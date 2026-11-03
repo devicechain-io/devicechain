@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, HelpCircle, Trash2, Wifi, WifiOff } from 'lucide-react';
@@ -29,7 +30,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority, isScoped } from '@devicechain/client';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
-import { getDeviceState, getLatestMeasurements } from '@/lib/api/device-state';
+import { getDeviceState, getLatestMeasurements, getDroppedMeasurements } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
 import { formatTime } from '@/lib/utils';
 import { presenceKind, presenceSourceLabelKey } from '@/lib/presence';
@@ -46,10 +47,14 @@ import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
 import { DeviceConfigurationPanel } from '@/routes/devices/DeviceConfigurationPanel';
 import { DeviceUpdatesPanel } from '@/routes/devices/DeviceUpdatesPanel';
 import { DeviceProvisioningPanel } from '@/routes/devices/DeviceProvisioningPanel';
+import { DroppedMeasurementsNotice, DroppedMeasurementsTable } from '@/routes/devices/DroppedMeasurements';
 import { mayWrite } from '@/lib/scope';
 import { useUpdateAccess } from '@/lib/updateAuthority';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { EventTypeLabel } from '@/components/EventTypeLabel';
+
+// The tab that holds the device's live state, its latest readings and the discarded-keys table.
+const CONNECTIVITY_TAB = 'connectivity';
 
 export default function DeviceDetailPage() {
   const { t } = useTranslation('devices');
@@ -80,6 +85,11 @@ export default function DeviceDetailPage() {
 
   const [version, reload] = useReload();
   const { data: device, loading, error } = useQuery(() => getDevice(token), [token, version]);
+  // The keys the platform discards from this device's messages. Read once, for the notice above
+  // the tabs and the table on the Connectivity tab. A role without state:read, or any failure,
+  // yields no notice (see DroppedMeasurementsNotice) rather than breaking the page.
+  const { current: dropped } = useQuery(() => getDroppedMeasurements(token), [token, version]);
+  const [tab, setTab] = useState('basic');
 
   if (loading) {
     return (
@@ -156,10 +166,11 @@ export default function DeviceDetailPage() {
         )
       }
     >
+      <DroppedMeasurementsNotice rows={dropped} onShowDetails={() => setTab(CONNECTIVITY_TAB)} />
       {/* Connectivity + events sit in their own tabs, so they load only when
           opened and the page stays digestible. */}
       {canWriteDevice && <DeviceRejectedNotice deviceToken={device.token} />}
-      <Tabs defaultValue="basic">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
           {!scoped && <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>}
@@ -238,6 +249,11 @@ export default function DeviceDetailPage() {
             <SectionPanel title={t('latestReadingsTitle')}>
               <DeviceReadingsPanel deviceToken={device.token} />
             </SectionPanel>
+            {Array.isArray(dropped) && dropped.length > 0 && (
+              <SectionPanel>
+                <DroppedMeasurementsTable rows={dropped} />
+              </SectionPanel>
+            )}
             {/* No SectionPanel wrapper here, deliberately: the position panel owns
                 its own card because it can decide to render NOTHING. A device whose
                 profile declares no position — and which has no stored position —

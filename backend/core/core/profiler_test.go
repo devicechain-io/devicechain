@@ -287,3 +287,41 @@ func TestAStalledTraceClientCannotHoldTheStop(t *testing.T) {
 		})
 	}
 }
+
+// Contention sampling variables are judged strictly, like the address: junk refuses, and
+// either one without the listener refuses rather than sampling for nobody.
+func TestProfilerSamplingVariablesAreJudgedStrictly(t *testing.T) {
+	for _, tc := range []struct {
+		name, env, val string
+		listenerOn     bool
+		wantErr        string
+	}{
+		{"junk block rate", ENV_PROFILER_BLOCK_RATE, "fast", true, "positive whole number"},
+		{"zero mutex fraction", ENV_PROFILER_MUTEX_FRACTION, "0", true, "positive whole number"},
+		{"block rate without a listener", ENV_PROFILER_BLOCK_RATE, "10000", false, "is not"},
+		{"mutex fraction without a listener", ENV_PROFILER_MUTEX_FRACTION, "5", false, "is not"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.env, tc.val)
+			_, _, err := profilerSampling(tc.listenerOn)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+
+	t.Setenv(ENV_PROFILER_BLOCK_RATE, "10000")
+	t.Setenv(ENV_PROFILER_MUTEX_FRACTION, "5")
+	block, mutex, err := profilerSampling(true)
+	require.NoError(t, err)
+	assert.Equal(t, 10000, block)
+	assert.Equal(t, 5, mutex)
+
+	// Negative control: unset is off, with or without a listener.
+	os.Unsetenv(ENV_PROFILER_BLOCK_RATE)
+	os.Unsetenv(ENV_PROFILER_MUTEX_FRACTION)
+	for _, on := range []bool{true, false} {
+		block, mutex, err = profilerSampling(on)
+		require.NoError(t, err)
+		assert.Zero(t, block+mutex)
+	}
+}

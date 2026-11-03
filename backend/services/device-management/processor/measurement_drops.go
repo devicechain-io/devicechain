@@ -8,23 +8,21 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 )
 
 // Why a measurement entry was dropped at resolution while the rest of its event was kept. A
 // closed set, because it is a metric label.
+//
+// The vocabulary lives in core/resolvedevent, shared with the consumer that projects the record
+// and the GraphQL enum that serves it; these are the names this package uses for it.
 const (
-	// dropUndeclaredNonNumeric: the key is not on the profile and its value is not a number
-	// (a text value such as "ok"), so it cannot go in the numeric measurement column.
-	dropUndeclaredNonNumeric = "undeclared_non_numeric"
-	// dropUndeclaredUnstorable: the key is not on the profile and its value is numeric but
-	// cannot be stored (NaN, +/-Inf, or beyond decimal(20,8)).
-	dropUndeclaredUnstorable = "undeclared_unstorable"
-	// dropDeclaredNotStorable: the key is declared with a data type that is not a time-series
-	// metric (defensive: creating such a definition is already refused).
-	dropDeclaredNotStorable = "declared_not_storable"
+	dropUndeclaredNonNumeric = resolvedevent.DropUndeclaredNonNumeric
+	dropUndeclaredUnstorable = resolvedevent.DropUndeclaredUnstorable
+	dropDeclaredNotStorable  = resolvedevent.DropDeclaredNotStorable
 )
 
-var measurementDropReasons = []string{dropUndeclaredNonNumeric, dropUndeclaredUnstorable, dropDeclaredNotStorable}
+var measurementDropReasons = resolvedevent.DroppedReasons
 
 // MeasurementDropMetrics counts measurement entries discarded at resolution while the event's
 // other entries were stored. The acknowledgement a device gets does not say so and the event is

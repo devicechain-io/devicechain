@@ -102,6 +102,12 @@ func run() int {
 		"progress cadence while publishing; each slice is logged and recorded in the report (negative disables)")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
 		"write the JSON report to this path (also printed to stderr)")
+	steadyMarker := flag.String("steady-marker", envOr("DC_LOADTEST_STEADY_MARKER", ""),
+		"write the steady-state marker JSON to this path: warmup, then steady, then ended or aborted; hack/perf-collect.sh collects profiles only while it says steady")
+	steadyWarmup := flag.Duration("steady-warmup", envDurationOr("DC_LOADTEST_STEADY_WARMUP", 5*time.Minute),
+		"with --steady-marker, how far into the drive the steady state begins (must be shorter than the drive)")
+	steadyPhase := flag.String("steady-phase", envOr("DC_LOADTEST_STEADY_PHASE", ""),
+		"with --steady-marker, the phase label the marker carries (for example R1); the collector checks it")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -127,7 +133,12 @@ func run() int {
 		manifestId = "devicepulse"
 	}
 
+	var steady *loadtest.SteadyMarker
+	if *steadyMarker != "" {
+		steady = &loadtest.SteadyMarker{Path: *steadyMarker, Phase: *steadyPhase, Warmup: *steadyWarmup}
+	}
 	profile := loadtest.MQTTProfile{
+		Steady:   steady,
 		Manifest: manifestId, Seed: hs.Seed, Devices: *devices,
 		Rate: *rate, Duration: *duration, MetricKey: *metric, PadBytes: *padBytes,
 		MQTT: mqttload.Config{

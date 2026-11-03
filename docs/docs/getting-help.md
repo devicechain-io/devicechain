@@ -69,6 +69,12 @@ usually faster than waiting on a reply.
     and the device is acknowledged as normal, so the drop is not visible to the sender. Every dropped
     entry is counted in `resolve_measurement_dropped_total`, by reason; the warning names the tenant,
     device and metric, once per device and metric.
+
+    The same fact is on the device's page in the console: when a device is losing keys, a notice
+    above the tabs says how many, and the Connectivity tab lists each key with the reason, the last
+    value the device sent, how many times and when it last did. The same list is `droppedMeasurements`
+    on the device-state GraphQL endpoint. It keeps at most 32 keys per device and is visible to
+    everyone who can read the device's latest readings.
   - A *declared* measurement whose value does not match its declared type is worse: the whole event
     is dead-lettered. So is one that is `NaN`, infinite, or 1,000,000,000,000 or more in magnitude.
 

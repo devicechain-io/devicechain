@@ -77,9 +77,14 @@ func referenceMarshalMeasurementsPayload(payload *ResolvedMeasurementsPayload, f
 				Derived:    mxentry.Derived,
 			})
 		}
+		var pdropped []*PDroppedMeasurement
+		for _, d := range mxsentry.Dropped {
+			pdropped = append(pdropped, &PDroppedMeasurement{Name: d.Name, Reason: d.Reason, Value: d.Value})
+		}
 		nanos, text := referenceInstant(mxsentry.OccurredTime, format, true)
 		pbpayload.Entries = append(pbpayload.Entries, &PResolvedMeasurementsEntry{
 			Measurements: pmxentries,
+			Dropped:      pdropped,
 			Occurred:     nanos,
 			OccurredTime: text,
 		})
@@ -197,7 +202,24 @@ func resolvedShapes() map[string]*ResolvedEvent {
 			e.SourceDeviceDisabled = true
 			e.GatewayToken = "edge-gw-1"
 		}),
-		"gateway token alone":     with(func(e *ResolvedEvent) { e.GatewayToken = "g" }),
+		"gateway token alone": with(func(e *ResolvedEvent) { e.GatewayToken = "g" }),
+		// The drop record: empty strings (a field at its proto3 default is not written), NUL
+		// (valid UTF-8, written), several in one sample, and a sample that dropped everything.
+		"dropped entries": with(func(e *ResolvedEvent) {
+			e.Payload = mx(ResolvedMeasurementsEntry{
+				Entries: []ResolvedMeasurementEntry{{Name: "temp", Value: "21.5"}}, OccurredTime: at,
+				Dropped: []DroppedMeasurementEntry{
+					{Name: "status_text", Reason: DropUndeclaredNonNumeric, Value: "ok"},
+					{Name: "", Reason: "", Value: ""},
+					{Name: "n\x00l", Reason: DropDeclaredNotStorable, Value: "\x00"},
+					{Name: long, Reason: DropUndeclaredUnstorable, Value: strings.Repeat("v", MaxDroppedValueBytes)},
+				}})
+		}),
+		"all dropped sample": with(func(e *ResolvedEvent) {
+			e.Payload = mx(ResolvedMeasurementsEntry{Entries: []ResolvedMeasurementEntry{}, OccurredTime: whole,
+				Dropped: []DroppedMeasurementEntry{{Name: "status_text", Reason: DropUndeclaredNonNumeric, Value: "ok"}}},
+				ResolvedMeasurementsEntry{OccurredTime: offset, Dropped: []DroppedMeasurementEntry{{}}})
+		}),
 		"empty alt id is present": with(func(e *ResolvedEvent) { e.AltId = strp("") }),
 		"empty anchor and membership": with(func(e *ResolvedEvent) {
 			e.Anchors = []ResolvedAnchor{{}}
@@ -450,6 +472,8 @@ func FuzzResolvedEventWire(f *testing.F) {
 	f.Add("http", "dev", "alt", "a", "t", "g", "21.5", "Cel", uint64(7), int64(1), int32(2), int32(0), uint8(1), uint8(1), uint8(0x3f), uint8(0))
 	f.Add("", "", "", "", "", "", "", "", uint64(0), int64(-1), int32(-1), int32(-5), uint8(0), uint8(3), uint8(0), uint8(0))
 	f.Add("ok\xff", "d", "", "", "", "", "v", "", uint64(1<<63), int64(1<<40), int32(1<<31-1), int32(9), uint8(4), uint8(0), uint8(0xff), uint8(0))
+	f.Add("http", "dev", "", "", "", "", "ok", "status", uint64(0x2100), int64(1), int32(2), int32(0), uint8(2), uint8(2), uint8(0), uint8(0))
+	f.Add("http", "dev", "", "", "", "", "", "", uint64(0x2200), int64(1), int32(2), int32(0), uint8(1), uint8(0), uint8(0), uint8(0))
 	for kind := uint8(1); kind < 7; kind++ {
 		f.Add("mqtt", "dev", "", "a", "t", "g", "1.5", "m", uint64(300), int64(5), int32(-2), int32(3), uint8(2), uint8(2), uint8(0x0f), kind)
 	}
@@ -492,6 +516,18 @@ func FuzzResolvedEventWire(f *testing.F) {
 				// Every flag bit is taken; the classifier's bits say which readings are derived.
 				mx.Derived = (classifier>>uint(j))&1 == 1
 				entry.Entries = append(entry.Entries, mx)
+			}
+			// The drop record: up to two entries per sample, strings from the inputs (empty and
+			// NUL-bearing among them), and some samples dropping everything they carried.
+			for k := 0; k < int((classifier>>8)%3); k++ {
+				d := DroppedMeasurementEntry{Name: fmt.Sprintf("%s%d", unit, k), Reason: source, Value: value + "\x00"}
+				if (classifier>>(11+uint(k)))&1 == 1 {
+					d = DroppedMeasurementEntry{}
+				}
+				entry.Dropped = append(entry.Dropped, d)
+			}
+			if (classifier>>13)&1 == 1 {
+				entry.Entries = []ResolvedMeasurementEntry{}
 			}
 			payload.Entries = append(payload.Entries, entry)
 		}

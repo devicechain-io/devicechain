@@ -95,6 +95,9 @@ type MQTTProfile struct {
 	// ReportInterval is the cadence of the progress slices (0 = DefaultMQTTReportInterval,
 	// negative disables).
 	ReportInterval time.Duration
+	// Steady, when set, writes the steady-state marker for the publishing window (see
+	// SteadyMarker). It is promoted on the progress cadence, so it needs ReportInterval > 0.
+	Steady *SteadyMarker
 
 	// Identity is IdentityAuto, IdentityFull or IdentityCount; IdentityMaxEvents the PUBACKed
 	// volume above which auto stops reading events back.
@@ -154,6 +157,9 @@ func (p MQTTProfile) withDefaults() MQTTProfile {
 
 // Validate rejects a profile that cannot be run as asked.
 func (p MQTTProfile) Validate() error {
+	if err := p.Steady.Validate(p.Duration); err != nil {
+		return err
+	}
 	if p.Rate <= 0 {
 		return fmt.Errorf("rate %v must be a positive number of events per second", p.Rate)
 	}
@@ -556,13 +562,20 @@ func (r mqttRun) driveAndReconcile(ctx context.Context) (*MQTTReport, error) {
 	if p.ReportInterval > 0 {
 		spec.ReportInterval = p.ReportInterval
 		spec.OnInterval = func(iv mqttload.Interval) {
+			if err := p.Steady.Tick(time.Now()); err != nil {
+				log.Error().Err(err).Msg("steady marker")
+			}
 			log.Info().Float64("t", iv.AtSeconds).Int64("sent", iv.Sent).Int64("pubacked", iv.Acked).
 				Int64("unconfirmed", iv.Unconfirmed).Int64("notSent", iv.NotSent).Int64("up", iv.Up).
 				Int64("inflight", iv.Inflight).Int64("connLosses", iv.Losses).Float64("ackP99ms", iv.P99Ms).
 				Msg("mqtt load interval")
 		}
 	}
+	if err := p.Steady.Begin(started, p.Duration); err != nil {
+		return nil, err
+	}
 	res, err := r.Fleet.Drive(ctx, spec, r.Ledger)
+	_ = p.Steady.End(err == nil)
 	if err != nil {
 		return nil, err
 	}

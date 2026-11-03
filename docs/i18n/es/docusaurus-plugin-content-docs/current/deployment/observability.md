@@ -1063,6 +1063,7 @@ cada uno de sus eventos se vuelve a fusionar por separado.
 | `devicechain_devicestate_state_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. |
 | `devicechain_devicestate_state_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a fusionar. Un ritmo constante indica que las escrituras de un inquilino se rechazan una y otra vez, por ejemplo las de un inquilino eliminado cuyos dispositivos siguen enviando. |
 | `devicechain_devicestate_state_write_conflict_retries_total` | Escrituras de un solo evento que se repitieron en el momento tras abortarlas PostgreSQL como víctima de un interbloqueo o por un fallo de serialización. Un ritmo que sigue subiendo indica que el barrido de inactividad y los escritores colisionan a menudo; un evento cuyos reintentos se pierden todos queda para reentrega y se cuenta como `retry` en los resultados de mensajes. |
+| `devicechain_devicestate_dropped_measurement_evicted_total` | Registros de mediciones descartadas expulsados porque un dispositivo superó su límite de 32 pares (clave, motivo) distintos; sale primero el par visto hace más tiempo. Un dispositivo que sigue enviando claves de texto nuevas hace subir este contador, y la lista de claves descartadas del dispositivo muestra entonces solo las más recientes. |
 | `devicechain_devicestate_state_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
 
 `state_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se
@@ -1614,20 +1615,13 @@ functionalAreas:
 
 - **Instalada directamente con el chart de Helm:** añade el bloque a tus valores y ejecuta
   `helm upgrade` como de costumbre.
-- **Instalada con `dcctl bootstrap`:** `dcctl` no tiene una opción para esto. Cambia la release
-  con `helm upgrade`, usando la versión del chart que ya ejecuta la instancia. `helm list -n default`
-  muestra esa versión, y la release se llama `dc-<instance>`:
-
-  ```bash
-  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
-  # añade a dc-values.yaml el bloque profiler de arriba
-  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
-    --version <chart-version> -n default -f dc-values.yaml
-  ```
-
-  Esto cambia solo la configuración de los pods, no el Secret de configuración de la instancia
-  que gestiona `dcctl`. El siguiente `dcctl upgrade` o `dcctl bootstrap` recalcula la release y
-  vuelve a desactivar el listener.
+- **Instalada con `dcctl`:** pon el bloque en un archivo de valores y pásalo con `--values`
+  (`dcctl bootstrap` o `dcctl upgrade`). `dcctl` acepta `enabled`, `blockRate` y
+  `mutexFraction` bajo `functionalAreas.<area>.profiler`; la `address` del listener no se puede
+  ajustar así y se queda en el valor por defecto de loopback. `dcctl` registra los valores con la
+  instancia, de modo que las actualizaciones posteriores los conservan hasta que los sustituyas
+  con otro archivo `--values` o los borres con `--reset-values`. Desactiva el profiler al terminar
+  la ejecución de la misma manera.
 
 La configuración se rechaza al instalar si el servicio no está desplegado, porque no haría nada.
 También se rechaza si la dirección usa un puerto que el pod del servicio ya sirve. Una vez en

@@ -32,6 +32,8 @@ module "nats" {
   memory_request           = var.nats_memory_request
   memory_limit             = var.nats_memory_limit
   route_compression        = var.nats_route_compression
+  profiling_port           = var.nats_profiling_port
+  profiling_block_rate     = var.nats_profiling_block_rate
 
   # 🔑 NO depends_on ON THE NAMESPACE, BECAUSE THIS ROOT NO LONGER OWNS IT. The
   # namespace is a cluster prerequisite now — created by the cluster root, and by
@@ -485,6 +487,9 @@ module "cnpg_tsdb" {
   # also known to drop this (cnpg#10840), which kills a restore during WAL
   # replay, so it is set on the Cluster itself rather than inherited.
   shared_preload_libraries = ["timescaledb"]
+
+  # A profiling RUN switch (off by default); see modules/cnpg-cluster var.statement_stats.
+  statement_stats = var.timescale_statement_stats
 
   post_init_template_sql = [
     # Coupling (b). NOTHING in the codebase ever issues `CREATE EXTENSION` — grep

@@ -443,6 +443,15 @@ locals {
       }
     }
 
+    # node-exporter is the node-level CPU/memory/disk collector, so it has to run on EVERY node:
+    # a tainted pool (a dedicated broker or database pool) otherwise has no node series at all,
+    # and the DaemonSet reads as stuck (KubeDaemonSetRolloutStuck, TargetDown). A bare
+    # `operator: Exists` tolerates every taint and every effect, the usual convention for a
+    # per-node agent; the subchart's own default covers NoSchedule only.
+    "prometheus-node-exporter" = {
+      tolerations = [{ operator = "Exists" }]
+    }
+
     grafana = local.grafana_values
   }, local.control_plane_overrides, local.cnpg_cluster_metrics_values)
 }

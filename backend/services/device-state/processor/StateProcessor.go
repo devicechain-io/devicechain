@@ -439,6 +439,7 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 	switch event.EventType {
 	case eventtype.Measurement:
 		update.Measurements = measurementInputs(event)
+		update.Dropped = droppedInputs(event)
 	case eventtype.Location:
 		update.Locations = locationInputs(event)
 	}
@@ -559,6 +560,18 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 		}
 	}
 
+	// What the resolver discarded from the same event goes to the drop record, in its own
+	// transaction like every other table of the per-message path. Its absence from the event
+	// (nearly every event) costs nothing.
+	if event.EventType == eventtype.Measurement && len(u.Dropped) > 0 {
+		if err := sp.retryOnConflict(p.ctx, func() error {
+			return sp.Api.MergeDroppedMeasurements(p.ctx, u.DeviceToken, u.Dropped)
+		}); err != nil {
+			sp.dispose(p, err, fmt.Sprintf("dropped-measurement projection update for device %s", u.DeviceToken))
+			return
+		}
+	}
+
 	// For a location event, also advance the last-known-position projection (in addition
 	// to the device state above: a location is a liveness heartbeat too).
 	if event.EventType == eventtype.Location {
@@ -671,6 +684,24 @@ func measurementInputs(event *resolvedevent.ResolvedEvent) []model.LatestMeasure
 				DataType:     mx.DataType,
 				OccurredTime: occurredAt,
 			})
+		}
+	}
+	return inputs
+}
+
+// droppedInputs extracts what the resolver discarded from a resolved measurement event, for the
+// drop record: one input per dropped entry, stamped at its sample's own time like the readings
+// beside it. nil when nothing was dropped, which is nearly every event.
+func droppedInputs(event *resolvedevent.ResolvedEvent) []model.DroppedMeasurementInput {
+	payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
+	if !ok {
+		return nil
+	}
+	var inputs []model.DroppedMeasurementInput
+	for _, entry := range payload.Entries {
+		for _, d := range entry.Dropped {
+			inputs = append(inputs, model.DroppedMeasurementInput{
+				Name: d.Name, Reason: d.Reason, Value: d.Value, OccurredTime: entry.OccurredTime})
 		}
 	}
 	return inputs

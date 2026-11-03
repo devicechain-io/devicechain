@@ -26,7 +26,8 @@
 #       --mqtt-handshake  ~/.devicechain/sims/rc-mqtt/handshake.json \
 #       --detect-handshake ~/.devicechain/sims/rc-detect/handshake.json \
 #       [--duration 60m] [--http-devices 200 --http-interval 200ms] \
-#       [--mqtt-devices 3000 --mqtt-rate 6000] [--out ./rc-run] [--build]
+#       [--mqtt-devices 3000 --mqtt-rate 6000] [--out ./rc-run] [--build] \
+#       [--steady-marker-dir DIR [--steady-phase R1] [--steady-warmup 5m]]
 #
 #   hack/loadtest-rc-run.sh --self-test   # proves the exit-code and stop handling against stubs
 #
@@ -169,6 +170,7 @@ http_hs="" mqtt_hs="" detect_hs=""
 http_devices=200 http_interval=200ms
 mqtt_devices=3000 mqtt_rate=6000
 mqtt_extra=()
+marker_dir="" steady_phase="" steady_warmup=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -183,6 +185,9 @@ while [[ $# -gt 0 ]]; do
     --mqtt-devices) mqtt_devices="$2"; shift 2 ;;
     --mqtt-rate) mqtt_rate="$2"; shift 2 ;;
     --mqtt-arg) mqtt_extra+=("$2"); shift 2 ;;   # any other dc-loadtest-mqtt flag, one per use
+    --steady-marker-dir) marker_dir="$2"; shift 2 ;;   # http.steady.json + mqtt.steady.json land here
+    --steady-phase) steady_phase="$2"; shift 2 ;;      # with --steady-marker-dir: the label the markers carry (R1...)
+    --steady-warmup) steady_warmup="$2"; shift 2 ;;    # with --steady-marker-dir: how far into the drive steady begins
     --build) build=1; shift ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
@@ -241,6 +246,20 @@ trap stop_rungs EXIT
 trap 'echo "interrupted: stopping every rung" >&2; exit 130' INT
 trap 'echo "terminated: stopping every rung" >&2; exit 143' TERM
 
+# One marker per harness that writes one (dc-loadtest, dc-loadtest-mqtt; the detection probe has none).
+# They are separate files because two writers on one path would overwrite each other; point
+# hack/perf-collect.sh --marker at the one for the rung being profiled.
+http_steady=() mqtt_steady=()
+if [[ -n "$marker_dir" ]]; then
+  mkdir -p "$marker_dir"
+  http_steady=(--steady-marker "$marker_dir/http.steady.json")
+  mqtt_steady=(--steady-marker "$marker_dir/mqtt.steady.json")
+  if [[ -n "$steady_phase" ]]; then http_steady+=(--steady-phase "$steady_phase"); mqtt_steady+=(--steady-phase "$steady_phase"); fi
+  if [[ -n "$steady_warmup" ]]; then http_steady+=(--steady-warmup "$steady_warmup"); mqtt_steady+=(--steady-warmup "$steady_warmup"); fi
+elif [[ -n "$steady_phase$steady_warmup" ]]; then
+  echo "--steady-phase / --steady-warmup need --steady-marker-dir" >&2; exit 2
+fi
+
 start() { # name, command...
   local name="$1"; shift
   "$@" >"$out/$name.log" 2>&1 &
@@ -250,11 +269,12 @@ start() { # name, command...
 
 start http "$out/bin/dc-loadtest" --handshake "$http_hs" \
   --devices "$http_devices" --emit-interval "$http_interval" --hold "$duration" \
-  --min-accepted 1000 --quiesce-timeout 10m --quiesce-settle 90s --state-timeout 10m --report "$out/http.json"
+  --min-accepted 1000 --quiesce-timeout 10m --quiesce-settle 90s --state-timeout 10m --report "$out/http.json" \
+  ${http_steady[@]+"${http_steady[@]}"}
 
 start mqtt "$out/bin/dc-loadtest-mqtt" --handshake "$mqtt_hs" \
   --devices "$mqtt_devices" --rate "$mqtt_rate" --duration "$duration" --qos 1 \
-  --identity full --quiesce-timeout 10m --report "$out/mqtt.json" ${mqtt_extra[@]+"${mqtt_extra[@]}"}
+  --identity full --quiesce-timeout 10m --report "$out/mqtt.json" ${mqtt_steady[@]+"${mqtt_steady[@]}"} ${mqtt_extra[@]+"${mqtt_extra[@]}"}
 
 # One probe step per second for the whole duration: K cycles = 2 steps each, so K = secs / 2.
 start detect "$out/bin/dc-loadtest-detection" --handshake "$detect_hs" --transport mqtt \

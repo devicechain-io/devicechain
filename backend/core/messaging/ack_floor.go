@@ -44,6 +44,14 @@ var ErrAckFloorPolicyMismatch = errors.New("messaging: durable exists with an ac
 // self-heal after the durable was deleted. A durable that already exists is bound as it is,
 // at wherever its own ack floor stands.
 //
+// 🔴 ONLY A DURABLE WITH A SINGLE ACTIVE READER MAY USE THIS. An AckAll ack settles, on the
+// broker, every message at or below its sequence on the WHOLE consumer, including ones the
+// broker handed to a different pull (another replica, or another read loop) that is still
+// working on them. It is what makes this safe for event-processing, whose DETECT tap is
+// term-gated to one leader that applies messages in order. A durable every replica of an area
+// shares (device-management's inbound, event-management's and device-state's resolved-events)
+// must keep explicit acks; ackall_shared_durable_test.go demonstrates the loss.
+//
 // start must be a fast local read. It runs with the reader's bind lock held, under a 30 s
 // context, and UnbindTerm (a lost leadership term) takes the same lock, so a slow start
 // delays term teardown by as long as it takes.

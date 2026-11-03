@@ -606,6 +606,9 @@ module "cnpg_rdb" {
     max_connections = tostring(var.postgres_max_connections)
   }
 
+  # A profiling RUN switch (off by default); see modules/cnpg-cluster var.statement_stats.
+  statement_stats = var.postgres_statement_stats
+
   # `required` durability for this store specifically: it holds the audit
   # journal and the control plane, RPO=0 is the point, and a write stall is a
   # loud recoverable failure rather than silent loss. The event store takes

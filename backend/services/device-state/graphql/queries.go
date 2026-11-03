@@ -187,6 +187,28 @@ func (r *SchemaResolver) LatestMeasurements(ctx context.Context, args struct {
 	return result, nil
 }
 
+// DroppedMeasurements returns the measurement keys a device sent that the platform discarded
+// (the drop record). Open to scoped members, and gated exactly as LatestMeasurements is: the
+// last value is the device's own content, visible to the readers of its latest values.
+func (r *SchemaResolver) DroppedMeasurements(ctx context.Context, args struct {
+	DeviceToken string
+}) ([]*DroppedMeasurementResolver, error) {
+	if err := scopedState(ctx, auth.StateRead); err != nil {
+		return nil, err
+	}
+
+	found, err := r.GetApi(ctx).DroppedMeasurementsByDeviceToken(ctx, args.DeviceToken)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*DroppedMeasurementResolver, 0, len(found))
+	for _, d := range found {
+		result = append(result, &DroppedMeasurementResolver{M: *d, S: r, C: ctx})
+	}
+	return result, nil
+}
+
 // LatestLocation returns a device's last-known position, or null when the device has
 // never produced a location event.
 //

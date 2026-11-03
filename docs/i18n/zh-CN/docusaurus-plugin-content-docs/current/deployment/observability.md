@@ -557,6 +557,7 @@ UPDATE "event-management".calculated_backfills
 | `devicechain_devicestate_state_batch_size` | 每提交事务事件数，通常 `1` 表示跟得上。 |
 | `devicechain_devicestate_state_batch_fallbacks_total` | 未提交、随后重合并的批次。持续增长表示某租户写入反复拒绝，例如删除租户设备仍发送。 |
 | `devicechain_devicestate_state_write_conflict_retries_total` | 单事件写入被 PostgreSQL 作为死锁受害者或序列化失败中止后，就地重新执行的次数。持续增长表示不活动扫描与写入方频繁冲突；重试全部失败的事件留待重投递，并在消息结果中计为 `retry`。 |
+| `devicechain_devicestate_dropped_measurement_evicted_total` | 因设备超出 32 个不同（键，原因）组合的上限而被淘汰的丢弃测量记录；最久未出现的组合最先被淘汰。持续发送新文本键的设备会使该计数上升，此时设备的已丢弃键列表只显示最近的那些。 |
 | `devicechain_devicestate_state_inflight` | 写入器持有事件，包括等待批提交。 |
 
 `state_duration_seconds` 从写入器取得事件计到批提交。
@@ -840,16 +841,7 @@ functionalAreas:
 ```
 
 - **直接安装 Helm chart：** 添加到 values，正常运行 `helm upgrade`。
-- **通过 `dcctl bootstrap` 安装：** `dcctl` 无此选项，用实例当前 chart 版本执行 `helm upgrade`。`helm list -n default` 显示版本，release 名为 `dc-<instance>`：
-
-  ```bash
-  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
-  # add the profiler block above to dc-values.yaml
-  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
-    --version <chart-version> -n default -f dc-values.yaml
-  ```
-
-  仅改 Pod 设置，不改 `dcctl` 拥有的实例配置 Secret。下次 `dcctl upgrade` 或 `dcctl bootstrap` 重新计算 release，会再次关闭监听器。
+- **通过 `dcctl` 安装：** 把该块写入 values 文件，用 `--values` 传入（`dcctl bootstrap` 或 `dcctl upgrade`）。`dcctl` 接受 `functionalAreas.<area>.profiler` 下的 `enabled`、`blockRate` 和 `mutexFraction`；监听器的 `address` 不能这样调整，保持回环默认值。`dcctl` 会把这些值与实例一同记录，之后的升级会一直保留，直到用另一个 `--values` 文件替换或用 `--reset-values` 清除。运行结束后用同样的方法关闭 profiler。
 
 服务未部署时，安装拒绝设置，因为不会生效；地址端口已被该 Pod 使用时也拒绝。运行后记录 `Profiling listener is ON` 及地址。
 

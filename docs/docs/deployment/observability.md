@@ -1014,6 +1014,7 @@ it is merged again on its own.
 | `devicechain_devicestate_state_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. |
 | `devicechain_devicestate_state_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were merged again. A steady rate means one tenant's writes are being refused repeatedly, such as a deleted tenant whose devices are still sending. |
 | `devicechain_devicestate_state_write_conflict_retries_total` | Single-event writes run again in place after PostgreSQL aborted them as a deadlock victim or serialization failure. A rate that keeps climbing means the inactivity sweep and the writers are colliding often; an event whose retries are all lost is left for redelivery and counted as `retry` in the message results. |
+| `devicechain_devicestate_dropped_measurement_evicted_total` | Dropped-measurement records evicted because a device exceeded its limit of 32 distinct (key, reason) pairs; the pair seen longest ago goes first. A device that keeps sending new text keys moves this, and the device's discarded-keys list then shows only the most recent ones. |
 | `devicechain_devicestate_state_inflight` | Events writers hold, including those waiting for their batch to commit. |
 
 `state_duration_seconds` measures each event from when a writer takes it until its batch commits.
@@ -1532,20 +1533,12 @@ functionalAreas:
 
 - **Installed from the Helm chart directly:** add the block to your values and run
   `helm upgrade` as you normally do.
-- **Installed with `dcctl bootstrap`:** `dcctl` has no option for this. Change the release
-  with `helm upgrade`, using the chart version the instance already runs. `helm list -n default`
-  shows that version, and the release is named `dc-<instance>`:
-
-  ```bash
-  helm get values dc-<instance> -n default -o yaml > dc-values.yaml
-  # add the profiler block above to dc-values.yaml
-  helm upgrade dc-<instance> oci://ghcr.io/devicechain-io/charts/devicechain \
-    --version <chart-version> -n default -f dc-values.yaml
-  ```
-
-  This changes only the pod settings, not the instance configuration Secret that `dcctl`
-  owns. The next `dcctl upgrade` or `dcctl bootstrap` recomputes the release and turns the
-  listener off again.
+- **Installed with `dcctl`:** put the block in a values file and pass it with `--values`
+  (`dcctl bootstrap` or `dcctl upgrade`). `dcctl` accepts `enabled`, `blockRate` and
+  `mutexFraction` under `functionalAreas.<area>.profiler`; the listener's `address` is not
+  tunable this way, so it stays on the loopback default. `dcctl` records the values with the
+  instance, so later upgrades keep them until you replace them with another `--values` file or
+  clear them with `--reset-values`. Turn the profiler off again after the run the same way.
 
 The setting is refused at install time if the service is not deployed, because it would do
 nothing. It is also refused if the address uses a port the service's pod already serves.

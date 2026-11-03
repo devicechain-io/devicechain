@@ -69,6 +69,33 @@ func profilerAddress() (addr string, ok bool, err error) {
 	return v, true, nil
 }
 
+// profilerSampling reads the two contention-sampling variables. Each is unset (0, off)
+// or a positive whole number; anything else, or either set while the listener is off,
+// refuses startup for the same reason profilerAddress does.
+func profilerSampling(listenerOn bool) (block, mutex int, err error) {
+	read := func(name string) (int, error) {
+		v, set := os.LookupEnv(name)
+		if !set {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("%s=%q cannot be used: it must be a positive whole number, or unset to leave the profile off", name, v)
+		}
+		if !listenerOn {
+			return 0, fmt.Errorf("%s is set but %s is not: the samples would have no endpoint to be read from", name, ENV_PROFILER_ADDRESS)
+		}
+		return n, nil
+	}
+	if block, err = read(ENV_PROFILER_BLOCK_RATE); err != nil {
+		return 0, 0, err
+	}
+	if mutex, err = read(ENV_PROFILER_MUTEX_FRACTION); err != nil {
+		return 0, 0, err
+	}
+	return block, mutex, nil
+}
+
 // startProfiler starts the profiling listener when ENV_PROFILER_ADDRESS asks for one.
 // It serves only the profiling handler, on its own server, so nothing it serves is ever
 // on the service's traffic port or its mux.
@@ -76,6 +103,10 @@ func profilerAddress() (addr string, ok bool, err error) {
 // A listener that cannot bind refuses startup, like the service's own server does.
 func (ms *Microservice) startProfiler() error {
 	addr, on, err := profilerAddress()
+	if err != nil {
+		return err
+	}
+	block, mutex, err := profilerSampling(on)
 	if err != nil || !on {
 		return err
 	}
@@ -91,6 +122,11 @@ func (ms *Microservice) startProfiler() error {
 		return fmt.Errorf("starting the profiling listener (%s): %w", ENV_PROFILER_ADDRESS, err)
 	}
 	ms.profiler.Store(&profilerListener{srv: srv, stop: stop})
+	profiling.EnableContention(block, mutex)
+	if block > 0 || mutex > 0 {
+		log.Warn().Int("blockRateNs", block).Int("mutexFraction", mutex).
+			Msg("Contention sampling is ON for this run; it costs CPU in proportion to contention.")
+	}
 
 	ev := log.Info()
 	msg := "Profiling listener is ON. Reach it with kubectl port-forward."

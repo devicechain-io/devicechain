@@ -59,6 +59,12 @@ variable "ha" {
 
 # --- Relational Postgres (control-plane RDB) ------------------------------------
 
+variable "postgres_statement_stats" {
+  description = "A profiling RUN switch, off by default: preload pg_stat_statements on the relational database and track statements, so a performance run can read the top statements by total time. Needs no image change. Restarts Postgres when it changes, so set it before the run and unset it after. See modules/cnpg-cluster var.statement_stats."
+  type        = bool
+  default     = false
+}
+
 variable "postgres_image" {
   description = <<-EOT
     Operand image for the relational Postgres database (ADR-020 A2.3).

@@ -1436,6 +1436,12 @@ functionalAreas:
     #   profiler:
     #     enabled: false
     #     address: "127.0.0.1:6060"   # an IP address and a port; not a port the pod serves
+    #     # Block and mutex profiles are EMPTY unless sampling is on, and cost CPU in
+    #     # proportion to contention: set them for a profiling run only. Each needs
+    #     # enabled: true. blockRate is nanoseconds blocked per sampled event (1 = all);
+    #     # mutexFraction samples 1 in N contended events.
+    #     blockRate: 0
+    #     mutexFraction: 0
     config:
       # disabled | optional | required. required (the hardened default, ADR-025)
       # rejects any inbound event that does not present a valid device credential;
