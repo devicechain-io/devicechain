@@ -6,8 +6,7 @@ package rdb
 import (
 	"fmt"
 	"reflect"
-	"regexp"
-	"strings"
+	"slices"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -31,8 +30,13 @@ type Assignment struct {
 }
 
 // SetTo assigns expr to column when a row conflicts. expr may name the existing row as
-// `t.<column>` and the incoming row as `excluded.<column>`; nothing else (it carries no
-// parameters, no sub-select and no second statement: see validateFragment).
+// `t.<column>` and the incoming row as `excluded.<column>`. The guarantee is an ALLOWLIST,
+// not a filter: a fragment is accepted only if it is built from those column references,
+// numeric and plain string literals, AND / OR / NOT / IS [NOT] [DISTINCT FROM] / NULL /
+// TRUE / FALSE / CASE, COALESCE and NULLIF, arithmetic and comparison operators and
+// parentheses (see insert_columns_fragment.go). It can therefore reach no other table, call
+// no other function and carry no second assignment. GREATEST and LEAST are not allowed (they
+// do not exist on SQLite); use CASE WHEN.
 func SetTo(column string, expr Fragment) Assignment {
 	return Assignment{Column: column, Expr: expr}
 }
@@ -72,80 +76,21 @@ type Upsert struct {
 // constants, so a bad one is a programming error and fails the first time the package that
 // declares the table is loaded, not on the first batch.
 func NewColumnUpsert[R any](tenant func(*R) *string, conflict []string, up Upsert, columns ...Column[R]) *ColumnTable[R] {
+	up.Set = slices.Clone(up.Set)
+	var refs []string
 	for _, a := range up.Set {
-		if err := validateFragment("SET "+a.Column, string(a.Expr), true); err != nil {
+		r, err := validateFragment("SET "+a.Column, string(a.Expr), true)
+		if err != nil {
 			panic(err)
 		}
+		refs = append(refs, r...)
 	}
-	if err := validateFragment("WHERE", string(up.Where), false); err != nil {
+	r, err := validateFragment("WHERE", string(up.Where), false)
+	if err != nil {
 		panic(err)
 	}
-	return &ColumnTable[R]{tenant: tenant, conflict: conflict, columns: columns, upsert: &up}
-}
-
-var (
-	// fragmentTokens are the words a fragment may not contain, in any case: with a
-	// sub-select a fragment could read another table, which the raw-SQL guard cannot see.
-	fragmentTokens = regexp.MustCompile(`(?i)\b(select|from)\b`)
-	// fragmentPunct are the punctuation a fragment may not contain: a second statement, a
-	// comment that would swallow the rest of the statement (the tenant term), a parameter
-	// placeholder (the arrays are bound by position) or gorm's `?` / `@name` rewriting.
-	fragmentPunct = []string{";", "--", "/*", "*/", "$", "?", "@"}
-)
-
-// validateFragment refuses a fragment that could change the statement's shape. Beyond the
-// blocklist it reads the fragment's structure: quotes and parentheses must balance (an
-// unbalanced `)` would close the guard's parentheses and let the next token escape them),
-// and a SET expression may have no comma outside parentheses (it would start a second
-// assignment, one the SET checks never saw: `x, tenant_id = 'other'`).
-func validateFragment(what, s string, set bool) error {
-	bad := func(format string, args ...any) error {
-		return fmt.Errorf("%w: the %s fragment %q %s", ErrColumnarModel, what, s, fmt.Sprintf(format, args...))
-	}
-	if set && strings.TrimSpace(s) == "" {
-		return bad("is empty")
-	}
-	for _, p := range fragmentPunct {
-		if strings.Contains(s, p) {
-			return bad("contains %q, which a fragment may not", p)
-		}
-	}
-	if m := fragmentTokens.FindString(s); m != "" {
-		return bad("contains the word %q, which a fragment may not", m)
-	}
-	depth := 0
-	var quote byte
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if quote != 0 {
-			if c == quote {
-				quote = 0 // a doubled quote reopens on the next byte
-			}
-			continue
-		}
-		switch c {
-		case '\'', '"':
-			quote = c
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth < 0 {
-				return bad("closes a parenthesis it did not open")
-			}
-		case ',':
-			if set && depth == 0 {
-				return bad("has a comma outside parentheses, which would start another assignment")
-			}
-		}
-	}
-	if quote != 0 {
-		return bad("has an unterminated quote")
-	}
-	if depth != 0 {
-		return bad("has an unclosed parenthesis")
-	}
-	return nil
+	refs = append(refs, r...)
+	return &ColumnTable[R]{tenant: tenant, conflict: conflict, columns: columns, upsert: &up, fragmentColumns: refs}
 }
 
 // omittedByUpsert is the generated primary key: an upsert leaves `id` to the sequence.

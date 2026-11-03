@@ -84,6 +84,8 @@ type ColumnTable[R any] struct {
 	// upsert is nil for the insert (ON CONFLICT DO NOTHING) and set for the upsert mode
 	// built by NewColumnUpsert.
 	upsert *Upsert
+	// fragmentColumns are the columns the upsert's fragments name, checked at plan time.
+	fragmentColumns []string
 
 	// plans caches the validated statement per dialect and resolved table name: the name
 	// depends on the handle's naming strategy (its schema prefix), not on the model alone.
@@ -428,7 +430,10 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 // tenant's row) is neither updated nor counted. Everything Insert checks is checked here,
 // and the terms of the upsert (NewColumnUpsert) on top. Two rows of one batch that name the
 // same conflict key fail on Postgres (a row cannot be affected twice by one statement), as
-// they do in a gorm upsert; the caller deduplicates.
+// they do in a gorm upsert (SQLite applies them in order, the last winning), so the caller
+// deduplicates and a Postgres test must cover it. The update arm also touches a soft-deleted
+// row, as a gorm upsert does. A PARTIAL unique index cannot be the arbiter (the conflict
+// target carries no index predicate): such an upsert fails loudly on Postgres.
 //
 // The rows' generated ids are not read back (there is no RETURNING), and a substituted
 // default is not written back to the row; only the tenant is stamped on it.
@@ -625,6 +630,11 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan[R
 		return nil, refuse("it has associations, which a Create also writes")
 	}
 
+	for _, ref := range t.fragmentColumns {
+		if f := s.LookUpField(ref); f == nil || f.DBName != ref {
+			return nil, refuse("a fragment names %q, which is not a column of the model", ref)
+		}
+	}
 	cols := slices.Clone(t.columns)
 	index := map[string]int{}
 	for i, c := range cols {
@@ -708,6 +718,10 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan[R
 		f := s.LookUpField(name)
 		if f == nil || f.DBName != name {
 			return nil, refuse("conflict column %q is not a column of the model", name)
+		}
+		if up != nil && (omittedByUpsert(f) || isSoftDelete(f)) {
+			return nil, refuse("conflict column %q is never written by an upsert (the database generates "+
+				"the id, deleted_at is always NULL), so nothing could ever conflict on it", name)
 		}
 		hasTenant = hasTenant || f == tenantField
 	}

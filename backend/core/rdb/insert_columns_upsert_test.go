@@ -424,6 +424,10 @@ func TestColumnarUpsertRefusesAModelItCannotWriteLikeACreate(t *testing.T) {
 			TextColumn("key", func(r *colUpExpr) string { return r.Key }),
 			TextColumn("ref", func(r *colUpExpr) string { return r.Ref })),
 			&colUpExpr{Model: gorm.Model{CreatedAt: upAt, UpdatedAt: upAt}}),
+		"the id in the conflict target":     with(same, set("rev"), []string{"tenant_id", "id"}),
+		"deleted_at in the conflict target": with(same, set("rev"), []string{"tenant_id", "deleted_at"}),
+		"a fragment naming no column of the model": with(same,
+			Upsert{Set: []Assignment{SetTo("rev", "excluded.nope")}}, key),
 		"the tenantless conflict target": with(same, set("rev"), []string{"key"}),
 		"no conflict target":             with(same, set("rev"), nil),
 		"SET of the tenant":              with(same, set("tenant_id"), key),
@@ -553,20 +557,44 @@ func TestColumnarUpsertRefusesAFragmentThatCouldChangeTheStatement(t *testing.T)
 			Upsert{Set: []Assignment{SetTo("rev", set)}, Where: where}, colUpCols...)
 	}
 	for name, f := range map[string]func(){
-		"SET with a sub-select":              func() { build("(SELECT 1)", "") },
-		"SET with from":                      func() { build("excluded.rev FROM other", "") },
-		"WHERE with a lower-case select":     func() { build("excluded.rev", "t.rev IN (select 1)") },
-		"SET with a second statement":        func() { build("excluded.rev; DROP TABLE x", "") },
-		"WHERE with a line comment":          func() { build("excluded.rev", "t.rev < 1 --") },
-		"WHERE with a block comment":         func() { build("excluded.rev", "t.rev < 1 /*") },
-		"WHERE with a parameter":             func() { build("excluded.rev", "t.rev < $1") },
-		"WHERE with a placeholder":           func() { build("excluded.rev", "t.rev < ?") },
-		"WHERE with an @name":                func() { build("excluded.rev", "t.rev < @x") },
-		"WHERE closing the guard early":      func() { build("excluded.rev", "t.rev < 1) OR (true") },
-		"WHERE with an unclosed parenthesis": func() { build("excluded.rev", "(t.rev < 1") },
-		"WHERE with an unterminated quote":   func() { build("excluded.rev", "t.label = 'x") },
-		"SET starting a second assignment":   func() { build("excluded.rev, tenant_id = 'other'", "") },
-		"an empty SET expression":            func() { build(" ", "") },
+		"SET with a sub-select":                      func() { build("(SELECT 1)", "") },
+		"SET with from":                              func() { build("excluded.rev FROM other", "") },
+		"WHERE with a lower-case select":             func() { build("excluded.rev", "t.rev IN (select 1)") },
+		"SET with a second statement":                func() { build("excluded.rev; DROP TABLE x", "") },
+		"WHERE with a line comment":                  func() { build("excluded.rev", "t.rev < 1 --") },
+		"WHERE with a block comment":                 func() { build("excluded.rev", "t.rev < 1 /*") },
+		"WHERE with a parameter":                     func() { build("excluded.rev", "t.rev < $1") },
+		"WHERE with a placeholder":                   func() { build("excluded.rev", "t.rev < ?") },
+		"WHERE with an @name":                        func() { build("excluded.rev", "t.rev < @x") },
+		"WHERE closing the guard early":              func() { build("excluded.rev", "t.rev < 1) OR (true") },
+		"WHERE with an unclosed parenthesis":         func() { build("excluded.rev", "(t.rev < 1") },
+		"WHERE with an unterminated quote":           func() { build("excluded.rev", "t.label = 'x") },
+		"SET starting a second assignment":           func() { build("excluded.rev, tenant_id = 'other'", "") },
+		"an empty SET expression":                    func() { build(" ", "") },
+		"E-string escape hiding a second assignment": func() { build(`E'\'', tenant_id = excluded.other, a = E'\''`, "") },
+		"a bare FROM":                                func() { build("excluded.rev FROM", "") },
+		"E-string prefix alone":                      func() { build("E'x'", "") },
+		"U& string":                                  func() { build("U&'x'", "") },
+		"a backslash in a plain string":              func() { build(`'a\b'`, "") },
+		"query_to_xml with a concatenated subquery": func() {
+			build("(query_to_xml('sel'||'ect * fr'||'om devices', true, false, ''))::text", "")
+		},
+		"TABLE subquery":             func() { build("excluded.label || (table devices)", "") },
+		"VALUES subquery":            func() { build("excluded.rev + (values (1))", "") },
+		"pg_sleep in WHERE":          func() { build("excluded.rev", "pg_sleep(30) is null") },
+		"set_config":                 func() { build("set_config('a','b',false)", "") },
+		"nextval":                    func() { build("nextval('s')", "") },
+		"advisory lock":              func() { build("excluded.rev", "pg_advisory_lock(1) is null") },
+		"dblink":                     func() { build("dblink('x','y')", "") },
+		"lo_import":                  func() { build("lo_import('/etc/passwd')", "") },
+		"a cast":                     func() { build("excluded.rev::text", "") },
+		"a quoted identifier":        func() { build(`"tenant_id"`, "") },
+		"a foreign qualifier":        func() { build("devices.rev", "") },
+		"an unknown bare identifier": func() { build("rev", "") },
+		"greatest (Postgres only)":   func() { build("greatest(t.rev, excluded.rev)", "") },
+		"a comma in a plain group":   func() { build("(excluded.rev, 1)", "") },
+		"a function name uncalled":   func() { build("coalesce", "") },
+		"an odd operator":            func() { build("excluded.rev <=> 1", "") },
 	} {
 		func() {
 			defer func() {
@@ -579,7 +607,9 @@ func TestColumnarUpsertRefusesAFragmentThatCouldChangeTheStatement(t *testing.T)
 	}
 	// The counterweights: a comma inside parentheses or a quote is fine, and so is a word
 	// that merely contains one of the blocked ones.
-	build("greatest(t.rev, excluded.rev)", "t.label <> 'a, b' AND t.rev > 0 AND t.label <> 'selected'")
+	build("coalesce(nullif(excluded.rev, 0), t.rev)",
+		"t.label <> 'a, b' AND t.rev > 0 AND t.label <> 'selected' AND t.label IS NOT DISTINCT FROM excluded.label")
+	build("CASE WHEN excluded.rev > t.rev THEN excluded.rev ELSE t.rev END", "")
 	build("coalesce(excluded.label, 'it''s')", "")
 }
 

@@ -42,6 +42,68 @@ func isColumnUpsertCall(call *ast.CallExpr) bool {
 	return false
 }
 
+// columnUpsertFindings applies the whole rule to one file: every reference to
+// NewColumnUpsert must be the function of a call, and that call must sit in a package-level
+// var initializer (a table is built once, where a reviewer reads it; a function value such as
+// `mk := rdb.NewColumnUpsert[Row]` or a call inside a function body would hide the fragments
+// from the check below), and each call's fragments must be literals or constants.
+func (s *siteScanner) columnUpsertFindings(fset *token.FileSet, file *ast.File, p *pkgFacts) []Finding {
+	var out []Finding
+	for _, decl := range file.Decls {
+		s.locals = localNames(decl)
+		gd, isGen := decl.(*ast.GenDecl)
+		inVar := isGen && gd.Tok == token.VAR
+		var root ast.Node = decl
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			if fd.Body == nil {
+				continue
+			}
+			root = fd.Body
+		}
+		inPos := map[ast.Node]bool{}
+		ast.Inspect(root, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok && isColumnUpsertCall(call) {
+				fun := call.Fun
+				switch f := fun.(type) {
+				case *ast.IndexExpr:
+					fun = f.X
+				case *ast.IndexListExpr:
+					fun = f.X
+				}
+				inPos[fun] = true
+				out = append(out, s.fragmentFindings(fset, call, p)...)
+			}
+			return true
+		})
+		skip := map[*ast.Ident]bool{}
+		flag := func(n ast.Node) {
+			out = append(out, Finding{
+				Pos: fset.Position(n.Pos()),
+				Message: "NewColumnUpsert must be called directly in a package-level var initializer, " +
+					"so every fragment it splices into SQL is visible to the reviewer and to this check",
+				Source: "NewColumnUpsert",
+			})
+		}
+		ast.Inspect(root, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.SelectorExpr:
+				if x.Sel.Name == columnUpsertFunc {
+					skip[x.Sel] = true
+					if !inVar || !inPos[x] {
+						flag(x)
+					}
+				}
+			case *ast.Ident:
+				if x.Name == columnUpsertFunc && !skip[x] && (!inVar || !inPos[x]) {
+					flag(x)
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
 // fragmentFindings reports every fragment of a NewColumnUpsert call that is not a literal or
 // a constant, and a terms argument that is not itself a literal.
 func (s *siteScanner) fragmentFindings(fset *token.FileSet, call *ast.CallExpr, p *pkgFacts) []Finding {

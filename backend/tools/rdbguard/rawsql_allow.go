@@ -80,9 +80,11 @@ var rawSQLAllowList = []siteEntry{
 			"The text is built from the model's own gorm schema plus, for an upsert, caller-written SQL " +
 			"FRAGMENTS (each SET expression and the WHERE guard): those are constants given once, when the " +
 			"table is built, and are not computed. Three things make that so. rdb.Fragment is a named string " +
-			"type, so only a constant converts to it implicitly; NewColumnUpsert refuses, at construction, a " +
-			"fragment with a select or from token, a semicolon, a comment, a parameter or placeholder, an " +
-			"unbalanced parenthesis or quote, or (in SET) a comma outside parentheses; and this scan's " +
+			"type, so only a constant converts to it implicitly; NewColumnUpsert accepts, at construction, " +
+			"only an ALLOWLISTED grammar (t. and excluded. column references, numeric and plain string " +
+			"literals, AND/OR/NOT/IS/NULL/CASE, COALESCE, NULLIF, operators, parentheses; commas only in " +
+			"function arguments), so a fragment cannot name another table or call another function; and " +
+			"this scan's " +
 			"column-upsert rule (columnupsert.go) fails any construction site whose fragments are not string " +
 			"literals or package constants, so a reviewer reads every one in place. The caller's guard is " +
 			"rendered in parentheses ANDed with the statement's own tenant term, SET may not name the tenant " +

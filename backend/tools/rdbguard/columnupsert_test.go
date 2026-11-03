@@ -36,15 +36,15 @@ var tbl = rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.
 
 	flagged := map[string]string{
 		"a variable in WHERE": `package model
-func f(g string) { rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", "excluded.a")}, Where: rdb.Fragment(g)}) }`,
+var tbl = func(g string) any { return rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", "excluded.a")}, Where: rdb.Fragment(g)}) }`,
 		"a variable in SET": `package model
-func f(g string) { rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", rdb.Fragment(g))}}) }`,
+var tbl = func(g string) any { return rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", rdb.Fragment(g))}}) }`,
 		"a package var, which can be reassigned": `package model
 var g = "x"
 var tbl = rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", g)}})`,
 		"a local that shadows a constant": `package model
 const g = "excluded.a"
-func f() { g := other(); rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", g)}}) }`,
+var tbl = func() any { g := other(); return rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", g)}}) }`,
 		"a call": `package model
 var tbl = rdb.NewColumnUpsert(tenant, key, rdb.Upsert{Set: []rdb.Assignment{rdb.SetTo("a", build())}})`,
 		"a formatted fragment": `package model
