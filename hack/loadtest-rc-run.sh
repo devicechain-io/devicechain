@@ -269,7 +269,8 @@ start() { # name, command...
 
 start http "$out/bin/dc-loadtest" --handshake "$http_hs" \
   --devices "$http_devices" --emit-interval "$http_interval" --hold "$duration" \
-  --min-accepted 1000 --quiesce-timeout 10m --quiesce-settle 90s --state-timeout 10m --report "$out/http.json" \n  ${http_steady[@]+"${http_steady[@]}"}
+  --min-accepted 1000 --quiesce-timeout 10m --quiesce-settle 90s --state-timeout 10m --report "$out/http.json" \
+  ${http_steady[@]+"${http_steady[@]}"}
 
 start mqtt "$out/bin/dc-loadtest-mqtt" --handshake "$mqtt_hs" \
   --devices "$mqtt_devices" --rate "$mqtt_rate" --duration "$duration" --qos 1 \
