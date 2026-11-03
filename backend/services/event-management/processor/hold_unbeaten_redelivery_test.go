@@ -312,7 +312,12 @@ func (p *f1Pod) stopWithStoreDown() {
 // F1 (a hold spends the delivery budget of unbeaten messages, exhausting MaxDeliver) was
 // TESTED AND REFUTED; this is the structural guard. A reader blocked in the hand-off pulls
 // nothing, so the broker redelivers nothing however long the hold lasts; one delivery is
-// spent at the first pull after recovery.
+// spent at the first pull after recovery. (Not asserted: how many are spent AFTER recovery
+// depends on how fast the backlog drains against the 1 s AckWait. A slow -race runner
+// reached a count of 3 for a few messages after one hold, because the drain of ~400 events
+// itself outlasted an AckWait and the broker redelivered messages still queued behind the
+// writer. That is the plain-reader contract (a fetched batch clears inside AckWait) meeting
+// a test AckWait 60 times shorter than production's, not a cost of the hold.)
 //
 // Measured with a flapping store (down 1.5 x AckWait, answering for a two-transaction window,
 // repeat; 1 s AckWait, 1500 events, one pod): batch 16 without fetch-ahead reached a highest
