@@ -437,8 +437,9 @@ if [[ "$skip_nats" -eq 0 ]]; then
       [[ -n "$cm" ]] || cm='{"items":[]}'
       # jq pulls out the config values and grep -E finds the port: jq's regex functions behave
       # differently across jq releases (this one passed on jq 1.8 and failed on CI's runner).
-      nats_prof_port="$("$JQ" -r '.items[]?.data[]?' <<<"$cm" 2>/dev/null \
-        | grep -oE '"?prof_port"?[[:space:]]*[:=][[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -n 1 || true)"
+      cm_values="$("$JQ" -r '.items[]?.data[]?' <<<"$cm" 2>/dev/null || true)"
+      nats_prof_port="$(grep -oE '"?prof_port"?[[:space:]]*[:=][[:space:]]*[0-9]+' <<<"$cm_values" \
+        | grep -oE '[0-9]+$' | sed -n '1p' || true)"
     fi
     if [[ -z "$nats_prof_port" ]]; then
       fail_rec nats "-" profiler "prof_port is not in the broker config and --nats-prof-port was not given: set the OpenTofu instance variable nats_profiling_port for the run"
