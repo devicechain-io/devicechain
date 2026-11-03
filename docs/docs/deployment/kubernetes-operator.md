@@ -152,7 +152,7 @@ different in kind:
 | Field | Meaning |
 |---|---|
 | `status.observedGeneration` | the spec generation this status was computed from |
-| `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete` (below) |
+| `status.conditions` | `Ready`, `WorkloadsAvailable`, `RolloutComplete`, `BrokerCertificateValid` (below) |
 | `status.version.requested` | `spec.imageVersion` |
 | `status.version.running` | the image tag every area with wanted pods runs; `mixed` (reserved: never a release tag) while areas differ; empty when it cannot be derived |
 | `status.areas[]` | one entry per functional area: `name`, `desiredReplicas`, `readyReplicas`, `availableReplicas`, `updatedReplicas`, and `image` (the full image reference, not a bare tag). The conditions are computed from `availableReplicas` |
@@ -172,12 +172,52 @@ device.
 | | `ProgressDeadlineExceeded` | False | a Deployment reports that its rollout has stopped progressing |
 | | `VersionMismatch` | False | converged, but on a different version from `spec.imageVersion` |
 | | `VersionUnknown` | Unknown | converged, but the running version cannot be derived (images pinned by digest alone) |
-| `Ready` | `Ready` | True | `WorkloadsAvailable` and `RolloutComplete` are both True |
+| `BrokerCertificateValid` | `CertificateValid` | True | the broker's TLS certificate and the authority that signed it have more than 30 days left |
+| | `CertificateExpiringSoon` | True | one of them expires within 30 days; `dcctl upgrade` renews the certificate, but never the authority, which means rebuilding the instance |
+| | `CertificateExpired` | False | one of them has expired: the broker refuses TLS connections until the certificate is renewed (or, for the authority, the instance rebuilt) |
+| | `CertificateNotPublished` | Unknown | no expiry has been published for the instance (it was last touched by a `dcctl` from before this existed) |
+| | `CertificateUnreadable` | Unknown | the published expiry is not an RFC 3339 time |
+| `Ready` | `Ready` | True | `WorkloadsAvailable` and `RolloutComplete` are both True, and the broker certificate has not expired |
 | | (the reason of the first condition that is not True) | False / Unknown | |
 
 An absent workload is always reported with a reason; it is never read as healthy. `Ready` is the
 settled state: it is False while a rollout is under way even though pods keep serving, so read
 `WorkloadsAvailable` to ask whether the instance is serving.
+
+#### Broker certificate expiry {#broker-certificate-expiry}
+
+The broker's TLS certificate is valid for a year and is renewed only when `dcctl upgrade` runs,
+inside the certificate's last 30 days. An instance that is never upgraded would therefore lose
+broker TLS on the anniversary of its bootstrap with nothing saying so. `BrokerCertificateValid`
+is that warning on the `Instance` itself.
+
+The operator has no access to Secrets, so it does not read the certificate. `dcctl` publishes
+when the certificate and its authority expire, as two annotations on the `Instance`: the dates of
+the certificate in the broker's Secret, written once the broker serves it (`dcctl bootstrap`, and
+every `dcctl upgrade`, including one that renews nothing, so an older instance gets them on its
+next upgrade). If a renewal restarts the broker and the restart does not finish, the older date
+stays, so the condition errs on the pessimistic side:
+
+| Annotation | Value |
+|---|---|
+| `core.devicechain.io/broker-certificate-not-after` | when the broker's certificate expires, RFC 3339, UTC |
+| `core.devicechain.io/broker-ca-not-after` | when the certificate authority that signed it expires |
+
+The operator compares those dates with its own clock, so the condition changes as time passes
+with nothing else in the cluster changing: it re-checks at each boundary and at least hourly. The
+message names the date, so it does not change from one check to the next.
+
+`Ready` follows only the False case. A certificate that is merely close to expiry leaves `Ready`
+alone, because the instance is serving and a status that went unready for a renewable date would
+teach readers to ignore it; an expired one means TLS to the broker fails, which is what `Ready`
+exists to say. `Unknown` never changes `Ready`. When workloads are also unhealthy, `Ready` keeps
+the workload reason, since that is the first thing to fix.
+
+Instances with monitoring enabled also get the `BrokerCertificateExpiringSoon` and
+`BrokerCertificateExpiryCritical` alerts, which read the expiry from the certificate the broker
+is serving rather than from these annotations (see the [alert
+runbook](./observability.md#broker-client-certificates)). The condition is what covers an instance with
+monitoring off, and the only thing that covers the certificate authority.
 
 `Instance` is a supported API. New status fields, condition types and reasons may be added;
 nothing is removed or changes meaning. A reader must treat a condition type or reason it does not

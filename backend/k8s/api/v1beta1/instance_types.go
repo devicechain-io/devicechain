@@ -51,6 +51,23 @@ const (
 	// instance protected. A phase write that moves a declaration AWAY from Ready drops
 	// an inert record, so moving the phase can never revive one.
 	AnnotationBootstrapUnfinished = "core.devicechain.io/bootstrap-unfinished"
+
+	// AnnotationBrokerCertificateNotAfter and AnnotationBrokerCANotAfter publish when
+	// the broker's TLS leaf certificate, and the authority that signed it, expire
+	// (RFC 3339, UTC). They are written by dcctl wherever it mints or renews that
+	// certificate (bootstrap, and every upgrade), from the PUBLIC certificate in the
+	// broker's TLS Secret, once the broker serves it: a restart that does not finish
+	// leaves the older, more pessimistic date.
+	//
+	// The operator is given no access to Secrets, so the expiry has to be published
+	// by the step that knows it. A date is not a secret, and these are assertions of
+	// what a dcctl run left in the cluster: the operator reads them, compares them
+	// with its own clock, and reports the result as the BrokerCertificateValid
+	// condition. Absence means nothing has published one (an instance last touched
+	// by a dcctl from before they existed), which is reported as Unknown and never
+	// as valid.
+	AnnotationBrokerCertificateNotAfter = "core.devicechain.io/broker-certificate-not-after"
+	AnnotationBrokerCANotAfter          = "core.devicechain.io/broker-ca-not-after"
 )
 
 // BootstrapUnfinished is the only value AnnotationBootstrapUnfinished takes.
@@ -522,6 +539,18 @@ const (
 	// ConditionRolloutComplete says the workloads have converged on the current
 	// template and on the requested version.
 	ConditionRolloutComplete = "RolloutComplete"
+	// ConditionBrokerCertificateValid says the broker's TLS certificate (and the
+	// authority behind it) is in date. True while it is, including inside the
+	// renewal window (reason CertificateExpiringSoon); False once it has expired;
+	// Unknown when no expiry was published or the published value cannot be read.
+	//
+	// 🔴 IT GATES Ready ONLY WHEN FALSE. A certificate that is merely close to
+	// expiring leaves Ready alone: the instance is serving, and an instance that
+	// flaps unready for a renewable date would train readers to ignore Ready. An
+	// expired one means the broker refuses TLS connections, which is what Ready
+	// exists to say. Unknown never gates, so an instance dcctl has not yet
+	// published for is not reported broken for it.
+	ConditionBrokerCertificateValid = "BrokerCertificateValid"
 )
 
 // The reasons the operator writes. These names are API: adding one is minor,
@@ -554,6 +583,23 @@ const (
 	// ReasonVersionUnknown: the workloads have converged but the running version
 	// cannot be derived from their images (RolloutComplete is Unknown).
 	ReasonVersionUnknown = "VersionUnknown"
+
+	// ReasonCertificateValid is BrokerCertificateValid=True with more than the
+	// warning window left.
+	ReasonCertificateValid = "CertificateValid"
+	// ReasonCertificateExpiringSoon is BrokerCertificateValid=True with the
+	// certificate (or its authority) expiring inside the warning window. Run
+	// `dcctl upgrade`, which renews it.
+	ReasonCertificateExpiringSoon = "CertificateExpiringSoon"
+	// ReasonCertificateExpired is BrokerCertificateValid=False (and Ready=False):
+	// the certificate or its authority has expired.
+	ReasonCertificateExpired = "CertificateExpired"
+	// ReasonCertificateNotPublished is BrokerCertificateValid=Unknown: no expiry
+	// annotation is present.
+	ReasonCertificateNotPublished = "CertificateNotPublished"
+	// ReasonCertificateUnreadable is BrokerCertificateValid=Unknown: an expiry
+	// annotation is present but is not an RFC 3339 time.
+	ReasonCertificateUnreadable = "CertificateUnreadable"
 )
 
 //+kubebuilder:object:root=true

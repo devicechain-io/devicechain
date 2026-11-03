@@ -33,6 +33,38 @@ Ten minutes is longer than a broker start (the probe waits for the server to be 
 a lame duck shutdown (the probe stops when it begins), so a rolling restart does not fire it.
 
 No `or vector(0)`, for the reason prometheusrule-dead-letter.yaml gives in its header.
+
+THE CERTIFICATE EXPIRY ALERTS (BrokerCertificateExpiringSoon, BrokerCertificateExpiryCritical)
+exist because the broker's TLS certificate is good for a year and is renewed only when dcctl
+upgrade runs: an instance nobody upgrades loses TLS on the anniversary of its bootstrap, and
+nothing else says so.
+
+THE SIGNAL IS THE BROKER'S OWN, NOT A DATE WRITTEN INTO THE RULE. dc_broker_mqtt_tls_cert_not_after_seconds
+is the expiry of the certificate the MQTT listener presents to new connections right now, read
+from the live TLS configuration and updated by a hot swap. Alerting on it means:
+  - a renewal cannot leave a stale threshold. Nothing about the certificate is rendered into
+    this rule, so there is no value to go out of date; the series moves when the broker starts
+    presenting the new certificate, and the alert clears then and not before;
+  - a renewal that was written but never picked up (a broker that did not reload) keeps
+    alerting, which is correct: the old certificate is still what devices see;
+  - it needs no operator metrics and no chart input, only the scrape podmonitor-nats.yaml
+    already does.
+(The alternatives considered were rendering the date as a constant into the rule, which is
+correct only until the first path that renews without re-rendering the chart, and exporting a
+gauge from the operator, which is disabled today and would read an annotation dcctl asserted
+rather than the certificate the broker serves.)
+
+THE TWO ALERTS ARE DISJOINT BY DESIGN: warning from 30 days out down to 7 days, critical below 7
+days and after expiry (a negative remaining time still matches). One page at a time, escalating,
+with no reliance on the alert manager inhibiting the weaker one. 30 days is where dcctl upgrade
+starts renewing, so a warning means "the next upgrade will renew it".
+
+QUIET when the listener does not terminate TLS (the series is 0, filtered out), and when the
+series does not exist; a broker that is not exporting it is BrokerMqttClientAuthLost's
+business. A compact instance whose dc-metrics port is broken alerts on nothing here (condition
+only: the BrokerCertificateValid condition below is its sole signal). An instance with monitoring off is not covered here; the operator reports the same
+expiry as the BrokerCertificateValid condition on the Instance. That condition also covers the
+certificate authority, which this series does not.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts .Values.metrics.natsPodMonitor }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -122,4 +154,32 @@ spec:
           annotations:
             summary: "one broker server leads far fewer streams than the others"
             description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. Only the streams that dcctl is allowed to move are counted: this instance's replicated streams other than the device-ingest ones (the broker's MQTT streams, the device capture stream and every stream an ingest area writes), which are never rebalanced because a leader change on them can lose messages already acknowledged to a device. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
+        - alert: BrokerCertificateExpiringSoon
+          expr: |
+            (
+              max by (namespace, pod) (dc_broker_mqtt_tls_cert_not_after_seconds{namespace="{{ $natsNamespace }}"} > 0) - time()
+            ) < 30 * 86400
+            and
+            (
+              max by (namespace, pod) (dc_broker_mqtt_tls_cert_not_after_seconds{namespace="{{ $natsNamespace }}"} > 0) - time()
+            ) >= 7 * 86400
+          for: 1h
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "the broker's TLS certificate expires within 30 days"
+            description: "The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl upgrade for this instance now clears this alert. If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch."
+        - alert: BrokerCertificateExpiryCritical
+          expr: |
+            (
+              max by (namespace, pod) (dc_broker_mqtt_tls_cert_not_after_seconds{namespace="{{ $natsNamespace }}"} > 0) - time()
+            ) < 7 * 86400
+          for: 10m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "the broker's TLS certificate expires within 7 days, or already has"
+            description: "The broker server named by the pod label presents a TLS certificate that expires in less than 7 days, or that has already expired. Once it has expired the broker's TLS connections fail for devices and for this instance's own services. Run dcctl upgrade for this instance now: it re-issues the certificate under the authority the instance keeps. An instance that does not keep its authority (one bootstrapped by an early release) cannot re-issue it in place and has to be rebuilt; dcctl upgrade says so when that is the case. If an upgrade has run and this still fires, the broker has not picked the new certificate up; restart the server pod."
 {{- end }}

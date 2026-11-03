@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,18 @@ const (
 	// maxNamed bounds how many areas a condition message names, so a message stays
 	// short on an instance with every area down.
 	maxNamed = 5
+
+	// certWarnWindow is how close to expiry the broker's certificate is reported as
+	// expiring soon. It equals what dcctl upgrade renews inside (natsLeafRenewBefore) and
+	// the chart's BrokerCertificateExpiringSoon alert uses the same 30 days, but the two
+	// are not simultaneous: the alert holds for an hour and reads the certificate the
+	// broker is serving, this reads the date dcctl published.
+	certWarnWindow = 30 * 24 * time.Hour
+
+	// certRecheck bounds how long the operator goes without looking at a published
+	// expiry again. The boundaries are scheduled exactly (see certificateVerdict); this
+	// is the backstop, so a missed timer or a stepped clock is corrected within the hour.
+	certRecheck = time.Hour
 )
 
 // instanceForDeployment maps a Deployment back to the Instance that owns it, or
@@ -48,7 +61,10 @@ func instanceForDeployment(d *appsv1.Deployment) string {
 // read here (SetStatusCondition stamps transition times only when a condition's
 // status actually changes), so the same inputs always give the same status and
 // the reconciler can skip the write when nothing moved.
-func computeStatus(instance *corev1beta1.Instance, deployments []appsv1.Deployment) corev1beta1.InstanceStatus {
+//
+// now is a parameter for the same reason: time passing is an input like any other, and
+// it is what flips BrokerCertificateValid with no event to announce it.
+func computeStatus(instance *corev1beta1.Instance, deployments []appsv1.Deployment, now time.Time) corev1beta1.InstanceStatus {
 	areas := make([]corev1beta1.AreaStatus, 0, len(deployments))
 	byName := make(map[string]*appsv1.Deployment, len(deployments))
 	for i := range deployments {
@@ -81,12 +97,14 @@ func computeStatus(instance *corev1beta1.Instance, deployments []appsv1.Deployme
 
 	available := workloadsAvailable(areas, byName)
 	rollout := rolloutComplete(instance.Spec.ImageVersion, running, areas, byName)
-	ready := summarize(available, rollout)
+	cert, _ := certificateVerdict(instance, now)
+	ready := summarize(available, rollout, cert)
 
 	for _, c := range []metav1.Condition{
 		{Type: corev1beta1.ConditionReady, Status: ready.Status, Reason: ready.Reason, Message: ready.Message},
 		{Type: corev1beta1.ConditionWorkloadsAvailable, Status: available.Status, Reason: available.Reason, Message: available.Message},
 		{Type: corev1beta1.ConditionRolloutComplete, Status: rollout.Status, Reason: rollout.Reason, Message: rollout.Message},
+		{Type: corev1beta1.ConditionBrokerCertificateValid, Status: cert.Status, Reason: cert.Reason, Message: cert.Message},
 	} {
 		c.ObservedGeneration = instance.Generation
 		meta.SetStatusCondition(&status.Conditions, c)
@@ -276,13 +294,107 @@ func sameVersion(a, b string) bool {
 	return strings.TrimPrefix(a, "v") == strings.TrimPrefix(b, "v")
 }
 
-// summarize folds the two conditions into Ready: True only when both are, else the
-// first one that is not, with its reason.
-func summarize(available, rollout verdict) verdict {
+// certificateVerdict reads the expiry dcctl published for the broker's certificate and
+// its authority and says what it means at now, plus when that answer next changes
+// (zero when nothing is published, so nothing needs a timer).
+//
+// 🔴 THE EXPIRY IS READ FROM AN ANNOTATION BECAUSE THE OPERATOR HAS NO ACCESS TO
+// SECRETS, and a date is not a secret. What the operator contributes is the comparison
+// with ITS clock, which is why this is evaluated on a timer rather than on events: no
+// object changes when a certificate crosses a boundary.
+//
+// Unknown is returned for "nothing published" and for "published but unreadable", never
+// a plausible Valid: an instance last touched by an older dcctl must not read as
+// verified. When both leaf and authority are published the worse of the two is reported.
+func certificateVerdict(instance *corev1beta1.Instance, now time.Time) (verdict, time.Duration) {
+	// leaf is re-issued by dcctl upgrade; the authority never is, so the remedy differs.
+	type subject struct {
+		what, annotation, remedy string
+	}
+	subjects := []subject{
+		{"broker certificate", corev1beta1.AnnotationBrokerCertificateNotAfter,
+			"run dcctl upgrade to renew it (an instance that does not keep its authority cannot be renewed in place and has to be rebuilt)"},
+		{"broker certificate authority", corev1beta1.AnnotationBrokerCANotAfter,
+			"renewal never re-issues the authority, so the instance has to be rebuilt"},
+	}
+	var (
+		expired, soon, unreadable []string
+		next                      time.Duration
+		published                 int
+		earliest                  time.Time
+	)
+	schedule := func(d time.Duration) {
+		if d > 0 && (next == 0 || d < next) {
+			next = d
+		}
+	}
+	// Both subjects are judged before anything is returned, so a definite False on one
+	// is never hidden by an unreadable value on the other.
+	for _, sub := range subjects {
+		raw, ok := instance.Annotations[sub.annotation]
+		if !ok {
+			continue
+		}
+		notAfter, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("annotation %s is %q, which is not an RFC 3339 time; run dcctl upgrade to publish it again",
+				sub.annotation, raw))
+			continue
+		}
+		published++
+		notAfter = notAfter.UTC()
+		if earliest.IsZero() || notAfter.Before(earliest) {
+			earliest = notAfter
+		}
+		switch remaining := notAfter.Sub(now); {
+		case remaining <= 0:
+			expired = append(expired, fmt.Sprintf("the %s expired at %s: %s", sub.what, notAfter.Format(time.RFC3339), sub.remedy))
+		case remaining <= certWarnWindow:
+			soon = append(soon, fmt.Sprintf("the %s expires at %s: %s", sub.what, notAfter.Format(time.RFC3339), sub.remedy))
+			schedule(remaining + time.Second)
+		default:
+			schedule(remaining - certWarnWindow + time.Second)
+		}
+	}
+	switch {
+	case len(expired) > 0:
+		return verdict{metav1.ConditionFalse, corev1beta1.ReasonCertificateExpired,
+			"the broker refuses TLS connections until this is fixed; " + strings.Join(expired, "; ")}, certRecheck
+	case len(soon) > 0:
+		return verdict{metav1.ConditionTrue, corev1beta1.ReasonCertificateExpiringSoon,
+			strings.Join(soon, "; ")}, capRecheck(next)
+	case len(unreadable) > 0:
+		return verdict{metav1.ConditionUnknown, corev1beta1.ReasonCertificateUnreadable,
+			strings.Join(unreadable, "; ")}, capRecheck(next)
+	case published == 0:
+		return verdict{metav1.ConditionUnknown, corev1beta1.ReasonCertificateNotPublished,
+			"no broker certificate expiry has been published for this instance; dcctl upgrade publishes it"}, 0
+	}
+	return verdict{metav1.ConditionTrue, corev1beta1.ReasonCertificateValid,
+		fmt.Sprintf("the broker certificate is valid until %s", earliest.Format(time.RFC3339))}, capRecheck(next)
+}
+
+// capRecheck is d bounded by certRecheck: a published expiry is looked at again within
+// the bound whatever the next boundary is.
+func capRecheck(d time.Duration) time.Duration {
+	if d <= 0 || d > certRecheck {
+		return certRecheck
+	}
+	return d
+}
+
+// summarize folds the conditions into Ready: True only when workloads are available
+// and the rollout is complete, else the first one that is not, with its reason. The
+// certificate counts only when it is definitely False (expired): expiring soon and
+// unknown do not make an otherwise serving instance unready.
+func summarize(available, rollout, cert verdict) verdict {
 	for _, v := range []verdict{available, rollout} {
 		if v.Status != metav1.ConditionTrue {
 			return v
 		}
+	}
+	if cert.Status == metav1.ConditionFalse {
+		return cert
 	}
 	return verdict{metav1.ConditionTrue, corev1beta1.ReasonReady,
 		"every area is available and the rollout is complete"}
