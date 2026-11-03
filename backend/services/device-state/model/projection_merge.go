@@ -41,7 +41,8 @@ import (
 // soft-deletes these rows (the tenant purge hard-deletes with raw SQL), so that state is not
 // reachable today.
 
-// upsertChunk is the most rows one upsert statement carries. 500 rows of the widest row
+// upsertChunk is the most rows one dropped_measurements insert carries (the column-array
+// upserts bind arrays and need no chunking). 500 rows of the widest row
 // (latest_locations, twelve columns) is 6000 parameters, far below either database's limit.
 const upsertChunk = 500
 
@@ -106,8 +107,9 @@ func foldColumns(db *gorm.DB) ([]string, error) {
 }
 
 // foldSelect is the lock read's column list: foldColumns, the key the rows are matched on, and
-// the primary key so the write-back names the row it holds (an absent id would burn a fresh
-// sequence value per row written, and a row that conflicts is never inserted anyway).
+// the primary key. The column-array write-back omits id, so each row it writes draws a value
+// from device_states' bigint sequence even though it always conflicts; that costs a gap in the
+// sequence and nothing else.
 func foldSelect(db *gorm.DB) ([]string, error) {
 	cols, err := foldColumns(db)
 	if err != nil {
@@ -347,8 +349,8 @@ func (e *BatchRefusal) Unwrap() error { return e.Err }
 // 🔴 THE LOCK ORDER. A transaction that waits for a lock while holding another can deadlock
 // only with one that acquires the same two in the opposite order. Every batch therefore takes
 // device_states row locks in ONE statement and in ascending (tenant, token) order, whether
-// the row exists or not: the heartbeat upsert and lockOrCreate both walk VALUES in token
-// order, and an INSERT … ON CONFLICT takes a new row (its own insert, which a second
+// the row exists or not: the heartbeat upsert and lockOrCreate both insert their rows in token
+// order (VALUES on SQLite, the unnested arrays on Postgres), and an INSERT … ON CONFLICT takes a new row (its own insert, which a second
 // inserter waits on until commit) and an existing one (the conflict arm's row lock) at the
 // SAME point of that walk. Everything after it touches only rows already held, then
 // latest_measurements in (token, name) order, then latest_locations in token order, each one
