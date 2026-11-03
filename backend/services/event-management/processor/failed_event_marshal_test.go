@@ -63,6 +63,9 @@ func newFailedEventProcessor(t *testing.T) (*EventPersistenceProcessor, *recordi
 		new(emtest.MockApi),
 		NewPersistMetrics(emtest.EventManagementMicroservice))
 	require.NoError(t, eproc.Initialize(context.Background()))
+	// Initialize starts the writers; stop them so none outlives the test (see the suite's
+	// TearDownTest). Refused, harmlessly, if the test already stopped the processor.
+	t.Cleanup(func() { _ = eproc.Stop(context.Background()) })
 	return eproc, failed
 }
 
