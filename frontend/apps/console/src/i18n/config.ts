@@ -113,6 +113,7 @@ export const NAMESPACES = [
   'trustAnchors',
   'integrations',
   'commandBatches',
+  'ingestFailures',
   'updateSigners',
   'branding',
   'basemap',

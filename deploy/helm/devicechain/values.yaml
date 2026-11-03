@@ -1825,6 +1825,13 @@ functionalAreas:
     #                               # history on demand is a separate capability and is
     #                               # not offered here. Deleting a TENANT already
     #                               # removes its positions along with everything else.
+    #       failedEventRetentionDays: 7
+    #                               # how long the Ingest failures index (the records of
+    #                               # events the platform refused or could not store) is
+    #                               # kept. Unlike retentionDays this one is ON by
+    #                               # default, because the index holds no telemetry; it
+    #                               # is independent of retentionDays in both directions.
+    #                               # 0 keeps the records indefinitely.
     #
     # Event persistence (defaults shown). Events are written in batches: each writer
     # commits the events already waiting for it, up to maxBatch, in one transaction,

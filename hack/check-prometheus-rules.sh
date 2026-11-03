@@ -1157,7 +1157,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker)
+required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1268,6 +1268,7 @@ declare -A rule_tests=(
   [device-state]="$repo_root/hack/testdata/prometheus-rules-device-state-tests.yaml"
   [update-management]="$repo_root/hack/testdata/prometheus-rules-update-management-tests.yaml"
   [broker]="$repo_root/hack/testdata/prometheus-rules-broker-tests.yaml"
+  [event-management]="$repo_root/hack/testdata/prometheus-rules-event-management-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop

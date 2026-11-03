@@ -1,0 +1,79 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for event-management's alerting rules (the failed-events index).
+#
+# FailedEventsSustained reads the rate of devicechain_eventmanagement_failed_events_recorded_total,
+# which counts EVERY record the reader saw (the table's flood bound hides the rate on purpose).
+# The quiet cases carry as much weight as the firing one:
+#
+#   - a trickle (well under 1/s) of one reason must not page;
+#   - a burst that stops before 15 minutes must not page;
+#   - the rate is per REASON: two reasons at 0.6/s each must not page, because neither is
+#     above 1/s on its own;
+#   - a sustained 2/s of one reason fires, labelled with that reason, and clears once it stops.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # A trickle: 0.1 records a second.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_failed_events_recorded_total{namespace="dci-devicechain", pod="dc-event-management-aaaaa", source="device-management", reason="device_not_found"}'
+        values: '0+6x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: FailedEventsSustained
+        exp_alerts: []
+
+  # A burst at 2/s for 10 minutes, then silence: shorter than the 15 minutes it must last.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_failed_events_recorded_total{namespace="dci-devicechain", pod="dc-event-management-aaaaa", source="device-management", reason="unauthenticated"}'
+        values: '0+120x10 1200x50'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: FailedEventsSustained
+        exp_alerts: []
+
+  # Two reasons at 0.6/s each (1.2/s together): neither is above 1/s, so the per-reason
+  # sum does not fire. The sum is by reason, not over everything.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_failed_events_recorded_total{namespace="dci-devicechain", pod="dc-event-management-aaaaa", source="device-management", reason="unauthenticated"}'
+        values: '0+36x60'
+      - series: 'devicechain_eventmanagement_failed_events_recorded_total{namespace="dci-devicechain", pod="dc-event-management-aaaaa", source="device-management", reason="device_not_found"}'
+        values: '0+36x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: FailedEventsSustained
+        exp_alerts: []
+
+  # Sustained 2/s of one reason: fires after the 15m `for`, labelled with the reason, and
+  # clears once the rate window has passed the end of the flood.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventmanagement_failed_events_recorded_total{namespace="dci-devicechain", pod="dc-event-management-aaaaa", source="device-management", reason="unauthenticated"}'
+        values: '0+120x30 3600x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FailedEventsSustained
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: FailedEventsSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              reason: unauthenticated
+            exp_annotations:
+              summary: "the platform has been refusing more than one event a second for the same reason for 15 minutes"
+              description: "Events are being refused or could not be stored at more than one a second for the reason named by the reason label, and have been for 15 minutes. That can be a single device sending that fast (2 a second from one device is enough to fire it) or many devices failing together: a credential or certificate that is wrong across many devices (unauthenticated), devices that were never registered (device_not_found), a gateway publishing for devices it does not hold (not_gateway_child), or a failing dependency (api_call_failed). The tenants' failedEvents query and the Ingest failures view in the console show which devices and what the platform said, at most ten rows per device an hour with the rest counted. Nothing is re-sent: the events were not stored, and fixing the cause makes the devices' next events succeed."
+      - eval_time: 55m
+        alertname: FailedEventsSustained
+        exp_alerts: []

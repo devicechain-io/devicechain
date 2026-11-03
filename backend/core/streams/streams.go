@@ -502,22 +502,25 @@ const (
 	// device-management publishes one when resolution fails, event-management when
 	// the message will not unmarshal or the row will not insert.
 	//
-	// 🔴 IT IS WRITE-ONLY TODAY, AND SAYING SO HERE IS THE POINT OF THIS COMMENT.
-	// Grep the backend for this constant and every hit is NewWriter — two of them.
-	// Nothing subscribes, nothing stores it, no console surface reads it, and there
-	// is no reconciler that works it off. A record published here is retained for the
-	// cold tier's window and then expires unread.
+	// event-management READS it into an index (the failed_event_records hypertable,
+	// served to a tenant's administrators as failedEvents): one row per record with the
+	// reason, the device token as claimed, the event type, a bounded error and the
+	// record's stream position. The payload is LOCATED on this stream, never copied
+	// into the relational store, so the record stays readable only while the cold
+	// tier's byte bound has not rolled past it - an operator who asks for it after that
+	// is told it has expired, not handed an empty payload. A flood from one device is
+	// suppressed to a bounded number of rows per hour with a count of what was dropped.
 	//
-	// So it is a REPORT, not a queue, and it must not be described as a dead-letter
-	// queue in comments or in prose. The platform does have one of those —
-	// DeadLetters below, whose letters user-management stores and command-delivery
-	// reads back — and the distinction is exactly the one an operator needs: work in
-	// DeadLetters can be recovered, and an event reported here cannot. The
-	// operator-visible signal for a persistence failure is the producing service's
-	// log line and its RED metrics counter.
-	//
-	// Giving it a consumer is open work, not something this comment forecloses; what
-	// it forecloses is a reader inferring one from the vocabulary.
+	// 🔴 IT IS STILL A REPORT, NOT A QUEUE, and it must not be described as a
+	// dead-letter queue in comments or in prose. Nothing here is recovered or replayed:
+	// a rejection replays to the same answer unless its cause was fixed, and re-injecting
+	// an archived unresolved event would have to bypass authentication, because the
+	// credential is deliberately not in the archive. The platform's one dead-letter
+	// store is DeadLetters below, whose letters user-management stores and
+	// command-delivery reads back - work in DeadLetters can be recovered, and an event
+	// reported here cannot. That is why a give-up by THIS reader is counted as a loss
+	// rather than lettered (NotLettered): a dead letter about a failure report would be
+	// a report about a report.
 	FailedEvents = "failed-events"
 
 	// DeadLetters is the platform's one sink for work a consumer accepted and then gave
@@ -978,7 +981,7 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.
-	{Suffix: FailedEvents, PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered,
+	{Suffix: FailedEvents, PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Readers: []Reader{{"event-management", ReadDurable}}, Tier: Cold, DeadLetterKind: NotLettered,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// The dedup window is what lets the connectors service's own arm and the platform's
 	// max-delivery recorder both write the verbatim copy of one give-up and store it

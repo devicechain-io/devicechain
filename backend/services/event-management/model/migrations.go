@@ -81,5 +81,9 @@ var (
 		// The calculated-metric backfill job table (see its doc comment). A plain table, no
 		// hypertable work, so it takes no part in the key rebuilds' gates.
 		NewCalculatedBackfillSchema(),
+		// The failed-events index (see its doc comment): a hypertable, so it IS governed by
+		// the data-lifecycle reconciler (LifecycleHypertables) and, unlike the others, on a
+		// window of its own.
+		NewFailedEventRecordsSchema(),
 	}
 )

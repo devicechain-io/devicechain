@@ -64,6 +64,7 @@ export const NAV_SECTION_KEY: Record<string, string> = {
   'service-accounts': 'serviceAccounts',
   roles: 'roles',
   'command-batches': 'commandBatches',
+  'ingest-failures': 'ingestFailures',
   updates: 'updates',
 };
 

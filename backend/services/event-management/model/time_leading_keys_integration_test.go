@@ -67,7 +67,7 @@ var testRekeyTiming = timeLeadingKeysTiming{
 // the final set.
 func assertAfterRekeyIndexes(t *testing.T, db *gorm.DB, minChunks int) {
 	t.Helper()
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, afterRekeyIndexes[table], hypertableIndexes(t, db, table), "indexes on %s", table)
 	}
 	assertChunkSets(t, db, minChunks, func(table string) []string { return sortedNames(afterRekeyIndexes[table]) })
@@ -77,7 +77,7 @@ func assertAfterRekeyIndexes(t *testing.T, db *gorm.DB, minChunks int) {
 // its OLD columns, every tenant-time index present.
 func assertAfterTrimIndexes(t *testing.T, db *gorm.DB, what string) {
 	t.Helper()
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		assert.Equalf(t, afterTrimIndexes[table], hypertableIndexes(t, db, table), "%s: indexes on %s", what, table)
 	}
 }
@@ -115,7 +115,7 @@ func TestIntegrationIdentityKeysLeadWithTime(t *testing.T) {
 func compressOldest(t *testing.T, sys *gorm.DB) map[string]string {
 	t.Helper()
 	oldChunk := map[string]string{}
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(enableCompressionStmt(table)).Error, "enable compression on %s", table)
 		var chunk string
 		require.NoError(t, sys.Raw(`SELECT format('%I.%I', chunk_schema, chunk_name)
@@ -227,7 +227,7 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 	assert.Equal(t, "23505", pgErr.Code)
 	assert.Truef(t, chunkIndexIs(pgErr.ConstraintName, "events_pkey"), "refused by %q", pgErr.ConstraintName)
 
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, oldChunk[table]).Error)
 	}
 	assertChunkSets(t, sys, 2, func(table string) []string { return sortedNames(afterRekeyIndexes[table]) })
@@ -265,7 +265,7 @@ func TestIntegrationTimeLeadingKeysRefuseTooMuchHistory(t *testing.T) {
 	mgr = newPostgresManagerWith(t, freshInstance(t, "itrekeygatez"), migrationsBefore(t, rekeyID()))
 	sys = systemDB(mgr)
 	twoChunkSeed(t, sys)
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(enableCompressionStmt(table)).Error)
 		require.NoError(t, sys.Exec(`SELECT compress_chunk(format('%I.%I', chunk_schema, chunk_name)::regclass)
 			FROM timescaledb_information.chunks
@@ -675,7 +675,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	const perDevice = 50
 	seedStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	seedEventStore(t, sys, []string{"acme", "globex"}, 100, perDevice, seedStart, 19*24*time.Hour/perDevice)
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(`ANALYZE "event-management".`+table).Error)
 	}
 
@@ -866,7 +866,7 @@ func TestIntegrationAnchorFilteredEventsSeekTheKey(t *testing.T) {
 		(tenant_id, event_id, device_token, event_type, occurred_time, anchor_type, anchor_token)
 		SELECT tenant_id, event_id, device_token, event_type, occurred_time, 'customer', 'cust-rare'
 		FROM "event-management".events WHERE tenant_id = 'acme' AND device_token = 'dev-7'`).Error)
-	for _, table := range LifecycleHypertables {
+	for _, table := range eventStoreTables {
 		require.NoError(t, sys.Exec(`ANALYZE "event-management".`+table).Error)
 	}
 

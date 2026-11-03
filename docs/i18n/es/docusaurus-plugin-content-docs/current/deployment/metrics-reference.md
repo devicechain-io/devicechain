@@ -194,6 +194,16 @@ nunca debería mostrar `raiseAlarm` ni `clearAlarm`, porque ese sumidero siempre
 | `react_events_poison_dropped_total` | Eventos derivados descartados tras el tope de reentregas, porque su despacho seguía fallando. También se escriben en el flujo de mensajes no entregados, así que esto cuenta los mismos eventos que `react_events_dead_lettered_total`; se mantiene porque la alerta `ReactPoisonDropping` se dispara sobre él. |
 | `react_workers` | Cuántos eventos derivados puede despachar REACT a la vez (`react.workers`). Los eventos de un mismo dispositivo se despachan uno tras otro, en el orden del flujo, salvo que un evento dejado para reentrega se despacha de nuevo después de los eventos que le siguen. |
 
+## Event management {#event-management}
+
+Prefijo: `devicechain_eventmanagement_`.
+
+| Métrica | Qué cuenta y qué hacer |
+| --- | --- |
+| `failed_events_recorded_total{source,reason}` | Registros de eventos que la plataforma rechazó o no pudo almacenar que el [índice de eventos fallidos](../guides/why-isnt-my-data-showing-up.md) leyó, por el área que los escribió y el motivo. Cuenta todos los registros, incluidos los que el límite de inundación agrupó en una fila existente, así que es la tasa real de rechazos de la plataforma. `FailedEventsSustained` se dispara con ella. |
+| `failed_events_suppressed_total{reason}` | Registros agrupados en el contador de una fila existente en lugar de añadir una fila, porque el dispositivo o el motivo alcanzó su límite por hora. Una tasa sostenida indica que un dispositivo, o una causa, rechaza eventos en volumen. |
+| `failed_events_unindexed_total{cause}` | Registros que el índice no almacenó: `no_tenant` (el asunto no nombraba tenant), `undecodable` (el registro no se pudo decodificar), `erased` (los datos del tenant fueron borrados) o `gave_up` (el almacén rechazó el registro en todas las entregas). Solo `gave_up` es una falla a revisar; el registro permanece en el flujo de fallos hasta que se descarta. |
+
 ## Event sources {#event-sources}
 
 Prefijo: `devicechain_eventsources_`.

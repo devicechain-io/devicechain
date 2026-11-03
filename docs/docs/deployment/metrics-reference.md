@@ -188,6 +188,16 @@ defect to investigate, not load. `react_actions_not_enabled_total` should never 
 | `react_events_poison_dropped_total` | Derived events dropped after the redelivery cap, because their dispatch kept failing. They are also written to the dead-letter stream, so this counts the same events as `react_events_dead_lettered_total`; it is kept because the `ReactPoisonDropping` alert fires on it. |
 | `react_workers` | How many derived events REACT may dispatch at once (`react.workers`). Events of one device are dispatched one after another, in stream order, except that an event left for redelivery is dispatched again after the events behind it. |
 
+## Event management {#event-management}
+
+Prefix: `devicechain_eventmanagement_`.
+
+| Metric | What it counts and what to do |
+| --- | --- |
+| `failed_events_recorded_total{source,reason}` | Records of events the platform refused or could not store that the [failed-events index](../guides/why-isnt-my-data-showing-up.md) read, by the area that wrote them and the reason. Every record counts, including those the flood bound folded into an existing row, so this is the platform's true rate of refusing events. `FailedEventsSustained` fires on it. |
+| `failed_events_suppressed_total{reason}` | Records folded into an existing row's count instead of adding a row, because the device or the reason reached its hourly bound. A sustained rate here means one device, or one cause, is refusing events in volume. |
+| `failed_events_unindexed_total{cause}` | Records the index did not store at all: `no_tenant` (the subject named no tenant), `undecodable` (the record would not decode), `erased` (the tenant's data has been erased) or `gave_up` (the store refused the record on every delivery). Only `gave_up` is a fault worth looking at; the record stays on the failure stream until it rolls off. |
+
 ## Event sources {#event-sources}
 
 Prefix: `devicechain_eventsources_`.

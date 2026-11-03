@@ -571,6 +571,141 @@ input CalculatedMetricBackfillInput {
     deviceTokens: [String!]
 }
 
+"""
+Why the platform refused an event or could not store it. UNKNOWN is a reason this version of the
+API does not name: either none was given, or a newer part of the platform wrote one, and then
+reasonCode carries its number. A reason is never reported as a different one.
+"""
+enum FailedEventReason {
+    """The message could not be read at all."""
+    INVALID
+    """A platform service the event needed could not be reached, or storing the event failed."""
+    API_CALL_FAILED
+    """No device has the token the sender named."""
+    DEVICE_NOT_FOUND
+    """The credential the device presented was missing or wrong."""
+    UNAUTHENTICATED
+    """The device exists and an operator has disabled it."""
+    DEVICE_DISABLED
+    """A gateway published for a device that is not assigned to it, or that does not exist."""
+    NOT_GATEWAY_CHILD
+    """An integration's event named a device that no longer holds the alias it was resolved from."""
+    INTEGRATION_ALIAS_MISMATCH
+    """No reason, or one this version does not name; see reasonCode."""
+    UNKNOWN
+}
+
+"""
+Whether the original event behind a failure record is still held on the platform's failure stream.
+The stream keeps records for a bounded time, the same bound that rolls its oldest records off
+unread, so a held original turns EXPIRED sooner or later; a record that is EXPIRED stays listed
+here and says so, rather than reading as an error or as empty. This API never returns the
+original, in any state.
+"""
+enum FailedEventPayloadStatus {
+    """The stream still holds the original."""
+    AVAILABLE
+    """The stream has discarded the original to make room; only this summary remains."""
+    EXPIRED
+    """The record never held an original (the platform could not read the message and kept nothing of it, or this is the overflow row); it will not become AVAILABLE or EXPIRED."""
+    NOT_RETAINED
+    """The stream could not be asked just now. None of the above is claimed."""
+    UNKNOWN
+}
+
+"""Filters and paging for the failed-event list. All supplied filters must match."""
+input FailedEventSearchCriteria {
+    """Page to return, starting at 1; values below 1 are treated as 1."""
+    pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 100 are capped at 100."""
+    pageSize: Int!
+    """Only failures for this reason. UNKNOWN selects every reason this version does not name."""
+    reason: FailedEventReason
+    """
+    Only failures for this device token, as the sender named it (a token longer than 128 bytes
+    is matched as the platform stored it, cut to 128). The overflow row has no token and cannot be
+    filtered for: "*" is refused with INVALID_VALUE.
+    """
+    deviceToken: String
+    """
+    Only failures recorded at or after this instant, an RFC 3339 timestamp. Defaults to, and is
+    capped at, 31 days ago.
+    """
+    since: String
+    """Only failures recorded at or before this instant, an RFC 3339 timestamp."""
+    until: String
+}
+
+"""
+One record of an event the platform refused or could not store. The event itself is not kept
+here: a record says what was refused, for whom and why. Nothing here can be re-sent or replayed;
+fix the cause and the device's next event will be accepted.
+
+To keep a misbehaving fleet from filling the list, at most 10 records are kept per device and
+reason in any hour; the rest are counted in suppressed on the newest of them, and past 1000
+records an hour for one reason the remainder are counted on a single row with no deviceToken.
+"""
+type FailedEvent {
+    """An opaque identifier of this record, stable across requests. It carries no meaning."""
+    id: ID!
+    """When the platform recorded the failure (RFC 3339), not when the device sent the event."""
+    occurredTime: String!
+    """The part of the platform that refused the event."""
+    sourceArea: String!
+    """Why the event was refused."""
+    reason: FailedEventReason!
+    """The reason's number, for a reason the enum calls UNKNOWN."""
+    reasonCode: Int!
+    """
+    The device token the SENDER named. It is the sender's claim, not proof the device exists:
+    for DEVICE_NOT_FOUND it names no device at all. Null when the record named none, and for the
+    row that counts a reason's overflow.
+    """
+    deviceToken: String
+    """The event type the sender named (see EventSearchCriteria.eventTypes), when there was one."""
+    eventType: Int
+    """What went wrong, in the platform's words. Bounded to 512 bytes."""
+    error: String!
+    """The correlation id the failed event carried, for matching it to a log line."""
+    correlation: String!
+    """How many further records of this reason from this device the hourly bound folded into this one."""
+    suppressed: Int!
+    """True for the row that counts a reason's records beyond the 1000-an-hour bound."""
+    overflow: Boolean!
+    """Whether the original event was kept and is still held on the failure stream; see FailedEventPayloadStatus."""
+    payloadStatus: FailedEventPayloadStatus!
+}
+
+"""One page of failed-event records."""
+type FailedEventSearchResults {
+    """The records on this page, newest first."""
+    results: [FailedEvent!]!
+    """Where this page sits within all matching records."""
+    pagination: SearchResultsPagination!
+}
+
+"""One device's failures for a reason."""
+type FailedEventDeviceCount {
+    """The token the sender named."""
+    deviceToken: String!
+    """Records for this device, including those folded into a count."""
+    records: Int!
+}
+
+"""One reason's line of the failure summary."""
+type FailedEventReasonCount {
+    """The reason."""
+    reason: FailedEventReason!
+    """The reason's number, for a reason the enum calls UNKNOWN."""
+    reasonCode: Int!
+    """Every record refused for this reason in the span, including those folded into a count."""
+    records: Int!
+    """Of records, how many were folded into a count rather than kept as a row."""
+    suppressed: Int!
+    """The devices with the most records for this reason, most first (at most 10)."""
+    devices: [FailedEventDeviceCount!]!
+}
+
 # Contains queries executed against model.
 type Query {
     """
@@ -703,6 +838,41 @@ type Query {
         """The nextCursor of the previous page; omit for the first page."""
         after: String
     ): CalculatedMetricBackfillConnection!
+    """
+    The events the platform refused or could not store for this tenant, newest first, a page at a
+    time: the answer to "why is my device's data not showing up". Each record names the reason,
+    the device token the sender claimed and the platform's error. Records are kept for 7 days by
+    default (an operator can change it) and are not a queue: nothing is re-sent. Requires
+    device:write; customer-scoped callers are refused with FORBIDDEN. A since or until that is not
+    RFC 3339, or a deviceToken of "*", is refused with INVALID_VALUE. With no since, the list
+    covers the last 31 days, and an older since is treated as 31 days ago.
+    """
+    failedEvents(
+        """Filters and page to return."""
+        criteria: FailedEventSearchCriteria!
+    ): FailedEventSearchResults!
+    """
+    Counts the tenant's failures per reason since an instant, with the devices with the most of
+    each. Records folded into a count are included. Requires device:write; customer-scoped callers
+    are refused with FORBIDDEN. since is an RFC 3339 timestamp; a value older than 31 days is
+    treated as 31 days ago. Reasons with no records are omitted.
+    """
+    failedEventSummary(
+        """Count failures recorded at or after this instant."""
+        since: String!
+    ): [FailedEventReasonCount!]!
+    """
+    How many events were refused for one claimed device token since an instant, including records
+    folded into a count. Drives "N events from this device were rejected". Requires device:write;
+    customer-scoped callers are refused with FORBIDDEN. A since older than 31 days is treated as
+    31 days ago, and a deviceToken of "*" is refused with INVALID_VALUE.
+    """
+    failedEventCount(
+        """The device token, as the sender names it."""
+        deviceToken: String!
+        """Count failures recorded at or after this instant, an RFC 3339 timestamp."""
+        since: String!
+    ): Int!
 }
 
 """

@@ -19,7 +19,8 @@ import (
 // age out alongside the events they index, else retention orphans them).
 func TestLifecycleHypertablesCoverAll(t *testing.T) {
 	assert.ElementsMatch(t,
-		[]string{"events", "location_events", "measurement_events", "alert_events", "event_anchors", "state_change_events"},
+		[]string{"events", "location_events", "measurement_events", "alert_events", "event_anchors", "state_change_events",
+			"failed_event_records"},
 		LifecycleHypertables)
 }
 
@@ -77,6 +78,8 @@ func TestEnableCompressionStmtSegmentsPerHypertable(t *testing.T) {
 		"state_change_events": "tenant_id",
 		// Anchor-keyed: read by the entity an event is anchored TO, not by device.
 		"event_anchors": "tenant_id, anchor_type, anchor_token",
+		// The failed-events index: flood-bounded to a handful of rows per device per hour.
+		"failed_event_records": "tenant_id",
 	} {
 		assert.Contains(t, enableCompressionStmt(table),
 			"timescaledb.compress_segmentby = '"+want+"'",
@@ -315,6 +318,9 @@ func TestRetentionUniformWhenNoLocationOverride(t *testing.T) {
 	})
 
 	for _, table := range LifecycleHypertables {
+		if table == FailedEventsHypertable {
+			continue // its own window: TestFailedEventRetentionIsIndependentOfTheUniformWindow
+		}
 		assert.Equal(t, 365, applied[table],
 			"%s must age out on the uniform window when no override is set", table)
 	}
@@ -332,7 +338,7 @@ func TestRetentionLocationOverrideAppliesToLocationOnly(t *testing.T) {
 	assert.Equal(t, 30, applied[LocationHypertable],
 		"a set location override must be the window location_events is given")
 	for _, table := range LifecycleHypertables {
-		if table == LocationHypertable {
+		if table == LocationHypertable || table == FailedEventsHypertable {
 			continue
 		}
 		assert.Equal(t, 365, applied[table],
@@ -399,4 +405,38 @@ func TestRetentionDaysForResolution(t *testing.T) {
 // silently make the override apply to nothing at all.
 func TestLocationHypertableIsGoverned(t *testing.T) {
 	assert.Contains(t, LifecycleHypertables, LocationHypertable)
+}
+
+// The failed-events index ages out on a window of its own, in BOTH directions: it is dropped
+// on its 7 days whether or not the uniform window (which deletes telemetry, and is off by
+// default) is on, and the uniform window never reaches it. A table that followed the uniform
+// window would be unbounded on the default install, which is the failure its flood bound
+// exists to prevent.
+func TestFailedEventRetentionIsIndependentOfTheUniformWindow(t *testing.T) {
+	// Uniform OFF: the index still has its window, and nothing else gets one.
+	applied := retentionAppliedPerTable(t, DataLifecyclePolicy{
+		ChunkIntervalHours: 24, CompressAfterDays: 7, RetentionDays: 0, FailedEventRetentionDays: 7,
+	})
+	assert.Equal(t, 7, applied[FailedEventsHypertable])
+	assert.Len(t, applied, 1, "the uniform window is off, so no other hypertable gets a policy")
+
+	// Uniform ON: the index keeps its own window rather than inheriting 365.
+	applied = retentionAppliedPerTable(t, DataLifecyclePolicy{
+		ChunkIntervalHours: 24, CompressAfterDays: 7, RetentionDays: 365, FailedEventRetentionDays: 3,
+	})
+	assert.Equal(t, 3, applied[FailedEventsHypertable])
+	assert.Equal(t, 365, applied["events"])
+
+	// An explicit 0 turns retention OFF for the index alone.
+	applied = retentionAppliedPerTable(t, DataLifecyclePolicy{
+		ChunkIntervalHours: 24, CompressAfterDays: 7, RetentionDays: 365, FailedEventRetentionDays: 0,
+	})
+	_, present := applied[FailedEventsHypertable]
+	assert.False(t, present)
+	assert.Equal(t, 365, applied["events"])
+}
+
+func TestFailedEventsHypertableIsGoverned(t *testing.T) {
+	assert.Contains(t, LifecycleHypertables, FailedEventsHypertable)
+	assert.Equal(t, "failed_event_records", FailedEventsHypertable)
 }

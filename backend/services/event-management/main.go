@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/storehold"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
@@ -47,6 +48,13 @@ var (
 	// EventPersistenceProcessor the NATS manager's oncreate callback builds. See
 	// buildMetrics.
 	PersistMetrics *processor.PersistMetrics
+
+	// FailedEventsReader and FailedEventsIndexer are the failed-events index: the durable reader
+	// of the stream this service also writes to, and the consumer that stores one row per
+	// record, with its flood bound. FailedEventMetrics is built once in the initialize phase.
+	FailedEventsReader  messaging.MessageReader
+	FailedEventsIndexer *processor.FailedEventsIndexer
+	FailedEventMetrics  *processor.FailedEventMetrics
 
 	EntityDeletedReader    messaging.MessageReader
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
@@ -104,6 +112,7 @@ func parseConfiguration() error {
 func buildMetrics() {
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
 	BackfillMetrics = backfill.NewMetrics(Microservice)
+	FailedEventMetrics = processor.NewFailedEventMetrics(Microservice)
 }
 
 // newEventPersistenceProcessor assembles the persistence processor from this service's
@@ -117,6 +126,16 @@ func newEventPersistenceProcessor(reader messaging.MessageReader,
 	return processor.NewEventPersistenceProcessor(Microservice, reader, writer,
 		core.NewNoOpLifecycleCallbacks(), Api, PersistMetrics,
 		processor.WithPersistence(Configuration.Persistence))
+}
+
+// newFailedEventsIndexer assembles the failed-events index consumer from this service's
+// globals, with the store hold that keeps a record unacked through a database outage. A
+// function of its own so the wiring test can build exactly what the service builds.
+func newFailedEventsIndexer(reader messaging.MessageReader) *processor.FailedEventsIndexer {
+	ix := processor.NewFailedEventsIndexer(Microservice, reader, Api, FailedEventMetrics,
+		core.NewNoOpLifecycleCallbacks())
+	ix.Hold = storehold.New(Microservice, "failed-events", storehold.RDBProbe(RdbManager))
+	return ix
 }
 
 // Create messaging components used by this microservice.
@@ -154,7 +173,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err := EntityAnchorReconciler.Initialize(context.Background()); err != nil {
 		return err
 	}
-	return nil
+
+	// The failed-events index: a durable reader of the stream this service also writes to,
+	// storing one row per record (flood-bounded) for the tenant's failedEvents query.
+	fevread, err := nmgr.NewReader(streams.FailedEvents)
+	if err != nil {
+		return err
+	}
+	FailedEventsReader = fevread
+	FailedEventsIndexer = newFailedEventsIndexer(FailedEventsReader)
+	return FailedEventsIndexer.Initialize(context.Background())
 }
 
 // wireAnchorSweep builds the reconciliation sweep (ADR-044 decision 3) when it is
@@ -315,10 +343,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if lc.CompressAfterDays != nil { // normally set by ApplyDefaults; guard against a nil deref
 				compressAfterDays = *lc.CompressAfterDays
 			}
+			failedEventRetentionDays := config.DefaultFailedEventRetentionDays
+			if lc.FailedEventRetentionDays != nil { // normally set by ApplyDefaults; guard against a nil deref
+				failedEventRetentionDays = *lc.FailedEventRetentionDays
+			}
 			if err := model.ApplyDataLifecyclePolicies(ctx, RdbManager, model.DataLifecyclePolicy{
-				ChunkIntervalHours: lc.ChunkIntervalHours,
-				CompressAfterDays:  compressAfterDays,
-				RetentionDays:      lc.RetentionDays,
+				ChunkIntervalHours:       lc.ChunkIntervalHours,
+				CompressAfterDays:        compressAfterDays,
+				RetentionDays:            lc.RetentionDays,
+				FailedEventRetentionDays: failedEventRetentionDays,
 				// Passed through as a pointer: nil means "no override", so location inherits
 				// the uniform window. Collapsing it to an int here would lose the distinction
 				// between "unset" and an explicit 0 (retention off for location only).
@@ -403,6 +436,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the failed-events index consumer.
+	if err := FailedEventsIndexer.Start(ctx); err != nil {
+		return err
+	}
+
 	// Start the reconciliation sweep, if configured.
 	if AnchorSweep != nil {
 		if err := AnchorSweep.Start(ctx); err != nil {
@@ -435,6 +473,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		if err := AnchorSweep.Stop(ctx); err != nil {
 			return err
 		}
+	}
+
+	// Stop the failed-events index consumer, which writes the suppressed counts it still holds.
+	if err := FailedEventsIndexer.Stop(ctx); err != nil {
+		return err
 	}
 
 	// Stop entity-anchor reconciler.

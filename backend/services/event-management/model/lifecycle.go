@@ -27,10 +27,19 @@ const lifecycleSchema = "event-management"
 // retention policy they never do — so dropping an old events chunk while leaving its
 // anchor rows would orphan them and grow that hypertable unbounded. Governing it
 // here ages the anchor rows out on the same window as the events.
+//
+// failed_event_records (the failed-events index) is governed too, but on a window of its OWN:
+// it is an operator's diagnostic, not telemetry, so the uniform RetentionDays (off by default,
+// "keep everything") would be the wrong answer for it - an unbounded diagnostic table is the
+// failure mode its flood bound exists to prevent. See DataLifecyclePolicy.FailedEventRetentionDays.
 var LifecycleHypertables = []string{
 	"events", "location_events", "measurement_events", "alert_events", "event_anchors",
-	"state_change_events",
+	"state_change_events", FailedEventsHypertable,
 }
+
+// FailedEventsHypertable is the failed-events index, the one member of LifecycleHypertables that
+// ages out on a window of its own, ALWAYS (see DataLifecyclePolicy.FailedEventRetentionDays).
+const FailedEventsHypertable = "failed_event_records"
 
 // LocationHypertable is the one hypertable holding device POSITIONS, and the only
 // member of LifecycleHypertables that can carry a retention window of its own (see
@@ -186,6 +195,13 @@ var compressSegmentBy = map[string]string{
 	// column then than it is now. This key changes what the anchor LOOKUP costs; it
 	// leaves that sweep exactly where it was.
 	"event_anchors": "tenant_id, anchor_type, anchor_token",
+
+	// The failed-events index: bounded by its flood gate to a handful of rows per device per
+	// hour, so far below the break-even for a per-device key, and read by tenant first. Its
+	// default window (7 days) equals the compression window, so the two policies come due on
+	// the same chunk at the same time and which one runs first is not defined; either way the
+	// chunk is gone in the end, and compression only matters once an operator lengthens it.
+	FailedEventsHypertable: "tenant_id",
 }
 
 // compressOrderBy is the compress_orderby setting shared by every hypertable: all six
@@ -317,6 +333,14 @@ type DataLifecyclePolicy struct {
 	// purge is catalog-driven and sweeps every table carrying a tenant_id column, so
 	// location_events is included by construction rather than by being listed.
 	LocationRetentionDays *int
+
+	// FailedEventRetentionDays is the window of the failed-events index alone. It is applied
+	// to failed_event_records REGARDLESS of RetentionDays: the uniform window is opt-in and
+	// off by default because it deletes telemetry, and this table holds none - it holds the
+	// platform's own record of what it refused, which is only useful while an operator is
+	// still asking "why did that stop working", and which must not grow without bound.
+	// config.ApplyDefaults fills it with 7 days; 0 turns retention off for this table.
+	FailedEventRetentionDays int
 }
 
 // retentionDaysFor resolves the retention window for one hypertable: the location
@@ -326,6 +350,9 @@ type DataLifecyclePolicy struct {
 func (p DataLifecyclePolicy) retentionDaysFor(table string) int {
 	if table == LocationHypertable && p.LocationRetentionDays != nil {
 		return *p.LocationRetentionDays
+	}
+	if table == FailedEventsHypertable {
+		return p.FailedEventRetentionDays
 	}
 	return p.RetentionDays
 }
@@ -373,6 +400,7 @@ func ApplyDataLifecyclePolicies(ctx context.Context, mgr *rdb.RdbManager,
 		if policy.LocationRetentionDays != nil {
 			event = event.Int("locationRetentionDays", *policy.LocationRetentionDays)
 		}
+		event = event.Int("failedEventRetentionDays", policy.FailedEventRetentionDays)
 		event.Msg("Applied TimescaleDB data-lifecycle policies (ADR-026).")
 		return nil
 	})
