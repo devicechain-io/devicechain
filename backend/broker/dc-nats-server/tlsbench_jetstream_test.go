@@ -71,7 +71,7 @@ func TestJetStreamIntegrityBench(t *testing.T) {
 	writeBenchCerts(t, dir)
 	var ports [3][2]int
 	for i := range ports {
-		ports[i] = [2]int{freePort(), freePort()}
+		ports[i] = [2]int{benchFreePort(), benchFreePort()}
 	}
 	names := []string{"A", "B", "C"}
 	nodes := make([]*benchNode, 3)

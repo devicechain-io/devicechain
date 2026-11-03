@@ -58,7 +58,7 @@ func envInt(k string, d int) int {
 	return d
 }
 
-func freePort() int {
+func benchFreePort() int {
 	l, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
@@ -204,7 +204,7 @@ func TestTLSThroughputBench(t *testing.T) {
 
 	dir := t.TempDir()
 	writeBenchCerts(t, dir)
-	cA, rA, cB, rB := freePort(), freePort(), freePort(), freePort()
+	cA, rA, cB, rB := benchFreePort(), benchFreePort(), benchFreePort(), benchFreePort()
 	a := startBenchNode(t, "A", dir, cA, rA, "", useTLS)
 	b := startBenchNode(t, "B", dir, cB, rB, fmt.Sprintf("nats-route://127.0.0.1:%d", rA), useTLS)
 
