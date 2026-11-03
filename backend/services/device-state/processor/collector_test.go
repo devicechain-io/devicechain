@@ -178,6 +178,7 @@ func TestAnEventIsInFlightFromReceiptNotFromAdmission(t *testing.T) {
 		t.Fatalf("initialize: %v", err)
 	}
 	at := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	handedAt := time.Now()
 	sp.handOff(context.Background(), threeMetrics(t, "inflight-1", at))
 	var seen atomic.Bool
 	deadline := time.Now().Add(5 * time.Second)
@@ -193,6 +194,8 @@ func TestAnEventIsInFlightFromReceiptNotFromAdmission(t *testing.T) {
 	}
 	if !seen.Load() {
 		t.Error("state_inflight never read 1 while the writer lingered for the event's batch")
+	} else if d := time.Since(handedAt); d > 300*time.Millisecond {
+		t.Errorf("state_inflight read 1 only after %v; the event was received at once and the writer lingers 400 ms, so it must read 1 during the linger", d)
 	}
 	if err := sp.ExecuteStop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)

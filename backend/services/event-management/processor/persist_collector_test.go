@@ -282,3 +282,25 @@ func TestCollectionMetricsReportFullBatchesAndTheHandOffDepth(t *testing.T) {
 		t.Errorf("persist_handoff_depth observed a total depth of %v; want 6 + 2 + 0 = 8", sum)
 	}
 }
+
+// A message is in flight from RECEIPT, not from admission: one that waits out the linger for
+// the rest of its batch is already counted by persist_inflight (and its duration already
+// running). The writer lingers 400 ms for a second message that never comes.
+func TestAMessageIsInFlightFromReceiptNotFromAdmission(t *testing.T) {
+	r := newBatchRig(t, 8)
+	r.ep.Linger = 400 * time.Millisecond
+	in := make(chan messaging.Message, 2)
+	r.ep.Unpersisted = in
+	done := make(chan struct{})
+	go func() { defer close(done); r.ep.Process(context.Background()) }()
+	handedAt := time.Now()
+	in <- consumed(t, r.acks, 0, fenceCostTenant, 1, batchEvent(0, true, batchT0))
+	waitUntil(t, "the message to read as in flight", func() bool {
+		return r.gauge(t, "devicechain_eventmanagement_persist_inflight") == 1
+	})
+	if d := time.Since(handedAt); d > 300*time.Millisecond {
+		t.Errorf("persist_inflight read 1 only after %v; it must read 1 during the 400 ms linger", d)
+	}
+	close(in)
+	r.finishWithin(t, done)
+}
