@@ -61,7 +61,7 @@ const pacedFleet = 3000
 // pacedProjection is the projection configuration a paced arm runs: the shipped defaults
 // but for what the arm sets.
 func pacedProjection(writers, lingerMs int) config.ProjectionConfiguration {
-	return config.ProjectionConfiguration{Writers: writers, LingerMillis: lingerMs}
+	return config.ProjectionConfiguration{Writers: writers, LingerMillis: &lingerMs}
 }
 
 // slowMergeApi times every batch merge and injects latency after it.

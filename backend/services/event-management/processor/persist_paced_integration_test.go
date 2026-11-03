@@ -271,7 +271,7 @@ func benchPacedArm(b *testing.B, mgr *rdb.RdbManager, arm pacedArm, invocation *
 	}
 	t0 := time.Now()
 	for _, m := range am {
-		w.admit(context.Background(), m)
+		w.admit(context.Background(), m, func(string) {})
 	}
 	b.ReportMetric(float64(time.Since(t0).Microseconds())/admits, "admit-us/ev")
 }

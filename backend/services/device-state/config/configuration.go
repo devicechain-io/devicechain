@@ -27,6 +27,12 @@ const (
 	// cap batches did not reach on a cloud cluster (see ProjectionConfiguration.MaxBatch).
 	// event-management's persistence default is larger.
 	DefaultProjectionMaxBatch = 32
+	// DefaultProjectionLingerMillis is how long a writer holding a batch that is not full
+	// waits for more events when projection.lingerMillis is not set. The writers collect
+	// one at a time (see ProjectionConfiguration.LingerMillis), so the wait fills ONE batch
+	// at the pod's whole rate; at the rates a pod sees, that is the difference between a
+	// transaction carrying two events and one carrying thirty.
+	DefaultProjectionLingerMillis = 10
 )
 
 type DeviceStateConfiguration struct {
@@ -87,16 +93,22 @@ type ProjectionConfiguration struct {
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more
-	// events before merging it, 0 to writerbatch.MaxLingerMillis. 0 (the default) takes only
-	// what is already waiting, which adds no latency: under light load a writer finds one
-	// event and merges it alone, and batches grow by themselves once events arrive faster
-	// than single merges keep up with.
-	LingerMillis int
+	// events before merging it, 0 to writerbatch.MaxLingerMillis. Unset (nil) defaults to
+	// DefaultProjectionLingerMillis. An explicit 0 turns the wait off: a writer merges only
+	// what is already waiting, so under light load it finds one event and merges it alone.
+	// It is a pointer because 0 is a setting of its own, not "use the default".
+	//
+	// The writers take turns receiving a batch (one holds the collection token while the
+	// rest wait for it), so a lingering writer's batch fills at the whole pod's rate and not
+	// at its tenth: a batch holds about rate x linger events, up to MaxBatch. The wait costs
+	// latency, never throughput. Under a backlog the receive returns a full batch at once
+	// and the linger is never paid. It adds at most this much to a live state's freshness.
+	LingerMillis *int
 }
 
-// ApplyDefaults fills the writer count and the batch size when they are unset. It is the ONE
-// definition of those defaults: the configuration load calls it, and so does the processor
-// for a value built in code.
+// ApplyDefaults fills the writer count, the batch size and the linger when they are unset.
+// It is the ONE definition of those defaults: the configuration load calls it, and so does
+// the processor for a value built in code.
 func (p *ProjectionConfiguration) ApplyDefaults() {
 	if p.Writers == 0 {
 		p.Writers = DefaultProjectionWriters
@@ -104,6 +116,19 @@ func (p *ProjectionConfiguration) ApplyDefaults() {
 	if p.MaxBatch == 0 {
 		p.MaxBatch = DefaultProjectionMaxBatch
 	}
+	if p.LingerMillis == nil {
+		l := p.lingerMillis()
+		p.LingerMillis = &l
+	}
+}
+
+// lingerMillis is LingerMillis with an unset value read as the default, so a value built in
+// code and never defaulted validates and waits exactly as a loaded one does.
+func (p ProjectionConfiguration) lingerMillis() int {
+	if p.LingerMillis == nil {
+		return DefaultProjectionLingerMillis
+	}
+	return *p.LingerMillis
 }
 
 // Validate bounds the writer count against the pool it draws from, and the batch size and
@@ -113,12 +138,12 @@ func (p ProjectionConfiguration) Validate(pool config.MicroserviceDatastoreConfi
 	if err := rdb.CheckWriterCount("projection.writers", p.Writers, pool); err != nil {
 		return err
 	}
-	return rdb.CheckWriterBatch("projection", p.MaxBatch, p.LingerMillis)
+	return rdb.CheckWriterBatch("projection", p.MaxBatch, p.lingerMillis())
 }
 
-// Linger is LingerMillis as a duration.
+// Linger is LingerMillis as a duration, the default when it is unset.
 func (p ProjectionConfiguration) Linger() time.Duration {
-	return time.Duration(p.LingerMillis) * time.Millisecond
+	return time.Duration(p.lingerMillis()) * time.Millisecond
 }
 
 // Creates the default device state configuration

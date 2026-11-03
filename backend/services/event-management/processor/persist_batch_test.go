@@ -62,6 +62,8 @@ func newBatchRig(t *testing.T, maxBatch int) *batchRig {
 	ms.UseMetricsRegistry(r.reg)
 	ep.Api = api
 	ep.MaxBatch = maxBatch
+	// Every test through the rig collects under a Collector, as the processor's writers do.
+	ep.collector = &messaging.Collector{}
 	ep.metrics = NewPersistMetrics(ms)
 	ep.Invalid = func(error, messaging.Message) {
 		r.mu.Lock()

@@ -78,11 +78,11 @@ type pendingEvent struct {
 // admit runs the checks a message must pass before it can be persisted: derive its tenant
 // from the subject and decode it. A message that fails them is disposed of here — acked
 // and recorded invalid, as it always was — and joins no batch.
-func (ep *EventPersistenceWorker) admit(ctx context.Context, msg messaging.Message) (pendingEvent, bool) {
-	// Mark the message in-flight and record its result+duration on every
-	// disposition path (ADR-022 E13). start() is nil-safe.
-	done := ep.metrics.start()
-
+//
+// done is the message's RED clock-stop, started when it was RECEIVED (see received), so its
+// duration still covers the wait for the collector token and the linger, not just what
+// happens after admission.
+func (ep *EventPersistenceWorker) admit(ctx context.Context, msg messaging.Message, done func(string)) (pendingEvent, bool) {
 	log.Debug().Int("worker", ep.WorkerId).Str("correlation", msg.CorrelationID()).
 		Msg("Event persistence handled by worker")
 
@@ -122,11 +122,58 @@ func (ep *EventPersistenceWorker) admit(ctx context.Context, msg messaging.Messa
 	return pendingEvent{msg: msg, ctx: msgctx, tenant: tenant, event: event, done: done}, true
 }
 
-// collect fills the next batch from the channel the read loop feeds (messaging.CollectBatch,
-// the one definition every batching writer shares). Messages admit refuses do not count.
+// received is called for each message as the collector takes it. It starts the message's
+// RED clock (marks it in flight; ADR-022 E13) at receipt, so the wait for the token and the
+// linger are inside persist_duration_seconds exactly as they were when each writer
+// collected for itself. start() is nil-safe.
+func (ep *EventPersistenceWorker) received(messaging.Message) {
+	ep.dones = append(ep.dones, ep.metrics.start())
+}
+
+// collect fills the next batch: it receives raw messages under the pod's collector token
+// (messaging.CollectRaw), and only AFTER the token is released admits them — tenant and
+// decode — so decoding stays parallel across writers and a decode failure (whose
+// OnInvalidEvent blocks when the failed channel is full) stalls this writer alone, never
+// the collection. Messages admit refuses are in no batch, so a batch can end up smaller
+// than its raw count.
+//
+// The returned batch lives in the worker's own buffer and is valid until clearBuffers.
 func (ep *EventPersistenceWorker) collect(ctx context.Context) (batch []pendingEvent, open bool) {
-	return messaging.CollectBatch(ep.Unpersisted, ep.MaxBatch, ep.Linger,
-		func(msg messaging.Message) (pendingEvent, bool) { return ep.admit(ctx, msg) })
+	limit := ep.MaxBatch
+	if limit < 1 {
+		limit = 1
+	}
+	if cap(ep.raw) < limit {
+		ep.raw = make([]messaging.Message, 0, limit)
+		ep.dones = make([]func(string), 0, limit)
+		ep.batch = make([]pendingEvent, 0, limit)
+	}
+	if ep.onReceive == nil {
+		ep.onReceive = ep.received
+	}
+	ep.dones = ep.dones[:0]
+	var raw []messaging.Message
+	raw, open = messaging.CollectRaw(ep.collector, ep.Unpersisted, ep.raw, limit, ep.Linger, ep.onReceive)
+	ep.raw = raw
+	ep.metrics.collected(len(raw), limit, len(ep.Unpersisted))
+	batch = ep.batch[:0]
+	for i, msg := range raw {
+		if p, ok := ep.admit(ctx, msg, ep.dones[i]); ok {
+			batch = append(batch, p)
+		}
+	}
+	ep.batch = batch
+	return batch, open
+}
+
+// clearBuffers drops every reference the batch buffers hold, once the batch is settled
+// (committed and acked, or set aside as held by value), so the next batch starts empty and
+// nothing is kept alive by a slot it has not yet overwritten.
+func (ep *EventPersistenceWorker) clearBuffers() {
+	clear(ep.raw[:cap(ep.raw)])
+	clear(ep.dones[:cap(ep.dones)])
+	clear(ep.batch[:cap(ep.batch)])
+	ep.raw, ep.dones, ep.batch = ep.raw[:0], ep.dones[:0], ep.batch[:0]
 }
 
 // persistBatch commits batch in one transaction, written grouped, and acknowledges it, or

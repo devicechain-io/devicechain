@@ -41,5 +41,11 @@ func TestConfiguredProjectionWritersReachTheProcessor(t *testing.T) {
 	sp = newStateProcessor(nil)
 	require.Equal(t, 10, sp.Writers())
 	require.Equal(t, 32, sp.MaxBatch())
+	require.Equal(t, 10*time.Millisecond, sp.Linger())
+
+	// An explicit 0 turns the wait off, and reaches the processor as 0.
+	Microservice.MicroserviceConfigurationRaw = []byte(`{"projection":{"lingerMillis":0}}`)
+	require.NoError(t, parseConfiguration())
+	sp = newStateProcessor(nil)
 	require.Equal(t, time.Duration(0), sp.Linger())
 }
