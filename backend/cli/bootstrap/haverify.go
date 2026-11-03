@@ -110,7 +110,7 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 		return rep, err
 	}
 
-	cfg, err := deployedInstanceConfig(ctx, typed, opts.InstanceId)
+	cfg, err := deployedInstanceConfigWithLogins(ctx, typed, opts.InstanceId)
 	if err != nil {
 		return rep, err
 	}
@@ -250,7 +250,7 @@ var settleInterval = 5 * time.Second
 // re-render of what dcctl thinks it installed. An instance whose Secret was
 // edited by hand, or installed by an older dcctl, or managed externally via
 // instance.existingSecret, is judged on what it is running.
-func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, instanceId string) (*config.InstanceConfiguration, error) {
+func deployedInstanceConfig(ctx context.Context, typed kubernetes.Interface, instanceId string) (*config.InstanceConfiguration, error) {
 	// The Secret NAME is built from the instance id; the namespace it lives in comes
 	// through InstanceNamespace. Two prefixes, two meanings — see DeployedInstanceConfig.
 	name := fmt.Sprintf("dci-%s-config", instanceId)
@@ -272,6 +272,27 @@ func deployedInstanceConfig(ctx context.Context, typed *kubernetes.Clientset, in
 	// The services call ApplyDefaults before reading any of this, so a key omitted
 	// from the Secret must be judged the way they will judge it and not as a zero.
 	cfg.ApplyDefaults()
+	return cfg, nil
+}
+
+// deployedInstanceConfigWithLogins is deployedInstanceConfig plus the broker logins, overlaid from the
+// per-login Secrets, for the callers that present an operator login to the broker.
+//
+// The logins are NOT in the document: AreaPasswords is dcctl's overlay and nothing writes it into
+// the instance document, so a view built from the document alone has AreaLogins=true and no
+// password, and operatorLogin would report the administrator's Secret as unreadable though it was
+// never asked for. They are kept out of deployedInstanceConfig itself because DeployedRootKey (the
+// restore drill) reads only the document and must not start failing on an unreadable login Secret.
+func deployedInstanceConfigWithLogins(ctx context.Context, typed kubernetes.Interface, instanceId string) (*config.InstanceConfiguration, error) {
+	cfg, err := deployedInstanceConfig(ctx, typed, instanceId)
+	if err != nil {
+		return nil, err
+	}
+	logins, err := readNatsLoginPasswords(ctx, typed, InstanceNamespace(instanceId), instanceId)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Infrastructure.Nats.Auth.AreaPasswords = logins
 	return cfg, nil
 }
 
@@ -392,7 +413,7 @@ func operatorLogin(natscfg config.NatsConfiguration) (user, password string, err
 	password = natscfg.Auth.AreaPasswords[config.NatsAdminPrincipal]
 	if password == "" {
 		return "", "", fmt.Errorf("the instance has a login for every principal, and the broker administrator's " +
-			"(Secret dci-<instance>-nats-broker-admin) could not be read, so there is no login to inspect the broker with")
+			"(Secret dci-<instance>-nats-broker-admin) is absent or holds no password, so there is no login to inspect the broker with")
 	}
 	return natsauth.LoginUser(config.NatsAdminPrincipal), password, nil
 }
