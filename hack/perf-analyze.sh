@@ -58,6 +58,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# pprof_in <dir> <pprof args...>: run `go tool pprof` from inside <dir>, so profile paths are relative.
+# pprof treats an argument it cannot resolve as a file as a URL, and a Git Bash for Windows absolute
+# path ("C:/...") that does not resolve from the current directory fails with "lookup C: no such
+# host" and an empty table. A "./name" path is always a file.
+pprof_in() { local dir="$1"; shift; ( cd "$dir" && "$GO" tool pprof "$@" ); }
+
 # cpu_table <dir> <prefix> <manifest>: "component pods cpu_seconds window_seconds" per component, and
 # lines "INVALID pod reason" for pods whose counters cannot be trusted. Reads the cAdvisor files.
 cpu_rows() {
@@ -187,26 +193,26 @@ analyze() {
       [[ -n "$comp" ]] || continue
       mapfile -t files < <("$JQ" -r --arg c "$comp" '.artifacts[] | select(.component == $c and (.kind | test("^cpu[0-9]+$")) and .invalid != true) | .file' "$man")
       [[ ${#files[@]} -gt 0 ]] || continue
-      local paths=() f; for f in "${files[@]}"; do paths+=("$d/$f"); done
+      local paths=() f; for f in "${files[@]}"; do paths+=("./$f"); done
       echo "### $comp (${#files[@]} CPU profile(s))"
       echo
       echo '```'
-      "$GO" tool pprof -top -nodecount=20 "${paths[@]}" 2>&1 | sed -n '1,32p'
+      pprof_in "$d" -top -nodecount=20 "${paths[@]}" 2>&1 | sed -n '1,32p'
       echo '```'
       echo
       echo "cumulative:"
       echo
       echo '```'
-      "$GO" tool pprof -top -cum -nodecount=20 "${paths[@]}" 2>&1 | sed -n '5,30p'
+      pprof_in "$d" -top -cum -nodecount=20 "${paths[@]}" 2>&1 | sed -n '5,30p'
       echo '```'
       echo
       mapfile -t files < <("$JQ" -r --arg c "$comp" '.artifacts[] | select(.component == $c and .kind == "allocs" and .invalid != true) | .file' "$man")
       if [[ ${#files[@]} -gt 0 ]]; then
-        paths=(); for f in "${files[@]}"; do paths+=("$d/$f"); done
+        paths=(); for f in "${files[@]}"; do paths+=("./$f"); done
         echo "allocations (alloc_space, since process start):"
         echo
         echo '```'
-        "$GO" tool pprof -top -nodecount=10 -sample_index=alloc_space "${paths[@]}" 2>&1 | sed -n '1,20p'
+        pprof_in "$d" -top -nodecount=10 -sample_index=alloc_space "${paths[@]}" 2>&1 | sed -n '1,20p'
         echo '```'
         echo
       fi
