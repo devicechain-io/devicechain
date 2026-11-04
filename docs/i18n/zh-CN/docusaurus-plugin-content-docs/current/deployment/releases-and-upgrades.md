@@ -630,7 +630,7 @@ prod   local      kind-devicechain  default   1.1.0       Ready       True    1.
 dcctl install   <provider> --mqtt-gateway                                   # 每个集群一次，仅 gateway 模式
 dcctl bootstrap <provider> <instance> --mqtt-exposure gateway|loadbalancer|none --mqtt-host mqtt.example.com
 dcctl upgrade   <provider> <instance> --mqtt-exposure ... --mqtt-host ...   # 或用 --mqtt-exposure none 关闭
-dcctl bootstrap|upgrade ... --broker-max-connections N                      # 可选上限；0 表示清除
+dcctl upgrade   <provider> <instance> --broker-max-connections N          # 可选上限；0 表示清除
 ```
 
 - **两种模式。** `gateway` 在实例的 Gateway 上按设备所连接的主机名做 TLS 透传路由，因此多个实例可共用一个地址。`loadbalancer` 创建一个 `LoadBalancer` Service，把 8883 直接指向代理 Pod，适用于不支持 Gateway API 的集群，或你想使用自己的负载均衡器时。

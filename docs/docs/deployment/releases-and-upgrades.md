@@ -870,7 +870,7 @@ Devices that are not in the cluster had no supported way to reach the platform's
 dcctl install   <provider> --mqtt-gateway                                   # once per cluster, gateway mode only
 dcctl bootstrap <provider> <instance> --mqtt-exposure gateway|loadbalancer|none --mqtt-host mqtt.example.com
 dcctl upgrade   <provider> <instance> --mqtt-exposure ... --mqtt-host ...   # or --mqtt-exposure none to close it
-dcctl bootstrap|upgrade ... --broker-max-connections N                      # optional ceiling; 0 clears it
+dcctl upgrade   <provider> <instance> --broker-max-connections N          # optional ceiling; 0 clears it
 ```
 
 - **Two modes.** `gateway` routes TLS passthrough on the instance's Gateway by the host name the device dials, so several instances share one address. `loadbalancer` creates a `LoadBalancer` Service for 8883 straight to the broker pods, for clusters without Gateway API support or when you want a balancer of your own.

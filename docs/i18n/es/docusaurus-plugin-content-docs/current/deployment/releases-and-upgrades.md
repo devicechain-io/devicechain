@@ -915,7 +915,7 @@ Los dispositivos que no están en el clúster no tenían una forma admitida de l
 dcctl install   <provider> --mqtt-gateway                                   # una vez por clúster, solo en modo gateway
 dcctl bootstrap <provider> <instance> --mqtt-exposure gateway|loadbalancer|none --mqtt-host mqtt.example.com
 dcctl upgrade   <provider> <instance> --mqtt-exposure ... --mqtt-host ...   # o --mqtt-exposure none para cerrarla
-dcctl bootstrap|upgrade ... --broker-max-connections N                      # límite opcional; 0 lo elimina
+dcctl upgrade   <provider> <instance> --broker-max-connections N          # límite opcional; 0 lo elimina
 ```
 
 - **Dos modos.** `gateway` enruta TLS en modo passthrough por el Gateway de la instancia según el nombre de host al que marca el dispositivo, de modo que varias instancias comparten una dirección. `loadbalancer` crea un Service `LoadBalancer` para el 8883 directo a los pods del broker, para clústeres sin soporte de Gateway API o cuando quieres un balanceador propio.
