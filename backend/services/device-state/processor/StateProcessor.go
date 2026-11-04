@@ -490,7 +490,7 @@ func (sp *StateProcessor) admitAllStarted(ctx context.Context, batch []pendingMe
 		}
 		return batch
 	}
-	units, _, err := messaging.SplitEnvelope(msg, tenant, done)
+	units, _, err := messaging.SplitEnvelope(msg, tenant, done, sp.metrics.start)
 	if err != nil {
 		// The envelope as a whole cannot be read: poison, dropped like an unparseable message
 		// (a projection has no failed-events channel).

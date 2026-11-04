@@ -31,7 +31,7 @@ type EventPersistenceWorker struct {
 	// Failed records a terminal failure; dedupID is the failed-events record's broker dedup id
 	// ("" for none: a legacy message), which names an envelope member so a whole-envelope
 	// redelivery does not record the same member twice.
-	Failed      func(tenant string, reason uint, event resolvedevent.ResolvedEvent, err error, correlationID, dedupID string)
+	Failed func(tenant string, reason uint, event resolvedevent.ResolvedEvent, err error, correlationID, dedupID string)
 
 	// MaxBatch is the most messages this worker commits in one transaction. 1 or less —
 	// the zero value included, so a worker built by literal keeps the per-message path —

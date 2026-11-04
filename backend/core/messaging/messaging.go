@@ -323,6 +323,9 @@ type Message struct {
 	// member is set on a message that stands for one member of an event envelope; see
 	// SplitEnvelope.
 	member *memberInfo
+	// split is set on a message read from inbound-events that is a member republished alone
+	// out of an envelope; see HeaderRetry.
+	split *splitOrigin
 }
 
 // AckDeadline is when the broker will redeliver this message if it has not been acked: its

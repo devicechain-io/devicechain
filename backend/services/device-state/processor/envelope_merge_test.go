@@ -72,13 +72,14 @@ func TestAPoisonMemberDoesNotBlockItsEnvelopeMates(t *testing.T) {
 			}
 			assertProjectedAt(t, built, "ea", t0)
 			assertProjectedAt(t, built, "eb", t0)
-			// The envelope is ONE message to the RED counters, counted once under the most severe
-			// result of its members.
+			// The RED counters count MEMBERS, as device-management's do: the poison member under
+			// its own result (so a drop is never hidden behind a neighbour's result) and each
+			// healthy member as ok.
 			if v, _, _, _ := gathered(t, reg, "state_messages_total", tc.wantResult); v != 1 {
-				t.Errorf("state_messages_total{result=%s} = %v; want 1 (the envelope, by its poison member)", tc.wantResult, v)
+				t.Errorf("state_messages_total{result=%s} = %v; want 1 (the poison member)", tc.wantResult, v)
 			}
-			if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultOK); v != 0 {
-				t.Errorf("state_messages_total{result=ok} = %v; want 0", v)
+			if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultOK); v != 2 {
+				t.Errorf("state_messages_total{result=ok} = %v; want 2 (the members around it)", v)
 			}
 		})
 	}

@@ -186,7 +186,7 @@ func (ep *EventPersistenceWorker) admitInto(ctx context.Context, batch []pending
 		}
 		return batch
 	}
-	units, _, err := messaging.SplitEnvelope(msg, tenant, done)
+	units, _, err := messaging.SplitEnvelope(msg, tenant, done, ep.metrics.start)
 	if err != nil {
 		// The envelope as a whole cannot be read: poison, like an undecodable message.
 		ep.Invalid(err, msg)

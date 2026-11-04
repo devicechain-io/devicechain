@@ -980,7 +980,9 @@ var All = []Stream{
 	{Suffix: FailedDecode, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// device-management publishes each failure record with an id its source's redelivery
 	// reproduces (processor.sourceDedupID), on the same redelivery span as resolved-events;
-	// event-management's records carry none. It used to be the broker's two-minute default.
+	// event-management's records carry one only for a member of an event envelope, in a kind
+	// of its own (messaging.DedupKindFailed, "fe:"), because the two areas number their sources
+	// independently and one stream holds both. It used to be the broker's two-minute default.
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.

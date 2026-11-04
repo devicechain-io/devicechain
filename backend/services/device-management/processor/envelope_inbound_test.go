@@ -123,7 +123,7 @@ func (suite *InboundEventsProcessorTestSuite) TestRetryingMembersAreSplitOutOfTh
 	suite.IP.splitWriter = w
 	ack := &envCountingAck{}
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(
-		inboundEnvelope(suite.T(), 4242, ack, 2, member("MISSING-A"), member("MISSING-B")), nil).Once()
+		inboundEnvelope(suite.T(), 4242, ack, 1, member("MISSING-A"), member("MISSING-B")), nil).Once()
 	readAndHandleOne(suite.IP, context.Background())
 
 	require.Eventually(suite.T(), func() bool { return ack.n.Load() == 1 }, 10*time.Second, 5*time.Millisecond,
@@ -134,13 +134,55 @@ func (suite *InboundEventsProcessorTestSuite) TestRetryingMembersAreSplitOutOfTh
 	ids := []string{w.msgs[0].DedupID, w.msgs[1].DedupID}
 	assert.ElementsMatch(suite.T(), []string{"x:tenant1:39u:0", "x:tenant1:39u:1"}, ids)
 	for _, m := range w.msgs {
-		assert.Equal(suite.T(), "2", m.Headers[messaging.HeaderRetry])
+		assert.Regexp(suite.T(), `^39u:[01]:0$`, m.Headers[messaging.HeaderRetry])
 		assert.False(suite.T(), m.IsEnvelope())
 	}
 	select {
 	case item := <-suite.IP.failed:
 		suite.T().Fatalf("a retrying member must not be dead-lettered: %+v", item.event)
 	default:
+	}
+}
+
+// A brown-out of the API is every member's, not any one member's: it is not split into k copies
+// and k synchronous publishes. The envelope is held (members unacked) and comes back whole, as a
+// message in the same brown-out does. And an envelope on a LATER delivery never splits, so a
+// member whose device is still unknown does not get a second copy.
+func (suite *InboundEventsProcessorTestSuite) TestABrownOutAndALaterDeliveryDoNotSplit() {
+	member := func(device string) []byte {
+		ev := buildLocationsEvent()
+		ev.Device = device
+		b, err := esproto.MarshalUnresolvedEvent(ev)
+		require.NoError(suite.T(), err)
+		return b
+	}
+	for name, tc := range map[string]struct {
+		lookup    func()
+		delivered int
+	}{
+		"the api is down": {func() {
+			suite.API.Mock.On("DevicesByToken").Return(([]*dmodel.Device)(nil), errors.New("db unreachable"))
+		}, 1},
+		"a later delivery of an unknown device": {func() {
+			suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
+		}, 2},
+	} {
+		suite.Run(name, func() {
+			suite.API.Mock.ExpectedCalls = nil
+			tc.lookup()
+			w := &captureWriter{}
+			suite.IP.splitWriter = w
+			ack := &envCountingAck{}
+			suite.Inbound.Mock.ExpectedCalls = nil
+			suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(
+				inboundEnvelope(suite.T(), 4242, ack, tc.delivered, member("MISSING-A"), member("MISSING-B")), nil).Once()
+			readAndHandleOne(suite.IP, context.Background())
+			time.Sleep(300 * time.Millisecond)
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			assert.Empty(suite.T(), w.msgs, "nothing is split out")
+			assert.EqualValues(suite.T(), 0, ack.n.Load(), "the envelope stays unacked")
+		})
 	}
 }
 
@@ -182,10 +224,16 @@ func (w *captureWriter) HandleResponse(error) {}
 // member's own bytes, the envelope's correlation id, the id x:<tenant>:<seq>:<index> and the
 // deliveries already spent. A refused publish reports false so the caller leaves the envelope
 // to redeliver instead.
+// A member that must retry is split out: published alone, in the legacy shape, with the
+// member's own bytes, the envelope's correlation id, the id x:<tenant>:<seq>:<index> and
+// Dc-Retry, its origin coordinate and the deliveries it used BEFORE the copy's first (none: the
+// copy's first delivery is the same attempt). A refused publish reports false so the caller
+// leaves the envelope to redeliver instead. And only on the envelope's FIRST delivery: a later
+// one never splits, so a member can never have two copies.
 func TestAMemberThatMustRetryIsSplitOutAlone(t *testing.T) {
 	ack := &envCountingAck{}
-	env := inboundEnvelope(t, 4242, ack, 3, []byte{0x1a, 0x01, 'a'}, []byte{0x1a, 0x01, 'b'})
-	units, marked, err := messaging.SplitEnvelope(env, "tenant1", func(string) {})
+	env := inboundEnvelope(t, 4242, ack, 1, []byte{0x1a, 0x01, 'a'}, []byte{0x1a, 0x01, 'b'})
+	units, marked, err := messaging.SplitEnvelope(env, "tenant1", func(string) {}, nil)
 	require.NoError(t, err)
 	require.True(t, marked)
 	require.Len(t, units, 2)
@@ -198,9 +246,83 @@ func TestAMemberThatMustRetryIsSplitOutAlone(t *testing.T) {
 	assert.Equal(t, units[1].Msg.Value, got.Value, "the member's own bytes, a legacy event")
 	assert.False(t, got.IsEnvelope(), "published in the legacy shape")
 	assert.Equal(t, "x:tenant1:39u:1", got.DedupID)
-	assert.Equal(t, "3", got.Headers[messaging.HeaderRetry], "the deliveries already spent travel with it")
+	assert.Equal(t, "39u:1:0", got.Headers[messaging.HeaderRetry], "origin coordinate, no attempts used yet")
 
 	w.err = errors.New("broker refused")
 	assert.False(t, iproc.splitOut(units[0].Msg, "tenant1"), "a refused copy leaves the member to retry in its envelope")
 	assert.False(t, (&InboundEventsProcessor{}).splitOut(units[0].Msg, "tenant1"), "no writer, no split")
+
+	// A redelivery of the envelope does not split again.
+	again := inboundEnvelope(t, 4242, &envCountingAck{}, 2, []byte{0x1a, 0x01, 'a'}, []byte{0x1a, 0x01, 'b'})
+	redelivered, _, err := messaging.SplitEnvelope(again, "tenant1", func(string) {}, nil)
+	require.NoError(t, err)
+	ok := &captureWriter{}
+	assert.False(t, (&InboundEventsProcessor{splitWriter: ok}).splitOut(redelivered[0].Msg, "tenant1"))
+	assert.Empty(t, ok.msgs, "no second copy of a member, however long its envelope is held")
+}
+
+// The event a split copy produces is named by the coordinate it came from, so the copy and its
+// envelope - which may both resolve the member - publish under ONE id and the broker's window
+// folds the second into the first: the member reaches DETECT once.
+func TestACopyAndItsEnvelopeNameTheSameEventAlike(t *testing.T) {
+	env := inboundEnvelope(t, 4242, &envCountingAck{}, 1, []byte{0x1a, 0x01, 'a'}, []byte{0x1a, 0x01, 'b'})
+	units, _, err := messaging.SplitEnvelope(env, "tenant1", func(string) {}, nil)
+	require.NoError(t, err)
+	member := units[1].Msg
+
+	w := &captureWriter{}
+	require.True(t, (&InboundEventsProcessor{splitWriter: w}).splitOut(member, "tenant1"))
+	copyMsg := messaging.NewConsumedMessage(member.Subject, w.msgs[0].Value, 1, w.msgs[0].Headers, nil)
+	copyMsg.StreamSeq = 987654 // the copy's own, unrelated sequence
+	messaging.ApplyRetryHeader(&copyMsg)
+
+	for _, kind := range []string{dedupKindResolved, dedupKindFailed} {
+		for position := 0; position < 3; position++ {
+			assert.Equal(t, sourceDedupID(kind, "tenant1", member, position), sourceDedupID(kind, "tenant1", copyMsg, position),
+				"kind %s position %d", kind, position)
+		}
+	}
+	assert.Equal(t, "r:tenant1:39u:1.2", sourceDedupID(dedupKindResolved, "tenant1", copyMsg, 2))
+	assert.Equal(t, "f:tenant1:39u:1", sourceDedupID(dedupKindFailed, "tenant1", copyMsg, 0))
+	// An ordinary message is still named by its own sequence.
+	plain := messaging.Message{StreamSeq: 987654}
+	assert.Equal(t, "r:tenant1:l62u:0", sourceDedupID(dedupKindResolved, "tenant1", plain, 0))
+}
+
+// The failed-events stream holds device-management's records and event-management's, numbered
+// from two unrelated sequence spaces. No id of one may equal an id of the other, or the window
+// would drop a real record as a duplicate of a stranger's.
+func TestFailedRecordIdsOfTheTwoAreasNeverCollide(t *testing.T) {
+	dm := map[string]bool{}
+	em := map[string]bool{}
+	for _, seq := range []uint64{1, 2, 36, 4242, 987654} {
+		for idx := uint32(0); idx < 70; idx++ {
+			src := messaging.Message{StreamSeq: seq}
+			dm[sourceDedupID(dedupKindFailed, "tenant1", src, int(idx))] = true
+			units, _, err := messaging.SplitEnvelope(inboundEnvelope(t, seq, nil, 1, []byte{0x1a, 0x01, 'a'}, []byte{0x1a, 0x01, 'b'}), "tenant1", func(string) {}, nil)
+			require.NoError(t, err)
+			dm[sourceDedupID(dedupKindFailed, "tenant1", units[1].Msg, 0)] = true
+			// event-management builds its member records with MemberDedupID on a resolved member
+			// whose index is idx.
+			em[unitWithIndex(t, seq, idx).MemberDedupID(messaging.DedupKindFailed, "tenant1")] = true
+		}
+	}
+	for id := range em {
+		assert.False(t, dm[id], "%q is both a device-management and an event-management failed-record id", id)
+	}
+}
+
+// unitWithIndex is a resolved-stream member at (seq, idx), as event-management reads one.
+func unitWithIndex(t *testing.T, seq uint64, idx uint32) messaging.Message {
+	t.Helper()
+	events := make([]eventenvelope.Event, 0, 2)
+	events = append(events, eventenvelope.Event{Index: idx, Bytes: []byte{0x1a, 0x01, 'a'}}, eventenvelope.Event{Index: idx + 1, Bytes: []byte{0x1a, 0x01, 'b'}})
+	body, err := eventenvelope.Encode(eventenvelope.Header{Kind: eventenvelope.KindResolved, Tenant: "tenant1"}, events)
+	require.NoError(t, err)
+	m := messaging.NewConsumedMessage(testTenantSubject, body, 1,
+		map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}, nil)
+	m.StreamSeq = seq
+	units, _, err := messaging.SplitEnvelope(m, "tenant1", func(string) {}, nil)
+	require.NoError(t, err)
+	return units[0].Msg
 }

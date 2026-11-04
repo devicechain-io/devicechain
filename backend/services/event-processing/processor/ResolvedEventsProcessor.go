@@ -472,7 +472,13 @@ type ResolvedEventsProcessor struct {
 	// else reads or writes them.
 	engine      detectcore.Detector
 	pendingAcks []messaging.Message
-	pendingDets []pendingDetection
+	// pendingEvents is how many EVENTS the messages in pendingAcks carry (an event envelope
+	// carries many), and appliedEvents how many the last applyResolved took. The checkpoint
+	// cadence counts events as well as messages, so an envelope of 64 does not stretch the span
+	// between snapshots - and so the replay a crash costs - 64-fold.
+	pendingEvents int
+	appliedEvents int
+	pendingDets   []pendingDetection
 	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
 	publishPasses  uint64
 	lastCheckpoint time.Time
@@ -1596,7 +1602,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		// A replay read acknowledges nothing (it is a read by sequence), so nothing is
 		// buffered for the durable here — only the engine is advanced.
 		if rp.applyResolved(msg) {
-			replayed++
+			replayed += rp.appliedEvents
 		}
 		if replayed >= rp.cfg.CheckpointEvents {
 			rp.checkpoint(rp.pctx())
@@ -1727,7 +1733,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			rp.handle(item.msg)
 			// Flush by buffered-ack count (bounds in-flight acks regardless of whether
 			// messages advanced the engine, were duplicates, or were poison).
-			if len(rp.pendingAcks) >= rp.cfg.CheckpointEvents {
+			if rp.checkpointDue() {
 				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
@@ -1863,6 +1869,13 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	}
 	rp.pendingAcks = append(rp.pendingAcks, msg)
 	rp.applyResolved(msg)
+	rp.pendingEvents += rp.appliedEvents
+}
+
+// checkpointDue is whether enough has been applied since the last checkpoint: CheckpointEvents
+// messages (which bounds the broker's ack-pending) or that many events (which bounds the replay).
+func (rp *ResolvedEventsProcessor) checkpointDue() bool {
+	return len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents
 }
 
 // applyResolved parses a resolved-event message, fans it out across the applicable rules
@@ -1875,6 +1888,7 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 // (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
 // predicate evaluations) — still acked upstream, but not counted or marked dirty.
 func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
+	rp.appliedEvents = 1 // an event envelope sets the number of its members (applyEnvelope)
 	if msg.StreamSeq == 0 {
 		// A JetStream-delivered message always carries a sequence; a 0 means the
 		// broker metadata was unreadable. Treat it as unprocessable rather than feed
@@ -1934,7 +1948,7 @@ func (rp *ResolvedEventsProcessor) decode(value []byte) (*resolvedevent.Resolved
 // Whatever the members did, LastSeq ends at the envelope's sequence: an envelope whose members
 // were all skipped or disabled is still handled.
 func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant string) bool {
-	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {})
+	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {}, nil)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping event envelope that could not be read from subject %q", msg.Subject)
@@ -1942,6 +1956,7 @@ func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant s
 	}
 	prev := rp.engine.LastSeq()
 	advanced := false
+	rp.appliedEvents = max(len(units), 1)
 	for _, u := range units {
 		event, err := rp.decode(u.Msg.Value)
 		if err != nil {
@@ -2869,6 +2884,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	rp.phases.enter(phaseAck)
 	rp.ackThroughCommitted()
 	rp.pendingAcks = rp.pendingAcks[:0]
+	rp.pendingEvents = 0
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.phases.flush()
 	return true

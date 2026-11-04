@@ -255,7 +255,7 @@ replay:
 		// sequence. A legacy message is its own single value.
 		values, enveloped := [][]byte{msg.Value}, msg.IsEnvelope()
 		if enveloped {
-			units, _, uerr := messaging.SplitEnvelope(msg, subjectTenant, func(string) {})
+			units, _, uerr := messaging.SplitEnvelope(msg, subjectTenant, func(string) {}, nil)
 			if uerr != nil {
 				continue // an unreadable envelope is skipped like a corrupt payload
 			}

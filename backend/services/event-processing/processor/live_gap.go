@@ -142,7 +142,7 @@ func (rp *ResolvedEventsProcessor) retryGapFill() {
 	msg := *rp.gapHeld
 	rp.gapHeld = nil
 	rp.handle(msg) // re-parks on a failed fill
-	if rp.gapHeld == nil && len(rp.pendingAcks) >= rp.cfg.CheckpointEvents {
+	if rp.gapHeld == nil && rp.checkpointDue() {
 		rp.checkpoint(rp.pctx())
 	}
 }
@@ -218,7 +218,7 @@ func (rp *ResolvedEventsProcessor) fillRange(from, to uint64) (err error) {
 				applied++
 			}
 			absentBehind += gap
-			sinceCheckpoint++
+			sinceCheckpoint += uint64(rp.appliedEvents)
 		}
 		// A wide gap would otherwise hold every detection it fires until the end of the fill.
 		if rp.cfg.CheckpointEvents > 0 && sinceCheckpoint >= uint64(rp.cfg.CheckpointEvents) {

@@ -105,7 +105,7 @@ func eventValues(msg messaging.Message, tenant string) [][]byte {
 	if !msg.IsEnvelope() {
 		return [][]byte{msg.Value}
 	}
-	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {})
+	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {}, nil)
 	if err != nil {
 		log.Debug().Err(err).Msg("subscription: skipping an unreadable event envelope")
 		return nil

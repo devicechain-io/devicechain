@@ -5,8 +5,9 @@ package messaging
 
 import (
 	"strconv"
-	"sync"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
@@ -36,29 +37,82 @@ import (
 // already stored. A poison member is acked and costs the others nothing.
 
 const (
-	// HeaderRetry carries the deliveries an event has already spent when it is republished
-	// alone out of an envelope (a "split out" member). A consumed message's NumDelivered is
-	// its own delivery count plus this, so a member's total budget stays MaxDeliver rather than
-	// starting again at the split.
+	// HeaderRetry rides a member republished alone out of an event envelope (a "split out"
+	// member, device-management's inbound retry). Its value is
+	//
+	//	<origin envelope stream sequence, base 36>:<member index, base 36>:<attempts spent>
+	//
+	// the member's ORIGIN coordinate and the deliveries it has already used. A reader of
+	// inbound-events adds the attempts to the copy's own delivery count, so a member's total
+	// budget stays MaxDeliver, and keeps the coordinate (Message.SourceCoordinate) so that what
+	// the copy produces - its resolved events, its failed record - is named by where the event
+	// came from and not by the copy's own sequence. The same member resolved from the copy and,
+	// after a redelivery, from its envelope then publishes under the same ids, and the broker's
+	// window folds the second into the first.
 	HeaderRetry = "Dc-Retry"
 
 	// The kinds of the per-member dedup ids (Message.MemberDedupID).
-	DedupKindFailed = "f" // the failed-events record of a member
-	DedupKindSplit  = "x" // the copy of a member republished alone
+	DedupKindFailed = "fe" // event-management's failed-events record of a member. NOT "f": device-management owns that kind on the same stream, and the two number their sources independently
+	DedupKindSplit  = "x"  // the copy of a member republished alone
 )
 
-// retryCarry is the deliveries a message's HeaderRetry says it has already spent, 0 when it
-// carries none or something that is not a small count.
-func retryCarry(headers map[string]string) int {
-	v, ok := headers[HeaderRetry]
+// splitOrigin is where a split-out copy came from.
+type splitOrigin struct {
+	seq uint64
+	idx uint32
+}
+
+// RetryHeader is the HeaderRetry value for a copy of member index of the envelope at stream
+// sequence seq, which has spent attempts deliveries.
+func RetryHeader(seq uint64, index uint32, attempts int) string {
+	return strconv.FormatUint(seq, 36) + ":" + strconv.FormatUint(uint64(index), 36) + ":" + strconv.Itoa(attempts)
+}
+
+// parseRetryHeader reads HeaderRetry. ok is false when it is absent or not in the form
+// RetryHeader writes (a malformed one is ignored, never half believed).
+func parseRetryHeader(headers map[string]string) (o splitOrigin, attempts int, ok bool) {
+	v, present := headers[HeaderRetry]
+	if !present {
+		return o, 0, false
+	}
+	parts := strings.Split(v, ":")
+	if len(parts) != 3 {
+		return o, 0, false
+	}
+	seq, err1 := strconv.ParseUint(parts[0], 36, 64)
+	idx, err2 := strconv.ParseUint(parts[1], 36, 32)
+	n, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil || seq == 0 || idx >= 1<<20 || n < 0 || n > MaxDeliver {
+		return o, 0, false
+	}
+	return splitOrigin{seq: seq, idx: uint32(idx)}, n, true
+}
+
+// ApplyRetryHeader is what a reader of inbound-events does with HeaderRetry on a message it
+// has built: the attempts are added to its delivery count and its origin is kept. Scoped to
+// inbound-events by the caller: no other stream carries the header.
+func ApplyRetryHeader(m *Message) {
+	o, attempts, ok := parseRetryHeader(m.Headers)
 	if !ok {
-		return 0
+		return
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 || n > MaxDeliver {
-		return 0
+	if m.NumDelivered > 0 {
+		m.NumDelivered += attempts
 	}
-	return n
+	m.split = &o
+}
+
+// SourceCoordinate is the (stream sequence, member index) an event is named by: the
+// envelope's sequence and the member's place in it for a member, the origin envelope's for a
+// copy split out of one, and ok=false for an ordinary message (named by its own sequence).
+func (m Message) SourceCoordinate() (seq uint64, index uint32, ok bool) {
+	switch {
+	case m.member != nil:
+		return m.StreamSeq, m.member.index, true
+	case m.split != nil:
+		return m.split.seq, m.split.idx, true
+	}
+	return 0, 0, false
 }
 
 // memberInfo is what a member Message knows about where it came from.
@@ -94,7 +148,7 @@ func (m Message) MemberDedupID(kind, tenant string) string {
 
 // IsEnvelope reports whether the message is marked as an envelope.
 func (m Message) IsEnvelope() bool {
-	return m.member == nil && m.Headers != nil && m.Headers[eventenvelope.HeaderName] != ""
+	return m.member == nil && m.Headers != nil && m.Headers[eventenvelope.HeaderName] == eventenvelope.HeaderValue
 }
 
 // EnvelopeUnit is one member of a split envelope: the Message to handle and the RED clock-stop
@@ -102,25 +156,6 @@ func (m Message) IsEnvelope() bool {
 type EnvelopeUnit struct {
 	Msg  Message
 	Done func(result string)
-}
-
-// resultRank orders the dispositions an envelope reports as one: its single clock-stop carries
-// the most severe outcome of its members.
-func resultRank(r string) int {
-	switch r {
-	case core.ResultRetry:
-		return 6
-	case core.ResultFailed:
-		return 5
-	case core.ResultInvalid:
-		return 4
-	case core.ResultErased:
-		return 3
-	case core.ResultDropped:
-		return 2
-	default:
-		return 1
-	}
 }
 
 // SplitEnvelope splits msg when it is an envelope. A legacy message returns marked=false and
@@ -134,9 +169,13 @@ func resultRank(r string) int {
 // An envelope that carries no members (a settlement record: every member of its round went
 // elsewhere) is acked here and done(OK) called, and returns marked=true with no units.
 //
-// done is the envelope's own clock-stop; the units' Done funcs call it once, after the last of
-// them has been called, with the most severe of their results.
-func SplitEnvelope(msg Message, subjectTenant string, done func(string)) (units []EnvelopeUnit, marked bool, err error) {
+// 🔴 THE RED COUNTERS COUNT MEMBERS, as device-management's do. done is the clock the caller
+// started when it received the envelope and goes to the FIRST member; startClock starts one for
+// each of the others (nil: they are not timed). Every member then stops its own clock with its
+// own result, so a poison member is counted invalid and a dropped one dropped whatever its
+// neighbours did - an envelope's one worst result would let one hide the other, and would count
+// k events as one message beside the services that count them k times.
+func SplitEnvelope(msg Message, subjectTenant string, done func(string), startClock func() func(string)) (units []EnvelopeUnit, marked bool, err error) {
 	if !msg.IsEnvelope() {
 		return nil, false, nil
 	}
@@ -161,7 +200,7 @@ func SplitEnvelope(msg Message, subjectTenant string, done func(string)) (units 
 			return nil, true, err
 		}
 	}
-	g := &memberGroup{parent: msg, acksLeft: int32(n), done: done, doneLeft: n, worst: core.ResultOK}
+	g := &memberGroup{parent: msg, acksLeft: int32(n)}
 	units = make([]EnvelopeUnit, n)
 	for i := range units {
 		member := msg
@@ -169,7 +208,14 @@ func SplitEnvelope(msg Message, subjectTenant string, done func(string)) (units 
 		member.slot = nil // the envelope's slot is released when the envelope is acked
 		member.member = &memberInfo{index: r.Index(i)}
 		member.ack = &memberAck{g: g}
-		units[i] = EnvelopeUnit{Msg: member, Done: g.memberDone}
+		clock := func(string) {}
+		switch {
+		case i == 0:
+			clock = done
+		case startClock != nil:
+			clock = startClock()
+		}
+		units[i] = EnvelopeUnit{Msg: member, Done: clock}
 	}
 	return units, true, nil
 }
@@ -178,26 +224,16 @@ func SplitEnvelope(msg Message, subjectTenant string, done func(string)) (units 
 type memberGroup struct {
 	parent   Message
 	acksLeft int32 // members not yet acked
-	done     func(string)
 
-	mu       sync.Mutex
-	doneLeft int
-	worst    string
+	// lastBeat is when an InProgress last reached the broker for this envelope (unix nanos).
+	lastBeat atomic.Int64
 }
 
-// memberDone records one member's result and, after the last, reports the most severe.
-func (g *memberGroup) memberDone(result string) {
-	g.mu.Lock()
-	if resultRank(result) > resultRank(g.worst) {
-		g.worst = result
-	}
-	g.doneLeft--
-	last, worst := g.doneLeft == 0, g.worst
-	g.mu.Unlock()
-	if last {
-		g.done(worst)
-	}
-}
+// beatInterval is the least time between two InProgress sent to the broker for one envelope.
+// The store hold beats every held message on a timer that is a fraction of AckWait, and an
+// envelope's members are all held together, so without this the broker would get k beats
+// where it needs one.
+const beatInterval = time.Second
 
 // memberAck acks one member, once.
 type memberAck struct {
@@ -216,5 +252,13 @@ func (a *memberAck) Ack() error {
 }
 
 // InProgress restarts the envelope's ack-wait: a member being held keeps the whole envelope
-// from being redelivered under it.
-func (a *memberAck) InProgress() error { return a.g.parent.InProgress() }
+// from being redelivered under it. One envelope is beaten once per beatInterval however many
+// of its members are being held.
+func (a *memberAck) InProgress() error {
+	now := time.Now().UnixNano()
+	last := a.g.lastBeat.Load()
+	if now-last < int64(beatInterval) || !a.g.lastBeat.CompareAndSwap(last, now) {
+		return nil
+	}
+	return a.g.parent.InProgress()
+}

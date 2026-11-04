@@ -37,7 +37,7 @@ type failedItem struct {
 	event         resolvedevent.FailedEvent
 	correlationId string
 	// dedupID is the record's broker dedup id: set for a failed member of an event envelope
-	// (f:<tenant>:<envelope seq>:<member index>), so the envelope's redelivery - which a
+	// (fe:<tenant>:<envelope seq>:<member index>), so the envelope's redelivery - which a
 	// stubborn neighbour causes - folds into the one record. Empty for a legacy message.
 	dedupID string
 }
@@ -289,7 +289,7 @@ func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) 
 		// it with the inbound message's correlation id (E15) so the emitted
 		// failed event can be traced back to the resolved event that triggered it.
 		msg := messaging.Message{
-			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
+			Key:     []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 			Value:   bytes,
 			DedupID: item.dedupID,
 		}.WithCorrelationID(item.correlationId)

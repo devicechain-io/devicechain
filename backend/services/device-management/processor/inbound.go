@@ -303,18 +303,29 @@ const splitTimeout = 5 * time.Second
 // splitOut republishes an envelope member alone, in the legacy shape, and reports whether the
 // broker stored it - in which case the caller acks the member. The copy carries the member's
 // bytes (self-contained: the bytes a legacy producer would have published), the envelope's
-// correlation id, the dedup id x:<tenant>:<envelope seq>:<member index> (so a whole-envelope
-// redelivery, which splits the same member again, folds into the one copy), and Dc-Retry, the
-// deliveries already spent, which the reader adds to the copy's own so the member's total
-// budget stays MaxDeliver rather than starting over.
+// correlation id, the dedup id x:<tenant>:<envelope seq>:<member index>, and Dc-Retry: the
+// member's ORIGIN coordinate and the deliveries it has already used before the copy's first.
+//
+// A member is split out only on its envelope's FIRST delivery (src.NumDelivered is 1). That
+// is what makes the split happen at most once per member: an envelope that comes back (another
+// member was left unacked) finds the member either already split, with its copy on the stream,
+// or not splittable, and in neither case makes a second copy, so a member never has two copies
+// with two outcomes however long the envelope is held. On the later deliveries a member that
+// still cannot resolve simply stays unacked, and the envelope's own ladder gives it its
+// failed-events record at the final delivery.
+//
+// The attempts the copy is told it has used are the envelope's deliveries BEFORE this one
+// (0): the copy's own first delivery is then the same attempt, and its ladder is the legacy
+// ladder, the full MaxDeliver deliveries a not-yet-registered device always had.
 func (iproc *InboundEventsProcessor) splitOut(src messaging.Message, tenant string) bool {
-	if iproc.splitWriter == nil || src.StreamSeq == 0 {
+	seq, member, ok := src.SourceCoordinate()
+	if iproc.splitWriter == nil || !ok || seq == 0 || src.NumDelivered > 1 {
 		return false
 	}
 	msg := messaging.Message{
 		Value:   src.Value,
 		DedupID: src.MemberDedupID(messaging.DedupKindSplit, tenant),
-		Headers: map[string]string{messaging.HeaderRetry: strconv.Itoa(src.NumDelivered)},
+		Headers: map[string]string{messaging.HeaderRetry: messaging.RetryHeader(seq, member, max(src.NumDelivered-1, 0))},
 	}.WithCorrelationID(src.CorrelationID())
 	ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), tenant), splitTimeout)
 	defer cancel()
@@ -740,8 +751,12 @@ func sourceDedupID(kind, tenant string, src messaging.Message, index int) string
 	// is r:<tenant>:<seq>:<member>.<fan-out position>. The dot keeps every member id
 	// disjoint from the ids a legacy source gets (base 36 has no dot), so an envelope's
 	// sequence can never collide with a message's.
-	if member, ok := src.MemberIndex(); ok {
-		id := kind + ":" + tenant + ":" + strconv.FormatUint(src.StreamSeq, 36) + ":" + strconv.FormatUint(uint64(member), 36)
+	//
+	// A copy split out of an envelope is named by the coordinate it came from, not its own
+	// sequence, so the event is the same source whether the copy or its envelope resolves it:
+	// both publish under the same ids and the broker's window folds the second into the first.
+	if seq, member, ok := src.SourceCoordinate(); ok {
+		id := kind + ":" + tenant + ":" + strconv.FormatUint(seq, 36) + ":" + strconv.FormatUint(uint64(member), 36)
 		if kind == dedupKindResolved {
 			id += "." + strconv.FormatUint(uint64(index), 36)
 		}
@@ -945,7 +960,7 @@ func (iproc *InboundEventsProcessor) handOffEnvelope(ctx context.Context, msg me
 		iproc.OnInvalidEvent(fmt.Errorf("event envelope on a subject with no tenant"), msg)
 		return true
 	}
-	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {})
+	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {}, nil)
 	if err != nil {
 		iproc.OnInvalidEvent(err, msg)
 		return true

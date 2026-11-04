@@ -67,7 +67,7 @@ func envelopeEvents(n int) []resolvedevent.ResolvedEvent {
 
 // Gate (b), the poison member: one member that can never be stored costs its neighbours
 // nothing. The other k-1 are stored, the one is recorded as ONE failed event under the id
-// f:<tenant>:<envelope seq>:<member index>, and the envelope is acknowledged once and never
+// fe:<tenant>:<envelope seq>:<member index>, and the envelope is acknowledged once and never
 // redelivered.
 func TestAPoisonMemberIsRecordedAloneAndTheEnvelopeIsAckedOnce(t *testing.T) {
 	r := newBatchRig(t, 16)
@@ -85,7 +85,7 @@ func TestAPoisonMemberIsRecordedAloneAndTheEnvelopeIsAckedOnce(t *testing.T) {
 	require.Zero(t, e)
 	require.Zero(t, m)
 	require.Equal(t, []recordedFailure{{device: "dev-2", reason: uint(resolvedevent.FailureReason_Invalid),
-		dedup: "f:" + fenceCostTenant + ":" + "25" + ":2"}}, failures(), "one record, for the member, under its own id")
+		dedup: "fe:" + fenceCostTenant + ":" + "25" + ":2"}}, failures(), "one record, for the member, under its own id")
 	require.Equal(t, map[int]int{0: 1}, r.acks.acked(), "the envelope is acknowledged exactly once")
 }
 
@@ -114,7 +114,7 @@ func TestAStubbornMemberIsRetriedWithItsEnvelopeThenRecordedAlone(t *testing.T) 
 
 	r.run([]messaging.Message{envelopeOf(t, r.acks, 0, fenceCostTenant, 90, messaging.MaxDeliver, envelopeEvents(6)...)})
 	require.Equal(t, []recordedFailure{{device: "dev-4", reason: uint(resolvedevent.FailureReason_ApiCallFailed),
-		dedup: "f:" + fenceCostTenant + ":2i:4"}}, failures(), "the stubborn member alone is recorded, once")
+		dedup: "fe:" + fenceCostTenant + ":2i:4"}}, failures(), "the stubborn member alone is recorded, once")
 	require.Equal(t, map[int]int{0: 1}, r.acks.acked(), "and then the envelope is acknowledged")
 	for _, dev := range []string{"dev-0", "dev-1", "dev-2", "dev-3", "dev-5"} {
 		e, _ := eventsFor(t, r.db, dev)

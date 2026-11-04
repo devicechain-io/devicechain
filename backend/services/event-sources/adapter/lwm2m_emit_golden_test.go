@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // LwM2M publishes through the synchronous Emit, Ingest and EmitPresence, and those are now
@@ -39,9 +41,19 @@ func writtenDigest(t *testing.T, w *fakeWriter) string {
 		fmt.Fprintf(h, "write %d tenant=%q\n", i, tenant)
 	}
 	for _, m := range w.msgs {
-		fmt.Fprintf(h, "%#v\n", m)
+		fmt.Fprintf(h, "%s\n", publishedForm(m))
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// publishedForm is the Go-syntax form of a message these goldens were computed from: every field
+// a producer sets. Message has since gained `member`, which is set only on a member of an event
+// envelope a READER split out and is nil on everything a producer writes; it is left out so the
+// literals - computed before the lwm2m split, which is the proof - are not re-pinned each time
+// Message gains a field that only a consumer sets. A message that DID carry a member would show
+// it, and fail.
+func publishedForm(m messaging.Message) string {
+	return strings.Replace(fmt.Sprintf("%#v", m), ", member:(*messaging.memberInfo)(nil)", "", 1)
 }
 
 func TestGoldenLwm2mEmitWritesUnchanged(t *testing.T) {

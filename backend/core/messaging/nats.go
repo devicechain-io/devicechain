@@ -2669,13 +2669,12 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			r.dropForeign(nm, sl, seq)
 			continue
 		}
-		headers := natsHeaders(nm)
+		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), ack)
 		// A member split out of an event envelope arrives with the deliveries it already spent
-		// (HeaderRetry), so its budget is MaxDeliver in all, not MaxDeliver again.
-		if deliv > 0 {
-			deliv += retryCarry(headers)
+		// and the coordinate it came from (HeaderRetry). Only inbound-events carries the header.
+		if r.suffix == streams.InboundEvents {
+			ApplyRetryHeader(&msg)
 		}
-		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, headers, ack)
 		if r.store && !r.storeHandOut(nm, &msg, seq, appended) {
 			r.skipHandOut(nm, sl)
 			continue
