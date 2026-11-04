@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"google.golang.org/protobuf/proto"
@@ -417,7 +418,13 @@ func UnmarshalResolvedEvent(encoded []byte) (*ResolvedEvent, error) {
 	if err != nil {
 		return nil, err
 	}
+	return resolvedFromWire(pbevent, pbevent.GetDeviceTypeToken(), pbevent.GetProfileVersionToken(), occurred, processed)
+}
 
+// resolvedFromWire maps a decoded PResolvedEvent to a ResolvedEvent. The two tokens and the
+// two instants are passed in rather than read off pbevent because an event inside an envelope
+// (UnmarshalEnvelopeMember) carries them in the envelope's header, not in its own bytes.
+func resolvedFromWire(pbevent *PResolvedEvent, deviceTypeToken, profileVersionToken string, occurred, processed time.Time) (*ResolvedEvent, error) {
 	// Unmarshal payload based on event type.
 	payload, err := UnmarshalResolvedPayload(eventtype.EventType(pbevent.EventType), pbevent.Payload, occurred)
 	if err != nil {
@@ -445,8 +452,8 @@ func UnmarshalResolvedEvent(encoded []byte) (*ResolvedEvent, error) {
 		AltId:                pbevent.AltId,
 		SourceDeviceToken:    pbevent.SourceDeviceToken,
 		Anchors:              anchors,
-		DeviceTypeToken:      pbevent.GetDeviceTypeToken(),
-		ProfileVersionToken:  pbevent.GetProfileVersionToken(),
+		DeviceTypeToken:      deviceTypeToken,
+		ProfileVersionToken:  profileVersionToken,
 		ScopeMemberships:     memberships,
 		ExternalId:           pbevent.GetExternalId(),
 		FenceSetVersion:      pbevent.GetFenceSetVersion(),
@@ -459,4 +466,33 @@ func UnmarshalResolvedEvent(encoded []byte) (*ResolvedEvent, error) {
 	}
 
 	return event, nil
+}
+
+// UnmarshalEnvelopeMember decodes the i'th member of a resolved-kind envelope: the same
+// ResolvedEvent UnmarshalResolvedEvent returns for the member's legacy bytes
+// (eventenvelope's TestBothDecodersAgree holds the two together), without rebuilding those bytes. The two
+// tokens come from the envelope's dictionary, shared across its members, and the instants
+// from its base time.
+func UnmarshalEnvelopeMember(r *eventenvelope.Reader, i int) (*ResolvedEvent, error) {
+	if r.Header().Kind != eventenvelope.KindResolved {
+		return nil, fmt.Errorf("envelope of %s events is not resolved", r.Header().Kind)
+	}
+	p := r.Parts(i)
+	pbevent := &PResolvedEvent{}
+	if err := proto.Unmarshal(p.Event, pbevent); err != nil {
+		return nil, err
+	}
+	var occurred, processed time.Time
+	var err error
+	if p.HasOccurred {
+		occurred = eventtime.FromWireNanos(p.Occurred)
+	} else if occurred, err = eventtime.ParseWireString(pbevent.OccurredTime); err != nil {
+		return nil, err
+	}
+	if p.HasProcessed {
+		processed = eventtime.FromWireNanos(p.Processed)
+	} else if processed, err = eventtime.ParseWireString(pbevent.ProcessedTime); err != nil {
+		return nil, err
+	}
+	return resolvedFromWire(pbevent, p.DeviceTypeToken, p.ProfileVersionToken, occurred, processed)
 }
