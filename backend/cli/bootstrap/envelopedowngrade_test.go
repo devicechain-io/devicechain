@@ -51,6 +51,7 @@ func TestEnvelopeDowngradeIsExact(t *testing.T) {
 		wantProbe  bool
 	}{
 		{"flag on, to an old release", envelopeFacts{From: "v1.2.0", To: "v1.0.0", FlagOn: true}, clean, nil, true, false},
+		{"both switches on", envelopeFacts{From: "v1.2.0", To: "v1.0.0", FlagOn: true, Switches: []string{"resolved", "inbound"}}, clean, nil, true, false},
 		{"never enabled, streams clean", envelopeFacts{From: "v1.2.0", To: "v1.0.0"}, clean, nil, false, true},
 		{"never enabled, but the sample finds one (set outside dcctl)", envelopeFacts{From: "v1.2.0", To: "v1.0.0"},
 			envelopeProbeResult{Bounds: bounds(1, 9, 1, 9), Sample: "resolved-events (message 4)"}, nil, true, true},
@@ -184,6 +185,21 @@ func TestTheOverlaySwitchIsReadFromItsNestedKey(t *testing.T) {
 	}
 }
 
+func TestTheRefusalNamesEverySwitchThatIsOn(t *testing.T) {
+	err := checkEnvelopeDowngrade(context.Background(),
+		envelopeFacts{From: "v1.2.0", To: "v1.0.0", FlagOn: true, Switches: envelopeSwitchNames(config.EnvelopesConfiguration{Resolved: true, Inbound: true})},
+		probeOf(envelopeProbeResult{}, nil, nil))
+	if err == nil || !strings.Contains(err.Error(), "resolved, inbound") {
+		t.Fatalf("both switches are on and the refusal must name both: %v", err)
+	}
+	err = checkEnvelopeDowngrade(context.Background(),
+		envelopeFacts{From: "v1.2.0", To: "v1.0.0", FlagOn: true, Switches: envelopeSwitchNames(config.EnvelopesConfiguration{Inbound: true})},
+		probeOf(envelopeProbeResult{}, nil, nil))
+	if err == nil || !strings.Contains(err.Error(), "ON (inbound)") {
+		t.Fatalf("only inbound is on and the refusal must say so: %v", err)
+	}
+}
+
 type fakeStreams struct {
 	infos map[string]*nats.StreamInfo
 	msgs  map[string]map[uint64]*nats.RawStreamMsg
@@ -215,7 +231,7 @@ func TestSampleReportsBoundsFindsAnEnvelopeAndRefusesAMissingStream(t *testing.T
 		},
 		msgs: map[string]map[uint64]*nats.RawStreamMsg{inb: {7: plain, 8: plain}, res: {1: plain, 2: plain, 3: plain, 4: env, 5: plain}},
 	}
-	got, err := sampleStreams(f, "i1")
+	got, err := sampleStreams(context.Background(), f, "i1")
 	if err != nil || !strings.Contains(got.Sample, "resolved-events (message 4)") {
 		t.Fatalf("sample = %+v, %v; want the envelope at message 4", got, err)
 	}
@@ -223,12 +239,12 @@ func TestSampleReportsBoundsFindsAnEnvelopeAndRefusesAMissingStream(t *testing.T
 		t.Fatalf("bounds = %+v", got.Bounds)
 	}
 	f.msgs[res][4] = plain
-	if got, err := sampleStreams(f, "i1"); err != nil || got.Sample != "" {
+	if got, err := sampleStreams(context.Background(), f, "i1"); err != nil || got.Sample != "" {
 		t.Fatalf("clean streams: %+v, %v", got, err)
 	}
 	// A stream that does not exist on a running instance is an error, never "clean".
 	delete(f.infos, res)
-	if _, err := sampleStreams(f, "i1"); err == nil {
+	if _, err := sampleStreams(context.Background(), f, "i1"); err == nil {
 		t.Fatal("a missing hot stream was read as clean")
 	}
 }

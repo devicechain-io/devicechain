@@ -480,6 +480,15 @@ func AdminPermissions(instanceId string) (Permissions, error) {
 			}
 		}
 	}
+	// dcctl's downgrade guard and its off-marks read the envelope-carrying streams' oldest and
+	// newest messages (a STREAM.MSG.GET by sequence, or a DIRECT.GET) as this login. A broker drops
+	// a publish its login may not make without answering, so a missing grant does not fail visibly:
+	// the read times out. Granted on exactly the streams that carry envelopes, derived from the
+	// table, never on every stream: the rest of the broker's messages stay unreadable here.
+	for _, suffix := range streams.EnvelopeCarriers() {
+		name := messaging.StreamName(instanceId, suffix)
+		g.api("STREAM.MSG.GET."+name, "DIRECT.GET."+name)
+	}
 	for _, b := range kv.All {
 		if b.Account != kv.App {
 			// The identity account is entered by its own login; the administrator never is.

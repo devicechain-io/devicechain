@@ -354,8 +354,19 @@ func TestTheBrokerAdministratorShapesTheCatalogAndNothingElse(t *testing.T) {
 			}
 		}
 	}
+	// The one message read it holds: the envelope-carrying streams' STREAM.MSG.GET and DIRECT.GET,
+	// by exact name (dcctl's downgrade guard); see TestTheAdministratorCanReadTheEnvelopeStreamsAndNoOthers.
+	envelopeReads := map[string]bool{}
+	for _, suffix := range streams.EnvelopeCarriers() {
+		name := messaging.StreamName(permInstance, suffix)
+		envelopeReads["$JS.API.STREAM.MSG.GET."+name] = true
+		envelopeReads["$JS.API.DIRECT.GET."+name] = true
+	}
 	for _, a := range p.Publish.Allow {
 		require.True(t, strings.HasPrefix(a, "$JS.API."), "the administrator may publish to %q, which is not a JetStream API subject", a)
+		if envelopeReads[a] {
+			continue
+		}
 		for _, forbidden := range []string{"STREAM.PURGE", "STREAM.MSG", "STREAM.RESTORE", "STREAM.SNAPSHOT", "CONSUMER.CREATE", "CONSUMER.DELETE", "CONSUMER.MSG", "DIRECT.GET"} {
 			require.NotContains(t, a, forbidden)
 		}

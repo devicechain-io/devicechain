@@ -226,6 +226,8 @@ type State struct {
 	// switched on. Both are read for the downgrade precheck (envelopedowngrade.go).
 	FromImageVersion    string
 	EnvelopesResolvedOn bool
+	// EnvelopeSwitches names the envelope switches that are on (resolved, inbound).
+	EnvelopeSwitches []string
 	// EnvelopesEnabledAt and EnvelopesOffMarks are the Instance's envelope annotations.
 	EnvelopesEnabledAt string
 	EnvelopesOffMarks  string
