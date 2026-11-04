@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
+	"regexp"
 	"testing"
 	"time"
 
@@ -47,13 +47,16 @@ func writtenDigest(t *testing.T, w *fakeWriter) string {
 }
 
 // publishedForm is the Go-syntax form of a message these goldens were computed from: every field
-// a producer sets. Message has since gained `member`, which is set only on a member of an event
-// envelope a READER split out and is nil on everything a producer writes; it is left out so the
-// literals - computed before the lwm2m split, which is the proof - are not re-pinned each time
-// Message gains a field that only a consumer sets. A message that DID carry a member would show
-// it, and fail.
+// a producer sets. Message has since gained `member` and `split`, which only a READER sets (on a
+// member of an event envelope, and on a member republished alone); they are nil on everything a
+// producer writes and are left out so the literals - computed before the lwm2m split, which is
+// the proof - are not re-pinned each time Message gains a field that only a consumer sets. A
+// message that DID carry one would print it, and fail.
+// readerOnlyFields matches the nil pointers Message prints for what only a reader sets.
+var readerOnlyFields = regexp.MustCompile(`, (member|split):\(\*messaging\.\w+\)\(nil\)`)
+
 func publishedForm(m messaging.Message) string {
-	return strings.Replace(fmt.Sprintf("%#v", m), ", member:(*messaging.memberInfo)(nil)", "", 1)
+	return readerOnlyFields.ReplaceAllString(fmt.Sprintf("%#v", m), "")
 }
 
 func TestGoldenLwm2mEmitWritesUnchanged(t *testing.T) {
