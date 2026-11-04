@@ -84,7 +84,7 @@ func TestTheHighWaterMarkAndCacheAreSharedAcrossChunks(t *testing.T) {
 	first.source(2, 1)
 	first.publish() // round 0 stored by "another pod"
 
-	h := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+	h := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 	h.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	h.rounds = &fakeRounds{w: first.w}
 	h.eng = testEngine(h.iproc, first.w, h.rounds)
@@ -112,7 +112,7 @@ func TestARedeliveredChunkRaisesTheMarkForTheNextFreshChunk(t *testing.T) {
 	h := newEnvHarness(t)
 	src, _ := envTestSource(1)
 	src.NumDelivered = 2
-	h.acks[1] = &countAck{}
+	h.acks[1] = &envSrcAck{}
 	h.items = append(h.items, envTestItem(&ackCoord{src: src, remaining: 1}, 0, "dev-1"))
 	h.publish() // redelivered: round 0
 	h.source(2, 1)
@@ -130,7 +130,7 @@ func TestAStoredRoundIsReadOnceAndThenSkipped(t *testing.T) {
 	first.publish() // round 0 holds 1 and 2
 	stored := len(first.w.msgs)
 
-	h := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+	h := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 	h.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	h.rounds = &fakeRounds{w: first.w}
 	h.eng = testEngine(h.iproc, first.w, h.rounds)
@@ -152,7 +152,7 @@ func TestAWalkKeepsItsSourcesAlive(t *testing.T) {
 	first := newEnvHarness(t)
 	first.source(1, 1)
 	first.publish()
-	h := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+	h := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 	h.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	h.rounds = &fakeRounds{w: first.w}
 	h.eng = testEngine(h.iproc, first.w, h.rounds)

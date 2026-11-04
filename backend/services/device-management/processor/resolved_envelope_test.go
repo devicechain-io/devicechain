@@ -110,13 +110,13 @@ func (r *fakeRounds) Get(_ context.Context, tenant string, seq uint64) (messagin
 	return messaging.StoredMessage{Sequence: seq, Subject: "i." + tenant + ".resolved-events", Value: m.Value, Headers: m.Headers}, nil
 }
 
-type countAck struct{ n atomic.Int32 }
+type envSrcAck struct{ n atomic.Int32 }
 
-func (a *countAck) Ack() error { a.n.Add(1); return nil }
+func (a *envSrcAck) Ack() error { a.n.Add(1); return nil }
 
 // envTestSource is an inbound message at stream sequence seq, and the count of its acks.
-func envTestSource(seq uint64) (messaging.Message, *countAck) {
-	ack := &countAck{}
+func envTestSource(seq uint64) (messaging.Message, *envSrcAck) {
+	ack := &envSrcAck{}
 	m := messaging.NewConsumedMessage("i.acme.inbound-events", nil, 1, nil, ack)
 	m.StreamSeq = seq
 	return m, ack
@@ -148,14 +148,14 @@ type envHarness struct {
 	iproc  *InboundEventsProcessor
 	eng    *envelopeEngine
 	items  []resolvedItem
-	acks   map[uint64]*countAck
+	acks   map[uint64]*envSrcAck
 }
 
 func newEnvHarness(t *testing.T) *envHarness {
 	w := newFakeAckedWriter()
 	iproc := &InboundEventsProcessor{ResolvedEventsWriter: w}
 	r := &fakeRounds{w: w}
-	return &envHarness{t: t, w: w, rounds: r, iproc: iproc, eng: testEngine(iproc, w, r), acks: map[uint64]*countAck{}}
+	return &envHarness{t: t, w: w, rounds: r, iproc: iproc, eng: testEngine(iproc, w, r), acks: map[uint64]*envSrcAck{}}
 }
 
 func (h *envHarness) source(seq uint64, fanout int) {
@@ -322,7 +322,7 @@ func TestADuplicateRoundPublishesOnlyTheMembersTheOriginalLacked(t *testing.T) {
 
 	// The replacement receives 1, 2 and 3 again (3 was never published), and a fresh engine,
 	// which starts the bucket at round 0.
-	second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+	second := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 	second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	second.rounds = &fakeRounds{w: first.w}
 	second.eng = testEngine(second.iproc, first.w, second.rounds)
@@ -350,7 +350,7 @@ func TestARedeliveryOfAStoredEnvelopePublishesNothing(t *testing.T) {
 	first.publish()
 	stored := len(first.w.bySeq)
 
-	second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+	second := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 	second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	second.rounds = &fakeRounds{w: first.w}
 	second.eng = testEngine(second.iproc, first.w, second.rounds)
@@ -374,7 +374,7 @@ func TestAMemberStoredAloneIsRecognisedWhenARedeliveryGroupsIt(t *testing.T) {
 	require.Len(t, first.w.bySeq, 1)
 	require.Equal(t, "", first.w.bySeq[1].Headers[eventenvelope.HeaderName], "stored alone, legacy-shaped")
 
-	second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+	second := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 	second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	second.rounds = &fakeRounds{w: first.w}
 	second.eng = testEngine(second.iproc, first.w, second.rounds)
@@ -417,7 +417,7 @@ func TestAnUnreadableOriginalLeavesTheSourcesUnacked(t *testing.T) {
 			damage(first)
 			published := len(first.w.msgs)
 
-			second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
+			second := &envHarness{t: t, w: first.w, acks: map[uint64]*envSrcAck{}}
 			second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 			second.rounds = first.rounds
 			second.eng = testEngine(second.iproc, first.w, second.rounds)
