@@ -107,6 +107,9 @@ type InboundEventsProcessor struct {
 	holdCtx    context.Context
 	holdCancel context.CancelFunc
 
+	// splitWriter is WithSplitWriter's; nil leaves a retrying member in its envelope.
+	splitWriter messaging.MessageWriter
+
 	messages  chan messaging.Message
 	failed    chan failedItem
 	resolved  chan resolvedItem
@@ -280,6 +283,47 @@ func WithSecretTransit(t *credential.SecretTransit) InboundOption {
 // only the best-effort notice to the gateway is not sent.
 func WithGatewayNotices(n GatewayNoticer) InboundOption {
 	return func(iproc *InboundEventsProcessor) { iproc.gatewayNoticer = n }
+}
+
+// WithSplitWriter hands the processor the writer it republishes an event-envelope member on
+// when that member alone cannot be resolved yet (a device not registered, a transient
+// lookup failure): the member is published to inbound-events by itself, in the legacy shape,
+// and runs the per-message retry ladder from there, instead of holding its envelope - and
+// the healthy members in it - for the minutes that ladder takes. Without a writer a member
+// that must retry leaves its envelope unacked, which redelivers it whole: correct, only
+// slower for the neighbours.
+func WithSplitWriter(w messaging.MessageWriter) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.splitWriter = w }
+}
+
+// splitTimeout bounds the publish of a split-out member. The resolver goroutine waits on it,
+// so it is short; a refused or late publish falls back to leaving the envelope unacked.
+const splitTimeout = 5 * time.Second
+
+// splitOut republishes an envelope member alone, in the legacy shape, and reports whether the
+// broker stored it - in which case the caller acks the member. The copy carries the member's
+// bytes (self-contained: the bytes a legacy producer would have published), the envelope's
+// correlation id, the dedup id x:<tenant>:<envelope seq>:<member index> (so a whole-envelope
+// redelivery, which splits the same member again, folds into the one copy), and Dc-Retry, the
+// deliveries already spent, which the reader adds to the copy's own so the member's total
+// budget stays MaxDeliver rather than starting over.
+func (iproc *InboundEventsProcessor) splitOut(src messaging.Message, tenant string) bool {
+	if iproc.splitWriter == nil || src.StreamSeq == 0 {
+		return false
+	}
+	msg := messaging.Message{
+		Value:   src.Value,
+		DedupID: src.MemberDedupID(messaging.DedupKindSplit, tenant),
+		Headers: map[string]string{messaging.HeaderRetry: strconv.Itoa(src.NumDelivered)},
+	}.WithCorrelationID(src.CorrelationID())
+	ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), tenant), splitTimeout)
+	defer cancel()
+	if err := iproc.splitWriter.WriteMessages(ctx, msg); err != nil {
+		log.Warn().Err(err).Str("tenant", tenant).Str("correlation", src.CorrelationID()).
+			Msg("Could not split a retrying event out of its envelope; leaving the envelope unacknowledged")
+		return false
+	}
+	return true
 }
 
 // WithStoreHold hands the resolver pool the Holder that keeps an event unacked, and outside its
@@ -691,6 +735,18 @@ func sourceDedupID(kind, tenant string, src messaging.Message, index int) string
 	if src.StreamSeq == 0 {
 		return ""
 	}
+	// A member of an inbound event envelope is a source of its own at (envelope sequence,
+	// member index): the failed record is f:<tenant>:<seq>:<member>, and a resolved event
+	// is r:<tenant>:<seq>:<member>.<fan-out position>. The dot keeps every member id
+	// disjoint from the ids a legacy source gets (base 36 has no dot), so an envelope's
+	// sequence can never collide with a message's.
+	if member, ok := src.MemberIndex(); ok {
+		id := kind + ":" + tenant + ":" + strconv.FormatUint(src.StreamSeq, 36) + ":" + strconv.FormatUint(uint64(member), 36)
+		if kind == dedupKindResolved {
+			id += "." + strconv.FormatUint(uint64(index), 36)
+		}
+		return id
+	}
 	// Concatenated rather than formatted: one is built for every resolved event published.
 	return kind + ":" + tenant + ":" + strconv.FormatUint(src.StreamSeq, 36) + ":" + strconv.FormatUint(uint64(index), 36)
 }
@@ -793,6 +849,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.slow = slow
 		resolver.SecretTransit = iproc.secretTransit
 		resolver.tenantDeleted = iproc.tenantDeleted
+		resolver.splitOut = iproc.splitOut
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
 		resolver.integrationAliasMismatch = iproc.metrics.integrationAliasMismatch
 		resolver.gateway = gateway
@@ -866,12 +923,41 @@ func (iproc *InboundEventsProcessor) readLoop(ctx context.Context, i int) {
 // carry on. It abandons the handoff on shutdown so the loop can exit instead of blocking on
 // a full channel (A5). The message is unacked at that point, so it redelivers after restart.
 func (iproc *InboundEventsProcessor) handOff(ctx context.Context, msg messaging.Message) bool {
+	if msg.IsEnvelope() {
+		return iproc.handOffEnvelope(ctx, msg)
+	}
 	select {
 	case iproc.messages <- msg:
 		return true
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// handOffEnvelope gives the members of an inbound event envelope to the resolvers, each as the
+// message it stands for (messaging.SplitEnvelope), so resolution, its dispositions and its
+// metrics run per event exactly as they do for a legacy message. The envelope is acked when
+// its last member is. An envelope that cannot be read at all is recorded as one failed message,
+// by locator as an undecodable message is, and acked once that record is stored.
+func (iproc *InboundEventsProcessor) handOffEnvelope(ctx context.Context, msg messaging.Message) bool {
+	tenant, ok := messaging.ParseTenantFromSubject(msg.Subject)
+	if !ok {
+		iproc.OnInvalidEvent(fmt.Errorf("event envelope on a subject with no tenant"), msg)
+		return true
+	}
+	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {})
+	if err != nil {
+		iproc.OnInvalidEvent(err, msg)
+		return true
+	}
+	for _, u := range units {
+		select {
+		case iproc.messages <- u.Msg:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
 }
 
 // Lifecycle callback that runs startup logic.

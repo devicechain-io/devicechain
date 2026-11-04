@@ -799,6 +799,37 @@ type MessagingConfiguration struct {
 	// once every pod has rolled; set legacy again before rolling back to one. The full plan
 	// is on eventtime.WireFormat.
 	WireFormat string
+
+	// Envelopes are the producer-side switches for event envelopes (core/eventenvelope): k
+	// events of one tenant in one message on inbound-events and resolved-events.
+	//
+	// 🔴 READING IS NOT A SWITCH: every reader of both streams reads envelopes and legacy
+	// messages always. These two decide only whether a producer WRITES them, and both are off.
+	// Neither can be turned on yet - no producer in this release writes an envelope - so true
+	// is refused at startup rather than accepted and ignored, which would read as a working
+	// setting that changes nothing. They exist so the release that carries the readers is the
+	// release before any producer, and so a document written for the producing release
+	// already validates the key.
+	Envelopes EnvelopesConfiguration
+}
+
+// EnvelopesConfiguration is MessagingConfiguration.Envelopes.
+type EnvelopesConfiguration struct {
+	// Resolved: device-management publishes resolved-events as envelopes.
+	Resolved bool
+	// Inbound: event-sources publishes inbound-events as envelopes.
+	Inbound bool
+}
+
+// Validate refuses a producer switch this release has no producer for.
+func (c EnvelopesConfiguration) Validate() error {
+	if c.Resolved {
+		return fmt.Errorf("infrastructure.messaging.envelopes.resolved: no producer in this release writes event envelopes; leave it false")
+	}
+	if c.Inbound {
+		return fmt.Errorf("infrastructure.messaging.envelopes.inbound: no producer in this release writes event envelopes; leave it false")
+	}
+	return nil
 }
 
 // EventWireFormat is the format WireFormat names, defaulted at the point of use as well
@@ -1418,6 +1449,9 @@ func (c *InstanceConfiguration) Validate() error {
 		}
 	}
 	if _, err := c.Infrastructure.Messaging.EventWireFormat(); err != nil {
+		return err
+	}
+	if err := c.Infrastructure.Messaging.Envelopes.Validate(); err != nil {
 		return err
 	}
 	if _, err := c.Infrastructure.Http.TrustedProxyPrefixes(); err != nil {

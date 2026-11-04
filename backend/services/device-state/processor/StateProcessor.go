@@ -464,11 +464,48 @@ func (w *writerBuffers) collect(ctx context.Context) (batch []pendingMerge, open
 	sp.metrics.collected(len(w.raw), w.limit, len(sp.messages))
 	w.batch = w.batch[:0]
 	for i, msg := range w.raw {
-		if p, ok := sp.admitStarted(ctx, msg, w.dones[i]); ok {
-			w.batch = append(w.batch, p)
-		}
+		w.batch = sp.admitAllStarted(ctx, w.batch, msg, w.dones[i])
 	}
 	return w.batch, open
+}
+
+// admitAllStarted admits msg into batch: itself for a legacy message, every member for an
+// event envelope. A member is admitted as the message it stands for (messaging.SplitEnvelope),
+// so the batch, its fallbacks and the dispositions run on members exactly as they ran on
+// messages. The envelope is acked when its last member is; a poison member is dropped alone,
+// and one left to retry leaves the envelope to be redelivered whole, which the merge's
+// strictly-newer guards make safe.
+func (sp *StateProcessor) admitAllStarted(ctx context.Context, batch []pendingMerge, msg messaging.Message, done func(string)) []pendingMerge {
+	if !msg.IsEnvelope() {
+		if p, ok := sp.admitStarted(ctx, msg, done); ok {
+			batch = append(batch, p)
+		}
+		return batch
+	}
+	_, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
+	if !ok {
+		// admitStarted disposes of a message with no parseable tenant.
+		if p, ok := sp.admitStarted(ctx, msg, done); ok {
+			batch = append(batch, p)
+		}
+		return batch
+	}
+	units, _, err := messaging.SplitEnvelope(msg, tenant, done)
+	if err != nil {
+		// The envelope as a whole cannot be read: poison, dropped like an unparseable message
+		// (a projection has no failed-events channel).
+		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
+			Msgf("Skipping event envelope that could not be read from subject %q", msg.Subject)
+		msg.Ack()
+		done(core.ResultInvalid)
+		return batch
+	}
+	for _, u := range units {
+		if p, ok := sp.admitStarted(ctx, u.Msg, u.Done); ok {
+			batch = append(batch, p)
+		}
+	}
+	return batch
 }
 
 // clear drops every reference the buffers hold, once the batch is merged, so nothing the
@@ -652,7 +689,7 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 
 // mergeOne merges a single message on its own: admission, then the per-message path.
 func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
-	if p, ok := sp.admit(ctx, msg); ok {
+	for _, p := range sp.admitAllStarted(ctx, nil, msg, sp.metrics.start()) {
 		sp.mergeAdmitted(p)
 	}
 }

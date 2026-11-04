@@ -36,6 +36,10 @@ type failedItem struct {
 	tenant        string
 	event         resolvedevent.FailedEvent
 	correlationId string
+	// dedupID is the record's broker dedup id: set for a failed member of an event envelope
+	// (f:<tenant>:<envelope seq>:<member index>), so the envelope's redelivery - which a
+	// stubborn neighbour causes - folds into the one record. Empty for a legacy message.
+	dedupID string
 }
 
 type EventPersistenceProcessor struct {
@@ -286,7 +290,8 @@ func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) 
 		// failed event can be traced back to the resolved event that triggered it.
 		msg := messaging.Message{
 			Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
-			Value: bytes,
+			Value:   bytes,
+			DedupID: item.dedupID,
 		}.WithCorrelationID(item.correlationId)
 		err = eproc.FailedEventsWriter.WriteMessages(core.WithTenant(ctx, item.tenant), msg)
 		eproc.FailedEventsWriter.HandleResponse(err)
@@ -307,12 +312,13 @@ func (eproc *EventPersistenceProcessor) OnInvalidEvent(err error, msg messaging.
 	}
 	failed := resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), eproc.Microservice.FunctionalArea,
 		"message could not be parsed", err, msg.Value)
-	eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: msg.CorrelationID()}
+	eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: msg.CorrelationID(),
+		dedupID: msg.MemberDedupID(messaging.DedupKindFailed, tenant)}
 }
 
 // Called when a message can not be persisted. The inbound correlation id (E15)
 // is threaded through from the worker so the emitted failed event carries it.
-func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event resolvedevent.ResolvedEvent, perr error, correlationId string) {
+func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event resolvedevent.ResolvedEvent, perr error, correlationId, dedupID string) {
 	// Marshal event message to protobuf.
 	bytes, err := resolvedevent.MarshalResolvedEvent(&event)
 	if err != nil {
@@ -320,7 +326,7 @@ func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint
 	} else {
 		failed := resolvedevent.NewFailedEvent(reason, eproc.Microservice.FunctionalArea,
 			"event could not be processed", perr, bytes)
-		eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: correlationId}
+		eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: correlationId, dedupID: dedupID}
 	}
 }
 

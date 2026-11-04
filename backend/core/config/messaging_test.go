@@ -30,6 +30,32 @@ func TestEventWireFormatDefaultsToCompact(t *testing.T) {
 	}
 }
 
+// The envelope producer switches exist and are off. Turning one on is refused, naming the
+// key: no producer ships in this release, and a switch that was accepted and did nothing would
+// read as a setting that works.
+func TestEnvelopeProducerSwitchesAreOffAndCannotYetBeTurnedOn(t *testing.T) {
+	c := validLoggingDoc("")
+	c.ApplyDefaults()
+	if c.Infrastructure.Messaging.Envelopes.Resolved || c.Infrastructure.Messaging.Envelopes.Inbound {
+		t.Fatal("an envelope producer switch defaulted on")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("the defaults do not validate: %v", err)
+	}
+	for key, set := range map[string]func(*InstanceConfiguration){
+		"infrastructure.messaging.envelopes.resolved": func(c *InstanceConfiguration) { c.Infrastructure.Messaging.Envelopes.Resolved = true },
+		"infrastructure.messaging.envelopes.inbound":  func(c *InstanceConfiguration) { c.Infrastructure.Messaging.Envelopes.Inbound = true },
+	} {
+		c := validLoggingDoc("")
+		c.ApplyDefaults()
+		set(c)
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Fatalf("%s turned on: %v; want a refusal naming the key", key, err)
+		}
+	}
+}
+
 // Both spellings validate; anything else is refused by Validate itself, naming the key, and
 // is never rewritten to the default by ApplyDefaults.
 func TestEventWireFormatValidates(t *testing.T) {

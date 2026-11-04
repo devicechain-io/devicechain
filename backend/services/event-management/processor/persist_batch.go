@@ -158,12 +158,48 @@ func (ep *EventPersistenceWorker) collect(ctx context.Context) (batch []pendingE
 	ep.metrics.collected(len(raw), limit, len(ep.Unpersisted))
 	batch = ep.batch[:0]
 	for i, msg := range raw {
-		if p, ok := ep.admit(ctx, msg, ep.dones[i]); ok {
-			batch = append(batch, p)
-		}
+		batch = ep.admitInto(ctx, batch, msg, ep.dones[i])
 	}
 	ep.batch = batch
 	return batch, open
+}
+
+// admitInto admits msg into batch, which for an event envelope means every member of it: the
+// envelope is split (messaging.SplitEnvelope) and each member is admitted as the message it
+// stands for, so everything after - the grouped write, the fallbacks, the dispositions - runs
+// on members exactly as it ran on messages. The envelope is acknowledged when its last member
+// is (see SplitEnvelope), so a member left to retry leaves the envelope unacked and it comes
+// back whole; its committed members are written again as no-ops (ON CONFLICT, content-derived
+// event ids), and at the final delivery the stubborn member alone is recorded failed.
+func (ep *EventPersistenceWorker) admitInto(ctx context.Context, batch []pendingEvent, msg messaging.Message, done func(string)) []pendingEvent {
+	if !msg.IsEnvelope() {
+		if p, ok := ep.admit(ctx, msg, done); ok {
+			batch = append(batch, p)
+		}
+		return batch
+	}
+	_, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
+	if !ok {
+		// admit disposes of a message with no parseable tenant.
+		if p, ok := ep.admit(ctx, msg, done); ok {
+			batch = append(batch, p)
+		}
+		return batch
+	}
+	units, _, err := messaging.SplitEnvelope(msg, tenant, done)
+	if err != nil {
+		// The envelope as a whole cannot be read: poison, like an undecodable message.
+		ep.Invalid(err, msg)
+		msg.Ack()
+		done(core.ResultInvalid)
+		return batch
+	}
+	for _, u := range units {
+		if p, ok := ep.admit(ctx, u.Msg, u.Done); ok {
+			batch = append(batch, p)
+		}
+	}
+	return batch
 }
 
 // clearBuffers drops every reference the batch buffers hold, once the batch is settled
@@ -361,11 +397,13 @@ func (ep *EventPersistenceWorker) dispose(p pendingEvent, err error) {
 		p.msg.Ack()
 		p.done(core.ResultErased)
 	case errors.Is(err, ErrDeterministic):
-		ep.Failed(p.tenant, uint(resolvedevent.FailureReason_Invalid), *p.event, err, p.msg.CorrelationID())
+		ep.Failed(p.tenant, uint(resolvedevent.FailureReason_Invalid), *p.event, err, p.msg.CorrelationID(),
+			p.msg.MemberDedupID(messaging.DedupKindFailed, p.tenant))
 		p.msg.Ack()
 		p.done(core.ResultFailed)
 	case disposition == messaging.Exhausted:
-		ep.Failed(p.tenant, uint(resolvedevent.FailureReason_ApiCallFailed), *p.event, err, p.msg.CorrelationID())
+		ep.Failed(p.tenant, uint(resolvedevent.FailureReason_ApiCallFailed), *p.event, err, p.msg.CorrelationID(),
+			p.msg.MemberDedupID(messaging.DedupKindFailed, p.tenant))
 		p.msg.Ack()
 		p.done(core.ResultFailed)
 	default:

@@ -218,6 +218,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	}
 
 	read := 0
+replay:
 	for {
 		if err := ctx.Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -249,94 +250,114 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		if !ok || subjectTenant != tenant {
 			continue
 		}
-		event, derr := resolvedevent.UnmarshalResolvedEvent(msg.Value)
-		if derr != nil {
-			continue // a corrupt payload is skipped, never fails the whole preview
+		// An event envelope replays as its members, in order, each the step a message of its
+		// own is (the live loop's applyEnvelope does the same), under the envelope's one
+		// sequence. A legacy message is its own single value.
+		values, enveloped := [][]byte{msg.Value}, msg.IsEnvelope()
+		if enveloped {
+			units, _, uerr := messaging.SplitEnvelope(msg, subjectTenant, func(string) {})
+			if uerr != nil {
+				continue // an unreadable envelope is skipped like a corrupt payload
+			}
+			values = make([][]byte, len(units))
+			for i, u := range units {
+				values[i] = u.Msg.Value
+			}
 		}
-		// A disabled device's presence transition feeds detection nothing, not even the
-		// watermark, exactly as the live loop skips it (applyResolved) — so it is not counted
-		// as scanned either.
-		if event.SourceDeviceDisabled {
-			continue
+		for _, value := range values {
+			event, derr := resolvedevent.UnmarshalResolvedEvent(value)
+			if derr != nil {
+				continue // a corrupt payload is skipped, never fails the whole preview
+			}
+			// A disabled device's presence transition feeds detection nothing, not even the
+			// watermark, exactly as the live loop skips it (applyResolved) — so it is not counted
+			// as scanned either.
+			if event.SourceDeviceDisabled {
+				continue
+			}
+			// Only events resolved against the previewed profile version feed the draft rule (the same
+			// scope key the live fan-out uses).
+			if event.ProfileVersionToken != profileVersion {
+				continue
+			}
+			// Already bounded at resolution and stored that way, so replay reads the SAME instant
+			// live detection read. It used to call the clamp with a tolerance of 0, which disables
+			// it — so the preview did not bound a device's clock skew at all while the live loop
+			// bounded it with the configured tolerance. Two consumers of one stream disagreeing
+			// about when an event happened, under the exact feature (replay preview) whose whole
+			// value is answering what the rule WOULD have done.
+			occurred := event.OccurredTime
+			// The reader started at the window's lower edge by PUBLISH time; filter to the OCCURRED-time
+			// window (a late-published-but-early-occurred event, or one occurring past the window, is out).
+			//
+			// 🔑 THE FILTER WIDENS; THE INSTANT HANDED TO THE ENGINE DOES NOT. `occurred` above stays
+			// the envelope and is what reg.Plan and ProcessResolved receive below, exactly as before —
+			// the plan fans a batch out per entry on its own, so changing the parent instant here would
+			// alter what the engine computes rather than merely which events reach it. This change is
+			// about ADMISSION only.
+			//
+			// 🔴🔴 THE ADMISSION TEST IS ON THE EVENT'S WHOLE SPAN, NOT ON ITS ENVELOPE, AND A BATCH IS WHY.
+			// An event's envelope carries ONE instant, but a batched event carries a sample's own time
+			// per entry — so a store-and-forward tracker that buffers 10:00–10:30 readings and uploads
+			// them at 11:05 has an envelope of 11:05 and samples entirely inside a 10:00–11:00 window.
+			// Filtering on the envelope dropped that event WHOLE: EventsScanned stayed 0, the preview
+			// reported the rule as never firing, and no degraded flag was raised. A preview whose entire
+			// job is "what would this rule have done" answered "nothing" about samples it never looked
+			// at, with no indication it had skipped them — the confident wrong answer this package's
+			// doc comment lists as the one failure mode worse than a truncation notice.
+			//
+			// 🔑 THIS IS AN ADMISSION FIX ONLY, AND DELIBERATELY NOT A CLAIM ABOUT THE LIVE ENGINE.
+			// Whether the samples then produce edges is the engine's business: it advances a watermark
+			// from the instant it is handed, so a batch's entries can still be dropped as LATE, and
+			// that behaviour is engine-wide and identical here and in production. Fixing it needs
+			// per-series watermarks and is not attempted here. What this change guarantees is narrower
+			// and worth having on its own: an event that overlaps the window REACHES the engine and is
+			// counted, so a preview's silence is the engine's answer rather than an artefact of the
+			// filter in front of it.
+			//
+			// occurredSpan returns the earliest and latest instant the event carries (the envelope
+			// twice, for an event that batches nothing), so this stays exactly the old comparison for
+			// an unbatched event and widens it to an overlap test for a batched one. Widening a filter
+			// is only safe while it still EXCLUDES: an event whose whole span sits outside the window
+			// is still dropped, which is what the second test below holds.
+			first, last := occurredSpan(event)
+			if last.Before(tr.Start) || first.After(tr.End) {
+				continue
+			}
+			// Check the in-scope cap BEFORE counting/processing, so EventsScanned reports events actually
+			// processed rather than one past the cap.
+			if res.Stats.EventsScanned >= maxScan {
+				addDegraded(&res.Degraded, "the window holds more in-scope events than the preview scan limit; the result is truncated")
+				break replay
+			}
+			res.Stats.EventsScanned++
+			if draft != nil {
+				event = recalculated(event, *draft, o.constants[event.SourceDeviceToken], &res.Stats)
+			}
+			// nil attr: a preview resolves no device attributes, so every device previews as having none.
+			// A structured dynamic threshold therefore does not fire (its positive presence guard reads
+			// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
+			// attribute previews that fallback on EVERY device, including devices that do have the
+			// attribute live — documented.
+			//
+			// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
+			// because a device attribute is CURRENT state with no historical record: there is no way to
+			// know what a threshold was last Tuesday, so the honest preview is "as if unset". A fence
+			// set is different in kind — the event NAMES the version it was resolved against, and that
+			// version's fences are frozen and still on record — so the exact set that was live is
+			// recoverable and the preview can be CORRECT. Copying attr's degradation here would render
+			// every geofence rule as never-firing, which for a preview whose entire job is "what would
+			// this rule have done" is worse than useless: it is a confident wrong answer about the
+			// headline feature.
+			plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil, fenceSets.Resolve(ctx, event.FenceSetVersion))
+			res.Stats.EvalErrors += plan.EvalErrors
+			if enveloped {
+				engine.ProcessReceivedMember(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
+			} else {
+				engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
+			}
+			res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
 		}
-		// Only events resolved against the previewed profile version feed the draft rule (the same
-		// scope key the live fan-out uses).
-		if event.ProfileVersionToken != profileVersion {
-			continue
-		}
-		// Already bounded at resolution and stored that way, so replay reads the SAME instant
-		// live detection read. It used to call the clamp with a tolerance of 0, which disables
-		// it — so the preview did not bound a device's clock skew at all while the live loop
-		// bounded it with the configured tolerance. Two consumers of one stream disagreeing
-		// about when an event happened, under the exact feature (replay preview) whose whole
-		// value is answering what the rule WOULD have done.
-		occurred := event.OccurredTime
-		// The reader started at the window's lower edge by PUBLISH time; filter to the OCCURRED-time
-		// window (a late-published-but-early-occurred event, or one occurring past the window, is out).
-		//
-		// 🔑 THE FILTER WIDENS; THE INSTANT HANDED TO THE ENGINE DOES NOT. `occurred` above stays
-		// the envelope and is what reg.Plan and ProcessResolved receive below, exactly as before —
-		// the plan fans a batch out per entry on its own, so changing the parent instant here would
-		// alter what the engine computes rather than merely which events reach it. This change is
-		// about ADMISSION only.
-		//
-		// 🔴🔴 THE ADMISSION TEST IS ON THE EVENT'S WHOLE SPAN, NOT ON ITS ENVELOPE, AND A BATCH IS WHY.
-		// An event's envelope carries ONE instant, but a batched event carries a sample's own time
-		// per entry — so a store-and-forward tracker that buffers 10:00–10:30 readings and uploads
-		// them at 11:05 has an envelope of 11:05 and samples entirely inside a 10:00–11:00 window.
-		// Filtering on the envelope dropped that event WHOLE: EventsScanned stayed 0, the preview
-		// reported the rule as never firing, and no degraded flag was raised. A preview whose entire
-		// job is "what would this rule have done" answered "nothing" about samples it never looked
-		// at, with no indication it had skipped them — the confident wrong answer this package's
-		// doc comment lists as the one failure mode worse than a truncation notice.
-		//
-		// 🔑 THIS IS AN ADMISSION FIX ONLY, AND DELIBERATELY NOT A CLAIM ABOUT THE LIVE ENGINE.
-		// Whether the samples then produce edges is the engine's business: it advances a watermark
-		// from the instant it is handed, so a batch's entries can still be dropped as LATE, and
-		// that behaviour is engine-wide and identical here and in production. Fixing it needs
-		// per-series watermarks and is not attempted here. What this change guarantees is narrower
-		// and worth having on its own: an event that overlaps the window REACHES the engine and is
-		// counted, so a preview's silence is the engine's answer rather than an artefact of the
-		// filter in front of it.
-		//
-		// occurredSpan returns the earliest and latest instant the event carries (the envelope
-		// twice, for an event that batches nothing), so this stays exactly the old comparison for
-		// an unbatched event and widens it to an overlap test for a batched one. Widening a filter
-		// is only safe while it still EXCLUDES: an event whose whole span sits outside the window
-		// is still dropped, which is what the second test below holds.
-		first, last := occurredSpan(event)
-		if last.Before(tr.Start) || first.After(tr.End) {
-			continue
-		}
-		// Check the in-scope cap BEFORE counting/processing, so EventsScanned reports events actually
-		// processed rather than one past the cap.
-		if res.Stats.EventsScanned >= maxScan {
-			addDegraded(&res.Degraded, "the window holds more in-scope events than the preview scan limit; the result is truncated")
-			break
-		}
-		res.Stats.EventsScanned++
-		if draft != nil {
-			event = recalculated(event, *draft, o.constants[event.SourceDeviceToken], &res.Stats)
-		}
-		// nil attr: a preview resolves no device attributes, so every device previews as having none.
-		// A structured dynamic threshold therefore does not fire (its positive presence guard reads
-		// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
-		// attribute previews that fallback on EVERY device, including devices that do have the
-		// attribute live — documented.
-		//
-		// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
-		// because a device attribute is CURRENT state with no historical record: there is no way to
-		// know what a threshold was last Tuesday, so the honest preview is "as if unset". A fence
-		// set is different in kind — the event NAMES the version it was resolved against, and that
-		// version's fences are frozen and still on record — so the exact set that was live is
-		// recoverable and the preview can be CORRECT. Copying attr's degradation here would render
-		// every geofence rule as never-firing, which for a preview whose entire job is "what would
-		// this rule have done" is worse than useless: it is a confident wrong answer about the
-		// headline feature.
-		plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil, fenceSets.Resolve(ctx, event.FenceSetVersion))
-		res.Stats.EvalErrors += plan.EvalErrors
-		engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
-		res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
 	}
 	// A cancellation mid-replay surfaces as io.EOF from the reader; re-check so a cancelled preview
 	// returns the error rather than a truncated result dressed up as complete (L1).

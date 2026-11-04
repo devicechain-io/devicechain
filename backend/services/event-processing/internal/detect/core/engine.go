@@ -1037,6 +1037,34 @@ func (e *Engine) ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event
 	e.lastSeq = seq
 }
 
+// ProcessReceivedMember applies ONE MEMBER of an event-envelope message: a message that
+// carries k events under a single stream sequence. It is ProcessReceived for the second and
+// later events of one sequence: the member advances the watermark to its own time, fires what
+// that makes due, applies its events and records the sequence, exactly the step a message of
+// its own would be, so k members applied in order are, to the engine, the same input as k
+// legacy messages in that order (only the recorded sequence differs, and it is the
+// envelope's for all of them).
+//
+// 🔴 THE ENVELOPE'S IDEMPOTENCY GUARD IS THE CALLER'S, AND IT RUNS BEFORE THE FIRST MEMBER.
+// The guard here is strict (seq < LastSeq): the first member of an envelope records seq, and
+// the members after it must still pass. A caller therefore checks `seq <= LastSeq()` ONCE,
+// before applying any member, and drops the whole envelope when it holds (a redelivery or
+// a replay of an envelope already applied); only a caller that has done so may call this.
+// Nothing checkpoints between two members (the loop is synchronous), so a snapshot never
+// records a half-applied envelope.
+func (e *Engine) ProcessReceivedMember(seq uint64, t time.Time, r Receipt, evs []Event) {
+	if seq < e.lastSeq {
+		return
+	}
+	e.msgFloor = e.wm.now
+	e.msgRedelivered = r.redelivered()
+	e.advance(t)
+	for i := range evs {
+		e.apply(evs[i])
+	}
+	e.lastSeq = seq
+}
+
 // Advance moves logical time forward to wall time w without an event — the live
 // idle-advance path that lets absence/duration fire when the stream is quiet. It carries
 // no sequence (it is derived from the clock, not the log), so it is re-generated

@@ -686,7 +686,10 @@ var All = []Stream{
 	// rather than discard one of those. device-management forwards into resolved-events, so
 	// it stops reading here while that stream's gate is closed, and the backlog it leaves is
 	// what closes this one.
-	{Suffix: InboundEvents, Writers: []string{"device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	//
+	// device-management is also a WRITER here, for one thing only: an event-envelope member that
+	// must retry is republished alone, in the legacy shape (processor.WithSplitWriter).
+	{Suffix: InboundEvents, Writers: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind:      kindEvent,
 		BackpressureReaders: []string{"device-management"},
 		Forwards:            map[string]string{"device-management": ResolvedEvents},

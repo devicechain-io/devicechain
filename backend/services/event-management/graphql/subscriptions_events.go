@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -55,44 +56,65 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	go func() {
 		defer close(out)
 		for msg := range live {
-			resolved, err := resolvedevent.UnmarshalResolvedEvent(msg.Value)
-			if err != nil {
-				log.Debug().Err(err).Msg("subscription: skipping undecodable resolved event")
-				continue
-			}
-			if resolved.EventType != eventtype.Measurement {
-				continue
-			}
-			if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {
-				continue
-			}
-			if !inScope(scope, resolved) {
-				continue
-			}
-			payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
-			if !ok {
-				continue
-			}
-			for _, entry := range payload.Entries {
-				for _, mx := range entry.Entries {
-					if args.Name != nil && mx.Name != *args.Name {
-						continue
-					}
-					me, merr := measurementFromResolved(tenant, resolved, entry, mx)
-					if merr != nil {
-						log.Debug().Err(merr).Msg("subscription: skipping a reading with no derivable identity")
-						continue
-					}
-					select {
-					case out <- &MeasurementEventResolver{M: me, S: r, C: ctx}:
-					case <-ctx.Done():
-						return
+			for _, value := range eventValues(msg, tenant) {
+				resolved, err := resolvedevent.UnmarshalResolvedEvent(value)
+				if err != nil {
+					log.Debug().Err(err).Msg("subscription: skipping undecodable resolved event")
+					continue
+				}
+				if resolved.EventType != eventtype.Measurement {
+					continue
+				}
+				if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {
+					continue
+				}
+				if !inScope(scope, resolved) {
+					continue
+				}
+				payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
+				if !ok {
+					continue
+				}
+				for _, entry := range payload.Entries {
+					for _, mx := range entry.Entries {
+						if args.Name != nil && mx.Name != *args.Name {
+							continue
+						}
+						me, merr := measurementFromResolved(tenant, resolved, entry, mx)
+						if merr != nil {
+							log.Debug().Err(merr).Msg("subscription: skipping a reading with no derivable identity")
+							continue
+						}
+						select {
+						case out <- &MeasurementEventResolver{M: me, S: r, C: ctx}:
+						case <-ctx.Done():
+							return
+						}
 					}
 				}
 			}
 		}
 	}()
 	return out, nil
+}
+
+// eventValues is the legacy-shaped bytes of every event a live message carries: the message's
+// own for a legacy message, each member's for an event envelope. A live tap acknowledges
+// nothing, so an envelope it cannot read is skipped, like an event it cannot decode.
+func eventValues(msg messaging.Message, tenant string) [][]byte {
+	if !msg.IsEnvelope() {
+		return [][]byte{msg.Value}
+	}
+	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {})
+	if err != nil {
+		log.Debug().Err(err).Msg("subscription: skipping an unreadable event envelope")
+		return nil
+	}
+	values := make([][]byte, len(units))
+	for i, u := range units {
+		values[i] = u.Msg.Value
+	}
+	return values
 }
 
 // inScope reports whether a resolved event may be delivered to a caller acting under
