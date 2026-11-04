@@ -5,9 +5,9 @@ title: Cómo obtener ayuda
 
 # Cómo obtener ayuda
 
-DeviceChain es anterior a la versión 1.0 y se desarrolla de forma abierta. Si algo no funcionó, o
+DeviceChain se desarrolla de forma abierta. Si algo no funcionó, o
 una página no te dijo lo que necesitabas, cuéntanoslo. Un informe temprano e incompleto vale más
-que uno pulido y tardío, porque las interfaces aún pueden cambiar en respuesta a lo que la gente
+que uno pulido y tardío, porque la hoja de ruta y esta documentación cambian en respuesta a lo que la gente
 se encuentra.
 
 ## Adónde acudir

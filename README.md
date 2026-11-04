@@ -51,7 +51,7 @@ creates a device, sends a reading with `curl` and shows it in the console.
 
 [Docs](https://docs.devicechain.io) · [Examples](examples/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
 
-DeviceChain has not reached 1.0; see [Status](#status).
+DeviceChain 1.0 is released; see [Status](#status) for what that promises.
 
 DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
 areas and customers it belongs to, detects conditions in the data as it arrives, and sends
@@ -179,8 +179,11 @@ SiteWhere installation.
 
 ## Status
 
-DeviceChain has not reached 1.0, and until it does any release may change APIs, schemas or
-behaviour without a compatibility period. Each release lists its breaking changes first, in the
+DeviceChain follows [semantic versioning](https://semver.org) from v1.0.0. The device wire, the
+GraphQL API, the npm and C# SDKs and `dcctl` change incompatibly only in a major release, and a
+deprecation lasts at least two minor releases first; the
+[versioning policy](https://docs.devicechain.io/deployment/versioning-policy) says exactly what is
+covered. Each release lists anything you must do first in the
 [release notes](https://github.com/devicechain-io/devicechain/releases) and the
 [upgrade guide](https://docs.devicechain.io/deployment/releases-and-upgrades). Read them before
 you upgrade.

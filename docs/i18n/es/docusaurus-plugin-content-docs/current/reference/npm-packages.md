@@ -9,8 +9,9 @@ El runtime de paneles se publica en npm. Una aplicación React fuera de este rep
 instalarlo y renderizar paneles de DeviceChain en vivo.
 
 :::note Estado
-Estos paquetes son **previos a 1.0**: los tipos, las props y las exportaciones pueden cambiar entre
-versiones, así que lee las notas de la versión antes de actualizar. Son exclusivamente ESM y están
+Desde la v1.0.0 estos paquetes siguen la [política de versionado](../deployment/versioning-policy.md):
+las exportaciones públicas solo cambian de forma incompatible en una versión mayor, y una obsolescencia
+se anuncia antes en las notas de la versión. Lee las notas de la versión antes de actualizar. Son exclusivamente ESM y están
 construidos para un bundler; consulta [Qué asumen estos paquetes](#qué-asumen-estos-paquetes).
 :::
 

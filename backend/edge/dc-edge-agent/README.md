@@ -212,7 +212,7 @@ counters are per-process. `GET /healthz` → `200` when up and healthy, else `50
 - **The high-water `WARN` is best-effort** (sampled on a 30 s tick); `dropped_total` is
   the guarantee, the WARN is the early runway signal.
 - **Rolling back to an E2 binary over an E3 store silently strips the bound** (the E2
-  `UpdateStream` sends `MaxBytes=0`). Pre-GA acceptable; do not downgrade a bounded store.
+  `UpdateStream` sends `MaxBytes=0`). Accepted for a downgrade, which is unsupported; do not downgrade a bounded store.
 - **Changing `instanceId` or the uplink timeout over an existing store fails closed,
   not gracefully.** (Changing `uplink.tenant` is the exception: the agent moves the durable
   consumer's filter in place. Events already spooled for the old tenant match no consumer and

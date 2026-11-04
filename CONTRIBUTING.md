@@ -17,8 +17,8 @@ is a contribution.
 | Something is broken | [Open an issue](https://github.com/devicechain-io/devicechain/issues/new/choose) |
 | A security vulnerability | Email **admin@devicechain.io** — see [below](#reporting-security-issues) |
 
-DeviceChain is pre-1.0 and we would rather hear a rough report now than a polished one
-after the interfaces are frozen. "I got stuck at step three and gave up" is a perfectly
+We would rather hear a rough report now than a polished one
+after the problem has cost you a week. "I got stuck at step three and gave up" is a perfectly
 good issue.
 
 ## Contributor License Agreement (required)

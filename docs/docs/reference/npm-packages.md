@@ -9,8 +9,9 @@ The dashboard runtime is published to npm. A React application outside this repo
 it and render live DeviceChain dashboards.
 
 :::note Status
-These packages are **pre-1.0**: types, props and exports can change between releases, so read the
-release notes before upgrading. They are ESM-only and built for a bundler — see
+From v1.0.0 these packages follow the [versioning policy](../deployment/versioning-policy.md): public
+exports change incompatibly only in a major release, and a deprecation is announced in the release notes
+first. Read the release notes before upgrading. They are ESM-only and built for a bundler — see
 [What these packages assume](#what-these-packages-assume).
 :::
 

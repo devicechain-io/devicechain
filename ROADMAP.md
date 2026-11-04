@@ -15,18 +15,12 @@ Say what you are trying to do and what stops you, rather than only naming a feat
 case moves an item up faster than a vote. If you want to build one yourself, start with
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Now (toward 1.0)
+## Now
 
-Version 1.0 is about trust more than breadth: a stable interface, an upgrade path that does not
-require recreating an instance, and evidence for the claims the documentation makes.
+Version 1.0 shipped on 2026-11-01 and was about trust more than breadth: a stable interface, an
+upgrade path that does not require recreating an instance, and evidence for the claims the
+documentation makes. What remains in this section is evidence still being gathered.
 
-- **The 1.0 compatibility promise.** From 1.0, the device wire contract, the GraphQL API, the
-  command-line tool, the Helm values and the npm packages follow semantic versioning, and the
-  documentation gets a frozen 1.0 snapshot in all three languages. The rules are in the
-  [versioning policy](https://docs.devicechain.io/deployment/versioning-policy).
-- **A last upgrade drill from the final 0.x release.** Upgrade a populated instance from the last
-  pre-1.0 release to the release candidate and check that nothing is lost, before the tag is cut.
-  See [releases and upgrades](https://docs.devicechain.io/deployment/releases-and-upgrades).
 - **Tenant deletion: finishing the evidence.** Deleting a tenant erases its data, and that is
   tested. The count of work blocked per storage system, the completion signal (`erasedAt`, and
   `dcctl tenant-deletion status`) and a first measurement of erasing a large tenant on one node are
@@ -36,13 +30,13 @@ require recreating an instance, and evidence for the claims the documentation ma
 
 ## Next
 
-Work we expect to start after 1.0, roughly in the order we expect to reach it. The order follows
+Work we expect to start next, roughly in the order we expect to reach it. The order follows
 what people ask for, so tell us if it should change.
 
 **Connecting and decoding**
 
 - **Acknowledged MQTT telemetry is durable by default.** The setting that makes a QoS 1
-  acknowledgement mean "the platform holds this message" exists and is measured, and in 1.0 it
+  acknowledgement mean "the platform holds this message" exists and is measured, and for now it
   stays opt-in. With it on, an instance keeps up with less traffic than with it off, and when
   traffic goes past that limit the broker runs out of memory and loses messages instead of
   refusing them. Turning it on by default needs overload to push back first. Until then the
