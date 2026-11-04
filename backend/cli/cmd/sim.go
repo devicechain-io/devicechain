@@ -46,6 +46,7 @@ func init() {
 	simCmd.PersistentFlags().String("otp", "", otpFlagHelp)
 	simCmd.PersistentFlags().String("admin-password", "", "superuser password (default: $"+adminPasswordEnv+", else read from the instance's Secret on the cluster)")
 	simCmd.PersistentFlags().String("kube-context", "", "kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)")
+	simCmd.PersistentFlags().String("host-header", "", "Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)")
 	simCmd.PersistentFlags().Bool("tls", false, "use https/wss for platform endpoints")
 	simCmd.PersistentFlags().String("control-addr", "http://localhost:8090", "the dc-simulator process's control API address")
 

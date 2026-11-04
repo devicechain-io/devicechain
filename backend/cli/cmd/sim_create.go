@@ -176,11 +176,12 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	}
 	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)
 	adminURL := sim.AdminURL(server, tls)
-	admin := sim.NewAdmin(endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	hostHeader := resolveHostHeader(cmd, server, instance)
+	admin := newSimAdmin(hostHeader, endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
-		return err
+		return withHostHint(err, server, hostHeader)
 	}
 	if needTier != nil {
 		if err := admin.EnsureTier(ctx, *needTier); err != nil {
@@ -225,6 +226,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		InstanceId:  instance,
 		ControlAddr: controlAddr,
 		AdminURL:    adminURL,
+		HostHeader:  hostHeader,
 
 		MqttTLSInsecure: mqttInsecure,
 	}

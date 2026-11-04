@@ -62,6 +62,11 @@ type Record struct {
 	// AdminURL is the /admin/graphql endpoint create resolved, persisted so destroy
 	// tears down against the same host it was created on (not a re-derived default).
 	AdminURL string `json:"adminURL"`
+	// HostHeader is the Host the Gateway was addressed as when --server was an address
+	// rather than the instance's hostname; empty when --server itself was the host.
+	// dcctl-only (dc-simulator ignores it): destroy replays it so it reaches the instance
+	// the way create did.
+	HostHeader string `json:"hostHeader,omitempty"`
 	// ScenarioIdentities are the exact accounts the simulator minted for the scenario's own people
 	// (a customer user), written back into this file by dc-simulator BEFORE it creates each one.
 	// It is the whole ownership record destroy deletes identities on: an address is never taken for

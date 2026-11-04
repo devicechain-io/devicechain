@@ -213,10 +213,16 @@ func runSimDestroy(cmd *cobra.Command, args []string) error {
 		tls, _ := cmd.Flags().GetBool("tls")
 		adminURL = sim.AdminURL(server, tls)
 	}
-	admin := sim.NewAdmin(rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	// The Host create presented is recorded; an explicit --host-header still wins.
+	hostHeader, _ := cmd.Flags().GetString("host-header")
+	if strings.TrimSpace(hostHeader) == "" {
+		hostHeader = rec.HostHeader
+	}
+	admin := newSimAdmin(hostHeader, rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
-		return err
+		server, _ := cmd.Flags().GetString("server")
+		return withHostHint(err, server, hostHeader)
 	}
 
 	out := cmd.OutOrStdout()

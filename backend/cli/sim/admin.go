@@ -6,6 +6,7 @@ package sim
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
@@ -23,8 +24,14 @@ type Admin struct {
 // NewAdmin builds an Admin authenticating as email/password (a superuser) against
 // userGraphQL for login and adminURL for the admin mutations.
 func NewAdmin(userGraphQL, adminURL, email, password string) *Admin {
+	return NewAdminWithClient(nil, userGraphQL, adminURL, email, password)
+}
+
+// NewAdminWithClient is NewAdmin over a caller-supplied HTTP client (nil = the shared
+// default), so the Host header the Gateway routes on can differ from the address dialled.
+func NewAdminWithClient(httpc *http.Client, userGraphQL, adminURL, email, password string) *Admin {
 	return &Admin{
-		session:  userclient.NewAdminSession(nil, userGraphQL, email, password),
+		session:  userclient.NewAdminSession(httpc, userGraphQL, email, password),
 		adminURL: adminURL,
 	}
 }
