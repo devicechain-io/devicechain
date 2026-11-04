@@ -71,6 +71,11 @@ jobs:
       - name: calculated-metrics cost gate self-test
         run: hack/calc-cost-gate.sh self-test
 
+      # The website manifest publisher, against local bare repos for both website layouts:
+      # an older tag and a wrong live version must each be refused.
+      - name: release manifest publisher self-test
+        run: hack/publish-release-manifest.sh --self-test
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test

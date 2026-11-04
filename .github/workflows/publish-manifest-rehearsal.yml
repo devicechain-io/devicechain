@@ -1,0 +1,68 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Rehearse the release manifest publish against a STAGING branch of the website repository.
+#
+# The release workflow's publish-manifest job runs hack/publish-release-manifest.sh against
+# the website's main and polls https://devicechain.io/releases.json. That path only runs on a
+# stable tag, so it is the last thing anyone gets to test and the first thing to fail. This
+# workflow runs the SAME script with the branch and the verify URL as inputs, so a change to
+# the website layout, the build or the script can be proven end to end before a release needs it.
+#
+#   gh workflow run publish-manifest-rehearsal.yml -f tag=v1.0.0 \
+#     -f website_branch=<staging branch> -f verify_url=<branch deploy or deploy-preview URL>/releases.json
+#
+# website_branch defaults to a name that is never main, on purpose: a rehearsal that quietly
+# defaults to production is not a rehearsal. The script refuses a tag older than the one the
+# branch already carries, so rehearse with the current stable tag.
+name: publish-manifest-rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing STABLE release tag (vX.Y.Z) whose manifest to publish
+        required: true
+      website_branch:
+        description: Branch of devicechain-io/website to push to (must exist; never main by default)
+        required: true
+        default: release-rehearsal
+      verify_url:
+        description: URL that must report the tag after the push (the branch deploy or preview releases.json)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Stable tags only
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::$TAG is not a stable vX.Y.Z tag"; exit 1; }
+      - name: Build the manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          RELEASED_AT="$(gh release view "$TAG" --json publishedAt -q .publishedAt)"
+          export RELEASED_AT
+          hack/build-release-manifest.sh "$TAG" releases.json
+          jq . releases.json
+      - name: Publish to the staging branch and confirm it is served
+        env:
+          DEPLOY_KEY: ${{ secrets.WEBSITE_DEPLOY_KEY }}
+          BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+          WEBSITE_BRANCH: ${{ inputs.website_branch }}
+          VERIFY_URL: ${{ inputs.verify_url }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ "$WEBSITE_BRANCH" != main ] || { echo "::error::a rehearsal never targets main"; exit 1; }
+          [ -n "$DEPLOY_KEY" ] || { echo "::error::WEBSITE_DEPLOY_KEY is not set"; exit 1; }
+          hack/publish-release-manifest.sh "$TAG" releases.json
