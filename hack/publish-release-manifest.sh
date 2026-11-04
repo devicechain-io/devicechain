@@ -52,8 +52,11 @@ version_gt() {
 }
 
 publish() {
-  local tag="$1" manifest="$2" workdir
-  [ -f "$manifest" ] || { echo "::error::manifest $manifest not found" >&2; return 1; }
+  local tag="$1" manifest workdir
+  [ -f "$2" ] || { echo "::error::manifest $2 not found" >&2; return 1; }
+  # Absolute BEFORE any cd: the release job passes a relative path (releases.json) and the copy
+  # below runs inside the website checkout.
+  manifest="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
   workdir="$(mktemp -d)"
   git clone --quiet --depth 1 --branch "$BRANCH" "$REMOTE" "$workdir/site"
   cd "$workdir/site"
@@ -121,7 +124,8 @@ verify() {
 }
 
 self_test() {
-  local root fails=0
+  local root fails=0 self
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
   root="$(mktemp -d)"
   trap 'rm -rf "$root"' RETURN
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -156,6 +160,19 @@ self_test() {
   expect "astro layout publishes to public/" 0 env VERIFY_ATTEMPTS=1 VERIFY_URL="$(furl v1.1.0)" WEBSITE_REMOTE="$root/astro.git" "$0" v1.1.0 "$(newmanifest v1.1.0)"
   [ "$(field astro public/releases.json)" = v1.1.0 ] || { echo "FAIL: public/releases.json not updated"; fails=$((fails+1)); }
   git -C "$root/astro.git" cat-file -e main:releases.json 2>/dev/null && { echo "FAIL: astro repo gained a root releases.json"; fails=$((fails+1)); }
+
+  # The release job passes a RELATIVE manifest path and runs from the repo root, not from the
+  # website checkout the script cds into. Both layouts, from a different cwd.
+  mkdir -p "$root/cwd"
+  mk legacy2 legacy v1.0.0
+  mk astro2 astro v1.0.0
+  relrun() { # relrun <remote> <tag>  (cwd = $root/cwd, manifest = ./releases.json)
+    ( cd "$root/cwd" && cp "$root/m-$2.json" releases.json       && VERIFY_ATTEMPTS=1 VERIFY_URL="$(furl "$2")" WEBSITE_REMOTE="$root/$1.git" "$self" "$2" releases.json )
+  }
+  expect "a RELATIVE manifest path works on the legacy layout" 0 relrun legacy2 v1.2.0
+  [ "$(field legacy2 releases.json)" = v1.2.0 ] || { echo "FAIL: legacy relative-path publish did not land"; fails=$((fails+1)); }
+  expect "a RELATIVE manifest path works on the astro layout" 0 relrun astro2 v1.2.0
+  [ "$(field astro2 public/releases.json)" = v1.2.0 ] || { echo "FAIL: astro relative-path publish did not land"; fails=$((fails+1)); }
 
   expect "same tag again is a no-op that still verifies" 0 env VERIFY_ATTEMPTS=1 VERIFY_URL="$(furl v1.1.0)" WEBSITE_REMOTE="$root/astro.git" "$0" v1.1.0 "$(newmanifest v1.1.0)"
   expect "an older tag is refused (negative control)" 1 env VERIFY_ATTEMPTS=1 VERIFY_URL="$(furl v1.1.0)" WEBSITE_REMOTE="$root/astro.git" "$0" v1.0.5 "$(newmanifest v1.0.5)"

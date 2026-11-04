@@ -9,12 +9,21 @@
 # workflow runs the SAME script with the branch and the verify URL as inputs, so a change to
 # the website layout, the build or the script can be proven end to end before a release needs it.
 #
-#   gh workflow run publish-manifest-rehearsal.yml -f tag=v1.0.0 \
-#     -f website_branch=<staging branch> -f verify_url=<branch deploy or deploy-preview URL>/releases.json
+# HOW TO RUN IT (branch deploys are off, so the verify URL is a PR deploy preview):
+#   1. Push a staging branch of the website repo. To rehearse the NEW layout, branch from the
+#      Astro cutover branch; to rehearse the legacy layout, branch from main.
+#   2. Open a DRAFT pull request from that branch to main. Netlify builds a deploy preview for it.
+#   3. gh workflow run publish-manifest-rehearsal.yml -R devicechain-io/devicechain
+#        -f tag=<current stable tag> -f website_branch=<staging branch>
+#        -f verify_url=https://deploy-preview-<PR number>--device-chain.netlify.app/releases.json
+#      (one command; wrapped here for width)
+#      The push to the branch triggers the preview rebuild; the script polls until the preview
+#      serves the tag. Close the draft PR and delete the branch afterwards.
 #
-# website_branch defaults to a name that is never main, on purpose: a rehearsal that quietly
-# defaults to production is not a rehearsal. The script refuses a tag older than the one the
-# branch already carries, so rehearse with the current stable tag.
+# This workflow never calls the Netlify build hook (BUILD_HOOK is deliberately not set): the hook
+# rebuilds main, which is not what is being rehearsed. The script refuses a tag older than the one
+# the branch already carries, so rehearse with the current stable tag. website_branch has no
+# default and is refused if it is main.
 name: publish-manifest-rehearsal
 
 on:
@@ -24,9 +33,8 @@ on:
         description: An existing STABLE release tag (vX.Y.Z) whose manifest to publish
         required: true
       website_branch:
-        description: Branch of devicechain-io/website to push to (must exist; never main by default)
+        description: Branch of devicechain-io/website to push to (must exist; never main)
         required: true
-        default: release-rehearsal
       verify_url:
         description: URL that must report the tag after the push (the branch deploy or preview releases.json)
         required: true
@@ -58,7 +66,6 @@ jobs:
       - name: Publish to the staging branch and confirm it is served
         env:
           DEPLOY_KEY: ${{ secrets.WEBSITE_DEPLOY_KEY }}
-          BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
           WEBSITE_BRANCH: ${{ inputs.website_branch }}
           VERIFY_URL: ${{ inputs.verify_url }}
           TAG: ${{ inputs.tag }}
