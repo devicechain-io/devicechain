@@ -1455,16 +1455,20 @@ jobs:
   # confidently offer an old version, which is worse than the menu being broken: the failure
   # has to be visible.
   #
-  # WEBSITE_PUBLISH_TOKEN is a fine-grained PAT scoped to devicechain-io/website with
-  # contents:write and nothing else — the narrowest credential that can do this. Every other
-  # job in this workflow uses the built-in GITHUB_TOKEN; this is the one exception, and it
-  # exists because a cross-repo write is not something GITHUB_TOKEN can do by design.
-  # 🔴 It EXPIRES. When this job fails, check the token's expiry before anything else.
+  # WEBSITE_DEPLOY_KEY is the private half of a write-enabled DEPLOY KEY on
+  # devicechain-io/website, and nothing else. Every other job in this workflow uses the
+  # built-in GITHUB_TOKEN; this is the one exception, and it exists because a cross-repo
+  # write is not something GITHUB_TOKEN can do by design.
+  # 🔴 Why a deploy key and not a PAT: the website's `main` is protected by a ruleset that
+  # requires a pull request, and the deploy key is that ruleset's ONLY bypass actor. A
+  # ruleset can exempt an identity but not one of its tokens, so exempting a PAT would have
+  # exempted every push its owner makes. The key reaches one repository and nothing else,
+  # and it does not expire; rotate it by adding a new key and replacing the secret.
   publish-manifest:
     needs: [guard, cli, edge-agent, simulator, provenance]
     runs-on: ubuntu-latest
     permissions:
-      contents: read  # gh release view; the website push uses its own PAT
+      contents: read  # gh release view; the website push uses its own deploy key
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -1498,14 +1502,24 @@ jobs:
       - name: Publish to the website repo
         if: needs.guard.outputs.is_prerelease == 'false'
         env:
-          TOKEN: ${{ secrets.WEBSITE_PUBLISH_TOKEN }}
+          DEPLOY_KEY: ${{ secrets.WEBSITE_DEPLOY_KEY }}
           TAG: ${{ github.ref_name }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::WEBSITE_PUBLISH_TOKEN is not set — the manifest cannot be published."
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::WEBSITE_DEPLOY_KEY is not set — the manifest cannot be published."
             exit 1
           fi
-          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/devicechain-io/website.git" site
+          # The key lives only for this step, in a file only the runner user can read.
+          # GitHub's SSH host keys come from its own API over HTTPS, so the host is pinned
+          # rather than accepted on first use.
+          keydir="$(mktemp -d)"
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$keydir/key"
+          chmod 600 "$keydir/key"
+          curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' > "$keydir/known_hosts"
+          [ -s "$keydir/known_hosts" ] || { echo "::error::could not fetch GitHub's SSH host keys"; exit 1; }
+          export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$keydir/known_hosts"
+          git clone --depth 1 "git@github.com:devicechain-io/website.git" site
           cp releases.json site/releases.json
           cd site
           # A re-run of an unchanged release is a no-op rather than an empty commit.
