@@ -33,7 +33,10 @@ publishes calculated metrics, which are off in every platform tier, so create en
 a tier named tp-showcase (calculated metrics on, ingest sized for the scenario) before
 creating the tenant. It is created if absent and only RAISED if present, never lowered,
 and sim destroy leaves it in place because it is shared by every towerpulse sim. Pass
---tier to use an existing tier instead; that tier is then never created or changed.`,
+--tier to use an existing tier instead; that tier is then never created or changed.
+dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger one
+(--tier rc-100k, say) adds --tier-config with the limits it must hold and create makes
+the tier the same way, raising but never lowering it.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimCreate,
 	SilenceUsage: true,
@@ -47,6 +50,7 @@ func init() {
 		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
 	simCreateCmd.Flags().String("tenant-name", "", "the tenant's display name, as the console shows it (default: the scenario's own, else \"<sim> (sim)\")")
 	simCreateCmd.Flags().String("tier", "", "tenant tier to package the sim at (default: the tier the scenario needs, which create makes if absent, else "+sim.DefaultTenantTier+")")
+	simCreateCmd.Flags().String("tier-config", "", "with --tier: JSON object of integer limits the named tier must hold, such as '{\"ingestReadingsPerSecond\":100000}'; create makes the tier if absent and raises (never lowers) a present one")
 	simCreateCmd.Flags().Int("shed-priority", 0, "shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
 }
@@ -115,6 +119,19 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	// one, a scenario that needs its own tier (Towerpulse needs calculated metrics, which every
 	// platform tier has off) gets it ensured below; any other scenario is packaged at silver.
 	var needTier *sim.TierSpec
+	tierConfig, _ := cmd.Flags().GetString("tier-config")
+	switch {
+	case tierConfig != "" && tier == "":
+		return fmt.Errorf("--tier-config sizes the tier --tier names; pass --tier <token> as well")
+	case tierConfig != "":
+		// The operator named a tier AND said what it holds, so create makes it (or raises it to
+		// at least that) the same way it does for a scenario's own tier.
+		spec, err := sim.CustomTier(tier, tierConfig)
+		if err != nil {
+			return err
+		}
+		needTier = &spec
+	}
 	if tier == "" {
 		tier = sim.DefaultTenantTier
 		if spec, ok := sim.TierForManifest(manifestId); ok {
@@ -171,6 +188,11 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if err := admin.CreateTenant(ctx, tenant, sim.TenantDisplayName(name, manifestId, tenantName), tier, shedPriority); err != nil {
+		if tierConfig == "" && strings.Contains(err.Error(), "tier not found") {
+			return fmt.Errorf("%w\ntier %q does not exist: dcctl bootstrap seeds only the platform tiers. "+
+				"Re-run with --tier-config '{\"ingestReadingsPerSecond\":100000}' (the limits the tier should hold) "+
+				"to have create make it, or name a tier that exists", err, tier)
+		}
 		return err
 	}
 	if err := admin.CreateIdentity(ctx, email, password); err != nil {

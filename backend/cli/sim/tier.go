@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // TierSpec is a tenant tier a scenario needs to exist before its tenant can be packaged at it.
@@ -47,6 +48,29 @@ var TowerpulseShowcaseTier = TierSpec{
 // DefaultTenantTier.
 var manifestTiers = map[string]TierSpec{
 	"towerpulse": TowerpulseShowcaseTier,
+}
+
+// CustomTier builds the TierSpec for an operator-named tier from a JSON object of integer
+// floors (for example {"ingestReadingsPerSecond":100000}). It exists so a sized tier a load
+// run names (--tier) can be made by the same command that uses it: dcctl bootstrap seeds only
+// the platform tiers, and there is no tier command.
+func CustomTier(token, rawConfig string) (TierSpec, error) {
+	var cfg map[string]int
+	dec := json.NewDecoder(strings.NewReader(rawConfig))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return TierSpec{}, fmt.Errorf("--tier-config must be a JSON object of integer limits, such as "+
+			`{"ingestReadingsPerSecond":100000}: %w`, err)
+	}
+	if len(cfg) == 0 {
+		return TierSpec{}, fmt.Errorf("--tier-config names no limits")
+	}
+	return TierSpec{
+		Token:       token,
+		Name:        token,
+		Description: "Created by dcctl sim create --tier-config.",
+		Config:      cfg,
+	}, nil
 }
 
 // TierForManifest returns the tier a scenario needs created, if it needs one.
