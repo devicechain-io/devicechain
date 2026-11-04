@@ -33,6 +33,8 @@ type fakeAckedWriter struct {
 	fail error
 	// legacy is what plain Publish (the flag-off shape) was given.
 	legacy []messaging.Message
+	// rejectOnce makes the ordered writer's publish of an id fail once, storing nothing.
+	rejectOnce map[string]bool
 }
 
 func newFakeAckedWriter() *fakeAckedWriter {
@@ -60,6 +62,14 @@ func (f *fakeAckedWriter) store(msg messaging.Message) (messaging.PubAckInfo, er
 }
 
 func (f *fakeAckedWriter) PublishAcked(_ context.Context, msg messaging.Message, done func(messaging.PubAckInfo, error)) {
+	f.mu.Lock()
+	if f.rejectOnce[msg.DedupID] {
+		delete(f.rejectOnce, msg.DedupID)
+		f.mu.Unlock()
+		done(messaging.PubAckInfo{}, errors.New("rejected: no responders"))
+		return
+	}
+	f.mu.Unlock()
 	ack, err := f.store(msg)
 	done(ack, err)
 }
@@ -145,7 +155,7 @@ func newEnvHarness(t *testing.T) *envHarness {
 	w := newFakeAckedWriter()
 	iproc := &InboundEventsProcessor{ResolvedEventsWriter: w}
 	r := &fakeRounds{w: w}
-	return &envHarness{t: t, w: w, rounds: r, iproc: iproc, eng: newEnvelopeEngine(iproc, w, r), acks: map[uint64]*countAck{}}
+	return &envHarness{t: t, w: w, rounds: r, iproc: iproc, eng: testEngine(iproc, w, r), acks: map[uint64]*countAck{}}
 }
 
 func (h *envHarness) source(seq uint64, fanout int) {
@@ -194,7 +204,7 @@ func TestEventsOfOneBucketBecomeOneEnvelopeInSourceOrder(t *testing.T) {
 
 	require.Len(t, h.w.msgs, 1, "one message for the four events")
 	msg := h.w.msgs[0]
-	assert.Equal(t, "G:acme:2:0", msg.DedupID)
+	assert.Equal(t, messaging.EnvelopeDedupID("G", "acme", bucketKey{bucket: 2}.source(), 0), msg.DedupID)
 	assert.Equal(t, eventenvelope.HeaderValue, msg.Headers[eventenvelope.HeaderName])
 	assert.Nil(t, msg.Key, "an envelope has no single device to key on")
 	assert.Equal(t, "corr-513", msg.Headers[messaging.HeaderCorrelationID], "the first member's correlation id")
@@ -248,7 +258,7 @@ func TestGroupsAreCutPerTenantBucketAndBound(t *testing.T) {
 	for _, m := range h.w.msgs {
 		ids = append(ids, m.DedupID)
 	}
-	assert.Equal(t, []string{"G:acme:0:0", "G:acme:0:1", "G:acme:1:0", "G:globex:1:0"}, ids)
+	assert.Equal(t, []string{gid("acme", 0, 0), gid("acme", 0, 1), gid("acme", 1, 0), gid("globex", 1, 0)}, ids)
 	assert.Equal(t, 64, len(h.members(1)), "the first round holds the lowest 64")
 	assert.Equal(t, 6, len(h.members(2)))
 	assert.Equal(t, 1, len(h.members(3)))
@@ -315,7 +325,7 @@ func TestADuplicateRoundPublishesOnlyTheMembersTheOriginalLacked(t *testing.T) {
 	second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
 	second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	second.rounds = &fakeRounds{w: first.w}
-	second.eng = newEnvelopeEngine(second.iproc, first.w, second.rounds)
+	second.eng = testEngine(second.iproc, first.w, second.rounds)
 	second.source(1, 1)
 	second.source(2, 1)
 	second.source(3, 1)
@@ -343,7 +353,7 @@ func TestARedeliveryOfAStoredEnvelopePublishesNothing(t *testing.T) {
 	second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
 	second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	second.rounds = &fakeRounds{w: first.w}
-	second.eng = newEnvelopeEngine(second.iproc, first.w, second.rounds)
+	second.eng = testEngine(second.iproc, first.w, second.rounds)
 	// Regrouped: only the sources the first run had not acked, in a different order.
 	second.source(4, 1)
 	second.source(2, 1)
@@ -367,7 +377,7 @@ func TestAMemberStoredAloneIsRecognisedWhenARedeliveryGroupsIt(t *testing.T) {
 	second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
 	second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	second.rounds = &fakeRounds{w: first.w}
-	second.eng = newEnvelopeEngine(second.iproc, first.w, second.rounds)
+	second.eng = testEngine(second.iproc, first.w, second.rounds)
 	second.source(1, 1)
 	second.source(2, 1)
 	second.publish()
@@ -410,7 +420,7 @@ func TestAnUnreadableOriginalLeavesTheSourcesUnacked(t *testing.T) {
 			second := &envHarness{t: t, w: first.w, acks: map[uint64]*countAck{}}
 			second.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 			second.rounds = first.rounds
-			second.eng = newEnvelopeEngine(second.iproc, first.w, second.rounds)
+			second.eng = testEngine(second.iproc, first.w, second.rounds)
 			second.source(1, 1)
 			second.source(2, 1)
 			second.publish()
@@ -447,7 +457,7 @@ func TestARedeliveryToTheSameProcessWalksFromRoundZero(t *testing.T) {
 	assert.Len(t, h.w.bySeq, 2, "the redelivered events were stored already, in rounds 0 and 1: nothing new")
 	assert.EqualValues(t, 1, h.acks[2].n.Load())
 	assert.EqualValues(t, 1, h.acks[3].n.Load())
-	assert.GreaterOrEqual(t, h.rounds.gets.Load(), int32(2), "it read the rounds it walked")
+	assert.EqualValues(t, 0, h.rounds.gets.Load(), "the rounds it walked were learned when stored: no read-back")
 }
 
 // carried: an envelope's SettledElsewhere counts as settled; an envelope of another tenant or
@@ -465,12 +475,12 @@ func TestCarriedReadsSettledElsewhereAndRefusesTheWrongEnvelope(t *testing.T) {
 		h.w.bySeq[h.w.seq] = messaging.Message{Value: body, Headers: map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}}
 		return h.w.seq
 	}
-	got, err := h.eng.carried("acme", store("acme", eventenvelope.KindResolved))
+	got, err := h.eng.carried(context.Background(), "acme", store("acme", eventenvelope.KindResolved))
 	require.NoError(t, err)
 	assert.Equal(t, map[uint32]struct{}{3: {}, 9: {}}, got)
-	_, err = h.eng.carried("acme", store("globex", eventenvelope.KindResolved))
+	_, err = h.eng.carried(context.Background(), "acme", store("globex", eventenvelope.KindResolved))
 	assert.Error(t, err, "another tenant's envelope")
-	_, err = h.eng.carried("acme", store("acme", eventenvelope.KindUnresolved))
+	_, err = h.eng.carried(context.Background(), "acme", store("acme", eventenvelope.KindUnresolved))
 	assert.Error(t, err, "an inbound envelope")
 }
 
@@ -483,7 +493,7 @@ func TestTheNextPublishOfABucketIsTheNextRoundWithoutAProbe(t *testing.T) {
 	h.source(3, 1)
 	h.source(4, 1)
 	h.publish()
-	assert.Equal(t, []string{"G:acme:0:0", "G:acme:0:1"}, []string{h.w.msgs[0].DedupID, h.w.msgs[1].DedupID})
+	assert.Equal(t, []string{gid("acme", 0, 0), gid("acme", 0, 1)}, []string{h.w.msgs[0].DedupID, h.w.msgs[1].DedupID})
 	assert.EqualValues(t, 0, h.rounds.gets.Load(), "no read-back on the normal path")
 	assert.EqualValues(t, 0, h.eng.duplicates.Load())
 }
@@ -541,3 +551,15 @@ func (plainOrdered) Publish(_ context.Context, _ messaging.Message, done func(er
 func (plainOrdered) Fail(err error, done func(error))                                 { done(err) }
 func (plainOrdered) Draining()                                                        {}
 func (plainOrdered) Close()                                                           {}
+
+// testEngine is an engine whose rejected rounds are given up on quickly.
+func testEngine(iproc *InboundEventsProcessor, w messaging.AckedWriter, r messaging.RoundPublisher) *envelopeEngine {
+	e := newEnvelopeEngine(context.Background(), iproc, w, r)
+	e.giveUp = 30 * time.Millisecond
+	return e
+}
+
+// gid is the dedup id of round of the tenant's sequence bucket (the test sources carry no append time).
+func gid(tenant string, bucket uint64, round uint32) string {
+	return messaging.EnvelopeDedupID(messaging.EnvelopeDedupKind, tenant, bucketKey{bucket: bucket}.source(), round)
+}

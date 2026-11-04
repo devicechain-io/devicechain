@@ -813,6 +813,12 @@ type MessagingConfiguration struct {
 	// older release cannot read one and dead-letters it; upgrade every pod first, then enable.
 	// Set it false again, and wait for the streams to hold no envelope, before rolling back
 	// below that release.
+	//
+	// 🔴 DO NOT ENABLE Resolved BEFORE event-processing's per-member DETECT guard (slice E4) and
+	// the settlement fixes of this producer ship together: an event the settlement protocol
+	// stores twice is applied twice by DETECT. Known residual: a recreated or renamed inbound
+	// durable resets every source's delivery count to 1, so a source redelivered across that
+	// change is not recognised as a redelivery and can be stored a second time.
 	Envelopes EnvelopesConfiguration
 }
 

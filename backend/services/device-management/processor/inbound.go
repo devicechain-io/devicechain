@@ -124,6 +124,7 @@ type InboundEventsProcessor struct {
 	envelopeCollectMax int
 	envelopeChunkMax   int
 	env                *envelopeEngine
+	envCancel          context.CancelFunc
 	// recoverWG counts the duplicate recoveries in flight (resolved_envelope.go).
 	recoverWG sync.WaitGroup
 
@@ -234,6 +235,12 @@ type ResolveMetrics struct {
 	// drops counts measurement entries dropped at resolution while the rest of their event was
 	// stored, shared by the pool.
 	drops *MeasurementDropMetrics
+
+	// Resolved-envelope protocol counters (resolved_envelope.go). Nil in a zero ResolveMetrics.
+	envDuplicates    prometheus.Counter
+	envRecoverySteps prometheus.Counter
+	envProbeFailures prometheus.Counter
+	envRetries       prometheus.Counter
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -265,6 +272,14 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		integrationAliasMismatch: ms.NewCounter(
 			"resolve_integration_alias_mismatch_total",
 			"Inbound integration events refused because their device no longer holds the alias the event was resolved from (removed or moved); each is dead-lettered with reason IntegrationAliasMismatch"),
+		envDuplicates: ms.NewCounter("resolve_envelope_duplicates_total",
+			"Resolved-envelope publishes the broker answered as duplicates of a round it already held (a redelivery, or another pod on the same bucket)"),
+		envRecoverySteps: ms.NewCounter("resolve_envelope_recovery_steps_total",
+			"Rounds a resolved-envelope walk moved past after finding them stored; the probes per event are about this over events"),
+		envProbeFailures: ms.NewCounter("resolve_envelope_probe_failures_total",
+			"Stored resolved envelopes a duplicate answer named that could not be read back or understood; each leaves its sources unacknowledged"),
+		envRetries: ms.NewCounter("resolve_envelope_round_retries_total",
+			"Resolved-envelope rounds the broker rejected, published again under the same id until their outcome was known"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -1035,7 +1050,9 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 		if !ok || iproc.roundPublisher == nil {
 			return fmt.Errorf("infrastructure.messaging.envelopes.resolved is on, but the resolved writer (%T) cannot report a PubAck or no round publisher was given", iproc.ResolvedEventsWriter)
 		}
-		iproc.env = newEnvelopeEngine(iproc, aw, iproc.roundPublisher)
+		walkCtx, walkCancel := context.WithCancel(context.Background())
+		iproc.envCancel = walkCancel
+		iproc.env = newEnvelopeEngine(walkCtx, iproc, aw, iproc.roundPublisher)
 		resolvedLoop = iproc.ProcessResolvedGroup
 	}
 	// Processing loop for failed events (drains until the failed channel closes).
@@ -1117,11 +1134,19 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	// publish was still settling here — held past AckWait — is published again by whichever
 	// pod gets it, and the dedup id (sourceDedupID) keeps that copy out of the stream for the
 	// stream's duplicate window (streams.RedeliveryDuplicateWindowSeconds).
+	// Walks (duplicate recoveries, retried rounds) get a short grace to finish, then are cancelled:
+	// what they leave unsettled stays unacknowledged for the next pod. Without the bound a walk
+	// retrying a round against a broker that is down would hold the shutdown past its budget.
+	if iproc.envCancel != nil {
+		grace := time.AfterFunc(5*time.Second, iproc.envCancel)
+		defer grace.Stop()
+		defer iproc.envCancel()
+	}
 	if iproc.ResolvedEventsWriter != nil {
 		iproc.ResolvedEventsWriter.Close()
 	}
-	// A duplicate's recovery starts from a writer callback, so every one that will ever start
-	// has by now (Close returns after the last callback); wait for them to finish, each bounded.
+	// A walk starts from a writer callback, so every one that will ever start has by now (Close
+	// returns after the last callback); wait for them to finish.
 	iproc.recoverWG.Wait()
 	if iproc.FailedEventsWriter != nil {
 		iproc.FailedEventsWriter.Close()

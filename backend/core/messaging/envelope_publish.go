@@ -104,6 +104,7 @@ type RoundPublisher interface {
 type roundPublisher struct {
 	nmgr   *NatsManager
 	suffix string
+	gate   *gateState
 }
 
 // NewRoundPublisher builds the RoundPublisher for suffix; the stream is created if needed.
@@ -117,7 +118,11 @@ func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error
 	if _, err := nmgr.ensureStream(suffix); err != nil {
 		return nil, err
 	}
-	return &roundPublisher{nmgr: nmgr, suffix: suffix}, nil
+	// Counted like every other publish: the same latency histogram, duplicate counter and
+	// backpressure volume as the ordered writer, so these rounds are not invisible to the
+	// instruments that watch the stream.
+	nmgr.metrics.initPublish(suffix, publishModeSync)
+	return &roundPublisher{nmgr: nmgr, suffix: suffix, gate: nmgr.registerBackpressure(suffix)}, nil
 }
 
 func (r *roundPublisher) Publish(ctx context.Context, msg Message) (PubAckInfo, error) {
@@ -131,8 +136,14 @@ func (r *roundPublisher) Publish(ctx context.Context, msg Message) (PubAckInfo, 
 	deadline, _ := pctx.Deadline()
 	var delay time.Duration
 	for {
+		start := time.Now()
 		ack, err := r.nmgr.js.PublishMsg(nm, nats.Context(pctx))
+		r.nmgr.metrics.observePublish(r.suffix, publishModeSync, time.Since(start))
 		if err == nil {
+			if ack.Duplicate {
+				r.nmgr.metrics.countDuplicate(r.suffix, string(WriterResolution))
+			}
+			r.gate.notePublished(wireSize(nm))
 			return PubAckInfo{Sequence: ack.Sequence, Duplicate: ack.Duplicate}, nil
 		}
 		if !duplicateInProcess(err) {
