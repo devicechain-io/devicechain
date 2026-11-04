@@ -49,3 +49,34 @@ func TestARoundSettlingWriterCanReadItsStreamBackAndOtherWritersCannot(t *testin
 	}
 	require.NotZero(t, listed, "no stream declares a round-settling writer: the table lost its ReadBackWriters")
 }
+
+// dcctl's downgrade guard and its off-marks read the oldest and the newest messages of the streams
+// that carry envelopes as the broker administrator. A broker drops a request its login may not
+// make without answering, so a missing grant is a timeout far from the cause. The expected set is
+// DERIVED from the table (the streams that declare a round-settling writer), and the grant must
+// not spread to a stream that carries no envelope.
+//
+// GUARD: kills an administrator without STREAM.MSG.GET / DIRECT.GET on an envelope stream, and one
+// granted the read on every stream.
+func TestTheAdministratorCanReadTheEnvelopeStreamsAndNoOthers(t *testing.T) {
+	p, err := AdminPermissions(permInstance)
+	require.NoError(t, err)
+	carriers := streams.EnvelopeCarriers()
+	require.ElementsMatch(t, []string{streams.InboundEvents, streams.ResolvedEvents}, carriers,
+		"the envelope-carrying streams changed: the guard's read grant follows them, so decide it on purpose")
+	isCarrier := map[string]bool{}
+	for _, c := range carriers {
+		isCarrier[c] = true
+	}
+	for _, st := range streams.All {
+		name := messaging.StreamName(permInstance, st.Suffix)
+		for _, verb := range []string{"STREAM.MSG.GET.", "DIRECT.GET."} {
+			got := p.publishes("$JS.API." + verb + name)
+			if isCarrier[st.Suffix] {
+				require.True(t, got, "the administrator cannot %s%s, so dcctl's envelope guard times out", verb, name)
+			} else {
+				require.False(t, got, "the administrator can read messages of %s, which carries no envelope", name)
+			}
+		}
+	}
+}

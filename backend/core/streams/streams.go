@@ -1235,6 +1235,19 @@ func ReadsBack(suffix, area string) bool {
 	return slices.Contains(bySuffix[suffix].ReadBackWriters, area)
 }
 
+// EnvelopeCarriers returns the suffixes of the streams event envelopes are written to: the ones
+// that declare a round-settling writer (ReadBackWriters). The operator's downgrade guard reads
+// exactly these, so the broker administrator's read grant is derived from the same list.
+func EnvelopeCarriers() []string {
+	var out []string
+	for _, s := range All {
+		if len(s.ReadBackWriters) > 0 {
+			out = append(out, s.Suffix)
+		}
+	}
+	return out
+}
+
 // ReadBackWritersOf returns the areas that read their own writes back on suffix's stream.
 func ReadBackWritersOf(suffix string) []string {
 	return bySuffix[suffix].ReadBackWriters

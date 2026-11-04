@@ -49,11 +49,14 @@ const (
 var envelopeStreamProbe = probeStreamsForEnvelopes
 
 // hotStreams are the streams envelopes are written to.
-var hotStreams = []string{streams.InboundEvents, streams.ResolvedEvents}
+var hotStreams = streams.EnvelopeCarriers()
 
 // envelopeSampleTail is how many of the newest messages of each hot stream the probe inspects,
 // besides the oldest retained one.
 const envelopeSampleTail = 256
+
+// envelopeReadTimeout bounds one message read. A var so a test can shorten it.
+var envelopeReadTimeout = 10 * time.Second
 
 type streamBounds struct{ First, Last uint64 }
 
@@ -67,8 +70,10 @@ type envelopeProbeResult struct {
 // envelopeFacts is everything the downgrade decision rests on.
 type envelopeFacts struct {
 	From, To string
-	// FlagOn is the deployed configuration's envelope switch.
-	FlagOn bool
+	// FlagOn is the deployed configuration's envelope switch, and Switches names the ones that are
+	// on (envelopeSwitchNames), for the refusal text.
+	FlagOn   bool
+	Switches []string
 	// EnabledAt and OffMarks are the Instance's annotations, "" when absent.
 	EnabledAt string
 	OffMarks  string
@@ -147,7 +152,7 @@ func checkEnvelopeDowngrade(ctx context.Context, f envelopeFacts, probe func(con
 			FirstEnvelopeReaderRelease))
 		return nil
 	}
-	fix := fmt.Sprintf("Set infrastructure.messaging.envelopes.resolved to false (`dcctl upgrade <provider> <instance> --values <file>` "+
+	fix := fmt.Sprintf("Set every switch under infrastructure.messaging.envelopes (resolved, inbound) to false (`dcctl upgrade <provider> <instance> --values <file>` "+
 		"sets it under instance.config.infrastructure.messaging.envelopes), then let inbound-events and resolved-events drain or "+
 		"wait out their retention, and upgrade again. Or move to %s or later. Nothing has been changed.", FirstEnvelopeReaderRelease)
 	refuse := func(why string) error {
@@ -155,7 +160,11 @@ func checkEnvelopeDowngrade(ctx context.Context, f envelopeFacts, probe func(con
 			target, why, FirstEnvelopeReaderRelease, fix)
 	}
 	if f.FlagOn {
-		return refuse("resolved event envelopes are switched ON")
+		names := f.Switches
+		if len(names) == 0 {
+			names = []string{"resolved"}
+		}
+		return refuse(fmt.Sprintf("event envelopes are switched ON (%s)", strings.Join(names, ", ")))
 	}
 	res, err := probe(ctx)
 	if err != nil {
@@ -200,7 +209,7 @@ func checkEnvelopeDowngrade(ctx context.Context, f envelopeFacts, probe func(con
 // is written.
 func precheckEnvelopeDowngrade(ctx context.Context, st *State, allow bool) error {
 	err := checkEnvelopeDowngrade(ctx, envelopeFacts{
-		From: st.FromImageVersion, To: st.ImageVersion, FlagOn: st.EnvelopesResolvedOn,
+		From: st.FromImageVersion, To: st.ImageVersion, FlagOn: st.EnvelopesResolvedOn, Switches: st.EnvelopeSwitches,
 		EnabledAt: st.EnvelopesEnabledAt, OffMarks: st.EnvelopesOffMarks, Allow: allow,
 	}, func(ctx context.Context) (envelopeProbeResult, error) {
 		return envelopeStreamProbe(ctx, st.Instance, st.KubeContext)
@@ -223,17 +232,19 @@ func precheckBootstrapEnvelopeDowngrade(ctx context.Context, st *State, existing
 		return fmt.Errorf("building kube clients to check for event envelopes: %w", err)
 	}
 	flagOn := false
+	var switches []string
 	cfg, err := deployedInstanceConfig(ctx, typed, st.Instance)
 	switch {
 	case err == nil:
 		flagOn = envelopesOn(cfg.Infrastructure.Messaging.Envelopes)
+		switches = envelopeSwitchNames(cfg.Infrastructure.Messaging.Envelopes)
 	case apierrors.IsNotFound(err):
 		return nil // no configuration document: no service has run, so no envelope exists
 	default:
 		return fmt.Errorf("reading the configuration instance %q is running on, to check for event envelopes: %w", st.Instance, err)
 	}
 	err = checkEnvelopeDowngrade(ctx, envelopeFacts{
-		From: existing.Spec.ImageVersion, To: st.ImageVersion, FlagOn: flagOn,
+		From: existing.Spec.ImageVersion, To: st.ImageVersion, FlagOn: flagOn, Switches: switches,
 		EnabledAt: existing.Annotations[AnnotationEnvelopesEnabledAt], OffMarks: existing.Annotations[AnnotationEnvelopesOffMarks],
 	}, func(ctx context.Context) (envelopeProbeResult, error) {
 		return envelopeStreamProbe(ctx, st.Instance, st.KubeContext)
@@ -266,6 +277,18 @@ func overlayEnvelopesOn(overlay map[string]interface{}) bool {
 
 // envelopesOn is whether a deployed configuration has either envelope switch on.
 func envelopesOn(e config.EnvelopesConfiguration) bool { return e.Resolved || e.Inbound }
+
+// envelopeSwitchNames names the envelope switches that are on.
+func envelopeSwitchNames(e config.EnvelopesConfiguration) []string {
+	var out []string
+	if e.Resolved {
+		out = append(out, "resolved")
+	}
+	if e.Inbound {
+		out = append(out, "inbound")
+	}
+	return out
+}
 
 // recordEnvelopesEnabled makes the instance remember that it has turned envelopes on: before the
 // run that turns them on moves anything, so a run that dies half-way still leaves the record. A
@@ -387,7 +410,7 @@ func probeStreamsForEnvelopes(ctx context.Context, instanceId, kubeContext strin
 	if err != nil {
 		return envelopeProbeResult{}, err
 	}
-	return sampleStreams(js, instanceId)
+	return sampleStreams(ctx, js, instanceId)
 }
 
 // streamReader is the part of JetStream the probe uses.
@@ -400,7 +423,7 @@ type streamReader interface {
 // not exist is an ERROR: on a running instance both hot streams exist, so a missing one means the
 // instance is not what it was taken for, and "nothing there" must not read as "no envelopes".
 // The reads are served by the stream's leader.
-func sampleStreams(js streamReader, instanceId string) (envelopeProbeResult, error) {
+func sampleStreams(ctx context.Context, js streamReader, instanceId string) (envelopeProbeResult, error) {
 	out := envelopeProbeResult{Bounds: map[string]streamBounds{}}
 	for _, suffix := range hotStreams {
 		name := messaging.StreamName(instanceId, suffix)
@@ -421,10 +444,20 @@ func sampleStreams(js streamReader, instanceId string) (envelopeProbeResult, err
 			seqs = append(seqs, s)
 		}
 		for _, seq := range seqs {
-			m, err := js.GetMsg(name, seq)
+			rctx, cancel := context.WithTimeout(ctx, envelopeReadTimeout)
+			m, err := js.GetMsg(name, seq, nats.Context(rctx))
+			cancel()
 			if err != nil {
 				if errors.Is(err, nats.ErrMsgNotFound) {
 					continue // deleted or expired between the info and the read
+				}
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrTimeout) || errors.Is(err, nats.ErrNoResponders) ||
+					strings.Contains(strings.ToLower(err.Error()), "permissions violation") {
+					// The broker drops, without answering, a request its login may not make, so a
+					// denied read looks exactly like a read that timed out.
+					return out, fmt.Errorf("reading %s message %d was denied or went unanswered (%v): the broker administrator login "+
+						"most likely lacks $JS.API.STREAM.MSG.GET.%s and $JS.API.DIRECT.GET.%s; the broker log shows a Permissions Violation "+
+						"if so", name, seq, err, name, name)
 				}
 				return out, fmt.Errorf("reading %s message %d: %w", name, seq, err)
 			}
