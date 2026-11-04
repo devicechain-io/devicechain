@@ -171,7 +171,7 @@ func (h *envHarness) publish() {
 	items := h.items
 	h.items = nil
 	h.eng.publishBatch(context.Background(), items)
-	h.iproc.recoverWG.Wait()
+	h.eng.Wait()
 }
 
 // members returns the source indices of the stored message at seq: an envelope's members, or the
@@ -204,7 +204,7 @@ func TestEventsOfOneBucketBecomeOneEnvelopeInSourceOrder(t *testing.T) {
 
 	require.Len(t, h.w.msgs, 1, "one message for the four events")
 	msg := h.w.msgs[0]
-	assert.Equal(t, messaging.EnvelopeDedupID("G", "acme", bucketKey{bucket: 2}.source(), 0), msg.DedupID)
+	assert.Equal(t, messaging.EnvelopeDedupID("G", "acme", bucketKey{Bucket: 2}.Source(), 0), msg.DedupID)
 	assert.Equal(t, eventenvelope.HeaderValue, msg.Headers[eventenvelope.HeaderName])
 	assert.Nil(t, msg.Key, "an envelope has no single device to key on")
 	assert.Equal(t, "corr-513", msg.Headers[messaging.HeaderCorrelationID], "the first member's correlation id")
@@ -224,7 +224,7 @@ func TestEventsOfOneBucketBecomeOneEnvelopeInSourceOrder(t *testing.T) {
 	for seq, a := range h.acks {
 		assert.EqualValues(t, 1, a.n.Load(), "source %d acked once", seq)
 	}
-	assert.EqualValues(t, 4, h.eng.members.Load())
+	assert.EqualValues(t, 4, h.eng.Members.Load())
 }
 
 // A source that fans out to several events is acked once, after the last of them, even when the
@@ -262,7 +262,7 @@ func TestGroupsAreCutPerTenantBucketAndBound(t *testing.T) {
 	assert.Equal(t, 64, len(h.members(1)), "the first round holds the lowest 64")
 	assert.Equal(t, 6, len(h.members(2)))
 	assert.Equal(t, 1, len(h.members(3)))
-	assert.EqualValues(t, 2, h.eng.singles.Load(), "a group of one is published legacy-shaped")
+	assert.EqualValues(t, 2, h.eng.Singles.Load(), "a group of one is published legacy-shaped")
 	assert.Equal(t, "", h.w.msgs[2].Headers[eventenvelope.HeaderName], "a group of one is not an envelope")
 	assert.Equal(t, strconv.FormatUint((300%bucketSize)*fanSlots, 36), h.w.msgs[2].Headers[messaging.HeaderMemberIndex])
 	for seq, a := range h.acks {
@@ -270,9 +270,10 @@ func TestGroupsAreCutPerTenantBucketAndBound(t *testing.T) {
 	}
 }
 
-// What cannot be grouped is published exactly as with the flag off: no stream sequence, a member
-// of an inbound envelope, a copy split out of one, a fan-out position past the slots.
-func TestWhatCannotBeGroupedKeepsTheLegacyShape(t *testing.T) {
+// A member of an inbound envelope, and a copy split out of one, are mapped 1:1 under the origin
+// envelope's sequence. What cannot be grouped is published exactly as with the flag off: no
+// stream sequence, a fan-out position past the slots.
+func TestMappedMembersAndWhatCannotBeGrouped(t *testing.T) {
 	h := newEnvHarness(t)
 	h.source(0, 1) // no sequence
 	// A member of an inbound envelope, made the way the readers make it.
@@ -288,14 +289,26 @@ func TestWhatCannotBeGroupedKeepsTheLegacyShape(t *testing.T) {
 	h.items = append(h.items, envTestItem(&ackCoord{src: src, remaining: 1}, fanSlots, "wide-fan"))
 	h.publish()
 
-	assert.Empty(t, h.w.msgs, "nothing went down the envelope path")
-	assert.Len(t, h.w.legacy, 4)
+	// The member and the split copy are mapped 1:1 under their ORIGIN envelope's sequence (the
+	// R kind, member index x fanSlots), each alone here so legacy-shaped under that id; nothing
+	// is published under a per-event id.
+	require.Len(t, h.w.msgs, 2, "the member and the copy went down the mapped envelope path")
+	got := map[string]string{}
+	for _, m := range h.w.msgs {
+		got[m.DedupID] = m.Headers[messaging.HeaderMemberIndex]
+	}
+	assert.Equal(t, map[string]string{
+		messaging.EnvelopeDedupID("R", "acme", 50, 0): strconv.FormatUint(1*fanSlots, 36),
+		messaging.EnvelopeDedupID("R", "acme", 77, 0): strconv.FormatUint(3*fanSlots, 36),
+	}, got)
+	// No sequence, and a fan-out position past the slots, keep the flag-off shape.
+	assert.Len(t, h.w.legacy, 2)
 	for _, m := range h.w.legacy {
 		assert.Empty(t, m.Headers[eventenvelope.HeaderName])
 		assert.Empty(t, m.Headers[messaging.HeaderMemberIndex])
 		assert.Regexp(t, `^(r:acme:[0-9a-z]+:[0-9a-z]+\.?[0-9a-z]*)?$`, m.DedupID)
 	}
-	assert.EqualValues(t, 4, h.eng.legacy.Load())
+	assert.EqualValues(t, 2, h.eng.legacy.Load())
 }
 
 // A refused publish fails every member's source: none is acked, so each is redelivered.
@@ -334,8 +347,8 @@ func TestADuplicateRoundPublishesOnlyTheMembersTheOriginalLacked(t *testing.T) {
 	require.Len(t, first.w.bySeq, 2, "two stored messages: round 0, and round 1 with the one new member")
 	assert.Equal(t, []uint32{1 * fanSlots, 2 * fanSlots}, first.members(1))
 	assert.Equal(t, []uint32{3 * fanSlots}, first.members(2), "only the complement is stored")
-	assert.EqualValues(t, 1, second.eng.duplicates.Load())
-	assert.EqualValues(t, 1, second.eng.recovered.Load())
+	assert.EqualValues(t, 1, second.eng.Duplicates.Load())
+	assert.EqualValues(t, 1, second.eng.Recovered.Load())
 	for seq, a := range second.acks {
 		assert.EqualValues(t, 1, a.n.Load(), "source %d acked once", seq)
 	}
@@ -475,12 +488,12 @@ func TestCarriedReadsSettledElsewhereAndRefusesTheWrongEnvelope(t *testing.T) {
 		h.w.bySeq[h.w.seq] = messaging.Message{Value: body, Headers: map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}}
 		return h.w.seq
 	}
-	got, err := h.eng.carried(context.Background(), "acme", store("acme", eventenvelope.KindResolved))
+	got, err := h.eng.Carried(context.Background(), "acme", store("acme", eventenvelope.KindResolved))
 	require.NoError(t, err)
 	assert.Equal(t, map[uint32]struct{}{3: {}, 9: {}}, got)
-	_, err = h.eng.carried(context.Background(), "acme", store("globex", eventenvelope.KindResolved))
+	_, err = h.eng.Carried(context.Background(), "acme", store("globex", eventenvelope.KindResolved))
 	assert.Error(t, err, "another tenant's envelope")
-	_, err = h.eng.carried(context.Background(), "acme", store("acme", eventenvelope.KindUnresolved))
+	_, err = h.eng.Carried(context.Background(), "acme", store("acme", eventenvelope.KindUnresolved))
 	assert.Error(t, err, "an inbound envelope")
 }
 
@@ -495,7 +508,7 @@ func TestTheNextPublishOfABucketIsTheNextRoundWithoutAProbe(t *testing.T) {
 	h.publish()
 	assert.Equal(t, []string{gid("acme", 0, 0), gid("acme", 0, 1)}, []string{h.w.msgs[0].DedupID, h.w.msgs[1].DedupID})
 	assert.EqualValues(t, 0, h.rounds.gets.Load(), "no read-back on the normal path")
-	assert.EqualValues(t, 0, h.eng.duplicates.Load())
+	assert.EqualValues(t, 0, h.eng.Duplicates.Load())
 }
 
 // Flag off, the message is today's, byte for byte: the dedup id, the key, the value and the
@@ -555,11 +568,11 @@ func (plainOrdered) Close()                                                     
 // testEngine is an engine whose rejected rounds are given up on quickly.
 func testEngine(iproc *InboundEventsProcessor, w messaging.AckedWriter, r messaging.RoundPublisher) *envelopeEngine {
 	e := newEnvelopeEngine(context.Background(), iproc, w, r)
-	e.giveUp = 30 * time.Millisecond
+	e.SetGiveUp(30 * time.Millisecond)
 	return e
 }
 
 // gid is the dedup id of round of the tenant's sequence bucket (the test sources carry no append time).
 func gid(tenant string, bucket uint64, round uint32) string {
-	return messaging.EnvelopeDedupID(messaging.EnvelopeDedupKind, tenant, bucketKey{bucket: bucket}.source(), round)
+	return messaging.EnvelopeDedupID(messaging.EnvelopeDedupKind, tenant, bucketKey{Bucket: bucket}.Source(), round)
 }

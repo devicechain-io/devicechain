@@ -837,9 +837,9 @@ type MessagingConfiguration struct {
 	//
 	// 🔴 READING IS NOT A SWITCH: every reader of both streams reads envelopes and legacy
 	// messages always. These two decide only whether a producer WRITES them, and both are off.
-	// Resolved is honoured by device-management (it publishes resolved-events as envelopes);
-	// Inbound has no producer yet, so true is refused at startup rather than accepted and
-	// ignored, which would read as a working setting that changes nothing.
+	// Resolved is honoured by device-management (it publishes resolved-events as envelopes, one
+	// per inbound envelope when the inbound message is one); Inbound by event-sources (the
+	// capture hop and HTTP /events, with InboundLingerMillis).
 	//
 	// 🔴 SET RESOLVED ONLY AFTER EVERY POD RUNS A RELEASE THAT READS ENVELOPES. A pod on an
 	// older release cannot read one and dead-letters it; upgrade every pod first, then enable.
@@ -858,14 +858,41 @@ type MessagingConfiguration struct {
 type EnvelopesConfiguration struct {
 	// Resolved: device-management publishes resolved-events as envelopes.
 	Resolved bool
-	// Inbound: event-sources publishes inbound-events as envelopes.
+	// Inbound: event-sources publishes inbound-events as envelopes, on the capture hop (the MQTT
+	// capture stream) and on HTTP /events. A tenant whose rate predicts company waits up to the
+	// linger for it; a quiet tenant never waits and its events keep the legacy shape.
+	//
+	// 🔴 SET INBOUND ONLY AFTER EVERY POD RUNS A RELEASE THAT READS ENVELOPES (device-management,
+	// the failed-events indexer and the max-deliveries recorder read inbound-events), and see the
+	// DETECT note on Messaging.Envelopes: it applies here too.
 	Inbound bool
+	// InboundLingerMillis is how long an inbound event may wait for a second one when its
+	// tenant's recent rate predicts one (event-sources). 0 is the default, 5. The cap is 10: no
+	// configuration makes an event wait longer, so the hop adds at most that to the persist path.
+	// A value outside 0..10 is refused at startup.
+	InboundLingerMillis int
 }
 
-// Validate refuses a producer switch this release has no producer for.
+// Envelope linger bounds, in milliseconds.
+const (
+	DefaultInboundLingerMillis = 5
+	MaxInboundLingerMillis     = 10
+)
+
+// InboundLinger is the inbound linger in force, defaulted at the point of use as well as
+// validated, for a Microservice built as a struct literal.
+func (c EnvelopesConfiguration) InboundLinger() time.Duration {
+	if c.InboundLingerMillis <= 0 {
+		return DefaultInboundLingerMillis * time.Millisecond
+	}
+	return time.Duration(c.InboundLingerMillis) * time.Millisecond
+}
+
+// Validate refuses an out-of-range linger, naming the key.
 func (c EnvelopesConfiguration) Validate() error {
-	if c.Inbound {
-		return fmt.Errorf("infrastructure.messaging.envelopes.inbound: no producer in this release writes inbound event envelopes; leave it false")
+	if c.InboundLingerMillis < 0 || c.InboundLingerMillis > MaxInboundLingerMillis {
+		return fmt.Errorf("infrastructure.messaging.envelopes.inboundLingerMillis is %d: it must be between 0 (the default, %d) and %d",
+			c.InboundLingerMillis, DefaultInboundLingerMillis, MaxInboundLingerMillis)
 	}
 	return nil
 }

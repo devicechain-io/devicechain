@@ -125,8 +125,6 @@ type InboundEventsProcessor struct {
 	envelopeChunkMax   int
 	env                *envelopeEngine
 	envCancel          context.CancelFunc
-	// recoverWG counts the duplicate recoveries in flight (resolved_envelope.go).
-	recoverWG sync.WaitGroup
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -1147,7 +1145,9 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	}
 	// A walk starts from a writer callback, so every one that will ever start has by now (Close
 	// returns after the last callback); wait for them to finish.
-	iproc.recoverWG.Wait()
+	if iproc.env != nil {
+		iproc.env.Wait()
+	}
 	if iproc.FailedEventsWriter != nil {
 		iproc.FailedEventsWriter.Close()
 	}

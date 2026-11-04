@@ -230,7 +230,7 @@ func chainArm(b *testing.B, servers []*natsserver.Server, instance string, k, ra
 	// on, and from the stream when they are off (one message per event).
 	events := func() int64 {
 		if p.iproc.env != nil {
-			return p.iproc.env.members.Load() + p.iproc.env.legacy.Load()
+			return p.iproc.env.Members.Load() + p.iproc.env.legacy.Load()
 		}
 		return int64(resolvedMsgs())
 	}

@@ -282,8 +282,8 @@ func TestKillBetweenRoundZeroPubAckAndAckLosesAndDuplicatesNothing(t *testing.T)
 				time.Sleep(10 * time.Millisecond)
 			}
 			require.NoError(t, b.iproc.Stop(context.Background()))
-			recoveredMembers += int(b.iproc.env.recovered.Load())
-			duplicateAcks += int(b.iproc.env.duplicates.Load())
+			recoveredMembers += int(b.iproc.env.Recovered.Load())
+			duplicateAcks += int(b.iproc.env.Duplicates.Load())
 		})
 		if t.Failed() {
 			break

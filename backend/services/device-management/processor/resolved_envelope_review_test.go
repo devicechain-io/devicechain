@@ -43,7 +43,7 @@ func TestABucketIsBoundedInTimeAsWellAsSequence(t *testing.T) {
 	assert.Equal(t, a, key(10, t0), "a redelivery is in the same bucket")
 	assert.Equal(t, a, key(11, t0.Add(5*time.Second)))
 	assert.NotEqual(t, a, key(11, t0.Add(bucketSeconds*time.Second)), "a source a bucket-span later is another bucket")
-	assert.NotEqual(t, a.source(), key(11, t0.Add(2*bucketSeconds*time.Second)).source())
+	assert.NotEqual(t, a.Source(), key(11, t0.Add(2*bucketSeconds*time.Second)).Source())
 }
 
 // A round the broker rejects while the pod is alive is retried under the SAME id, so no hole stays
@@ -51,7 +51,7 @@ func TestABucketIsBoundedInTimeAsWellAsSequence(t *testing.T) {
 func TestARejectedRoundIsRetriedUnderTheSameIdAndLeavesNoHole(t *testing.T) {
 	h := newEnvHarness(t)
 	h.iproc.envelopeChunkMax = 1 // one event per round: a source's two events straddle rounds 0 and 1
-	h.eng.giveUp = 5 * time.Second
+	h.eng.SetGiveUp(5 * time.Second)
 	h.w.rejectOnce = map[string]bool{gid("acme", 0, 0): true}
 	h.source(7, 2)
 	h.publish()
@@ -62,7 +62,7 @@ func TestARejectedRoundIsRetriedUnderTheSameIdAndLeavesNoHole(t *testing.T) {
 		ids[m.DedupID] = true
 	}
 	assert.Equal(t, map[string]bool{gid("acme", 0, 0): true, gid("acme", 0, 1): true}, ids, "no round was skipped")
-	assert.EqualValues(t, 1, h.eng.retries.Load()+0, "one rejection retried")
+	assert.EqualValues(t, 1, h.eng.Retries.Load()+0, "one rejection retried")
 	assert.EqualValues(t, 1, h.acks[7].n.Load(), "the source is acked once, after both events are stored")
 
 	// The source comes back (delivery 2): everything is stored already.
@@ -103,7 +103,7 @@ func TestTheHighWaterMarkAndCacheAreSharedAcrossChunks(t *testing.T) {
 	assert.Equal(t, []string{gid("acme", 0, 0), gid("acme", 0, 0), gid("acme", 0, 1), gid("acme", 0, 2), gid("acme", 0, 3)}, ids,
 		"after the one duplicate every chunk takes a fresh round: the probes are O(1) per bucket, not per chunk")
 	assert.EqualValues(t, 1, h.rounds.gets.Load(), "round 0 was read back once")
-	assert.EqualValues(t, 1, h.eng.duplicates.Load())
+	assert.EqualValues(t, 1, h.eng.Duplicates.Load())
 }
 
 // A round a redelivered chunk publishes raises the mark too, so the next fresh chunk does not
@@ -118,7 +118,7 @@ func TestARedeliveredChunkRaisesTheMarkForTheNextFreshChunk(t *testing.T) {
 	h.source(2, 1)
 	h.publish() // fresh: must be round 1, not a duplicate of round 0
 	assert.Equal(t, []string{gid("acme", 0, 0), gid("acme", 0, 1)}, []string{h.w.msgs[0].DedupID, h.w.msgs[1].DedupID})
-	assert.EqualValues(t, 0, h.eng.duplicates.Load())
+	assert.EqualValues(t, 0, h.eng.Duplicates.Load())
 }
 
 // A round read back once is cached: later redelivered chunks settle against it with neither a
@@ -156,7 +156,7 @@ func TestAWalkKeepsItsSourcesAlive(t *testing.T) {
 	h.iproc = &InboundEventsProcessor{ResolvedEventsWriter: first.w}
 	h.rounds = &fakeRounds{w: first.w}
 	h.eng = testEngine(h.iproc, first.w, h.rounds)
-	h.eng.beatEvery = 0
+	h.eng.SetBeatEvery(0)
 	beats := &progAck{}
 	src := messaging.NewConsumedMessage("i.acme.inbound-events", nil, 2, nil, beats)
 	src.StreamSeq = 9
@@ -226,7 +226,7 @@ func TestEncoderRefusalsSplitTheChunkAndNeverUseEventIds(t *testing.T) {
 		h.items = append(h.items, envTestItem(&ackCoord{src: src, remaining: 1}, 0, "dev-2"))
 		h.publish()
 		check(t, h, 1)
-		assert.EqualValues(t, 3-1, h.eng.members.Load(), "two members, not three")
+		assert.EqualValues(t, 3-1, h.eng.Members.Load(), "two members, not three")
 	})
 }
 

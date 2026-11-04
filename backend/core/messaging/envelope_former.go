@@ -298,6 +298,12 @@ func NewEnvelopeMetrics(ms *core.Microservice, prefix string) *EnvelopeMetrics {
 	}
 }
 
+// NewEnvelopeCounters wraps counters a service already registered, for a producer (device-
+// management) whose settlement instruments predate the shared ones. Any may be nil.
+func NewEnvelopeCounters(duplicates, recoverySteps, probeFailures, retries prometheus.Counter) *EnvelopeMetrics {
+	return &EnvelopeMetrics{duplicates: duplicates, recoverySteps: recoverySteps, probeFailures: probeFailures, retries: retries}
+}
+
 func (m *EnvelopeMetrics) observeBatch(hop string, k int, wait time.Duration) {
 	if m == nil || m.members == nil {
 		return

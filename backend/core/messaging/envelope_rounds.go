@@ -89,6 +89,11 @@ type RoundKey struct {
 	// Epoch is the source message's append time (Unix seconds) / RoundBucketSeconds; 0 when the
 	// message carries none.
 	Epoch uint64
+	// Mapped marks an envelope mapped 1:1 from ONE source message (device-management's resolved
+	// envelope for an inbound envelope): Bucket is then that message's own stream sequence, there
+	// is no time half (a source message is immutable, so its id never regroups), and the id is
+	// the engine's MappedDedupKind.
+	Mapped bool
 }
 
 // RoundKeyOf is the bucket a source message with stream sequence seq and broker append time at
@@ -106,7 +111,20 @@ func RoundKeyOf(tenant string, seq uint64, at time.Time) (k RoundKey, index uint
 }
 
 // Source is the number the id names: the sequence bucket and the time bucket together.
-func (k RoundKey) Source() uint64 { return k.Bucket<<28 | k.Epoch&(1<<28-1) }
+func (k RoundKey) Source() uint64 {
+	if k.Mapped {
+		return k.Bucket
+	}
+	return k.Bucket<<28 | k.Epoch&(1<<28-1)
+}
+
+// headerSeq is the SourceSeq an envelope of this bucket declares.
+func (k RoundKey) headerSeq() uint64 {
+	if k.Mapped {
+		return k.Bucket
+	}
+	return k.Bucket * RoundBucketSize
+}
 
 type roundKey struct {
 	b     RoundKey
@@ -142,13 +160,16 @@ type RoundEngineConfig struct {
 	// DedupKind is the id's kind letter. It must be upper case and disjoint from every other id
 	// shape on the stream.
 	DedupKind string
+	// MappedDedupKind is the kind letter of RoundKey.Mapped buckets; required to publish any.
+	MappedDedupKind string
 	// Writer publishes the first attempt of each round; Rounds publishes the later ones.
 	Writer AckedWriter
 	Rounds RoundPublisher
 	// Ctx ends the walks.
 	Ctx context.Context
-	// ChunkMax caps k; zero is eventenvelope.MaxMembers.
-	ChunkMax int
+	// ChunkMax, when set, caps k (read at every publish; zero or beyond the format bound is
+	// eventenvelope.MaxMembers). Tests fix k with it.
+	ChunkMax func() int
 	// Metrics may be nil.
 	Metrics *EnvelopeMetrics
 }
@@ -184,7 +205,11 @@ func NewRoundEngine(cfg RoundEngineConfig) (*RoundEngine, error) {
 	if cfg.Writer == nil || cfg.Rounds == nil {
 		return nil, errors.New("messaging: a round engine needs a writer that reports the PubAck and a round publisher")
 	}
-	if cfg.DedupKind == "" || cfg.DedupKind == EnvelopeDedupKind || cfg.DedupKind != upper(cfg.DedupKind) {
+	if cfg.MappedDedupKind != "" && (cfg.MappedDedupKind == cfg.DedupKind ||
+		cfg.MappedDedupKind != upper(cfg.MappedDedupKind)) {
+		return nil, fmt.Errorf("messaging: round engine mapped id kind %q must be an upper-case letter of its own", cfg.MappedDedupKind)
+	}
+	if cfg.DedupKind == "" || cfg.DedupKind != upper(cfg.DedupKind) {
 		return nil, fmt.Errorf("messaging: round engine id kind %q must be an upper-case letter of its own", cfg.DedupKind)
 	}
 	if cfg.Ctx == nil {
@@ -204,13 +229,20 @@ func upper(s string) string {
 	return string(b)
 }
 
+// SetGiveUp and SetBeatEvery override how long a rejected round is retried and how often a long
+// walk tells the broker its sources are alive. For tests; call before publishing.
+func (e *RoundEngine) SetGiveUp(d time.Duration)    { e.giveUp = d }
+func (e *RoundEngine) SetBeatEvery(d time.Duration) { e.beatEvery = d }
+
 // Wait blocks until every walk has finished. Call it after the writer is closed, so no new walk
 // can start.
 func (e *RoundEngine) Wait() { e.wg.Wait() }
 
 func (e *RoundEngine) chunkMax() int {
-	if n := e.cfg.ChunkMax; n > 0 && n <= eventenvelope.MaxMembers {
-		return n
+	if e.cfg.ChunkMax != nil {
+		if n := e.cfg.ChunkMax(); n > 0 && n <= eventenvelope.MaxMembers {
+			return n
+		}
 	}
 	return eventenvelope.MaxMembers
 }
@@ -332,7 +364,11 @@ func (e *RoundEngine) publishPieces(ctx context.Context, k RoundKey, ms []RoundM
 
 // buildRound builds the message for round of the bucket's members.
 func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Message, error) {
-	id := EnvelopeDedupID(e.cfg.DedupKind, k.Tenant, k.Source(), round)
+	kind := e.cfg.DedupKind
+	if k.Mapped {
+		kind = e.cfg.MappedDedupKind
+	}
+	id := EnvelopeDedupID(kind, k.Tenant, k.Source(), round)
 	if len(ms) == 1 {
 		m := Message{
 			Key:     ms[0].Key,
@@ -350,7 +386,7 @@ func (e *RoundEngine) buildRound(k RoundKey, round uint32, ms []RoundMember) (Me
 		events[i] = eventenvelope.Event{Index: m.Index, Bytes: m.Bytes}
 	}
 	body, err := eventenvelope.Encode(eventenvelope.Header{
-		Kind: e.cfg.Kind, Tenant: k.Tenant, SourceSeq: k.Bucket * RoundBucketSize, Round: round,
+		Kind: e.cfg.Kind, Tenant: k.Tenant, SourceSeq: k.headerSeq(), Round: round,
 	}, events)
 	if err != nil {
 		return Message{}, err
@@ -617,7 +653,7 @@ func (e *RoundEngine) heldOf(ctx context.Context, k RoundKey, round uint32, seq 
 		return s, nil
 	}
 	e.Probes.Add(1)
-	s, err := e.carried(ctx, k.Tenant, seq)
+	s, err := e.Carried(ctx, k.Tenant, seq)
 	if err != nil {
 		return nil, err
 	}
@@ -629,10 +665,10 @@ func (e *RoundEngine) heldOf(ctx context.Context, k RoundKey, round uint32, seq 
 // a member published alone: the id's protocol cannot be followed, so nothing is assumed.
 var errNotAnEnvelope = errors.New("the stored message is neither an envelope nor a single member")
 
-// carried returns the source indices the stored message at seq settled: its members and the
+// Carried returns the source indices the stored message at seq settled: its members and the
 // indices it says were settled elsewhere. Anything that does not parse as exactly that is an
 // error - never an empty set, which would republish what is already stored.
-func (e *RoundEngine) carried(ctx context.Context, tenant string, seq uint64) (map[uint32]struct{}, error) {
+func (e *RoundEngine) Carried(ctx context.Context, tenant string, seq uint64) (map[uint32]struct{}, error) {
 	ctx, cancel := context.WithTimeout(ctx, roundTimeout)
 	defer cancel()
 	stored, err := e.cfg.Rounds.Get(ctx, tenant, seq)

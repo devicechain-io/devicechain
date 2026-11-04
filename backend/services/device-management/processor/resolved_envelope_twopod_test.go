@@ -102,7 +102,7 @@ func TestTwoPodsSharingTheDurableLoseAndDuplicateNothing(t *testing.T) {
 	}()
 	deadline := time.Now().Add(60 * time.Second)
 	for dying.dropped.Load() == 0 {
-		require.True(t, time.Now().Before(deadline), "pod A never reached its kill point (settled %d, a members %d, b members %d)", dying.settled.Load(), a.iproc.env.members.Load(), b.iproc.env.members.Load())
+		require.True(t, time.Now().Before(deadline), "pod A never reached its kill point (settled %d, a members %d, b members %d)", dying.settled.Load(), a.iproc.env.Members.Load(), b.iproc.env.Members.Load())
 		time.Sleep(time.Millisecond)
 	}
 	// The pod dies: nothing more is acknowledged, and what it holds goes back to the durable.
@@ -141,7 +141,7 @@ func TestTwoPodsSharingTheDurableLoseAndDuplicateNothing(t *testing.T) {
 	t.Logf("two pods, one killed: %d events in %d envelopes + %d legacy; walk requests %d (publishes %d + read-backs %d) = %.4f per event; "+
 		"duplicate answers a=%d b=%d; missing %d, duplicated %d",
 		members, envelopes, legacy, probes, counts[0].pubs.Load()+counts[1].pubs.Load(), counts[0].gets.Load()+counts[1].gets.Load(),
-		float64(probes)/events, a.iproc.env.duplicates.Load(), b.iproc.env.duplicates.Load(), missing, twice)
+		float64(probes)/events, a.iproc.env.Duplicates.Load(), b.iproc.env.Duplicates.Load(), missing, twice)
 	require.Zero(t, missing, "resolved events lost")
 	require.Zero(t, twice, "resolved events stored more than once")
 	require.Equal(t, events, members)
