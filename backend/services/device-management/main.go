@@ -71,6 +71,11 @@ var (
 	// inbound-events on its own, in the legacy shape (processor.WithSplitWriter).
 	InboundSplitWriter messaging.MessageWriter
 
+	// ResolvedRoundPublisher publishes and reads back the later settlement rounds of a resolved
+	// envelope (processor.WithResolvedEnvelopes). Nil unless
+	// infrastructure.messaging.envelopes.resolved is on.
+	ResolvedRoundPublisher messaging.RoundPublisher
+
 	// AlarmEventsWriter publishes alarm state-change events (ADR-041). It backs the
 	// publisher injected into the shared Api so every alarm transition — the DETECT edge
 	// integrator or an operator — emits onto the alarm-events stream.
@@ -329,6 +334,7 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
 		processor.WithSplitWriter(InboundSplitWriter),
+		processor.WithResolvedEnvelopes(resolvedEnvelopesOn(), ResolvedRoundPublisher),
 		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
 		processor.WithSecretTransit(SecretTransit),
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
@@ -443,6 +449,15 @@ func createPublishWriters(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	InboundSplitWriter = split
+
+	ResolvedRoundPublisher = nil
+	if resolvedEnvelopesOn() {
+		rounds, err := nmgr.NewRoundPublisher(streams.ResolvedEvents)
+		if err != nil {
+			return err
+		}
+		ResolvedRoundPublisher = rounds
+	}
 	return nil
 }
 
@@ -1151,4 +1166,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which both consumers above still precede.
 	return Svc.Terminate(ctx)
+}
+
+// resolvedEnvelopesOn reports infrastructure.messaging.envelopes.resolved: whether this service
+// publishes resolved-events as envelopes. A function of its own so the wiring is one read of
+// one setting, not two that can disagree.
+func resolvedEnvelopesOn() bool {
+	return Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Resolved
 }

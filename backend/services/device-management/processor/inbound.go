@@ -48,6 +48,10 @@ type ackCoord struct {
 	src       messaging.Message
 	remaining int
 	failed    bool
+	// mu guards remaining and failed. Without envelopes only the resolved writer's settle
+	// goroutine touches them, in order; with envelopes a duplicate's recovery settles members
+	// from a goroutine of its own, so the same coordinator can be settled from two.
+	mu sync.Mutex
 }
 
 // resolvedItem pairs a resolved event with the tenant it belongs to so the
@@ -109,6 +113,19 @@ type InboundEventsProcessor struct {
 
 	// splitWriter is WithSplitWriter's; nil leaves a retrying member in its envelope.
 	splitWriter messaging.MessageWriter
+
+	// envelopeResolved and roundPublisher are WithResolvedEnvelopes'; env is built from them
+	// (and the resolved writer) when the processor starts, and nil with the flag off.
+	envelopeResolved bool
+	roundPublisher   messaging.RoundPublisher
+	// envelopeLinger, envelopeCollectMax and envelopeChunkMax override the grouping constants;
+	// only tests set them (the bench fixes k to compare with the design's measurement).
+	envelopeLinger     *time.Duration
+	envelopeCollectMax int
+	envelopeChunkMax   int
+	env                *envelopeEngine
+	// recoverWG counts the duplicate recoveries in flight (resolved_envelope.go).
+	recoverWG sync.WaitGroup
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -294,6 +311,18 @@ func WithGatewayNotices(n GatewayNoticer) InboundOption {
 // slower for the neighbours.
 func WithSplitWriter(w messaging.MessageWriter) InboundOption {
 	return func(iproc *InboundEventsProcessor) { iproc.splitWriter = w }
+}
+
+// WithResolvedEnvelopes turns on resolved envelopes (infrastructure.messaging.envelopes.resolved):
+// the resolved events of one tenant that the processor holds together are published as one
+// message (resolved_envelope.go). enabled false changes nothing at all. enabled true needs the
+// resolved writer to be a messaging.AckedWriter and rounds to be non-nil, and the processor
+// refuses to start without them - it will not publish envelopes it cannot settle.
+func WithResolvedEnvelopes(enabled bool, rounds messaging.RoundPublisher) InboundOption {
+	return func(iproc *InboundEventsProcessor) {
+		iproc.envelopeResolved = enabled
+		iproc.roundPublisher = rounds
+	}
 }
 
 // splitTimeout bounds the publish of a split-out member. The resolver goroutine waits on it,
@@ -629,15 +658,24 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 	if !more {
 		return true
 	}
+	bytes, err := resolvedevent.MarshalResolvedEvent(&item.event)
+	iproc.publishResolvedLegacy(ctx, item, bytes, err)
+	return false
+}
+
+// publishResolvedLegacy publishes one resolved event as its own message: the shape every
+// resolved event has without envelopes, and the one an event that cannot be grouped keeps with
+// them. marshalErr is the error from marshalling it, reported through the writer so it settles
+// in order with everything published.
+func (iproc *InboundEventsProcessor) publishResolvedLegacy(ctx context.Context, item resolvedItem, bytes []byte, marshalErr error) {
 	coord := item.coord
 	settle := func(err error) { iproc.settleResolved(coord, err) }
-	bytes, err := resolvedevent.MarshalResolvedEvent(&item.event)
-	if err != nil {
-		log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
+	if marshalErr != nil {
+		log.Error().Err(marshalErr).Msg("unable to marshal resolved event to protobuf")
 		// Through the writer, not inline: the outcome must reach the coordinator on the
 		// writer's settle goroutine, in order, like every published one.
-		iproc.ResolvedEventsWriter.Fail(err, settle)
-		return false
+		iproc.ResolvedEventsWriter.Fail(marshalErr, settle)
+		return
 	}
 	msg := messaging.Message{
 		// The source device token, carried as the producer-local Key. Read the
@@ -691,7 +729,6 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 		DedupID: resolvedDedupID(item.tenant, coord, item.index),
 	}.WithCorrelationID(item.correlation)
 	iproc.ResolvedEventsWriter.Publish(core.WithTenant(ctx, item.tenant), msg, settle)
-	return false
 }
 
 // resolvedDedupID names one resolved-event publish for the broker's duplicate window; see
@@ -785,6 +822,8 @@ func (iproc *InboundEventsProcessor) settleResolved(coord *ackCoord, err error) 
 	if coord == nil {
 		return
 	}
+	coord.mu.Lock()
+	defer coord.mu.Unlock()
 	if err != nil {
 		// A publish failed: latch failure so the source is never acked, which leaves
 		// the whole message for AckWait-paced redelivery. Do NOT nak — an immediate
@@ -988,6 +1027,17 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 		// Built here, before any loop runs, so no two goroutines build pacers at once.
 		iproc.pacer(i)
 	}
+	// Refused before anything starts, like the readers above: envelopes on, and nothing that can
+	// settle them, would publish messages whose duplicates cannot be told from lost events.
+	resolvedLoop := iproc.ProcessResolvedEvent
+	if iproc.envelopeResolved {
+		aw, ok := iproc.ResolvedEventsWriter.(messaging.AckedWriter)
+		if !ok || iproc.roundPublisher == nil {
+			return fmt.Errorf("infrastructure.messaging.envelopes.resolved is on, but the resolved writer (%T) cannot report a PubAck or no round publisher was given", iproc.ResolvedEventsWriter)
+		}
+		iproc.env = newEnvelopeEngine(iproc, aw, iproc.roundPublisher)
+		resolvedLoop = iproc.ProcessResolvedGroup
+	}
 	// Processing loop for failed events (drains until the failed channel closes).
 	iproc.outboundWG.Add(1)
 	go func() {
@@ -1004,7 +1054,7 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 	go func() {
 		defer iproc.outboundWG.Done()
 		for {
-			eof := iproc.ProcessResolvedEvent(ctx)
+			eof := resolvedLoop(ctx)
 			if eof {
 				break
 			}
@@ -1070,6 +1120,9 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	if iproc.ResolvedEventsWriter != nil {
 		iproc.ResolvedEventsWriter.Close()
 	}
+	// A duplicate's recovery starts from a writer callback, so every one that will ever start
+	// has by now (Close returns after the last callback); wait for them to finish, each bounded.
+	iproc.recoverWG.Wait()
 	if iproc.FailedEventsWriter != nil {
 		iproc.FailedEventsWriter.Close()
 	}

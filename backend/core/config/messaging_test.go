@@ -30,10 +30,10 @@ func TestEventWireFormatDefaultsToCompact(t *testing.T) {
 	}
 }
 
-// The envelope producer switches exist and are off. Turning one on is refused, naming the
-// key: no producer ships in this release, and a switch that was accepted and did nothing would
-// read as a setting that works.
-func TestEnvelopeProducerSwitchesAreOffAndCannotYetBeTurnedOn(t *testing.T) {
+// The envelope producer switches exist and are off. Resolved may be turned on (device-management
+// produces it); Inbound has no producer, so turning it on is refused, naming the key: a switch
+// that was accepted and did nothing would read as a setting that works.
+func TestEnvelopeProducerSwitchesAreOffAndOnlyResolvedCanBeTurnedOn(t *testing.T) {
 	c := validLoggingDoc("")
 	c.ApplyDefaults()
 	if c.Infrastructure.Messaging.Envelopes.Resolved || c.Infrastructure.Messaging.Envelopes.Inbound {
@@ -42,9 +42,14 @@ func TestEnvelopeProducerSwitchesAreOffAndCannotYetBeTurnedOn(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Fatalf("the defaults do not validate: %v", err)
 	}
+	on := validLoggingDoc("")
+	on.ApplyDefaults()
+	on.Infrastructure.Messaging.Envelopes.Resolved = true
+	if err := on.Validate(); err != nil {
+		t.Fatalf("envelopes.resolved turned on is refused: %v", err)
+	}
 	for key, set := range map[string]func(*InstanceConfiguration){
-		"infrastructure.messaging.envelopes.resolved": func(c *InstanceConfiguration) { c.Infrastructure.Messaging.Envelopes.Resolved = true },
-		"infrastructure.messaging.envelopes.inbound":  func(c *InstanceConfiguration) { c.Infrastructure.Messaging.Envelopes.Inbound = true },
+		"infrastructure.messaging.envelopes.inbound": func(c *InstanceConfiguration) { c.Infrastructure.Messaging.Envelopes.Inbound = true },
 	} {
 		c := validLoggingDoc("")
 		c.ApplyDefaults()

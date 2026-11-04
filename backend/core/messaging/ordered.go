@@ -126,6 +126,8 @@ type orderedPending struct {
 	deadline    time.Time
 	callerBound bool
 	done        func(error)
+	// ack, when not nil, receives the broker's PubAck before done runs (PublishAcked).
+	ack *PubAckInfo
 }
 
 // NewOrderedWriter builds an OrderedWriter for suffix with up to window publishes awaiting
@@ -223,6 +225,13 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 // that is the latest moment either can be decided: before the slot, a wait for room would
 // sit between the decision and the send.
 func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done func(error), guard func() error) {
+	o.publishGuardedAck(ctx, msg, done, guard, nil)
+}
+
+// publishGuardedAck is publishGuarded that, when ack is not nil, fills *ack from the broker's
+// PubAck before done runs (see PublishAcked). The settle goroutine is the only writer of *ack,
+// and done runs on that goroutine after the write, so done may read it without a lock.
+func (o *orderedWriter) publishGuardedAck(ctx context.Context, msg Message, done func(error), guard func() error, ack *PubAckInfo) {
 	if done == nil {
 		panic("messaging: OrderedWriter.Publish needs a done callback: it is the only place the outcome goes")
 	}
@@ -274,7 +283,7 @@ func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done fu
 	// broker holds, and a publish in flight is about to be held.
 	// Subject, headers and data, as sent: what natsWriter counts.
 	o.gate.notePublished(wireSize(nm))
-	o.pending <- orderedPending{fut: fut, msg: nm, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
+	o.pending <- orderedPending{fut: fut, msg: nm, sent: sent, deadline: deadline, callerBound: callerBound, done: done, ack: ack}
 }
 
 // follow moves the writer onto the connection its stream's target names (affinity.go), when
@@ -436,6 +445,9 @@ func (o *orderedWriter) settleLoop() {
 			ack, err = o.settle(p)
 			if err == nil && ack != nil && ack.Duplicate {
 				o.nmgr.metrics.countDuplicate(o.suffix, string(o.writer))
+			}
+			if p.ack != nil && err == nil && ack != nil {
+				*p.ack = PubAckInfo{Sequence: ack.Sequence, Duplicate: ack.Duplicate}
 			}
 			o.nmgr.metrics.observePublish(o.suffix, publishModePipelined, time.Since(p.sent))
 			brokerFailed = err != nil
