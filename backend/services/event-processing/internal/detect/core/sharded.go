@@ -200,6 +200,27 @@ func (s *Sharded) ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Even
 	}
 }
 
+// ProcessReceivedMember is Engine.ProcessReceivedMember for every shard: one member of an event
+// envelope, ticked into every shard exactly as a message of its own would be, so the shards'
+// watermarks and sequences stay equal.
+func (s *Sharded) ProcessReceivedMember(seq uint64, t time.Time, r Receipt, evs []Event) {
+	if len(s.shards) == 1 {
+		s.shards[0].ProcessReceivedMember(seq, t, r, evs)
+		return
+	}
+	for i := range s.scratch {
+		s.scratch[i] = s.scratch[i][:0]
+	}
+	k := len(s.shards)
+	for i := range evs {
+		o := shardOf(evs[i].Key.Rule, evs[i].Key.Series, k, s.salt)
+		s.scratch[o] = append(s.scratch[o], evs[i])
+	}
+	for i, e := range s.shards {
+		e.ProcessReceivedMember(seq, t, r, s.scratch[i])
+	}
+}
+
 // Skip records a poison message's sequence in every shard and reports whether it moved.
 func (s *Sharded) Skip(seq uint64) bool {
 	moved := false

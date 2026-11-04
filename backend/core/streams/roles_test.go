@@ -76,6 +76,7 @@ func TestRolesMatchKnownUse(t *testing.T) {
 		{"event-sources writes inbound-events", Writes(InboundEvents, "event-sources")},
 		{"lwm2m-ingest writes inbound-events", Writes(InboundEvents, "lwm2m-ingest")},
 		{"sparkplug-ingest writes inbound-events", Writes(InboundEvents, "sparkplug-ingest")},
+		{"device-management republishes a retrying envelope member to inbound-events", Writes(InboundEvents, "device-management")},
 		{"device-management reads inbound-events", ReadsAs(InboundEvents, "device-management", ReadDurable)},
 		{"device-management writes resolved-events", Writes(ResolvedEvents, "device-management")},
 		{"event-processing reads resolved-events at the floor", ReadsAs(ResolvedEvents, "event-processing", ReadAckFloor)},

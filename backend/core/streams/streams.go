@@ -686,7 +686,10 @@ var All = []Stream{
 	// rather than discard one of those. device-management forwards into resolved-events, so
 	// it stops reading here while that stream's gate is closed, and the backlog it leaves is
 	// what closes this one.
-	{Suffix: InboundEvents, Writers: []string{"device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	//
+	// device-management is also a WRITER here, for one thing only: an event-envelope member that
+	// must retry is republished alone, in the legacy shape (processor.WithSplitWriter).
+	{Suffix: InboundEvents, Writers: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind:      kindEvent,
 		BackpressureReaders: []string{"device-management"},
 		Forwards:            map[string]string{"device-management": ResolvedEvents},
@@ -977,7 +980,9 @@ var All = []Stream{
 	{Suffix: FailedDecode, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// device-management publishes each failure record with an id its source's redelivery
 	// reproduces (processor.sourceDedupID), on the same redelivery span as resolved-events;
-	// event-management's records carry none. It used to be the broker's two-minute default.
+	// event-management's records carry one only for a member of an event envelope, in a kind
+	// of its own (messaging.DedupKindFailed, "fe:"), because the two areas number their sources
+	// independently and one stream holds both. It used to be the broker's two-minute default.
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.

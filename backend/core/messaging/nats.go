@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/streams"
 	nats "github.com/nats-io/nats.go"
 	"github.com/nats-io/nuid"
@@ -2669,6 +2670,11 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			continue
 		}
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), ack)
+		// A member split out of an event envelope arrives with the deliveries it already spent
+		// and the coordinate it came from (HeaderRetry). Only inbound-events carries the header.
+		if r.suffix == streams.InboundEvents {
+			ApplyRetryHeader(&msg)
+		}
 		if r.store && !r.storeHandOut(nm, &msg, seq, appended) {
 			r.skipHandOut(nm, sl)
 			continue
@@ -2867,8 +2873,16 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 				// fire-and-forget fan-out to the connected client, not a
 				// durable-processing handoff. Headers are dropped (nil): the live
 				// feed's consumer reads only the payload, so building a per-message
-				// header map would be wasted work on the hot path.
-				msg := NewConsumedMessage(nm.Subject, nm.Data, 0, nil, nil)
+				// header map would be wasted work on the hot path. The one it keeps is the
+				// envelope marker, without which an event envelope would read as a single
+				// event it is not.
+				var headers map[string]string
+				if len(nm.Header) > 0 {
+					if v := nm.Header.Get(eventenvelope.HeaderName); v != "" {
+						headers = map[string]string{eventenvelope.HeaderName: v}
+					}
+				}
+				msg := NewConsumedMessage(nm.Subject, nm.Data, 0, headers, nil)
 				select {
 				case out <- msg:
 				case <-ctx.Done():

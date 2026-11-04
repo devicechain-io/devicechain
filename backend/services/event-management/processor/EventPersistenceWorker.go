@@ -28,7 +28,10 @@ type EventPersistenceWorker struct {
 	Api         model.EventManagementApi
 	Unpersisted <-chan messaging.Message
 	Invalid     func(error, messaging.Message)
-	Failed      func(string, uint, resolvedevent.ResolvedEvent, error, string)
+	// Failed records a terminal failure; dedupID is the failed-events record's broker dedup id
+	// ("" for none: a legacy message), which names an envelope member so a whole-envelope
+	// redelivery does not record the same member twice.
+	Failed func(tenant string, reason uint, event resolvedevent.ResolvedEvent, err error, correlationID, dedupID string)
 
 	// MaxBatch is the most messages this worker commits in one transaction. 1 or less —
 	// the zero value included, so a worker built by literal keeps the per-message path —
@@ -102,7 +105,7 @@ type EventPersistenceResults struct {
 func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 	unpersisted <-chan messaging.Message,
 	invalid func(error, messaging.Message),
-	failed func(string, uint, resolvedevent.ResolvedEvent, error, string),
+	failed func(string, uint, resolvedevent.ResolvedEvent, error, string, string),
 	metrics *PersistMetrics) *EventPersistenceWorker {
 	return &EventPersistenceWorker{
 		WorkerId:    workerId,

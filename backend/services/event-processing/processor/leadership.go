@@ -284,6 +284,7 @@ type termHandle struct {
 // before the new term's first read.
 func (rp *ResolvedEventsProcessor) resetForTerm() {
 	rp.pendingAcks = rp.pendingAcks[:0]
+	rp.pendingEvents = 0
 	rp.pendingDets = rp.pendingDets[:0]
 	rp.dirty = false
 	rp.idleUncommitted = false

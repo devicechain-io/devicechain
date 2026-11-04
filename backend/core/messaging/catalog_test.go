@@ -37,10 +37,10 @@ func TestUndeclaredUseIsRefused(t *testing.T) {
 			_, err := m.NewWriter(streams.DeviceCommands)
 			return err
 		}, streams.DeviceCommands},
-		{"ordered writer on a stream the area only reads", "device-management", func(m *NatsManager) error {
-			_, err := m.NewOrderedWriter(streams.InboundEvents, WriterResolution, 1)
+		{"ordered writer on a stream the area only reads", "event-management", func(m *NatsManager) error {
+			_, err := m.NewOrderedWriter(streams.ResolvedEvents, WriterResolution, 1)
 			return err
-		}, streams.InboundEvents},
+		}, streams.ResolvedEvents},
 		{"writer on a broker-written stream", "event-sources", func(m *NatsManager) error {
 			_, err := m.NewWriter(streams.DeviceEventsCapture)
 			return err

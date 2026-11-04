@@ -472,7 +472,13 @@ type ResolvedEventsProcessor struct {
 	// else reads or writes them.
 	engine      detectcore.Detector
 	pendingAcks []messaging.Message
-	pendingDets []pendingDetection
+	// pendingEvents is how many EVENTS the messages in pendingAcks carry (an event envelope
+	// carries many), and appliedEvents how many the last applyResolved took. The checkpoint
+	// cadence counts events as well as messages, so an envelope of 64 does not stretch the span
+	// between snapshots - and so the replay a crash costs - 64-fold.
+	pendingEvents int
+	appliedEvents int
+	pendingDets   []pendingDetection
 	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
 	publishPasses  uint64
 	lastCheckpoint time.Time
@@ -1596,7 +1602,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		// A replay read acknowledges nothing (it is a read by sequence), so nothing is
 		// buffered for the durable here — only the engine is advanced.
 		if rp.applyResolved(msg) {
-			replayed++
+			replayed += rp.appliedEvents
 		}
 		if replayed >= rp.cfg.CheckpointEvents {
 			rp.checkpoint(rp.pctx())
@@ -1727,7 +1733,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			rp.handle(item.msg)
 			// Flush by buffered-ack count (bounds in-flight acks regardless of whether
 			// messages advanced the engine, were duplicates, or were poison).
-			if len(rp.pendingAcks) >= rp.cfg.CheckpointEvents {
+			if rp.checkpointDue() {
 				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
@@ -1863,6 +1869,13 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	}
 	rp.pendingAcks = append(rp.pendingAcks, msg)
 	rp.applyResolved(msg)
+	rp.pendingEvents += rp.appliedEvents
+}
+
+// checkpointDue is whether enough has been applied since the last checkpoint: CheckpointEvents
+// messages (which bounds the broker's ack-pending) or that many events (which bounds the replay).
+func (rp *ResolvedEventsProcessor) checkpointDue() bool {
+	return len(rp.pendingAcks) >= rp.cfg.CheckpointEvents || rp.pendingEvents >= rp.cfg.CheckpointEvents
 }
 
 // applyResolved parses a resolved-event message, fans it out across the applicable rules
@@ -1875,6 +1888,7 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 // (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
 // predicate evaluations) — still acked upstream, but not counted or marked dirty.
 func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
+	rp.appliedEvents = 1 // an event envelope sets the number of its members (applyEnvelope)
 	if msg.StreamSeq == 0 {
 		// A JetStream-delivered message always carries a sequence; a 0 means the
 		// broker metadata was unreadable. Treat it as unprocessable rather than feed
@@ -1896,16 +1910,78 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
 		return rp.skipPoison(msg.StreamSeq)
 	}
-	decode := rp.decodeResolved
-	if decode == nil {
-		decode = resolvedevent.UnmarshalResolvedEvent
+	if msg.IsEnvelope() {
+		return rp.applyEnvelope(msg, tenant)
 	}
-	event, err := decode(msg.Value)
+	event, err := rp.decode(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event that could not be parsed from subject %q", msg.Subject)
 		return rp.skipPoison(msg.StreamSeq)
 	}
+	return rp.applyEvent(msg, tenant, event, rp.engine.LastSeq(), false)
+}
+
+// decode is the resolved-event decoder: the protobuf one, or the test seam.
+func (rp *ResolvedEventsProcessor) decode(value []byte) (*resolvedevent.ResolvedEvent, error) {
+	if rp.decodeResolved != nil {
+		return rp.decodeResolved(value)
+	}
+	return resolvedevent.UnmarshalResolvedEvent(value)
+}
+
+// applyEnvelope applies an event-envelope message: its members, one at a time and in member
+// order, under the ONE stream sequence the envelope holds.
+//
+// Each member takes the step a message of its own would: its plan, its descopes, then the
+// engine advances the watermark to the member's own time and applies it
+// (Engine.ProcessReceivedMember). For the same events in the same order that is the same engine
+// input as legacy messages carry, which is what keeps detection replay-correct without a new
+// sequence coordinate: the snapshot, the ack floor, gap detection and the idempotency guard
+// all stay keyed on the envelope's sequence, and an envelope already at or below LastSeq was
+// dropped by applyResolved before it got here. (The differential in envelope_differential_test.go
+// holds it: the same events delivered both ways give byte-identical snapshots and derived dedup
+// ids.)
+//
+// A member that cannot be decoded is skipped alone (counted as poison) and the others apply; an
+// envelope that cannot be read at all is skipped whole, by its sequence, as a poison message is.
+// Whatever the members did, LastSeq ends at the envelope's sequence: an envelope whose members
+// were all skipped or disabled is still handled.
+func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant string) bool {
+	units, _, err := messaging.SplitEnvelope(msg, tenant, func(string) {}, nil)
+	if err != nil {
+		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
+			Msgf("Dropping event envelope that could not be read from subject %q", msg.Subject)
+		return rp.skipPoison(msg.StreamSeq)
+	}
+	prev := rp.engine.LastSeq()
+	advanced := false
+	rp.appliedEvents = max(len(units), 1)
+	for _, u := range units {
+		event, err := rp.decode(u.Msg.Value)
+		if err != nil {
+			idx, _ := u.Msg.MemberIndex()
+			log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Uint32("member", idx).
+				Msgf("Skipping envelope member that could not be parsed from subject %q", msg.Subject)
+			rp.poisonSkipped++
+			continue
+		}
+		if rp.applyEvent(msg, tenant, event, prev, true) {
+			advanced = true
+		}
+	}
+	// The envelope is handled even when no member applied.
+	if rp.engine.Skip(msg.StreamSeq) {
+		rp.dirty = true
+		advanced = true
+	}
+	return advanced
+}
+
+// applyEvent applies one decoded event of msg. prev is the engine's LastSeq before msg began
+// (the descope gate), and member says the event is one of an envelope's, whose sequence the
+// engine records after the first of them (Engine.ProcessReceivedMember).
+func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant string, event *resolvedevent.ResolvedEvent, prev uint64, member bool) bool {
 	// 🔴 A DISABLED DEVICE'S EVENT IS SKIPPED WHOLE, NOT FED AS AN EMPTY PLAN. Plan already
 	// gives it no rule, but ProcessResolved with an empty batch still ADVANCES the shared
 	// watermark to its time — firing other devices' due timers and closing panes at this
@@ -1915,6 +1991,9 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// the history's to record, not an input to detection. The mark is frozen into the event,
 	// so a replay skips it at the same sequence.
 	if event.SourceDeviceDisabled {
+		if member {
+			return false // the envelope's sequence is recorded once, by applyEnvelope
+		}
 		if rp.engine.Skip(msg.StreamSeq) {
 			rp.dirty = true
 			return true
@@ -1955,7 +2034,6 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// trip the guard; all events share the clamped event time.
 	plan := rp.registry.Plan(msg.StreamSeq, tenant, event, occurred, attr, fences)
 	rp.metrics.RecordFanout(len(plan.Events), plan.EvalErrors)
-	prev := rp.engine.LastSeq()
 	// ADR-062 S4 membership-flip: apply descopes for the rules this event is OUT of scope
 	// for BEFORE ProcessResolved advances the watermark. Ordering is load-bearing — advance()
 	// fires due timers, so a stale Duration/Absence timer for a departed series must be
@@ -1973,7 +2051,11 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 			}
 		}
 	}
-	rp.engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
+	if member {
+		rp.engine.ProcessReceivedMember(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
+	} else {
+		rp.engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
+	}
 	// Samples the engine declined as late (the sliding kinds' foldsIn, Duration's hold budget in
 	// applyDuration). Drained here rather than left on the engine so the counter is the only place
 	// the number lives — a store-and-forward fleet whose windowed or duration rules stop firing
@@ -2802,6 +2884,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	rp.phases.enter(phaseAck)
 	rp.ackThroughCommitted()
 	rp.pendingAcks = rp.pendingAcks[:0]
+	rp.pendingEvents = 0
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.phases.flush()
 	return true

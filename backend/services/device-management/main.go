@@ -67,6 +67,9 @@ var (
 	InboundEventsProcessor *processor.InboundEventsProcessor
 	ResolvedEventsWriter   messaging.OrderedWriter
 	FailedEventsWriter     messaging.OrderedWriter
+	// InboundSplitWriter republishes an event-envelope member that cannot be resolved yet to
+	// inbound-events on its own, in the legacy shape (processor.WithSplitWriter).
+	InboundSplitWriter messaging.MessageWriter
 
 	// AlarmEventsWriter publishes alarm state-change events (ADR-041). It backs the
 	// publisher injected into the shared Api so every alarm transition — the DETECT edge
@@ -325,6 +328,7 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
+		processor.WithSplitWriter(InboundSplitWriter),
 		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
 		processor.WithSecretTransit(SecretTransit),
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
@@ -430,6 +434,15 @@ func createPublishWriters(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	FailedEventsWriter = fevents
+
+	// The writer a member of an event envelope that cannot be resolved yet is republished on,
+	// alone, in the legacy shape (processor.WithSplitWriter). Unused until a producer writes
+	// inbound envelopes.
+	split, err := nmgr.NewWriter(streams.InboundEvents)
+	if err != nil {
+		return err
+	}
+	InboundSplitWriter = split
 	return nil
 }
 

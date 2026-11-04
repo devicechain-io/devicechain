@@ -57,6 +57,10 @@ type EventResolver struct {
 	// the outbound failed event is stamped with, so it stays traceable end to end
 	// (ADR-022 review E15).
 	Failed func(messaging.Message, string, uint, esmodel.UnresolvedEvent, error)
+	// splitOut republishes a retrying member of an event envelope alone, in the legacy shape,
+	// and reports whether it was stored (the pool sets it to the processor's). Nil, or false,
+	// leaves the member unacked, which redelivers its envelope whole.
+	splitOut func(src messaging.Message, tenant string) bool
 	// metrics records RED instrumentation for the resolve loop (ADR-022 review
 	// E13). It is shared across all workers and may be nil in tests; Start() is
 	// nil-safe so a nil value no-ops.
@@ -1532,6 +1536,24 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					// a redelivery reads the same alias row and answers the same.
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
+				} else if _, member := unresolved.MemberIndex(); member && reason != uint(resolvedevent.FailureReason_ApiCallFailed) &&
+					rez.splitOut != nil && rez.splitOut(unresolved, tenant) {
+					// A member of an event envelope that must retry for a reason of its own (a
+					// device not registered yet, a credential that does not authenticate yet) is
+					// SPLIT OUT: republished alone, in the legacy shape, where it runs the
+					// per-message ladder below (AckWait pacing, a failed-events record at the final
+					// delivery) without holding its envelope - and the healthy members in it - for
+					// minutes. The member is acked once its copy is stored; the envelope is acked
+					// when every member is settled this way or another.
+					//
+					// 🔴 A FAILURE OF THE API OR ITS CACHE IS NOT THE MEMBER'S. It hits the members
+					// around it alike, so it is not split: 64 members of a brown-out would be 64
+					// copies and 64 synchronous publishes on a resolver, for a condition that clears
+					// for all of them at once. Such a member stays unacknowledged and the envelope
+					// is redelivered whole, exactly as a message in the same brown-out is.
+					log.Debug().Str("correlation", correlation).Err(err).Msg("Splitting a retrying member out of its envelope.")
+					_ = unresolved.Ack()
+					done(core.ResultRetry)
 				} else {
 					// Transient: leave it UNACKED (do not nak) so AckWait paces
 					// redelivery — an immediate nak would burn MaxDeliver in ~1.4ms

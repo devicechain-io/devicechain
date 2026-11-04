@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // LwM2M publishes through the synchronous Emit, Ingest and EmitPresence, and those are now
@@ -39,9 +41,22 @@ func writtenDigest(t *testing.T, w *fakeWriter) string {
 		fmt.Fprintf(h, "write %d tenant=%q\n", i, tenant)
 	}
 	for _, m := range w.msgs {
-		fmt.Fprintf(h, "%#v\n", m)
+		fmt.Fprintf(h, "%s\n", publishedForm(m))
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// publishedForm is the Go-syntax form of a message these goldens were computed from: every field
+// a producer sets. Message has since gained `member` and `split`, which only a READER sets (on a
+// member of an event envelope, and on a member republished alone); they are nil on everything a
+// producer writes and are left out so the literals - computed before the lwm2m split, which is
+// the proof - are not re-pinned each time Message gains a field that only a consumer sets. A
+// message that DID carry one would print it, and fail.
+// readerOnlyFields matches the nil pointers Message prints for what only a reader sets.
+var readerOnlyFields = regexp.MustCompile(`, (member|split):\(\*messaging\.\w+\)\(nil\)`)
+
+func publishedForm(m messaging.Message) string {
+	return readerOnlyFields.ReplaceAllString(fmt.Sprintf("%#v", m), "")
 }
 
 func TestGoldenLwm2mEmitWritesUnchanged(t *testing.T) {

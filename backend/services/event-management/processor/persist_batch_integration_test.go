@@ -56,7 +56,7 @@ func newPgBatchRig(t *testing.T, instance string, maxBatch int) *pgBatchRig {
 	r := &pgBatchRig{api: api, mgr: mgr, acks: &ackLog{api: api}}
 	r.ep = &EventPersistenceWorker{Api: api, MaxBatch: maxBatch,
 		Invalid: func(err error, _ messaging.Message) { t.Errorf("unexpected invalid message: %v", err) },
-		Failed: func(tenant string, reason uint, ev resolvedevent.ResolvedEvent, _ error, _ string) {
+		Failed: func(tenant string, reason uint, ev resolvedevent.ResolvedEvent, _ error, _, _ string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			r.failures = append(r.failures, failure{tenant: tenant, reason: reason, device: ev.SourceDeviceToken})
@@ -363,7 +363,7 @@ func BenchmarkPersistBatch(b *testing.B) {
 			newWorker := func(ch <-chan messaging.Message) *EventPersistenceWorker {
 				return &EventPersistenceWorker{Api: api, Unpersisted: ch, MaxBatch: batch,
 					Invalid: func(err error, _ messaging.Message) { failed.Store("invalid", err) },
-					Failed: func(_ string, _ uint, _ resolvedevent.ResolvedEvent, err error, _ string) {
+					Failed: func(_ string, _ uint, _ resolvedevent.ResolvedEvent, err error, _, _ string) {
 						failed.Store("failed", err)
 					}}
 			}

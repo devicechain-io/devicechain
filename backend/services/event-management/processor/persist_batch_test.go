@@ -70,7 +70,7 @@ func newBatchRig(t *testing.T, maxBatch int) *batchRig {
 		defer r.mu.Unlock()
 		r.invalid++
 	}
-	ep.Failed = func(tenant string, reason uint, ev resolvedevent.ResolvedEvent, _ error, _ string) {
+	ep.Failed = func(tenant string, reason uint, ev resolvedevent.ResolvedEvent, _ error, _, _ string) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.failures = append(r.failures, failure{tenant: tenant, reason: reason, device: ev.SourceDeviceToken})
