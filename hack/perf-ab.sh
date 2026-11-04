@@ -153,14 +153,14 @@ say "arm=$arm context=$kctx namespace=$ns -> $run_dir"
 # ---------------------------------------------------------------------------
 sims=()
 cleaned=0
-# shellcheck disable=SC2329 # run from cleanup, which runs from the EXIT trap
+# shellcheck disable=SC2317,SC2329 # run from cleanup, which runs from the EXIT trap
 stop_load() { # kill every dc-loadtest* process in the pod, by name, and nothing else
   k exec -n "$ns" "$loadgen" -- sh -c 'for p in /proc/[0-9]*; do
       c="$(tr "\0" " " < "$p/cmdline" 2>/dev/null)"
       case "$c" in /rc/bin/dc-loadtest*) kill "${p#/proc/}" 2>/dev/null;; esac
     done; true' >/dev/null 2>&1 || true
 }
-# shellcheck disable=SC2329 # the EXIT trap
+# shellcheck disable=SC2317,SC2329 # the EXIT trap (shellcheck versions name it differently)
 cleanup() {
   [[ "$cleaned" == 1 ]] && return 0
   cleaned=1
