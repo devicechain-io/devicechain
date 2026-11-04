@@ -60,6 +60,9 @@ type reconcileRun struct {
 	configPath string
 	areas      []string
 	timeout    time.Duration
+	// allowShrink lets the reconcile lower a per-event stream's ceiling below what it holds,
+	// discarding its oldest messages at once. Off unless asked for: see messaging.shrinkRefusal.
+	allowShrink bool
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, out io.Writer) error {
@@ -89,6 +92,7 @@ func parseReconcile(args []string, getenv func(string) string) (*reconcileRun, e
 	fs.StringVar(&areas, "areas", "", "comma-separated functional areas the installation deploys")
 	fs.StringVar(&r.configPath, "config", core.InstanceConfigPath, "the instance configuration document")
 	fs.DurationVar(&r.timeout, "timeout", 8*time.Minute, "how long the whole reconcile may take, including waiting for a retention migration to drain")
+	fs.BoolVar(&r.allowShrink, "allow-ceiling-shrink", false, "allow lowering the byte or message ceiling of inbound-events, resolved-events or the device capture stream below what it holds, which discards its oldest messages (including unread ones) at once")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -120,6 +124,9 @@ func (r *reconcileRun) run(ctx context.Context, getenv func(string) string, out 
 	defer cancel()
 
 	admin := messaging.NewBrokerAdmin(ms)
+	if r.allowShrink {
+		admin.AllowCeilingShrink()
+	}
 	if err := admin.ExecuteInitialize(ctx); err != nil {
 		return fmt.Errorf("connecting to the broker as the broker administrator: %w", err)
 	}

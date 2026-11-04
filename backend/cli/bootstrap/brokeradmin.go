@@ -140,6 +140,9 @@ type ReconcileBrokerOptions struct {
 	Options
 	// Out receives the administrator's log. Defaults to discarding it.
 	Out io.Writer
+	// AllowCeilingShrink passes --allow-ceiling-shrink to the administrator, so it may lower a
+	// per-event stream's ceiling below what the stream holds (discarding its oldest messages).
+	AllowCeilingShrink bool
 }
 
 // ReconcileBroker runs the broker administrator again for an installed instance and waits for it.
@@ -181,6 +184,11 @@ func ReconcileBroker(ctx context.Context, opts ReconcileBrokerOptions) error {
 	_, _, typed, err := kubeClients(binding.KubeContext)
 	if err != nil {
 		return fmt.Errorf("connecting to the cluster: %w", err)
+	}
+	if opts.AllowCeilingShrink {
+		for i := range job.Spec.Template.Spec.Containers {
+			job.Spec.Template.Spec.Containers[i].Args = append(job.Spec.Template.Spec.Containers[i].Args, "--allow-ceiling-shrink")
+		}
 	}
 	return runBrokerAdminJob(ctx, typed, job, copies, out)
 }

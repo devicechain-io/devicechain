@@ -78,6 +78,11 @@ func NewBrokerAdmin(ms *core.Microservice) *NatsManager {
 	return nmgr
 }
 
+// AllowCeilingShrink lets this administrator lower a per-event stream's byte or message ceiling
+// below what the stream holds now (see shrinkRefusal). It is the explicit override of a refusal
+// that otherwise protects unread events; dc-broker-admin sets it from --allow-ceiling-shrink.
+func (nmgr *NatsManager) AllowCeilingShrink() { nmgr.allowCeilingShrink = true }
+
 // Close ends the administrator's connection as an orderly close, which the liveness handlers do
 // not mistake for a death.
 func (nmgr *NatsManager) Close() { nmgr.closeConn() }

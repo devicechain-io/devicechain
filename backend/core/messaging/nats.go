@@ -170,6 +170,9 @@ type NatsManager struct {
 	// create, reconfigure and delete streams and buckets (admin.go). Every other manager over
 	// a deployed microservice only verifies them.
 	admin bool
+	// allowCeilingShrink lifts the refusal to lower a per-event stream's ceiling below what it
+	// holds (shrinkRefusal). Only the administrator reads it.
+	allowCeilingShrink bool
 	// reconciled, when set, is told what each reconcile did (admin.go).
 	reconciled func(kind, name, action string)
 
@@ -653,7 +656,7 @@ type streamBounds struct {
 // idempotent.
 func (nmgr *NatsManager) streamBounds(suffix string) streamBounds {
 	c := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
-	b := streamBounds{maxBytes: c.StreamMaxBytesFor(suffix), maxMsgs: c.StreamMaxMsgs, maxMsgSize: c.StreamMaxMsgSize}
+	b := streamBounds{maxBytes: c.StreamMaxBytesFor(suffix), maxMsgs: c.StreamMaxMsgsFor(suffix), maxMsgSize: c.StreamMaxMsgSize}
 	if b.maxMsgs <= 0 {
 		b.maxMsgs = config.DefaultStreamMaxMsgs
 	}
@@ -958,6 +961,10 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 				return nil
 			}
 			cfg := info.Config
+			if msg := shrinkRefusal(suffix, name, info.Config, bounds, info.State); msg != "" && !nmgr.allowCeilingShrink {
+				refused = errors.New(msg)
+				return nil
+			}
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
 			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)

@@ -89,6 +89,9 @@ spec:
             - reconcile
             - --areas={{ include "devicechain.enabledAreas" $root }}
             - --timeout={{ sub (int $admin.activeDeadlineSeconds) 30 }}s
+            {{- if $admin.allowCeilingShrink }}
+            - --allow-ceiling-shrink
+            {{- end }}
           env:
             - name: DC_INSTANCE_ID
               value: {{ $root.Values.instance.id | quote }}

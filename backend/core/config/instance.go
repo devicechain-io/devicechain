@@ -71,6 +71,38 @@ type NatsConfiguration struct {
 	// every control-plane stream for a load it will never see.
 	StreamMaxBytes     int64
 	StreamMaxBytesCold int64
+	// StreamDesignRate and StreamRunwayMinutes size the streams that carry one message per
+	// ingested event (those that declare streams.Stream.RunwayBytesPerMessage: inbound-events,
+	// resolved-events and the device-events capture stream) BY TIME instead of by a flat byte
+	// count.
+	//
+	// THE CEILING IS THE OUTAGE RUNWAY. While the event store, a consumer or a whole service is
+	// down, these streams are where events wait, and the history they keep is how far back rule
+	// preview and detection replay can reach. How long that lasts is ceiling / (rate x bytes per
+	// event): a flat 1 GiB held resolved-events for 2.8 minutes at 20,000 events a second.
+	//
+	// So each such stream gets AT LEAST StreamDesignRate x StreamRunwayMinutes x its per-event
+	// cost; StreamMaxBytes remains the floor (the larger of the two applies), and the message
+	// count ceiling StreamMaxMsgs is raised to rate x runway the same way, so neither limit cuts
+	// the runway short. StreamDesignRate is the events a second the INSTANCE is expected to
+	// ingest at its peak, in total, across tenants. It is not enforced as a rate limit: it is
+	// the rate the disk is sized for.
+	//
+	// Fail-closed: a value outside the bounds is refused by Validate. The bytes are reserved UP
+	// FRONT like every other ceiling, so a runway the JetStream volume cannot hold is refused by
+	// `dcctl bootstrap` before anything is written, naming the runway as the cause (the
+	// reservation precheck). Read through StreamMaxBytesFor, StreamMaxMsgsFor and
+	// StreamRunwayFor.
+	//
+	// A rate of 0 or an absent key means the streams are NOT sized by time and keep their
+	// byte ceilings alone, exactly as before this key existed. ApplyDefaults deliberately does
+	// not fill it: an instance whose document predates the key, or one sized small by hand
+	// (--compact), or run from the chart without dcctl, must not have its reservation raised by
+	// an upgrade it did not ask for. The chart's own default is 0 for the same reason; dcctl states
+	// DefaultStreamDesignRate for the standard profile and its own rate for --compact, because it
+	// checks the reservation against the volume, so an instance dcctl manages is sized by time.
+	StreamDesignRate    int64
+	StreamRunwayMinutes int
 	// MqttStoreMaxBytes bounds each of the MQTT gateway's OWN JetStream streams
 	// ($MQTT_msgs, $MQTT_out). nats-server creates them with no size limit at all
 	// and offers no option to bound them, yet they sit in the same account and
@@ -1132,6 +1164,26 @@ const (
 	DefaultStreamMaxBytesCold int64 = 128 << 20 // 128 MiB per control-plane stream
 	DefaultStreamMaxMsgs      int64 = 5_000_000 // 5M messages per stream
 	DefaultStreamMaxMsgSize   int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
+	// DefaultStreamDesignRate is the ingest rate, in events a second across the instance, the
+	// standard dcctl profile states for the hot event streams. ApplyDefaults does not apply it
+	// (see NatsConfiguration.StreamDesignRate); dcctl does, and a test holds the two together.
+	// At the default runway it asks for less disk than DefaultStreamMaxBytes already gives, so
+	// a default install keeps its 1 GiB ceiling; raise it, with the JetStream volume, for a
+	// busier instance.
+	DefaultStreamDesignRate int64 = 1000
+	// DefaultStreamRunwayMinutes is how long the hot event streams are sized to hold events at
+	// the design rate while a consumer or the database is down.
+	DefaultStreamRunwayMinutes = 15
+	// MaxStreamDesignRate bounds StreamDesignRate. It is not a platform limit; it keeps the
+	// arithmetic far from overflow and a mistyped extra zero from reserving a petabyte.
+	MaxStreamDesignRate int64 = 1_000_000
+	// MaxStreamRunwayMinutes is the longest runway that can be honoured: the streams' own
+	// 7-day age window (messaging streamMaxAge) discards anything older whatever the ceiling.
+	MaxStreamRunwayMinutes = 7 * 24 * 60
+	// MinStreamRunwayMinutes is the shortest runway accepted. The alerts that warn the runway is
+	// running out predict from five minutes of samples and must fire before the platform stops
+	// accepting events at 90% of the stream; on a runway shorter than this they cannot.
+	MinStreamRunwayMinutes = 10
 	// DefaultMqttStoreMaxBytes bounds each MQTT gateway stream. Sized as a
 	// working buffer, not a retention window: $MQTT_msgs drains as the QoS-1
 	// subscriber acks, so it holds in-flight messages rather than history. It is
@@ -1246,6 +1298,13 @@ func (c *NatsConfiguration) MqttMessageStoreMaxBytes() int64 {
 
 func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
 	tier := c.tierMaxBytesFor(suffix)
+	// A stream sized by time is never smaller than its runway. The larger of the tier and the
+	// runway wins, so the tier stays the floor an operator already sized a deployment with
+	// (and --compact runs far below the defaults), and the runway only ever RAISES a ceiling
+	// when the configured rate and window need more than the tier gives.
+	if run := c.StreamRunwayBytes(suffix); run > tier {
+		tier = run
+	}
 	// A stream may cap itself BELOW its tier — for one whose tier is right but whose
 	// tier ceiling does not fit the budget. The tier says what drives the volume,
 	// which is a different question from how much disk there is to give it.
@@ -1263,6 +1322,92 @@ func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
 		return cap
 	}
 	return tier
+}
+
+// StreamRunwaySeconds is the outage runway the hot event streams are sized for, in seconds,
+// or 0 when the instance is not runway-sized (no design rate or no window).
+func (c *NatsConfiguration) StreamRunwaySeconds() int64 {
+	if c.StreamDesignRate <= 0 || c.StreamRunwayMinutes <= 0 {
+		return 0
+	}
+	return int64(c.StreamRunwayMinutes) * 60
+}
+
+// StreamRunwayBytes is the disk the runway asks of a suffix's stream: design rate x runway x
+// the stream's per-event cost. 0 for a stream not sized by time, or an instance with no design
+// rate. It is the runway alone: StreamMaxBytesFor is what the stream is actually given.
+func (c *NatsConfiguration) StreamRunwayBytes(suffix string) int64 {
+	per, secs := streams.RunwayBytesPerMessageFor(suffix), c.StreamRunwaySeconds()
+	if per <= 0 || secs <= 0 {
+		return 0
+	}
+	return c.StreamDesignRate * secs * per
+}
+
+// StreamMaxMsgsFor is the message-count ceiling for a suffix: StreamMaxMsgs, or the number of
+// events the runway holds when that is larger and the stream is sized by time. A count ceiling
+// that bound first would cut the runway short just as a byte ceiling would.
+func (c *NatsConfiguration) StreamMaxMsgsFor(suffix string) int64 {
+	base := c.StreamMaxMsgs
+	if base <= 0 {
+		base = DefaultStreamMaxMsgs
+	}
+	if streams.RunwayBytesPerMessageFor(suffix) > 0 {
+		if run := c.StreamDesignRate * c.StreamRunwaySeconds(); run > base {
+			return run
+		}
+	}
+	return base
+}
+
+// StreamRunwayFor is how long a suffix's stream holds events at the design rate, given the
+// ceilings it is actually created with: the tighter of its byte and message ceilings. It is
+// at least the configured runway, and longer when the byte floor is larger than the runway
+// needs. 0 for a stream not sized by time, or an instance with no design rate.
+func (c *NatsConfiguration) StreamRunwayFor(suffix string) time.Duration {
+	per := streams.RunwayBytesPerMessageFor(suffix)
+	if per <= 0 || c.StreamDesignRate <= 0 {
+		return 0
+	}
+	byBytes := float64(c.StreamMaxBytesFor(suffix)) / float64(c.StreamDesignRate*per)
+	byMsgs := float64(c.StreamMaxMsgsFor(suffix)) / float64(c.StreamDesignRate)
+	return time.Duration(min(byBytes, byMsgs) * float64(time.Second))
+}
+
+// RunwayReservation is the disk the runway adds to the up-front reservation: for every stream
+// sized by time, what its ceiling exceeds the tier's by. Zero while the tier already covers
+// the runway, which is how a default install keeps the reservation it always had.
+func (c *NatsConfiguration) RunwayReservation() int64 {
+	var extra int64
+	for _, s := range streams.RunwaySuffixes() {
+		if d := c.StreamMaxBytesFor(s) - c.tierMaxBytesFor(s); d > 0 {
+			extra += d
+			// With fail-closed MQTT the gateway's message store is sized from the capture
+			// stream's ceiling (MqttMessageStoreMaxBytes), so it carries the same extra.
+			if c.MqttFailClosed && s == streams.DeviceEventsCapture {
+				extra += d
+			}
+		}
+	}
+	return extra
+}
+
+// validateRunway rejects a design rate or runway that cannot be honoured.
+func (c *NatsConfiguration) validateRunway() error {
+	if c.StreamDesignRate < 0 || c.StreamDesignRate > MaxStreamDesignRate {
+		return fmt.Errorf("infrastructure.nats.streamDesignRate is %d; it must be between 1 and %d events a "+
+			"second (0 or absent leaves the streams sized by their byte ceilings alone)",
+			c.StreamDesignRate, MaxStreamDesignRate)
+	}
+	if c.StreamRunwayMinutes < 0 || c.StreamRunwayMinutes > MaxStreamRunwayMinutes ||
+		(c.StreamRunwayMinutes > 0 && c.StreamRunwayMinutes < MinStreamRunwayMinutes) {
+		return fmt.Errorf("infrastructure.nats.streamRunwayMinutes is %d; it must be between %d and %d "+
+			"(0 or absent means %d). Under %d minutes the alerts that warn the runway is running out cannot "+
+			"fire before the platform stops accepting events, and the streams discard anything older than "+
+			"7 days whatever their size, so a longer runway cannot be held", c.StreamRunwayMinutes,
+			MinStreamRunwayMinutes, MaxStreamRunwayMinutes, DefaultStreamRunwayMinutes, MinStreamRunwayMinutes)
+	}
+	return nil
 }
 
 // tierMaxBytesFor is the ceiling a suffix's TIER alone would give it, before any
@@ -1321,6 +1466,9 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 	if nats.StreamMaxBytesCold <= 0 {
 		nats.StreamMaxBytesCold = DefaultStreamMaxBytesCold
+	}
+	if nats.StreamRunwayMinutes == 0 {
+		nats.StreamRunwayMinutes = DefaultStreamRunwayMinutes
 	}
 	if nats.StreamMaxMsgs <= 0 {
 		nats.StreamMaxMsgs = DefaultStreamMaxMsgs
@@ -1433,6 +1581,9 @@ func (c *InstanceConfiguration) Validate() error {
 		return err
 	}
 	if err := c.Infrastructure.Nats.validateStreamReplicas(); err != nil {
+		return err
+	}
+	if err := c.Infrastructure.Nats.validateRunway(); err != nil {
 		return err
 	}
 	if err := c.Infrastructure.Nats.Fetch.validate(); err != nil {
