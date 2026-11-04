@@ -4,11 +4,10 @@
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/eventidentity"
+	"github.com/devicechain-io/dc-microservice/eventidentity/eventid"
 )
 
 // The canonical preimage of each payload table's row identity, and of the base event's,
@@ -169,14 +168,8 @@ func DeriveAlertPayloadId(request *AlertEventCreateRequest) ([]byte, error) {
 // existed, which is what every stored event's id was derived from. Both callers come
 // through here, so neither can forget the filter.
 func DeriveEventIdForPayload(tenantId string, event *Event, payload any) ([]byte, error) {
-	// The common shapes are written straight into the digest input (identity_bytes.go),
-	// byte-identical to the json.Marshal document below; anything else takes that path.
-	if id, ok := deriveEventIdFast(tenantId, event, payload); ok {
-		return id, nil
-	}
-	encoded, err := json.Marshal(eventidentity.Payload(payload))
-	if err != nil {
-		return nil, fmt.Errorf("canonicalizing payload for the event identity: %w", err)
-	}
-	return DeriveEventId(tenantId, event, encoded), nil
+	// The derivation is core/eventidentity/eventid's, shared with event-processing's duplicate
+	// guard: the common shapes are written straight into the digest input, byte-identical to
+	// the json.Marshal document; anything else takes that path.
+	return eventid.Derive(tenantId, eventidEvent(event), payload)
 }

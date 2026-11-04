@@ -137,6 +137,22 @@
                     }
                   }
                 },
+                "messaging": {
+                  "type": "object",
+                  "description": "How the services write events to the retained streams. The chart validates only the key named below; the services validate the rest at startup.",
+                  "properties": {
+                    "envelopes": {
+                      "type": "object",
+                      "description": "Event envelopes: several events of one tenant in one message on the resolved-events stream.",
+                      "properties": {
+                        "resolved": {
+                          "type": "boolean",
+                          "description": "Whether device-management writes resolved events as envelopes. False by default. Turn it on only once every pod runs a release that reads envelopes and carries the detection engine's duplicate guard (v1.1.0 or later). dcctl records when it is turned on and what the streams held when it is turned off, and refuses to move the instance to an earlier release while envelopes may remain."
+                        }
+                      }
+                    }
+                  }
+                },
                 "nats": {
                   "type": "object",
                   "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",

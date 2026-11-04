@@ -56,6 +56,19 @@ func TestSkipInfrastructureIsOffByDefaultAndReachesTheUpgrade(t *testing.T) {
 	}
 }
 
+// The envelope-downgrade override is off by default and reaches the upgrade.
+func TestAllowEnvelopeDowngradeIsOffByDefaultAndReachesTheUpgrade(t *testing.T) {
+	f := upgradeCmd.Flags().Lookup("allow-envelope-downgrade")
+	if f == nil || f.DefValue != "false" {
+		t.Fatalf("--allow-envelope-downgrade = %v; it must exist and default to false", f)
+	}
+	upgradeAllowEnvelopeDowngrade = true
+	t.Cleanup(func() { upgradeAllowEnvelopeDowngrade = false })
+	if !upgradeOptions("i", nil, nil).AllowEnvelopeDowngrade {
+		t.Error("the flag does not reach UpgradeOptions.AllowEnvelopeDowngrade")
+	}
+}
+
 // --values is on both verbs, repeatable, and --reset-values is on upgrade only.
 func TestValuesFlagsAreOnTheVerbsThatTakeThem(t *testing.T) {
 	for name, cmd := range map[string]*cobra.Command{"upgrade": upgradeCmd, "bootstrap": bootstrapCmd} {

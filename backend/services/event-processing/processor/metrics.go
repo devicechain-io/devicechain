@@ -86,8 +86,16 @@ type DetectMetrics struct {
 	// label would be unbounded). A refusal by the erasure fence is not counted here.
 	ruleStatWriteFailures prometheus.Counter
 	lateSamplesTotal      prometheus.Counter
-	derivedPublished      prometheus.Counter
-	derivedRejected       *prometheus.CounterVec
+	// duplicateSkippedTotal counts events (a legacy message or an envelope member) skipped because
+	// an event with the same identity was already applied inside the guard's window.
+	duplicateSkippedTotal prometheus.Counter
+	// The duplicate guard's priming at a term build: how long it took, how many events it read,
+	// and how often the stream no longer reached back the whole retention.
+	guardPrimeSeconds      prometheus.Gauge
+	guardPrimeEventsTotal  prometheus.Counter
+	guardPrimePartialTotal prometheus.Counter
+	derivedPublished       prometheus.Counter
+	derivedRejected        *prometheus.CounterVec
 
 	// Slice-4c idle-advance counters (ADR-051 observability thread). Bounded cardinality
 	// (no labels). idleAdvancesTotal counts wall-clock idle advances that PRODUCED at least one
@@ -230,13 +238,17 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal)."),
 		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work)."),
 
-		rulesActive:           ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
-		fanoutEventsTotal:     ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
-		fanoutEvalErrors:      ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
-		ruleStatWriteFailures: ms.NewCounter("detect_rule_stat_write_failures_total", "Rule-health fire counter batch writes (one tenant's transaction) that failed or timed out and were discarded, not retried. Detection is unaffected (the counters are written off the detection loop), but the console's rule-health counts fall short while this rises; the fires lost are in detect_rule_stat_updates_discarded_total with reason write_failed, and the cause is in the service log."),
-		lateSamplesTotal:      ms.NewCounter("detect_late_samples_total", "Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading from inside the run of an alarm already raised, older than the raise. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
-		derivedPublished:      ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
-		derivedRejected:       ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
+		rulesActive:            ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
+		fanoutEventsTotal:      ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
+		fanoutEvalErrors:       ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
+		ruleStatWriteFailures:  ms.NewCounter("detect_rule_stat_write_failures_total", "Rule-health fire counter batch writes (one tenant's transaction) that failed or timed out and were discarded, not retried. Detection is unaffected (the counters are written off the detection loop), but the console's rule-health counts fall short while this rises; the fires lost are in detect_rule_stat_updates_discarded_total with reason write_failed, and the cause is in the service log."),
+		duplicateSkippedTotal:  ms.NewCounter("detect_duplicate_events_skipped_total", "Events DETECT skipped because an event with the same identity (tenant, device, type, occurred time, alternate id, payload) was already applied inside the recent window: a duplicate the resolved stream delivered under a second sequence, such as a republish across a rolling upgrade or a residual of envelope settlement. Each is an event that would otherwise have been applied twice. A sustained non-zero rate means something upstream is storing events twice."),
+		guardPrimeSeconds:      ms.NewGauge("detect_guard_prime_seconds", "Wall-clock seconds the last term build spent reading the stream to prime the duplicate-event guard. Zero until a build primed one. It is the part of a leader change that grows with the event rate."),
+		guardPrimeEventsTotal:  ms.NewCounter("detect_guard_prime_events_total", "Events read from the stream to prime the duplicate-event guard, summed over term builds."),
+		guardPrimePartialTotal: ms.NewCounter("detect_guard_prime_partial_total", "Term builds whose priming found the stream no longer reaching back the guard's whole retention (the oldest message is newer than the retention before the restored position and is not the first ever written). A duplicate of an event older than that is applied twice. Non-zero means stream retention is shorter than the redelivery span."),
+		lateSamplesTotal:       ms.NewCounter("detect_late_samples_total", "Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading from inside the run of an alarm already raised, older than the raise. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
+		derivedPublished:       ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
+		derivedRejected:        ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 
 		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection."),
 		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence)."),
@@ -814,6 +826,26 @@ func (m *DetectMetrics) recordIdleAdvance(dets int) {
 	}
 	m.idleAdvancesTotal.Inc()
 	m.idleDetectionsTotal.Add(float64(dets))
+}
+
+// recordGuardPrimed records one priming of the duplicate guard.
+func (m *DetectMetrics) recordGuardPrimed(seconds float64, events int, partial bool) {
+	if m == nil {
+		return
+	}
+	m.guardPrimeSeconds.Set(seconds)
+	m.guardPrimeEventsTotal.Add(float64(events))
+	if partial {
+		m.guardPrimePartialTotal.Inc()
+	}
+}
+
+// recordDuplicateSkipped records one event skipped by the applied-event guard.
+func (m *DetectMetrics) recordDuplicateSkipped() {
+	if m == nil {
+		return
+	}
+	m.duplicateSkippedTotal.Inc()
 }
 
 // recordApplied records one resolved event that advanced the engine.

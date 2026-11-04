@@ -98,6 +98,11 @@ var tunableValues = []string{
 	"instance.config.infrastructure.nats.streamMaxBytes",
 	"instance.config.infrastructure.nats.streamMaxBytesCold",
 	"instance.config.infrastructure.nats.streamMaxMsgs",
+	// Whether device-management writes resolved events as envelopes. A capacity dial, off by
+	// default; dcctl records when it is turned on and what the streams held when it is turned
+	// off, because that is what makes a later move to a release that cannot read envelopes
+	// exact (envelopedowngrade.go).
+	"instance.config.infrastructure.messaging.envelopes.resolved",
 	// The one upgrade that deliberately shortens the runway sets this and then unsets it; left
 	// on, every later upgrade could discard unread events.
 	"brokerAdmin.allowCeilingShrink",

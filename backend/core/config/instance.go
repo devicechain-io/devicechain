@@ -844,13 +844,21 @@ type MessagingConfiguration struct {
 	// 🔴 SET RESOLVED ONLY AFTER EVERY POD RUNS A RELEASE THAT READS ENVELOPES. A pod on an
 	// older release cannot read one and dead-letters it; upgrade every pod first, then enable.
 	// Set it false again, and wait for the streams to hold no envelope, before rolling back
-	// below that release.
+	// below that release: `dcctl upgrade` records when the switch is turned on and what the
+	// streams held when it is turned off, and refuses such a move until every hot stream's oldest
+	// message is past that mark (and while a sample of them holds an envelope).
 	//
-	// 🔴 DO NOT ENABLE Resolved BEFORE event-processing's per-member DETECT guard (slice E4) and
-	// the settlement fixes of this producer ship together: an event the settlement protocol
-	// stores twice is applied twice by DETECT. Known residual: a recreated or renamed inbound
-	// durable resets every source's delivery count to 1, so a source redelivered across that
-	// change is not recognised as a redelivery and can be stored a second time.
+	// 🔴 THE DETECT GUARD NOW EXISTS, AND IT IS ON ONLY WITH THIS SWITCH. Event-processing then
+	// remembers the identity of every event it applied for the platform's redelivery span (ten
+	// minutes of broker append time, streams.RedeliveryDuplicateWindowSeconds) and skips a second
+	// copy (detect_duplicate_events_skipped_total), so an event the settlement protocol stores
+	// twice is not applied twice inside that span. With the switch off DETECT builds, primes and
+	// consults nothing. Turn Resolved on once EVERY pod runs a release with the readers AND the
+	// guard (the same release); it stays false by default. Known residual the guard does not
+	// cover: a recreated or renamed inbound durable resets every source's delivery count to 1 and
+	// redelivers from its start, so a source redelivered across that change can be stored a
+	// second time MORE than ten minutes after its first copy; event-management and device-state
+	// absorb it, DETECT applies it.
 	Envelopes EnvelopesConfiguration
 }
 

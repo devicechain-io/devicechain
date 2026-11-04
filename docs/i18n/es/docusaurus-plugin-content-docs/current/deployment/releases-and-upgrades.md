@@ -690,6 +690,56 @@ la clave. Forma parte de la configuración montada, como el
 - **Volver atrás a `v0.22.0` o anterior** requiere establecer `legacy` primero, y que los
   consumidores hayan vaciado de los flujos todo mensaje `compact`.
 
+### Sobres de eventos {#event-envelopes}
+
+Un sobre de eventos lleva varios eventos de un mismo tenant en un único mensaje del flujo
+resolved-events, en lugar de un mensaje por evento. Reduce el trabajo que hace el bróker por evento.
+Se activa con `infrastructure.messaging.envelopes.resolved` (en un archivo de valores, como
+`instance.config.infrastructure.messaging.envelopes.resolved`; consulte [Ajustar una instancia](./tuning-an-instance.md)),
+y **está desactivado por defecto**. Leer no es un interruptor: desde `v1.1.0` todos los servicios
+leen sobres y mensajes de un solo evento por igual, sea cual sea el valor; el valor solo decide si
+device-management los escribe.
+
+- **Cuándo es seguro activarlo.** Cuando todos los pods de la instancia ejecutan `v1.1.0` o
+  posterior, y no antes. Un pod de una versión anterior no puede leer un sobre y lo aparta como
+  fallido, y los eventos que contiene se pierden para ese pod. Actualice primero, espere a que todos
+  los pods se hayan renovado y entonces establezca el valor.
+- **Qué hace el motor de detección con un duplicado.** En casos raros, como una confirmación
+  perdida durante un reintento, un evento llega dos veces al flujo. El almacenamiento de eventos y
+  el estado de los dispositivos ya lo absorben. Con el valor activado, el motor de detección
+  también recuerda la identidad de cada evento que aplicó durante los últimos diez minutos
+  aproximadamente de tiempo del bróker (el intervalo de reentrega de la propia plataforma), omite
+  una segunda copia y la cuenta en `detect_duplicate_events_skipped_total`. Una tasa sostenida
+  distinta de cero significa que algo aguas arriba está almacenando eventos dos veces. Con el valor
+  desactivado el motor de detección no guarda esa memoria y su coste y comportamiento no cambian.
+  La identidad es la que usa el almacenamiento de eventos, de modo que dos lecturas idénticas de un
+  mismo dispositivo en el mismo nanosegundo se cuentan una sola vez en ambos.
+- **Qué cuesta.** Con unos 20 000 eventos por segundo la memoria guarda unos 12 millones de
+  identidades, unos 180 MB, solo en el líder de detección (un suplente la construye al asumir el
+  cargo); con 5 000 eventos por segundo, unos 45 MB. Por encima de unos 25 000 eventos por segundo
+  se aplica un tope y la memoria cubre menos de diez minutos (unos 2,7 minutos con 100 000 por
+  segundo). Tras un reinicio o un cambio de líder, el motor de detección vuelve a leer los últimos
+  diez minutos del flujo antes de continuar, así que ese paso tarda más en un flujo con mucho
+  tráfico; se informa en `detect_guard_prime_seconds` y `detect_guard_prime_events_total`, y
+  `detect_guard_prime_partial_total` cuenta las veces que el flujo ya no llegaba tan atrás.
+- **Qué no cubre.** Una copia que llega más de diez minutos después de la primera, por ejemplo
+  cuando se recrea un consumidor de entrada y vuelve a entregar desde su inicio, el motor de
+  detección la aplica una segunda vez, lo que puede contarla dos veces en una regla de conteo o de
+  ventana.
+- **Desactivarlo.** Establezca el valor en `false`. Los sobres que ya están en el flujo permanecen
+  hasta que caducan o se consumen, y se siguen leyendo.
+- **Pasar a una versión anterior a `v1.1.0`.** `dcctl upgrade` registra cuándo se activa el valor
+  y, cuando se desactiva, registra la posición del mensaje más reciente de los flujos de entrada y
+  resuelto. Pasar a una versión anterior a `v1.1.0` se rechaza mientras el valor esté activado,
+  mientras alguno de los flujos conserve un mensaje anterior a la desactivación, mientras falte el
+  registro de cuándo se desactivó (ejecute `dcctl upgrade` una vez más en la versión actual para
+  crearlo) y cuando se encuentra un sobre en una muestra de los flujos (el mensaje retenido más
+  antiguo y los 256 más recientes de cada uno, lo que también detecta un valor cambiado fuera de
+  `dcctl`). También se niega cuando no puede comprobarlo o cuando el destino no es una etiqueta de
+  versión. Una ejecución que no cambia de versión nunca se rechaza. `--allow-envelope-downgrade`
+  omite el rechazo con una advertencia: un servicio de la versión anterior aparta un sobre como
+  fallido y los eventos que contiene se pierden para ese servicio.
+
 ## Actualizar desde una versión anterior {#pre-declaration-recreate}
 
 <a id="v090-baseline-squash"></a>

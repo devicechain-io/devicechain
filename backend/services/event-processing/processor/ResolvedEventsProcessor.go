@@ -94,6 +94,14 @@ type Config struct {
 	// Lateness bounds how far event time is held back before advancing the watermark
 	// (out-of-orderness tolerance).
 	Lateness time.Duration
+	// AppliedGuard enables the duplicate-event guard (runtime.AppliedGuard). It follows
+	// infrastructure.messaging.envelopes.resolved: false builds, primes and consults nothing.
+	AppliedGuard bool
+	// AppliedMaxEntries overrides the guard's entry cap (tests). Zero means the default.
+	AppliedMaxEntries int
+	// AppliedRetention is how far back, in broker append time, the duplicate-event guard remembers an
+	// applied event (runtime.AppliedGuard). Zero means runtime.DefaultAppliedRetention.
+	AppliedRetention time.Duration
 	// IdleAdvanceGuard is how long the read loop must be quiet (no delivery) before the loop
 	// tests broker emptiness and, if caught up, advances the watermark off the wall clock so a
 	// silent series' absence/duration/session timer fires (ADR-051 slice 4c). It is one of
@@ -575,6 +583,12 @@ type ResolvedEventsProcessor struct {
 	// fill reads it around each message to tell a skipped poison message from an applied one,
 	// since applyResolved reports both as having advanced the engine.
 	poisonSkipped uint64
+	// applied is the duplicate-event guard (runtime.AppliedGuard): loop-owned, rebuilt by every
+	// term build (primeApplied) and replaced wherever the engine is reset.
+	applied *runtime.AppliedGuard
+	// primedPartial records that the last priming found the stream no longer reaching back the
+	// guard's whole retention (primeApplied).
+	primedPartial bool
 	// stale latches when Save refuses a backward checkpoint (ErrStaleCheckpoint) — proof that
 	// another writer owns this partition (split-brain: a rolling-update overlap or operator
 	// error). A stale writer has no legitimate future, so the loop halts: this bounds its
@@ -1487,6 +1501,7 @@ func (rp *ResolvedEventsProcessor) applyFenceSet(fu fenceUpdate) {
 // ran before sharding existed.
 func (rp *ResolvedEventsProcessor) newDetector() detectcore.Detector {
 	rp.metrics.recordShards(max(rp.cfg.Shards, 1))
+	rp.applied = rp.newAppliedGuard()
 	if rp.cfg.Shards <= 1 {
 		return detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 	}
@@ -1498,6 +1513,7 @@ func (rp *ResolvedEventsProcessor) newDetector() detectcore.Detector {
 // the whole of what changing K takes.
 func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.Detector, error) {
 	rp.metrics.recordShards(max(rp.cfg.Shards, 1))
+	rp.applied = rp.newAppliedGuard() // primed by replayToHead
 	if rp.cfg.Shards <= 1 {
 		return detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, payload)
 	}
@@ -1545,6 +1561,12 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 // resets the engine to empty rather than replaying against sequences the stream no
 // longer holds.
 func (rp *ResolvedEventsProcessor) replayToHead() error {
+	// The duplicate guard first: it reads the stream before LastSeq, and the replay reader below
+	// is the last one opened (a snapshot ahead of the stream head primes nothing; the reset below
+	// replaces the guard with the engine).
+	if err := rp.primeApplied(); err != nil {
+		return err
+	}
 	startSeq := rp.engine.LastSeq() + 1
 	reader, head, err := rp.Replay.NewReplayReader(rp.cfg.Suffix, startSeq)
 	if err != nil {
@@ -1982,6 +2004,22 @@ func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant s
 // (the descope gate), and member says the event is one of an envelope's, whose sequence the
 // engine records after the first of them (Engine.ProcessReceivedMember).
 func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant string, event *resolvedevent.ResolvedEvent, prev uint64, member bool) bool {
+	// 🔴 AN EVENT ALREADY APPLIED IS SKIPPED, whatever sequence it arrived under (see
+	// runtime.AppliedGuard). It is handled exactly as a disabled device's event is: a member
+	// leaves the envelope's sequence to applyEnvelope, a legacy message records its own with
+	// Skip. This is the first thing the event meets, and primeApplied runs the same call over
+	// the window before LastSeq on a restart, so live and replay agree.
+	if rp.duplicateEvent(msg.AppendTime, tenant, event) {
+		rp.metrics.recordDuplicateSkipped()
+		if member {
+			return false
+		}
+		if rp.engine.Skip(msg.StreamSeq) {
+			rp.dirty = true
+			return true
+		}
+		return false
+	}
 	// 🔴 A DISABLED DEVICE'S EVENT IS SKIPPED WHOLE, NOT FED AS AN EMPTY PLAN. Plan already
 	// gives it no rule, but ProcessResolved with an empty batch still ADVANCES the shared
 	// watermark to its time — firing other devices' due timers and closing panes at this
