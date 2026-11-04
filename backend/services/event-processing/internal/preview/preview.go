@@ -198,6 +198,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		maxRead = DefaultMaxRead
 	}
 	engine := core.NewEngine(reg.Cores(), lateness)
+	applied := runtime.NewAppliedGuard(0, 0)
 	// The fence-set resolver for this preview: one memoizing reader over the frozen snapshots,
 	// scoped to this tenant for its whole life, so no replayed event can reach another tenant's
 	// fences however it is stamped.
@@ -278,6 +279,19 @@ replay:
 			// Only events resolved against the previewed profile version feed the draft rule (the same
 			// scope key the live fan-out uses).
 			if event.ProfileVersionToken != profileVersion {
+				continue
+			}
+			// An event already applied inside the guard's retention is not applied again, as live
+			// (runtime.AppliedGuard). Asked of the in-scope events only: the preview feeds one
+			// profile version's rules, so a copy stored under another version is not its duplicate.
+			//
+			// 🔴 THIS GUARD IS UNPRIMED AND VERSION-SCOPED, SO IT IS NOT LIVE'S. It starts empty at
+			// the window's lower edge (a duplicate whose original precedes the window is applied)
+			// and sees only the previewed version's events (live's sees all of them), so it can
+			// apply a duplicate that live would have refused. It errs toward applying, never toward
+			// dropping an event live applied; it exists so a replay of a window holding both
+			// copies does not count the event twice.
+			if id, ierr := runtime.EventIdentity(tenant, event); ierr == nil && !applied.Admit(msg.AppendTime, id) {
 				continue
 			}
 			// Already bounded at resolution and stored that way, so replay reads the SAME instant

@@ -221,6 +221,14 @@ type State struct {
 	TrustedProxies         []string
 	TrustedProxiesExplicit bool
 	TrustedProxiesChange   bool
+	// FromImageVersion is the image version the instance runs BEFORE an upgrade moves it, and
+	// EnvelopesResolvedOn is whether its deployed configuration has resolved event envelopes
+	// switched on. Both are read for the downgrade precheck (envelopedowngrade.go).
+	FromImageVersion    string
+	EnvelopesResolvedOn bool
+	// EnvelopesEnabledAt and EnvelopesOffMarks are the Instance's envelope annotations.
+	EnvelopesEnabledAt string
+	EnvelopesOffMarks  string
 	// ValuesOverlay is the operator's tuning overlay in effect for this run (--values, or the
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.

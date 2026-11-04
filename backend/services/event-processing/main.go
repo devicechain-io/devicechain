@@ -257,6 +257,10 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// reader) up to the head before consuming live, and applies live rule updates from the
 	// published-rule fact reader on the same loop.
 	cfg := detectProcessorConfig(Configuration)
+	// The duplicate-event guard exists for event envelopes and for nothing else: with them off,
+	// DETECT builds, primes and consults none.
+	env := Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes
+	cfg.AppliedGuard = env.Resolved || env.Inbound
 	// Its instruments were built once in afterMicroserviceInitialized and are handed in,
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.

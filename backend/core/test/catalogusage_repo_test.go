@@ -24,8 +24,10 @@ var dynamicCatalogUses = map[string][]string{
 	// DETECT's replay, live-gap fill and rule preview read the stream their configuration
 	// names, and event-processing's main sets it to resolved-events (main.go, Suffix:).
 	"event-processing/processor/ResolvedEventsProcessor.go#NewReplayReader": {streams.ResolvedEvents},
-	"event-processing/processor/live_gap.go#NewRangeReader":                 {streams.ResolvedEvents},
-	"event-processing/internal/preview/preview.go#NewReplayReaderFromTime":  {streams.ResolvedEvents},
+	// The duplicate guard's priming reads the same stream (processor/applied_guard.go).
+	"event-processing/processor/applied_guard.go#NewReplayReader":          {streams.ResolvedEvents},
+	"event-processing/processor/live_gap.go#NewRangeReader":                {streams.ResolvedEvents},
+	"event-processing/internal/preview/preview.go#NewReplayReaderFromTime": {streams.ResolvedEvents},
 }
 
 // catalogAliases name the constants that stand for a bucket in another package.

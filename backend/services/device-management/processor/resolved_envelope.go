@@ -17,8 +17,11 @@ import (
 // Resolved envelopes (infrastructure.messaging.envelopes.resolved): k resolved events of one
 // tenant in one message on resolved-events, in place of k messages.
 //
-// 🔴 DO NOT ENABLE THE FLAG before event-processing's per-member DETECT guard (E4) and these
-// fixes ship together: a duplicate that escapes the protocol is applied twice by DETECT.
+// 🔴 ENABLE THE FLAG ONLY WHEN EVERY POD RUNS A RELEASE WITH event-processing's DETECT guard
+// (runtime.AppliedGuard): a duplicate that escapes the protocol below is applied twice by DETECT
+// unless that guard sees it, and the guard remembers ten minutes of broker append time (the
+// platform's redelivery span, streams.RedeliveryDuplicateWindowSeconds, which covers retryGiveUp
+// and a bucket with room to spare).
 //
 // The settlement protocol - the id that names (source, round) and never the members, the
 // duplicate PubAck that names the stored original, the leader read-back, publishing only the

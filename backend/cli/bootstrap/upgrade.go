@@ -55,6 +55,10 @@ type UpgradeOptions struct {
 	// records the instance with them, at the version it is already on. See
 	// applyAreaChange.
 	EnableAreas []string
+
+	// AllowEnvelopeDowngrade skips the refusal to move below the first release that reads event
+	// envelopes while the streams may hold one. See envelopedowngrade.go.
+	AllowEnvelopeDowngrade bool
 }
 
 // Upgrade moves a live instance onto a release: its message broker and event store
@@ -241,6 +245,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
+	// 🔴 A MOVE BELOW THE FIRST RELEASE THAT READS EVENT ENVELOPES IS REFUSED WHILE THE HOT
+	// STREAMS MAY HOLD ONE, before the declaration is written. See envelopedowngrade.go.
+	if err := precheckEnvelopeDowngrade(ctx, st, opts.AllowEnvelopeDowngrade); err != nil {
+		return err
+	}
+
 	// 🔴 THE DECLARATION IS UPDATED BEFORE ANYTHING MOVES, AND BOTH HALVES OF THAT
 	// ARE DELIBERATE. See recordUpgradedVersion.
 	if err := recordUpgradedVersion(ctx, dyn, opts.Instance, st); err != nil {
@@ -277,6 +287,14 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	if opts.DryRun {
 		sayUpgradeDryRun(st)
 		return nil
+	}
+
+	// 🔴 TURNING ENVELOPES ON IS RECORDED BEFORE THE MOVE that turns them on, so a run that dies
+	// half-way still leaves the record that the instance may hold some. See envelopedowngrade.go.
+	if overlayEnvelopesOn(st.ValuesOverlay) {
+		if err := recordEnvelopesEnabled(ctx, dyn, opts.Instance, !st.EnvelopesResolvedOn); err != nil {
+			return err
+		}
 	}
 
 	// 🔴 THE OVERLAY IS RECORDED BEFORE THE MOVE, for the reason the version is: a run that
@@ -435,6 +453,15 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// broker. Warns and never fails: see brokerbalance.go.
 	if !st.DryRun && brokerRolled(brokerBefore, brokerPodUIDs(ctx, typed, InstanceNamespace(st.Instance))) {
 		runBrokerRebalance(ctx, st, typed)
+	}
+
+	// 🔴 WITH THE SWITCH OFF AND THE ROLLOUT DONE, no pod writes envelopes any more: this is the
+	// moment each hot stream's newest sequence is the mark every envelope sits at or below. A
+	// run that died before here leaves none, and the next run records one (a later mark is safe).
+	if !st.DryRun && !overlayEnvelopesOn(st.ValuesOverlay) {
+		if err := settleEnvelopeMarks(ctx, dyn, st); err != nil {
+			return err
+		}
 	}
 
 	if st.AreaChange != nil {

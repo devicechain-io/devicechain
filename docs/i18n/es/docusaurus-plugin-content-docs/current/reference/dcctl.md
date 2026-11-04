@@ -2033,6 +2033,7 @@ dcctl upgrade <provider> <instance> [flags]
 ### Options
 
 ```
+      --allow-envelope-downgrade        move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service
       --broker-max-connections int      cap the platform broker's simultaneous client connections (nats-server max_connections), devices and platform clients alike. It bounds a connection flood against the MQTT port when that is exposed (--mqtt-exposure): every connection costs a TLS handshake and, for a device, an authentication round trip. Size it above your fleet with headroom for a reconnect storm; devices past it are refused. 0 returns to the server's own limit, which is also what an instance that never set it has. Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted
       --drop-legacy-ingress             stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class
       --dry-run                         print what would happen without changing anything

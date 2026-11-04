@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"hash"
+
+	"github.com/devicechain-io/dc-microservice/eventidentity/eventid"
 )
 
 // EventIdSize is the width of a derived event identity in bytes (SHA-256).
@@ -63,30 +65,8 @@ const EventIdSize = sha256.Size
 // keys, so a map that survives to this point is stable. It is a map EXPANDED INTO A SLICE
 // upstream, which looks like a plain slice by the time it arrives here.
 func DeriveEventId(tenantId string, event *Event, canonicalPayload []byte) []byte {
-	h := sha256.New()
-	writeField(h, []byte(tenantId))
-	writeField(h, []byte(event.DeviceToken))
-
-	var eventType [8]byte
-	binary.BigEndian.PutUint64(eventType[:], uint64(event.EventType))
-	writeField(h, eventType[:])
-
-	var occurred [8]byte
-	binary.BigEndian.PutUint64(occurred[:], uint64(event.OccurredTime.UTC().UnixNano()))
-	writeField(h, occurred[:])
-
-	// An absent alternateId is distinguished from an empty one: a present-but-empty id is
-	// a claim the device made, absence is not, and collapsing them would let one stand in
-	// for the other.
-	if event.AltId.Valid {
-		writeField(h, []byte{1})
-		writeField(h, []byte(event.AltId.String))
-	} else {
-		writeField(h, []byte{0})
-	}
-
-	writeField(h, canonicalPayload)
-	return h.Sum(nil)
+	// One function, shared with event-processing's duplicate guard (core/eventidentity/eventid).
+	return eventid.Hash(tenantId, eventidEvent(event), canonicalPayload)
 }
 
 // DerivePayloadId computes one payload row's identity from its parent event and its own

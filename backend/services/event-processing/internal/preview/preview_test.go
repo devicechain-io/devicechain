@@ -129,6 +129,23 @@ func TestPreviewThresholdRaiseResolve(t *testing.T) {
 	}
 }
 
+// TestPreviewAppliesAnEventDeliveredTwiceOnce: the stream holds one event under two sequences (a
+// residual of envelope settlement); the preview counts and applies it once, as live does.
+func TestPreviewAppliesAnEventDeliveredTwiceOnce(t *testing.T) {
+	op := &fakeOpener{msgs: []messaging.Message{
+		msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base),
+		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base), // the same event, again
+		msg(t, 3, "acme", "d1", "p@1", "temperature", "91", base), // a different reading at the same instant
+	}}
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Stats.EventsScanned != 2 {
+		t.Fatalf("scanned = %d, want 2 (the repeated event counted once)", res.Stats.EventsScanned)
+	}
+}
+
 // TestPreviewFiltersTenantAndProfile: events from a different tenant or a different profile version
 // are ignored (not scanned, no firings).
 func TestPreviewFiltersTenantAndProfile(t *testing.T) {

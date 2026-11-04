@@ -193,6 +193,10 @@ func hydrateUpgradeState(
 				"finished — there is no running instance here to upgrade. Complete the bootstrap, "+
 				"or destroy the instance and build it again", opts.Instance)
 	}
+	st.FromImageVersion = inst.Spec.ImageVersion
+	st.EnvelopesEnabledAt = inst.Annotations[AnnotationEnvelopesEnabledAt]
+	st.EnvelopesOffMarks = inst.Annotations[AnnotationEnvelopesOffMarks]
+	st.EnvelopesResolvedOn = envelopesOn(deployed.Infrastructure.Messaging.Envelopes)
 	if err := applyDeployedInfrastructure(st, deployed); err != nil {
 		return nil, fmt.Errorf("reading instance %q's broker credentials: %w", opts.Instance, err)
 	}

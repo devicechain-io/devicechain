@@ -652,6 +652,55 @@ and is set the same way.
 - **Rolling back to `v0.22.0` or earlier** needs `legacy` set first, and the consumers to have
   drained every `compact` message from the streams.
 
+### Event envelopes {#event-envelopes}
+
+An event envelope carries several events of one tenant in a single message on the resolved-events
+stream (and, for the events as received, on the inbound-events stream), in place of one message
+each. It cuts the work the broker does per event. Two settings switch it, and **both are off by
+default**: `infrastructure.messaging.envelopes.resolved` (device-management writes resolved events
+as envelopes) and `infrastructure.messaging.envelopes.inbound` (event-sources writes inbound events
+as envelopes, waiting at most `inboundLingerMillis`, default 5 and at most 10, for a second event
+of a busy tenant). Set them in a values file under `instance.config.infrastructure.messaging.envelopes`,
+see [Tuning an instance](./tuning-an-instance.md). Reading is not a switch: from `v1.1.0` every
+service reads envelopes and single-event messages alike, whatever the settings; the settings
+decide only whether a service writes them. Every rule below applies to either one, and to both.
+
+- **When it is safe to turn on.** Once every pod of the instance runs `v1.1.0` or later, and not
+  before. A pod on an earlier release cannot read an envelope and sets it aside as failed, and the
+  events in it are lost to that pod. Upgrade first, wait until every pod has rolled, then set it.
+- **What the detection engine does with a duplicate.** In rare cases, such as a lost
+  acknowledgement during a retry, one event reaches the stream twice. Event storage and device
+  state already absorb that. With the setting on, the detection engine also remembers the identity
+  of every event it has applied for about the last ten minutes of broker time (the platform's own
+  redelivery span), skips a second copy and counts it on `detect_duplicate_events_skipped_total`.
+  A sustained non-zero rate means something upstream is storing events twice. With the setting off
+  the detection engine keeps no such memory and its cost and behaviour are unchanged. The identity
+  is the one the event store uses, so two identical readings from one device at the same nanosecond
+  are counted once by both.
+- **What it costs.** At about 20,000 events a second the memory holds roughly 12 million
+  identities, about 180 MB, in the detection leader only (a standby builds it when it takes over);
+  at 5,000 events a second about 45 MB. Above about 25,000 events a second a cap applies and the
+  memory covers less than ten minutes (about 2.7 minutes at 100,000 a second). After a restart or a
+  change of leader the detection engine reads the last ten minutes of the stream again before it
+  resumes, so that step takes longer on a busy stream; it is reported on
+  `detect_guard_prime_seconds` and `detect_guard_prime_events_total`, and
+  `detect_guard_prime_partial_total` counts the times the stream no longer reached back that far.
+- **What it does not cover.** A copy that arrives more than ten minutes after the first, for
+  example when an inbound consumer is recreated and redelivers from its start, is applied by the
+  detection engine a second time, which can count it twice in a counting or windowed rule.
+- **Turning it off.** Set the value to `false`. Envelopes already on the stream stay until they
+  expire or are consumed, and are still read.
+- **Moving to a release below `v1.1.0`.** `dcctl upgrade` records when the setting is turned on,
+  and when it is turned off records the position of the newest message of the inbound and resolved
+  streams. A move below `v1.1.0` is refused while the setting is on, while either stream still
+  holds a message from before the setting was turned off, while the record of when it was turned
+  off is missing (run `dcctl upgrade` once more at the current version to make it), and when an
+  envelope is found in a sample of the streams (the oldest retained message and the newest 256 of
+  each, which also catches a setting changed outside `dcctl`). It also refuses when it cannot
+  check, or when the target is not a release tag. A run that moves no version is never refused.
+  `--allow-envelope-downgrade` skips the refusal, with a warning: a service on the earlier release
+  sets an envelope aside as failed and the events in it are lost to that service.
+
 ## Upgrading from an older release {#pre-declaration-recreate}
 
 <a id="v090-baseline-squash"></a>

@@ -20,6 +20,8 @@ var (
 	upgradeEscrowPass  string
 	upgradeSkipInfra   bool
 
+	upgradeAllowEnvelopeDowngrade bool
+
 	upgradeMqttFailClosed bool
 	upgradeTrustedProxies []string
 	upgradeMQTTExposure   string
@@ -84,6 +86,8 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 		EscrowPassphraseFile: upgradeEscrowPass,
 		DcctlVersion:         Version,
 		SkipInfrastructure:   upgradeSkipInfra,
+
+		AllowEnvelopeDowngrade: upgradeAllowEnvelopeDowngrade,
 	}
 }
 
@@ -262,6 +266,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
+	upgradeCmd.Flags().BoolVar(&upgradeAllowEnvelopeDowngrade, "allow-envelope-downgrade", false, "move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service")
 	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
 	upgradeCmd.Flags().StringVar(&upgradeLwm2mIdentities, "lwm2m-identities", "", lwm2mIdentitiesUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawLwm2m, "withdraw-lwm2m-identities", false, withdrawLwm2mUsage)

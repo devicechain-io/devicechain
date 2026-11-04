@@ -137,6 +137,32 @@
                     }
                   }
                 },
+                "messaging": {
+                  "type": "object",
+                  "description": "How the services write events to the retained streams. The chart validates only the key named below; the services validate the rest at startup.",
+                  "properties": {
+                    "envelopes": {
+                      "type": "object",
+                      "description": "Event envelopes: several events of one tenant in one message on the resolved-events stream.",
+                      "properties": {
+                        "resolved": {
+                          "type": "boolean",
+                          "description": "Whether device-management writes resolved events as envelopes. False by default. Turn it on only once every pod runs a release that reads envelopes and carries the detection engine's duplicate guard (v1.1.0 or later). dcctl records when it is turned on and what the streams held when it is turned off, and refuses to move the instance to an earlier release while envelopes may remain."
+                        },
+                        "inbound": {
+                          "type": "boolean",
+                          "description": "Whether event-sources writes inbound events as envelopes (the capture hop and HTTP /events). False by default, with the same rule as resolved: turn it on only once every pod runs a release that reads envelopes (v1.1.0 or later). dcctl treats it like resolved when it records the switch and when it judges a move to an earlier release."
+                        },
+                        "inboundLingerMillis": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10,
+                          "description": "How many milliseconds an inbound event may wait for a second one to share its envelope when its tenant's recent rate predicts one. 0 means 5. Values above 10 are refused."
+                        }
+                      }
+                    }
+                  }
+                },
                 "nats": {
                   "type": "object",
                   "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",
