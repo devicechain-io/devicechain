@@ -534,9 +534,9 @@ dcctl upgrade local devicechain --version v1.1.0
 
 事件写入器现在会把批次填满。一个 Pod 的十个写入器过去各自从一个共享通道收集自己的批次，因此一个批次只有寥寥几个事件，等待时间几乎没有带来任何好处。现在，一个 Pod 内各写入器之间的收集是串行化的：同一时间只有一个写入器持有收集权，且仅在它接收消息期间持有，并在解码、租户准入和提交之前释放，因此这些步骤仍然并行。因此 `event-management` 和 `device-state` 的批量都大幅增加。`device-state` 还通过共享数据库层中新增的按列数组 upsert 模式，把热点 upsert（心跳、加锁或创建、合并后的回写、最新测量值和最新位置）按每批一条语句写入，每列一个数组。该模式从请求上下文绑定租户，要求冲突目标包含租户列，并依据允许列表语法校验其更新保护条件，因此它与其旁边的插入具有相同的租户隔离。
 
-在 GKE 上测量，以相同的负载形态和相同的测试工具对比 `v1.0.0` 与本版本：三个服务节点、三个数据库节点，代理（上游原版，未做修改）运行在独立的三节点节点池上；混合负载为 HTTP 2,500 台设备、MQTT over TLS 1,500 个会话、2,000 台检测设备和命令（约 6,200 事件/秒入库），取 15 分钟稳态窗口。`v1.0.0` 一列是写入器变更之前的最后一个构建，在该混合负载下的开销与 `v1.0.0` 候选发布版相同。
+在 GKE 上测量，两列使用相同的负载形态和相同的测试工具：三个服务节点、三个数据库节点，代理（上游原版，未做修改）运行在独立的三节点节点池上；混合负载为 500 台 HTTP 设备（每台 5 事件/秒，共 2,500 事件/秒）、1,500 个 MQTT over TLS 会话（每个 1 事件/秒）、500 台检测背景设备（每台 4 事件/秒，共 2,000 事件/秒）外加探针，以及命令（约 6,200 事件/秒入库），取 15 分钟稳态窗口。第一列不是已发布的 `v1.0.0` 镜像，而是主分支上写入器变更之前的最后一个构建。在代理与服务共用节点的形态下，该构建的测量结果与 `v1.0.0` 候选发布版相同；表中采用独立节点池形态，该次运行中代理的 CPU 因领导者分布不均而只是上限。
 
-| 混合负载，约 6,200 事件/秒 | v1.0.0 | v1.1.0 |
+| 混合负载，约 6,200 事件/秒 | 之前（写入器变更前的最后一个构建） | v1.1.0 |
 | --- | --- | --- |
 | 每 1,000 个事件的平台 CPU | 2.60 CPU 秒 | 2.06 CPU 秒（降低 21%） |
 | 每 1,000 个事件的关系型数据库 CPU | 0.402 CPU 秒 | 0.241 CPU 秒（降低 40%） |
@@ -558,7 +558,7 @@ dcctl upgrade local devicechain --version v1.1.0
 为每个摄取的事件承载一条消息的那些流，过去的上限固定为 1 GiB 和 500 万条消息。这个上限是平台在消费者或数据库故障期间的缓冲时长，也是规则预览和检测重放能够回读的范围。在每秒 20,000 个事件时，它只能把 `resolved-events` 保留约 2.8 分钟。
 
 - **两个新的 chart 值。** `instance.config.infrastructure.nats.streamDesignRate` 是预期整个实例（跨租户）摄取的事件速率峰值，单位为事件/秒。它是磁盘定容所依据的速率，不是限速。`instance.config.infrastructure.nats.streamRunwayMinutes` 是流按该速率保留多少分钟的事件（默认 15，范围 10 到 10080）。三个流各自至少获得 速率 × 分钟数 × 60 × 其单事件成本（捕获流和入站流为 384 字节，已解析流为 448 字节）。`streamMaxBytes` 仍是下限，`streamMaxMsgs` 会被调高，使消息数量不会缩短缓冲时长。
-- **默认值让上限保持原样。** 未设置速率时，各流按以前的方式定容。chart 默认值为每秒 1,000 个事件、15 分钟，仍在 1 GiB 上限之内，`--compact` 为每秒 50 个，保持 64 MiB。超出范围的值会导致启动失败。
+- **默认值让上限保持原样。** 未设置速率时，各流按以前的方式定容。chart 自身对 `streamDesignRate` 的默认值为 0（不按时间定容）；`dcctl` 的标准配置提供每秒 1,000 个事件、15 分钟，仍在 1 GiB 上限之内，`--compact` 提供每秒 50 个，保持 64 MiB。超出范围的值会导致启动失败。
 - **设置方法：**在值文件的 `instance.config.infrastructure.nats` 下放入这两个键，然后运行 `dcctl upgrade <provider> <instance> --values <file>`。现有的流会原地采用新的上限。按每秒 20,000 个事件、15 分钟定容的流，需要约 33 GiB 的 JetStream 卷；完整对照表见[事件流能等待多久的故障](./observability.md#outage-runway)。
 - **预留量预检会指明缓冲时长。** 当装不进卷的正是缓冲时长时，`dcctl` 会在写入任何内容之前失败并说明这一点。
 
@@ -616,7 +616,7 @@ prod   local      kind-devicechain  default   1.1.0       Ready       True    1.
 
 - **在线状态时间线。** `event-management` 新增租户 GraphQL 查询 `stateChangeEvents`，按设备令牌和时间范围分页返回设备的在线状态变化（已连接、已断开、不活跃），从新到旧排列。它需要 `event:read`，并像其他事件查询一样通过事件的锚点限定范围，因此限定到客户的调用方只能看到自己的设备。控制台的设备页面把它显示为在线状态时间线。
 - **设备页面显示更多连接信息。** 连接状态卡片现在显示最近一次在线状态报告及其所属的传输会话。
-- **统一的不活跃窗口。** 设备在十分钟没有上报后被标记为不活跃，全平台统一；它从来不能按设备配置。清扫每 60 秒运行一次，因此设备在静默后 10 到 11 分钟离线。`DeviceState.inactivityTimeout` 始终报告该窗口（600 秒）。`inactivityAlarmTime` 字段已被[弃用](#v110-deprecations)。
+- **统一的不活跃窗口。** 在线状态为推断的设备在十分钟没有上报后被标记为不活跃，全平台统一；它从来不能按设备配置。清扫每 60 秒运行一次，因此这类设备在静默后 10 到 11 分钟离线。在线状态为断言的设备遵循显式的在线状态转换，不参与清扫。`DeviceState.inactivityTimeout` 始终报告该窗口（600 秒）。`inactivityAlarmTime` 字段已被[弃用](#v110-deprecations)。
 
 #### 弃用 {#v110-deprecations}
 
@@ -663,7 +663,7 @@ dcctl bootstrap|upgrade ... --broker-max-connections N                      # �
 
 #### 性能剖析开关 {#v110-profiling}
 
-这些开关默认全部关闭，用于性能调查。阻塞和互斥锁剖析过去一直是空的，因为采样从未开启；设置了 `profiler.blockRate` 和 `profiler.mutexFraction` 后，相应端点会提供它们。只设置其中之一而不设置 `profiler.enabled` 会拒绝启动，chart 在渲染时也会拒绝。OpenTofu 集群根新增用于代理的 `nats_profiling_port` 和 `nats_profiling_block_rate`，以及用于两个数据库上 `pg_stat_statements` 的 `postgres_statement_stats` 和 `timescale_statement_stats`。监控模块还会在带污点的节点池上运行 node exporter（对每个污点都设置容忍），因此专用的代理节点池不再在节点 CPU 中缺失，也不会触发 `KubeDaemonSetRolloutStuck` 或 `TargetDown`。
+这些开关默认全部关闭，用于性能调查。阻塞和互斥锁剖析过去一直是空的，因为采样从未开启；设置了 `profiler.blockRate` 和 `profiler.mutexFraction` 后，相应端点会提供它们。只设置其中之一而不设置 `profiler.enabled` 会拒绝启动，chart 在渲染时也会拒绝。OpenTofu 集群根新增用于关系型数据库上 `pg_stat_statements` 的 `postgres_statement_stats`；实例根新增用于代理的 `nats_profiling_port` 和 `nats_profiling_block_rate`，以及用于事件存储上 `pg_stat_statements` 的 `timescale_statement_stats`。监控模块还会在带污点的节点池上运行 node exporter（对每个污点都设置容忍），因此专用的代理节点池不再在节点 CPU 中缺失，也不会触发 `KubeDaemonSetRolloutStuck` 或 `TargetDown`。
 
 #### 较小的变更 {#v110-smaller}
 
