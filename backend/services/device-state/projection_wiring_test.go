@@ -40,7 +40,7 @@ func TestConfiguredProjectionWritersReachTheProcessor(t *testing.T) {
 	require.NoError(t, parseConfiguration())
 	sp = newStateProcessor(nil)
 	require.Equal(t, 10, sp.Writers())
-	require.Equal(t, 32, sp.MaxBatch())
+	require.Equal(t, 64, sp.MaxBatch())
 	require.Equal(t, 10*time.Millisecond, sp.Linger())
 
 	// An explicit 0 turns the wait off, and reaches the processor as 0.

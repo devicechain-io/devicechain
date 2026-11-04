@@ -1968,7 +1968,7 @@ functionalAreas:
     #                         # while it merges. Must be below
     #                         # rdbConfiguration.maxOpenConnections (20 unless set);
     #                         # above half of it is logged.
-    #       maxBatch: 32      # events per transaction, 1 to 64. 1 turns batching off.
+    #       maxBatch: 64      # events per transaction, 1 to 64. 1 turns batching off.
     #       lingerMillis: 10  # how long a writer waits for a batch to fill, up to
     #                         # 1000. The writers take turns receiving a batch, so
     #                         # the wait fills one batch at the whole rate (about

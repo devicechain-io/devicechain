@@ -23,10 +23,13 @@ const (
 	// logging that reads compete with the writers. See ProjectionConfiguration.Writers.
 	DefaultProjectionWriters = 10
 	// DefaultProjectionMaxBatch is the most events one projection writer merges in one
-	// transaction: this projection's measured best on a small fleet sending in turn, and a
-	// cap batches did not reach on a cloud cluster (see ProjectionConfiguration.MaxBatch).
-	// event-management's persistence default is larger.
-	DefaultProjectionMaxBatch = 32
+	// transaction: the largest value writerbatch.MaxSize allows, and event-management's
+	// persistence default. It was 32, this projection's measured best on a small fleet
+	// sending in turn; it is 64 because a batch is split by tenant before it is written,
+	// so a multi-tenant mix gets only a fraction of the cap in each upsert (GKE round 26:
+	// 15.7 rows per device_states upsert against 30 for one tenant). See
+	// ProjectionConfiguration.MaxBatch.
+	DefaultProjectionMaxBatch = 64
 	// DefaultProjectionLingerMillis is how long a writer holding a batch that is not full
 	// waits for more events when projection.lingerMillis is not set. The writers collect
 	// one at a time (see ProjectionConfiguration.LingerMillis), so the wait fills ONE batch
@@ -90,6 +93,17 @@ type ProjectionConfiguration struct {
 	// is why the realistic fleet decides. On the cloud cluster described on Writers, batches
 	// averaged 15 to 19 (with the cap at 32, and at 64 in the 10-writer run), so 32 did not
 	// bind on average; an average does not show that it never did.
+	//
+	// The default is 64. A collected batch is split by tenant and each tenant's share is one
+	// upsert, so the cap bounds the rows per upsert divided by the tenants in the batch.
+	// Paced at 3,000 events a second against a standby-less TimescaleDB with 5 ms injected
+	// per commit (BenchmarkProjectionWriters/paced, DC_BENCH_MAXBATCH), a 25 ms linger over
+	// 4 tenants went from 32 to 64 events per transaction (8 to 16 rows per upsert) and 8
+	// tenants from 4 to 8, at a median hand-off to acknowledgement near 25 ms higher; at the
+	// default 10 ms linger a batch holds only about rate x linger (30) events and the cap
+	// does not bind, so 64 changed nothing there. The channel and in-flight bound grow with
+	// it (2 x writers x MaxBatch slots, see messageBacklog); the durable's MaxAckPending of
+	// 65,536 stays far above that.
 	MaxBatch int
 
 	// LingerMillis is how long a writer holding a batch that is not full waits for more
