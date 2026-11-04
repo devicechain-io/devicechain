@@ -270,6 +270,23 @@ func CheckTenantFence(ctx context.Context, db *gorm.DB, tenant string) error {
 	return readFence(db.Session(&gorm.Session{NewDB: true, Context: ctx}), []string{tenant})
 }
 
+// ReadFenceIfEnforced reads the erasure fence for one tenant exactly when a write on db would
+// (the fence's create hook is registered on it), and returns what the write would: nil,
+// ErrTenantPurged, or the wrapped read error.
+//
+// It exists for a caller that is about to write inside a SAVEPOINT it may roll back. The
+// fence read takes a share lock on the fence table that the transaction keeps to its end, and
+// the per-transaction memo then remembers the tenant as read clear; but a lock taken inside a
+// savepoint is released by ROLLBACK TO SAVEPOINT while the memo still holds, so the rest of the
+// transaction would write without the lock the memo's comment promises. Reading the fence
+// first, outside the savepoint, makes the lock the transaction's own.
+func ReadFenceIfEnforced(ctx context.Context, db *gorm.DB, tenant string) error {
+	if db.Callback().Create().Get(fenceCreateCallback) == nil {
+		return nil
+	}
+	return CheckTenantFence(ctx, db, tenant)
+}
+
 // readFence is the fence read itself, for the tenants tokens: nil when no fence stands for
 // any of them, ErrTenantPurged when one does, and the read's own error, wrapped, when the
 // fence could not be read (fail closed). It is shared by the create/update callback above

@@ -1557,6 +1557,9 @@ a tier named tp-showcase (calculated metrics on, ingest sized for the scenario) 
 creating the tenant. It is created if absent and only RAISED if present, never lowered,
 and sim destroy leaves it in place because it is shared by every towerpulse sim. Pass
 --tier to use an existing tier instead; that tier is then never created or changed.
+dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger one
+(--tier rc-100k, say) adds --tier-config with the limits it must hold and create makes
+the tier the same way, raising but never lowering it.
 
 ```
 dcctl sim create <name> [flags]
@@ -1574,6 +1577,7 @@ dcctl sim create <name> [flags]
       --shed-priority int    shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band
       --tenant-name string   the tenant's display name, as the console shows it (default: the scenario's own, else "<sim> (sim)")
       --tier string          tenant tier to package the sim at (default: the tier the scenario needs, which create makes if absent, else silver)
+      --tier-config string   with --tier: JSON object of integer limits the named tier must hold, such as '{"ingestReadingsPerSecond":100000}'; create makes the tier if absent and raises (never lowers) a present one
 ```
 
 ### Options inherited from parent commands

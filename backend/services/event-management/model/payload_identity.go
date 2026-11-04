@@ -49,6 +49,11 @@ import (
 // one redelivery interval, it was taken knowingly pre-GA, and it is recorded here so the
 // next value change is recognised for what it is.
 func DeriveLocationPayloadId(request *LocationEventCreateRequest) ([]byte, error) {
+	if id, ok := derivePayloadIdFast(request.EventId, func(b []byte) ([]byte, bool) {
+		return appendLocationEntry(b, request)
+	}); ok {
+		return id, nil
+	}
 	entry, err := canonicalPayloadEntry(struct {
 		Lat, Lon, Elev           *float64
 		Accuracy, Speed, Heading *float64
@@ -95,6 +100,11 @@ func CanonicalEntryInstant(t time.Time) time.Time {
 // id; redelivered after the deploy, it inserts once more. The raw branch below is
 // untouched, and a raw row's id is exactly what it always was.
 func DeriveMeasurementPayloadId(request *MeasurementEventCreateRequest) ([]byte, error) {
+	if id, ok := derivePayloadIdFast(request.EventId, func(b []byte) ([]byte, bool) {
+		return appendMeasurementEntry(b, request)
+	}); ok {
+		return id, nil
+	}
 	if request.Derived {
 		entry, err := canonicalPayloadEntry(struct {
 			Kind     string
@@ -125,6 +135,11 @@ func DeriveMeasurementPayloadId(request *MeasurementEventCreateRequest) ([]byte,
 // (event_id, type) alone, because a second SENSOR_FAULT carrying a different message is a
 // different alert — see DerivePayloadId for why a natural column does not discriminate.
 func DeriveAlertPayloadId(request *AlertEventCreateRequest) ([]byte, error) {
+	if id, ok := derivePayloadIdFast(request.EventId, func(b []byte) ([]byte, bool) {
+		return appendAlertEntry(b, request)
+	}); ok {
+		return id, nil
+	}
 	entry, err := canonicalPayloadEntry(struct {
 		Type     string
 		Level    uint32
@@ -154,6 +169,11 @@ func DeriveAlertPayloadId(request *AlertEventCreateRequest) ([]byte, error) {
 // existed, which is what every stored event's id was derived from. Both callers come
 // through here, so neither can forget the filter.
 func DeriveEventIdForPayload(tenantId string, event *Event, payload any) ([]byte, error) {
+	// The common shapes are written straight into the digest input (identity_bytes.go),
+	// byte-identical to the json.Marshal document below; anything else takes that path.
+	if id, ok := deriveEventIdFast(tenantId, event, payload); ok {
+		return id, nil
+	}
 	encoded, err := json.Marshal(eventidentity.Payload(payload))
 	if err != nil {
 		return nil, fmt.Errorf("canonicalizing payload for the event identity: %w", err)
