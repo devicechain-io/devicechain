@@ -116,3 +116,92 @@ authenticates as `postgres` on a CNPG pod, that the API server proxies each node
 the nats chart passes `config.merge.prof_port` into `nats.conf` and the monitor port is named
 `monitor`, or that a 60 s CPU profile survives a port-forward. Expect to fix those on the first
 use, and re-run the self-test after.
+
+## Local A/B rig (`hack/perf-ab.sh`, `hack/perf-ab-compare.sh`)
+
+Checks a change's effect on **per-event costs** on a kind cluster before a GKE round is spent on
+it. One run of `perf-ab.sh` is one arm: warm-up, a steady window at a fixed offered rate, counters
+read before and after, and a `summary.json` / `summary.md` with, per event persisted: NATS
+messages (client in/out, non-client in/out, route in/out), NATS bytes, JetStream API calls, WAL
+bytes and records on the event-store and relational primaries, rows per `INSERT INTO events` and per
+`device_states` upsert, statements per second, CPU-seconds per 1,000 events per component, appends
+per stream and deliveries per consumer, and the harnesses' own loss/duplicate verdict.
+
+**What transfers to GKE.** Counts and bytes per event (messages, bytes, WAL records, rows per
+statement), **compared at the same offered rate**: messages per event fall as the rate rises, so a
+kind figure at 1,500 events/s is comparable to a GKE figure at 1,500 events/s and to nothing else.
+CPU is a **ratio** between two arms on the same machine only. Latency, saturation, throttling,
+absolute CPU and tail behaviour do not transfer; the rig reports CFS throttling so that a CPU-bound
+arm is flagged rather than trusted.
+
+Set-up, once per cluster (an HA kind cluster so route traffic exists; `deploy/local/kind-cluster-ha.yaml`,
+changing the host ports if they are taken):
+
+1. `TF_VAR_postgres_statement_stats=true dcctl install local --ha ...` and
+   `TF_VAR_timescale_statement_stats=true dcctl bootstrap local <instance> ...` (use a unique image
+   tag; the chart pulls `IfNotPresent`). The rig refuses to run without `pg_stat_statements`.
+2. Linux builds of the load harnesses:
+   `GOOS=linux CGO_ENABLED=0 go build -o <bin-dir>/dc-loadtest ./cmd/loadtest` (and `loadtest-mqtt`)
+   in `backend/sims/dc-simulator`.
+
+One arm (about 9 to 10 minutes with the defaults: 45 s warm-up, 40 s settle, 180 s window, then the
+harnesses' read-back):
+
+```bash
+hack/perf-ab.sh --kubeconfig $KC --namespace dci-perf --instance perf --arm main-1 \
+    --bin-dir $BIN --dcctl $DCCTL --out ab-out --rebalance [--roll] [--mqtt-rate 1000 --http-rate 500]
+```
+
+The load runs in a pod inside the cluster (no port-forward is held open). One arm at a time; the same
+rate for every arm you compare; `--rebalance` so the broker's movable leaders sit in the same place
+(the layout is recorded, and `compare` warns if two arms differ).
+
+What the script does around the window, and why (each one was a measured confound, not a guess):
+
+- **The sims run in a tier with headroom** (`ab-load-<rate>`: ingest ceiling 10x the offered rate, burst 20x,
+  made by `dcctl sim create --tier --tier-config`; sim names `abt-<rate>-m/-h`). A tenant AT the default
+  ceiling (1,000/s, burst 2,000) has events shed by the ingest gate whenever the host stalls the broker for
+  more than ~2 s, and the harness reports that as loss. The rig measures cost, not governance. Each arm also
+  snapshots the gate's shed counters over the drive and classifies a failed verdict as `counted shed: N` (the
+  counters account for the loss) or `UNEXPLAINED LOSS` (exit 4: a durability alarm); both exclude the arm from
+  replicates, with the reason recorded.
+- **Broker stalls are timed against the window.** The NATS logs of the arm are scanned for `took too long`,
+  `NO quorum` and leader changes; each episode is placed relative to the window start. One inside the window
+  excludes the arm; one outside is only reported.
+- **The sims are reused** (the same two tenants every run). Destroying a sim starts a tenant purge in every area, and
+  its DELETEs of the whole previous run overlapped the next arm: the event-store statement rate
+  rose 1,450 to 2,770 per second over five identical arms. `--fresh-sims` gives the old behaviour.
+- **It waits until the databases have run no DELETE** for two looks before it starts.
+- **It takes a CHECKPOINT** on both primaries when the load is steady, so the 5-minute timed one
+  falls after the window. A checkpoint inside the window adds full-page images (+20 to +50 percent
+  event-store WAL bytes); a window that holds one is reported with `wal_bytes_per_event_with_ckpt`
+  and not compared. WAL **records** per event are the stable signal either way.
+- **A base backup on a standby** (the scheduled one) burns 1 to 2 cores in the barman sidecar of a
+  standby pod; that CPU is left out of the metrics and the run says so.
+- **Rolling the pods moves the route message count by 15 to 20 percent** with an identical build and
+  configuration (the broker connections and pod placement are fixed when a pod starts). An arm that
+  changes the deployment is rolled by that change, so give every replicate `--roll` (it restarts the
+  Deployments, not the broker or the databases) and compare against rolled baselines.
+
+**Trust no delta before the noise is known.** Run the same arm at least three times, derive the
+band, then compare. A run whose harness verdict failed (a PUBACKed event not persisted) is left out
+of the replicates, loudly; `--include-failed` keeps it for an arm that is expected to fail one.
+
+```bash
+hack/perf-ab-compare.sh noise noise.json ab-out/roll-1 ab-out/roll-2 ab-out/roll-3
+hack/perf-ab-compare.sh compare --noise noise.json ab-out/roll-1,ab-out/roll-2,ab-out/roll-3 ab-out/candidate
+```
+
+The band for a metric is the 99 percent prediction interval of one new run from the replicates
+(floor 2 percent, 5 percent for CPU; `noise --confidence 95` for a tighter, leakier one). It is wide
+with three replicates and narrows with more; a test arm averaged over several runs gets a tighter
+band. Bands measured at 1,500 events/s (three replicates on unchanged pods, six on rolled pods):
+client messages per event 5 to 14 percent, route messages and bytes 10 to 33, WAL records 2 to 4,
+rows per statement 16 to 25, CPU 14 to 55 by component. Read a list of flagged metrics as a
+signature (a cause and its consequences move together), not as a count; a change smaller than its
+band needs more replicates, or the GKE round. JetStream API calls per event are shown but never
+flagged (they are mostly timed calls, so per event they follow the rate).
+
+`perf-ab.sh --self-test` and `perf-ab-compare.sh --self-test` check the arithmetic, the refusals
+(a `pg_stat_statements` reset), and that identical arms flag nothing while a 24 percent change is
+flagged.
