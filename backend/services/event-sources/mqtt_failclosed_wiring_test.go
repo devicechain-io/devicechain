@@ -95,7 +95,7 @@ func fcWiringBrokerWith(t *testing.T, on, gateway bool) (nats.JetStreamContext, 
 		// The declaration tests never read the store; a bare source satisfies the start's
 		// refusal of the setting with nothing to read device events from the store.
 		StoreSource = processor.NewGatewayJetStreamSource(nil, "bare", nil, nil, nil, nil, nil,
-			func(string, string, time.Time, bool, processor.Origin, int) bool { return true })
+			func(string, string, time.Time, bool, processor.Origin, int) bool { return true }, nil)
 	}
 
 	nc, err := nats.Connect(srv.ClientURL())

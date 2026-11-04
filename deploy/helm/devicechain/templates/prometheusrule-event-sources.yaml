@@ -94,6 +94,21 @@ spec:
           annotations:
             summary: "An external MQTT source is losing events it has already read"
             description: "For at least 10 minutes, external MQTT source {{ "{{ $labels.source }}" }} has been losing events: they were read from your broker and decoded, but publishing them to the platform's event stream failed. That source does not retry, and your broker was already told they arrived, so each one is gone. The cause is on the platform's side, not your broker's: its message broker is refusing or not answering publishes. Check the platform's message broker, and the event-sources log for 'is lost: this transport does not retry', which names the source and tenant of each."
+        # NO `for`, unlike the sibling ingest-loss alerts, and that is the point of this one. A
+        # platform stall that sheds a tenant's queued traffic is a single burst of seconds, and a
+        # `for` as long as the window would let it come and go unseen. Every message counted here
+        # was acknowledged to its device (PUBACK) before it was read, so one is already data lost:
+        # the alert fires on the first, holds for the 10-minute window, and clears 10 minutes after
+        # the last. Every pod exports the series at 0 for every MQTT source from start, so the
+        # first shed after a restart is an increase and not a series appearing at 1.
+        - alert: MqttIngestShedAfterAcknowledgement
+          expr: sum by (source) (increase(devicechain_eventsources_total_msg_shed_acknowledged{namespace="{{ $ns }}"}[10m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "MQTT messages were dropped at the ingest ceiling after the device was told they arrived"
+            description: "In the last 10 minutes, {{ "{{ $value }}" }} messages from MQTT source {{ "{{ $labels.source }}" }} were dropped at their tenant's ingest ceiling. The broker had already acknowledged each one to its device (PUBACK), so the device will not resend it: these messages are lost, not deferred. Either a tenant is sending above its ceiling, or the platform stalled briefly and the messages queued behind it arrived together; the shed counters carry the shed class but not the tenant, so raise event-sources to debug logging to name the tenant. Compare devicechain_eventsources_total_msg_rate_limited and total_msg_reading_limited, check whether the tenant's ceiling (ingestReadingsPerSecond, ingestBurst) matches what its devices send, and look at the platform's message broker for a stall (a log line saying an internal subscription took too long) at the same time."
         # `for` equals the increase window, as for the sibling ingest-loss alerts: a failure
         # that stops clears inside one window, one that lasts a full window is presence being
         # lost faster than reconciliation is meant to repair it.

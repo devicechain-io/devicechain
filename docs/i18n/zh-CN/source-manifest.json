@@ -47,8 +47,8 @@
       "translationSha256": "f997db67c7b0561b701a3a09716cbf7b2bb035a8109791dde8453fec515b788f"
     },
     "concepts/governance.md": {
-      "sourceSha256": "77cf80ef5110941c976910e6d31542c179b2aa91c53c6dee489e8620da496a40",
-      "translationSha256": "1ec1f132249d15de56f2e76940057784b4190d2168cf6f4d99f876a1fa11f892"
+      "sourceSha256": "bd19775d1808c08d3f2e7b5d98de957ed1d3ad984559e5cbfd07f075999ade69",
+      "translationSha256": "7d23e3043d990346a4e9325cd538016e80bf39e1083f09c9927577601125e8fa"
     },
     "concepts/lwm2m.md": {
       "sourceSha256": "4fbaf7e098ad203760ae8e3288f35cbb3826e0b280b735e6b5c0a65f339a9ff7",
@@ -139,8 +139,8 @@
       "translationSha256": "b167cb0de6903ba7162bd9ee99d42432049d66047e33a875dc2b219c5f212425"
     },
     "deployment/observability.md": {
-      "sourceSha256": "b8364f6a11d21f73d79c8d5cacfae8ac3b7b265d6cbff0b2b4700f29ccc92a97",
-      "translationSha256": "d55ec922d4d5185a2e1f6364a250ddbc7b84404fb933a590c6ae9c479c8c8b8b"
+      "sourceSha256": "8ad8befd45f24fddf437a0d14863c3c75f189f3da2edc03ee88cd8668b99ea9d",
+      "translationSha256": "4e23586f5fbaf7be010675698dd4fed39d6c279c45ddb889d4a5d1dea75d1021"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "5519bf7ef8a6450e445c064ab773604fcbe8fe4eda3097372fef510c51cc2d81",

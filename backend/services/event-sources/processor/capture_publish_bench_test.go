@@ -278,7 +278,7 @@ func runCapturePipelineVia(b *testing.B, srv *natsserver.Server, writerVia, inst
 	src := NewGatewayJetStreamSource(nil, "bench", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, benchInboundMessage,
 		func(string, string, []byte, error) error { failedDecodes.Add(1); return nil },
-		nil, admitAllReadings)
+		nil, admitAllReadings, nil)
 	if err := src.Initialize(context.Background()); err != nil {
 		b.Fatal(err)
 	}

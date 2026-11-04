@@ -259,6 +259,15 @@ func (l *TenantRateLimiter) AllowNAt(tenant string, when time.Time, n int) bool 
 	return ok
 }
 
+// Ceiling is the ceiling this limiter currently meters the tenant at, resolved exactly as an
+// admission resolves it. It reads the resolver and touches no bucket, so asking changes nothing.
+// A caller that must size something to the tenant's allowance (event-sources sizes its backlog
+// threshold to the live burst) reads it here rather than keeping a second resolver that could
+// disagree with the one that meters.
+func (l *TenantRateLimiter) Ceiling(tenant string) TenantCeiling {
+	return l.resolve(tenant)
+}
+
 // RetryAfter is how long a caller refused by Allow should wait before one more admission is
 // earned: one token at the tenant's current rate. It reads the ceiling and touches no bucket,
 // so asking changes nothing. A ceiling with no rate (which admits nothing) reports a second,

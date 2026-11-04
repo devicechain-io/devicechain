@@ -1,0 +1,98 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package processor
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	core "github.com/devicechain-io/dc-microservice/core"
+)
+
+// A PLATFORM STALL MUST NOT SHED A TENANT THAT WAS WITHIN ITS CEILING.
+//
+// The capture reader falls behind for a few seconds (a broker hiccup), then drains what queued.
+// Each queued message is metered by its age. Before the threshold followed the tenant's burst,
+// anything younger than a fixed 5 s was metered at NOW, so the whole stall arrived at the live
+// bucket at once: the 2000-token burst absorbed 2 s of it and the rest was ack-dropped, messages
+// the broker had already PUBACKed to the device, charged to a tenant that was sending exactly its
+// ceiling. These tests drive the REAL gate and the REAL routing decision through the source's own
+// handle, because the defect lives in which limiter a message is routed to, not in either bucket.
+
+// stallHarness wires the capture source to the real gate over a limiter set at the platform
+// default ceiling, and returns how many messages of a stalled run were admitted and shed.
+func stallHarness(t *testing.T) (*captureHarness, *int) {
+	t.Helper()
+	shed := 0
+	limits := core.StaticCeiling(platformRate, platformBurst)
+	live := core.NewTenantRateLimiter(limits)
+	gate := NewRateGate(live, core.NewTenantRateLimiter(limits), core.NewTenantRateLimiter(limits),
+		core.NewTenantRateLimiter(limits), func(string, string) { shed++ })
+	h := newCaptureHarnessWith(t, func(es *GatewayJetStreamSource) { es.meter = NewMeterAt(live) })
+	h.gate = gate
+	return h, &shed
+}
+
+// replayStall sends `count` messages `spacing` apart, the last of them `stall` ago, and feeds
+// them to the source in one go: the shape of a queue that built up behind a stalled reader and
+// is released at once.
+func replayStall(t *testing.T, h *captureHarness, count int, spacing, stall time.Duration) {
+	t.Helper()
+	first := time.Now().Add(-stall)
+	for i := 0; i < count; i++ {
+		h.source.handle(capturedMsgAt(captureSubject, validEvent, uint64(i+1),
+			first.Add(time.Duration(i)*spacing), &recordingAck{}))
+	}
+}
+
+// The case from the field: a tenant at exactly its ceiling (1000/s), a 3 s backlog, nothing shed.
+// 3 s sits in the old dead zone: past the 2 s the burst covers, short of the fixed 5 s.
+func TestAPlatformStallDoesNotShedATenantAtItsCeiling(t *testing.T) {
+	h, shed := stallHarness(t)
+
+	// 3 s of traffic at the ceiling, queued and released together.
+	const count = 3000
+	replayStall(t, h, count, time.Millisecond, 3*time.Second)
+
+	_, _, admitted, _ := h.counts()
+	require.Zero(t, *shed, "a tenant sending at its ceiling lost PUBACKed messages to a platform stall")
+	require.Equal(t, count, admitted)
+}
+
+// The same, across the whole old dead zone and both sides of it: every stall from under the
+// burst's cover to well past the fixed threshold, for a tenant at its ceiling.
+func TestNoStallLengthShedsATenantAtItsCeiling(t *testing.T) {
+	for _, stall := range []time.Duration{time.Second, 2500 * time.Millisecond, 3 * time.Second,
+		4500 * time.Millisecond, 5500 * time.Millisecond, 20 * time.Second} {
+		h, shed := stallHarness(t)
+		count := int(stall / time.Millisecond)
+		replayStall(t, h, count, time.Millisecond, stall)
+
+		_, _, admitted, _ := h.counts()
+		require.Zerof(t, *shed, "stall %v shed a tenant at its ceiling", stall)
+		require.Equalf(t, count, admitted, "stall %v", stall)
+	}
+}
+
+// THE COUNTERWEIGHT. Routing the stall to the send timeline must not become a way to send over
+// the ceiling: a tenant genuinely at 3x its ceiling is still shed, and by the volume its own
+// timestamps say it exceeded, not wholesale and not nothing.
+func TestAPlatformStallStillShedsATenantAboveItsCeiling(t *testing.T) {
+	h, shed := stallHarness(t)
+
+	// 3x the ceiling for 3 s: one message every 333 microseconds, 9000 in all.
+	const count = 9000
+	replayStall(t, h, count, time.Second/3000, 3*time.Second)
+
+	_, _, admitted, _ := h.counts()
+	require.Equal(t, count, admitted+*shed, "every message is admitted or counted shed")
+	// Admitted is bounded by what two timelines can grant: the older part of the backlog on its
+	// send timeline (burst + rate over the span it covers) plus the burst of the live bucket.
+	// Far below the 9000 sent, which is the point; the exact figure is the limiter's.
+	const bound = 2*platformBurst + int(platformRate*3) // 7000
+	require.LessOrEqual(t, admitted, bound, "an over-ceiling tenant must not be admitted wholesale")
+	require.Greater(t, *shed, count/5, "an over-ceiling tenant was barely shed")
+}

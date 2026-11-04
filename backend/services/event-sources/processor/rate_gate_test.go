@@ -17,18 +17,36 @@ import (
 const (
 	testCeiling = 100.0
 	testBurst   = 10
+
+	// The platform default per-tenant ingest ceiling (config.DefaultIngestReadingsPerSecond and
+	// DefaultIngestBurst): 1000/s with a burst of 2000, which the burst covers for 2 s.
+	platformRate  = 1000.0
+	platformBurst = 2000
 )
 
+// newTestGate builds the gate the way production wires it: the routing decision (MeterAt) is made
+// from the live limiter's own ceiling and handed to the gate, which only follows it. A test that
+// hands the gate a send time therefore goes through the same decision a source makes.
 func newTestGate() (RateGate, *int) {
 	shed := 0
 	limits := core.StaticCeiling(testCeiling, testBurst)
-	gate := NewRateGate(
-		core.NewTenantRateLimiter(limits),
+	live := core.NewTenantRateLimiter(limits)
+	inner := NewRateGate(
+		live,
 		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		func(string, string) { shed++ })
-	return gate, &shed
+	meter := NewMeterAt(live)
+	return func(source, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
+		return inner(source, tenant, meter(tenant, sentAt), redelivery, origin)
+	}, &shed
+}
+
+// harnessMeter is the routing decision the capture-source test harness is built with: the
+// platform default ceiling, the ceiling the strategy's measurements ran at.
+func harnessMeter() MeterAt {
+	return NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)))
 }
 
 // THE MINTING BYPASS — the defect this gate's two-limiter shape exists to close.
@@ -118,8 +136,9 @@ func TestGateAdmitsACompliantBacklogInFull(t *testing.T) {
 func TestCaughtUpTrafficIsMeteredOnTheLiveLimiter(t *testing.T) {
 	gate, _ := newTestGate()
 
-	// Fresh captured messages: below the backlog threshold, so they are live.
-	fresh := time.Now().Add(-BacklogThreshold / 2)
+	// Fresh captured messages: below the tenant's backlog threshold (the time its burst covers),
+	// so they are live.
+	fresh := time.Now().Add(-backlogAfter(core.TenantCeiling{RatePerSecond: testCeiling, Burst: testBurst}) / 2)
 	admitted := 0
 	for i := 0; i < 500; i++ {
 		if gate("gw", "acme", fresh, false, OriginAuthenticated) {
