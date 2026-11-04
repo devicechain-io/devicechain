@@ -183,6 +183,9 @@ func (f *Fleet) tlsConfig(deviceToken string) *tls.Config {
 	if u, err := url.Parse(f.broker); err == nil {
 		host = u.Hostname()
 	}
+	if f.cfg.TLSServerName != "" {
+		host = f.cfg.TLSServerName
+	}
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: f.cfg.TLSInsecure, //nolint:gosec // the operator's recorded trust decision for a self-signed gateway

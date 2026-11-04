@@ -651,7 +651,7 @@ func TestStatusWireNamesAreTheContract(t *testing.T) {
 // read as applied while doing nothing.
 func TestBrokerTLSConfigFollowsTheScheme(t *testing.T) {
 	for _, broker := range []string{"tcp://127.0.0.1:1883", "mqtt://host:1883", "ws://host:80", "unix://sock"} {
-		if cfg := brokerTLSConfig(broker, true); cfg != nil {
+		if cfg := brokerTLSConfig(broker, true, ""); cfg != nil {
 			t.Errorf("%s got a TLS config; paho establishes no TLS there, so the insecure "+
 				"flag reads as applied while doing nothing", broker)
 		}
@@ -660,16 +660,31 @@ func TestBrokerTLSConfigFollowsTheScheme(t *testing.T) {
 		"ssl://host:1883", "tls://host:1883", "mqtts://host:1883",
 		"mqtt+ssl://host:1883", "tcps://host:1883", "wss://host:443",
 	} {
-		cfg := brokerTLSConfig(broker, false)
+		cfg := brokerTLSConfig(broker, false, "")
 		if cfg == nil {
 			t.Fatalf("%s got no TLS config; paho verifies against system roots with none", broker)
 		}
 		if cfg.InsecureSkipVerify {
 			t.Errorf("%s skips verification without being asked to", broker)
 		}
-		if cfg := brokerTLSConfig(broker, true); !cfg.InsecureSkipVerify {
+		if cfg := brokerTLSConfig(broker, true, ""); !cfg.InsecureSkipVerify {
 			t.Errorf("%s verifies despite mqttTLSInsecure", broker)
 		}
+		if cfg.ServerName != "" {
+			t.Errorf("%s got SNI %q without a host header", broker, cfg.ServerName)
+		}
+	}
+}
+
+// An instance reached through an address presents its Gateway host as the SNI, so the
+// TLS-passthrough MQTT route finds it; with none recorded the field stays empty.
+func TestBrokerTLSConfigPresentsTheHandshakeHostAsSNI(t *testing.T) {
+	cfg := brokerTLSConfig("ssl://34.1.2.3:1883", false, "devicechain.local")
+	if cfg.ServerName != "devicechain.local" {
+		t.Errorf("SNI = %q, want devicechain.local", cfg.ServerName)
+	}
+	if brokerTLSConfig("ssl://34.1.2.3:1883", false, "").ServerName != "" {
+		t.Errorf("control: SNI set with no host header")
 	}
 }
 

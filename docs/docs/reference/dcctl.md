@@ -1527,7 +1527,6 @@ instance was bootstrapped on).
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
   -h, --help                    help for sim
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
@@ -1580,6 +1579,7 @@ dcctl sim create <name> [flags]
 
 ```
   -h, --help                 help for create
+      --host-header string   Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host; the sim presents it too (default: the instance's recorded host)
       --ingress string       device-plane HTTP ingress base URL (default http(s)://<server>:8081)
       --manifest string      built-in scenario to run (devicepulse, buildingpulse, widgetlab, sitepulse, fleetpulse, towerpulse) (default "devicepulse")
       --mqtt-broker string   NATS MQTT gateway a scenario's command far end dials (default: the local cluster's published MQTT port on a loopback --server, else ssl://<server>:1883; set it explicitly for any other topology)
@@ -1597,7 +1597,6 @@ dcctl sim create <name> [flags]
       --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
@@ -1662,7 +1661,8 @@ dcctl sim destroy <name> [flags]
 ### Options
 
 ```
-  -h, --help   help for destroy
+  -h, --help                 help for destroy
+      --host-header string   Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host; the sim presents it too (default: the instance's recorded host)
 ```
 
 ### Options inherited from parent commands
@@ -1671,7 +1671,6 @@ dcctl sim destroy <name> [flags]
       --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
@@ -1719,7 +1718,6 @@ dcctl sim run <name> [flags]
       --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
@@ -1751,7 +1749,6 @@ dcctl sim start <name> [flags]
       --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
@@ -1783,7 +1780,6 @@ dcctl sim status <name> [flags]
       --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
@@ -1815,7 +1811,6 @@ dcctl sim stop <name> [flags]
       --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
       --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
       --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
-      --host-header string      Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host (default: the instance's recorded host)
   -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
       --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
       --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given

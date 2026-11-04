@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-simulator/mqttload"
 	"github.com/devicechain-io/dc-simulator/sim"
 	"github.com/rs/zerolog/log"
@@ -677,6 +678,9 @@ func RunMQTT(ctx context.Context, hs *sim.Handshake, p MQTTProfile) (*MQTTReport
 		p.MQTT.TLSInsecure = true
 	}
 	p.MQTT.InstanceId, p.MQTT.Tenant = hs.InstanceId, hs.Tenant
+	if p.MQTT.TLSServerName == "" {
+		p.MQTT.TLSServerName = httptransport.HostName(hs.HostHeader)
+	}
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}

@@ -4,12 +4,12 @@
 package sim
 
 import (
-	"crypto/tls"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
-	"time"
+
+	"github.com/devicechain-io/dc-microservice/httptransport"
 )
 
 // The instance Gateway's listener is bound to the instance's recorded host
@@ -60,24 +60,11 @@ func PickHostHeader(server, explicit, recorded string) string {
 	return recorded
 }
 
-// hostHeaderTransport sends every request with Host set to host, whatever address
-// the URL dials.
-type hostHeaderTransport struct {
-	host string
-	next http.RoundTripper
-}
-
-func (t *hostHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	r := req.Clone(req.Context())
-	r.Host = t.host
-	return t.next.RoundTrip(r)
-}
-
 // HostHeaderClient returns an HTTP client that presents host as the Host header and
 // the TLS server name. host is what the Gateway routes on; the URL still decides
-// where the connection goes.
+// where the connection goes. It rides the project transport (no proxy environment,
+// bounded dial and response-header waits) and leaves the timeout zero so the session
+// fills in its own.
 func HostHeaderClient(host string) *http.Client {
-	base := http.DefaultTransport.(*http.Transport).Clone()
-	base.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverHostname(host)}
-	return &http.Client{Timeout: 30 * time.Second, Transport: &hostHeaderTransport{host: host, next: base}}
+	return &http.Client{Transport: httptransport.PresentHost(httptransport.New(), host)}
 }

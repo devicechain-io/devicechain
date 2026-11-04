@@ -65,6 +65,7 @@ read connected for a while after the data stops.`,
 }
 
 func init() {
+	simDestroyCmd.Flags().String("host-header", "", hostHeaderFlagHelp)
 	simCmd.AddCommand(simDestroyCmd)
 }
 
@@ -221,8 +222,9 @@ func runSimDestroy(cmd *cobra.Command, args []string) error {
 	admin := newSimAdmin(hostHeader, rec.Endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
-		server, _ := cmd.Flags().GetString("server")
-		return withHostHint(err, server, hostHeader)
+		// The record's own login URL names the address create dialled, which is what the
+		// hint is about; --server may not even have been repeated.
+		return withHostHint(err, urlHost(rec.Endpoints.UserGraphQL), hostHeader)
 	}
 
 	out := cmd.OutOrStdout()

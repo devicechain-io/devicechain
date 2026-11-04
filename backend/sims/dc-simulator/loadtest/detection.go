@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-simulator/loadtest/detmonitor"
 	"github.com/devicechain-io/dc-simulator/mqttload"
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -846,6 +847,9 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 			mc.TLSInsecure = true
 		}
 		mc.InstanceId, mc.Tenant = hs.InstanceId, hs.Tenant
+		if mc.TLSServerName == "" {
+			mc.TLSServerName = httptransport.HostName(hs.HostHeader)
+		}
 		fleet, err = mqttload.NewFleet(mc, rt.Devices)
 		if err != nil {
 			return nil, fmt.Errorf("mqtt transport: %w", err)

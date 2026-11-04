@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-simulator/cmdreceiver"
 )
 
@@ -60,7 +61,11 @@ var brokerTLSSchemes = []string{"ssl://", "tls://", "mqtts://", "mqtt+ssl://", "
 // brokerTLSConfig returns the TLS config for a broker URL, or nil for a plaintext
 // one. paho uses a config only for a TLS-scheme broker, and then needs one — a nil
 // config verifies against the system roots.
-func brokerTLSConfig(broker string, insecure bool) *tls.Config {
+//
+// serverName, when set, is the SNI and verification name instead of the broker URL's
+// host: an instance reached through an address presents its Gateway host here, so the
+// TLS-passthrough route (which selects on SNI) finds it.
+func brokerTLSConfig(broker string, insecure bool, serverName string) *tls.Config {
 	tlsScheme := false
 	for _, s := range brokerTLSSchemes {
 		if strings.HasPrefix(broker, s) {
@@ -74,7 +79,7 @@ func brokerTLSConfig(broker string, insecure bool) *tls.Config {
 	// #nosec G402 -- InsecureSkipVerify is the caller's explicit handshake field, off
 	// unless dcctl (or a hand-edited record) asked for it; a deployment reachable at
 	// its certificate's SAN leaves it false and gets full verification.
-	return &tls.Config{InsecureSkipVerify: insecure}
+	return &tls.Config{InsecureSkipVerify: insecure, ServerName: httptransport.HostName(serverName)}
 }
 
 // attachCommandFarEnd readies the scenario's command channel: it brings up an
@@ -177,7 +182,7 @@ func (l *Lifecycle) attachCommandFarEnd(ctx context.Context) error {
 	if newFarEnd == nil {
 		newFarEnd = newMqttFarEnd
 	}
-	fe := newFarEnd(l.rt.InstanceId, l.rt.Tenant, broker, brokerTLSConfig(broker, l.rt.MqttTLSInsecure))
+	fe := newFarEnd(l.rt.InstanceId, l.rt.Tenant, broker, brokerTLSConfig(broker, l.rt.MqttTLSInsecure, l.rt.HostHeader))
 
 	// A scenario whose commands take time to take effect answers them itself. The handler is
 	// set BEFORE any device subscribes, so no frame is ever answered under the default

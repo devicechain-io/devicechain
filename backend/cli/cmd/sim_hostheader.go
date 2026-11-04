@@ -5,10 +5,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
@@ -65,7 +68,25 @@ func withHostHint(err error, server, hostHeader string) error {
 	if err == nil || hostHeader != "" || !sim.NeedsHostHeader(server) {
 		return err
 	}
-	return fmt.Errorf("%w\nhint: --server %q is an address, but the instance Gateway only routes the host it was "+
-		"bootstrapped with (devicechain.local unless `dcctl bootstrap --host` said otherwise). Pass "+
-		"--host-header <that host>, or use --server <that host> with it resolving to this address", err, server)
+	var se *userclient.StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusNotFound {
+		return err
+	}
+	return fmt.Errorf("%w\nhint: %q is an address, but the instance Gateway only routes the host it was "+
+		"bootstrapped with (devicechain.local unless `dcctl bootstrap --host` said otherwise), which is "+
+		"what a 404 here usually means. Pass --host-header <that host>", err, server)
+}
+
+// hostHeaderFlagHelp is shared by sim create and sim destroy, the two commands that
+// call the admin surface.
+const hostHeaderFlagHelp = "Host the instance Gateway routes on, when --server is an address (an IP or localhost) " +
+	"rather than that host; the sim presents it too (default: the instance's recorded host)"
+
+// urlHost is the host:port of a URL, or "" when it does not parse.
+func urlHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
 }

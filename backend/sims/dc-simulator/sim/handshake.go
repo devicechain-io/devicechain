@@ -115,6 +115,12 @@ type Handshake struct {
 	// address — it is a trust decision about one, and burying a verification
 	// opt-out among base URLs is how it stops being read as one.
 	MqttTLSInsecure bool `json:"mqttTLSInsecure"`
+	// HostHeader is the instance host the Gateway routes on, set when dcctl reached the
+	// instance through an ADDRESS (a load balancer, a port-forward) rather than that
+	// hostname. Every HTTP request presents it as the Host header and TLS server name, and
+	// the MQTT gateway connection as its SNI, while the connection still goes to the
+	// address in Endpoints. Empty means Endpoints already name the host.
+	HostHeader string `json:"hostHeader,omitempty"`
 
 	// ScenarioIdentities are the exact accounts THIS simulator minted for the scenario's own
 	// people (a customer user), appended here before each is created. It is dcctl's whole ownership
