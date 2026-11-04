@@ -1579,6 +1579,7 @@ dcctl sim create <name> [flags]
 
 ```
   -h, --help                 help for create
+      --host-header string   Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host; the sim presents it too (default: the instance's recorded host)
       --ingress string       device-plane HTTP ingress base URL (default http(s)://<server>:8081)
       --manifest string      built-in scenario to run (devicepulse, buildingpulse, widgetlab, sitepulse, fleetpulse, towerpulse) (default "devicepulse")
       --mqtt-broker string   NATS MQTT gateway a scenario's command far end dials (default: the local cluster's published MQTT port on a loopback --server, else ssl://<server>:1883; set it explicitly for any other topology)
@@ -1660,7 +1661,8 @@ dcctl sim destroy <name> [flags]
 ### Options
 
 ```
-  -h, --help   help for destroy
+  -h, --help                 help for destroy
+      --host-header string   Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host; the sim presents it too (default: the instance's recorded host)
 ```
 
 ### Options inherited from parent commands

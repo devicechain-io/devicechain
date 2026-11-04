@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
@@ -217,6 +218,11 @@ type Runtime struct {
 	Tenant     string
 	HTTPClient *http.Client
 
+	// HostHeader is the handshake's host to present to the Gateway (see Handshake). Empty
+	// when the endpoints already name it. HTTPClient and Session already do this; the MQTT
+	// gateway connection reads it for its SNI.
+	HostHeader string
+
 	// SimPassword is the sim login's password. A scenario that provisions a customer user
 	// accepts the user's invitation with it, so the person signs in with the credential the
 	// sim record already holds rather than one nobody was told. It is never logged.
@@ -312,8 +318,14 @@ func NewRuntime(hs *Handshake, load Load, deviceCount int) (*Runtime, error) {
 	transport.MaxIdleConns = workers * 2
 	transport.MaxIdleConnsPerHost = workers
 
-	httpc := &http.Client{Timeout: httpTimeout, Transport: transport}
+	var rtp http.RoundTripper = transport
+	if hs.HostHeader != "" {
+		// Dial the address in the endpoints, but present the host the Gateway routes on.
+		rtp = httptransport.PresentHost(transport, hs.HostHeader)
+	}
+	httpc := &http.Client{Timeout: httpTimeout, Transport: rtp}
 	return &Runtime{
+		HostHeader:      hs.HostHeader,
 		Session:         userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant),
 		Endpoints:       hs.Endpoints,
 		SimPassword:     hs.SimPassword,

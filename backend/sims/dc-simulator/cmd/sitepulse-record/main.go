@@ -32,6 +32,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dc-simulator/recording"
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -69,6 +70,9 @@ func session(handshakePath string) (*sim.Handshake, *userclient.TenantSession, e
 		return nil, nil, err
 	}
 	httpc := &http.Client{Timeout: 60 * time.Second}
+	if hs.HostHeader != "" {
+		httpc.Transport = httptransport.PresentHost(httptransport.New(), hs.HostHeader)
+	}
 	return hs, userclient.NewTenantSession(httpc, hs.Endpoints.UserGraphQL, hs.SimEmail, hs.SimPassword, hs.Tenant), nil
 }
 

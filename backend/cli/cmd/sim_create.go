@@ -44,6 +44,7 @@ the tier the same way, raising but never lowering it.`,
 
 func init() {
 	simCreateCmd.Flags().Int64("seed", 1, "deterministic generation seed for the sim's populations")
+	simCreateCmd.Flags().String("host-header", "", hostHeaderFlagHelp)
 	simCreateCmd.Flags().String("ingress", "", "device-plane HTTP ingress base URL (default http(s)://<server>:8081)")
 	registerMqttFlags(simCreateCmd.Flags())
 	simCreateCmd.Flags().String("manifest", "devicepulse",
@@ -176,11 +177,12 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	}
 	endpoints := sim.ResolveEndpoints(server, ingress, mqttBroker, tls)
 	adminURL := sim.AdminURL(server, tls)
-	admin := sim.NewAdmin(endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
+	hostHeader := resolveHostHeader(cmd, server, instance)
+	admin := newSimAdmin(hostHeader, endpoints.UserGraphQL, adminURL, adminEmail, adminPassword).WithOTP(otpFunc(otpFlag(cmd)))
 
 	ctx := cmd.Context()
 	if err := admin.EnsureSuperuser(ctx); err != nil {
-		return err
+		return withHostHint(err, server, hostHeader)
 	}
 	if needTier != nil {
 		if err := admin.EnsureTier(ctx, *needTier); err != nil {
@@ -225,6 +227,7 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 		InstanceId:  instance,
 		ControlAddr: controlAddr,
 		AdminURL:    adminURL,
+		HostHeader:  hostHeader,
 
 		MqttTLSInsecure: mqttInsecure,
 	}
@@ -234,6 +237,10 @@ func runSimCreate(cmd *cobra.Command, args []string) error {
 	path, _ := sim.RecordPath(name)
 
 	fmt.Printf("✅ sim %q created — tenant %q, scoped identity %q\n\n", name, tenant, email)
+	if hostHeader != "" {
+		fmt.Printf("ℹ️  the sim reaches %s presenting %q as the Host and TLS server name the Gateway routes on.\n\n",
+			server, hostHeader)
+	}
 	// Stated on every create, not only for a scenario that needs it: a certificate
 	// check that was skipped is worth one line wherever it was decided, and dcctl
 	// does not know which scenario the handshake will end up running.

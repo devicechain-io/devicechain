@@ -56,6 +56,10 @@ type Config struct {
 	// TLSInsecure skips verification of the broker's certificate (a local bring-up's
 	// self-signed gateway). It is only meaningful with TLS.
 	TLSInsecure bool
+	// TLSServerName, when set, is the SNI and verification name instead of the broker
+	// URL's host: the instance host the handshake recorded when the broker is reached by
+	// address.
+	TLSServerName string
 
 	InstanceId string
 	Tenant     string
