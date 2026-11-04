@@ -193,6 +193,10 @@ const config: Config = {
       defaultMode: 'dark',
       respectPrefersColorScheme: true,
     },
+    // The card a link to any docs page shows when it is shared (og:image and
+    // twitter:image). It is the marketing site's card, kept identical so a
+    // shared link looks the same whichever site it points at.
+    image: 'img/social-card.png',
     navbar: {
       title: 'DeviceChain',
       logo: {
