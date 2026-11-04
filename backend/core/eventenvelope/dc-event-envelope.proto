@@ -1,0 +1,78 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+option go_package = "/eventenvelope";
+
+package io.devicechain.eventenvelope;
+
+// The schema of the event envelope. There is no generated code for it: envelope.go writes and
+// reads these messages directly with protowire, in the field order below, the way
+// core/resolvedevent writes the resolved event. This file is the contract both hold to, and
+// wire_golden_test.go pins the bytes.
+//
+// One NATS message on inbound-events or resolved-events carries k events of ONE tenant. The
+// message is marked by the Dc-Env header; a message without it is a single legacy event and
+// stays valid input forever.
+
+message PEventEnvelope {
+	// 1. A reader refuses a version it does not know.
+	uint32 version = 1;
+	// Which stream's event the members are.
+	Kind kind = 2;
+	// Must equal the subject's tenant token; the caller checks (Reader.VerifyTenant).
+	string tenant = 3;
+	// resolved: the inbound envelope's stream sequence; inbound: the first capture sequence
+	// (0 when there is none).
+	uint64 source_seq = 4;
+	// Settlement round, 0 normally.
+	uint32 round = 5;
+	// Nanoseconds since the Unix epoch. A member's occurred / processed instants are written as
+	// signed deltas against it.
+	sfixed64 base_time = 6;
+	// Interned strings: the device-type and profile-version tokens of the resolved members.
+	// A member names an entry by its index + 1.
+	repeated string dict = 7;
+	Codec codec = 8;
+	// k, cross-checked after decode.
+	uint32 count = 9;
+	// k x (varint length + PEnvelopeMember), an s2 block when codec = S2.
+	bytes members = 10;
+	// Source indices of members settled outside this message (recorded or split out).
+	repeated uint32 settled_elsewhere = 11;
+	// The length of members once decompressed: the bound is checked before anything is inflated.
+	uint32 raw_size = 12;
+	// CRC-32C (Castagnoli) of every byte of the message before this field, always the last
+	// field. The members of an uncompressed envelope are plain protobuf, so without it a
+	// flipped bit inside one would decode as a different event.
+	fixed32 checksum = 13;
+}
+
+enum Kind {
+	KIND_UNSPECIFIED = 0;
+	KIND_UNRESOLVED = 1;
+	KIND_RESOLVED = 2;
+}
+
+enum Codec {
+	CODEC_NONE = 0;
+	CODEC_S2 = 1;
+}
+
+message PEnvelopeMember {
+	// Position in the SOURCE, stable across rounds.
+	uint32 index = 1;
+	// Instants against base_time. Absent = equal, unless the matching bit of flags says the
+	// event had no numeric form of that instant (it carries the RFC 3339 string instead).
+	sint64 occurred_delta = 2;
+	sint64 processed_delta = 3;
+	// Dictionary index + 1; 0 = the event carries no such field.
+	uint32 device_type_ref = 4;
+	uint32 profile_ref = 5;
+	// Today's PUnresolvedEvent / PResolvedEvent bytes with the interned fields omitted:
+	// resolved 11, 12, 17, 18; unresolved 14, 15.
+	bytes event = 6;
+	// bit 0: occurred has no numeric form. bit 1: processed has none.
+	uint32 flags = 7;
+}
