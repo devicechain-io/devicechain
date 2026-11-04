@@ -21,9 +21,9 @@ type ObjectRange struct {
 	Lo, Hi int
 }
 
-// ObjectAllowlist decides which LwM2M objects are telemetry worth observing. It is a
-// parameter (config supplies the concrete set at L2b) so the pure selector never hard-codes a
-// policy: the allowlist keeps the server from issuing Observe requests against management
+// ObjectAllowlist decides which LwM2M objects are telemetry worth observing. The set is a
+// parameter so the pure selector never hard-codes a policy, but the only value the service
+// passes is DefaultObjectAllowlist: it is fixed by the build and no setting changes it. The allowlist keeps the server from issuing Observe requests against management
 // objects (0 Security, 1 Server, 3 Device, …) — only sensor/telemetry objects are observed.
 type ObjectAllowlist struct {
 	Ranges []ObjectRange
@@ -41,7 +41,8 @@ func (a ObjectAllowlist) Permits(objectID int) bool {
 
 // DefaultObjectAllowlist is the IPSO Smart Object sensor range — the objects that carry
 // numeric readings (3200 Digital Input … 3441 and neighbours). It deliberately excludes the
-// OMA management objects (0/1/2/3/4/…). Config may override it.
+// OMA management objects (0/1/2/3/4/…), and Object 5 (Firmware Update), which is
+// driven with commands and read back, never observed. Not configurable.
 var DefaultObjectAllowlist = ObjectAllowlist{Ranges: []ObjectRange{{Lo: 3200, Hi: 3441}}}
 
 // linkTarget matches the path URI-Reference between the angle brackets of a CoRE Link

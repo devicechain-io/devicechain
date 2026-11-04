@@ -198,9 +198,9 @@ observation is lost and none is reconstructed** — the package says so
 device-controlled and bounded only by the lifetime, up to the 86400-second default. Presence is
 reconstructed; telemetry is not.
 
-🔴 **Two comments claim the object allowlist is configurable** (`decode/links.go:26`, `:45`) and an
-operator runbook tells a reader to add Object 5 to it. **There is no such knob** — the allowlist is a
-package constant and Object 5 is outside its range. An instruction a reader cannot follow.
+The object allowlist is a package constant, not configuration; the code comments and the operator
+docs (`deployment/edge-services`, `concepts/lwm2m`) now say so. Object 5 (Firmware Update) is
+deliberately outside it: it is driven with commands and read back, never observed.
 
 **Only SenML-JSON is decoded** on the notify path (`decode/senml.go:75-82`). The consequence is
 named as a boundary in the code and nowhere in the docs: a conformant **LwM2M 1.0-only client gets
