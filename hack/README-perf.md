@@ -158,7 +158,17 @@ rate for every arm you compare; `--rebalance` so the broker's movable leaders si
 
 What the script does around the window, and why (each one was a measured confound, not a guess):
 
-- **The sims are reused** (`ab-m`, `ab-h`). Destroying a sim starts a tenant purge in every area, and
+- **The sims run in a tier with headroom** (`ab-load-<rate>`: ingest ceiling 10x the offered rate, burst 20x,
+  made by `dcctl sim create --tier --tier-config`; sim names `abt-<rate>-m/-h`). A tenant AT the default
+  ceiling (1,000/s, burst 2,000) has events shed by the ingest gate whenever the host stalls the broker for
+  more than ~2 s, and the harness reports that as loss. The rig measures cost, not governance. Each arm also
+  snapshots the gate's shed counters over the drive and classifies a failed verdict as `counted shed: N` (the
+  counters account for the loss) or `UNEXPLAINED LOSS` (exit 4: a durability alarm); both exclude the arm from
+  replicates, with the reason recorded.
+- **Broker stalls are timed against the window.** The NATS logs of the arm are scanned for `took too long`,
+  `NO quorum` and leader changes; each episode is placed relative to the window start. One inside the window
+  excludes the arm; one outside is only reported.
+- **The sims are reused** (the same two tenants every run). Destroying a sim starts a tenant purge in every area, and
   its DELETEs of the whole previous run overlapped the next arm: the event-store statement rate
   rose 1,450 to 2,770 per second over five identical arms. `--fresh-sims` gives the old behaviour.
 - **It waits until the databases have run no DELETE** for two looks before it starts.

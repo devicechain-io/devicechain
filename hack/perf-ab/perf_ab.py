@@ -167,6 +167,59 @@ def component_of(pod):
     return re.sub(r"-\d+$", "", pod)
 
 
+SHED_METRIC = re.compile(r'^devicechain_eventsources_total_(msg_rate_limited|msg_reading_limited|readings_rate_limited|msg_publish_failed|msg_backpressured)\{([^}]*)\}\s+([0-9.eE+-]+)')
+
+
+def read_shed(d):
+    """-> {(counter, source): value} summed over the event-sources pods, or None when not collected."""
+    if not os.path.isdir(d):
+        return None
+    out = {}
+    for f in glob.glob(os.path.join(d, "shed-*.prom")):
+        with open(f, encoding="utf-8") as fh:
+            for line in fh:
+                mt = SHED_METRIC.match(line)
+                if mt:
+                    src = (re.search(r'source="([^"]*)"', mt.group(2)) or [None, ""])[1]
+                    out[(mt.group(1), src)] = out.get((mt.group(1), src), 0.0) + float(mt.group(3))
+    return out
+
+
+STALL = re.compile(r"took too long|NO quorum|stalled|new (?:stream |consumer |metadata )?leader|leader (?:changed|lost)|[Ss]tep[- ]?down")
+LOG_TIME = re.compile(r"(\d{4})/(\d\d)/(\d\d) (\d\d):(\d\d):(\d\d)")
+
+
+def stall_episodes(path, w0, w1, gap=30):
+    """Broker log lines that mark a stall or a leader change, grouped into episodes (lines within `gap`
+    seconds), each placed against the measured window [w0, w1] in epoch seconds."""
+    if not os.path.exists(path):
+        return None
+    import calendar
+    times, kinds = [], []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            mt = LOG_TIME.search(line)
+            if not mt or not STALL.search(line):
+                continue
+            times.append(calendar.timegm(tuple(int(x) for x in mt.groups()) + (0, 0, 0)))
+            kinds.append("leader-change" if "leader" in line and "quorum" not in line else "stall")
+    order = sorted(range(len(times)), key=lambda i: times[i])
+    eps = []
+    for i in order:
+        if eps and times[i] - eps[-1]["end"] <= gap:
+            eps[-1]["end"] = times[i]
+            eps[-1]["lines"] += 1
+            if kinds[i] == "stall":
+                eps[-1]["kind"] = "stall"
+        else:
+            eps.append({"start": times[i], "end": times[i], "lines": 1, "kind": kinds[i]})
+    for e in eps:
+        e["startRelS"] = e["start"] - w0
+        e["endRelS"] = e["end"] - w0
+        e["inWindow"] = e["end"] >= w0 and e["start"] <= w1
+    return eps
+
+
 def summarize(d):
     meta = load(os.path.join(d, "meta.json"))
     raw = os.path.join(d, "raw")
@@ -397,14 +450,67 @@ def summarize(d):
         warnings.append("achieved %.0f events/s is under 97%% of the offered %.0f: per-event counts are only comparable at the same achieved rate" %
                         (m["rate.achieved_eps"], num(meta["offered"])))
 
+    # --- a failed verdict: counted shed, or an unexplained loss?
+    shed0, shed1 = read_shed(os.path.join(raw, "shed-start")), read_shed(os.path.join(raw, "shed-end"))
+    shed = None
+    if shed0 is not None and shed1 is not None:
+        shed = {}
+        for key, v in shed1.items():
+            dv = v - shed0.get(key, 0.0)
+            if dv < 0:
+                warnings.append("shed counter %s went backwards (event-sources restarted?)" % (key,))
+                dv = 0.0
+            shed.setdefault(key[0], {})[key[1]] = dv
+        info["shed_counters"] = {k: {s_: int(x) for s_, x in v.items()} for k, v in shed.items()}
+    loss_class, unexplained = None, False
+    for kind, rep in verdict["reports"].items():
+        lost = rep.get("lost", 0) if isinstance(rep, dict) else 0
+        if not lost:
+            continue
+        if shed is None:
+            rep["lossClass"] = "UNEXPLAINED LOSS: lost %d and no shed counters were collected" % lost
+            unexplained = True
+            continue
+        counted = sum(x for per in shed.values() for src, x in per.items() if (("mqtt" in src) == (kind == "mqtt")))
+        if counted >= lost:
+            rep["lossClass"] = "counted shed: %d" % counted
+        else:
+            rep["lossClass"] = "UNEXPLAINED LOSS: lost %d, counted shed %d" % (lost, counted)
+            unexplained = True
+    classes = [r["lossClass"] for r in verdict["reports"].values() if isinstance(r, dict) and r.get("lossClass")]
+    if classes:
+        loss_class = "; ".join(classes)
+    verdict["lossClass"] = loss_class
+    verdict["unexplainedLoss"] = unexplained
+    if unexplained:
+        warnings.append("UNEXPLAINED LOSS (%s): PUBACKed events are missing and no shed counter accounts for them; this is a durability alarm, not noise" % loss_class)
+
+    # --- broker stalls and leader changes, against the measured window
+    w0 = int(pre["epoch"] or 0)
+    w1 = int(open(os.path.join(raw, "post", "end.epoch")).read().strip()) if os.path.exists(os.path.join(raw, "post", "end.epoch")) else w0 + int(window)
+    eps = stall_episodes(os.path.join(raw, "nats-events.log"), w0, w1)
+    info["stalls"] = eps
+    stall_in_window = bool(eps) and any(e["inWindow"] for e in eps)
+    if eps:
+        for e in eps:
+            warnings.append("broker %s at %+d..%+d s relative to the window start (%d log lines)%s" % (
+                e["kind"], e["startRelS"], e["endRelS"], e["lines"], ": INSIDE the window" if e["inWindow"] else ", outside the window"))
+    excluded = None
+    if stall_in_window:
+        excluded = "a broker stall or leader change fell inside the measured window"
+    if not verdict["passed"]:
+        excluded = ((excluded + "; ") if excluded else "") + "harness verdict failed" + (" (%s)" % loss_class if loss_class else "")
+
     layout = layout_of(raw)
-    summary = {"schema": SCHEMA, "meta": meta, "info": info, "metrics": m, "verdict": verdict, "layout": layout, "warnings": warnings}
+    summary = {"schema": SCHEMA, "meta": meta, "info": info, "metrics": m, "verdict": verdict, "layout": layout, "warnings": warnings, "excluded": excluded}
     with open(os.path.join(d, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
     with open(os.path.join(d, "summary.md"), "w", encoding="utf-8") as f:
         f.write(render_md(summary))
     sys.stdout.write(render_md(summary))
-    return 0 if verdict["passed"] else 1
+    if unexplained:
+        return 4
+    return 0 if verdict["passed"] and not stall_in_window else 1
 
 
 def layout_of(raw):
@@ -447,6 +553,12 @@ def render_md(s):
     v = s["verdict"]
     L.append("Harness verdict: **%s**. lost=%d duplicated=%d. %s" % ("PASS" if v["passed"] else "FAIL", m["loss.lost_events"], m["loss.duplicated_events"],
                                                                      json.dumps(v["reports"], sort_keys=True)))
+    if s.get("excluded"):
+        L.append("")
+        L.append("**EXCLUDED from replicates: %s**" % s["excluded"])
+    if meta.get("tier"):
+        L.append("")
+        L.append("Sim tier `%s`: ingest ceiling %s/s, burst %s." % (meta["tier"], meta.get("tierIngestPerS"), meta.get("tierBurst")))
     L.append("")
     L += ["| metric | per event |", "|---|---:|"]
     for k in sorted(m):
@@ -498,8 +610,9 @@ def arm_values(arg):
         s = load(p)
         # A run whose harness verdict failed (a PUBACKed event lost, state not caught up) was not a
         # like-for-like window: a stall or a loss moves every per-event count. It is left out, loudly.
-        if not (s.get("verdict") or {}).get("passed", True) and not INCLUDE_FAILED:
-            sys.stderr.write("perf-ab: leaving out %s: its harness verdict FAILED (%s)\n" % (p, json.dumps((s.get("verdict") or {}).get("reports"), sort_keys=True)[:160]))
+        bad = s.get("excluded") or (None if (s.get("verdict") or {}).get("passed", True) else "its harness verdict FAILED")
+        if bad and not INCLUDE_FAILED:
+            sys.stderr.write("perf-ab: leaving out %s: %s\n" % (p, bad))
             continue
         sums.append(s)
     if not sums:
@@ -691,6 +804,53 @@ def self_test():
                 rc = 1
         if "cpu.perf-ab-loadgen.s_per_1k_events" in s:
             sys.stderr.write("self-test: the loadgen pod's CPU was counted\n")
+            rc = 1
+        # a failed verdict: classified as a counted shed, or as an unexplained loss; and stalls placed against the window
+        raw0 = os.path.join(arm, "raw")
+        for when, val in (("shed-start", 100), ("shed-end", 2100)):
+            os.makedirs(os.path.join(raw0, when), exist_ok=True)
+            with open(os.path.join(raw0, when, "shed-event-sources-x.prom"), "w") as f:
+                f.write('devicechain_eventsources_total_msg_rate_limited{source="mqtt1",shed_class="a"} %d\n' % val)
+                f.write('devicechain_eventsources_total_msg_reading_limited{source="mqtt1"} 0\n')
+        with open(os.path.join(raw0, "report-mqtt.json"), "w") as f:
+            json.dump({"drive": {"pubacked": 3200}, "storage": {"persisted": 1200, "lost": 2000, "excess": 0},
+                       "invariants": [{"name": "puback-durability", "passed": False}]}, f)
+        with open(os.path.join(raw0, "nats-events.log"), "w") as f:
+            f.write("dc-nats-0 [7] 2026/07/03 23:00:00.5 [WRN] Internal subscription on x took too long: 3s\n")  # long before the window
+        with open(os.path.join(raw0, "pre", "start.epoch"), "w") as f:
+            f.write("1783123200")  # 2026-07-04 00:00:00 UTC: the window starts here
+        with open(os.path.join(raw0, "post", "end.epoch"), "w") as f:
+            f.write("1783123300")
+        j = {}
+        for shed_end, want_class, want_rc in ((2100, "counted shed: 2000", 1), (150, "UNEXPLAINED LOSS", 4)):
+            with open(os.path.join(raw0, "shed-end", "shed-event-sources-x.prom"), "w") as f:
+                f.write('devicechain_eventsources_total_msg_rate_limited{source="mqtt1",shed_class="a"} %d\n' % shed_end)
+            stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+            try:
+                got_rc = summarize(arm)
+            finally:
+                sys.stdout.close()
+                sys.stdout = stdout
+            j = load(os.path.join(arm, "summary.json"))
+            if want_class not in (j["verdict"].get("lossClass") or "") or got_rc != want_rc:
+                sys.stderr.write("self-test: loss class %r rc %r, want %r rc %r\n" % (j["verdict"].get("lossClass"), got_rc, want_class, want_rc))
+                rc = 1
+        if j["info"]["stalls"][0]["inWindow"] or not j.get("excluded"):
+            sys.stderr.write("self-test: a stall before the window was placed inside it (or the failed arm was not excluded)\n")
+            rc = 1
+        with open(os.path.join(raw0, "nats-events.log"), "a") as f:
+            f.write("dc-nats-2 [7] 2026/07/04 00:00:30.1 [WRN] JetStream cluster stream 'X' has NO quorum, stalled\n")  # inside
+        with open(os.path.join(raw0, "report-mqtt.json"), "w") as f:
+            json.dump({"drive": {"pubacked": 3200}, "storage": {"persisted": 3200, "lost": 0, "excess": 0}, "invariants": [{"name": "x", "passed": True}]}, f)
+        stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+        try:
+            got_rc = summarize(arm)
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
+        j = load(os.path.join(arm, "summary.json"))
+        if not any(e["inWindow"] for e in j["info"]["stalls"]) or "inside the measured window" not in (j.get("excluded") or "") or got_rc != 1:
+            sys.stderr.write("self-test: a stall inside the window did not exclude the arm (excluded=%r rc=%r)\n" % (j.get("excluded"), got_rc))
             rc = 1
         # the refusal: a pg_stat_statements reset inside the window must invalidate the statement metrics
         for name in ("tsdb",):

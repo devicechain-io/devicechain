@@ -60,7 +60,8 @@
 # Credentials are never printed: the sim handshakes are rewritten and streamed into the pod, never read.
 #
 # Requires: kubectl, jq, python3 (or python), dcctl (when sims are created), date, awk.
-# Exit: 0 measured and the harnesses' verdicts passed; 1 measured, a verdict failed; 2 usage; 3 refused/aborted.
+# Exit: 0 measured and the harnesses' verdicts passed; 1 measured, a verdict failed (a counted shed, or a
+# stall in the window); 2 usage; 3 refused/aborted; 4 an UNEXPLAINED LOSS (a durability alarm).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -85,7 +86,7 @@ py() { # the interpreter: python3 where it is real, python on Windows
 kubeconfig="" ns="" instance="" arm="" out="perf-ab-out" dcctl="${DCCTL:-dcctl}" bin_dir=""
 mqtt_rate=1000 http_rate=500 duration=180 warmup=45 settle=40 tail=20 stagger=90
 rebalance=0 roll=0 rdb_ns="dc-system" rdb_cluster="dc-rdb" tsdb_cluster="dc-tsdb" nats_prefix="dc-nats"
-console_host="localhost:8080" fresh_sims=0 sim_prefix="ab" self_test=0
+console_host="localhost:8080" fresh_sims=0 sim_prefix="abt" tier_multiple=10 self_test=0
 loadgen="perf-ab-loadgen" loadgen_image="${LOADGEN_IMAGE:-debian:12-slim}"
 nats_monitor_port=8222
 
@@ -111,6 +112,7 @@ while [[ $# -gt 0 ]]; do
     --console-host) console_host="$2"; shift 2 ;;
     --fresh-sims) fresh_sims=1; shift ;;
     --sim-prefix) sim_prefix="$2"; shift 2 ;;
+    --tier-multiple) tier_multiple="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) say "unknown argument: $1"; usage ;;
   esac
@@ -128,7 +130,7 @@ fi
 [[ "$arm" =~ ^[a-z0-9][a-z0-9-]{0,19}$ ]] || usage_err "--arm must be [a-z0-9-] and at most 20 characters (it names the sims, with a run suffix)"
 [[ -n "$bin_dir" && -f "$bin_dir/dc-loadtest" && -f "$bin_dir/dc-loadtest-mqtt" ]] \
   || usage_err "--bin-dir must hold Linux dc-loadtest and dc-loadtest-mqtt"
-for n in mqtt_rate http_rate duration warmup settle tail stagger; do
+for n in mqtt_rate http_rate duration warmup settle tail stagger tier_multiple; do
   [[ "${!n}" =~ ^[0-9]+$ ]] || usage_err "--${n//_/-} must be a whole number"
 done
 [[ "$duration" -ge 60 ]] || usage_err "--duration under 60 s is mostly noise"
@@ -258,9 +260,20 @@ put "$bin_dir/dc-loadtest-mqtt" /rc/bin/dc-loadtest-mqtt
 k exec -n "$ns" "$loadgen" -- chmod +x /rc/bin/dc-loadtest /rc/bin/dc-loadtest-mqtt
 
 sim_dir="${DC_HOME:-$HOME/.devicechain}/sims"
+# The sims run in a tier whose ingest ceiling is far above the offered rate and whose burst holds many
+# seconds of it. The rig measures cost, not governance: a tenant AT the platform default ceiling
+# (1,000/s, burst 2,000) has its PUBACKed events shed by the ingest gate whenever the host stalls the
+# broker for more than ~2 s, which the harness reports as loss. The tier is named for the rate it was
+# sized for and the sim names carry it, so a sim made at another tier is never reused by mistake.
+max_rate=$((mqtt_rate > http_rate ? mqtt_rate : http_rate))
+tier_token="ab-load-$max_rate"
+tier_msgs=$((tier_multiple * max_rate))
+tier_burst=$((2 * tier_msgs))
+tier_config="{\"ingestReadingsPerSecond\":$tier_msgs,\"ingestBurst\":$tier_burst}"
 mk_sim() { # name
   if [[ "$fresh_sims" == 1 || ! -f "$sim_dir/$1.json" ]]; then
     env KUBECONFIG="$kubeconfig" "$dcctl" sim create "$1" -s "$console_host" -i "$instance" --kube-context "$kctx" \
+      --tier "$tier_token" --tier-config "$tier_config" \
       --ingress "http://event-sources.$ns.svc.cluster.local:8081" \
       --mqtt-broker "ssl://${nats_prefix}.$ns.svc.cluster.local:1883" >"$run_dir/sim-$1.log" 2>&1 \
       || die "dcctl sim create $1 failed; see $run_dir/sim-$1.log"
@@ -278,7 +291,7 @@ mk_sim() { # name
 # gives each run tenants of its own instead (a destroyed tenant's token stays reserved, so the
 # run's time of day is part of the name) and destroys them on exit.
 if [[ "$fresh_sims" == 1 ]]; then sim_m="${arm}-${ts:9:6}-m"; sim_h="${arm}-${ts:9:6}-h"
-else sim_m="${sim_prefix}-m"; sim_h="${sim_prefix}-h"; fi
+else sim_m="${sim_prefix}-${max_rate}-m"; sim_h="${sim_prefix}-${max_rate}-h"; fi
 [[ "$mqtt_rate" -gt 0 ]] && mk_sim "$sim_m"
 [[ "$http_rate" -gt 0 ]] && mk_sim "$sim_h"
 
@@ -344,6 +357,19 @@ done
 # The harnesses set up (devices, sessions) for different lengths of time before their drives start, so
 # their steady windows are offset; --stagger is the margin that keeps the window inside both.
 drive=$((warmup + settle + duration + tail + stagger))
+# The ingest gate's shed counters, over the whole drive (the harness's loss is over the whole drive too).
+shed_snap() { # label
+  local p
+  local -a es_pods=()
+  mkdir -p "$raw/$1"
+  mapfile -t es_pods < <(k get pods -n "$ns" -o json | jq -r '.items[]|select(.metadata.name|test("^event-sources-"))|.metadata.name' | tr -d '\r')
+  for p in "${es_pods[@]}"; do
+    k get --raw "/api/v1/namespaces/$ns/pods/$p:8080/proxy/metrics" \
+      | grep -E '^devicechain_eventsources_total_(msg_rate_limited|msg_reading_limited|readings_rate_limited|msg_publish_failed|msg_backpressured)[{ ]' > "$raw/$1/shed-$p.prom" || true
+  done
+}
+shed_snap shed-start
+load_start_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 marker_dir=/rc/run
 if [[ "$mqtt_rate" -gt 0 ]]; then
   # One MQTT session per device at one event per second, as the GKE rounds did.
@@ -421,6 +447,15 @@ while :; do
   [[ $SECONDS -gt $wait_end ]] && { say "harness still running at the timeout"; break; }
   sleep 8
 done
+shed_snap shed-end
+# Stalls the broker logged since the load started (UTC, as the server stamps them): the summary places
+# each against the measured window.
+: > "$raw/nats-events.log"
+for p in "${nats_pods[@]}"; do
+  { k logs -n "$ns" "$p" -c nats --since-time="$load_start_iso" \
+      | grep -E 'took too long|NO quorum|stalled|new (stream |consumer |metadata )?leader|leader (changed|lost)|[Ss]tep[- ]?down' \
+      | sed "s|^|$p |" >> "$raw/nats-events.log"; } || true
+done
 for n in "${names[@]}"; do
   k exec -n "$ns" "$loadgen" -- cat "$marker_dir/$n.json" > "$raw/report-$n.json" 2>/dev/null || say "warning: no $n report"
   k exec -n "$ns" "$loadgen" -- tail -n 40 "$marker_dir/$n.log" > "$raw/harness-$n.log" 2>/dev/null || true
@@ -434,10 +469,10 @@ done
 # ---------------------------------------------------------------------------
 jq -n --arg arm "$arm" --arg ctx "$kctx" --arg ns "$ns" --arg ts "$ts" --arg tsdb "$tsdb_pod" --arg rdb "$rdb_pod" \
   --argjson mqtt "$mqtt_rate" --argjson http "$http_rate" --argjson dur "$duration" --argjson warm "$warmup" \
-  --argjson rb "$rebalance" --arg nats "${nats_pods[*]}" \
+  --argjson rb "$rebalance" --arg nats "${nats_pods[*]}" --arg tier "$tier_token" --argjson tmsgs "$tier_msgs" --argjson tburst "$tier_burst" \
   '{arm:$arm, context:$ctx, namespace:$ns, startedAt:$ts, eventStorePrimary:$tsdb, relationalPrimary:$rdb,
     offeredMqtt:$mqtt, offeredHttp:$http, offered:($mqtt+$http), durationS:$dur, warmupS:$warm, rebalanced:($rb==1),
-    natsPods:($nats|split(" "))}' > "$run_dir/meta.json"
+    natsPods:($nats|split(" ")), tier:$tier, tierIngestPerS:$tmsgs, tierBurst:$tburst}' > "$run_dir/meta.json"
 rc=0
 py "$HELPER" summarize --dir "$run_dir" || rc=$?
 exit "$rc"
