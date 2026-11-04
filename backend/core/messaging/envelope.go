@@ -120,6 +120,11 @@ type memberInfo struct {
 	index uint32
 }
 
+// IsSplitCopy reports whether the message is a copy of an envelope member republished alone
+// (Dc-Retry). Its own delivery count says nothing about the member's earlier life in the envelope
+// it came from, so a producer that settles by position treats it as redelivered.
+func (m Message) IsSplitCopy() bool { return m.split != nil }
+
 // MemberIndex reports the member's position in its source and true when the message is a
 // member of an envelope; false for a legacy message.
 func (m Message) MemberIndex() (uint32, bool) {

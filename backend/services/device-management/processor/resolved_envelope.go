@@ -80,9 +80,11 @@ func newEnvelopeEngine(ctx context.Context, iproc *InboundEventsProcessor, w mes
 		Writer:          w,
 		Rounds:          rp,
 		Ctx:             ctx,
-		ChunkMax:        func() int { return iproc.envelopeChunkMax },
+		// A bucket's members cannot exceed bucketSize x fanSlots, and every round carries at least one.
+		MaxRounds: bucketSize * fanSlots,
+		ChunkMax:  func() int { return iproc.envelopeChunkMax },
 		Metrics: messaging.NewEnvelopeCounters(iproc.metrics.envDuplicates, iproc.metrics.envRecoverySteps,
-			iproc.metrics.envProbeFailures, iproc.metrics.envRetries),
+			iproc.metrics.envProbeFailures, iproc.metrics.envRetries).WithProbeDenied(iproc.metrics.envProbeDenied),
 	})
 	if err != nil {
 		// The kinds above are constants and the writer and publisher were checked by the caller.
@@ -187,9 +189,12 @@ func (e *envelopeEngine) publishBatch(ctx context.Context, batch []resolvedItem)
 			Bytes:       bytes,
 			Key:         []byte(item.event.SourceDeviceToken),
 			Correlation: item.correlation,
-			Redelivered: coord.src.NumDelivered > 1,
+			// A copy split out of an envelope has a delivery count of its own, which says nothing
+			// about the member's earlier life in the envelope it came from (its event may already
+			// be stored under the envelope's id), so it walks from round 0 like a redelivery.
+			Redelivered: coord.src.NumDelivered > 1 || coord.src.IsSplitCopy(),
 			Settle:      func(err error) { e.iproc.settleResolved(coord, err) },
-			Beat:        func() { _ = coord.src.InProgress() },
+			Beat:        coord.beat,
 		})
 	}
 	for _, k := range order {

@@ -216,6 +216,12 @@ func streamGrant(g *grant, instance, area string, st streams.Stream) {
 		// A stream that refuses its writers when a reader falls behind is gated by that reader's
 		// backlog, which the writer reads off the reader's durable: state only, the writer cannot
 		// fetch from or change it.
+		// A writer that settles envelope rounds reads the stored message a duplicate PubAck names
+		// back by sequence, from the stream it writes (messaging.RoundPublisher.Get). Only that
+		// read: no consumer, no delete.
+		if streams.ReadsBack(st.Suffix, area) {
+			g.api("STREAM.MSG.GET."+name, "DIRECT.GET."+name, "DIRECT.GET."+name+".>")
+		}
 		if streams.AppliesBackpressure(st.Suffix) {
 			for _, reader := range streams.BackpressureReadersFor(st.Suffix) {
 				g.api("CONSUMER.INFO." + name + "." + messaging.DurableName(instance, reader, st.Suffix))

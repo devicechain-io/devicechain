@@ -427,6 +427,13 @@ type Stream struct {
 	//
 	// Each name must be a durable reader, and none may be in ReplayCovered.
 	BackpressureReaders []string
+	// ReadBackWriters names the Writers that publish envelopes on this stream and SETTLE them
+	// (messaging.RoundEngine): when the broker answers a round as a duplicate, they read the stored
+	// message back by sequence to learn which members it holds. A read-back is a STREAM.MSG.GET (or
+	// DIRECT.GET) on the stream the writer publishes to, which a plain writer is not granted, so the
+	// grant is derived from this list (core/natsauth). Without it a duplicate answer is a permission
+	// error and the round's sources are left unacknowledged forever. Each name must be a Writer.
+	ReadBackWriters []string
 	// Forwards maps an area that reads this stream to the stream it forwards what it reads
 	// into, when that stream applies backpressure. Every reader the area opens on this stream
 	// then parks before each fetch while the downstream stream's gate is closed, so a closed
@@ -711,6 +718,7 @@ var All = []Stream{
 		RunwayBytesPerMessage: 384,
 		DeadLetterKind:        kindEvent,
 		BackpressureReaders:   []string{"device-management"},
+		ReadBackWriters:       []string{"event-sources"},
 		Forwards:              map[string]string{"device-management": ResolvedEvents},
 		Why:                   "raw device telemetry — the primary ingest path"},
 	//
@@ -748,6 +756,7 @@ var All = []Stream{
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		ReplayCovered:          []string{"event-processing"},
 		BackpressureReaders:    []string{"event-management"},
+		ReadBackWriters:        []string{"device-management"},
 		Why:                    "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 
 	// One message per detection, and a subscribe-able product in its own right
@@ -1218,6 +1227,17 @@ func ReplayCoveredBy(suffix, area string) bool {
 // refuse its writers, or nil for a stream that never refuses. See Stream.BackpressureReaders.
 func BackpressureReadersFor(suffix string) []string {
 	return bySuffix[suffix].BackpressureReaders
+}
+
+// ReadsBack reports whether area, a writer of suffix's stream, settles envelope rounds on it and
+// so reads a stored message back by sequence. See Stream.ReadBackWriters.
+func ReadsBack(suffix, area string) bool {
+	return slices.Contains(bySuffix[suffix].ReadBackWriters, area)
+}
+
+// ReadBackWritersOf returns the areas that read their own writes back on suffix's stream.
+func ReadBackWritersOf(suffix string) []string {
+	return bySuffix[suffix].ReadBackWriters
 }
 
 // AppliesBackpressure reports whether suffix's stream refuses its writers while a declared

@@ -224,6 +224,16 @@ func (f *Former) Expired(now time.Time) []FormedBatch {
 	return out
 }
 
+// DrainTenant closes and returns tenant's open group, if any. A message that bypasses the former
+// (it cannot be grouped) calls it first, so it cannot overtake an earlier event of the same tenant
+// that is still waiting for company.
+func (f *Former) DrainTenant(now time.Time, tenant string) []FormedBatch {
+	if t := f.open[tenant]; t != nil {
+		return []FormedBatch{f.closeTenant(now, tenant, t)}
+	}
+	return nil
+}
+
 // Drain closes and returns every open group, whatever its age: the caller is stopping.
 func (f *Former) Drain(now time.Time) []FormedBatch {
 	var out []FormedBatch
@@ -251,8 +261,9 @@ func (f *Former) sweep(now time.Time) {
 			delete(f.tenants, tenant)
 		}
 	}
-	// Still full of active tenants: forget the arrival history of the idle-er half rather than
-	// grow without bound. Open groups are never dropped.
+	// Still full: forget the arrival history of EVERY tenant with no open group (an active
+	// tenant relearns its rate within a few events) rather than grow without bound. Open groups
+	// are never dropped.
 	if len(f.tenants) >= formerMaxTenants {
 		for tenant, t := range f.tenants {
 			if len(t.members) == 0 {
@@ -275,6 +286,7 @@ type EnvelopeMetrics struct {
 	duplicates    prometheus.Counter
 	recoverySteps prometheus.Counter
 	probeFailures prometheus.Counter
+	probeDenied   prometheus.Counter
 	retries       prometheus.Counter
 }
 
@@ -293,6 +305,8 @@ func NewEnvelopeMetrics(ms *core.Microservice, prefix string) *EnvelopeMetrics {
 			"Rounds an envelope walk moved past after finding them stored"),
 		probeFailures: ms.NewCounter(prefix+"_envelope_probe_failures_total",
 			"Stored envelopes a duplicate answer named that could not be read back or understood; each leaves its sources unacknowledged"),
+		probeDenied: ms.NewCounter(prefix+"_envelope_probe_denied_total",
+			"Read-backs of a stored envelope the broker REFUSED: this writer lacks the read-back grant, which no retry cures; each leaves its sources unacknowledged"),
 		retries: ms.NewCounter(prefix+"_envelope_round_retries_total",
 			"Envelope rounds the broker rejected, published again under the same id until their outcome was known"),
 	}
@@ -328,6 +342,19 @@ func (m *EnvelopeMetrics) countRecoveryStep() {
 		incCounter(m.recoverySteps)
 	}
 }
+
+// WithProbeDenied attaches the counter of read-backs the broker refused (a missing grant).
+func (m *EnvelopeMetrics) WithProbeDenied(c prometheus.Counter) *EnvelopeMetrics {
+	m.probeDenied = c
+	return m
+}
+
+func (m *EnvelopeMetrics) countProbeDenied() {
+	if m != nil {
+		incCounter(m.probeDenied)
+	}
+}
+
 func (m *EnvelopeMetrics) countProbeFailure() {
 	if m != nil {
 		incCounter(m.probeFailures)
@@ -357,6 +384,8 @@ type GroupCommit struct {
 	timer *time.Timer
 	// stopped refuses new work once Stop ran.
 	stopped bool
+	// wg counts the flushes in flight.
+	wg sync.WaitGroup
 }
 
 // ErrGroupCommitStopped answers an Add after Stop.
@@ -383,9 +412,7 @@ func (g *GroupCommit) Add(tenant string, m FormedMember) error {
 	ready := g.f.Add(time.Now(), tenant, m)
 	g.rearmLocked()
 	g.mu.Unlock()
-	for _, b := range ready {
-		g.flush(b)
-	}
+	g.flushAll(ready)
 	return nil
 }
 
@@ -400,19 +427,29 @@ func (g *GroupCommit) tick() {
 	ready := g.f.Expired(time.Now())
 	g.rearmLocked()
 	g.mu.Unlock()
+	g.flushAll(ready)
+}
+
+// flushAll publishes each closed batch on a goroutine of its own, so a batch whose PubAck stalls
+// (one tenant's stream trouble, a slow broker) never delays another batch's answer: not the
+// requests behind it in the same call, not the timer's next tick.
+func (g *GroupCommit) flushAll(ready []FormedBatch) {
 	for _, b := range ready {
-		g.flush(b)
+		g.wg.Add(1)
+		go func() {
+			defer g.wg.Done()
+			g.flush(b)
+		}()
 	}
 }
 
-// Stop refuses further Adds and flushes every open group at once.
+// Stop refuses further Adds, flushes every open group at once and waits for every flush in flight.
 func (g *GroupCommit) Stop() {
 	g.mu.Lock()
 	g.stopped = true
 	g.timer.Stop()
 	ready := g.f.Drain(time.Now())
 	g.mu.Unlock()
-	for _, b := range ready {
-		g.flush(b)
-	}
+	g.flushAll(ready)
+	g.wg.Wait()
 }

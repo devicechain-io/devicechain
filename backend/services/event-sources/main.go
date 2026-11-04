@@ -1187,15 +1187,25 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 
 // writeInbound writes one message to inbound-events and accounts for a backpressure refusal.
 func writeInbound(ctx context.Context, source string, msg messaging.Message) error {
-	err := InboundEventsWriter.WriteMessages(ctx, msg)
-	InboundEventsWriter.HandleResponse(err)
+	err := publishInbound(ctx, msg)
 	// The gate can close between a source's admit check and this publish; the refusal is
 	// counted the same way, and the source answers it as it answers any refusal.
 	if errors.Is(err, messaging.ErrStreamBackpressure) {
-		BackpressureCounter.WithLabelValues(source).Inc()
+		countBackpressured(source)
 	}
 	return err
 }
+
+// publishInbound writes one message to inbound-events and reports the writer's response, without
+// counting a refusal: the group commit counts per request, not per envelope.
+func publishInbound(ctx context.Context, msg messaging.Message) error {
+	err := InboundEventsWriter.WriteMessages(ctx, msg)
+	InboundEventsWriter.HandleResponse(err)
+	return err
+}
+
+// countBackpressured counts one request refused by the pipeline's backpressure.
+func countBackpressured(source string) { BackpressureCounter.WithLabelValues(source).Inc() }
 
 // Handle failed decoding. It returns whether the undecodable payload was durably
 // routed to the failed-decode path, so a source consuming a durable stream can
@@ -1609,9 +1619,9 @@ func buildHTTPGroupCommit() error {
 		return nil
 	}
 	g, err := processor.NewHTTPEnvelopes(inboundFormerConfig(), InboundEnvelopeMetrics,
-		func(ctx context.Context, source string, msg messaging.Message) error {
-			return writeInbound(ctx, source, msg)
-		})
+		func(ctx context.Context, _ string, msg messaging.Message) error {
+			return publishInbound(ctx, msg)
+		}, countBackpressured)
 	if err != nil {
 		return err
 	}

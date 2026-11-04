@@ -62,6 +62,20 @@ import (
 // is alive and the sources are unacknowledged). Skipping it would leave a hole below a stored
 // round, and a redelivery walk would fill the hole with events the later round already holds.
 //
+// # The round-hole residual (inherited from the interim grouping)
+//
+// A round id is allocated before its publish is known to have landed, and the high-water mark is a
+// process's memory. The protocol closes every hole it can see (a rejected round is retried under
+// the same id; a redelivered source walks from round 0), but one window remains: a source that is
+// NOT marked Redelivered, and whose earlier publish landed in a round this process has no record of,
+// takes the NEXT round and stores the member a second time. That happens when a pod died after the
+// PubAck and before the ack and the redelivery reaches a pod whose delivery count did not rise (a
+// recreated or renamed durable resets the count to 1), or when a split copy is not marked. It is a
+// duplicate, never a loss: event-management's content-derived event id and device-state's
+// strictly-newer guards absorb it, and the per-member DETECT guard of the slice that follows (E4a)
+// drops it before the engine sees it. The cases the engine CAN see (Redelivered, a duplicate
+// PubAck) never reach it.
+//
 // An event whose envelope the encoder refuses (a size, a token that is not UTF-8) is split down to
 // single members, published in the legacy shape under the SAME group id with HeaderMemberIndex
 // naming which member it is - never under a per-event id, which no walk could see.
@@ -71,14 +85,11 @@ const (
 	// RoundBucketSeconds is how long, in the broker's append time, one bucket spans.
 	RoundBucketSeconds = 30
 
-	// maxRoundsPerBucket bounds the rounds one bucket can need: a member per sequence, one round
-	// at least per member. Reaching it is an error (the sources stay unacknowledged), never a loop.
-	maxRoundsPerBucket = RoundBucketSize
-	roundStateMax      = 8192
-	roundWorkers       = 16
-	roundTimeout       = 10 * time.Second
-	roundGiveUp        = 5 * time.Minute
-	roundBeat          = 10 * time.Second
+	roundStateMax = 8192
+	roundWorkers  = 16
+	roundTimeout  = 10 * time.Second
+	roundGiveUp   = 5 * time.Minute
+	roundBeat     = 10 * time.Second
 )
 
 // RoundKey names a bucket of one tenant's sequenced source.
@@ -167,6 +178,12 @@ type RoundEngineConfig struct {
 	Rounds RoundPublisher
 	// Ctx ends the walks.
 	Ctx context.Context
+	// MaxRounds bounds the rounds one walk may need for a bucket: its members cannot exceed this
+	// many, and every round carries at least one. Reaching it is an error (the sources stay
+	// unacknowledged), never a loop. A bucket of one member per sequence needs RoundBucketSize;
+	// device-management's, whose member index also names a fan-out slot, needs
+	// RoundBucketSize x fan-out slots. Zero is RoundBucketSize.
+	MaxRounds int
 	// ChunkMax, when set, caps k (read at every publish; zero or beyond the format bound is
 	// eventenvelope.MaxMembers). Tests fix k with it.
 	ChunkMax func() int
@@ -237,6 +254,13 @@ func (e *RoundEngine) SetBeatEvery(d time.Duration) { e.beatEvery = d }
 // Wait blocks until every walk has finished. Call it after the writer is closed, so no new walk
 // can start.
 func (e *RoundEngine) Wait() { e.wg.Wait() }
+
+func (e *RoundEngine) maxRounds() int {
+	if e.cfg.MaxRounds > 0 {
+		return e.cfg.MaxRounds
+	}
+	return RoundBucketSize
+}
 
 func (e *RoundEngine) chunkMax() int {
 	if e.cfg.ChunkMax != nil {
@@ -544,6 +568,15 @@ var errRoundWalkStopped = errors.New("envelope: stopped before the round's outco
 func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []RoundMember, dup *PubAckInfo, retry bool) {
 	start := round
 	lastBeat := time.Now()
+	// beatIfDue tells the sources' broker they are alive. The retry loop of a rejected round calls
+	// it too: a walk can sit in that loop for minutes, and a source whose AckWait expires meanwhile
+	// is redelivered under the walk.
+	beatIfDue := func() {
+		if time.Since(lastBeat) >= e.beatEvery {
+			e.beat(ms)
+			lastBeat = time.Now()
+		}
+	}
 	var giveUp <-chan time.Time
 	if retry {
 		t := time.NewTimer(e.giveUpAfter())
@@ -551,10 +584,7 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 		giveUp = t.C
 	}
 	for len(ms) > 0 {
-		if time.Since(lastBeat) >= e.beatEvery {
-			e.beat(ms)
-			lastBeat = time.Now()
-		}
+		beatIfDue()
 		var ack PubAckInfo
 		if dup != nil {
 			ack, dup = *dup, nil
@@ -563,8 +593,8 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 			if len(ms) == 0 {
 				return
 			}
-			if round-start > maxRoundsPerBucket {
-				e.settle(ms, fmt.Errorf("envelope for bucket %d needed more than %d rounds", k.Bucket, maxRoundsPerBucket))
+			if int(round-start) > e.maxRounds() {
+				e.settle(ms, fmt.Errorf("envelope for bucket %d needed more than %d rounds", k.Bucket, e.maxRounds()))
 				return
 			}
 			msg, err := e.buildRound(k, round, ms)
@@ -578,7 +608,7 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 				e.settle(ms, err)
 				return
 			}
-			next, err := e.publishRound(ctx, k, msg, giveUp)
+			next, err := e.publishRound(ctx, k, msg, giveUp, beatIfDue)
 			if err != nil {
 				e.settle(ms, err)
 				return
@@ -597,6 +627,16 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 		}
 		// The round is stored: read what it carries.
 		held, err := e.heldOf(ctx, k, round, ack.Sequence)
+		if err != nil && probeDenied(err) {
+			// A refused read is a missing grant, not a flaky broker: no retry cures it, so it is
+			// counted apart and logged as an error. Sources stay unacknowledged (never settled as
+			// stored on a guess).
+			e.cfg.Metrics.countProbeDenied()
+			log.Error().Err(err).Str("tenant", k.Tenant).Uint64("bucket", k.Bucket).Uint32("round", round).
+				Msg("The broker DENIED reading back an envelope a duplicate publish named: this writer lacks the read-back grant (streams.Stream.ReadBackWriters); its sources stay unacknowledged")
+			e.settle(ms, err)
+			return
+		}
 		if err != nil {
 			e.cfg.Metrics.countProbeFailure()
 			log.Warn().Err(err).Str("tenant", k.Tenant).Uint64("bucket", k.Bucket).Uint32("round", round).
@@ -621,7 +661,7 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 
 // publishRound publishes msg synchronously, again under the same id while it fails, until the
 // outcome is known, the walk is stopped, or giveUp fires (nil: never).
-func (e *RoundEngine) publishRound(ctx context.Context, k RoundKey, msg Message, giveUp <-chan time.Time) (PubAckInfo, error) {
+func (e *RoundEngine) publishRound(ctx context.Context, k RoundKey, msg Message, giveUp <-chan time.Time, beatIfDue func()) (PubAckInfo, error) {
 	backoff := 200 * time.Millisecond
 	for {
 		e.Probes.Add(1)
@@ -642,6 +682,7 @@ func (e *RoundEngine) publishRound(ctx context.Context, k RoundKey, msg Message,
 		case <-time.After(backoff):
 		}
 		backoff = min(2*backoff, 5*time.Second)
+		beatIfDue()
 		e.cfg.Metrics.countRetry()
 		e.Retries.Add(1)
 	}

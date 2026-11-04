@@ -186,7 +186,7 @@ func TestFormerConfigRefusesOutOfRange(t *testing.T) {
 	}
 }
 
-// GroupCommit: a quiet tenant's Add flushes on the caller's goroutine before returning; a busy
+// GroupCommit: a quiet tenant's Add flushes its own group at once (no linger); a busy
 // tenant's members are flushed together by the timer, within the linger.
 func TestGroupCommitFlushesQuietNowAndBusyByTimer(t *testing.T) {
 	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
@@ -201,11 +201,22 @@ func TestGroupCommitFlushesQuietNowAndBusyByTimer(t *testing.T) {
 	if err := g.Add("quiet", fm(1)); err != nil {
 		t.Fatal(err)
 	}
-	mu.Lock()
-	if len(batches) != 1 || len(batches[0].Members) != 1 {
-		t.Fatalf("a quiet tenant's Add did not flush inline: %+v", batches)
+	quietDeadline := time.Now().Add(time.Second)
+	for {
+		mu.Lock()
+		n := len(batches)
+		mu.Unlock()
+		if n == 1 || time.Now().After(quietDeadline) {
+			break
+		}
+		time.Sleep(100 * time.Microsecond)
 	}
+	mu.Lock()
+	ok := len(batches) == 1 && len(batches[0].Members) == 1
 	mu.Unlock()
+	if !ok {
+		t.Fatalf("a quiet tenant's Add did not flush its own group at once")
+	}
 
 	// Teach a fast rate, then add two and wait for the timer.
 	for i := 0; i < 12; i++ {

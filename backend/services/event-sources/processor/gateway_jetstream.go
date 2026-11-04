@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -145,6 +146,10 @@ type GatewayJetStreamSource struct {
 	// the current start's machinery built from it.
 	envelopes *CaptureEnvelopes
 	ce        *captureEngine
+	// beats maps a captured message's reference to the function that tells the capture broker the
+	// message is still being worked on (envelope mode); an entry lives until the message settles.
+	beats   sync.Map
+	beatRef atomic.Uint64
 
 	lifecycle core.LifecycleManager
 	cancel    context.CancelFunc
@@ -371,6 +376,11 @@ func (es *GatewayJetStreamSource) submitter(publishes chan<- pendingPublish) Dec
 		var pos *capturePos
 		if es.ce != nil {
 			dedupID, pos = splitPosition(tenant, dedupID)
+			if pos != nil && pos.ref != 0 {
+				if f, ok := es.beats.Load(pos.ref); ok {
+					pos.beat = f.(func())
+				}
+			}
 		}
 		ctx, msg, ok := es.build(source, tenant, event, payload, dedupID)
 		if !ok {
@@ -437,6 +447,11 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 // use it.
 func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 	es.writer.Draining()
+	if ce := es.ce; ce != nil {
+		// Draining has begun: end the settlement walks now, so none is still retrying (and none can
+		// fire a done) after this returns. What they leave unsettled stays unacked for the next pod.
+		ce.cancel()
+	}
 	close(es.messages)
 	if !es.await(ctx, es.workersDone, "decode workers") {
 		return false
@@ -626,11 +641,14 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 				"and a redelivery would be stored twice.")
 	}
 	dedupID := es.dedupID(tenant, msg)
+	var beatRef uint64
 	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 {
 		// Envelope mode: the decode pipeline carries the message's position to the submitter in
 		// the id it already passes through (see positionToken).
 		if key, _, ok := messaging.RoundKeyOf(tenant, msg.StreamSeq, msg.AppendTime); ok {
-			dedupID = positionToken(dedupID, key, msg.NumDelivered > 1)
+			beatRef = es.beatRef.Add(1)
+			es.beats.Store(beatRef, func() { _ = msg.InProgress() })
+			dedupID = positionToken(dedupID, key, msg.NumDelivered > 1, beatRef)
 		}
 	}
 
@@ -650,7 +668,19 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		assertion:  assertedByCaptureBroker(msg),
-		done:       es.settler(msg, tenant),
+		done:       es.settleAndForget(es.settler(msg, tenant), beatRef),
+	}
+}
+
+// settleAndForget wraps a message's settler so its beat-table entry (envelope mode) is released
+// when the message settles, whether it was published, shed or dropped.
+func (es *GatewayJetStreamSource) settleAndForget(settle func(error), ref uint64) func(error) {
+	if ref == 0 {
+		return settle
+	}
+	return func(err error) {
+		es.beats.Delete(ref)
+		settle(err)
 	}
 }
 

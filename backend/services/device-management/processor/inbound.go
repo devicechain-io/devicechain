@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -48,10 +49,27 @@ type ackCoord struct {
 	src       messaging.Message
 	remaining int
 	failed    bool
+	// lastBeat is when an InProgress last went to the broker for this source (unix nanos), so a
+	// walk that beats several events of one source sends one.
+	lastBeat atomic.Int64
 	// mu guards remaining and failed. Without envelopes only the resolved writer's settle
 	// goroutine touches them, in order; with envelopes a duplicate's recovery settles members
 	// from a goroutine of its own, so the same coordinator can be settled from two.
 	mu sync.Mutex
+}
+
+// beatDedup is the least time between two InProgress sent for one source.
+const beatDedup = time.Second
+
+// beat tells the broker the source is still being worked on, once per beatDedup however many of
+// its events a walk is holding.
+func (c *ackCoord) beat() {
+	now := time.Now().UnixNano()
+	last := c.lastBeat.Load()
+	if now-last < int64(beatDedup) || !c.lastBeat.CompareAndSwap(last, now) {
+		return
+	}
+	_ = c.src.InProgress()
 }
 
 // resolvedItem pairs a resolved event with the tenant it belongs to so the
@@ -239,6 +257,7 @@ type ResolveMetrics struct {
 	envRecoverySteps prometheus.Counter
 	envProbeFailures prometheus.Counter
 	envRetries       prometheus.Counter
+	envProbeDenied   prometheus.Counter
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -278,6 +297,8 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 			"Stored resolved envelopes a duplicate answer named that could not be read back or understood; each leaves its sources unacknowledged"),
 		envRetries: ms.NewCounter("resolve_envelope_round_retries_total",
 			"Resolved-envelope rounds the broker rejected, published again under the same id until their outcome was known"),
+		envProbeDenied: ms.NewCounter("resolve_envelope_probe_denied_total",
+			"Read-backs of a stored resolved envelope the broker REFUSED: this writer lacks the read-back grant, which no retry cures; each leaves its sources unacknowledged"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}

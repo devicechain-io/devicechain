@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -51,17 +52,25 @@ type httpPending struct {
 type HTTPEnvelopes struct {
 	gc      *messaging.GroupCommit
 	publish func(ctx context.Context, source string, msg messaging.Message) error
+	// refused is told, once per REQUEST and with that request's own source, that its publish was
+	// refused under backpressure (nothing was stored). It is never called for any other failure.
+	refused func(source string)
 }
 
 // NewHTTPEnvelopes builds the group commit. publish writes one message to inbound-events and
-// returns only after its PubAck (the service's writeInbound).
+// returns only after its PubAck; it does NOT count a backpressure refusal (refused does, once per
+// request), because one refused envelope refuses every request that joined it.
 func NewHTTPEnvelopes(cfg messaging.FormerConfig, metrics *messaging.EnvelopeMetrics,
-	publish func(ctx context.Context, source string, msg messaging.Message) error) (*HTTPEnvelopes, error) {
+	publish func(ctx context.Context, source string, msg messaging.Message) error,
+	refused func(source string)) (*HTTPEnvelopes, error) {
 	former, err := messaging.NewFormer(cfg, "http", metrics)
 	if err != nil {
 		return nil, err
 	}
-	h := &HTTPEnvelopes{publish: publish}
+	if refused == nil {
+		refused = func(string) {}
+	}
+	h := &HTTPEnvelopes{publish: publish, refused: refused}
 	h.gc = messaging.NewGroupCommit(former, h.flush)
 	return h, nil
 }
@@ -75,7 +84,7 @@ func (h *HTTPEnvelopes) Publish(ctx context.Context, source, tenant string, msg 
 	p := &httpPending{ctx: ctx, msg: msg, source: source, done: make(chan error, 1)}
 	if len(msg.Value) > eventenvelope.MaxRawBytes {
 		// Larger than an envelope can hold: published alone, as it always was.
-		return h.publish(ctx, source, msg)
+		return h.single(p)
 	}
 	if err := h.gc.Add(tenant, messaging.FormedMember{Bytes: msg.Value, Token: p}); err != nil {
 		return err
@@ -91,12 +100,15 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 	}
 	answer := func(err error) {
 		for _, p := range pend {
+			if errors.Is(err, messaging.ErrStreamBackpressure) {
+				h.refused(p.source)
+			}
 			p.done <- err
 		}
 	}
 	if len(pend) == 1 {
 		// A group of one is the legacy message, byte for byte what the path always published.
-		pend[0].done <- h.publish(pend[0].ctx, pend[0].source, pend[0].msg)
+		pend[0].done <- h.single(pend[0])
 		return
 	}
 	events := make([]eventenvelope.Event, len(pend))
@@ -109,7 +121,7 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 		// singly, each answered by its own publish, as they were before envelopes.
 		log.Debug().Err(err).Str("tenant", b.Tenant).Msg("Could not envelope an HTTP group; publishing its events singly")
 		for _, p := range pend {
-			p.done <- h.publish(p.ctx, p.source, p.msg)
+			p.done <- h.single(p)
 		}
 		return
 	}
@@ -122,6 +134,15 @@ func (h *HTTPEnvelopes) flush(b messaging.FormedBatch) {
 		msg = msg.WithCorrelationID(cid)
 	}
 	answer(h.publish(pend[0].ctx, pend[0].source, msg))
+}
+
+// single publishes one request's event alone and counts its refusal.
+func (h *HTTPEnvelopes) single(p *httpPending) error {
+	err := h.publish(p.ctx, p.source, p.msg)
+	if errors.Is(err, messaging.ErrStreamBackpressure) {
+		h.refused(p.source)
+	}
+	return err
 }
 
 // randomSource is the 64 random bits that make an HTTP group's id its own.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -50,18 +51,24 @@ type capturePos struct {
 	key         messaging.RoundKey
 	index       uint32
 	redelivered bool
+	// ref names the message's entry in the source's beat table (0: none); beat tells the capture
+	// broker the message is still being worked on, which a long settlement walk must do or the
+	// message's AckWait expires and it is redelivered under the walk.
+	ref  uint64
+	beat func()
 }
 
 // positionToken is the dedup id the gateway hands the decode pipeline in envelope mode: the
-// legacy per-event id, then '@', the append-time bucket in base 36, and '!' for a redelivery.
-// The pipeline passes the string through untouched, and only the submitter reads it back
-// (splitPosition), so the position needs no change to the decode worker's signature.
-func positionToken(legacy string, key messaging.RoundKey, redelivered bool) string {
+// legacy per-event id, then '@', the append-time bucket in base 36, '!' for a redelivery, and '#'
+// with the message's beat-table reference. The pipeline passes the string through untouched, and
+// only the submitter reads it back (splitPosition), so the position needs no change to the decode
+// worker's signature.
+func positionToken(legacy string, key messaging.RoundKey, redelivered bool, ref uint64) string {
 	tok := legacy + "@" + strconv.FormatUint(key.Epoch, 36)
 	if redelivered {
 		tok += "!"
 	}
-	return tok
+	return tok + "#" + strconv.FormatUint(ref, 36)
 }
 
 // splitPosition reads positionToken back. A string that is not one (envelope mode off, a
@@ -72,6 +79,11 @@ func splitPosition(tenant, token string) (legacy string, pos *capturePos) {
 		return token, nil
 	}
 	legacy, rest := token[:at], token[at+1:]
+	var ref uint64
+	if hash := strings.LastIndexByte(rest, '#'); hash >= 0 {
+		ref, _ = strconv.ParseUint(rest[hash+1:], 36, 64)
+		rest = rest[:hash]
+	}
 	redelivered := strings.HasSuffix(rest, "!")
 	rest = strings.TrimSuffix(rest, "!")
 	epoch, err := strconv.ParseUint(rest, 36, 64)
@@ -87,6 +99,7 @@ func splitPosition(tenant, token string) (legacy string, pos *capturePos) {
 		key:         messaging.RoundKey{Tenant: tenant, Bucket: seq / messaging.RoundBucketSize, Epoch: epoch},
 		index:       uint32(seq % messaging.RoundBucketSize),
 		redelivered: redelivered,
+		ref:         ref,
 	}
 }
 
@@ -113,6 +126,9 @@ func (es *GatewayJetStreamSource) UseEnvelopes(c CaptureEnvelopes) error {
 	es.envelopes = &c
 	return nil
 }
+
+// EnvelopesEnabled reports whether UseEnvelopes turned envelope mode on.
+func (es *GatewayJetStreamSource) EnvelopesEnabled() bool { return es.envelopes != nil }
 
 // captureEngine is one start's envelope machinery.
 type captureEngine struct {
@@ -172,6 +188,11 @@ func (es *GatewayJetStreamSource) envelopeSubmitLoop(ce *captureEngine, publishe
 				return
 			}
 			if p.pos == nil || len(p.msg.Value) > eventenvelope.MaxRawBytes {
+				// It cannot be grouped, and it must not overtake an earlier event of its tenant
+				// that is still waiting for company in the open group: flush that group first.
+				if tenant, ok := core.TenantFromContext(p.ctx); ok {
+					flush(ce.former.DrainTenant(time.Now(), tenant))
+				}
 				es.writer.Publish(p.ctx, p.msg, p.done)
 				continue
 			}
@@ -203,6 +224,7 @@ func (es *GatewayJetStreamSource) publishGroup(ce *captureEngine, b messaging.Fo
 			Correlation: p.msg.CorrelationID(),
 			Redelivered: p.pos.redelivered,
 			Settle:      p.done,
+			Beat:        p.pos.beat,
 		})
 	}
 	for _, k := range order {

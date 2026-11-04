@@ -865,6 +865,14 @@ type EnvelopesConfiguration struct {
 	// 🔴 SET INBOUND ONLY AFTER EVERY POD RUNS A RELEASE THAT READS ENVELOPES (device-management,
 	// the failed-events indexer and the max-deliveries recorder read inbound-events), and see the
 	// DETECT note on Messaging.Envelopes: it applies here too.
+	//
+	// 🔴 FLIPPING Inbound (or upgrading to a release that groups with Resolved already on) CHANGES
+	// THE SHAPE OF THE IDS a source is published under: a group id names the source's bucket where
+	// the per-event id named the message. A capture message or inbound envelope redelivered ACROSS
+	// the rolling restart, whose first publish was under the other shape, is therefore not folded by
+	// the broker and can be stored a second time. It is the documented upgrade class: the
+	// event-management event id is content-derived and absorbs it, device-state's guards absorb it,
+	// and DETECT applies it twice until its per-member guard is in place.
 	Inbound bool
 	// InboundLingerMillis is how long an inbound event may wait for a second one when its
 	// tenant's recent rate predicts one (event-sources). 0 is the default, 5. The cap is 10: no
