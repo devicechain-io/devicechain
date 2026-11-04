@@ -21,24 +21,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// TestWalPerEventReport is a MEASUREMENT, not an assertion: it writes DC_WAL_EVENTS measurement
+// BenchmarkWalPerEventReport is a MEASUREMENT, not an assertion: it writes DC_WAL_EVENTS measurement
 // events (default 100000) the way the persistence worker's batches do (DC_WAL_BATCH rows per
 // statement, 23 as in the r26 profile; ascending instants at one reading per device in
 // turn) and reports the WAL the event store wrote per event, from pg_current_wal_lsn
-// deltas. It skips unless DC_WAL_REPORT=1.
+// deltas. It is a Benchmark so the integration job lists it rather than running it; run it
+// once, by hand:
 //
-//	DC_WAL_REPORT=1 DC_WAL_PLAIN=0|1 DC_WAL_TIME_INDEX=desc|asc|brin|none DC_IT_PGPORT=... \
-//	  go test -tags integration -run TestWalPerEventReport -v ./model/
+//	DC_WAL_PLAIN=0|1 DC_WAL_TIME_INDEX=desc|asc|brin|none DC_IT_PGPORT=... \
+//	  go test -tags integration -run '^$' -bench BenchmarkWalPerEventReport -benchtime 1x -v ./model/
 //
 // DC_WAL_PLAIN=1 writes plain INSERTs (rdb.WithPlainInsert), 0 keeps ON CONFLICT DO NOTHING.
 // DC_WAL_TIME_INDEX swaps measurement_events' cross-tenant time index first (the chain builds
 // a btree DESC), which is how the index alternatives were costed. A CHECKPOINT precedes the run so a full-page image is paid the way
 // it is after any checkpoint, and the continuous aggregate is refreshed over the written
 // range at the end so its WAL is counted.
-func TestWalPerEventReport(t *testing.T) {
-	if os.Getenv("DC_WAL_REPORT") != "1" {
-		t.Skip("set DC_WAL_REPORT=1 to measure WAL per event")
-	}
+func BenchmarkWalPerEventReport(b *testing.B) {
+	t := testing.TB(b)
 	events := atoiEnv(t, "DC_WAL_EVENTS", 100000)
 	batch := atoiEnv(t, "DC_WAL_BATCH", 23)
 	devices := atoiEnv(t, "DC_WAL_DEVICES", 6000)
@@ -127,7 +126,7 @@ func TestWalPerEventReport(t *testing.T) {
 		diff(first, refreshed)/float64(events), diff(first, refreshed)/1e6, float64(events)/elapsed.Seconds())
 }
 
-func atoiEnv(t *testing.T, key string, fallback int) int {
+func atoiEnv(t testing.TB, key string, fallback int) int {
 	t.Helper()
 	v := os.Getenv(key)
 	if v == "" {
