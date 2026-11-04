@@ -126,7 +126,6 @@ func TestChartJetStreamCeilingsReachTheStruct(t *testing.T) {
 		{"mqttQoS2StoreMaxBytes", n.MqttQoS2StoreMaxBytes, config.DefaultMqttQoS2StoreMaxBytes},
 		{"kvCacheMaxBytes", n.KvCacheMaxBytes, config.DefaultKvCacheMaxBytes},
 		{"kvStateMaxBytes", n.KvStateMaxBytes, config.DefaultKvStateMaxBytes},
-		{"streamDesignRate", n.StreamDesignRate, config.DefaultStreamDesignRate},
 		{"streamRunwayMinutes", int64(n.StreamRunwayMinutes), config.DefaultStreamRunwayMinutes},
 	} {
 		if tc.got == 0 {

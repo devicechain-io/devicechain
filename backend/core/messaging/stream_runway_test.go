@@ -13,8 +13,9 @@ import (
 )
 
 // An instance upgraded onto a configured design rate has its hot streams on the flat 1 GiB /
-// 5M-message ceilings an earlier build gave them. The first start of the new build must move
-// the ceilings ON THE EXISTING STREAM (UpdateStream, not a delete and recreate), so the
+// 5M-message ceilings an earlier build gave them. Services only VERIFY their streams (and
+// streamDrift ignores the ceilings), so the move is the broker administrator's: its
+// pre-upgrade hook Job, or `dcctl broker reconcile`, must move the ceilings ON THE EXISTING STREAM (UpdateStream, not a delete and recreate), so the
 // stream keeps what it holds. This is the path that makes the outage runway real on an
 // instance that already exists, and a negative control rides along: a stream the runway does
 // not size (a control-plane one) keeps its ceilings.
@@ -57,7 +58,7 @@ func TestAnExistingHotStreamGetsItsRunwayCeilingsInPlace(t *testing.T) {
 		before, err := nmgr.js.StreamInfo(name)
 		require.NoError(t, err)
 
-		_, err = nmgr.NewWriter(suffix) // ensureStream, as the upgraded pod runs it
+		_, err = nmgr.NewWriter(suffix) // ensureStream, as the broker administrator's upgrade hook runs it
 		require.NoError(t, err)
 
 		after, err := nmgr.js.StreamInfo(name)

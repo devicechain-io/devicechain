@@ -97,9 +97,10 @@ type NatsConfiguration struct {
 	// A rate of 0 or an absent key means the streams are NOT sized by time and keep their
 	// byte ceilings alone, exactly as before this key existed. ApplyDefaults deliberately does
 	// not fill it: an instance whose document predates the key, or one sized small by hand
-	// (--compact), must not have its reservation raised by an upgrade it did not ask for. The
-	// chart ships DefaultStreamDesignRate in its values and --compact ships its own, so an
-	// instance installed from either is sized by time.
+	// (--compact), or run from the chart without dcctl, must not have its reservation raised by
+	// an upgrade it did not ask for. The chart's own default is 0 for the same reason; dcctl states
+	// DefaultStreamDesignRate for the standard profile and its own rate for --compact, because it
+	// checks the reservation against the volume, so an instance dcctl manages is sized by time.
 	StreamDesignRate    int64
 	StreamRunwayMinutes int
 	// MqttStoreMaxBytes bounds each of the MQTT gateway's OWN JetStream streams
@@ -1164,8 +1165,8 @@ const (
 	DefaultStreamMaxMsgs      int64 = 5_000_000 // 5M messages per stream
 	DefaultStreamMaxMsgSize   int32 = 1 << 20   // 1 MiB per message (matches default max_payload)
 	// DefaultStreamDesignRate is the ingest rate, in events a second across the instance, the
-	// chart's values state for the hot event streams. ApplyDefaults does not apply it (see
-	// NatsConfiguration.StreamDesignRate); the chart does, and a test holds the two together.
+	// standard dcctl profile states for the hot event streams. ApplyDefaults does not apply it
+	// (see NatsConfiguration.StreamDesignRate); dcctl does, and a test holds the two together.
 	// At the default runway it asks for less disk than DefaultStreamMaxBytes already gives, so
 	// a default install keeps its 1 GiB ceiling; raise it, with the JetStream volume, for a
 	// busier instance.
@@ -1179,6 +1180,10 @@ const (
 	// MaxStreamRunwayMinutes is the longest runway that can be honoured: the streams' own
 	// 7-day age window (messaging streamMaxAge) discards anything older whatever the ceiling.
 	MaxStreamRunwayMinutes = 7 * 24 * 60
+	// MinStreamRunwayMinutes is the shortest runway accepted. The alerts that warn the runway is
+	// running out predict from five minutes of samples and must fire before the platform stops
+	// accepting events at 90% of the stream; on a runway shorter than this they cannot.
+	MinStreamRunwayMinutes = 10
 	// DefaultMqttStoreMaxBytes bounds each MQTT gateway stream. Sized as a
 	// working buffer, not a retention window: $MQTT_msgs drains as the QoS-1
 	// subscriber acks, so it holds in-flight messages rather than history. It is
@@ -1377,6 +1382,11 @@ func (c *NatsConfiguration) RunwayReservation() int64 {
 	for _, s := range streams.RunwaySuffixes() {
 		if d := c.StreamMaxBytesFor(s) - c.tierMaxBytesFor(s); d > 0 {
 			extra += d
+			// With fail-closed MQTT the gateway's message store is sized from the capture
+			// stream's ceiling (MqttMessageStoreMaxBytes), so it carries the same extra.
+			if c.MqttFailClosed && s == streams.DeviceEventsCapture {
+				extra += d
+			}
 		}
 	}
 	return extra
@@ -1389,11 +1399,13 @@ func (c *NatsConfiguration) validateRunway() error {
 			"second (0 or absent leaves the streams sized by their byte ceilings alone)",
 			c.StreamDesignRate, MaxStreamDesignRate)
 	}
-	if c.StreamRunwayMinutes < 0 || c.StreamRunwayMinutes > MaxStreamRunwayMinutes {
-		return fmt.Errorf("infrastructure.nats.streamRunwayMinutes is %d; it must be between 1 and %d "+
-			"(0 or absent means %d). The streams discard anything older than 7 days whatever their size, "+
-			"so a longer runway cannot be held", c.StreamRunwayMinutes, MaxStreamRunwayMinutes,
-			DefaultStreamRunwayMinutes)
+	if c.StreamRunwayMinutes < 0 || c.StreamRunwayMinutes > MaxStreamRunwayMinutes ||
+		(c.StreamRunwayMinutes > 0 && c.StreamRunwayMinutes < MinStreamRunwayMinutes) {
+		return fmt.Errorf("infrastructure.nats.streamRunwayMinutes is %d; it must be between %d and %d "+
+			"(0 or absent means %d). Under %d minutes the alerts that warn the runway is running out cannot "+
+			"fire before the platform stops accepting events, and the streams discard anything older than "+
+			"7 days whatever their size, so a longer runway cannot be held", c.StreamRunwayMinutes,
+			MinStreamRunwayMinutes, MaxStreamRunwayMinutes, DefaultStreamRunwayMinutes, MinStreamRunwayMinutes)
 	}
 	return nil
 }

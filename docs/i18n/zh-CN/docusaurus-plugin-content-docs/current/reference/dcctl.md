@@ -420,6 +420,11 @@ it uses the same image, the same areas and the same broker login. It is idempote
 already matches it changes nothing. The Job's log is printed. When it fails, the Job is left in the
 instance's namespace to read and the command exits non-zero.
 
+A new ceiling is applied here too, on inbound-events, resolved-events and the device capture stream
+included, so a runway set with --values takes effect on a running instance through this. Lowering one of
+those three below what the stream holds is refused, naming the stream and the shortfall, because the broker
+would discard its oldest messages at once, unread ones included; --allow-ceiling-shrink accepts that loss.
+
 A stream that an older release created with a different retention is drained by its reader before
 it is recreated as declared, which can take a few minutes.
 
@@ -437,8 +442,9 @@ dcctl broker reconcile <instance> [flags]
 ### Options
 
 ```
-  -h, --help                  help for reconcile
-      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
+      --allow-ceiling-shrink   allow lowering the ceiling of inbound-events, resolved-events or the device capture stream below what it holds, which discards its oldest messages (unread ones included) at once
+  -h, --help                   help for reconcile
+      --kube-context string    kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
 ```
 
 ### SEE ALSO

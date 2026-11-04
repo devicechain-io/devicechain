@@ -136,6 +136,39 @@
                       }
                     }
                   }
+                },
+                "nats": {
+                  "type": "object",
+                  "description": "The message broker connection and the JetStream ceilings. The chart validates only the capacity keys named below; the services validate the rest at startup.",
+                  "properties": {
+                    "streamDesignRate": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000,
+                      "description": "Events a second the whole instance is expected to ingest at its peak, across tenants. The streams that carry one message per event (inbound-events, resolved-events, the device capture stream) are sized to hold at least this rate for streamRunwayMinutes. It is the rate the disk is sized for, not a rate limit. 0 sizes them by streamMaxBytes alone."
+                    },
+                    "streamRunwayMinutes": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10080,
+                      "description": "Minutes of events at streamDesignRate the per-event streams are sized to hold. Between 10 (the alerts that warn the runway is running out need that long to fire before the platform stops accepting events) and 10080, the 7 days after which the broker discards a message whatever the ceiling. 0 means 15."
+                    },
+                    "streamMaxBytes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Byte ceiling of each high-volume stream, and the floor under the runway sizing."
+                    },
+                    "streamMaxBytesCold": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Byte ceiling of each control-plane stream. Must not exceed streamMaxBytes."
+                    },
+                    "streamMaxMsgs": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Message-count ceiling of each stream; raised for the per-event streams to hold the runway."
+                    }
+                  }
                 }
               }
             }
@@ -567,6 +600,10 @@
           "minimum": 0,
           "maximum": 6,
           "description": "How many times a failed attempt is retried before the Job, and so the release, fails."
+        },
+        "allowCeilingShrink": {
+          "type": "boolean",
+          "description": "Let the administrator lower the byte or message ceiling of inbound-events, resolved-events or the device capture stream below what the stream holds. That discards its oldest messages at once, read or not, including replay history and events devices were told were accepted, so it is refused unless this is set. Set it for the one upgrade that deliberately shortens the runway, then unset it."
         },
         "resources": {
           "type": "object",

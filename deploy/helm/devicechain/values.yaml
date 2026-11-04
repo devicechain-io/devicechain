@@ -231,20 +231,27 @@ instance:
         # detection replay can reach). A flat byte ceiling answers that in bytes, not time: 1 GiB
         # held resolved-events for 2.8 minutes at 20,000 events a second. So each of those streams
         # is sized to hold AT LEAST streamDesignRate events a second for streamRunwayMinutes:
-        # rate x minutes x ~384-448 bytes an event. streamMaxBytes stays the floor, so the
-        # defaults below (1,000 events a second for 15 minutes, about 350-400 MB a stream) keep
-        # the 1 GiB ceiling and add nothing to the reservation.
+        # rate x minutes x ~384-448 bytes an event. streamMaxBytes stays the floor, so a rate of
+        # 1,000 events a second for 15 minutes (about 350-400 MB a stream) keeps the 1 GiB ceiling
+        # and adds nothing to the reservation.
         #
         # streamDesignRate is the PEAK events a second the whole instance ingests, across
         # tenants. It is not a rate limit; it is the rate the disk is sized for. For a busier
         # instance raise it AND the JetStream volume (nats_jetstream_storage): at 20,000 a second
         # for 15 minutes the three streams reserve about 8.1 + 6.9 + 6.9 GB (20 GiB) on every
-        # broker server, up from 3 GiB, so the volume needs roughly 17 GiB more than the default
-        # 16Gi one. `dcctl bootstrap` checks the sum against the
-        # volume before it changes anything and says which of the two is short. A value of 0 or an
-        # absent key sizes the streams by streamMaxBytes alone, as before this key existed.
-        # streamRunwayMinutes is capped at the streams' 7-day age window (10080).
-        streamDesignRate: 1000
+        # broker server, up from 3 GiB, so the volume needs 33Gi against the default 16Gi.
+        # `dcctl bootstrap` and `dcctl upgrade` check the sum against the volume before they
+        # change anything and say which of the two is short; dcctl sets 1000 for the standard
+        # profile and 50 for --compact, and `--values` moves it.
+        #
+        # 🔴 THE CHART'S OWN DEFAULT IS 0, NOT 1000. 0 (or an absent key) sizes the streams by
+        # streamMaxBytes alone, as before this key existed. An instance run from this chart without
+        # dcctl, and sized small by hand through streamMaxBytes, must not have its reservation
+        # raised by a default it never chose; with 1000 here a `helm upgrade` would do exactly that
+        # on a volume sized for the smaller ceilings. dcctl is the tool that checks the reservation
+        # against the volume, so dcctl is what states the rate.
+        # streamRunwayMinutes is at least 10 and at most the streams' 7-day age window (10080).
+        streamDesignRate: 0
         streamRunwayMinutes: 15
         streamMaxMsgs: 5000000 # 5M messages per stream
         streamMaxMsgSize: 1048576 # 1 MiB per message
@@ -681,6 +688,11 @@ brokerAdmin:
   activeDeadlineSeconds: 540
   # A failed attempt is retried this many times before the Job (and so the release) fails.
   backoffLimit: 1
+  # Lower a per-event stream's ceiling (inbound-events, resolved-events, the device capture
+  # stream) below what it holds. Off: the administrator refuses, naming the stream and the
+  # shortfall, because the broker would discard the oldest messages at once, unread ones
+  # included. Set it for the one upgrade that deliberately shortens the runway, then unset it.
+  allowCeilingShrink: false
   resources:
     requests:
       cpu: 50m

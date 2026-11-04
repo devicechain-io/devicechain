@@ -219,8 +219,8 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 | 告警 | 严重程度 | 含义 | 处理 |
 | --- | --- | --- | --- |
-| `JetStreamUnreadBacklogNearFull` | warning | 关键消费者落后超过流容量 80%，持续五分钟。90% 时为所有租户拒绝新事件：HTTP 返回带重试头的 `503`，MQTT 在捕获流等待，Sparkplug、LwM2M 和外部 MQTT 丢弃并计数。 | 查服务日志、数据库、`JetStreamDurableFallingBehind`。流不足时，提高上限并同步扩卷。 |
-| `JetStreamOutageRunwayHalfUsed` | warning | `inbound-events` 或 `resolved-events` 背后的消费者落后超过其流容量的 50%，持续三分钟。该流按配置的故障缓冲时长（`streamRunwayMinutes`，速率为 `streamDesignRate` 事件/秒）确定大小，因此已有一半以上的时间被用掉。80% 时 `JetStreamUnreadBacklogNearFull` 告警，90% 时平台停止接收该流的新事件。 | 查明消费者落后的原因：其服务未运行或反复崩溃、数据库不可用或很慢（`EventStoreRefusingWrites`、`ConsumerHoldingForDatabase`），或流量已超出设计速率。若是后者，请在扩大 JetStream 卷的同时提高 `streamDesignRate`（参见[事件流能撑过多长时间的故障](#outage-runway)）。 |
+| `JetStreamUnreadBacklogNearFull` | warning | 关键消费者落后超过流容量 75%，持续一分钟。90% 时为所有租户拒绝新事件：HTTP 返回带重试头的 `503`，MQTT 在捕获流等待，Sparkplug、LwM2M 和外部 MQTT 丢弃并计数。 | 查服务日志、数据库、`JetStreamDurableFallingBehind`。流不足时，提高上限并同步扩卷。 |
+| `JetStreamOutageRunwayShort` | warning | `inbound-events` 或 `resolved-events` 背后的消费者未读量超过其流的 10%，并且按过去五分钟积压的增长速度，该流将在二十分钟内开始拒绝新事件（90% 时拒绝），持续两分钟。该流按配置的故障缓冲时长（设定了速率时为 `streamRunwayMinutes`，速率为 `streamDesignRate` 事件/秒）确定大小，这条告警说明这段时间正在被用掉。 | 查明消费者落后的原因：其服务未运行或反复崩溃、数据库不可用或很慢（`EventStoreRefusingWrites`、`ConsumerHoldingForDatabase`），或流量已超出设计速率。若是后者，请在扩大 JetStream 卷的同时提高 `streamDesignRate`（参见[事件流能撑过多长时间的故障](#outage-runway)）。 |
 | `JetStreamIngestBackpressureEngaged` | critical | 流对所有租户拒绝新事件持续一分钟：未读接近上限，或历史将在 30 秒内耗尽，或写入服务三十秒无法测量积压。 | `JetStreamUnreadBacklogNearFull` 标识落后消费者，最常见是服务缩为零或崩溃循环。已部署却未运行仍有意阻止接入。若该告警安静，通常是历史耗尽；查看 `jetstream_backpressure_history_runway_seconds` 和写入服务日志中的消费者与速率。积压低于 80%，且历史足够一分钟或全部读完后自动恢复。均未标识消费者时，可能写入服务无法连接代理，见[代理连接静默失效](#broker-connection-dead)。 |
 
 两条流的写入服务导出：
@@ -254,23 +254,51 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 | 键 | 含义 | 默认值 |
 | --- | --- | --- |
-| `streamDesignRate` | 整个实例（所有租户合计）每秒接入的最大事件数。这是磁盘按此速率规划的依据，而不是限速。`0` 或缺省表示仅按 `streamMaxBytes` 确定流大小。 | `1000`（`--compact` 为 `50`） |
-| `streamRunwayMinutes` | 流按该速率可保存多少分钟的事件。最大 10,080，即 7 天，超过后无论上限多大代理都会丢弃消息。 | `15` |
+| `streamDesignRate` | 整个实例（所有租户合计）每秒接入的最大事件数。这是磁盘按此速率规划的依据，而不是限速。`0` 或缺省表示仅按 `streamMaxBytes` 确定流大小，与该键出现之前相同。 | `dcctl` 设为 `1000`（`--compact` 为 `50`）；chart 自身默认值为 `0` |
+| `streamRunwayMinutes` | 流按该速率可保存多少分钟的事件。取值 10 到 10,080，后者即 7 天，超过后无论上限多大代理都会丢弃消息。 | `15` |
 
-默认值所需的空间小于现有字节上限已提供的空间，因此默认安装保留 1 GiB 上限，实际缓冲时长长于所要求的 15 分钟：在每秒 1,000 个事件时，捕获流和 `inbound-events` 约 47 分钟，`resolved-events` 约 40 分钟。`--compact` 安装保留 64 MiB 上限，按其每秒 50 个事件约可保存 50 分钟。超出范围的值会使服务在启动时停止，并指明是哪个键。
+默认值所需的空间小于现有字节上限已提供的空间，因此默认安装保留 1 GiB 上限，实际缓冲时长长于所要求的 15 分钟：在每秒 1,000 个事件时，捕获流和 `inbound-events` 约 47 分钟，`resolved-events` 约 40 分钟。`--compact` 安装保留 64 MiB 上限，按其每秒 50 个事件约可保存 50 分钟。超出范围的值会使服务在启动时停止，并指明是哪个键。chart 自身默认值为 `0`，是为了让不用 `dcctl`、直接用 chart 运行并通过 `streamMaxBytes` 手工调小的实例，不会因一次它没有要求的升级而被加大预留；`dcctl` 会设定该速率，因为它会拿预留量与卷大小比对。
 
-**规划卷大小。** 各上限会在代理的每台服务器的卷上预先预留，因此卷放不下的缓冲时长会让最后启动的服务无法创建自己的流。`dcctl` 会在改动任何内容之前比较预留量与卷大小；当放不下的原因是缓冲时长时，它会如此说明并给出差额。所以提高速率意味着同步扩大 JetStream 卷（`nats_jetstream_storage`）。三个流在默认 15 分钟、[MQTT 故障关闭确认](#mqtt-fail-closed)关闭时：
+**用 `dcctl` 设置。** 把这些键写入 values 文件，并在初始化或升级时传入：
 
-| 设计速率（事件/秒） | 捕获流 | `inbound-events` | `resolved-events` | 最小 JetStream 卷 |
-| --- | --- | --- | --- | --- |
-| 1,000 及以下 | 1 GiB | 1 GiB | 1 GiB | 16Gi（默认） |
-| 5,000 | 1.6 GiB | 1.6 GiB | 1.9 GiB | 16Gi |
-| 10,000 | 3.2 GiB | 3.2 GiB | 3.8 GiB | 22Gi |
-| 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi |
+```yaml
+# runway.yaml
+instance:
+  config:
+    infrastructure:
+      nats:
+        streamDesignRate: 20000
+        streamRunwayMinutes: 15
+```
 
-这些卷大小已为代理自身预留 10% 余量，并计入其他流的预留（默认约 8.3 GiB）；请向上取整而不是向下。已运行实例的流会在其服务下次启动时原地采用新上限，并保留已有内容。如果把上限调到低于流中现有内容，代理会立即丢弃最旧的消息。
+```bash
+dcctl upgrade local my-instance --values runway.yaml
+```
 
-当 `inbound-events` 或 `resolved-events` 背后的消费者用掉一半缓冲时长时，`JetStreamOutageRunwayHalfUsed` 会发出警告，远早于 `JetStreamUnreadBacklogNearFull`（80%）和 90% 时的拒绝。按设计速率计算，剩余时间就是流中仍空闲的比例乘以其缓冲时长；这条告警的目的，是让这段时间用来修复问题。
+`streamMaxBytes`、`streamMaxBytesCold` 和 `streamMaxMsgs` 也可以用同样方式设置。该文件会记录在实例上，之后的升级会继续应用。对已在运行的实例，升级会在服务滚动之前运行代理管理器，由它把新上限应用到已有的流上，并保留其中的内容。服务本身不会修改流，只做检查。`dcctl broker reconcile my-instance` 可按需运行管理器，用于未经升级而更改的上限。
+
+**调低上限。** 当上限被调到低于流中现有内容时，代理会立即丢弃最旧的消息；对这三个流而言，这意味着回放历史，对捕获流还意味着已告知设备“已接受”的 MQTT 事件。因此，代理管理器会拒绝把 `inbound-events`、`resolved-events` 或捕获流的字节或消息数上限调到低于其当前内容，指明流名和差额，并且不做任何更改。要接受这一损失，请给 `dcctl broker reconcile my-instance` 加上 `--allow-ceiling-shrink`，或仅在那一次升级的 values 文件中设置 `brokerAdmin.allowCeilingShrink: true`，之后删除。
+
+**规划卷大小。** 各上限会在代理的每台服务器的卷上预先预留，因此卷放不下的缓冲时长会让最后启动的服务无法创建自己的流。`dcctl` 会在改动任何内容之前比较预留量与卷大小并拒绝，同时指明能放下它的卷大小（代理的 `max_file_store` 为卷的 90%，向下取整到整数单位），并在放不下的原因是缓冲时长时如此说明。三个流在默认 15 分钟、[MQTT 故障关闭确认](#mqtt-fail-closed)关闭时：
+
+| 设计速率（事件/秒） | 捕获流 | `inbound-events` | `resolved-events` | 刚好放得下的卷 | 建议使用的卷 |
+| --- | --- | --- | --- | --- | --- |
+| 1,000 及以下 | 1 GiB | 1 GiB | 1 GiB | 16Gi（默认） | 16Gi |
+| 5,000 | 1.6 GiB | 1.6 GiB | 1.9 GiB | 16Gi | 16Gi |
+| 10,000 | 3.2 GiB | 3.2 GiB | 3.8 GiB | 22Gi | 24Gi |
+| 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi | 36Gi |
+
+“刚好放得下的卷”是其 `max_file_store` 能容纳该预留的最小卷，已计入其他流、MQTT 网关的存储和键值桶（默认合计约 8.6 GiB）；20,000 一行的余量不足 100 MiB。请使用较大的数值，它为后续版本新增的流和桶留出空间。`dcctl` 没有设置 JetStream 卷大小的选项。StatefulSet 的卷声明无法原地修改，因此扩容是手动步骤：
+
+```bash
+kubectl -n dci-my-instance delete statefulset dc-nats --cascade=orphan
+kubectl -n dci-my-instance get pvc          # 然后把代理每个卷声明的请求大小改为新值
+kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests":{"storage":"36Gi"}}}}'
+```
+
+然后再次运行 `dcctl upgrade`（这与卷大小不一致时 `dcctl` 打印的步骤相同）。这需要允许扩容的 StorageClass。
+
+**告警。** 消费者按设计速率停止后，流会以稳定速度被填满，因此各告警都以平台停止接收事件的时刻（流的 90%）为基准；对 R 分钟的缓冲时长，该时刻是 0.9R。`JetStreamOutageRunwayShort` 做预测：当按过去五分钟积压的增长速度，流将在二十分钟内开始拒绝时触发；在最短的缓冲时长（10 分钟）下，这大约比拒绝提前五分钟。`JetStreamUnreadBacklogNearFull` 在 75% 持续一分钟时随后触发，流开始拒绝后则由 `JetStreamIngestBackpressureEngaged` 触发。
 
 ## 消息代理连接静默失效 {#broker-connection-dead}
 

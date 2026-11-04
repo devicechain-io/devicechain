@@ -86,6 +86,21 @@ var tunableValues = []string{
 	// The console's own pods.
 	"frontend.replicas",
 	"frontend.resources",
+	// The JetStream capacity dials: the outage runway the event streams are sized for, and the
+	// byte and message ceilings under it. They are capacity, not wiring, and the reservation
+	// they imply is checked against the broker's volume before anything is written
+	// (precheckJetStreamReservation reads the authored document, overlay included), so a
+	// setting the volume cannot hold is refused by name rather than crash-looping a service.
+	// The ones dcctl itself presets (the compact profile's ceilings and the design rate) are in
+	// presetDefaults, which is what lets an overlay replace them.
+	"instance.config.infrastructure.nats.streamDesignRate",
+	"instance.config.infrastructure.nats.streamRunwayMinutes",
+	"instance.config.infrastructure.nats.streamMaxBytes",
+	"instance.config.infrastructure.nats.streamMaxBytesCold",
+	"instance.config.infrastructure.nats.streamMaxMsgs",
+	// The one upgrade that deliberately shortens the runway sets this and then unsets it; left
+	// on, every later upgrade could discard unread events.
+	"brokerAdmin.allowCeilingShrink",
 	// Alerting rules and dashboards.
 	"metrics.alerts",
 	"metrics.grafanaDashboards",
@@ -211,6 +226,12 @@ var presetDefaults = []string{
 	"resources.requests.cpu",
 	"resources.requests.memory",
 	"useMeasuredRequests",
+	// The profile's JetStream sizing: compact states small ceilings and a design rate, the
+	// standard profile states the design rate. An overlay moves them, and the reservation
+	// precheck judges the result against the volume.
+	"instance.config.infrastructure.nats.streamDesignRate",
+	"instance.config.infrastructure.nats.streamMaxBytes",
+	"instance.config.infrastructure.nats.streamMaxBytesCold",
 }
 
 func splitPath(p string) []string { return strings.Split(p, ".") }

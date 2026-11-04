@@ -15,6 +15,7 @@ import (
 	"github.com/fatih/color"
 
 	assets "github.com/devicechain-io/dc-deploy"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
@@ -480,6 +481,12 @@ func helmValues(st *State) map[string]interface{} {
 		for k, v := range compact.natsValues() {
 			natsVals[k] = v
 		}
+	} else {
+		// The standard profile states its design rate here rather than leaving it to the
+		// chart: the chart's own default is "not sized by time", so that a raw `helm upgrade`
+		// of an instance sized by hand never has its reservation raised by a default it did
+		// not choose. dcctl checks the reservation against the volume, so it can say it.
+		natsVals["streamDesignRate"] = config.DefaultStreamDesignRate
 	}
 	// The Helm half of the HA topology, merged for the same reason. Unconditional,
 	// like its OpenTofu counterpart in infraVars: rendering streamReplicas even at 1

@@ -407,45 +407,66 @@ spec:
           annotations:
             summary: "The device capture reader dropped messages that no device published"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} was handed messages stored under a subject it does not read, and dropped them without passing them on: {{ "{{ $value }}" }} in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops."
-        # A gating consumer's UNREAD backlog is over 80% of what its stream can hold. At
+        # A gating consumer's UNREAD backlog is over 75% of what its stream can hold. At
         # 90% the stream's writers refuse new events (JetStreamIngestBackpressureEngaged).
         # Exported by every service that WRITES the stream, for the consumers that gate it
         # (device-management's on inbound-events, event-management's on resolved-events).
         # `max by`: every writer pod measures the same consumer.
+        #
+        # 🔴 IT MUST FIRE BEFORE THE GATE CLOSES, which is why it is 75% for ONE minute and not
+        # 80% for five. A stream sized for a runway of R minutes at its design rate, with its
+        # consumer stopped, reaches 75% at 0.75R and refuses at 0.9R; waiting five minutes after
+        # 80% fired after the refusal for any R under about 17 minutes. At the shortest runway
+        # the configuration accepts (10 minutes) this warns at 8.5 minutes and the gate closes at
+        # 9. JetStreamOutageRunwayShort, below, is the earlier warning.
         - alert: JetStreamUnreadBacklogNearFull
-          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"}) > 0.8
-          for: 5m
+          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"}) > 0.75
+          for: 1m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
             summary: "A consumer's unread backlog is near its stream's ceiling"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read: HTTP devices are answered 503 with a Retry-After, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
-        # The outage runway is HALF USED. The two streams that hold one message per ingested
-        # event and refuse writers (inbound-events, resolved-events) are sized to hold a
-        # configured number of minutes of events at a design rate
-        # (infrastructure.nats.streamDesignRate and streamRunwayMinutes), because that history
-        # is how long a stopped consumer or event store can stay stopped before the platform has
-        # to refuse ingest. A gating consumer's unread backlog is that runway in use: at 50% of
-        # the ceiling half of it is gone, at 80% JetStreamUnreadBacklogNearFull warns, and at
-        # 90% the stream refuses. This is the earlier tier, for the operator who needs the time
-        # that runway was bought to be spent on a fix rather than on discovering the problem.
+        # The outage runway is being used up. inbound-events and resolved-events (the streams
+        # that hold one message per ingested event and refuse writers) are sized to hold a number
+        # of minutes of events at a design rate while a consumer or the event store is down
+        # (infrastructure.nats.streamRunwayMinutes at streamDesignRate, when the rate is set). A
+        # gating consumer's unread backlog is that runway in use, and the platform stops
+        # accepting events at 90% of the stream.
+        #
+        # 🔴 THIS PREDICTS, IT DOES NOT THRESHOLD. A fixed fraction cannot be early enough for
+        # every runway: "half used for three minutes" fired three minutes before the refusal at a
+        # 15-minute runway and after it at anything under 7.5. So this reads how fast the backlog
+        # is growing (over five minutes of the 30 s samples) and fires when, at that rate, the
+        # stream will refuse within twenty minutes: (0.9 - ratio) / slope. A full stop of the
+        # consumer at the design rate on the shortest runway the configuration accepts (ten
+        # minutes) fires this at about minute 3.5 and refuses at minute 9. The 10% floor keeps a momentary burst quiet, the `> 0` on the slope
+        # keeps a draining or flat backlog out, and `for: 2m` keeps one noisy window from paging.
+        # It also stays on while the gate is closed and the backlog still grows.
         #
         # SELECTED BY DECLARATION, like its neighbour: jetstream_backpressure_unread_ratio is
         # exported only for the durables core/streams declares as gating, so no stream list is
         # kept here, and the capture stream (its own backlog alerts) is not in it. `max by`:
-        # every writer pod measures the same consumer. `for: 3m` so a burst the consumer is
-        # about to absorb stays quiet, short of the 5 minutes the 80% tier waits because this
-        # one has the room to.
-        - alert: JetStreamOutageRunwayHalfUsed
-          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"}) > 0.5
-          for: 3m
+        # every writer pod measures the same consumer.
+        - alert: JetStreamOutageRunwayShort
+          expr: |
+            (
+              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"}) > 0.1
+            )
+            and on (stream, durable)
+            (
+              (0.9 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"}))
+              / (deriv(max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_backpressure_unread_ratio", namespace="{{ $ns }}"})[5m:30s]) > 0)
+              < 1200
+            )
+          for: 2m
           labels:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "Half of an event stream's outage runway is used"
-            description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. That stream is sized to hold events for the configured outage runway (infrastructure.nats.streamRunwayMinutes at streamDesignRate events a second) while a consumer or the database is down, so more than half of that time is gone. At 80% JetStreamUnreadBacklogNearFull warns, and at 90% the platform stops accepting new events on the stream, for every tenant. Find out why the consumer is behind: its service is not running or is crash-looping, its database is unavailable or slow (EventStoreRefusingWrites, ConsumerHoldingForDatabase), or the traffic has outgrown the design rate. If the rate has outgrown the design, raise streamDesignRate together with the JetStream volume."
+            summary: "An event stream's outage runway is running out"
+            description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold, and at the rate that backlog grew over the last five minutes the platform will stop accepting new events on the stream, for every tenant, within twenty (it does so at 90%). When infrastructure.nats.streamDesignRate is set, the stream is sized to hold streamRunwayMinutes of events at that many events a second while a consumer or the database is down, and this is that time being used; when it is not set, the stream holds only what streamMaxBytes allows. Find out why the consumer is behind: its service is not running or is crash-looping, its database is unavailable or slow (EventStoreRefusingWrites, ConsumerHoldingForDatabase), or the traffic has outgrown the design rate. If it has, raise streamDesignRate together with the JetStream volume: set instance.config.infrastructure.nats.streamDesignRate in a values file and run dcctl upgrade <provider> <instance> --values <file>."
         # The gate is closed: the stream's writers are refusing new events. Evaluated at
         # scrape time, so it also reads 1 while a writer cannot measure the backlog (a gate
         # that cannot measure refuses). `max by`: any writer pod refusing is an outage.

@@ -458,8 +458,8 @@ de control, que la compuerta no ve. `ReplayCoveredDeliveriesExhausted` lo vigila
 
 | Alerta | Severidad | Qué significa | Qué hacer |
 | --- | --- | --- | --- |
-| `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 5 minutos con más del 80% de su flujo sin leer. Al 90% el flujo rechaza eventos nuevos para todos los inquilinos: los dispositivos HTTP reciben `503` con `Retry-After`, los eventos de los dispositivos MQTT esperan en el flujo de captura, y las lecturas de Sparkplug y LwM2M, y los eventos de un broker MQTT externo, se descartan y se cuentan. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
-| `JetStreamOutageRunwayHalfUsed` | warning | Un consumidor de `inbound-events` o `resolved-events` lleva 3 minutos sin haber leído más del 50% de lo que cabe en su flujo. El flujo está dimensionado para retener el margen de interrupción configurado (`streamRunwayMinutes` a `streamDesignRate` eventos por segundo), así que más de la mitad de ese tiempo se ha agotado. Al 80% avisa `JetStreamUnreadBacklogNearFull`, y al 90% la plataforma deja de aceptar eventos nuevos en el flujo. | Averigüe por qué el consumidor va retrasado: su servicio no está en marcha o falla en bucle, su base de datos no está disponible o va lenta (`EventStoreRefusingWrites`, `ConsumerHoldingForDatabase`), o el tráfico ha superado la tasa de diseño. Si es así, aumente `streamDesignRate` junto con el volumen de JetStream (consulte [Cuánto pueden esperar los flujos de eventos durante una interrupción](#outage-runway)). |
+| `JetStreamUnreadBacklogNearFull` | warning | Un consumidor que controla la compuerta lleva 1 minuto con más del 75% de su flujo sin leer. Al 90% el flujo rechaza eventos nuevos para todos los inquilinos: los dispositivos HTTP reciben `503` con `Retry-After`, los eventos de los dispositivos MQTT esperan en el flujo de captura, y las lecturas de Sparkplug y LwM2M, y los eventos de un broker MQTT externo, se descartan y se cuentan. | Averigüe por qué el consumidor va lento: los registros de su servicio, su base de datos, `JetStreamDurableFallingBehind`. Si el tráfico ha superado el flujo, aumente su límite y, con él, el volumen de JetStream. |
+| `JetStreamOutageRunwayShort` | warning | Un consumidor de `inbound-events` o `resolved-events` tiene sin leer más del 10% de su flujo, y al ritmo con que creció ese atraso en los últimos cinco minutos el flujo rechazará eventos nuevos (lo hace al 90%) en menos de veinte minutos, durante 2 minutos. El flujo está dimensionado para retener el margen de interrupción configurado (`streamRunwayMinutes` a `streamDesignRate` eventos por segundo, cuando hay una tasa fijada), y ese tiempo es el que se está consumiendo. | Averigüe por qué el consumidor va retrasado: su servicio no está en marcha o falla en bucle, su base de datos no está disponible o va lenta (`EventStoreRefusingWrites`, `ConsumerHoldingForDatabase`), o el tráfico ha superado la tasa de diseño. Si es así, aumente `streamDesignRate` junto con el volumen de JetStream (consulte [Cuánto pueden esperar los flujos de eventos durante una interrupción](#outage-runway)). |
 | `JetStreamIngestBackpressureEngaged` | critical | Un flujo lleva un minuto rechazando eventos nuevos, para todos los inquilinos: la cola sin leer de un consumidor está cerca del límite, o el flujo lleno descarta el historial procesado por delante de ella tan deprisa que se agotaría en 30 segundos, o un servicio que escribe en él lleva 30 segundos sin poder medir esa cola. | `JetStreamUnreadBacklogNearFull` indica qué consumidor va atrasado. La causa más probable es que el servicio de ese consumidor no esté funcionando: escalado a cero réplicas o en un bucle de reinicios. Un servicio desplegado que no funciona sigue frenando la ingesta, a propósito. Si `JetStreamUnreadBacklogNearFull` no se dispara, es el segundo caso: `jetstream_backpressure_history_runway_seconds` lo muestra, y el registro del servicio que escribe indica el consumidor y el ritmo. El rechazo se levanta solo cuando la cola de ese consumidor baja del 80% y, si la causa era el historial, cuando ese historial duraría un minuto o el consumidor lo ha leído todo. Si ninguno de los dos indica un consumidor, puede que el servicio que escribe no esté llegando al broker: consulta [Una conexión con el broker que murió en silencio](#broker-connection-dead). |
 
 Los servicios que escriben en los dos flujos exportan estas series:
@@ -519,40 +519,89 @@ Ambas claves están bajo `instance.config.infrastructure.nats`:
 
 | Clave | Significado | Valor por defecto |
 | --- | --- | --- |
-| `streamDesignRate` | El máximo de eventos por segundo que ingiere toda la instancia, sumando los inquilinos. Es la tasa para la que se dimensiona el disco, no un límite de tasa. `0` o ausente dimensiona los flujos solo con `streamMaxBytes`. | `1000` (`50` con `--compact`) |
-| `streamRunwayMinutes` | Cuántos minutos de eventos a esa tasa retienen los flujos. Como máximo 10 080, los 7 días tras los cuales el broker descarta un mensaje sea cual sea el límite. | `15` |
+| `streamDesignRate` | El máximo de eventos por segundo que ingiere toda la instancia, sumando los inquilinos. Es la tasa para la que se dimensiona el disco, no un límite de tasa. `0` o ausente dimensiona los flujos solo con `streamMaxBytes`, como antes de que existiera esta clave. | `dcctl` fija `1000` (`50` con `--compact`); el valor por defecto del chart es `0` |
+| `streamRunwayMinutes` | Cuántos minutos de eventos a esa tasa retienen los flujos. De 10 a 10 080, los 7 días tras los cuales el broker descarta un mensaje sea cual sea el límite. | `15` |
 
 Los valores por defecto piden menos de lo que ya dan los límites de bytes existentes, así que una
 instalación por defecto conserva su límite de 1 GiB y el margen que informa es mayor que los 15
 minutos pedidos: unos 47 minutos a 1000 eventos por segundo para el flujo de captura e
 `inbound-events`, y 40 para `resolved-events`. Una instalación `--compact` conserva su límite de
 64 MiB, que retiene unos 50 minutos a sus 50 eventos por segundo. Un valor fuera de los límites
-detiene el servicio al arrancar y nombra la clave.
+detiene el servicio al arrancar y nombra la clave. El valor por defecto del chart es `0` para que una
+instancia ejecutada desde el chart sin `dcctl`, y reducida a mano con `streamMaxBytes`, nunca reciba
+una reserva mayor por una actualización que no pidió; `dcctl` fija la tasa porque comprueba la reserva
+contra el volumen.
+
+**Configurarlo con `dcctl`.** Ponga las claves en un archivo de valores y pásele al arrancar o actualizar:
+
+```yaml
+# runway.yaml
+instance:
+  config:
+    infrastructure:
+      nats:
+        streamDesignRate: 20000
+        streamRunwayMinutes: 15
+```
+
+```bash
+dcctl upgrade local my-instance --values runway.yaml
+```
+
+`streamMaxBytes`, `streamMaxBytesCold` y `streamMaxMsgs` se pueden configurar igual. El archivo queda
+registrado en la instancia, así que las actualizaciones posteriores lo siguen aplicando. En una
+instancia que ya está en marcha, la actualización ejecuta el administrador del broker antes de
+reiniciar los servicios, y eso es lo que aplica los nuevos límites a los flujos existentes, conservando
+lo que contienen. Los servicios no modifican un flujo: solo lo comprueban. `dcctl broker reconcile
+my-instance` ejecuta el administrador a demanda, para un límite cambiado sin actualización.
+
+**Bajarlo.** El broker descarta de inmediato los mensajes más antiguos cuando se baja un límite por
+debajo de lo que contiene un flujo, y en estos tres flujos eso significa historial de reproducción y,
+en el flujo de captura, eventos MQTT que se dijo a los dispositivos que fueron aceptados. Por eso el
+administrador del broker se niega a bajar el límite de bytes o de mensajes de `inbound-events`,
+`resolved-events` o del flujo de captura por debajo de lo que contienen ahora, nombra el flujo y la
+diferencia, y no cambia nada. Para aceptar la pérdida, pase `--allow-ceiling-shrink` a `dcctl broker
+reconcile my-instance`, o ponga `brokerAdmin.allowCeilingShrink: true` en el archivo de valores solo
+para esa actualización y quítelo después.
 
 **Dimensionar el volumen.** Los límites se reservan por adelantado en el volumen del broker, en cada
-servidor del broker, así que un margen que el volumen no pueda alojar dejaría a los últimos
-servicios en arrancar sin poder crear sus flujos. `dcctl` compara la reserva con el volumen antes de
-cambiar nada y, cuando lo que no cabe es el margen, lo dice y cuánto falta. Subir la tasa significa,
-por tanto, subir con ella el volumen de JetStream (`nats_jetstream_storage`). Para los tres flujos
-con los 15 minutos por defecto y [MQTT con cierre ante fallo](#mqtt-fail-closed) desactivado:
+servidor del broker, así que un margen que el volumen no pueda alojar dejaría a los últimos servicios
+en arrancar sin poder crear sus flujos. `dcctl` compara la reserva con el volumen antes de cambiar nada
+y se niega, nombrando el volumen que la alojaría (el `max_file_store` del broker es el 90% del volumen,
+redondeado hacia abajo a una unidad entera) y diciendo cuándo lo que no cabe es el margen. Para los
+tres flujos con los 15 minutos por defecto y [MQTT con cierre ante fallo](#mqtt-fail-closed)
+desactivado:
 
-| Tasa de diseño (eventos por segundo) | Flujo de captura | `inbound-events` | `resolved-events` | Volumen de JetStream mínimo |
-| --- | --- | --- | --- | --- |
-| 1000 o menos | 1 GiB | 1 GiB | 1 GiB | 16Gi (el valor por defecto) |
-| 5000 | 1,6 GiB | 1,6 GiB | 1,9 GiB | 16Gi |
-| 10 000 | 3,2 GiB | 3,2 GiB | 3,8 GiB | 22Gi |
-| 20 000 | 6,4 GiB | 6,4 GiB | 7,5 GiB | 33Gi |
+| Tasa de diseño (eventos por segundo) | Flujo de captura | `inbound-events` | `resolved-events` | Volumen que cabe | Volumen a usar |
+| --- | --- | --- | --- | --- | --- |
+| 1000 o menos | 1 GiB | 1 GiB | 1 GiB | 16Gi (el valor por defecto) | 16Gi |
+| 5000 | 1,6 GiB | 1,6 GiB | 1,9 GiB | 16Gi | 16Gi |
+| 10 000 | 3,2 GiB | 3,2 GiB | 3,8 GiB | 22Gi | 24Gi |
+| 20 000 | 6,4 GiB | 6,4 GiB | 7,5 GiB | 33Gi | 36Gi |
 
-Los tamaños de volumen dejan el 10% de margen propio del broker y las reservas de los demás flujos
-(unos 8,3 GiB con los valores por defecto); redondee hacia arriba, no hacia abajo. Los flujos de una
-instancia que ya está en marcha toman los nuevos límites en el sitio la próxima vez que arranquen
-sus servicios, conservando lo que contienen. Si se baja un límite por debajo de lo que un flujo
-contiene, el broker descarta de inmediato los mensajes más antiguos.
+«Volumen que cabe» es el menor volumen cuyo `max_file_store` aloja la reserva, junto con los demás
+flujos, los almacenes de la pasarela MQTT y los cubos clave-valor (unos 8,6 GiB en conjunto con los
+valores por defecto); la fila de 20 000 lo supera por menos de 100 MiB. Use la cifra mayor, que deja
+espacio para los flujos y cubos que añadan versiones posteriores. `dcctl` no tiene ninguna opción para
+el volumen de JetStream. La reclamación de volumen de un StatefulSet no se puede cambiar en el sitio,
+así que ampliarlo es un paso manual:
 
-`JetStreamOutageRunwayHalfUsed` avisa cuando un consumidor de `inbound-events` o `resolved-events` ha
-consumido la mitad del margen, mucho antes de `JetStreamUnreadBacklogNearFull` (80%) y del rechazo
-al 90%. A la tasa de diseño, el tiempo que queda es la parte del flujo que sigue libre por su margen;
-la alerta existe para que ese tiempo se dedique a arreglar el problema.
+```bash
+kubectl -n dci-my-instance delete statefulset dc-nats --cascade=orphan
+kubectl -n dci-my-instance get pvc          # luego ajuste la solicitud de cada reclamación del broker al nuevo tamaño
+kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests":{"storage":"36Gi"}}}}'
+```
+
+y después vuelva a ejecutar `dcctl upgrade` (es la receta que `dcctl` imprime cuando el volumen
+difiere). Requiere una StorageClass que permita la expansión.
+
+**Las alertas.** Un consumidor que se detiene a la tasa de diseño llena su flujo a un ritmo constante,
+así que los avisos se miden contra el momento en que la plataforma deja de aceptar eventos (el 90% del
+flujo), que para un margen de R minutos es 0,9R. `JetStreamOutageRunwayShort` lo predice: salta cuando,
+al ritmo con que creció el atraso en los últimos cinco minutos, el flujo rechazará eventos en menos de
+veinte minutos, lo que en el margen más corto (10 minutos) son unos cinco minutos antes del rechazo.
+`JetStreamUnreadBacklogNearFull` sigue al 75% durante un minuto, y `JetStreamIngestBackpressureEngaged`
+salta cuando el flujo ya está rechazando.
 
 ## Una conexión con el broker que murió en silencio {#broker-connection-dead}
 

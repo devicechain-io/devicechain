@@ -119,6 +119,7 @@ func TestValidateRejectsAnUnholdableRunway(t *testing.T) {
 		"negative rate":    {rate: -1, minutes: 15, want: "streamDesignRate"},
 		"absurd rate":      {rate: MaxStreamDesignRate + 1, minutes: 15, want: "streamDesignRate"},
 		"negative window":  {rate: 1000, minutes: -5, want: "streamRunwayMinutes"},
+		"too short":        {rate: 1000, minutes: MinStreamRunwayMinutes - 1, want: "streamRunwayMinutes"},
 		"beyond age limit": {rate: 1000, minutes: MaxStreamRunwayMinutes + 1, want: "streamRunwayMinutes"},
 	}
 	for name, tc := range cases {
