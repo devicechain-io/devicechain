@@ -1317,6 +1317,27 @@ ingress:
     clusterIssuer: ""
     secretName: devicechain-tls
 
+# Exposure of the platform MQTT broker to devices OUTSIDE the cluster. Off by default: an
+# upgrade never opens a new public port. Plaintext MQTT is never exposed; the broker terminates
+# TLS itself (it also does device-certificate authentication), so both modes carry TLS through
+# untouched, on port 8883. `dcctl bootstrap|upgrade --mqtt-exposure ... --mqtt-host ...` sets this
+# and adds the host to the broker's certificate; set by hand only if you manage the broker
+# certificate yourself.
+mqttExposure:
+  # none: nothing. gateway: a TLSRoute (Passthrough, routed by SNI = host) on the instance
+  # Gateway's 8883 listener; needs ingress.enabled with controller gateway, and an 8883
+  # entrypoint on the controller (OpenTofu traefik module mqtt_entrypoint). loadbalancer: a
+  # Service of type LoadBalancer for 8883 to the broker pods.
+  mode: none
+  # The DNS name devices dial and the broker's certificate carries. Required unless mode is none.
+  host: ""
+  # loadbalancer mode only.
+  loadBalancer:
+    # Cloud-specific annotations on the Service (for example an internal-only balancer).
+    annotations: {}
+    # CIDRs allowed to reach the balancer; empty allows any source.
+    sourceRanges: []
+
 # Per-functional-area settings. `config` defaults to {} → the service applies its
 # own typed defaults at load (ADR-022 decision 1). Override `image`, `replicas`,
 # `resources`, or `config` per area as needed.

@@ -167,7 +167,7 @@ func leafReissueReason(leafPEM string, wanted []string, now time.Time) (string, 
 	}
 
 	if missing := namesMissingFrom(leaf.DNSNames, wanted); len(missing) > 0 {
-		return fmt.Sprintf("it does not cover %v, which this instance's brokers dial each other by",
+		return fmt.Sprintf("it does not cover %v, which this instance's brokers dial each other by, or devices dial from outside the cluster (--mqtt-host)",
 			missing), nil
 	}
 
@@ -253,7 +253,7 @@ func hotRenewable(current *corev1.Secret, caPEM string, wanted []string,
 		return false, "the current certificate cannot be read"
 	}
 	if missing := namesMissingFrom(leaf.DNSNames, wanted); len(missing) > 0 {
-		return false, "the cluster's topology changed, which is a config change"
+		return false, "the certificate's names changed (the cluster grew, or an MQTT host was added), which is a config change"
 	}
 	if strings.TrimSpace(string(current.Data["ca.crt"])) != strings.TrimSpace(caPEM) {
 		return false, "the certificate authority changed"
@@ -293,7 +293,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	replicas := haFor(st.HA).ServerReplicas
-	wanted := natsServerDNSNames(natsReleaseName, ns, replicas)
+	wanted := natsServerDNSNames(natsReleaseName, ns, replicas, mqttBrokerNames(st)...)
 	reason, err := leafReissueReason(string(current.Data["tls.crt"]), wanted, time.Now().UTC())
 	if err != nil {
 		return false, err
@@ -322,7 +322,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		return false, nil
 	}
 
-	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, natsReleaseName, ns, replicas, time.Now().UTC())
+	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, natsReleaseName, ns, replicas, time.Now().UTC(), mqttBrokerNames(st)...)
 	if err != nil {
 		return false, err
 	}

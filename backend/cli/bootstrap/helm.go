@@ -608,6 +608,11 @@ func helmValues(st *State) map[string]interface{} {
 	if len(blobStorageVals) > 0 {
 		vals["blobStorage"] = blobStorageVals
 	}
+	// Absent unless the operator turned it on, so an instance that never did renders exactly as
+	// it did before the feature existed.
+	if v := mqttExposureValues(st); v != nil {
+		vals["mqttExposure"] = v
+	}
 	// update-management without the instance store: the chart takes the area out of the pods
 	// that mount the volume, and the service builds no store whatever the instance configures.
 	// See updateStoreMountless. Absent otherwise, so a shareable store renders the default.

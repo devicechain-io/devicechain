@@ -636,3 +636,32 @@ run "a_drain_longer_than_two_minutes_is_refused" {
 
   expect_failures = [var.drain_seconds]
 }
+
+# --- the MQTT passthrough entrypoint ------------------------------------------------------
+
+run "no_mqtt_entrypoint_by_default" {
+  command = plan
+
+  assert {
+    condition     = !can(yamldecode(helm_release.traefik.values[0]).ports.mqtts)
+    error_message = "an upgrade must not publish a new port on the controller's Service: 8883 is opt-in"
+  }
+}
+
+run "mqtt_entrypoint_exposes_8883_next_to_80_and_443" {
+  command = plan
+
+  variables {
+    mqtt_entrypoint = true
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).ports.mqtts.port == 8883 && yamldecode(helm_release.traefik.values[0]).ports.mqtts.exposedPort == 8883 && yamldecode(helm_release.traefik.values[0]).ports.mqtts.expose.default == true && yamldecode(helm_release.traefik.values[0]).ports.mqtts.protocol == "TCP"
+    error_message = "mqtt_entrypoint must open a TCP entrypoint on 8883 and expose it on the Service under the same number (a Gateway listener matches the entrypoint port)"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.traefik.values[0]).ports.web.port == 80 && yamldecode(helm_release.traefik.values[0]).ports.websecure.port == 443
+    error_message = "the MQTT entrypoint must leave 80 and 443 as they are"
+  }
+}

@@ -157,6 +157,11 @@ func hydrateUpgradeState(
 	if err := settleFrontEnd(ctx, st); err != nil {
 		return nil, err
 	}
+	if !st.DryRun && st.MQTTExposureChange {
+		if err := settleMQTTExposurePrereqs(ctx, st); err != nil {
+			return nil, err
+		}
+	}
 	// An upgrade over an instance whose first bootstrap never finished (the document
 	// written, then Helm or readiness failed) is let through: it runs the same Helm
 	// upgrade and readiness gate against the same document, and its Ready removes the
@@ -358,6 +363,19 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 		st.MqttFailClosedChange = !sameBoolPtr(st.MqttFailClosed, opts.MqttFailClosed)
 		st.MqttFailClosed = copyBoolPtr(opts.MqttFailClosed)
 	}
+
+	// 🔴 THE MQTT EXPOSURE: THE DECLARATION'S, UNLESS THIS RUN WAS GIVEN ONE. Settled here, while
+	// nothing has been written, and BEFORE the broker certificate is renewed (which reads it:
+	// the host must be among the leaf's names). A flagless upgrade leaves it as it is.
+	if opts.MQTTExposure != "" || opts.MQTTHost != "" {
+		rec := recordedMQTTSpec(st)
+		got, err := settleMQTTExposure(rec.MQTTExposure, rec.MQTTHost, opts.MQTTExposure, opts.MQTTHost, st.NoTLS)
+		if err != nil {
+			return err
+		}
+		st.MQTTExposure, st.MQTTHost, st.MQTTExposureChange = got.Mode, got.Host, got.Changed
+	}
+	sayMQTTExposure(st)
 
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a

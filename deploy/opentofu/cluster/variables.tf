@@ -409,6 +409,12 @@ variable "traefik_aws_nlb" {
   default     = false
 }
 
+variable "traefik_mqtt_entrypoint" {
+  description = "Open an 8883 entrypoint on Traefik and expose it on its Service, so an instance can serve MQTT over TLS through the Gateway (TLSRoute, Passthrough, routed by SNI; the broker terminates TLS). Off by default: it publishes a new port on the controller's load balancer. dcctl install --mqtt-gateway sets it."
+  type        = bool
+  default     = false
+}
+
 variable "traefik_trusted_proxy_cidrs" {
   description = "Ranges of an L7 load balancer or proxy IN FRONT of Traefik, whose X-Forwarded-* it should trust. Empty (default) is the edge posture. When set, core's infrastructure.http.trustedProxies must list the pod CIDR AND these same ranges."
   type        = list(string)

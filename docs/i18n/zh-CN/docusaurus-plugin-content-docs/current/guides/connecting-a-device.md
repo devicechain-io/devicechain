@@ -212,7 +212,7 @@ mosquitto_pub \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-凭据用于认证连接。消息代理由此知道每条发布来自哪台设备，因此事件本身不携带凭据；携带凭据的事件会被拒绝。TLS 主机、CA 来源及端口暴露方式取决于实例部署；参见[部署](../deployment/kubernetes-operator.md)。
+凭据用于认证连接。消息代理由此知道每条发布来自哪台设备，因此事件本身不携带凭据；携带凭据的事件会被拒绝。TLS 主机、CA 来源及端口暴露方式取决于实例部署。要从云集群外部连接消息代理，参见[从集群外部连接设备](../deployment/connecting-from-outside.md)；在本地 kind 集群上，使用下面描述的本地端口。
 
 代理使用 TLS，因此 `--cafile` 需要实例的 CA 证书。在本地 kind 安装中，它位于实例命名空间的 `dc-nats-tls` Secret 里，键为 `ca.crt`。用一条命令将其保存为 `instance-ca.crt`（把 `dci-` 前缀后的实例 ID 换成你自己的）：
 

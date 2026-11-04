@@ -58,7 +58,8 @@ How devices reach the platform, and how the platform reaches back.
 ### MQTT — the platform broker
 
 The default path, and the most complete one. The broker is the MQTT server built into NATS, so
-there is no separate broker to run.
+there is no separate broker to run. Devices outside the cluster reach it over TLS on port 8883, once an
+operator has switched that on; see [Connecting devices from outside the cluster](../deployment/connecting-from-outside.md).
 
 - **Subscribe ◐** — the device publishes to its own events topic, and the broker captures the
   message durably before any platform code sees it. Authentication has two independent layers:

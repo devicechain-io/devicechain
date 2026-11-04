@@ -69,7 +69,7 @@ type natsTLSMaterial struct {
 // All four resolution depths are named because which one a server dials with is
 // decided by the chart's own templating, not here. Naming all four costs nothing and
 // removes the dependency.
-func natsServerDNSNames(releaseName, namespace string, replicas int) []string {
+func natsServerDNSNames(releaseName, namespace string, replicas int, extra ...string) []string {
 	names := []string{
 		releaseName,
 		releaseName + "." + namespace,
@@ -78,6 +78,8 @@ func natsServerDNSNames(releaseName, namespace string, replicas int) []string {
 		// In-pod tooling connects over the loopback name.
 		"localhost",
 	}
+	// The names devices dial from OUTSIDE the cluster (--mqtt-host), when MQTT is exposed.
+	names = append(names, extra...)
 	if replicas <= 1 {
 		return names
 	}
@@ -95,7 +97,7 @@ func natsServerDNSNames(releaseName, namespace string, replicas int) []string {
 }
 
 // mintNATSTLS creates the authority and its leaf.
-func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*natsTLSMaterial, error) {
+func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time, extraNames ...string) (*natsTLSMaterial, error) {
 	caKey, err := rsa.GenerateKey(rand.Reader, natsTLSKeyBits)
 	if err != nil {
 		return nil, fmt.Errorf("generating the broker certificate authority key: %w", err)
@@ -125,7 +127,7 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*n
 		return nil, fmt.Errorf("re-reading the certificate authority just created: %w", err)
 	}
 
-	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, releaseName, namespace, replicas, now)
+	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, releaseName, namespace, replicas, now, extraNames...)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +154,7 @@ func issueNATSLeaf(
 	releaseName, namespace string,
 	replicas int,
 	now time.Time,
+	extraNames ...string,
 ) (certPEM, keyPEM string, err error) {
 	leafKey, err := rsa.GenerateKey(rand.Reader, natsTLSKeyBits)
 	if err != nil {
@@ -169,7 +172,7 @@ func issueNATSLeaf(
 		},
 		NotBefore: now.Add(-certClockSkewAllowance),
 		NotAfter:  now.Add(natsLeafValidity),
-		DNSNames:  natsServerDNSNames(releaseName, namespace, replicas),
+		DNSNames:  natsServerDNSNames(releaseName, namespace, replicas, extraNames...),
 		KeyUsage:  x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		// 🔴 BOTH ROLES, AND THE SECOND ONE IS THE ONE THAT IS EASY TO DROP. One leaf
 		// plays both: on the client and messaging listeners the server presents it as

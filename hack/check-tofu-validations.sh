@@ -1020,6 +1020,7 @@ run_assertions() {
   # validation block to reject by).
   accepts traefik_aws_nlb true
   accepts ingress_nginx_aws_nlb true
+  accepts traefik_mqtt_entrypoint true
 
   # A trusted-proxy entry that is not a CIDR would be handed to the controller as-is.
   rejects traefik_trusted_proxy_cidrs '["not-a-cidr"]'

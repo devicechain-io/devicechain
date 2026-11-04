@@ -191,7 +191,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	// kept forever expires a year after bootstrap with nothing to re-issue it. That
 	// belongs to the verb that evolves an instance rather than the one that creates
 	// it, and the two answer opposite questions.
-	st.NATSTLS, err = mintNATSTLS(natsReleaseName, InstanceNamespace(st.Instance), haFor(st.HA).ServerReplicas, time.Now().UTC())
+	st.NATSTLS, err = mintNATSTLS(natsReleaseName, InstanceNamespace(st.Instance), haFor(st.HA).ServerReplicas, time.Now().UTC(), mqttBrokerNames(st)...)
 	if err != nil {
 		return fail("minting the broker's certificate authority", err)
 	}

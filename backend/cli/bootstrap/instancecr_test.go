@@ -45,7 +45,7 @@ func specJSONFields(t *testing.T) []string {
 func TestInstanceSpecIsAClosedList(t *testing.T) {
 	want := []string{
 		"cluster", "cnpg", "compact", "extraFunctionalAreas", "grafanaSSO", "ha",
-		"host", "imageRegistry", "imageVersion", "managed", "monitoring", "mqttFailClosed", "objectStore", "profile",
+		"host", "imageRegistry", "imageVersion", "managed", "monitoring", "mqttExposure", "mqttFailClosed", "mqttHost", "objectStore", "profile",
 		"provider", "restored", "restoredAt", "tls", "trustedProxies", "trustedProxiesExplicit",
 	}
 	got := specJSONFields(t)

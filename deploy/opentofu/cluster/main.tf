@@ -750,6 +750,7 @@ module "traefik" {
   use_host_port       = var.traefik_use_host_port
   service_type        = var.traefik_service_type
   aws_nlb             = var.traefik_aws_nlb
+  mqtt_entrypoint     = var.traefik_mqtt_entrypoint
   replicas            = var.traefik_replicas > 0 ? var.traefik_replicas : (var.ha ? 2 : 1)
   trusted_proxy_cidrs = var.traefik_trusted_proxy_cidrs
   max_artifact_bytes  = var.traefik_max_artifact_bytes

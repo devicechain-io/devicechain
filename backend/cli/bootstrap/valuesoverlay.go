@@ -117,6 +117,10 @@ var tunableValues = []string{
 	"ingress.gateway.annotations",
 	"networkPolicy.additionalAllowedCidrs",
 	"serviceAccount.annotations",
+	// The cloud knobs of the MQTT LoadBalancer Service (an internal balancer, source ranges).
+	// Whether MQTT is exposed at all, and under which host, are the declaration's
+	// (--mqtt-exposure / --mqtt-host), so mqttExposure.mode and .host are refused by omission.
+	"mqttExposure.loadBalancer",
 	// One area's own scale, resources and configuration.
 	"functionalAreas.*.replicas",
 	"functionalAreas.*.strategy",

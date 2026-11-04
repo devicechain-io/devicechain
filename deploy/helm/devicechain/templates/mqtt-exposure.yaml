@@ -1,0 +1,69 @@
+{{/*
+First-class exposure of the platform MQTT broker to devices OUTSIDE the cluster. Off by
+default (mqttExposure.mode none): an upgrade never opens a new public port. Plaintext MQTT is
+never exposed; both modes carry the broker's own TLS listener, so the broker (which already
+does server TLS and device-certificate authentication) terminates TLS, never the ingress.
+
+  gateway       a TLSRoute in Passthrough mode on the instance Gateway's mqtt-tls listener
+                (gateway.yaml, port 8883), routed by the SNI name mqttExposure.host. The
+                controller needs an 8883 entrypoint (the OpenTofu traefik module's
+                mqtt_entrypoint). The listener is bound to this instance's host name and admits
+                routes from this namespace only, so one instance cannot capture another's SNI.
+  loadbalancer  a Service of type LoadBalancer for 8883 straight to the broker pods, for a
+                cluster with no Gateway API support or where an L4 balancer is preferred.
+*/}}
+{{- $mqtt := include "devicechain.mqttExposure" . | fromJson -}}
+{{- $m := .Values.mqttExposure | default dict -}}
+{{- $ns := include "devicechain.instanceNamespace" . -}}
+{{- if eq $mqtt.mode "gateway" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: devicechain-mqtt
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: devicechain
+      sectionName: mqtt-tls
+  hostnames:
+    - {{ $mqtt.host | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ $mqtt.brokerService }}
+          port: 1883
+{{- else if eq $mqtt.mode "loadbalancer" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $mqtt.brokerService }}-mqtt-lb
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mqtt-lb
+  {{- with ($m.loadBalancer | default dict).annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  {{- with ($m.loadBalancer | default dict).sourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  # Local keeps the device's address on the way to the broker and sends traffic only to nodes
+  # that run a broker pod.
+  externalTrafficPolicy: Local
+  # The broker's own pod labels (the nats chart's), the same ones the nodeport Service and the
+  # PodMonitor select on.
+  selector:
+    app.kubernetes.io/name: nats
+    app.kubernetes.io/instance: {{ $mqtt.brokerService }}
+    app.kubernetes.io/component: nats
+  ports:
+    - name: mqtts
+      port: 8883
+      targetPort: mqtt
+      protocol: TCP
+{{- end }}

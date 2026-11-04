@@ -110,6 +110,8 @@ var dispositions = map[string]disposition{
 	// mqtt-fail-closed is the declaration's mqttFailClosed field (a pointer, so an explicit
 	// off is recorded as off and "never chose" as absent), read back by every upgrade.
 	"trusted-proxies":  declared, // recorded as spec.trustedProxies (+ trustedProxiesExplicit)
+	"mqtt-exposure":    declared, // recorded as spec.mqttExposure
+	"mqtt-host":        declared, // recorded as spec.mqttHost
 	"mqtt-fail-closed": declared,
 
 	// --- known gaps ---

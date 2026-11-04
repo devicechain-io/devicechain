@@ -35,8 +35,10 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// cluster dcctl was pointed at, a fresh default one on a cluster it created. Either rewrites
 	// what the instance is built on, and a store dropped from the declaration is a volume Helm
 	// would then remove along with every logo and artifact on it.
+	var existing *dcv1beta1.Instance
 	if !st.DryRun {
-		existing, err := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
+		var err error
+		existing, err = readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
 		if err != nil {
 			return err
 		}
@@ -62,6 +64,21 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	if err := settleFrontEnd(ctx, st); err != nil {
 		return err
 	}
+	// The MQTT exposure: this run's flags over the declaration's, judged while nothing has been
+	// written. After the front end is settled because gateway mode rides on it.
+	var recorded *dcv1beta1.InstanceSpec
+	if existing != nil {
+		recorded = &existing.Spec
+	}
+	if err := adoptMQTTExposure(st, recorded, st.MQTTExposureGiven, st.MQTTHostGiven); err != nil {
+		return err
+	}
+	if !st.DryRun {
+		if err := settleMQTTExposurePrereqs(ctx, st); err != nil {
+			return err
+		}
+	}
+	sayMQTTExposure(st)
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
 	sayUpdateStoreMountless(st)
@@ -208,4 +225,5 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
 	st.TrustedProxies = append([]string(nil), spec.TrustedProxies...)
 	st.TrustedProxiesExplicit = spec.TrustedProxiesExplicit
+	st.MQTTExposure, st.MQTTHost = spec.MQTTExposure, spec.MQTTHost
 }

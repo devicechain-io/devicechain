@@ -22,6 +22,8 @@ var (
 
 	upgradeMqttFailClosed bool
 	upgradeTrustedProxies []string
+	upgradeMQTTExposure   string
+	upgradeMQTTHost       string
 
 	upgradeLwm2mIdentities   string
 	upgradeWithdrawLwm2m     bool
@@ -60,6 +62,8 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 
 			MqttFailClosed: mqttFailClosed,
 			TrustedProxies: upgradeTrustedProxies,
+			MQTTExposure:   upgradeMQTTExposure,
+			MQTTHost:       upgradeMQTTHost,
 			ValuesOverlay:  valuesOverlay,
 
 			IngressController: upgradeIngressController,
@@ -215,6 +219,9 @@ when they are in a terraform.tfvars beside its state
 			return fmt.Errorf("--drop-legacy-ingress stops rendering the Ingress objects beside the Gateway, and --ingress-controller nginx makes them the only front end; give one")
 		}
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
+		if err := bootstrap.CheckMQTTExposureFlags(upgradeMQTTExposure, upgradeMQTTHost, false); err != nil {
+			return err
+		}
 		if upgradeResetValues && len(upgradeValues) > 0 {
 			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
 		}
@@ -256,6 +263,8 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
+	upgradeCmd.Flags().StringVar(&upgradeMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
+	upgradeCmd.Flags().StringVar(&upgradeMQTTHost, "mqtt-host", "", mqttHostUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeDropLegacyIngress, "drop-legacy-ingress", false, dropLegacyIngressUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
