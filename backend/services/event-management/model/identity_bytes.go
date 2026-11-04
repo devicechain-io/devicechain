@@ -167,6 +167,9 @@ func appendMeasurementsPayload(dst []byte, p *resolvedevent.ResolvedMeasurements
 				dst = append(dst, ',')
 			}
 			sample := &p.Entries[i]
+			// Defensive: IdentityView strips drop records before the payload gets here, so this
+			// does not run on the identity path. A payload that still carries one is marshalled
+			// by json (which writes the field) rather than reproduced.
 			if len(sample.Dropped) > 0 {
 				return dst, false
 			}

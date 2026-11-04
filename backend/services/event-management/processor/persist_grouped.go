@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/devicechain-io/dc-event-management/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -119,6 +120,19 @@ func (ep *EventPersistenceWorker) writeGrouped(tx *gorm.DB, batch []pendingEvent
 	if tx.Dialector.Name() != "postgres" {
 		return ep.writeGroups(tx, batch, groups, seq, false)
 	}
+	// The fence is read BEFORE the savepoint, never inside it: the read's share lock on the
+	// fence table is kept to the end of the transaction only if it is taken outside the
+	// savepoint, and the per-transaction memo would otherwise count the tenant as read after
+	// ROLLBACK TO SAVEPOINT released that lock (rdb.ReadFenceIfEnforced).
+	for _, g := range groups {
+		tenant, ok := core.TenantFromContext(g.ctx)
+		if !ok {
+			return g.first, core.ErrNoTenant
+		}
+		if err := rdb.ReadFenceIfEnforced(g.ctx, tx, tenant); err != nil {
+			return blame(g, nil, err)
+		}
+	}
 	// Optimistic first pass: plain INSERTs, no ON CONFLICT arbiter (see optimisticSavepoint).
 	if err := tx.SavePoint(optimisticSavepoint).Error; err != nil {
 		return -1, err
@@ -132,6 +146,7 @@ func (ep *EventPersistenceWorker) writeGrouped(tx *gorm.DB, batch []pendingEvent
 	// batch again with the arbiter, which absorbs those rows exactly as it always has. A
 	// unique violation the arbiter does not cover (the alternate-id key) comes back from
 	// this pass as it always has.
+	ep.metrics.insertFallback()
 	log.Debug().Err(err).Int("events", len(batch)).
 		Msg("A batch met rows that are already stored; writing it again with ON CONFLICT")
 	if err := tx.RollbackTo(optimisticSavepoint).Error; err != nil {
