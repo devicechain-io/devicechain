@@ -280,6 +280,7 @@ const sidebars: SidebarsConfig = {
             'deployment/kubernetes-operator',
             'deployment/cluster-lock',
             'deployment/ingress-cutover',
+            'deployment/connecting-from-outside',
           ],
         },
         {

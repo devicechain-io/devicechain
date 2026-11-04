@@ -212,7 +212,7 @@ mosquitto_pub \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-La credencial autentica la conexión. El broker ya sabe de qué dispositivo viene cada publicación, así que el evento no lleva credencial; uno que la lleve se rechaza. El host TLS, el origen de la CA y la exposición del puerto dependen de cómo se despliegue la instancia; consulta [Despliegue](../deployment/kubernetes-operator.md).
+La credencial autentica la conexión. El broker ya sabe de qué dispositivo viene cada publicación, así que el evento no lleva credencial; uno que la lleve se rechaza. El host TLS, el origen de la CA y la exposición del puerto dependen de cómo se despliegue la instancia. Para llegar al bróker desde fuera de un clúster en la nube, consulta [Conectar dispositivos desde fuera del clúster](../deployment/connecting-from-outside.md); en un clúster kind local, usa el puerto local que se describe más abajo.
 
 El broker habla TLS, así que `--cafile` necesita el certificado de la CA de la instancia. En una instalación kind local está en el Secret `dc-nats-tls` del namespace de la instancia, bajo la clave `ca.crt`. Guárdalo como `instance-ca.crt` con un comando (sustituye el id de tu instancia tras el prefijo `dci-`):
 

@@ -84,6 +84,8 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	// The fail-closed choice as made: nil is "never chose" and is recorded as that.
 	spec.MQTTFailClosed = copyBoolPtr(st.MqttFailClosed)
 	recordTrustedProxies(&spec, st)
+	recordMQTTExposure(&spec, st)
+	spec.BrokerMaxConnections = int32(st.BrokerMaxConnections)
 	if spec.Restored {
 		now := metav1.NewTime(time.Now().UTC())
 		spec.RestoredAt = &now
@@ -100,6 +102,11 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 	if _, err := CanonicalTrustedProxies(spec.TrustedProxies); len(spec.TrustedProxies) > 0 && err != nil {
 		return fmt.Errorf("trustedProxies: %w", err)
+	}
+	if spec.MQTTExposure != "" && spec.MQTTExposure != MQTTExposureNone {
+		if err := ValidateMQTTHost(spec.MQTTHost); err != nil {
+			return fmt.Errorf("mqttHost: %w", err)
+		}
 	}
 	if spec.Provider == "" {
 		return fmt.Errorf("the instance declaration names no provider, so nothing could later " +

@@ -68,6 +68,7 @@ fails rather than emit an invalid object if a future area set would not.
 {{- fail "ingress.annotations are Ingress controller annotations and have no effect when ingress.controller is gateway (they apply to the Ingress objects of a cutover window, ingress.legacy.enabled, and to nothing else). Remove them; to annotate the Gateway itself use ingress.gateway.annotations." }}
 {{- end }}
 {{- $appSection := ternary "https" "http" $tls.enabled -}}
+{{- $mqtt := include "devicechain.mqttExposure" . | fromJson -}}
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -112,6 +113,22 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+    {{- end }}
+    {{- if eq $mqtt.mode "gateway" }}
+    # MQTT over TLS, passed through to the broker (mqtt-exposure.yaml). The listener only
+    # admits TLSRoutes from this namespace, and is bound to this instance's own MQTT host name.
+    - name: mqtt-tls
+      protocol: TLS
+      port: 8883
+      hostname: {{ $mqtt.host | quote }}
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - group: gateway.networking.k8s.io
+            kind: TLSRoute
     {{- end }}
 {{- if $tls.enabled }}
 ---

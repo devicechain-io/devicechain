@@ -89,6 +89,9 @@ type InstallOptions struct {
 	// AWSNLB asks for an AWS Network Load Balancer on the ingress controllers' LoadBalancer Services
 	// (EKS): see awsNLBPlan.
 	AWSNLB string
+	// MQTTGateway is `dcctl install --mqtt-gateway`: nil when not given (keep what the controller's
+	// Service has), otherwise whether Traefik listens on 8883 for MQTT over TLS. See mqttGatewayPlan.
+	MQTTGateway *bool
 }
 
 // Install prepares a cluster for instances: it creates or names the cluster, applies
@@ -456,6 +459,7 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		Restore:             opts.Restore,
 		RemoveLegacyIngress: opts.RemoveLegacyIngress,
 		AWSNLB:              opts.AWSNLB,
+		MQTTGateway:         opts.MQTTGateway,
 		Values:              map[string]string{},
 	}
 }

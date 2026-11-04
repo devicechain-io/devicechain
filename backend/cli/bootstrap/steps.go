@@ -28,6 +28,16 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// natsAuthorityClient builds the client a bootstrap reads the broker's existing authority with. A
+// variable so a test that has no cluster can hand it a fake; nothing else replaces it.
+var natsAuthorityClient = func(kubeContext string) (kubernetes.Interface, error) {
+	_, _, t, err := kubeClients(kubeContext)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // defaultProfile is used when the user does not specify one: the standard system —
 // the whole device/telemetry/automation platform, and the right default for a
 // complete instance. It deliberately is NOT "full": full additionally ships the areas
@@ -186,14 +196,20 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		return fail("settling this instance's credentials", err)
 	}
 
-	// The broker's authority and leaf. Minted on every run for now: reuse would keep
-	// a certificate, and what a live instance actually needs is RENEWAL — a leaf
-	// kept forever expires a year after bootstrap with nothing to re-issue it. That
-	// belongs to the verb that evolves an instance rather than the one that creates
-	// it, and the two answer opposite questions.
-	st.NATSTLS, err = mintNATSTLS(natsReleaseName, InstanceNamespace(st.Instance), haFor(st.HA).ServerReplicas, time.Now().UTC())
+	// The broker's authority and leaf. The LEAF is issued on every run (renewal of an aging leaf
+	// belongs to `dcctl upgrade`), but the AUTHORITY is kept when the instance already has one:
+	// devices pin it, so a re-run must not rotate it. See settleNATSTLS.
+	var authorityReader kubernetes.Interface
+	if !st.DryRun {
+		t, kerr := natsAuthorityClient(st.KubeContext)
+		if kerr != nil {
+			return fail("reaching the cluster to look for the broker's existing authority", kerr)
+		}
+		authorityReader = t
+	}
+	st.NATSTLS, err = settleNATSTLS(ctx, authorityReader, st, time.Now().UTC())
 	if err != nil {
-		return fail("minting the broker's certificate authority", err)
+		return fail("settling the broker's certificate authority", err)
 	}
 	st.Values["natsCA"] = st.NATSTLS.CACertPEM
 

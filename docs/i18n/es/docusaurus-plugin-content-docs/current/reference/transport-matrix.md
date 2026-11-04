@@ -60,7 +60,8 @@ Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vu
 ### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
 
 La vía por defecto, y la más completa. El bróker es el servidor MQTT integrado en NATS, así que no
-hay ningún bróker aparte que operar.
+hay ningún bróker aparte que operar. Los dispositivos fuera del clúster llegan a él por TLS en el puerto 8883, una vez que un
+operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúster](../deployment/connecting-from-outside.md).
 
 - **Suscripción ◐**: el dispositivo publica en su propio topic de eventos, y el bróker captura el
   mensaje de forma duradera antes de que ningún código de la plataforma lo vea. La autenticación

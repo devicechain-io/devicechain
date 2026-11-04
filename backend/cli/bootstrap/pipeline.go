@@ -119,6 +119,8 @@ type State struct {
 	ClusterFrontEndVars []string
 	// AWSNLB is `dcctl install --aws-nlb`; see awsNLBPlan.
 	AWSNLB string
+	// MQTTGateway is `dcctl install --mqtt-gateway`; see mqttGatewayPlan.
+	MQTTGateway *bool
 	// NoMonitoring records that the cluster was installed WITHOUT the observability
 	// stack. It is `dcctl install`'s flag, applied to the cluster root there; a
 	// bootstrap has no flag for it and reads it back from the install record
@@ -196,6 +198,21 @@ type State struct {
 	// MqttFailClosedChange says this upgrade was given --mqtt-fail-closed with a value the
 	// declaration does not hold, so recordUpgradedVersion must write it.
 	MqttFailClosedChange bool
+	// MQTTExposure and MQTTHost are the settled exposure of the MQTT broker to devices outside the
+	// cluster (none, gateway or loadbalancer, and the DNS name they dial): the flags, else the
+	// declaration's, see mqttexposure.go. MQTTExposureChange says an upgrade must record them, and
+	// the Given pair is what this run's flags said (empty: keep what is recorded).
+	MQTTExposure       string
+	MQTTHost           string
+	MQTTExposureChange bool
+	MQTTExposureGiven  string
+	MQTTHostGiven      string
+	// BrokerMaxConnections is the settled cap on broker connections (0: the server's own limit),
+	// BrokerMaxConnectionsGiven this run's flag, and BrokerMaxConnectionsChange says an upgrade
+	// must record it.
+	BrokerMaxConnections       int
+	BrokerMaxConnectionsGiven  *int
+	BrokerMaxConnectionsChange bool
 	// TrustedProxiesOverride is --trusted-proxies as given: nil when not given, ["auto"] to drop
 	// an explicit list, otherwise the operator's CIDRs. TrustedProxies and TrustedProxiesExplicit
 	// are what the run settled and renders (infrastructure.http.trustedProxies), and

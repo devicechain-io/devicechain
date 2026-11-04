@@ -142,6 +142,23 @@ func TestTheCRDKeepsTheRestoreFact(t *testing.T) {
 	}
 }
 
+// Exposing the MQTT broker off-cluster is refused in the declaration itself when it has no host
+// to route by, and the host is a bounded, well-formed DNS name.
+func TestTheCRDRefusesAnMQTTExposureWithoutAValidHost(t *testing.T) {
+	spec := specSchema(t, loadInstanceCRD(t))
+	joined := strings.Join(rulesOf(spec), "\n")
+	for _, want := range []string{"size(self.mqttHost) > 0"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the spec carries no rule containing %q; rules found: %q", want, joined)
+		}
+	}
+	mode := spec["properties"].(map[string]interface{})["mqttExposure"].(map[string]interface{})
+	enum, _ := mode["enum"].([]interface{})
+	if len(enum) != 3 {
+		t.Errorf("mqttExposure must be one of none, gateway, loadbalancer; enum = %v", enum)
+	}
+}
+
 // The generated CRD and the Go type must describe the same object. They are
 // joined by nothing but `make manifests` having been run.
 func TestTheGeneratedCRDMatchesTheGoType(t *testing.T) {

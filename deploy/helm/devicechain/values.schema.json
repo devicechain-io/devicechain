@@ -484,6 +484,39 @@
       "type": "object",
       "description": "Container-level securityContext. The hardened defaults drop all Linux capabilities, forbid privilege escalation and use a read-only root filesystem; the service images are static binaries that write nothing to the root filesystem."
     },
+    "mqttExposure": {
+      "type": "object",
+      "description": "Exposure of the platform MQTT broker to devices outside the cluster. Off by default. Plaintext MQTT is never exposed: the broker terminates TLS itself, and both modes carry it through untouched on port 8883.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "gateway", "loadbalancer"],
+          "default": "none",
+          "description": "none exposes nothing. gateway renders a TLSRoute in Passthrough mode on the instance Gateway's 8883 listener, routed by the SNI name in host. loadbalancer renders a Service of type LoadBalancer for 8883 to the broker pods."
+        },
+        "host": {
+          "type": "string",
+          "description": "The DNS name devices dial; the Gateway routes by it and the broker's certificate must carry it. Required unless mode is none."
+        },
+        "loadBalancer": {
+          "type": "object",
+          "description": "Settings for loadbalancer mode.",
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "type": "object",
+              "description": "Annotations on the LoadBalancer Service (cloud-specific, for example an internal balancer)."
+            },
+            "sourceRanges": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "CIDRs allowed to reach the balancer. Empty allows any source."
+            }
+          }
+        }
+      }
+    },
     "ingress": {
       "type": "object",
       "description": "Optional routing + cert-manager TLS exposing the GraphQL/HTTP surface: Ingress objects (controller nginx) or a Gateway API Gateway with HTTPRoutes (controller gateway). Requires the OpenTofu controller + cert-manager.",

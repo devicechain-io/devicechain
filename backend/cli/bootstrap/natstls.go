@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // The broker's certificate authority and the one leaf it signs.
@@ -69,7 +71,7 @@ type natsTLSMaterial struct {
 // All four resolution depths are named because which one a server dials with is
 // decided by the chart's own templating, not here. Naming all four costs nothing and
 // removes the dependency.
-func natsServerDNSNames(releaseName, namespace string, replicas int) []string {
+func natsServerDNSNames(releaseName, namespace string, replicas int, extra ...string) []string {
 	names := []string{
 		releaseName,
 		releaseName + "." + namespace,
@@ -78,6 +80,8 @@ func natsServerDNSNames(releaseName, namespace string, replicas int) []string {
 		// In-pod tooling connects over the loopback name.
 		"localhost",
 	}
+	// The names devices dial from OUTSIDE the cluster (--mqtt-host), when MQTT is exposed.
+	names = append(names, extra...)
 	if replicas <= 1 {
 		return names
 	}
@@ -95,7 +99,7 @@ func natsServerDNSNames(releaseName, namespace string, replicas int) []string {
 }
 
 // mintNATSTLS creates the authority and its leaf.
-func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*natsTLSMaterial, error) {
+func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time, extraNames ...string) (*natsTLSMaterial, error) {
 	caKey, err := rsa.GenerateKey(rand.Reader, natsTLSKeyBits)
 	if err != nil {
 		return nil, fmt.Errorf("generating the broker certificate authority key: %w", err)
@@ -125,7 +129,7 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*n
 		return nil, fmt.Errorf("re-reading the certificate authority just created: %w", err)
 	}
 
-	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, releaseName, namespace, replicas, now)
+	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, releaseName, namespace, replicas, now, extraNames...)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +140,44 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time) (*n
 		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
 		LeafCertPEM: leafCertPEM,
 		LeafKeyPEM:  leafKeyPEM,
+	}, nil
+}
+
+// settleNATSTLS is the broker's authority and leaf for a bootstrap run: the authority the instance
+// already keeps, with a fresh leaf, else a newly minted pair.
+//
+// 🔴 A RE-RUN MUST NOT ROTATE THE AUTHORITY. Devices pin it (the instance CA is shipped in firmware
+// and configuration), and the services trust it from the document they started with, so a new CA
+// on a re-run silently breaks every pinned device while the run reports success. Only an instance
+// with no authority of its own (a fresh namespace) gets a new one.
+//
+// An authority that EXISTS but cannot be read is an error, never a mint: "could not tell" must not
+// resolve to the answer that cannot be undone. typed is nil in a dry run, which mints a
+// throwaway pair it will never deploy.
+func settleNATSTLS(ctx context.Context, typed kubernetes.Interface, st *State, now time.Time) (*natsTLSMaterial, error) {
+	ns := InstanceNamespace(st.Instance)
+	replicas := haFor(st.HA).ServerReplicas
+	if typed == nil {
+		return mintNATSTLS(natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
+	}
+	caCert, caKey, err := readNATSAuthority(ctx, typed, st.Instance, st.InstanceUID)
+	if err != nil {
+		return nil, fmt.Errorf("the instance already has a broker authority that cannot be read, and minting a "+
+			"new one would break every device that pins it: %w", err)
+	}
+	if caCert == nil {
+		return mintNATSTLS(natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
+	}
+	certPEM, keyPEM, err := issueNATSLeaf(caCert, caKey, natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
+	if err != nil {
+		return nil, err
+	}
+	return &natsTLSMaterial{
+		Namespace:   ns,
+		CACertPEM:   encodePEM("CERTIFICATE", caCert.Raw),
+		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
+		LeafCertPEM: certPEM,
+		LeafKeyPEM:  keyPEM,
 	}, nil
 }
 
@@ -152,6 +194,7 @@ func issueNATSLeaf(
 	releaseName, namespace string,
 	replicas int,
 	now time.Time,
+	extraNames ...string,
 ) (certPEM, keyPEM string, err error) {
 	leafKey, err := rsa.GenerateKey(rand.Reader, natsTLSKeyBits)
 	if err != nil {
@@ -169,7 +212,7 @@ func issueNATSLeaf(
 		},
 		NotBefore: now.Add(-certClockSkewAllowance),
 		NotAfter:  now.Add(natsLeafValidity),
-		DNSNames:  natsServerDNSNames(releaseName, namespace, replicas),
+		DNSNames:  natsServerDNSNames(releaseName, namespace, replicas, extraNames...),
 		KeyUsage:  x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		// 🔴 BOTH ROLES, AND THE SECOND ONE IS THE ONE THAT IS EASY TO DROP. One leaf
 		// plays both: on the client and messaging listeners the server presents it as

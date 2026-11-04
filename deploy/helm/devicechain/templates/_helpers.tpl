@@ -1540,3 +1540,43 @@ ingress.gateway.tlsSecretName when set, else the instance's own (ingress.tls.sec
 {{- define "devicechain.gatewayTlsSecret" -}}
 {{- .Values.ingress.gateway.tlsSecretName | default .Values.ingress.tls.secretName -}}
 {{- end -}}
+
+{{/*
+The MQTT exposure settings, validated, as JSON for the caller to fromJson: mode (none, gateway or
+loadbalancer), host, and brokerService (the broker Service's name). Every refusal here is a
+render-time failure rather than a Service or route that quietly leaves the broker reachable some
+other way than the one asked for.
+
+Plaintext MQTT is never exposed off-cluster by this feature, so it refuses when the broker's own
+TLS is off (when the chart can read the instance config; under instance.existingSecret it cannot,
+and dcctl, which composes that config, makes the same refusal before it renders anything).
+*/}}
+{{- define "devicechain.mqttExposure" -}}
+{{- $m := .Values.mqttExposure | default dict -}}
+{{- $mode := $m.mode | default "none" -}}
+{{- if not (has $mode (list "none" "gateway" "loadbalancer")) -}}
+{{- fail (printf "mqttExposure.mode %q is not one of none, gateway or loadbalancer" $mode) -}}
+{{- end -}}
+{{- $host := $m.host | default "" -}}
+{{- $svc := "" -}}
+{{- if ne $mode "none" -}}
+{{- if not (regexMatch "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\\.)+[a-z]([-a-z0-9]{0,61}[a-z0-9])?$" $host) -}}
+{{- fail (printf "mqttExposure.host %q is not a fully-qualified lower-case DNS name. Devices verify the broker's certificate against the name they dial, and the Gateway routes by that name, so it is required whenever mqttExposure.mode is not none." $host) -}}
+{{- end -}}
+{{- $cfg := .Values.instance.config | default dict -}}
+{{- $infra := $cfg.infrastructure | default dict -}}
+{{- $nats := $infra.nats | default dict -}}
+{{- if and $infra (not (($nats.tls | default dict).enabled)) -}}
+{{- fail "mqttExposure.mode is not none, but the broker's TLS is off (instance.config.infrastructure.nats.tls.enabled). Plaintext MQTT is never exposed outside the cluster; turn the broker's TLS on or leave mqttExposure.mode at none." -}}
+{{- end -}}
+{{- $parts := splitList "." ($nats.hostname | default "dc-nats") -}}
+{{- $svc = first $parts -}}
+{{- if and (gt (len $parts) 1) (ne (index $parts 1) (include "devicechain.instanceNamespace" .)) -}}
+{{- fail (printf "mqttExposure.mode is not none, but the broker runs in namespace %q and this instance's routes live in %q. A route cannot reach a Service in another namespace without a grant, and this chart renders none; expose a broker that runs in the instance's own namespace." (index $parts 1) (include "devicechain.instanceNamespace" .)) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq $mode "gateway") (not (and .Values.ingress.enabled (eq .Values.ingress.controller "gateway"))) -}}
+{{- fail "mqttExposure.mode gateway needs the Gateway the instance already ships: set ingress.enabled and ingress.controller gateway, or use mqttExposure.mode loadbalancer." -}}
+{{- end -}}
+{{- dict "mode" $mode "host" $host "brokerService" $svc | toJson -}}
+{{- end -}}

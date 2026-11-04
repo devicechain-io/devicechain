@@ -172,6 +172,21 @@ variable "aws_nlb" {
   default     = false
 }
 
+variable "mqtt_entrypoint" {
+  description = <<-EOT
+    Open an `mqtts` entrypoint on 8883 and expose it on the controller's Service, so an
+    instance Gateway can carry MQTT over TLS in Passthrough mode (a TLSRoute routed by SNI:
+    the broker, not the controller, terminates TLS). Off by default: turning it on publishes
+    a NEW port on the controller's Service (on a cloud, on its load balancer), so an upgrade
+    never does it by itself. It does nothing until an instance asks for it
+    (`dcctl bootstrap --mqtt-exposure gateway`), and an instance's route is bound to that
+    instance's own host name, so enabling it hands no instance another's traffic. Raw TCP
+    through the controller: the broker sees the controller's address, not the device's.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "replicas" {
   description = <<-EOT
     Controller replicas. Forced to 1 with use_host_port: two pods cannot share a node's host
@@ -483,7 +498,7 @@ locals {
         name    = var.gateway_class
       }
 
-      ports = {
+      ports = merge({
         web = merge(
           {
             port             = 80
@@ -502,7 +517,16 @@ locals {
           },
           { for k, v in { hostPort = 443 } : k => v if var.use_host_port },
         )
-      }
+        }, var.mqtt_entrypoint ? {
+        # Listeners on a Gateway match the ENTRYPOINT port, so this is 8883 as the instance
+        # Gateway's mqtt-tls listener states it. Exposed on the Service under the same number.
+        mqtts = {
+          port        = 8883
+          exposedPort = 8883
+          protocol    = "TCP"
+          expose      = { default = true }
+        }
+      } : {})
 
       accessLog = local.access_log
 

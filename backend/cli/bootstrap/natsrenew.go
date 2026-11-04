@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -167,7 +168,7 @@ func leafReissueReason(leafPEM string, wanted []string, now time.Time) (string, 
 	}
 
 	if missing := namesMissingFrom(leaf.DNSNames, wanted); len(missing) > 0 {
-		return fmt.Sprintf("it does not cover %v, which this instance's brokers dial each other by",
+		return fmt.Sprintf("it does not cover %v, which this instance's brokers dial each other by, or devices dial from outside the cluster (--mqtt-host)",
 			missing), nil
 	}
 
@@ -247,13 +248,18 @@ var brokerServedNotAfter = func(ctx context.Context, typed kubernetes.Interface,
 // or the broker's rendered config rolls the broker in the infrastructure apply that follows,
 // and the new pods mount the new Secret; no extra handling is warranted for that.
 func hotRenewable(current *corev1.Secret, caPEM string, wanted []string,
-	sts *appsv1.StatefulSet, replicas int) (bool, string) {
+	sts *appsv1.StatefulSet, replicas int, hostNames ...string) (bool, string) {
 	leaf, err := parseFirstCertificate(string(current.Data["tls.crt"]))
 	if err != nil {
 		return false, "the current certificate cannot be read"
 	}
-	if missing := namesMissingFrom(leaf.DNSNames, wanted); len(missing) > 0 {
-		return false, "the cluster's topology changed, which is a config change"
+	// The MQTT host devices dial from outside is a name on the certificate and nothing else: it
+	// appears in no broker config text, so adding it is a key-material change the hot swap
+	// serves. Only route and topology names are a config change.
+	missing := namesMissingFrom(leaf.DNSNames, wanted)
+	missing = slices.DeleteFunc(missing, func(n string) bool { return slices.Contains(hostNames, n) })
+	if len(missing) > 0 {
+		return false, "the certificate's names changed (the cluster grew, or an MQTT host was added), which is a config change"
 	}
 	if strings.TrimSpace(string(current.Data["ca.crt"])) != strings.TrimSpace(caPEM) {
 		return false, "the certificate authority changed"
@@ -283,6 +289,9 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	ns := InstanceNamespace(st.Instance)
 	current, err := typed.CoreV1().Secrets(ns).Get(ctx, natsReleaseName+"-tls", metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
+		if len(mqttBrokerNames(st)) > 0 {
+			return false, errMQTTHostNeedsACertificate("the broker has no certificate Secret")
+		}
 		fmt.Println(color.YellowString(
 			"  The broker has no certificate Secret, so there is nothing to renew. This instance " +
 				"predates dcctl owning it; its certificate is renewed by rebuilding the instance."))
@@ -293,7 +302,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	}
 
 	replicas := haFor(st.HA).ServerReplicas
-	wanted := natsServerDNSNames(natsReleaseName, ns, replicas)
+	wanted := natsServerDNSNames(natsReleaseName, ns, replicas, mqttBrokerNames(st)...)
 	reason, err := leafReissueReason(string(current.Data["tls.crt"]), wanted, time.Now().UTC())
 	if err != nil {
 		return false, err
@@ -305,6 +314,9 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	caCert, caKey, err := readNATSAuthority(ctx, typed, st.Instance, st.InstanceUID)
 	if err != nil {
 		return false, err
+	}
+	if caCert == nil && leafLacksMQTTHost(string(current.Data["tls.crt"]), st) {
+		return false, errMQTTHostNeedsACertificate("this instance does not keep the authority that signed its broker certificate")
 	}
 	if caCert == nil {
 		// 🔴 REPORTED LOUDLY AND NOT FAILED. This instance needs a new certificate and
@@ -322,7 +334,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		return false, nil
 	}
 
-	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, natsReleaseName, ns, replicas, time.Now().UTC())
+	leafCertPEM, leafKeyPEM, err := issueNATSLeaf(caCert, caKey, natsReleaseName, ns, replicas, time.Now().UTC(), mqttBrokerNames(st)...)
 	if err != nil {
 		return false, err
 	}
@@ -342,7 +354,7 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 	if stsErr != nil {
 		sts = nil
 	}
-	hot, whyNot := hotRenewable(current, material.CACertPEM, wanted, sts, replicas)
+	hot, whyNot := hotRenewable(current, material.CACertPEM, wanted, sts, replicas, mqttBrokerNames(st)...)
 
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		natsTLSSecret(natsReleaseName, material), time.Now); err != nil {
@@ -418,6 +430,54 @@ func restartBroker(ctx context.Context, typed kubernetes.Interface, namespace st
 		return fmt.Errorf("restarting the broker so it presents its new certificate: %w. The "+
 			"certificate was written, so restarting %s/%s by hand completes the renewal",
 			err, namespace, natsStatefulSetName)
+	}
+	return nil
+}
+
+// errMQTTHostNeedsACertificate is the refusal for an MQTT exposure whose host the broker's
+// certificate cannot be made to carry. Exposing the port with a certificate that does not name the
+// host would hand every device a handshake failure, so it fails instead of warning.
+func errMQTTHostNeedsACertificate(why string) error {
+	return fmt.Errorf("--mqtt-host needs the broker's certificate to carry the host, and it cannot be re-issued: %s. "+
+		"Nothing was exposed. Rebuilding the instance mints an authority and certificate that can", why)
+}
+
+// leafLacksMQTTHost says the certificate in the Secret is missing a name the MQTT exposure needs.
+func leafLacksMQTTHost(leafBundle string, st *State) bool {
+	want := mqttBrokerNames(st)
+	if len(want) == 0 {
+		return false
+	}
+	leaf, err := parseFirstCertificate(leafBundle)
+	if err != nil {
+		return true
+	}
+	return len(namesMissingFrom(leaf.DNSNames, want)) > 0
+}
+
+// precheckMQTTHostCertificate fails an MQTT exposure that the broker's certificate cannot carry,
+// BEFORE anything is written: if the leaf lacks the host, the Secret must exist and the authority
+// that signed it must be kept, or the renewal later in the run could not issue one.
+func precheckMQTTHostCertificate(ctx context.Context, typed kubernetes.Interface, st *State) error {
+	if len(mqttBrokerNames(st)) == 0 {
+		return nil
+	}
+	current, err := typed.CoreV1().Secrets(InstanceNamespace(st.Instance)).Get(ctx, natsReleaseName+"-tls", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return errMQTTHostNeedsACertificate("the broker has no certificate Secret")
+	}
+	if err != nil {
+		return fmt.Errorf("reading the broker's certificate to see whether it carries the MQTT host: %w", err)
+	}
+	if !leafLacksMQTTHost(string(current.Data["tls.crt"]), st) {
+		return nil
+	}
+	caCert, _, err := readNATSAuthority(ctx, typed, st.Instance, st.InstanceUID)
+	if err != nil {
+		return err
+	}
+	if caCert == nil {
+		return errMQTTHostNeedsACertificate("this instance does not keep the authority that signed its broker certificate")
 	}
 	return nil
 }

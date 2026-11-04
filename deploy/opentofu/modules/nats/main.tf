@@ -425,6 +425,40 @@ variable "login_password_bcrypts" {
   }
 }
 
+variable "max_connections" {
+  description = <<-EOT
+    The broker's cap on simultaneous client connections (nats-server `max_connections`), counting
+    devices and platform clients alike. 0 (the default) leaves it unset, which is the server's own
+    default (65536) and what every earlier release ran. Set it when the MQTT port is exposed to the
+    internet and you want a ceiling that holds a connection flood below what the broker's memory and
+    the auth callout can carry: every connection costs a TLS handshake and, for a device, a callout
+    round trip, so the cap protects the platform at the price of refusing devices past it. Size it
+    above your fleet, with headroom for reconnect storms, and below what the broker pods can hold.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.max_connections >= 0 && var.max_connections == floor(var.max_connections)
+    error_message = "max_connections must be 0 (unset) or a whole number of connections."
+  }
+}
+
+variable "mqtt_capable_users" {
+  description = <<-EOT
+    The static logins that may connect over MQTT. When set (a list, even an empty one), EVERY static
+    login (dc_service, the per-area logins, dc_identity, the system account) is held to
+    `allowed_connection_types`: STANDARD (the NATS protocol) for all of them, plus MQTT for the ones
+    named here. A platform credential then cannot authenticate through the MQTT port that
+    `dcctl ... --mqtt-exposure` publishes to the internet, even if its password leaks: devices never
+    use these logins (they authenticate through the auth callout), and the only platform area that
+    speaks MQTT is event-sources. Null (the default) leaves the logins unrestricted, which is what
+    every release before it ran; dcctl always sets it.
+  EOT
+  type        = list(string)
+  default     = null
+}
+
 variable "service_users" {
   description = <<-EOT
     The GENERATED broker permissions of every static login, as one JSON document:
@@ -646,7 +680,7 @@ locals {
   # The shared login exists only while its hash is supplied. Fresh installs and retired instances
   # supply none, so the user, its auth_users entry and its permissions entry are all absent together.
   shared_login_enabled = var.service_password_bcrypt != ""
-  shared_users         = local.shared_login_enabled ? [{ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null) }] : []
+  shared_users         = local.shared_login_enabled ? [{ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null), allowed_connection_types = local.connection_types[local.service_user] }] : []
 
   # 🔴 THIS MODULE HOLDS NO SUBJECT. Every static login's permissions block comes from
   # var.service_users, which dcctl generates from the stream and bucket declarations the services
@@ -675,6 +709,13 @@ locals {
     [for u in local.static_app_users : u if !contains(keys(local.service_app_permissions), u)],
     [for u in local.static_sys_users : u if !contains(keys(local.service_sys_permissions), u)],
   )
+  # The connection types each static login may use (var.mqtt_capable_users). null per user when the
+  # variable is unset, so the key renders as absent and the login is unrestricted as before.
+  connection_types = {
+    for u in concat([local.service_user, local.sys_user, local.identity_user], nonsensitive(keys(var.login_password_bcrypts))) :
+    u => var.mqtt_capable_users == null ? null : (contains(var.mqtt_capable_users, u) ? ["STANDARD", "MQTT"] : ["STANDARD"])
+  }
+
   # The IDENTITY account (see var.identity_password_bcrypt): its login, and the one account block
   # it adds. Kept in sync with natsauth.IdentityUser / natsauth.IdentityAccount (a Go test reads
   # this file). It is rendered only when a hash was supplied, so an instance that has not minted the
@@ -687,18 +728,19 @@ locals {
   identity_accounts = local.identity_enabled ? {
     (local.identity_account) = {
       jetstream = "enabled"
-      users     = [{ user = local.identity_user, password = var.identity_password_bcrypt }]
+      users     = [{ user = local.identity_user, password = var.identity_password_bcrypt, allowed_connection_types = local.connection_types[local.identity_user] }]
     }
   } : {}
 
   # The per-area logins (see var.login_password_bcrypts), each with its own generated block.
   # Terraform iterates a map in key order, so the rendered users are stable across runs.
-  login_users = [for u, h in var.login_password_bcrypts : { user = u, password = h, permissions = try(local.service_app_permissions[u], null) }]
+  login_users = [for u, h in var.login_password_bcrypts : { user = u, password = h, permissions = try(local.service_app_permissions[u], null), allowed_connection_types = local.connection_types[u] }]
 
   sys_users = var.sys_password_bcrypt == "" ? [] : [{
-    user        = local.sys_user
-    password    = var.sys_password_bcrypt
-    permissions = try(local.service_sys_permissions[local.sys_user], null)
+    user                     = local.sys_user
+    password                 = var.sys_password_bcrypt
+    permissions              = try(local.service_sys_permissions[local.sys_user], null)
+    allowed_connection_types = local.connection_types[local.sys_user]
   }]
 
   # js_max_file_store resolves the server-level max_file_store (see the
@@ -1312,8 +1354,10 @@ locals {
       prof_block_rate = var.profiling_block_rate
     } : k => v if v > 0
   }
-  auth_part    = { for k, v in local.auth_merge_content : k => v if var.enable_auth }
-  config_merge = merge(local.auth_part, local.profiling_merge)
+  auth_part = { for k, v in local.auth_merge_content : k => v if var.enable_auth }
+  # Absent unless set, so an instance that never asked renders the broker config it always did.
+  limits_merge = { for k, v in { max_connections = var.max_connections } : k => v if v > 0 }
+  config_merge = merge(local.auth_part, local.profiling_merge, local.limits_merge)
   chart_values_encoded = length(local.config_merge) > 0 ? yamlencode(merge(local.chart_values, {
     config = merge(local.chart_values.config, { merge = local.config_merge })
   })) : yamlencode(local.chart_values)

@@ -841,6 +841,18 @@ func settleClusterFrontEnd(ctx context.Context, st *State, typed kubernetes.Inte
 	for _, w := range nlbWarnings {
 		fmt.Println(color.YellowString("  warning: %s", w))
 	}
+	var dyn dynamic.Interface
+	if d, _, _, derr := kubeClients(st.KubeContext); derr == nil {
+		dyn = d
+	}
+	mqttVars, mqttWarnings, err := mqttGatewayPlan(ctx, typed, dyn, st.MQTTGateway)
+	if err != nil {
+		return err
+	}
+	plan.Vars = append(plan.Vars, mqttVars...)
+	for _, w := range mqttWarnings {
+		fmt.Println(color.YellowString("  warning: %s", w))
+	}
 	st.ClusterFrontEndVars = plan.Vars
 	for _, n := range plan.Notes {
 		fmt.Printf("  ingress          %s\n", n)

@@ -212,7 +212,7 @@ mosquitto_pub \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-The credential authenticates the connection. The broker then knows which device every publish comes from, so the event carries no credential; one that does is refused. The TLS host, CA source and port exposure depend on how the instance is deployed; see [Deployment](../deployment/kubernetes-operator.md).
+The credential authenticates the connection. The broker then knows which device every publish comes from, so the event carries no credential; one that does is refused. The TLS host, CA source and port exposure depend on how the instance is deployed. To reach the broker from outside a cloud cluster, see [Connecting devices from outside the cluster](../deployment/connecting-from-outside.md); on a local kind cluster, use the local port below.
 
 The broker speaks TLS, so `--cafile` needs the instance's CA certificate. On a local kind install it
 is in the instance namespace's `dc-nats-tls` Secret, under the key `ca.crt`. Save it as
