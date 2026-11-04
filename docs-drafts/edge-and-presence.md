@@ -319,11 +319,13 @@ withdraw the claim when the transport is no longer making it.
 Four items used to read as features and were not. Each has since been decided one way or the other:
 
 - **`InactivityTimeout`** was documented as a per-device override with no write path. The claim is
-  gone: the inactivity window is one platform-wide value (ten minutes), the column is dropped, and
-  `inactivityTimeout` on `DeviceState` now reports that constant. The presence page already told
+  gone: the inactivity window is one platform-wide value (ten minutes), nothing reads or writes the
+  column any more (it is dropped in the next major release), and `inactivityTimeout` on
+  `DeviceState` now reports that constant. The presence page already told
   operators the window is not adjustable, so removal matched what was promised.
 - **`InactivityAlarmTime`** was written by the sweep to the same instant as `lastDisconnectTime` and
-  read by nothing. The column and the GraphQL field are dropped.
+  read by nothing. Nothing reads or writes the column any more; the GraphQL field is deprecated and
+  derived from `lastDisconnectTime`, and both go in the next major release.
 - **`state_change_events`** now has a read surface: the `stateChangeEvents` query on the event store
   (event:read, customer-scope aware), shown as the presence timeline on the device page.
 - **`presenceTime` and `sessionId`** are now selected by the console and shown on the Connectivity

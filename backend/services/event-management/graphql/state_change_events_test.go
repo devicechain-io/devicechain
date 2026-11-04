@@ -50,6 +50,10 @@ func TestStateChangeEventsReadTimelineWithScopeAndAuthority(t *testing.T) {
 	seedStateChange(t, db, tenant, "pump-1", "CONNECTED", t0, "acme")
 	seedStateChange(t, db, tenant, "pump-1", "DISCONNECTED", t0.Add(time.Hour), "acme")
 	seedStateChange(t, db, tenant, "pump-2", "CONNECTED", t0.Add(2*time.Hour), "globex")
+	// The same device later belonged to Globex, and one transition carries no anchor at all:
+	// an Acme-scoped caller must see neither.
+	seedStateChange(t, db, tenant, "pump-1", "DISCONNECTED", t0.Add(4*time.Hour), "globex")
+	seedStateChange(t, db, tenant, "pump-1", "CONNECTED", t0.Add(5*time.Hour))
 	// Another tenant's transition must never surface.
 	seedStateChange(t, db, "tenant2", "pump-1", "CONNECTED", t0.Add(3*time.Hour), "acme")
 
@@ -66,24 +70,28 @@ func TestStateChangeEventsReadTimelineWithScopeAndAuthority(t *testing.T) {
 	}
 	page := EventSearchCriteriaInput{PageNumber: 1, PageSize: 10}
 
-	assert.Equal(t, []string{"pump-2:CONNECTED", "pump-1:DISCONNECTED", "pump-1:CONNECTED"},
+	assert.Equal(t, []string{"pump-1:CONNECTED", "pump-1:DISCONNECTED", "pump-2:CONNECTED", "pump-1:DISCONNECTED", "pump-1:CONNECTED"},
 		read(scopedCtx(api, tenant, nil, string(auth.EventRead)), page), "newest first, own tenant only")
 
 	dev := page
 	token := "pump-1"
 	dev.DeviceToken = &token
-	assert.Equal(t, []string{"pump-1:DISCONNECTED", "pump-1:CONNECTED"},
+	assert.Equal(t, []string{"pump-1:CONNECTED", "pump-1:DISCONNECTED", "pump-1:DISCONNECTED", "pump-1:CONNECTED"},
 		read(scopedCtx(api, tenant, nil, string(auth.EventRead)), dev))
 
 	bounded := dev
 	start := t0.Add(30 * time.Minute).Format(time.RFC3339)
 	bounded.StartTime = &start
+	start2 := t0.Add(30 * time.Minute).Format(time.RFC3339)
+	end := t0.Add(90 * time.Minute).Format(time.RFC3339)
+	bounded.StartTime, bounded.EndTime = &start2, &end
 	assert.Equal(t, []string{"pump-1:DISCONNECTED"},
-		read(scopedCtx(api, tenant, nil, string(auth.EventRead)), bounded), "startTime bounds the timeline")
+		read(scopedCtx(api, tenant, nil, string(auth.EventRead)), bounded), "startTime and endTime bound the timeline")
 
 	assert.Equal(t, []string{"pump-1:DISCONNECTED", "pump-1:CONNECTED"},
 		read(scopedCtx(api, tenant, []string{"customer:acme"}, string(auth.EventRead)), page),
-		"a member limited to Acme sees only transitions recorded while the device was Acme's")
+		"a member limited to Acme sees only transitions recorded while the device was Acme's, "+
+			"not the later Globex one and not an un-anchored one")
 
 	_, err = r.StateChangeEvents(scopedCtx(api, tenant, nil, string(auth.LocationRead)),
 		struct{ Criteria EventSearchCriteriaInput }{Criteria: page})

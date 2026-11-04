@@ -25,8 +25,9 @@ import (
 // 🔴 A STORED NUMBER WIDER THAN A GraphQL Int IS REFUSED ON READ, NOT WRAPPED.
 //
 // classifier (the bound metric definition's id, a *uint) is a bigint column, and the
-// wire type is a 32-bit Int. The read used to narrow with a bare int32 conversion, so a stored 2147483648 read back as -2147483648 — a plausible
-// wrong number with nothing to say it was wrong.
+// wire type is a 32-bit Int. The read used to narrow with a bare int32 conversion, so a
+// stored 2147483648 read back as -2147483648 — a plausible wrong number with nothing to
+// say it was wrong.
 func TestAClassifierWiderThanAnIntIsRefusedOnRead(t *testing.T) {
 	wide := uint(math.MaxInt32 + 1)
 	got, err := (&LatestMeasurementResolver{M: model.LatestMeasurement{Classifier: &wide}}).Classifier()
@@ -77,9 +78,8 @@ func intRangeWireCtx(t *testing.T) context.Context {
 }
 
 // What a caller actually receives, through the served schema. The release note makes wire
-// claims — a wide classifier is an error on that field alone, a wide inactivityTimeout
-// takes the listing with it — and these hold them. Both assert the DATA, not just that an
-// error came back.
+// claims — a wide classifier is an error on that field alone — and this holds it. It
+// asserts the DATA, not just that an error came back.
 func TestAnOutOfRangeRowOnTheWire(t *testing.T) {
 	ctx := intRangeWireCtx(t)
 	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})

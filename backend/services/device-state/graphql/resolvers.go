@@ -72,6 +72,16 @@ func (r *DeviceStateResolver) LastActivityTime() *string {
 	return nil
 }
 
+// InactivityAlarmTime is deprecated and derived: the sweep stamped it with the same instant as
+// lastDisconnectTime, so an INFERRED device that is currently inactive answers that, and any
+// other row answers null. The stored column is no longer read or written.
+func (r *DeviceStateResolver) InactivityAlarmTime() *string {
+	if !r.M.Active && r.M.PresenceSource != model.PresenceSourceAsserted && r.M.LastDisconnectTime.Valid {
+		return util.FormatTime(r.M.LastDisconnectTime.Time)
+	}
+	return nil
+}
+
 // InactivityTimeout is the platform-wide window the inactivity sweep applies to every
 // INFERRED device. It is a constant of the platform, not a stored value of the row.
 func (r *DeviceStateResolver) InactivityTimeout() int32 {

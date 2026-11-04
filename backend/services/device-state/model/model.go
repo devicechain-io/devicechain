@@ -36,6 +36,13 @@ const MaxAssertedPageSize = 1000
 // DeviceState is the live current-state projection for one device (ADR-012):
 // connectivity + activity timestamps, distinct from the
 // append-only event history. One row per device.
+//
+// TODO(next MAJOR release): the device_states columns inactivity_timeout (NOT NULL DEFAULT
+// 600) and inactivity_alarm_time (nullable) are no longer read or written by anything and
+// stay in the table only because dropping them would break a rolling upgrade (old pods
+// still write them) and the versioning policy forbids a minor release removing a served
+// field. Drop both columns in a migration in the next MAJOR release (expand/contract), when
+// the deprecated inactivityAlarmTime GraphQL field goes too.
 type DeviceState struct {
 	gorm.Model
 	// TenantId is spelled out rather than embedded from rdb.TenantScoped (the tenant-scope

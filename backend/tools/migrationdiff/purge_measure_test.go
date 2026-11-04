@@ -258,8 +258,8 @@ SELECT g, %s, 'cred-' || g, g, 'token', 'cid-' || g, true FROM generate_series(1
 INSERT INTO "device-management".entity_attributes (id, tenant_id, entity_type, entity_id, scope, attr_key, value_type, value, last_updated)
 SELECT g, %s, 'device', g / 3 + 1, 'server', 'attr' || (g %% 3), 'string', 'value-' || g, now() FROM generate_series(1, ?) g`)
 	seed(rdbConn, "rdb.device_states", devices, `
-INSERT INTO "device-state".device_states (id, tenant_id, device_token, active, presence_source, session_id)
-SELECT g, %s, 'dev-' || g, true, 'INFERRED', 1 FROM generate_series(1, ?) g`)
+INSERT INTO "device-state".device_states (id, tenant_id, device_token, active, inactivity_timeout, presence_source, session_id)
+SELECT g, %s, 'dev-' || g, true, 600, 'INFERRED', 1 FROM generate_series(1, ?) g`)
 	seed(rdbConn, "rdb.commands", devices*5, `
 INSERT INTO "command-delivery".commands (id, tenant_id, token, device_token, name, status, dispatch_failures)
 SELECT g, %s, 'cmd-' || g, 'dev-' || (g %% `+strconv.Itoa(devices)+` + 1), 'reboot', 'DELIVERED', 0 FROM generate_series(1, ?) g`)
