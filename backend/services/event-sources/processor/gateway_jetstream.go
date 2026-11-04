@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -83,6 +84,9 @@ type pendingPublish struct {
 	ctx  context.Context
 	msg  messaging.Message
 	done func(error)
+	// pos is where the captured message came from, set only in envelope mode (see
+	// capture_envelope.go) and only for a message that can be named.
+	pos *capturePos
 }
 
 // GatewayJetStreamSource ingests device telemetry by consuming the durable
@@ -137,6 +141,15 @@ type GatewayJetStreamSource struct {
 	submitterDone chan struct{}
 	// poison is the current start's failed-decode routes; see poisonRoutes.
 	poison *poisonRoutes
+
+	// envelopes is UseEnvelopes' setting (nil: events are published one message each), and ce
+	// the current start's machinery built from it.
+	envelopes *CaptureEnvelopes
+	ce        *captureEngine
+	// beats maps a captured message's reference to the function that tells the capture broker the
+	// message is still being worked on (envelope mode); an entry lives until the message settles.
+	beats   sync.Map
+	beatRef atomic.Uint64
 
 	lifecycle core.LifecycleManager
 	cancel    context.CancelFunc
@@ -280,6 +293,11 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	// a start retried after a failed one produces — gets its own rather than a channel
 	// the previous attempt already closed, which would make the read loop return
 	// instantly and race a live loop into a closed channel.
+	if es.envelopes != nil {
+		if _, ok := es.writer.(messaging.AckedWriter); !ok {
+			return fmt.Errorf("event source %q: infrastructure.messaging.envelopes.inbound is on, but the capture writer (%T) cannot report a PubAck, so it could not settle the envelopes it published", es.Id, es.writer)
+		}
+	}
 	drained := make(chan struct{})
 	es.drained = drained
 	es.startPipeline(DECODE_WORKER_COUNT)
@@ -316,6 +334,16 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 	es.poison = &poisonRoutes{slots: make(chan struct{}, POISON_ROUTE_LIMIT)}
 
 	submit := es.submitter(publishes)
+	es.ce = nil
+	if es.envelopes != nil {
+		// Built in ExecuteStart, which refuses an unwired start; a test that drives the pipeline
+		// directly gets the same machinery here.
+		ce, err := es.newCaptureEngine()
+		if err != nil {
+			panic(err)
+		}
+		es.ce = ce
+	}
 	var running sync.WaitGroup
 	es.workers = make([]*DecodeWorker, 0, workers)
 	for w := 1; w <= workers; w++ {
@@ -331,7 +359,11 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 		running.Wait()
 		close(workersDone)
 	}()
-	go submitLoop(publishes, es.writer, submitterDone)
+	if es.ce != nil {
+		go es.envelopeSubmitLoop(es.ce, publishes, submitterDone)
+	} else {
+		go submitLoop(publishes, es.writer, submitterDone)
+	}
 }
 
 // submitter returns the workers' DecodedFunc for one start: build the message and hand it
@@ -341,12 +373,21 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 func (es *GatewayJetStreamSource) submitter(publishes chan<- pendingPublish) DecodedFunc {
 	return func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
 		dedupID string, done func(error)) {
+		var pos *capturePos
+		if es.ce != nil {
+			dedupID, pos = splitPosition(tenant, dedupID)
+			if pos != nil && pos.ref != 0 {
+				if f, ok := es.beats.Load(pos.ref); ok {
+					pos.beat = f.(func())
+				}
+			}
+		}
 		ctx, msg, ok := es.build(source, tenant, event, payload, dedupID)
 		if !ok {
 			done(nil)
 			return
 		}
-		publishes <- pendingPublish{ctx: ctx, msg: msg, done: done}
+		publishes <- pendingPublish{ctx: ctx, msg: msg, done: done, pos: pos}
 	}
 }
 
@@ -406,6 +447,11 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 // use it.
 func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 	es.writer.Draining()
+	if ce := es.ce; ce != nil {
+		// Draining has begun: end the settlement walks now, so none is still retrying (and none can
+		// fire a done) after this returns. What they leave unsettled stays unacked for the next pod.
+		ce.cancel()
+	}
 	close(es.messages)
 	if !es.await(ctx, es.workersDone, "decode workers") {
 		return false
@@ -421,6 +467,21 @@ func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 	}()
 	if !es.await(ctx, closed, "inbound-events publishes") {
 		return false
+	}
+	if ce := es.ce; ce != nil {
+		// A walk (a duplicate's recovery, a retried round) starts from a writer callback, so every
+		// one that will ever start has by now; give them the shutdown budget to finish, then end
+		// them. What they leave unsettled stays unacked for the next pod.
+		walked := make(chan struct{})
+		go func() {
+			defer close(walked)
+			ce.engine.Wait()
+		}()
+		ok := es.await(ctx, walked, "envelope walks")
+		ce.cancel()
+		if !ok {
+			return false
+		}
 	}
 	// Every done has run, so every poison route that will ever start has started: the
 	// wait below cannot miss one.
@@ -580,6 +641,16 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 				"and a redelivery would be stored twice.")
 	}
 	dedupID := es.dedupID(tenant, msg)
+	var beatRef uint64
+	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 {
+		// Envelope mode: the decode pipeline carries the message's position to the submitter in
+		// the id it already passes through (see positionToken).
+		if key, _, ok := messaging.RoundKeyOf(tenant, msg.StreamSeq, msg.AppendTime); ok {
+			beatRef = es.beatRef.Add(1)
+			es.beats.Store(beatRef, func() { _ = msg.InProgress() })
+			dedupID = positionToken(dedupID, key, msg.NumDelivered > 1, beatRef)
+		}
+	}
 
 	// Count the arrival only once it clears the gate, so a shed message is not
 	// counted as both inbound and rate-limited (matches the HTTP path). A message the
@@ -597,7 +668,19 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		assertion:  assertedByCaptureBroker(msg),
-		done:       es.settler(msg, tenant),
+		done:       es.settleAndForget(es.settler(msg, tenant), beatRef),
+	}
+}
+
+// settleAndForget wraps a message's settler so its beat-table entry (envelope mode) is released
+// when the message settles, whether it was published, shed or dropped.
+func (es *GatewayJetStreamSource) settleAndForget(settle func(error), ref uint64) func(error) {
+	if ref == 0 {
+		return settle
+	}
+	return func(err error) {
+		es.beats.Delete(ref)
+		settle(err)
 	}
 }
 

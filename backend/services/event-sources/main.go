@@ -132,7 +132,14 @@ var (
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
-	FailedDecodeWriter  messaging.MessageWriter
+	// InboundEnvelopeMetrics are the instruments of inbound envelopes (realised k, linger paid,
+	// settlement counters). Built once with the other instruments; nil-safe, so it exists whether
+	// or not the setting is on.
+	InboundEnvelopeMetrics *messaging.EnvelopeMetrics
+	// HTTPGroupCommit is the HTTP path's group commit, non-nil only with
+	// infrastructure.messaging.envelopes.inbound on. Built in createNatsComponents, stopped with the sources.
+	HTTPGroupCommit    *processor.HTTPEnvelopes
+	FailedDecodeWriter messaging.MessageWriter
 	// ExternalPublishers are the publishers of the external MQTT sources, one per source and
 	// each built ONCE for the life of the process (not per lease term: a writer holds a reply
 	// subscription until the connection closes). Built in INITIALIZE with the sources, given
@@ -360,6 +367,7 @@ func initializeMetrics() {
 		"Count of connections to an HTTP ingest listener that closed before delivering a request — "+
 			"a header-timeout close, but equally a port scan, a TCP health check or a client that hung up",
 		[]string{"source"})
+	InboundEnvelopeMetrics = messaging.NewEnvelopeMetrics(Microservice, "inbound")
 	BackpressureCounter = Microservice.NewCounterVec(
 		"total_msg_backpressured",
 		"Count of inbound messages refused because the ingest pipeline is applying backpressure "+
@@ -1158,6 +1166,11 @@ func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, 
 	if !ok {
 		return nil
 	}
+	if g := HTTPGroupCommit; g != nil {
+		// A group commit (infrastructure.messaging.envelopes.inbound): this returns after the PubAck
+		// of the message that holds the event, which is the event alone for a quiet tenant.
+		return g.Publish(ctx, source, tenant, msg)
+	}
 	return writeInbound(ctx, source, msg)
 }
 
@@ -1174,15 +1187,25 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 
 // writeInbound writes one message to inbound-events and accounts for a backpressure refusal.
 func writeInbound(ctx context.Context, source string, msg messaging.Message) error {
-	err := InboundEventsWriter.WriteMessages(ctx, msg)
-	InboundEventsWriter.HandleResponse(err)
+	err := publishInbound(ctx, msg)
 	// The gate can close between a source's admit check and this publish; the refusal is
 	// counted the same way, and the source answers it as it answers any refusal.
 	if errors.Is(err, messaging.ErrStreamBackpressure) {
-		BackpressureCounter.WithLabelValues(source).Inc()
+		countBackpressured(source)
 	}
 	return err
 }
+
+// publishInbound writes one message to inbound-events and reports the writer's response, without
+// counting a refusal: the group commit counts per request, not per envelope.
+func publishInbound(ctx context.Context, msg messaging.Message) error {
+	err := InboundEventsWriter.WriteMessages(ctx, msg)
+	InboundEventsWriter.HandleResponse(err)
+	return err
+}
+
+// countBackpressured counts one request refused by the pipeline's backpressure.
+func countBackpressured(source string) { BackpressureCounter.WithLabelValues(source).Inc() }
 
 // Handle failed decoding. It returns whether the undecodable payload was durably
 // routed to the failed-decode path, so a source consuming a durable stream can
@@ -1306,6 +1329,20 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 			return err
 		}
 		GatewaySource.SetWriter(pipeline)
+		if envelopesInbound() {
+			rounds, err := nmgr.NewRoundPublisher(streams.InboundEvents)
+			if err != nil {
+				return err
+			}
+			if err := GatewaySource.UseEnvelopes(processor.CaptureEnvelopes{
+				Rounds: rounds, Former: inboundFormerConfig(), Metrics: InboundEnvelopeMetrics,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	if err := buildHTTPGroupCommit(); err != nil {
+		return err
 	}
 
 	// One AsyncWriter per external MQTT source, shared by every lease term of that source and
@@ -1562,8 +1599,48 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	return Svc.Stop(ctx)
 }
 
+// envelopesInbound reports infrastructure.messaging.envelopes.inbound: whether this service
+// publishes inbound-events as envelopes (the capture hop and HTTP /events).
+func envelopesInbound() bool {
+	return Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.Inbound
+}
+
+// inboundFormerConfig is the grouping the setting asks for: the configured linger (validated at
+// startup, so it is in range here) and the format's bounds.
+func inboundFormerConfig() messaging.FormerConfig {
+	return messaging.FormerConfig{Linger: Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes.InboundLinger()}
+}
+
+// buildHTTPGroupCommit builds the HTTP path's group commit when the setting is on, replacing (and
+// first flushing) the one an earlier start built.
+func buildHTTPGroupCommit() error {
+	stopHTTPGroupCommit()
+	if !envelopesInbound() {
+		return nil
+	}
+	g, err := processor.NewHTTPEnvelopes(inboundFormerConfig(), InboundEnvelopeMetrics,
+		func(ctx context.Context, _ string, msg messaging.Message) error {
+			return publishInbound(ctx, msg)
+		}, countBackpressured)
+	if err != nil {
+		return err
+	}
+	HTTPGroupCommit = g
+	return nil
+}
+
+// stopHTTPGroupCommit flushes every open group and refuses further requests. It runs once the HTTP
+// sources have stopped (nothing is waiting on a group then) and before the broker connection drains.
+func stopHTTPGroupCommit() {
+	if HTTPGroupCommit != nil {
+		HTTPGroupCommit.Stop()
+		HTTPGroupCommit = nil
+	}
+}
+
 // closeExternalPublishers drains and closes every external source's writer.
 func closeExternalPublishers() {
+	stopHTTPGroupCommit()
 	for _, publisher := range ExternalPublishers {
 		publisher.Close()
 	}

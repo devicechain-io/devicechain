@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventtime"
 )
@@ -30,10 +31,8 @@ func TestEventWireFormatDefaultsToCompact(t *testing.T) {
 	}
 }
 
-// The envelope producer switches exist and are off. Resolved may be turned on (device-management
-// produces it); Inbound has no producer, so turning it on is refused, naming the key: a switch
-// that was accepted and did nothing would read as a setting that works.
-func TestEnvelopeProducerSwitchesAreOffAndOnlyResolvedCanBeTurnedOn(t *testing.T) {
+// The envelope producer switches exist and are off; both may be turned on.
+func TestEnvelopeProducerSwitchesAreOffAndCanBeTurnedOn(t *testing.T) {
 	c := validLoggingDoc("")
 	c.ApplyDefaults()
 	if c.Infrastructure.Messaging.Envelopes.Resolved || c.Infrastructure.Messaging.Envelopes.Inbound {
@@ -48,15 +47,40 @@ func TestEnvelopeProducerSwitchesAreOffAndOnlyResolvedCanBeTurnedOn(t *testing.T
 	if err := on.Validate(); err != nil {
 		t.Fatalf("envelopes.resolved turned on is refused: %v", err)
 	}
-	for key, set := range map[string]func(*InstanceConfiguration){
-		"infrastructure.messaging.envelopes.inbound": func(c *InstanceConfiguration) { c.Infrastructure.Messaging.Envelopes.Inbound = true },
-	} {
+	on.Infrastructure.Messaging.Envelopes.Inbound = true
+	if err := on.Validate(); err != nil {
+		t.Fatalf("envelopes.inbound turned on is refused: %v", err)
+	}
+	if got := on.Infrastructure.Messaging.Envelopes.InboundLinger(); got != 5*time.Millisecond {
+		t.Fatalf("the default inbound linger is %s, want 5ms", got)
+	}
+}
+
+// The inbound linger is configurable up to a hard cap of 10 ms; anything outside is refused at
+// startup, naming the key, and never clamped.
+func TestInboundLingerIsBoundedAndRefusedOutOfRange(t *testing.T) {
+	for _, ms := range []int{0, 1, 5, 10} {
 		c := validLoggingDoc("")
 		c.ApplyDefaults()
-		set(c)
+		c.Infrastructure.Messaging.Envelopes.InboundLingerMillis = ms
+		if err := c.Validate(); err != nil {
+			t.Fatalf("%d ms refused: %v", ms, err)
+		}
+		want := time.Duration(ms) * time.Millisecond
+		if ms == 0 {
+			want = 5 * time.Millisecond
+		}
+		if got := c.Infrastructure.Messaging.Envelopes.InboundLinger(); got != want {
+			t.Fatalf("%d ms reads as %s, want %s", ms, got, want)
+		}
+	}
+	for _, ms := range []int{-1, 11, 1000} {
+		c := validLoggingDoc("")
+		c.ApplyDefaults()
+		c.Infrastructure.Messaging.Envelopes.InboundLingerMillis = ms
 		err := c.Validate()
-		if err == nil || !strings.Contains(err.Error(), key) {
-			t.Fatalf("%s turned on: %v; want a refusal naming the key", key, err)
+		if err == nil || !strings.Contains(err.Error(), "infrastructure.messaging.envelopes.inboundLingerMillis") {
+			t.Fatalf("%d ms: %v; want a refusal naming the key", ms, err)
 		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/nats-io/nats.go"
 )
 
@@ -114,6 +115,12 @@ func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error
 	}
 	if err := refuseTenantWide(suffix); err != nil {
 		return nil, err
+	}
+	// The read-back is a grant a plain writer does not hold (core/natsauth derives it from
+	// Stream.ReadBackWriters). A declared writer that settles rounds without being listed would
+	// start fine and fail on its first duplicate answer, so it is refused here, at startup.
+	if area := nmgr.Microservice.FunctionalArea; streams.Writes(suffix, area) && !streams.ReadsBack(suffix, area) {
+		return nil, fmt.Errorf("messaging: %s publishes envelope rounds on %s but is not in that stream's ReadBackWriters, so the broker would refuse its read-back of a duplicate; declare it in core/streams", area, suffix)
 	}
 	if _, err := nmgr.ensureStream(suffix); err != nil {
 		return nil, err
