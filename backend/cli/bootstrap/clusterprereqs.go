@@ -118,7 +118,12 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	// 🔴 THIS IS THE ROOT THE CNPG ADMISSION RACE LIVES IN. It installs the operator
 	// and creates the shared relational store in one graph, which is the race's exact
 	// precondition — see applyWithCNPGAdmissionRetry.
-	if err := applyWithCNPGAdmissionRetry(ctx, tf, opts, "tofu apply (cluster prerequisites)", func(ctx context.Context) error {
+	//
+	// The apply also runs under the Barman Cloud plugin certificate healer: the plugin's
+	// chart can leave one of its two Certificates un-issued, which stalls the very
+	// release this apply is waiting on — see withBarmanCertHealer.
+	healed := barmanHealingApplier{tf: tf, kubeContext: st.KubeContext}
+	if err := applyWithCNPGAdmissionRetry(ctx, healed, opts, "tofu apply (cluster prerequisites)", func(ctx context.Context) error {
 		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)
 	}); err != nil {
 		return InstallOutputs{}, err

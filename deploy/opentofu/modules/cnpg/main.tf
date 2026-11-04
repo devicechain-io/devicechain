@@ -446,6 +446,15 @@ resource "helm_release" "barman_plugin" {
   # release above (create_namespace), and this release does not create it.
   depends_on = [helm_release.cnpg]
 
+  # 🔴 The chart renders one self-signed Issuer and the two Certificates that name it
+  # (barman-cloud-server, barman-cloud-client) in this single install. cert-manager can
+  # reconcile a Certificate before it has seen the Issuer and then back that first
+  # attempt off for an hour, leaving the plugin pod in ContainerCreating on a missing
+  # secret until this wait times out. Neither the chart nor this module can order the
+  # three objects, and nothing in a provider-only tree can act while this release is
+  # blocked, so `dcctl install` watches the two Certificates during the apply and
+  # re-creates a stuck one (backend/cli/bootstrap/barmancerts.go). Applying this root
+  # any other way relies on a re-run after deleting the stuck Certificate.
   timeout = 600
 }
 
