@@ -291,7 +291,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 
 	// 🔴 TURNING ENVELOPES ON IS RECORDED BEFORE THE MOVE that turns them on, so a run that dies
 	// half-way still leaves the record that the instance may hold some. See envelopedowngrade.go.
-	if overlayEnvelopesResolved(st.ValuesOverlay) {
+	if overlayEnvelopesOn(st.ValuesOverlay) {
 		if err := recordEnvelopesEnabled(ctx, dyn, opts.Instance, !st.EnvelopesResolvedOn); err != nil {
 			return err
 		}
@@ -458,7 +458,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// 🔴 WITH THE SWITCH OFF AND THE ROLLOUT DONE, no pod writes envelopes any more: this is the
 	// moment each hot stream's newest sequence is the mark every envelope sits at or below. A
 	// run that died before here leaves none, and the next run records one (a later mark is safe).
-	if !st.DryRun && !overlayEnvelopesResolved(st.ValuesOverlay) {
+	if !st.DryRun && !overlayEnvelopesOn(st.ValuesOverlay) {
 		if err := settleEnvelopeMarks(ctx, dyn, st); err != nil {
 			return err
 		}

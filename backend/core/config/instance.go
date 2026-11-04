@@ -841,20 +841,21 @@ type MessagingConfiguration struct {
 	// per inbound envelope when the inbound message is one); Inbound by event-sources (the
 	// capture hop and HTTP /events, with InboundLingerMillis).
 	//
-	// 🔴 SET RESOLVED ONLY AFTER EVERY POD RUNS A RELEASE THAT READS ENVELOPES. A pod on an
+	// 🔴 SET EITHER SWITCH ONLY AFTER EVERY POD RUNS A RELEASE THAT READS ENVELOPES. A pod on an
 	// older release cannot read one and dead-letters it; upgrade every pod first, then enable.
 	// Set it false again, and wait for the streams to hold no envelope, before rolling back
-	// below that release: `dcctl upgrade` records when the switch is turned on and what the
-	// streams held when it is turned off, and refuses such a move until every hot stream's oldest
+	// below that release: `dcctl upgrade` records when either switch is turned on and what the
+	// streams held when both are off, and refuses such a move until every hot stream's oldest
 	// message is past that mark (and while a sample of them holds an envelope).
 	//
-	// 🔴 THE DETECT GUARD NOW EXISTS, AND IT IS ON ONLY WITH THIS SWITCH. Event-processing then
+	// 🔴 THE DETECT GUARD EXISTS, AND IT IS ON ONLY WITH EITHER SWITCH. Event-processing then
 	// remembers the identity of every event it applied for the platform's redelivery span (ten
 	// minutes of broker append time, streams.RedeliveryDuplicateWindowSeconds) and skips a second
 	// copy (detect_duplicate_events_skipped_total), so an event the settlement protocol stores
-	// twice is not applied twice inside that span. With the switch off DETECT builds, primes and
-	// consults nothing. Turn Resolved on once EVERY pod runs a release with the readers AND the
-	// guard (the same release); it stays false by default. Known residual the guard does not
+	// twice, or an inbound message redelivered across a change of id shape, is not applied twice
+	// inside that span. With both switches off DETECT builds, primes and consults nothing. Turn a
+	// switch on once EVERY pod runs a release with the readers AND the guard (the same release);
+	// both stay false by default. Known residual the guard does not
 	// cover: a recreated or renamed inbound durable resets every source's delivery count to 1 and
 	// redelivers from its start, so a source redelivered across that change can be stored a
 	// second time MORE than ten minutes after its first copy; event-management and device-state
@@ -880,7 +881,7 @@ type EnvelopesConfiguration struct {
 	// the rolling restart, whose first publish was under the other shape, is therefore not folded by
 	// the broker and can be stored a second time. It is the documented upgrade class: the
 	// event-management event id is content-derived and absorbs it, device-state's guards absorb it,
-	// and DETECT applies it twice until its per-member guard is in place.
+	// and DETECT's duplicate-event guard (on with this switch) skips it inside its ten-minute span.
 	Inbound bool
 	// InboundLingerMillis is how long an inbound event may wait for a second one when its
 	// tenant's recent rate predicts one (event-sources). 0 is the default, 5. The cap is 10: no

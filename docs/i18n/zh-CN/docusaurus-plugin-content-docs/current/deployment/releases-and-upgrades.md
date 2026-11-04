@@ -453,7 +453,7 @@ MQTT 故障关闭确认也以同样方式保留：`dcctl bootstrap` 或 `dcctl u
 
 ### 事件信封 {#event-envelopes}
 
-事件信封把同一租户的多个事件放进 resolved-events 流中的一条消息，而不是每个事件一条消息，从而减少代理为每个事件所做的工作。它由实例配置中的 `infrastructure.messaging.envelopes.resolved` 控制（在值文件中写作 `instance.config.infrastructure.messaging.envelopes.resolved`，参见[调优实例](./tuning-an-instance.md)），**默认关闭**。读取不是开关：自 `v1.1.0` 起，无论该值如何，所有服务都同样读取信封和单事件消息；该值只决定 device-management 是否写入信封。
+事件信封把同一租户的多个事件放进 resolved-events 流（对于原样接收的事件则是 inbound-events 流）中的一条消息，而不是每个事件一条消息，从而减少代理为每个事件所做的工作。它由两个设置控制，**两者默认都关闭**：`infrastructure.messaging.envelopes.resolved`（device-management 把已解析的事件写成信封）和 `infrastructure.messaging.envelopes.inbound`（event-sources 把入站事件写成信封，最多等待 `inboundLingerMillis` 毫秒，默认 5，最大 10，以等待繁忙租户的第二个事件）。在值文件的 `instance.config.infrastructure.messaging.envelopes` 下设置，参见[调优实例](./tuning-an-instance.md)。读取不是开关：自 `v1.1.0` 起，无论设置如何，所有服务都同样读取信封和单事件消息；设置只决定服务是否写入信封。下面的每条规则对其中任一个以及两者同时适用。
 
 - **何时可以安全开启。** 实例的每个 Pod 都运行 `v1.1.0` 或更高版本之后，而不是之前。较早版本的 Pod 无法读取信封，会将其作为失败消息搁置，其中的事件对该 Pod 而言即告丢失。请先升级，等所有 Pod 都完成滚动，再设置该值。
 - **检测引擎如何处理重复。** 在少数情况下（例如重试期间确认丢失），同一个事件会两次进入流。事件存储和设备状态本来就能吸收这种情况。该值开启时，检测引擎还会记住约过去十分钟代理时间（平台自身的重新投递跨度）内它已应用的每个事件的标识，跳过第二份副本，并在 `detect_duplicate_events_skipped_total` 上计数。该计数持续不为零，说明上游有东西在重复存储事件。该值关闭时，检测引擎不保存这份记忆，其开销和行为不变。标识与事件存储使用的相同，因此同一设备在同一纳秒的两次完全相同的读数，在两处都只计一次。

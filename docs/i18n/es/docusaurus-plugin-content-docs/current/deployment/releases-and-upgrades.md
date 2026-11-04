@@ -693,12 +693,17 @@ la clave. Forma parte de la configuración montada, como el
 ### Sobres de eventos {#event-envelopes}
 
 Un sobre de eventos lleva varios eventos de un mismo tenant en un único mensaje del flujo
-resolved-events, en lugar de un mensaje por evento. Reduce el trabajo que hace el bróker por evento.
-Se activa con `infrastructure.messaging.envelopes.resolved` (en un archivo de valores, como
-`instance.config.infrastructure.messaging.envelopes.resolved`; consulte [Ajustar una instancia](./tuning-an-instance.md)),
-y **está desactivado por defecto**. Leer no es un interruptor: desde `v1.1.0` todos los servicios
-leen sobres y mensajes de un solo evento por igual, sea cual sea el valor; el valor solo decide si
-device-management los escribe.
+resolved-events (y, para los eventos tal como se recibieron, del flujo inbound-events), en lugar de
+un mensaje por evento. Reduce el trabajo que hace el bróker por evento. Lo activan dos ajustes, y
+**ambos están desactivados por defecto**: `infrastructure.messaging.envelopes.resolved`
+(device-management escribe los eventos resueltos como sobres) e
+`infrastructure.messaging.envelopes.inbound` (event-sources escribe los eventos de entrada como
+sobres, esperando como máximo `inboundLingerMillis`, 5 por defecto y 10 como máximo, a un segundo
+evento de un tenant con mucho tráfico). Se establecen en un archivo de valores bajo
+`instance.config.infrastructure.messaging.envelopes`; consulte [Ajustar una instancia](./tuning-an-instance.md).
+Leer no es un interruptor: desde `v1.1.0` todos los servicios leen sobres y mensajes de un solo
+evento por igual, sean cuales sean los valores; los valores solo deciden si un servicio los
+escribe. Todas las reglas siguientes valen para cualquiera de los dos y para ambos.
 
 - **Cuándo es seguro activarlo.** Cuando todos los pods de la instancia ejecutan `v1.1.0` o
   posterior, y no antes. Un pod de una versión anterior no puede leer un sobre y lo aparta como

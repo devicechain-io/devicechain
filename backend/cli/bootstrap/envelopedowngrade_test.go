@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -166,10 +167,19 @@ func TestTheEnvelopeSwitchLeavesTheRecordsTheRuleReads(t *testing.T) {
 func TestTheOverlaySwitchIsReadFromItsNestedKey(t *testing.T) {
 	on := map[string]interface{}{"instance": map[string]interface{}{"config": map[string]interface{}{"infrastructure": map[string]interface{}{
 		"messaging": map[string]interface{}{"envelopes": map[string]interface{}{"resolved": true}}}}}}
-	if !overlayEnvelopesResolved(on) {
+	if !overlayEnvelopesOn(on) {
 		t.Fatal("a true switch was not read")
 	}
-	if overlayEnvelopesResolved(nil) || overlayEnvelopesResolved(map[string]interface{}{"instance": "x"}) {
+	inbound := map[string]interface{}{"instance": map[string]interface{}{"config": map[string]interface{}{"infrastructure": map[string]interface{}{
+		"messaging": map[string]interface{}{"envelopes": map[string]interface{}{"inbound": true}}}}}}
+	if !overlayEnvelopesOn(inbound) {
+		t.Fatal("the inbound switch alone was not read as envelopes on")
+	}
+	if !envelopesOn(config.EnvelopesConfiguration{Inbound: true}) || !envelopesOn(config.EnvelopesConfiguration{Resolved: true}) ||
+		envelopesOn(config.EnvelopesConfiguration{}) {
+		t.Fatal("either deployed switch must read as envelopes on, and neither as off")
+	}
+	if overlayEnvelopesOn(nil) || overlayEnvelopesOn(map[string]interface{}{"instance": "x"}) {
 		t.Fatal("an absent or malformed switch must read as off")
 	}
 }

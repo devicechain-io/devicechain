@@ -196,7 +196,7 @@ func hydrateUpgradeState(
 	st.FromImageVersion = inst.Spec.ImageVersion
 	st.EnvelopesEnabledAt = inst.Annotations[AnnotationEnvelopesEnabledAt]
 	st.EnvelopesOffMarks = inst.Annotations[AnnotationEnvelopesOffMarks]
-	st.EnvelopesResolvedOn = deployed.Infrastructure.Messaging.Envelopes.Resolved || deployed.Infrastructure.Messaging.Envelopes.Inbound
+	st.EnvelopesResolvedOn = envelopesOn(deployed.Infrastructure.Messaging.Envelopes)
 	if err := applyDeployedInfrastructure(st, deployed); err != nil {
 		return nil, fmt.Errorf("reading instance %q's broker credentials: %w", opts.Instance, err)
 	}

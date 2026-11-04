@@ -15,6 +15,7 @@ import (
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -225,7 +226,7 @@ func precheckBootstrapEnvelopeDowngrade(ctx context.Context, st *State, existing
 	cfg, err := deployedInstanceConfig(ctx, typed, st.Instance)
 	switch {
 	case err == nil:
-		flagOn = cfg.Infrastructure.Messaging.Envelopes.Resolved || cfg.Infrastructure.Messaging.Envelopes.Inbound
+		flagOn = envelopesOn(cfg.Infrastructure.Messaging.Envelopes)
 	case apierrors.IsNotFound(err):
 		return nil // no configuration document: no service has run, so no envelope exists
 	default:
@@ -243,19 +244,28 @@ func precheckBootstrapEnvelopeDowngrade(ctx context.Context, st *State, existing
 	return nil
 }
 
-// overlayEnvelopesResolved reads the envelope switch out of a values overlay.
-func overlayEnvelopesResolved(overlay map[string]interface{}) bool {
-	var cur interface{} = overlay
-	for _, k := range []string{"instance", "config", "infrastructure", "messaging", "envelopes", "resolved"} {
-		m, ok := cur.(map[string]interface{})
-		if !ok {
-			return false
+// overlayEnvelopesOn reads the envelope switches out of a values overlay: either one (resolved
+// or inbound) puts envelopes on the hot streams.
+func overlayEnvelopesOn(overlay map[string]interface{}) bool {
+	for _, key := range []string{"resolved", "inbound"} {
+		var cur interface{} = overlay
+		for _, k := range []string{"instance", "config", "infrastructure", "messaging", "envelopes", key} {
+			m, ok := cur.(map[string]interface{})
+			if !ok {
+				cur = nil
+				break
+			}
+			cur = m[k]
 		}
-		cur = m[k]
+		if on, _ := cur.(bool); on {
+			return true
+		}
 	}
-	on, _ := cur.(bool)
-	return on
+	return false
 }
+
+// envelopesOn is whether a deployed configuration has either envelope switch on.
+func envelopesOn(e config.EnvelopesConfiguration) bool { return e.Resolved || e.Inbound }
 
 // recordEnvelopesEnabled makes the instance remember that it has turned envelopes on: before the
 // run that turns them on moves anything, so a run that dies half-way still leaves the record. A

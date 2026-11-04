@@ -655,12 +655,15 @@ and is set the same way.
 ### Event envelopes {#event-envelopes}
 
 An event envelope carries several events of one tenant in a single message on the resolved-events
-stream, in place of one message each. It cuts the work the broker does per event. It is switched by
-`infrastructure.messaging.envelopes.resolved` (set in a values file as
-`instance.config.infrastructure.messaging.envelopes.resolved`, see [Tuning an instance](./tuning-an-instance.md)),
-and **it is off by default**. Reading is not a switch: from `v1.1.0` every service reads envelopes
-and single-event messages alike, whatever the setting; the setting decides only whether
-device-management writes them.
+stream (and, for the events as received, on the inbound-events stream), in place of one message
+each. It cuts the work the broker does per event. Two settings switch it, and **both are off by
+default**: `infrastructure.messaging.envelopes.resolved` (device-management writes resolved events
+as envelopes) and `infrastructure.messaging.envelopes.inbound` (event-sources writes inbound events
+as envelopes, waiting at most `inboundLingerMillis`, default 5 and at most 10, for a second event
+of a busy tenant). Set them in a values file under `instance.config.infrastructure.messaging.envelopes`,
+see [Tuning an instance](./tuning-an-instance.md). Reading is not a switch: from `v1.1.0` every
+service reads envelopes and single-event messages alike, whatever the settings; the settings
+decide only whether a service writes them. Every rule below applies to either one, and to both.
 
 - **When it is safe to turn on.** Once every pod of the instance runs `v1.1.0` or later, and not
   before. A pod on an earlier release cannot read an envelope and sets it aside as failed, and the

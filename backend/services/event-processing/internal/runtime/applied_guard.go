@@ -43,8 +43,8 @@ func (d Digest) Fingerprint() uint64 {
 }
 
 // AppliedGuard is DETECT's duplicate-event guard. It is ENABLED ONLY WHEN event envelopes are
-// switched on (infrastructure.messaging.envelopes.resolved): with the switch off nothing builds,
-// primes or consults one, and behaviour and cost are exactly as before it existed.
+// switched on (infrastructure.messaging.envelopes.resolved or .inbound): with both off nothing
+// builds, primes or consults one, and behaviour and cost are exactly as before it existed.
 //
 // 🔴 WHY IT EXISTS. The engine's idempotency guard is the STREAM SEQUENCE (seq <= LastSeq), which
 // drops a redelivery or a replay of a message it has applied. It cannot see an EVENT delivered
