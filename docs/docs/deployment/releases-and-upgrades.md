@@ -744,6 +744,141 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases are documented in full, newest first.
 
+### v1.1.0 — ingest costs less per event, and the event streams are sized by outage runway {#v110-upgrade}
+
+`v1.1.0` is an in-place upgrade from `v1.0.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Two appended migrations run on upgrade (one in `event-management`, one in `device-state`); each adds a table and rewrites no existing row. Coming from `v0.27.0` or earlier, read the [`v1.0.0` notes](#v100-upgrade) first and follow them with `--version v1.1.0`.
+
+```bash
+dcctl install local --version v1.1.0
+dcctl upgrade local devicechain --version v1.1.0 --dry-run
+dcctl upgrade local devicechain --version v1.1.0
+```
+
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds to the covered interfaces (new `dcctl` commands and flags, new GraphQL queries) and removes none.
+
+What needs action, in the order to do it:
+
+- **Know that the per-event streams are now sized by an outage runway.** `inbound-events`, `resolved-events` and the device capture stream are sized by minutes of events at a design rate instead of a flat 1 GiB. With the chart defaults the ceilings do not change. If you set `streamDesignRate`, the upgrade grows them in place and the JetStream volume has to hold the result; `dcctl` checks the reservation against the volume before anything is written and names the shortfall. See [Streams are sized by outage runway](#v110-runway).
+- **Lowering a stream ceiling is refused unless you ask for it.** If a values file of yours sets a ceiling below what a stream now holds, the broker administrator stops and names the stream and the shortfall. See [the guard](#v110-shrink).
+- **Update alert routing.** Four alerts are new and two changed. See [Alerts](#v110-alerts).
+- **Update scripts that read `kubectl get dci`.** The columns changed. See [The instance reports its observed status](#v110-status).
+- **Install .NET SDK 8.0.427** if you build the C# SDK or the demo projects yourself. See [Smaller changes](#v110-smaller).
+- **Going back.** See [Going back](#v110-going-back).
+
+#### Ingest costs less CPU per event {#v110-ingest}
+
+The event writers now fill their batches. Each of a pod's ten writers used to collect its own batch from one shared channel, so a batch held only a handful of events and the linger bought almost nothing. Collection is now serialized across a pod's writers: one writer holds the right to collect at a time, only while it is receiving messages, and releases it before decode, tenant admission and commit, so those stay parallel. Both `event-management` and `device-state` batch much more as a result. `device-state` also writes its hot upserts (heartbeat, lock-or-create, the folded write-back, latest measurement and latest location) as one statement per batch with one array per column, through a new column-array upsert mode in the shared database layer. That mode binds the tenant from the request context, requires the conflict target to name the tenant column, and validates its update guards against an allow-list grammar, so it carries the same tenant isolation as the insert it sits beside.
+
+Measured on GKE with three services nodes and three database nodes, comparing `v1.0.0` with this release on the same shape, 15-minute steady windows:
+
+| | v1.0.0 | v1.1.0 |
+| --- | --- | --- |
+| Platform CPU per 1,000 events, MQTT over TLS, 3,000 sessions at 3,000 events/s | 3.83 CPU-s | 3.04 CPU-s |
+| Platform CPU per 1,000 events, mixed load (HTTP 2,500 devices, MQTT 1,500, 2,000 detection devices, commands; about 6,200 events/s stored) | 2.13 CPU-s | 1.83 CPU-s |
+| Relational database CPU per event, mixed load | | 37% lower |
+| `device-state` CPU per 1,000 events, mixed load | 0.124 CPU-s | 0.055 CPU-s |
+| Rows per `INSERT` into `events`, mixed load | 8.4 | 22.9 |
+| `device_states` upsert statements per second, MQTT load | 1,396 | 100 |
+
+Persist latency did not rise. At the mixed load the median went from 21.2 ms to 18.5 ms and the 99th percentile from 135.3 ms to 96.9 ms.
+
+Two further changes shorten the event-store write path. The id of each event is now computed directly instead of through a JSON document; ids are byte-for-byte unchanged, so a redelivered event is still recognized. And a batch is first written with a plain `INSERT`, falling back to `ON CONFLICT DO NOTHING` only when a duplicate turns up, which removes the second log record the arbiter writes for every row. Event-store WAL per event is about 8% lower in an isolated measurement. The new counter `devicechain_eventmanagement_persist_insert_fallbacks_total` shows how often a batch takes the fallback; it is expected to be rare.
+
+Tuning and metrics: `device-state` `projection.lingerMillis` now defaults to 10 (an explicit `0` stays `0`). New metrics `persist_collect_full_total` and `persist_handoff_depth` in `event-management`, and `state_collect_full_total` and `state_handoff_depth` in `device-state`, show whether batches are filling. The `device-state` writer's batches reach at most 32 rows, and with several tenants running side by side they are split per tenant, so a many-tenant load sees smaller batches than a single-tenant one.
+
+#### Streams are sized by outage runway {#v110-runway}
+
+The streams that carry one message per ingested event were capped at a flat 1 GiB and 5 million messages. That ceiling is the platform's runway through a consumer or database outage, and the horizon that rule preview and detection replay can read back. At 20,000 events per second it held `resolved-events` for about 2.8 minutes.
+
+- **Two new chart values.** `instance.config.infrastructure.nats.streamDesignRate` is the peak events per second the whole instance is expected to ingest, across tenants. It is the rate the disk is sized for, not a rate limit. `instance.config.infrastructure.nats.streamRunwayMinutes` is how many minutes of events at that rate the streams hold (default 15, between 10 and 10080). Each of the three streams gets at least rate x minutes x 60 x its per-event cost (384 bytes for capture and inbound, 448 bytes for resolved). `streamMaxBytes` stays the floor, and `streamMaxMsgs` is raised so the message count cannot cut the runway short.
+- **Defaults leave the ceilings where they were.** With no rate set the streams are sized as before. The chart ships 1,000 events per second for 15 minutes, which still fits the 1 GiB ceiling, and `--compact` ships 50 per second, which keeps 64 MiB. Out-of-range values fail startup.
+- **To set them,** put the two keys under `instance.config.infrastructure.nats` in a values file and run `dcctl upgrade <provider> <instance> --values <file>`. Existing streams take the new ceilings in place. A stream sized for 20,000 events per second for 15 minutes needs about 33 GiB of JetStream volume; [how long the event streams can wait out an outage](./observability.md#outage-runway) has the full table.
+- **The reservation precheck names the runway.** When the runway is what does not fit the volume, `dcctl` fails before anything is written and says so.
+
+##### Lowering a stream ceiling needs an explicit flag {#v110-shrink}
+
+Lowering a per-event stream's ceiling below what it holds makes the broker discard its oldest messages at once, unread ones included. The broker administrator now refuses that, naming the stream and the shortfall. When you mean it, for example in one upgrade that deliberately shortens the runway, pass it once and then remove it:
+
+- chart value `brokerAdmin.allowCeilingShrink: true` (default `false`),
+- `dcctl broker reconcile --allow-ceiling-shrink`.
+
+Raising a ceiling, or lowering it to something the stream still fits under, needs nothing.
+
+#### MQTT devices within their ceiling are not shed after a platform stall {#v110-rate-gate}
+
+`event-sources` meters each tenant's ingest against its ceiling. A message that had waited in the capture stream for more than a fixed five seconds was metered at the time the device sent it, and a younger one at the time it was read. When the hop from capture to inbound stalled for a few seconds, the queued traffic was all metered at the moment the stall ended, the tenant's burst allowance absorbed only a second or two of it, and the rest was shed even though the tenant was within its ceiling and the broker had already acknowledged the messages to the device.
+
+- **The threshold is per tenant.** A message counts as backlog when its age exceeds the smaller of the old five seconds and the burst the tenant's ceiling can absorb (burst divided by rate), and it is then metered at its send time. The decision is made once per message and handed to both metering stages, so the message stage and the readings stage cannot route one message to different limiters.
+- **Unchanged.** HTTP and other untrusted traffic, integrations and the external MQTT source are metered at read time as before. A tenant that is genuinely over its ceiling is still limited.
+- **New counter and alert.** `total_msg_shed_acknowledged{source}` counts messages shed after the broker had acknowledged them, for MQTT sources only, and is exported at 0. The alert `MqttIngestShedAfterAcknowledgement` (warning) fires on `increase(...[10m]) > 0` with no `for:`, so a burst that lasts seconds and then stops is still seen. It holds for ten minutes after the last one. A tenant within its ceiling sheds nothing, so in steady state the series sits at 0; a tenant over its ceiling raises it and should.
+
+#### Alerts {#v110-alerts}
+
+- **`JetStreamOutageRunwayShort`** (warning) is new. It reads how fast a gating consumer's unread backlog is growing and fires when, at that rate, the stream will start refusing new events within twenty minutes (it refuses at 90% of the stream). The backlog must be above 10%, and the condition must hold for two minutes. A flat or draining backlog stays quiet. Its text points to raising `streamDesignRate` together with the JetStream volume when traffic has outgrown the design rate.
+- **`JetStreamUnreadBacklogNearFull`** now fires at 75% for one minute (it was 80% for five minutes). A stream sized for a runway of R minutes reaches 75% at 0.75R and refuses at 0.9R, so the old threshold fired after the refusal for any runway under about 17 minutes.
+- **`MqttIngestShedAfterAcknowledgement`** (warning) is new. See [above](#v110-rate-gate).
+- **`BrokerCertificateExpiringSoon`** (warning, 30 to 7 days) and **`BrokerCertificateExpiryCritical`** (critical, under 7 days or expired) are new. They read the expiry the broker's TLS listener is serving right now (`dc_broker_mqtt_tls_cert_not_after_seconds`), so a renewal the broker never picked up keeps alerting.
+- **`JetStreamReplicaPeersDegraded` reads online peers,** and lag has its own alert, **`JetStreamReplicaPeersLagging`**. The old comparison counted a follower a moment behind the same as one that was gone, so under load it kept re-arming. A new gauge `jetstream_peers_online` counts the leader plus every peer not offline.
+- **`DeviceX509IssuerPinUnavailable` no longer goes pending on a broker roll.** A two-second blip of the broker's system account during a roll used to hold the alert pending for about two minutes. The hold is now in the expression: the refusal rate must be non-zero at every one of the last ten one-minute evaluations. A real outage still fires after about ten minutes.
+
+#### The instance reports its observed status {#v110-status}
+
+The operator now writes **observed** status on every `Instance` and is its only writer. Before, `kubectl get dci` showed dcctl's intent in the `Phase` column and the object's `status` was never written.
+
+```
+NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
+prod   local      kind-devicechain  default   1.1.0       Ready       True    1.1.0     12d
+```
+
+- **Columns changed.** `Phase` is renamed `Operation`, `Version` is renamed `Requested` so it is not confused with the new `Running` column, and `Ready` and `Running` are added.
+- **Status content.** `status.observedGeneration`, the conditions `WorkloadsAvailable` and `RolloutComplete` with their reasons, `status.version.requested` and `.running`, and one `status.areas[]` entry per functional area (desired, ready and updated replicas, image). Nothing is kept per tenant or per device. The controller watches the instance's Deployments, so status follows a rollout. The operator gains `get`, `list` and `watch` on `apps/deployments`, and its manager cache is restricted to instance-labelled Deployments. The Instance CRD ships with the operator, not in the Helm chart.
+- **Broker certificate expiry.** A new `BrokerCertificateValid` condition reports the broker's TLS leaf and authority: `CertificateValid`, `CertificateExpiringSoon` (30 days or less, still True), `CertificateExpired` (False, and it makes `Ready` False), and `CertificateNotPublished` or `CertificateUnreadable` (Unknown). The worse of leaf and authority wins. The leaf is minted for a year and renewed inside `dcctl upgrade`, so an instance that is not upgraded for about eleven months used to lose broker TLS with nothing saying so. `dcctl bootstrap` and `dcctl upgrade` publish the two `notAfter` dates as annotations on the Instance (`core.devicechain.io/broker-certificate-not-after` and `.../broker-ca-not-after`). An older instance fills in on its next upgrade, and until then the condition reads `CertificateNotPublished`.
+
+See [Instance status](./kubernetes-operator.md#instance-status) and [Broker certificate expiry](./kubernetes-operator.md#broker-certificate-expiry).
+
+#### Rejected events can be read {#v110-failed-events}
+
+Events the platform refuses go to a stream, and until now nothing read it: "why isn't my device's data showing up" could be answered only from pod logs.
+
+- **An index of refused events.** `event-management` reads the failed-events stream into a new `failed_event_records` table, kept for seven days (`lifecycle.failedEventRetentionDays`). A row holds the tenant, time, source area, reason, the claimed device token, the event type, a bounded error text, and whether the original payload is still on the stream; the payload is not copied. At most ten rows are kept for one tenant, reason and device in any hour, and further records are folded into a `suppressed` count on the newest row, so a probe with invented device tokens cannot flood the table.
+- **Tenant GraphQL.** `failedEvents`, `failedEventSummary` and `failedEventCount`, for members who hold `device:write` (customer-scoped callers are refused). They read at most 31 days back. Nothing replays or retries an event, and nothing in the API returns the original payload.
+- **Console.** An Ingest failures view with reason chips, a device filter and a time range, and a notice on the device page when events from that device were rejected in the last 24 hours.
+- **Dropped measurement keys are recorded.** A device that sends `{"status_text":"ok","battery":50}` is acknowledged, `battery` is stored and `status_text` is dropped. The [`v1.0.0` counter](#v100-measurement-drops) says how often across the fleet; now `device-state` records which device lost which key and why, with a count, first and last time and the last value (cut to 64 bytes), at most 32 keys per device. It is served through the `droppedMeasurements` query and shown on the device page. The count says how often, not an exact total. Event ids do not change.
+
+#### `dcctl` {#v110-dcctl}
+
+- **`dcctl attr set|get|unset <kind> <token> <key> [value]`** writes facet values from a script, as the console's Facets tab does. Kinds are device, asset, area and customer. `get` prints a table or `-o json`. Writes go to the shared scope, the only one facet selectors read; the value type comes from the facet's declaration, and a `--type` that contradicts it is refused. An undeclared key needs `--type`. It signs in as a tenant member (`--tenant`, `--email`, `--password`, `--otp`) and uses the existing device-management GraphQL calls, so authorization is the server's. CSV bulk import and renaming a value are not included.
+- **`dcctl events failed`** lists the tenant's refused events, newest first, with `--reason`, `--device`, `--since` and `--until` (RFC 3339 or a length of time such as `6h`), `--limit` (default 100; the output says when more matched) and `-o table|json`. `--summary` prints per-reason counts and top devices, over the last 24 hours by default. It signs in as a tenant member and needs `device:write`.
+- **`dcctl sim create --tier <token> --tier-config '<json>'`** creates the tier a load run names if it is absent, and only raises it if it exists (it never lowers one). For example `--tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'`. `--tier-config` without `--tier` is refused, and plain `--tier` still means an existing tier. A missing tier without `--tier-config` now fails with the fix spelled out.
+- **`dcctl broker reconcile --allow-ceiling-shrink`** is described [above](#v110-shrink).
+- **`dcctl broker rebalance` works after a broker roll.** It failed to find the broker administrator's login, and once that was fixed it still landed only some of the leader moves, because the administrator could read streams but not the consumers a move touches, and the refusal showed up as a timeout. The administrator may now read those consumers; nothing else about its permissions changes. `dcctl upgrade` runs the same step at its end.
+- **`dcctl install` heals a stuck Barman Cloud plugin certificate.** On a fresh cluster cert-manager could leave one of the plugin's two certificates unissued behind a one-hour back-off, so the plugin stayed in `ContainerCreating` until the Helm wait ran out. The install now watches the two certificates during the prerequisites apply and, for one still not ready three minutes after creation, deletes and re-creates it.
+- **`dcctl --values` admits the profiler switches:** `functionalAreas.<area>.profiler.enabled`, `.blockRate` and `.mutexFraction`. `profiler.address` is deliberately not admitted, because a non-loopback bind exposes unauthenticated profiles; collect through a port-forward.
+
+#### Profiling switches {#v110-profiling}
+
+All of these are off by default and are meant for performance investigation. Block and mutex profiles were always empty because sampling was never switched on; with `profiler.blockRate` and `profiler.mutexFraction` set, the endpoints serve them. Either one without `profiler.enabled` refuses startup, and the chart refuses it at render. The OpenTofu cluster roots gain `nats_profiling_port` and `nats_profiling_block_rate` for the broker, and `postgres_statement_stats` and `timescale_statement_stats` for `pg_stat_statements` on the two databases. The monitoring module also runs the node exporter on tainted node pools (a toleration for every taint), so a dedicated broker pool is no longer missing from node CPU and does not trip `KubeDaemonSetRolloutStuck` or `TargetDown`.
+
+#### Smaller changes {#v110-smaller}
+
+- **.NET SDK 8.0.427.** The pinned SDK moves from 8.0.425 to 8.0.427 (runtime 8.0.33) for a published advisory in the .NET Brotli decoder that the older runtime packs carried. Every locked .NET project, including the C# SDK, its AOT host and the demo and simulator projects, is re-locked to the 8.0.33 packs; only versions and content hashes change. If you build any of them yourself, install SDK 8.0.427 first.
+- **The frontend workspace pins `minimatch` to 11.0.1 or later** for a published advisory, and routine Go, npm and container base-image updates are included.
+- **Documentation.** New: the Instance status section, the outage-runway page, a "From the command line" section in the failed-events guide, and a scripting section for facets. The page of measured throughput gains the sixty-minute mixed-load row for `v1.0.0`. The release-notes header no longer carries the pre-1.0 warning.
+- **A single-sample pulse** has its mapping to rising edges pinned by a test; behaviour is unchanged.
+
+#### Groundwork, not enabled {#v110-envelope}
+
+A wire format for carrying several events of one tenant in one stream message is in the code, and every reader of `inbound-events` and `resolved-events` can read it. `device-management` can also write `resolved-events` this way, behind `infrastructure.messaging.envelopes.resolved`, which is off by default. **Leave it off in this release.** It is groundwork for a later release, which adds the remaining safeguards and the guidance for turning it on. With it off, the stream format is unchanged and nothing needs doing.
+
+#### Going back {#v110-going-back}
+
+Two migrations append a table each (`failed_event_records` in the event store and `dropped_measurements` in `device-state`). Nothing in a database needs undoing. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again. If you go back to `v1.0.0` after setting `streamDesignRate`, `v1.0.0` sets the event streams back to its own flat ceilings when it starts, and a stream holding more than that discards its oldest messages at once (`v1.0.0` has no shrink guard). Before going back, let the event streams drain until each holds well under its `v1.0.0` ceiling, or keep `v1.1.0`.
+
+#### Known issues {#v110-known-issues}
+
+- **Fail-closed MQTT acknowledgement is off by default,** as in `v1.0.0`. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) page states the measured limits with it off and on.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+
 ### v1.0.0 — the first stable release: a database outage holds events, and Traefik is the default front end {#v100-upgrade}
 
 `v1.0.0` is the first stable release. It is an in-place upgrade from `v0.27.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. No migration runs and no row is rewritten, so there is no data step beyond the upgrade itself. Coming from `v0.26.0` or earlier, read the [`v0.27.0` notes](#v0270-upgrade) first and follow them with `--version v1.0.0`. An instance built by `v0.16.0` or earlier is still [below the line](#pre-declaration-recreate) and is recreated, not upgraded.

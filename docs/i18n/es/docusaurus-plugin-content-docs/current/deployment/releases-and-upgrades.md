@@ -789,6 +789,141 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes se documentan por completo, de la más nueva a la más antigua.
 
+### v1.1.0 — la ingesta cuesta menos por evento y los flujos de eventos se dimensionan por margen de caída {#v110-upgrade}
+
+`v1.1.0` es una actualización in situ desde `v1.0.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Durante la actualización se ejecutan dos migraciones añadidas (una en `event-management` y otra en `device-state`); cada una agrega una tabla y no reescribe ninguna fila existente. Si vienes de `v0.27.0` o anterior, lee primero las [notas de `v1.0.0`](#v100-upgrade) y sigúelas con `--version v1.1.0`.
+
+```bash
+dcctl install local --version v1.1.0
+dcctl upgrade local devicechain --version v1.1.0 --dry-run
+dcctl upgrade local devicechain --version v1.1.0
+```
+
+Se aplica la [política de versiones y actualización](./versioning-policy.md). Esta versión amplía las interfaces cubiertas (nuevos comandos y banderas de `dcctl`, nuevas consultas GraphQL) y no elimina ninguna.
+
+Lo que exige actuar, en el orden en que hacerlo:
+
+- **Ten presente que los flujos por evento ahora se dimensionan por un margen de caída.** `inbound-events`, `resolved-events` y el flujo de captura de dispositivos se dimensionan por minutos de eventos a una tasa de diseño, en lugar de 1 GiB fijo. Con los valores por defecto del chart los límites no cambian. Si defines `streamDesignRate`, la actualización los amplía in situ y el volumen de JetStream tiene que alojar el resultado; `dcctl` comprueba la reserva frente al volumen antes de escribir nada y nombra el déficit. Consulta [Los flujos se dimensionan por margen de caída](#v110-runway).
+- **Reducir el límite de un flujo se rechaza salvo que lo pidas.** Si un archivo de valores tuyo fija un límite por debajo de lo que un flujo contiene ahora, el administrador del broker se detiene y nombra el flujo y el déficit. Consulta [la protección](#v110-shrink).
+- **Actualiza el enrutamiento de alertas.** Hay cuatro alertas nuevas y dos cambiadas. Consulta [Alertas](#v110-alerts).
+- **Actualiza los scripts que leen `kubectl get dci`.** Las columnas cambiaron. Consulta [La instancia informa de su estado observado](#v110-status).
+- **Instala el SDK de .NET 8.0.427** si compilas tú mismo el SDK de C# o los proyectos de demostración. Consulta [Cambios menores](#v110-smaller).
+- **Volver atrás.** Consulta [Volver atrás](#v110-going-back).
+
+#### La ingesta consume menos CPU por evento {#v110-ingest}
+
+Los escritores de eventos ahora llenan sus lotes. Cada uno de los diez escritores de un pod recogía antes su propio lote de un canal compartido, así que un lote contenía solo un puñado de eventos y la espera de acumulación casi no aportaba nada. Ahora la recogida se serializa entre los escritores de un pod: solo uno a la vez conserva el derecho de recoger, únicamente mientras recibe mensajes, y lo libera antes de la decodificación, la admisión del inquilino y la confirmación, de modo que esas etapas siguen siendo paralelas. Como resultado, tanto `event-management` como `device-state` agrupan mucho más. `device-state` además escribe sus upserts calientes (latido, bloqueo o creación, la escritura diferida combinada, la última medición y la última ubicación) como una sola sentencia por lote con un arreglo por columna, mediante un nuevo modo de upsert por arreglos de columnas en la capa de base de datos compartida. Ese modo toma el inquilino del contexto de la solicitud, exige que el destino del conflicto nombre la columna del inquilino y valida sus protecciones de actualización contra una gramática de lista permitida, de modo que ofrece el mismo aislamiento por inquilino que la inserción a la que acompaña.
+
+Medido en GKE con tres nodos de servicios y tres nodos de base de datos, comparando `v1.0.0` con esta versión con la misma forma de carga, en ventanas estables de 15 minutos:
+
+| | v1.0.0 | v1.1.0 |
+| --- | --- | --- |
+| CPU de la plataforma por 1.000 eventos, MQTT sobre TLS, 3.000 sesiones a 3.000 eventos/s | 3,83 CPU-s | 3,04 CPU-s |
+| CPU de la plataforma por 1.000 eventos, carga mixta (HTTP con 2.500 dispositivos, MQTT con 1.500, 2.000 dispositivos de detección, comandos; unos 6.200 eventos/s almacenados) | 2,13 CPU-s | 1,83 CPU-s |
+| CPU de la base de datos relacional por evento, carga mixta | | 37 % menos |
+| CPU de `device-state` por 1.000 eventos, carga mixta | 0,124 CPU-s | 0,055 CPU-s |
+| Filas por `INSERT` en `events`, carga mixta | 8,4 | 22,9 |
+| Sentencias de upsert de `device_states` por segundo, carga MQTT | 1.396 | 100 |
+
+La latencia de persistencia no aumentó. Con la carga mixta, la mediana pasó de 21,2 ms a 18,5 ms y el percentil 99 de 135,3 ms a 96,9 ms.
+
+Otros dos cambios acortan la ruta de escritura del almacén de eventos. El identificador de cada evento ahora se calcula directamente en lugar de a través de un documento JSON; los identificadores no cambian ni un byte, así que un evento reentregado se sigue reconociendo. Y un lote se escribe primero con un `INSERT` simple, recurriendo a `ON CONFLICT DO NOTHING` solo cuando aparece un duplicado, lo que elimina el segundo registro de log que el árbitro escribe por cada fila. El WAL del almacén de eventos por evento es aproximadamente un 8 % menor en una medición aislada. El nuevo contador `devicechain_eventmanagement_persist_insert_fallbacks_total` muestra con qué frecuencia un lote recurre al respaldo; se espera que sea poco frecuente.
+
+Ajustes y métricas: `projection.lingerMillis` de `device-state` ahora vale 10 por defecto (un `0` explícito sigue siendo `0`). Las nuevas métricas `persist_collect_full_total` y `persist_handoff_depth` en `event-management`, y `state_collect_full_total` y `state_handoff_depth` en `device-state`, muestran si los lotes se están llenando. Los lotes del escritor de `device-state` alcanzan como máximo 32 filas y, con varios inquilinos en paralelo, se dividen por inquilino, por lo que una carga con muchos inquilinos ve lotes más pequeños que una de un solo inquilino.
+
+#### Los flujos se dimensionan por margen de caída {#v110-runway}
+
+Los flujos que transportan un mensaje por evento ingerido tenían un tope fijo de 1 GiB y 5 millones de mensajes. Ese tope es el margen de la plataforma durante una caída de un consumidor o de la base de datos, y el horizonte que pueden releer la vista previa de reglas y la reproducción de detección. A 20.000 eventos por segundo retenía `resolved-events` durante unos 2,8 minutos.
+
+- **Dos valores nuevos del chart.** `instance.config.infrastructure.nats.streamDesignRate` es el pico de eventos por segundo que se espera que ingiera toda la instancia, sumando inquilinos. Es la tasa para la que se dimensiona el disco, no un límite de tasa. `instance.config.infrastructure.nats.streamRunwayMinutes` es cuántos minutos de eventos a esa tasa retienen los flujos (15 por defecto, entre 10 y 10080). Cada uno de los tres flujos recibe al menos tasa × minutos × 60 × su coste por evento (384 bytes para captura y entrada, 448 bytes para resueltos). `streamMaxBytes` sigue siendo el mínimo y `streamMaxMsgs` se eleva para que el número de mensajes no acorte el margen.
+- **Los valores por defecto dejan los límites donde estaban.** Sin una tasa definida, los flujos se dimensionan como antes. El chart incluye 1.000 eventos por segundo durante 15 minutos, que sigue cabiendo en el límite de 1 GiB, y `--compact` incluye 50 por segundo, que conserva 64 MiB. Los valores fuera de rango hacen fallar el arranque.
+- **Para definirlos,** pon las dos claves bajo `instance.config.infrastructure.nats` en un archivo de valores y ejecuta `dcctl upgrade <provider> <instance> --values <file>`. Los flujos existentes toman los nuevos límites in situ. Un flujo dimensionado para 20.000 eventos por segundo durante 15 minutos necesita unos 33 GiB de volumen de JetStream; [cuánto pueden esperar los flujos de eventos durante una caída](./observability.md#outage-runway) tiene la tabla completa.
+- **La comprobación previa de la reserva nombra el margen.** Cuando lo que no cabe en el volumen es el margen, `dcctl` falla antes de escribir nada y lo dice.
+
+##### Reducir el límite de un flujo exige una bandera explícita {#v110-shrink}
+
+Reducir el límite de un flujo por evento por debajo de lo que contiene hace que el broker descarte de inmediato sus mensajes más antiguos, incluidos los no leídos. El administrador del broker ahora lo rechaza, nombrando el flujo y el déficit. Cuando lo hagas a propósito, por ejemplo en una actualización que acorta deliberadamente el margen, indícalo una vez y quítalo después:
+
+- valor del chart `brokerAdmin.allowCeilingShrink: true` (`false` por defecto),
+- `dcctl broker reconcile --allow-ceiling-shrink`.
+
+Elevar un límite, o reducirlo a algo bajo lo cual el flujo todavía cabe, no requiere nada.
+
+#### Los dispositivos MQTT dentro de su límite no se descartan tras un bloqueo de la plataforma {#v110-rate-gate}
+
+`event-sources` mide la ingesta de cada inquilino frente a su límite. Un mensaje que había esperado en el flujo de captura más de cinco segundos fijos se medía en el momento en que el dispositivo lo envió, y uno más reciente en el momento en que se leyó. Cuando el salto de captura a entrada se bloqueaba unos segundos, todo el tráfico en cola se medía en el instante en que terminaba el bloqueo, la ráfaga permitida del inquilino absorbía solo uno o dos segundos y el resto se descartaba aunque el inquilino estuviera dentro de su límite y el broker ya hubiera confirmado los mensajes al dispositivo.
+
+- **El umbral es por inquilino.** Un mensaje cuenta como acumulado cuando su antigüedad supera el menor entre los cinco segundos anteriores y la ráfaga que el límite del inquilino puede absorber (ráfaga dividida por tasa), y entonces se mide en el momento de su envío. La decisión se toma una vez por mensaje y se entrega a las dos etapas de medición, de modo que la etapa de mensajes y la de lecturas no pueden encaminar un mismo mensaje a limitadores distintos.
+- **Sin cambios.** El tráfico HTTP y otro tráfico no confiable, las integraciones y la fuente MQTT externa se miden en el momento de la lectura como antes. Un inquilino que realmente supera su límite sigue siendo limitado.
+- **Nuevo contador y alerta.** `total_msg_shed_acknowledged{source}` cuenta los mensajes descartados después de que el broker los hubiera confirmado, solo para fuentes MQTT, y se exporta a 0. La alerta `MqttIngestShedAfterAcknowledgement` (advertencia) se activa con `increase(...[10m]) > 0` sin `for:`, de modo que una ráfaga que dura segundos y se detiene también se ve. Se mantiene diez minutos después de la última. Un inquilino dentro de su límite no descarta nada, así que en régimen estable la serie está en 0; un inquilino por encima de su límite la eleva, y debe hacerlo.
+
+#### Alertas {#v110-alerts}
+
+- **`JetStreamOutageRunwayShort`** (advertencia) es nueva. Lee con qué rapidez crece la acumulación sin leer de un consumidor que condiciona y se activa cuando, a ese ritmo, el flujo empezará a rechazar eventos nuevos en menos de veinte minutos (los rechaza al 90 % del flujo). La acumulación debe superar el 10 % y la condición debe mantenerse dos minutos. Una acumulación plana o que se vacía permanece en silencio. Su texto indica subir `streamDesignRate` junto con el volumen de JetStream cuando el tráfico ha superado la tasa de diseño.
+- **`JetStreamUnreadBacklogNearFull`** ahora se activa al 75 % durante un minuto (antes al 80 % durante cinco minutos). Un flujo dimensionado para un margen de R minutos llega al 75 % en 0,75R y rechaza en 0,9R, así que el umbral anterior se activaba después del rechazo para cualquier margen inferior a unos 17 minutos.
+- **`MqttIngestShedAfterAcknowledgement`** (advertencia) es nueva. Consulta [más arriba](#v110-rate-gate).
+- **`BrokerCertificateExpiringSoon`** (advertencia, de 30 a 7 días) y **`BrokerCertificateExpiryCritical`** (crítica, menos de 7 días o caducado) son nuevas. Leen la caducidad que el listener TLS del broker está sirviendo en este momento (`dc_broker_mqtt_tls_cert_not_after_seconds`), de modo que una renovación que el broker nunca recogió sigue alertando.
+- **`JetStreamReplicaPeersDegraded` lee pares en línea,** y el retraso tiene su propia alerta, **`JetStreamReplicaPeersLagging`**. La comparación anterior contaba igual a un seguidor momentáneamente rezagado que a uno ausente, así que bajo carga se rearmaba una y otra vez. Un nuevo indicador `jetstream_peers_online` cuenta el líder más cada par que no está fuera de línea.
+- **`DeviceX509IssuerPinUnavailable` ya no pasa a pendiente en un reinicio del broker.** Un parpadeo de dos segundos de la cuenta de sistema del broker durante un reinicio dejaba la alerta pendiente unos dos minutos. Ahora la espera está en la expresión: la tasa de rechazos debe ser distinta de cero en cada una de las últimas diez evaluaciones de un minuto. Una caída real sigue activándola tras unos diez minutos.
+
+#### La instancia informa de su estado observado {#v110-status}
+
+El operador ahora escribe el estado **observado** en cada `Instance` y es su único escritor. Antes, `kubectl get dci` mostraba la intención de dcctl en la columna `Phase` y el `status` del objeto nunca se escribía.
+
+```
+NAME   PROVIDER   CLUSTER           PROFILE   REQUESTED   OPERATION   READY   RUNNING   AGE
+prod   local      kind-devicechain  default   1.1.0       Ready       True    1.1.0     12d
+```
+
+- **Columnas cambiadas.** `Phase` pasa a llamarse `Operation`, `Version` pasa a llamarse `Requested` para no confundirla con la nueva columna `Running`, y se añaden `Ready` y `Running`.
+- **Contenido del estado.** `status.observedGeneration`, las condiciones `WorkloadsAvailable` y `RolloutComplete` con sus motivos, `status.version.requested` y `.running`, y una entrada `status.areas[]` por área funcional (réplicas deseadas, listas y actualizadas, imagen). No se guarda nada por inquilino ni por dispositivo. El controlador vigila los Deployments de la instancia, así que el estado sigue a un despliegue. El operador gana `get`, `list` y `watch` sobre `apps/deployments`, y su caché de gestor se restringe a los Deployments etiquetados con la instancia. El CRD de Instance se entrega con el operador, no en el chart de Helm.
+- **Caducidad del certificado del broker.** Una nueva condición `BrokerCertificateValid` informa de la hoja TLS del broker y de su autoridad: `CertificateValid`, `CertificateExpiringSoon` (30 días o menos, sigue en True), `CertificateExpired` (False, y deja `Ready` en False), y `CertificateNotPublished` o `CertificateUnreadable` (Unknown). Gana el peor de la hoja y la autoridad. La hoja se emite por un año y se renueva dentro de `dcctl upgrade`, de modo que una instancia que no se actualizaba durante unos once meses perdía el TLS del broker sin que nada lo dijera. `dcctl bootstrap` y `dcctl upgrade` publican las dos fechas `notAfter` como anotaciones en la Instance (`core.devicechain.io/broker-certificate-not-after` y `.../broker-ca-not-after`). Una instancia antigua se completa en su próxima actualización y, hasta entonces, la condición muestra `CertificateNotPublished`.
+
+Consulta [Estado de la instancia](./kubernetes-operator.md#instance-status) y [Caducidad del certificado del broker](./kubernetes-operator.md#broker-certificate-expiry).
+
+#### Los eventos rechazados se pueden leer {#v110-failed-events}
+
+Los eventos que la plataforma rechaza van a un flujo, y hasta ahora nada lo leía: «por qué no aparecen los datos de mi dispositivo» solo podía responderse con los logs de los pods.
+
+- **Un índice de eventos rechazados.** `event-management` lee el flujo de eventos fallidos en una nueva tabla `failed_event_records`, conservada siete días (`lifecycle.failedEventRetentionDays`). Una fila contiene el inquilino, la hora, el área de origen, el motivo, el token de dispositivo reclamado, el tipo de evento, un texto de error acotado y si la carga original sigue en el flujo; la carga no se copia. Se conservan como máximo diez filas por inquilino, motivo y dispositivo en una hora, y los registros adicionales se pliegan en un contador `suppressed` de la fila más reciente, de modo que una sonda con tokens de dispositivo inventados no puede inundar la tabla.
+- **GraphQL del inquilino.** `failedEvents`, `failedEventSummary` y `failedEventCount`, para los miembros que tienen `device:write` (los llamadores limitados a un cliente son rechazados). Leen como máximo 31 días atrás. Nada reproduce ni reintenta un evento, y nada en la API devuelve la carga original.
+- **Consola.** Una vista de fallos de ingesta con chips de motivo, un filtro de dispositivo y un rango de tiempo, y un aviso en la página del dispositivo cuando se rechazaron eventos de ese dispositivo en las últimas 24 horas.
+- **Se registran las claves de medición descartadas.** Un dispositivo que envía `{"status_text":"ok","battery":50}` recibe confirmación, `battery` se almacena y `status_text` se descarta. El [contador de `v1.0.0`](#v100-measurement-drops) indica con qué frecuencia ocurre en toda la flota; ahora `device-state` registra qué dispositivo perdió qué clave y por qué, con un recuento, la primera y la última hora y el último valor (recortado a 64 bytes), con un máximo de 32 claves por dispositivo. Se sirve mediante la consulta `droppedMeasurements` y se muestra en la página del dispositivo. El recuento indica la frecuencia, no un total exacto. Los identificadores de evento no cambian.
+
+#### `dcctl` {#v110-dcctl}
+
+- **`dcctl attr set|get|unset <kind> <token> <key> [value]`** escribe valores de facetas desde un script, como hace la pestaña Facetas de la consola. Los tipos son dispositivo, activo, área y cliente. `get` imprime una tabla o `-o json`. Las escrituras van al ámbito compartido, el único que leen los selectores de facetas; el tipo del valor procede de la declaración de la faceta, y un `--type` que la contradiga se rechaza. Una clave no declarada necesita `--type`. Inicia sesión como miembro del inquilino (`--tenant`, `--email`, `--password`, `--otp`) y usa las llamadas GraphQL existentes de device-management, así que la autorización es la del servidor. No incluye la importación masiva por CSV ni el cambio de nombre de un valor.
+- **`dcctl events failed`** lista los eventos rechazados del inquilino, del más reciente al más antiguo, con `--reason`, `--device`, `--since` y `--until` (RFC 3339 o una duración como `6h`), `--limit` (100 por defecto; la salida indica cuándo coincidieron más) y `-o table|json`. `--summary` imprime los recuentos por motivo y los dispositivos principales, por defecto de las últimas 24 horas. Inicia sesión como miembro del inquilino y necesita `device:write`.
+- **`dcctl sim create --tier <token> --tier-config '<json>'`** crea el nivel que nombra una ejecución de carga si no existe, y solo lo sube si existe (nunca lo baja). Por ejemplo, `--tier rc-100k --tier-config '{"ingestReadingsPerSecond":100000}'`. `--tier-config` sin `--tier` se rechaza, y `--tier` solo sigue significando un nivel existente. Un nivel ausente sin `--tier-config` ahora falla con la solución explicada.
+- **`dcctl broker reconcile --allow-ceiling-shrink`** se describe [más arriba](#v110-shrink).
+- **`dcctl broker rebalance` funciona después de un reinicio del broker.** No encontraba el inicio de sesión del administrador del broker y, una vez corregido eso, aun así solo lograba algunos de los traslados de líder, porque el administrador podía leer flujos pero no los consumidores que toca un traslado, y el rechazo se manifestaba como un tiempo de espera agotado. El administrador ahora puede leer esos consumidores; nada más de sus permisos cambia. `dcctl upgrade` ejecuta el mismo paso al final.
+- **`dcctl install` repara un certificado atascado del plugin Barman Cloud.** En un clúster nuevo, cert-manager podía dejar sin emitir uno de los dos certificados del plugin tras una espera de una hora, de modo que el plugin se quedaba en `ContainerCreating` hasta que se agotaba la espera de Helm. Ahora la instalación vigila los dos certificados durante la aplicación de los requisitos previos y, si uno sigue sin estar listo tres minutos después de crearse, lo elimina y lo vuelve a crear.
+- **`dcctl --values` admite los interruptores del perfilador:** `functionalAreas.<area>.profiler.enabled`, `.blockRate` y `.mutexFraction`. `profiler.address` no se admite deliberadamente, porque un bind no loopback expone perfiles sin autenticación; recógelos mediante un port-forward.
+
+#### Interruptores de perfilado {#v110-profiling}
+
+Todos están desactivados por defecto y están pensados para investigar el rendimiento. Los perfiles de bloqueo y de mutex siempre salían vacíos porque el muestreo nunca se activaba; con `profiler.blockRate` y `profiler.mutexFraction` definidos, los endpoints los sirven. Cualquiera de los dos sin `profiler.enabled` rechaza el arranque, y el chart lo rechaza al renderizar. Las raíces de OpenTofu del clúster ganan `nats_profiling_port` y `nats_profiling_block_rate` para el broker, y `postgres_statement_stats` y `timescale_statement_stats` para `pg_stat_statements` en las dos bases de datos. El módulo de monitorización también ejecuta el node exporter en los grupos de nodos con taints (una toleration para cada taint), de modo que un grupo de broker dedicado ya no falta en la CPU de nodos y no activa `KubeDaemonSetRolloutStuck` ni `TargetDown`.
+
+#### Cambios menores {#v110-smaller}
+
+- **SDK de .NET 8.0.427.** El SDK fijado pasa de 8.0.425 a 8.0.427 (runtime 8.0.33) por un aviso publicado sobre el decodificador Brotli de .NET que llevaban los paquetes de runtime anteriores. Todos los proyectos .NET con bloqueo, incluidos el SDK de C#, su host AOT y los proyectos de demostración y simulador, se vuelven a bloquear con los paquetes 8.0.33; solo cambian versiones y hashes de contenido. Si compilas alguno tú mismo, instala antes el SDK 8.0.427.
+- **El espacio de trabajo del frontend fija `minimatch` en 11.0.1 o posterior** por un aviso publicado, y se incluyen las actualizaciones rutinarias de Go, npm y de imágenes base de contenedores.
+- **Documentación.** Nuevo: la sección de estado de la instancia, la página del margen de caída, una sección «Desde la línea de comandos» en la guía de eventos fallidos y una sección de scripting para facetas. La página de rendimiento medido añade la fila de carga mixta de sesenta minutos para `v1.0.0`. El encabezado de las notas de versión ya no lleva la advertencia previa a la 1.0.
+- **Un pulso de una sola muestra** tiene su correspondencia con flancos ascendentes fijada por una prueba; el comportamiento no cambia.
+
+#### Preparación, sin activar {#v110-envelope}
+
+En el código hay un formato de cable para transportar varios eventos de un mismo inquilino en un solo mensaje de flujo, y todos los lectores de `inbound-events` y `resolved-events` pueden leerlo. `device-management` también puede escribir `resolved-events` de este modo, tras `infrastructure.messaging.envelopes.resolved`, que está desactivado por defecto. **Déjalo desactivado en esta versión.** Es preparación para una versión posterior, que añadirá las salvaguardas restantes y la guía para activarlo. Con él desactivado, el formato del flujo no cambia y no hay nada que hacer.
+
+#### Volver atrás {#v110-going-back}
+
+Dos migraciones añaden una tabla cada una (`failed_event_records` en el almacén de eventos y `dropped_measurements` en `device-state`). No hay nada que deshacer en una base de datos. Avanza siempre que puedas: una actualización fallida se arregla ejecutando `dcctl upgrade` de nuevo. Si vuelves a `v1.0.0` después de definir `streamDesignRate`, `v1.0.0` devuelve los flujos de eventos a sus propios límites fijos al arrancar, y un flujo que contenga más que eso descarta de inmediato sus mensajes más antiguos (`v1.0.0` no tiene protección contra la reducción). Antes de volver atrás, deja que los flujos de eventos se vacíen hasta que cada uno contenga bastante menos que su límite de `v1.0.0`, o conserva `v1.1.0`.
+
+#### Problemas conocidos {#v110-known-issues}
+
+- **La confirmación MQTT con cierre ante fallo está desactivada por defecto,** como en `v1.0.0`. El [transporte MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) indica los límites medidos con ella desactivada y activada.
+- **Un cambio en la configuración del broker sigue desconectando los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace.
+
 ### v1.0.0 — la primera versión estable: una caída de la base de datos retiene los eventos y Traefik es el acceso por defecto {#v100-upgrade}
 
 `v1.0.0` es la primera versión estable. Es una actualización in situ desde `v0.27.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. No se ejecuta ninguna migración y no se reescribe ninguna fila, así que no hay un paso de datos más allá de la propia actualización. Si vienes de `v0.26.0` o anterior, lee primero las [notas de `v0.27.0`](#v0270-upgrade) y síguelas con `--version v1.0.0`. Una instancia creada con `v0.16.0` o anterior sigue [por debajo del límite](#pre-declaration-recreate) y se recrea, no se actualiza.
