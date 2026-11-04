@@ -27,7 +27,7 @@ y se detienen si falta alguna, así que instálalas primero. La lista completa e
 [Prerrequisitos](#prerequisites).
 
 :::note Estado
-DeviceChain está en fase previa al lanzamiento. `dcctl install local` y `dcctl bootstrap local`
+`dcctl install local` y `dcctl bootstrap local`
 están implementados y validados de extremo a extremo en Kubernetes local (kind).
 `dcctl install local` crea el clúster de kind por ti si no existe ninguno, y te pregunta antes
 salvo que pases `--yes`. El proveedor `gcp` es una mejora planificada.

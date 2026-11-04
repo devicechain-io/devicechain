@@ -9,7 +9,7 @@ You can run DeviceChain locally with only two dependencies: NATS and TimescaleDB
 Java, Kafka, ZooKeeper, Redis, Keycloak or Mosquitto.
 
 :::note Status
-DeviceChain is pre-release. This guide covers working on the source tree: building the Go workspace
+This guide covers working on the source tree: building the Go workspace
 and running a single service against dependencies you started yourself. For a complete running
 instance, use `dcctl` and the [Quickstart](../quickstart/first-device.md) instead. Two commands,
 `dcctl install` and `dcctl bootstrap`, stand up everything.

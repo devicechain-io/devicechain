@@ -286,18 +286,20 @@ done
      breaks *fresh* installs (`column already exists`) while every existing database applies cleanly
      and looks healthy. Seeds count: insert through the snapshot, with literal values.
   2. **Never edit an existing migration — and that now includes the baselines.** The pre-GA flatten is
-     **done**: every area's chain has been collapsed into one frozen `NewBaselineSchema()` built from its
+     **done** (it shipped before v1.0.0): every area's chain has been collapsed into one frozen `NewBaselineSchema()` built from its
      own snapshot structs (`baseline.go` + `baseline_snapshot*.go`), each table created once with no
      `ALTER`s inside it and no version suffixes. A schema change from here **appends** a new migration
      that declares its own snapshot of just what it touches; a baseline is never edited and its snapshot
      types are never "updated" to match the live models. Anything appended must be individually
      re-runnable, since migrations run with `UseTransaction:false` and replay from the top after a
-     failure. Consequence, deliberate and pre-GA only: an existing instance is **recreated**
-     (`dcctl destroy` + `bootstrap`), not migrated onto a baseline.
+     failure. Consequence: from v1.0.0 a database **always upgrades in place** — an instance is never
+     recreated to take a release (`dcctl install` then `dcctl upgrade`), so a schema change is an
+     appended migration and nothing else. (Instances built before the flatten were recreated, not
+     migrated onto a baseline; that was pre-GA only and ended with v1.0.0.)
 
      🔴 **ONE baseline has been edited on purpose, and the bar it cleared is the rule, not the
-     exception.** event-management's could not survive its own replay, which pre-GA meant a
-     crash-loop with `destroy` + `bootstrap` as the remedy and after GA would have meant a
+     exception.** event-management's could not survive its own replay, which before v1.0.0 meant a
+     crash-loop with `destroy` + `bootstrap` as the remedy and from v1.0.0 on would have meant a
      permanent trap — a released instance cannot be told to destroy itself. It was re-cut (#874),
      and what made that legitimate is that the edit changed **re-runnability only**: `verify` and
      `replay` together proved the resulting schema **byte-identical** on both Postgres majors
@@ -323,8 +325,25 @@ done
   (`user-management/schema/baseline_seed_test.go` is the worked example). It *can* see hypertables and
   continuous aggregates, via a catalog probe added for exactly that reason. Maintainers: the reasoning,
   the recipes and the gorm traps are in `.agent-os/product/data-modeling.md`.
-- **Pre-GA (v1.0.0):** all models and APIs are changeable. Prefer decisive cutovers over compat shims,
-  backfills, or migration scaffolding for old shapes.
+- **Post-1.0 compatibility (v1.0.0 shipped 2026-11-01):** served interfaces are bound by the published
+  [versioning policy](docs/docs/deployment/versioning-policy.md) — the device wire (MQTT/HTTP payloads,
+  topic/subject layout, credential types), the GraphQL schemas, the public npm exports, the C# SDK and
+  `dcctl` commands/flags. Not every model is frozen: Helm values, the instance config document, and
+  metric/alert names may move in a minor if its notes say so.
+  - **No removal or rename in a minor or patch.** A minor adds (fields, operations, optional settings,
+    migrations) and deprecates; it never removes or renames, changes a type, makes an optional argument
+    required, or changes what an existing field returns. Removal happens only in a major, after the
+    deprecation has lasted at least two minors. Deprecate a GraphQL field/argument with
+    `@deprecated(reason: "...")` naming its replacement; a deprecated flag, export or setting is documented
+    as deprecated in the release notes. A deprecated thing keeps working exactly as before.
+  - **Upgrades are in-place and ROLLING** (old and new pods overlap), so a column or table drop is
+    **expand/contract**: the release that stops needing it stops reading AND writing it (old pods still
+    running must survive), and a later major **appends** the drop. A new column is added nullable or with a
+    default so the old pods' writes still succeed. There is no downgrade.
+  - **Every deprecation gets an upgrade-notes line** in that release's section of
+    `docs/docs/deployment/releases-and-upgrades.md`.
+  - Unserved internals (unexported code, in-process types, anything no covered interface exposes) are still
+    free to cut over decisively; do not add compat shims for a shape nothing outside the process sees.
 - **Fail closed:** typed config rejects unknown/invalid keys at startup; the DB tenant-scope callback
   rejects any tenant-scoped query with no tenant in context.
 - **Unimplemented must fail loudly — never return a plausible value.** A stub that returns a zero

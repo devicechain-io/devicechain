@@ -9,7 +9,7 @@ title: GraphQL API
 本页列出端点、获取 Schema 的方法、所有变更遵循的约定，以及每个请求受到的限制。
 
 :::note 状态
-DeviceChain 处于预发布阶段，Schema 仍会演进。发布的 Schema 文件是权威参考。
+自 v1.0.0 起，已发布的 Schema 遵循[版本策略](../deployment/versioning-policy.md)：次版本只做新增，并用 `@deprecated` 标记弃用项，删除要等到主版本。发布的 Schema 文件是权威参考。
 默认禁用内省，参见[探索 Schema](#exploring-the-schema)。
 :::
 

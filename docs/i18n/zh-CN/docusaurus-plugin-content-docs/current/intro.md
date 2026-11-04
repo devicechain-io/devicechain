@@ -55,7 +55,7 @@ DeviceChain 由一组基于共享核心库协作的微服务组成：
 
 ## 项目状态 {#project-status}
 
-DeviceChain 尚处于正式发布前阶段，正在积极开发。这些文档页面会标明各项能力是**已提供**、**已计划**还是**设计中**。[GitHub 仓库](https://github.com/devicechain-io/devicechain) 是判断当前哪些功能能够构建和运行的权威依据。
+DeviceChain 正在积极开发中。这些文档页面会标明各项能力是**已提供**、**已计划**还是**设计中**。[GitHub 仓库](https://github.com/devicechain-io/devicechain) 是判断当前哪些功能能够构建和运行的权威依据。
 
 ## 许可证 {#license}
 

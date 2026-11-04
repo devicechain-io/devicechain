@@ -17,7 +17,7 @@ dcctl bootstrap local my-instance
 它不包含工具本身。两个命令调用 `PATH` 中的 `kubectl`、`helm`、`tofu`（或 `terraform`）；由 dcctl 自己运行集群时（`local` 提供方）还需要 `docker` 和 `kind`，构建镜像时（`--build`）还需要 `docker`。启动前检查本次运行所需的工具，缺少时停止，因此应先安装，完整列表见[前置条件](#prerequisites)。
 
 :::note 状态
-DeviceChain 尚未正式发布。`dcctl install local` 和 `dcctl bootstrap local` 已实现，并在本地 kind Kubernetes 上端到端验证。不存在 kind 集群时，install 会创建，除非指定 `--yes` 否则先确认。`gcp` 提供商是计划中的后续工作。
+`dcctl install local` 和 `dcctl bootstrap local` 已实现，并在本地 kind Kubernetes 上端到端验证。不存在 kind 集群时，install 会创建，除非指定 `--yes` 否则先确认。`gcp` 提供商是计划中的后续工作。
 :::
 
 ## 安装集群 {#install}

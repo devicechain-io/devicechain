@@ -55,7 +55,7 @@ Una simulación se autentica como una identidad de un solo inquilino con alcance
 
 ## Estado del proyecto
 
-DeviceChain está en fase previa al lanzamiento y en desarrollo activo. Las páginas de esta documentación indican si una capacidad está **disponible**, **planeada** o **en diseño**. El [repositorio de GitHub](https://github.com/devicechain-io/devicechain) es la fuente de verdad de lo que actualmente se construye y se ejecuta.
+DeviceChain está en desarrollo activo. Las páginas de esta documentación indican si una capacidad está **disponible**, **planeada** o **en diseño**. El [repositorio de GitHub](https://github.com/devicechain-io/devicechain) es la fuente de verdad de lo que actualmente se construye y se ejecuta.
 
 ## Licencia
 

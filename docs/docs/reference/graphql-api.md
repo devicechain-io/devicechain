@@ -10,8 +10,9 @@ the endpoints, how to get the schemas, the conventions every mutation follows, a
 request is held to.
 
 :::note Status
-Schemas evolve while DeviceChain is pre-release. The published schema files are the authoritative
-reference. Introspection is disabled by default (see [Exploring the schema](#exploring-the-schema)).
+From v1.0.0 the served schemas follow the [versioning policy](../deployment/versioning-policy.md): a
+minor release adds to them and marks anything it deprecates with `@deprecated`, and removals wait for
+a major release. The published schema files are the authoritative reference. Introspection is disabled by default (see [Exploring the schema](#exploring-the-schema)).
 :::
 
 ## Download the schemas {#download-the-schemas}

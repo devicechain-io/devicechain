@@ -24,7 +24,7 @@ itself (the `local` provider) and `docker` when it builds images (`--build`). Bo
 for the ones the run needs before they start and stop if one is missing, so install them first. The full list is under [Prerequisites](#prerequisites).
 
 :::note Status
-DeviceChain is pre-release. `dcctl install local` and `dcctl bootstrap local` are implemented
+`dcctl install local` and `dcctl bootstrap local` are implemented
 and validated end-to-end on local Kubernetes (kind). `dcctl install local` creates the kind
 cluster for you if none exists, and asks first unless you pass `--yes`. The `gcp` provider is
 a planned follow-up.

@@ -8,7 +8,7 @@ title: 本地开发
 在本地运行 DeviceChain 只需要两个依赖：NATS 和 TimescaleDB。无需 Java、Kafka、ZooKeeper、Redis、Keycloak 或 Mosquitto。
 
 :::note 状态
-DeviceChain 尚未正式发布。本指南介绍如何开发源代码：构建 Go 工作区，并让单个服务连接到自行启动的依赖。要运行完整实例，请使用 `dcctl` 和[快速入门](../quickstart/first-device.md)。`dcctl install` 和 `dcctl bootstrap` 两条命令即可启动所有组件。
+本指南介绍如何开发源代码：构建 Go 工作区，并让单个服务连接到自行启动的依赖。要运行完整实例，请使用 `dcctl` 和[快速入门](../quickstart/first-device.md)。`dcctl install` 和 `dcctl bootstrap` 两条命令即可启动所有组件。
 :::
 
 ## 前提条件 {#prerequisites}

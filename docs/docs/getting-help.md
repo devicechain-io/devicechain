@@ -5,9 +5,9 @@ title: Getting help
 
 # Getting help
 
-DeviceChain is pre-1.0 and developed in the open. If something did not work, or a page did not tell
-you what you needed, tell us. An early, rough report beats a late, polished one, because interfaces
-can still change in response to what people run into.
+DeviceChain is developed in the open. If something did not work, or a page did not tell
+you what you needed, tell us. An early, rough report beats a late, polished one, because the
+roadmap and these docs change in response to what people run into.
 
 ## Where to go
 

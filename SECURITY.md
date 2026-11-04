@@ -50,9 +50,6 @@ Fixes ship as patch releases (`1.x.y`). See the
 [upgrade guide](https://docs.devicechain.io/deployment/releases-and-upgrades) for moving
 between versions.
 
-Until `1.0.0` is released, DeviceChain is pre-1.0 and only `main` is supported; there are no
-backported patch releases.
-
 ## Verifying a release
 
 From `v0.25.0`, every container image and the Helm chart a release publishes is signed (keyless, with

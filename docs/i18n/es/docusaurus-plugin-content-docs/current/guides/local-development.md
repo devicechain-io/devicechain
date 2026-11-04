@@ -9,7 +9,7 @@ Puedes ejecutar DeviceChain localmente con solo dos dependencias: NATS y Timesca
 Java, Kafka, ZooKeeper, Redis, Keycloak ni Mosquitto.
 
 :::note Estado
-DeviceChain es pre-release. Esta guía trata sobre trabajar en el árbol de código: compilar el
+Esta guía trata sobre trabajar en el árbol de código: compilar el
 workspace de Go y ejecutar un único servicio contra dependencias que tú mismo has iniciado. Para
 tener una instancia completa en ejecución, usa `dcctl` y la [Guía rápida](../quickstart/first-device.md).
 Dos comandos, `dcctl install` y `dcctl bootstrap`, levantan todo.

@@ -10,8 +10,9 @@ enumera los endpoints, cómo obtener los esquemas, las convenciones que sigue to
 límites a los que se somete cada solicitud.
 
 :::note Estado
-Los esquemas evolucionan mientras DeviceChain está en pre-release. Los archivos de esquema publicados
-son la referencia autoritativa. La introspección está deshabilitada por defecto (consulta
+Desde la v1.0.0 los esquemas publicados siguen la [política de versionado](../deployment/versioning-policy.md):
+una versión menor solo añade y marca con `@deprecated` lo que deja obsoleto, y las eliminaciones esperan
+a una versión mayor. Los archivos de esquema publicados son la referencia autoritativa. La introspección está deshabilitada por defecto (consulta
 [Explorar el esquema](#exploring-the-schema)).
 :::
 

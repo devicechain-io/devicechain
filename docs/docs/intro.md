@@ -55,7 +55,7 @@ A simulation authenticates as a scoped, single-tenant identity, like any other e
 
 ## Project status
 
-DeviceChain is pre-release and under active development. Pages in these docs mark whether a capability is **available**, **planned** or **in design**. The [GitHub repository](https://github.com/devicechain-io/devicechain) is the source of truth for what currently builds and runs.
+DeviceChain is under active development. Pages in these docs mark whether a capability is **available**, **planned** or **in design**. The [GitHub repository](https://github.com/devicechain-io/devicechain) is the source of truth for what currently builds and runs.
 
 ## License
 
