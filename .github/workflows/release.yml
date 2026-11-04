@@ -1499,56 +1499,29 @@ jobs:
       # ran regardless, so the intent was written down and never implemented. The manifest is
       # still BUILT above on an rc, which is the half worth exercising: it proves the script,
       # the highlights and goreleaser's checksums all line up before the stable tag.
-      - name: Publish to the website repo
+      # Everything from the clone to the poll lives in hack/publish-release-manifest.sh so the
+      # rehearsal workflow (publish-manifest-rehearsal.yml) runs the SAME code against a staging
+      # branch. The target branch and the verify URL come from repository variables so a
+      # rehearsal can be pointed away from production without editing this file; unset, they
+      # are main and https://devicechain.io/releases.json.
+      #
+      # The script picks the manifest's path from the checkout it clones: public/releases.json
+      # once the website has the Astro layout, releases.json at the root before that. It
+      # refuses a tag older than the one the branch already carries, and after a push it waits
+      # about ten minutes for the site (the Astro build is budgeted under three). If the file
+      # was already current in git but is not live, it triggers the Netlify build hook once
+      # (secret NETLIFY_BUILD_HOOK; optional).
+      - name: Publish to the website repo and confirm the site serves it
         if: needs.guard.outputs.is_prerelease == 'false'
         env:
           DEPLOY_KEY: ${{ secrets.WEBSITE_DEPLOY_KEY }}
+          BUILD_HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+          WEBSITE_BRANCH: ${{ vars.WEBSITE_BRANCH || 'main' }}
+          VERIFY_URL: ${{ vars.WEBSITE_VERIFY_URL || 'https://devicechain.io/releases.json' }}
           TAG: ${{ github.ref_name }}
         run: |
           if [ -z "$DEPLOY_KEY" ]; then
             echo "::error::WEBSITE_DEPLOY_KEY is not set — the manifest cannot be published."
             exit 1
           fi
-          # The key lives only for this step, in a file only the runner user can read.
-          # GitHub's SSH host keys come from its own API over HTTPS, so the host is pinned
-          # rather than accepted on first use.
-          keydir="$(mktemp -d)"
-          trap 'rm -rf "$keydir"' EXIT
-          printf '%s\n' "$DEPLOY_KEY" > "$keydir/key"
-          chmod 600 "$keydir/key"
-          curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' > "$keydir/known_hosts"
-          [ -s "$keydir/known_hosts" ] || { echo "::error::could not fetch GitHub's SSH host keys"; exit 1; }
-          export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$keydir/known_hosts"
-          git clone --depth 1 "git@github.com:devicechain-io/website.git" site
-          cp releases.json site/releases.json
-          cd site
-          # A re-run of an unchanged release is a no-op rather than an empty commit.
-          if git diff --quiet -- releases.json; then
-            echo "releases.json already current for $TAG — nothing to publish."
-            exit 0
-          fi
-          git config user.name "devicechain-release"
-          git config user.email "noreply@devicechain.io"
-          git add releases.json
-          git commit -m "Publish release manifest for $TAG"
-          git push origin HEAD:main
-
-      # Netlify deploys on push; give it a moment, then verify the PUBLISHED file rather
-      # than trusting that a green push means a live site. Skipped for a prerelease because
-      # nothing was pushed — see the step above.
-      - name: Confirm the site serves it
-        if: needs.guard.outputs.is_prerelease == 'false'
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          for i in $(seq 1 20); do
-            live="$(curl -fsS https://devicechain.io/releases.json | jq -r '.version' 2>/dev/null || true)"
-            if [ "$live" = "$TAG" ]; then
-              echo "devicechain.io/releases.json is serving $TAG."
-              exit 0
-            fi
-            echo "attempt $i: serving '${live:-<none>}', waiting for $TAG"
-            sleep 15
-          done
-          echo "::error::devicechain.io/releases.json did not report $TAG within 5 minutes. The commit landed; check the Netlify deploy."
-          exit 1
+          hack/publish-release-manifest.sh "$TAG" releases.json
