@@ -656,6 +656,16 @@ were read from your broker and are gone, so look at the platform's message broke
 event-sources log names the source and tenant of each. A single burst, such as what was in flight
 when a stop gave up waiting, clears on its own and does not raise it.
 
+`MqttIngestShedAfterAcknowledgement` (warning) fires as soon as an MQTT source has dropped any message at its
+tenant's ingest ceiling in the last ten minutes (`devicechain_eventsources_total_msg_shed_acknowledged` rising).
+It has no waiting period, because a platform stall sheds in a burst of seconds. The broker had already acknowledged
+each of these messages to its device (PUBACK), so the device will not resend it: they are lost, not deferred.
+Either a tenant is sending above its ceiling, or the platform stalled briefly and the messages queued behind it
+arrived together. The counter carries the source, not the tenant, so compare `total_msg_rate_limited` and
+`total_msg_reading_limited` by shed class, raise the log level to `debug` to name the tenant, check the tenant's
+ceiling against what its devices send, and look in the message broker's log for an internal subscription that took
+too long. HTTP sheds are answered `429` and retried, so they are not counted here.
+
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 
 The broker gives a service a fixed window to acknowledge each message it hands out. A

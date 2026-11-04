@@ -262,6 +262,17 @@ var (
 	// inbound-events failed. That transport is at-most-once and does not retry, so each is an
 	// event lost.
 	PublishFailedCounter *prometheus.CounterVec
+
+	// ShedAcknowledgedCounter counts messages shed at the per-tenant ingest ceiling from an MQTT
+	// source, every one of which the device (or the operator's broker) had ALREADY been told
+	// arrived: a PUBACK is sent before this service reads the message, and a shed message is
+	// acknowledged and dropped. So unlike an HTTP shed, which answers 429 and is retried, each of
+	// these is a stored-nowhere message. It is in addition to the rate and reading shed counters,
+	// which also count HTTP; it exists so an alert can name exactly the sheds that lose data.
+	ShedAcknowledgedCounter *prometheus.CounterVec
+	// acknowledgedShedSources is the set of configured source ids whose transport is MQTT, built
+	// once when the metrics are initialised and read-only after.
+	acknowledgedShedSources map[string]struct{}
 )
 
 func main() {
@@ -373,6 +384,16 @@ func initializeMetrics() {
 		"Count of decoded messages from an external MQTT broker that were not stored because the publish to "+
 			"the platform's inbound-events stream failed. That source does not retry, so each one is lost",
 		[]string{"source"})
+	ShedAcknowledgedCounter = Microservice.NewCounterVec(
+		"total_msg_shed_acknowledged",
+		"Count of messages from an MQTT source shed at the per-tenant ingest ceiling after the device had "+
+			"already been acknowledged (PUBACK), by message or by the readings it carried. Each one is lost, "+
+			"not deferred; HTTP sheds are answered 429 and are not counted here",
+		[]string{"source"})
+	acknowledgedShedSources = mqttSourceIDs()
+	for source := range acknowledgedShedSources {
+		ShedAcknowledgedCounter.WithLabelValues(source) // exported at 0, so the first shed is an increase
+	}
 	initializeIntegrationMetrics()
 	seedRefusalCounters(configuredSourceIDs())
 	initializePresenceMetrics()
@@ -665,6 +686,9 @@ func buildEventSources() error {
 		ingestTenantGate(infra, safetyGates),
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
 		onTenantGone)
+	// The live/backlog routing decision the capture source makes once per message, sized to
+	// the tenant's live burst (see processor.NewMeterAt).
+	meterAt := processor.NewMeterAt(RateLimiter)
 	// The reading stage, charged after decode on every transport. One gate, built once,
 	// for the same reason as ingestGate.
 	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter, IntegrationReadingRateLimiter,
@@ -724,7 +748,7 @@ func buildEventSources() error {
 				GatewaySourceId = source.Id
 				gateway := processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
-					ingestGate, readingGate)
+					ingestGate, readingGate, meterAt)
 				// Held so createNatsComponents can hand it the capture reader and its
 				// inbound-events writer once they exist. Sources are built in the
 				// INITIALIZE phase and readers and writers are created in START, so there
@@ -737,7 +761,7 @@ func buildEventSources() error {
 				// same source as what the capture path forwards.
 				StoreSource = processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
-					ingestGate, readingGate)
+					ingestGate, readingGate, meterAt)
 				StoreSource.UseMessageStore()
 				continue
 			}
@@ -917,6 +941,7 @@ func onConnectionClosedBeforeRequest(source string) {
 
 func onRateShed(source string, tenant string) {
 	RateLimitedCounter.WithLabelValues(source, shedClassOf(tenant)).Inc()
+	countAcknowledgedShed(source)
 	// Per-tenant attribution is logged (debug) rather than carried as a metric label:
 	// this service does not verify tenant existence, so a tenant label would be an
 	// unbounded, attacker-influenceable cardinality vector (ADR-023 G.3). The metric
@@ -935,6 +960,7 @@ func onReadingShed(source, tenant string, readings int) {
 	class := shedClassOf(tenant)
 	ReadingLimitedCounter.WithLabelValues(source, class).Inc()
 	ReadingsRateLimitedCounter.WithLabelValues(source, class).Add(float64(readings))
+	countAcknowledgedShed(source)
 	if log.Debug().Enabled() {
 		log.Debug().Str("source", source).Str("tenant", tenant).Int("readings", readings).
 			Msg("Shed a decoded event exceeding the per-tenant ingest ceiling in readings")

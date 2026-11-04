@@ -649,3 +649,46 @@ tests:
       - eval_time: 40m
         alertname: IntegrationShedAccepted
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MqttIngestShedAfterAcknowledgement. Every pod exports the counter at 0 for every MQTT source
+  # from start, and an HTTP source exports none (its sheds are answered 429, not lost). A healthy
+  # source never moves it: quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_msg_shed_acknowledged{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="mqtt1"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: MqttIngestShedAfterAcknowledgement
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE FIELD CASE: a platform stall sheds a burst, once, and the counter then stays put. There
+  # is NO pending period, so a burst that lasts seconds is still seen; it holds for the ten-minute
+  # window and clears after it. The other MQTT source on the same pod is untouched and is not named.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_msg_shed_acknowledged{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="mqtt1"}'
+        values: '0x10 2000x40'
+      - series: 'devicechain_eventsources_total_msg_shed_acknowledged{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="mqtt2"}'
+        values: '0x50'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MqttIngestShedAfterAcknowledgement
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: MqttIngestShedAfterAcknowledgement
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              source: mqtt1
+            exp_annotations:
+              summary: "MQTT messages were dropped at the ingest ceiling after the device was told they arrived"
+              description: "In the last 10 minutes, 2000 messages from MQTT source mqtt1 were dropped at their tenant's ingest ceiling. The broker had already acknowledged each one to its device (PUBACK), so the device will not resend it: these messages are lost, not deferred. Either a tenant is sending above its ceiling, or the platform stalled briefly and the messages queued behind it arrived together; the shed counters carry the shed class but not the tenant, so raise event-sources to debug logging to name the tenant. Compare devicechain_eventsources_total_msg_rate_limited and total_msg_reading_limited, check whether the tenant's ceiling (ingestReadingsPerSecond, ingestBurst) matches what its devices send, and look at the platform's message broker for a stall (a log line saying an internal subscription took too long) at the same time."
+      - eval_time: 40m
+        alertname: MqttIngestShedAfterAcknowledgement
+        exp_alerts: []

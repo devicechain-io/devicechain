@@ -155,7 +155,7 @@ func startCaptureSourceWith(t *testing.T, id string, reader messaging.MessageRea
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		failed,
-		nil, admitAllReadings)
+		nil, admitAllReadings, nil)
 
 	ctx := context.Background()
 	require.NoError(t, src.Initialize(ctx))

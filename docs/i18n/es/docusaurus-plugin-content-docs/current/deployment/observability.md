@@ -679,6 +679,17 @@ la plataforma, no el tuyo; el registro de event-sources indica la fuente y el te
 ráfaga aislada, como lo que estaba en vuelo cuando una parada dejó de esperar, se despeja sola y no
 la dispara.
 
+`MqttIngestShedAfterAcknowledgement` (aviso) salta en cuanto una fuente MQTT ha descartado algún mensaje en
+el techo de ingesta de su tenant durante los últimos diez minutos (`devicechain_eventsources_total_msg_shed_acknowledged`
+en aumento). No tiene periodo de espera, porque una parada de la plataforma descarta en una ráfaga de
+segundos. El bróker ya había confirmado cada uno de esos mensajes a su dispositivo (PUBACK), así que el
+dispositivo no lo reenviará: se han perdido, no aplazado. O bien un tenant envía por encima de su techo, o
+bien la plataforma se detuvo un instante y los mensajes acumulados llegaron juntos. El contador lleva la
+fuente, no el tenant: compara `total_msg_rate_limited` y `total_msg_reading_limited` por clase de descarte,
+sube el nivel de registro a `debug` para ver el tenant, contrasta su techo con lo que envían sus
+dispositivos y busca en el registro del bróker de mensajería una suscripción interna que tardó demasiado.
+Los descartes por HTTP se responden con `429` y se reintentan, así que no se cuentan aquí.
+
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 
 El broker da a un servicio una ventana fija para confirmar cada mensaje que le entrega. Un

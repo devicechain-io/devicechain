@@ -3,7 +3,10 @@
 
 package main
 
-import "github.com/devicechain-io/dc-microservice/governance"
+import (
+	"github.com/devicechain-io/dc-event-sources/processor"
+	"github.com/devicechain-io/dc-microservice/governance"
+)
 
 // seedRefusalCounters exports every refusal counter of every configured source at zero
 // from the start of the process.
@@ -45,4 +48,28 @@ func configuredSourceIDs() []string {
 		ids = append(ids, s.Id)
 	}
 	return ids
+}
+
+// mqttSourceIDs is the set of configured source ids whose transport is MQTT: the sources whose
+// shed messages were acknowledged to the device before they were read.
+func mqttSourceIDs() map[string]struct{} {
+	ids := map[string]struct{}{}
+	if Configuration == nil {
+		return ids
+	}
+	for _, s := range Configuration.EventSources {
+		if s.Type == processor.TYPE_MQTT {
+			ids[s.Id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+// countAcknowledgedShed counts one message shed at the ingest ceiling when its source is MQTT,
+// whose devices were told it arrived. Called from both shed hooks, so a message is counted once
+// whichever stage (message or readings) refused it.
+func countAcknowledgedShed(source string) {
+	if _, ok := acknowledgedShedSources[source]; ok {
+		ShedAcknowledgedCounter.WithLabelValues(source).Inc()
+	}
 }

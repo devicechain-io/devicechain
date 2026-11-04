@@ -296,7 +296,7 @@ func TestHTTPReadingFloodDoesNotShedCapturedReadings(t *testing.T) {
 	require.True(t, readingGate("http1", "acme", time.Time{}, false, processor.OriginUntrusted, 256))
 	require.False(t, readingGate("http1", "acme", time.Time{}, false, processor.OriginUntrusted, 256),
 		"the HTTP reading allowance is spent")
-	assert.True(t, readingGate("gw", "acme", time.Now(), false, processor.OriginAuthenticated, 256),
+	assert.True(t, readingGate("gw", "acme", time.Time{}, false, processor.OriginAuthenticated, 256),
 		"captured readings are charged in an allowance HTTP did not touch")
 	assert.True(t, readingGate("gw", "acme", time.Now().Add(-time.Hour), false, processor.OriginAuthenticated, 256),
 		"and so are backlog readings")

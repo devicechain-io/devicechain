@@ -191,7 +191,7 @@ func newCaptureHarnessWith(t *testing.T, configure func(*GatewayJetStreamSource)
 				return true
 			}
 			return h.allowResult
-		}, h.readingGate)
+		}, h.readingGate, harnessMeter())
 
 	// Start only the publish pipeline, through the code ExecuteStart runs; the read loop
 	// is bypassed so tests drive handle directly with the exact message they mean to
@@ -700,7 +700,7 @@ func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },
-		nil, admitAllReadings)
+		nil, admitAllReadings, nil)
 	// The writer IS wired, so the refusal this reaches is the reader's, whichever order
 	// the two checks run in.
 	source.SetWriter(harnessWriter{&captureHarness{}})

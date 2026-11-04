@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -152,6 +153,9 @@ type GatewayJetStreamSource struct {
 	// readings charges a decoded message's readings against its tenant's ingest ceiling
 	// (see ReadingGate). Never nil (the constructor refuses one).
 	readings ReadingGate
+	// meter decides, once per message, whether it is metered as live or as backlog (MeterAt).
+	// Required whenever allow is set.
+	meter MeterAt
 
 	// fromStore makes this the source over the MQTT gateway's message store rather than the
 	// capture stream; see UseMessageStore.
@@ -174,9 +178,14 @@ func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder
 	received func(string, []byte),
 	build InboundMessageFunc,
 	failed func(string, string, []byte, error) error,
-	allow RateGate, readings ReadingGate) *GatewayJetStreamSource {
+	allow RateGate, readings ReadingGate, meter MeterAt) *GatewayJetStreamSource {
 	if readings == nil {
 		panic("processor.NewGatewayJetStreamSource: a reading gate is required")
+	}
+	if allow != nil && meter == nil {
+		// Without it the source cannot say which limiter a message belongs to, and guessing
+		// "live" for everything is the dead zone this decision exists to close.
+		panic("processor.NewGatewayJetStreamSource: a MeterAt is required alongside the ingest gate")
 	}
 	es := &GatewayJetStreamSource{
 		Id:        id,
@@ -186,6 +195,7 @@ func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder
 		failed:    failed,
 		allow:     allow,
 		readings:  readings,
+		meter:     meter,
 		readPacer: core.NewReadPacer(ms, "gateway capture"),
 	}
 	es.lifecycle = core.NewLifecycleManager("gateway-jetstream-event-source", es, core.NewNoOpLifecycleCallbacks())
@@ -547,7 +557,10 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// (meterAt, decided once here so both stages route the message to the same limiter)
 	// and with the same redelivery exemption. A message over its tenant's reading ceiling
 	// is ack-dropped there, as a message over the message ceiling is here.
-	meterAt := meterTime(msg.AppendTime)
+	var meterAt time.Time
+	if es.meter != nil {
+		meterAt = es.meter(tenant, msg.AppendTime)
+	}
 	redelivery := msg.NumDelivered > 1
 	if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
 		ackDrop(msg, "refused at the tenant ingest gate")

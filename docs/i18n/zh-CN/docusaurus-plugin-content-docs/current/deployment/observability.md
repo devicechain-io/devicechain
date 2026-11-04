@@ -331,6 +331,8 @@ kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests
 
 来源因发布失败持续丢失事件（`devicechain_eventsources_total_msg_publish_failed` 上升）十分钟时，`ExternalMqttSourceLosingEvents`（warning）触发。这些事件已从你的代理读取，已经丢失，应检查平台的消息代理，而不是你的代理；event-sources 日志注明每条的来源和租户。单次突发（例如停止时放弃等待而仍在途的事件）会自行消退，不会触发。
 
+最近十分钟内，MQTT 来源只要在租户的摄取上限处丢弃了任何消息（`devicechain_eventsources_total_msg_shed_acknowledged` 上升），`MqttIngestShedAfterAcknowledgement`（warning）立即触发。它没有等待期，因为平台停顿造成的丢弃只持续数秒。这些消息在丢弃之前，代理已向设备确认（PUBACK），设备不会重发：它们是丢失，而不是延后。原因要么是租户发送量超过其上限，要么是平台短暂停顿后积压的消息一起到达。该计数器带有来源而非租户：请按丢弃等级对比 `total_msg_rate_limited` 和 `total_msg_reading_limited`，把日志级别调到 `debug` 以查看租户，核对其上限与设备实际发送量，并在消息代理日志中查找耗时过长的内部订阅。HTTP 的丢弃会以 `429` 应答并被重试，因此不计入此处。
+
 ## 超过确认窗口的消息 {#held-past-ack-wait}
 
 代理为每条交付消息提供固定确认窗口。窗口关闭仍未确认，会重新交付，服务按新消息处理。告警通知和对外连接器的工作是向平台外慢速发送，因此可能重复通知或调用 webhook。两者仅在有空闲 worker 时读取相应数量消息，避免排队消耗窗口；每次发送也会在窗口结束前留有余量地截止。下列告警报告仍超时的情况。

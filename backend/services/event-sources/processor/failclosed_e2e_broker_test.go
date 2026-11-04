@@ -91,7 +91,7 @@ func e2eSource(t *testing.T, id string) *GatewayJetStreamSource {
 		func(_ string, _ string, _ []byte, err error) error {
 			t.Errorf("unexpected failed-decode: %v", err)
 			return nil
-		}, nil, admitAllReadings)
+		}, nil, admitAllReadings, nil)
 }
 
 // startE2EPod starts a pod: its broker manager (which declares the store with the setting
