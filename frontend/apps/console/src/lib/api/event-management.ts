@@ -6,6 +6,7 @@ import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-management';
 import type {
   EventsQuery,
+  StateChangeEventsQuery,
   CalculatedEventsQuery,
   CalculatedEventsQueryVariables,
   CalculatedMetricBackfillsQuery,
@@ -15,6 +16,7 @@ import type {
 // Public type derived from the generated operation result so it always reflects
 // the actual selection set and can never drift from the schema.
 export type DeviceEvent = EventsQuery['events']['results'][number];
+export type PresenceTransition = StateChangeEventsQuery['stateChangeEvents']['results'][number];
 
 const EVENTS = graphql(`
   query Events($criteria: EventSearchCriteria!) {
@@ -47,6 +49,41 @@ export async function listEvents(opts: {
       },
     })
   ).events;
+}
+
+const STATE_CHANGE_EVENTS = graphql(`
+  query StateChangeEvents($criteria: EventSearchCriteria!) {
+    stateChangeEvents(criteria: $criteria) {
+      results {
+        deviceToken
+        occurredTime
+        state
+        reason
+        sessionId
+      }
+      pagination {
+        totalRecords
+      }
+    }
+  }
+`);
+
+// listPresenceTransitions returns a device's presence history (connected, disconnected,
+// released to inferred presence), newest first. Requires event:read.
+export async function listPresenceTransitions(opts: {
+  deviceToken: string;
+  pageNumber: number;
+  pageSize: number;
+}): Promise<StateChangeEventsQuery['stateChangeEvents']> {
+  return (
+    await gql('event-management', STATE_CHANGE_EVENTS, {
+      criteria: {
+        pageNumber: opts.pageNumber,
+        pageSize: opts.pageSize,
+        deviceToken: opts.deviceToken,
+      },
+    })
+  ).stateChangeEvents;
 }
 
 // ── Draft-formula history preview ─────────────────────────────────────────

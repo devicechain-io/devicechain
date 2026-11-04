@@ -248,6 +248,28 @@ func (r *SchemaResolver) BucketedMeasurements(ctx context.Context, args struct {
 	}), nil
 }
 
+// List state change (presence transition) events that match the given criteria. Gated on
+// EventRead like the other event reads; a scoped caller sees only the transitions recorded
+// while the device belonged to one of their customers (StateChangeEvent.ScopedBy).
+func (r *SchemaResolver) StateChangeEvents(ctx context.Context, args struct {
+	Criteria EventSearchCriteriaInput
+}) (*StateChangeEventSearchResultsResolver, error) {
+	if _, err := auth.AuthorizeScoped(ctx, auth.EventRead); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	criteria, err := toEventSearchCriteria(args.Criteria)
+	if err != nil {
+		return nil, err
+	}
+	found, err := api.StateChangeEvents(ctx, criteria)
+	if err != nil {
+		return nil, err
+	}
+	return &StateChangeEventSearchResultsResolver{M: *found, S: r, C: ctx}, nil
+}
+
 // List alert events that match the given criteria.
 func (r *SchemaResolver) AlertEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput

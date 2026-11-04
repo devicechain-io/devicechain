@@ -52,9 +52,9 @@ const upsertChunk = 500
 var deviceStateKey = []string{"tenant_id", "device_token"}
 
 // notFolded is what foldedStateColumns has and the fold never reads or writes: the row's
-// soft-delete marker and its per-device inactivity override (neither is touched by
-// applyEvent or newDeviceState), and updated_at, which a write stamps rather than folds.
-var notFolded = map[string]bool{"deleted_at": true, "inactivity_timeout": true, "updated_at": true}
+// soft-delete marker (not touched by applyEvent or newDeviceState), and updated_at, which a
+// write stamps rather than folds.
+var notFolded = map[string]bool{"deleted_at": true, "updated_at": true}
 
 // foldedStateColumns is every column of device_states a batch may write over a row it has
 // folded: all of them but the row's identity — its primary key, created_at, and
@@ -89,8 +89,8 @@ func foldedStateColumns(db *gorm.DB) ([]string, error) {
 // less notFolded. It is the ONE list a batch uses for both halves of a locked merge — the
 // lock read selects exactly these (plus the row's id and token), and the write-back overwrites
 // exactly these (plus updated_at) — so a column applyEvent learns to touch is read AND written
-// or neither, and a column the fold does not touch (inactivity_timeout, which an operator may
-// set between the read and the write) is never overwritten with a value the read did not carry.
+// or neither, and a column the fold does not touch is never overwritten with a value the read
+// did not carry.
 // notFolded is an opt-out list: a new column is folded until someone says otherwise.
 func foldColumns(db *gorm.DB) ([]string, error) {
 	all, err := foldedStateColumns(db)

@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	// DefaultInactivityTimeout is the per-device inactivity window in seconds
-	// before a device is marked inactive.
-	DefaultInactivityTimeout = 600
+	// InactivityTimeout is the inactivity window in seconds before an INFERRED device is
+	// marked inactive. It is one platform-wide value: there is no per-device override.
+	InactivityTimeout = 600
 	// InactivityRecheckInterval is how often the background monitor re-evaluates
 	// device activity.
 	InactivityRecheckInterval = 60 // seconds

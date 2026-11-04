@@ -77,9 +77,6 @@ func TestADemotionCarriesNoConnectivityEdge(t *testing.T) {
 	if after.LastActivityTime != before.LastActivityTime {
 		t.Fatalf("demotion moved LastActivityTime %v -> %v", before.LastActivityTime, after.LastActivityTime)
 	}
-	if after.InactivityAlarmTime != before.InactivityAlarmTime {
-		t.Fatalf("demotion moved InactivityAlarmTime %v -> %v", before.InactivityAlarmTime, after.InactivityAlarmTime)
-	}
 }
 
 // TestADemotionReturnsAStaleOnlineRowToTheSweep covers the MAJORITY frozen direction.
@@ -162,9 +159,6 @@ func TestADemotionReturnsAWedgedOfflineRowToTheHeartbeat(t *testing.T) {
 	}
 	if !ds.Active {
 		t.Fatalf("a demoted row was not repaired by its next data event: %+v", ds)
-	}
-	if ds.InactivityAlarmTime.Valid {
-		t.Fatalf("repair did not clear the inactivity alarm: %+v", ds)
 	}
 }
 
@@ -273,7 +267,7 @@ func TestAStaleDataEventDoesNotResurrectASweptDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fresh merge: %v", err)
 	}
-	if !fresh.Active || fresh.InactivityAlarmTime.Valid {
+	if !fresh.Active {
 		t.Fatalf("a fresh event failed to resurrect a swept device: %+v", fresh)
 	}
 }
@@ -425,9 +419,6 @@ func TestAFrozenClockDeviceIsNotPermanentlyOffline(t *testing.T) {
 	}
 	if !ds.Active {
 		t.Fatalf("a device that is still sending data reads permanently inactive: %+v", ds)
-	}
-	if ds.InactivityAlarmTime.Valid {
-		t.Fatalf("the inactivity alarm was not cleared on resurrect: %+v", ds)
 	}
 }
 

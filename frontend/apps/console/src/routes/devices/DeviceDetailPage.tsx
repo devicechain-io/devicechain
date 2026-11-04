@@ -31,7 +31,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority, isScoped } from '@devicechain/client';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState, getLatestMeasurements, getDroppedMeasurements } from '@/lib/api/device-state';
-import { listEvents } from '@/lib/api/event-management';
+import { listEvents, listPresenceTransitions } from '@/lib/api/event-management';
 import { formatTime } from '@/lib/utils';
 import { presenceKind, presenceSourceLabelKey } from '@/lib/presence';
 import { errMessage, useReload } from '@/routes/common';
@@ -246,6 +246,9 @@ export default function DeviceDetailPage() {
             <SectionPanel title={t('tabConnectivity')}>
               <DeviceStatePanel deviceToken={device.token} />
             </SectionPanel>
+            <SectionPanel title={t('presenceTimelineTitle')}>
+              <PresenceTimelinePanel deviceToken={device.token} />
+            </SectionPanel>
             <SectionPanel title={t('latestReadingsTitle')}>
               <DeviceReadingsPanel deviceToken={device.token} />
             </SectionPanel>
@@ -369,9 +372,8 @@ function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
         here is how the two come to disagree.
 
         🔴 It also does not name a timeout. The inferred window is a platform-wide ten
-        minutes and is documented as not adjustable; rendering the row's own
-        inactivityTimeout beside this text would imply a per-device override the
-        product does not offer.
+        minutes and is documented as not adjustable; naming one here would imply a
+        per-device override the product does not offer.
       */}
       {kind === 'quiet' && (
         <div className="space-y-1 rounded-md border border-warning/40 bg-warning/5 p-3">
@@ -389,6 +391,19 @@ function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
           up as "Inferred" would hide the disagreement worth seeing.
         */}
         <dd className="text-foreground">{sourceKey ? t(sourceKey) : state.presenceSource}</dd>
+        {/*
+          The last-applied presence transition's stamp. Null until any source has spoken
+          for this device; a demoted (INFERRED) row still carries the stamp of the release.
+          Session 0 means the transport reported none, which is not worth a row.
+        */}
+        <dt className="text-muted-foreground">{t('presenceTimeLabel')}</dt>
+        <dd className="text-foreground" data-shot-mask>{formatTime(state.presenceTime)}</dd>
+        {state.sessionId !== '0' && (
+          <>
+            <dt className="text-muted-foreground">{t('presenceSessionLabel')}</dt>
+            <dd className="text-foreground" data-shot-mask>{state.sessionId}</dd>
+          </>
+        )}
         <dt className="text-muted-foreground">{t('lastConnectLabel')}</dt>
         <dd className="text-foreground" data-shot-mask>{formatTime(state.lastConnectTime)}</dd>
         <dt className="text-muted-foreground">{t('lastActivityLabel')}</dt>
@@ -396,6 +411,69 @@ function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
         <dt className="text-muted-foreground">{t('lastDisconnectLabel')}</dt>
         <dd className="text-foreground" data-shot-mask>{formatTime(state.lastDisconnectTime)}</dd>
       </dl>
+    </div>
+  );
+}
+
+// PresenceTimelinePanel lists the device's recent presence transitions, newest first: the
+// history behind the live card above it. Loads independently: a role without event:read gets
+// an ErrorState here rather than a broken page.
+//
+// 🔴 A transition is worded as the transport reported it. DEMOTED is not a connectivity edge
+// (the device was released back to inferred presence), so it is never rendered as a
+// disconnect, and an unrecognised state is shown verbatim rather than guessed at.
+const PRESENCE_TRANSITION_KEYS: Record<string, string> = {
+  CONNECTED: 'presenceTransition_CONNECTED',
+  DISCONNECTED: 'presenceTransition_DISCONNECTED',
+  DEMOTED: 'presenceTransition_DEMOTED',
+};
+const PRESENCE_TIMELINE_PAGE = 10;
+
+function PresenceTimelinePanel({ deviceToken }: { deviceToken: string }) {
+  const { t } = useTranslation('devices');
+  const { data, loading, error } = useQuery(
+    () => listPresenceTransitions({ deviceToken, pageNumber: 1, pageSize: PRESENCE_TIMELINE_PAGE }),
+    [deviceToken],
+  );
+
+  if (loading) return <LoadingState description={t('loadingPresenceTimeline')} />;
+  if (error) return <ErrorState description={error} />;
+
+  const results = data?.results ?? [];
+  if (results.length === 0) {
+    return <EmptyState description={t('noPresenceTransitions')} />;
+  }
+
+  return (
+    <div className="space-y-3" data-testid="presence-timeline">
+      <DataTable>
+        <DataTableHead>
+          <DataTableHeaderCell>{t('occurredColumn')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('presenceTransitionColumn')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('presenceReasonColumn')}</DataTableHeaderCell>
+          <DataTableHeaderCell>{t('presenceSessionColumn')}</DataTableHeaderCell>
+        </DataTableHead>
+        <DataTableBody>
+          {results.map((row, i) => {
+            const key = PRESENCE_TRANSITION_KEYS[row.state];
+            return (
+              <DataTableRow key={`${row.occurredTime}-${row.state}-${row.sessionId}-${i}`}>
+                <DataTableCell className="text-muted-foreground" data-shot-mask>
+                  {formatTime(row.occurredTime)}
+                </DataTableCell>
+                <DataTableCell className="text-foreground">{key ? t(key) : row.state}</DataTableCell>
+                <DataTableCell className="text-muted-foreground">{row.reason ?? ''}</DataTableCell>
+                <DataTableCell className="text-muted-foreground" data-shot-mask>
+                  {row.sessionId === '0' ? '' : row.sessionId}
+                </DataTableCell>
+              </DataTableRow>
+            );
+          })}
+        </DataTableBody>
+      </DataTable>
+      {(data?.pagination.totalRecords ?? 0) > PRESENCE_TIMELINE_PAGE && (
+        <p className="text-xs text-muted-foreground">{t('showingRecentTransitions')}</p>
+      )}
     </div>
   );
 }

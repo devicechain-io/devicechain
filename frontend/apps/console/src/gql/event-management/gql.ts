@@ -16,6 +16,7 @@ import * as types from './graphql';
  */
 type Documents = {
     "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.EventsDocument,
+    "\n  query StateChangeEvents($criteria: EventSearchCriteria!) {\n    stateChangeEvents(criteria: $criteria) {\n      results {\n        deviceToken\n        occurredTime\n        state\n        reason\n        sessionId\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.StateChangeEventsDocument,
     "\n  query CalculatedEvents(\n    $deviceToken: String!\n    $expression: String!\n    $dataType: String!\n    $inputs: [CalculatedInput!]!\n    $minValue: Float\n    $maxValue: Float\n    $constants: [CalculatedConstant!]\n    $from: String!\n    $to: String!\n  ) {\n    calculatedEvents(\n      deviceToken: $deviceToken\n      expression: $expression\n      dataType: $dataType\n      inputs: $inputs\n      minValue: $minValue\n      maxValue: $maxValue\n      constants: $constants\n      from: $from\n      to: $to\n    ) {\n      samples {\n        occurredTime\n        eventId\n        inputs {\n          key\n          value\n        }\n        value\n        skippedReason\n      }\n      computed\n      skipped {\n        reason\n        count\n      }\n      inputDecimalPlaces\n    }\n  }\n": typeof types.CalculatedEventsDocument,
     "\n  mutation StartCalculatedMetricBackfill($input: CalculatedMetricBackfillInput!) {\n    startCalculatedMetricBackfill(input: $input) {\n      token\n      status\n    }\n  }\n": typeof types.StartCalculatedMetricBackfillDocument,
     "\n  query CalculatedMetricBackfillAvailability {\n    calculatedMetricBackfillAvailability {\n      available\n      reason\n    }\n  }\n": typeof types.CalculatedMetricBackfillAvailabilityDocument,
@@ -28,6 +29,7 @@ type Documents = {
 };
 const documents: Documents = {
     "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EventsDocument,
+    "\n  query StateChangeEvents($criteria: EventSearchCriteria!) {\n    stateChangeEvents(criteria: $criteria) {\n      results {\n        deviceToken\n        occurredTime\n        state\n        reason\n        sessionId\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.StateChangeEventsDocument,
     "\n  query CalculatedEvents(\n    $deviceToken: String!\n    $expression: String!\n    $dataType: String!\n    $inputs: [CalculatedInput!]!\n    $minValue: Float\n    $maxValue: Float\n    $constants: [CalculatedConstant!]\n    $from: String!\n    $to: String!\n  ) {\n    calculatedEvents(\n      deviceToken: $deviceToken\n      expression: $expression\n      dataType: $dataType\n      inputs: $inputs\n      minValue: $minValue\n      maxValue: $maxValue\n      constants: $constants\n      from: $from\n      to: $to\n    ) {\n      samples {\n        occurredTime\n        eventId\n        inputs {\n          key\n          value\n        }\n        value\n        skippedReason\n      }\n      computed\n      skipped {\n        reason\n        count\n      }\n      inputDecimalPlaces\n    }\n  }\n": types.CalculatedEventsDocument,
     "\n  mutation StartCalculatedMetricBackfill($input: CalculatedMetricBackfillInput!) {\n    startCalculatedMetricBackfill(input: $input) {\n      token\n      status\n    }\n  }\n": types.StartCalculatedMetricBackfillDocument,
     "\n  query CalculatedMetricBackfillAvailability {\n    calculatedMetricBackfillAvailability {\n      available\n      reason\n    }\n  }\n": types.CalculatedMetricBackfillAvailabilityDocument,
@@ -43,6 +45,10 @@ const documents: Documents = {
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').EventsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query StateChangeEvents($criteria: EventSearchCriteria!) {\n    stateChangeEvents(criteria: $criteria) {\n      results {\n        deviceToken\n        occurredTime\n        state\n        reason\n        sessionId\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').StateChangeEventsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

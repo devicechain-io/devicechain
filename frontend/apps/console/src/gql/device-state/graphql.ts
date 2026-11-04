@@ -25,7 +25,7 @@ export type DeviceStatesByDeviceTokenQueryVariables = Exact<{
 }>;
 
 
-export type DeviceStatesByDeviceTokenQuery = { deviceStatesByDeviceToken: Array<{ id: string, deviceToken: string, active: boolean, lastConnectTime: string | null, lastDisconnectTime: string | null, lastActivityTime: string | null, inactivityTimeout: number, presenceSource: string }> };
+export type DeviceStatesByDeviceTokenQuery = { deviceStatesByDeviceToken: Array<{ id: string, deviceToken: string, active: boolean, lastConnectTime: string | null, lastDisconnectTime: string | null, lastActivityTime: string | null, presenceSource: string, presenceTime: string | null, sessionId: string }> };
 
 export type LatestMeasurementsQueryVariables = Exact<{
   deviceToken: string;
@@ -76,8 +76,9 @@ export const DeviceStatesByDeviceTokenDocument = new TypedDocumentString(`
     lastConnectTime
     lastDisconnectTime
     lastActivityTime
-    inactivityTimeout
     presenceSource
+    presenceTime
+    sessionId
   }
 }
     `) as unknown as TypedDocumentString<DeviceStatesByDeviceTokenQuery, DeviceStatesByDeviceTokenQueryVariables>;

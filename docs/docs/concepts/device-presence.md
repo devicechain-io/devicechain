@@ -12,7 +12,7 @@ How DeviceChain decides a device is online depends on the transport, so that is 
 
 Every device carries a **presence source** that says how its online/offline state is determined.
 
-**Inferred** is the default. The transport gives DeviceChain no explicit connect or disconnect signal, so presence is inferred from activity. A device counts as online while it is sending data. If it goes quiet for longer than its **inactivity timeout**, a background sweep marks it offline. This is the right model for connectionless transports such as plain HTTP and CoAP.
+**Inferred** is the default. The transport gives DeviceChain no explicit connect or disconnect signal, so presence is inferred from activity. A device counts as online while it is sending data. If it goes quiet for longer than the **inactivity timeout**, a background sweep marks it offline. The timeout is ten minutes and is one value for the whole platform; it is not configurable per device. The sweep runs every 60 seconds, so a device is marked offline between 10 and 11 minutes after it goes quiet. This is the right model for connectionless transports such as plain HTTP and CoAP.
 
 **Asserted** means the transport tells DeviceChain explicitly when a device connects and disconnects, so presence is authoritative rather than guessed. The first time such a signal arrives for a device, DeviceChain switches that device to the asserted source. From then on:
 
@@ -73,9 +73,9 @@ The comparison declines to mark anything offline unless it can account for **eve
 
 The presence source is shown wherever it changes what a reading means:
 
-- **Console.** The Connectivity tab names the source, *Reported by the transport* or *Inferred from activity*. It also distinguishes a device the transport reported **Disconnected** from one that is merely **Offline**. Offline means nothing has arrived recently, which is also exactly what a healthy device on a slow reporting interval looks like.
+- **Console.** The Connectivity tab names the source, *Reported by the transport* or *Inferred from activity*, and shows when the transport last reported on the device and, when it gave one, the transport session. It also distinguishes a device the transport reported **Disconnected** from one that is merely **Offline**. Offline means nothing has arrived recently, which is also exactly what a healthy device on a slow reporting interval looks like. Below the card, the **Presence timeline** lists the device's most recent transitions, newest first: connected, disconnected, or released back to inferred presence. A device whose presence is only inferred has no timeline, because nothing reported a transition.
 - **[MCP](./mcp.md).** The `get_device_state` tool returns `presenceSource` alongside the state, and tells the assistant not to report an inferred inactive device as down.
-- **API.** `presenceSource` is a field on `device-state`'s `DeviceState` type, returning `ASSERTED` or `INFERRED`.
+- **API.** `presenceSource` is a field on `device-state`'s `DeviceState` type, returning `ASSERTED` or `INFERRED`; `presenceTime` and `sessionId` on the same type give the stamp of the last transition. `inactivityAlarmTime` on the same type is deprecated: it returns `lastDisconnectTime` while an inferred device is inactive and null otherwise, so use `lastDisconnectTime`. The history behind it is the `stateChangeEvents` query on the event store: it takes the same criteria as the other event reads (a device token, a time range and a page), returns each transition's `state` (`CONNECTED`, `DISCONNECTED` or `DEMOTED`), and requires `event:read`. A member whose access is limited to some customers sees only transitions recorded while the device belonged to one of them.
 
 ## Why the distinction matters {#why-the-distinction-matters}
 

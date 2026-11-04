@@ -52,6 +52,12 @@ type AlertEventSearchResults struct {
 	Pagination rdb.SearchResultsPagination
 }
 
+// Search results returned from a state change (presence transition) query.
+type StateChangeEventSearchResults struct {
+	Results    []StateChangeEvent
+	Pagination rdb.SearchResultsPagination
+}
+
 // IsAnchorType reports whether t is a recognized entity (anchor) type. The read
 // path drops an unrecognized anchor (no filter), so callers must reject an
 // unknown type up front rather than silently returning unfiltered results.

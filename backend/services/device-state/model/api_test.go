@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -35,9 +34,6 @@ func TestIsInactive(t *testing.T) {
 		{"old activity beyond timeout", valid(-20 * time.Minute), 600, true},
 		{"exactly at boundary is not inactive", valid(-600 * time.Second), 600, false},
 		{"one second past boundary is inactive", valid(-601 * time.Second), 600, true},
-		{"zero timeout falls back to default (within)", valid(-5 * time.Minute), 0, false},
-		{"zero timeout falls back to default (beyond)", valid(-20 * time.Minute), 0, true},
-		{"negative timeout falls back to default (beyond)", valid(-20 * time.Minute), -5, true},
 	}
 
 	for _, tc := range cases {
@@ -82,9 +78,6 @@ func TestMergeAndSweep(t *testing.T) {
 	if !ds.Active || !ds.LastActivityTime.Valid || !ds.LastConnectTime.Valid {
 		t.Fatalf("new state not active/connected: %+v", ds)
 	}
-	if ds.InactivityTimeout != config.DefaultInactivityTimeout {
-		t.Fatalf("expected default timeout %d, got %d", config.DefaultInactivityTimeout, ds.InactivityTimeout)
-	}
 
 	// A later event advances last-activity time but does not re-connect.
 	ds, err = api.MergeDeviceState(ctx, "device-100", base.Add(1*time.Minute), nil, DeviceIdentity{})
@@ -121,17 +114,17 @@ func TestMergeAndSweep(t *testing.T) {
 	if states[0].Active {
 		t.Fatalf("device should be inactive after sweep")
 	}
-	if !states[0].InactivityAlarmTime.Valid || !states[0].LastDisconnectTime.Valid {
-		t.Fatalf("inactive device missing alarm/disconnect times: %+v", states[0])
+	if !states[0].LastDisconnectTime.Valid {
+		t.Fatalf("inactive device missing disconnect time: %+v", states[0])
 	}
 
-	// A new event reconnects the device and clears the inactivity alarm.
+	// A new event reconnects the device.
 	ds, err = api.MergeDeviceState(ctx, "device-100", now.Add(1*time.Minute), nil, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("reconnect merge failed: %v", err)
 	}
-	if !ds.Active || ds.InactivityAlarmTime.Valid {
-		t.Fatalf("reconnect did not reactivate/clear alarm: %+v", ds)
+	if !ds.Active {
+		t.Fatalf("reconnect did not reactivate: %+v", ds)
 	}
 	if !ds.LastConnectTime.Time.Equal(now.Add(1 * time.Minute)) {
 		t.Fatalf("reconnect did not update connect time: %v", ds.LastConnectTime.Time)

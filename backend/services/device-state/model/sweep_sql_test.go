@@ -9,15 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
-// sweepCase is one (age, timeout) pair fed through BOTH implementations of the
-// inactivity rule.
+// sweepCase is one age fed through BOTH implementations of the inactivity rule.
 type sweepCase struct {
-	name    string
-	age     time.Duration // how long ago this device was last heard from, at `now`
-	timeout int           // the row's inactivity_timeout column, verbatim
+	name string
+	age  time.Duration // how long ago this device was last heard from, at `now`
 }
 
 // TestSweepAgreesWithIsInactive is the instrument that makes it safe for the rule to
@@ -31,18 +30,13 @@ type sweepCase struct {
 // WRONG at exactly the timeout, because the float product lands a hair above the
 // integer and flips a device one tick early. This table is what catches it.
 func TestSweepAgreesWithIsInactive(t *testing.T) {
+	timeout := config.InactivityTimeout
 	cases := []sweepCase{
-		{"one second past the timeout", 601 * time.Second, 600},
-		{"exactly at the timeout is NOT inactive", 600 * time.Second, 600},
-		{"one second short of the timeout", 599 * time.Second, 600},
-		{"zero timeout falls back to the default, past it", 601 * time.Second, 0},
-		{"zero timeout falls back to the default, short of it", 599 * time.Second, 0},
-		{"negative timeout falls back to the default, past it", 601 * time.Second, -5},
-		{"negative timeout falls back to the default, short of it", 599 * time.Second, -5},
-		{"custom short timeout, past it", 61 * time.Second, 60},
-		{"custom short timeout, exactly at it", 60 * time.Second, 60},
-		{"custom long timeout, well short of it", 601 * time.Second, 3600},
-		{"long silence under a long timeout", 4 * time.Hour, 3600},
+		{"one second past the timeout", time.Duration(timeout+1) * time.Second},
+		{"exactly at the timeout is NOT inactive", time.Duration(timeout) * time.Second},
+		{"one second short of the timeout", time.Duration(timeout-1) * time.Second},
+		{"long silence", 4 * time.Hour},
+		{"just heard from", time.Second},
 	}
 
 	api := newTestApi(t)
@@ -57,12 +51,7 @@ func TestSweepAgreesWithIsInactive(t *testing.T) {
 		if _, err := api.MergeDeviceState(ctx, token, now.Add(-tc.age), nil, DeviceIdentity{}); err != nil {
 			t.Fatalf("%s: seed failed: %v", tc.name, err)
 		}
-		if err := api.RDB.DB(ctx).Model(&DeviceState{}).
-			Where("device_token = ?", token).
-			Update("inactivity_timeout", tc.timeout).Error; err != nil {
-			t.Fatalf("%s: setting timeout failed: %v", tc.name, err)
-		}
-		if isInactive(sql.NullTime{Time: now.Add(-tc.age), Valid: true}, tc.timeout, now) {
+		if isInactive(sql.NullTime{Time: now.Add(-tc.age), Valid: true}, timeout, now) {
 			wantFlipped++
 		}
 	}
@@ -79,11 +68,11 @@ func TestSweepAgreesWithIsInactive(t *testing.T) {
 			t.Fatalf("%s: lookup failed: %v (n=%d)", tc.name, err, len(states))
 		}
 		last := sql.NullTime{Time: now.Add(-tc.age), Valid: true}
-		wantInactive := isInactive(last, tc.timeout, now)
+		wantInactive := isInactive(last, timeout, now)
 		gotInactive := !states[0].Active
 		if gotInactive != wantInactive {
 			t.Errorf("%s: SQL says inactive=%v, isInactive says %v (age=%s timeout=%d)",
-				tc.name, gotInactive, wantInactive, tc.age, tc.timeout)
+				tc.name, gotInactive, wantInactive, tc.age, timeout)
 		}
 	}
 

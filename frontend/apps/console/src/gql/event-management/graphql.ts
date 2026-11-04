@@ -211,6 +211,13 @@ export type EventsQueryVariables = Exact<{
 
 export type EventsQuery = { events: { results: Array<{ id: string, deviceToken: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { totalRecords: number | null } } };
 
+export type StateChangeEventsQueryVariables = Exact<{
+  criteria: EventSearchCriteria;
+}>;
+
+
+export type StateChangeEventsQuery = { stateChangeEvents: { results: Array<{ deviceToken: string, occurredTime: string | null, state: string, reason: string | null, sessionId: string }>, pagination: { totalRecords: number | null } } };
+
 export type CalculatedEventsQueryVariables = Exact<{
   deviceToken: string;
   expression: string;
@@ -317,6 +324,22 @@ export const EventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<EventsQuery, EventsQueryVariables>;
+export const StateChangeEventsDocument = new TypedDocumentString(`
+    query StateChangeEvents($criteria: EventSearchCriteria!) {
+  stateChangeEvents(criteria: $criteria) {
+    results {
+      deviceToken
+      occurredTime
+      state
+      reason
+      sessionId
+    }
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<StateChangeEventsQuery, StateChangeEventsQueryVariables>;
 export const CalculatedEventsDocument = new TypedDocumentString(`
     query CalculatedEvents($deviceToken: String!, $expression: String!, $dataType: String!, $inputs: [CalculatedInput!]!, $minValue: Float, $maxValue: Float, $constants: [CalculatedConstant!], $from: String!, $to: String!) {
   calculatedEvents(

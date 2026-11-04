@@ -189,9 +189,9 @@ func projectionRows(t *testing.T, api *Api) []string {
 		if s.ScopeAnchors != nil {
 			owners = "[" + strings.Join(s.ScopeAnchors, ",") + "]"
 		}
-		out = append(out, fmt.Sprintf("state %s/%s ext=%q src=%q active=%v conn=%s disc=%s act=%s alarm=%s timeout=%d presence=%s session=%d ptime=%s owners=%s owned=%s",
+		out = append(out, fmt.Sprintf("state %s/%s ext=%q src=%q active=%v conn=%s disc=%s act=%s presence=%s session=%d ptime=%s owners=%s owned=%s",
 			s.TenantId, s.DeviceToken, s.ExternalId, s.Source, s.Active, nt(s.LastConnectTime), nt(s.LastDisconnectTime),
-			nt(s.LastActivityTime), nt(s.InactivityAlarmTime), s.InactivityTimeout, s.PresenceSource, s.SessionId, nt(s.PresenceTime),
+			nt(s.LastActivityTime), s.PresenceSource, s.SessionId, nt(s.PresenceTime),
 			owners, nt(s.ScopeAnchorsAt)))
 	}
 	for _, r := range readings {
@@ -390,7 +390,7 @@ func equivalenceCases() []equivalenceCase {
 			seed:    []ProjectionUpdate{data(A, "d1", at(13*time.Second))},
 			sweepAt: at(2 * time.Hour),
 			updates: []ProjectionUpdate{data(A, "d1", at(15*time.Second)), data(A, "d1", at(12*time.Second)), data(A, "d1", at(20*time.Second))},
-			want:    []string{"active=true conn=2026-09-20T12:00:15Z", "act=2026-09-20T12:00:20Z alarm=null"}},
+			want:    []string{"active=true conn=2026-09-20T12:00:15Z", "act=2026-09-20T12:00:20Z"}},
 		{name: "heartbeat: a swept device given only an older event stays inactive",
 			seed:    []ProjectionUpdate{data(A, "d1", at(13*time.Second))},
 			sweepAt: at(2 * time.Hour),
@@ -422,7 +422,7 @@ func equivalenceCases() []equivalenceCase {
 			seed:    []ProjectionUpdate{data(A, "d1", at(time.Minute))},
 			sweepAt: at(2 * time.Hour),
 			updates: []ProjectionUpdate{data(A, "d1", at(time.Minute))},
-			want:    []string{"active=true conn=2026-09-20T12:01:00Z", "alarm=null"}},
+			want:    []string{"active=true conn=2026-09-20T12:01:00Z"}},
 		{name: "heartbeat: a sub-microsecond older event ties the stored activity and resurrects",
 			seed:    []ProjectionUpdate{data(A, "d1", at(1300*time.Nanosecond))},
 			sweepAt: at(2 * time.Hour),

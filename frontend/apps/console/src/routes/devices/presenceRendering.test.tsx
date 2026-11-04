@@ -76,8 +76,9 @@ function state(deviceToken: string, active: boolean, presenceSource: string) {
     lastConnectTime: '2026-08-12T12:00:00Z',
     lastDisconnectTime: active ? null : '2026-08-12T13:00:00Z',
     lastActivityTime: '2026-08-12T12:30:00Z',
-    inactivityTimeout: 600,
     presenceSource,
+    presenceTime: presenceSource === 'ASSERTED' ? '2026-08-12T12:45:00Z' : null,
+    sessionId: presenceSource === 'ASSERTED' ? '1786540800000000000' : '0',
   };
 }
 
@@ -153,7 +154,11 @@ describe('the device list', () => {
 
 // The detail page's connectivity tab. It renders the whole page and reads the panel,
 // because DeviceStatePanel is deliberately private to that file.
-async function renderDetail(presenceSource: string, active: boolean) {
+async function renderDetail(
+  presenceSource: string,
+  active: boolean,
+  transitions: Array<{ state: string; reason: string | null; sessionId: string; occurredTime: string }> = [],
+) {
   gqlMock.mockImplementation((service: string) => {
     if (service === 'device-management') {
       return Promise.resolve({ devicesByToken: [device('dev-1')], deviceTypes: { results: [], pagination: {} } });
@@ -165,7 +170,16 @@ async function renderDetail(presenceSource: string, active: boolean) {
         latestLocation: null,
       });
     }
-    return Promise.resolve({ events: { results: [], pagination: {} } });
+    if (service === 'event-management') {
+      return Promise.resolve({
+        events: { results: [], pagination: {} },
+        stateChangeEvents: {
+          results: transitions.map((tr) => ({ deviceToken: 'dev-1', ...tr })),
+          pagination: { totalRecords: transitions.length },
+        },
+      });
+    }
+    return Promise.resolve({});
   });
   render(
     <MemoryRouter>
@@ -203,6 +217,37 @@ describe('the device detail connectivity panel', () => {
     expect(screen.getByText('SOMETHING-NEW')).toBeTruthy();
     expect(screen.queryByText('Disconnected')).toBeNull();
     expect(screen.getByText(CALLOUT)).toBeTruthy();
+  });
+
+  it('shows the last presence report and transport session of an asserted device', async () => {
+    await renderDetail('ASSERTED', true);
+    expect(screen.getByText('Last presence report')).toBeTruthy();
+    expect(screen.getByText('Transport session')).toBeTruthy();
+    expect(screen.getByText('1786540800000000000')).toBeTruthy();
+  });
+
+  it('omits the transport session of a device no transport has spoken for', async () => {
+    await renderDetail('INFERRED', true);
+    expect(screen.getByText('Last presence report')).toBeTruthy();
+    expect(screen.queryByText('Transport session')).toBeNull();
+  });
+
+  it('lists the presence timeline, wording a release as a release and not as a disconnect', async () => {
+    await renderDetail('INFERRED', true, [
+      { state: 'DEMOTED', reason: 'tap disabled', sessionId: '7', occurredTime: '2026-08-12T14:00:00Z' },
+      { state: 'DISCONNECTED', reason: null, sessionId: '7', occurredTime: '2026-08-12T13:00:00Z' },
+      { state: 'CONNECTED', reason: null, sessionId: '7', occurredTime: '2026-08-12T12:00:00Z' },
+    ]);
+    const timeline = await screen.findByTestId('presence-timeline');
+    expect(within(timeline).getByText('Released to inferred presence')).toBeTruthy();
+    expect(within(timeline).getByText('Disconnected')).toBeTruthy();
+    expect(within(timeline).getByText('Connected')).toBeTruthy();
+    expect(within(timeline).getByText('tap disabled')).toBeTruthy();
+  });
+
+  it('says so when no transition has ever been reported', async () => {
+    await renderDetail('INFERRED', true);
+    expect(await screen.findByText('No connect or disconnect has been reported for this device.')).toBeTruthy();
   });
 
   // 🔴 The callout is a claim about EVIDENCE, so it must appear in exactly one of the

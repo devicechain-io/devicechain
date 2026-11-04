@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/devicechain-io/dc-event-management/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -392,5 +393,61 @@ func (r *AlertEventSearchResultsResolver) Results() []*AlertEventResolver {
 }
 
 func (r *AlertEventSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
+	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
+}
+
+// -----------------------------
+// State change event resolver
+// -----------------------------
+
+type StateChangeEventResolver struct {
+	M model.StateChangeEvent
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *StateChangeEventResolver) DeviceToken() string {
+	return r.M.DeviceToken
+}
+
+func (r *StateChangeEventResolver) EventType() int32 {
+	return int32(r.M.EventType)
+}
+
+func (r *StateChangeEventResolver) OccurredTime() *string {
+	return util.FormatTime(r.M.OccurredTime)
+}
+
+func (r *StateChangeEventResolver) State() string {
+	return r.M.State
+}
+
+func (r *StateChangeEventResolver) Reason() *string {
+	if r.M.Reason == "" {
+		return nil
+	}
+	reason := r.M.Reason
+	return &reason
+}
+
+// SessionId is the producer's connect epoch, a uint64 a GraphQL Int cannot hold, so it
+// is served as a decimal string.
+func (r *StateChangeEventResolver) SessionId() string {
+	return strconv.FormatUint(r.M.SessionId, 10)
+}
+
+type StateChangeEventSearchResultsResolver struct {
+	M model.StateChangeEventSearchResults
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *StateChangeEventSearchResultsResolver) Results() []*StateChangeEventResolver {
+	return mapResolvers(r.M.Results, func(m model.StateChangeEvent) *StateChangeEventResolver {
+		return &StateChangeEventResolver{M: m, S: r.S, C: r.C}
+	})
+}
+
+func (r *StateChangeEventSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
 	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
 }
