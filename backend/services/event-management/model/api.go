@@ -529,7 +529,8 @@ type EventRows struct {
 // CreateEventRows writes rows on db under the tenant in ctx: the parents first
 // (deduplicated on their event id, as upsertParentEvents always has), then each payload
 // table that has rows. It makes one column-array INSERT per table (rdb.ColumnTable),
-// whatever the number of rows, and every statement keeps its ON CONFLICT arbiter.
+// whatever the number of rows, and every statement keeps its ON CONFLICT arbiter unless the
+// caller opted into a plain first pass with rdb.WithPlainInsert (see writeGrouped).
 func (api *Api) CreateEventRows(ctx context.Context, db *gorm.DB, rows *EventRows) error {
 	if err := upsertParentEvents(ctx, db, rows.Parents); err != nil {
 		return err

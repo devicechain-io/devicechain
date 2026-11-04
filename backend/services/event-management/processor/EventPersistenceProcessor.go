@@ -97,6 +97,9 @@ type PersistMetrics struct {
 	batchSize prometheus.Observer
 	// fallbacks is persist_batch_fallbacks_total: batch transactions that did not commit.
 	fallbacks prometheus.Counter
+	// insertFallbacks is persist_insert_fallbacks_total: batches whose plain-INSERT first pass met
+	// rows already stored and were written again with ON CONFLICT.
+	insertFallbacks prometheus.Counter
 	// held is persist_store_held_events: events a writer is holding, unacked, because the
 	// event store cannot take writes (disk full, read-only, unreachable). Zero when healthy.
 	held prometheus.Gauge
@@ -176,6 +179,13 @@ func (m *PersistMetrics) fallback() {
 	}
 }
 
+// insertFallback records one batch whose plain-INSERT first pass met stored rows.
+func (m *PersistMetrics) insertFallback() {
+	if m != nil {
+		m.insertFallbacks.Inc()
+	}
+}
+
 // NewPersistMetrics builds this processor's RED instrumentation.
 //
 // 🔴 IT IS SEPARATE FROM THE CONSTRUCTOR BECAUSE THE TWO RUN IN DIFFERENT PHASES.
@@ -192,6 +202,8 @@ func NewPersistMetrics(ms *core.Microservice) *PersistMetrics {
 			nil, []float64{1, 2, 4, 8, 16, 32, 64}).WithLabelValues(),
 		fallbacks: ms.NewCounter("persist_batch_fallbacks_total",
 			"Batch transactions that did not commit, after which their events were written again."),
+		insertFallbacks: ms.NewCounter("persist_insert_fallbacks_total",
+			"Batches whose plain-INSERT first pass met rows already stored, and were written again with ON CONFLICT."),
 		held: ms.NewGauge("persist_store_held_events",
 			"Events held unacked because the event store cannot take writes (disk full, read-only, unreachable); they are written when it recovers. Zero when healthy."),
 		rows: ms.NewCounter("persist_rows_total", "Rows stored by committed persistence transactions."),

@@ -75,14 +75,14 @@ func newPostgresApi(t *testing.T, instance string) *Api {
 
 // newPostgresManager runs the real chain and returns the manager itself, for tests whose
 // subject is the storage layer rather than the Api over it.
-func newPostgresManager(t *testing.T, instance string) *rdb.RdbManager {
+func newPostgresManager(t testing.TB, instance string) *rdb.RdbManager {
 	t.Helper()
 	return newPostgresManagerWith(t, instance, Migrations)
 }
 
 // newPostgresManagerWith runs the given migration chain — a PREFIX of Migrations, for a
 // test whose subject is what one appended migration does to a database that predates it.
-func newPostgresManagerWith(t *testing.T, instance string, migrations []*gormigrate.Migration) *rdb.RdbManager {
+func newPostgresManagerWith(t testing.TB, instance string, migrations []*gormigrate.Migration) *rdb.RdbManager {
 	t.Helper()
 	port, err := strconv.Atoi(envOr("DC_IT_PGPORT", "5432"))
 	require.NoError(t, err, "DC_IT_PGPORT must be numeric")
