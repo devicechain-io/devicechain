@@ -24,9 +24,8 @@ import (
 
 // 🔴 A STORED NUMBER WIDER THAN A GraphQL Int IS REFUSED ON READ, NOT WRAPPED.
 //
-// classifier (the bound metric definition's id, a *uint) and inactivityTimeout (an int)
-// are bigint columns, and the wire type is a 32-bit Int. Both reads used to narrow with a
-// bare int32 conversion, so a stored 2147483648 read back as -2147483648 — a plausible
+// classifier (the bound metric definition's id, a *uint) is a bigint column, and the
+// wire type is a 32-bit Int. The read used to narrow with a bare int32 conversion, so a stored 2147483648 read back as -2147483648 — a plausible
 // wrong number with nothing to say it was wrong.
 func TestAClassifierWiderThanAnIntIsRefusedOnRead(t *testing.T) {
 	wide := uint(math.MaxInt32 + 1)
@@ -44,19 +43,6 @@ func TestAClassifierWiderThanAnIntIsRefusedOnRead(t *testing.T) {
 	}
 	if got, err := (&LatestMeasurementResolver{}).Classifier(); got != nil || err != nil {
 		t.Errorf("no classifier: got (%v, %v), want (nil, nil)", got, err)
-	}
-}
-
-func TestAnInactivityTimeoutWiderThanAnIntIsRefusedOnRead(t *testing.T) {
-	got, err := (&DeviceStateResolver{M: model.DeviceState{InactivityTimeout: math.MaxInt32 + 1}}).InactivityTimeout()
-	if got != 0 {
-		t.Errorf("inactivityTimeout 2147483648 read back as %d, want no value", got)
-	}
-	if !errors.Is(err, gqlcore.ErrStoredIntOutOfRange) {
-		t.Errorf("inactivityTimeout 2147483648: err = %v, want ErrStoredIntOutOfRange", err)
-	}
-	if got, err := (&DeviceStateResolver{M: model.DeviceState{InactivityTimeout: 600}}).InactivityTimeout(); err != nil || got != 600 {
-		t.Errorf("inactivityTimeout 600: got (%d, %v), want 600", got, err)
 	}
 }
 
@@ -80,8 +66,6 @@ func intRangeWireCtx(t *testing.T) context.Context {
 	rows := []any{
 		&model.LatestMeasurement{TenantId: "acme", DeviceToken: "pump-1",
 			Name: "temp", Value: sql.NullFloat64{Float64: 21.5, Valid: true}, Classifier: &wide, OccurredTime: now},
-		&model.DeviceState{TenantId: "acme", DeviceToken: "pump-1",
-			InactivityTimeout: math.MaxInt32 + 1, PresenceSource: "INFERRED"},
 	}
 	for _, row := range rows {
 		if err := db.WithContext(ctx).Create(row).Error; err != nil {
@@ -124,16 +108,6 @@ func TestAnOutOfRangeRowOnTheWire(t *testing.T) {
 		}
 		if len(resp.Errors) != 1 || fmt.Sprint(resp.Errors[0].Path) != "[latestMeasurements 0 classifier]" {
 			t.Errorf("errors = %v, want one refusal at latestMeasurements.0.classifier", resp.Errors)
-		}
-	})
-
-	t.Run("inactivityTimeout nulls the whole listing", func(t *testing.T) {
-		resp := schema.Exec(ctx, `{ deviceStatesByDeviceToken(deviceTokens: ["pump-1"]) { deviceToken inactivityTimeout } }`, "", nil)
-		if string(resp.Data) != "null" && len(resp.Data) != 0 {
-			t.Errorf("data = %s, want null: the field is non-null inside a non-null list", resp.Data)
-		}
-		if len(resp.Errors) != 1 || fmt.Sprint(resp.Errors[0].Path) != "[deviceStatesByDeviceToken 0 inactivityTimeout]" {
-			t.Errorf("errors = %v, want one refusal at deviceStatesByDeviceToken.0.inactivityTimeout", resp.Errors)
 		}
 	})
 }

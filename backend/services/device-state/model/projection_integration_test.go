@@ -194,8 +194,8 @@ func theirRowPG(t *testing.T, tx *gorm.DB, token string, t0 time.Time) {
 	t.Helper()
 	if _, err := tx.Statement.ConnPool.ExecContext(context.Background(),
 		`INSERT INTO "device-state".device_states (created_at, updated_at, tenant_id, device_token, external_id, `+
-			`source, active, last_connect_time, last_activity_time, inactivity_timeout, presence_source, session_id) `+
-			`VALUES ($1, $2, 'acme', $3, 'theirs', '', true, $4, $5, 600, 'INFERRED', 0)`,
+			`source, active, last_connect_time, last_activity_time, presence_source, session_id) `+
+			`VALUES ($1, $2, 'acme', $3, 'theirs', '', true, $4, $5, 'INFERRED', 0)`,
 		t0, t0, token, t0, t0); err != nil {
 		t.Errorf("the other writer's insert: %v", err)
 	}
@@ -539,8 +539,8 @@ func holdInsert(t *testing.T, api *Api, tok string) *heldInsert {
 	}
 	now := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO "device-state".device_states (created_at, updated_at, tenant_id, `+
-		`device_token, external_id, source, active, inactivity_timeout, presence_source, session_id) `+
-		`VALUES ($1, $1, 'acme', $2, '', '', false, 600, 'INFERRED', 0)`, now, tok); err != nil {
+		`device_token, external_id, source, active, presence_source, session_id) `+
+		`VALUES ($1, $1, 'acme', $2, '', '', false, 'INFERRED', 0)`, now, tok); err != nil {
 		t.Fatalf("the held insert of %s: %v", tok, err)
 	}
 	return h

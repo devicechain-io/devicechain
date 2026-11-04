@@ -338,6 +338,14 @@ type StateChangeEvent struct {
 	SessionId    uint64 `gorm:"not null;default:0"`
 }
 
+// DefaultOrder implements rdb.Sortable: newest first, tiebroken on the parent event's
+// identity and then on state and session so the order is total. Two transitions can share
+// an instant (a birth and a death at one timestamp survive as distinct rows, see the
+// idempotency index), and a tie under LIMIT/OFFSET is the repeat-and-skip defect.
+func (StateChangeEvent) DefaultOrder() string {
+	return "state_change_events.occurred_time DESC, state_change_events.event_id DESC, state_change_events.state DESC, state_change_events.session_id DESC"
+}
+
 // Information required to create a state change event.
 type StateChangeEventCreateRequest struct {
 	Event

@@ -100,6 +100,7 @@ type EventManagementApi interface {
 	LocationEvents(ctx context.Context, criteria EventSearchCriteria) (*LocationEventSearchResults, error)
 	MeasurementEvents(ctx context.Context, criteria EventSearchCriteria) (*MeasurementEventSearchResults, error)
 	AlertEvents(ctx context.Context, criteria EventSearchCriteria) (*AlertEventSearchResults, error)
+	StateChangeEvents(ctx context.Context, criteria EventSearchCriteria) (*StateChangeEventSearchResults, error)
 }
 
 // PersistInTx opens one transaction whose handle is bound to the supplied

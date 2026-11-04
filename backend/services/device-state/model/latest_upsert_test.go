@@ -218,8 +218,8 @@ func theirRow(t *testing.T, tx *gorm.DB, t0 time.Time) {
 	t.Helper()
 	if _, err := tx.Statement.ConnPool.ExecContext(context.Background(),
 		"INSERT INTO device_states (created_at, updated_at, tenant_id, device_token, external_id, source, active, "+
-			"last_connect_time, last_activity_time, inactivity_timeout, presence_source, session_id) "+
-			"VALUES (?, ?, 'acme', 'race-1', 'theirs', '', true, ?, ?, 600, 'INFERRED', 0)",
+			"last_connect_time, last_activity_time, presence_source, session_id) "+
+			"VALUES (?, ?, 'acme', 'race-1', 'theirs', '', true, ?, ?, 'INFERRED', 0)",
 		t0, t0, t0, t0); err != nil {
 		t.Errorf("the other writer's insert: %v", err)
 	}

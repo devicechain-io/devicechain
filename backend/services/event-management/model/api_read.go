@@ -553,3 +553,22 @@ func (api *Api) AlertEvents(ctx context.Context, criteria EventSearchCriteria) (
 	}
 	return &AlertEventSearchResults{Results: results, Pagination: pag}, nil
 }
+
+// Search for state change (presence transition) events that meet criteria, newest first.
+func (api *Api) StateChangeEvents(ctx context.Context, criteria EventSearchCriteria) (*StateChangeEventSearchResults, error) {
+	if err := checkAnchorFilter(ctx, criteria.AnchorType, criteria.AnchorToken); err != nil {
+		return nil, err
+	}
+	ctx, cancel := boundScopedAnchorRead(ctx, criteria.AnchorType)
+	defer cancel()
+	results := make([]StateChangeEvent, 0)
+	db, pag := api.RDB.ListOf(ctx, &StateChangeEvent{}, func(result *gorm.DB) *gorm.DB {
+		result = commonEventFilters(criteria)(result)
+		return api.anchorFilter(ctx, criteria, result)
+	}, criteria.Pagination)
+	db.Find(&results)
+	if db.Error != nil {
+		return nil, scopedReadError(ctx, db.Error)
+	}
+	return &StateChangeEventSearchResults{Results: results, Pagination: pag}, nil
+}

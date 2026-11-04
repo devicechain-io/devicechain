@@ -32,5 +32,6 @@ var (
 		NewLatestLocationSchema(),
 		NewDeviceStateScopeAnchorsSchema(),
 		NewDroppedMeasurementsSchema(),
+		NewDropInactivityColumnsSchema(),
 	}
 )

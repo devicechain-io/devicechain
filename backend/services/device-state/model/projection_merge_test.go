@@ -172,8 +172,7 @@ func TestABatchAdvancesUpdatedAtOnTheRowsItWritesBack(t *testing.T) {
 }
 
 // The write-back writes back what the fold touched and nothing else, so a column the batch's
-// events do not touch must come back as it was stored — including one an operator set that the
-// lock read never carried (inactivity_timeout) — and the row's identity must not move. It is
+// events do not touch must come back as it was stored, and the row's identity must not move. It is
 // asserted for each way a batch writes a row it has locked: the locked path (a claim), and the
 // heartbeat upsert's two arms (a live device, and a swept one folded by the fallback).
 func TestABatchKeepsColumnsItDoesNotFold(t *testing.T) {
@@ -199,21 +198,21 @@ func TestABatchKeepsColumnsItDoesNotFold(t *testing.T) {
 				}
 			}
 			sys := api.RDB.DB(core.WithSystemContext(context.Background()))
-			if err := sys.Exec(`UPDATE device_states SET inactivity_timeout = 123, external_id = 'ext-k' WHERE device_token = ?`,
+			if err := sys.Exec(`UPDATE device_states SET external_id = 'ext-k' WHERE device_token = ?`,
 				"k-1").Error; err != nil {
 				t.Fatalf("set columns: %v", err)
 			}
 			before := loadRow(t, api, "acme", "k-1")
-			if before.InactivityTimeout != 123 || before.ExternalId != "ext-k" || before.Active == tc.sweep {
-				t.Fatalf("precondition: timeout %d, external id %q, active %v", before.InactivityTimeout, before.ExternalId, before.Active)
+			if before.ExternalId != "ext-k" || before.Active == tc.sweep {
+				t.Fatalf("precondition: external id %q, active %v", before.ExternalId, before.Active)
 			}
 
 			if err := api.MergeProjectionBatch(context.Background(), []ProjectionUpdate{tc.batch}); err != nil {
 				t.Fatalf("batch: %v", err)
 			}
 			after := loadRow(t, api, "acme", "k-1")
-			if after.InactivityTimeout != 123 || after.ExternalId != "ext-k" {
-				t.Errorf("timeout %d, external id %q after the batch; want 123, ext-k", after.InactivityTimeout, after.ExternalId)
+			if after.ExternalId != "ext-k" {
+				t.Errorf("external id %q after the batch; want ext-k", after.ExternalId)
 			}
 			if after.ID != before.ID || !after.CreatedAt.Equal(before.CreatedAt) {
 				t.Errorf("identity moved: id %d → %d, created %v → %v", before.ID, after.ID, before.CreatedAt, after.CreatedAt)
@@ -230,7 +229,7 @@ func TestABatchKeepsColumnsItDoesNotFold(t *testing.T) {
 // where gorm still holds the Select. The two reads that lock are the locked path's, and the
 // heartbeat upsert's fallback for a swept device.
 func TestTheLockReadSelectsOnlyTheColumnsTheFoldTouches(t *testing.T) {
-	want := []string{"active", "external_id", "id", "device_token", "inactivity_alarm_time", "last_activity_time",
+	want := []string{"active", "external_id", "id", "device_token", "last_activity_time",
 		"last_connect_time", "last_disconnect_time", "presence_source", "presence_time", "session_id", "source",
 		"scope_anchors", "scope_anchors_at"} // the owners stamp is folded too (applyOwners)
 	sort.Strings(want)

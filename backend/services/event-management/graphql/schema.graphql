@@ -207,6 +207,32 @@ type AlertEvent {
     source: String
 }
 
+"""
+A stored presence transition of a device: the history behind its live connectivity state. One
+row per transition the device's transport reported, so it shows when the device connected, when
+it disconnected, and when the platform stopped trusting the transport to report for it.
+"""
+type StateChangeEvent {
+    """Token of the device the transition belongs to."""
+    deviceToken: String!
+    """Kind of event, as an integer; always 4 for a state change."""
+    eventType: Int!
+    """When the transition happened, as an RFC 3339 timestamp."""
+    occurredTime: String
+    """
+    The transition: CONNECTED, DISCONNECTED, or DEMOTED. DEMOTED is not a connectivity edge: it
+    records that the device was released back to inferred presence.
+    """
+    state: String!
+    """Why the transport reported the transition, when it said; null otherwise."""
+    reason: String
+    """
+    The transport's connect epoch for the session the transition belongs to, as a decimal
+    string. "0" when the transport reports none.
+    """
+    sessionId: String!
+}
+
 """A relationship anchor to filter events by: events recorded against this entity."""
 # Relationship anchor used to filter events. The type names an entity class
 # (e.g. "customer", "area") and the token is that entity's stable per-tenant token;
@@ -266,6 +292,14 @@ type LocationEventSearchResults {
     """The location events on this page, newest first."""
     results: [LocationEvent!]!
     """Where this page sits within all matching location events."""
+    pagination: SearchResultsPagination!
+}
+
+"""One page of presence transitions."""
+type StateChangeEventSearchResults {
+    """The transitions on this page, newest first."""
+    results: [StateChangeEvent!]!
+    """Where this page sits within all matching transitions."""
     pagination: SearchResultsPagination!
 }
 
@@ -744,6 +778,16 @@ type Query {
         """Filters and page to return."""
         criteria: EventSearchCriteria!
     ): AlertEventSearchResults!
+    """
+    Searches the presence transitions of devices (connected, disconnected, demoted), newest first
+    by occurred time, one page at a time. Filter by deviceToken and bound the range with
+    startTime and endTime. Requires event:read. A member whose access is limited to some
+    customers sees only transitions recorded while the device belonged to one of them.
+    """
+    stateChangeEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): StateChangeEventSearchResults!
     """
     Aggregates measurements into fixed-width time buckets (average, minimum, maximum, sum and
     count) per measurement name, ordered by bucket start and then name. startTime is required,

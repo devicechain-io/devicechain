@@ -147,6 +147,11 @@ func (api *MockApi) MeasurementEvents(ctx context.Context, criteria emmodel.Even
 	return args.Get(0).(*emmodel.MeasurementEventSearchResults), args.Error(1)
 }
 
+func (api *MockApi) StateChangeEvents(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.StateChangeEventSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*emmodel.StateChangeEventSearchResults), args.Error(1)
+}
+
 func (api *MockApi) AlertEvents(ctx context.Context, criteria emmodel.EventSearchCriteria) (*emmodel.AlertEventSearchResults, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*emmodel.AlertEventSearchResults), args.Error(1)

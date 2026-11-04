@@ -24,7 +24,9 @@ export type DroppedMeasurement = DroppedMeasurementsQuery['droppedMeasurements']
 // nothing has arrived inside the inactivity window). Without it every screen reads
 // `active: false` as the former, which is a claim about the DEVICE the platform cannot
 // support for an inferred row. lib/presence.ts is the one place that folds the two
-// fields into an answer; do not re-derive it from `active` alone.
+// fields into an answer; do not re-derive it from `active` alone. `presenceTime` and
+// `sessionId` are the last-applied transition's stamp (when, and under which transport
+// session); the device page shows them so asserted and inferred rows can be told apart.
 //
 // The explanation lives here rather than inside the document because the client preset
 // keys its generated lookup tables on the document's LITERAL TEXT — a comment in the
@@ -38,8 +40,9 @@ const DEVICE_STATES_BY_DEVICE_TOKEN = graphql(`
       lastConnectTime
       lastDisconnectTime
       lastActivityTime
-      inactivityTimeout
       presenceSource
+      presenceTime
+      sessionId
     }
   }
 `);

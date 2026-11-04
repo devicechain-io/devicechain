@@ -56,13 +56,11 @@ type DeviceState struct {
 	// enumeration to its OWN source, so two Sparkplug sources on one tenant (distinct
 	// brokers) can never cross-disconnect each other's devices (ADR-067 SP4b). Empty for
 	// a device that has never produced an event carrying a source.
-	Source              string `gorm:"type:text"`
-	Active              bool
-	LastConnectTime     sql.NullTime
-	LastDisconnectTime  sql.NullTime
-	LastActivityTime    sql.NullTime
-	InactivityAlarmTime sql.NullTime
-	InactivityTimeout   int // seconds; per-device override of the default
+	Source             string `gorm:"type:text"`
+	Active             bool
+	LastConnectTime    sql.NullTime
+	LastDisconnectTime sql.NullTime
+	LastActivityTime   sql.NullTime
 	// PresenceSource discriminates authoritative from inferred presence (ADR-067
 	// decision 3): INFERRED (default) derives Active from activity + the inactivity
 	// sweep, unchanged; ASSERTED takes Active ONLY from a StateChange — a data event

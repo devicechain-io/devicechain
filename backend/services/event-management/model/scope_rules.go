@@ -22,8 +22,7 @@ import (
 //
 // Every rule below is enforced by core/rdb's scope callback on a gorm read whose context
 // carries a scoped caller's claims. A model with no rule is refused to such a caller; that
-// is the state MeasurementRollup and StateChangeEvent are left in, on purpose (see the
-// notes at the end).
+// is the state MeasurementRollup is left in, on purpose (see the note at the end).
 
 // eventAnchorSet is the event_anchors set table, joined on the anchor's event_id. The
 // payload tables join on event_id ALONE: a payload row carries its reading's own instant,
@@ -72,11 +71,13 @@ func (EventAnchor) ScopedBy() rdb.ScopeRule {
 	return rdb.OwnAnchor("anchor_type", "anchor_token")
 }
 
-// StateChangeEvent declares NO scope rule. No resolver reads it, so a rule here
-// would be a guard nothing exercises; a scoped read that reaches it is refused, and the
-// resolver that first reads it decides its rule (an event_id-only AnchorTable, like the
-// payload tables above) along with the test that proves it.
-//
+// ScopedBy admits a scoped caller to a presence transition through its event's anchors,
+// like the other payload tables: a device's connectivity history stays with the customer it
+// belonged to when the transition happened.
+func (StateChangeEvent) ScopedBy() rdb.ScopeRule {
+	return rdb.AnchorTable(eventAnchorSet(anchorByEventId))
+}
+
 // MeasurementRollup declares NO scope rule, deliberately. The continuous aggregate sums
 // across every event of a device and carries no anchor dimension, so no predicate on it
 // can say which customer a bucket belongs to: a device reassigned mid-bucket has both

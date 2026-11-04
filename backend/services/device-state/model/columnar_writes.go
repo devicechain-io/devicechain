@@ -54,8 +54,6 @@ var deviceStateColumns = []rdb.Column[DeviceState]{
 	rdb.NullTimeColumn("last_connect_time", func(r *DeviceState) sql.NullTime { return r.LastConnectTime }),
 	rdb.NullTimeColumn("last_disconnect_time", func(r *DeviceState) sql.NullTime { return r.LastDisconnectTime }),
 	rdb.NullTimeColumn("last_activity_time", func(r *DeviceState) sql.NullTime { return r.LastActivityTime }),
-	rdb.NullTimeColumn("inactivity_alarm_time", func(r *DeviceState) sql.NullTime { return r.InactivityAlarmTime }),
-	rdb.IntColumn("inactivity_timeout", func(r *DeviceState) int { return r.InactivityTimeout }),
 	rdb.TextColumn("presence_source", func(r *DeviceState) string { return r.PresenceSource }),
 	rdb.Uint64Column("session_id", func(r *DeviceState) uint64 { return r.SessionId }),
 	rdb.NullTimeColumn("presence_time", func(r *DeviceState) sql.NullTime { return r.PresenceTime }),
@@ -76,8 +74,7 @@ var deviceStateLock = rdb.NewColumnUpsert(deviceStateTenant, deviceStateKey,
 
 // deviceStateFolded is writeFoldedStates' statement: on the device's key, overwrite the columns
 // the fold reads and writes (foldColumns) from the incoming row, and stamp updated_at. The
-// identity (id, created_at, the key) and inactivity_timeout (which an operator may set between
-// the lock read and this write) are never rewritten.
+// identity (id, created_at, the key) is never rewritten.
 var deviceStateFolded = rdb.NewColumnUpsert(deviceStateTenant, deviceStateKey,
 	rdb.Upsert{Set: []rdb.Assignment{
 		rdb.SetTo("external_id", "excluded.external_id"),
@@ -86,7 +83,6 @@ var deviceStateFolded = rdb.NewColumnUpsert(deviceStateTenant, deviceStateKey,
 		rdb.SetTo("last_connect_time", "excluded.last_connect_time"),
 		rdb.SetTo("last_disconnect_time", "excluded.last_disconnect_time"),
 		rdb.SetTo("last_activity_time", "excluded.last_activity_time"),
-		rdb.SetTo("inactivity_alarm_time", "excluded.inactivity_alarm_time"),
 		rdb.SetTo("presence_source", "excluded.presence_source"),
 		rdb.SetTo("session_id", "excluded.session_id"),
 		rdb.SetTo("presence_time", "excluded.presence_time"),
@@ -97,7 +93,7 @@ var deviceStateFolded = rdb.NewColumnUpsert(deviceStateTenant, deviceStateKey,
 
 // heartbeatGuard is the DO UPDATE's WHERE: it EXCLUDES the one row a plain data event cannot
 // be folded into in SQL — an INFERRED, inactive device the event is fresh for, which the
-// event resurrects (Active, LastConnectTime and InactivityAlarmTime change, and which event
+// event resurrects (Active and LastConnectTime change, and which event
 // supplies LastConnectTime depends on arrival order). The condition is applyEvent's test, in
 // SQL: `fresh` is "no activity recorded, or the event is NOT OLDER" (>=, the frozen-clock
 // rule), and the flip needs presence_source <> ASSERTED and not active. excluded holds the

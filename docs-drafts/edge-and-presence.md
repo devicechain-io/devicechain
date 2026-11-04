@@ -314,24 +314,20 @@ have said so"** — which is a claim about the transport, not about the code. Th
 justification is a dependency on reconcile paths that can each fail. What demotion adds is a way to
 withdraw the claim when the transport is no longer making it.
 
-## 8. Things that exist in name only
+## 8. Things that existed in name only (resolved)
 
-Each of these reads as a feature and is not one.
+Four items used to read as features and were not. Each has since been decided one way or the other:
 
-- **`InactivityTimeout` is documented as a per-device override** (`device-state/model/model.go:46`)
-  and has **no write path** — device-state's schema now declares one mutation
-  (`demoteAssertedPresence`) and it does not touch this field, so every row still holds the
-  compile-time default of 600.
-- **`InactivityAlarmTime`** is written by the sweep, cleared on reconnect, and exposed over GraphQL —
-  and **read by nothing**. Despite the name, no alarm is raised from it.
-- **`state_change_events` has no read surface.** The hypertable is written and indexed for
-  idempotency, and there is no query field for it anywhere, so the presence timeline its model
-  comment advertises as "the history DETECT/audit reads" is write-only.
-- **`sessionId` and `presenceTime` are selected by no client.** `presenceSource` no longer belongs
-  on this list: the console's Connectivity tab reads it to split "Disconnected" (asserted) from
-  "Offline" (inferred, i.e. merely quiet), and the MCP `get_device_state` tool returns it with a
-  description telling the model the two do not support the same conclusion. The other two are still
-  ordering machinery nothing outside the pipeline asks for.
+- **`InactivityTimeout`** was documented as a per-device override with no write path. The claim is
+  gone: the inactivity window is one platform-wide value (ten minutes), the column is dropped, and
+  `inactivityTimeout` on `DeviceState` now reports that constant. The presence page already told
+  operators the window is not adjustable, so removal matched what was promised.
+- **`InactivityAlarmTime`** was written by the sweep to the same instant as `lastDisconnectTime` and
+  read by nothing. The column and the GraphQL field are dropped.
+- **`state_change_events`** now has a read surface: the `stateChangeEvents` query on the event store
+  (event:read, customer-scope aware), shown as the presence timeline on the device page.
+- **`presenceTime` and `sessionId`** are now selected by the console and shown on the Connectivity
+  card beside the presence source.
 
 ## 9. What is validated, and what is not
 

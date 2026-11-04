@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
@@ -71,20 +72,10 @@ func (r *DeviceStateResolver) LastActivityTime() *string {
 	return nil
 }
 
-func (r *DeviceStateResolver) InactivityAlarmTime() *string {
-	if r.M.InactivityAlarmTime.Valid {
-		return util.FormatTime(r.M.InactivityAlarmTime.Time)
-	}
-	return nil
-}
-
-// InactivityTimeout refuses, rather than wraps, a stored timeout a GraphQL Int cannot hold.
-// The only writer is the default on insert, so this fires only on a value written to the
-// database some other way. The field is non-null inside non-null lists, so for a query that
-// selects it (the console's device page and the MCP device-state tool do) a refusal nulls
-// the whole list, not just this one state.
-func (r *DeviceStateResolver) InactivityTimeout() (int32, error) {
-	return util.StoredInt32("inactivityTimeout", r.M.InactivityTimeout)
+// InactivityTimeout is the platform-wide window the inactivity sweep applies to every
+// INFERRED device. It is a constant of the platform, not a stored value of the row.
+func (r *DeviceStateResolver) InactivityTimeout() int32 {
+	return int32(config.InactivityTimeout)
 }
 
 // ExternalId is the device's transport-native identity, denormalized (ADR-049); nil

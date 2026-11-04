@@ -109,9 +109,8 @@ type DeviceIdentity struct {
 // TestABlankRowFoldsToTheNewRow pins it.
 func blankDeviceState(deviceToken string) *DeviceState {
 	return &DeviceState{
-		DeviceToken:       deviceToken,
-		PresenceSource:    PresenceSourceInferred,
-		InactivityTimeout: config.DefaultInactivityTimeout,
+		DeviceToken:    deviceToken,
+		PresenceSource: PresenceSourceInferred,
 	}
 }
 
@@ -305,8 +304,8 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 				// source — and the ordering stamp advances so a late echo from the released
 				// session cannot re-assert it.
 				//
-				// SessionId, Active, LastConnectTime, LastDisconnectTime, LastActivityTime
-				// and InactivityAlarmTime are deliberately untouched. A demotion is a
+				// SessionId, Active, LastConnectTime, LastDisconnectTime and LastActivityTime
+				// are deliberately untouched. A demotion is a
 				// statement about who has custody, never about what the device is doing;
 				// rewriting Active here would fabricate a connectivity edge out of an
 				// administrative one, and DETECT — which keys off the same predicate —
@@ -329,7 +328,6 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 					// producers — Sparkplug SP4a, LwM2M L1 — mint a fresh epoch per connect.)
 					if d.Flipped || d.NewSession || neverAsserted {
 						found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
-						found.InactivityAlarmTime = sql.NullTime{}
 					}
 				} else if d.Flipped || neverAsserted {
 					// A true CONNECTED→dead flip, or the first authoritative word over an
@@ -380,7 +378,6 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 	if fresh && found.PresenceSource != PresenceSourceAsserted && !found.Active {
 		found.Active = true
 		found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
-		found.InactivityAlarmTime = sql.NullTime{}
 	}
 	if fresh {
 		found.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
@@ -617,20 +614,14 @@ func (api *Api) DeviceStates(ctx context.Context, criteria DeviceStateSearchCrit
 // reason above. It is paid once a minute, for up to about one and a half times the cost of the single UPDATE; what it buys
 // is that the sweep cannot be a party to a deadlock (see below).
 //
-// The reason is structural, not a statistics accident: the time predicate compares
-// last_activity_time against a PER-ROW deadline (inactivity_timeout, or the default when it
-// is 0), so the bound differs for every row and no index on last_activity_time can seek it.
-// Indexing the deadline itself is not available either — PostgreSQL refuses
-// `last_activity_time + inactivity_timeout * INTERVAL '1 second'` in an index expression with
-// "functions in index expression must be marked IMMUTABLE", because timestamptz + interval is
-// STABLE (it depends on the session time zone for the day and month components).
-//
-// What WOULD make this sargable is storing the deadline as a column maintained on write and
-// indexing that partially. That is a schema change plus a write-path change with its own
-// correctness question — every path that touches last_activity_time or inactivity_timeout has
-// to recompute it — so it is a slice, not an index. It is worth doing when the sweep's cost
-// is shown to matter; at 500k devices it is 100 ms, and the unbounded full-table read into
-// this process that collapsing the loop deleted was the part that actually hurt.
+// The scan was forced when the deadline was a PER-ROW value (a per-device timeout column,
+// since removed: no write path ever set it), because no index can seek a bound that differs
+// for every row. The window is now one platform constant, so the predicate is a plain
+// range on last_activity_time and an index on it WOULD serve it. None is added: the sweep's
+// cost has not been shown to matter (at 500k devices it is 100 ms, and the unbounded
+// full-table read into this process that collapsing the loop deleted was the part that
+// actually hurt), and device_states is rewritten on every event, so an index on a column
+// every event moves is paid on the hottest write path in the platform. Measure first.
 func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error) {
 	db := api.RDB.DB(ctx)
 	frag, args, err := inactivitySQL(db.Dialector.Name(), now)
@@ -682,9 +673,8 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	res := db.Model(&DeviceState{}).
 		Where(idMatch, candidates).
 		Updates(map[string]any{
-			"active":                false,
-			"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},
-			"inactivity_alarm_time": sql.NullTime{Time: now, Valid: true},
+			"active":               false,
+			"last_disconnect_time": sql.NullTime{Time: now, Valid: true},
 		})
 	if res.Error != nil {
 		return 0, res.Error
@@ -693,7 +683,7 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 }
 
 // inactivitySQL is the SQL twin of isInactive: it returns the fragment and args
-// selecting rows whose last activity is older than their own inactivity timeout at
+// selecting rows whose last activity is older than the platform inactivity timeout at
 // now. The two are pinned together by TestSweepAgreesWithIsInactive, which runs one
 // case table through both — a rule with two implementations is only safe while
 // something fails when they disagree.
@@ -718,8 +708,8 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 // 🔴 NOTHING IN CI EXECUTES THE POSTGRES STRING — the unit tests run on SQLite and
 // hack/migration-diff.sh compares schema only, no rows. It was therefore verified by
 // hand against a real PostgreSQL 16: correct at +599s, at EXACTLY the timeout, at
-// +601s and at +2h, with the zero/negative fallback flipping the right rows, and with
-// a deliberately wrong interval as the negative control so the run could fail. Redo
+// +601s and at +2h, and with a deliberately wrong interval as the negative control so
+// the run could fail. Redo
 // that by hand if this string changes; a green suite says nothing about it.
 func inactivitySQL(dialect string, now time.Time) (string, []any, error) {
 	// `last_activity_time IS NOT NULL` is REDUNDANT and kept on purpose. SQL's
@@ -732,28 +722,24 @@ func inactivitySQL(dialect string, now time.Time) (string, []any, error) {
 	switch dialect {
 	case "postgres":
 		return "last_activity_time IS NOT NULL AND last_activity_time < " +
-				"?::timestamptz - (CASE WHEN inactivity_timeout > 0 THEN inactivity_timeout ELSE ? END) * INTERVAL '1 second'",
-			[]any{now, config.DefaultInactivityTimeout}, nil
+				"?::timestamptz - ? * INTERVAL '1 second'",
+			[]any{now, config.InactivityTimeout}, nil
 	case "sqlite":
 		return "last_activity_time IS NOT NULL AND " +
-				"(unixepoch(?) - unixepoch(last_activity_time)) > (CASE WHEN inactivity_timeout > 0 THEN inactivity_timeout ELSE ? END)",
-			[]any{now, config.DefaultInactivityTimeout}, nil
+				"(unixepoch(?) - unixepoch(last_activity_time)) > ?",
+			[]any{now, config.InactivityTimeout}, nil
 	}
 	// Fail closed. A dialect nobody wrote a predicate for would otherwise fall through
 	// to a sweep with no time bound at all, which flips the entire fleet offline.
 	return "", nil, fmt.Errorf("inactivity sweep has no predicate for dialect %q", dialect)
 }
 
-// isInactive reports whether a device whose last activity was at last (with the
-// given per-device timeout in seconds) should be considered inactive at now. A
-// device with no recorded activity is never flipped. A non-positive timeout is
-// treated as the configured default.
+// isInactive reports whether a device whose last activity was at last should be
+// considered inactive at now, given the timeout in seconds. A device with no recorded
+// activity is never flipped.
 func isInactive(last sql.NullTime, timeoutSecs int, now time.Time) bool {
 	if !last.Valid {
 		return false
-	}
-	if timeoutSecs <= 0 {
-		timeoutSecs = config.DefaultInactivityTimeout
 	}
 	return now.Sub(last.Time) > time.Duration(timeoutSecs)*time.Second
 }
