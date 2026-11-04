@@ -148,7 +148,20 @@ func (suite *InboundEventsProcessorTestSuite) TestRetryingMembersAreSplitOutOfTh
 // and k synchronous publishes. The envelope is held (members unacked) and comes back whole, as a
 // message in the same brown-out does. And an envelope on a LATER delivery never splits, so a
 // member whose device is still unknown does not get a second copy.
-func (suite *InboundEventsProcessorTestSuite) TestABrownOutAndALaterDeliveryDoNotSplit() {
+//
+// Two top-level tests, not subtests: SetupTest runs per test, and a held envelope keeps its
+// resolvers calling the API mock, so re-arming one shared mock between cases is a data race.
+func (suite *InboundEventsProcessorTestSuite) TestABrownOutDoesNotSplit() {
+	suite.API.Mock.On("DevicesByToken").Return(([]*dmodel.Device)(nil), errors.New("db unreachable"))
+	suite.assertEnvelopeHeldWhole(1)
+}
+
+func (suite *InboundEventsProcessorTestSuite) TestALaterDeliveryDoesNotSplit() {
+	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
+	suite.assertEnvelopeHeldWhole(2)
+}
+
+func (suite *InboundEventsProcessorTestSuite) assertEnvelopeHeldWhole(delivered int) {
 	member := func(device string) []byte {
 		ev := buildLocationsEvent()
 		ev.Device = device
@@ -156,34 +169,17 @@ func (suite *InboundEventsProcessorTestSuite) TestABrownOutAndALaterDeliveryDoNo
 		require.NoError(suite.T(), err)
 		return b
 	}
-	for name, tc := range map[string]struct {
-		lookup    func()
-		delivered int
-	}{
-		"the api is down": {func() {
-			suite.API.Mock.On("DevicesByToken").Return(([]*dmodel.Device)(nil), errors.New("db unreachable"))
-		}, 1},
-		"a later delivery of an unknown device": {func() {
-			suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
-		}, 2},
-	} {
-		suite.Run(name, func() {
-			suite.API.Mock.ExpectedCalls = nil
-			tc.lookup()
-			w := &captureWriter{}
-			suite.IP.splitWriter = w
-			ack := &envCountingAck{}
-			suite.Inbound.Mock.ExpectedCalls = nil
-			suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(
-				inboundEnvelope(suite.T(), 4242, ack, tc.delivered, member("MISSING-A"), member("MISSING-B")), nil).Once()
-			readAndHandleOne(suite.IP, context.Background())
-			time.Sleep(300 * time.Millisecond)
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			assert.Empty(suite.T(), w.msgs, "nothing is split out")
-			assert.EqualValues(suite.T(), 0, ack.n.Load(), "the envelope stays unacked")
-		})
-	}
+	w := &captureWriter{}
+	suite.IP.splitWriter = w
+	ack := &envCountingAck{}
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(
+		inboundEnvelope(suite.T(), 4242, ack, delivered, member("MISSING-A"), member("MISSING-B")), nil).Once()
+	readAndHandleOne(suite.IP, context.Background())
+	time.Sleep(300 * time.Millisecond)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	assert.Empty(suite.T(), w.msgs, "nothing is split out")
+	assert.EqualValues(suite.T(), 0, ack.n.Load(), "the envelope stays unacked")
 }
 
 func (suite *InboundEventsProcessorTestSuite) TestWithoutASplitWriterARetryingMemberHoldsItsEnvelope() {
