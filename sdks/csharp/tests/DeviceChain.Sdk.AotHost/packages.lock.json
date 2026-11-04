@@ -4,15 +4,15 @@
     "net8.0": {
       "Microsoft.DotNet.ILCompiler": {
         "type": "Direct",
-        "requested": "[8.0.31, )",
-        "resolved": "8.0.31",
-        "contentHash": "FPlzoyWyfrMrnZghOyfIH5LILgtGSEfhlutcZJOx+HzwvkL0JUXFgj6pQBUo+JK32leyYK+cyhlZxgRCmLxKvQ=="
+        "requested": "[8.0.33, )",
+        "resolved": "8.0.33",
+        "contentHash": "Jw7z+J2FuzfXxC2LkDN9HhkJ7ljy9++aT4CA59kPwkurTF1GDJ0hhcRjA/QagVyQkfe+xh3C/DHKrem1Vzw+hg=="
       },
       "Microsoft.NET.ILLink.Tasks": {
         "type": "Direct",
-        "requested": "[8.0.31, )",
-        "resolved": "8.0.31",
-        "contentHash": "OJdAGATV2QoVWL11zlDLEluA06q8rK+cgZR47ohrO8V+Qj5z9dlvN7bG9/0e5t0IOe+yD8tREC0bpsEgDGrzIQ=="
+        "requested": "[8.0.33, )",
+        "resolved": "8.0.33",
+        "contentHash": "dG9SM/0/zOTIE1UvSrveD1iDyEJjThqPqSnreExgqQWSoGWvze0esDi0faRk3C44IO1kqCeEX6AeCxWmBOppfw=="
       },
       "MQTTnet": {
         "type": "Transitive",
@@ -41,17 +41,17 @@
     "net8.0/linux-x64": {
       "Microsoft.DotNet.ILCompiler": {
         "type": "Direct",
-        "requested": "[8.0.31, )",
-        "resolved": "8.0.31",
-        "contentHash": "FPlzoyWyfrMrnZghOyfIH5LILgtGSEfhlutcZJOx+HzwvkL0JUXFgj6pQBUo+JK32leyYK+cyhlZxgRCmLxKvQ==",
+        "requested": "[8.0.33, )",
+        "resolved": "8.0.33",
+        "contentHash": "Jw7z+J2FuzfXxC2LkDN9HhkJ7ljy9++aT4CA59kPwkurTF1GDJ0hhcRjA/QagVyQkfe+xh3C/DHKrem1Vzw+hg==",
         "dependencies": {
-          "runtime.linux-x64.Microsoft.DotNet.ILCompiler": "8.0.31"
+          "runtime.linux-x64.Microsoft.DotNet.ILCompiler": "8.0.33"
         }
       },
       "runtime.linux-x64.Microsoft.DotNet.ILCompiler": {
         "type": "Transitive",
-        "resolved": "8.0.31",
-        "contentHash": "kkBeqITEI4aKmAjeYm8KkPZ3qNLcRCMG6HILMZi5JHdQumXJGYJhDHH4hBhTAIAhS+5BzJmJkhB7Zie9CRZeOQ=="
+        "resolved": "8.0.33",
+        "contentHash": "9PeHTazqwLRqT0jXmzmbXak/VfwcVyQa45IP4DZ4Qpn9cV9FowMVxeeeP7VBO7ZWWWJahVkCaW90FSTWfn0YmA=="
       }
     }
   }
