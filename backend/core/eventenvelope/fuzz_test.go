@@ -4,6 +4,7 @@
 package eventenvelope_test
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // envelopes is the messages the corruption tests damage: both kinds, with and without
@@ -140,39 +142,78 @@ func FuzzRoundTrip(f *testing.F) {
 		if rng.Intn(4) == 0 {
 			format = eventtime.WireLegacy
 		}
+		unresolved := rng.Intn(3) == 0
+		kind := eventenvelope.KindResolved
+		if unresolved {
+			kind = eventenvelope.KindUnresolved
+		}
 		var events []eventenvelope.Event
 		idx := uint32(0)
+		outOfOrder := false
 		for i := 0; i < k; i++ {
-			e := realisticResolved(rng.Intn(1000))
-			switch rng.Intn(6) {
-			case 0:
-				e.DeviceTypeToken, e.ProfileVersionToken = "", ""
-			case 1:
-				e.OccurredTime = e.OccurredTime.AddDate(-400, 0, 0) // string form
-			case 2:
-				e.ProcessedTime = e.ProcessedTime.AddDate(400, 0, 0)
-			case 3:
-				e.ExternalId = "ext-" + e.SourceDeviceToken
-				e.GatewayToken = "gw-1"
+			var b []byte
+			if unresolved {
+				occ, proc := t0.UnixNano()+rng.Int63n(1e9)-5e8, t0.UnixNano()+rng.Int63n(1e9)
+				var op, pp *int64
+				if rng.Intn(5) != 0 {
+					op = &occ
+				}
+				if rng.Intn(5) != 0 {
+					pp = &proc
+				}
+				payload := make([]byte, rng.Intn(40))
+				rng.Read(payload)
+				b = unresolvedBytes("mqtt", fmt.Sprintf("dev-%d", rng.Intn(50)), int64(1+rng.Intn(3)), payload, op, pp)
+			} else {
+				e := realisticResolved(rng.Intn(1000))
+				switch rng.Intn(6) {
+				case 0:
+					e.DeviceTypeToken, e.ProfileVersionToken = "", ""
+				case 1:
+					e.OccurredTime = e.OccurredTime.AddDate(-400, 0, 0) // string form
+				case 2:
+					e.ProcessedTime = e.ProcessedTime.AddDate(400, 0, 0)
+				case 3:
+					e.ExternalId = "ext-" + e.SourceDeviceToken
+					e.GatewayToken = "gw-1"
+				}
+				var err error
+				b, err = resolvedevent.MarshalResolvedEventAs(e, format)
+				require.NoError(t, err)
+				if rng.Intn(5) == 0 {
+					b = withEmptyDeviceType(t, b)
+				}
 			}
-			b, err := resolvedevent.MarshalResolvedEventAs(e, format)
-			require.NoError(t, err)
+			// An unknown field above every known one is in order and must come back exactly; a
+			// field below the interned ones, written after them, is out of order and is refused.
+			switch rng.Intn(8) {
+			case 0:
+				b = protowire.AppendString(protowire.AppendTag(b, 100+protowire.Number(rng.Intn(50)), protowire.BytesType), "unknown")
+			case 1:
+				b = protowire.AppendString(protowire.AppendTag(b, 3, protowire.BytesType), "late")
+				outOfOrder = true
+			}
 			idx += 1 + uint32(rng.Intn(3))
 			events = append(events, eventenvelope.Event{Index: idx, Bytes: b})
 		}
-		h := resolvedHeader()
+		h := eventenvelope.Header{Kind: kind, Tenant: "acme"}
 		h.SourceSeq = rng.Uint64()
 		h.Round = uint32(rng.Intn(3))
 		for i := 0; i < rng.Intn(4); i++ {
 			h.SettledElsewhere = append(h.SettledElsewhere, idx+1+uint32(i))
 		}
 		msg, err := eventenvelope.Encode(h, events)
+		if outOfOrder {
+			require.ErrorIs(t, err, eventenvelope.ErrBadInput, "an out-of-order event must be refused, not enveloped")
+			return
+		}
 		if err != nil {
 			require.ErrorIs(t, err, eventenvelope.ErrTooLarge)
 			return
 		}
 		r, err := eventenvelope.Parse(msg)
 		require.NoError(t, err)
+		require.Equal(t, h.Kind, r.Header().Kind)
 		require.Equal(t, h.SettledElsewhere, r.Header().SettledElsewhere)
 		require.Equal(t, h.SourceSeq, r.Header().SourceSeq)
 		require.Equal(t, k, r.Len())
@@ -181,11 +222,13 @@ func FuzzRoundTrip(f *testing.F) {
 			got, err := r.Member(i)
 			require.NoError(t, err)
 			require.Equal(t, events[i].Bytes, got)
-			want, err := resolvedevent.UnmarshalResolvedEvent(events[i].Bytes)
-			require.NoError(t, err)
-			typed, err := resolvedevent.UnmarshalEnvelopeMember(r, i)
-			require.NoError(t, err)
-			require.Equal(t, want, typed)
+			if !unresolved {
+				want, err := resolvedevent.UnmarshalResolvedEvent(events[i].Bytes)
+				require.NoError(t, err)
+				typed, err := resolvedevent.UnmarshalEnvelopeMember(r, i)
+				require.NoError(t, err)
+				require.Equal(t, want, typed)
+			}
 		}
 		// And a corrupted copy is refused.
 		bad := append([]byte(nil), msg...)

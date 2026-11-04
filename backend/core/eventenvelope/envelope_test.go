@@ -289,7 +289,9 @@ func TestParseRefusesWhatTheBoundsForbid(t *testing.T) {
 			rec = protowire.AppendVarint(rec, next-1)
 		}
 		rec = protowire.AppendTag(rec, 6, protowire.BytesType)
-		rec = protowire.AppendBytes(rec, make([]byte, n))
+		// a well-formed event: field 3 holding n bytes
+		ev := protowire.AppendBytes(protowire.AppendTag(nil, 3, protowire.BytesType), make([]byte, n))
+		rec = protowire.AppendBytes(rec, ev)
 		return protowire.AppendBytes(nil, rec)
 	}
 	t.Run("count 65", func(t *testing.T) {
@@ -348,7 +350,9 @@ func TestParseRefusesWhatTheBoundsForbid(t *testing.T) {
 		assert.ErrorIs(t, err, eventenvelope.ErrCorrupt)
 	})
 	t.Run("a message over the bound", func(t *testing.T) {
-		_, err := eventenvelope.Parse(make([]byte, 1<<20))
+		big := make([]byte, 1<<20)
+		big[0], big[1] = 0x08, 1 // a version-1 start
+		_, err := eventenvelope.Parse(big)
 		assert.ErrorIs(t, err, eventenvelope.ErrTooLarge)
 	})
 }

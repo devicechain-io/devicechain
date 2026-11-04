@@ -470,7 +470,7 @@ func resolvedFromWire(pbevent *PResolvedEvent, deviceTypeToken, profileVersionTo
 
 // UnmarshalEnvelopeMember decodes the i'th member of a resolved-kind envelope: the same
 // ResolvedEvent UnmarshalResolvedEvent returns for the member's legacy bytes
-// (envelope_member_test.go holds the two together), without rebuilding those bytes. The two
+// (eventenvelope's TestBothDecodersAgree holds the two together), without rebuilding those bytes. The two
 // tokens come from the envelope's dictionary, shared across its members, and the instants
 // from its base time.
 func UnmarshalEnvelopeMember(r *eventenvelope.Reader, i int) (*ResolvedEvent, error) {

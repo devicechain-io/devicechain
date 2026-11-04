@@ -73,6 +73,9 @@ func Encode(h Header, events []Event) ([]byte, error) {
 	if k == 1 && h.Round == 0 && len(h.SettledElsewhere) == 0 {
 		return nil, ErrSingleMember
 	}
+	if len(h.SettledElsewhere) > MaxMembers {
+		return nil, ErrTooManyMembers
+	}
 	if err := checkAscending(h.SettledElsewhere); err != nil {
 		return nil, err
 	}
@@ -224,6 +227,10 @@ func Encode(h Header, events []Event) ([]byte, error) {
 	if k != 0 {
 		out = protowire.AppendTag(out, fRawSize, protowire.VarintType)
 		out = protowire.AppendVarint(out, uint64(len(raw)))
+	}
+	// Nothing is written that Parse would refuse as too large.
+	if len(out)+checksumTailSize > maxMessageBytes {
+		return nil, ErrTooLarge
 	}
 	sum := crc32.Checksum(out, crcTable)
 	out = protowire.AppendTag(out, fChecksum, protowire.Fixed32Type)

@@ -35,13 +35,28 @@ type Reader struct {
 
 // Parse validates data as an envelope and returns a Reader over it.
 //
-// It refuses, wrapping ErrCorrupt, anything that is not exactly what Encode writes: a
-// checksum that does not match, a field out of order, repeated or outside the format, a
-// declared count or raw size that disagrees with the members, a dictionary reference
-// outside the dictionary, member indices that are not ascending. An unknown version is
-// ErrVersion, a member count or raw size beyond the bounds is ErrTooManyMembers or
-// ErrTooLarge, all checked before anything is inflated.
+// The version is read FIRST, before the checksum and before any field is walked: the version
+// field is the first field of every version of the format, so a message of a version this
+// reader does not know is ErrVersion however its other fields (or its checksum rule) have
+// changed. A caller can then tell "written by a newer release" from "damaged".
+//
+// It then refuses, wrapping ErrCorrupt, what Encode could not have written: a checksum that
+// does not match, a field out of order, repeated or outside the format, a declared count or raw
+// size that disagrees with the members, a dictionary reference outside the dictionary, member
+// indices that are not ascending, a member whose event bytes still carry a field the envelope
+// interns (so Member and the typed decoder cannot disagree about it), more than MaxMembers
+// settled indices. It does NOT promise to refuse every message Encode would not write (a
+// member's event bytes are opaque beyond that), only that anything it accepts decodes the same
+// through Member and through Parts. A member count or raw size beyond the bounds is
+// ErrTooManyMembers or ErrTooLarge, checked before anything is inflated.
 func Parse(data []byte) (*Reader, error) {
+	// Field 1 (version), tag 0x08, as a varint.
+	if len(data) < 2 || data[0] != byte(protowire.EncodeTag(fVersion, protowire.VarintType)) {
+		return nil, fmt.Errorf("%w: the message does not begin with a version", ErrVersion)
+	}
+	if v, n := protowire.ConsumeVarint(data[1:]); n < 0 || v != Version {
+		return nil, fmt.Errorf("%w: %d", ErrVersion, v)
+	}
 	if len(data) > maxMessageBytes {
 		return nil, ErrTooLarge
 	}
@@ -153,8 +168,8 @@ func Parse(data []byte) (*Reader, error) {
 				if l := len(r.hdr.SettledElsewhere); l > 0 && uint32(v) <= r.hdr.SettledElsewhere[l-1] {
 					return nil, corrupt("settled indices are not ascending")
 				}
-				if len(r.hdr.SettledElsewhere) >= maxIndex {
-					return nil, corrupt("too many settled indices")
+				if len(r.hdr.SettledElsewhere) >= MaxMembers {
+					return nil, ErrTooManyMembers
 				}
 				r.hdr.SettledElsewhere = append(r.hdr.SettledElsewhere, uint32(v))
 				b = b[m:]
@@ -169,7 +184,7 @@ func Parse(data []byte) (*Reader, error) {
 	}
 
 	if version != Version {
-		return nil, fmt.Errorf("%w: %d", ErrVersion, version)
+		return nil, fmt.Errorf("%w: %d", ErrVersion, version) // unreachable: read first; kept as the invariant
 	}
 	r.hdr.Kind = Kind(kind)
 	if kind > 0xff || !r.hdr.Kind.valid() {
@@ -324,6 +339,9 @@ func parseMember(rec []byte, dictLen int, kind Kind) (member, error) {
 			if len(b) == 0 {
 				return m, corrupt("empty event")
 			}
+			if err := checkStripped(b, layoutFor(kind)); err != nil {
+				return m, err
+			}
 			m.event = b
 		default:
 			return m, corrupt("unknown member field %d", num)
@@ -333,6 +351,29 @@ func parseMember(rec []byte, dictLen int, kind Kind) (member, error) {
 		return m, corrupt("a delta for an instant the member does not carry")
 	}
 	return m, nil
+}
+
+// checkStripped refuses member event bytes that are not well-formed protobuf or that still carry
+// a field the envelope interns. Such a member was not produced by Encode, and it would have two
+// sources of truth for the field (the bytes and the member's refs or deltas) that the two
+// decoders resolve differently.
+func checkStripped(event []byte, lay *layout) error {
+	for rest := event; len(rest) > 0; {
+		num, typ, n := protowire.ConsumeTag(rest)
+		if n < 0 {
+			return corrupt("member event is not well-formed protobuf")
+		}
+		vn := protowire.ConsumeFieldValue(num, typ, rest[n:])
+		if vn < 0 {
+			return corrupt("member event is not well-formed protobuf")
+		}
+		if (lay.refA != 0 && num == lay.refA) || (lay.refB != 0 && num == lay.refB) ||
+			num == lay.occurred || num == lay.processed {
+			return corrupt("member event carries field %d that the envelope interns", num)
+		}
+		rest = rest[n+vn:]
+	}
+	return nil
 }
 
 // Header returns what the envelope says about its members. The slice of settled indices is

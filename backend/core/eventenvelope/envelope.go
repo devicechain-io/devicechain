@@ -100,8 +100,9 @@ const (
 var (
 	// ErrTooManyMembers refuses an envelope of more than MaxMembers.
 	ErrTooManyMembers = errors.New("event envelope: more than 64 members")
-	// ErrTooLarge refuses member bytes beyond MaxRawBytes (or a message beyond its bound).
-	ErrTooLarge = errors.New("event envelope: members exceed 64 KiB")
+	// ErrTooLarge refuses an envelope beyond its size bounds: more than MaxRawBytes of member
+	// bytes, or a whole message longer than any envelope within them can be.
+	ErrTooLarge = errors.New("event envelope: exceeds the size bound (64 KiB of members)")
 	// ErrSingleMember refuses to envelope exactly one event: that is the legacy shape.
 	ErrSingleMember = errors.New("event envelope: one event is published in the legacy shape")
 	// ErrEmpty refuses an envelope that carries nothing at all.
@@ -151,10 +152,12 @@ type Event struct {
 	Bytes []byte
 }
 
-// Marked reports whether a message's headers mark it as an envelope. h is a nats.Header, or
-// anything with its Get.
+// Marked reports whether a message's headers mark it as an envelope of the format this package
+// reads: the header is present AND names this version. h is a nats.Header, or anything with its
+// Get. A message marked with another value is not Marked, so a reader treats it as what it
+// cannot decode (poison) instead of guessing at a format it does not know.
 func Marked(h interface{ Get(string) string }) bool {
-	return h != nil && h.Get(HeaderName) != ""
+	return h != nil && h.Get(HeaderName) == HeaderValue
 }
 
 // layout names the field numbers of an event that the envelope interns. 0 = none.
@@ -195,9 +198,22 @@ type parts struct {
 
 // strip copies the fields of event that are not interned onto dst and returns it with what
 // it took out. Interned strings are returned as slices of event, for the caller to intern.
+//
+// 🔴 strip REFUSES (ErrBadInput) an event that Member(i) would not give back byte for byte, so
+// "a reader gets the producer's bytes" is a property of Encode and not an assumption about its
+// callers. The rebuild puts the interned fields back in field-number order with the shortest tag
+// and length, so an event is refused when
+//
+//   - its fields are not in ascending field-number order (equal numbers, a repeated
+//     non-interned field, are fine): proto.Marshal writes unknown fields last, after field 18, and
+//     an event with one would come back with 17 and 18 after it;
+//   - an interned field's tag or length is not the shortest encoding of itself.
+//
+// The producer falls back to the legacy shape for such an event, which is always valid.
 func strip(dst []byte, event []byte, lay *layout) (out []byte, p parts, a, b []byte, hasA, hasB bool, err error) {
 	out = dst
 	rest := event
+	var last protowire.Number
 	for len(rest) > 0 {
 		num, typ, n := protowire.ConsumeTag(rest)
 		if n < 0 {
@@ -207,6 +223,15 @@ func strip(dst []byte, event []byte, lay *layout) (out []byte, p parts, a, b []b
 		if vn < 0 {
 			return dst, p, nil, nil, false, false, badInput("event is not well-formed protobuf")
 		}
+		if num < last {
+			return dst, p, nil, nil, false, false, badInput("event field %d follows field %d: fields are not in ascending order", num, last)
+		}
+		last = num
+		interned := (lay.refA != 0 && num == lay.refA) || (lay.refB != 0 && num == lay.refB) ||
+			num == lay.occurred || num == lay.processed
+		if interned && n != protowire.SizeVarint(protowire.EncodeTag(num, typ)) {
+			return dst, p, nil, nil, false, false, badInput("event field %d has a tag that is not the shortest encoding", num)
+		}
 		field := rest[:n+vn]
 		switch {
 		case lay.refA != 0 && num == lay.refA:
@@ -214,12 +239,18 @@ func strip(dst []byte, event []byte, lay *layout) (out []byte, p parts, a, b []b
 				return dst, p, nil, nil, false, false, badInput("event field %d is repeated or not a string", num)
 			}
 			a, _ = protowire.ConsumeBytes(rest[n:])
+			if vn-len(a) != protowire.SizeVarint(uint64(len(a))) {
+				return dst, p, nil, nil, false, false, badInput("event field %d has a length that is not the shortest encoding", num)
+			}
 			hasA = true
 		case lay.refB != 0 && num == lay.refB:
 			if typ != protowire.BytesType || hasB {
 				return dst, p, nil, nil, false, false, badInput("event field %d is repeated or not a string", num)
 			}
 			b, _ = protowire.ConsumeBytes(rest[n:])
+			if vn-len(b) != protowire.SizeVarint(uint64(len(b))) {
+				return dst, p, nil, nil, false, false, badInput("event field %d has a length that is not the shortest encoding", num)
+			}
 			hasB = true
 		case num == lay.occurred:
 			if typ != protowire.Fixed64Type || p.hasOcc {

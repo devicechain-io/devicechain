@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +55,38 @@ func goldens(t testing.TB) map[string]struct {
 		occ, proc := at+int64(i)*1_000_000, at+int64(i)*1_000_000+400_000
 		ev = append(ev, eventenvelope.Event{Index: uint32(i), Bytes: unresolvedBytes("mqtt", "dev-"+string(rune('a'+i)), 1, []byte{9, 8, 7, byte(i)}, &occ, &proc)})
 	}
+
+	// Every instant as a string, as a producer on the legacy wire format writes them: both
+	// member flags set, no numeric instant at all, so the base time is absent.
+	var legacyFmt []eventenvelope.Event
+	for i := 0; i < 3; i++ {
+		legacyFmt = append(legacyFmt, eventenvelope.Event{Index: uint32(i), Bytes: legacyBytes(t, loadtestResolved(i), eventtime.WireLegacy)})
+	}
+	out["resolved_string_instants_no_base"] = g{resolvedHeader(), legacyFmt}
+
+	// Tokens absent on some members, present-but-empty on one, a later member EARLIER than the
+	// first (negative deltas), and one member with a string instant among numeric ones.
+	noTokens := loadtestResolved(1)
+	noTokens.DeviceTypeToken, noTokens.ProfileVersionToken = "", ""
+	early := loadtestResolved(2)
+	early.OccurredTime = early.OccurredTime.Add(-90 * time.Second)
+	early.ProcessedTime = early.OccurredTime.Add(-time.Second)
+	stringInstant := loadtestResolved(3)
+	stringInstant.OccurredTime = time.Date(1500, 1, 2, 3, 4, 5, 6, time.UTC)
+	mixed := []eventenvelope.Event{
+		{Index: 0, Bytes: legacyBytes(t, loadtestResolved(0), eventtime.WireCompact)},
+		{Index: 1, Bytes: legacyBytes(t, noTokens, eventtime.WireCompact)},
+		{Index: 2, Bytes: withEmptyDeviceType(t, legacyBytes(t, noTokens, eventtime.WireCompact))},
+		{Index: 3, Bytes: legacyBytes(t, early, eventtime.WireCompact)},
+		{Index: 5, Bytes: legacyBytes(t, stringInstant, eventtime.WireCompact)},
+	}
+	out["resolved_absent_empty_refs_negative_deltas"] = g{resolvedHeader(), mixed}
+
+	// A settlement record that carries no members at all.
+	hs := resolvedHeader()
+	hs.Round, hs.SettledElsewhere = 2, []uint32{0, 1, 2, 7}
+	out["resolved_settlement_only"] = g{hs, nil}
+
 	out["unresolved_k3_plain"] = g{eventenvelope.Header{Kind: eventenvelope.KindUnresolved, Tenant: "acme", SourceSeq: 77}, ev}
 	return out
 }
