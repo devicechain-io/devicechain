@@ -7,11 +7,15 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/devicechain-io/dc-k8s/functionalarea"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -25,8 +29,10 @@ import (
 //	loadbalancer  a Service of type LoadBalancer for 8883 straight to the broker pods.
 //
 // 🔴 PLAINTEXT MQTT IS NEVER EXPOSED BY THIS FEATURE. Both modes carry the broker's own TLS
-// listener, and a request made while TLS is off is refused here, in the chart, and by the
-// declaration's own CEL rule.
+// listener (8883 is the only port published), and the chart refuses to render an exposure over a
+// broker whose own TLS is off. The gate is the BROKER's TLS, which dcctl always turns on, and not
+// the ingress's: a compact cluster serves its console over plain HTTP (--no-tls) and can still
+// expose MQTT, because the device path never touches the ingress certificate.
 const (
 	MQTTExposureNone         = "none"
 	MQTTExposureGateway      = "gateway"
@@ -71,10 +77,10 @@ type mqttSettlement struct {
 // what the run was given. Pure, so every refusal is testable without a cluster.
 //
 // 🔴 ABSENT FLAGS KEEP WHAT IS RECORDED, so an upgrade that never mentions the feature neither
-// opens a port nor closes one; "none" is the only way to close it, and it is explicit. And every
-// path that leaves an exposure ON re-checks that TLS is on, so an instance cannot be left
-// exposing MQTT by a later --no-tls.
-func settleMQTTExposure(recMode, recHost, givenMode, givenHost string, noTLS bool) (mqttSettlement, error) {
+// opens a port nor closes one; "none" is the only way to close it, and it is explicit. Every
+// path that leaves an exposure ON is judged again here, so an instance cannot be left
+// exposing MQTT over a broker without TLS (the chart's own gate).
+func settleMQTTExposure(recMode, recHost, givenMode, givenHost string) (mqttSettlement, error) {
 	if err := ValidateMQTTExposure(givenMode); err != nil {
 		return mqttSettlement{}, err
 	}
@@ -107,10 +113,6 @@ func settleMQTTExposure(recMode, recHost, givenMode, givenHost string, noTLS boo
 		}
 		if err := ValidateMQTTHost(host); err != nil {
 			return mqttSettlement{}, err
-		}
-		if noTLS {
-			return mqttSettlement{}, fmt.Errorf("--mqtt-exposure %s is refused while TLS is off (--no-tls): plaintext MQTT is never "+
-				"exposed outside the cluster. Serve this instance over TLS, or leave MQTT unexposed", mode)
 		}
 	}
 	rm := recMode
@@ -161,7 +163,7 @@ func adoptMQTTExposure(st *State, recorded *dcv1beta1.InstanceSpec, givenMode, g
 	if recorded != nil {
 		recMode, recHost = recorded.MQTTExposure, recorded.MQTTHost
 	}
-	got, err := settleMQTTExposure(recMode, recHost, givenMode, givenHost, st.NoTLS)
+	got, err := settleMQTTExposure(recMode, recHost, givenMode, givenHost)
 	if err != nil {
 		return err
 	}
@@ -187,21 +189,27 @@ func refuseMQTTHostTaken(host, instance string, others []dcv1beta1.Instance) err
 
 // traefikServesMQTT says whether the cluster's Traefik Service publishes the 8883 entrypoint that
 // gateway mode needs.
-func traefikServesMQTT(ctx context.Context, typed kubernetes.Interface) (bool, error) {
+//
+// found says a Traefik Service was there to read at all. "Not found" is NOT "no 8883": a caller
+// that expects Traefik (an instance on the Gateway front end) must treat found=false as an error,
+// because reading a renamed or missing Service as "closed" would send the operator off to open a
+// port that is already open, or hide that Traefik is not where dcctl looks.
+func traefikServesMQTT(ctx context.Context, typed kubernetes.Interface) (open, found bool, err error) {
 	svcs, err := typed.CoreV1().Services(traefikNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/name=traefik,app.kubernetes.io/instance=traefik-" + traefikNamespace,
 	})
 	if err != nil {
-		return false, fmt.Errorf("listing the Services in %s: %w", traefikNamespace, err)
+		return false, false, fmt.Errorf("listing the Services in %s: %w", traefikNamespace, err)
 	}
 	for _, s := range svcs.Items {
+		found = true
 		for _, p := range s.Spec.Ports {
 			if p.Port == mqttsPort && p.Protocol != corev1.ProtocolUDP {
-				return true, nil
+				return true, true, nil
 			}
 		}
 	}
-	return false, nil
+	return false, found, nil
 }
 
 // settleMQTTExposurePrereqs checks, against the cluster, what the settled exposure needs. It runs
@@ -220,9 +228,15 @@ func settleMQTTExposurePrereqs(ctx context.Context, st *State) error {
 		return fmt.Errorf("checking the cluster for --mqtt-exposure: %w", err)
 	}
 	if st.MQTTExposure == MQTTExposureGateway {
-		ok, err := traefikServesMQTT(ctx, typed)
+		ok, found, err := traefikServesMQTT(ctx, typed)
 		if err != nil {
 			return err
+		}
+		if !found {
+			return fmt.Errorf("--mqtt-exposure gateway expects Traefik, and no Traefik Service was found in namespace %q "+
+				"(labels app.kubernetes.io/name=traefik, app.kubernetes.io/instance=traefik-%s). The instance is served by the "+
+				"Gateway front end, so Traefik should be there: check the cluster before trusting this run, or use "+
+				"--mqtt-exposure loadbalancer", traefikNamespace, traefikNamespace)
 		}
 		if !ok {
 			return fmt.Errorf("--mqtt-exposure gateway needs the ingress controller to listen on %d, and this cluster's Traefik "+
@@ -283,14 +297,21 @@ func recordedMQTTSpec(st *State) dcv1beta1.InstanceSpec {
 //
 // 🔴 ABSENT MEANS KEEP, because the root's variable defaults to off: a re-run that forgot the flag
 // would otherwise close the port every gateway-exposed instance's devices connect through.
-func mqttGatewayPlan(ctx context.Context, typed kubernetes.Interface, given *bool) (vars, warnings []string, err error) {
-	open, err := traefikServesMQTT(ctx, typed)
+func mqttGatewayPlan(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, given *bool) (vars, warnings []string, err error) {
+	open, _, err := traefikServesMQTT(ctx, typed)
 	if err != nil {
 		return nil, nil, err
 	}
 	want := open
 	if given != nil {
 		want = *given
+	}
+	if open && !want {
+		// 🔴 CLOSING THE PORT IS REFUSED WHILE AN INSTANCE ROUTES THROUGH IT, the way
+		// --remove-legacy-ingress is refused while an Ingress object names the class it removes.
+		if err := refuseClosingMQTTGateway(ctx, dyn); err != nil {
+			return nil, nil, err
+		}
 	}
 	if want {
 		vars = append(vars, "traefik_mqtt_entrypoint=true")
@@ -300,8 +321,8 @@ func mqttGatewayPlan(ctx context.Context, typed kubernetes.Interface, given *boo
 		warnings = append(warnings, fmt.Sprintf("--mqtt-gateway publishes TCP %d on the ingress controller's Service (on a cloud, "+
 			"its load balancer). Nothing is routed to it until an instance asks: dcctl bootstrap|upgrade --mqtt-exposure gateway --mqtt-host <name>", mqttsPort))
 	case !want && open:
-		warnings = append(warnings, fmt.Sprintf("--mqtt-gateway=false closes TCP %d on the ingress controller. An instance exposed with "+
-			"--mqtt-exposure gateway stops being reachable by devices until it is opened again", mqttsPort))
+		warnings = append(warnings, fmt.Sprintf("--mqtt-gateway=false closes TCP %d on the ingress controller; no instance routes "+
+			"MQTT through it", mqttsPort))
 	}
 	return vars, warnings, nil
 }
@@ -309,7 +330,7 @@ func mqttGatewayPlan(ctx context.Context, typed kubernetes.Interface, given *boo
 // CheckMQTTExposureFlags judges --mqtt-exposure and --mqtt-host on their own, before any cluster
 // exists. With no mode given there is nothing to judge here: a host alone is meaningful over an
 // instance that already records an exposure, which only the pipeline can see.
-func CheckMQTTExposureFlags(mode, host string, noTLS bool) error {
+func CheckMQTTExposureFlags(mode, host string) error {
 	if err := ValidateMQTTExposure(mode); err != nil {
 		return err
 	}
@@ -319,6 +340,84 @@ func CheckMQTTExposureFlags(mode, host string, noTLS bool) error {
 		}
 		return nil
 	}
-	_, err := settleMQTTExposure("", "", mode, host, noTLS)
+	_, err := settleMQTTExposure("", "", mode, host)
 	return err
+}
+
+// mqttCapableUsers are the static broker logins allowed to speak MQTT: event-sources' (the MQTT
+// event source and the presence canary connect with it), and the transitional shared login while
+// the instance still has one. Every other static login is NATS-protocol only.
+func mqttCapableUsers(st *State) []string {
+	users := []string{natsauth.LoginUser(string(functionalarea.EventSources))}
+	if sharedLoginRetainedFor(st) {
+		users = append(users, natsauth.ServiceUser)
+	}
+	sort.Strings(users)
+	return users
+}
+
+// mqttCapableUsersVar renders mqttCapableUsers as the HCL list the instance root takes.
+func mqttCapableUsersVar(st *State) string {
+	parts := make([]string, 0, 2)
+	for _, u := range mqttCapableUsers(st) {
+		parts = append(parts, fmt.Sprintf("%q", u))
+	}
+	return "nats_mqtt_capable_users=[" + strings.Join(parts, ",") + "]"
+}
+
+// refuseClosingMQTTGateway refuses to close Traefik's 8883 entrypoint while any instance on the
+// cluster declares gateway-mode MQTT exposure: its devices would stop connecting while its
+// declaration, its Gateway listener and its route all still said they could.
+func refuseClosingMQTTGateway(ctx context.Context, dyn dynamic.Interface) error {
+	if dyn == nil {
+		return fmt.Errorf("--mqtt-gateway=false cannot check which instances route MQTT through the port it would close " +
+			"(the cluster's instance declarations could not be read), so it is refused")
+	}
+	names, err := declaredInstances(ctx, dyn)
+	if err != nil {
+		return err
+	}
+	var using []string
+	for _, n := range names {
+		inst, err := readInstanceCR(ctx, dyn, n)
+		if err != nil {
+			return err
+		}
+		if inst != nil && inst.Spec.MQTTExposure == MQTTExposureGateway {
+			using = append(using, n)
+		}
+	}
+	if len(using) > 0 {
+		return fmt.Errorf("--mqtt-gateway=false would close TCP %d on the ingress controller while %s still expose MQTT through it "+
+			"(--mqtt-exposure gateway). Move them off first (dcctl upgrade <provider> <instance> --mqtt-exposure none, or "+
+			"loadbalancer), then run it again", mqttsPort, strings.Join(using, ", "))
+	}
+	return nil
+}
+
+// maxBrokerConnections bounds --broker-max-connections to what a broker can be configured with.
+const maxBrokerConnections = 10_000_000
+
+// adoptBrokerMaxConnections settles the broker's connection cap: this run's flag over the recorded
+// value. nil keeps the recorded cap; 0 clears it (the server's own limit).
+func adoptBrokerMaxConnections(st *State, recorded int, given *int) error {
+	st.BrokerMaxConnections, st.BrokerMaxConnectionsChange = recorded, false
+	if given == nil {
+		return nil
+	}
+	if *given < 0 || *given > maxBrokerConnections {
+		return fmt.Errorf("--broker-max-connections %d: want 0 (the server's own limit) or a whole number up to %d", *given, maxBrokerConnections)
+	}
+	st.BrokerMaxConnectionsChange = *given != recorded
+	st.BrokerMaxConnections = *given
+	return nil
+}
+
+// BrokerMaxConnectionsFromFlag turns a flag's (given, value) pair into the Options field.
+func BrokerMaxConnectionsFromFlag(given bool, value int) *int {
+	if !given {
+		return nil
+	}
+	v := value
+	return &v
 }

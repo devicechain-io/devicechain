@@ -25,6 +25,9 @@ var (
 	upgradeMQTTExposure   string
 	upgradeMQTTHost       string
 
+	upgradeBrokerMaxConnections      int
+	upgradeBrokerMaxConnectionsGiven bool
+
 	upgradeLwm2mIdentities   string
 	upgradeWithdrawLwm2m     bool
 	upgradeLwm2mIdentityList []bootstrap.Lwm2mIdentity
@@ -64,7 +67,9 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			TrustedProxies: upgradeTrustedProxies,
 			MQTTExposure:   upgradeMQTTExposure,
 			MQTTHost:       upgradeMQTTHost,
-			ValuesOverlay:  valuesOverlay,
+
+			BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(upgradeBrokerMaxConnectionsGiven, upgradeBrokerMaxConnections),
+			ValuesOverlay:        valuesOverlay,
 
 			IngressController: upgradeIngressController,
 			DropLegacyIngress: upgradeDropLegacyIngress,
@@ -219,7 +224,8 @@ when they are in a terraform.tfvars beside its state
 			return fmt.Errorf("--drop-legacy-ingress stops rendering the Ingress objects beside the Gateway, and --ingress-controller nginx makes them the only front end; give one")
 		}
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
-		if err := bootstrap.CheckMQTTExposureFlags(upgradeMQTTExposure, upgradeMQTTHost, false); err != nil {
+		upgradeBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
+		if err := bootstrap.CheckMQTTExposureFlags(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
 			return err
 		}
 		if upgradeResetValues && len(upgradeValues) > 0 {
@@ -263,6 +269,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
+	upgradeCmd.Flags().IntVar(&upgradeBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTHost, "mqtt-host", "", mqttHostUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)

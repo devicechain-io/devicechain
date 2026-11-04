@@ -10,7 +10,7 @@ Los dispositivos llegan al bróker MQTT de la plataforma por TLS en el puerto TC
 En un clúster local `kind` nada de esto hace falta: `dcctl` ya asigna el puerto 1883 de tu máquina al bróker, como se describe en [Conectar un dispositivo](../guides/connecting-a-device.md#publishing-an-event).
 
 :::note El MQTT en texto plano nunca se expone
-Ambos modos transportan únicamente el listener TLS del bróker. La ruta en texto plano no se publica, y `dcctl` se niega a exponer MQTT en una instancia que no sirve TLS (`--no-tls`). El propio bróker termina el TLS y hace la autenticación de dispositivos, incluidos los [certificados de dispositivo](./device-certificates.md); el controlador de ingreso nunca ve el tráfico en claro.
+Ambos modos transportan únicamente el listener TLS del bróker, en el 8883. El puerto en texto plano no se publica, y el chart se niega a renderizar una exposición sobre un bróker cuyo propio TLS está desactivado. El propio bróker termina el TLS y hace la autenticación de dispositivos, incluidos los [certificados de dispositivo](./device-certificates.md); el controlador de ingreso nunca ve el tráfico en claro. El TLS del bróker no depende del de la consola, así que un clúster compacto que sirve su consola por HTTP plano (`--no-tls`) puede exponer MQTT igualmente.
 :::
 
 ## Elegir un modo {#modes}
@@ -62,16 +62,18 @@ Esto crea el Service `dc-nats-mqtt-lb` en el namespace de la instancia, con `ext
 mqttExposure:
   loadBalancer:
     annotations:
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+      service.beta.kubernetes.io/aws-load-balancer-internal: "true"
     sourceRanges:
       - 203.0.113.0/24
 ```
 
-En EKS, un Service `LoadBalancer` obtiene un balanceador Classic salvo que se anote para un Network Load Balancer; añade ahí `service.beta.kubernetes.io/aws-load-balancer-type: nlb`. Para el balanceador de Traefik en modo gateway, lo hace `dcctl install --aws-nlb traefik`.
+**Un `sourceRanges` vacío permite cualquier dirección de origen (`0.0.0.0/0`).** Defínelo, o restringe el puerto en el cortafuegos de la nube, salvo que tus dispositivos se conecten realmente desde cualquier parte.
+
+En EKS, un Service `LoadBalancer` obtiene un balanceador Classic salvo que se anote para un Network Load Balancer; añade ahí `service.beta.kubernetes.io/aws-load-balancer-type: nlb`. Las anotaciones `aws-load-balancer-scheme` y `aws-load-balancer-nlb-target-type` solo las lee el AWS Load Balancer Controller, que debe estar instalado para que surtan efecto; `aws-load-balancer-internal: "true"` la respeta el proveedor de nube integrado en Kubernetes. Para el balanceador de Traefik en modo gateway, lo hace `dcctl install --aws-nlb traefik`.
 
 ### Qué hace una actualización {#enable-effects}
 
-El ajuste se registra en la instancia y lo conserva cada `dcctl upgrade` posterior, así que das las opciones una sola vez. El nombre de host se añade al certificado del bróker, y un bróker que aún no lo lleva recibe un certificado nuevo y **se reinicia**. Un reinicio del bróker es una breve interrupción para los dispositivos conectados y, como con cualquier reinicio del bróker, una ventana en la que se pueden perder mensajes ya confirmados salvo que el [MQTT fail-closed](../reference/transport-matrix.md#mqtt--the-platform-broker) esté activado. Planifícalo como una actualización de versión.
+El ajuste se registra en la instancia y lo conserva cada `dcctl upgrade` posterior, así que das las opciones una sola vez. El nombre de host se añade al certificado del bróker. El bróker adopta en caliente un certificado que solo ha ganado el nombre de host, sin reiniciarse y sin desconectar a los dispositivos conectados; el certificado se vuelve a emitir bajo la misma autoridad, así que no hay nada que volver a confiar. (Un cambio que además altere las rutas del bróker o su autoridad sigue reiniciando el bróker, y un reinicio del bróker es, como cualquier reinicio, una ventana en la que se pueden perder mensajes ya confirmados salvo que el [MQTT fail-closed](../reference/transport-matrix.md#mqtt--the-platform-broker) esté activado.) Si el certificado no se puede volver a emitir, porque la instancia no conserva la autoridad que lo firmó, `dcctl` se detiene antes de cambiar nada y lo indica.
 
 Para desactivar la exposición usa `--mqtt-exposure none`. Elimina la ruta o el Service; el certificado conserva el nombre adicional hasta su próxima renovación, lo que es inofensivo.
 
@@ -98,6 +100,20 @@ No hace falta abrir nada más para MQTT. La nube crea la regla de un Service `Lo
 
 En modo gateway, el bróker ve la dirección del controlador de ingreso como origen de todos los dispositivos, no la del propio dispositivo. Todo lo que se base en la dirección de origen de un dispositivo en el bróker se comparte, por tanto, entre todos los dispositivos que están detrás de un controlador. El modo balanceador de carga con un balanceador que conserva la dirección del cliente (un Network Load Balancer en AWS, el balanceador de red de Google Cloud) no tiene este límite.
 
+El límite por dirección del registro en la primera conexión (`callout.jitSourceTrusted`, consulta el README del chart) debe seguir **desactivado** en modo gateway, porque todos los dispositivos compartirían la dirección del controlador y un dispositivo ruidoso agotaría la cuota de todos. En modo balanceador de carga actívalo solo detrás de un balanceador que conserve las direcciones de cliente.
+
+En un clúster `kind` local que llega al bróker mediante asignaciones de puertos del host, el 8883 necesita su propia asignación al nodo, igual que el 1883; la configuración local por defecto asigna solo el 1883.
+
+### Inundaciones de conexiones {#connection-floods}
+
+Un puerto abierto a internet está abierto a cualquiera que se conecte, sea un dispositivo válido o no. Cada conexión cuesta un handshake TLS en el bróker y, para un dispositivo que presenta credenciales, una ida y vuelta por el callout de autenticación. Acótalo en tres niveles:
+
+- Restringe las direcciones de origen: `sourceRanges` en modo balanceador de carga, o una regla de cortafuegos de la nube en cualquiera de los dos modos, a las redes que usan tus dispositivos.
+- Limita el bróker con `--broker-max-connections` en `dcctl bootstrap` o `dcctl upgrade`. Fija el `max_connections` del bróker, contando por igual dispositivos y clientes de la plataforma. Sin él, el bróker conserva el límite propio del servidor, como antes. Defínelo por encima de tu flota, con margen para una tormenta de reconexiones, y por debajo de lo que pueden soportar los pods del bróker; los dispositivos que lo superen se rechazan. Se registra en la instancia y lo conservan las actualizaciones posteriores; `--broker-max-connections=0` vuelve al límite del servidor.
+- Vigila las métricas de conexiones y autenticación del bróker (consulta [Observabilidad](./observability.md)).
+
+Los inicios de sesión propios de la plataforma en el bróker están limitados al protocolo NATS y no pueden usarse por este puerto: una credencial de la plataforma filtrada no puede presentarse por MQTT. Solo el inicio de sesión de event-sources, que ejecuta la fuente MQTT de la plataforma, puede hablar MQTT.
+
 ## El certificado en el que deben confiar tus dispositivos {#certificates}
 
 El bróker presenta un certificado emitido por la autoridad certificadora propia de la instancia, y el nombre de host que elegiste figura entre sus nombres. Los dispositivos deben confiar en esa autoridad, como en cualquier [conexión MQTT a la instancia](../guides/connecting-a-device.md#publishing-an-event). Expórtala desde una máquina con acceso al clúster:
@@ -107,6 +123,8 @@ kubectl -n dci-acme get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base6
 ```
 
 Distribuye `instance-ca.crt` con el firmware o la configuración de tus dispositivos. Es un certificado público. `dcctl upgrade` renueva el certificado del bróker cuando le quedan menos de 30 días de validez; la autoridad sigue siendo la misma, así que los dispositivos siguen confiando en ella tras las renovaciones.
+
+**Cuándo cambia la autoridad.** La autoridad se crea una sola vez, cuando se crea por primera vez el namespace de la instancia, y desde entonces se conserva en la instancia: un `dcctl upgrade` y un `dcctl bootstrap` repetido sobre una instancia en marcha la conservan y solo emiten un certificado nuevo bajo ella. Una autoridad nueva existe solo para una instancia nueva y para una instancia que destruyes y vuelves a construir, incluida una restaurada desde una copia de seguridad en un clúster reconstruido: la autoridad no forma parte de una copia de seguridad de la base de datos ni del depósito de la clave raíz, así que una instancia reconstruida obtiene una nueva. Todo dispositivo que fijó la autoridad anterior debe recibir el nuevo `instance-ca.crt`. Si fijas la autoridad en el firmware, planifícalo antes de reconstruir una instancia.
 
 Los dispositivos deben enviar el nombre de host como nombre de servidor TLS. En modo gateway así se encuentra la instancia correcta: una conexión que no envía nombre de servidor, o para la que el Gateway no tiene ruta, se cierra. Conectarse por dirección IP falla, por tanto, en modo gateway; conéctate por nombre.
 
@@ -140,7 +158,8 @@ Añade `-d` para ver el `CONNACK` del bróker y el `PUBLISH`. Un dispositivo que
 | Lo que ves | Qué significa |
 | --- | --- |
 | `dcctl` se niega con "needs the ingress controller to listen on 8883" | Ejecuta `dcctl install <provider> --mqtt-gateway` una vez para el clúster, o usa `--mqtt-exposure loadbalancer` |
-| `dcctl` se niega porque TLS está desactivado | La instancia sirve HTTP plano (`--no-tls`). El MQTT en texto plano nunca se expone; sirve la instancia por TLS |
+| `dcctl install --mqtt-gateway=false` se niega | Una instancia aún enruta MQTT por ese puerto. Pásala antes a `--mqtt-exposure none` o `loadbalancer` |
+| El renderizado del chart falla con "the broker's TLS is off" | Solo en un chart instalado a mano: el MQTT en texto plano nunca se expone. `dcctl` siempre activa el TLS del bróker |
 | `dcctl` se niega porque el nombre de host está en uso | Otra instancia del clúster usa ese nombre. Da a cada instancia el suyo |
 | La conexión se cierra durante el handshake, `no peer certificate available` | En modo gateway: no se envió nombre de servidor, o ninguna ruta coincide con él. Conéctate con el nombre de host exacto; revisa `kubectl -n dci-acme get tlsroute devicechain-mqtt` |
 | `certificate verify failed` o discrepancia de nombre de host | El dispositivo confía en otra autoridad, o marca un nombre que el certificado no incluye. Compara el nombre con la salida del paso 1 |

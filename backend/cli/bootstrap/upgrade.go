@@ -641,6 +641,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 		if st.TrustedProxiesChange {
 			wouldDo(fmt.Sprintf("record trustedProxies=%s in the instance declaration", strings.Join(st.TrustedProxies, ",")))
 		}
+		if st.BrokerMaxConnectionsChange {
+			wouldDo(fmt.Sprintf("record brokerMaxConnections=%d in the instance declaration", st.BrokerMaxConnections))
+		}
 		if st.MQTTExposureChange {
 			wouldDo(fmt.Sprintf("record mqttExposure=%s host=%s in the instance declaration, and re-issue the broker certificate with the host", st.MQTTExposure, st.MQTTHost))
 		}
@@ -665,7 +668,8 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove &&
 		!(st.MqttFailClosedChange && !sameBoolPtr(inst.Spec.MQTTFailClosed, st.MqttFailClosed)) &&
 		!(st.TrustedProxiesChange && !trustedProxiesRecorded(inst.Spec, st)) &&
-		!(st.MQTTExposureChange && !mqttExposureRecorded(inst.Spec, st)) {
+		!(st.MQTTExposureChange && !mqttExposureRecorded(inst.Spec, st)) &&
+		!(st.BrokerMaxConnectionsChange && inst.Spec.BrokerMaxConnections != int32(st.BrokerMaxConnections)) {
 		// Already says what this run is about to do. Writing anyway would bump the
 		// provenance annotations on every no-op re-apply, which makes
 		// `last-applied-at` useless for the question it exists to answer.
@@ -702,6 +706,9 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	// leaves it declared and the flagless re-run finishes it rather than forgetting it.
 	if st.MQTTExposureChange {
 		recordMQTTExposure(&spec, st)
+	}
+	if st.BrokerMaxConnectionsChange {
+		spec.BrokerMaxConnections = int32(st.BrokerMaxConnections)
 	}
 	// 🔴 Upgrading, AND THE VALUE IS THE DEFECT THIS LINE FIXES. writeInstanceCR
 	// stamped Bootstrapping on every write, so every instance that had ever been

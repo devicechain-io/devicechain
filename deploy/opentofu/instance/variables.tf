@@ -303,6 +303,18 @@ variable "nats_login_password_bcrypts" {
   sensitive   = true
 }
 
+variable "nats_max_connections" {
+  description = "The broker's cap on simultaneous client connections (nats-server max_connections). 0 leaves it unset, the server's own default. Set it (TF_VAR_nats_max_connections, on every apply) to bound a connection flood against the exposed MQTT port; see the nats module variable."
+  type        = number
+  default     = 0
+}
+
+variable "nats_mqtt_capable_users" {
+  description = "The static broker logins that may connect over MQTT; every static login is otherwise held to the NATS protocol (allowed_connection_types), so a platform credential cannot authenticate through the MQTT port exposed to devices. dcctl sets it to the event-sources login (the one platform area that speaks MQTT) and, while it exists, the transitional shared login. Null leaves the logins unrestricted. See the nats module variable."
+  type        = list(string)
+  default     = null
+}
+
 variable "nats_service_users" {
   description = "The generated permissions of every static broker login, as one JSON document (`{\"APP\": {<username>: <permissions>}, \"SYS\": {...}}`), rendered into the broker's users verbatim. dcctl produces it from the stream and bucket declarations the services are held to; `dcctl broker permissions` prints it. Required whenever nats_enable_auth is true: a login with no block would be unrestricted, so the broker module refuses to render one."
   type        = string

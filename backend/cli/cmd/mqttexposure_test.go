@@ -85,27 +85,43 @@ func TestMQTTExposureFlagsFailClosedUpFront(t *testing.T) {
 	cases := []struct {
 		name       string
 		mode, host string
-		noTLS      bool
 		want       string // "" = accepted
 	}{
-		{"off by default", "", "", false, ""},
-		{"gateway", "gateway", "mqtt.example.com", false, ""},
-		{"loadbalancer", "loadbalancer", "mqtt.example.com", false, ""},
-		{"none", "none", "", true, ""},
-		{"no host", "gateway", "", false, "needs --mqtt-host"},
-		{"bad host", "gateway", "mqtt", false, "fully-qualified"},
-		{"TLS off", "gateway", "mqtt.example.com", true, "plaintext MQTT is never exposed"},
-		{"TLS off with loadbalancer", "loadbalancer", "mqtt.example.com", true, "plaintext MQTT is never exposed"},
-		{"unknown mode", "internet", "mqtt.example.com", false, "want gateway, loadbalancer or none"},
-		{"host alone, malformed", "", "NOPE", false, "fully-qualified"},
+		{"off by default", "", "", ""},
+		{"gateway", "gateway", "mqtt.example.com", ""},
+		{"loadbalancer", "loadbalancer", "mqtt.example.com", ""},
+		{"none", "none", "", ""},
+		{"no host", "gateway", "", "needs --mqtt-host"},
+		{"bad host", "gateway", "mqtt", "fully-qualified"},
+		{"unknown mode", "internet", "mqtt.example.com", "want gateway, loadbalancer or none"},
+		{"host alone, malformed", "", "NOPE", "fully-qualified"},
 	}
 	for _, tc := range cases {
-		err := bootstrap.CheckMQTTExposureFlags(tc.mode, tc.host, tc.noTLS)
+		err := bootstrap.CheckMQTTExposureFlags(tc.mode, tc.host)
 		switch {
 		case tc.want == "" && err != nil:
 			t.Errorf("%s: unexpected error %v", tc.name, err)
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Errorf("%s: err = %v, want one containing %q", tc.name, err, tc.want)
 		}
+	}
+}
+
+func TestBrokerMaxConnectionsReachesTheOptionsOnlyWhenGiven(t *testing.T) {
+	if got := bootstrap.BrokerMaxConnectionsFromFlag(false, 5); got != nil {
+		t.Errorf("a flag not given arrived as %d, want nil (keep what is recorded)", *got)
+	}
+	if got := bootstrap.BrokerMaxConnectionsFromFlag(true, 0); got == nil || *got != 0 {
+		t.Errorf("--broker-max-connections=0 arrived as %v, want &0 (clear)", got)
+	}
+	bootstrapBrokerMaxConnections, bootstrapBrokerMaxConnectionsGiven = 20000, true
+	t.Cleanup(func() { bootstrapBrokerMaxConnections, bootstrapBrokerMaxConnectionsGiven = 0, false })
+	opts := bootstrapOptions("prod", nil, nil)
+	if opts.BrokerMaxConnections == nil || *opts.BrokerMaxConnections != 20000 {
+		t.Fatalf("bootstrap options dropped the cap: %v", opts.BrokerMaxConnections)
+	}
+	st := bootstrapStateFor(opts, bootstrap.ClusterBinding{}, "uid", "local", nil, nil, nil, nil, false, bootstrap.EscrowPlan{})
+	if st.BrokerMaxConnectionsGiven == nil || *st.BrokerMaxConnectionsGiven != 20000 {
+		t.Fatalf("the state dropped the cap: %v", st.BrokerMaxConnectionsGiven)
 	}
 }

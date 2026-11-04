@@ -77,6 +77,15 @@ spec:
               because the required fields INSIDE the spec are only checked once a spec
               exists — so the object that declares nothing would pass every rule below.
             properties:
+              brokerMaxConnections:
+                description: |-
+                  BrokerMaxConnections is the cap on simultaneous client connections to the platform broker
+                  (nats-server max_connections), counting devices and platform clients alike. Absent or 0
+                  leaves the server's own limit. Recorded so every later upgrade keeps it: it is what bounds
+                  a connection flood against the MQTT port when that is exposed.
+                format: int32
+                minimum: 0
+                type: integer
               cluster:
                 description: |-
                   Cluster is the provider's name for the cluster holding this instance. Empty
@@ -189,7 +198,10 @@ spec:
               mqttHost:
                 description: |-
                   MQTTHost is the DNS name devices dial when MQTTExposure is on. The Gateway routes by
-                  it and dcctl adds it to the broker certificate's names.
+                  it and dcctl adds it to the broker certificate's names. A fully-qualified, lower-case DNS
+                  name, as dcctl and the chart require.
+                maxLength: 253
+                pattern: ^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]([-a-z0-9]{0,61}[a-z0-9])?$
                 type: string
               objectStore:
                 description: |-
@@ -361,10 +373,6 @@ spec:
                 devices dial it and the broker''s certificate must carry it'
               rule: '!has(self.mqttExposure) || self.mqttExposure == ''none'' || (has(self.mqttHost)
                 && size(self.mqttHost) > 0)'
-            - message: 'mqttExposure is refused when tls is off: plaintext MQTT is
-                never exposed outside the cluster'
-              rule: '!has(self.mqttExposure) || self.mqttExposure == ''none'' || (has(self.tls)
-                && self.tls)'
           status:
             description: |-
               InstanceStatus is the OBSERVED state, and the operator is its only writer.

@@ -79,6 +79,13 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		}
 	}
 	sayMQTTExposure(st)
+	var recordedCap int32
+	if existing != nil {
+		recordedCap = existing.Spec.BrokerMaxConnections
+	}
+	if err := adoptBrokerMaxConnections(st, int(recordedCap), st.BrokerMaxConnectionsGiven); err != nil {
+		return err
+	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
 	sayUpdateStoreMountless(st)
@@ -226,4 +233,5 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	st.TrustedProxies = append([]string(nil), spec.TrustedProxies...)
 	st.TrustedProxiesExplicit = spec.TrustedProxiesExplicit
 	st.MQTTExposure, st.MQTTHost = spec.MQTTExposure, spec.MQTTHost
+	st.BrokerMaxConnections = int(spec.BrokerMaxConnections)
 }

@@ -721,6 +721,18 @@ func infraVars(st *State) []string {
 		if st.Values[areaLoginsEnabledValue] == "true" {
 			vars = append(vars, loginsVar(loginsBcryptByUser(st)))
 		}
+		// 🔴 THE PLATFORM LOGINS ARE HELD TO THE NATS PROTOCOL, with MQTT left to the one that needs
+		// it. The MQTT port can be published to the internet (--mqtt-exposure), and a platform
+		// credential must not authenticate through it. The list is the exemption, not the grant:
+		// event-sources runs the MQTT source and the presence canary, and the transitional shared
+		// login stands in for it on an instance that has not yet been through the upgrade that
+		// retires it.
+		vars = append(vars, mqttCapableUsersVar(st))
+		// The broker's connection cap, when the operator set one. Absent otherwise, so the broker
+		// config is what it always was.
+		if st.BrokerMaxConnections > 0 {
+			vars = append(vars, fmt.Sprintf("nats_max_connections=%d", st.BrokerMaxConnections))
+		}
 	}
 	return vars
 }

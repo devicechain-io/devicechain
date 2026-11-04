@@ -10,7 +10,7 @@ title: 从集群外部连接设备
 在本地 `kind` 集群上不需要这些：`dcctl` 已经把你机器上的 1883 端口映射到消息代理，见[连接设备](../guides/connecting-a-device.md#publishing-an-event)。
 
 :::note 明文 MQTT 永远不会被暴露
-两种模式都只转发消息代理的 TLS 监听器。明文端口不会被发布，并且 `dcctl` 会拒绝在不提供 TLS 的实例（`--no-tls`）上暴露 MQTT。TLS 由消息代理自己终止，设备认证（包括[设备证书](./device-certificates.md)）也由它完成；入口控制器永远看不到明文流量。
+两种模式都只转发消息代理的 TLS 监听器，端口为 8883。明文端口不会被发布，并且当消息代理自身的 TLS 关闭时，chart 会拒绝渲染对外暴露。TLS 由消息代理自己终止，设备认证（包括[设备证书](./device-certificates.md)）也由它完成；入口控制器永远看不到明文流量。消息代理的 TLS 不依赖控制台的 TLS，因此通过明文 HTTP 提供控制台（`--no-tls`）的紧凑集群仍然可以暴露 MQTT。
 :::
 
 ## 选择模式 {#modes}
@@ -62,16 +62,18 @@ dcctl upgrade   <provider> acme --mqtt-exposure loadbalancer --mqtt-host mqtt.ac
 mqttExposure:
   loadBalancer:
     annotations:
-      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+      service.beta.kubernetes.io/aws-load-balancer-internal: "true"
     sourceRanges:
       - 203.0.113.0/24
 ```
 
-在 EKS 上，`LoadBalancer` Service 除非带有 Network Load Balancer 的注解，否则得到的是 Classic 负载均衡器；在此处添加 `service.beta.kubernetes.io/aws-load-balancer-type: nlb`。对于 gateway 模式下 Traefik 自己的负载均衡器，用 `dcctl install --aws-nlb traefik`。
+**`sourceRanges` 为空表示允许所有来源地址（`0.0.0.0/0`）。** 除非你的设备确实可能从任何地方连接，否则请设置它，或在云防火墙中限制该端口。
+
+在 EKS 上，`LoadBalancer` Service 除非带有 Network Load Balancer 的注解，否则得到的是 Classic 负载均衡器；在此处添加 `service.beta.kubernetes.io/aws-load-balancer-type: nlb`。`aws-load-balancer-scheme` 和 `aws-load-balancer-nlb-target-type` 注解只由 AWS Load Balancer Controller 读取，必须安装它们才会生效；`aws-load-balancer-internal: "true"` 则由 Kubernetes 内置的云提供商处理。对于 gateway 模式下 Traefik 自己的负载均衡器，用 `dcctl install --aws-nlb traefik`。
 
 ### 升级会做什么 {#enable-effects}
 
-该设置会记录在实例上，并被之后的每次 `dcctl upgrade` 保留，因此参数只需给一次。主机名会加入消息代理的证书；尚未包含该名称的消息代理会获得新证书并**重启**。消息代理重启对已连接的设备是一次短暂中断，并且和任何消息代理滚动一样，除非开启了 [fail-closed MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker)，否则会有一个已确认消息可能丢失的窗口。请像对待版本升级一样规划它。
+该设置会记录在实例上，并被之后的每次 `dcctl upgrade` 保留，因此参数只需给一次。主机名会加入消息代理的证书。消息代理会就地采用仅多了该主机名的证书，不重启，也不会断开已连接的设备；证书在同一个颁发机构下重新签发，因此无需重新建立任何信任。（如果变更同时改动了消息代理的路由或其颁发机构，仍会重启消息代理；和任何滚动一样，除非开启了 [fail-closed MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker)，否则重启会带来一个已确认消息可能丢失的窗口。）如果证书无法重新签发，因为实例没有保留签发它的颁发机构，`dcctl` 会在更改任何内容之前停止并说明原因。
 
 用 `--mqtt-exposure none` 关闭暴露。它会移除路由或 Service；证书在下次续期前仍带有多出的名称，这是无害的。
 
@@ -98,6 +100,20 @@ MQTT 不需要再开放其他端口。在 GKE 和 AKS 上，云会为 `LoadBalan
 
 在 gateway 模式下，消息代理看到的所有设备来源地址都是入口控制器的地址，而不是设备自己的地址。因此，在消息代理处凭设备来源地址区分的任何内容，会被同一个控制器后面的所有设备共享。使用能保留客户端地址的负载均衡器（AWS 上的 Network Load Balancer、Google Cloud 的网络负载均衡器）的负载均衡器模式没有这个限制。
 
+首次连接注册的按地址限制（`callout.jitSourceTrusted`，见 chart 的 README）在 gateway 模式下必须保持**关闭**，因为所有设备会共用控制器的地址，一个吵闹的设备就会耗尽所有设备的配额。在负载均衡器模式下，只有在能保留客户端地址的负载均衡器之后才可开启。
+
+在通过主机端口映射访问消息代理的本地 `kind` 集群上，8883 需要单独映射到节点，与 1883 的做法相同；默认的本地设置只映射 1883。
+
+### 连接洪泛 {#connection-floods}
+
+对互联网开放的端口，任何人都可以连接，无论是否是合法设备。每个连接都会在消息代理上消耗一次 TLS 握手，对出示凭据的设备还要经过一次认证回调的往返。可以在三个层面限制它：
+
+- 限制来源地址：在负载均衡器模式下用 `sourceRanges`，或在两种模式下都用云防火墙规则，只允许你的设备所在网络。
+- 用 `dcctl bootstrap` 或 `dcctl upgrade` 的 `--broker-max-connections` 为消息代理设置上限。它设置消息代理的 `max_connections`，设备和平台客户端一并计数。不设置时，消息代理保持服务器自身的限制，与以前相同。请把它设在设备规模之上并留出重连风暴的余量，同时低于消息代理 Pod 能承受的数量；超出的设备会被拒绝。它记录在实例上，并被之后的升级保留；`--broker-max-connections=0` 恢复为服务器自身的限制。
+- 监控消息代理的连接和认证指标（见[可观测性](./observability.md)）。
+
+平台自身的消息代理登录被限制为 NATS 协议，不能通过此端口使用：泄露的平台凭据无法通过 MQTT 出示。只有运行平台自带 MQTT 源的 event-sources 登录可以使用 MQTT。
+
 ## 设备必须信任的证书 {#certificates}
 
 消息代理出示由实例自己的证书颁发机构签发的证书，你选定的主机名在它的名称之中。设备必须信任该机构，和对实例的任何 [MQTT 连接](../guides/connecting-a-device.md#publishing-an-event)一样。在能访问集群的机器上导出它：
@@ -107,6 +123,8 @@ kubectl -n dci-acme get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base6
 ```
 
 把 `instance-ca.crt` 随设备固件或配置一起分发。它是公开证书。消息代理的证书在到期前 30 天内由 `dcctl upgrade` 续期；颁发机构保持不变，因此设备在续期前后始终信任它。
+
+**颁发机构何时会变。** 颁发机构只在实例的命名空间首次创建时创建一次，此后一直保存在实例中：对运行中的实例执行 `dcctl upgrade` 和重复执行 `dcctl bootstrap` 都会保留它，只在其下签发新证书。只有新实例，以及你销毁后重新构建的实例（包括从备份恢复到重建集群中的实例）才会有新的颁发机构：颁发机构不在数据库备份中，也不在根密钥托管中，所以重建的实例会得到新的。所有固定了旧颁发机构的设备都必须获得新的 `instance-ca.crt`。如果你在固件中固定了颁发机构，请在重建实例之前做好计划。
 
 设备必须把主机名作为 TLS 服务器名称发送。在 gateway 模式下，正是靠它找到正确的实例：不发送服务器名称的连接，或 Gateway 没有对应路由的连接，会被关闭。因此在 gateway 模式下按 IP 地址连接会失败，请按名称连接。
 
@@ -140,7 +158,8 @@ mosquitto_pub --cafile instance-ca.crt \
 | 你看到的现象 | 含义 |
 | --- | --- |
 | `dcctl` 拒绝，提示 "needs the ingress controller to listen on 8883" | 对集群执行一次 `dcctl install <provider> --mqtt-gateway`，或改用 `--mqtt-exposure loadbalancer` |
-| `dcctl` 因 TLS 关闭而拒绝 | 该实例提供明文 HTTP（`--no-tls`）。明文 MQTT 永远不会被暴露；请让实例使用 TLS |
+| `dcctl install --mqtt-gateway=false` 被拒绝 | 仍有实例通过该端口路由 MQTT。请先把它改为 `--mqtt-exposure none` 或 `loadbalancer` |
+| 渲染 chart 时失败，提示 "the broker's TLS is off" | 仅出现在手动安装的 chart：明文 MQTT 永远不会被暴露。`dcctl` 始终开启消息代理的 TLS |
 | `dcctl` 因主机名已被使用而拒绝 | 集群上的另一个实例使用了该名称。请为每个实例指定各自的名称 |
 | 握手期间连接被关闭，`no peer certificate available` | gateway 模式下：未发送服务器名称，或没有路由匹配它。请使用准确的主机名连接；检查 `kubectl -n dci-acme get tlsroute devicechain-mqtt` |
 | `certificate verify failed` 或主机名不匹配 | 设备信任的是另一个颁发机构，或拨号的名称不在证书中。请对照上面第 1 步的输出检查名称 |

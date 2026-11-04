@@ -23,7 +23,6 @@ func TestSettleMQTTExposure(t *testing.T) {
 		name                 string
 		recMode, recHost     string
 		givenMode, givenHost string
-		noTLS                bool
 		wantMode, wantHost   string
 		wantChanged          bool
 		wantErr              string
@@ -50,14 +49,10 @@ func TestSettleMQTTExposure(t *testing.T) {
 		{name: "upper case is refused", givenMode: "gateway", givenHost: "MQTT.example.com", wantErr: "fully-qualified"},
 		{name: "a host without an exposure", givenHost: "mqtt.example.com", wantErr: "without --mqtt-exposure"},
 		{name: "none with a host contradicts itself", givenMode: "none", givenHost: "mqtt.example.com", wantErr: "give one"},
-		{name: "TLS off refuses gateway", givenMode: "gateway", givenHost: "mqtt.example.com", noTLS: true, wantErr: "plaintext MQTT is never exposed"},
-		{name: "TLS off refuses loadbalancer", givenMode: "loadbalancer", givenHost: "mqtt.example.com", noTLS: true, wantErr: "plaintext MQTT is never exposed"},
-		{name: "TLS off refuses a recorded exposure too", recMode: "gateway", recHost: "mqtt.example.com", noTLS: true, wantErr: "plaintext MQTT is never exposed"},
-		{name: "TLS off is fine when nothing is exposed", noTLS: true, wantMode: MQTTExposureNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := settleMQTTExposure(tc.recMode, tc.recHost, tc.givenMode, tc.givenHost, tc.noTLS)
+			got, err := settleMQTTExposure(tc.recMode, tc.recHost, tc.givenMode, tc.givenHost)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want one containing %q", err, tc.wantErr)
@@ -108,12 +103,6 @@ func TestInstanceSpecRecordsTheMQTTExposure(t *testing.T) {
 	if spec.MQTTExposure != "gateway" || spec.MQTTHost != "mqtt.example.com" {
 		t.Fatalf("declaration = %+v", spec)
 	}
-	// An exposure over a TLS-less declaration is refused on the read-back path too.
-	spec.TLS = false
-	if err := ValidateInstanceSpec(spec); err == nil || !strings.Contains(err.Error(), "plaintext MQTT") {
-		t.Fatalf("ValidateInstanceSpec = %v, want the TLS refusal", err)
-	}
-	spec.TLS = true
 	spec.MQTTHost = "nope"
 	if err := ValidateInstanceSpec(spec); err == nil || !strings.Contains(err.Error(), "mqttHost") {
 		t.Fatalf("ValidateInstanceSpec = %v, want the host refusal", err)

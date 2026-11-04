@@ -143,12 +143,11 @@ func TestTheCRDKeepsTheRestoreFact(t *testing.T) {
 }
 
 // Exposing the MQTT broker off-cluster is refused in the declaration itself when it has no host
-// to route by, or when TLS is off: plaintext MQTT is never exposed, and a hand-edited object
-// must not be able to say otherwise.
-func TestTheCRDRefusesAnMQTTExposureWithoutAHostOrWithoutTLS(t *testing.T) {
+// to route by, and the host is a bounded, well-formed DNS name.
+func TestTheCRDRefusesAnMQTTExposureWithoutAValidHost(t *testing.T) {
 	spec := specSchema(t, loadInstanceCRD(t))
 	joined := strings.Join(rulesOf(spec), "\n")
-	for _, want := range []string{"size(self.mqttHost) > 0", "has(self.tls) && self.tls"} {
+	for _, want := range []string{"size(self.mqttHost) > 0"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the spec carries no rule containing %q; rules found: %q", want, joined)
 		}

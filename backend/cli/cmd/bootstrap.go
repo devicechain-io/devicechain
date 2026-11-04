@@ -28,6 +28,13 @@ var (
 	bootstrapMQTTHost     string
 )
 
+// bootstrapBrokerMaxConnections is --broker-max-connections, and ...Given whether it was on the
+// command line (read off the flag set in RunE).
+var (
+	bootstrapBrokerMaxConnections      int
+	bootstrapBrokerMaxConnectionsGiven bool
+)
+
 // bootstrapTrustedProxies is --trusted-proxies. See trustedProxiesUsage.
 var bootstrapTrustedProxies []string
 
@@ -178,6 +185,7 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		MqttFailClosed:       mqttFailClosed,
 		TrustedProxies:       bootstrapTrustedProxies,
 		MQTTExposure:         bootstrapMQTTExposure,
+		BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(bootstrapBrokerMaxConnectionsGiven, bootstrapBrokerMaxConnections),
 		MQTTHost:             bootstrapMQTTHost,
 		SparkplugSources:     bootstrapSparkplugSources,
 		Lwm2mIdentities:      bootstrapLwm2mIdentityList,
@@ -194,36 +202,37 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 	valuesOverlay map[string]interface{}, objectStore *dcv1beta1.ObjectStoreSpec, objectStoreExplicit bool,
 	escrowPlan bootstrap.EscrowPlan) *bootstrap.State {
 	return &bootstrap.State{
-		Instance:               opts.Instance,
-		KubeContext:            binding.KubeContext,
-		ClusterUID:             clusterUID,
-		Binding:                binding,
-		Provider:               provider,
-		DcctlVersion:           Version,
-		Profile:                opts.Profile,
-		DryRun:                 opts.DryRun,
-		AssumeYes:              opts.AssumeYes,
-		ImageRegistry:          opts.ImageRegistry,
-		ImageVersion:           opts.ImageVersion,
-		BuildImages:            opts.BuildImages,
-		IngressHost:            opts.IngressHost,
-		NoTLS:                  opts.NoTLS,
-		AllowLegacyDbRemoval:   opts.AllowLegacyDbRemoval,
-		EnableAreas:            opts.EnableAreas,
-		EnabledAreas:           enabledAreas,
-		Lwm2mIdentities:        lwm2mIdentities,
-		Lwm2mIdentitiesGiven:   len(lwm2mIdentities) > 0 || opts.WithdrawLwm2mIdentities,
-		SparkplugSources:       opts.SparkplugSources,
-		SparkplugSourcesGiven:  len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources,
-		MqttFailClosed:         opts.MqttFailClosed,
-		MQTTExposureGiven:      opts.MQTTExposure,
-		MQTTHostGiven:          opts.MQTTHost,
-		TrustedProxiesOverride: opts.TrustedProxies,
-		ValuesOverlay:          valuesOverlay,
-		ObjectStore:            objectStore,
-		ObjectStoreExplicit:    objectStoreExplicit,
-		Escrow:                 escrowPlan,
-		Values:                 map[string]string{},
+		Instance:                  opts.Instance,
+		KubeContext:               binding.KubeContext,
+		ClusterUID:                clusterUID,
+		Binding:                   binding,
+		Provider:                  provider,
+		DcctlVersion:              Version,
+		Profile:                   opts.Profile,
+		DryRun:                    opts.DryRun,
+		AssumeYes:                 opts.AssumeYes,
+		ImageRegistry:             opts.ImageRegistry,
+		ImageVersion:              opts.ImageVersion,
+		BuildImages:               opts.BuildImages,
+		IngressHost:               opts.IngressHost,
+		NoTLS:                     opts.NoTLS,
+		AllowLegacyDbRemoval:      opts.AllowLegacyDbRemoval,
+		EnableAreas:               opts.EnableAreas,
+		EnabledAreas:              enabledAreas,
+		Lwm2mIdentities:           lwm2mIdentities,
+		Lwm2mIdentitiesGiven:      len(lwm2mIdentities) > 0 || opts.WithdrawLwm2mIdentities,
+		SparkplugSources:          opts.SparkplugSources,
+		SparkplugSourcesGiven:     len(opts.SparkplugSources) > 0 || opts.WithdrawSparkplugSources,
+		MqttFailClosed:            opts.MqttFailClosed,
+		MQTTExposureGiven:         opts.MQTTExposure,
+		BrokerMaxConnectionsGiven: opts.BrokerMaxConnections,
+		MQTTHostGiven:             opts.MQTTHost,
+		TrustedProxiesOverride:    opts.TrustedProxies,
+		ValuesOverlay:             valuesOverlay,
+		ObjectStore:               objectStore,
+		ObjectStoreExplicit:       objectStoreExplicit,
+		Escrow:                    escrowPlan,
+		Values:                    map[string]string{},
 	}
 }
 
@@ -286,9 +295,13 @@ var bootstrapCmd = &cobra.Command{
 		if err := bootstrap.ValidateMqttFailClosed(mqttFailClosed, bootstrapProfile, bootstrapEnableAreas); err != nil {
 			return err
 		}
-		// The MQTT exposure is judged up front too: a refusal (no host, a bad host, TLS off) lands
+		// The MQTT exposure is judged up front too: a refusal (no host, a bad host) lands
 		// before any cluster exists. The pipeline judges it again against what the instance records.
-		if err := bootstrap.CheckMQTTExposureFlags(bootstrapMQTTExposure, bootstrapMQTTHost, bootstrapNoTLS); err != nil {
+		bootstrapBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
+		if v := bootstrap.BrokerMaxConnectionsFromFlag(bootstrapBrokerMaxConnectionsGiven, bootstrapBrokerMaxConnections); v != nil && (*v < 0) {
+			return fmt.Errorf("--broker-max-connections %d: want 0 or a positive number", *v)
+		}
+		if err := bootstrap.CheckMQTTExposureFlags(bootstrapMQTTExposure, bootstrapMQTTHost); err != nil {
 			return err
 		}
 		// The tuning overlay is judged here too -- its keys against the allowlist and its values
@@ -711,6 +724,7 @@ func init() {
 	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
+	bootstrapCmd.Flags().IntVar(&bootstrapBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapMQTTHost, "mqtt-host", "", mqttHostUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
@@ -794,9 +808,15 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 // mqttExposureUsage and mqttHostUsage are the help for --mqtt-exposure and --mqtt-host on bootstrap and upgrade.
 const (
 	mqttExposureUsage = "how devices OUTSIDE the cluster reach the MQTT broker: gateway (a TLSRoute in Passthrough mode on the instance's Gateway, TCP 8883, routed by SNI; needs 'dcctl install --mqtt-gateway' once for the cluster), loadbalancer (a LoadBalancer Service for 8883 straight to the broker, for a cluster without Gateway API) or none (turns it off). Off by default, so an upgrade never opens a port. " +
-		"The broker terminates TLS itself; plaintext MQTT is never exposed, and the request is refused with --no-tls. Needs --mqtt-host. Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted"
+		"The broker terminates TLS itself and plaintext MQTT is never exposed. Needs --mqtt-host. Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted"
 	mqttHostUsage = "the DNS name devices dial for --mqtt-exposure (for example mqtt.example.com): the Gateway routes by it and it is added to the broker's certificate. One per instance. Point its DNS at the ingress controller's address (gateway) or the <broker>-mqtt-lb Service's (loadbalancer)"
 )
+
+// brokerMaxConnectionsUsage is the help for --broker-max-connections on bootstrap and upgrade.
+const brokerMaxConnectionsUsage = "cap the platform broker's simultaneous client connections (nats-server max_connections), devices and platform clients alike. " +
+	"It bounds a connection flood against the MQTT port when that is exposed (--mqtt-exposure): every connection costs a TLS handshake and, for a device, an authentication round trip. " +
+	"Size it above your fleet with headroom for a reconnect storm; devices past it are refused. 0 returns to the server's own limit, which is also what an instance that never set it has. " +
+	"Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted"
 
 // mqttGatewayFlag reads --mqtt-gateway off a command's flag set: nil when it was not given.
 func mqttGatewayFlag(given, value bool) *bool {

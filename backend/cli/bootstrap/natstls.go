@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 // The broker's certificate authority and the one leaf it signs.
@@ -138,6 +140,44 @@ func mintNATSTLS(releaseName, namespace string, replicas int, now time.Time, ext
 		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
 		LeafCertPEM: leafCertPEM,
 		LeafKeyPEM:  leafKeyPEM,
+	}, nil
+}
+
+// settleNATSTLS is the broker's authority and leaf for a bootstrap run: the authority the instance
+// already keeps, with a fresh leaf, else a newly minted pair.
+//
+// 🔴 A RE-RUN MUST NOT ROTATE THE AUTHORITY. Devices pin it (the instance CA is shipped in firmware
+// and configuration), and the services trust it from the document they started with, so a new CA
+// on a re-run silently breaks every pinned device while the run reports success. Only an instance
+// with no authority of its own (a fresh namespace) gets a new one.
+//
+// An authority that EXISTS but cannot be read is an error, never a mint: "could not tell" must not
+// resolve to the answer that cannot be undone. typed is nil in a dry run, which mints a
+// throwaway pair it will never deploy.
+func settleNATSTLS(ctx context.Context, typed kubernetes.Interface, st *State, now time.Time) (*natsTLSMaterial, error) {
+	ns := InstanceNamespace(st.Instance)
+	replicas := haFor(st.HA).ServerReplicas
+	if typed == nil {
+		return mintNATSTLS(natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
+	}
+	caCert, caKey, err := readNATSAuthority(ctx, typed, st.Instance, st.InstanceUID)
+	if err != nil {
+		return nil, fmt.Errorf("the instance already has a broker authority that cannot be read, and minting a "+
+			"new one would break every device that pins it: %w", err)
+	}
+	if caCert == nil {
+		return mintNATSTLS(natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
+	}
+	certPEM, keyPEM, err := issueNATSLeaf(caCert, caKey, natsReleaseName, ns, replicas, now, mqttBrokerNames(st)...)
+	if err != nil {
+		return nil, err
+	}
+	return &natsTLSMaterial{
+		Namespace:   ns,
+		CACertPEM:   encodePEM("CERTIFICATE", caCert.Raw),
+		CAKeyPEM:    encodePEM("RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey)),
+		LeafCertPEM: certPEM,
+		LeafKeyPEM:  keyPEM,
 	}, nil
 }
 

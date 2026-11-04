@@ -157,8 +157,15 @@ func hydrateUpgradeState(
 	if err := settleFrontEnd(ctx, st); err != nil {
 		return nil, err
 	}
-	if !st.DryRun && st.MQTTExposureChange {
+	// 🔴 JUDGED ON EVERY UPGRADE THAT LEAVES MQTT EXPOSED, not only the one that turns it on: a
+	// later change to the front end (--ingress-controller nginx would strand a gateway-mode route)
+	// or a Traefik that lost its 8883 entrypoint must stop the run here, before the broker
+	// certificate is renewed or anything is written.
+	if !st.DryRun && st.MQTTExposure != "" && st.MQTTExposure != MQTTExposureNone {
 		if err := settleMQTTExposurePrereqs(ctx, st); err != nil {
+			return nil, err
+		}
+		if err := precheckMQTTHostCertificate(ctx, typed, st); err != nil {
 			return nil, err
 		}
 	}
@@ -369,13 +376,16 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// the host must be among the leaf's names). A flagless upgrade leaves it as it is.
 	if opts.MQTTExposure != "" || opts.MQTTHost != "" {
 		rec := recordedMQTTSpec(st)
-		got, err := settleMQTTExposure(rec.MQTTExposure, rec.MQTTHost, opts.MQTTExposure, opts.MQTTHost, st.NoTLS)
+		got, err := settleMQTTExposure(rec.MQTTExposure, rec.MQTTHost, opts.MQTTExposure, opts.MQTTHost)
 		if err != nil {
 			return err
 		}
 		st.MQTTExposure, st.MQTTHost, st.MQTTExposureChange = got.Mode, got.Host, got.Changed
 	}
 	sayMQTTExposure(st)
+	if err := adoptBrokerMaxConnections(st, st.BrokerMaxConnections, opts.BrokerMaxConnections); err != nil {
+		return err
+	}
 
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a

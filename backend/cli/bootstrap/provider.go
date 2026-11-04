@@ -51,6 +51,9 @@ type Options struct {
 	// what the declaration records). See mqttexposure.go.
 	MQTTExposure string
 	MQTTHost     string
+	// BrokerMaxConnections is --broker-max-connections: nil when not given (keep what is recorded),
+	// 0 to clear it. See mqttexposure.go.
+	BrokerMaxConnections *int
 	// TrustedProxies is --trusted-proxies: nil when not given, "auto" alone to return to
 	// deriving the list from the cluster, otherwise the CIDRs to render as
 	// infrastructure.http.trustedProxies. See trustedproxies.go.

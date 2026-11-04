@@ -167,7 +167,6 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.objectStore) || has(self.objectStore)",message="objectStore cannot be removed: the logos and artifacts on it would be stranded, and the volume deleted with the declaration that named it"
 // +kubebuilder:validation:XValidation:rule="!has(self.mqttExposure) || self.mqttExposure == 'none' || (has(self.mqttHost) && size(self.mqttHost) > 0)",message="mqttHost is required when mqttExposure is gateway or loadbalancer: devices dial it and the broker's certificate must carry it"
-// +kubebuilder:validation:XValidation:rule="!has(self.mqttExposure) || self.mqttExposure == 'none' || (has(self.tls) && self.tls)",message="mqttExposure is refused when tls is off: plaintext MQTT is never exposed outside the cluster"
 type InstanceSpec struct {
 	// Provider is the infrastructure provider that resolved this instance's
 	// cluster. Immutable: an instance cannot move between providers in place.
@@ -320,10 +319,22 @@ type InstanceSpec struct {
 	MQTTExposure string `json:"mqttExposure,omitempty"`
 
 	// MQTTHost is the DNS name devices dial when MQTTExposure is on. The Gateway routes by
-	// it and dcctl adds it to the broker certificate's names.
+	// it and dcctl adds it to the broker certificate's names. A fully-qualified, lower-case DNS
+	// name, as dcctl and the chart require.
 	//
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)+[a-z]([-a-z0-9]{0,61}[a-z0-9])?$`
 	// +optional
 	MQTTHost string `json:"mqttHost,omitempty"`
+
+	// BrokerMaxConnections is the cap on simultaneous client connections to the platform broker
+	// (nats-server max_connections), counting devices and platform clients alike. Absent or 0
+	// leaves the server's own limit. Recorded so every later upgrade keeps it: it is what bounds
+	// a connection flood against the MQTT port when that is exposed.
+	//
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	BrokerMaxConnections int32 `json:"brokerMaxConnections,omitempty"`
 
 	// TrustedProxies are the CIDR prefixes written to the instance configuration's
 	// infrastructure.http.trustedProxies: the proxies whose X-Forwarded-For header the

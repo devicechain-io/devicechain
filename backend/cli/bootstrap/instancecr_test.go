@@ -44,7 +44,7 @@ func specJSONFields(t *testing.T) []string {
 // in something that many people can read? Answer it, then edit the list.
 func TestInstanceSpecIsAClosedList(t *testing.T) {
 	want := []string{
-		"cluster", "cnpg", "compact", "extraFunctionalAreas", "grafanaSSO", "ha",
+		"brokerMaxConnections", "cluster", "cnpg", "compact", "extraFunctionalAreas", "grafanaSSO", "ha",
 		"host", "imageRegistry", "imageVersion", "managed", "monitoring", "mqttExposure", "mqttFailClosed", "mqttHost", "objectStore", "profile",
 		"provider", "restored", "restoredAt", "tls", "trustedProxies", "trustedProxiesExplicit",
 	}

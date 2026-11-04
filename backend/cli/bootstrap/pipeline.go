@@ -207,6 +207,12 @@ type State struct {
 	MQTTExposureChange bool
 	MQTTExposureGiven  string
 	MQTTHostGiven      string
+	// BrokerMaxConnections is the settled cap on broker connections (0: the server's own limit),
+	// BrokerMaxConnectionsGiven this run's flag, and BrokerMaxConnectionsChange says an upgrade
+	// must record it.
+	BrokerMaxConnections       int
+	BrokerMaxConnectionsGiven  *int
+	BrokerMaxConnectionsChange bool
 	// TrustedProxiesOverride is --trusted-proxies as given: nil when not given, ["auto"] to drop
 	// an explicit list, otherwise the operator's CIDRs. TrustedProxies and TrustedProxiesExplicit
 	// are what the run settled and renders (infrastructure.http.trustedProxies), and
