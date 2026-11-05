@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 )
 
 // IsUnavailable reports whether err means the peer could not be REACHED or could not serve right
@@ -28,12 +29,24 @@ func IsUnavailable(err error) bool {
 	if errors.As(err, &gql) || errors.Is(err, ErrResponseTooLarge) {
 		return false
 	}
+	// A caller that gave up is not the peer being down, whichever way the cancellation arrived
+	// (while waiting for a token, or inside the HTTP call).
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
 	var status *StatusError
 	if errors.As(err, &status) {
 		return status.Status >= http.StatusInternalServerError || status.Status == http.StatusTooManyRequests
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		return true
+	}
+	// http.Client wraps every failure in a *url.Error, which is itself a net.Error whatever its
+	// cause; the cause decides: a refused or reset connection or a timeout is an outage, an
+	// unsupported scheme or a redirect loop is a request that can never succeed.
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Timeout() || (ue.Err != nil && IsUnavailable(ue.Err))
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr)
