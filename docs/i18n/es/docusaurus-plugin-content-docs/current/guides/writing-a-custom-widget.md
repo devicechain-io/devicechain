@@ -346,7 +346,7 @@ debajo de 1; pasa una precisión para fijar el número de decimales.
 
 De forma predeterminada, el SDK dibuja las descripciones emergentes de los gráficos como HTML y
 genera el CSS de los tokens de severidad como un elemento `<style>`. Una página cuya política no
-incluye `style-src 'unsafe-inline'` (por ejemplo `style-src 'self'`) rechaza ambos. Un host que
+incluye `style-src 'unsafe-inline'` (por ejemplo `style-src 'self'`) rechaza ambos. Un anfitrión que
 sirve bajo esa política llama una vez a `configureStrictCsp(true)`, de `@devicechain/widget-sdk`,
 antes de montar un panel:
 
@@ -358,7 +358,7 @@ antes de montar un panel:
   panel alojado dentro de un shadow root no la recibe. Los navegadores sin hojas de estilos
   construidas (Safari anterior a 16.4) recurren al elemento `<style>`.
 
-El ajuste está desactivado de forma predeterminada y no cambia nada para un host que no lo llama.
+El ajuste está desactivado de forma predeterminada y no cambia nada para un anfitrión que no lo llama.
 
 ## Interacciones y modelo de confianza {#interactions-and-the-trust-model}
 
