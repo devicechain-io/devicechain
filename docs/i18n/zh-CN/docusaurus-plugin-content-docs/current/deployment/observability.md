@@ -857,6 +857,31 @@ chart 覆盖链条各环节：
 | `UpdateRolloutStepsFailing` | warning | 持续 15 分钟，发布驱动不断失败并把步骤留给下一轮。分组发布显示为运行中，却没有向新设备分发，而失败阈值暂停无济于事，因为它统计的是设备失败。 | 原因包括：步骤期间的数据库错误、制品上无法读取的兼容配置文档，或 device-management 不可达、未为 update-management 配置。`update_rollout_step_failures_total` 的 `stage` 标签区分步骤失败（`step`）与查询运行中发布失败（`list`）；update-management 日志会指出失败的步骤。 |
 | `UpdateAttemptsGoingUnknown` | warning | 最近 30 分钟内，有五次或更多尝试因设备在安装或重启期间停止上报而转为 `UNKNOWN`。升级可能已应用，也可能没有。少量属正常；成批出现说明设备同时出问题，常见原因是镜像有缺陷。阈值 5 是绝对计数，而非设备总量的占比；请按设备规模调整规则。 | 暂停发布。检查受影响的设备是否重新上报，因为它们的清单会解决该尝试；对始终不上报的设备，用 `abandonUnknownUpdate` 决定。 |
 
+## 令牌受众检查 {#token-audience-checks}
+
+每个 API 都会检查访问令牌绑定到哪个资源，授权服务器则检查客户端申请哪个资源。规则见[令牌受众](../concepts/security-model.md#token-audience)。检查只做观察时（这是 `v1.2` 的默认），下面的序列和告警就是你找出 `v1.3` 会拒绝的客户端的方法。当 chart 的告警处于开启状态（`metrics.alerts`，默认开启）时，它们就存在。
+
+| 序列 | 标签 | 如何读取 |
+| --- | --- | --- |
+| `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
+| `devicechain_usermanagement_oauth_resource_checks_total` | `grant`、`resource`、`verdict` | 授权服务器每做出一次资源判定计一次。`grant` 是 `authorization_code`、`refresh_token` 或 `client_credentials`。`resource` 是所申请内容的类别：`none`、`area`、`mcp`、`external`、`unlisted`、`malformed` 或 `multiple`。`resource` 与其授权码或刷新令牌所绑定的资源不同的请求也会计入这里。 |
+| `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | 指定了资源却未指定 scope 的 `client_credentials` 请求，这种请求已被弃用。判定始终是 `would_reject`，请求照常处理。 |
+| `devicechain_mcp_token_audience_registered` | 无 | MCP 服务器的 `resourceUrl` 在 `infrastructure.tokenAudience.mcpResources` 中时为 1，不在时为 0。为 0 表示 MCP 服务器转发的调用被计为 `would_reject`，并且在启用强制执行后 `mcp` 会拒绝启动。 |
+
+健康的实例只有 `accepted` 判定。前两行的 `would_reject` 序列有变化，说明某个客户端发送的令牌或请求会被 `v1.3` 拒绝；第三行有变化，则说明有请求会被下一个主版本拒绝。读取这些数字时请记住两点：
+
+- **它们统计的是请求，不是客户端。** 一个持续发送同一令牌的客户端，每次调用都会让某个序列增加，而且入口是在 GraphQL 授权运行之前计数的。序列不为零回答的是“有没有客户端这样做”，日志回答的是“是哪一个”。伪造或过期的令牌永远不会让入口计数器增加，因为检查是在验证签名之后进行的。授权服务器的计数器在客户端通过认证之后才增加，只有一个例外：授权端点在任何人登录之前就对请求计数，所用的值都是公开的，所以任何能访问该页面的人都可以让它的序列增加。
+- **`rejected` 只在强制执行时出现。** 使用 `observe` 时它保持为零。
+
+有两个 `info` 级告警监视 `would_reject` 判定。两者都在序列最近一小时的速率持续一小时大于零之后触发，并在最后一个违规请求之后大约一小时自行解除。它们都不带租户标签；kube-prometheus-stack 默认的 Alertmanager 配置会抑制 `info` 级告警，所以如果想收到它们，请显式配置路由。
+
+| 告警 | 严重程度 | 含义 | 处理方式 |
+| --- | --- | --- | --- |
+| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。目前这些请求照常处理，`v1.3` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
+| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。目前这些请求照常处理，`v1.3` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
+
+已弃用的 `client_credentials` 请求在 `user-management` 的日志中有它自己的警告 `A client_credentials request named a resource without a scope`，带有客户端和租户，但没有告警。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
+
 ## 设备自注册 {#self-registration-alerts}
 
 三条告警覆盖设备自行注册所用的端点

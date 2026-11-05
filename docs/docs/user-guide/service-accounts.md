@@ -98,7 +98,8 @@ What to know about the token:
 - **It names the account's tenant** and no other. A request cannot ask for another tenant.
 - Two optional form fields narrow it. `scope` caps the token to an OAuth scope's ceiling (for
   example `read-only`). `resource` binds it to one resource server by its address (an absolute
-  `https` URI): the MCP server, for instance, accepts only a token bound to its own address.
+  `https` URI): the MCP server, for instance, accepts only a token bound to its own address. Send a
+  `scope` with every `resource`; see [Binding a token to a resource](#binding-a-token-to-a-resource).
 - The token endpoint is rate limited. Each account can obtain about one token every 30 seconds,
   after a burst of 10, and each source address can make about one attempt every 3 seconds, after a
   burst of 20. A client that asks too often is answered `429` (`slow_down`) with a `Retry-After`
@@ -109,6 +110,26 @@ gets the same answer, `401 invalid_client`, so a caller cannot tell which it was
 tenant that is disabled or being deleted is answered `400 invalid_grant`.
 
 The tenant's own single sign-on requirement applies to people, not to service accounts.
+
+## Binding a token to a resource {#binding-a-token-to-a-resource}
+
+Without `resource`, the token is bound to nothing and the platform's APIs accept it, with all the authorities of the account's roles, or the ceiling of the `scope` you send. That is the right token for an integration that calls the platform's APIs. The MCP server does not accept it, because it requires a token bound to itself.
+
+With `resource`, the token names that resource as its audience. Once enforcement is on, the authorization server binds a token only to a resource it serves: the MCP server, an area's API at `<origin>/api/<area>`, or an address the operator listed as an external resource. See [Token audience](../concepts/security-model.md#token-audience). An API accepts a token that is bound to nothing, to that API's own area, or to the MCP server. It refuses a token bound to anything else, and until enforcement is on it counts and logs that.
+
+Ask for a resource only when something other than the platform checks the audience, such as a service of your own that validates the token with the instance's published key set, and **always send a `scope` with it**:
+
+```bash
+curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials \
+  -d scope=read-only \
+  --data-urlencode "resource=https://my-service.example.com/api" \
+  https://dc.example.com/api/user-management/oauth/token
+```
+
+A request with a `resource` and no `scope` is **deprecated**. It still succeeds and the token carries every authority of the account's roles. The platform counts it in `devicechain_usermanagement_oauth_unscoped_client_credentials_total` and writes a warning that names your client, and the next major release refuses it with `invalid_scope`. A scoped token carries only the scope's read authorities. An integration that has to write should leave out the `resource` and get an unbound token.
+
+A request whose `resource` the instance does not serve is counted and logged in this release, and refused from `v1.3` with `invalid_target`. At the token endpoint, a request with more than one `resource`, or one that is not an absolute `https` URL (`http` is accepted only for `localhost`, `127.0.0.1` and `::1`), is refused today.
 
 ## Rotating a secret {#rotating-a-secret}
 

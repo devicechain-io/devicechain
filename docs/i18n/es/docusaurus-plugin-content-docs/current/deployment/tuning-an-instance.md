@@ -74,6 +74,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `mqttExposure.loadBalancer` | Los ajustes de nube del balanceador de carga de MQTT, como un balanceador interno y los rangos de origen permitidos |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | El margen de interrupción para el que se dimensionan los streams de eventos y sus techos de bytes y mensajes. La reserva se comprueba con el volumen del broker antes de escribir nada |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Si los eventos se escriben como envelopes, desactivado por defecto |
+| `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Si se rechaza un token vinculado al recurso equivocado, y para qué servidores de recursos ajenos a la plataforma puede emitir el servidor de autorización. Consulte [Audiencia del token](../concepts/security-model.md#token-audience-config). Las otras dos claves de `tokenAudience` las deriva el chart y se rechazan |
 | `brokerAdmin.allowCeilingShrink` | Permite que una actualización baje un techo de stream por debajo de lo que contiene. Fíjalo para esa actualización y quítalo después |
 
 `functionalAreas.event-management.replicas` no es ajustable aunque el resto de esa área sí lo

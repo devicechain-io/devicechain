@@ -71,6 +71,7 @@ An overlay may set only the values below. Anything else is refused.
 | `mqttExposure.loadBalancer` | The cloud settings of the MQTT load balancer, such as an internal balancer and allowed source ranges |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | The outage runway the event streams are sized for, and their byte and message ceilings. The reservation is checked against the broker's volume before anything is written |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Whether events are written as envelopes, off by default |
+| `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Whether a token bound to the wrong resource is refused, and which resource servers outside the platform the authorization server may issue for. See [Token audience](../concepts/security-model.md#token-audience-config). The other two `tokenAudience` keys are derived by the chart and refused |
 | `brokerAdmin.allowCeilingShrink` | Lets one upgrade lower a stream ceiling below what the stream holds. Set it for that upgrade and remove it after |
 
 `functionalAreas.event-management.replicas` is not tunable even though the rest of that area is:
