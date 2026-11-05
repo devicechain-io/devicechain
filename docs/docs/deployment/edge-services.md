@@ -397,7 +397,8 @@ column. There is nothing there to recognise it by.
 
 You also cannot search for it. The console's device list has **no search box**. It is a plain paged
 listing of Status, Token, Name, Type, Description and Created, with no external-id column. The API's
-device search takes only a page number, a page size and a device type. To find the device:
+device search takes a page number and a page size, and can filter by device type, provisioning
+profile or an exact alias, but it has no search on an external id. To find the device:
 
 - **In the console**, find it by its token. The generated token embeds the external id
   (`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`), so paging the list and reading the

@@ -6,7 +6,7 @@ title: Cluster Lock
 # Cluster Lock
 
 Every `dcctl` run that changes a cluster takes a **lock** on that cluster before it
-applies anything, and holds it until the run ends. Two operators on two machines can no
+applies anything, and holds it until the run ends (`dcctl install` lets go once the install is recorded, before its final wait for the database replicas). Two operators on two machines can no
 longer apply to the same cluster at the same time without one of them being told.
 
 This page is for you if a run has just told you the cluster is taken.

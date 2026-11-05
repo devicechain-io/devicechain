@@ -6,7 +6,7 @@ title: El bloqueo del clúster
 # El bloqueo del clúster
 
 Toda ejecución de `dcctl` que cambie un clúster toma un **bloqueo** sobre ese clúster
-antes de aplicar nada, y lo mantiene hasta que la ejecución termina. Dos operadores en
+antes de aplicar nada, y lo mantiene hasta que la ejecución termina (`dcctl install` lo libera cuando la instalación queda registrada, antes de su espera final por las réplicas de la base de datos). Dos operadores en
 dos máquinas ya no pueden aplicar sobre el mismo clúster a la vez sin que a uno de los
 dos se le avise.
 

@@ -5,7 +5,7 @@ title: Verificar las versiones
 
 # Verificar las versiones {#verifying-releases}
 
-Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceChain está **firmado**, y lleva dos declaraciones firmadas sobre cómo se construyó. Puede comprobarlo todo antes de ejecutar nada, sin ninguna clave que obtener; comprobar la procedencia requiere iniciar sesión en GitHub.
+Cada imagen de contenedor y el chart de Helm que publica una versión de DeviceChain está **firmado**. Cada uno lleva una declaración firmada sobre cómo se construyó (procedencia de la compilación), y cada imagen lleva además una lista firmada de lo que contiene (un SBOM). Puede comprobarlo todo antes de ejecutar nada, sin ninguna clave que obtener; comprobar la procedencia requiere iniciar sesión en GitHub.
 
 | Qué | Dónde está | Qué le dice |
 | --- | --- | --- |

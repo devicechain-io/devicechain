@@ -427,8 +427,9 @@ eso la lista de dispositivos de la consola lo muestra bajo su token generado `sp
 
 Tampoco puedes buscarlo. La lista de dispositivos de la consola **no tiene caja de búsqueda**. Es un
 listado paginado sin más de Estado, Token, Nombre, Tipo, Descripción y Creado, sin columna de id
-externo. La búsqueda de dispositivos de la API solo admite número de página, tamaño de página y tipo
-de dispositivo. Para encontrar el dispositivo:
+externo. La búsqueda de dispositivos de la API admite número de página y tamaño de página, y puede filtrar
+por tipo de dispositivo, perfil de aprovisionamiento o un alias exacto, pero no tiene búsqueda por
+id externo. Para encontrar el dispositivo:
 
 - **En la consola**, localízalo por su token. El token generado incrusta el id externo
   (`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`), así que paginar la lista y leer la

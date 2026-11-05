@@ -73,7 +73,7 @@ On EKS, a `LoadBalancer` Service gets a Classic balancer unless it is annotated 
 
 ### What an upgrade does {#enable-effects}
 
-The setting is recorded on the instance and kept by every later `dcctl upgrade`, so you give the flags once. The host name is added to the broker's certificate. The broker picks up a certificate that only gained the host name in place, without restarting and without dropping connected devices; the certificate is re-issued under the same authority, so nothing has to be re-trusted. (A change that also alters the broker's routes or its authority still restarts the broker, and a broker restart is, as with any roll, a window in which acknowledged messages can be lost unless [fail-closed MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) is on.) If the certificate cannot be re-issued, because the instance does not keep the authority that signed it, `dcctl` stops before it changes anything and says so.
+The setting is recorded on the instance and kept by every later `dcctl upgrade`, so you give the flags once. The host name is added to the broker's certificate. The broker normally picks up a certificate that only gained the host name in place, without restarting and without dropping connected devices (if the brokers do not switch to it within the timeout, or the broker set is not the one the certificate was issued for, `dcctl` restarts the broker instead); the certificate is re-issued under the same authority, so nothing has to be re-trusted. (A change that also alters the broker's routes or its authority still restarts the broker, and a broker restart is, as with any roll, a window in which acknowledged messages can be lost unless [fail-closed MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) is on.) If the certificate cannot be re-issued, because the instance does not keep the authority that signed it, `dcctl` stops before it changes anything and says so.
 
 Turn exposure off again with `--mqtt-exposure none`. It removes the route or the Service; the certificate keeps the extra name until its next renewal, which is harmless.
 
@@ -112,7 +112,7 @@ A port open to the internet is open to anyone who connects to it, valid device o
 - Cap the broker with `--broker-max-connections` on `dcctl bootstrap` or `dcctl upgrade`. It sets the broker's `max_connections`, counting devices and platform clients alike. Without it the broker keeps the server's own limit, as before. Set it above your fleet, with headroom for a reconnect storm, and below what the broker pods can hold; devices past it are refused. It is recorded on the instance and kept by later upgrades; `--broker-max-connections=0` returns to the server's limit.
 - Watch the broker's connection and authentication metrics (see [Observability](./observability.md)).
 
-The platform's own broker logins are held to the NATS protocol and cannot be used over this port: a leaked platform credential cannot be presented through MQTT. Only the event-sources login, which runs the platform's own MQTT source, may speak MQTT.
+The platform's own broker logins are held to the NATS protocol and cannot be used over this port: a leaked platform credential cannot be presented through MQTT. Only the event-sources login, which runs the platform's own MQTT source, may speak MQTT, together with the transitional shared service login on an instance that still keeps one.
 
 ## The certificate your devices must trust {#certificates}
 
@@ -135,23 +135,24 @@ From a machine outside the cluster, once DNS resolves:
 ```bash
 # 1. The right certificate answers, and it verifies against the instance CA
 openssl s_client -connect mqtt.acme.example.com:8883 \
-  -servername mqtt.acme.example.com -CAfile instance-ca.crt </dev/null \
+  -servername mqtt.acme.example.com -CAfile instance-ca.crt \
+  -verify_hostname mqtt.acme.example.com </dev/null \
   | grep -E 'subject=|Verify return code'
 ```
 
-You should see the host name in the subject (or among the alternative names) and `Verify return code: 0 (ok)`.
+You should see `Verify return code: 0 (ok)`, which with `-verify_hostname` also means the host name is among the certificate's names. (The subject shows the broker's internal name, not the host name.)
 
 ```bash
 # 2. A device can connect and publish
 mosquitto_pub --cafile instance-ca.crt \
   -h mqtt.acme.example.com -p 8883 \
-  -i 'devicechain:acme:sensor-001' \
+  -i 'acme:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t 'devicechain/acme/devices/sensor-001/events' \
+  -t 'acme/acme/devices/sensor-001/events' \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-Add `-d` to see the broker's `CONNACK` and the `PUBLISH`. A device that authenticates with a certificate adds `--cert` and `--key`, as in [Connecting with a certificate](../guides/device-x509.md).
+The client id is `{instance}:{tenant}:{device}` and the topic starts `{instance}/{tenant}`; the example is for an instance named `acme` with a tenant named `acme`. Add `-d` to see the broker's `CONNACK` and the `PUBLISH`. A device that authenticates with a certificate adds `--cert` and `--key`, uses the username `acme:@x509` and sends no password, as in [Connecting with a certificate](../guides/device-x509.md).
 
 ## When it does not work {#troubleshooting}
 

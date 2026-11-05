@@ -470,14 +470,14 @@ OAuth 客户端的重定向 URI 和 scope 不可清空：空重定向允许列�
 
 | 操作 | 作用 |
 | --- | --- |
-| `createProvisioningProfile` | 创建配置并返回 `{ profile, issuedSecret }`。密文由服务器生成（43 个字符，256 位），这个响应是它出现的唯一位置：平台只存储摘要。请求中没有 `provisionSecret`。`maxDevices`（至少为 1，省略表示无上限）限制该配置注册的设备数。 |
-| `rotateProvisioningProfileSecret(token)` | 替换密文并只返回一次新密文。旧密文立即失效，没有重叠。已注册的设备不受影响。服务器开始生成密文之前创建的配置，也靠它投入使用。 |
+| `createProvisioningProfile` | 创建配置并返回 `{ profile, issuedSecret }`。对使用密文的配置，密文由服务器生成（43 个字符，256 位），这个响应是它出现的唯一位置：平台只存储摘要。请求中没有 `provisionSecret`。证书配置会指定一个信任锚，没有密文，`issuedSecret` 为 `null`。`maxDevices`（至少为 1，省略表示无上限）限制该配置注册的设备数。 |
+| `rotateProvisioningProfileSecret(token)` | 替换密文并只返回一次新密文。旧密文立即失效，没有重叠。已注册的设备不受影响。服务器开始生成密文之前创建的配置，也靠它投入使用。证书配置没有密文，因此对其轮换会被拒绝。 |
 | `updateProvisioningProfile` | 部分更新。它没有密文字段。`maxDevices` 可以设置，也可以用 `null` 清除。 |
 | `revokeProvisionedDevices(profileToken)` | 禁用该配置签发的每一份凭据，终止这些设备的在线会话，并返回禁用的数量。 |
 | `resetDeviceProvisioning(deviceToken)` | 删除自注册签发给某台设备的凭据并终止其会话。设备保留其预指定，因此可以再次注册。 |
 | `deleteProvisioningProfile(token)` | 只要还有设备持有该配置签发的凭据（包括已吊销的），就会被拒绝（`REFERENCE_VIOLATION`）。 |
 
-在类型上，`ProvisioningProfile` 新增 `maxDevices`、`provisionedDeviceCount` 和 `secretIssued`（在服务器生成密文之前为 false，此时配置处于**需要轮换（Rotate required）**状态）。设备新增 `expectedProvisioningProfile`（它的预指定），凭据新增 `provisioningProfile`。`createDevice` 和 `importDevices` 接受 `provisioningProfileToken` 来预指定设备，`DeviceSearchCriteria` 接受 `provisioningProfile` 和 `expectedProvisioningProfile`。端点本身是纯 HTTP，在[设备协议参考](./device-protocol.md#self-registration)中说明。
+在类型上，`ProvisioningProfile` 新增 `maxDevices`、`provisionedDeviceCount` 和 `secretIssued`（在服务器生成密文之前为 false，此时配置处于**需要轮换（Rotate required）**状态；证书配置没有密文，因此始终为 false）。设备新增 `expectedProvisioningProfile`（它的预指定），凭据新增 `provisioningProfile`。`createDevice` 和 `importDevices` 接受 `provisioningProfileToken` 来预指定设备，`DeviceSearchCriteria` 接受 `provisioningProfile` 和 `expectedProvisioningProfile`。端点本身是纯 HTTP，在[设备协议参考](./device-protocol.md#self-registration)中说明。
 
 ## 入站集成 {#integrations}
 

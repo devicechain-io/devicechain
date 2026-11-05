@@ -73,7 +73,7 @@ mqttExposure:
 
 ### 升级会做什么 {#enable-effects}
 
-该设置会记录在实例上，并被之后的每次 `dcctl upgrade` 保留，因此参数只需给一次。主机名会加入消息代理的证书。消息代理会就地采用仅多了该主机名的证书，不重启，也不会断开已连接的设备；证书在同一个颁发机构下重新签发，因此无需重新建立任何信任。（如果变更同时改动了消息代理的路由或其颁发机构，仍会重启消息代理；和任何滚动一样，除非开启了 [fail-closed MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker)，否则重启会带来一个已确认消息可能丢失的窗口。）如果证书无法重新签发，因为实例没有保留签发它的颁发机构，`dcctl` 会在更改任何内容之前停止并说明原因。
+该设置会记录在实例上，并被之后的每次 `dcctl upgrade` 保留，因此参数只需给一次。主机名会加入消息代理的证书。消息代理通常会就地采用仅多了该主机名的证书，不重启，也不会断开已连接的设备（如果各代理在超时时间内没有切换到它，或代理集合不是该证书签发时的那一组，`dcctl` 会改为重启消息代理）；证书在同一个颁发机构下重新签发，因此无需重新建立任何信任。（如果变更同时改动了消息代理的路由或其颁发机构，仍会重启消息代理；和任何滚动一样，除非开启了 [fail-closed MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker)，否则重启会带来一个已确认消息可能丢失的窗口。）如果证书无法重新签发，因为实例没有保留签发它的颁发机构，`dcctl` 会在更改任何内容之前停止并说明原因。
 
 用 `--mqtt-exposure none` 关闭暴露。它会移除路由或 Service；证书在下次续期前仍带有多出的名称，这是无害的。
 
@@ -112,7 +112,7 @@ MQTT 不需要再开放其他端口。在 GKE 和 AKS 上，云会为 `LoadBalan
 - 用 `dcctl bootstrap` 或 `dcctl upgrade` 的 `--broker-max-connections` 为消息代理设置上限。它设置消息代理的 `max_connections`，设备和平台客户端一并计数。不设置时，消息代理保持服务器自身的限制，与以前相同。请把它设在设备规模之上并留出重连风暴的余量，同时低于消息代理 Pod 能承受的数量；超出的设备会被拒绝。它记录在实例上，并被之后的升级保留；`--broker-max-connections=0` 恢复为服务器自身的限制。
 - 监控消息代理的连接和认证指标（见[可观测性](./observability.md)）。
 
-平台自身的消息代理登录被限制为 NATS 协议，不能通过此端口使用：泄露的平台凭据无法通过 MQTT 出示。只有运行平台自带 MQTT 源的 event-sources 登录可以使用 MQTT。
+平台自身的消息代理登录被限制为 NATS 协议，不能通过此端口使用：泄露的平台凭据无法通过 MQTT 出示。只有运行平台自带 MQTT 源的 event-sources 登录可以使用 MQTT，此外还有仍保留过渡性共享服务登录的实例上的该登录。
 
 ## 设备必须信任的证书 {#certificates}
 
@@ -139,19 +139,19 @@ openssl s_client -connect mqtt.acme.example.com:8883 \
   | grep -E 'subject=|Verify return code'
 ```
 
-你应当看到主题（或备用名称）中有该主机名，并且 `Verify return code: 0 (ok)`。
+你应当看到 `Verify return code: 0 (ok)`；加上 `-verify_hostname` 后，这也意味着该主机名在证书的名称之中。（主题显示的是消息代理的内部名称，而不是该主机名。）
 
 ```bash
 # 2. 设备可以连接并发布
 mosquitto_pub --cafile instance-ca.crt \
   -h mqtt.acme.example.com -p 8883 \
-  -i 'devicechain:acme:sensor-001' \
+  -i 'acme:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t 'devicechain/acme/devices/sensor-001/events' \
+  -t 'acme/acme/devices/sensor-001/events' \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-加上 `-d` 可以看到消息代理的 `CONNACK` 和 `PUBLISH`。使用证书认证的设备再加上 `--cert` 和 `--key`，见[使用证书连接设备](../guides/device-x509.md)。
+客户端 ID 为 `{实例}:{租户}:{设备}`，主题以 `{实例}/{租户}` 开头；示例针对名为 `acme` 的实例和名为 `acme` 的租户。加上 `-d` 可以看到消息代理的 `CONNACK` 和 `PUBLISH`。使用证书认证的设备再加上 `--cert` 和 `--key`，用户名为 `acme:@x509` 且不发送密码，见[使用证书连接设备](../guides/device-x509.md)。
 
 ## 不工作时 {#troubleshooting}
 

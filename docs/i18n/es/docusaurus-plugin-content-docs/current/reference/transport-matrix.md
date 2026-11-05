@@ -65,9 +65,9 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
 
 - **Suscripción ◐**: el dispositivo publica en su propio topic de eventos, y el bróker captura el
   mensaje de forma duradera antes de que ningún código de la plataforma lo vea. La autenticación
-  tiene dos capas independientes: la conexión se autentica en el bróker y queda ligada a los
-  subjects de ese único dispositivo, y el evento lleva una credencial que se comprueba de nuevo en
-  el pipeline.
+  ocurre en el bróker: la conexión se autentica y queda ligada a los subjects de ese único
+  dispositivo, y el pipeline comprueba que el dispositivo del evento es el que nombra el topic. El
+  evento no lleva credencial propia, y uno que la incluya se rechaza.
 
   Hay un agujero, y es la razón de que esto no sea `●`. Un mensaje que llega mientras el inquilino
   supera su **techo de ingesta, contado en lecturas,** se confirma al bróker y se descarta. El dispositivo ya
@@ -161,8 +161,9 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   dispositivo es el id que el operador dio a la fuente de eventos), así que la compuerta que
   reconoce un transporte no entregable no puede reconocer este. El comando se acepta, se publica
   donde ningún dispositivo está suscrito para recibirlo, se marca `SENT` y acaba en `TIMEOUT`.
-  Sparkplug es la única fila de esta página en la que un `○` en esta columna produce un `FAILED`
-  inmediato (Sparkplug lo hace cuando sus comandos no están habilitados).
+  Sparkplug (cuando sus comandos no están habilitados) y las
+  [integraciones entrantes](../guides/inbound-integrations.md#commands) son las únicas filas de esta página en las que un `○` en esta columna produce un `FAILED`
+  inmediato.
 - El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia; las
   credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
   que pongas por delante del servicio.

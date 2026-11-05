@@ -56,7 +56,11 @@ dcctl upgrade local my-instance --version <new-version>
 | `functionalAreas.<area>.profiler.enabled`、`.blockRate`、`.mutexFraction` | 诊断用的性能分析监听器，默认关闭（见 [可观测性](./observability.md)）。其 `address` 不可调整 |
 | `frontend.replicas`、`frontend.resources` | 控制台的 Pod |
 | `metrics.alerts`、`metrics.grafanaDashboards` | 告警规则和仪表板 |
-| `ingress.className`、`ingress.annotations`、`ingress.uploadMaxBodySize`、`networkPolicy.additionalAllowedCidrs`、`serviceAccount.annotations` | 入口如何对外提供，以及谁可以访问 Pod |
+| `ingress.className`、`ingress.annotations`、`ingress.uploadMaxBodySize`、`ingress.gateway.className`、`ingress.gateway.annotations`、`networkPolicy.additionalAllowedCidrs`、`serviceAccount.annotations` | 入口如何对外提供，以及谁可以访问 Pod |
+| `mqttExposure.loadBalancer` | MQTT 负载均衡器的云相关设置，例如内部负载均衡器和允许的来源范围 |
+| `instance.config.infrastructure.nats.streamDesignRate`、`.streamRunwayMinutes`、`.streamMaxBytes`、`.streamMaxBytesCold`、`.streamMaxMsgs` | 事件流按其预留的中断缓冲时间，以及字节和消息数上限。写入任何内容之前，会用代理的卷检查预留量 |
+| `instance.config.infrastructure.messaging.envelopes.resolved`、`.inbound`、`.inboundLingerMillis` | 事件是否以信封形式写入，默认关闭 |
+| `brokerAdmin.allowCeilingShrink` | 允许一次升级把某个流的上限降到其现有内容以下。仅在该次升级时设置，之后移除 |
 
 `functionalAreas.event-management.replicas` 虽然属于可调优区域，但它本身不可调：它由 `--ha` 设置，事件存储的连接预留量正是按它来确定的。
 
@@ -132,7 +136,7 @@ kubectl -n <instance namespace> get pvc -w
 ```
 
 如果数据库 Pod 已因磁盘写满而反复崩溃重启，请在其卷声明扩容后删除该 Pod，让它在更大的文件系统上重启。
-随后被保留的事件及其后的积压会入库，告警也会随空闲比例上升而恢复。还要把安装时 OpenTofu 配置中的 `timescale_storage` 设为新容量。Cluster 由该值应用：只要配置值不变，Helm 的三方合并就会保留手工修改的容量；配置值更小会让数据库算子拒绝缩容并使升级失败；灾难恢复重建则会回到配置的容量。
+随后被保留的事件及其后的积压会入库，告警也会随空闲比例上升而恢复。还要把安装时 OpenTofu 配置中的 `timescale_storage` 设为新容量。Cluster 由该值应用：只要配置值不变，Helm 的三方合并就会保留手工修改的容量；配置值更小会让数据库算子拒绝缩容并使直接应用失败（`dcctl upgrade` 本身会保留卷当前的容量，不会缩小它）；灾难恢复重建则会回到配置的容量。
 
 ## 副本数与数据库的连接预算 {#connections}
 

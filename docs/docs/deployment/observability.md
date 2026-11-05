@@ -1742,9 +1742,10 @@ one replica, forward to the pod you mean by name (`kubectl port-forward pod/<nam
 
 ### What it does not serve, and why
 
-- **`block` and `mutex` answer 404.** Their sampling is off in these services, so they would
+- **`block` and `mutex` answer 404 unless their sampling is on.** It is off by default, so they would
   always be empty, and an empty profile would read as "no contention" when nothing was
-  measured.
+  measured. For a profiling run, set a positive `functionalAreas.<area>.profiler.blockRate` or
+  `.mutexFraction` alongside `profiler.enabled`, and they are served.
 - **A heap or allocation profile over a time window (`?seconds=` on those) is refused.**
   Take two snapshots and compare them with `go tool pprof -base first.pb.gz second.pb.gz`.
 - **`cmdline` and `symbol` are not served.** The profiles carry their own symbols.

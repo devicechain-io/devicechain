@@ -55,7 +55,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/ownership_outbox.go":        {"Api.DrainOwnershipFacts"},
 	"backend/services/device-management/model/api_trust_anchor_expiry.go": {"Api.CountTrustAnchorsExpiring"},
 	"backend/services/device-management/model/session_kick_pending.go": {
-		"Api.DrainSessionKicks", "Api.observeSessionKicks",
+		"Api.tenantsOwingKicks", "Api.observeSessionKicks",
 	},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",

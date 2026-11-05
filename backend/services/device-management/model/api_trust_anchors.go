@@ -48,6 +48,19 @@ const kickOriginAnchorBase uint = 1 << 40
 // anchorKickOrigin is the queue Origin of a kick owed because trust anchor id was disabled.
 func anchorKickOrigin(id uint) uint { return kickOriginAnchorBase + id }
 
+// kickOriginDeviceDisabled is the queue Origin of a kick owed because the DEVICE was disabled.
+// The device is the key's own second column, so one constant names the debt for every device. It
+// is the top of the bigint range the column holds short of its last bit, so no sequence of ids
+// reaches it from below: a profile id is below 1 << 40, an anchor origin is 1 << 40 plus its id,
+// and both would need two billion billion rows to arrive here. TestKickOriginsDoNotCollide pins
+// the boundaries.
+const kickOriginDeviceDisabled uint = 1 << 62
+
+// kickOriginDeviceDeleted is the queue Origin of a kick owed because the device was DELETED. The
+// row is queued in the delete's own transaction, so a delete whose kick could not be confirmed is
+// retried by the background drain, and it is never withdrawn: a deleted device does not come back.
+const kickOriginDeviceDeleted uint = 1<<62 + 1
+
 // lockTrustAnchorByToken reads the anchor with this token on tx, locking its row FOR UPDATE.
 // Disable, delete and every write that binds something to an anchor serialize on it. A token
 // that names nothing in the tenant is gorm.ErrRecordNotFound.
