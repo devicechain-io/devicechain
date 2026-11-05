@@ -121,6 +121,18 @@ dcctl upgrade local my-instance --version <new-version>
   约 30 分钟的量，因为检查点会分散在其间隔的大部分时间内完成。为更高速率规划事件库时，请同时调高 `timescale_max_wal_size_mib` 并调低
   `timescale_checkpoint_timeout`：要让检查点保持按时钟触发，`max_wal_size` 至少应为每个检查点
   间隔内所写日志量的三倍。日志位于数据卷上，所以这个数值必须能放进数据卷。
+  **规划规则。** 当自上一次检查点以来写入的日志达到约 `max_wal_size` / (1 +
+  `checkpoint_completion_target`)（大致是 `max_wal_size` 除以 1.9）时，Postgres 会在计时器之前就请求
+  检查点。要让事件库的检查点保持按时钟触发，请把 `max_wal_size` 设为至少 1.9 ×
+  `checkpoint_timeout`（默认 900 秒）× 日志速率（字节每秒）。请在您自己的事件库上测量该速率
+  （`pg_stat_wal` 的 `wal_bytes` 在某个时间窗口内的增量），它取决于行宽和索引。GKE 基准测试中的实例：
+  在默认的 13 GiB 上限下，事件库在每秒 8,000 个 MQTT 事件（日志 9.4 MB/s）时按时钟做检查点，但在
+  每秒 12,000 个（15.3 MB/s）时会提前请求检查点，而不是等待计时器，因为 15 MB/s 不到八分钟就会写出
+  约 7 GB。按 15.3 MB/s，该规则给出约 26 GiB；每秒 20,000 个时约为 45 GiB。日志位于数据卷上，因此
+  规划卷容量时除数据外还要容纳这个上限。上文的三倍是在此最小值之上应保留的余量。
+  这些设置只调优事件库。关系型数据库保持自己的默认值（`max_wal_size` 为 1 GB，`checkpoint_timeout`
+  为 5 分钟）；同一次基准测试中它在每个 7.5 分钟窗口内请求了 3 到 6 次检查点，日志速率为
+  4.5 到 7 MB/s，这在它身上属于预期，并不表示事件库的调优有问题。
   升级时，这一设置也会按现有卷的当前大小应用到已有的事件库。如果该卷已接近写满，请把
   `timescale_max_wal_size_mib` 设为 1024，以保留原来的 1 GiB。
 - **分块间隔。** `lifecycle.chunkIntervalHours` 默认为 24，且只影响修改之后创建的分块。写入期间，
@@ -141,6 +153,47 @@ kubectl -n <instance namespace> get pvc -w
 
 如果数据库 Pod 已因磁盘写满而反复崩溃重启，请在其卷声明扩容后删除该 Pod，让它在更大的文件系统上重启。
 随后被保留的事件及其后的积压会入库，告警也会随空闲比例上升而恢复。还要把安装时 OpenTofu 配置中的 `timescale_storage` 设为新容量。Cluster 由该值应用：只要配置值不变，Helm 的三方合并就会保留手工修改的容量；配置值更小会让数据库算子拒绝缩容并使直接应用失败（`dcctl upgrade` 本身会保留卷当前的容量，不会缩小它）；灾难恢复重建则会回到配置的容量。
+
+### 调整容量没有传到卷上时 {#event-store-expand-pvc}
+
+数据库算子只有在协调 Cluster 时才会把新的 `spec.storage.size` 应用到卷声明上，而不健康的 Cluster 可能
+不会协调。在促成这些说明的卷写满事件中，两个备库都因 `No space left on device` 反复崩溃，修改
+Cluster 约三分钟内没有改变卷声明；直接修改卷声明则生效。如果修改 Cluster 几分钟后 `kubectl get
+pvc` 仍显示旧容量，请自行扩容卷声明。关系型数据库（Cluster `dc-rdb`，卷声明 `dc-rdb-N`）同样适用，
+除事件库外，`DatabaseVolumeFillingUp`、`DatabaseVolumeAlmostFull` 和 `DatabaseVolumeCritical`
+也在监控它。
+
+1. 确认 StorageClass 允许扩容。否则修改会被拒绝，只剩上文所述的办法：
+
+   ```bash
+   kubectl -n <实例命名空间> get pvc dc-tsdb-1 -o jsonpath='{.spec.storageClassName}{"\n"}'
+   kubectl get storageclass <该类> -o jsonpath='{.allowVolumeExpansion}{"\n"}'   # 必须输出 true
+   ```
+
+2. 把该 Cluster 的每个卷声明改为同一容量：每个成员的数据卷声明，以及（若 Cluster 有单独的预写日志卷）
+   其 `-wal` 卷声明（`dc-tsdb-1`、`dc-tsdb-2`、`dc-tsdb-3`，以及 `dc-tsdb-1-wal` 等）。卷声明只能增大：
+
+   ```bash
+   for pvc in dc-tsdb-1 dc-tsdb-2 dc-tsdb-3; do
+     kubectl -n <实例命名空间> patch pvc "$pvc" --type merge \
+       -p '{"spec":{"resources":{"requests":{"storage":"48Gi"}}}}'
+   done
+   ```
+
+3. 让 Cluster 的 `spec.storage.size` 和 `timescale_storage` 设置保持同一容量（见上文），使算子和下一次
+   应用与您的操作一致。
+
+确认完成之前请验证：
+
+- `kubectl -n <实例命名空间> get pvc` 在每个成员的 `CAPACITY` 列显示新容量。卷声明若停留在
+  `FileSystemResizePending` 状态，会在其 Pod 重启时扩容文件系统：删除该 Pod。
+- 在数据库容器内执行 `df -h`（`kubectl -n <实例命名空间> exec dc-tsdb-1 -c postgres --
+  df -h /var/lib/postgresql/data`）显示更大的文件系统。
+- 告警会随空闲比例上升而恢复：先是 `DatabaseVolumeCritical` 和 `DatabaseVolumeAlmostFull`，然后是
+  `DatabaseVolumeFillingFast` 和 `DatabaseVolumeFillsWithinDay`。待备库重启、`event-management`
+  存下所保留的事件后，`CNPGClusterNotReady` 和 `EventStoreRefusingWrites` 恢复；`resolved-events`
+  上的积压排空后，`JetStreamDurableFallingBehind` 恢复。在那次事件中，卷扩容后积压约 70 秒排空，
+  每个事件都恰好存储一次。
 
 ## 副本数与数据库的连接预算 {#connections}
 

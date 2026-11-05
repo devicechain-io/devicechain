@@ -158,6 +158,22 @@ readings per second.
   size the store for a higher rate: to keep checkpoints on the clock, `max_wal_size` wants to be
   at least three times the log written per checkpoint interval. The log lives on the data volume,
   so that figure has to fit inside it.
+  **Sizing rule.** Postgres requests a checkpoint, ahead of the timer, once the log written since
+  the last one reaches about `max_wal_size` / (1 + `checkpoint_completion_target`), roughly
+  `max_wal_size` divided by 1.9. To keep the event store's checkpoints on the clock, set
+  `max_wal_size` to at least 1.9 × `checkpoint_timeout` (900 seconds by default) × the log rate in
+  bytes per second. Measure the rate on your own store (`wal_bytes` in `pg_stat_wal`, over a
+  window); it depends on row width and indexes. Worked example from a GKE benchmark: with the
+  default 13 GiB limit the event store checkpointed on the clock at 8,000 MQTT events a second
+  (9.4 MB/s of log), but at 12,000 a second (15.3 MB/s) it requested a checkpoint instead of
+  waiting for the timer, because 15 MB/s writes about 7 GB in under eight minutes. At 15.3 MB/s the
+  rule gives about 26 GiB, and about 45 GiB at 20,000 a second. The log lives on the data volume, so
+  size the volume for that limit as well as for the data. The factor of three above is the margin to
+  keep on top of this minimum.
+  These settings tune the event store only. The relational database keeps its own defaults
+  (`max_wal_size` of 1 GB and a five-minute `checkpoint_timeout`); in the same benchmark it requested
+  3 to 6 checkpoints in every 7.5-minute window at 4.5 to 7 MB/s of log, which is expected there and
+  is not a sign that the event store is mistuned.
   An upgrade applies this to an existing store too, at its current volume size. If that volume
   is already close to full, set `timescale_max_wal_size_mib` to 1024 to keep the previous 1 GiB.
 - **Chunk interval.** `lifecycle.chunkIntervalHours` is 24 by default and only affects chunks
@@ -185,6 +201,54 @@ delete that pod once its claim has grown so it restarts on the larger filesystem
 and the backlog behind them are then stored, and the alerts clear as the free fraction rises. Also set `timescale_storage` to the new size in the install's OpenTofu configuration. The Cluster is applied from that value: Helm's three-way merge keeps a hand-patched size only while the configured value is unchanged, a smaller configured value makes the database operator refuse the shrink and fails a direct apply (`dcctl upgrade` itself keeps the volume's live size and never shrinks it), and a disaster-recovery rebuild comes back at the configured size. A StorageClass without expansion cannot grow a
 volume: the only ways out are to shorten retention (which frees space as chunks are dropped) or to
 restore into a larger cluster.
+
+### When the resize does not reach the volumes {#event-store-expand-pvc}
+
+The database operator applies a new `spec.storage.size` to the claims only while it reconciles the
+Cluster, and an unhealthy Cluster may not. In the full-volume incident behind these notes both
+standbys were crash-looping on `No space left on device`, and patching the Cluster did not change
+the claims within about three minutes; patching the claims directly did. If `kubectl get pvc` still
+shows the old capacity a few minutes after you patched the Cluster, grow the claims yourself. The
+same applies to the relational database (Cluster `dc-rdb`, claims `dc-rdb-N`), which
+`DatabaseVolumeFillingUp`, `DatabaseVolumeAlmostFull` and `DatabaseVolumeCritical` watch as well as
+the event store.
+
+1. Check that the StorageClass allows expansion. Without it the patch is refused, and the only ways
+   out are the ones above:
+
+   ```bash
+   kubectl -n <instance namespace> get pvc dc-tsdb-1 -o jsonpath='{.spec.storageClassName}{"\n"}'
+   kubectl get storageclass <that class> -o jsonpath='{.allowVolumeExpansion}{"\n"}'   # must print true
+   ```
+
+2. Patch every claim of the Cluster to the same size: each member's data claim and, where the
+   Cluster has a separate write-ahead log volume, its `-wal` claim too (`dc-tsdb-1`, `dc-tsdb-2`,
+   `dc-tsdb-3`, and `dc-tsdb-1-wal` and so on). A claim can only grow:
+
+   ```bash
+   for pvc in dc-tsdb-1 dc-tsdb-2 dc-tsdb-3; do
+     kubectl -n <instance namespace> patch pvc "$pvc" --type merge \
+       -p '{"spec":{"resources":{"requests":{"storage":"48Gi"}}}}'
+   done
+   ```
+
+3. Keep the Cluster's `spec.storage.size` and the `timescale_storage` setting at the same size, as
+   described above, so the operator and the next apply agree with what you did.
+
+Verify before you call it done:
+
+- `kubectl -n <instance namespace> get pvc` shows the new capacity under `CAPACITY` for every
+  member. A claim left with a `FileSystemResizePending` condition grows its filesystem when its pod
+  restarts: delete the pod.
+- `df -h` inside the database container (`kubectl -n <instance namespace> exec dc-tsdb-1 -c postgres
+  -- df -h /var/lib/postgresql/data`) reports the larger filesystem.
+- The alerts clear as the free fraction rises: `DatabaseVolumeCritical` and
+  `DatabaseVolumeAlmostFull` first, then `DatabaseVolumeFillingFast` and
+  `DatabaseVolumeFillsWithinDay`. `CNPGClusterNotReady` and `EventStoreRefusingWrites` clear once
+  the standbys have restarted and `event-management` has stored what it held;
+  `JetStreamDurableFallingBehind` clears when the backlog on `resolved-events` has drained. In the
+  incident the backlog drained in about 70 seconds once the volume had grown, and every event
+  was stored exactly once.
 
 ## Replicas and the database's connection budget {#connections}
 
