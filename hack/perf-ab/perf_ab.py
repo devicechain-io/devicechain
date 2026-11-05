@@ -120,7 +120,9 @@ def read_snap(d):
 
 
 def stmt_key(s):
-    return (s.get("db"), s.get("id"))
+    # pg_stat_statements identifies an entry by (database, queryid, userid, toplevel); keying on the first
+    # two folds two users, or a top-level and a nested execution of one query, into one entry.
+    return (s.get("db"), s.get("id"), s.get("uid"), s.get("top"))
 
 
 def norm_query(q):
@@ -313,8 +315,13 @@ def instance_cpu(pre, post, window, events, m, info, warnings):
         name, nsp, pod, ctr = key
         if name != "container_cpu_usage_seconds_total" or ctr != "postgres" or pod not in post_by:
             continue
-        d1 = v1 - pre["cpu"].get(key, 0.0)
         i = post_by[pod]
+        if key not in pre["cpu"]:
+            # No earlier sample: the whole counter would read as this window's CPU.
+            warnings.append("no 'before' CPU sample for %s/%s: its per-instance CPU rows are invalid" % (pod, ctr))
+            moved.add(i["store"])
+            continue
+        d1 = v1 - pre["cpu"][key]
         if d1 < 0:
             warnings.append("cAdvisor counter went backwards for %s/%s (container restarted?)" % (pod, ctr))
             moved.add(i["store"])
@@ -960,6 +967,32 @@ def self_test():
         if abs(sum(v for k, v in s.items() if k.startswith("cpu.dbinst.tsdb.")) - (64 + 16) / 3.2) > 1e-6:
             sys.stderr.write("self-test: a sidecar container was counted as database CPU\n")
             rc = 1
+        # Two users running the same query are two entries: neither may overwrite the other as a baseline.
+        grp = stmt_deltas({"reset": "r", "dealloc": 0, "stmts": [{"db": "d", "id": "9", "uid": "10", "top": True, "q": "select 1", "calls": 100, "rows": 0, "ms": 0, "walb": 0},
+                                                                {"db": "d", "id": "9", "uid": "20", "top": True, "q": "select 1", "calls": 5, "rows": 0, "ms": 0, "walb": 0}]},
+                          {"reset": "r", "dealloc": 0, "stmts": [{"db": "d", "id": "9", "uid": "10", "top": True, "q": "select 1", "calls": 110, "rows": 0, "ms": 0, "walb": 0},
+                                                                {"db": "d", "id": "9", "uid": "20", "top": True, "q": "select 1", "calls": 15, "rows": 0, "ms": 0, "walb": 0}]},
+                          [], "t")
+        if grp is None or sum(g["calls"] for g in grp.values()) != 20:
+            sys.stderr.write("self-test: statements of two users were folded into one baseline (calls = %r, want 20)\n" % (None if grp is None else sum(g["calls"] for g in grp.values())))
+            rc = 1
+        # A container with no 'before' CPU sample must not report its whole lifetime counter as window CPU.
+        cad_p = os.path.join(arm, "raw", "pre", "cadvisor-n2.prom")
+        keep_cad = open(cad_p).read()
+        with open(cad_p, "w") as f:
+            f.write("".join(l for l in keep_cad.splitlines(True) if 'pod="dc-tsdb-2"' not in l or 'container="postgres"' not in l))
+        stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+        try:
+            summarize(arm)
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
+        j2 = load(os.path.join(arm, "summary.json"))
+        if any(k.startswith("cpu.dbinst.tsdb.") for k in j2["metrics"]) or not any("no 'before' CPU sample" in w for w in j2["warnings"]):
+            sys.stderr.write("self-test: a missing 'before' CPU sample still produced per-instance CPU rows\n")
+            rc = 1
+        with open(cad_p, "w") as f:
+            f.write(keep_cad)
         # NEGATIVE CONTROLS for the instance split and the table counters, each run on a copy of the
         # raw tree and judged by what it must REFUSE to say.
         raw_ = os.path.join(arm, "raw")

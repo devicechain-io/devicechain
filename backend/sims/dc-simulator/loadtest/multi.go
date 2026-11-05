@@ -450,9 +450,9 @@ func RunMany(ctx context.Context, handshakes []*sim.Handshake, run Runner, lead 
 		}(i, hs)
 	}
 	wg.Wait()
-	if opt.Expect <= 0 {
-		opt.Expect = len(handshakes)
-	}
+	// Whatever the caller asked to expect, the number LAUNCHED is the number that must report: an
+	// Expect below it would let a failed harness drop out of the count and the verdict.
+	opt.Expect = len(handshakes)
 	return MergeReports(sums, opt), errs
 }
 

@@ -340,3 +340,31 @@ func TestMicrosHashVectors(t *testing.T) {
 		}
 	}
 }
+
+// Two sends that share a (device, instant) cannot be told apart by a sum of hashes: one stored
+// copy of each and two stored copies of one hash alike. The ledger records the collision and the
+// oracle refuses to decide, as the per-identity read-back does.
+func TestAggregateLedgerCollisionIsInconclusive(t *testing.T) {
+	led := ledgerOfIDs(map[string]sim.DeviceIdentities{"d1": {Accepted: []int64{idA, idA, idB}}})
+	exp := NewAggregateLedger("t1", "m", 1, testWindow, led, sim.Snapshot{Emitted: 3}, true)
+	if exp.Collisions != 1 {
+		t.Fatalf("collisions = %d, want 1", exp.Collisions)
+	}
+	// Stored: one A lost, B duplicated: counts and hash sums are not equal here, but the stored
+	// pair for {A,A,B} is what a faithful store holds, and that must still not read as clean.
+	st := map[string][]int64{"d1": {idA, idA, idB}}
+	rep := check(t, exp, storedOf(st), AggregateOptions{})
+	if rep.Reconciled || len(rep.Inconclusive) == 0 || !strings.Contains(strings.Join(rep.Inconclusive, ";"), "more than once") {
+		t.Fatalf("a ledger with a colliding identity must be inconclusive even when the store matches it: %+v", rep)
+	}
+	// Across outcomes too: the same instant accepted once and ambiguous once.
+	led = ledgerOfIDs(map[string]sim.DeviceIdentities{"d1": {Accepted: []int64{idA}, Ambiguous: []int64{idA}}})
+	if got := NewAggregateLedger("t1", "m", 1, testWindow, led, sim.Snapshot{Emitted: 1, Failed: 1}, false).Collisions; got != 1 {
+		t.Fatalf("a collision across outcomes was not counted: %d", got)
+	}
+	// And a clean fleet records none.
+	l2, d2, _ := fleet(5, 5)
+	if got := NewAggregateLedger("t1", "m", 1, testWindow, l2, d2, false).Collisions; got != 0 {
+		t.Fatalf("a clean ledger reported %d collisions", got)
+	}
+}

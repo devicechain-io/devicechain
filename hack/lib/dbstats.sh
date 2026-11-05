@@ -64,33 +64,40 @@ dbstats_instances() { # kubectl ns cluster store
     | tr -d '\r'
 }
 
-# dbstats_init: builds STMT_SQL, the one statement that reads a store's WAL position, WAL counters,
+# dbstats_stmt_sql <ns> <pod>: prints the one statement that reads a store's WAL position, WAL counters,
 # checkpoint counts (timed and requested apart: "requested" is max_wal_size or an explicit CHECKPOINT,
 # "timed" is checkpoint_timeout, and they have different fixes) and pg_stat_statements, all at one
-# instant. PG17 moved the checkpoint counters to pg_stat_checkpointer.
-# Needs: psql_at, ns, tsdb_pod.
-dbstats_init() {
-  ckpt_view="$(psql_at "$ns" "$tsdb_pod" "SELECT CASE WHEN to_regclass('pg_stat_checkpointer') IS NOT NULL THEN 'pg_stat_checkpointer' ELSE 'pg_stat_bgwriter' END" | tr -d '\r')"
-  # The cause of a checkpoint matters: "requested" is max_wal_size being reached (or an explicit
-  # CHECKPOINT), "timed" is checkpoint_timeout. They have different fixes, so the split is kept.
-  if [[ "$ckpt_view" == pg_stat_checkpointer ]]; then
-    ckpt_t_expr="(SELECT num_timed FROM pg_stat_checkpointer)"; ckpt_r_expr="(SELECT num_requested FROM pg_stat_checkpointer)"
+# instant. The checkpoint counters moved to pg_stat_checkpointer in PG17, and the two stores can run
+# different majors, so the view is probed on THIS store, never assumed from the other one.
+# A statement is identified by (database, queryid, userid, toplevel): two users, or a top-level and a
+# nested execution, of one query are different entries.
+# Needs: psql_at.
+dbstats_stmt_sql() {
+  local ns="$1" pod="$2" view t_expr r_expr
+  view="$(psql_at "$ns" "$pod" "SELECT CASE WHEN to_regclass('pg_stat_checkpointer') IS NOT NULL THEN 'pg_stat_checkpointer' ELSE 'pg_stat_bgwriter' END" | tr -d '\r')" || return 1
+  if [[ "$view" == pg_stat_checkpointer ]]; then
+    t_expr="(SELECT num_timed FROM pg_stat_checkpointer)"; r_expr="(SELECT num_requested FROM pg_stat_checkpointer)"
   else
-    ckpt_t_expr="(SELECT checkpoints_timed FROM pg_stat_bgwriter)"; ckpt_r_expr="(SELECT checkpoints_req FROM pg_stat_bgwriter)"
+    t_expr="(SELECT checkpoints_timed FROM pg_stat_bgwriter)"; r_expr="(SELECT checkpoints_req FROM pg_stat_bgwriter)"
   fi
-  ckpt_expr="($ckpt_t_expr + $ckpt_r_expr)"
-  STMT_SQL="SELECT jsonb_build_object('t', extract(epoch from clock_timestamp()), 'ckpt', $ckpt_expr, 'ckptTimed', $ckpt_t_expr, 'ckptReq', $ckpt_r_expr, 'lsn', pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0'), 'lsnText', pg_current_wal_lsn()::text, 'inRecovery', pg_is_in_recovery(), 'wal', (SELECT to_jsonb(w) - 'stats_reset' FROM pg_stat_wal w), 'reset', (SELECT stats_reset FROM pg_stat_statements_info), 'dealloc', (SELECT dealloc FROM pg_stat_statements_info), 'stmts', coalesce((SELECT jsonb_agg(jsonb_build_object('q', left(s.query, 300), 'id', s.queryid::text, 'db', d.datname, 'calls', s.calls, 'rows', s.rows, 'ms', s.total_exec_time, 'walb', s.wal_bytes, 'walr', s.wal_records)) FROM pg_stat_statements s LEFT JOIN pg_database d ON d.oid = s.dbid WHERE s.calls > 0), '[]'::jsonb))"
+  printf '%s' "SELECT jsonb_build_object('t', extract(epoch from clock_timestamp()), 'ckpt', ($t_expr + $r_expr), 'ckptTimed', $t_expr, 'ckptReq', $r_expr, 'lsn', pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0'), 'lsnText', pg_current_wal_lsn()::text, 'inRecovery', pg_is_in_recovery(), 'wal', (SELECT to_jsonb(w) - 'stats_reset' FROM pg_stat_wal w), 'reset', (SELECT stats_reset FROM pg_stat_statements_info), 'dealloc', (SELECT dealloc FROM pg_stat_statements_info), 'stmts', coalesce((SELECT jsonb_agg(jsonb_build_object('q', left(s.query, 300), 'id', s.queryid::text, 'uid', s.userid::text, 'top', s.toplevel, 'db', d.datname, 'calls', s.calls, 'rows', s.rows, 'ms', s.total_exec_time, 'walb', s.wal_bytes, 'walr', s.wal_records)) FROM pg_stat_statements s LEFT JOIN pg_database d ON d.oid = s.dbid WHERE s.calls > 0), '[]'::jsonb))"
 }
 
-# dbstats_snap_dbs <dir>: writes db-tsdb.json, db-rdb.json (the STMT_SQL snapshots), tables-tsdb.json,
+# dbstats_init: builds STMT_SQL_TSDB and STMT_SQL_RDB, one per store. Needs: psql_at, ns, tsdb_pod, rdb_ns, rdb_pod.
+dbstats_init() {
+  STMT_SQL_TSDB="$(dbstats_stmt_sql "$ns" "$tsdb_pod")" || return 1
+  STMT_SQL_RDB="$(dbstats_stmt_sql "$rdb_ns" "$rdb_pod")" || return 1
+}
+
+# dbstats_snap_dbs <dir>: writes db-tsdb.json, db-rdb.json (the statement snapshots), tables-tsdb.json,
 # tables-rdb.json (per-table counters) and db-instances.json (every CNPG pod with its role) into <dir>,
 # in parallel so the stores are read within a second of one another. Returns non-zero if any failed.
-# Needs: psql_at, psql_db, k, STMT_SQL, ns, tsdb_pod, tsdb_cluster, rdb_ns, rdb_pod, rdb_cluster.
+# Needs: psql_at, psql_db, k, STMT_SQL_TSDB, STMT_SQL_RDB, ns, tsdb_pod, tsdb_cluster, rdb_ns, rdb_pod, rdb_cluster.
 dbstats_snap_dbs() {
   local d="$1" pid rc=0
   local -a pids=()
-  ( psql_at "$ns" "$tsdb_pod" "$STMT_SQL" > "$d/db-tsdb.json" ) & pids+=($!)
-  ( psql_at "$rdb_ns" "$rdb_pod" "$STMT_SQL" > "$d/db-rdb.json" ) & pids+=($!)
+  ( psql_at "$ns" "$tsdb_pod" "$STMT_SQL_TSDB" > "$d/db-tsdb.json" ) & pids+=($!)
+  ( psql_at "$rdb_ns" "$rdb_pod" "$STMT_SQL_RDB" > "$d/db-rdb.json" ) & pids+=($!)
   ( dbstats_tables psql_db "$ns" "$tsdb_pod" > "$d/tables-tsdb.json" ) & pids+=($!)
   ( dbstats_tables psql_db "$rdb_ns" "$rdb_pod" > "$d/tables-rdb.json" ) & pids+=($!)
   ( { dbstats_instances k "$ns" "$tsdb_cluster" tsdb; dbstats_instances k "$rdb_ns" "$rdb_cluster" rdb; } | jq -sc 'add' > "$d/db-instances.json" ) & pids+=($!)

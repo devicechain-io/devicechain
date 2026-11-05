@@ -184,6 +184,11 @@ type AggregateLedger struct {
 	AllAmbiguous int64 `json:"allAmbiguous"`
 	Unparsed     int64 `json:"unparsed,omitempty"`
 	SubMicro     int64 `json:"subMicrosecond,omitempty"`
+	// Collisions counts identities the ledger filed more than once ((device, instant) in two sends).
+	// Summing hashes cannot tell one stored copy of each from two stored copies of one, so a ledger
+	// with a collision cannot be decided by the aggregate and is inconclusive, exactly as the
+	// per-identity read-back calls it.
+	Collisions int64 `json:"collisions,omitempty"`
 
 	Devices map[string]AggregateDevice `json:"devices"`
 }
@@ -205,6 +210,7 @@ func NewAggregateLedger(tenant, manifest string, seed int64, w Window, led sim.I
 		Devices: make(map[string]AggregateDevice, len(led.Devices)),
 	}
 	for dev, ids := range led.Devices {
+		l.Collisions += identityCollisions(ids)
 		d := AggregateDevice{
 			Accepted:  AggregateOf(ids.Accepted),
 			Refused:   AggregateOf(ids.Refused),
@@ -216,6 +222,22 @@ func NewAggregateLedger(tenant, manifest string, seed int64, w Window, led sim.I
 		l.Devices[dev] = d
 	}
 	return l
+}
+
+// identityCollisions counts the instants one device filed more than once across all its sends.
+func identityCollisions(ids sim.DeviceIdentities) int64 {
+	seen := make(map[int64]struct{}, len(ids.Accepted)+len(ids.Refused)+len(ids.Ambiguous))
+	var n int64
+	for _, list := range [][]int64{ids.Accepted, ids.Refused, ids.Ambiguous} {
+		for _, us := range list {
+			if _, dup := seen[us]; dup {
+				n++
+				continue
+			}
+			seen[us] = struct{}{}
+		}
+	}
+	return n
 }
 
 // snapshots rebuilds what ledgerInconsistencies reads.
@@ -375,6 +397,9 @@ func reconcileAggregate(ctx context.Context, exp *AggregateLedger, stored map[st
 	ledSnap, driveSnap := exp.snapshots()
 	for _, why := range ledgerInconsistencies(ledSnap, driveSnap) {
 		inconclusive("%s", why)
+	}
+	if exp.Collisions > 0 {
+		inconclusive("%d identities were filed more than once in the ledger (a harness defect): a sum of hashes cannot tell one stored copy of each from two of one", exp.Collisions)
 	}
 	for _, d := range exp.Devices {
 		rep.Accepted += d.Accepted.Count

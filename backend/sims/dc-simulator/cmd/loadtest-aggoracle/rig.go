@@ -305,7 +305,10 @@ func runRig(ctx context.Context, dsn, tenant string, events, devices int, ledger
 		tenant, rigToken(subD), subAt); err != nil || tag.RowsAffected() != 1 {
 		return nil, fmt.Errorf("substitute: %v (%v rows)", err, tag.RowsAffected())
 	}
-	if err := run("substitute", true, "per-device count", countPerDevice, rigToken(subD)); err != nil {
+	// It must name the instant that vanished and the one that appeared, not only the device.
+	subKey := loadtest.IdentityKey{Device: rigToken(subD), OccurredMicros: rigUs(subD, subK)}
+	subNow := loadtest.IdentityKey{Device: rigToken(subD), OccurredMicros: rigUs(subD, subK) + 1}
+	if err := run("substitute", true, "per-device count", countPerDevice, subKey.String(), subNow.String()); err != nil {
 		return nil, err
 	}
 	if tag, err := db.Exec(ctx, `UPDATE `+rigTable+` SET occurred_time = occurred_time - interval '1 microsecond' WHERE tenant_id = $1 AND device_token = $2 AND occurred_time = $3`,

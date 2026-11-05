@@ -281,3 +281,21 @@ func TestPerHarnessFiles(t *testing.T) {
 		t.Fatalf("%+v", m)
 	}
 }
+
+// An Expect smaller than the number launched must not let a failed harness drop out of the verdict.
+func TestRunManyEnforcesTheLaunchedCount(t *testing.T) {
+	var hs []*sim.Handshake
+	for i := 0; i < 6; i++ {
+		hs = append(hs, &sim.Handshake{Tenant: fmt.Sprintf("t%02d", i), Seed: int64(i)})
+	}
+	run := func(_ context.Context, h *sim.Handshake, at time.Time) ([]byte, error) {
+		if h.Tenant == "t02" {
+			return nil, errors.New("cluster unreachable")
+		}
+		return json.Marshal(mqttRep(int(h.Seed), at.Sub(multiT0), time.Minute))
+	}
+	m, errs := RunMany(context.Background(), hs, run, time.Minute, "", MergeOptions{Expect: 5})
+	if len(errs) != 1 || m.Passed() || invOf(t, m, InvHarnessCount).Passed {
+		t.Fatalf("five reports of six launched passed because Expect said five:\n%s", m.Human())
+	}
+}
