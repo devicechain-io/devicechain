@@ -41,3 +41,20 @@ func TestRebalanceableStreamsAreWhatTheImbalanceAlertCounts(t *testing.T) {
 		require.Equal(t, want, strings.Split(one[1], "|"), "the alert's stream list differs from RebalanceableStreams")
 	}
 }
+
+// The per-event streams are exactly capture, inbound-events and resolved-events, and of them only
+// resolved-events may be moved: the others are fixed anchors the movable one is placed away from.
+func TestPerEventStreams(t *testing.T) {
+	got := PerEventStreams("INST")
+	want := []string{
+		StreamName("INST", streams.DeviceEventsCapture),
+		StreamName("INST", streams.InboundEvents),
+		StreamName("INST", streams.ResolvedEvents),
+	}
+	slices.Sort(want)
+	require.Equal(t, want, got)
+	movable := RebalanceableStreams("INST")
+	for _, n := range got {
+		require.Equal(t, n == StreamName("INST", streams.ResolvedEvents), slices.Contains(movable, n), n)
+	}
+}

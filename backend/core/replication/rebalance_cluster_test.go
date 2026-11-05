@@ -143,3 +143,82 @@ func leaderNow(t *testing.T, js nats.JetStreamContext, stream string) string {
 	}
 	return si.Cluster.Leader
 }
+
+// The post-roll pile-up on a real three-server cluster, with consumers: the stream every event enters
+// through (fixed) and the one every event leaves through (movable, three consumers) are led by one
+// server. The plan steps the movable stream down to a server leading no per-event stream, over the
+// broker's API; the fixed one stays; a second plan is empty.
+func TestRebalanceSeparatesPerEventStreamsOnARealCluster(t *testing.T) {
+	servers := dctest.StartJetStreamCluster(t, 3)
+	nc, err := nats.Connect(servers[0].ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"PEV_CAPTURE", "PEV_IN", "PEV_OUT", "PEV_C0", "PEV_C1", "PEV_C2"}
+	for i, n := range names {
+		if _, err := js.AddStream(&nats.StreamConfig{Name: n, Subjects: []string{fmt.Sprintf("pev.%d", i)}, Storage: nats.FileStorage, Replicas: 3}); err != nil {
+			t.Fatalf("add %s: %v", n, err)
+		}
+	}
+	for _, c := range []string{"state", "store", "rules"} { // resolved's three readers
+		if _, err := js.AddConsumer("PEV_OUT", &nats.ConsumerConfig{Durable: c, AckPolicy: nats.AckExplicitPolicy}); err != nil {
+			t.Fatalf("add consumer: %v", err)
+		}
+	}
+	n0, n1, n2 := servers[0].Name(), servers[1].Name(), servers[2].Name()
+	place := map[string]string{"PEV_CAPTURE": n0, "PEV_IN": n1, "PEV_OUT": n0, "PEV_C0": n1, "PEV_C1": n1, "PEV_C2": n2}
+	for n, to := range place {
+		if leaderNow(t, js, n) != to {
+			stepDown(t, nc, js, n, to)
+		}
+	}
+	waitFor(t, func() bool {
+		for n, to := range place {
+			if si, err := js.StreamInfo(n); err != nil || si.Cluster == nil || si.Cluster.Leader != to {
+				return false
+			}
+		}
+		return true
+	})
+	isFixed := func(s string) bool { return s == "PEV_CAPTURE" || s == "PEV_IN" }
+	opts := replication.PlanOptions{
+		Movable:  func(s string) bool { return !isFixed(s) },
+		PerEvent: func(s string) bool { return isFixed(s) || s == "PEV_OUT" },
+	}
+	exp := replication.Expectation{Prefixes: []string{"PEV_"}}
+	snap, err := replication.Collect(js, exp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Control: the count plan alone does not separate them (PEV_OUT stays with PEV_CAPTURE).
+	for _, m := range replication.PlanRebalance(snap, replication.PlanOptions{Movable: opts.Movable}).Moves {
+		if m.Stream == "PEV_OUT" && !m.IsConsumer() && m.To == n2 {
+			t.Fatalf("control: the count plan separated them by itself: %+v", m)
+		}
+	}
+	plan := replication.PlanRebalance(snap, opts)
+	if len(plan.Moves) == 0 || plan.Moves[0].Stream != "PEV_OUT" || plan.Moves[0].To != n2 {
+		t.Fatalf("the movable per-event stream should go to the free server %s: %+v", n2, plan.Moves)
+	}
+	for _, r := range replication.ApplyMoves(context.Background(), nc, js, plan.Moves, replication.ApplyOptions{PerMove: 10 * time.Second}) {
+		if r.Err != nil {
+			t.Errorf("move %+v: %v", r.Move, r.Err)
+		}
+	}
+	waitFor(t, func() bool { return leaderNow(t, js, "PEV_OUT") == n2 })
+	if leaderNow(t, js, "PEV_CAPTURE") != n0 || leaderNow(t, js, "PEV_IN") != n1 {
+		t.Error("a fixed stream moved")
+	}
+	snap, err = replication.Collect(js, exp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := replication.PlanRebalance(snap, opts); len(again.Moves) != 0 {
+		t.Errorf("a second plan over the result still moves %+v", again.Moves)
+	}
+}

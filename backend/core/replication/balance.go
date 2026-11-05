@@ -44,6 +44,12 @@ func (s Spread) Balanced() bool {
 	return hi-lo <= 1
 }
 
+// FixedShare is a server that leads two or more of the per-event streams the plan may not move.
+type FixedShare struct {
+	Server  string
+	Streams []string
+}
+
 // RebalancePlan is what to ask the broker to do, and what that would leave.
 type RebalancePlan struct {
 	Moves []Move
@@ -53,6 +59,18 @@ type RebalancePlan struct {
 	StreamsAfter, ConsumersAfter Spread
 	// Servers is every server seen, sorted.
 	Servers []string
+	// PerEventLeaders is, for each per-event stream the snapshot holds and has a leader for (the
+	// fixed ones and the movable ones), the server that leads it if every move lands. Empty when
+	// the options name no per-event streams.
+	PerEventLeaders map[string]string
+	// PerEventShared is whether a MOVABLE per-event stream is still led by a server that leads another
+	// per-event stream after the plan: it has no current, online replica on a free server (fewer
+	// servers than per-event streams, or the free servers hold no replica of it, as with five servers
+	// at three replicas, or the replicas are lagging), or the move budget ran out.
+	PerEventShared bool
+	// FixedShared lists the servers that lead more than one FIXED per-event stream (capture,
+	// inbound-events). The plan never moves those, so this is reported, not a failure.
+	FixedShared []FixedShare
 }
 
 // group is one RAFT group with a leader and the servers that could take over.
@@ -72,6 +90,14 @@ type PlanOptions struct {
 	Movable func(stream string) bool
 	// MaxMoves bounds the plan; zero or less means no bound beyond the rules below.
 	MaxMoves int
+	// PerEvent says which streams every device event passes through. Nil means none. A MOVABLE
+	// per-event stream is placed first, by the separation step: when a server leads it and another
+	// per-event stream, it is stepped down to a current, online replica on a server that leads no
+	// per-event stream (the lowest led count among them; with none, it is left and the plan says the
+	// leaders are shared). It is then PINNED for the count balancing that follows, so that step
+	// cannot put it back. The per-event streams that are not movable are never moved and are not
+	// counted, as before; they are only read, to know which servers the movable one must avoid.
+	PerEvent func(stream string) bool
 }
 
 // PlanRebalance works out, from one snapshot, the leader step-downs that even out how many
@@ -92,6 +118,7 @@ func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
 	plan := RebalancePlan{}
 	servers := map[string]bool{}
 	var streams, consumers []group
+	budget := func() int { return maxMoves - len(plan.Moves) }
 	collect := func(leader string, peers []Peer) []string {
 		if leader != "" {
 			servers[leader] = true
@@ -141,7 +168,63 @@ func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
 	}
 	plan.StreamsBefore, plan.ConsumersBefore = spread(streams), spread(consumers)
 
-	budget := maxMoves
+	// Separation: the movable per-event streams off the servers that lead the other per-event ones.
+	perEvent := func(stream string) bool { return opts.PerEvent != nil && opts.PerEvent(stream) }
+	fixedLeader := map[string]string{} // fixed per-event stream -> its leader
+	for _, o := range snap.Objects {
+		if perEvent(o.Name) && !movable(o.Name) && o.Leader != "" {
+			fixedLeader[o.Name] = o.Leader
+			servers[o.Leader] = true
+		}
+	}
+	// Sorted once, here: balance sorts in place, and the pointers taken below must keep pointing at
+	// the same groups.
+	sort.Slice(streams, func(i, j int) bool { return streams[i].stream < streams[j].stream })
+	var pinned []*group
+	for i := range streams {
+		if perEvent(streams[i].stream) {
+			pinned = append(pinned, &streams[i])
+		}
+	}
+	sort.Slice(pinned, func(i, j int) bool { return pinned[i].stream < pinned[j].stream })
+	// ledBy counts the per-event streams each server leads, optionally leaving one out.
+	ledBy := func(skip *group) map[string]int {
+		m := map[string]int{}
+		for _, l := range fixedLeader {
+			m[l]++
+		}
+		for _, g := range pinned {
+			if g != skip {
+				m[g.leader]++
+			}
+		}
+		return m
+	}
+	for _, g := range pinned {
+		occupied := ledBy(g)
+		if occupied[g.leader] == 0 { // no other per-event stream on this server: already separate
+			continue
+		}
+		if maxMoves > 0 && budget() <= 0 {
+			continue
+		}
+		counts := spread(streams)
+		best := ""
+		for _, c := range g.candidates {
+			if occupied[c] == 0 && (best == "" || counts[c] < counts[best]) {
+				best = c
+			}
+		}
+		if best == "" {
+			continue
+		}
+		plan.Moves = append(plan.Moves, Move{Stream: g.stream, From: g.leader, To: best})
+		g.leader = best
+	}
+	for _, g := range pinned {
+		g.candidates = nil // placed (or unplaceable): the count balancing below leaves it where it is
+	}
+
 	balance := func(gs []group) Spread {
 		sp := spread(gs)
 		sort.Slice(gs, func(i, j int) bool {
@@ -150,7 +233,7 @@ func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
 			}
 			return gs[i].consumer < gs[j].consumer
 		})
-		for maxMoves <= 0 || budget > 0 {
+		for maxMoves <= 0 || budget() > 0 {
 			bestGain, bi, bto := 0, -1, ""
 			for i, g := range gs {
 				for _, c := range g.candidates {
@@ -169,11 +252,40 @@ func PlanRebalance(snap Snapshot, opts PlanOptions) RebalancePlan {
 			sp[bto]++
 			g.leader = bto
 			g.candidates = nil // moved once; leave the rest of the plan to the next snapshot
-			budget--
 		}
 		return sp
 	}
 	plan.StreamsAfter = balance(streams)
 	plan.ConsumersAfter = balance(consumers)
+	if len(fixedLeader)+len(pinned) > 0 {
+		plan.PerEventLeaders = map[string]string{}
+		byServer := map[string][]string{}
+		for n, l := range fixedLeader {
+			plan.PerEventLeaders[n] = l
+			byServer[l] = append(byServer[l], n)
+		}
+		for _, g := range pinned {
+			plan.PerEventLeaders[g.stream] = g.leader
+			if len(byServer[g.leader]) > 0 {
+				plan.PerEventShared = true
+			}
+		}
+		for i, g := range pinned {
+			for _, h := range pinned[i+1:] {
+				if g.leader == h.leader {
+					plan.PerEventShared = true
+				}
+			}
+		}
+		// The fixed streams are never moved, so two of them on one server is information, not a
+		// failure of the plan.
+		for srv, names := range byServer {
+			if len(names) > 1 {
+				sort.Strings(names)
+				plan.FixedShared = append(plan.FixedShared, FixedShare{Server: srv, Streams: names})
+			}
+		}
+		sort.Slice(plan.FixedShared, func(i, j int) bool { return plan.FixedShared[i].Server < plan.FixedShared[j].Server })
+	}
 	return plan
 }

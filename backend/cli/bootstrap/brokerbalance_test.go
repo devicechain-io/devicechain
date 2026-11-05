@@ -83,26 +83,27 @@ func TestAnEvenBrokerIsLeftAlone(t *testing.T) {
 
 func TestAnUnsettledBrokerIsNotPlannedOver(t *testing.T) {
 	all := func(string) bool { return true }
+	none := func(string) bool { return false }
 	lagging := replication.Snapshot{Objects: []replication.Object{{Name: "a", Replicas: 3, Leader: "n1",
 		Peers: []replication.Peer{{Name: "n2", Current: false}}}}}
-	if brokerSettled(lagging, all) {
+	if brokerSettled(lagging, all, none) {
 		t.Error("a replica that is not current must hold the plan back")
 	}
 	leaderless := replication.Snapshot{Objects: []replication.Object{{Name: "a", Replicas: 3}}}
-	if brokerSettled(leaderless, all) {
+	if brokerSettled(leaderless, all, none) {
 		t.Error("a replicated group with no leader must hold the plan back")
 	}
 	// A consumer's replicas count as much as a stream's.
 	laggingConsumer := replication.Snapshot{Consumers: []replication.Consumer{{Stream: "a", Name: "c", Durable: true, Leader: "n1",
 		Peers: []replication.Peer{{Name: "n2", Current: false}}}}}
-	if brokerSettled(laggingConsumer, all) {
+	if brokerSettled(laggingConsumer, all, none) {
 		t.Error("a consumer replica that is not current must hold the plan back")
 	}
 	// What is not movable is not waited on: an ingest stream mid-election does not hold the rest.
-	if !brokerSettled(lagging, func(string) bool { return false }) {
+	if !brokerSettled(lagging, none, none) {
 		t.Error("a group that is never moved should not hold the plan back")
 	}
-	if !brokerSettled(replication.Snapshot{}, all) {
+	if !brokerSettled(replication.Snapshot{}, all, none) {
 		t.Error("an empty snapshot has nothing to wait for")
 	}
 }

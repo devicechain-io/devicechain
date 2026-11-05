@@ -297,3 +297,18 @@ func RebalanceableStreams(instanceId string) []string {
 	slices.Sort(out)
 	return out
 }
+
+// PerEventStreams are the streams of an instance every device event passes through, by concrete
+// name (streams.Stream.PerEvent). Some are on the acknowledged-ingest path and never move
+// (RebalanceableStreams leaves them out); they are still named here, because the one that may move
+// is kept off the server that leads each of the others.
+func PerEventStreams(instanceId string) []string {
+	var out []string
+	for _, s := range streams.All {
+		if s.PerEvent() {
+			out = append(out, StreamName(instanceId, s.Suffix))
+		}
+	}
+	slices.Sort(out)
+	return out
+}

@@ -95,6 +95,11 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 		movable[n] = true
 	}
 	isMovable := func(stream string) bool { return movable[stream] }
+	perEvent := map[string]bool{}
+	for _, n := range messaging.PerEventStreams(st.Instance) {
+		perEvent[n] = true
+	}
+	isPerEvent := func(stream string) bool { return perEvent[stream] }
 
 	// Settle: every movable group led, every replica of it current. Bounded, and when it does not
 	// settle nothing is planned: a plan over a broker still catching up would move leadership onto
@@ -103,7 +108,7 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 	deadline := time.Now().Add(brokerRebalanceSettle)
 	for {
 		snap, err = replication.Collect(js, exp)
-		if err == nil && brokerSettled(snap, isMovable) {
+		if err == nil && brokerSettled(snap, isMovable, isPerEvent) {
 			break
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
@@ -119,7 +124,7 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 		}
 	}
 
-	plan := replication.PlanRebalance(snap, replication.PlanOptions{Movable: isMovable, MaxMoves: brokerRebalanceMaxMoves})
+	plan := replication.PlanRebalance(snap, replication.PlanOptions{Movable: isMovable, MaxMoves: brokerRebalanceMaxMoves, PerEvent: isPerEvent})
 	if len(plan.Moves) == 0 {
 		return summarizeRebalance(plan, nil), nil
 	}
@@ -127,15 +132,27 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 	return summarizeRebalance(plan, results), rebalanceFailures(results)
 }
 
-// brokerSettled is whether every movable group has a leader and all its replicas are current,
-// consumers' included.
-func brokerSettled(snap replication.Snapshot, movable func(string) bool) bool {
+// brokerSettled is whether every group the plan reads has a leader and all its replicas are current:
+// the movable streams and their consumers. The per-event streams that are not movable are read for
+// their LEADER only (the movable one is placed away from it), so they need a leader and no offline
+// follower; a merely lagging follower of capture must not hold every move back. Their consumers are not read.
+func brokerSettled(snap replication.Snapshot, movable, perEvent func(string) bool) bool {
 	for _, o := range snap.Objects {
-		if !movable(o.Name) {
+		if !movable(o.Name) && !perEvent(o.Name) {
 			continue
 		}
 		if o.Replicas > 1 && o.Leader == "" {
 			return false
+		}
+		if !movable(o.Name) {
+			// A fixed stream is read for its leader, and for an outage: an offline follower is a
+			// partial outage whatever else is healthy. Only "behind" is not its business.
+			for _, p := range o.Peers {
+				if p.Offline {
+					return false
+				}
+			}
+			continue
 		}
 		for _, p := range o.Peers {
 			if !p.Current || p.Offline {
@@ -194,6 +211,51 @@ func countFailed(results []replication.MoveResult) int {
 // summarizeRebalance is the one line the operator reads: streams and consumers led per server
 // before and after, and how many moves landed.
 func summarizeRebalance(plan replication.RebalancePlan, results []replication.MoveResult) string {
+	return summarizeMoves(plan, results) + perEventLine(plan, results)
+}
+
+// perEventLine is appended to the summary: where the streams every event passes through are led once
+// the plan lands, and whether any two share a server. Empty when the plan read none. It only ever
+// follows the fields above, which keep their order and meaning.
+func perEventLine(plan replication.RebalancePlan, results []replication.MoveResult) string {
+	if len(plan.PerEventLeaders) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(plan.PerEventLeaders))
+	for n := range plan.PerEventLeaders {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		short := n[strings.LastIndex(n, "_")+1:] // the suffix after the instance prefix
+		parts = append(parts, short+"="+plan.PerEventLeaders[n])
+	}
+	state := "separated"
+	if plan.PerEventShared {
+		state = "SHARED"
+	}
+	// The leaders are where the plan would leave them. A per-event move that did not land (failed, or
+	// skipped because the group had changed) leaves that unconfirmed, and the line says so rather
+	// than claim a separation nobody saw.
+	for _, r := range results {
+		if _, ok := plan.PerEventLeaders[r.Move.Stream]; ok && !r.Move.IsConsumer() && (r.Err != nil || r.Skipped) {
+			state = "NOT CONFIRMED"
+		}
+	}
+	line := "; per-event leaders: " + strings.Join(parts, " ") + " (" + state + ")"
+	// The fixed streams are never moved: two on one server is reported, not a failure of the plan.
+	for _, f := range plan.FixedShared {
+		short := make([]string, len(f.Streams))
+		for i, n := range f.Streams {
+			short[i] = n[strings.LastIndex(n, "_")+1:]
+		}
+		line += "; " + strings.Join(short, "/") + " share " + f.Server + " (fixed, not moved)"
+	}
+	return line
+}
+
+func summarizeMoves(plan replication.RebalancePlan, results []replication.MoveResult) string {
 	if len(plan.Moves) == 0 {
 		return "leadership already even (" + spreadLine("streams", plan.StreamsBefore, plan.Servers) + ")"
 	}

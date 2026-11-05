@@ -1307,3 +1307,13 @@ func (s Stream) OnIngestPath() bool {
 	}
 	return false
 }
+
+// perEvent are the streams every device event passes through, one hop each: the capture the broker
+// writes a device publish into, the inbound stream the ingest areas write, and the resolved stream
+// device-management writes. Measured on GKE, the server leading two of them ran at 3.4 cores
+// against about 2 on the others.
+var perEvent = []string{DeviceEventsCapture, InboundEvents, ResolvedEvents}
+
+// PerEvent reports whether every device event passes through the stream. Leader placement keeps the
+// leaders of these on different servers where it can (see messaging.PerEventStreams).
+func (s Stream) PerEvent() bool { return slices.Contains(perEvent, s.Suffix) }

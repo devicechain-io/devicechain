@@ -29,6 +29,11 @@ type ApplyOptions struct {
 	Settle time.Duration
 	// Poll is the interval of that wait. 0 means 250 ms.
 	Poll time.Duration
+	// Behind bounds how long a move waits, before it is sent, for a replica of its group that reads
+	// as not current to catch up. Under load a follower is briefly behind all the time, and refusing
+	// on one reading would refuse the move exactly when it is needed. A replica that is OFFLINE is
+	// refused at once. 0 means 12 s.
+	Behind time.Duration
 }
 
 // stepDownRequest is the JetStream API body that names the server to hand leadership to.
@@ -87,11 +92,38 @@ func settled(leader string, peers []Peer) bool {
 // the run: what is left is reported as not attempted rather than sent into a broker that is still
 // changing. A failed move before that does not stop the rest.
 func ApplyMoves(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, moves []Move, o ApplyOptions) []MoveResult {
+	return applyMoves(ctx, moveIO{
+		state: func(m Move) (string, []Peer, error) { return groupState(js, m) },
+		stepDown: func(ctx context.Context, m Move) error {
+			var body stepDownRequest
+			body.Placement.Preferred = m.To
+			raw, _ := json.Marshal(body)
+			rctx, cancel := context.WithTimeout(ctx, o.PerMove)
+			defer cancel()
+			msg, err := nc.RequestWithContext(rctx, stepDownSubject(m), raw)
+			return stepDownOutcome(msg, err)
+		},
+	}, moves, o)
+}
+
+// stateReader reads a move's group from the broker: its leader and replicas.
+type stateReader func(m Move) (leader string, peers []Peer, err error)
+
+// moveIO is what applyMoves needs from the broker, so the sequencing can be tested without one.
+type moveIO struct {
+	state    stateReader
+	stepDown func(ctx context.Context, m Move) error
+}
+
+func applyMoves(ctx context.Context, io moveIO, moves []Move, o ApplyOptions) []MoveResult {
 	if o.Settle <= 0 {
 		o.Settle = 15 * time.Second
 	}
 	if o.Poll <= 0 {
 		o.Poll = 250 * time.Millisecond
+	}
+	if o.Behind <= 0 {
+		o.Behind = 12 * time.Second
 	}
 	out := make([]MoveResult, 0, len(moves))
 	var stopped error
@@ -105,32 +137,20 @@ func ApplyMoves(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, mo
 			out = append(out, MoveResult{Move: m, Err: stopped})
 			continue
 		}
-		leader, peers, err := groupState(js, m)
-		switch {
-		case err != nil:
-			out = append(out, MoveResult{Move: m, Err: fmt.Errorf("reading the group before the move: %w", err)})
-			continue
-		case leader == m.To:
-			out = append(out, MoveResult{Move: m, Skipped: true})
-			continue
-		case leader != m.From:
-			out = append(out, MoveResult{Move: m, Skipped: true})
-			continue
-		case !targetFit(peers, m.To):
-			out = append(out, MoveResult{Move: m, Skipped: true})
-			continue
-		}
-		var body stepDownRequest
-		body.Placement.Preferred = m.To
-		raw, _ := json.Marshal(body)
-		rctx, cancel := context.WithTimeout(ctx, o.PerMove)
-		msg, err := nc.RequestWithContext(rctx, stepDownSubject(m), raw)
-		cancel()
-		if err = stepDownOutcome(msg, err); err != nil {
+		skip, err := awaitMoveable(ctx, io.state, m, o)
+		if err != nil {
 			out = append(out, MoveResult{Move: m, Err: err})
 			continue
 		}
-		if err := awaitSettled(ctx, js, m, o); err != nil {
+		if skip {
+			out = append(out, MoveResult{Move: m, Skipped: true})
+			continue
+		}
+		if err := io.stepDown(ctx, m); err != nil {
+			out = append(out, MoveResult{Move: m, Err: err})
+			continue
+		}
+		if err := awaitSettled(ctx, io.state, m, o); err != nil {
 			stopped = fmt.Errorf("not attempted: an earlier move did not settle")
 			out = append(out, MoveResult{Move: m, Err: err})
 			continue
@@ -140,22 +160,78 @@ func ApplyMoves(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, mo
 	return out
 }
 
-func targetFit(peers []Peer, to string) bool {
+// errOffline and errBehind are why precheck refuses a move.
+var (
+	errOffline = fmt.Errorf("not moved: a replica of the group is offline")
+	errBehind  = fmt.Errorf("not moved: a replica of the group is behind")
+)
+
+// awaitMoveable reads the group and judges the move (precheck). A replica that is merely behind is
+// waited for, up to o.Behind, and re-read each time; an offline one, or a read that fails, is not.
+func awaitMoveable(ctx context.Context, read stateReader, m Move, o ApplyOptions) (skip bool, err error) {
+	deadline := time.Now().Add(o.Behind)
+	for {
+		leader, peers, rerr := read(m)
+		if rerr != nil {
+			return false, fmt.Errorf("reading the group before the move: %w", rerr)
+		}
+		skip, err = precheck(leader, peers, m)
+		if err != errBehind || time.Now().After(deadline) || ctx.Err() != nil {
+			return skip, err
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(o.Poll):
+		}
+	}
+}
+
+// precheck judges a move against the group as it is NOW. It is skipped when the group no longer needs
+// it (the leader is already the target, or is neither of the servers the plan saw) or the target is
+// no longer a current, online replica. It is refused, as an error, while any replica of the group is
+// offline or behind (errOffline, errBehind; the caller waits for the second): a plan is a snapshot, and an outage that began after it was taken is no time to
+// start an election.
+func precheck(leader string, peers []Peer, m Move) (skip bool, err error) {
+	switch {
+	case leader == m.To, leader != m.From:
+		return true, nil
+	case !targetPresent(peers, m.To):
+		return true, nil // not a replica of the group, or offline: the plan is stale
+	}
+	behind := false
+	for _, p := range peers {
+		if p.Offline {
+			return false, errOffline
+		}
+		behind = behind || !p.Current
+	}
+	if behind {
+		return false, errBehind
+	}
+	return false, nil
+}
+
+// targetPresent is whether the target is a replica of the group and online. Whether it is current is
+// the caller's wait, not a reason to drop the move.
+func targetPresent(peers []Peer, to string) bool {
 	for _, p := range peers {
 		if p.Name == to {
-			return p.Current && !p.Offline
+			return !p.Offline
 		}
 	}
 	return false
 }
 
-// awaitSettled waits for the group's leader to be elected and all its replicas current.
-func awaitSettled(ctx context.Context, js nats.JetStreamContext, m Move, o ApplyOptions) error {
+// awaitSettled waits for the group's leader to be elected (somewhere other than where it was) and all
+// its replicas current.
+func awaitSettled(ctx context.Context, read stateReader, m Move, o ApplyOptions) error {
 	deadline := time.Now().Add(o.Settle)
 	var last string
 	for {
-		leader, peers, err := groupState(js, m)
-		if err == nil && settled(leader, peers) {
+		leader, peers, err := read(m)
+		// Settled means the leadership LEFT the old leader: a reading of the old one after an accepted
+		// step-down is the election not yet seen, and the next move must not start on it.
+		if err == nil && leader != m.From && settled(leader, peers) {
 			return nil
 		}
 		if err != nil {
