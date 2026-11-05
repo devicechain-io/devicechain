@@ -44,6 +44,10 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	if err != nil {
 		return nil, err
 	}
+	decoder, err := api.decoderDeclarationForProfile(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
 	metrics, err := api.MetricDefinitionsByDeviceProfile(ctx, profileId)
 	if err != nil {
 		return nil, err
@@ -66,7 +70,7 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 		dr.DeviceProfile = nil
 	}
 	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location,
-		Configuration: configuration})
+		Configuration: configuration, Decoder: decoder})
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +208,13 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 	// The calculated-metrics gate (ADR-082): local, so it runs before the cross-service
 	// detection-rule check, and over the same exact bytes.
 	if err := api.checkCalculatedMetrics(ctx, snapshot); err != nil {
+		return nil, err
+	}
+
+	// The payload-decoder gate: the decoder compiles against the metrics being published (so the
+	// strict-key check sees THIS version's metrics, not the draft's earlier ones) and every saved
+	// vector passes. Local, like the calculated-metrics gate, and over the same exact bytes.
+	if err := api.checkPayloadDecoder(ctx, snapshot); err != nil {
 		return nil, err
 	}
 
@@ -457,6 +468,15 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 	// revert to it does not depend on user-management. Only the count is checked, not the
 	// formulas: an emergency revert must not be blocked by compiler-rule drift.
 	if err := api.checkRollbackCalculatedMetrics(ctx, target.Snapshot, token, version); err != nil {
+		return nil, err
+	}
+
+	// The decoder re-checks on a rollback as on a publish: a snapshot that compiled when it was
+	// published still compiles, because function-library versions only ever grow, so this guards
+	// the other direction, a rollback onto a version whose decoder names a library this build does
+	// not know. Refusing is the loud answer; activating it would make every integration uplink of
+	// the profile fail at resolve.
+	if err := api.checkRollbackPayloadDecoder(ctx, target.Snapshot, token, version); err != nil {
 		return nil, err
 	}
 

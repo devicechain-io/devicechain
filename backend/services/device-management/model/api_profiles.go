@@ -112,7 +112,7 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	// configuration_declaration is omitted for the same reason: it is written only by
 	// SetDeviceProfileConfigurationDeclaration, so an edit built from a stale read must not
 	// write a stale declaration back over one set in between.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince", "ConfigurationDeclaration").Save(found)
+	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince", "ConfigurationDeclaration", "DecoderDeclaration").Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}

@@ -59,5 +59,6 @@ var (
 		NewPendingSessionKicksSchema(),
 		NewDeviceTrustAnchorsSchema(),
 		NewX509RevocationSchema(),
+		NewProfileDecodersSchema(),
 	}
 )

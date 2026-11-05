@@ -95,3 +95,33 @@ func (r *SchemaResolver) RenameDeviceProfile(ctx context.Context, args struct {
 	}
 	return &DeviceProfileResolver{M: *renamed, S: r, C: ctx}, nil
 }
+
+// SetDeviceProfileDecoder saves a profile's DRAFT payload decoder after a full compile against the
+// profile's draft metrics. Same authority as any other profile edit.
+func (r *SchemaResolver) SetDeviceProfileDecoder(ctx context.Context, args struct {
+	ProfileToken string
+	Document     string
+}) (*DeviceProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	updated, err := r.GetApi(ctx).SetDeviceProfileDecoder(ctx, args.ProfileToken, []byte(args.Document))
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceProfileResolver{M: *updated, S: r, C: ctx}, nil
+}
+
+// ClearDeviceProfileDecoder withdraws a profile's DRAFT payload decoder.
+func (r *SchemaResolver) ClearDeviceProfileDecoder(ctx context.Context, args struct {
+	ProfileToken string
+}) (*DeviceProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	updated, err := r.GetApi(ctx).ClearDeviceProfileDecoder(ctx, args.ProfileToken)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceProfileResolver{M: *updated, S: r, C: ctx}, nil
+}
