@@ -463,8 +463,22 @@ func TestApplyRevocationUnrepresentableSerialIsUnknown(t *testing.T) {
 	if len(v.RevocationKeys().Serials) != 0 {
 		t.Fatal("a zero serial produced a serial key")
 	}
-	if _, err := v.ApplyRevocation(entriesState()); ReasonOf(err) != ReasonRevocationUnknown {
-		t.Fatalf("want revocation_unknown, got %v", err)
+	// ENTRIES changes nothing until an entry exists: the certificate the verifier admits is admitted.
+	if _, err := v.ApplyRevocation(entriesState()); err != nil {
+		t.Fatalf("ENTRIES must admit a certificate with no serial key: %v", err)
+	}
+	// REQUIRE_CURRENT cannot show it covered by any CRL.
+	rc := RevocationState{Mode: ModeRequireCurrent, Now: testNow, Lists: map[IssuerID]ListStatus{
+		IssuerIDOfCA(root.cert): {NextUpdate: testNow.Add(time.Hour)}}}
+	if _, err := v.ApplyRevocation(rc); ReasonOf(err) != ReasonRevocationUnknown {
+		t.Fatalf("REQUIRE_CURRENT: want revocation_unknown, got %v", err)
+	}
+	// A manual fingerprint entry still refuses in both modes.
+	for _, st := range []RevocationState{entriesState(), rc} {
+		st.RevokedFingerprints = map[string]RevocationReason{Fingerprint(leaf.cert): RevocationKeyCompromise}
+		if _, err := v.ApplyRevocation(st); ReasonOf(err) != ReasonRevoked {
+			t.Fatalf("%s: a fingerprint entry must refuse: %v", st.Mode, err)
+		}
 	}
 }
 

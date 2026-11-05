@@ -285,11 +285,13 @@ func judgePath(chain []*x509.Certificate, s RevocationState) pathVerdict {
 		}
 	}
 	for _, e := range entries {
+		if s.Mode != ModeRequireCurrent {
+			// ENTRIES changes nothing until an entry exists: a serial no CRL can name is not
+			// grounds to refuse a certificate the verifier admits.
+			continue
+		}
 		if !e.serialOK {
 			return pathUnknown
-		}
-		if s.Mode != ModeRequireCurrent {
-			continue
 		}
 		l, have := s.Lists[e.issuer]
 		if !have || s.Now.After(l.NextUpdate.Add(s.StaleGrace)) {

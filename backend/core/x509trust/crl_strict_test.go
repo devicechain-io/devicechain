@@ -153,6 +153,9 @@ func TestStrictCRLStructure(t *testing.T) {
 	if !strictCRLStructure(build(nil, entryOf(), ext, nil)) {
 		t.Fatal("control: a well-formed structure was refused")
 	}
+	if !strictCRLStructure(build(nil, []byte{}, ext, nil)) {
+		t.Fatal("control: an empty revokedCertificates SEQUENCE is well-formed (some CAs emit one)")
+	}
 	if !strictCRLStructure(build(nil, nil, nil, nil)) {
 		t.Fatal("control: no entries and no extensions is well-formed")
 	}

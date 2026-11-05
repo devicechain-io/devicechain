@@ -68,6 +68,9 @@ func TestVerifyCAChain(t *testing.T) {
 	refuse("name constraints on a linking CA", ReasonNameConstraints, root.cert, chainOf(inter2, constrained), testNow)
 	cRoot := issue(t, nil, spec{cn: "cr", ca: true, mutate: func(c *x509.Certificate) { c.PermittedDNSDomains = []string{".a.example"} }})
 	refuse("name constraints on the anchor", ReasonNameConstraints, cRoot.cert, chainOf(cRoot), testNow)
+	// A constrained anchor above an unconstrained signer is refused on its own.
+	underC := issue(t, cRoot, spec{cn: "under-constrained", ca: true})
+	refuse("name constraints on the anchor only", ReasonNameConstraints, cRoot.cert, chainOf(underC), testNow)
 
 	var many []*x509.Certificate
 	for i := 0; i < MaxPresentedCerts+1; i++ {
