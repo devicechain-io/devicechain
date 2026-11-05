@@ -7,6 +7,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	tfjson "github.com/hashicorp/terraform-json"
 
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	corev1 "k8s.io/api/core/v1"
@@ -37,6 +40,9 @@ func orphanedBrokerObjects(claimSizes []string, ready bool) []runtime.Object {
 				ObjectMeta: metav1.ObjectMeta{Name: "dc-nats-js-dc-nats-" + n, Namespace: ns},
 				Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
 					Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(size)}}},
+				// The expansion has finished: the claim's capacity is what it asked for.
+				Status: corev1.PersistentVolumeClaimStatus{Capacity: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size)}},
 			},
 			&corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "dc-nats-" + n, Namespace: ns},
@@ -151,4 +157,96 @@ func TestTheUpgradeAppliesOverAnOrphanedBrokerAtTheGrownSize(t *testing.T) {
 			t.Fatalf("an orphaned broker with unready servers was not refused: %v", err)
 		}
 	})
+}
+
+// The reservation check prefers the ceiling the release recorded, and the release records the one
+// the OLD volume derived. Over a grown volume that is the check refusing the reservation the growth
+// was made to hold, so the recorded ceiling is dropped when the apply is about to re-derive it, and
+// kept when an operator set it.
+func TestAGrownVolumeIsNotCheckedAgainstItsOldDerivedCeiling(t *testing.T) {
+	state := func(size, max string) *tfjson.State {
+		return &tfjson.State{Values: &tfjson.StateValues{RootModule: &tfjson.StateModule{
+			Resources: []*tfjson.StateResource{{Address: natsReleaseAddress, AttributeValues: valuesAttr(t,
+				map[string]interface{}{"config": map[string]interface{}{"jetstream": map[string]interface{}{
+					"fileStore": map[string]interface{}{"maxSize": max, "pvc": map[string]interface{}{"size": size}}}}})}}}}}
+	}
+	for _, c := range []struct {
+		name, recordedSize, recordedMax, live, want string
+	}{
+		{"grown, ceiling was derived: re-derived by the apply", "16Gi", "14Gi", "36Gi", ""},
+		{"grown, ceiling hand-set: honoured", "16Gi", "15Gi", "36Gi", "15Gi"},
+		{"not grown: the recorded ceiling is the broker's", "16Gi", "14Gi", "16Gi", "14Gi"},
+		{"nothing recorded", "16Gi", "", "36Gi", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := maxStoreAfterGrowth(state(c.recordedSize, c.recordedMax), c.live, liveMaxFileStore(state(c.recordedSize, c.recordedMax))); got != c.want {
+				t.Fatalf("ceiling = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAnOrphanedBrokerThatIsNotWholeIsRefused(t *testing.T) {
+	read := func(mutate func(objs []runtime.Object) []runtime.Object) liveInfra {
+		typed := fake.NewSimpleClientset(mutate(orphanedBrokerObjects([]string{"36Gi", "36Gi", "36Gi"}, true))...)
+		infra, err := readInfraFrom(context.Background(), typed, storeDynamic(t), InstanceNamespace("prod"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return infra
+	}
+	for _, c := range []struct {
+		name, want string
+		mutate     func([]runtime.Object) []runtime.Object
+	}{
+		{"a server is gone", "2 servers are running for 3 volume claims", func(o []runtime.Object) []runtime.Object {
+			var out []runtime.Object
+			for _, x := range o {
+				if p, ok := x.(*corev1.Pod); ok && p.Name == "dc-nats-2" {
+					continue
+				}
+				out = append(out, x)
+			}
+			return out
+		}},
+		{"a server is terminating with a stale Ready", "dc-nats-1", func(o []runtime.Object) []runtime.Object {
+			for _, x := range o {
+				if p, ok := x.(*corev1.Pod); ok && p.Name == "dc-nats-1" {
+					now := metav1.NewTime(time.Now())
+					p.DeletionTimestamp = &now
+				}
+			}
+			return o
+		}},
+		{"an expansion has not finished", "volume expansion has not finished for dc-nats-js-dc-nats-0", func(o []runtime.Object) []runtime.Object {
+			for _, x := range o {
+				if c, ok := x.(*corev1.PersistentVolumeClaim); ok && c.Name == "dc-nats-js-dc-nats-0" {
+					c.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("16Gi")}
+				}
+			}
+			return o
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			infra := read(c.mutate)
+			if why := orphanedBrokerNotReady(infra.BrokerPods, infra.BrokerClaims); !strings.Contains(why, c.want) {
+				t.Fatalf("orphanedBrokerNotReady = %q, want it to say %q", why, c.want)
+			}
+		})
+	}
+}
+
+// With --skip-infrastructure nothing recreates the StatefulSet or re-derives the broker's ceiling,
+// so the services must not be checked (or upgraded) against the claims' size.
+func TestSkippingInfrastructureOverAnOrphanedBrokerIsRefused(t *testing.T) {
+	typed := fake.NewSimpleClientset(orphanedBrokerObjects([]string{"36Gi", "36Gi", "36Gi"}, true)...)
+	infra, err := readInfraFrom(context.Background(), typed, storeDynamic(t), InstanceNamespace("prod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubUpgradeReads(t, clusterArchiveState{Exists: true}, infra, natsauth.DeployedHashes{})
+	err = precheckJetStreamReservation(context.Background(), &State{Instance: "prod", KubeContext: "gke_p_z_c"})
+	if err == nil || !strings.Contains(err.Error(), "without --skip-infrastructure") {
+		t.Fatalf("services were checked against a broker nobody owns: %v", err)
+	}
 }

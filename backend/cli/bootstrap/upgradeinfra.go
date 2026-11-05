@@ -236,15 +236,44 @@ func (i liveInfra) volumes() (liveVolumes, error) {
 
 // orphanedBrokerNotReady names the pods of an orphaned broker that are not ready, or
 // says there are none. "" means the servers are all up.
-func orphanedBrokerNotReady(pods []corev1.Pod) string {
+func orphanedBrokerNotReady(pods []corev1.Pod, claims []corev1.PersistentVolumeClaim) string {
 	if len(pods) == 0 {
 		return "its servers are not running"
 	}
+	// One claim per server: fewer pods than claims is a server that is gone.
+	if len(pods) < len(claims) {
+		return fmt.Sprintf("%d servers are running for %d volume claims", len(pods), len(claims))
+	}
+	// A volume claim whose expansion has not finished still has its old capacity, and the
+	// broker's file-store ceiling would be derived from a size the disk does not have yet.
+	var growing []string
+	for _, c := range claims {
+		want, ok := c.Spec.Resources.Requests[corev1.ResourceStorage]
+		if !ok {
+			continue
+		}
+		have, ok := c.Status.Capacity[corev1.ResourceStorage]
+		if !ok || have.Cmp(want) < 0 {
+			growing = append(growing, c.Name)
+		}
+		for _, cond := range c.Status.Conditions {
+			if (cond.Type == corev1.PersistentVolumeClaimResizing || cond.Type == corev1.PersistentVolumeClaimFileSystemResizePending) &&
+				cond.Status == corev1.ConditionTrue {
+				growing = append(growing, c.Name)
+				break
+			}
+		}
+	}
+	if len(growing) > 0 {
+		sort.Strings(growing)
+		return "volume expansion has not finished for " + strings.Join(growing, ", ")
+	}
 	var stuck []string
 	for _, p := range pods {
-		ready := false
+		ready := p.DeletionTimestamp == nil
+		ready = false
 		for _, c := range p.Status.Conditions {
-			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue && p.DeletionTimestamp == nil {
 				ready = true
 			}
 		}
@@ -537,7 +566,7 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	if infra.Broker == nil {
 		// The StatefulSet was deleted with --cascade=orphan to grow the volume: its servers
 		// run on, unowned, and this apply recreates the StatefulSet around them.
-		if why := orphanedBrokerNotReady(infra.BrokerPods); why != "" {
+		if why := orphanedBrokerNotReady(infra.BrokerPods, infra.BrokerClaims); why != "" {
 			return fmt.Errorf("instance %q's broker StatefulSet is gone and its servers are not all ready "+
 				"(%s), so recreating it would restart a broker that is already short of a server. "+
 				"Nothing has been changed. Bring them back first, then run the upgrade again", st.Instance, why)
@@ -1366,7 +1395,7 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 	if err := spellVolumesAsRecorded(st, state); err != nil {
 		return nil, err
 	}
-	st.LiveMaxFileStore = liveMaxFileStore(state)
+	st.LiveMaxFileStore = maxStoreAfterGrowth(state, st.LiveVolumes.JetStream, liveMaxFileStore(state))
 	vars, err := instanceRootVars(st)
 	if err != nil {
 		return nil, err
