@@ -48,7 +48,10 @@ func requireNoMarks(t *testing.T, event *model.UnresolvedEvent, context string) 
 
 // 1. REFLECTION: the DC-JSON device input has no field that could carry them. Every field
 // reachable from JsonEvent, by name and by JSON key, is checked against the vocabulary.
-func TestTheDeviceJsonInputHasNoFieldThatCouldCarryAnIntegrationMark(t *testing.T) {
+//
+// markViolations is the walk, returning what it finds so the test can show it fails on a type that
+// does carry one (a guard that has not been shown to fail does not count).
+func markViolations(root reflect.Type) (violations []string, visited int) {
 	seen := map[reflect.Type]bool{}
 	var walk func(reflect.Type, string)
 	walk = func(typ reflect.Type, path string) {
@@ -59,29 +62,64 @@ func TestTheDeviceJsonInputHasNoFieldThatCouldCarryAnIntegrationMark(t *testing.
 			return
 		}
 		seen[typ] = true
-		require.NotEqual(t, reflect.TypeOf(model.UnresolvedIntegrationUplinkPayload{}), typ,
-			"%s reaches the integration uplink payload, which only the integration route may build", path)
+		if typ == reflect.TypeOf(model.UnresolvedIntegrationUplinkPayload{}) {
+			violations = append(violations, path+" reaches the integration uplink payload, which only the integration route may build")
+		}
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
 			key := strings.ToLower(f.Name + " " + f.Tag.Get("json"))
-			require.NotContains(t, key, "integration", "%s.%s can carry an integration mark", path, f.Name)
-			require.NotContains(t, key, "sealed", "%s.%s can carry a sealed token", path, f.Name)
-			// The integration uplink's own fields: a device-facing input that could carry them would
-			// let a device hand the resolver the raw input of a decoder, or pick the charge it was
-			// admitted under.
-			for _, banned := range []string{"maxreadings", "max_readings", "profileversion", "profile_version"} {
-				require.NotContains(t, key, banned, "%s.%s can carry an integration uplink's field", path, f.Name)
+			for _, banned := range []string{"integration", "sealed",
+				// The integration uplink's own fields: a device-facing input that could carry them
+				// would let a device hand the resolver the raw input of a decoder, or pick the
+				// charge it was admitted under.
+				"maxreadings", "max_readings", "profileversion", "profile_version"} {
+				if strings.Contains(key, banned) {
+					violations = append(violations, path+"."+f.Name+" can carry "+banned)
+				}
 			}
 			walk(f.Type, path+"."+f.Name)
 		}
 	}
-	walk(reflect.TypeOf(JsonEvent{}), "JsonEvent")
-	require.NotEmpty(t, seen, "the walk visited nothing")
-	// The walk can fail: a type that did carry one is caught.
-	type leaky struct {
+	walk(root, root.Name())
+	return violations, len(seen)
+}
+
+func TestTheDeviceJsonInputHasNoFieldThatCouldCarryAnIntegrationMark(t *testing.T) {
+	violations, visited := markViolations(reflect.TypeOf(JsonEvent{}))
+	require.Empty(t, violations)
+	require.NotZero(t, visited, "the walk visited nothing")
+}
+
+// The walk can fail: each way a device input could grow the authority is caught, including the
+// integration uplink's payload type and its charged-count and version fields.
+func TestTheMarkWalkSeesEachWayADeviceInputCouldCarryAnIntegrationAuthority(t *testing.T) {
+	type sealed struct {
 		Sealed string `json:"sealedIntegrationToken"`
 	}
-	require.True(t, strings.Contains(strings.ToLower(reflect.TypeOf(leaky{}).Field(0).Tag.Get("json")), "integration"))
+	type payloadInside struct {
+		Nested []*model.UnresolvedIntegrationUplinkPayload `json:"nested"`
+	}
+	type chargedCount struct {
+		Deep struct{ MaxReadings int } `json:"deep"`
+	}
+	type versionToken struct {
+		ProfileVersionToken string `json:"profileVersionToken"`
+	}
+	type snake struct {
+		X int `json:"max_readings"`
+	}
+	for name, typ := range map[string]reflect.Type{
+		"a sealed token":                  reflect.TypeOf(sealed{}),
+		"the uplink payload type, nested": reflect.TypeOf(payloadInside{}),
+		"a charged-count field, nested":   reflect.TypeOf(chargedCount{}),
+		"a profile version token":         reflect.TypeOf(versionToken{}),
+		"a snake-case charged-count key":  reflect.TypeOf(snake{}),
+	} {
+		violations, _ := markViolations(typ)
+		require.NotEmpty(t, violations, name)
+	}
+	clean, _ := markViolations(reflect.TypeOf(struct{ Device string }{}))
+	require.Empty(t, clean, "the counterweight: an ordinary input passes")
 }
 
 // 2. BEHAVIOUR: a body that names the marks is ignored by every decode path (the fast scanner,
