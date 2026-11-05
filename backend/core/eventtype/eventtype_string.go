@@ -18,11 +18,12 @@ func _() {
 	_ = x[StateChange-4]
 	_ = x[CommandInvocation-5]
 	_ = x[CommandResponse-6]
+	_ = x[IntegrationUplink-7]
 }
 
-const _EventType_name = "NewRelationshipLocationMeasurementAlertStateChangeCommandInvocationCommandResponse"
+const _EventType_name = "NewRelationshipLocationMeasurementAlertStateChangeCommandInvocationCommandResponseIntegrationUplink"
 
-var _EventType_index = [...]uint8{0, 15, 23, 34, 39, 50, 67, 82}
+var _EventType_index = [...]uint8{0, 15, 23, 34, 39, 50, 67, 82, 99}
 
 func (i EventType) String() string {
 	if i < 0 || i >= EventType(len(_EventType_index)-1) {

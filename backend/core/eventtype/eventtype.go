@@ -22,4 +22,11 @@ const (
 	StateChange
 	CommandInvocation
 	CommandResponse
+	// IntegrationUplink is what an inbound integration's route hands the resolver UNREAD (a raw
+	// frame, a generic item or a network server's decoded object), for the decoder on the
+	// device's profile to turn into a measurement. Only the integration route produces it and
+	// only the integration resolver accepts it. A resolver that does not know the type cannot
+	// decode it and stores nothing, which is why a decoder's input is a new type and not a
+	// Measurement carrying an extra field that an older resolver would store as empty.
+	IntegrationUplink
 )

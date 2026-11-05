@@ -271,6 +271,28 @@ type UnresolvedStateChangePayload struct {
 	OccurredTime      *string
 }
 
+// Payload of an IntegrationUplink: what an inbound integration's envelope carried, unread, for the
+// decoder on the device's profile (see eventtype.IntegrationUplink). Only the integration route
+// builds one.
+type UnresolvedIntegrationUplinkPayload struct {
+	// Frame is the raw frame, at most 4 KiB. Nil when the envelope had none.
+	Frame []byte
+	// FPort and FCnt are the LoRaWAN application port and uplink frame counter, nil when the
+	// envelope is not a LoRaWAN one. A frame counter is an unsigned 32-bit number.
+	FPort *int32
+	FCnt  *uint32
+	// Json is the canonical JSON of a generic sender's item and Decoded that of the network
+	// server's decoded object. Each is at most 64 KiB and nested at most 32 deep.
+	Json    []byte
+	Decoded []byte
+	// Link is rssi / snr / gateways, when the envelope had them.
+	Link map[string]float64
+	// MaxReadings is what the route charged the tenant's reading ceiling for this uplink.
+	MaxReadings uint32
+	// ProfileVersionToken is the profile version the route selected the decoder on.
+	ProfileVersionToken string
+}
+
 // Initializer.
 func init() {
 	EventTypesByName = make(map[string]eventtype.EventType)
@@ -281,4 +303,5 @@ func init() {
 	EventTypesByName[eventtype.StateChange.String()] = eventtype.StateChange
 	EventTypesByName[eventtype.CommandInvocation.String()] = eventtype.CommandInvocation
 	EventTypesByName[eventtype.CommandResponse.String()] = eventtype.CommandResponse
+	EventTypesByName[eventtype.IntegrationUplink.String()] = eventtype.IntegrationUplink
 }

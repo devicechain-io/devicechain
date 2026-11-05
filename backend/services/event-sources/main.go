@@ -13,7 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/integration"
-	"github.com/devicechain-io/dc-microservice/integrationcodec"
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/graphql"
@@ -24,8 +23,10 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -1012,6 +1013,18 @@ func inboundEventMessage(source string, tenant string, event *model.UnresolvedEv
 	// integration route, so it carries no integration's authority. Only that route sets the marks,
 	// and it publishes through integrationEventMessage.
 	processor.ClearIntegrationMark(event)
+	// An IntegrationUplink is the integration route's alone: it carries a sender's raw input for a
+	// decoder to read, which no device-facing source may hand the resolver. The device JSON decode
+	// refuses the type by name; this is the publish-side guard behind it, so a decoder or source
+	// added later that builds the type still cannot reach the stream. A terminal drop, like the
+	// others here: a redelivery would be refused identically.
+	if event.EventType == eventtype.IntegrationUplink {
+		log.Error().Str("source", source).Msg("Refusing to publish an integration-uplink event from a device-facing source")
+		if FailedDecodeCounter != nil {
+			FailedDecodeCounter.WithLabelValues(source).Inc()
+		}
+		return nil, messaging.Message{}, false
+	}
 	return buildInboundMessage(source, tenant, event, payload, dedupID)
 }
 
