@@ -87,6 +87,41 @@ func (r *userinfoRig) get(bearer string) *httptest.ResponseRecorder {
 	return getUserinfo(r.h, bearer)
 }
 
+// post is the same request by POST, which OIDC Core 5.3.1 also allows.
+func (r *userinfoRig) post(bearer string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, UserinfoPath, nil)
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	w := httptest.NewRecorder()
+	r.h.ServeHTTP(w, req)
+	return w
+}
+
+// Both methods are covered: enforce refuses and observe counts a POST exactly as a GET.
+func TestUserinfoPostIsCoveredToo(t *testing.T) {
+	r := newUserinfoRig(t, "enforce")
+	require.Equal(t, http.StatusUnauthorized, r.post(r.token([]string{uiExternal})).Code)
+	require.Equal(t, []uiObs{{auth.PlaneUserinfo, auth.AudExternal, auth.VerdictRejected}}, r.rec.all())
+
+	o := newUserinfoRig(t, "observe")
+	require.Equal(t, http.StatusOK, o.post(o.token([]string{uiExternal})).Code)
+	require.Equal(t, []uiObs{{auth.PlaneUserinfo, auth.AudExternal, auth.VerdictWouldReject}}, o.rec.all())
+
+	a := newUserinfoRig(t, "enforce")
+	require.Equal(t, http.StatusOK, a.post(a.token(nil)).Code)
+	require.Equal(t, []uiObs{{auth.PlaneUserinfo, auth.AudNone, auth.VerdictAccepted}}, a.rec.all())
+}
+
+// A source that exists but returns nil is the closed policy too, not "skip admission".
+func TestUserinfoNilReturningSourceFailsClosed(t *testing.T) {
+	key, err := auth.GenerateKeyPair()
+	require.NoError(t, err)
+	iss := auth.NewIssuer(key, "https://as.example.com", time.Hour, time.Hour)
+	h := UserinfoHandler(auth.NewValidator(&key.PublicKey).Validate, func() *auth.PlanePolicy { return nil })
+	bound, err := iss.IssueOAuthAccess("acme", "a@acme.example", nil, []string{string(auth.AuthorityAll)}, "", []string{uiMCP}, false, "c", "j")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, getUserinfo(h, bound.Token).Code)
+}
+
 func TestUserinfoEnforceRefusesAnExternalAudience(t *testing.T) {
 	for name, tc := range map[string]struct {
 		aud   []string

@@ -180,3 +180,12 @@ func TestUploadWithoutAPolicySourceFailsClosed(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, refusedUnread(t, e, e.audToken([]string{audMCP}), "fw-1", int64(len(content))))
 	status(t, e.put(e.audToken(nil), "fw-1", bytes.NewReader(content)), http.StatusOK)
 }
+
+// A source that exists but returns nil is the closed policy too, not "skip admission".
+func TestUploadNilReturningSourceFailsClosed(t *testing.T) {
+	e := newEnv(t)
+	e.h.policy = func() *auth.PlanePolicy { return nil }
+	content := []byte("0123456789")
+	e.declare("acme", "fw-1", content)
+	require.Equal(t, http.StatusUnauthorized, refusedUnread(t, e, e.audToken([]string{audMCP}), "fw-1", int64(len(content))))
+}

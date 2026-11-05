@@ -185,3 +185,10 @@ func TestBrandingWithoutAPolicySourceFailsClosed(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, do(t, ts, http.MethodPost, logoToken(t, iss, []string{audMCP}), bytes.NewReader(tinyPNG)))
 	require.Equal(t, http.StatusOK, do(t, ts, http.MethodPost, logoToken(t, iss, nil), bytes.NewReader(tinyPNG)))
 }
+
+// A source that exists but returns nil is the closed policy too, not "skip admission".
+func TestBrandingNilReturningSourceFailsClosed(t *testing.T) {
+	ts, iss := logoServerWithPolicy(t, func() *auth.PlanePolicy { return nil })
+	require.Equal(t, http.StatusUnauthorized, do(t, ts, http.MethodPost, logoToken(t, iss, []string{audMCP}), bytes.NewReader(tinyPNG)))
+	require.Equal(t, http.StatusOK, do(t, ts, http.MethodPost, logoToken(t, iss, nil), bytes.NewReader(tinyPNG)))
+}
