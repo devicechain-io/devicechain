@@ -620,7 +620,14 @@ matched, which matches that instance having no OAuth issuer either.
 */}}
 {{- define "devicechain.tokenAudienceBaseUrl" -}}
 {{- $origin := include "devicechain.publicOriginServable" . -}}
-{{- if $origin -}}{{- printf "%s/api" $origin -}}{{- end -}}
+{{- if $origin -}}
+{{- /* The origin guard compares the raw ingress.host; the validator parses the URL. A bare
+"::1" passes the first and renders http://::1, which is not a URL (and not loopback to the
+validator), and a rendered value the validator refuses is a crash loop. So http is derived only
+for a name that is loopback as a URL host: localhost or 127.0.0.1. */ -}}
+{{- $loopback := has $origin (list "http://localhost" "http://127.0.0.1") -}}
+{{- if or (hasPrefix "https://" $origin) $loopback -}}{{- printf "%s/api" $origin -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -639,8 +646,15 @@ crash loop. mcp then reports the mismatch itself instead of the instance failing
 {{- if has "mcp" (splitList "," (include "devicechain.enabledAreas" .)) -}}
 {{- $v := include "devicechain.mcpResourceUrl" . -}}
 {{- if $v -}}
-{{- $u := urlParse $v -}}
-{{- if and (eq $u.scheme (lower $u.scheme)) (eq $u.host (lower $u.host)) -}}
+{{- /* Scheme and authority as WRITTEN (urlParse normalises the scheme, which would hide an
+uppercase one from a comparison of its fields). */ -}}
+{{- $head := regexFind "^[^/]*//[^/]*" $v -}}
+{{- $base := include "devicechain.tokenAudienceBaseUrl" . -}}
+{{- /* An entry that is one of the platform areas' identifiers (an mcp override of
+<areaBaseUrl>/<area>) would be refused by the validator, so it is left out. mcp's own derived
+<areaBaseUrl>/mcp is not an area and stays. */ -}}
+{{- $clash := and $base (hasPrefix (printf "%s/" $base) $v) (ne $v (printf "%s/mcp" $base)) (not (contains "/" (trimPrefix (printf "%s/" $base) $v))) -}}
+{{- if and (eq $head (lower $head)) (not $clash) -}}
 {{- $out = append $out $v -}}
 {{- end -}}
 {{- end -}}
