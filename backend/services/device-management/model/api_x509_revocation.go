@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -346,6 +347,9 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		if fp == anchor.FingerprintSha256 {
 			return invalidAnchor("that is the trust anchor's own certificate; disable the anchor instead")
 		}
+		if err := refuseIfEnforcedUnderOtherAnchors(tx, tenant, anchor, fp); err != nil {
+			return err
+		}
 		var existing []DeviceRevokedCertificate
 		if err := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND kind = ? AND fingerprint = ?",
 			tenant, anchor.ID, RevokedKindManual, fp).Limit(1).Find(&existing).Error; err != nil {
@@ -417,16 +421,23 @@ func (api *Api) UnrevokeDeviceCertificate(ctx context.Context, anchorToken, fing
 			}
 			return err
 		}
-		res := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND kind = ? AND fingerprint = ?",
-			tenant, anchor.ID, RevokedKindManual, fp).Delete(&DeviceRevokedCertificate{})
-		if res.Error != nil {
-			return res.Error
+		// The rows are read under the anchor lock and deleted by identity, so the audit journal
+		// names each one (row id and fingerprint label) instead of "something was deleted".
+		var rows []DeviceRevokedCertificate
+		if err := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND kind = ? AND fingerprint = ?",
+			tenant, anchor.ID, RevokedKindManual, fp).Find(&rows).Error; err != nil {
+			return err
 		}
-		if res.RowsAffected == 0 {
+		for i := range rows {
+			if err := tx.Delete(&rows[i]).Error; err != nil {
+				return err
+			}
+		}
+		if len(rows) == 0 {
 			return nil
 		}
 		removed = true
-		return bumpRevocationRows(tx, anchor.ID, -res.RowsAffected)
+		return bumpRevocationRows(tx, anchor.ID, -int64(len(rows)))
 	})
 	if err != nil {
 		return false, err
@@ -475,4 +486,45 @@ func revocationRowsOf(tx *gorm.DB, anchorId uint) (int64, error) {
 		total += n
 	}
 	return total, nil
+}
+
+// refuseIfEnforcedUnderOtherAnchors is the revoke-time guard for the per-anchor store: a revocation
+// is enforced only for chains verified against the anchor it is recorded under. If the fingerprint
+// pins a certificate credential, or sits on a recorded chain, under ANOTHER anchor of the tenant
+// and not under this one, a "success" here would leave those devices connecting. That is refused,
+// naming the anchor(s) whose store would enforce it. Called with the named anchor locked.
+func refuseIfEnforcedUnderOtherAnchors(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, fp string) error {
+	var pinned, linked []uint
+	if err := tx.Model(&DeviceCredential{}).Where("tenant_id = ? AND credential_type = ? AND credential_id = ? AND trust_anchor_id IS NOT NULL",
+		tenant, string(CredentialX509Certificate), fp).Distinct().Pluck("trust_anchor_id", &pinned).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&DeviceCredentialChainLink{}).Where("tenant_id = ? AND fingerprint = ?", tenant, fp).
+		Distinct().Pluck("trust_anchor_id", &linked).Error; err != nil {
+		return err
+	}
+	others := map[uint]bool{}
+	for _, id := range append(pinned, linked...) {
+		if id == anchor.ID {
+			return nil // this anchor enforces it: nothing is stranded
+		}
+		others[id] = true
+	}
+	if len(others) == 0 {
+		return nil
+	}
+	ids := make([]uint, 0, len(others))
+	for id := range others {
+		ids = append(ids, id)
+	}
+	var anchors []DeviceTrustAnchor
+	if err := tx.Where("id IN ?", ids).Order("token").Find(&anchors).Error; err != nil {
+		return err
+	}
+	tokens := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		tokens = append(tokens, strconv.Quote(a.Token))
+	}
+	return invalidAnchor("this certificate is used under trust anchor(s) %s, not under %q, and a revocation is enforced only "+
+		"under the anchor it is recorded for; revoke it under %s", strings.Join(tokens, ", "), anchor.Token, strings.Join(tokens, " or "))
 }

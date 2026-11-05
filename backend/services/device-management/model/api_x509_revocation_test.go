@@ -17,6 +17,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/assert"
@@ -760,4 +761,88 @@ func TestDeletingAnAnchorThatHoldsRevocationsIsRefused(t *testing.T) {
 	deleted, err := f.api.DeleteDeviceTrustAnchor(f.ctx, f.anchor.Token)
 	require.NoError(t, err, "the control: with nothing recorded it deletes")
 	assert.True(t, deleted)
+}
+
+// The un-revoke is journaled with the row it removed: its id and the certificate's fingerprint.
+func TestUnrevokeJournalNamesTheRowAndTheFingerprint(t *testing.T) {
+	f := newRevFixture(t)
+	fp := x509trust.Fingerprint(f.ca.leaf(t, "SN-1").cert)
+	entry := f.revoke(fp)
+	ok, err := f.api.UnrevokeDeviceCertificate(f.ctx, f.anchor.Token, fp)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	var rows []rdb.AuditEvent
+	require.NoError(t, f.api.RDB.DB(core.WithSystemContext(context.Background())).
+		Where("table_name = ? AND operation = ?", "device_revoked_certificates", "delete").Find(&rows).Error)
+	require.Len(t, rows, 1, "the un-revoke must be journaled")
+	assert.Equal(t, fmt.Sprint(entry.ID), rows[0].EntityPK, "the journal must carry the removed row's id")
+	assert.Equal(t, fp, rows[0].EntityLabel, "the journal must carry the fingerprint label")
+}
+
+// 🔴 A REVOCATION IS ENFORCED ONLY UNDER THE ANCHOR IT IS RECORDED FOR. Recording one under an
+// anchor that does not enforce a certificate the tenant actually uses would "succeed" and strand
+// the devices: it is refused, naming the anchor(s) that would enforce it.
+func TestRevokeRefusesACertificateUsedOnlyUnderAnotherAnchor(t *testing.T) {
+	f := newRevFixture(t) // anchor "maker" = f.ca (the root)
+	inter := newPki(t, f.ca, pkiOpts{cn: "Line CA", ca: true})
+	_, err := f.api.CreateDeviceTrustAnchor(f.ctx, &DeviceTrustAnchorCreateRequest{Token: "sub", CertificatePem: inter.pem()})
+	require.NoError(t, err)
+	fpOf := func(n *pkiNode) string { return x509trust.Fingerprint(n.cert) }
+	revokeUnder := func(anchor, fp string) error {
+		_, err := f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: anchor, FingerprintSha256: &fp})
+		return err
+	}
+
+	t.Run("a leaf pinned under the intermediate-anchored profile", func(t *testing.T) {
+		leaf := inter.leaf(t, "SN-1")
+		_, err := f.api.CreateDeviceCredential(f.ctx, x509Create("c-1", "dev", leaf.pem(), "sub"))
+		require.NoError(t, err)
+		err = revokeUnder("maker", fpOf(leaf))
+		requireInvalid(t, err, "revoking a leaf pinned under another anchor")
+		assert.Contains(t, err.Error(), `"sub"`, "the refusal must name the anchor that would enforce it")
+		c, _ := f.rowsCounter()
+		assert.Zero(t, c, "a refused revoke recorded nothing")
+		require.NoError(t, revokeUnder("sub", fpOf(leaf)), "the counterweight: under the anchor that enforces it")
+	})
+	t.Run("an intermediate on the recorded chain of a credential under another anchor", func(t *testing.T) {
+		line2 := newPki(t, f.ca, pkiOpts{cn: "Line CA 2", ca: true})
+		leaf := line2.leaf(t, "SN-2")
+		f.device("dev2", "dev2-ext", "dt-a", "")
+		_, err := f.api.CreateDeviceCredential(f.ctx, x509Create("c-2", "dev2", leaf.pem()+line2.pem(), "maker"))
+		require.NoError(t, err)
+		other := newRootCA(t, "Other Root")
+		_, err = f.api.CreateDeviceTrustAnchor(f.ctx, &DeviceTrustAnchorCreateRequest{Token: "other", CertificatePem: other.pem()})
+		require.NoError(t, err)
+		err = revokeUnder("other", fpOf(line2))
+		requireInvalid(t, err, "revoking an intermediate that appears only on another anchor's chains")
+		assert.Contains(t, err.Error(), `"maker"`)
+		require.NoError(t, revokeUnder("maker", fpOf(line2)), "the counterweight: under the anchor whose chains carry it")
+	})
+	t.Run("a pinned credential with no links (and no stored leaf to link) is still found", func(t *testing.T) {
+		leaf := inter.leaf(t, "SN-BARE")
+		f.device("dev3", "dev3-ext", "dt-a", "")
+		cred, err := f.api.CreateDeviceCredential(f.ctx, x509Create("c-3", "dev3", leaf.pem(), "sub"))
+		require.NoError(t, err)
+		require.NoError(t, f.api.RDB.DB(f.ctx).Where("credential_id = ?", cred.ID).Delete(&DeviceCredentialChainLink{}).Error)
+		require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredential{}).Where("id = ?", cred.ID).Update("certificate_pem", nil).Error)
+		err = revokeUnder("maker", fpOf(leaf))
+		requireInvalid(t, err, "the pin itself, not only its links, names the anchor")
+		assert.Contains(t, err.Error(), `"sub"`)
+	})
+	t.Run("a fingerprint the named anchor also enforces is revoked", func(t *testing.T) {
+		shared := x509trust.Fingerprint(f.ca.leaf(t, "SN-BOTH").cert)
+		maker, err := f.api.trustAnchorByToken(f.ctx, "maker")
+		require.NoError(t, err)
+		sub, err := f.api.trustAnchorByToken(f.ctx, "sub")
+		require.NoError(t, err)
+		for i, a := range []*DeviceTrustAnchor{maker, sub} {
+			require.NoError(t, f.api.RDB.DB(f.ctx).Create(&DeviceCredentialChainLink{CredentialId: uint(9000 + i), Depth: 1,
+				TrustAnchorId: a.ID, Fingerprint: shared, IssuerName: "n", Serial: "1"}).Error)
+		}
+		require.NoError(t, revokeUnder("maker", shared), "it is on chains under the named anchor too, so the revocation is enforced where it is recorded")
+	})
+	t.Run("a fingerprint nothing uses is revoked under any anchor", func(t *testing.T) {
+		require.NoError(t, revokeUnder("other", fpOf(f.ca.leaf(t, "SN-UNUSED"))))
+	})
 }

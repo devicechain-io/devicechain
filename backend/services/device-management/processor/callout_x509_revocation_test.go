@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // X.509 REVOCATION ON THE CONNECT PATH: the REAL callout, the REAL Api over a database, the
@@ -377,4 +379,112 @@ func TestNoCRLParsingIsReachableFromTheProcessorPackage(t *testing.T) {
 			assert.NotContains(t, string(src), banned, "%s: the callout must not parse or verify a CRL", f)
 		}
 	}
+}
+
+// revokeAfterProvision commits a revocation right after ProvisionDevice returns, before the
+// credential is read back and the connect is granted.
+type revokeAfterProvision struct {
+	JitRegistrar
+	revoke func()
+}
+
+func (g *revokeAfterProvision) ProvisionDevice(ctx context.Context, r *model.ProvisionRequest) (*model.ProvisionResult, error) {
+	res, err := g.JitRegistrar.ProvisionDevice(ctx, r)
+	if err == nil && g.revoke != nil {
+		g.revoke()
+		g.revoke = nil
+	}
+	return res, err
+}
+
+// 🔑 THE CHECK AFTER REGISTRATION. A certificate revoked after its device registered, but before the
+// connect was granted, is refused by the connect check on the registered credential, and the device
+// stays registered (the revocation, not the registration, is what refuses it).
+func TestX509RevocationAfterRegistrationRefusesTheGrant(t *testing.T) {
+	r := newJitRig(t, jitRigOpts{})
+	leaf := r.ca.simDevice(t, "SN-LATE", time.Hour)
+	inject := &revokeAfterProvision{JitRegistrar: r.api, revoke: func() { r.revokeCert(leaf) }}
+	r.gate.JitRegistrar = inject
+
+	before := r.counts()
+	userJWT, why := r.authorize(r.clientID("SN-LATE"), leaf)
+	require.Empty(t, userJWT, "a certificate revoked after registration was granted a session")
+	require.Equal(t, genericAuthFailure, why)
+	r.moved(before, x509ResultCertRevoked)
+	assert.EqualValues(t, 1, r.rows().devices, "the device stays registered")
+	assert.EqualValues(t, 1, r.rows().credentials)
+}
+
+// 🔑 THE SURVIVING PATH CLAMPS A PINNED CONNECT TOO. A pinned leaf verifies through two cross-signed
+// intermediates; the longer-lived one is revoked; the session ends with the survivor's notAfter.
+func TestX509PinnedSessionIsClampedToTheSurvivingPath(t *testing.T) {
+	r := newJitRig(t, jitRigOpts{})
+	root := newTestCert(t, nil, certOpts{cn: "Maker Root P", ca: true})
+	r.anchor("maker-p", root)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	ixOld := sameKeyIntermediate(t, root, key, "Line CA", time.Now().Add(10*time.Hour))
+	ixNew := sameKeyIntermediate(t, root, key, "Line CA", time.Now().Add(48*time.Hour))
+	leaf := newTestCert(t, ixNew, certOpts{cn: "SN-P", notAfter: time.Now().Add(20 * time.Hour)})
+	r.device("sensor-p")
+	r.pin("c-p", "sensor-p", "maker-p", leaf, ixOld, ixNew)
+
+	userJWT, why := r.authorize(clientIDOf("sensor-p"), leaf, ixOld, ixNew)
+	require.Empty(t, why)
+	require.Greater(t, expiryOf(t, userJWT), ixOld.cert.NotAfter.Unix()+3600, "the control: before the revoke the longer path bounds the session")
+
+	fp := x509trust.Fingerprint(ixNew.cert)
+	_, err = r.api.RevokeDeviceCertificate(r.ctx, &model.DeviceCertificateRevokeRequest{AnchorToken: "maker-p", FingerprintSha256: &fp})
+	require.NoError(t, err)
+	userJWT, why = r.authorize(clientIDOf("sensor-p"), leaf, ixOld, ixNew)
+	require.Empty(t, why, "the surviving path admits it")
+	assert.InDelta(t, ixOld.cert.NotAfter.Unix(), expiryOf(t, userJWT), 1, "the session must end with the surviving path's notAfter")
+}
+
+// 🔑 THE JIT GATE ASKS EVERY USABLE MATCHED ANCHOR. A chain reaches a root-anchored profile and an
+// intermediate-anchored one; the narrowest (the intermediate's) is chosen to register, but a
+// revocation recorded under EITHER anchor refuses it, before anything is spent or written. With
+// nothing recorded under any anchor no revocation query runs.
+func TestX509JitGateAsksEveryMatchedAnchor(t *testing.T) {
+	r := newJitRig(t, jitRigOpts{sources: true})
+	root := newTestCert(t, nil, certOpts{cn: "Maker Root G", ca: true})
+	inter := newTestCert(t, root, certOpts{cn: "Line CA G", ca: true})
+	// The ROOT's profile is created first, so a gate that looked at usable[0] (not at every
+	// anchor, nor at the chosen one) would ask the wrong store.
+	r.anchor("root-g", root)
+	r.anchor("inter-g", inter)
+	r.addProfile("pp-root-g", "root-g", model.ProvisionAllowNew, nil)
+	r.addProfile("pp-inter-g", "inter-g", model.ProvisionAllowNew, nil)
+	revokeUnder := func(anchor string, c *testCert) {
+		fp := x509trust.Fingerprint(c.cert)
+		_, err := r.api.RevokeDeviceCertificate(r.ctx, &model.DeviceCertificateRevokeRequest{AnchorToken: anchor, FingerprintSha256: &fp})
+		require.NoError(r.t, err)
+	}
+
+	// Nothing recorded under either anchor: registers, and no revocation table is read.
+	var reads atomic.Int64
+	name := "test:count-jit-gate-reads"
+	require.NoError(t, r.api.RDB.Database.Callback().Query().Before("gorm:query").Register(name, func(d *gorm.DB) {
+		if d.Statement.Table == "device_revoked_certificates" || d.Statement.Table == "device_revocation_lists" {
+			reads.Add(1)
+		}
+	}))
+	clean := newTestCert(t, inter, certOpts{cn: "SN-G0"})
+	r.grants(x509ResultJitCreated, r.clientID("SN-G0"), clean, inter)
+	require.NoError(t, r.api.RDB.Database.Callback().Query().Remove(name))
+	assert.Zero(t, reads.Load(), "a query ran for ENTRIES anchors with nothing recorded")
+
+	// Revoked under the CHOSEN (intermediate) anchor, and under the other (root) one.
+	viaChosen := newTestCert(t, inter, certOpts{cn: "SN-G1"})
+	viaOther := newTestCert(t, inter, certOpts{cn: "SN-G2"})
+	revokeUnder("inter-g", viaChosen)
+	revokeUnder("root-g", viaOther)
+	charged, sourceCharged := len(r.tenants.charged()), len(r.sources.charged())
+	r.refuses(x509ResultCertRevoked, r.clientID("SN-G1"), viaChosen, inter)
+	r.refuses(x509ResultCertRevoked, r.clientID("SN-G2"), viaOther, inter)
+	assert.Len(t, r.tenants.charged(), charged, "a revoked certificate was charged against the registration allowance")
+	assert.Len(t, r.sources.charged(), sourceCharged, "and the source allowance")
+
+	// The control: an unrevoked twin still registers.
+	r.grants(x509ResultJitCreated, r.clientID("SN-G3"), newTestCert(t, inter, certOpts{cn: "SN-G3"}), inter)
 }

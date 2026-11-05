@@ -220,21 +220,28 @@ func (c *CalloutResponder) unknownX509Pin(ctx context.Context, req jwt.Authoriza
 		return nil, x509ResultJitAmbiguous
 	}
 
-	// 3a. 🔴 THE REVOCATION GATE, on the CHOSEN profile's anchor only (so its cost does not multiply
-	// with the profiles), BEFORE the source bucket, the in-flight slot and the registration: a
+	// 3a. 🔴 THE REVOCATION GATE, on every usable matched anchor (the chosen one's survivor is what is
+	// registered), BEFORE the source bucket, the in-flight slot and the registration: a
 	// revoked certificate costs no registration budget and is never registered. The narrowest
 	// anchor was chosen on the depth of the longest-lived path; the path that survives revocation
 	// may be another one, and it is the survivor's notAfter the credential is registered with.
 	// grantX509 checks again after the credential is read back (two reads for a successful
 	// registration, on purpose: reusing this answer would widen the race the in-transaction recheck
 	// closes).
-	survivor, refusal := c.applyRevocation(ctx, tenant, chosen.cand.Anchor, chosen.verified)
-	if refusal != "" {
-		log.Debug().Str("tenant", tenant).Str("host", host).Str("result", refusal).
-			Msg("Auth-callout refused a certificate registration on revocation.")
-		return nil, refusal
+	// EVERY usable matched anchor is asked, not only the chosen one: a revocation is recorded per
+	// anchor, and the same chain reaches several (a root and an intermediate); any anchor that
+	// refuses it refuses the registration. An ENTRIES anchor with nothing recorded costs no query.
+	for _, m := range usable {
+		survivor, refusal := c.applyRevocation(ctx, tenant, m.cand.Anchor, m.verified)
+		if refusal != "" {
+			log.Debug().Str("tenant", tenant).Str("host", host).Str("result", refusal).
+				Msg("Auth-callout refused a certificate registration on revocation.")
+			return nil, refusal
+		}
+		if m.cand.Anchor.ID == chosen.cand.Anchor.ID {
+			chosen.verified = survivor
+		}
 	}
-	chosen.verified = survivor
 
 	// 3b. The per-source bucket, charged only for a chain that verified to a usable profile, so
 	// a stranger's invalid certificates cost no source its allowance.
