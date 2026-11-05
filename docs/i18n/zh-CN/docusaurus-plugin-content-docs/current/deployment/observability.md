@@ -613,6 +613,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | 最久的排队或运行中任务的存续时间；没有则为 `0`。任务卡住会使它无限增长，请对其设置告警。 |
 | `devicechain_eventmanagement_calc_backfill_batch_seconds`、`..._rollup_refresh_seconds` | 处理一批的耗时，以及对一个时间段刷新测量值汇总的耗时。 |
 | `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | 与汇总自身的策略任务冲突并被重试的刷新次数。 |
+| `devicechain_eventmanagement_calc_backfill_rollup_tail_windows_skipped_total{reason}` | 每小时清扫未刷新的旧汇总历史数据块数：`timeout`、`conflict`（策略任务的锁）、`error`，或 `backoff`（最近失败、正在等待逐渐加长的延迟的数据块）。持续出现 `timeout` 或 `error` 意味着某个数据块中标记为 30 天前的读数尚未进入基于汇总的图表。 |
 
 每次领取任务、每个时间片结束和最终状态也都会记录一行日志，包含租户、任务令牌、配置文件、版本、计数和失败原因（如有）。
 

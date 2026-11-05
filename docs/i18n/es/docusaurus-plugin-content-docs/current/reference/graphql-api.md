@@ -204,8 +204,8 @@ query {
 
 :::caution A `bucketedMeasurements` le faltan las lecturas rellenadas con mucho retraso
 Una lectura **escrita ahora pero fechada más de 30 días en el pasado** (por su propio `occurredTime`,
-que controla el dispositivo) la devuelve `measurementEvents` pero no `bucketedMeasurements`, y ningún
-error lo advierte. Esto solo alcanza a un dispositivo que estuvo almacenando más de un mes, o a uno
+que controla el dispositivo) la devuelve `measurementEvents` de inmediato, pero `bucketedMeasurements`
+solo la muestra tras el siguiente barrido, normalmente en aproximadamente una hora. Esto solo alcanza a un dispositivo que estuvo almacenando más de un mes, o a uno
 cuyo reloj se desvía otro tanto. Consulta
 [Lecturas rellenadas y la preagregación](#backfilled-readings-and-the-rollup).
 :::
@@ -214,17 +214,22 @@ cuyo reloj se desvía otro tanto. Consulta
 
 Una lectura por intervalos cuyo `intervalSeconds` es un múltiplo entero de 60 y que no lleva filtro de
 anclaje se sirve desde una preagregación, no desde las lecturas en bruto. La preagregación se
-mantiene al día sobre una **ventana móvil de 30 días**. Todo lo anterior se materializó una sola vez,
-cuando se creó la base de datos.
+mantiene al día sobre una **ventana móvil de 30 días**, cada minuto. Todo lo anterior se materializó
+una sola vez, cuando se creó la base de datos, y vuelve a refrescarse mediante un barrido que se
+ejecuta cada hora (y unos minutos después de un reinicio), un fragmento de historial cada vez, desde la lectura más antigua que la plataforma
+conserva (o acepta) hasta esa ventana.
 
-Una lectura escrita ahora pero fechada más de 30 días atrás cae entre ambas: demasiado antigua para
-la ventana de refresco, demasiado tardía para la pasada única. El historial en bruto está completo,
-así que `measurementEvents` la devuelve; `bucketedMeasurements` no la muestra.
-
-El límite es cuánto **hacia atrás** está fechada la lectura, no la antigüedad de los datos. Una
-lectura rellenada con una hora, un día o tres semanas de retraso se recoge en un minuto y no tiene
-problema. Los intervalos de menos de un minuto y las lecturas acotadas por anclaje se sirven desde las
-lecturas en bruto y no se ven afectados.
+Una lectura escrita ahora pero fechada más de 30 días atrás se almacena de inmediato, así que
+`measurementEvents` la devuelve, pero `bucketedMeasurements` solo la muestra tras el siguiente
+barrido, normalmente en aproximadamente una hora. Tres cosas lo retrasan. Un relleno de métricas
+calculadas en curso retiene la preagregación, y el barrido reintenta cada cinco minutos hasta que
+queda libre. Una instancia cuyo pool de conexiones del almacén de eventos no tiene ninguna conexión
+libre no ejecuta el barrido en absoluto (el servicio lo registra al arrancar), de modo que esas
+lecturas no aparecen hasta ampliar el pool. Y un fragmento que sigue fallando al refrescarse se omite
+y se reintenta tras una espera creciente; `devicechain_eventmanagement_calc_backfill_rollup_tail_windows_skipped_total{reason}`
+los cuenta. Una lectura fechada dentro de los últimos 30 días se recoge en un minuto. Una
+lectura fechada más de un año atrás se rechaza al llegar. Los intervalos de menos de un minuto y las
+lecturas acotadas por anclaje se sirven desde las lecturas en bruto y no se ven afectados.
 
 ## Explorar el esquema {#exploring-the-schema}
 
