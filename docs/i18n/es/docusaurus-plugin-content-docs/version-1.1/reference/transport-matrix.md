@@ -1,0 +1,446 @@
+---
+sidebar_position: 2
+title: Matriz de capacidades por transporte
+---
+
+# Matriz de capacidades por transporte
+
+Esta página muestra qué hace hoy cada transporte, en cada dirección, y nombra las carencias.
+
+:::info El código es la fuente de verdad
+Esta página se mantiene a mano contra la implementación, no se genera, así que puede quedarse atrás.
+Cuando ella y tu instancia discrepen, tu instancia tiene razón. Cada afirmación de más abajo se leyó
+del servicio que la implementa, no de un documento de diseño; todo lo que no pudo establecerse así
+aparece marcado como tal en lugar de rellenado. Una celda que exagera lo que hace la plataforma es un
+fallo de esta página; por favor, [comunícalo](../getting-help.md).
+:::
+
+## Cómo leer esta página
+
+Cada capacidad está en uno de tres estados, y no hay un cuarto:
+
+| | | |
+| --- | --- | --- |
+| ● | **Completo** | Implementado, sin ninguna limitación específica de esta dirección. Las salvedades ordinarias que afectan al transporte entero están en sus notas. |
+| ◐ | **Parcial** | Implementado, y falta algo concreto. La nota dice qué; léela antes de diseñar apoyándote en esa fila. |
+| ○ | **Ninguno** | No implementado. Cuando se trata de una decisión deliberada y no de trabajo pendiente, la nota lo dice: son dos cosas muy distintas frente a las que planificar. En **Escritura**, la nota dice además qué le ocurre a un comando que emitas de todos modos, porque no es lo mismo en todas las filas. |
+| — | **No aplica** | La dirección no tiene sentido para esa fila. No es un sinónimo de «ninguno», y nunca sustituye a «desconocido» ni a «planeado». |
+
+Una sola regla separa ● de ◐, y se aplica a todas las filas de esta página. Una dirección es ◐
+siempre que la plataforma pueda perder, truncar o rechazar algo **sin decírselo a nadie**, incluso
+cuando el transporte en conjunto sea el más completo de la página. ● se reserva para una dirección sin
+ese agujero. Esa es la única razón por la que la ingesta HTTP es `●` en Suscripción y el bróker de la
+plataforma no lo es: al superar el límite de ingesta del inquilino, HTTP responde `429` al publicador,
+mientras que la vía del bróker descarta el mensaje después de que el dispositivo ya haya recibido su
+PUBACK, y al publicador no le llega nada.
+
+Las direcciones se nombran desde el punto de vista de la plataforma:
+
+- **Lectura**: la plataforma pide un valor a un dispositivo y obtiene la respuesta en ese intercambio.
+- **Escritura**: la plataforma fija un valor en un dispositivo, o le dice que actúe.
+- **Suscripción**: el dispositivo envía lecturas sin que se le pidan cada vez.
+
+`—` nunca aparece en la tabla de transportes de dispositivo. Las tres direcciones tienen sentido para
+todos los transportes de dispositivo, así que **Ninguno** ahí es siempre una respuesta real a una
+pregunta real.
+
+## Transportes de dispositivo
+
+Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vuelta.
+
+| Transporte | Lectura | Escritura | Suscripción |
+| --- | :---: | :---: | :---: |
+| [MQTT](../guides/connecting-a-device.md#mqtt) (bróker de la plataforma) | ○ | ◐ | ◐ |
+| [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
+| MQTT (bróker externo) | ○ | ○ | ◐ |
+| [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
+| [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
+| [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ○ | ◐ |
+
+### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
+
+La vía por defecto, y la más completa. El bróker es el servidor MQTT integrado en NATS, así que no
+hay ningún bróker aparte que operar. Los dispositivos fuera del clúster llegan a él por TLS en el puerto 8883, una vez que un
+operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúster](../deployment/connecting-from-outside.md).
+
+- **Suscripción ◐**: el dispositivo publica en su propio topic de eventos, y el bróker captura el
+  mensaje de forma duradera antes de que ningún código de la plataforma lo vea. La autenticación
+  tiene dos capas independientes: la conexión se autentica en el bróker y queda ligada a los
+  subjects de ese único dispositivo, y el evento lleva una credencial que se comprueba de nuevo en
+  el pipeline.
+
+  Hay un agujero, y es la razón de que esto no sea `●`. Un mensaje que llega mientras el inquilino
+  supera su **techo de ingesta, contado en lecturas,** se confirma al bróker y se descarta. El dispositivo ya
+  recibió su PUBACK cuando el bróker lo capturó, así que nada informa al publicador; en este
+  transporte no hay un `429` que enviar. Si tu flota puede superar su límite a ráfagas,
+  dimensiónala contra ese límite en lugar de confiar en que se avise al dispositivo para que frene,
+  porque no se le avisa.
+
+  Tampoco se avisa al dispositivo cuando la propia plataforma rechaza eventos nuevos
+  (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)).
+  El bróker ya confirmó el mensaje al dispositivo, así que no se rechaza: espera en el stream de
+  captura hasta que la canalización vuelva a aceptar eventos. Si el rechazo dura lo suficiente
+  para llenar el stream de captura, se descartan sus mensajes más antiguos.
+  `JetStreamDurableStalledBehindStream` lo informa mientras la canalización no lee el stream de
+  captura, y `JetStreamDurableLostUnread` cuando vuelve a leerlo.
+
+  Lo mismo ocurre sin ningún rechazo cuando `event-sources` simplemente se queda atrás respecto al ritmo de los dispositivos con
+  carga sostenida. En una prueba de carga con tráfico HTTP y MQTT combinado en una instalación por defecto, sin reinicio del
+  broker, el stream de captura se llenó y se perdió entre el 7 y el 13 % del tráfico MQTT, todo él ya confirmado.
+  `devicechain_<area>_jetstream_consumer_unread_skipped_total` lo cuenta, `JetStreamDurableLostUnread` alerta sobre ello, y
+  `JetStreamCaptureBacklogGrowing` y `JetStreamCaptureBacklogWillOverflow` avisan antes de que el stream se llene.
+
+  Un tercer agujero es la propia elección de líder del stream de captura. El broker entrega cada
+  publicación QoS 1 al stream de captura sin respuesta, después de que el dispositivo ya tiene su
+  PUBACK. Si el stream cambia de líder, con cualquier carga, las publicaciones que llegan mientras no
+  tiene ninguno, varios segundos, no se guardan en ningún sitio y ningún contador las registra. Un
+  reinicio progresivo del broker reinicia todos los servidores, también el líder, así que cada uno,
+  incluidos los que hace una actualización, abre esta ventana. En una prueba de 12 000 eventos por
+  segundo, un cambio así perdió unos cinco segundos de eventos; en un ensayo de actualización con
+  cuatro dispositivos que enviaban 20 mensajes por segundo entre todos, se perdieron 11 de 11 262
+  mensajes confirmados durante los reinicios del broker.
+  `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio mientras llegaban eventos; los
+  eventos perdidos no se pueden recuperar, y la hora del cambio acota la ventana que revisar en los
+  registros de sus propios dispositivos.
+
+  El ajuste de instancia `infrastructure.nats.mqttFailClosed` (desactivado por defecto) cierra el
+  segundo y el tercer agujero para QoS 1. Con él activado, un PUBACK de QoS 1 significa que la
+  plataforma guarda el mensaje: la plataforma lee los eventos, las respuestas a comandos y los
+  informes de dispositivo QoS 1 del propio almacén de mensajes del bróker. Un almacén lleno rechaza
+  la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
+  PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
+  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
+  [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
+  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, porque con él activado el techo es más bajo y la sobrecarga aún no genera contrapresión; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
+- **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
+  confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
+  instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si
+  el dispositivo la recibió. Deliberadamente no existe un estado `DELIVERED`: confirmar la entrega
+  por separado de la respuesta exigiría un acuse de recibo que este transporte no proporciona. Un
+  comando se completa cuando el dispositivo lo responde; consulta
+  [respuesta a un comando](../guides/connecting-a-device.md#responding-to-a-command).
+- **Lectura ○**: no hay ninguna primitiva de petición/respuesta iniciada por la plataforma. Puedes
+  expresar una lectura como un comando cuya respuesta lleve el valor, pero eso es un vocabulario
+  que tú defines en el perfil del dispositivo, no algo que aporte el transporte.
+
+- **Certificados de cliente.** En lugar de un token o una contraseña, un dispositivo puede autenticarse con un certificado de cliente X.509 presentado en el handshake TLS, con el usuario MQTT `{tenant}:@x509` y sin contraseña. El certificado debe encadenar con un [ancla de confianza](../concepts/device-certificates.md) que el tenant añadió, ya sea fijado a la credencial de un dispositivo o aceptado por un perfil de certificado que registra el dispositivo en su primera conexión. Los límites se dicen sin rodeos: una CA con restricciones de nombre se rechaza, no hay CRL ni OCSP (revoca deshabilitando la credencial o el ancla, y usa certificados de corta duración), y la renovación y el SDK de C# todavía no están disponibles. Consulta [Conectar con un certificado](../guides/device-x509.md).
+- **Pasarelas.** Un dispositivo puede representar a otros. El [agente de borde](../deployment/edge-services.md#gateway-identity) inicia sesión como dispositivo pasarela y publica los eventos de cada dispositivo en el [espacio de nombres de pasarela](./device-protocol.md#gateway-namespace). La plataforma acepta un evento solo para un dispositivo asignado a esa pasarela, y rechaza cualquier otro de forma visible (el motivo `NotGatewayChild`, un contador y un aviso a la pasarela) en lugar de dejar que el broker lo confirme y lo descarte. Los comandos a dispositivos tras una pasarela aún no se enrutan.
+
+### HTTP
+
+Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo sentido.
+
+- **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
+  - `202` una vez almacenado el evento en el stream de entrada de la plataforma;
+  - `400` ante un cuerpo que no puede decodificar o un inquilino sintácticamente inválido;
+  - `404` cuando el id de instancia de la ruta es incorrecto;
+  - `429` cuando el inquilino supera su techo de ingesta, contado en lecturas. Se comprueba antes
+    de la contrapresión, así que un inquilino por encima de su propio techo recibe `429`, nunca el
+    `503` de contrapresión;
+  - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: rechaza
+    eventos nuevos para que no desplacen eventos que un consumidor aún no ha procesado
+    (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure));
+  - **`503` sin `Retry-After` cuando el evento no pudo entregarse al stream.**
+
+  Reintenta ante un `503`: es la plataforma diciéndote, en el único transporte que puede hacerlo,
+  que tus datos quizá no llegaron. Un `503` con `Retry-After` significa que el evento no se
+  almacenó con toda seguridad, así que espera ese tiempo y vuelve a enviarlo. Un `503` sin él
+  significa que la publicación falló, y si falló después de que el stream almacenara el evento, un
+  reintento lo almacena dos veces, salvo que el evento lleve `altId` y `occurredTime` (consulta
+  [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). Un `429` también significa que el evento no se aceptó; lleva una
+  cabecera `Retry-After`, así que espera y reintenta. `202`, `400` y `404` son terminales
+  para esa petición.
+- **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que
+  llega a la plataforma solo por HTTP no puede recibir comandos. Más que una carencia a la espera
+  de arreglo, es la forma de la integración: da también una conexión MQTT a un dispositivo que deba
+  recibir comandos.
+
+  Un comando emitido a un dispositivo solo HTTP **no se rechaza: caduca**. La plataforma no acuña
+  ningún nombre de transporte para un dispositivo que llegó por HTTP (el origen registrado del
+  dispositivo es el id que el operador dio a la fuente de eventos), así que la compuerta que
+  reconoce un transporte no entregable no puede reconocer este. El comando se acepta, se publica
+  donde ningún dispositivo está suscrito para recibirlo, se marca `SENT` y acaba en `TIMEOUT`.
+  Sparkplug es la única fila de esta página en la que un `○` en esta columna produce un `FAILED`
+  inmediato (Sparkplug lo hace cuando sus comandos no están habilitados).
+- El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia; las
+  credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
+  que pongas por delante del servicio.
+
+### Autorregistro {#self-registration}
+
+No es un transporte para lecturas, sino la forma en que un dispositivo que aún no tiene credencial obtiene una. Con un secreto, es solo HTTPS.
+
+| Puerta | ¿Registra un dispositivo? |
+| --- | :---: |
+| HTTPS, `POST /api/device-management/provisioning/{tenant}/register` | sí |
+| MQTT en el bróker de la plataforma, con un certificado de cliente y un perfil de certificado | sí, en la primera conexión |
+| MQTT, de cualquier otra forma | no |
+| Ingesta de eventos HTTP, Sparkplug B, LwM2M | no |
+
+- Un dispositivo presenta la clave y el secreto de un perfil de aprovisionamiento, su número de serie y una credencial que inventó, y recibe su token de dispositivo y su id de cliente MQTT. Consulta [Autorregistro de dispositivos](../guides/device-self-registration.md) y [el contrato del endpoint](./device-protocol.md#self-registration).
+- **No hay registro al conectarse por MQTT con un secreto.** El bróker autentica una credencial que ya existe. La excepción es un dispositivo con certificado de cliente: un [perfil de certificado](../guides/device-x509.md#registration) lo registra en su primera conexión, sin secreto y sin este endpoint.
+- Necesita el ingress de la API de la instancia y tiene limitación de tasa por dirección de cliente y por inquilino, y responde `429` con `Retry-After`.
+- Sparkplug B y LwM2M crean dispositivos mediante su propio ajuste de autorregistro, que es independiente y no usa perfiles de aprovisionamiento.
+
+### MQTT — un bróker externo, propiedad del operador {#external-mqtt-broker}
+
+La plataforma también puede actuar como cliente en un bróker que ya operes, para ingerir de él.
+
+- **Suscripción ◐**: funciona, pero faltan cuatro cosas, y todas importan más allá de un
+  laboratorio:
+  - la conexión es en claro (sin TLS);
+  - no presenta ninguna credencial de bróker;
+  - en la práctica es como mucho una vez;
+  - un mensaje rechazado por exceder un límite, o mientras la plataforma aplica contrapresión, se
+    descarta, sin devolver nada al publicador.
+
+  Prefiere el bróker de la plataforma salvo que necesites específicamente leer de uno ya existente.
+
+  Lo de como mucho una vez importa si vas a elegir un QoS en tu propio bróker. La plataforma se
+  suscribe con QoS 1, así que la pérdida no está en la suscripción. La sesión no es persistente y
+  el traspaso a la decodificación vive en memoria, de modo que un mensaje que la plataforma ya tomó
+  de tu bróker y aún no ha publicado se pierde si el proceso se reinicia. Subir el QoS en tu lado
+  no cambia eso, y la plataforma no reclama durabilidad sobre un bróker que no le pertenece.
+
+  Cuánto puede perderse tiene un límite: los mensajes en cola para decodificar o en decodificación
+  (hasta 105), más los eventos que esperan la confirmación del bróker de la plataforma, que son
+  como máximo `externalMqtt.publishWindow` (128 por defecto). Una parada que deja terminar a la
+  plataforma, como una actualización progresiva o ceder la fuente a otro pod, espera a que se
+  almacenen primero. Una publicación que falla se cuenta en `total_msg_publish_failed` y se
+  registra; no se reintenta.
+
+  Si tu bróker se reinicia o la conexión se cae, la plataforma se reconecta y vuelve a suscribirse
+  por sí sola. Un bróker que rechaza la suscripción, ya sea al arrancar o tras una reconexión (por
+  ejemplo, porque un cambio de ACL deniega el topic), detiene **todo el servicio event-sources** con
+  un error en lugar de dejarlo conectado sin ingerir nada. Eso incluye la ingesta desde el bróker de
+  la plataforma y por HTTP, no solo esta fuente: el servicio se reinicia y sigue fallando hasta que
+  el bróker vuelva a conceder la suscripción.
+
+  **Un solo pod lee cada fuente, con un identificador de cliente propio.** La plataforma se
+  conecta a tu bróker como `devicechain:<instancia>:<fuente>:<pod>`, así que dos instancias, dos
+  fuentes o dos pods de `event-sources` nunca comparten una sesión. Un bróker mantiene una sesión
+  por identificador de cliente y corta la conexión más antigua cuando llega una segunda, y el
+  identificador único compartido que usaban las versiones anteriores perdía mensajes por esa vía.
+  Corran los pods de `event-sources` que corran, solo uno lee una fuente dada a la vez, porque
+  nada en esta vía distingue un mensaje entregado a dos pods de dos mensajes. Los demás no
+  conectan nada para esa fuente, quedan a la espera y siguen atendiendo todo lo demás. Si la ACL,
+  la lista de permitidos o la regla de identificadores de tu bróker se basa en el identificador de
+  cliente, permite los que empiezan por `devicechain:`. El identificador supera los 23 caracteres,
+  el límite más corto que MQTT exige aceptar a un bróker, así que un bróker que aplica ese límite
+  lo rechaza.
+
+  - **Relevo.** Un pod que se detiene libera la fuente al salir, y otro pod se conecta en unos dos
+    segundos. Tras una pérdida abrupta (un fallo de nodo, un `SIGKILL`, una terminación por falta
+    de memoria), la fuente queda sin leer unos 30 segundos más lo que tarde en reconectarse. Tu
+    bróker no conserva lo que entrega en ninguno de esos huecos, porque la sesión no es
+    persistente.
+  - **Un pod que toma una fuente y no puede conectarse** registra el motivo, libera la fuente y
+    vuelve a intentarlo cada 15 segundos. No detiene el servicio. Si tu bróker rechaza su
+    suscripción, el servicio se detiene, como se describe arriba. El pod que lee una fuente cuando
+    el servicio arranca sigue haciendo fallar ese arranque en ambos casos, como antes.
+  - **Escalar no reparte la carga.** Añadir pods de `event-sources` añade pods en espera, no
+    lectores de una fuente externa.
+  - **Vigílalo.** `devicechain_eventsources_external_mqtt_owner{source}` vale 1 en el pod que lee
+    la fuente y 0 en los demás. La alerta `ExternalMqttSourceNotReadByOnePod` salta cuando una
+    fuente lleva dos minutos sin que la lea ningún pod, o leída por más de uno.
+  - **Solapamiento.** Un pod que pierde la fuente mientras sigue conectado descarta lo que todavía
+    le llega, y lo cuenta en `devicechain_eventsources_total_msg_not_owner{source}`, en lugar de
+    almacenarlo. La ventana en la que dos pods pueden almacenar el mismo mensaje es de una
+    fracción de segundo, no el arrendamiento de 30 segundos.
+- **Escritura ○ / Lectura ○**: esta integración es solo de ingesta. Un comando emitido a un
+  dispositivo que llega por esta vía se comporta exactamente igual que en HTTP, más arriba:
+  publicado, `SENT` y luego `TIMEOUT`.
+
+### Sparkplug B
+
+Para flotas ya existentes que hablan Sparkplug con su propio bróker.
+
+- **Suscripción ◐**: se decodifican NBIRTH/NDATA/DBIRTH/DDATA, incluidas las tablas de alias y el
+  seguimiento de secuencia, y BIRTH/DEATH dirigen una presencia autoritativa en lugar de una
+  presencia inferida por temporizador. Lo que impide que sea `●`: **solo las métricas numéricas se
+  convierten en mediciones**. Una métrica booleana, de cadena, de bytes, DataSet o Template se omite
+  al decodificar el payload, sin registrar nada y sin decir nada. Si las señales interesantes de tu
+  flota son booleanas (un indicador de marcha, un bit de fallo), verás un dispositivo
+  autoritativamente en línea que no reporta nada.
+
+  Mientras la plataforma aplica contrapresión (consulta
+  [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), las
+  lecturas se descartan sin reintento y se cuentan. BIRTH y DEATH se siguen aceptando, así que la
+  presencia sigue siendo correcta.
+- **Escritura ◐: opcional, confirmada por informe.** Con `commands.enabled` en una fuente, un comando a un
+  dispositivo Sparkplug se publica como `NCMD` o `DCMD` en la sesión de la Host Application, y se
+  confirma cuando el nodo *informa* después del valor solicitado. Sparkplug no tiene confirmación de
+  comandos, así que un comando que el nodo no informa acaba en `TIMEOUT`, no como fallo. Está
+  desactivado por defecto y se habilita en los ajustes de la fuente (`dcctl bootstrap` y `dcctl upgrade` los reciben con `--sparkplug-source`); consulta
+  [Comandos Sparkplug](../concepts/sparkplug.md#commands). Con él desactivado, un comando a un
+  dispositivo Sparkplug acaba en `FAILED`, no entregable, con dos matices:
+  - **El veredicto suele ser rápido, pero no es sincrónico con el encolado.** Encolar un comando
+    desencadena un intento de despacho inmediato para ese dispositivo. Cuando es el único comando
+    encolado del dispositivo, la compuerta de presencia lo marca como fallido en el acto. Si el
+    dispositivo ya tiene otros comandos encolados, ese intento se retira y el veredicto llega en el
+    siguiente barrido de entrega, que corre cada 30 segundos por defecto (configurable entre 5 y
+    300).
+  - **Exige que la compuerta de presencia esté configurada.** La compuerta de presencia es la
+    comprobación que retiene o marca como fallido un comando según lo que el transporte del
+    dispositivo informa sobre él. Necesita el secreto entre servicios y un endpoint de
+    `device-state`. Sin cualquiera de los dos está apagada (lo registra al arrancar), y el comando
+    se despacha como cualquier otro y acaba en `TIMEOUT`.
+- **Lectura ○**: por la misma razón.
+
+Lo que la plataforma publica en Sparkplug además de eso: con los comandos habilitados, los `NCMD` y `DCMD` de los
+comandos que envías, con QoS 0 y sin retener; siempre, un `NCMD` interno de `Node Control/Rebirth`, emitido por
+el seguimiento de sesión de la propia Host Application para reparar un hueco de secuencia.
+
+La Host Application sí publica su propio mensaje `STATE` en `spBv1.0/STATE/{host_id}`, retenido y
+con QoS 1: al conectarse, al detenerse limpiamente y como su Last-Will si muere. Ese es el contrato
+de nacimiento/muerte de la Host Application de Sparkplug, y los nodos de borde lo leen.
+
+:::warning Las ACL del bróker deben permitir la publicación de `STATE` de la plataforma
+Si escribes ACL de bróker, concede al cliente de la plataforma permiso de publicación en
+`spBv1.0/STATE/{host_id}`. Si lo deniegas, la sesión de la Host Application queda **rota desde la
+primera conexión**.
+:::
+
+:::caution En Sparkplug la identidad del dispositivo se establece en el bróker, no por dispositivo
+La identidad de un dispositivo Sparkplug proviene del topic en el que publicó, así que el modo de
+autenticación de dispositivo por evento **no** impide que un publicador de tu bróker envíe bajo la
+identidad de otro dispositivo dentro del mismo inquilino. Entre inquilinos esto no puede ocurrir: la
+pertenencia a inquilino la fija la conexión de bróker por la que llegó un mensaje, nunca nada del
+mensaje. La separación dentro de un inquilino se aplica en *tu* bróker, con credenciales por cliente
+y permisos de topic. Dimensiona eso antes de apuntar un bróker compartido a un inquilino.
+:::
+
+### LwM2M
+
+Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
+
+- **Lectura ◐**: implementada como un comando de dispositivo, y el cuerpo de la respuesta vuelve.
+  La limitación es que un cuerpo de más de **8 KiB se trunca** y la respuesta se sigue reportando
+  como un éxito. «Limitado» es el modelo mental equivocado: no se rechaza nada y nada marca el
+  resultado como parcial, así que la lectura de un recurso grande vuelve con aspecto de estar
+  completa.
+- **Escritura ◐**: un **único recurso escalar** cada vez. No se admite escribir una instancia de
+  objeto, escribir varios recursos en una sola operación ni la actualización parcial. Los valores se
+  limitan a 8 KiB.
+- **Suscripción ◐**: Observe funciona, pero **solo se decodifican notificaciones SenML-JSON** y, de
+  ellas, **solo los recursos numéricos se convierten en mediciones**. Un objeto de naturaleza
+  booleana no produce telemetría alguna, la misma limitación que tiene Sparkplug.
+
+  Dimensiona esto de antemano: un cliente conforme **solo LwM2M 1.0** no puede producir SenML, así
+  que rechaza correctamente el Observe. Ese dispositivo sigue registrándose, dirige la presencia y
+  acepta comandos, pero no reporta **ninguna telemetría**. Decodificar el formato TLV más antiguo es
+  la tarea pendiente que cierra esto.
+
+  Los objetos observados se restringen a una lista de permitidos incorporada que no es
+  configurable, con un tope de 32 observaciones por registro. Las observaciones **no sobreviven a
+  un relevo de líder**: la presencia se reconstruye, y la telemetría se restablece solo a medida que
+  se renueva el registro de cada dispositivo.
+
+  Mientras la plataforma aplica contrapresión (consulta
+  [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure)), una
+  notificación se descarta y se cuenta, y la siguiente la sustituye. El registro y la desconexión se
+  siguen aceptando, así que la presencia sigue siendo correcta.
+- Los comandos a un dispositivo dormido se retienen de forma duradera y se drenan cuando vuelve a
+  aparecer, registrados como `PARKED`. Es el único lugar donde un comando que el transporte ya
+  intentó entregar se conserva para el dispositivo en vez de perderse. No es la única retención de
+  la plataforma: para todos los transportes (MQTT incluido, cuando es el propio bróker quien informa
+  la presencia del dispositivo), un comando cuyo dispositivo el transporte afirma ausente se retiene
+  como `HELD` antes de publicarse, y se libera cuando vuelve la presencia. Consulta
+  [comandos para un dispositivo ausente](../concepts/commands.md#commands-to-a-device-that-is-away).
+
+#### Operaciones LwM2M en detalle
+
+| Operación | | Notas |
+| --- | :---: | --- |
+| Read | ◐ | GET de CoAP; una respuesta de más de 8 KiB se trunca en silencio y se sigue reportando como correcta |
+| Write | ◐ | Un único recurso escalar, solo reemplazo |
+| Execute | ● | Con o sin argumentos. Un Execute sin procesar del recurso Factory Reset del objeto Device (`/3/0/5`) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`; está prevista una operación con nombre y confirmación |
+| Reboot (`lwm2m.reboot`) | ● | Un comando con nombre que ejecuta (Execute) el recurso Reboot del objeto Device; no recibe parámetros |
+| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ● | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía |
+| Recolección de información del dispositivo | ● | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría |
+| Observe | ◐ | Solo SenML-JSON; solo recursos numéricos; lista de objetos fija; 32 por registro |
+| Discover | ○ | No implementado |
+| Create | ○ | No implementado |
+| Delete | ○ | No implementado |
+| Write-Attributes | ○ | No implementado: las bandas de notificación no se pueden fijar desde la plataforma |
+| Bootstrap | ○ | No implementado; un servidor Bootstrap está planeado |
+
+La autenticación de dispositivo es por dispositivo, en el handshake DTLS, con claves precompartidas.
+Las credenciales X.509 y de clave pública en bruto están planeadas.
+
+### Integraciones de entrada {#inbound-integrations}
+
+Un servidor de red como ChirpStack o The Things Stack, o cualquier sistema capaz de enviar un `POST` con
+JSON o bytes, reenvía los datos de un dispositivo a una [integración](../guides/inbound-integrations.md)
+del inquilino. El dispositivo nunca se conecta a DeviceChain.
+
+- **Suscripción ◐**: la plataforma guarda los valores decodificados que aporta el remitente, como
+  mediciones normales. Lo que impide que sea `●`: un mensaje que llega mientras el inquilino supera su
+  asignación de ingesta se responde con `202` y se descarta, porque un rechazo lo perdería de todos modos
+  y algunos servidores de red suspenden un webhook al que se rechaza. Por tanto, no se avisa al remitente.
+  Un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
+  `IntegrationUndecodedHigh` informan de ambos casos.
+- **Escritura ○ / Lectura ○**: no hay downlink. Un comando emitido a un dispositivo que informó por última
+  vez a través de una integración **se acepta y luego falla** en el siguiente barrido de entrega con
+  `COMMAND_TRANSPORT_UNSUPPORTED`, en lugar de esperar hasta caducar. El fallo es definitivo. Un
+  dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan,
+  y caducan, hasta que informa por primera vez. Como el transporte registrado es el último por el que informó el dispositivo, un dispositivo que
+  también envía por MQTT vuelve a recibir comandos en cuanto lo ha hecho.
+
+## Conectores de salida
+
+A dónde envía datos la plataforma cuando dispara una regla. Un conector es un sumidero de un solo
+sentido sin direcciones de dispositivo, así que **Lectura** y **Suscripción** son `—` y no
+`Ninguno`.
+
+| Conector | Lectura | Escritura | Suscripción | Notas |
+| --- | :---: | :---: | :---: | --- |
+| Webhook `httpCall` | — | ● | — | Solo `POST`; se rechaza cualquier otro método |
+| `publish` → MQTT | — | ● | — | QoS 0/1/2; usuario + secreto; URL `tcp`, `mqtt`, `ssl`, `tls`, `mqtts`, `ws`, `wss`; **sin ajustes de TLS** (consulta más abajo) |
+| `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
+| `publish` → AWS SNS | — | ● | — | Solo credenciales estáticas por inquilino |
+| `publish` → AWS SQS | — | ● | — | Solo credenciales estáticas por inquilino |
+| `publish` → Google Pub/Sub | — | ○ | — | **No disponible**: se rechaza al escribir (consulta más abajo) |
+
+A diferencia de Kafka, que tiene un conmutador `tls` real, la configuración del conector MQTT **no
+tiene campos de TLS de ningún tipo**, y rechaza claves desconocidas, así que no hay nada que
+configurar. El TLS solo ocurre de forma implícita, cuando das al bróker una URL `ssl://`, `tls://`,
+`mqtts://` o `wss://`. La conexión se verifica entonces contra el almacén de confianza público y el
+host que nombra la URL, sin ninguna manera de aportar una CA, un certificado de cliente o un ajuste
+de verificación.
+
+Los dos conectores de AWS exigen deliberadamente una clave de acceso estática y **no** recurren a la
+identidad IAM ambiental del pod en el que se ejecutan. Esa separación existe para que la identidad de
+nube de la propia plataforma nunca se tome prestada para hacer la llamada de un inquilino.
+
+Cada destino de un conector se comprueba al establecer la conexión, y uno que resuelve a una
+dirección privada o de metadatos de nube se rechaza salvo que un operador haya permitido
+explícitamente esa dirección; consulta
+[a dónde puede enviar un conector](../concepts/outbound-connectors.md#destinations).
+
+:::warning Un conector de Google Pub/Sub se rechaza en lugar de aceptarse y nunca envía nada
+`gcp_pubsub` es un tipo de conector reconocido, pero **no tiene implementación de entrega** en esta
+versión. Crear un conector de ese tipo, actualizar uno a ese tipo o publicarlo se rechaza con el
+código de error `UNSUPPORTED`. Un conector de ese tipo guardado por una versión anterior sigue
+acabando en la cola de mensajes muertos como no soportado si un `publish` lo apunta: reconocido
+pero no ejecutable, nunca descartado en silencio. Cuando se publique, se autenticará con una credencial
+guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
+:::
+
+Aparte de los conectores, los [canales de notificación](../guides/notification-channels.md) llegan a
+personas y no a sistemas, por SMTP y webhook.
+
+## No disponible
+
+Se nombran explícitamente porque, desde fuera de la plataforma, «ausente de la lista de arriba» y
+«se pidió y la respuesta fue no» son indistinguibles, y solo uno de los dos merece la espera.
+
+| | |
+| --- | --- |
+| Ingesta de dispositivo por WebSocket | No disponible. Figura como planeada en la [introducción](../intro.md). |
+| CoAP fuera de LwM2M | No disponible. CoAP llega a la plataforma a través de [LwM2M](../concepts/lwm2m.md) y no de otro modo. |
+| Certificados de cliente por HTTP o LwM2M | No disponible. Solo el bróker MQTT de la plataforma autentica un dispositivo por certificado de cliente. HTTP usa un token o una credencial básica, y LwM2M usa claves precompartidas. |
+| NATS en bruto como transporte de dispositivo | No disponible. Una credencial de dispositivo autoriza una conexión MQTT, y no existe un cliente de dispositivo nativo de NATS. |
+| Salida de comandos Sparkplug (`DCMD`) | Disponible cuando una fuente la habilita, confirmada porque el nodo informa del valor y no por una confirmación, que Sparkplug no tiene; consulta [más arriba](#sparkplug-b). |
+| Protocolos de bus de campo industrial: OPC-UA, Modbus, BACnet | No disponibles como transportes de plataforma, y **nada de lo que publica el proyecto los habla.** La forma admitida es una pasarela local que hable el bus de campo en la red de planta y reenvíe por MQTT o HTTP; la traducción de protocolo la aportas tú. El proyecto sí publica `dc-edge-agent`, que hace la *otra* mitad de ese trabajo: termina localmente la vía MQTT del dispositivo, almacena de forma duradera durante un corte de WAN y reenvía **solo por MQTT**. No habla ningún bus de campo. |

@@ -1,0 +1,91 @@
+---
+sidebar_position: 6
+title: Getting help
+---
+
+# Getting help
+
+DeviceChain is developed in the open. If something did not work, or a page did not tell
+you what you needed, tell us. An early, rough report beats a late, polished one, because the
+roadmap and these docs change in response to what people run into.
+
+## Where to go
+
+| What you have | Where it goes |
+| --- | --- |
+| A question, or something that confused you | [Discussions](https://github.com/devicechain-io/devicechain/discussions) |
+| An idea or feature request | [Discussions → Ideas](https://github.com/devicechain-io/devicechain/discussions/categories/ideas) |
+| Something is broken | [Open an issue](https://github.com/devicechain-io/devicechain/issues/new/choose) |
+| A security vulnerability | Email **admin@devicechain.io** — please do not file publicly |
+
+You do not need to be sure it is a bug before you speak up. If you could not tell whether the
+behaviour you saw was intended, that ambiguity is itself worth reporting.
+
+## Filing a good issue
+
+The issue forms ask for what we would otherwise have to come back and request. Two answers save the
+most time:
+
+- **Which version.** Run `dcctl version`, or give the chart or image tag you installed.
+- **Where it stopped.** Not the whole story: the last step that worked and the first that did not.
+  For data that never arrives, say whether the device connected, whether events were recorded, and
+  whether the console showed anything, in that order.
+
+For install problems, the environment matters more than usual. Bring-up is the part we can least
+easily reproduce, because we only have our own machines. Include:
+
+- your Kubernetes distribution and version
+- your host OS and CPU architecture
+- the output of `kubectl get pods -A`
+
+`dcctl preflight` catches many environment problems on its own. Paste its output even when it
+passes.
+
+:::caution Redact before you paste
+Logs and command output can carry tokens, connection strings, and internal hostnames.
+Issues and Discussions are public.
+:::
+
+## Missing telemetry: three common causes {#things-that-silently-swallow-data}
+
+If telemetry is missing, these three causes account for most reports. Ruling them out first is
+usually faster than waiting on a reply.
+
+- **The device token is not registered, or its credential is refused.** Being unassigned is *not*
+  the problem: an unassigned device's events are stored and projected, they carry no customer,
+  area or asset to be attributed to. A token the platform does not know, or a credential it rejects,
+  is the problem. The transport has already answered by the time the event is resolved, so the
+  refusal never reaches the sender. The event is dead-lettered and logged at warning level in
+  device-management.
+- **The measurement is not on the profile, and its value is not a number.** Measurements are stored
+  as numbers, so:
+  - An undeclared measurement with a numeric value is stored as-is, with no warning at all.
+    The exceptions are `NaN`, `Inf` and any value of 1,000,000,000,000 or more in magnitude,
+    which the store cannot hold: that entry alone is dropped, with a warning in device-management's logs.
+  - An undeclared measurement with a non-numeric value is dropped — that entry alone — with a
+    warning in device-management's logs. This includes a text value such as `"ok"` and a boolean
+    written as `true` or `false`: the `true` to 1 and `false` to 0 conversion applies only to a metric
+    declared with the boolean data type. The device's other readings in the same message are stored
+    and the device is acknowledged as normal, so the drop is not visible to the sender. Every dropped
+    entry is counted in `resolve_measurement_dropped_total`, by reason; the warning names the tenant,
+    device and metric, once per device and metric.
+
+    The same fact is on the device's page in the console: when a device is losing keys, a notice
+    above the tabs says how many, and the Connectivity tab lists each key with the reason, the last
+    value the device sent, how many times and when it last did. The same list is `droppedMeasurements`
+    on the device-state GraphQL endpoint. It keeps at most 32 keys per device and is visible to
+    everyone who can read the device's latest readings.
+  - A *declared* measurement whose value does not match its declared type is worse: the whole event
+    is dead-lettered. So is one that is `NaN`, infinite, or 1,000,000,000,000 or more in magnitude.
+
+  Declaring the metric on the profile, with the right data type, fixes both. It does not help a
+  value the store cannot hold: that is refused either way, and declaring it only means the whole
+  event goes with it.
+- **You are looking at a different tenant** than the one the device reports into.
+
+## What to expect
+
+DeviceChain is maintained by a small team, so a reply may take a few days. An issue that sits
+unanswered for a little while has not been ignored. Reports that include a version and a clear
+stopping point get resolved fastest, because nobody needs a round trip before they can start
+looking.
