@@ -375,5 +375,6 @@
   "notificationPolicyConflict": "Someone else saved this policy after you opened it. Reload the page and make your change again.",
   "notificationPolicyRulesHelp": "Rules are shown read-only here and are left untouched when you save. A policy created here starts with no rules.",
   "notificationPolicyNoChannel": "(channel removed)",
-  "notificationPolicyAnySeverity": "Any severity"
+  "notificationPolicyAnySeverity": "Any severity",
+  "deviceProfileDecoderTab": "Decoder"
 }
