@@ -9,14 +9,15 @@ in-process credential handling) and replaces its hard-coded shots with data.
 hack/video-capture/setup.sh                  # once: venv + pinned Playwright/Chromium (ffmpeg must be on PATH)
 PY=~/.cache/video-capture/venv/bin/python    # Scripts/python on Windows
 $PY hack/video-capture/video_capture.py check  hack/video-capture/shots/poc-device-profile.yaml
-$PY hack/video-capture/video_capture.py record hack/video-capture/shots/poc-device-profile.yaml --out /tmp/clips [--shots id,id] [--base-url URL]
+$PY hack/video-capture/video_capture.py record hack/video-capture/shots/poc-device-profile.yaml --out ./clips [--shots id,id] [--base-url URL]
 ```
 
 On Windows pass a Windows path to `--out` (`C:/...`): Git Bash with `MSYS_NO_PATHCONV=1` hands `/c/...` to Python verbatim, which then
-means `C:\c\...`. The recorder refuses that form.
+means `C:\c\...`. The recorder refuses `/c/...`, a bare `/c` and `/cygdrive/...`.
 
 Exit status: `0` all shots recorded, `1` a shot failed (screenshot written, the rest still run), `2` the shot list or setup is wrong,
-`3` the sign-in password was visible in a recorded page (the run stops).
+`3` the sign-in password appeared in a recorded page (the run stops, no clip and no screenshot is kept).
+A password shorter than 4 characters is refused up front (exit 2): the guard cannot be trusted with it.
 
 ## Output
 
@@ -91,17 +92,39 @@ One verb per step. Optional keys on any step: `timeout_s` (default 20), `pause_m
 
 ### Masks (secret regions)
 
-A mask is applied inside the page before paint, so the frames never hold the value. `style: blur` (default, 14 px) or `box`.
+Element masks (`shot`, `testid`, `selector`) are a stylesheet applied before paint: `style: blur` (default, 14 px) or `box`. A `shot` or
+`testid` value is a plain token (letters, digits, `_ . : -`) because it goes into an attribute selector. `box` also blacks out images,
+canvases and iframes inside the element.
+
+Text masks (`text_regex`, a JavaScript regular expression) are **opaque overlay boxes** placed from `Range.getClientRects()` on every
+animation frame. The page's own text nodes are not rewritten, so a framework that owns them keeps working. They are boxes, not blurs, because
+a backdrop blur left the text legible in headless Chromium.
 
 ```yaml
 mask:
   - {shot: user-menu, name: account email}              # an element: shot | testid | selector
-  - {text_regex: '[\w.-]+@sim\.devicechain\.local'}     # running text, wherever it appears (wrapped in a blurred span)
+  - {text_regex: '[\w.-]+@sim\.devicechain\.local'}     # running text, wherever it appears
   - {selector: ".token", required: false}               # required defaults to true
 ```
 
 `input[type=password]` is always blurred. A **required mask that matched nothing during the shot fails the shot** (a mask that silently
-misses is a leak). The recorder also reads the page text after every step and **stops the run (exit 3)** if the sign-in password is in it.
+misses is a leak); so does a mask stylesheet that has gone missing from the page.
+
+## Fail-loud checks (all of these end the shot; none leaves a clip)
+
+- **The password, per change.** The page reports every changed text node, attribute value and input value (and the whole document at load)
+  to the recorder, which compares each with the password. A toast that shows it for 300 ms is caught; the password is never put in the page.
+  When it appears the run stops with exit 3, and the temporary frames are deleted. The failure screenshot of any other failure is taken only
+  after the same guard passes.
+- **HTTP errors.** A same-origin XHR/fetch/document response of 400 or more, and a GraphQL response body that carries `errors`, fail the
+  shot (checked after every step).
+- A start page that is an error page, a redirect to the sign-in at any point, a `wait_for` that times out (screenshot, then one retry), a
+  clip longer than `max_s`.
+- Stale output from an earlier run (the clip and failure screenshot of a selected shot) is removed first; clips are encoded to a temporary
+  name and renamed; frames live under `<out>/.frames-<pid>` and are swept at the next start if a run was killed.
+
+Known limits: a page that paints one frame from the compositor thread (a fast scroll) can show a moved text box one frame before its overlay
+moves; shadow-DOM text is not reported to the leak check; a GraphQL body that the browser has already discarded cannot be read.
 
 ## Secrets: what is guaranteed
 
@@ -118,5 +141,11 @@ trim it out.
 
 ## Tests
 
-`python3 -m unittest discover -s hack/video-capture` (pure functions only: schema validation, targets, masks, timeline, credentials,
-scrubbing). They need no browser. The browser path is exercised by recording `shots/poc-device-profile.yaml` against a console.
+`python3 -m unittest -v test_video_capture` (pure functions: schema validation, targets, masks, timeline, credentials, scrubbing); no browser,
+this is what CI runs.
+
+`DC_BROWSER_TESTS=1 <venv python> -m unittest -v test_browser_paths` runs the real recorder against a throwaway local web server and judges each
+negative control by what it leaves behind: a planted password (a transient toast, an attribute) is exit 3 with no mp4 and no screenshot; a
+required mask that matches nothing, a 404 start page, a 500 fetch and a GraphQL `errors` body are exit 1 with no mp4; a short password is exit 2;
+a good shot is exit 0 with both mask kinds. It needs Chromium and ffmpeg (`setup.sh`), so CI does not run it. To see the leak tests fail, make
+`_on_text` a no-op and `password_leaked` return False: both exit-3 tests then fail with exit 0 and a clip kept.

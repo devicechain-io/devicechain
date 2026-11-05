@@ -159,7 +159,15 @@ class Pure(unittest.TestCase):
         self.assertEqual(e["marks"], [{"at_s": 1.5, "what": "a"}])
         self.assertEqual((e["duration_s"], e["line"], e["size"]), (10.0, "L1", "1920x1080"))
 
+    def test_anchor_tokens_cannot_break_out_of_a_selector(self):
+        for bad_v in ('a"]', "a]", "a b", 'a"', "a\b", ""):
+            self.assertTrue(bad(lambda d, x=bad_v: d["shots"][0].update(mask=[{"shot": x}])), repr(bad_v))
+            self.assertTrue(bad(lambda d, x=bad_v: d["shots"][0].update(steps=[{"click": {"testid": x}}])), repr(bad_v))
+        self.assertEqual(bad(lambda d: d["shots"][0].update(mask=[{"testid": "user.menu-1:x_y"}])), [])
+
     def test_posix_drive_path_is_refused_on_windows_only(self):
+        for p in ("/c", "/c/", "/cygdrive/c/x"):
+            self.assertEqual(v.posix_drive_path(p), os.name == "nt", p)
         self.assertEqual(v.posix_drive_path("/c/Users/x"), os.name == "nt")
         self.assertFalse(v.posix_drive_path("C:/Users/x"))
 

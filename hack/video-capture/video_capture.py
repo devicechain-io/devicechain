@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 EXIT_OK, EXIT_SHOT_FAILED, EXIT_BAD_SETUP, EXIT_SECRET_LEAK = 0, 1, 2, 3
 
@@ -46,6 +47,7 @@ SHOT_KEYS = ("id", "title", "line", "start", "steps", "mask", "min_s", "max_s", 
 TOP_KEYS = ("version", "video", "base_url", "viewport", "fps", "login", "cursor", "reduce_motion", "locale", "timezone", "shots")
 LOGIN_MODES = ("sim", "superuser-secret", "env")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+ANCHOR_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")  # a data-shot / data-testid value: no quote, bracket or backslash can reach a selector
 
 
 class CaptureError(Exception):
@@ -109,6 +111,9 @@ def _check_target(t, where, errs):
         errs.append(f"{where}: a target names exactly one of testid, shot, role, text, label, placeholder, selector (got {locators or 'none'})")
     if "name" in t and "role" not in t:
         errs.append(f"{where}: 'name' belongs with 'role'")
+    for k in ("shot", "testid"):
+        if k in t and not (isinstance(t[k], str) and ANCHOR_RE.match(t[k])):
+            errs.append(f"{where}: {k} is a plain token (letters, digits, _ . : -)")
     if "nth" in t and not (isinstance(t["nth"], int) and not isinstance(t["nth"], bool) and t["nth"] >= 0):
         errs.append(f"{where}: nth is a non-negative integer")
 
@@ -174,6 +179,9 @@ def validate_mask(m, where):
     locs = [k for k in ("selector", "shot", "testid", "text_regex") if k in m]
     if len(locs) != 1:
         errs.append(f"{where}: a mask names exactly one of selector, shot, testid, text_regex")
+    for k in ("shot", "testid"):
+        if k in m and not (isinstance(m[k], str) and ANCHOR_RE.match(m[k])):
+            errs.append(f"{where}: {k} is a plain token (letters, digits, _ . : -)")
     if "text_regex" in m:
         try:
             re.compile(m["text_regex"])
@@ -504,70 +512,113 @@ CURSOR_JS = """
 })();
 """
 
-# Masks. __SPEC__ is {css, selectors:[[i,sel]], regexes:[[i,pattern]], blur}. Applied inside the page, before paint: the frames never
-# hold the value. Each mask reports (once per document) that it matched something, through the exposed __dcMaskSeen binding.
+# Masks and the per-change secret report. __SPEC__ is {css, selectors:[[i,sel]], regexes:[[i,pattern]], blur}.
+#  - Element masks are a stylesheet (applied before paint, so frames never hold the value).
+#  - Text masks (text_regex) are OPAQUE overlay boxes (a backdrop blur left the text legible in headless Chromium) placed from Range.getClientRects() on every animation frame: the page's own text nodes are
+#    never rewritten (a framework that owns them keeps working), and a box exists before the frame that shows the text is painted.
+#  - EVERY changed text node, attribute value and input value, and the whole document at load, is sent to the exposed __dcLeak binding, where
+#    the recorder compares it with the password. The password is never put in the page; only page text goes out.
+#  - Each mask reports (once per document) that it matched something, through the exposed __dcMaskSeen binding.
 MASK_JS = """
 (() => {
   const spec = __SPEC__;
-  // an init script runs before the document has a root: the stylesheet goes in the moment there is one (a throw here leaves NO mask)
   const style = document.createElement('style');
   style.id = '__dc_mask_css';
   style.textContent = spec.css + ' input[type=password]{filter:blur(8px) !important}';
   const inject = () => { const r = document.head || document.documentElement; if (r && !style.isConnected) r.appendChild(style); return !!r; };
   if (!inject()) new MutationObserver((_, o) => { if (inject()) o.disconnect(); }).observe(document, {childList: true});
+
   const seen = new Set();
-  // the binding may not exist yet when the init script first runs: a mask is "seen" only once the report got through, so it is retried
+  // the bindings may not exist yet when the init script first runs: a mask is "seen" only once the report got through, so it is retried
   const report = (i) => { if (!seen.has(i) && typeof window.__dcMaskSeen === 'function') { try { window.__dcMaskSeen(i); seen.add(i); } catch (e) {} } };
+  const send = (t) => { if (t && typeof window.__dcLeak === 'function') { try { window.__dcLeak(String(t)); } catch (e) {} } };
+
   const scan = (root) => {
     for (const [i, sel] of spec.selectors) {
       try { if ((root.querySelector && root.querySelector(sel)) || (root.matches && root.matches(sel))) report(i); } catch (e) {}
     }
   };
+
+  // ---- text masks: one overlay box per match rectangle, repositioned every frame
   const rx = spec.regexes.map(([i, p]) => [i, new RegExp(p, 'g')]);
-  const wrap = (node) => {
-    if (!rx.length || !node.nodeValue || !node.parentNode) return;
-    if (node.parentElement && node.parentElement.classList.contains('__dc_masked')) return;
-    for (const [i, re] of rx) {
-      re.lastIndex = 0;
-      if (!re.test(node.nodeValue)) continue;
-      re.lastIndex = 0;
-      const frag = document.createDocumentFragment();
-      let last = 0, m;
-      const v = node.nodeValue;
-      while ((m = re.exec(v)) !== null) {
-        if (m[0] === '') { re.lastIndex++; continue; }
-        frag.appendChild(document.createTextNode(v.slice(last, m.index)));
-        const s = document.createElement('span');
-        s.className = '__dc_masked';
-        s.style.cssText = 'filter:blur(' + spec.blur + 'px);user-select:none;';
-        s.textContent = m[0];
-        frag.appendChild(s);
-        last = m.index + m[0].length;
-        report(i);
-      }
-      frag.appendChild(document.createTextNode(v.slice(last)));
-      node.parentNode.replaceChild(frag, node);
-      return;
-    }
+  let layer = null, pool = [];
+  const ensureLayer = () => {
+    if (layer && layer.isConnected) return true;
+    const host = document.body || document.documentElement;
+    if (!host) return false;
+    layer = document.createElement('div');
+    layer.id = '__dc_mask_layer';
+    layer.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483645;pointer-events:none;';
+    host.appendChild(layer);
+    pool = [];
+    return true;
   };
-  const walk = (root) => {
-    if (!rx.length || !root) return;
+  const box = (k, r) => {
+    let el = pool[k];
+    if (!el) {
+      el = document.createElement('div');
+      el.style.cssText = 'position:fixed;pointer-events:none;background:#1b3246;border-radius:3px;';
+      layer.appendChild(el);
+      pool[k] = el;
+    }
+    el.style.display = 'block';
+    el.style.left = (r.left - 2) + 'px'; el.style.top = (r.top - 1) + 'px'; el.style.width = (r.width + 4) + 'px'; el.style.height = (r.height + 2) + 'px';
+  };
+  const paint = () => {
+    if (!rx.length || !ensureLayer()) return;
+    let used = 0;
+    const root = document.body || document.documentElement;
     const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    while (w.nextNode()) nodes.push(w.currentNode);
-    nodes.forEach(wrap);
-  };
-  const sweep = () => { scan(document); walk(document.body || document.documentElement); };
-  new MutationObserver((muts) => {
-    for (const m of muts) {
-      m.addedNodes.forEach((n) => { if (n.nodeType === 1) { scan(n); walk(n); } else if (n.nodeType === 3) wrap(n); });
-      if (m.type === 'characterData' && m.target.nodeType === 3) wrap(m.target);
+    const range = document.createRange();
+    while (w.nextNode()) {
+      const node = w.currentNode, v = node.nodeValue;
+      if (!v || v.length < 2 || node.parentElement && (node.parentElement.closest('#__dc_mask_layer,style,script') )) continue;
+      for (const [i, re] of rx) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(v)) !== null) {
+          if (m[0] === '') { re.lastIndex++; continue; }
+          report(i);
+          range.setStart(node, m.index); range.setEnd(node, m.index + m[0].length);
+          for (const r of range.getClientRects()) box(used++, r);
+        }
+      }
     }
+    for (let k = used; k < pool.length; k++) pool[k].style.display = 'none';
+  };
+
+  // ---- the per-change secret report
+  const attrs = (el) => { let o = []; for (const a of el.attributes || []) o.push(a.value); return o.join(' '); };
+  const inLayer = (n) => layer && (n === layer || (n.nodeType === 1 || n.parentElement) && layer.contains(n.nodeType === 1 ? n : n.parentElement));
+  new MutationObserver((muts) => {
+    const out = [];
+    for (const m of muts) {
+      if (inLayer(m.target)) continue;
+      if (m.type === 'childList') {
+        m.addedNodes.forEach((n) => {
+          if (n.nodeType === 1) { out.push(n.textContent || '', attrs(n)); n.querySelectorAll('*').forEach((c) => out.push(attrs(c))); scan(n); }
+          else out.push(n.nodeValue || '');
+        });
+      } else if (m.type === 'characterData') out.push(m.target.nodeValue || '');
+      else if (m.type === 'attributes') out.push(m.target.getAttribute(m.attributeName) || '');
+    }
+    send(out.join('\\n'));
     scan(document);
-  }).observe(document, {childList: true, subtree: true, characterData: true});
-  document.addEventListener('DOMContentLoaded', sweep);
-  window.addEventListener('load', sweep);
-  sweep();
+  }).observe(document, {childList: true, subtree: true, characterData: true, attributes: true});
+  const values = new WeakMap();
+  const sweepValues = () => {
+    for (const e of document.querySelectorAll('input:not([type=password]),textarea,select')) {
+      const v = e.value || '';
+      if (v && values.get(e) !== v) { values.set(e, v); send(v); }
+    }
+  };
+  for (const ev of ['input', 'change', 'focusin']) document.addEventListener(ev, (e) => { if (e.target && e.target.type !== 'password') send(e.target.value); }, true);
+  const full = () => { scan(document); send((document.body ? document.body.innerText : '') + '\\n' + document.title); sweepValues(); };
+  document.addEventListener('DOMContentLoaded', full);
+  window.addEventListener('load', full);
+  const frame = () => { paint(); sweepValues(); requestAnimationFrame(frame); };
+  requestAnimationFrame(frame);
+  full();
 })();
 """
 
@@ -657,7 +708,13 @@ class Recorder:
         self.password = ""
         self.pos = (960, 540)
         self.state = None
+        self.leaked = False       # set by the page's per-change report (see MASK_JS) the moment the password appears in any text or value
+        self.pending = []         # responses seen by the page, checked at each step
         os.makedirs(out_dir, exist_ok=True)
+        for d in os.listdir(out_dir):  # frames of a run that was killed
+            if d.startswith(".frames-"):
+                shutil.rmtree(os.path.join(out_dir, d), ignore_errors=True)
+        self.frames_root = os.path.join(out_dir, f".frames-{os.getpid()}")
 
     def _say(self, m):
         self.say(scrub(m, self.secrets))
@@ -670,6 +727,9 @@ class Recorder:
         self.email, self.password = load_credentials(self.doc["login"])
         self.secrets = (self.email, self.password)
         _SECRETS[:] = [x for x in self.secrets if x]
+        if len(self.password) < 4:
+            raise CaptureError("the sign-in password is shorter than 4 characters, so the password guard cannot be trusted; refusing to record", EXIT_BAD_SETUP)
+        os.makedirs(self.frames_root, exist_ok=True)
         self._pw = sync_playwright().start()
         self.browser = self._pw.chromium.launch(headless=True, args=[
             "--hide-scrollbars", "--force-color-profile=srgb", "--font-render-hinting=none", "--disable-lcd-text", "--renderer-process-limit=2"])
@@ -680,6 +740,7 @@ class Recorder:
             self.browser.close()
         finally:
             self._pw.stop()
+            shutil.rmtree(self.frames_root, ignore_errors=True)
 
     def new_context(self, state=None, reduce=True):
         ctx = self.browser.new_context(
@@ -835,7 +896,11 @@ class Recorder:
                 os.remove(stale)  # an earlier run's clip must never sit beside this run's failure
         for attempt in range(1, retries + 2):
             try:
-                return self.attempt(shot, attempt)
+                entry = self.attempt(shot, attempt)
+                png = os.path.join(self.out, "failures", shot["id"] + ".png")
+                if os.path.exists(png):
+                    os.remove(png)  # an earlier attempt's screenshot does not belong beside a clip that succeeded
+                return entry
             except SecretLeak:
                 raise
             except CaptureError as e:
@@ -849,33 +914,69 @@ class Recorder:
     def mask_name(m):
         return m.get("name") or next((f"{k}={m[k]}" for k in ("selector", "shot", "testid", "text_regex") if k in m), "?")
 
+    def _on_text(self, text):
+        """called by the page for every changed text, attribute and input value: the password in any of them marks the run as leaked"""
+        if password_leaked(text, (self.password,)):
+            self.leaked = True
+
+    def _on_response(self, resp):
+        self.pending.append(resp)
+
+    def drain(self):
+        """Fails the shot on a same-origin XHR/fetch/document response of 400 or more, or a GraphQL body that carries errors."""
+        pend, self.pending = self.pending, []
+        for r in pend:
+            try:
+                if not r.url.startswith(self.base):
+                    continue
+                kind = r.request.resource_type
+                path = urlsplit(r.url).path
+                if kind in ("xhr", "fetch", "document") and r.status >= 400:
+                    raise CaptureError(f"{r.request.method} {path} answered HTTP {r.status}")
+                if kind in ("xhr", "fetch") and "graphql" in path:
+                    body = r.json()
+                    for item in (body if isinstance(body, list) else [body]):
+                        if isinstance(item, dict) and item.get("errors"):
+                            first = item["errors"][0]
+                            msg = first.get("message", "") if isinstance(first, dict) else str(first)
+                            raise CaptureError(f"GraphQL {path} returned errors: {msg[:120]}")
+            except CaptureError:
+                raise
+            except Exception:  # noqa: BLE001 - a body that is gone (the page navigated) cannot be read; the status check above already ran
+                continue
+
     def attempt(self, shot, attempt):
         specs = shot.get("mask", []) or []
         reduce = shot.get("reduce_motion", self.doc.get("reduce_motion", True))
-        ctx = self.new_context(self.state, reduce=reduce)
-        seen = set()
-        ctx.expose_function("__dcMaskSeen", lambda i: seen.add(i))
-        spec = {"css": mask_css(specs), "selectors": mask_selectors(specs),
-                "regexes": [[i, m["text_regex"]] for i, m in enumerate(specs) if "text_regex" in m], "blur": 14}
-        ctx.add_init_script(MASK_JS.replace("__SPEC__", json.dumps(spec)))
-        page = ctx.new_page()
-        session = ctx.new_cdp_session(page)
-        td = tempfile.mkdtemp(prefix="vcclip-")
-        clip = Clip(session, td, self.fps)
+        self.leaked, self.pending = False, []
+        ctx = page = td = None
         failed_at = "start"
+        masking = bool(specs)
         try:
+            ctx = self.new_context(self.state, reduce=reduce)
+            seen = set()
+            ctx.expose_function("__dcMaskSeen", lambda i: seen.add(i))
+            ctx.expose_function("__dcLeak", self._on_text)
+            spec = {"css": mask_css(specs), "selectors": mask_selectors(specs),
+                    "regexes": [[i, m["text_regex"]] for i, m in enumerate(specs) if "text_regex" in m], "blur": 14}
+            ctx.add_init_script(MASK_JS.replace("__SPEC__", json.dumps(spec)))
+            page = ctx.new_page()
+            page.on("response", self._on_response)
+            session = ctx.new_cdp_session(page)
+            td = tempfile.mkdtemp(prefix="clip-", dir=self.frames_root)
+            clip = Clip(session, td, self.fps)
             self.pos = (960, 540)
             resp = page.goto(self.base + shot["start"])
             if resp is not None and resp.status >= 400:
                 raise CaptureError(f"{shot['start']} answered HTTP {resp.status}")
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(800)
-            self.guard(page, bool(specs))
+            self.guard(page, masking)
             clip.begin()
             for j, step in enumerate(shot["steps"]):
                 failed_at = f"step {j + 1} ({next(k for k in STEP_KINDS if k in step)})"
                 self.do_step(page, clip, step, shot)
-                self.guard(page, bool(specs))
+                self.guard(page, masking)
             failed_at = "end"
             missing = [i for i, m in enumerate(specs) if m.get("required", True) and i not in seen]
             if missing:
@@ -885,28 +986,31 @@ class Recorder:
                 need = shot["min_s"] + shot.get("trim", {}).get("head_s", 0) + shot.get("trim", {}).get("tail_s", 0)
                 while time.time() - clip.start < need:
                     page.wait_for_timeout(int(min(500, max(1, (need - (time.time() - clip.start)) * 1000))))
-                    self.guard(page, bool(specs))
-            self.guard(page, bool(specs))
+                    self.guard(page, masking)
+            self.guard(page, masking)
             start, end = clip.finish()
+            self.guard(page, masking)  # the last frame, and anything reported while the screencast stopped, is checked before anything is encoded
             if shot.get("max_s") and end - start > shot["max_s"]:
                 raise CaptureError(f"the shot took {end - start:.1f}s, over its max_s of {shot['max_s']}")
             win = trim_window(start, end, shot.get("trim", {}), shot.get("min_s"))
             encode_atomic(clip.frames, win[0], win[1], os.path.join(self.out, shot["id"] + ".mp4"), self.fps)
             return shot_entry(shot, start, end, clip.marks, shot.get("trim", {}), self.fps, attempt, win)
         except Exception as e:
-            if not (isinstance(e, CaptureError) and e.unsafe):
-                self.fail_shot(page, shot, failed_at)
-            else:
+            if page is not None and not (isinstance(e, CaptureError) and e.unsafe):
+                self.fail_shot(page, shot, failed_at, masking)  # runs the guard first; raises SecretLeak instead of photographing a leak
+            elif page is not None:
                 self._say("  no failure screenshot: this failure is about what the page shows")
             if isinstance(e, CaptureError):
                 raise type(e)(f"{failed_at}: {e}") if isinstance(e, SecretLeak) else CaptureError(f"{failed_at}: {e}", e.exit_code, e.unsafe)
             raise
         finally:
-            shutil.rmtree(td, ignore_errors=True)
-            try:
-                ctx.close()
-            except Exception:  # noqa: BLE001
-                pass
+            if td:
+                shutil.rmtree(td, ignore_errors=True)
+            if ctx is not None:
+                try:
+                    ctx.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     PROBE = """(masking) => {
       const texts = [document.body ? document.body.innerText : ''];
@@ -920,8 +1024,11 @@ class Recorder:
     def guard(self, page, masking=False):
         """Ends the shot when the page is unsafe to record: the sign-in password in any frame's text or form values (SecretLeak, exit 3), the
         mask stylesheet gone from a document that should have it, the sign-in page, or an unreadable page (fail closed, after one retry)."""
+        if self.leaked:
+            raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
         if "/login" in page.url:
             raise CaptureError("the console sent the shot to the sign-in (the session was not accepted)", unsafe=True)
+        self.drain()
         for attempt in (1, 2):
             try:
                 probes = [f.evaluate(self.PROBE, masking) for f in page.frames]
@@ -933,10 +1040,21 @@ class Recorder:
         for k, pr in enumerate(probes):
             if password_leaked(pr["text"] + "\n" + pr["title"], (self.password,)):
                 raise SecretLeak("the sign-in password is visible in a recorded page; no clip is kept")
+        if self.leaked:
+            raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
             if k == 0 and not pr["masked"]:  # the main document carries the init script; a child frame may be another origin
                 raise CaptureError("the mask stylesheet is missing from a recorded page, so it is not safe to keep", unsafe=True)
 
-    def fail_shot(self, page, shot, where):
+    def fail_shot(self, page, shot, where, masking=False):
+        """A screenshot of the failed page, taken only when the page passes the guard: a SecretLeak propagates, and any other guard failure
+        (or an unreadable page) means no screenshot."""
+        try:
+            self.guard(page, masking)
+        except SecretLeak:
+            raise
+        except Exception:  # noqa: BLE001
+            self._say("  no failure screenshot: the page could not be shown to be safe")
+            return
         d = os.path.join(self.out, "failures")
         path = os.path.join(d, shot["id"] + ".png")
         try:
@@ -961,7 +1079,10 @@ class Recorder:
 
 
 def load_shotlist(path):
-    import yaml
+    try:
+        import yaml
+    except ImportError:
+        raise CaptureError("PyYAML is not installed (hack/video-capture/setup.sh installs it)", EXIT_BAD_SETUP)
 
     try:
         with open(path, encoding="utf-8") as f:
@@ -988,7 +1109,7 @@ def select(doc, only):
 def posix_drive_path(p):
     """True for '/c/Users/...' on Windows: Git Bash hands such a path to a native Python verbatim (MSYS_NO_PATHCONV), where it means C:/c/Users,
     a stray tree on the drive. Refused rather than recorded into."""
-    return os.name == "nt" and re.match(r"^/[A-Za-z]/", p.replace("\\", "/")) is not None
+    return os.name == "nt" and re.match(r"^/([A-Za-z](/|$)|cygdrive/)", p.replace("\\", "/")) is not None
 
 
 def record(args):
