@@ -19,6 +19,8 @@ import sys
 import tempfile
 
 SCHEMA = 1
+# Fewer table updates than this in the window make a HOT ratio meaningless.
+HOT_MIN_UPDATES = 1000
 # A relative band is meaningless for a metric that is ~0 in every arm.
 TINY = 1e-9
 # Components using less CPU than this are background, not per-event cost: not reported as metrics.
@@ -44,7 +46,9 @@ INCLUDE_FAILED = False
 # Diagnostics, shown but never flagged: JetStream API calls (mostly timed health and info calls, so per event they
 # follow the rate, not the work), counts of rare events (full-page images follow checkpoints),
 # the rate itself, and the loss counters (the harness verdict covers those).
-INFO_ONLY = ("nats.js_api_calls", "db.tsdb.wal_fpi_bytes", "db.rdb.wal_fpi_bytes", "db.tsdb.wal_fpi", "db.rdb.wal_fpi", "db.tsdb.wal_bytes_per_event_with_ckpt", "db.rdb.wal_bytes_per_event_with_ckpt", "loss.", "rate.", "db.tsdb.txns_per_s", "db.rdb.txns_per_s")
+INFO_ONLY = ("nats.js_api_calls", "db.tsdb.wal_fpi_bytes", "db.rdb.wal_fpi_bytes", "db.tsdb.wal_fpi", "db.rdb.wal_fpi", "db.tsdb.wal_bytes_per_event_with_ckpt", "db.rdb.wal_bytes_per_event_with_ckpt", "loss.", "rate.", "db.tsdb.txns_per_s", "db.rdb.txns_per_s",
+             "db.tsdb.dead_tuples", "db.rdb.dead_tuples", "db.tsdb.autovacuum_runs", "db.rdb.autovacuum_runs",
+             "db.tsdb.autoanalyze_runs", "db.rdb.autoanalyze_runs", "db.tsdb.checkpoints_", "db.rdb.checkpoints_")
 
 
 def t_quantile(conf, n):
@@ -82,6 +86,15 @@ def read_snap(d):
         if os.path.exists(p):
             with open(p, encoding="utf-8") as f:
                 s["db"][name] = json.loads(f.read().strip())
+    s["tables"], s["instances"] = {}, None
+    for name in ("tsdb", "rdb"):
+        p = os.path.join(d, "tables-%s.json" % name)
+        if os.path.exists(p) and os.path.getsize(p) > 2:
+            with open(p, encoding="utf-8") as f:
+                s["tables"][name] = json.loads(f.read().strip())
+    p = os.path.join(d, "db-instances.json")
+    if os.path.exists(p) and os.path.getsize(p) > 2:
+        s["instances"] = load(p)
     label = re.compile(r'(\w+)="([^"]*)"')
     for f in glob.glob(os.path.join(d, "cadvisor-*.prom")):
         with open(f, encoding="utf-8") as fh:
@@ -220,6 +233,105 @@ def stall_episodes(path, w0, w1, gap=30):
     return eps
 
 
+def checkpoint_cause(timed, requested):
+    """Why the checkpoints in the window ran. 'requested' is max_wal_size being reached (or an explicit
+    CHECKPOINT); 'timed' is checkpoint_timeout. They have opposite fixes, so they are never summed."""
+    if timed <= 0 and requested <= 0:
+        return "none"
+    if requested <= 0:
+        return "timed (checkpoint_timeout)"
+    if timed <= 0:
+        return "requested (max_wal_size reached, or an explicit CHECKPOINT)"
+    return "timed and requested"
+
+
+def table_metrics(name, a, b, events, m, info, warnings):
+    """Per-table write and vacuum behaviour from pg_stat_user_tables snapshots ({database: [rows]}):
+    the HOT-update ratio (n_tup_hot_upd / n_tup_upd: a non-HOT update writes every index of the table),
+    dead tuples (a gauge at the end of the window), and autovacuum / autoanalyze runs in the window."""
+    if a is None or b is None:
+        warnings.append("%s: no table statistics were collected, so the HOT ratio, dead tuples and autovacuum runs are missing" % name)
+        return
+
+    def flat(doc):
+        return {(db, r["t"]): r for db, rows in doc.items() for r in rows}
+    A, B = flat(a), flat(b)
+    rows = []
+    for key, r in B.items():
+        o = A.get(key, {})
+        d = {f: num(r.get(f)) - num(o.get(f)) for f in ("i", "u", "h", "d", "av", "aa", "vc")}
+        if any(v < 0 for v in d.values()):
+            warnings.append("%s: table statistics went backwards for %s (a crash or a stats reset); table metrics are invalid" % (name, key[1]))
+            return
+        d.update(t=key[1], db=key[0], dead=num(r.get("dead")), live=num(r.get("live")))
+        rows.append(d)
+    if not rows:
+        warnings.append("%s: the table statistics are empty" % name)
+        return
+    multi = len({r["db"] for r in rows}) > 1
+    for r in rows:
+        r["name"] = ("%s:%s" % (r["db"], r["t"])) if multi else r["t"]
+    upd, hot = sum(r["u"] for r in rows), sum(r["h"] for r in rows)
+    m["db.%s.tuple_updates_per_event" % name] = upd / events
+    # A ratio over a handful of updates says nothing; below this it is reported as absent.
+    if upd >= HOT_MIN_UPDATES:
+        m["db.%s.hot_ratio" % name] = hot / upd
+    for r in rows:
+        if r["u"] >= HOT_MIN_UPDATES:
+            m["db.%s.hot_ratio.%s" % (name, r["name"])] = r["h"] / r["u"]
+    m["db.%s.dead_tuples" % name] = sum(r["dead"] for r in rows)
+    for r in sorted(rows, key=lambda x: -x["dead"])[:8]:
+        if r["dead"] > 0:
+            m["db.%s.dead_tuples.%s" % (name, r["name"])] = r["dead"]
+    m["db.%s.autovacuum_runs" % name] = sum(r["av"] for r in rows)
+    m["db.%s.autoanalyze_runs" % name] = sum(r["aa"] for r in rows)
+    top = sorted(rows, key=lambda x: -(x["u"] + x["i"]))[:8]
+    info.setdefault("tables", {})[name] = [
+        {"table": r["name"], "inserts": int(r["i"]), "updates": int(r["u"]), "hot_updates": int(r["h"]),
+         "hot_ratio": round(r["h"] / r["u"], 4) if r["u"] else None, "dead_tuples": int(r["dead"]), "live_tuples": int(r["live"]),
+         "autovacuum_runs": int(r["av"]), "autoanalyze_runs": int(r["aa"])} for r in top]
+
+
+def instance_cpu(pre, post, window, events, m, info, warnings):
+    """DB CPU per INSTANCE: the postgres container of each CNPG pod, labelled by role (primary or
+    standby) from the cluster labels read at both ends of the window. The component rows
+    (cpu.dc-tsdb...) fold the primary and the standby into one number, which hides the standby replay
+    cost and the primary alone; these rows keep them apart."""
+    if not post.get("instances") or not pre.get("instances"):
+        warnings.append("no db-instances snapshot: the DB CPU could not be split into primary and standby")
+        return
+    role_of = lambda inst: "primary" if inst.get("role") == "primary" else "standby"
+    pre_by = {i["n"]: i for i in pre["instances"]}
+    post_by = {i["n"]: i for i in post["instances"]}
+    totals, cores, moved = {}, {}, set()
+    for pod, i in post_by.items():
+        before = pre_by.get(pod)
+        if before is None or role_of(before) != role_of(i):
+            moved.add(i["store"])
+            warnings.append("%s changed role (or appeared) inside the window: a failover or switchover. The per-instance CPU rows for %s are invalid" % (pod, i["store"]))
+    for key, v1 in post["cpu"].items():
+        name, nsp, pod, ctr = key
+        if name != "container_cpu_usage_seconds_total" or ctr != "postgres" or pod not in post_by:
+            continue
+        d1 = v1 - pre["cpu"].get(key, 0.0)
+        i = post_by[pod]
+        if d1 < 0:
+            warnings.append("cAdvisor counter went backwards for %s/%s (container restarted?)" % (pod, ctr))
+            moved.add(i["store"])
+            continue
+        totals[(i["store"], role_of(i))] = totals.get((i["store"], role_of(i)), 0.0) + d1
+        cores.setdefault(i["store"], {})["%s (%s)" % (pod, role_of(i))] = round(d1 / window, 3)
+    for store in sorted({i["store"] for i in post_by.values()}):
+        if store in moved:
+            continue
+        for role in ("primary", "standby"):
+            if (store, role) in totals:
+                m["cpu.dbinst.%s.%s.s_per_1k_events" % (store, role)] = totals[(store, role)] / (events / 1000.0)
+            elif any(role_of(i) == role and i["store"] == store for i in post_by.values()):
+                warnings.append("no CPU counters for the %s %s instance" % (store, role))
+        info.setdefault("db_instance_cores", {})[store] = cores.get(store, {})
+
+
 def summarize(d):
     meta = load(os.path.join(d, "meta.json"))
     raw = os.path.join(d, "raw")
@@ -333,11 +445,17 @@ def summarize(d):
         m["db.%s.wal_bytes_per_event" % name] = dw / events
         m["db.%s.wal_fpi_per_event" % name] = (num((b.get("wal") or {}).get("wal_fpi")) - num((a.get("wal") or {}).get("wal_fpi"))) / events
         cks = num(b.get("ckpt")) - num(a.get("ckpt"))
+        ct, cr = num(b.get("ckptTimed")) - num(a.get("ckptTimed")), num(b.get("ckptReq")) - num(a.get("ckptReq"))
+        if "ckptTimed" in b and "ckptReq" in b:
+            m["db.%s.checkpoints_timed" % name], m["db.%s.checkpoints_requested" % name] = ct, cr
+            info.setdefault("checkpoint_cause", {})[name] = checkpoint_cause(ct, cr)
+        else:
+            warnings.append("%s: the snapshot carries no timed/requested checkpoint split; the cause of a checkpoint is unknown" % name)
         if cks > 0:
             # Every page touched after a checkpoint writes a full-page image, so the byte count of a window
             # that holds one is not comparable. It is kept under another name, which is never compared.
             m["db.%s.wal_bytes_per_event_with_ckpt" % name] = m.pop("db.%s.wal_bytes_per_event" % name)
-            warnings.append("%s: %d checkpoint(s) inside the window; WAL bytes per event are reported as wal_bytes_per_event_with_ckpt and not compared; wal_bytes_excl_fpi_per_event (exact, from pg_walinspect) and records per event still are" % (name, cks))
+            warnings.append("%s: %d checkpoint(s) inside the window (cause: %s); WAL bytes per event are reported as wal_bytes_per_event_with_ckpt and not compared; wal_bytes_excl_fpi_per_event (exact, from pg_walinspect) and records per event still are" % (name, cks, info.get("checkpoint_cause", {}).get(name, "unknown")))
         ws_path = os.path.join(raw, "post", "walstats-%s.json" % name)
         if os.path.exists(ws_path):
             with open(ws_path, encoding="utf-8") as f:
@@ -347,6 +465,7 @@ def summarize(d):
             m["db.%s.wal_fpi_bytes_per_event" % name] = num(ws.get("fpiBytes")) / events
         wr = num((b.get("wal") or {}).get("wal_records")) - num((a.get("wal") or {}).get("wal_records"))
         m["db.%s.wal_records_per_event" % name] = wr / events
+        table_metrics(name, pre["tables"].get(name), post["tables"].get(name), events, m, info, warnings)
         if sd[name] is not None:
             calls = sum(g["calls"] for q, g in sd[name].items() if not BACKGROUND.search(q) and q.lower() not in TXN_CONTROL)
             m["db.%s.stmts_per_s" % name] = calls / window
@@ -396,6 +515,7 @@ def summarize(d):
         total_cpu += v
     m["cpu.total.s_per_1k_events"] = total_cpu / (events / 1000.0)
     info["cpu_cores"] = {c: round(v / window, 3) for c, v in sorted(comp.items(), key=lambda kv: -kv[1]) if v / window >= MIN_CORES}
+    instance_cpu(pre, post, window, events, m, info, warnings)
     info["throttled_s_per_s"] = {c: round(v / window, 4) for c, v in thr.items() if v / window >= 0.02}
     if info["throttled_s_per_s"]:
         warnings.append("CFS throttling in the window (%s): the arm may be CPU-bound, so a count may be inflated by backlog" %
@@ -777,12 +897,28 @@ def self_test():
             for name in ("tsdb", "rdb"):
                 with open(os.path.join(d, "db-%s.json" % name), "w") as f:
                     json.dump({"t": 1000 + 100 * scale, "lsn": 5000 + 3200 * 2000 * scale, "inRecovery": False, "wal": {"wal_records": 10 + 6400 * scale},
+                               "ckptTimed": 5 + scale, "ckptReq": 1 + 2 * scale,
                                "reset": "r", "dealloc": 0, "stmts": stmts if name == "tsdb" else []}, f)
             with open(os.path.join(d, "cadvisor-n1.prom"), "w") as f:
                 f.write('container_cpu_usage_seconds_total{container="svc",namespace="dci",pod="device-state-abc12345-xyz12"} %d 1\n' % (10 + 32 * scale))
                 f.write('container_cpu_usage_seconds_total{container="svc",namespace="dci",pod="perf-ab-loadgen"} %d 1\n' % (10 + 99 * scale))
             with open(os.path.join(d, "pods.json"), "w") as f:
                 json.dump([], f)
+            with open(os.path.join(d, "tables-tsdb.json"), "w") as f:
+                json.dump({"app": [{"t": "event-management/events", "i": 3200 * scale, "u": 0, "h": 0, "d": 0, "live": 3200 * scale, "dead": 0, "av": 0, "aa": scale, "vc": 0}]}, f)
+            with open(os.path.join(d, "tables-rdb.json"), "w") as f:
+                json.dump({"app": [{"t": "device-state/device_states", "i": 100 * scale, "u": 4000 * scale, "h": 3000 * scale, "d": 0, "live": 1000, "dead": 120 * scale, "av": 2 * scale, "aa": scale, "vc": 0},
+                                   {"t": "device-management/devices", "i": 0, "u": 10 * scale, "h": 0, "d": 0, "live": 50, "dead": 0, "av": 0, "aa": 0, "vc": 0}]}, f)
+            with open(os.path.join(d, "db-instances.json"), "w") as f:
+                json.dump([{"n": "dc-tsdb-1", "ns": "dci", "cluster": "dc-tsdb", "store": "tsdb", "role": "primary"},
+                           {"n": "dc-tsdb-2", "ns": "dci", "cluster": "dc-tsdb", "store": "tsdb", "role": "replica"},
+                           {"n": "dc-rdb-1", "ns": "dc-system", "cluster": "dc-rdb", "store": "rdb", "role": "primary"},
+                           {"n": "dc-rdb-2", "ns": "dc-system", "cluster": "dc-rdb", "store": "rdb", "role": "replica"}], f)
+            with open(os.path.join(d, "cadvisor-n2.prom"), "w") as f:
+                for pod, cpu in (("dc-tsdb-1", 64), ("dc-tsdb-2", 16), ("dc-rdb-1", 8), ("dc-rdb-2", 4)):
+                    ns_ = "dc-system" if "rdb" in pod else "dci"
+                    f.write('container_cpu_usage_seconds_total{container="postgres",namespace="%s",pod="%s"} %d 1\n' % (ns_, pod, 10 + cpu * scale))
+                    f.write('container_cpu_usage_seconds_total{container="plugin-barman-cloud",namespace="%s",pod="%s"} %d 1\n' % (ns_, pod, 5 + 40 * scale))
         with open(os.path.join(arm, "meta.json"), "w") as f:
             json.dump({"arm": "t", "offered": 32, "offeredMqtt": 32, "offeredHttp": 0}, f)
         with open(os.path.join(arm, "raw", "report-mqtt.json"), "w") as f:
@@ -797,7 +933,14 @@ def self_test():
         want = {"nats.total_msgs_per_event": (2 * 2 * 10000) / 3200.0, "nats.client_in_msgs_per_event": 2 * 2000 / 3200.0,
                 "nats.nonclient_out_msgs_per_event": (2 * 10000 - 2 * 3000) / 3200.0, "nats.route_in_msgs_per_event": 2 * 4000 / 3200.0,
                 "db.tsdb.wal_bytes_per_event": 2000.0, "stmt.events_insert.rows_per_call": 32.0, "stmt.device_states_upsert.rows_per_call": 32.0,
-                "cpu.device-state.s_per_1k_events": 32 / 3.2, "rate.achieved_eps": 32.0, "nats.js_api_calls_per_event": 2 * 100 / 3200.0}
+                "cpu.device-state.s_per_1k_events": 32 / 3.2, "rate.achieved_eps": 32.0, "nats.js_api_calls_per_event": 2 * 100 / 3200.0,
+                # the S0 additions: checkpoint cause, HOT ratio, dead tuples, autovacuum, DB CPU by role (postgres container only)
+                "db.tsdb.checkpoints_timed": 1.0, "db.tsdb.checkpoints_requested": 2.0,
+                "db.rdb.hot_ratio": 3000 / 4010.0, "db.rdb.hot_ratio.device-state/device_states": 0.75, "db.rdb.dead_tuples": 120.0,
+                "db.rdb.dead_tuples.device-state/device_states": 120.0, "db.rdb.autovacuum_runs": 2.0, "db.rdb.autoanalyze_runs": 1.0,
+                "db.rdb.tuple_updates_per_event": 4010 / 3200.0, "db.tsdb.autoanalyze_runs": 1.0,
+                "cpu.dbinst.tsdb.primary.s_per_1k_events": 64 / 3.2, "cpu.dbinst.tsdb.standby.s_per_1k_events": 16 / 3.2,
+                "cpu.dbinst.rdb.primary.s_per_1k_events": 8 / 3.2, "cpu.dbinst.rdb.standby.s_per_1k_events": 4 / 3.2}
         for k, w in want.items():
             if abs(s.get(k, -1) - w) > 1e-6:
                 sys.stderr.write("self-test: %s = %r, want %r\n" % (k, s.get(k), w))
@@ -805,6 +948,77 @@ def self_test():
         if "cpu.perf-ab-loadgen.s_per_1k_events" in s:
             sys.stderr.write("self-test: the loadgen pod's CPU was counted\n")
             rc = 1
+        summ = load(os.path.join(arm, "summary.json"))
+        # a HOT ratio over a handful of updates is absent, not a number (devices: 10 updates)
+        if "db.rdb.hot_ratio.device-management/devices" in s or "db.tsdb.hot_ratio" in s:
+            sys.stderr.write("self-test: a HOT ratio was reported over fewer than %d updates\n" % HOT_MIN_UPDATES)
+            rc = 1
+        if summ["info"].get("checkpoint_cause", {}).get("tsdb") != "timed and requested":
+            sys.stderr.write("self-test: checkpoint cause = %r\n" % summ["info"].get("checkpoint_cause"))
+            rc = 1
+        # the sidecar's CPU is not the database's: only the postgres container is a DB instance
+        if abs(sum(v for k, v in s.items() if k.startswith("cpu.dbinst.tsdb.")) - (64 + 16) / 3.2) > 1e-6:
+            sys.stderr.write("self-test: a sidecar container was counted as database CPU\n")
+            rc = 1
+        # NEGATIVE CONTROLS for the instance split and the table counters, each run on a copy of the
+        # raw tree and judged by what it must REFUSE to say.
+        raw_ = os.path.join(arm, "raw")
+        inst_p = os.path.join(raw_, "post", "db-instances.json")
+        keep_inst = open(inst_p).read()
+        swapped = json.loads(keep_inst)
+        swapped[0]["role"], swapped[1]["role"] = "replica", "primary"
+        with open(inst_p, "w") as f:
+            json.dump(swapped, f)
+        stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+        try:
+            summarize(arm)
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
+        j2 = load(os.path.join(arm, "summary.json"))
+        if any(k.startswith("cpu.dbinst.tsdb.") for k in j2["metrics"]) or not any("changed role" in w for w in j2["warnings"]):
+            sys.stderr.write("self-test: a role change inside the window still produced per-instance CPU rows\n")
+            rc = 1
+        if not any(k.startswith("cpu.dbinst.rdb.") for k in j2["metrics"]):
+            sys.stderr.write("self-test: a failover of one store invalidated the other store's rows\n")
+            rc = 1
+        with open(inst_p, "w") as f:
+            f.write(keep_inst)
+        tab_p = os.path.join(raw_, "post", "tables-rdb.json")
+        keep_tab = open(tab_p).read()
+        broken = json.loads(keep_tab)
+        broken["app"][0]["h"] = -1  # below the earlier snapshot: the counter went backwards (a stats reset)
+        with open(tab_p, "w") as f:
+            json.dump(broken, f)
+        stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+        try:
+            summarize(arm)
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
+        j2 = load(os.path.join(arm, "summary.json"))
+        if "db.rdb.hot_ratio" in j2["metrics"] or not any("went backwards" in w for w in j2["warnings"]):
+            sys.stderr.write("self-test: a stats reset still produced a HOT ratio\n")
+            rc = 1
+        os.remove(tab_p)
+        stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+        try:
+            summarize(arm)
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
+        j2 = load(os.path.join(arm, "summary.json"))
+        if "db.rdb.hot_ratio" in j2["metrics"] or not any("no table statistics" in w for w in j2["warnings"]):
+            sys.stderr.write("self-test: missing table statistics were not reported as missing\n")
+            rc = 1
+        with open(tab_p, "w") as f:
+            f.write(keep_tab)
+        stdout, sys.stdout = sys.stdout, open(os.devnull, "w")
+        try:
+            summarize(arm)
+        finally:
+            sys.stdout.close()
+            sys.stdout = stdout
         # a failed verdict: classified as a counted shed, or as an unexplained loss; and stalls placed against the window
         raw0 = os.path.join(arm, "raw")
         for when, val in (("shed-start", 100), ("shed-end", 2100)):

@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -108,6 +109,10 @@ func run() int {
 		"with --steady-marker, how far into the drive the steady state begins (must be shorter than the drive)")
 	steadyPhase := flag.String("steady-phase", envOr("DC_LOADTEST_STEADY_PHASE", ""),
 		"with --steady-marker, the phase label the marker carries (for example R1); the collector checks it")
+	aggregateLedger := flag.String("aggregate-ledger", envOr("DC_LOADTEST_AGGREGATE_LEDGER", ""),
+		"write the run's expected per-device aggregates (count and hash sum) to this path, for the aggregate identity oracle (dc-loadtest-aggoracle) to check against the event store")
+	startAtFlag := flag.String("start-at", envOr("DC_LOADTEST_START_AT", ""),
+		"hold the drive until this RFC3339 instant, after provisioning, so N harnesses on N pods start their steady windows together (dc-loadtest-multi merge checks the alignment)")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -137,7 +142,13 @@ func run() int {
 	if *steadyMarker != "" {
 		steady = &loadtest.SteadyMarker{Path: *steadyMarker, Phase: *steadyPhase, Warmup: *steadyWarmup}
 	}
+	startAt, err := parseStartAt(*startAtFlag)
+	if err != nil {
+		log.Error().Err(err).Msg("--start-at")
+		return loadtest.ExitError
+	}
 	profile := loadtest.MQTTProfile{
+		AggregateLedger: *aggregateLedger, StartAt: startAt,
 		Steady:   steady,
 		Manifest: manifestId, Seed: hs.Seed, Devices: *devices,
 		Rate: *rate, Duration: *duration, MetricKey: *metric, PadBytes: *padBytes,
@@ -255,4 +266,16 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 		log.Fatal().Str(key, v).Msg("not a duration (want e.g. 200ms, 5s, 60m)")
 	}
 	return d
+}
+
+// parseStartAt reads --start-at: empty means start at once.
+func parseStartAt(v string) (time.Time, error) {
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%q is not an RFC3339 instant (for example 2026-11-05T14:00:00Z): %w", v, err)
+	}
+	return t, nil
 }

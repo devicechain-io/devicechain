@@ -117,6 +117,12 @@ type MQTTProfile struct {
 	QuiescePoll    time.Duration
 	QuiesceTimeout time.Duration
 	QuiesceSettle  time.Duration
+
+	// AggregateLedger, when set, is where the run writes its expected per-device aggregates for
+	// the aggregate identity oracle (see AggregateLedger). StartAt holds the publish window until
+	// that instant, once the fleet is connected, so N harnesses start together.
+	AggregateLedger string
+	StartAt         time.Time
 }
 
 func (p MQTTProfile) withDefaults() MQTTProfile {
@@ -589,6 +595,15 @@ func (r mqttRun) driveAndReconcile(ctx context.Context) (*MQTTReport, error) {
 	if p.MQTT.QoS == 0 {
 		promised = snap.Written
 	}
+	if p.AggregateLedger != "" {
+		// The ledger holds Accepted for PUBACKs and Ambiguous for everything else, so it is
+		// compared with the driver's counters in the same terms as the identity read-back below.
+		drive := sim.Snapshot{Emitted: snap.Acked, Failed: snap.Unconfirmed + snap.Written}
+		led := NewAggregateLedger(r.Tenant, p.Manifest, r.Seed, w, r.Ledger.Snapshot(), drive, false)
+		if err := led.WriteFile(p.AggregateLedger); err != nil {
+			return nil, fmt.Errorf("write the aggregate ledger: %w", err)
+		}
+	}
 	oracle := &Oracle{Counter: r.Counter, Poll: p.QuiescePoll, Timeout: p.QuiesceTimeout, Settle: p.QuiesceSettle}
 	qr, err := oracle.Await(ctx, w, promised)
 	if err != nil {
@@ -722,6 +737,9 @@ func RunMQTT(ctx context.Context, hs *sim.Handshake, p MQTTProfile) (*MQTTReport
 		return nil, fmt.Errorf("connect the fleet: %w (%d connected)", err, n)
 	}
 
+	if err := awaitStart(ctx, p.StartAt); err != nil {
+		return nil, fmt.Errorf("waiting for the start instant: %w", err)
+	}
 	run := mqttRun{
 		Tenant: hs.Tenant, Profile: p, Seed: hs.Seed, Fleet: fleet,
 		Devices: deviceTokens(rt.Devices), Ledger: led,
