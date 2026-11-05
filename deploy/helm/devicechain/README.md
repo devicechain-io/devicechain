@@ -681,6 +681,7 @@ generated from the schema; do not edit it by hand.
 | `mqttExposure` | object | - | Exposure of the platform MQTT broker to devices outside the cluster. Off by default. Plaintext MQTT is never exposed: the broker terminates TLS itself, and both modes carry it through untouched on port 8883. |
 | `mqttExposure.mode` | string | `"none"` | none exposes nothing. gateway renders a TLSRoute in Passthrough mode on the instance Gateway's 8883 listener, routed by the SNI name in host. loadbalancer renders a Service of type LoadBalancer for 8883 to the broker pods. |
 | `mqttExposure.host` | string | `""` | The DNS name devices dial; the Gateway routes by it and the broker's certificate must carry it. Required unless mode is none. |
+| `mqttExposure.brokerTLSConfirmed` | boolean | `false` | States that the broker terminates TLS. Required to expose MQTT when instance.existingSecret is set, because the chart then cannot read the broker's TLS setting; without it the chart refuses. dcctl sets it from the broker's own infrastructure outputs. Ignored without existingSecret, where instance.config.infrastructure.nats.tls.enabled decides. |
 | `mqttExposure.loadBalancer` | object | - | Settings for loadbalancer mode. |
 | `mqttExposure.loadBalancer.annotations` | object | `{}` | Annotations on the LoadBalancer Service (cloud-specific, for example an internal balancer). |
 | `mqttExposure.loadBalancer.sourceRanges` | array | `[]` | CIDRs allowed to reach the balancer. Empty allows any source. |

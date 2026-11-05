@@ -4,14 +4,17 @@
 package bootstrap
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-exec/tfexec"
 	"helm.sh/helm/v3/pkg/action"
 	"sigs.k8s.io/yaml"
 
@@ -346,15 +349,18 @@ func TestChartRendersTheLoadBalancerMode(t *testing.T) {
 	}
 }
 
-// TestChartRendersMQTTExposureUnderExistingSecret is the path dcctl actually takes: it composes the
-// instance config into a Secret of its own and hands the chart instance.existingSecret, so the chart
-// sees no config of its own beyond its defaults, which name no broker TLS. The gate must not read
-// that absence as "TLS off": it did, and refused every exposure dcctl asked for.
-func TestChartRendersMQTTExposureUnderExistingSecret(t *testing.T) {
-	t.Parallel()
+// renderUnderExistingSecret renders the chart the way dcctl installs it: the instance config is
+// in a Secret of dcctl's, so the chart sees only its own defaults, and the one statement about the
+// broker's TLS is mqttExposure.brokerTLSConfirmed (absent when confirmed is nil).
+func renderUnderExistingSecret(t *testing.T, mode string, confirmed *bool) error {
+	t.Helper()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatal(err)
+	}
+	mqtt := map[string]interface{}{"mode": mode, "host": "mqtt.example.com"}
+	if confirmed != nil {
+		mqtt["brokerTLSConfirmed"] = *confirmed
 	}
 	vals := map[string]interface{}{
 		"instance": map[string]interface{}{
@@ -363,7 +369,7 @@ func TestChartRendersMQTTExposureUnderExistingSecret(t *testing.T) {
 			"existingSecretChecksum": strings.Repeat("a", 64),
 		},
 		"ingress":      map[string]interface{}{"enabled": true, "controller": "gateway", "host": "dc.example.com"},
-		"mqttExposure": map[string]interface{}{"mode": "loadbalancer", "host": "mqtt.example.com"},
+		"mqttExposure": mqtt,
 		"metrics":      map[string]interface{}{"natsBrokerHost": "dc-nats"},
 	}
 	inst := action.NewInstall(&action.Configuration{})
@@ -372,13 +378,70 @@ func TestChartRendersMQTTExposureUnderExistingSecret(t *testing.T) {
 	inst.DryRun = true
 	inst.ClientOnly = true
 	inst.APIVersions = []string{"monitoring.coreos.com/v1"}
-	rel, err := inst.RunWithContext(t.Context(), ch, vals)
-	if err != nil {
-		t.Fatalf("an exposure over dcctl's config Secret was refused: %v", err)
+	_, err = inst.RunWithContext(t.Context(), ch, vals)
+	return err
+}
+
+// Under instance.existingSecret the chart cannot read the broker's TLS setting, so an exposure
+// needs the tooling's word for it: absent or false is refused (a direct-Helm install with its own
+// Secret and a plaintext broker must not get a public listener), true renders. Both modes.
+func TestChartMQTTExposureUnderExistingSecretNeedsTheBrokerTLSAssertion(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	for _, mode := range []string{"gateway", "loadbalancer"} {
+		for name, c := range map[string]*bool{"absent": nil, "false": &no} {
+			err := renderUnderExistingSecret(t, mode, c)
+			if err == nil || !strings.Contains(err.Error(), "brokerTLSConfirmed") {
+				t.Errorf("%s with the assertion %s: err = %v, want a refusal naming brokerTLSConfirmed", mode, name, err)
+			}
+		}
+		if err := renderUnderExistingSecret(t, mode, &yes); err != nil {
+			t.Errorf("%s with the assertion true was refused: %v", mode, err)
+		}
 	}
-	if find(objectsOf(t, rel.Manifest), "Service", "dc-nats-mqtt-lb") == nil {
-		t.Error("no LoadBalancer Service rendered")
+}
+
+// dcctl's assertion is the OpenTofu output of this run: the output says TLS on => the chart is told
+// so; off or missing => the chart is told false AND the run refuses before the chart is rendered.
+func TestBrokerTLSAssertionComesFromTheTofuOutput(t *testing.T) {
+	t.Parallel()
+	out := func(v string) map[string]tfexec.OutputMeta {
+		return map[string]tfexec.OutputMeta{"nats_tls_enabled": {Value: json.RawMessage(v)}}
 	}
+	for name, c := range map[string]struct {
+		outputs   map[string]tfexec.OutputMeta
+		stale     bool
+		wantErr   bool
+		confirmed bool
+	}{
+		"on":                          {out("true"), false, false, true},
+		"off":                         {out("false"), false, true, false},
+		"missing":                     {map[string]tfexec.OutputMeta{}, false, true, false},
+		"off after a stale true read": {out("false"), true, true, false},
+	} {
+		st := &State{MQTTExposure: "loadbalancer", MQTTHost: "mqtt.example.com", Values: map[string]string{}}
+		if c.stale {
+			st.Values[brokerTLSObservedKey] = "true"
+		}
+		err := readInstanceInfraOutputs(t.Context(), st, fakeOutputs(c.outputs))
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: err = %v, wantErr %v", name, err, c.wantErr)
+		}
+		if got := mqttExposureValues(st)["brokerTLSConfirmed"]; got != c.confirmed {
+			t.Errorf("%s: brokerTLSConfirmed = %v, want %v", name, got, c.confirmed)
+		}
+	}
+	// With nothing exposed an off broker is not this feature's business.
+	st := &State{Values: map[string]string{}}
+	if err := readInstanceInfraOutputs(t.Context(), st, fakeOutputs(out("false"))); err != nil {
+		t.Errorf("no exposure, broker TLS off: %v", err)
+	}
+}
+
+type fakeOutputs map[string]tfexec.OutputMeta
+
+func (f fakeOutputs) Output(context.Context, ...tfexec.OutputOption) (map[string]tfexec.OutputMeta, error) {
+	return f, nil
 }
 
 func TestChartRefusesUnsafeMQTTExposure(t *testing.T) {
@@ -391,7 +454,7 @@ func TestChartRefusesUnsafeMQTTExposure(t *testing.T) {
 		gateway   bool
 		want      string
 	}{
-		{"broker TLS off", good, false, true, "TLS is off"},
+		{"broker TLS off", good, false, true, "TLS is not on"},
 		{"no host", map[string]interface{}{"mode": "gateway"}, true, true, "mqttExposure.host"},
 		{"bad host", map[string]interface{}{"mode": "loadbalancer", "host": "Bad_Host"}, true, false, "mqttExposure.host"},
 		{"gateway without the Gateway front end", good, true, false, "ingress.enabled"},

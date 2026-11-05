@@ -128,7 +128,31 @@ func mqttExposureValues(st *State) map[string]interface{} {
 	if st.MQTTExposure == "" || st.MQTTExposure == MQTTExposureNone {
 		return nil
 	}
-	return map[string]interface{}{"mode": st.MQTTExposure, "host": st.MQTTHost}
+	return map[string]interface{}{
+		"mode": st.MQTTExposure, "host": st.MQTTHost,
+		// What the broker's own infrastructure outputs said THIS run, never a remembered value:
+		// the chart cannot read the instance config dcctl keeps in a Secret, so it exposes MQTT only
+		// on this word. Owned by dcctl: the values overlay cannot reach mqttExposure at all.
+		"brokerTLSConfirmed": st.Values[brokerTLSObservedKey] == "true",
+	}
+}
+
+// brokerTLSObservedKey is the State value holding whether the broker terminates TLS, as the
+// OpenTofu outputs of this run reported it. Cleared before every read of the outputs so a value
+// from an earlier run, or from the deployed document, can never stand in for it.
+const brokerTLSObservedKey = "brokerTLSObserved"
+
+// requireBrokerTLSForMQTTExposure refuses an exposure over a broker that is not known to terminate
+// TLS. Plaintext MQTT is never exposed; "unknown" is treated as "off".
+func requireBrokerTLSForMQTTExposure(st *State) error {
+	if st.MQTTExposure == "" || st.MQTTExposure == MQTTExposureNone {
+		return nil
+	}
+	if st.Values[brokerTLSObservedKey] == "true" {
+		return nil
+	}
+	return fmt.Errorf("--mqtt-exposure %s needs the broker to terminate TLS, and this broker's TLS is off or could not be confirmed. "+
+		"Plaintext MQTT is never exposed outside the cluster; leave --mqtt-exposure none", st.MQTTExposure)
 }
 
 // mqttBrokerNames are the extra names the broker's certificate must carry: the host devices dial.

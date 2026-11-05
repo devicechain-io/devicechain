@@ -1331,6 +1331,12 @@ mqttExposure:
   mode: none
   # The DNS name devices dial and the broker's certificate carries. Required unless mode is none.
   host: ""
+  # Required (true) when instance.existingSecret is set, because the chart then cannot read the
+  # broker's TLS setting and refuses an exposure on the word of nothing. dcctl sets it from the
+  # broker's own infrastructure outputs on every run; set it by hand only if you compose the
+  # instance config yourself AND the broker terminates TLS. Ignored without existingSecret, where
+  # instance.config.infrastructure.nats.tls.enabled decides.
+  brokerTLSConfirmed: false
   # loadbalancer mode only.
   loadBalancer:
     # Cloud-specific annotations on the Service (for example an internal-only balancer).

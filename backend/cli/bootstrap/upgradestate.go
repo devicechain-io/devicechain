@@ -201,6 +201,17 @@ func hydrateUpgradeState(
 	if err := applyDeployedInfrastructure(st, deployed); err != nil {
 		return nil, fmt.Errorf("reading instance %q's broker credentials: %w", opts.Instance, err)
 	}
+	// An exposure over a broker that is not known to terminate TLS is refused here, while nothing
+	// has been written. The outputs of this run's infrastructure apply are the authority and are
+	// checked again when they are read; this is the early read of the same fact from the live
+	// document, and it is also the answer when --skip-infrastructure applies nothing to read.
+	delete(st.Values, brokerTLSObservedKey)
+	if deployed.Infrastructure.Nats.Tls.Enabled {
+		st.Values[brokerTLSObservedKey] = "true"
+	}
+	if err := requireBrokerTLSForMQTTExposure(st); err != nil {
+		return nil, fmt.Errorf("instance %q: %w. Nothing has been changed", opts.Instance, err)
+	}
 	if err := refuseNoSystemLogin(opts.Instance, st); err != nil {
 		return nil, err
 	}

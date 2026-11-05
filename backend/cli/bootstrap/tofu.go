@@ -316,6 +316,9 @@ func readInstanceInfraOutputs(ctx context.Context, st *State, tf infraOutputRead
 	// failure the two-flags-one-source design exists to prevent, and NATS'
 	// retry-forever masks it as a healthy-but-mute service. Fail the bootstrap
 	// loudly instead.
+	// Cleared first: what the chart is told about the broker's TLS for an exposure is what THIS
+	// apply reported, never a value left by an earlier read.
+	delete(st.Values, brokerTLSObservedKey)
 	if meta, ok := outputs["nats_tls_enabled"]; ok {
 		var enabled bool
 		if err := json.Unmarshal(meta.Value, &enabled); err != nil {
@@ -323,7 +326,11 @@ func readInstanceInfraOutputs(ctx context.Context, st *State, tf infraOutputRead
 		}
 		if enabled {
 			st.Values["natsTlsEnabled"] = "true"
+			st.Values[brokerTLSObservedKey] = "true"
 		}
+	}
+	if err := requireBrokerTLSForMQTTExposure(st); err != nil {
+		return err
 	}
 	if meta, ok := outputs["nats_ca"]; ok {
 		var ca string
