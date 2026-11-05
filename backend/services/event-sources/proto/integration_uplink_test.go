@@ -82,3 +82,14 @@ func TestAnIntegrationUplinkEventRefusesAForeignPayloadWithoutEchoingIt(t *testi
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "secret")
 }
+
+// What a consumer built before IntegrationUplink does with one is the same as what this build does
+// with a type number it does not know: the event does not unmarshal, so the consumer's "could not
+// be parsed" path takes it (a failed-events record, then an ack) BEFORE any resolver guard runs.
+// That is the rolling-upgrade contract of the carrier, pinned here so a slice that relies on an
+// older resolver refusing and redelivering reads this first.
+func TestAnEventOfATypeTheBuildDoesNotKnowFailsToUnmarshalBeforeAnyResolverSeesIt(t *testing.T) {
+	unknown := eventtype.EventType(99)
+	_, err := UnmarshalUnresolvedPayload(unknown, []byte{})
+	require.Error(t, err)
+}
