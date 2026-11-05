@@ -187,12 +187,24 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 	if len(req.Resources) > 1 {
 		return nil, errInvalidTarget("at most one resource may be requested")
 	}
+	rp := m.resourcePolicy()
 	var audience []string
+	// With no resource there is nothing to judge: class none, accepted.
+	rc := rp.check("", 0)
 	if len(req.Resources) == 1 {
 		if err := ValidateResource(req.Resources[0]); err != nil {
 			return nil, err
 		}
 		audience = []string{req.Resources[0]}
+		// The allowlist (rule 1). Enforce refuses here, before the account lookup, which keeps
+		// the refusal cheap; the syntax and multiplicity refusals above are shipped behaviour
+		// and stay unconditional. Observe falls through and is COUNTED below, after the secret
+		// check, so a sender that has not authenticated cannot move the counter or put a
+		// client_id of its choosing into the log.
+		rc = rp.check(req.Resources[0], 1)
+		if rc.Refused() {
+			return nil, errInvalidTarget(rc.Desc)
+		}
 	}
 	var allow []string
 	if scope := strings.TrimSpace(req.Scope); scope != "" {
@@ -218,6 +230,7 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 	if !m.saMints.Allow(acct.ClientId) {
 		return nil, errSlowDown(serviceAccountMintLimits.Every)
 	}
+	// The sender has authenticated: from here the request may be counted.
 
 	t, err := m.iam.TenantByToken(ctx, acct.TenantId)
 	switch {
@@ -256,6 +269,12 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 		log.Warn().Err(err).Msg("Could not record a service account secret's last use.")
 	}
 	m.saTrusted.mark(source, now)
+	// Counted once the token is really minted. Rule 3 is deprecated, not enforced: a resource
+	// with no scope is counted and warned about per client, and served as before in EVERY mode.
+	rp.record(GrantClientCredentials, acct.ClientId, acct.TenantId, rc)
+	if unscopedRequest(req.Resources, req.Scope) {
+		rp.recordUnscoped(acct.ClientId, acct.TenantId)
+	}
 	m.recordAuth(ctx, rdb.AuditOpServiceAccountToken, subject, acct.TenantId)
 	return &OAuthTokens{
 		AccessToken: access.Token,

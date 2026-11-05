@@ -38,6 +38,14 @@ type AuthorizeService interface {
 	// IdentitySubject validates the identity token carried across steps → the subject
 	// (email + session epoch) it names.
 	IdentitySubject(identityToken string) (IdentitySubject, error)
+	// ValidateAuthorize checks the request parameters against the resolved client, resource rule
+	// included (ValidateAuthorizeRequest over the instance's allowlist). The ResourceCheck is the
+	// resource outcome, zero when the request failed an earlier check.
+	ValidateAuthorize(client *iam.OAuthClient, p AuthorizeParams) (ResourceCheck, error)
+	// RecordAuthorizeResource counts the resource decision of an authorization request that came
+	// from a registered client to a registered redirect URI. The handler calls it on the ENTRY
+	// request only (see AuthorizeHandler), so a flow is counted once.
+	RecordAuthorizeResource(client *iam.OAuthClient, rc ResourceCheck)
 	// IssueAuthorizationCode mints the one-time code for the consenting user. It
 	// returns ErrInvalidToken when the subject's session has ended since the identity
 	// token was minted.
@@ -95,7 +103,16 @@ func AuthorizeHandler(svc AuthorizeService) http.Handler {
 
 		// 2. Validate the request parameters. Now that the redirect_uri is trusted,
 		// these errors are reported by redirecting back with an error code.
-		if verr := ValidateAuthorizeRequest(client, p); verr != nil {
+		rc, verr := svc.ValidateAuthorize(client, p)
+		// The resource decision is counted ONCE per flow, on the ENTRY request (no step): it is
+		// the only request that carries the client's raw parameters, so it is the only place a
+		// second `resource=` is still visible. Every later POST re-posts the one value the hidden
+		// field kept, and the SSO resume runs from a parked copy; counting there would count the
+		// same flow again, and a `multiple` as its single survivor.
+		if rc.Checked && values.Get("step") == "" {
+			svc.RecordAuthorizeResource(client, rc)
+		}
+		if verr != nil {
 			if re, ok := verr.(*authorizeRedirectError); ok {
 				redirectAuthorizeError(w, r, p.RedirectURI, re.Code, re.Desc, p.State)
 				return
@@ -184,6 +201,16 @@ func handleAuthorizeSsoReturn(w http.ResponseWriter, r *http.Request, svc Author
 	case errors.Is(err, ErrAuthorizeClientUnknown), errors.Is(err, ErrAuthorizeRedirectUnregistered):
 		renderAuthorizeError(w, http.StatusBadRequest, "Invalid request",
 			"The client or redirect URI is not recognized. Do not proceed.")
+	case isInvalidTarget(err) && res != nil:
+		// The resource is no longer served (the allowlist changed while the person was at their
+		// provider). The redirect URI was re-resolved against the client, so it is trusted: tell
+		// the client, as the authorization endpoint does, instead of a page the client never sees.
+		// Only this error is redirected. Any other validation failure here means the PARKED record
+		// no longer validates (it was tampered with, or the client's registration changed), which
+		// stays the page it always was.
+		var re *authorizeRedirectError
+		_ = errors.As(err, &re)
+		redirectAuthorizeError(w, r, res.Params.RedirectURI, re.Code, re.Desc, res.Params.State)
 	case errors.Is(err, ErrSsoCodeInvalid):
 		renderAuthorizeError(w, http.StatusBadRequest, "Sign-in expired",
 			"This sign-in link is not valid or has already been used. Start the authorization again.")
@@ -191,6 +218,11 @@ func handleAuthorizeSsoReturn(w http.ResponseWriter, r *http.Request, svc Author
 		renderAuthorizeError(w, http.StatusForbidden, "Sign-in failed",
 			"The sign-in could not be completed. Start the authorization again.")
 	}
+}
+
+func isInvalidTarget(err error) bool {
+	var re *authorizeRedirectError
+	return errors.As(err, &re) && re.Code == "invalid_target"
 }
 
 // ssoReturnMessage is the page text for the callback's coarse error classes.
@@ -306,6 +338,12 @@ func handleAuthorizeConsent(w http.ResponseWriter, r *http.Request, svc Authoriz
 		return
 	}
 	code, err := svc.IssueAuthorizationCode(r.Context(), client, p, subject, r.PostFormValue("tenant"))
+	var rerr *authorizeRedirectError
+	if errors.As(err, &rerr) {
+		// The mint-time re-assert refused the request (the resource): the client is told why.
+		redirectAuthorizeError(w, r, p.RedirectURI, rerr.Code, rerr.Desc, p.State)
+		return
+	}
 	if errors.Is(err, ErrInvalidToken) {
 		// The sign-in this consent rides has been ended since (a password reset,
 		// disable or delete). That is the user's session, not a decision about the
@@ -518,7 +556,7 @@ const hiddenParamsPartial = `
 <input type="hidden" name="state" value="{{.State}}">
 <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
 <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
-<input type="hidden" name="resource" value="{{.Resource}}">
+{{if .Resource}}<input type="hidden" name="resource" value="{{.Resource}}">{{end}}
 {{end}}`
 
 const pageStyle = `<style>

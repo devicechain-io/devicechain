@@ -65,7 +65,7 @@ func TestRefreshOAuthRejectsScopelessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueRefresh: %v", err)
 	}
-	_, err = m.RefreshOAuth(context.Background(), plain.Token, "", "")
+	_, err = m.RefreshOAuth(context.Background(), plain.Token, "", "", nil)
 	assertOAuthErrorCode(t, err, "invalid_grant")
 }
 
@@ -84,7 +84,7 @@ func TestRefreshOAuthRejectsScopeWidening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueOAuthRefresh: %v", err)
 	}
-	_, err = m.RefreshOAuth(context.Background(), scoped.Token, "read-only write", "")
+	_, err = m.RefreshOAuth(context.Background(), scoped.Token, "read-only write", "", nil)
 	assertOAuthErrorCode(t, err, "invalid_scope")
 }
 

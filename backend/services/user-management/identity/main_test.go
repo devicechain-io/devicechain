@@ -1,0 +1,23 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package identity
+
+import (
+	"os"
+	"testing"
+
+	dctest "github.com/devicechain-io/dc-microservice/test"
+)
+
+// logSink is where the global zerolog logger writes for this package's whole test binary. A
+// test that asserts on a log line switches collection on with logSink.Capture(t) rather than
+// installing a logger of its own; dctest.LogSink says why a per-test swap of the global logger
+// is a data race. Its TestMain installs the sink before any test runs, the one moment writing
+// the global logger is safe.
+var logSink *dctest.LogSink
+
+func TestMain(m *testing.M) {
+	logSink = dctest.InstallLogSink()
+	os.Exit(m.Run())
+}

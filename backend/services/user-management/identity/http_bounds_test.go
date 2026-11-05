@@ -72,8 +72,8 @@ func blockingTokenHandler() http.Handler {
 	block := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
 	return TokenHandler(
 		func(ctx context.Context, _, _ string, _ bool) error { return block(ctx) },
-		func(ctx context.Context, _, _, _, _ string) (*OAuthTokens, error) { return nil, block(ctx) },
-		func(ctx context.Context, _, _, _ string) (*OAuthTokens, error) { return nil, block(ctx) },
+		func(ctx context.Context, _, _, _, _ string, _ []string) (*OAuthTokens, error) { return nil, block(ctx) },
+		func(ctx context.Context, _, _, _ string, _ []string) (*OAuthTokens, error) { return nil, block(ctx) },
 		func(ctx context.Context, _ ClientCredentialsRequest) (*OAuthTokens, error) { return nil, block(ctx) },
 	)
 }
