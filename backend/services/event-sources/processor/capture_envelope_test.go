@@ -576,37 +576,43 @@ func TestAnUngroupableMessageFlushesItsTenantsOpenGroupFirst(t *testing.T) {
 
 // A group refused under backpressure refuses EVERY request in it, and each is counted once with its
 // own source: three requests, three refusals, never one per envelope.
+//
+// The group is handed to flush already formed: whether three concurrent requests share a group is
+// the former's call (learned arrival rate, a linger capped at 10 ms), so a test that sleeps and
+// hopes sometimes gets two groups on a loaded runner.
 func TestHTTPGroupRefusedUnderBackpressureRefusesAndCountsEveryRequest(t *testing.T) {
 	var mu sync.Mutex
 	counted := map[string]int{}
-	gate := make(chan struct{})
-	var gated atomic.Bool
+	var published atomic.Int32
 	h, err := NewHTTPEnvelopes(messaging.FormerConfig{Linger: 5 * time.Millisecond}, nil,
 		func(_ context.Context, _ string, _ messaging.Message) error {
-			if gated.Load() {
-				<-gate
-				return &messaging.BackpressureError{}
-			}
-			return nil
+			published.Add(1)
+			return &messaging.BackpressureError{}
 		}, func(source string) { mu.Lock(); counted[source]++; mu.Unlock() })
 	require.NoError(t, err)
 	defer h.Stop()
-	for i := 0; i < 20; i++ { // learn a fast rate
-		_ = h.Publish(core.WithTenant(context.Background(), "acme"), "warm", "acme", messaging.Message{Value: pbDevice("w")})
-	}
-	gated.Store(true)
-	errs := make(chan error, 3)
+	batch := messaging.FormedBatch{Tenant: "acme"}
+	pend := map[string]*httpPending{}
 	for _, src := range []string{"http-a", "http-b", "http-c"} {
-		go func() {
-			errs <- h.Publish(core.WithTenant(context.Background(), "acme"), src, "acme", messaging.Message{Value: pbDevice("d")})
-		}()
+		p := &httpPending{
+			ctx:    core.WithTenant(context.Background(), "acme"),
+			msg:    messaging.Message{Value: pbDevice("d")},
+			source: src,
+			done:   make(chan error, 1),
+		}
+		pend[src] = p
+		batch.Members = append(batch.Members, messaging.FormedMember{Bytes: p.msg.Value, Token: p})
 	}
-	time.Sleep(30 * time.Millisecond)
-	close(gate)
-	for i := 0; i < 3; i++ {
-		err := <-errs
-		require.Error(t, err)
-		assert.ErrorIs(t, err, messaging.ErrStreamBackpressure)
+	h.flush(batch)
+	assert.EqualValues(t, 1, published.Load(), "the group is one envelope, published once")
+	for src, p := range pend {
+		select {
+		case err := <-p.done:
+			require.Error(t, err, src)
+			assert.ErrorIs(t, err, messaging.ErrStreamBackpressure, src)
+		default:
+			t.Fatalf("request %s was never answered", src)
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()

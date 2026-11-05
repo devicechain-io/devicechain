@@ -181,3 +181,159 @@ func (d deniedRounds) Get(context.Context, string, uint64) (StoredMessage, error
 }
 
 var _ = sync.Mutex{}
+
+// gcSeam holds a flush between mu being released and the flush starting, once armed. It is
+// installed straight after NewGroupCommit, before anything can read the hook concurrently.
+type gcSeam struct {
+	armed   atomic.Bool
+	atSeam  chan struct{}
+	release chan struct{}
+}
+
+func installSeam(g *GroupCommit) *gcSeam {
+	s := &gcSeam{atSeam: make(chan struct{}), release: make(chan struct{})}
+	g.afterUnlock = func() {
+		if s.armed.CompareAndSwap(true, false) {
+			close(s.atSeam)
+			<-s.release
+		}
+	}
+	return s
+}
+
+// stopMustWaitFor arms the seam, runs closeBatch (which must make g close a batch), and once the
+// batch is closed but its flush not started, starts Stop. It fails if Stop returns before the
+// flush has run: the window the old code left a closed batch uncounted in.
+func stopMustWaitFor(t *testing.T, g *GroupCommit, s *gcSeam, flushed *atomic.Int32, closeBatch func()) {
+	t.Helper()
+	s.armed.Store(true)
+	go closeBatch()
+	<-s.atSeam
+
+	stopped := make(chan struct{})
+	go func() { g.Stop(); close(stopped) }()
+	// Stop takes mu first thing; once it has set stopped it is on its way to Wait.
+	for {
+		g.mu.Lock()
+		st := g.stopped
+		g.mu.Unlock()
+		if st {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-stopped:
+		t.Fatalf("Stop returned with a closed batch not yet published (flushed=%d)", flushed.Load())
+	case <-time.After(100 * time.Millisecond): // Stop is correctly waiting
+	}
+	close(s.release)
+	<-stopped
+	if flushed.Load() != 1 {
+		t.Fatalf("the batch closed before Stop must be published before Stop returns, flushed=%d", flushed.Load())
+	}
+}
+
+// GUARD: a batch Add closed (under mu) is counted on the wait group before mu is released, so a
+// Stop that slips in right after cannot return ahead of its publish.
+func TestGroupCommitStopWaitsForABatchAddJustClosed(t *testing.T) {
+	var flushed atomic.Int32
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(FormedBatch) { flushed.Add(1) })
+	seam := installSeam(g)
+	stopMustWaitFor(t, g, seam, &flushed, func() {
+		_ = g.Add("quiet", fm(1)) // a quiet tenant's lone event closes at once
+	})
+}
+
+// GUARD: the same for a batch the linger timer closed. The group is opened with controlled
+// timestamps (a tenant whose rate predicts company, one event waiting, long past its linger), so
+// it is tick, not Add, that closes it, whatever the scheduler does.
+func TestGroupCommitStopWaitsForABatchTheTimerJustClosed(t *testing.T) {
+	var flushed atomic.Int32
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(FormedBatch) { flushed.Add(1) })
+	seam := installSeam(g)
+	t0 := time.Now().Add(-time.Hour)
+	g.mu.Lock()
+	closed := f.Add(t0, "busy", fm(1)) // no rate yet: closes alone (discarded; nothing waits on it)
+	waiting := f.Add(t0.Add(time.Millisecond), "busy", fm(1))
+	open := len(f.open)
+	g.mu.Unlock()
+	if len(closed) != 1 || len(waiting) != 0 || open != 1 {
+		t.Fatalf("setup: want one event waiting for the timer, got closed=%d waiting=%d open=%d", len(closed), len(waiting), open)
+	}
+	stopMustWaitFor(t, g, seam, &flushed, g.tick)
+}
+
+// Policy for work that arrives once Stop has begun: nothing is queued and nothing is dropped. Add
+// is refused with ErrGroupCommitStopped, so its caller knows; a timer tick that runs after Stop
+// finds no open group (Stop drained them all under mu), so no batch closes after Stop.
+func TestGroupCommitNothingClosesAfterStopAndLateAddsAreRefused(t *testing.T) {
+	var flushed atomic.Int32
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(b FormedBatch) { flushed.Add(int32(len(b.Members))) })
+	for i := 0; i < 4; i++ {
+		_ = g.Add("busy", fm(1))
+	}
+	g.Stop()
+	if got := flushed.Load(); got != 4 {
+		t.Fatalf("Stop must return only after every accepted member is published, got %d of 4", got)
+	}
+	if err := g.Add("busy", fm(1)); err != ErrGroupCommitStopped {
+		t.Fatalf("an Add after Stop must be refused with ErrGroupCommitStopped, got %v", err)
+	}
+	g.tick() // a tick that was already running when Stop stopped the timer
+	if got := flushed.Load(); got != 4 {
+		t.Fatalf("a member that arrived after Stop was published (flushed %d, want 4)", got)
+	}
+}
+
+// A tick that runs while Stop is inside Wait (the timer callback was already running when Stop
+// stopped the timer) closes nothing, re-arms nothing and does not touch the wait group, so it
+// cannot release Stop's waiter early or trip the WaitGroup's misuse check.
+func TestGroupCommitTickDuringStopsWaitPublishesNothingAndLeavesStopWaiting(t *testing.T) {
+	var flushed atomic.Int32
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(b FormedBatch) {
+		flushed.Add(int32(len(b.Members)))
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-hold
+	})
+	if err := g.Add("quiet", fm(1)); err != nil { // closes at once; its flush now blocks on hold
+		t.Fatal(err)
+	}
+	<-entered
+	stopped := make(chan struct{})
+	go func() { g.Stop(); close(stopped) }()
+	for { // Stop has set stopped and is on its way to (or in) Wait
+		g.mu.Lock()
+		st := g.stopped
+		g.mu.Unlock()
+		if st {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); g.tick() }()
+	}
+	wg.Wait()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a flush was still in flight")
+	default:
+	}
+	if got := flushed.Load(); got != 1 {
+		t.Fatalf("a tick after Stop published something: flushed=%d, want 1", got)
+	}
+	close(hold)
+	<-stopped
+}
