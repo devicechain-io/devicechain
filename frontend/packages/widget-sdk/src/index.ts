@@ -58,6 +58,7 @@ export {
 export { WidgetFrame, type WidgetFrameProps } from './frame';
 
 export type { WidgetExportCell, WidgetExportResult, WidgetExportTable } from './widget-export';
+export { configureStrictCsp, plainTooltipText, strictCspEnabled } from './strict-csp';
 export { css, type ThemeVar } from './theme';
 // The curve's constants and the pure sticky-length step stay internal: a widget reaches them
 // through fitValueFont / fitValueFontCss / useStickyChars, so the curve can be retuned.

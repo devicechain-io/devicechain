@@ -22,7 +22,7 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 
 - `list_devices` — lista dispositivos, con filtrado.
 - `get_device` — los detalles de un dispositivo individual.
-- `get_device_capabilities` — qué puede medir un dispositivo y los comandos publicados que acepta, con el esquema de parámetros de cada comando.
+- `get_device_capabilities` — qué puede medir un dispositivo y los comandos publicados que acepta, con el esquema de parámetros de cada comando. Las métricas proceden de las definiciones actuales del perfil, así que pueden incluir alguna que aún no se ha publicado; los comandos son siempre los publicados.
 
 `list_devices` y `get_device` todavía no indican si un dispositivo está deshabilitado, y `list_devices` no puede filtrar por ello. Un dispositivo deshabilitado aparece exactamente igual que uno activo, así que con estas herramientas un asistente no puede distinguir un dispositivo en cuarentena de uno que funciona. Comprueba el estado del dispositivo en la consola, donde un dispositivo deshabilitado lleva el distintivo **Deshabilitado**; consulta [Deshabilitar y habilitar un dispositivo](../user-guide/devices.md).
 
@@ -54,7 +54,7 @@ MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA c
 
 - **Porta el token del usuario, nunca un token de servicio.** El servidor MCP no posee ninguna credencial privilegiada de plataforma. Cada llamada a una herramienta reenvía el JWT validado y con alcance de inquilino del *solicitante* al servicio GraphQL subyacente, de modo que el agente alcanza exactamente lo que alcanza el usuario. Dar a una IA una identidad de servicio propia le permitiría actuar entre inquilinos a petición de cualquiera, y eso es lo único que este diseño rechaza.
 - **El inquilino se fija en el momento de la concesión, no se pasa como parámetro.** La autorización decide en qué inquilino puede actuar el token, y el token lleva ese inquilino. Ninguna herramienta recibe un argumento de "inquilino" que un agente pudiera cambiar.
-- **Los tokens están vinculados a una audiencia.** Un token de acceso emitido para el servidor MCP nombra a ese servidor como su audiencia prevista (RFC 8707) y se rechaza en cualquier otro lugar. Un token acuñado para un recurso no puede reproducirse contra otro.
+- **Los tokens están vinculados a una audiencia.** Un token de acceso emitido para el servidor MCP nombra a ese servidor como su audiencia prevista (RFC 8707). El servidor MCP rechaza cualquier token que no lo nombre como su audiencia, así que un token acuñado para otro recurso no puede reproducirse contra el servidor MCP.
 - **De solo lectura, y curado.** Todas las herramientas son consultas. No hay ruta de escritura, ni escotilla de escape de consulta genérica, ni exposición de objetos sensibles.
 - **Cada llamada se autentica y se vuelve a verificar.** En cada solicitud, el servidor valida el token portador contra las claves públicas de `user-management` y hace cumplir un alcance de solo lectura. Después, el servicio GraphQL subyacente vuelve a aplicar de forma independiente las mismas verificaciones de inquilino y rol que recibe la consola.
 

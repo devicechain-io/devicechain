@@ -10,6 +10,7 @@ import type { MeasurementSample } from '@devicechain/dashboards';
 import { FIT_MIN_FONT_PX, fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
+import { strictCspEnabled } from '../strict-csp';
 import { isAlarmLevel, levelColor, type AlarmLevel } from '../severity';
 import { bandAt, parseThresholds, thresholdBands, type Threshold } from '../thresholds';
 
@@ -185,6 +186,9 @@ export function buildLineOption(
     grid: { left: 8, right: 12, top: names.length > 1 || options.unit ? 28 : 12, bottom: 8, containLabel: true },
     tooltip: {
       trigger: 'axis',
+      // Strict-CSP host mode (configureStrictCsp): drawn on the canvas, because the HTML tooltip's
+      // rows carry `style=""` attributes a policy without `style-src 'unsafe-inline'` refuses.
+      ...(strictCspEnabled() ? { renderMode: 'richText' as const } : {}),
       valueFormatter: (v: unknown) => (typeof v === 'number' ? `${formatValue(v, precision)}${suffix}` : String(v ?? '—')),
     },
     legend:

@@ -90,7 +90,7 @@ Reading is the only way to follow progress. DeviceChain observes only the sensor
 - The platform's download links are longer than the Package URI resource accepts: in Object 5 version 1.0 the resource is a string of at most 255 bytes.
 - Object 5 has no resource that carries a signature. The device's own firmware format does its verification, and the platform has nowhere to relay a signature to, so an assignment could look authenticated when it was not.
 - LwM2M has no boot identifier, so the evidence an attempt needs, a new boot running the target version, has to be inferred from a new registration and the Device object.
-- The platform serves downloads over HTTPS only, and a device may support CoAP only for firmware download.
+- The platform serves downloads over HTTP or HTTPS (HTTPS on an instance with TLS), never CoAP, and a device may support CoAP only for firmware download.
 
 Treat the runbook as the way to update LwM2M devices. The automated interoperability tests cover registration and telemetry, not commands, so try the sequence on your own device model before you depend on it.
 

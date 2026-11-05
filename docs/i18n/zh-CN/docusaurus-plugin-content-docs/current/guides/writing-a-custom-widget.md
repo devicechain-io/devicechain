@@ -228,6 +228,21 @@ layout: {
 
 不指定精度时，`formatValue(value)` 最多显示 3 位小数；小于 1 的数值保留 4 位有效数字。传入精度可固定小数位数。
 
+## 在严格的内容安全策略下提供服务 {#strict-csp}
+
+默认情况下，SDK 将图表提示框绘制为 HTML，并把严重级别令牌的 CSS 渲染为 `<style>` 元素。
+如果页面的策略不含 `style-src 'unsafe-inline'`（例如 `style-src 'self'`），这两者都会被拒绝。
+在这类策略下提供服务的宿主，需在挂载看板之前调用一次 `@devicechain/widget-sdk` 中的
+`configureStrictCsp(true)`：
+
+- 图表提示框改为绘制在画布上，而不是 HTML，因此自定义的提示框格式化函数必须返回纯文本，
+  不能返回 HTML。系列名称中的 `{` 或 `}` 可能截断提示框中的一行，提示框的
+  `extraCssText`、`className` 和 `appendTo` 选项不再生效；
+- 令牌 CSS 以构造样式表的形式由文档采用，因此托管在 shadow root 内的看板不会收到它。
+  不支持构造样式表的浏览器（16.4 之前的 Safari）会回退到 `<style>` 元素。
+
+该设置默认关闭，不调用它的宿主不受任何影响。
+
 ## 交互与信任模型 {#interactions-and-the-trust-model}
 
 `interactions` 列出组件使用的宿主回调：`alarmActions`（确认与清除，仅限告警通道）、`commandSend`（仅限控制通道）、`selection` 和 `candidates`。宿主只提供你声明过的回调，并进一步限制在宿主支持且查看者被允许的范围内。没有回调的组件表现为只读。服务器始终是权威：查看者无权执行的操作会被服务器拒绝，且该拒绝会传达到你的组件。

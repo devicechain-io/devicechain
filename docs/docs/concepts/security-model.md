@@ -195,8 +195,8 @@ These are known and accepted for the current release. Plan around them.
    loss, though not forgery, by filling a stream it may create consumers on until older messages are discarded.
 2. **The database login is shared by all services in an instance.** Every service reaches the instance's relational
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
-   in the database rests on the application's tenant scope, not on database permissions. Separate roles per
-   service are planned for a 1.0.x release.
+   in the database rests on the application's tenant scope, not on database permissions. The platform does not
+   provide separate database roles per service.
 3. **MQTT acknowledgements the broker can lose.** By default the broker can acknowledge a QoS 1 message and
    then lose it in two ways. One is while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
    node causes, at any load. The other needs no restart: under sustained load, if `event-sources` falls behind and the

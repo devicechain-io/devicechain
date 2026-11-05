@@ -81,7 +81,7 @@ query {
 
 无论持有哪些凭据，设备也可以被整体**停用**：在重新启用之前，其事件被丢弃、无法建立新连接、其配置和更新流量被拒绝、发往它的命令被拒绝。参见[停用设备](../guides/device-credentials.md#disabling-a-device)。
 
-凭据中的密钥是**只写**的：注册凭据时提交，读取时绝不返回。这只适用于 MQTT-basic 密码。对于访问令牌，凭据 ID 本身就是持有凭据的证明，因此读取设备凭据需要 `device:write` 权限，而不是 `device:read`。参见[设备凭据](../guides/device-credentials.md#reading-a-credential)。
+凭据中的密钥是**只写**的：注册凭据时提交，读取时绝不返回。这同时适用于 MQTT-basic 密码和访问令牌：令牌只在设置它的那次调用的响应中返回一次，之后的每次读取只返回一个无法当作令牌出示的指纹。读取设备凭据仍然需要 `device:write` 权限，而不是 `device:read`。参见[设备凭据](../guides/device-credentials.md#reading-a-credential)。
 
 设备还可以带有可选的 **`externalId`**：客户自己的业务标识，例如 VIN、序列号、GS1 编码或资产标签。它既不同于内部身份，也不同于凭据。它具有以下特点：
 

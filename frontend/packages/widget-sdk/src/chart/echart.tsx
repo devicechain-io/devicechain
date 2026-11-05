@@ -105,7 +105,13 @@ export function EChart({ option, className, style }: EChartProps) {
   // here and the chart exists: a PNG at twice the on-screen resolution, on the background the frame
   // hands over, since the canvas itself is transparent.
   useRegisterWidgetImage(
-    loaded ? ({ backgroundColor }) => chartRef.current?.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor }) : undefined,
+    loaded
+      ? ({ backgroundColor }) => {
+          // A canvas-drawn tooltip (strict-CSP mode) is part of the picture: hide it first.
+          chartRef.current?.dispatchAction({ type: 'hideTip' });
+          return chartRef.current?.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor });
+        }
+      : undefined,
   );
 
   // The engine, when this is the first chart to mount and nobody preloaded it.

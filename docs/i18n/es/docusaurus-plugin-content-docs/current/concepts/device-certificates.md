@@ -40,7 +40,7 @@ La plataforma acepta un certificado de dispositivo solo cuando se cumple todo es
 | **Credencial fijada** | Creas el dispositivo y luego añades una credencial `X509_CERTIFICATE` con su certificado que nombra el ancla. | El dispositivo que creaste. Su token es el que elegiste. |
 | **Registro en la primera conexión** | Creas un **perfil de certificado**: un perfil de aprovisionamiento que nombra un ancla. Los dispositivos cuyos certificados encadenan con el ancla se registran solos la primera vez que se conectan. | Un dispositivo creado para el certificado. Su id externo es el nombre común del certificado, y su token se deriva de él. |
 
-Una **credencial fijada** se identifica por el SHA-256 del certificado, que calcula el servidor. La credencial registra el ancla con la que debe encadenar el certificado y la caducidad más temprana de toda la cadena. Un dispositivo puede tener hasta tres credenciales de certificado activas a la vez, de modo que se puede añadir un reemplazo antes de que caduque el anterior.
+Una **credencial fijada** se identifica por el SHA-256 del certificado, que calcula el servidor. La credencial registra el ancla con la que debe encadenar el certificado y la caducidad más temprana de toda la cadena. Un dispositivo puede tener hasta tres credenciales de certificado a la vez, de modo que se puede añadir un reemplazo antes de que caduque el anterior. Las credenciales deshabilitadas y las caducadas cuentan entre las tres hasta que las elimines.
 
 Un **perfil de certificado** no tiene un secreto de aprovisionamiento que proteger ni rotar, porque el certificado es la prueba. Usa los mismos controles que el [autorregistro](../guides/device-self-registration.md): la estrategia, un tope de dispositivos, una caducidad y la revocación de lo que registró. Un tenant puede tener ocho perfiles de certificado.
 
@@ -54,7 +54,8 @@ pv-{slug}-{hash}
 
 - `slug` es el nombre común con cada carácter que no sea letra, dígito, `-` o `_` sustituido por `-`, y sin `-` ni `_` al principio ni al final.
 - `hash` son los primeros 12 caracteres hexadecimales del SHA-256 del nombre común.
-- El token completo tiene como máximo 128 caracteres; un `slug` largo se recorta para que quepa.
+- El token completo tiene como máximo 128 caracteres; un `slug` largo se recorta para que quepa, y se elimina cualquier `-` o `_` que el recorte deje al final.
+- Si ningún carácter del nombre común llega al `slug`, el token es `pv-{hash}`.
 
 Así, el firmware de un dispositivo puede calcular su propio client id a partir de su propio certificado. La [guía](../guides/device-x509.md#client-id) tiene un ejemplo resuelto. Una conexión cuyo client id no coincide se rechaza antes de crear nada, de modo que una conexión rechazada nunca deja un dispositivo a medias.
 

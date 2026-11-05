@@ -284,8 +284,10 @@ inquilino; no se puede subir ni bajar por inquilino.
 
 #### Reintentar un rechazo por techo {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` es el **único rechazo temporal** que produce la ruta de puesta en cola.
-Cualquier otro rechazo describe una petición que estará igual de mal en el siguiente intento; este
+`HELD_CEILING_EXCEEDED` es el **único rechazo temporal con código** que produce la ruta de puesta en cola.
+(Si un servicio del que depende la puesta en cola no responde, esta falla con un error sin código,
+`validation is unavailable`, que puede tener éxito al reintentar cuando el servicio vuelva.)
+Cualquier otro rechazo con código describe una petición que estará igual de mal en el siguiente intento; este
 se resuelve solo conforme sale el pendiente. Es el único código que vale la pena reintentar, y los
 demás vale la pena mostrarlos a una persona. Consulta
 [Enviar un comando](../guides/sending-commands.md#when-an-enqueue-is-refused).
@@ -293,7 +295,9 @@ demás vale la pena mostrarlos a una persona. Consulta
 ### Quién informa del desenlace {#who-reports-the-outcome}
 
 Solo el dispositivo puede informar de un éxito. `SUCCESSFUL` y un `FAILED` informado por el
-dispositivo son los dos desenlaces que solo el dispositivo puede producir. Cualquier otro estado
+dispositivo son los dos desenlaces que solo el dispositivo puede producir. (La excepción es una
+escritura Sparkplug, cuyo éxito la plataforma infiere del estado informado por el nodo, lo que puede
+significar que el valor ya estaba ahí; consulta [Sparkplug B](./sparkplug.md).) Cualquier otro estado
 terminal lo escribe la plataforma por su cuenta:
 
 - `TIMEOUT`, `EXPIRED` o `CANCELLED`;
