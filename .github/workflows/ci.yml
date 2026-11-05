@@ -3235,6 +3235,28 @@ jobs:
         run: go test ./payloaddecode -run 'Determinism' -count=1 -v
 
   # ---------------------------------------------------------------------------
+  # Video recorder (hack/video-capture): the pure parts of the unattended console recorder -- shot-list
+  # schema validation, target and mask building, the manifest and timeline, credential reading and the
+  # redaction of its errors. No browser and no credential: the browser path is a maintainer-run recording
+  # against a console.
+  # ---------------------------------------------------------------------------
+  video-capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Recorder unit tests
+        working-directory: hack/video-capture
+        run: |
+          python3 -c 'import yaml' # PyYAML ships on the runner image; fail here, not mid-test
+          python3 -m unittest -v test_video_capture
+
+      - name: Shipped shot lists validate
+        working-directory: hack/video-capture
+        run: |
+          for f in shots/*.yaml; do python3 video_capture.py check "$f"; done
+
+  # ---------------------------------------------------------------------------
   # The single required check.
   #
   # This job exists so branch protection has ONE stable name to require. The
@@ -3282,6 +3304,7 @@ jobs:
       - image-smoke
       - api-compat
       - payloaddecode-arm64
+      - video-capture
     steps:
       # ANY result other than success fails the gate, including `skipped` and
       # `cancelled`. No job in this workflow is conditional, so a skip here means

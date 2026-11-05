@@ -1,0 +1,6 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+# The video recorder's dependencies (video_capture.py), installed by setup.sh into its own venv. Pinned exactly; the Chromium build it
+# downloads is the one this Playwright release pins. PyYAML reads the shot lists.
+playwright==1.48.0
+PyYAML==6.0.2
