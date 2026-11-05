@@ -224,6 +224,24 @@ export declare function lastValueHint(value: string, age: string, locale?: strin
 export declare function widgetEmptyStrings(locale?: string | undefined): WidgetEmptyStrings;
 ```
 
+## `./strict-csp:configureStrictCsp`
+
+```ts
+export declare function configureStrictCsp(enabled: boolean): void;
+```
+
+## `./strict-csp:plainTooltipText`
+
+```ts
+export declare function plainTooltipText(text: string): string;
+```
+
+## `./strict-csp:strictCspEnabled`
+
+```ts
+export declare function strictCspEnabled(): boolean;
+```
+
 ## `.:ALARM_LEVELS`
 
 ```ts
@@ -1039,6 +1057,12 @@ export declare function ageSeconds(at: number, now: number): number;
 export declare function bandAt(thresholds: readonly Threshold[], value: number | null | undefined): Threshold | undefined;
 ```
 
+## `.:configureStrictCsp`
+
+```ts
+export declare function configureStrictCsp(enabled: boolean): void;
+```
+
 ## `.:createWidgetRegistry`
 
 ```ts
@@ -1210,6 +1234,12 @@ export declare function parseThresholds(raw: unknown): Threshold[];
 export declare function pickSample(latest: Record<string, MeasurementSample>, name: string | undefined): MeasurementSample | undefined;
 ```
 
+## `.:plainTooltipText`
+
+```ts
+export declare function plainTooltipText(text: string): string;
+```
+
 ## `.:primaryMeasurementName`
 
 ```ts
@@ -1240,6 +1270,12 @@ export declare function severityVar(level: AlarmLevel): string;
 
 ```ts
 export declare function spaceVar(token: SpaceToken): string;
+```
+
+## `.:strictCspEnabled`
+
+```ts
+export declare function strictCspEnabled(): boolean;
 ```
 
 ## `.:thresholdBands`
@@ -1468,6 +1504,13 @@ types: ./dist/empty-state.d.ts
 
 ```ts
 default: ./package.json
+```
+
+## `exports:./strict-csp`
+
+```ts
+import: ./dist/strict-csp.js
+types: ./dist/strict-csp.d.ts
 ```
 
 ## `~freshness:FreshnessStrings`

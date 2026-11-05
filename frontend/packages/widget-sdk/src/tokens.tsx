@@ -109,6 +109,6 @@ export function WidgetTokenStyles() {
   // Adopted DURING render, not in an effect: an effect runs after the first commit, by which time a
   // <style> element would already have been rendered (and refused). The adoption is idempotent
   // (once per distinct CSS per page), so a repeated or discarded render does no harm.
-  if (strictCspEnabled() && adoptTokenCss(css)) return null;
+  if (strictCspEnabled() && adoptTokenCss(css)) return <></>;
   return <style data-dc-tokens="">{css}</style>;
 }

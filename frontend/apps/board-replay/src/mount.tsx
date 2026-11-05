@@ -16,7 +16,7 @@
 //                   how a page that IS the embed sets them on its URL instead)
 
 import { StrictMode } from 'react';
-import { configureStrictCsp } from '@devicechain/widget-sdk';
+import { configureStrictCsp } from '@devicechain/widget-sdk/strict-csp';
 import { createRoot, type Root } from 'react-dom/client';
 
 import ReplayApp, { loadEmbed } from './App';
