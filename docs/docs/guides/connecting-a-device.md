@@ -13,7 +13,7 @@ MQTT and HTTP ingestion are available. Constrained devices can instead connect o
 
 A device that reports through a LoRaWAN network server (ChirpStack, The Things Stack) or another system's webhook does not connect itself; see [Inbound Integrations](./inbound-integrations.md).
 
-Connections are secured at the broker. The MQTT/NATS listeners are TLS, and a NATS auth-callout authenticates each connection and binds it to that one device's subjects, so a device can only publish its own events and read its own commands. Device authentication is also enforced per event by credential. The default device-auth mode is `required`, so a credential is expected on both the connection and the event. See [Device credentials](./device-credentials.md). LwM2M and Sparkplug B authenticate at the transport handshake rather than per event.
+Connections are secured at the broker. The MQTT/NATS listeners are TLS, and a NATS auth-callout authenticates each connection and binds it to that one device's subjects, so a device can only publish its own events and read its own commands. Over HTTP, the credential in each event is what authenticates the device. Over the platform's MQTT broker, the authenticated connection is the identity: the event body carries no credential, and an event that includes one is refused. The default device-auth mode is `required`, so a credential is expected on every HTTP event and every MQTT connection. See [Device credentials](./device-credentials.md). LwM2M and Sparkplug B authenticate at the transport handshake rather than per event.
 
 ## Three identifiers {#three-identifiers}
 
@@ -58,13 +58,13 @@ Every inbound event, over any transport, is a JSON object. The example below is 
 - `device` — the device's stable token.
 - `eventType` — `Measurement`, `Location`, or `Alert` (also `NewRelationship`).
 - `credentialType` / `credentialId` — the credential the device presents **over HTTP**. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so an HTTP event is expected to carry a credential. **Over MQTT, leave all three out**: the broker has already authenticated the device when it connected, and an event on the platform's MQTT broker that carries any of them is refused (see the [Device Protocol Reference](../reference/device-protocol.md#rejections-at-the-door)).
-- `payload` — its shape depends on `eventType`, and every shape is `{ "entries": [ … ] }`. See below.
+- `payload` — its shape depends on `eventType`. `Measurement`, `Location` and `Alert` are `{ "entries": [ … ] }`; `NewRelationship` is three fields directly under `payload`. See below.
 
 Every field, with its type and whether it is required, including the optional `altId` and `relationship`, is in the [Device Protocol Reference](../reference/device-protocol.md#device-event), together with JSON Schemas you can validate firmware output against.
 
 ### Payload shapes {#payload-shapes}
 
-Every payload wraps its content in an `entries` array, and the shape fixes the JSON type of each value:
+A `Measurement`, `Location` or `Alert` payload wraps its content in an `entries` array (a `NewRelationship` payload carries `relationshipType`, `targetType` and `target` directly), and the shape fixes the JSON type of each value:
 
 - Measurement values and every `Location` field are **JSON strings** (`"21.5"`, not `21.5`).
 - An alert's `level` is a **bare JSON integer** from 0 to 2147483647.

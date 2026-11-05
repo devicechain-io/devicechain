@@ -167,8 +167,8 @@ The **Rule Health** tab answers "is my rule working?" for the profile's active p
 
 <GuideShot id="rule-health" alt="The Rule Health tab of the Building Pulse Thermostat Profile. A table lists the rule Building Pulse over-temperature with status Active, no last-fired time and 0 fires. Below, a Live detections section marked live reads: Waiting for detections… firings appear here as rules trigger." />
 
-- The table lists each published rule with its **Status**, when it **Last fired** and how many
-  times it **Fires** in total. **Active** means the rule is running. **Compile error** means the
+- The table lists each enabled rule of the active published version with its **Status**, when it **Last fired** and
+  how many times it **Fires**. The count is approximate: it is written asynchronously, so a crash, overload or a failed write can lose counts, and a replay can count a republished detection again. **Active** means the rule is running. **Compile error** means the
   published rule could not be compiled, and the message explains why.
 - **Live detections** shows firings as they happen, each marked raised or resolved. The dot beside
   the heading shows whether the feed is connected.

@@ -89,7 +89,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ### 无可读内容的上行消息 {#undecoded}
 
-当上行消息不含任何带数值的已解码对象时，就会被计为未解码。对于网络服务器，常见原因是缺少编解码器或 payload formatter：请在那里的设备配置文件上设置一个，并使用 JSON 编码。DeviceChain 不会解码原始帧。
+当上行消息不含任何带数值或布尔值的已解码对象（布尔值存为 1 或 0）时，就会被计为未解码。对于网络服务器，常见原因是缺少编解码器或 payload formatter：请在那里的设备配置文件上设置一个，并使用 JSON 编码。DeviceChain 不会解码原始帧。
 
 ### 令牌被拒 {#rejected-token}
 

@@ -156,7 +156,7 @@ hexadecimal, cuándo se rechazó la última petición y cuándo se generó el to
 
 ### Envíos sin nada que leer {#undecoded}
 
-Un envío cuenta como sin decodificar cuando no lleva ningún objeto decodificado con un valor numérico.
+Un envío cuenta como sin decodificar cuando no lleva ningún objeto decodificado con un valor numérico o booleano (un booleano se almacena como 1 o 0).
 En un servidor de red, la causa habitual es que falta un códec o un payload formatter: configura uno en
 el perfil de dispositivo de allí y usa codificación JSON. DeviceChain no decodifica la trama sin
 procesar.

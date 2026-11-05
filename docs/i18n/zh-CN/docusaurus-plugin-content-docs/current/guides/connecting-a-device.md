@@ -13,7 +13,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 
 通过 LoRaWAN 网络服务器（ChirpStack、The Things Stack）或其他系统的 webhook 上报的设备不会自行连接，参见[入站集成](./inbound-integrations.md)。
 
-连接在消息代理处受到保护。MQTT/NATS 监听器使用 TLS，NATS auth-callout 对每个连接进行认证，并将其绑定到该设备自己的主题，因此设备只能发布自己的事件、读取自己的命令。流水线还根据凭据逐事件强制执行设备认证。默认设备认证模式为 `required`，因此连接和事件都需要凭据。参见[设备凭据](./device-credentials.md)。LwM2M 和 Sparkplug B 在传输握手时认证，而不是逐事件认证。
+连接在消息代理处受到保护。MQTT/NATS 监听器使用 TLS，NATS auth-callout 对每个连接进行认证，并将其绑定到该设备自己的主题，因此设备只能发布自己的事件、读取自己的命令。通过 HTTP 时，每个事件中的凭据负责认证设备。通过平台的 MQTT 代理时，已认证的连接就是身份：事件正文不携带凭据，包含凭据的事件会被拒绝。默认设备认证模式为 `required`，因此每个 HTTP 事件和每个 MQTT 连接都需要凭据。参见[设备凭据](./device-credentials.md)。LwM2M 和 Sparkplug B 在传输握手时认证，而不是逐事件认证。
 
 ## 三种标识符 {#three-identifiers}
 
@@ -58,13 +58,13 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 - `device`：设备的稳定令牌。
 - `eventType`：`Measurement`、`Location` 或 `Alert`（也支持 `NewRelationship`）。
 - `credentialType` / `credentialId`：设备**通过 HTTP** 提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此 HTTP 事件需要携带凭据。**通过 MQTT 时，这三个字段都不要带**：设备连接时消息代理已完成认证，平台 MQTT 消息代理上携带其中任何一个的事件都会被拒绝（参见[设备协议参考](../reference/device-protocol.md#rejections-at-the-door)）。
-- `payload`：结构取决于 `eventType`，所有结构都是 `{ "entries": [ … ] }`。见下文。
+- `payload`：结构取决于 `eventType`。`Measurement`、`Location` 和 `Alert` 是 `{ "entries": [ … ] }`；`NewRelationship` 是直接位于 `payload` 下的三个字段。见下文。
 
 每个字段的类型及是否必填（包括可选的 `altId` 和 `relationship`）见[设备协议参考](../reference/device-protocol.md#device-event)，其中还提供可用于校验固件输出的 JSON Schema。
 
 ### 载荷结构 {#payload-shapes}
 
-每个载荷都以 `entries` 数组包裹内容，其结构固定了各个值的 JSON 类型：
+`Measurement`、`Location` 或 `Alert` 载荷以 `entries` 数组包裹内容（`NewRelationship` 载荷直接携带 `relationshipType`、`targetType` 和 `target`），其结构固定了各个值的 JSON 类型：
 
 - 测量值和所有 `Location` 字段都是 **JSON 字符串**（`"21.5"`，不是 `21.5`）。
 - 告警的 `level` 是 0 到 2147483647 之间的**未加引号的 JSON 整数**。

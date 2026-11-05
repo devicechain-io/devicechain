@@ -39,13 +39,13 @@ When an assignment arrives, the device does these in order. The order is the poi
 
 1. **Policy, before anything is downloaded.** The component must be this device's. An unsigned assignment is refused unless the device was told to accept one. The version must be valid semantic versioning and **strictly newer** than the one running; an equal version is a replay, and a version that is not semver is refused rather than guessed at.
 2. **Disk space** for the part of the download still to come.
-3. **Download**, with `Range` requests, into a partial file in the inactive slot. A response that starts anywhere but the requested offset is refused. A byte past the declared size is a failure, and the partial file is deleted. An expired grant asks for a new one, a bounded number of times.
+3. **Download**, with `Range` requests, into a partial file in the inactive slot. A partial response that starts anywhere but the requested offset is refused; if the server ignores `Range` and answers with the whole file, the device discards the partial file and starts again from the top. A byte past the declared size is a failure, and the partial file is deleted. An expired grant asks for a new one, a bounded number of times.
 4. **Digest.** The SHA-256 of the bytes held equals `artifact.digest`. Nothing has been executed.
 5. **Signature.** The detached signature over the raw 32-byte digest verifies against a key in the device's own trust set. The `keyId` on the wire only selects a key from that set; a key is never taken from a message. Nothing has been executed.
 6. **Identity.** Only now is the image run, once, in a mode that prints its product and version and exits, with an empty environment, a scratch working directory and a deadline. It must name this device's product and the version the assignment named.
 7. **Install.** The image goes into the inactive slot, is staged as pending, and the device reports `REBOOTING` and exits so the launcher starts it.
 
-Every stage is written to disk before it is acted on and before it is reported. A broken link therefore never changes what the device does: it carries on installing, and after the reboot it reports the stage it has reached, skipping those whose report was lost, which the protocol allows. A restart at any point resumes from the bytes held. The device installs only while it is the confirmed slot with nothing pending.
+Every stage is written to disk before it is acted on and before it is reported. A broken link therefore never changes what the device does: it carries on installing, and after the reboot it reports the stage it has reached, skipping those whose report was lost, which the protocol allows. A restart during the download or verification resumes from the bytes held; a restart after the device has recorded `INSTALLING`, while the old image is still the one running, fails the attempt with `IMAGE_MISMATCH` rather than resuming. The device installs only while it is the confirmed slot with nothing pending.
 
 ## Rollback {#rollback}
 

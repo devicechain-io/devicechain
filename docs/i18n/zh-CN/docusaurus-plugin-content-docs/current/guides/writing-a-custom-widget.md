@@ -89,7 +89,7 @@ export const tankLevelWidget = defineWidget({
 | `selection` | 无数据。组件根据宿主的候选项查询来驱动一个槽位。 | 无 |
 | `none` | 无数据。静态组件。 | 无 |
 
-绑定值要么是常量 `{ const: 25 }`，要么是对选项键的引用 `{ option: 'window', min: 1, default: 1 }`。引用在编译时会按选项类型检查。你不能提供 GraphQL 字符串或订阅函数：传输由宿主负责。`selection` 和 `none` 通道不打开任何数据通道，且必须声明 `datasource: { mode: 'none' }`。
+绑定值是对选项键的引用 `{ option: 'window', min: 1, default: 1 }`。有两个绑定还接受常量：`pageSize` 接受正整数 `{ const: 25 }`，`members` 接受 `{ const: true }`。引用在编译时会按选项类型检查。你不能提供 GraphQL 字符串或订阅函数：传输由宿主负责。`selection` 和 `none` 通道不打开任何数据通道，且必须声明 `datasource: { mode: 'none' }`。
 
 声明了 `members` 的 `measurement` 组件会逐台设备读取其数据源：绑定到设备组时，`data.members` 列出每台设备及其各测量的最新读数，因此上报同名测量的两台设备不会互相覆盖。`{ const: true }` 始终开启该模式；带 `equals` 的选项引用则在某个枚举选项取特定值时开启，例如柱状图的*每台设备一根柱*。没有该模式的 `measurement` 或 `aggregate` 组件只显示一台设备：只提供 `device` 和 `slot` 选择器，因为宿主会拒绝到达它的设备组，并给出一句指向车队表格的说明，而不是显示最后上报的那台设备。
 

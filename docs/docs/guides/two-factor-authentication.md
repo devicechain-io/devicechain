@@ -68,7 +68,7 @@ An operator can make two-factor authentication a floor for every tenant at a tie
 
 ### Single sign-on and two-factor {#sso}
 
-The tenant requirement binds **password** sign-ins only. A person who signs in through single sign-on is governed by their connection's own requirements: for a stronger guarantee, require an authentication method on the connection (`requiredAmr`, for example `["mfa"]`) so the provider must have performed its own second factor. See [Configure single sign-on](./configuring-sso.md). A tenant that turns on **Require SSO** has no password sign-ins left for the requirement to apply to.
+The tenant requirement binds **password** sign-ins only. A person who signs in through single sign-on is governed by their connection's own requirements: for a stronger guarantee, require an authentication method on the connection (`requiredAmr`, for example `["mfa"]`) so the provider must have performed its own second factor. See [Configure single sign-on](./configuring-sso.md). A tenant that turns on **Require SSO** has no member password sign-ins left for the requirement to apply to (a superuser's password sign-in is still admitted, and recorded as `sso_enforcement_bypassed`).
 
 ## Command line and API clients {#clients}
 

@@ -35,7 +35,7 @@ An instance connection (for your own operators) is created the same way with kin
 
 ## Two-factor authentication {#two-factor}
 
-A tenant's [two-factor requirement](./two-factor-authentication.md#require) binds **password** sign-ins only. A person who signs in through single sign-on does not meet it, and the tenant's setting does not apply to them. What governs an SSO sign-in is the connection: require an authentication method on it (`requiredAmr`, for example `["mfa"]`) so that the identity provider must have performed its own second factor. A tenant that turns on **Require SSO** has no password sign-ins left for the requirement to apply to.
+A tenant's [two-factor requirement](./two-factor-authentication.md#require) binds **password** sign-ins only. A person who signs in through single sign-on does not meet it, and the tenant's setting does not apply to them. What governs an SSO sign-in is the connection: require an authentication method on it (`requiredAmr`, for example `["mfa"]`) so that the identity provider must have performed its own second factor. A tenant that turns on **Require SSO** has no member password sign-ins left for the requirement to apply to (a superuser's password sign-in is still admitted, and recorded as `sso_enforcement_bypassed`).
 
 ## Sign out at the provider {#provider-sign-out}
 
@@ -74,7 +74,7 @@ In each recipe, replace `<callback URL>` with the connection's callback URL.
 1. In the Okta admin console, **Applications → Create App Integration → OIDC - OpenID Connect → Web Application**. Sign-in redirect URI: `<callback URL>`. Assign the people or groups who may use it.
 2. Copy the client id and client secret.
 3. Issuer: your Okta org URL for the org authorization server (`https://<org>.okta.com`), or a custom authorization server (`https://<org>.okta.com/oauth2/<id>`). It must equal the `issuer` in that server's discovery document exactly.
-4. Okta sends `email` and `email_verified`. If your Okta users' emails are not verified, sign-ins are refused.
+4. Okta sends `email` and `email_verified`. If your Okta users' emails are not verified, a sign-in from an account not yet linked to an identity is refused.
 5. For group mapping: add the `groups` scope to the connection's scopes, and add a **groups claim** (Sign On tab, or the authorization server's Claims) with a filter such as "Starts with" or "Matches regex" so only the groups you want are sent. Map the group names. Okta's `amr` includes `mfa` when multi-factor was used.
 6. Okta has no tenant-pinning claim like `tid`; each organization has its own issuer, which is what pins it.
 

@@ -110,8 +110,8 @@ Un widget declara un canal:
 | `selection` | Sin datos. El widget gobierna un slot a partir de la búsqueda de candidatos del anfitrión. | ninguna |
 | `none` | Sin datos. Un widget estático. | ninguna |
 
-Un valor de enlace es una constante, `{ const: 25 }`, o una referencia a una clave de opción,
-`{ option: 'window', min: 1, default: 1 }`. La referencia se comprueba contra el tipo de la opción al
+Un valor de enlace es una referencia a una clave de opción,
+`{ option: 'window', min: 1, default: 1 }`. Dos enlaces también aceptan una constante: `pageSize` admite un entero positivo, `{ const: 25 }`, y `members` admite `{ const: true }`. La referencia se comprueba contra el tipo de la opción al
 compilar. No puedes aportar una cadena GraphQL ni una función de suscripción: el transporte es del
 anfitrión. Los canales `selection` y `none` no abren ningún canal de datos y deben declarar
 `datasource: { mode: 'none' }`.

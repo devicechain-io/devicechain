@@ -94,7 +94,7 @@ Use this when you create devices yourself and know each device's certificate.
 
 3. Send `credentialId` empty, as above: the schema requires the field, and a non-empty value is refused for this type. The server computes it as the SHA-256 of the certificate, and returns it. It is public, and it is the pin.
 
-The platform verifies the chain when you create the credential, and refuses one that could not authenticate. A device can hold up to three live certificate credentials, so you can add the next certificate before the old one expires. The credential's expiry is the earliest expiry along the whole chain.
+The platform verifies the chain when you create the credential, and refuses one that could not authenticate. A device can hold up to three certificate credentials, so you can add the next certificate before the old one expires. Disabled and expired credentials count toward the three until you delete them. The credential's expiry is the earliest expiry along the whole chain.
 
 ### Option B: register devices on their first connect {#registration}
 
@@ -157,7 +157,8 @@ pv-{slug}-{hash}
 
 - `slug`: the common name with each character other than letters, digits, `-` and `_` replaced by `-`, then leading and trailing `-` and `_` removed.
 - `hash`: the first 12 hexadecimal characters of the SHA-256 of the common name.
-- The whole token is at most 128 characters; a long `slug` is cut to fit.
+- The whole token is at most 128 characters; a long `slug` is cut to fit, and any `-` or `_` the cut leaves at its end is removed.
+- If no character of the common name survives into a `slug`, the token is `pv-{hash}`.
 
 With the shell, for the certificate above:
 
@@ -168,7 +169,7 @@ hash=$(printf '%s' "$CN" | openssl dgst -sha256 -hex | sed 's/^.*= //' | cut -c1
 echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08144e3e8
 ```
 
-A first connect whose client id does not match is refused before anything is created, so a mistake cannot leave a half-registered device. A common name must be 1 to 256 characters, not blank, and contain no NUL character.
+A first connect whose client id does not match is refused before anything is created, so a mistake cannot leave a half-registered device. A common name must be valid UTF-8 of 1 to 256 characters, with no NUL character and no leading or trailing whitespace.
 
 If you create a device ahead of time for a certificate profile, leave its token empty and give it the external id: the console and the API fill in the derived token, and refuse a different one.
 

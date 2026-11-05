@@ -127,8 +127,8 @@ the individual commands.
 :::danger Check `rejection`, not just for errors
 `createCommandBatch` returns **exactly one** of `batch` or `rejection`. A refused batch is a
 successful GraphQL response carrying a `rejection`, not a GraphQL error. A GraphQL error instead of
-either means the batch could not be *decided* at all: nothing was created, the token is unspent, and
-you can retry the request.
+either means the batch could not be *decided* at all: this request created nothing, and
+you can retry it with the same token: if an earlier attempt did commit the batch, the retry returns it without another fan-out.
 :::
 
 ### The token is an idempotency key

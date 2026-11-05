@@ -45,7 +45,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ### 租户页面 {#a-tenants-page}
 
-打开租户即可编辑它。页面显示名称及旁边的令牌、层级和状态徽章，以及两个操作：**Disable**（禁用；已禁用时为 **Enable**，启用）和 **Delete**（删除）。被禁用的租户不允许任何人进入，直到你重新启用。
+打开租户即可编辑它。页面显示名称及旁边的令牌、层级和状态徽章，以及两个操作：**Disable**（禁用；已禁用时为 **Enable**，启用）和 **Delete**（删除）。被禁用的租户不允许其任何成员进入，直到你重新启用（实例超级用户仍可作为应急访问进入，每次进入都会被审计）。
 
 选项卡上方的 **Single sign-on**（单点登录）面板说明该租户的人员是否必须通过单点登录登录。**Require SSO**（要求单点登录）会先让你确认，因为租户的密码会话会在下次刷新时结束。除非至少有一个已启用的身份提供商连接为该租户服务，否则会被拒绝。超级用户不受此限制，因此身份提供商故障不会把你锁在外面。参见[要求单点登录](/concepts/single-sign-on#require-sso)。
 
@@ -61,7 +61,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="admin-tenant-settings" alt="acme (sim) 的 Settings 选项卡：Ingest rate (readings/sec)、Ingest burst、Outbound rate (calls/sec) 和 Outbound burst，均显示 default；External AI routing 复选框“Allow external AI routing for NL→rule authoring”，未勾选；AI drafting rate (requests/min) 和 AI drafting burst；以及 Held command ceiling 的开头部分。" />
 
-**Effective settings**（生效设置）选项卡是只读的。它显示摄取、出站和 AI 起草速率及突发量的结果：层级的值、此租户的覆盖值，以及实际生效的值，并用徽章标明来源。暂存命令上限、负载削减优先级和地理围栏限额以同样的方式解析，但此选项卡不列出它们。设置的回退顺序是：自身的覆盖值、层级、平台默认值。平台默认值是真实的限额，绝不是“无限制”。当值来自某个服务自身的默认值时，控制台显示 **Set by the service**（由服务设定）。说明中的层级名称链接到该层级。
+**Effective settings**（生效设置）选项卡是只读的。它显示摄取、出站和 AI 起草速率及突发量的结果：层级的值、此租户的覆盖值，以及实际生效的值，并用徽章标明来源。单值设置（暂存命令上限、负载削减优先级、地理围栏限额等）以同样的方式解析，并接在同一张表中。设置的回退顺序是：自身的覆盖值、层级、平台默认值。平台默认值是真实的限额，绝不是“无限制”。当值来自某个服务自身的默认值时，控制台显示 **Set by the service**（由服务设定）。说明中的层级名称链接到该层级。
 
 <GuideShot id="admin-tenant-effective" alt="acme (sim) 的 Effective settings 选项卡。说明中以链接形式给出 Silver 层级。表格列出 Ingest rate、Ingest burst、Outbound rate、Outbound burst、AI drafting rate 和 AI drafting burst；Tier 和 Override 列显示短横线，每个 Effective 单元格显示 Set by the service 并带有 Platform default 徽章。" />
 
@@ -112,7 +112,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **Settings** 保存层级的 **Ceilings**（上限）：摄取、出站和 AI 起草的速率及突发量。字段留空则使用平台默认值。仍可在租户自己的 Settings 选项卡上为其设置覆盖值。当层级下有租户时，保存后新的上限会在一分钟内对它们生效，无需重启。
 
-层级还可以携带暂存命令上限、负载削减优先级和三个地理围栏限额，该层级的租户以同样方式继承它们。控制台没有在层级上提供这些字段：它们通过管理 API 设置，保存此选项卡时会保持原样。租户在其 Settings 选项卡上自己的值仍优先于层级的值。
+层级还可以携带暂存命令上限、负载削减优先级、三个地理围栏限额以及其他单值上限，该层级的租户以同样方式继承它们。同一选项卡在速率下方为每一项提供了字段；留空则使用平台默认值。租户在其 Settings 选项卡上自己的值仍优先于层级的值。
 
 <GuideShot id="admin-tier-settings" alt="Pilot 层级的 Settings 选项卡，标题为 Ceilings：Ingest rate 50、Ingest burst 100、Outbound rate 5、Outbound burst 10，AI drafting rate 和 AI drafting burst 均显示 platform default。有“Save changes”按钮。" />
 

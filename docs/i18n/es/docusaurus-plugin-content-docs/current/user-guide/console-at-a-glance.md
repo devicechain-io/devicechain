@@ -48,8 +48,8 @@ una página dentro de ella para ir allí.
 
 Solo ves las entradas que tu rol permite. Si tu rol no puede leer alarmas, por ejemplo,
 **Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación ejecuta el servicio
-de actualizaciones. Las secciones **Acceso** y **Configuración** son para los administradores del
-inquilino.
+de actualizaciones. Las secciones **Acceso** y **Configuración** son sobre todo para los administradores del
+inquilino; cada entrada aparece según tus propios permisos.
 
 Si tu acceso está limitado a algunos de los clientes del inquilino, la barra lateral contiene solo
 **Inicio**, **Paneles**, **Alarmas** y **Dispositivos**. Consulta

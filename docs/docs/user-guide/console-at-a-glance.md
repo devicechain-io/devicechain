@@ -46,7 +46,7 @@ pages. Select a section's heading to open or close it, and select a page inside 
 
 You see only the entries your role allows. If your role cannot read alarms, for example,
 **Alarms** is not in your sidebar. **Updates** appears only when your installation runs the update service. The **Access**
-and **Settings** sections are for tenant administrators.
+and **Settings** sections are mostly for tenant administrators; each entry in them appears according to your own permissions.
 
 If your access is limited to some of the tenant's customers, the sidebar holds only **Home**,
 **Dashboards**, **Alarms** and **Devices**. See

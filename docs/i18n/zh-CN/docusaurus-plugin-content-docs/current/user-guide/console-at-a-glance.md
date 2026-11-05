@@ -37,7 +37,7 @@ import GuideShot from '@site/src/components/GuideShot';
 | **Access**（访问） | **Members**（成员）、**Service Accounts**（服务账号）、**Roles**（角色）、**Sign-in Security**（登录安全）和 **Audit**（审计，租户内“谁修改了什么”的记录）。 |
 | **Settings**（设置） | **Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
 
-你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Access** 和 **Settings** 两个分区面向租户管理员。
+你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Access** 和 **Settings** 两个分区主要面向租户管理员；其中每个条目是否出现取决于你自己的权限。
 
 如果你的访问权限仅限于租户的部分客户，侧边栏只有 **Home**、**Dashboards**、**Alarms** 和 **Devices**。参见[客户用户能看到什么](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees)。
 

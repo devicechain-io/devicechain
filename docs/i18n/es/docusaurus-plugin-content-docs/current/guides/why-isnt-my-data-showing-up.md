@@ -31,13 +31,12 @@ Las filas son un informe. **No son una cola**: no se reenvía nada, y los evento
 | **Dispositivo desconocido** (`DEVICE_NOT_FOUND`) | Ningún dispositivo tiene el token que indicó el remitente. | Registre el dispositivo o corrija el token que envía. Un token no es el nombre del dispositivo ni su credencial; vea [los tres identificadores](./connecting-a-device.md#three-identifiers). |
 | **Credencial rechazada** (`UNAUTHENTICATED`) | La credencial que presentó el dispositivo faltaba o era incorrecta. | La [credencial](./device-credentials.md) del dispositivo: ¿se rotó, venció o nunca se configuró en el dispositivo? |
 | **No es dispositivo de esta pasarela** (`NOT_GATEWAY_CHILD`) | Una pasarela publicó para un dispositivo que no le está asignado o que no existe. | La [asignación a la pasarela](./connecting-a-device.md) del dispositivo. |
-| **Dispositivo deshabilitado** (`DEVICE_DISABLED`) | El dispositivo existe y ha sido deshabilitado. | Habilítelo, si no era lo previsto. |
 | **Mensaje ilegible** (`INVALID`) | El mensaje no se pudo leer. | El formato de la carga que envía el dispositivo. |
 | **Error de la plataforma** (`API_CALL_FAILED`) | No se pudo contactar un servicio de la plataforma que el evento necesitaba, o falló el almacenamiento del evento. | No se resuelve desde el dispositivo. Avise a su operador; el detalle está en los logs de la plataforma y no se le muestra. |
 | **Alias de integración cambiado** (`INTEGRATION_ALIAS_MISMATCH`) | El evento de una integración nombró un dispositivo que ya no tiene el alias con el que se asoció. | El alias del dispositivo en la [integración](./inbound-integrations.md). |
 | **Otro motivo** (`UNKNOWN`) | Un motivo que esta versión no nombra. | La fila lleva su código de motivo. Nunca se muestra como otro motivo. |
 
-Si la tabla está vacía y los datos siguen sin aparecer, la plataforma no rechazó nada: revise la conexión del dispositivo, su [estado en vivo](../user-guide/devices.md) y si sus eventos llegan al broker.
+Si la tabla está vacía y los datos siguen sin aparecer, la plataforma no registró ningún rechazo: compruebe si el dispositivo está [deshabilitado](./device-credentials.md#disabling-a-device) (los eventos de un dispositivo deshabilitado se descartan y se cuentan, pero no aparecen aquí), la conexión del dispositivo, su [estado en vivo](../user-guide/devices.md) y si sus eventos llegan al broker.
 
 ## En la página de un dispositivo {#device-page}
 

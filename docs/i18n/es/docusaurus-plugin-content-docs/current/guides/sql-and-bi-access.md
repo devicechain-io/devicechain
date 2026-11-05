@@ -37,8 +37,8 @@ sobre rangos largos.
 | `analytics.state_change_events` | La línea temporal de conexión/desconexión |
 | `analytics.event_anchors` | Los anclajes de relación estampados en cada evento al escribirlo |
 
-Cada vista está filtrada al **inquilino propio del lector**, automáticamente. No hay ninguna columna
-de inquilino que recordar filtrar, ninguna vista que elegir por inquilino, y nada que una consulta
+Cada vista está filtrada al **inquilino propio del lector**, automáticamente. Las vistas incluyen una columna `tenant_id`, pero nunca necesitas filtrar por ella: no hay ninguna
+vista que elegir por inquilino, y nada que una consulta
 pueda hacer para ampliar el resultado. Consulta [Cómo se aplica el
 límite](#how-the-boundary-is-enforced).
 

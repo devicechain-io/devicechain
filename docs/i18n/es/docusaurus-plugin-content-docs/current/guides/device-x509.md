@@ -94,7 +94,7 @@ Elige una para cada flota.
 
 3. Envía `credentialId` vacío, como arriba: el esquema exige el campo, y un valor no vacío se rechaza para este tipo. El servidor lo calcula como el SHA-256 del certificado y lo devuelve. Es público, y es la huella fijada.
 
-La plataforma verifica la cadena al crear la credencial y rechaza una que no podría autenticar. Un dispositivo puede tener hasta tres credenciales de certificado activas, así que puedes añadir el siguiente certificado antes de que caduque el anterior. La caducidad de la credencial es la más temprana de toda la cadena.
+La plataforma verifica la cadena al crear la credencial y rechaza una que no podría autenticar. Un dispositivo puede tener hasta tres credenciales de certificado, así que puedes añadir el siguiente certificado antes de que caduque el anterior. Las credenciales deshabilitadas y las caducadas cuentan entre las tres hasta que las elimines. La caducidad de la credencial es la más temprana de toda la cadena.
 
 ### Opción B: registrar dispositivos en su primera conexión {#registration}
 
@@ -157,7 +157,8 @@ pv-{slug}-{hash}
 
 - `slug`: el nombre común con cada carácter que no sea letra, dígito, `-` o `_` sustituido por `-`, y sin `-` ni `_` al principio ni al final.
 - `hash`: los primeros 12 caracteres hexadecimales del SHA-256 del nombre común.
-- El token completo tiene como máximo 128 caracteres; un `slug` largo se recorta para que quepa.
+- El token completo tiene como máximo 128 caracteres; un `slug` largo se recorta para que quepa, y se elimina cualquier `-` o `_` que el recorte deje al final.
+- Si ningún carácter del nombre común llega al `slug`, el token es `pv-{hash}`.
 
 Con el shell, para el certificado de arriba:
 
@@ -168,7 +169,7 @@ hash=$(printf '%s' "$CN" | openssl dgst -sha256 -hex | sed 's/^.*= //' | cut -c1
 echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08144e3e8
 ```
 
-Una primera conexión cuyo client id no coincide se rechaza antes de crear nada, de modo que un error no puede dejar un dispositivo a medio registrar. Un nombre común debe tener de 1 a 256 caracteres, no estar en blanco y no contener el carácter NUL.
+Una primera conexión cuyo client id no coincide se rechaza antes de crear nada, de modo que un error no puede dejar un dispositivo a medio registrar. Un nombre común debe ser UTF-8 válido de 1 a 256 caracteres, sin carácter NUL y sin espacios al principio ni al final.
 
 Si creas un dispositivo de antemano para un perfil de certificado, deja su token vacío y dale el id externo: la consola y la API rellenan el token derivado y rechazan uno distinto.
 

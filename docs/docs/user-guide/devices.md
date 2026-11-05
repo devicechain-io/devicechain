@@ -145,8 +145,9 @@ Open the device and choose **Disable** at the top right. The console asks you to
 the device is disabled:
 
 - its events are discarded instead of stored, and they do not come back when you enable it;
-- it cannot open a new connection, although a connection it already has stays open until it
-  ends. When that connection ends, the device shows as disconnected;
+- it cannot open a new connection, and a connection it already has is ended (if the platform
+  cannot confirm that, the disable is saved and you are told to repeat it). When that connection
+  ends, the device shows as disconnected;
 - new commands to it are refused;
 - commands that were already queued for it are **held**: they are neither sent nor cancelled.
 
@@ -326,10 +327,11 @@ covered in the over-the-air updates chapter.
 
 <GuideShot id="device-detail-credentials" alt="The Credentials tab for Rooftop AHU 2 return air. At the top, a form with a Type picker set to ACCESS_TOKEN, an Access token field with a Generate button, and an Add credential button. Below, a table lists two credentials: MQTT_BASIC with the id rooftop-ahu-2 and the note 'Password is set. It cannot be shown.', enabled, with Set new password and Delete buttons; and ACCESS_TOKEN, whose id is hidden in this screenshot, enabled, with a Delete button." />
 
-There are two types:
+There are three types:
 
 - **ACCESS_TOKEN**: the device presents a token. Paste your own or choose **Generate**.
 - **MQTT_BASIC**: the device connects with a username and password.
+- **X509_CERTIFICATE**: the device presents a client certificate. You register the certificate and name the trust anchor it must chain to (see [Provisioning and trust anchors](./provisioning-and-trust-anchors.md)).
 
 Choose the **Type**, fill in the fields and choose **Add credential**. A device can hold more
 than one credential. **Delete** removes one, after which the device can no longer authenticate
@@ -352,7 +354,7 @@ See [Device credentials](/guides/device-credentials).
 `mosquitto_pub` for MQTT, or a `curl` for HTTP. Choose the transport, and the credential if the
 device has more than one, then copy the command with the copy button.
 
-The command uses the device's token and credential, and the metrics in the **published** version
+The command uses the device's token and credential (for an access token it shows `<access-token>` in place of the token, which the console cannot read back: paste the one you issued, or replace the token if it is lost), and the metrics in the **published** version
 of its profile, with example values the profile accepts. A metric that exists only in the draft is
 not used, because the platform checks readings against the published version. When the published
 version has no metric the example can use, the command sends an undeclared reading instead, which
@@ -379,8 +381,7 @@ The tab offers no command when the command could not work, and says what to fix 
 
 A device that is not assigned to anything can send data; its events are stored.
 
-Like **Credentials**, the tab needs permission to change devices, because an access token is
-written into the command.
+Like **Credentials**, the tab needs permission to change devices.
 
 A `202` from HTTP, or an MQTT acknowledgement, means the event was received, not that it was
 stored. Look for it on the **Events** tab.

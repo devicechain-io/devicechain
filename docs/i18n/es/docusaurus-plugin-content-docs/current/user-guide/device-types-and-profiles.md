@@ -76,7 +76,7 @@ Cuando varios tipos de dispositivo comparten un perfil, la tarjeta lo indica. Un
 afecta a todos.
 
 Un tipo sin perfil está permitido, pero tiene **capacidad limitada**: sus dispositivos se siguen
-listando y mostrando, pero no envían métricas tipadas, no aceptan comandos y no generan alarmas.
+listando y mostrando, pero no envían métricas tipadas y no generan alarmas, y sus comandos no se comprueban contra un vocabulario declarado, así que se acepta cualquier clave de comando.
 Para corregirlo, vincula un perfil existente o elige **Crear un perfil para este tipo**.
 
 ## Perfiles de dispositivo
@@ -133,7 +133,7 @@ Elige **Nuevo comando** para añadir uno.
   destructivos esperan la ventana de mantenimiento del tipo de dispositivo. Los normales nunca se
   retienen.
 - **Esquema de parámetros** (opcional): un arreglo JSON que describe los parámetros del comando,
-  cada uno con un `name` y un `dataType`. Déjalo vacío para un comando sin argumentos. La consola
+  cada uno con un `name` y un `dataType`. Déjalo vacío para no declarar parámetros; la plataforma entonces no comprueba los parámetros con que se envía un comando. La consola
   construye el formulario de parámetros de la pestaña Comandos de un dispositivo a partir de este
   esquema.
 

@@ -12,8 +12,8 @@ account once you are in. It walks through the sign-in steps, single sign-on, cho
 what happens when a session expires, and the user menu.
 
 It is for everyone who uses the console. The instance superuser signs in to the instance Admin
-console, which has no tenant pages; to use a tenant's console you need a tenant-admin identity,
-which `dcctl sim create` makes for a first tenant (or an administrator creates with
+console, which has no tenant pages; to use a tenant's console you need an identity with an enabled membership in that tenant (its roles decide what you can change),
+and `dcctl sim create` makes a tenant-admin one for a first tenant (or an administrator creates with
 `createIdentity` and `addMembership` on the admin API). Your administrator gives you an account; you cannot
 create one from the sign-in page.
 

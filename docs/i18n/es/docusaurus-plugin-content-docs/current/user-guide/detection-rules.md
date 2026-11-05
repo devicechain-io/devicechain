@@ -183,8 +183,8 @@ perfil.
 
 <GuideShot id="rule-health" alt="La pestaña Estado de reglas del perfil Building Pulse Thermostat Profile. Una tabla muestra la regla Building Pulse over-temperature con estado Activa, sin último disparo y 0 disparos. Debajo, una sección Detecciones en vivo, marcada en vivo, dice: Esperando detecciones… los disparos aparecerán aquí a medida que se activen las reglas." />
 
-- La tabla muestra cada regla publicada con su **Estado**, cuándo fue su **Último disparo** y
-  cuántos **Disparos** acumula. **Activa** significa que la regla se está ejecutando. **Error de
+- La tabla muestra cada regla habilitada de la versión publicada activa con su **Estado**, cuándo fue su **Último disparo** y
+  cuántos **Disparos** acumula. La cifra es aproximada: se escribe de forma asíncrona, así que un fallo, una sobrecarga o una escritura fallida pueden perder cuentas, y una reproducción puede contar de nuevo una detección republicada. **Activa** significa que la regla se está ejecutando. **Error de
   compilación** significa que la regla publicada no se pudo compilar, y el mensaje explica por qué.
 - **Detecciones en vivo** muestra los disparos a medida que ocurren, cada uno marcado como generada o
   resuelta. El punto junto al título indica si la conexión está activa.

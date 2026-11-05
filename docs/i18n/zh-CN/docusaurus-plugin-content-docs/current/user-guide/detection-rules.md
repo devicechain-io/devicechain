@@ -106,7 +106,7 @@ Describe 需要实例的 AI 服务，并且租户必须被允许使用它。不�
 
 <GuideShot id="rule-health" alt="Building Pulse Thermostat Profile 的 Rule Health 选项卡。表格列出规则 Building Pulse over-temperature，状态为 Active，没有最近触发时间，触发 0 次。下方是标有 live 的 Live detections 部分，内容为：Waiting for detections… firings appear here as rules trigger。" />
 
-- 表格列出每条已发布的规则，包括它的 **Status**（状态）、**Last fired**（最近触发时间）和累计触发的 **Fires**（次数）。**Active**（运行中）表示规则正在运行。**Compile error**（编译错误）表示已发布的规则无法编译，并附有消息说明原因。
+- 表格列出当前已发布版本中每条已启用的规则，包括它的 **Status**（状态）、**Last fired**（最近触发时间）和 **Fires**（触发次数）。该计数是近似值：它以异步方式写入，崩溃、过载或写入失败都可能丢失计数，重放也可能把重新发布的检测再计一次。**Active**（运行中）表示规则正在运行。**Compile error**（编译错误）表示已发布的规则无法编译，并附有消息说明原因。
 - **Live detections**（实时检测）会在触发发生时显示它们，每条都标明是触发还是解除。标题旁的圆点表示数据流是否已连接。
 
 这里只显示已发布的规则。在截图中，表格里没有 *Early heat warning*，因为它只存在于配置文件的草稿中。

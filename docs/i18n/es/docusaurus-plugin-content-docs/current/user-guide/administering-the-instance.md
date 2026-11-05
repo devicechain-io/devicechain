@@ -65,7 +65,7 @@ Después elige **Crear inquilino**.
 
 Abre un inquilino para editarlo. Su página muestra el nombre con el token al lado, las insignias de
 nivel y de estado, y dos acciones: **Deshabilitar** (o **Habilitar**) y **Eliminar**. Un inquilino
-deshabilitado no admite a nadie hasta que lo vuelvas a habilitar.
+deshabilitado no admite a ninguno de sus miembros hasta que lo vuelvas a habilitar (un superusuario de la instancia aún puede entrar, como acceso de emergencia, y cada entrada queda auditada).
 
 Sobre las pestañas, el panel **Inicio de sesión único** indica si las personas del inquilino deben
 iniciar sesión mediante inicio de sesión único. **Exigir SSO** te pide confirmación, porque las
@@ -97,8 +97,8 @@ explicación en la consola. **Guardar cambios** guarda a la vez las pestañas B�
 
 La pestaña **Ajustes efectivos** es de solo lectura. Muestra el resultado para las tasas y ráfagas de
 ingesta, de salida y de redacción de IA: el valor del nivel, la anulación de este inquilino y el valor
-vigente, con una insignia que indica de dónde procede. El límite de comandos retenidos, la prioridad
-de reducción y los límites de geocercas se resuelven igual, pero esta pestaña no los muestra. Un ajuste recurre primero a su propia anulación, luego al nivel y después al valor
+vigente, con una insignia que indica de dónde procede. Los ajustes de un solo número (el límite de comandos retenidos, la prioridad
+de reducción, los límites de geocercas y similares) se resuelven igual y aparecen a continuación en la misma tabla. Un ajuste recurre primero a su propia anulación, luego al nivel y después al valor
 predeterminado de la plataforma, que es un límite real, nunca «ilimitado». Cuando el valor procede
 del propio valor predeterminado de un servicio, la consola muestra **Establecido por el servicio**. El
 nombre del nivel en la explicación enlaza con el nivel.
@@ -190,11 +190,11 @@ redacción de IA. Deja un campo en blanco para usar el valor predeterminado de l
 inquilino concreto puede seguir teniendo su propia anulación en su pestaña Ajustes. Si hay inquilinos
 en el nivel, guardar cambia sus límites en menos de un minuto, sin reiniciar nada.
 
-Un nivel también puede llevar un límite de comandos retenidos, una prioridad de reducción y los tres
-límites de geocercas, que los inquilinos del nivel heredan de la misma forma. La consola no tiene
-campos para ellos en un nivel: se fijan mediante la API de administración, y guardar esta pestaña los
-deja como están. El valor propio de un inquilino en su pestaña Ajustes sigue teniendo prioridad sobre
-el del nivel.
+Un nivel también puede llevar un límite de comandos retenidos, una prioridad de reducción, los tres
+límites de geocercas y los demás topes de un solo número, que los inquilinos del nivel heredan de la
+misma forma. La misma pestaña tiene un campo para cada uno, debajo de las tasas; déjalo vacío para el
+valor predeterminado de la plataforma. El valor propio de un inquilino en su pestaña Ajustes sigue
+teniendo prioridad sobre el del nivel.
 
 <GuideShot id="admin-tier-settings" alt="La pestaña Ajustes del nivel Pilot, bajo el encabezado de límites máximos: tasa de ingesta 50, ráfaga de ingesta 100, tasa de salida 5, ráfaga de salida 10, y la tasa y la ráfaga de redacción de IA con el valor predeterminado de la plataforma. Un botón para guardar los cambios." />
 

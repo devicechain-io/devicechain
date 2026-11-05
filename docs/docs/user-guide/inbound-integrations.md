@@ -145,7 +145,7 @@ hexadecimal, when the last request was rejected and when the token was generated
 
 ### Uplinks with nothing to read {#undecoded}
 
-An uplink counts as undecoded when it carries no decoded object with a numeric value. For a network
+An uplink counts as undecoded when it carries no decoded object with a numeric or boolean value (a boolean is stored as 1 or 0). For a network
 server, the usual cause is a missing codec or payload formatter: set one on the device profile there,
 and use JSON encoding. The raw frame is not decoded by DeviceChain.
 
