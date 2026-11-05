@@ -124,7 +124,7 @@ func NewTailSweeper(ms *core.Microservice, rdbm *rdb.RdbManager, cfg Config, met
 	callbacks core.LifecycleCallbacks) *TailSweeper {
 	s := &TailSweeper{rdb: rdbm, cfg: cfg, metrics: metrics, now: time.Now,
 		backoff: map[time.Time]tailBackoff{}, cycleDone: map[time.Time]struct{}{},
-		jitter:  func() time.Duration { return rand.N(tailJitter) }}
+		jitter: func() time.Duration { return rand.N(tailJitter) }}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "rollup-tail", tailTick, s.RunOnce, callbacks)
 	return s
 }
