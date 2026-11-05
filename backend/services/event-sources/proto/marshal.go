@@ -211,6 +211,40 @@ func MarshalPayloadForStateChangeEvent(payload *model.UnresolvedStateChangePaylo
 	return bytes, nil
 }
 
+// Marshal payload for an integration uplink. The link map is written in key order, so the same
+// payload always encodes to the same bytes.
+func MarshalPayloadForIntegrationUplinkEvent(payload *model.UnresolvedIntegrationUplinkPayload) ([]byte, error) {
+	pbpayload := &PUnresolvedIntegrationUplinkPayload{
+		Frame:               payload.Frame,
+		FPort:               payload.FPort,
+		FCnt:                payload.FCnt,
+		Json:                payload.Json,
+		Decoded:             payload.Decoded,
+		Link:                payload.Link,
+		MaxReadings:         payload.MaxReadings,
+		ProfileVersionToken: payload.ProfileVersionToken,
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(pbpayload)
+}
+
+// Unmarshal a payload into an integration uplink.
+func UnmarshalPayloadForIntegrationUplinkEvent(encoded []byte) (*model.UnresolvedIntegrationUplinkPayload, error) {
+	pbpayload := &PUnresolvedIntegrationUplinkPayload{}
+	if err := proto.Unmarshal(encoded, pbpayload); err != nil {
+		return nil, err
+	}
+	return &model.UnresolvedIntegrationUplinkPayload{
+		Frame:               pbpayload.Frame,
+		FPort:               pbpayload.FPort,
+		FCnt:                pbpayload.FCnt,
+		Json:                pbpayload.Json,
+		Decoded:             pbpayload.Decoded,
+		Link:                pbpayload.Link,
+		MaxReadings:         pbpayload.MaxReadings,
+		ProfileVersionToken: pbpayload.ProfileVersionToken,
+	}, nil
+}
+
 // Unmarshal a payload into a new relationship event.
 func UnmarshalPayloadForNewRelationshipEvent(payload []byte) (*model.UnresolvedNewRelationshipPayload, error) {
 	pbassn := &PUnresolvedNewRelationshipPayload{}
@@ -349,6 +383,12 @@ func MarshalUnresolvedPayload(etype eventtype.EventType, payload interface{}, fo
 			return MarshalPayloadForStateChangeEvent(scpayload)
 		}
 		return nil, fmt.Errorf("invalid state-change payload: %+v", payload)
+	case eventtype.IntegrationUplink:
+		if ipayload, ok := payload.(*model.UnresolvedIntegrationUplinkPayload); ok {
+			return MarshalPayloadForIntegrationUplinkEvent(ipayload)
+		}
+		// The text names the type and never the payload: it can hold a device's raw frame.
+		return nil, fmt.Errorf("invalid integration-uplink payload: %T", payload)
 	default:
 		return nil, fmt.Errorf("unable to marshal unresolved payload for event type: %s", etype.String())
 	}
@@ -367,6 +407,8 @@ func UnmarshalUnresolvedPayload(etype eventtype.EventType, payload []byte) (inte
 		return UnmarshalPayloadForAlertsEvent(payload)
 	case eventtype.StateChange:
 		return UnmarshalPayloadForStateChangeEvent(payload)
+	case eventtype.IntegrationUplink:
+		return UnmarshalPayloadForIntegrationUplinkEvent(payload)
 	default:
 		return nil, fmt.Errorf("unable to unmarshal unresolved payload for event type: %s", etype.String())
 	}

@@ -59,11 +59,19 @@ func TestTheDeviceJsonInputHasNoFieldThatCouldCarryAnIntegrationMark(t *testing.
 			return
 		}
 		seen[typ] = true
+		require.NotEqual(t, reflect.TypeOf(model.UnresolvedIntegrationUplinkPayload{}), typ,
+			"%s reaches the integration uplink payload, which only the integration route may build", path)
 		for i := 0; i < typ.NumField(); i++ {
 			f := typ.Field(i)
 			key := strings.ToLower(f.Name + " " + f.Tag.Get("json"))
 			require.NotContains(t, key, "integration", "%s.%s can carry an integration mark", path, f.Name)
 			require.NotContains(t, key, "sealed", "%s.%s can carry a sealed token", path, f.Name)
+			// The integration uplink's own fields: a device-facing input that could carry them would
+			// let a device hand the resolver the raw input of a decoder, or pick the charge it was
+			// admitted under.
+			for _, banned := range []string{"maxreadings", "max_readings", "profileversion", "profile_version"} {
+				require.NotContains(t, key, banned, "%s.%s can carry an integration uplink's field", path, f.Name)
+			}
 			walk(f.Type, path+"."+f.Name)
 		}
 	}
@@ -196,4 +204,86 @@ func TestTheWorkspaceGuardSeesEveryFormOfWrite(t *testing.T) {
 	} {
 		require.False(t, writesIntegrationMark(reads), reads)
 	}
+}
+
+// 4. EVENT TYPE: the IntegrationUplink type is the integration route's alone. A device naming it in
+// DC JSON, in any decode path, is refused; and no Go file outside the producer, the consumer and
+// the type's own plumbing mentions it.
+func TestADeviceBodyThatNamesTheIntegrationUplinkTypeIsRefused(t *testing.T) {
+	bodies := map[string]string{
+		"with the uplink's own fields": `{"device":"sensor-001","eventType":"IntegrationUplink","payload":{"frame":"AQID","fPort":2,` +
+			`"fCnt":7,"maxReadings":9,"profileVersionToken":"v1","decoded":{"t":21.5}}}`,
+		"with a measurement payload": `{"device":"sensor-001","eventType":"IntegrationUplink",` +
+			`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`,
+		"with marks": `{"device":"sensor-001","eventType":"IntegrationUplink","integration":"cs","sealedIntegrationToken":"AAAA","payload":{}}`,
+	}
+	for name, body := range bodies {
+		event, built, err := NewJsonDecoder(map[string]string{}).Decode([]byte(body), time.Time{})
+		require.Error(t, err, name)
+		require.Nil(t, event, name)
+		require.Nil(t, built, name)
+		require.Contains(t, err.Error(), "integration route", name)
+		_, _, err = NewJsonDecoder(map[string]string{}).decodeReference([]byte(body), time.Time{})
+		require.Error(t, err, name+" (reference path)")
+	}
+}
+
+// The files that may name eventtype.IntegrationUplink, relative to backend/: the registry and wire
+// plumbing of the type, the device-facing refusals, and the one producer and one consumer.
+var integrationUplinkAllowed = map[string]bool{
+	filepath.Join("services", "event-sources", "model", "events.go"):                      true,
+	filepath.Join("services", "event-sources", "proto", "marshal.go"):                     true,
+	filepath.Join("services", "event-sources", "processor", "decoders.go"):                true,
+	filepath.Join("services", "event-sources", "processor", "http_integration.go"):        true,
+	filepath.Join("services", "event-sources", "main.go"):                                 true,
+	filepath.Join("services", "device-management", "processor", "integration_resolve.go"): true,
+}
+
+func TestNothingOutsideTheIntegrationPathNamesTheIntegrationUplinkType(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	scanned := 0
+	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" || strings.HasPrefix(d.Name(), ".") && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, ".pb.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		require.NoError(t, err)
+		src, err := os.ReadFile(path)
+		require.NoError(t, err)
+		scanned++
+		if namesIntegrationUplinkType(string(src)) && !integrationUplinkAllowed[rel] {
+			t.Errorf("%s names eventtype.IntegrationUplink: only the integration path may (see integrationUplinkAllowed)", rel)
+		}
+		return nil
+	}))
+	require.Greater(t, scanned, 500, "the walk must have covered the workspace, not an empty directory")
+}
+
+func namesIntegrationUplinkType(src string) bool {
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		if strings.Contains(line, "eventtype.IntegrationUplink") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTheIntegrationUplinkGuardSeesAUseAndIgnoresAComment(t *testing.T) {
+	require.True(t, namesIntegrationUplinkType("e.EventType = eventtype.IntegrationUplink"))
+	require.True(t, namesIntegrationUplinkType("case eventtype.IntegrationUplink:"))
+	require.False(t, namesIntegrationUplinkType("// eventtype.IntegrationUplink is the route's"))
+	require.False(t, namesIntegrationUplinkType("e.EventType = eventtype.Measurement"))
 }

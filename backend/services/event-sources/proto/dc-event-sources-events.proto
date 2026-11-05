@@ -201,3 +201,30 @@ message PUnresolvedStateChangePayload {
     // an in-flight event written by an older producer still decodes.
     string expected_session_id = 5;
 }
+
+/**
+ * Payload for an integration uplink: what an inbound integration's envelope carried, handed to
+ * the resolver UNREAD so a decoder on the device's profile can turn it into readings. Only the
+ * integration route produces this event type, and only the resolver of the integration's own
+ * authority accepts it: a resolver that does not know the type refuses the event rather than
+ * storing anything (see eventtype.IntegrationUplink).
+ */
+message PUnresolvedIntegrationUplinkPayload {
+    // The raw frame, at most 4 KiB.
+    optional bytes frame = 1;
+    // The LoRaWAN application port and uplink frame counter. Absent on an envelope that is not a
+    // LoRaWAN one. A frame counter is an unsigned 32-bit number, so it is not an int32.
+    optional int32 f_port = 2;
+    optional uint32 f_cnt = 3;
+    // Canonical JSON of a generic sender's item (with its identifier and time pointers removed),
+    // at most 64 KiB and nested at most 32 deep.
+    optional bytes json = 4;
+    // Canonical JSON of the network server's decoded object, at most 64 KiB and nested at most 32 deep.
+    optional bytes decoded = 5;
+    // rssi / snr / gateways, when the envelope had them and the integration asks for link metrics.
+    map<string, double> link = 6;
+    // The readings the route charged the tenant's reading ceiling for this uplink.
+    uint32 max_readings = 7;
+    // The profile version the route selected the decoder on, for skew accounting at the resolver.
+    string profile_version_token = 8;
+}

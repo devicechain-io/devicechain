@@ -628,6 +628,12 @@ func (jd *JsonDecoder) decodeReference(payload []byte, receivedAt time.Time) (*m
 		// device that simply does it again. What the demotion changes is the cost of the
 		// mistake, not whether it is one.
 		return nil, nil, fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest")
+	case eventtype.IntegrationUplink:
+		// An integration uplink is a sender's raw input for a decoder on the device's profile, built
+		// only by the integration route after it authenticated the sender. A device naming the
+		// type would be asking the resolver to run a decoder over bytes the device chose, as
+		// though an integration had vouched for them.
+		return nil, nil, fmt.Errorf("integration-uplink events are produced by the integration route and not accepted from device ingest")
 	default:
 		return nil, nil, fmt.Errorf("unhandled event type: %s", jevent.EventType)
 	}
