@@ -10,6 +10,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -131,9 +132,11 @@ func CheckJSON(raw []byte) *DecodeError {
 }
 
 // ParseCost is the cost, in the same units as an expression's, of checking and parsing n bytes
-// of JSON: 0.3 units a byte, so the largest legal input (MaxJSONBytes) costs about 19,700,
-// near a millisecond. Parsing is real CPU the expression estimate does not see.
-func ParseCost(n int) uint64 { return (uint64(max(n, 0))*3 + 9) / 10 }
+// of JSON: one unit a byte, so the largest legal input (MaxJSONBytes) costs 65,536. Measured
+// on 64 KiB, the cheapest shape (a few long strings) parses in about 1 ms and the densest
+// (nested empty arrays or objects, a long array of zeros, one-character strings) in 4-6 ms,
+// which is 60-100 ns a unit: inside the band the natives measure in.
+func ParseCost(n int) uint64 { return uint64(max(n, 0)) }
 
 func parseObject(raw []byte, what string) (ref.Val, *DecodeError) {
 	if de := CheckJSON(raw); de != nil {
@@ -280,6 +283,11 @@ func (s *state) runSection(sec *section) (*Result, *DecodeError) {
 		if !ok {
 			return nil, s.fail(ReasonEvalError, r.value.path, "the map output did not produce a map")
 		}
+		// Size first: iterating copies every key, and a row that declared maxKeys 1 must not pay
+		// for a map of thousands before being refused.
+		if n, ok := m.Size().(types.Int); ok && int64(n) > int64(r.maxKeys) {
+			return nil, s.fail(ReasonMapOverflow, r.value.path, fmt.Sprintf("the map has more than the declared maxKeys of %d", r.maxKeys))
+		}
 		keys := make([]string, 0, r.maxKeys)
 		for it := m.Iterator(); it.HasNext() == types.True; {
 			k, ok := it.Next().(types.String)
@@ -387,13 +395,32 @@ func (s *state) evalBool(e *expr) (bool, *DecodeError) {
 	return bool(b), nil
 }
 
+// isCostLimit reports cel-go's own typed cancellation for the runtime cost limit, not a
+// message that merely contains its words (a JSON key can be named anything).
+func isCostLimit(err error) bool {
+	var ec interpreter.EvalCancelledError
+	return errors.As(err, &ec) && ec.Cause == interpreter.CostLimitExceeded
+}
+
+// truncateUTF8 cuts s to at most n bytes on a rune boundary, and makes sure what is left is
+// valid UTF-8: a record with a split rune is refused by the database that stores it.
+func truncateUTF8(s string, n int) string {
+	if len(s) > n {
+		s = s[:n]
+		for len(s) > 0 && !utf8.ValidString(s[max(0, len(s)-utf8.UTFMax):]) {
+			s = s[:len(s)-1]
+		}
+	}
+	return strings.ToValidUTF8(s, "�")
+}
+
 // classify maps an evaluation error to a DecodeError. Its text is built from the expression
 // path, the function name and the offset only.
 func (s *state) classify(e *expr, err error) *DecodeError {
 	de := &DecodeError{Reason: ReasonEvalError, Path: e.path, Offset: -1, Cost: s.cost}
 	var ne *nativeError
 	switch {
-	case strings.Contains(err.Error(), "actual cost limit exceeded"):
+	case isCostLimit(err):
 		de.Reason = ReasonCostExceeded
 		de.Message = fmt.Sprintf("the expression spent more than its estimated cost of %d", e.cost)
 	case errors.As(err, &ne):
@@ -405,11 +432,7 @@ func (s *state) classify(e *expr, err error) *DecodeError {
 		// author's mistake, and its text (a Go runtime message) is not for a tenant.
 		de.Message = internalErrorMessage
 	default:
-		msg := err.Error()
-		if len(msg) > 200 {
-			msg = msg[:200]
-		}
-		de.Message = msg
+		de.Message = truncateUTF8(err.Error(), 200)
 	}
 	return de
 }
@@ -465,6 +488,8 @@ func formatValue(key string, v ref.Val, typ calcfield.Type, typed bool) (string,
 			return "0", nil
 		}
 		return "", fmt.Errorf("%s: %s is not 0, 1 or a bool, which the BOOLEAN metric needs", key, calcfield.FormatDouble(f))
+	case calcfield.Double:
+		return calcfield.FormatDouble(f), nil
 	}
-	return calcfield.FormatDouble(f), nil
+	return "", fmt.Errorf("%s: the metric has an unknown type %s", key, typ)
 }

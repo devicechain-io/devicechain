@@ -5,8 +5,13 @@ package payloaddecode
 
 import (
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/google/cel-go/common/types"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
 )
@@ -478,5 +483,72 @@ func TestJSONSubObjectMapOutput(t *testing.T) {
 	}
 	if _, err := p.Decode(Input{JSON: []byte(`{"values":{"a":1,"b":2,"c":3,"d":4,"e":5}}`)}); err == nil || err.Reason != ReasonMapOverflow {
 		t.Fatalf("overflow: %v", err)
+	}
+}
+
+// F1: a long error message is cut on a rune boundary, so it is always valid UTF-8 (a record
+// with a split rune is refused by the database).
+func TestErrorMessageTruncationKeepsUTF8(t *testing.T) {
+	key := strings.Repeat("é", 150)
+	p := mustCompile(t, `{"kind":"CEL","envVersion":1,"input":"JSON","sections":[{"name":"s","outputs":[{"key":"v","expr":"double(json[\"`+key+`\"])"}]}]}`, nil)
+	_, err := p.Decode(Input{JSON: []byte(`{}`)})
+	if err == nil || err.Reason != ReasonEvalError {
+		t.Fatalf("want eval_error, got %v", err)
+	}
+	if !utf8.ValidString(err.Message) || len(err.Message) > 200 || len(err.Message) < 190 {
+		t.Fatalf("message must be valid UTF-8 of about 200 bytes, got %d bytes valid=%v", len(err.Message), utf8.ValidString(err.Message))
+	}
+	if !utf8.ValidString(truncateUTF8("a\xffb\xc3", 10)) || truncateUTF8("ééé", 5) != "éé" {
+		t.Fatal("truncateUTF8")
+	}
+}
+
+// F7: a JSON key spelled like the cost-limit message is not a cost overrun.
+func TestCostLimitSpoofIsNotCostExceeded(t *testing.T) {
+	p := mustCompile(t, `{"kind":"CEL","envVersion":1,"input":"JSON","sections":[{"name":"s","outputs":[{"key":"v","expr":"double(json[\"actual cost limit exceeded\"])"}]}]}`, nil)
+	_, err := p.Decode(Input{JSON: []byte(`{}`)})
+	if err == nil || err.Reason != ReasonEvalError {
+		t.Fatalf("want eval_error, got %v", err)
+	}
+}
+
+// F3: a map over maxKeys is refused from its size, before any key is copied.
+func TestMapOverflowCheckedBeforeIterating(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString(`{`)
+	for i := 0; i < 6000; i++ {
+		fmt.Fprintf(&sb, `"k%d":0,`, i)
+	}
+	sb.WriteString(`"z":0}`)
+	in := Input{JSON: []byte(sb.String())}
+	p := mustCompile(t, `{"kind":"CEL","envVersion":1,"input":"JSON","sections":[{"name":"s","outputs":[{"map":"json","maxKeys":1}]}]}`, nil)
+	if _, err := p.Decode(in); err == nil || err.Reason != ReasonMapOverflow {
+		t.Fatalf("want map_overflow, got %v", err)
+	}
+	// Parsing the body allocates; the key copies of an iteration would add thousands.
+	base := mustCompile(t, `{"kind":"CEL","envVersion":1,"input":"JSON","sections":[{"name":"s","outputs":[{"key":"v","expr":"double(json.z)"}]}]}`, nil)
+	bytesPer := func(pl *Plan) uint64 {
+		var m0, m1 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m0)
+		for i := 0; i < 20; i++ {
+			_, _ = pl.Decode(in)
+		}
+		runtime.ReadMemStats(&m1)
+		return (m1.TotalAlloc - m0.TotalAlloc) / 20
+	}
+	b1, b0 := bytesPer(p), bytesPer(base)
+	if b1 > b0+20_000 {
+		t.Fatalf("the overflow path allocates %d bytes against a %d baseline: it copied the keys", b1, b0)
+	}
+}
+
+// F6: an unknown metric type is an error, not a silent DOUBLE.
+func TestFormatValueUnknownTypeFails(t *testing.T) {
+	if _, err := formatValue("k", types.Double(1.5), calcfield.Type(99), true); err == nil {
+		t.Fatal("an unknown metric type must be refused")
+	}
+	if got, err := formatValue("k", types.Double(1.5), calcfield.Double, true); err != nil || got != "1.5" {
+		t.Fatalf("%q %v", got, err)
 	}
 }

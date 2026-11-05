@@ -257,7 +257,7 @@ func TestJSONParseIsCharged(t *testing.T) {
 	if rb.Cost > p.CostFor(big) || p.CostFor(big) > p.EstimatedCost() || rs.Cost > p.CostFor(small) {
 		t.Fatalf("actual %d / CostFor %d / EstimatedCost %d out of order", rb.Cost, p.CostFor(big), p.EstimatedCost())
 	}
-	if ParseCost(MaxJSONBytes) < 19_000 || ParseCost(MaxJSONBytes) > 20_000 {
+	if ParseCost(MaxJSONBytes) != MaxJSONBytes {
 		t.Fatalf("ParseCost(64 KiB) = %d", ParseCost(MaxJSONBytes))
 	}
 	// A frame decoder reads no JSON: its parse term is zero.
