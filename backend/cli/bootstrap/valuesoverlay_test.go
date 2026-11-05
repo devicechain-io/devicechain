@@ -227,6 +227,8 @@ func TestARefusedKeyIsNamedAndRefusedBeforeAnyChange(t *testing.T) {
 		// The profiler's switches are tunable; where its listener binds is not, nor anything else under it.
 		"functionalAreas.device-management.profiler.address": "functionalAreas:\n  device-management:\n    profiler:\n      address: \"0.0.0.0:6060\"\n",
 		"functionalAreas.device-management.profiler.extra":   "functionalAreas:\n  device-management:\n    profiler:\n      extra: true\n",
+		// The broker-TLS assertion is dcctl's alone: a values file must not be able to confirm it.
+		"mqttExposure.brokerTLSConfirmed": "mqttExposure:\n  brokerTLSConfirmed: true\n",
 		// An ingress annotation the chart sets itself would REPLACE the chart's.
 		"ingress.annotations.nginx.ingress.kubernetes.io/configuration-snippet": "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/configuration-snippet: \"#\"\n",
 		"ingress.annotations.nginx.ingress.kubernetes.io/enable-access-log":     "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/enable-access-log: \"true\"\n",

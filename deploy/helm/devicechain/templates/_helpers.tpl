@@ -1547,9 +1547,15 @@ loadbalancer), host, and brokerService (the broker Service's name). Every refusa
 render-time failure rather than a Service or route that quietly leaves the broker reachable some
 other way than the one asked for.
 
-Plaintext MQTT is never exposed off-cluster by this feature, so it refuses when the broker's own
-TLS is off (when the chart can read the instance config; under instance.existingSecret it cannot,
-and dcctl, which composes that config, makes the same refusal before it renders anything).
+Plaintext MQTT is never exposed off-cluster by this feature, so it refuses unless the broker's own
+TLS is known to be on, and it fails CLOSED when that is not known. Where the answer comes from
+depends on who composes the instance config:
+  - the chart does (no instance.existingSecret): the inline instance.config must say
+    infrastructure.nats.tls.enabled; an absent or false value refuses.
+  - the operator's tooling does (instance.existingSecret): the config lives in a Secret this chart
+    cannot read, so the tooling must state what it observed in mqttExposure.brokerTLSConfirmed.
+    Absent or false refuses. dcctl sets it from the broker's own infrastructure outputs on every
+    run and refuses an exposure itself when the broker's TLS is off or unknown.
 */}}
 {{- define "devicechain.mqttExposure" -}}
 {{- $m := .Values.mqttExposure | default dict -}}
@@ -1566,8 +1572,12 @@ and dcctl, which composes that config, makes the same refusal before it renders 
 {{- $cfg := .Values.instance.config | default dict -}}
 {{- $infra := $cfg.infrastructure | default dict -}}
 {{- $nats := $infra.nats | default dict -}}
-{{- if and $infra (not (($nats.tls | default dict).enabled)) -}}
-{{- fail "mqttExposure.mode is not none, but the broker's TLS is off (instance.config.infrastructure.nats.tls.enabled). Plaintext MQTT is never exposed outside the cluster; turn the broker's TLS on or leave mqttExposure.mode at none." -}}
+{{- if .Values.instance.existingSecret -}}
+{{- if not (and (kindIs "bool" $m.brokerTLSConfirmed) $m.brokerTLSConfirmed) -}}
+{{- fail "mqttExposure.mode is not none, but nothing states that the broker's TLS is on: this release's instance configuration lives in the Secret named by instance.existingSecret, which the chart cannot read. Plaintext MQTT is never exposed outside the cluster. Set mqttExposure.brokerTLSConfirmed=true only if the broker terminates TLS, or leave mqttExposure.mode at none." -}}
+{{- end -}}
+{{- else if not (and (kindIs "bool" ($nats.tls | default dict).enabled) ($nats.tls | default dict).enabled) -}}
+{{- fail "mqttExposure.mode is not none, but the broker's TLS is not on in instance.config.infrastructure.nats.tls.enabled. Plaintext MQTT is never exposed outside the cluster; turn the broker's TLS on or leave mqttExposure.mode at none." -}}
 {{- end -}}
 {{- $parts := splitList "." ($nats.hostname | default "dc-nats") -}}
 {{- $svc = first $parts -}}

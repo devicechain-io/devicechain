@@ -201,6 +201,20 @@ func hydrateUpgradeState(
 	if err := applyDeployedInfrastructure(st, deployed); err != nil {
 		return nil, fmt.Errorf("reading instance %q's broker credentials: %w", opts.Instance, err)
 	}
+	// An exposure over a broker that is not known to terminate TLS is refused here, while nothing
+	// has been written. The outputs of this run's infrastructure apply are the authority and are
+	// checked again when they are read; this is the early read of the same fact from the live
+	// document, so a plain refusal comes before anything is written.
+	delete(st.Values, brokerTLSObservedKey)
+	if err := refuseSkipInfrastructureWhileExposed(st); err != nil {
+		return nil, fmt.Errorf("instance %q: %w. Nothing has been changed", opts.Instance, err)
+	}
+	if deployed.Infrastructure.Nats.Tls.Enabled {
+		st.Values[brokerTLSObservedKey] = "true"
+	}
+	if err := requireBrokerTLSForMQTTExposure(st); err != nil {
+		return nil, fmt.Errorf("instance %q: %w. Nothing has been changed", opts.Instance, err)
+	}
 	if err := refuseNoSystemLogin(opts.Instance, st); err != nil {
 		return nil, err
 	}
@@ -483,4 +497,17 @@ func ingressHostFor(st *State) string {
 		return DefaultIngressHost
 	}
 	return st.IngressHost
+}
+
+// refuseSkipInfrastructureWhileExposed: the deployed document is history, not an observation of the
+// broker (it can say TLS while the broker has since been changed), and only an applied
+// infrastructure reports the broker. An exposure therefore cannot be confirmed, or kept, on a run
+// that applies none.
+func refuseSkipInfrastructureWhileExposed(st *State) error {
+	if !st.SkipInfrastructure || st.MQTTExposure == "" || st.MQTTExposure == MQTTExposureNone {
+		return nil
+	}
+	return fmt.Errorf("--skip-infrastructure cannot confirm the broker terminates TLS, and MQTT is exposed "+
+		"(--mqtt-exposure %s). Run the upgrade without --skip-infrastructure, or close the exposure first "+
+		"with --mqtt-exposure none", st.MQTTExposure)
 }

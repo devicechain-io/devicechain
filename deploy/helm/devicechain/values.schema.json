@@ -525,6 +525,11 @@
           "type": "string",
           "description": "The DNS name devices dial; the Gateway routes by it and the broker's certificate must carry it. Required unless mode is none."
         },
+        "brokerTLSConfirmed": {
+          "type": "boolean",
+          "default": false,
+          "description": "States that the broker terminates TLS. Required to expose MQTT when instance.existingSecret is set, because the chart then cannot read the broker's TLS setting; without it the chart refuses. dcctl sets it from the broker's own infrastructure outputs. Ignored without existingSecret, where instance.config.infrastructure.nats.tls.enabled decides."
+        },
         "loadBalancer": {
           "type": "object",
           "description": "Settings for loadbalancer mode.",
