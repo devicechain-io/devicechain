@@ -335,6 +335,9 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 // the tenant and device each row RETURNED, so a device with no credential evicts nothing.
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	var credentials []DeviceCredential
+	// kickTenant is the tenant the device's row names, read inside the transaction: a system
+	// context carries no tenant of its own, and the kick must name the one that owns the device.
+	kickTenant := ""
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) ([]uint, error) {
 			// A gateway that still has children is not deleted (ErrGatewayHasChildren): a device
@@ -348,9 +351,16 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			}
 			// The kick is recorded with the delete, in this transaction: the device row is about to
 			// be gone, and a retry could not rediscover it. Cleared only by a confirmed kick.
-			if t, _ := core.TenantFromContext(ctx); t != "" {
-				if err := api.queueSessionKicksOnTx(tx, t, kickOriginDeviceDeleted, []string{token}); err != nil {
+			if api.SessionKicker != nil {
+				var tenants []string
+				if err := tx.Unscoped().Model(&Device{}).Where("id = ?", id).Pluck("tenant_id", &tenants).Error; err != nil {
 					return nil, err
+				}
+				if len(tenants) == 1 && tenants[0] != "" {
+					kickTenant = tenants[0]
+					if err := api.queueSessionKicksOnTx(tx, kickTenant, kickOriginDeviceDeleted, []string{token}); err != nil {
+						return nil, err
+					}
 				}
 			}
 			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error; err != nil {
@@ -366,18 +376,26 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		})
 	if err == nil && deleted {
 		api.evictCredentialOwners(ctx, credentials)
+	}
+	if err == nil {
 		// The device is gone and so is every credential it held: end whatever sessions it still has.
-		tenant := ""
+		// Run whether or not THIS call deleted anything, so repeating a delete whose kick could not
+		// be confirmed asks again instead of reporting success for a session that may live on.
+		tenant := kickTenant
 		for _, c := range credentials {
-			tenant = c.TenantId
+			if tenant == "" {
+				tenant = c.TenantId
+			}
 		}
 		if tenant == "" {
 			tenant, _ = core.TenantFromContext(ctx)
 		}
-		if kerr := api.drainSessionKicks(ctx, tenant, 0, func(db *gorm.DB) *gorm.DB {
-			return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
-		}); kerr != nil {
-			return deleted, kerr
+		if tenant != "" {
+			if kerr := api.drainSessionKicks(ctx, tenant, 0, func(db *gorm.DB) *gorm.DB {
+				return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
+			}); kerr != nil {
+				return deleted, kerr
+			}
 		}
 	}
 	return deleted, inUseOn(err, fmt.Sprintf("device %q is still referenced", token))

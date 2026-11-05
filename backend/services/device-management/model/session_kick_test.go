@@ -355,3 +355,48 @@ func TestAnEditThatReadADeviceDisabledDoesNotQueueAKickForOneEnabledBeforeTheSav
 	require.Empty(t, rows, "an enabled device owes no kick")
 	require.Empty(t, k.calls)
 }
+
+// Repeating a delete whose kick could not be confirmed asks again, instead of finding no device
+// and reporting success.
+//
+// Negative control: draining only when this call deleted something returns (false, nil) here.
+func TestRepeatingADeleteWhoseKickFailedAsksAgain(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	k := &togglingKicker{}
+	api.SessionKicker = k
+	require.NoError(t, api.RDB.DB(ctx).Create(&Device{TokenReference: rdb.TokenReference{Token: "dev-1"}}).Error)
+	_, err := api.DeleteDevice(ctx, "dev-1")
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+
+	deleted, err := api.DeleteDevice(ctx, "dev-1")
+	require.ErrorIs(t, err, ErrSessionsNotEnded, "still unconfirmed: the repeat must say so")
+	require.False(t, deleted)
+
+	k.set(true)
+	deleted, err = api.DeleteDevice(ctx, "dev-1")
+	require.NoError(t, err)
+	require.False(t, deleted)
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows)
+}
+
+// A system-context delete (no tenant on the context) names the tenant the device's row holds.
+//
+// Negative control: reading the tenant from the context queues nothing here.
+func TestADeleteWithNoTenantOnTheContextStillQueuesItsKick(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	tctx := core.WithTenant(context.Background(), "acme")
+	k := &togglingKicker{}
+	api.SessionKicker = k
+	require.NoError(t, api.RDB.DB(tctx).Create(&Device{TokenReference: rdb.TokenReference{Token: "dev-1"}}).Error)
+
+	_, err := api.DeleteDevice(core.WithSystemContext(context.Background()), "dev-1")
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(tctx).Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, "acme", rows[0].TenantId)
+	require.Equal(t, kickOriginDeviceDeleted, rows[0].Origin)
+}
