@@ -145,11 +145,13 @@ readings per second.
   minutes and `max_wal_size` to a fifth of the volume (6.4 GiB on the default 32Gi), so a store
   taking a few thousand readings per second checkpoints on the clock instead of whenever the log
   fills. Both are applied by reload, with no restart. The cost is crash recovery: after an unclean
-  stop the database replays the log written since its last checkpoint, up to 15 minutes of it.
+  stop the database replays the log written since its last checkpoint, up to about 30 minutes of it, since a checkpoint is spread over most of its interval.
   Raise `timescale_max_wal_size_mib` and lower `timescale_checkpoint_timeout` together when you
   size the store for a higher rate: to keep checkpoints on the clock, `max_wal_size` wants to be
   at least three times the log written per checkpoint interval. The log lives on the data volume,
   so that figure has to fit inside it.
+  An upgrade applies this to an existing store too, at its current volume size. If that volume
+  is already close to full, set `timescale_max_wal_size_mib` to 1024 to keep the previous 1 GiB.
 - **Chunk interval.** `lifecycle.chunkIntervalHours` is 24 by default and only affects chunks
   created after it changes. A chunk's indexes should fit in memory while it is being written, and
   the active chunks' indexes should fit in about a quarter of the database's RAM. At 1,000

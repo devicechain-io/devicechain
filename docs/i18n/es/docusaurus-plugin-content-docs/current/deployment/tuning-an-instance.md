@@ -154,11 +154,14 @@ de lecturas por segundo.
   recibe unos pocos miles de lecturas por segundo hace los puntos de control por reloj y no cada
   vez que se llena el registro. Ambos se aplican por recarga, sin reinicio. El coste es la
   recuperación tras una caída: después de una parada no limpia, la base de datos reproduce el
-  registro escrito desde su último punto de control, hasta 15 minutos. Al dimensionar el almacén
+  registro escrito desde su último punto de control, hasta unos 30 minutos, porque un punto de control se reparte durante la mayor parte de su intervalo. Al dimensionar el almacén
   para una tasa mayor, suba `timescale_max_wal_size_mib` y baje `timescale_checkpoint_timeout`
   juntos: para que los puntos de control sigan el reloj, `max_wal_size` debe ser al menos el triple
   del registro escrito por intervalo de punto de control. El registro vive en el volumen de datos,
   así que esa cifra tiene que caber en él.
+  Una actualización lo aplica también a un almacén existente, con el tamaño actual de su volumen.
+  Si ese volumen ya está casi lleno, fije `timescale_max_wal_size_mib` en 1024 para conservar el
+  1 GiB anterior.
 - **Intervalo de fragmento.** `lifecycle.chunkIntervalHours` es 24 por defecto y solo afecta a los
   fragmentos creados después de cambiarlo. Los índices de un fragmento deben caber en memoria
   mientras se escribe en él, y los de los fragmentos activos en aproximadamente una cuarta parte

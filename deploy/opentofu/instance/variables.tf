@@ -923,10 +923,12 @@ variable "timescale_checkpoint_timeout" {
     Postgres checkpoint_timeout for the event store (default 15min; Postgres's own is
     5min). The first change to each page after a checkpoint logs a whole 8 KB image, so
     fewer checkpoints means less WAL, and on this store those images were about half the
-    log. The cost is crash recovery: after an unclean stop Postgres replays the log
-    written since the last checkpoint, bounded by this and by max_wal_size. At the rates
+    log. The cost is crash recovery: after an unclean stop Postgres replays from the
+    last COMPLETED checkpoint's start, and a checkpoint is spread over 90% of this interval,
+    so the replay can span up to about twice this much time of log (bounded as well by
+    max_wal_size). At the rates
     measured so far (single-digit MB/s of WAL) that is seconds. At 100k events/s, about
-    150 MB/s of WAL, 15 minutes is over 100 GB of log, which takes minutes to replay:
+    150 MB/s of WAL, 15 minutes is over 100 GB of log (up to twice that to replay), which takes minutes:
     lower this, or accept that recovery time, before sizing for that rate.
     Reload-only: changing it restarts nothing.
   EOT
@@ -934,8 +936,17 @@ variable "timescale_checkpoint_timeout" {
   default     = "15min"
 
   validation {
-    condition     = can(regex("^[0-9]+(ms|s|min|h|d)?$", var.timescale_checkpoint_timeout))
-    error_message = "timescale_checkpoint_timeout is a Postgres time with an optional unit (ms, s, min, h, d), such as 15min."
+    condition = can(regex("^[0-9]+(ms|s|min|h|d)?$", var.timescale_checkpoint_timeout)) && (
+      tonumber(regex("^[0-9]+", var.timescale_checkpoint_timeout)) * lookup(
+        { ms = 0.001, s = 1, min = 60, h = 3600, d = 86400 },
+        try(regex("[a-z]+$", var.timescale_checkpoint_timeout), "s"), 0
+      ) >= 30
+      && tonumber(regex("^[0-9]+", var.timescale_checkpoint_timeout)) * lookup(
+        { ms = 0.001, s = 1, min = 60, h = 3600, d = 86400 },
+        try(regex("[a-z]+$", var.timescale_checkpoint_timeout), "s"), 0
+      ) <= 86400
+    )
+    error_message = "timescale_checkpoint_timeout is a Postgres time with an optional unit (ms, s, min, h, d), such as 15min, between 30 seconds and 1 day (Postgres refuses to start outside that range). A bare number is in seconds."
   }
 }
 
@@ -952,13 +963,18 @@ variable "timescale_max_wal_size_mib" {
     🔴 pg_wal sits on the data volume, so this must stay well inside timescale_storage;
     with archiving behind, the log grows past it.
     Reload-only: changing it restarts nothing.
+
+    🔴 UPGRADING an existing instance applies the derived value to the volume it already has:
+    on the default 32Gi the allowance goes from the stock 1 GiB to 6.4 GiB, and pg_wal may
+    now grow that far between checkpoints. An event store that is already close to full has
+    less room than that to give. To keep the stock allowance, set this to 1024.
   EOT
   type        = number
   default     = 0
 
   validation {
-    condition     = var.timescale_max_wal_size_mib >= 0 && var.timescale_max_wal_size_mib == floor(var.timescale_max_wal_size_mib)
-    error_message = "timescale_max_wal_size_mib is a whole number of MiB, or 0 to derive it from timescale_storage."
+    condition     = var.timescale_max_wal_size_mib == floor(var.timescale_max_wal_size_mib) && (var.timescale_max_wal_size_mib == 0 || var.timescale_max_wal_size_mib >= 64)
+    error_message = "timescale_max_wal_size_mib is a whole number of MiB of at least 64 (Postgres refuses to start below twice its 16 MiB segment size, and a few segments of room is the practical floor), or 0 to derive it from timescale_storage."
   }
 }
 

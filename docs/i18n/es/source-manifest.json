@@ -155,8 +155,8 @@
       "translationSha256": "a8cb94e93b061f32b9acbcbc3fbb2ec275b741a3c8bc959c4bf42031d9a3a71f"
     },
     "deployment/tuning-an-instance.md": {
-      "sourceSha256": "f8204b6c749bd527b5e72279f750d362d62b2bc8ca10bd60f4916c4c15fd393c",
-      "translationSha256": "0feec34d2cd16bd7ad65f79989e9ad1e908523069e3f06fbf2eb1584066cdb49"
+      "sourceSha256": "7763425f2071a4505987b281eec7ec43ec03789a2739ee59817d2f5bd3a4f513",
+      "translationSha256": "80d2b144c1ade1644dd5a0a9716668124c48630b189181e46e8f30c91d985814"
     },
     "deployment/verifying-releases.md": {
       "sourceSha256": "c8a8d86631cca191ea70149ebdb7ae38dac2ed89a59f291a0c47246a951f1de6",

@@ -225,7 +225,7 @@ variable "max_wal_size" {
 }
 
 variable "checkpoint_timeout" {
-  description = "Postgres checkpoint_timeout, with its unit (for example 15min). Empty leaves the server's own value (5min) unless var.parameters sets one. Reload-only: no restart. Crash recovery replays at most this much time of WAL. The caller's own var.parameters entry wins."
+  description = "Postgres checkpoint_timeout, with its unit (for example 15min). Empty leaves the server's own value (5min) unless var.parameters sets one. Reload-only: no restart. Crash recovery replays from the last completed checkpoint, up to about twice this much time of WAL. The caller's own var.parameters entry wins."
   type        = string
   default     = ""
 }
