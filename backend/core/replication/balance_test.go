@@ -4,8 +4,10 @@
 package replication
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	nats "github.com/nats-io/nats.go"
 )
@@ -242,21 +244,23 @@ func TestPlanRebalanceReportsSharedLeadersWhenThereIsNowhereToGo(t *testing.T) {
 	}
 }
 
-// A move is refused while any replica of its group is offline or behind, even when the target itself
-// is fine: an outage that began after the plan was made is no time to start an election.
+// A move is refused while a replica of its group is offline, at once; one that is merely behind is
+// reported as such, for the caller to wait on. An outage that began after the plan was made is no time
+// to start an election.
 func TestPrecheckRefusesAMoveDuringAnOutage(t *testing.T) {
 	m := Move{Stream: "s", From: "a", To: "b"}
 	healthy := []Peer{{Name: "b", Current: true}, {Name: "c", Current: true}}
 	if skip, err := precheck("a", healthy, m); skip || err != nil {
 		t.Fatalf("healthy group: skip=%v err=%v", skip, err)
 	}
-	for name, peers := range map[string][]Peer{
-		"other replica offline": {{Name: "b", Current: true}, {Name: "c", Current: true, Offline: true}},
-		"other replica behind":  {{Name: "b", Current: true}, {Name: "c"}},
-	} {
-		if skip, err := precheck("a", peers, m); skip || err == nil {
-			t.Errorf("%s: skip=%v err=%v, want a refusal", name, skip, err)
-		}
+	if skip, err := precheck("a", []Peer{{Name: "b", Current: true}, {Name: "c", Current: true, Offline: true}}, m); skip || err != errOffline {
+		t.Errorf("other replica offline: skip=%v err=%v", skip, err)
+	}
+	if skip, err := precheck("a", []Peer{{Name: "b", Current: true}, {Name: "c"}}, m); skip || err != errBehind {
+		t.Errorf("other replica behind: skip=%v err=%v", skip, err)
+	}
+	if skip, err := precheck("a", []Peer{{Name: "b"}, {Name: "c", Current: true}}, m); skip || err != errBehind {
+		t.Errorf("target behind is waited for, not dropped: skip=%v err=%v", skip, err)
 	}
 	if skip, _ := precheck("b", healthy, m); !skip {
 		t.Error("a group already led by the target is skipped")
@@ -264,7 +268,153 @@ func TestPrecheckRefusesAMoveDuringAnOutage(t *testing.T) {
 	if skip, _ := precheck("x", healthy, m); !skip {
 		t.Error("a group led by neither server is skipped")
 	}
-	if skip, err := precheck("a", []Peer{{Name: "b"}, {Name: "c", Current: true}}, m); !skip || err != nil {
-		t.Errorf("an unfit target is skipped: skip=%v err=%v", skip, err)
+	if skip, err := precheck("a", []Peer{{Name: "b", Offline: true}, {Name: "c", Current: true}}, m); !skip || err != nil {
+		t.Errorf("an offline target is skipped: skip=%v err=%v", skip, err)
+	}
+}
+
+// fakeGroup is a broker group whose replicas read as the script says, one reading per call.
+type fakeGroup struct {
+	readings [][]Peer
+	reads    int
+	sent     int
+	stuck    bool // the leader never leaves "a"
+}
+
+func (f *fakeGroup) state(Move) (string, []Peer, error) {
+	i := min(f.reads, len(f.readings)-1)
+	f.reads++
+	if f.sent > 0 && !f.stuck {
+		return "b", f.readings[i], nil // the step-down took effect
+	}
+	return "a", f.readings[i], nil
+}
+
+func (f *fakeGroup) io() moveIO {
+	return moveIO{state: f.state, stepDown: func(context.Context, Move) error { f.sent++; return nil }}
+}
+
+var fastApply = ApplyOptions{Poll: time.Millisecond, Behind: 50 * time.Millisecond, Settle: 50 * time.Millisecond}
+
+// Under load a follower reads not-current for a moment. The move waits for it instead of being
+// refused on the first reading. (Negative control: with Behind forced to zero the move is refused.)
+func TestApplyMovesWaitsForALaggingReplicaToCatchUp(t *testing.T) {
+	behind := []Peer{{Name: "b", Current: true}, {Name: "c"}}
+	ok := []Peer{{Name: "b", Current: true}, {Name: "c", Current: true}}
+	g := &fakeGroup{readings: [][]Peer{behind, behind, ok}}
+	res := applyMoves(context.Background(), g.io(), []Move{{Stream: "s", From: "a", To: "b"}}, fastApply)
+	// After the step-down the fake still reports leader "a"; the move itself was sent, which is the point.
+	if g.sent != 1 {
+		t.Fatalf("the move was not sent after the replica caught up: %+v", res)
+	}
+	g2 := &fakeGroup{readings: [][]Peer{behind, behind, ok}}
+	zero := fastApply
+	zero.Behind = time.Nanosecond // effectively no wait
+	if r := applyMoves(context.Background(), g2.io(), []Move{{Stream: "s", From: "a", To: "b"}}, zero); g2.sent != 0 || r[0].Err == nil {
+		t.Errorf("control: with no wait the first reading refuses: sent=%d %+v", g2.sent, r[0])
+	}
+}
+
+// A replica that stays behind past the window refuses the move, and nothing is sent. An offline one
+// refuses it at once, without waiting.
+func TestApplyMovesRefusesAndSendsNothingWhileAReplicaIsDownOrStuckBehind(t *testing.T) {
+	behind := []Peer{{Name: "b", Current: true}, {Name: "c"}}
+	g := &fakeGroup{readings: [][]Peer{behind}}
+	r := applyMoves(context.Background(), g.io(), []Move{{Stream: "s", From: "a", To: "b"}}, fastApply)
+	if g.sent != 0 || r[0].Err != errBehind || r[0].Skipped {
+		t.Errorf("stuck behind: sent=%d %+v", g.sent, r[0])
+	}
+	down := &fakeGroup{readings: [][]Peer{{{Name: "b", Current: true}, {Name: "c", Current: true, Offline: true}}}}
+	slow := fastApply
+	slow.Behind = time.Minute
+	start := time.Now()
+	r = applyMoves(context.Background(), down.io(), []Move{{Stream: "s", From: "a", To: "b"}}, slow)
+	if down.sent != 0 || r[0].Err != errOffline || down.reads != 1 || time.Since(start) > time.Second {
+		t.Errorf("offline: sent=%d reads=%d %+v", down.sent, down.reads, r[0])
+	}
+}
+
+// The pin: after resolved is separated onto the only free server (n2), the count balancing sees n2
+// leading three movable streams and n0 and n1 none. Its candidates were read before the move, so n1
+// (inbound's server) is among them, and unpinned it is the first move the balancing makes. With the
+// pin, something else moves.
+func TestPlanRebalanceKeepsTheSeparatedStreamWhereItWasPut(t *testing.T) {
+	var snap Snapshot
+	add := func(name, leader string) {
+		snap.Objects = append(snap.Objects, Object{Name: name, Replicas: 3, Leader: leader, Peers: peers(leader, three...)})
+	}
+	add("capture", "dc-nats-0")
+	add("inbound", "dc-nats-1")
+	add("resolved", "dc-nats-0")
+	add("z1", "dc-nats-2")
+	add("z2", "dc-nats-2")
+	opts := PlanOptions{
+		Movable:  func(s string) bool { return s != "capture" && s != "inbound" },
+		PerEvent: func(s string) bool { return s == "capture" || s == "inbound" || s == "resolved" },
+	}
+	plan := PlanRebalance(snap, opts)
+	var resolvedMoves []Move
+	for _, m := range plan.Moves {
+		if m.Stream == "resolved" {
+			resolvedMoves = append(resolvedMoves, m)
+		}
+	}
+	if len(resolvedMoves) != 1 || resolvedMoves[0].To != "dc-nats-2" {
+		t.Fatalf("resolved should move once, to the free server: %+v", plan.Moves)
+	}
+	if plan.PerEventLeaders["resolved"] != "dc-nats-2" || plan.PerEventShared {
+		t.Errorf("leaders after: %v shared=%v", plan.PerEventLeaders, plan.PerEventShared)
+	}
+	if len(plan.Moves) < 2 {
+		t.Errorf("the count balancing should still have moved something else off dc-nats-2: %+v", plan.Moves)
+	}
+}
+
+// The fixed pair sharing a server is reported as information; the movable stream is still separated
+// from it, and the plan is not marked shared.
+func TestPlanRebalanceReportsAFixedPairSharingAServerApart(t *testing.T) {
+	var snap Snapshot
+	add := func(name, leader string) {
+		snap.Objects = append(snap.Objects, Object{Name: name, Replicas: 3, Leader: leader, Peers: peers(leader, three...)})
+	}
+	add("capture", "dc-nats-0")
+	add("inbound", "dc-nats-0")
+	add("resolved", "dc-nats-1")
+	plan := PlanRebalance(snap, PlanOptions{
+		Movable:  func(s string) bool { return s == "resolved" },
+		PerEvent: func(string) bool { return true },
+	})
+	if plan.PerEventShared {
+		t.Errorf("resolved is separate; the fixed pair must not make the plan read as shared: %v", plan.PerEventLeaders)
+	}
+	if len(plan.FixedShared) != 1 || plan.FixedShared[0].Server != "dc-nats-0" || len(plan.FixedShared[0].Streams) != 2 {
+		t.Errorf("fixed pair not reported: %+v", plan.FixedShared)
+	}
+}
+
+// Handoff is confirmed only once the leader has left the old server. A reading of the old leader after
+// an accepted step-down means the election is not seen yet, so the next move is not started on it.
+func TestApplyMovesDoesNotStartTheNextMoveUntilTheHandoffIsSeen(t *testing.T) {
+	ok := []Peer{{Name: "b", Current: true}, {Name: "c", Current: true}}
+	g := &fakeGroup{readings: [][]Peer{ok}, stuck: true}
+	moves := []Move{{Stream: "s1", From: "a", To: "b"}, {Stream: "s2", From: "a", To: "b"}}
+	res := applyMoves(context.Background(), g.io(), moves, fastApply)
+	if g.sent != 1 {
+		t.Fatalf("the second move was sent on an unseen handoff: sent=%d %+v", g.sent, res)
+	}
+	if res[0].Err == nil || res[1].Err == nil {
+		t.Errorf("neither move should read as done: %+v", res)
+	}
+	// Control: when the handoff lands, the second move goes out.
+	h := &fakeGroup{readings: [][]Peer{ok}}
+	h.sent = 0
+	r2 := applyMoves(context.Background(), moveIO{state: func(m Move) (string, []Peer, error) {
+		if m.Stream == "s2" || h.sent > 0 {
+			return "b", ok, nil
+		}
+		return "a", ok, nil
+	}, stepDown: func(context.Context, Move) error { h.sent++; return nil }}, moves, fastApply)
+	if r2[0].Err != nil {
+		t.Errorf("control: %+v", r2)
 	}
 }

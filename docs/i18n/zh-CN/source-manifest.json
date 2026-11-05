@@ -143,12 +143,12 @@
       "translationSha256": "b167cb0de6903ba7162bd9ee99d42432049d66047e33a875dc2b219c5f212425"
     },
     "deployment/observability.md": {
-      "sourceSha256": "d5058ea8a8c8f31417f44135ad143cd0224996dcbd9080e6dc5294a3174f1c54",
-      "translationSha256": "3d6125c9946a6e738c658a15917f928dbb59e93f8c46f0b0e0e080e95767fb9b"
+      "sourceSha256": "f60b82ea332fbcdff6196c51ecf6c0f08a5b1903f81b8e5a7543a082f7e71451",
+      "translationSha256": "c3c290f25680c0878a9f1a7398dce1f30f4fcb007c247a6bd4775a982ae75691"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "a08fe1b88620289cee82f38edfdb888c678893628cc61355575c3539e0728e96",
-      "translationSha256": "0def196d62dc48fd11c6e5c28ec50b4548d76dce5e5de3a964170926ed45c3eb"
+      "sourceSha256": "39c4e4ed6ea3e8ca8f0f1b2f0782ee5bc73ac88b6fd253ca24134904caccdac4",
+      "translationSha256": "8c38c69ad587f1a20fc691b4949de96d8069c455585159f6404e63b8238b91f6"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",
@@ -271,8 +271,8 @@
       "translationSha256": "e5256712ec6c7ea0aa8ac96169f57f6f6c55b21260300e9d9dc79fafd5b34d7f"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "610b8073487221c6d0ebee84bb9361177d2706b92529ca8ec0774ee7dc68f766",
-      "translationSha256": "699ac659975bda29d0d66fa3804725e1bccea8bd1be5b9daff945c800f1a9516"
+      "sourceSha256": "a4ea537e507bd2ac080c7f8d3c61f4d0ac8b963137b175b6a7d46bf24f963d3d",
+      "translationSha256": "8619afa686cc802e7bea2a5219235ec215864c5ff1bfa0078c3c915fb76f031f"
     },
     "reference/device-protocol.md": {
       "sourceSha256": "72f8c1c6cdda43074da6792b6fc5bcc75b7a88ce4198e56c53bf82324adb2024",

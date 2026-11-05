@@ -198,27 +198,44 @@ func TestAlreadySeparatedLeadersStayPut(t *testing.T) {
 	if plan.PerEventShared || !resolvedSeparated(applyMoves(snap, plan.Moves)) {
 		t.Errorf("per-event leaders should be separate: %v", plan.PerEventLeaders)
 	}
-	if line := perEventLine(plan, nil); !strings.HasSuffix(line, "(separated)") || !strings.Contains(line, "resolved-events=n2") {
+	if line := perEventLine(plan, nil); !strings.Contains(line, "(separated)") || !strings.Contains(line, "resolved-events=n2") {
 		t.Errorf("summary line: %q", line)
 	}
 }
 
-// With fewer servers than per-event streams they cannot be separated: nothing is forced and the
-// summary says so.
-func TestFewerServersThanPerEventStreamsIsReportedNotForced(t *testing.T) {
-	snap := shapeSnapshot(func(string) string { return "n0" })
+// With nowhere to put resolved-events (two servers, capture and inbound on both of them) nothing is
+// forced and the summary says SHARED. Control: the same fixture with a third server separates it.
+func TestNoFreeServerIsReportedNotForced(t *testing.T) {
+	cap, in, res := messaging.StreamName(shapeInstance, streams.DeviceEventsCapture), messaging.StreamName(shapeInstance, streams.InboundEvents), messaging.StreamName(shapeInstance, streams.ResolvedEvents)
+	place := map[string]string{cap: "n0", in: "n1", res: "n0"}
+	snap := shapeSnapshot(func(name string) string {
+		if l, ok := place[name]; ok {
+			return l
+		}
+		return "n0"
+	})
+	two := func(leader string) []replication.Peer {
+		if leader == "n0" {
+			return []replication.Peer{{Name: "n1", Current: true}}
+		}
+		return []replication.Peer{{Name: "n0", Current: true}}
+	}
+	three := replication.Snapshot{Objects: append([]replication.Object(nil), snap.Objects...), Consumers: snap.Consumers}
 	for i := range snap.Objects {
-		snap.Objects[i].Peers = []replication.Peer{{Name: "n1", Current: true}}
+		snap.Objects[i].Peers = two(snap.Objects[i].Leader)
 	}
 	for i := range snap.Consumers {
-		snap.Consumers[i].Peers = []replication.Peer{{Name: "n1", Current: true}}
+		snap.Consumers[i].Peers = two(snap.Consumers[i].Leader)
 	}
 	plan := replication.PlanRebalance(snap, shapeOptions(true))
 	if !plan.PerEventShared {
-		t.Errorf("three per-event streams on two servers must read as shared: %v", plan.PerEventLeaders)
+		t.Errorf("resolved-events has no free server and must read as shared: %v", plan.PerEventLeaders)
 	}
-	if line := perEventLine(plan, nil); !strings.HasSuffix(line, "(SHARED)") {
+	if line := perEventLine(plan, nil); !strings.Contains(line, "(SHARED)") {
 		t.Errorf("the summary should say SHARED: %q", line)
+	}
+	if ctl := replication.PlanRebalance(three, shapeOptions(true)); ctl.PerEventShared {
+		t.Errorf("control: with a replica on the third server it separates: %v", ctl.PerEventLeaders)
 	}
 }
 
@@ -364,36 +381,74 @@ func TestSummaryDoesNotClaimASeparationThatDidNotLand(t *testing.T) {
 	if mv.Stream == "" {
 		t.Fatal("fixture should plan a move of resolved-events")
 	}
-	if line := perEventLine(plan, []replication.MoveResult{{Move: mv}}); !strings.HasSuffix(line, "(separated)") && !strings.HasSuffix(line, "(SHARED)") {
+	if line := perEventLine(plan, []replication.MoveResult{{Move: mv}}); !strings.Contains(line, "(separated)") && !strings.Contains(line, "(SHARED)") {
 		t.Errorf("a landed move leaves the plain state: %q", line)
 	}
 	for name, r := range map[string]replication.MoveResult{"failed": {Move: mv, Err: fmt.Errorf("boom")}, "skipped": {Move: mv, Skipped: true}} {
-		if line := perEventLine(plan, []replication.MoveResult{r}); !strings.HasSuffix(line, "(NOT CONFIRMED)") {
+		if line := perEventLine(plan, []replication.MoveResult{r}); !strings.Contains(line, "(NOT CONFIRMED)") {
 			t.Errorf("%s: %q", name, line)
 		}
 	}
 }
 
-// The settle gate reads the fixed per-event anchors: a leaderless or lagging one holds the plan back,
-// and their consumers are not read.
-func TestSettleGateReadsTheFixedPerEventLeaders(t *testing.T) {
+// The settle gate reads the fixed per-event streams for their LEADER only: a leaderless one holds the
+// plan back, a lagging or offline follower does not (a follower of capture is not the plan's
+// business), and their consumers are not read. Negative control: the same snapshots, with the
+// anchors read in full as the earlier gate did, are NOT settled.
+func TestSettleGateReadsTheFixedPerEventLeadersOnly(t *testing.T) {
 	opts := shapeOptions(true)
 	capture := messaging.StreamName(shapeInstance, streams.DeviceEventsCapture)
 	ok := replication.Peer{Name: "n1", Current: true}
+	leaderless := replication.Object{Name: capture, Replicas: 3, Leader: "", Peers: []replication.Peer{ok}}
+	if brokerSettled(replication.Snapshot{Objects: []replication.Object{leaderless}}, opts.Movable, opts.PerEvent) {
+		t.Error("a leaderless anchor must hold the plan back")
+	}
 	for name, o := range map[string]replication.Object{
-		"leaderless": {Name: capture, Replicas: 3, Leader: "", Peers: []replication.Peer{ok}},
-		"lagging":    {Name: capture, Replicas: 3, Leader: "n0", Peers: []replication.Peer{{Name: "n1"}}},
-		"offline":    {Name: capture, Replicas: 3, Leader: "n0", Peers: []replication.Peer{{Name: "n1", Current: true, Offline: true}}},
+		"lagging follower": {Name: capture, Replicas: 3, Leader: "n0", Peers: []replication.Peer{{Name: "n1"}}},
 	} {
-		if brokerSettled(replication.Snapshot{Objects: []replication.Object{o}}, opts.Movable, opts.PerEvent) {
-			t.Errorf("%s anchor must hold the plan back", name)
+		snap := replication.Snapshot{Objects: []replication.Object{o}}
+		if !brokerSettled(snap, opts.Movable, opts.PerEvent) {
+			t.Errorf("%s of a fixed stream must not hold the plan back", name)
 		}
-		if !brokerSettled(replication.Snapshot{Objects: []replication.Object{o}}, opts.Movable, func(string) bool { return false }) {
-			t.Errorf("control, %s: with the anchor not read the snapshot is settled", name)
+		// control: treated as a movable stream (read in full), the same snapshot is unsettled
+		if brokerSettled(snap, func(s string) bool { return s == capture }, opts.PerEvent) {
+			t.Errorf("control, %s: read in full the snapshot should be unsettled", name)
 		}
+	}
+	// An offline follower of a fixed stream is a partial outage even when every movable group is
+	// healthy (five servers, three replicas): the gate holds. Control: lagging only does not.
+	offline := replication.Object{Name: capture, Replicas: 3, Leader: "n0", Peers: []replication.Peer{{Name: "n1", Current: true, Offline: true}}}
+	if brokerSettled(replication.Snapshot{Objects: []replication.Object{offline}}, opts.Movable, opts.PerEvent) {
+		t.Error("an offline follower of a fixed stream must hold the plan back")
 	}
 	lagConsumer := replication.Snapshot{Consumers: []replication.Consumer{{Stream: capture, Name: "c", Durable: true, Leader: "n0", Peers: []replication.Peer{{Name: "n1"}}}}}
 	if !brokerSettled(lagConsumer, opts.Movable, opts.PerEvent) {
 		t.Error("a fixed stream's consumers are not read by the plan")
+	}
+	// a MOVABLE stream is still read in full
+	movableName := messaging.StreamName(shapeInstance, streams.ResolvedEvents)
+	lagging := replication.Snapshot{Objects: []replication.Object{{Name: movableName, Replicas: 3, Leader: "n0", Peers: []replication.Peer{{Name: "n1"}}}}}
+	if brokerSettled(lagging, opts.Movable, opts.PerEvent) {
+		t.Error("a lagging replica of a movable stream must hold the plan back")
+	}
+}
+
+// The fixed pair sharing a server is reported apart and does not make the movable stream's state
+// SHARED.
+func TestSummaryReportsAFixedPairApart(t *testing.T) {
+	place := map[string]string{
+		messaging.StreamName(shapeInstance, streams.DeviceEventsCapture): "n0",
+		messaging.StreamName(shapeInstance, streams.InboundEvents):       "n0",
+		messaging.StreamName(shapeInstance, streams.ResolvedEvents):      "n1",
+	}
+	snap := shapeSnapshot(func(name string) string {
+		if l, ok := place[name]; ok {
+			return l
+		}
+		return "n2"
+	})
+	line := perEventLine(replication.PlanRebalance(snap, shapeOptions(true)), nil)
+	if !strings.Contains(line, "(separated)") || !strings.Contains(line, "device-events-capture/inbound-events share n0 (fixed, not moved)") {
+		t.Errorf("summary line: %q", line)
 	}
 }

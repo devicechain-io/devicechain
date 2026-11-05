@@ -365,13 +365,18 @@ demand, for a broker restarted some other way (a node drain, a pod loss).
 
 It asks the leader of each over-loaded group to hand over to a replica that is current, one
 group at a time, each waiting for the new leader to be current, and moves nothing else: no data,
-no configuration. A broker that is already even is left alone. Each move is a brief leader
-election for one stream or consumer.
+no configuration. A broker that is already even is left alone, apart from the separation described
+below. Each move is a brief leader election for one stream or consumer.
 
 First it keeps the streams every device event passes through on different servers: when the stream
 that carries resolved events is led by the same server as the device capture or the inbound stream,
 it is handed to a replica on a server that leads neither, and the balancing that follows leaves it
-there. With fewer servers than such streams it cannot, and the summary says the leaders are shared.
+there. The summary ends with where those streams are led. The resolved stream reads "separated", or
+"SHARED" when no current replica sits on a free server: fewer servers than such streams, a free
+server that holds no replica of it (five servers at three replicas), or replicas that are behind.
+It reads "NOT CONFIRMED" when the move failed or was skipped. The capture and inbound streams are
+never moved, so when one server leads both the line says so as information; it clears at the next
+broker roll.
 
 Streams that hold device data already acknowledged to the device are never moved, and there is no
 option to include them: the broker's MQTT streams, the device capture stream and every stream an

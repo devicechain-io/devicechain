@@ -133,8 +133,9 @@ func rebalanceBrokerLeadership(ctx context.Context, st *State, typed *kubernetes
 }
 
 // brokerSettled is whether every group the plan reads has a leader and all its replicas are current:
-// the movable streams and their consumers, and the leaders of the per-event streams that are not
-// movable (the movable one is placed away from them; their consumers are not read).
+// the movable streams and their consumers. The per-event streams that are not movable are read for
+// their LEADER only (the movable one is placed away from it), so they need a leader and no offline
+// follower; a merely lagging follower of capture must not hold every move back. Their consumers are not read.
 func brokerSettled(snap replication.Snapshot, movable, perEvent func(string) bool) bool {
 	for _, o := range snap.Objects {
 		if !movable(o.Name) && !perEvent(o.Name) {
@@ -142,6 +143,16 @@ func brokerSettled(snap replication.Snapshot, movable, perEvent func(string) boo
 		}
 		if o.Replicas > 1 && o.Leader == "" {
 			return false
+		}
+		if !movable(o.Name) {
+			// A fixed stream is read for its leader, and for an outage: an offline follower is a
+			// partial outage whatever else is healthy. Only "behind" is not its business.
+			for _, p := range o.Peers {
+				if p.Offline {
+					return false
+				}
+			}
+			continue
 		}
 		for _, p := range o.Peers {
 			if !p.Current || p.Offline {
@@ -232,7 +243,16 @@ func perEventLine(plan replication.RebalancePlan, results []replication.MoveResu
 			state = "NOT CONFIRMED"
 		}
 	}
-	return "; per-event leaders: " + strings.Join(parts, " ") + " (" + state + ")"
+	line := "; per-event leaders: " + strings.Join(parts, " ") + " (" + state + ")"
+	// The fixed streams are never moved: two on one server is reported, not a failure of the plan.
+	for _, f := range plan.FixedShared {
+		short := make([]string, len(f.Streams))
+		for i, n := range f.Streams {
+			short[i] = n[strings.LastIndex(n, "_")+1:]
+		}
+		line += "; " + strings.Join(short, "/") + " share " + f.Server + " (fixed, not moved)"
+	}
+	return line
 }
 
 func summarizeMoves(plan replication.RebalancePlan, results []replication.MoveResult) string {
