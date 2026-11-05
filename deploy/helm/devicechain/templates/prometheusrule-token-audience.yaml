@@ -1,0 +1,53 @@
+{{/*
+Alerting rules for the token-audience check.
+
+WHY THIS GROUP EXISTS. Every API plane now checks the `aud` of the access token it is shown
+against the area it serves (and against the registered MCP resource, for calls MCP forwards).
+In this release the check only OBSERVES: a request whose audience belongs to another plane is
+counted `would_reject`, logged, and served. The next minor refuses those requests. This alert
+is how an operator finds out, while it is still harmless, that some client is sending tokens
+bound to the wrong resource, so the client can be fixed before the refusal.
+
+THE ALERT IS `info`, NOT A PAGE. Nothing is failing. It fires once, after a sustained hour of
+would-reject traffic, and it clears by itself once the client is corrected. It carries no tenant
+label because the plane counter has none: a request-volume signal per service, not a per-tenant
+fault. Finding WHICH client sends it is the log's job (the rate-limited warning names the
+client_id and the audience class).
+
+The counter is selected by name across every service's subsystem, so a new area is covered
+without editing this file.
+
+(The authorization-server twin, over the resource it is asked to issue a token for, ships with
+the counter it reads, in the release that adds the authorization-server check.)
+
+This alert is removed or rewritten against `rejected` when the check starts refusing.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: token-audience
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.token-audience
+      rules:
+        # `for` equals the window, so the alert needs would-reject traffic to keep the hour's
+        # rate above zero for a full hour. A lone request stops counting once it leaves the 1h
+        # window and the alert clears. It is not a guarantee of continuous traffic: one request
+        # every 59 minutes keeps the rate above zero. For an info-level nudge that is the right
+        # sensitivity.
+        - alert: TokenAudienceWouldReject
+          expr: sum by (job) (rate({__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject", namespace="{{ $ns }}"}[1h])) > 0
+          for: 1h
+          labels:
+            severity: info
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A client is sending tokens that the next minor release will refuse"
+            description: "For at least an hour, {{ "{{ $labels.job }}" }} has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
+{{- end }}
