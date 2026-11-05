@@ -176,10 +176,12 @@ de lecturas por segundo.
   depende del ancho de fila y de los índices. Ejemplo de una prueba de rendimiento en GKE: con el límite predeterminado
   de 13 GiB, el almacén de eventos hizo puntos de control por reloj a 8.000 eventos MQTT por segundo
   (9,4 MB/s de registro), pero a 12.000 por segundo (15,3 MB/s) solicitó un punto de control en lugar
-  de esperar al temporizador, porque 15 MB/s escriben unos 7 GB en menos de ocho minutos. A 15,3 MB/s
-  la regla da unos 26 GiB, y unos 45 GiB a 20.000 por segundo (esta última cifra es una extrapolación, no una
-  medición; redondee hacia arriba y mida su propia tasa). El registro vive en el volumen de
-  datos, así que dimensione el volumen para ese límite además de para los datos. El triple indicado
+  de esperar al temporizador, porque 15 MB/s escriben unos 7 GB en menos de ocho minutos. MB/s aquí
+  significa 10^6 bytes por segundo. A 15,3 MB/s la regla da 1,9 × 900 × 15,3 MB/s = 26,2 GB, es decir,
+  24,4 GiB, así que fije unos 25 GiB a 12.000 por segundo. Escalando la tasa medida a 20.000 por
+  segundo (unos 25,5 MB/s) salen unos 40,6 GiB, así que unos 41 GiB; esta segunda cifra es una
+  extrapolación, no una medición. Redondee hacia arriba en ambos casos y mida su propia tasa. El
+  registro vive en el volumen de datos, así que dimensione el volumen para ese límite además de para los datos. El triple indicado
   arriba es el margen que conviene mantener sobre este mínimo.
   Estos ajustes afinan solo el almacén de eventos. La base de datos relacional conserva sus valores
   predeterminados (`max_wal_size` de 1 GB y `checkpoint_timeout` de cinco minutos); en la misma
@@ -235,10 +237,8 @@ datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `Data
    kubectl get storageclass <esa clase> -o jsonpath='{.allowVolumeExpansion}{"\n"}'   # debe imprimir true
    ```
 
-2. Modifique todas las reclamaciones del Cluster al mismo tamaño: la de datos de cada miembro y,
-   si el Cluster tiene un volumen aparte para el registro de escritura anticipada, también su
-   reclamación `-wal` (`dc-tsdb-1`, `dc-tsdb-2`, `dc-tsdb-3`, y `dc-tsdb-1-wal`, etc.). Una
-   reclamación solo puede crecer:
+2. Modifique todas las reclamaciones del Cluster al mismo tamaño (`dc-tsdb-1`, `dc-tsdb-2`,
+   `dc-tsdb-3`). Una reclamación solo puede crecer:
 
    ```bash
    for pvc in dc-tsdb-1 dc-tsdb-2 dc-tsdb-3; do
@@ -248,8 +248,7 @@ datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `Data
    ```
 
 3. Mantenga `spec.storage.size` del Cluster y el ajuste `timescale_storage` en el mismo tamaño, como
-   se describió antes, para que el operador y la siguiente aplicación coincidan con lo que hizo. Si
-   también amplió reclamaciones `-wal`, ajuste `spec.walStorage.size` del Cluster al mismo valor.
+   se describió antes, para que el operador y la siguiente aplicación coincidan con lo que hizo.
 
 Verifique antes de darlo por terminado:
 

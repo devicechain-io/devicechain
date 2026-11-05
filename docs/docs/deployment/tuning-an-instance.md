@@ -166,10 +166,12 @@ readings per second.
   window); it depends on row width and indexes. Worked example from a GKE benchmark: with the
   default 13 GiB limit the event store checkpointed on the clock at 8,000 MQTT events a second
   (9.4 MB/s of log), but at 12,000 a second (15.3 MB/s) it requested a checkpoint instead of
-  waiting for the timer, because 15 MB/s writes about 7 GB in under eight minutes. At 15.3 MB/s the
-  rule gives about 26 GiB, and about 45 GiB at 20,000 a second (that last figure is an extrapolation, not a measurement: round
-  up and measure your own rate). The log lives on the data volume, so
-  size the volume for that limit as well as for the data. The factor of three above is the margin to
+  waiting for the timer, because 15 MB/s writes about 7 GB in under eight minutes. MB/s here
+  means 10^6 bytes a second. At 15.3 MB/s the rule gives 1.9 × 900 × 15.3 MB/s = 26.2 GB, which is
+  24.4 GiB, so set about 25 GiB at 12,000 a second. Scaling the measured rate to 20,000 a second
+  (about 25.5 MB/s) gives about 40.6 GiB, so about 41 GiB there; that second figure is an
+  extrapolation, not a measurement. Round up in both cases and measure your own rate. The log lives
+  on the data volume, so size the volume for that limit as well as for the data. The factor of three above is the margin to
   keep on top of this minimum.
   These settings tune the event store only. The relational database keeps its own defaults
   (`max_wal_size` of 1 GB and a five-minute `checkpoint_timeout`); in the same benchmark it requested
@@ -223,9 +225,8 @@ the event store.
    kubectl get storageclass <that class> -o jsonpath='{.allowVolumeExpansion}{"\n"}'   # must print true
    ```
 
-2. Patch every claim of the Cluster to the same size: each member's data claim and, where the
-   Cluster has a separate write-ahead log volume, its `-wal` claim too (`dc-tsdb-1`, `dc-tsdb-2`,
-   `dc-tsdb-3`, and `dc-tsdb-1-wal` and so on). A claim can only grow:
+2. Patch every claim of the Cluster to the same size (`dc-tsdb-1`, `dc-tsdb-2`, `dc-tsdb-3`). A claim
+   can only grow:
 
    ```bash
    for pvc in dc-tsdb-1 dc-tsdb-2 dc-tsdb-3; do
@@ -235,8 +236,7 @@ the event store.
    ```
 
 3. Keep the Cluster's `spec.storage.size` and the `timescale_storage` setting at the same size, as
-   described above, so the operator and the next apply agree with what you did. If you also grew
-   `-wal` claims, set the Cluster's `spec.walStorage.size` to match.
+   described above, so the operator and the next apply agree with what you did.
 
 Verify before you call it done:
 

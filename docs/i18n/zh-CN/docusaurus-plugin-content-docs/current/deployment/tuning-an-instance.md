@@ -128,7 +128,10 @@ dcctl upgrade local my-instance --version <new-version>
   （`pg_stat_wal` 的 `wal_bytes` 在某个时间窗口内的增量），它取决于行宽和索引。GKE 基准测试中的实例：
   在默认的 13 GiB 上限下，事件库在每秒 8,000 个 MQTT 事件（日志 9.4 MB/s）时按时钟做检查点，但在
   每秒 12,000 个（15.3 MB/s）时会提前请求检查点，而不是等待计时器，因为 15 MB/s 不到八分钟就会写出
-  约 7 GB。按 15.3 MB/s，该规则给出约 26 GiB；每秒 20,000 个时约为 45 GiB（后者是外推而非实测；请向上取整并测量您自己的速率）。日志位于数据卷上，因此
+  约 7 GB。这里的 MB/s 指每秒 10^6 字节。按 15.3 MB/s，该规则给出 1.9 × 900 × 15.3 MB/s = 26.2 GB，即
+  24.4 GiB，因此在每秒 12,000 个时设为约 25 GiB。把实测速率按比例放大到每秒 20,000 个（约
+  25.5 MB/s）得到约 40.6 GiB，即约 41 GiB；后一个数字是外推而非实测。两种情况都请向上取整，并测量您
+  自己的速率。日志位于数据卷上，因此
   规划卷容量时除数据外还要容纳这个上限。上文的三倍是在此最小值之上应保留的余量。
   这些设置只调优事件库。关系型数据库保持自己的默认值（`max_wal_size` 为 1 GB，`checkpoint_timeout`
   为 5 分钟）；同一次基准测试中它在每个 7.5 分钟窗口内请求了 3 到 6 次检查点，日志速率为
@@ -170,8 +173,7 @@ pvc` 仍显示旧容量，请自行扩容卷声明。关系型数据库（Cluste
    kubectl get storageclass <该类> -o jsonpath='{.allowVolumeExpansion}{"\n"}'   # 必须输出 true
    ```
 
-2. 把该 Cluster 的每个卷声明改为同一容量：每个成员的数据卷声明，以及（若 Cluster 有单独的预写日志卷）
-   其 `-wal` 卷声明（`dc-tsdb-1`、`dc-tsdb-2`、`dc-tsdb-3`，以及 `dc-tsdb-1-wal` 等）。卷声明只能增大：
+2. 把该 Cluster 的每个卷声明改为同一容量（`dc-tsdb-1`、`dc-tsdb-2`、`dc-tsdb-3`）。卷声明只能增大：
 
    ```bash
    for pvc in dc-tsdb-1 dc-tsdb-2 dc-tsdb-3; do
@@ -181,7 +183,7 @@ pvc` 仍显示旧容量，请自行扩容卷声明。关系型数据库（Cluste
    ```
 
 3. 让 Cluster 的 `spec.storage.size` 和 `timescale_storage` 设置保持同一容量（见上文），使算子和下一次
-   应用与您的操作一致。如果您也扩容了 `-wal` 卷声明，请把 Cluster 的 `spec.walStorage.size` 同步设为相同值。
+   应用与您的操作一致。
 
 确认完成之前请验证：
 
