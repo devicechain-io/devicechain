@@ -45,7 +45,7 @@ func TestUserinfoHandler_SuperuserAndTenantUser(t *testing.T) {
 			return claimsFor("alice@acme.io", "acme", false), nil
 		}
 		return nil, errors.New("unknown")
-	})
+	}, nil)
 
 	// Operator token → sudo:true, identity fields populated.
 	rec := getUserinfo(h, "op")
@@ -82,7 +82,7 @@ func TestUserinfoHandler_MissingToken(t *testing.T) {
 	h := UserinfoHandler(func(string) (*auth.Claims, error) {
 		consulted = true
 		return nil, nil
-	})
+	}, nil)
 	rec := getUserinfo(h, "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
@@ -99,7 +99,7 @@ func TestUserinfoHandler_MissingToken(t *testing.T) {
 func TestUserinfoHandler_InvalidToken(t *testing.T) {
 	h := UserinfoHandler(func(string) (*auth.Claims, error) {
 		return nil, errors.New("token type \"refresh\" does not match expected \"access\"")
-	})
+	}, nil)
 	rec := getUserinfo(h, "bad")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
@@ -113,7 +113,7 @@ func TestUserinfoHandler_InvalidToken(t *testing.T) {
 }
 
 func TestUserinfoHandler_MethodNotAllowed(t *testing.T) {
-	h := UserinfoHandler(func(string) (*auth.Claims, error) { return claimsFor("a@b.c", "t", false), nil })
+	h := UserinfoHandler(func(string) (*auth.Claims, error) { return claimsFor("a@b.c", "t", false), nil }, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, UserinfoPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {

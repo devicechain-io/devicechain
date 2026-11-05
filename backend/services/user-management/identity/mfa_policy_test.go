@@ -322,7 +322,7 @@ func TestUserinfoReturnsTheTokensAmr(t *testing.T) {
 // userinfoOf runs the userinfo endpoint over claims and decodes its answer.
 func userinfoOf(t *testing.T, claims *auth.Claims) userinfoResponse {
 	t.Helper()
-	h := UserinfoHandler(func(string) (*auth.Claims, error) { return claims, nil })
+	h := UserinfoHandler(func(string) (*auth.Claims, error) { return claims, nil }, nil)
 	req := httptest.NewRequest(http.MethodGet, "/oauth/userinfo", nil)
 	req.Header.Set("Authorization", "Bearer x")
 	rec := httptest.NewRecorder()

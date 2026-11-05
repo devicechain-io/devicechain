@@ -187,7 +187,7 @@ func TestAdminAndBrandingRoutesAreOnTheOwnedMux(t *testing.T) {
 
 	registerAdminHandler()
 	registerSettingsHandler()
-	graphql.RegisterBrandingLogoHandler(Microservice.Mux(), BlobStore, IdentityManager, IdentityManager.Validator())
+	graphql.RegisterBrandingLogoHandler(Microservice.Mux(), BlobStore, IdentityManager, IdentityManager.Validator(), nil)
 
 	for _, tc := range []struct {
 		path string

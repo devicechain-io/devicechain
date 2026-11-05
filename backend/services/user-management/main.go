@@ -395,7 +395,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Tenant branding-logo object-store endpoints (ADR-058): an authorizing read
 	// proxy + a branding:write upload, on the shared http server. Data-plane tier
 	// (tenant access tokens), self-scoped to the caller's tenant.
-	graphql.RegisterBrandingLogoHandler(Microservice.Mux(), BlobStore, IdentityManager, IdentityManager.Validator())
+	graphql.RegisterBrandingLogoHandler(Microservice.Mux(), BlobStore, IdentityManager, IdentityManager.Validator(),
+		func() *auth.PlanePolicy { return Microservice.Readiness.AudiencePolicy() })
 
 	// The ADR-077 purge coordinator. Deleting a tenant marks its row `purging` and cuts
 	// access; this is what then erases its data across every store and removes the row,
@@ -636,7 +637,7 @@ func registerOAuthHandlers() {
 	// through the access-token validator (signature + type + tenant).
 	Microservice.Mux().Handle(identity.UserinfoPath, identity.UserinfoHandler(func(t string) (*auth.Claims, error) {
 		return IdentityManager.Validator().Validate(t)
-	}))
+	}, func() *auth.PlanePolicy { return Microservice.Readiness.AudiencePolicy() }))
 
 	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
 	// Serves the same retained key set as /auth/jwks.

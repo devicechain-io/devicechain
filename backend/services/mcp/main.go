@@ -63,6 +63,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// 🔴 BEFORE ANYTHING IS REGISTERED OR STARTED. In enforce mode an mcp whose resourceUrl is not
+	// a registered MCP resource would report healthy while every call it forwards is refused by
+	// the planes, so it refuses to start instead. See checkAudienceRegistration.
+	if err := checkAudienceRegistration(Configuration.ResourceUrl,
+		Microservice.InstanceConfiguration.Infrastructure.TokenAudience,
+		Microservice.MetricsRegisterer(), Microservice.MetricsSubsystem()); err != nil {
+		return err
+	}
+
 	// Fetch the token validator from user-management's JWKS in the background and
 	// gate readiness on it (ADR-022 decision 3) — the MCP server validates every
 	// bearer with it, so it degrades (503) rather than failing startup if

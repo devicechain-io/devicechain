@@ -45,7 +45,12 @@ type userinfoResponse struct {
 // without a live key set; it must verify the signature + access-token type + tenant
 // (auth.Validator.Validate). Supports GET and POST (OIDC Core §5.3.1); the token is
 // read from the Authorization header for both.
-func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error)) http.Handler {
+//
+// policy is the token-audience policy (rule 2), read per request: userinfo takes the
+// user-management PLANE rule (no audience, this area's resource, or a registered MCP
+// resource), so a token bound to an external resource server is refused (RFC 7519 4.1.3).
+// A nil source, or one returning nil, is the CLOSED policy.
+func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error), policy func() *auth.PlanePolicy) http.Handler {
 	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
 			w.Header().Set("Allow", "GET, POST")
@@ -63,6 +68,17 @@ func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error)) ht
 		if err != nil {
 			// An invalid/expired token → invalid_token challenge (RFC 6750 §3.1). Never
 			// echo the parse error (no oracle about why the token failed).
+			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		// 🔴 AFTER validate, NEVER BEFORE: a forged token must not reach the counters. A
+		// refusal answers exactly like an invalid token, so the two cannot be told apart.
+		var p *auth.PlanePolicy
+		if policy != nil {
+			p = policy()
+		}
+		if err := p.Admit(claims, auth.PlaneUserinfo); err != nil {
 			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
