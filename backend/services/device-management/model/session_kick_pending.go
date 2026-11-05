@@ -66,6 +66,9 @@ func (r PendingSessionKick) reason() string {
 	if r.Origin == kickOriginDeviceDisabled {
 		return messaging.SessionKickDeviceDisabled
 	}
+	if r.Origin == kickOriginDeviceDeleted {
+		return messaging.SessionKickDeviceDeleted
+	}
 	return messaging.SessionKickCredentialChanged
 }
 
@@ -275,7 +278,9 @@ func (api *Api) DrainSessionKicksLocked(ctx context.Context) error {
 }
 
 // dropWithdrawnDeviceDisabledKicks removes, and returns the rows without, the device-disabled
-// debts of devices that are ENABLED now.
+// debts of devices that are ENABLED now: a device whose row EXISTS and is not disabled. A device
+// whose row is gone (deleted, soft or hard) keeps its debt: a disabled device that was then
+// deleted still has a session to end, and a missing row is never read as "enabled".
 //
 // 🔴 THE DEBT IS CHECKED AGAIN AT THE MOMENT IT IS COLLECTED. Re-enabling a device deletes its
 // row, but a drain that had already read the row would still ask the broker, and a replica
@@ -292,24 +297,22 @@ func (api *Api) dropWithdrawnDeviceDisabledKicks(db *gorm.DB, tenant string, row
 	if len(tokens) == 0 {
 		return rows, nil
 	}
-	disabled := map[string]bool{}
+	enabledNow := map[string]bool{}
 	for chunk := range slices.Chunk(tokens, rdb.MaxLookupKeys) {
-		var still []string
-		// A deleted device is not enabled: its own delete queued a kick of its own, and a debt
-		// with no live row to re-check is kept rather than guessed away.
+		var enabled []string
 		if err := db.Unscoped().Model(&Device{}).
-			Where("tenant_id = ? AND token IN ? AND (disabled_at IS NOT NULL OR deleted_at IS NOT NULL)", tenant, chunk).
-			Pluck("token", &still).Error; err != nil {
+			Where("tenant_id = ? AND token IN ? AND disabled_at IS NULL AND deleted_at IS NULL", tenant, chunk).
+			Pluck("token", &enabled).Error; err != nil {
 			return nil, err
 		}
-		for _, t := range still {
-			disabled[t] = true
+		for _, t := range enabled {
+			enabledNow[t] = true
 		}
 	}
 	kept := rows[:0:0]
 	var gone []PendingSessionKick
 	for _, r := range rows {
-		if r.Origin == kickOriginDeviceDisabled && !disabled[r.DeviceToken] {
+		if r.Origin == kickOriginDeviceDisabled && enabledNow[r.DeviceToken] {
 			gone = append(gone, r)
 			continue
 		}

@@ -346,6 +346,13 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return nil, err
 			}
+			// The kick is recorded with the delete, in this transaction: the device row is about to
+			// be gone, and a retry could not rediscover it. Cleared only by a confirmed kick.
+			if t, _ := core.TenantFromContext(ctx); t != "" {
+				if err := api.queueSessionKicksOnTx(tx, t, kickOriginDeviceDeleted, []string{token}); err != nil {
+					return nil, err
+				}
+			}
 			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error; err != nil {
 				return nil, err
 			}
@@ -367,7 +374,9 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		if tenant == "" {
 			tenant, _ = core.TenantFromContext(ctx)
 		}
-		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickDeviceDeleted, token); kerr != nil {
+		if kerr := api.drainSessionKicks(ctx, tenant, 0, func(db *gorm.DB) *gorm.DB {
+			return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
+		}); kerr != nil {
 			return deleted, kerr
 		}
 	}

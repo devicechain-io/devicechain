@@ -56,6 +56,11 @@ func anchorKickOrigin(id uint) uint { return kickOriginAnchorBase + id }
 // the boundaries.
 const kickOriginDeviceDisabled uint = 1 << 62
 
+// kickOriginDeviceDeleted is the queue Origin of a kick owed because the device was DELETED. The
+// row is queued in the delete's own transaction, so a delete whose kick could not be confirmed is
+// retried by the background drain, and it is never withdrawn: a deleted device does not come back.
+const kickOriginDeviceDeleted uint = 1<<62 + 1
+
 // lockTrustAnchorByToken reads the anchor with this token on tx, locking its row FOR UPDATE.
 // Disable, delete and every write that binds something to an anchor serialize on it. A token
 // that names nothing in the tenant is gorm.ErrRecordNotFound.

@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"gorm.io/gorm"
 	"testing"
 	"time"
 
@@ -268,4 +269,89 @@ func TestTheDrainDropsADeviceDisabledDebtOfAnEnabledDevice(t *testing.T) {
 	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
 	require.NoError(t, err)
 	require.Len(t, k.calls, 1)
+}
+
+// 🔴 A DISABLED DEVICE THAT IS THEN DELETED STILL OWES ITS KICK. The device row is gone (a delete
+// removes it for good), so a debt whose device cannot be found must be KEPT, not read as
+// "enabled" and dropped. Here only the disable's debt exists (the delete is by a release or a
+// path that queued nothing of its own), so it is the only thing that can end the session.
+//
+// Negative control: dropping a debt when the row is missing (the earlier rule) clears it with no
+// kick made.
+func TestADisabledThenDeletedDeviceStillOwesItsKick(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	k := &togglingKicker{up: true}
+	api.SessionKicker = k
+	require.NoError(t, api.RDB.DB(ctx).Create(&Device{TokenReference: rdb.TokenReference{Token: "dev-1"}}).Error)
+	require.NoError(t, api.RDB.DB(ctx).Create(&PendingSessionKick{TenantId: "acme", DeviceToken: "dev-1",
+		Origin: kickOriginDeviceDisabled, Generation: 1, RequestedAt: time.Now()}).Error)
+	require.NoError(t, api.RDB.DB(ctx).Unscoped().Where("token = ?", "dev-1").Delete(&Device{}).Error)
+
+	_, err := api.DrainSessionKicks(ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
+	require.True(t, k.answered("dev-1"), "the broker was asked to end the session of the deleted device")
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows)
+}
+
+// A delete's kick is recorded with the delete and retried in the background, like a disable's.
+func TestADeviceDeleteWhoseKickFailedIsRetriedByTheBackgroundDrain(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	k := &togglingKicker{}
+	api.SessionKicker = k
+	require.NoError(t, api.RDB.DB(ctx).Create(&Device{TokenReference: rdb.TokenReference{Token: "dev-1"}}).Error)
+	_, err := api.DeleteDevice(ctx, "dev-1")
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, kickOriginDeviceDeleted, rows[0].Origin)
+
+	k.set(true)
+	_, err = api.DrainSessionKicks(ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
+	require.Equal(t, togglingCall{messaging.SessionKickDeviceDeleted, []string{"dev-1"}}, k.calls[len(k.calls)-1])
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows)
+}
+
+// 🔴 THE QUEUE DECISION IS MADE FROM THE ROW AS STORED. A metadata edit read the device disabled;
+// it was enabled before the save. The edit must not queue a debt (or kick) for a device that is
+// enabled.
+//
+// Negative control: deciding from the pre-transaction copy (updated.DisabledAt.Valid) queues a
+// debt here.
+func TestAnEditThatReadADeviceDisabledDoesNotQueueAKickForOneEnabledBeforeTheSave(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	k := &togglingKicker{up: true}
+	api.SessionKicker = k
+	// Disable it with no responder wired yet so no kick is made, then clear the debt.
+	api.SessionKicker = nil
+	_, err := api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+	require.NoError(t, err)
+	api.SessionKicker = k
+
+	db := api.RDB.Database
+	armed := true
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:racing-enable", func(d *gorm.DB) {
+		row, ok := d.Statement.Dest.(*Device)
+		if !armed || !ok || row.Token != "dev" {
+			return
+		}
+		armed = false
+		_ = d.Session(&gorm.Session{NewDB: true}).Model(&Device{}).Where("id = ?", row.ID).
+			UpdateColumn("disabled_at", nil).Error
+	}))
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("test:racing-enable") })
+
+	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Name: dcgraphql.OptionalStringOf("renamed")})
+	require.NoError(t, err)
+	require.False(t, armed, "the racing enable never ran; the test proves nothing")
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows, "an enabled device owes no kick")
+	require.Empty(t, k.calls)
 }
