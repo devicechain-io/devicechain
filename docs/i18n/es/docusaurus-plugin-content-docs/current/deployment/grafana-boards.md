@@ -358,16 +358,45 @@ la dirección de loopback del equipo. El Prometheus de la instancia nunca lo rec
 chart no instala ningún panel para él. El panel es un archivo que importas en el Grafana que lee
 **tu propio** Prometheus: [`edge-agent.json`](https://github.com/devicechain-io/devicechain/blob/main/backend/edge/dc-edge-agent/dashboards/edge-agent.json).
 
-Para usarlo, lleva las métricas de los agentes a un Prometheus: ejecuta en cada equipo un colector,
-o un relevo accesible desde tu red, que recolecte `127.0.0.1:<metricsPort>` (por defecto 9090) y escriba en él. Después, en Grafana elige
-**Dashboards, New, Import**, sube el archivo y selecciona ese Prometheus como origen de datos. El
-panel tiene dos selectores, **Job** y **Agent**, tomados de las etiquetas de la recolección, de modo
-que un solo panel cubre toda la flota y cualquier subconjunto. No tiene tabla *Firing alerts*,
-porque el agente no distribuye reglas de alerta.
+Para usarlo, lleva las métricas de los agentes a un Prometheus. El endpoint de métricas escucha en la
+dirección de loopback del equipo (`127.0.0.1`, puerto `local.metricsPort`, por defecto 9090), así que el
+colector tiene que ser un proceso en el propio equipo: nada fuera de él puede alcanzarlo. Las series de
+cada agente deben llevar una **etiqueta `agent` única**. El selector, las leyendas y las agrupaciones del
+panel la usan, y sin ella las series de equipos distintos tienen etiquetas idénticas y se pisan unas a
+otras donde se reciben. Defínela como etiqueta externa en el colector de cada equipo. Con Prometheus en
+modo agente:
+
+```yaml
+global:
+  external_labels:
+    agent: site-berlin-01   # unique per box
+scrape_configs:
+  - job_name: dc-edge-agent
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+remote_write:
+  - url: https://prometheus.example.com/api/v1/write
+```
+
+El puerto por defecto del agente, 9090, es también el puerto de escucha por defecto de Prometheus, así
+que cambia uno de los dos: arranca el colector en otro, como abajo, o define `local.metricsPort` en la
+configuración del agente y recolecta ese puerto.
+
+```bash
+prometheus --enable-feature=agent --config.file=agent.yml --web.listen-address=127.0.0.1:9091
+```
+
+Después, en Grafana elige **Dashboards, New, Import**, sube el archivo y selecciona ese Prometheus como
+origen de datos. El panel tiene dos selectores, **Agent** (cada agente que envía la etiqueta) y
+**Lookback** (cuánto tiempo atrás buscar agentes que han dejado de reportar). Una planta que pierde su
+enlace deja de enviar todo, incluido su propio estado de desconexión, así que los indicadores *Known
+agents reporting* y *Agents silent* y la tabla *Agents* comparan lo que reporta ahora con lo que se vio
+en la ventana de lookback. El panel no tiene tabla *Firing alerts*, porque el agente no distribuye
+reglas de alerta.
 
 | Grupo | Qué muestra |
 | --- | --- |
-| Is every site connected? | Agentes que reportan y desconectados, el evento más antiguo en el búfer, el búfer más lleno, eventos perdidos por desbordamiento, eventos rechazados, agentes con el puerto local abierto y una tabla con una fila por agente. |
+| Is every site connected? | La proporción de agentes conocidos que reportan, agentes en silencio y agentes desconectados, el evento más antiguo en el búfer, el búfer más lleno, eventos perdidos por desbordamiento, eventos rechazados, agentes con el puerto local abierto y una tabla con una fila por agente. |
 | Connectivity | El enlace con la nube de cada agente a lo largo del tiempo y las publicaciones a la espera de la nube. |
 | Store-and-forward backlog | Antigüedad del evento más antiguo en el búfer, eventos en el búfer, búfer usado frente a su límite, ocupación del búfer y eventos perdidos por desbordamiento. |
 | Throughput | Eventos leídos para reenviar y confirmados por la nube, reenviados por agente e intentos de reenvío fallidos. |

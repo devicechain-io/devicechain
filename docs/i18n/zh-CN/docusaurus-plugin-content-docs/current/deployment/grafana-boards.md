@@ -237,11 +237,31 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 边缘代理运行在你站点的硬件上，它的指标端点只监听该设备的回环地址。实例的 Prometheus 永远不会采集它，因此 chart 不为它安装仪表盘。这个仪表盘是一个文件，导入读取**你自己的** Prometheus 的 Grafana 即可：[`edge-agent.json`](https://github.com/devicechain-io/devicechain/blob/main/backend/edge/dc-edge-agent/dashboards/edge-agent.json)。
 
-使用时，先把各代理的指标送进一个 Prometheus：在每台设备上运行一个采集器，或运行一个你的网络可达的中继，抓取 `127.0.0.1:<metricsPort>`（默认 9090）并写入它。然后在 Grafana 中选择 **Dashboards, New, Import**，上传该文件，并把那个 Prometheus 选为数据源。仪表盘有两个选择器 **Job** 和 **Agent**，取自抓取标签，因此一个仪表盘即可覆盖整个设备群及其任意子集。它没有 *Firing alerts* 表，因为代理不附带告警规则。
+使用时，先把各代理的指标送进一个 Prometheus。指标端点只监听设备的回环地址（`127.0.0.1`，端口为 `local.metricsPort`，默认 9090），因此采集器必须是设备本机上的进程：设备之外的任何东西都无法访问它。每个代理的序列都必须带有**唯一的 `agent` 标签**。仪表盘的选择器、图例和分组都使用它；没有它，不同设备的序列标签完全相同，在接收端会互相覆盖。请在每台设备的采集器上把它设为外部标签。以 Prometheus 的 agent 模式为例：
+
+```yaml
+global:
+  external_labels:
+    agent: site-berlin-01   # unique per box
+scrape_configs:
+  - job_name: dc-edge-agent
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+remote_write:
+  - url: https://prometheus.example.com/api/v1/write
+```
+
+代理的默认端口 9090 同时也是 Prometheus 的默认监听端口，所以要让其中一个换端口：像下面这样让采集器使用另一个端口，或在代理配置中设置 `local.metricsPort` 并抓取该端口。
+
+```bash
+prometheus --enable-feature=agent --config.file=agent.yml --web.listen-address=127.0.0.1:9091
+```
+
+然后在 Grafana 中选择 **Dashboards, New, Import**，上传该文件，并把那个 Prometheus 选为数据源。仪表盘有两个选择器：**Agent**（所有发送该标签的代理）和 **Lookback**（向前回溯多久来寻找已停止上报的代理）。失去链路的站点会停止发送一切，包括它自己的断开状态，因此 *Known agents reporting*、*Agents silent* 两个指标块和 *Agents* 表会把当前正在上报的代理与回溯窗口内见到过的代理做对比。仪表盘没有 *Firing alerts* 表，因为代理不附带告警规则。
 
 | 分组 | 显示内容 |
 | --- | --- |
-| Is every site connected? | 正在上报和已断开的代理、最旧的缓冲事件、最满的缓冲区、因溢出而丢失的事件、被拒绝的事件、本地端口开放的代理，以及每个代理一行的表格。 |
+| Is every site connected? | 正在上报的已知代理占比、静默的代理、已断开的代理、最旧的缓冲事件、最满的缓冲区、因溢出而丢失的事件、被拒绝的事件、本地端口开放的代理，以及每个代理一行的表格。 |
 | Connectivity | 各代理随时间变化的云端链路，以及等待云端确认的发布。 |
 | Store-and-forward backlog | 最旧缓冲事件的年龄、缓冲事件数、缓冲区用量与上限、缓冲区占用率，以及因溢出而丢失的事件。 |
 | Throughput | 读取待转发的事件与云端已确认的事件、各代理的转发量，以及失败的转发尝试。 |

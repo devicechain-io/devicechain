@@ -64,7 +64,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Lwm2m.*\"})"
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Lwm2m.*\"} or ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=\"InstanceAreaUnavailable\", deployment=\"lwm2m-ingest\"} or ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=\"InstanceContainerRestarted\", pod=~\"lwm2m-ingest-.*\"})"
         }
       ],
       "fieldConfig": {
@@ -169,8 +169,8 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Leaders",
-      "description": "Replicas holding the LwM2M leadership lease. Exactly one is healthy: zero means every LwM2M device is unreachable although every pod looks healthy, and more than one means two replicas are serving at once. This service is optional; when it is not installed the panel shows no data or zero.",
+      "title": "Pods available",
+      "description": "Pods of the lwm2m-ingest deployment that Kubernetes reports available. Zero while the service is deployed means it is down, and every tile below then keeps its last value or shows no data, so read this first. Not reporting means the service is not deployed on this instance. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -188,8 +188,9 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(devicechain_lwm2mingest_is_leader{namespace=\"$namespace\"})",
-          "legendFormat": "__auto"
+          "expr": "sum(kube_deployment_status_replicas_available{namespace=\"$namespace\", deployment=\"lwm2m-ingest\"})",
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -208,13 +209,10 @@
               {
                 "color": "green",
                 "value": 1
-              },
-              {
-                "color": "red",
-                "value": 2
               }
             ]
-          }
+          },
+          "noValue": "Not reporting"
         },
         "overrides": []
       },
@@ -227,16 +225,22 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
-      }
+      },
+      "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}"
+        }
+      ]
     },
     {
       "id": 4,
       "type": "stat",
-      "title": "Serving",
-      "description": "Replicas whose CoAP and DTLS read loop is running. Read it with Leaders: a leader that is not serving for longer than a takeover takes is stuck building its term, and because it keeps the lease no standby can take over. Restart that pod. This service is optional; when it is not installed the panel shows no data or zero.",
+      "title": "Leaders",
+      "description": "Replicas holding the LwM2M leadership lease. Exactly one is healthy: zero means every LwM2M device is unreachable although every pod looks healthy, and more than one means two replicas are serving at once. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -254,8 +258,9 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(devicechain_lwm2mingest_is_serving{namespace=\"$namespace\"})",
-          "legendFormat": "__auto"
+          "expr": "sum(devicechain_lwm2mingest_is_leader{namespace=\"$namespace\"})",
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -280,7 +285,8 @@
                 "value": 2
               }
             ]
-          }
+          },
+          "noValue": "Not reporting"
         },
         "overrides": []
       },
@@ -293,7 +299,7 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
       }
@@ -301,12 +307,80 @@
     {
       "id": 5,
       "type": "stat",
+      "title": "Serving",
+      "description": "Replicas whose CoAP and DTLS read loop is running. Read it with Leaders: a leader that is not serving for longer than a takeover takes is stuck building its term, and because it keeps the lease no standby can take over. Restart that pod. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_lwm2mingest_is_serving{namespace=\"$namespace\"})",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "noValue": "Not reporting"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
       "title": "Notifications dropped, over the range",
       "description": "Notify messages whose readings were dropped because ingest failed or refused them, backpressure included. There is no retry, so a device that reports rarely loses its reading. Above zero: check the message broker, the inbound-events backlog and the service log. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 8,
+        "x": 12,
         "y": 8
       },
       "datasource": {
@@ -362,14 +436,14 @@
       }
     },
     {
-      "id": 6,
+      "id": 7,
       "type": "stat",
       "title": "Commands not carried out, over the range",
       "description": "Commands not sent because command delivery could not confirm them immediately before they reached the device. They are retried, not lost, but a sustained count means no LwM2M command is reaching its device. Check command delivery. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 12,
+        "x": 16,
         "y": 8
       },
       "datasource": {
@@ -425,15 +499,78 @@
       }
     },
     {
-      "id": 7,
+      "id": 8,
+      "type": "stat",
+      "title": "Command results not published, over the range",
+      "description": "Command outcomes that could not be published back after local retries. The command already ran, so it is not redelivered and will show as timed out. Above zero: check the message broker and command delivery. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_command_response_publish_failures_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 9,
       "type": "stat",
       "title": "Handshakes refused, over the range",
       "description": "DTLS handshakes refused because the client presented an identity that is not provisioned. Expected for a stray device; a burst means a fleet whose identities are missing or were rotated. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 16,
-        "y": 8
+        "x": 0,
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -488,15 +625,15 @@
       }
     },
     {
-      "id": 8,
+      "id": 10,
       "type": "stat",
       "title": "Sessions refused at the ceiling, over the range",
       "description": "New sessions refused because the live-session ceiling was reached. Above zero: the fleet has outgrown the configured ceiling; raise it or investigate devices that reconnect in a loop. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 20,
-        "y": 8
+        "x": 4,
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -551,7 +688,7 @@
       }
     },
     {
-      "id": 9,
+      "id": 11,
       "type": "row",
       "title": "The fleet it holds",
       "collapsed": false,
@@ -559,12 +696,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 16
       },
       "panels": []
     },
     {
-      "id": 10,
+      "id": 12,
       "type": "timeseries",
       "title": "Registrations, sessions and observations",
       "description": "Live registrations, DTLS sessions and observations as the service sees them. Watch observations across a restart or a leadership change: observations are not re-established until each device registers again, so this is how you see the loss and the recovery. Right after a takeover registrations include rebuilt placeholders. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -572,7 +709,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 17
       },
       "datasource": {
         "type": "prometheus",
@@ -636,7 +773,7 @@
       }
     },
     {
-      "id": 11,
+      "id": 13,
       "type": "timeseries",
       "title": "Registration lifecycle",
       "description": "Per second: devices registering, refreshing their registration, deregistering on purpose, and registrations that lapsed with no refresh. A steady expiry rate means devices vanishing without saying goodbye. Devices registered counts new devices created at first sight. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -644,7 +781,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 17
       },
       "datasource": {
         "type": "prometheus",
@@ -726,7 +863,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 14,
       "type": "timeseries",
       "title": "Failover markers",
       "description": "Registrations rebuilt from stored state after a leadership change, and presence changes written and dropped, per second. A spike in rebuilt registrations is the fingerprint of a failover. Dropped presence changes are an unregistered device on a credential that may not create devices, or a write that ran out of budget. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -734,7 +871,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 25
       },
       "datasource": {
         "type": "prometheus",
@@ -798,7 +935,7 @@
       }
     },
     {
-      "id": 13,
+      "id": 15,
       "type": "timeseries",
       "title": "Refused registrations",
       "description": "Per second: registrations refused because the device is disabled, requests with no usable authenticated identity, and malformed requests. Any standing rate is a device or a credential to look at. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -806,7 +943,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 21
+        "y": 25
       },
       "datasource": {
         "type": "prometheus",
@@ -870,7 +1007,7 @@
       }
     },
     {
-      "id": 14,
+      "id": 16,
       "type": "timeseries",
       "title": "DTLS handshakes",
       "description": "Completed handshakes (each a new authenticated session), handshakes refused for an unprovisioned identity, and new sessions refused at the session ceiling, per second. A burst of completed handshakes is a fleet reconnecting, as after a failover. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -878,7 +1015,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 29
+        "y": 33
       },
       "datasource": {
         "type": "prometheus",
@@ -942,7 +1079,7 @@
       }
     },
     {
-      "id": 15,
+      "id": 17,
       "type": "timeseries",
       "title": "Health-probe requests by response code",
       "description": "Transport-level CoAP requests answered by the built-in health probe, per second, by response code. Registrations are counted separately above. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -950,7 +1087,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 29
+        "y": 33
       },
       "datasource": {
         "type": "prometheus",
@@ -996,7 +1133,7 @@
       }
     },
     {
-      "id": 16,
+      "id": 18,
       "type": "row",
       "title": "Readings",
       "collapsed": false,
@@ -1004,12 +1141,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 37
+        "y": 41
       },
       "panels": []
     },
     {
-      "id": 17,
+      "id": 19,
       "type": "timeseries",
       "title": "Notifications and readings stored",
       "description": "Notify messages received and measurement samples written to the inbound-events stream, per second. Notifications arriving with no readings stored means they are being skipped or dropped; read the two panels below. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1017,7 +1154,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 38
+        "y": 42
       },
       "datasource": {
         "type": "prometheus",
@@ -1072,7 +1209,7 @@
       }
     },
     {
-      "id": 18,
+      "id": 20,
       "type": "timeseries",
       "title": "Notifications that produced no reading",
       "description": "Per second: payloads that could not be decoded, payloads in a format that is not decoded, and records skipped as NaN or infinite or as unnamed. All are device faults. Observe requests refused is the symptom of a 1.0-only client that never notifies; observations ended by the device are normal. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1080,7 +1217,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 38
+        "y": 42
       },
       "datasource": {
         "type": "prometheus",
@@ -1180,7 +1317,7 @@
       }
     },
     {
-      "id": 19,
+      "id": 21,
       "type": "timeseries",
       "title": "Non-numeric records",
       "description": "Records skipped for carrying no numeric value, per second. Normal for a boolean or string reading, and it is what tells a device working correctly apart from one that has gone quiet. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1188,7 +1325,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 50
       },
       "datasource": {
         "type": "prometheus",
@@ -1234,7 +1371,7 @@
       }
     },
     {
-      "id": 20,
+      "id": 22,
       "type": "timeseries",
       "title": "Readings dropped",
       "description": "Per second: notifications dropped at ingest, readings from an unregistered device with auto-registration off, readings for a tenant being deleted, readings older than 366 days, and messages and readings shed because a tenant is over its ingest ceiling. A standing rate on any line is lost data. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1242,7 +1379,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 46
+        "y": 50
       },
       "datasource": {
         "type": "prometheus",
@@ -1333,7 +1470,7 @@
       }
     },
     {
-      "id": 21,
+      "id": 23,
       "type": "timeseries",
       "title": "Devices created by telemetry",
       "description": "Devices created on a first telemetry sample, per second. Rare: LwM2M devices are normally created when they register. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1341,7 +1478,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 54
+        "y": 58
       },
       "datasource": {
         "type": "prometheus",
@@ -1387,7 +1524,7 @@
       }
     },
     {
-      "id": 22,
+      "id": 24,
       "type": "row",
       "title": "Commands",
       "collapsed": false,
@@ -1395,12 +1532,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 66
       },
       "panels": []
     },
     {
-      "id": 23,
+      "id": 25,
       "type": "stat",
       "title": "Commands dispatched, over the range",
       "description": "Commands sent to live devices over the time range (the device acknowledged or rejected each one). Compare with the failed rate in the panel beside it. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1408,7 +1545,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 63
+        "y": 67
       },
       "datasource": {
         "type": "prometheus",
@@ -1459,7 +1596,7 @@
       }
     },
     {
-      "id": 24,
+      "id": 26,
       "type": "timeseries",
       "title": "Commands dispatched, by operation",
       "description": "Commands sent to live devices per second, split into those the device acknowledged and those it rejected, timed out on or that failed local validation, by operation. A failed rate that tracks the attempted rate is a device or an object that does not support the operation. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1467,7 +1604,7 @@
         "h": 8,
         "w": 12,
         "x": 4,
-        "y": 63
+        "y": 67
       },
       "datasource": {
         "type": "prometheus",
@@ -1526,7 +1663,7 @@
       }
     },
     {
-      "id": 25,
+      "id": 27,
       "type": "timeseries",
       "title": "Commands not sent straight away",
       "description": "Commands set aside in command delivery instead of being sent, per second, by reason. full: the device's queue was full. offline: no live connection. bind: the device had just connected and its waiting commands were not delivered yet; expect a spike after a failover. unconfirmed: a command ahead of it could not be confirmed. They are delivered in order moments later. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1534,7 +1671,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 71
+        "y": 75
       },
       "datasource": {
         "type": "prometheus",
@@ -1589,7 +1726,7 @@
       }
     },
     {
-      "id": 26,
+      "id": 28,
       "type": "timeseries",
       "title": "Commands for offline or other devices",
       "description": "Per second: commands for a device this service holds with no live connection (parked until it wakes), commands for devices this service does not serve (a mirror of the instance's command traffic, not a fault), commands dropped as unprocessable, commands for a tenant being deleted, and deliveries discarded because the platform had already re-sent them (a duplicate actuation avoided). This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1597,7 +1734,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 71
+        "y": 75
       },
       "datasource": {
         "type": "prometheus",
@@ -1679,7 +1816,7 @@
       }
     },
     {
-      "id": 27,
+      "id": 29,
       "type": "timeseries",
       "title": "Command faults",
       "description": "Per second: commands not carried out because command delivery could not confirm them, outcomes that could not be published back, and hand-backs to command delivery that failed. A hand-back that fails leaves the command stuck until a retry succeeds. Settled and skipped hand-backs are outcomes, not faults. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1687,7 +1824,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 79
+        "y": 83
       },
       "datasource": {
         "type": "prometheus",
@@ -1769,7 +1906,7 @@
       }
     },
     {
-      "id": 28,
+      "id": 30,
       "type": "timeseries",
       "title": "Draining the command backlog",
       "description": "Per second: backlogged commands delivered by a drain, drain turns run (each delivers at most four commands of one device), drain fetches that failed, and claims lost to another dispatcher or that could not be established. A rising turn rate with a flat parked rate means backlogs are being worked off. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1777,7 +1914,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 79
+        "y": 83
       },
       "datasource": {
         "type": "prometheus",
@@ -1859,7 +1996,7 @@
       }
     },
     {
-      "id": 29,
+      "id": 31,
       "type": "row",
       "title": "Device information and housekeeping",
       "collapsed": false,
@@ -1867,12 +2004,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 87
+        "y": 91
       },
       "panels": []
     },
     {
-      "id": 30,
+      "id": 32,
       "type": "timeseries",
       "title": "Device information harvests",
       "description": "Reads of a newly reachable device's information object per second, by outcome: complete, partial, empty, or unanswered (the device did not respond). Retries and skipped requests are shown beside them. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1880,7 +2017,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 88
+        "y": 92
       },
       "datasource": {
         "type": "prometheus",
@@ -1944,7 +2081,7 @@
       }
     },
     {
-      "id": 31,
+      "id": 33,
       "type": "timeseries",
       "title": "Harvest write problems",
       "description": "Harvested attributes that could not be written to device management, and batches dropped because the write pool was busy, per second. Both are retried at the device's next harvest. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1952,7 +2089,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 88
+        "y": 92
       },
       "datasource": {
         "type": "prometheus",
@@ -2007,7 +2144,7 @@
       }
     },
     {
-      "id": 32,
+      "id": 34,
       "type": "timeseries",
       "title": "Tenant sweep passes",
       "description": "Passes of the sweep that removes registrations of deleted tenants, per second by outcome, how long a pass takes (99th percentile) and the seconds since the last pass that completed, fully or partly (both right axis). Failed passes leave a deleted tenant's registrations in memory. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -2015,7 +2152,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 96
+        "y": 100
       },
       "datasource": {
         "type": "prometheus",

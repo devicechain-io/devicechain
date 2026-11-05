@@ -64,7 +64,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Sparkplug.*\"})"
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Sparkplug.*\"} or ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=\"InstanceAreaUnavailable\", deployment=\"sparkplug-ingest\"} or ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=\"InstanceContainerRestarted\", pod=~\"sparkplug-ingest-.*\"})"
         }
       ],
       "fieldConfig": {
@@ -169,8 +169,8 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Active readers",
-      "description": "Replicas holding the Sparkplug leadership lease and connecting the sources. Exactly one is healthy: zero means no Sparkplug data is read at all, and more than one means duplicates. A pod deployed with no sources reads zero for good; configure its sources or leave the service out. This service is optional; when it is not installed the panel shows no data or zero.",
+      "title": "Pods available",
+      "description": "Pods of the sparkplug-ingest deployment that Kubernetes reports available. Zero while the service is deployed means it is down, and every tile below then keeps its last value or shows no data, so read this first. Not reporting means the service is not deployed on this instance. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -188,8 +188,79 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
+          "expr": "sum(kube_deployment_status_replicas_available{namespace=\"$namespace\", deployment=\"sparkplug-ingest\"})",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "Not reporting"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Active readers",
+      "description": "Replicas holding the Sparkplug leadership lease and connecting the sources. Exactly one is healthy: zero means no Sparkplug data is read at all, and more than one means duplicates. A pod deployed with no sources reads zero for good; configure its sources or leave the service out. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "expr": "sum(devicechain_sparkplugingest_is_leader{namespace=\"$namespace\"})",
-          "legendFormat": "__auto"
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -214,7 +285,8 @@
                 "value": 2
               }
             ]
-          }
+          },
+          "noValue": "Not reporting"
         },
         "overrides": []
       },
@@ -227,20 +299,20 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
       }
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "stat",
       "title": "Broker connection failures, over the range",
       "description": "Failed attempts to connect to a configured Sparkplug broker. The pod stays ready while a source is down, so this tile is how a bad host, a rejected credential or a broker outage shows. Above zero: the pod log names the source and the reason. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 4,
+        "x": 8,
         "y": 8
       },
       "datasource": {
@@ -296,14 +368,14 @@
       }
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "stat",
       "title": "Subscriptions refused, over the range",
       "description": "Sources abandoned and retried because the broker accepted the connection but refused, or never acknowledged, a group subscription. While any group is refused the source ingests none of its groups. Above zero: compare the credential's read permissions on the broker with the configured groups. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 8,
+        "x": 12,
         "y": 8
       },
       "datasource": {
@@ -359,14 +431,14 @@
       }
     },
     {
-      "id": 6,
+      "id": 7,
       "type": "stat",
       "title": "Messages dropped, over the range",
       "description": "Accepted messages whose readings or presence changes were dropped after the retry budget, under backpressure or at shutdown. A Sparkplug host gets no redelivery, so each one is lost. Above zero: check device management, the message broker and the service log. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 12,
+        "x": 16,
         "y": 8
       },
       "datasource": {
@@ -422,14 +494,14 @@
       }
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "stat",
       "title": "Undecodable messages, over the range",
       "description": "Messages whose topic or payload could not be decoded. Above zero: a node or a bridge is publishing something that is not Sparkplug B. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 16,
+        "x": 20,
         "y": 8
       },
       "datasource": {
@@ -485,15 +557,15 @@
       }
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "stat",
       "title": "Nodes that cannot register",
       "description": "Nodes whose births could not be registered, most often because the source names a device type that does not exist yet. They are asked to rebirth. A standing non-zero value is a node, or a whole source, that is not registering; create the device type or fix the source. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 20,
-        "y": 8
+        "x": 0,
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -507,7 +579,8 @@
             "uid": "${datasource}"
           },
           "expr": "max(devicechain_sparkplugingest_birth_recovery_pending{namespace=\"$namespace\"})",
-          "legendFormat": "__auto"
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -528,7 +601,8 @@
                 "value": 1
               }
             ]
-          }
+          },
+          "noValue": "Not reporting"
         },
         "overrides": []
       },
@@ -541,13 +615,13 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
       }
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "row",
       "title": "What arrives",
       "collapsed": false,
@@ -555,12 +629,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 12
+        "y": 16
       },
       "panels": []
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "timeseries",
       "title": "Messages by type",
       "description": "Sparkplug messages received per second by type (birth, data, death and so on). A flat line on a live fleet is the symptom of a lost subscription or a dead source. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -568,7 +642,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 13
+        "y": 17
       },
       "datasource": {
         "type": "prometheus",
@@ -618,7 +692,7 @@
       }
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "timeseries",
       "title": "Readings and presence stored",
       "description": "Numeric readings written to the inbound-events stream per second, presence changes written per second, and devices auto-registered per second. Compare readings with the message rate above: messages arriving with no readings stored means they are being skipped or dropped. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -626,7 +700,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 13
+        "y": 17
       },
       "datasource": {
         "type": "prometheus",
@@ -690,7 +764,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "row",
       "title": "What was not stored",
       "collapsed": false,
@@ -698,12 +772,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 25
       },
       "panels": []
     },
     {
-      "id": 13,
+      "id": 14,
       "type": "timeseries",
       "title": "Readings skipped, by reason",
       "description": "Metrics of accepted messages that produced no reading, per second. non_numeric is a boolean, string or similar value and is normal; null, unnamed, untyped and oversize point at the node's configuration. An oversize message has none of its readings stored. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -711,7 +785,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 26
       },
       "datasource": {
         "type": "prometheus",
@@ -761,7 +835,7 @@
       }
     },
     {
-      "id": 14,
+      "id": 15,
       "type": "timeseries",
       "title": "Messages and readings dropped",
       "description": "Per second: messages dropped at ingest, undecodable messages, traffic from identities with no device while auto-registration is off, traffic for a tenant being deleted, readings older than 366 days, and readings shed because a tenant is over its ingest ceiling. A standing rate on any line is lost data. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -769,7 +843,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 26
       },
       "datasource": {
         "type": "prometheus",
@@ -860,7 +934,7 @@
       }
     },
     {
-      "id": 15,
+      "id": 16,
       "type": "row",
       "title": "Presence and rebirths",
       "collapsed": false,
@@ -868,12 +942,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 34
       },
       "panels": []
     },
     {
-      "id": 16,
+      "id": 17,
       "type": "timeseries",
       "title": "Rebirth requests",
       "description": "Rebirth commands per second: requested by the session machine, actually published, and discarded because the publish queue was full. Drops while published requests plateau means fan-out is outrunning a healthy publisher; drops while published is flat points at the broker connection. The liveness probe's rebirths count here too. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -881,7 +955,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 35
       },
       "datasource": {
         "type": "prometheus",
@@ -945,7 +1019,7 @@
       }
     },
     {
-      "id": 17,
+      "id": 18,
       "type": "timeseries",
       "title": "Liveness probes",
       "description": "Probes that reached a verdict per second, by trigger. On a connected host the periodic series must rise; flat means the probe is not running, which a quiet fleet cannot tell apart. Connect probes run once per broker session. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -953,7 +1027,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 35
       },
       "datasource": {
         "type": "prometheus",
@@ -999,7 +1073,7 @@
       }
     },
     {
-      "id": 18,
+      "id": 19,
       "type": "timeseries",
       "title": "Devices marked offline by a probe",
       "description": "Devices a probe marked offline for not answering a rebirth, per second, by trigger. Near zero in a healthy fleet. A standing periodic rate means death certificates are being lost between the nodes and the host. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1007,7 +1081,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 39
+        "y": 43
       },
       "datasource": {
         "type": "prometheus",
@@ -1053,7 +1127,7 @@
       }
     },
     {
-      "id": 19,
+      "id": 20,
       "type": "timeseries",
       "title": "Registration recovery",
       "description": "Nodes that could not be registered (left axis) and rebirths sent to them per second (right axis). A climbing rebirth rate beside a non-zero count is a registration that keeps failing. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1061,7 +1135,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 39
+        "y": 43
       },
       "datasource": {
         "type": "prometheus",
@@ -1133,7 +1207,7 @@
       }
     },
     {
-      "id": 20,
+      "id": 21,
       "type": "timeseries",
       "title": "Presence probe passes",
       "description": "Passes of the periodic liveness probe per second by outcome, and the seconds since the last pass that completed, fully or partly. Failed or partial passes mean some nodes were not checked. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1141,7 +1215,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 47
+        "y": 51
       },
       "datasource": {
         "type": "prometheus",
@@ -1213,7 +1287,7 @@
       }
     },
     {
-      "id": 21,
+      "id": 22,
       "type": "timeseries",
       "title": "Presence probe pass time",
       "description": "How long one pass of the periodic liveness probe takes (50th and 99th percentile). A pass that approaches the probe interval cannot keep up with the fleet. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1221,7 +1295,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 47
+        "y": 51
       },
       "datasource": {
         "type": "prometheus",
@@ -1276,7 +1350,7 @@
       }
     },
     {
-      "id": 22,
+      "id": 23,
       "type": "row",
       "title": "Commands to edge nodes",
       "collapsed": false,
@@ -1284,12 +1358,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 59
       },
       "panels": []
     },
     {
-      "id": 23,
+      "id": 24,
       "type": "stat",
       "title": "Commands awaiting an outcome",
       "description": "Published commands waiting for the node to report the requested value. Sparkplug has no acknowledgement, so a command is confirmed when the node reports the new value. Many waiting for a long time: nodes are slow to report, or the command path does not work. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1297,7 +1371,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 56
+        "y": 60
       },
       "datasource": {
         "type": "prometheus",
@@ -1311,7 +1385,8 @@
             "uid": "${datasource}"
           },
           "expr": "sum(devicechain_sparkplugingest_commands_awaiting{namespace=\"$namespace\"})",
-          "legendFormat": "__auto"
+          "legendFormat": "__auto",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -1328,7 +1403,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "Not reporting"
         },
         "overrides": []
       },
@@ -1341,13 +1417,13 @@
           "values": false
         },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "justifyMode": "auto"
       }
     },
     {
-      "id": 24,
+      "id": 25,
       "type": "stat",
       "title": "Commands unconfirmed, over the range",
       "description": "Commands that ended without the node reporting the requested value. They are recorded as timed out, not failed. A high share of published commands means the path does not work: check publish permission on the command topics and the host role. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1355,7 +1431,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 56
+        "y": 60
       },
       "datasource": {
         "type": "prometheus",
@@ -1410,7 +1486,7 @@
       }
     },
     {
-      "id": 25,
+      "id": 26,
       "type": "stat",
       "title": "Command faults, over the range",
       "description": "Commands that could not be carried through: command-delivery unreachable or refusing the call, the awaiting store not writable, or a publish that may not have reached the node. Above zero: check command delivery, the message broker and the service log. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1418,7 +1494,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 56
+        "y": 60
       },
       "datasource": {
         "type": "prometheus",
@@ -1473,7 +1549,7 @@
       }
     },
     {
-      "id": 26,
+      "id": 27,
       "type": "stat",
       "title": "Command breaker trips, over the range",
       "description": "Times a source's command breaker opened because the broker dropped the host session right after a command was published. Almost always a missing publish permission on the node and device command topics. While open, commands to that source fail at once. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1481,7 +1557,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 56
+        "y": 60
       },
       "datasource": {
         "type": "prometheus",
@@ -1536,15 +1612,15 @@
       }
     },
     {
-      "id": 27,
+      "id": 28,
       "type": "stat",
-      "title": "Breakers not closed",
-      "description": "Sources whose command breaker is open or half-open right now. The source's telemetry is not affected; its commands fail fast until the breaker closes. This service is optional; when it is not installed the panel shows no data or zero.",
+      "title": "Breakers open",
+      "description": "Sources whose command breaker is open right now (state 1): their commands fail fast and the source's telemetry is not affected. A half-open breaker (state 2) is waiting for a command to test it and is not counted: a source with no commands waiting stays half-open without alerting, as in SparkplugCommandBreakerOpen. This service is optional; when it is not installed the panel shows no data or zero.",
       "gridPos": {
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 56
+        "y": 60
       },
       "datasource": {
         "type": "prometheus",
@@ -1557,7 +1633,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "count(devicechain_sparkplugingest_command_breaker_state{namespace=\"$namespace\"} > 0) or vector(0)",
+          "expr": "count(devicechain_sparkplugingest_command_breaker_state{namespace=\"$namespace\"} == 1) or vector(0)",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1599,7 +1675,7 @@
       }
     },
     {
-      "id": 28,
+      "id": 29,
       "type": "timeseries",
       "title": "Commands by result",
       "description": "Commands handled per second by result: published, confirmed, unconfirmed, parked, drained, refused_* before the wire, and the faults. Zero until a source enables commands. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1607,7 +1683,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 60
+        "y": 64
       },
       "datasource": {
         "type": "prometheus",
@@ -1657,7 +1733,7 @@
       }
     },
     {
-      "id": 29,
+      "id": 30,
       "type": "timeseries",
       "title": "Time to confirm a command",
       "description": "Seconds from publishing a command to the node's report that confirms it (50th, 95th and 99th percentile). Commands that were never confirmed are not counted here. If the 99th percentile is near the confirmation window, raise the window or expect unconfirmed commands. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1665,7 +1741,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 60
+        "y": 64
       },
       "datasource": {
         "type": "prometheus",
@@ -1729,7 +1805,7 @@
       }
     },
     {
-      "id": 30,
+      "id": 31,
       "type": "timeseries",
       "title": "Command breaker state per source",
       "description": "Each source's command breaker: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). It closes only when the next command is published without a disconnect, so a source with no commands waiting stays half-open without alerting. This service is optional; when it is not installed the panel shows no data or zero.",
@@ -1737,7 +1813,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 68
+        "y": 72
       },
       "datasource": {
         "type": "prometheus",

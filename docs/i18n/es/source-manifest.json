@@ -127,8 +127,8 @@
       "translationSha256": "adbbe8547a1d71ea71864231cf4d34db5e232da56e140325082cec90315101f3"
     },
     "deployment/grafana-boards.md": {
-      "sourceSha256": "ea4577406e6949402eb4b4914aa36166d5ab9a01e0c2d5591ab9437a9982a656",
-      "translationSha256": "28a282464c036fe3362e5d9c98e9e90e44ef1ab6ad7d63e7a56b73f301dd47fe"
+      "sourceSha256": "abf322b0ca7918a2126a5ca450d7b6de96e0d0df26d5a511fb9069fbf332c55f",
+      "translationSha256": "6a7719b5ebb91173cf78d101d236c688b7cbb4a189ff24c7bf1dd93a21cb4f2e"
     },
     "deployment/ingress-cutover.md": {
       "sourceSha256": "11f7ba29969ace2fe2a0b03b8badf1191e767fcbb042c8238a543ff927d3cfec",

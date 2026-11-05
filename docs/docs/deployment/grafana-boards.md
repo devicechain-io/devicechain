@@ -353,16 +353,43 @@ loopback address only. The instance's Prometheus never scrapes it, so the chart 
 for it. The dashboard is a file you import into the Grafana that reads **your own** Prometheus:
 [`edge-agent.json`](https://github.com/devicechain-io/devicechain/blob/main/backend/edge/dc-edge-agent/dashboards/edge-agent.json).
 
-To use it, get the agents' metrics into a Prometheus: run a collector on each box, or a relay
-reachable from your network, that scrapes `127.0.0.1:<metricsPort>` (default 9090) and writes to it. Then in Grafana choose
-**Dashboards, New, Import**, upload the file, and pick that Prometheus as the data source. The board
-has two pickers, **Job** and **Agent**, both taken from the scrape labels, so one board covers
-the whole fleet and any subset of it. It has no *Firing alerts* table, because the agent ships no
-alert rules.
+To use it, get the agents' metrics into a Prometheus. The metrics endpoint listens on the box's
+loopback address (`127.0.0.1`, port `local.metricsPort`, default 9090), so the collector has to be a
+process on the box itself: nothing off the box can reach it. Every agent's series must carry a
+**unique `agent` label**. The board's picker, legends and groupings all use it, and without one the
+series of different boxes have identical labels and overwrite one another where they are received.
+Set it as an external label on each box's collector. For Prometheus in agent mode:
+
+```yaml
+global:
+  external_labels:
+    agent: site-berlin-01   # unique per box
+scrape_configs:
+  - job_name: dc-edge-agent
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+remote_write:
+  - url: https://prometheus.example.com/api/v1/write
+```
+
+The agent's default port, 9090, is also Prometheus's default listen port, so give one of them another:
+start the collector on a different one, as below, or set `local.metricsPort` in the agent's
+configuration and scrape that port.
+
+```bash
+prometheus --enable-feature=agent --config.file=agent.yml --web.listen-address=127.0.0.1:9091
+```
+
+Then in Grafana choose **Dashboards, New, Import**, upload the file, and pick that Prometheus as the
+data source. The board has two pickers, **Agent** (every agent that sends the label) and **Lookback**
+(how far back to look for agents that have stopped reporting). A site that loses its link stops
+sending anything, including its own disconnected state, so the *Known agents reporting* and *Agents
+silent* tiles and the *Agents* table compare what is reporting now with what was seen in the
+lookback window. The board has no *Firing alerts* table, because the agent ships no alert rules.
 
 | Group | What it shows |
 | --- | --- |
-| Is every site connected? | Agents reporting and disconnected, the oldest buffered event, the fullest buffer, events lost to overflow, events refused, agents with an open local port, and a table with one row per agent. |
+| Is every site connected? | The share of known agents reporting, agents silent and agents disconnected, the oldest buffered event, the fullest buffer, events lost to overflow, events refused, agents with an open local port, and a table with one row per agent. |
 | Connectivity | The cloud link of each agent over time, and publishes waiting for the cloud. |
 | Store-and-forward backlog | Age of the oldest buffered event, buffered events, buffer used against its limit, buffer fill, and events lost to overflow. |
 | Throughput | Events read for forwarding and acknowledged by the cloud, forwarded per agent, and failed forward attempts. |
