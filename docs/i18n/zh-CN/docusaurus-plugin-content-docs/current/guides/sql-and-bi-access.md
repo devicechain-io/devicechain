@@ -27,7 +27,7 @@ DeviceChain 将遥测存储在 **TimescaleDB** 中，而 TimescaleDB 就是 Post
 | `analytics.state_change_events` | 连接/断开连接时间线 |
 | `analytics.event_anchors` | 写入每个事件时附加的关系锚点 |
 
-每个视图都会自动过滤为**读取者自己的租户**。无需记住按租户列过滤，无需为不同租户选择不同视图，查询也无法扩大结果范围。参见[如何强制执行边界](#how-the-boundary-is-enforced)。
+每个视图都会自动过滤为**读取者自己的租户**。视图带有 `tenant_id` 列，但你无需按它过滤，无需为不同租户选择不同视图，查询也无法扩大结果范围。参见[如何强制执行边界](#how-the-boundary-is-enforced)。
 
 汇总会让当前仍在填充的时间桶保持实时，因此读取它的仪表板不会只能看到上次刷新之前的数据。
 

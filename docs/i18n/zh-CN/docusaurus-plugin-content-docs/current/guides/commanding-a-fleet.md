@@ -92,7 +92,7 @@ mutation {
 `expiresAt` 设置批次创建的每条命令的 TTL。省略时，所有命令采用平台默认的七天。`metadata` 记录在批次记录上，不会复制到各条命令。
 
 :::danger 检查 `rejection`，不要只检查错误
-`createCommandBatch` **恰好返回** `batch` 或 `rejection` 之一。被拒绝的批次是携带 `rejection` 的成功 GraphQL 响应，而不是 GraphQL 错误。如果返回 GraphQL 错误而非二者之一，表示根本无法对批次作出决定：没有创建任何内容，令牌尚未使用，可以重试请求。
+`createCommandBatch` **恰好返回** `batch` 或 `rejection` 之一。被拒绝的批次是携带 `rejection` 的成功 GraphQL 响应，而不是 GraphQL 错误。如果返回 GraphQL 错误而非二者之一，表示根本无法对批次作出决定：这次请求没有创建任何内容，可以用同一个令牌重试：如果之前的某次尝试已经提交了该批次，重试会直接返回它，而不会再次扇出。
 :::
 
 ### 令牌是幂等键 {#the-token-is-an-idempotency-key}

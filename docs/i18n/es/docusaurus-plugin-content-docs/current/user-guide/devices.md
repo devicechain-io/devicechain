@@ -157,8 +157,8 @@ Abre el dispositivo y elige **Deshabilitar** arriba a la derecha. La consola te 
 Mientras el dispositivo está deshabilitado:
 
 - sus eventos se descartan en lugar de almacenarse, y no se recuperan al volver a habilitarlo;
-- no puede abrir una conexión nueva, aunque una conexión que ya tenga sigue abierta hasta que
-  termina. Cuando esa conexión termina, el dispositivo aparece como desconectado;
+- no puede abrir una conexión nueva, y una conexión que ya tenga se cierra (si la plataforma no
+  puede confirmarlo, la deshabilitación queda guardada y se te indica que la repitas). Cuando esa conexión termina, el dispositivo aparece como desconectado;
 - los comandos nuevos que se le envían se rechazan;
 - los comandos que ya estaban en cola para él quedan **retenidos**: ni se envían ni se cancelan.
 
@@ -347,10 +347,11 @@ actualizaciones. Se trata en el capítulo de actualizaciones remotas.
 
 <GuideShot id="device-detail-credentials" alt="La pestaña Credenciales de Rooftop AHU 2 return air. Arriba, un formulario con un selector Tipo con el valor ACCESS_TOKEN, un campo Token de acceso con un botón Generar y un botón Agregar credencial. Debajo, una tabla enumera dos credenciales: MQTT_BASIC con el id rooftop-ahu-2 y la nota de que la contraseña está establecida y no se puede mostrar, habilitada, con los botones Establecer nueva contraseña y Eliminar; y ACCESS_TOKEN, cuyo id está oculto en esta captura, habilitada, con un botón Eliminar." />
 
-Hay dos tipos:
+Hay tres tipos:
 
 - **ACCESS_TOKEN**: el dispositivo presenta un token. Pega el tuyo o elige **Generar**.
 - **MQTT_BASIC**: el dispositivo se conecta con un usuario y una contraseña.
+- **X509_CERTIFICATE**: el dispositivo presenta un certificado de cliente. Registras el certificado y nombras el ancla de confianza con la que debe encadenar (consulta [Aprovisionamiento y anclas de confianza](./provisioning-and-trust-anchors.md)).
 
 Elige el **Tipo**, rellena los campos y elige **Agregar credencial**. Un dispositivo puede tener
 más de una credencial. **Eliminar** quita una, y después el dispositivo ya no puede autenticarse
@@ -373,7 +374,7 @@ Consulta [Credenciales de dispositivo](../guides/device-credentials.md).
 dispositivo: un `mosquitto_pub` para MQTT o un `curl` para HTTP. Elige el transporte, y la
 credencial si el dispositivo tiene más de una, y copia el comando con el botón de copiar.
 
-El comando usa el token y la credencial del dispositivo, y las métricas de la versión
+El comando usa el token y la credencial del dispositivo (para un token de acceso muestra `<access-token>` en lugar del token, que la consola no puede leer de nuevo: pega el que emitiste, o sustituye el token si lo perdiste), y las métricas de la versión
 **publicada** de su perfil, con valores de ejemplo que el perfil acepta. Una métrica que solo
 existe en el borrador no se usa, porque la plataforma comprueba las lecturas contra la versión
 publicada. Cuando la versión publicada no tiene ninguna métrica que el ejemplo pueda usar, el
@@ -404,8 +405,7 @@ qué corregir:
 
 Un dispositivo que no está asignado a nada puede enviar datos; sus eventos se almacenan.
 
-Como **Credenciales**, la pestaña requiere permiso para modificar dispositivos, porque el comando
-incluye el token de acceso.
+Como **Credenciales**, la pestaña requiere permiso para modificar dispositivos.
 
 Un `202` de HTTP, o un acuse de recibo MQTT, significa que el evento se recibió, no que se
 almacenó. Búscalo en la pestaña **Eventos**.

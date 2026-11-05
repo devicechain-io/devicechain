@@ -60,8 +60,8 @@ Then choose **Create tenant**.
 ### A tenant's page
 
 Open a tenant to edit it. Its page shows the name with the token beside it, the tier and status
-badges, and two actions: **Disable** (or **Enable**) and **Delete**. A disabled tenant admits nobody
-until you enable it again.
+badges, and two actions: **Disable** (or **Enable**) and **Delete**. A disabled tenant admits none of its members
+until you enable it again (an instance superuser can still enter it, as break-glass, and each entry is audited).
 
 Above the tabs, the **Single sign-on** panel says whether the tenant's people must sign in through
 single sign-on. **Require SSO** asks you to confirm first, because the tenant's password sessions end
@@ -90,8 +90,8 @@ geofence** and **Geofence point budget**. Each field carries a short explanation
 
 The **Effective settings** tab is read-only. It shows the result for the ingest, outbound and AI
 drafting rates and bursts: the tier's value, this tenant's override, and the value in force, with a
-badge naming where it came from. The held command ceiling, shed priority and geofence limits resolve
-the same way, but this tab does not list them. A setting
+badge naming where it came from. The single-number settings (the held command ceiling, shed priority, geofence limits and the like) resolve
+the same way and follow them in the same table. A setting
 falls back from its own override, to the tier, to the platform default. The platform default is a
 real limit, never "unlimited". When the value comes from a service's own default, the console shows
 **Set by the service**. The tier's name in the explanation links to the tier.
@@ -171,9 +171,9 @@ operator-facing description, and the **Color** of its pill. The colour is presen
 Leave a field blank for the platform default. A tenant can still be given its own override on its
 Settings tab. When tenants are on the tier, saving re-prices them within a minute, without a restart.
 
-A tier can also carry a held command ceiling, a shed priority and the three geofence limits, and
-tenants at the tier inherit them the same way. The console has no fields for these on a tier: they
-are set through the admin API, and saving this tab leaves them as they are. A tenant's own value on
+A tier can also carry a held command ceiling, a shed priority, the three geofence limits and the
+other single-number ceilings, and tenants at the tier inherit them the same way. The same tab has a
+field for each, below the rates; leave one blank for the platform default. A tenant's own value on
 its Settings tab still takes precedence over the tier's.
 
 <GuideShot id="admin-tier-settings" alt="The Settings tab of the Pilot tier, under the heading Ceilings: Ingest rate 50, Ingest burst 100, Outbound rate 5, Outbound burst 10, and AI drafting rate and AI drafting burst both reading platform default. A Save changes button." />

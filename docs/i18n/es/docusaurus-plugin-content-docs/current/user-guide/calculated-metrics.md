@@ -257,8 +257,9 @@ simple, escribe `device["ct-ratio"]`. El nombre `device` está reservado para es
 medida cuya clave sea `device` se lee a través de `m`, envuelta en la conversión de su tipo, como
 `double(m["device"])`.
 
-El número procede de los **metadatos del dispositivo**. Edita el dispositivo y pon la constante en
-sus metadatos como un número JSON con el mismo nombre:
+El número procede de los **metadatos del dispositivo**. Pon la constante en los
+metadatos del dispositivo como un número JSON con el mismo nombre, mediante el campo `metadata` de
+`updateDevice` en la API (el formulario de dispositivo de la consola no edita los metadatos):
 
 ```json
 { "site": "north plant", "calibration": 1.02 }

@@ -70,7 +70,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="geofence-history" alt="Acme campus perimeter 围栏的 History 选项卡。Fence set version 控件显示 1，带有 Older 和 Newer 按钮以及 Current 标签。方形边界绘制在内置世界地图上，版本 1 为实线，当前形状为虚线，下方有图例。" />
 
-History 地图始终使用不带瓦片的内置世界地图，因此只显示形状。
+History 地图使用与 Basic 标签页相同的底图（先用浏览器覆盖设置，再用租户底图，二者都没有时使用不带瓦片的内置世界地图），因此过去的形状不会显示在另一张地图上。
 
 如果围栏在你选择的版本上不存在，选项卡会说明：它是后来才创建的，或者带有该令牌的围栏曾被删除，令牌随后被重用。
 

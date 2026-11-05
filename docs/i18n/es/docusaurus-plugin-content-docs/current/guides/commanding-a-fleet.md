@@ -134,8 +134,8 @@ copia a los comandos individuales.
 :::danger Revisa `rejection`, no solo si hay errores
 `createCommandBatch` devuelve **exactamente uno** de `batch` o `rejection`. Un lote rechazado es una
 respuesta GraphQL exitosa que lleva un `rejection`, no un error de GraphQL. Un error de GraphQL en
-lugar de cualquiera de los dos significa que el lote no se pudo *decidir* en absoluto: no se creó
-nada, el token queda sin gastar y puedes reintentar la petición.
+lugar de cualquiera de los dos significa que el lote no se pudo *decidir* en absoluto: esta petición no creó
+nada, y puedes reintentarla con el mismo token: si un intento anterior sí confirmó el lote, el reintento lo devuelve sin otra difusión.
 :::
 
 ### El token es una clave de idempotencia

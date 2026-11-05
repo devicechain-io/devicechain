@@ -13,7 +13,7 @@ pasa cuando una sesión expira y el menú de usuario.
 
 Es para todas las personas que usan la consola. El superusuario de la instancia inicia sesión en la
 consola de administración de la instancia, que no tiene páginas de inquilino; para usar la consola
-de un inquilino necesitas una identidad de administrador de inquilino, que `dcctl sim create` crea
+de un inquilino necesitas una identidad con una membresía habilitada en ese inquilino (sus roles deciden qué puedes cambiar); `dcctl sim create` crea una de administrador de inquilino
 para un primer inquilino (o que un administrador crea con `createIdentity` y `addMembership` en la
 API de administración). Tu cuenta la crea un administrador; no se puede
 crear desde la página de inicio de sesión.

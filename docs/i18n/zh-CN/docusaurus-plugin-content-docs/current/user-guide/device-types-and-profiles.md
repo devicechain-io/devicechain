@@ -54,7 +54,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 当一个配置文件被多个设备类型共用时，卡片会予以说明。对它的更改会影响所有这些类型。
 
-没有配置文件的类型是允许的，但它的**能力受限**：其设备仍会被列出和显示，但不会上报带类型的指标，不接受命令，也不会触发告警。要解决这一点，可以关联已有的配置文件，或选择 **Create a profile for this type**（为此类型创建配置文件）。
+没有配置文件的类型是允许的，但它的**能力受限**：其设备仍会被列出和显示，但不会上报带类型的指标，也不会触发告警，其命令也不会对照已声明的词汇表检查，因此任何命令键都会被接受。要解决这一点，可以关联已有的配置文件，或选择 **Create a profile for this type**（为此类型创建配置文件）。
 
 ## 设备配置文件 {#device-profiles}
 
@@ -95,7 +95,7 @@ import GuideShot from '@site/src/components/GuideShot';
 - **Command key**（命令键）：设备接受的命令，例如 `set_point`。
 - **Token**、**Name** 和 **Description**。
 - **Impact**（影响级别）：**Normal**（普通）、**Disruptive**（有中断）或 **Destructive**（破坏性）。有中断和破坏性的命令要等待设备类型的维护窗口。普通命令永远不会被暂扣。
-- **Parameter schema**（参数模式，可选）：描述命令参数的 JSON 数组，每个参数带有 `name` 和 `dataType`。没有参数的命令可留空。控制台会据此模式为设备的 Commands 选项卡构建参数表单。
+- **Parameter schema**（参数模式，可选）：描述命令参数的 JSON 数组，每个参数带有 `name` 和 `dataType`。不声明参数时可留空；此时平台不会检查命令携带的参数。控制台会据此模式为设备的 Commands 选项卡构建参数表单。
 
 对于 LwM2M 设备，**Add LwM2M standard commands**（添加 LwM2M 标准命令）会把 **Reboot**（重启）和 **Read device information**（读取设备信息）声明为具名命令，这样发送时无需输入对象路径。已声明的命令保持不变。
 

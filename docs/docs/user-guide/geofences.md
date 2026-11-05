@@ -100,7 +100,7 @@ and the fence's current shape is drawn dashed behind it, so you can compare them
 
 <GuideShot id="geofence-history" alt="The History tab of the Acme campus perimeter fence. The Fence set version control shows 1, with Older and Newer buttons and the Current label. The square boundary is drawn on the built-in world map, solid at version 1 and dashed for the current shape, with the legend below." />
 
-The History map always uses the built-in world map, without tiles, so only the shape is shown.
+The History map uses the same basemap as the Basic tab (your browser override, then the tenant basemap, and the built-in world map without tiles when neither supplies one), so the past is not shown on a different map.
 
 If the fence did not exist at the version you pick, the tab says so: it was created later, or a
 fence with this token was deleted and the token reused.

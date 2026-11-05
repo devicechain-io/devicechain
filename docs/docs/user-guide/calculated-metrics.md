@@ -238,8 +238,9 @@ calibration factor or a current-transformer ratio. Write it as `device.` followe
 `device` is read through `m`, wrapped in the conversion for its type, such as
 `double(m["device"])`.
 
-The number comes from the **device's metadata**. Edit the device and put the constant in its
-metadata as a JSON number under the same name:
+The number comes from the **device's metadata**. Put the constant in the device's
+metadata as a JSON number under the same name, through the `metadata` field of `updateDevice` in the
+API (the console's device form does not edit metadata):
 
 ```json
 { "site": "north plant", "calibration": 1.02 }

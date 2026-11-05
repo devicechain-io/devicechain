@@ -108,7 +108,7 @@ Scoping a policy to a device type needs a cross-service lookup from the alarm's 
 
 Two more settings shape delivery:
 
-- **`throttleSeconds`** is the minimum gap between notifications for the *same* alarm, so a flapping condition does not flood a channel. `null` means no throttle.
+- **`throttleSeconds`** is the minimum gap between notifications for the *same* alarm, so a flapping condition does not flood a channel. A change that escalates the alarm's severity is not throttled. `null` means no throttle.
 - **`escalateAfterSeconds`** and **`maxEscalations`**: when set (> 0), an alarm that stays **unacknowledged and uncleared** for that long after its last notification is re-notified, up to the cap. If `maxEscalations` is unset or `0`, a service-wide default cap of 5 applies. A `null`/`0` `escalateAfterSeconds` disables escalation for the policy.
 
 Escalation is safe to run on several replicas: each escalation tier is claimed before it is sent, so exactly one replica delivers it. Each alarm has **one shared escalation clock and tier**. If several escalating policies match, the shortest window sets the cadence, and every cap counts against the shared tier.

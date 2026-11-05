@@ -68,7 +68,7 @@ Un operador puede convertir la autenticación en dos pasos en un mínimo para to
 
 ### Inicio de sesión único y dos pasos {#sso}
 
-La exigencia del inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único se rige por los requisitos de su propia conexión: para una garantía mayor, exige un método de autenticación en la conexión (`requiredAmr`, por ejemplo `["mfa"]`), de modo que el proveedor tenga que haber aplicado su propio segundo factor. Consulta [Configurar el inicio de sesión único](./configuring-sso.md). Un inquilino que activa **Require SSO** ya no tiene inicios de sesión con contraseña a los que aplicar la exigencia.
+La exigencia del inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único se rige por los requisitos de su propia conexión: para una garantía mayor, exige un método de autenticación en la conexión (`requiredAmr`, por ejemplo `["mfa"]`), de modo que el proveedor tenga que haber aplicado su propio segundo factor. Consulta [Configurar el inicio de sesión único](./configuring-sso.md). Un inquilino que activa **Require SSO** ya no tiene inicios de sesión de miembros con contraseña a los que aplicar la exigencia (el inicio de sesión con contraseña de un superusuario sigue admitiéndose y se registra como `sso_enforcement_bypassed`).
 
 ## Línea de comandos y clientes de la API {#clients}
 

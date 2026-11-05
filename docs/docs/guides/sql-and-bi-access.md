@@ -35,8 +35,8 @@ already bucketed, so it is cheap to scan over long ranges.
 | `analytics.state_change_events` | The connect/disconnect timeline |
 | `analytics.event_anchors` | The relationship anchors stamped on each event at write time |
 
-Every view is filtered to **the reader's own tenant**, automatically. There is no tenant column to
-remember to filter on, no view to pick per tenant, and nothing a query can do to widen the result.
+Every view is filtered to **the reader's own tenant**, automatically. The views do carry a `tenant_id` column, but
+you never need to filter on it, there is no view to pick per tenant, and nothing a query can do to widen the result.
 See [How the boundary is enforced](#how-the-boundary-is-enforced).
 
 The rollup keeps the current, still-filling bucket live, so a dashboard reading it is not blind up

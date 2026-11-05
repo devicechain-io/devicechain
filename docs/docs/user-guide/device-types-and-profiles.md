@@ -74,7 +74,7 @@ When a profile is shared by several device types, the card says so. A change to 
 of them.
 
 A type with no profile is allowed, but it is **capability-limited**: its devices are still listed
-and displayed, but they report no typed metrics, accept no commands and raise no alarms. To fix
+and displayed, but they report no typed metrics and raise no alarms, and their commands are not checked against a declared vocabulary, so any command key is accepted. To fix
 that, attach an existing profile or choose **Create a profile for this type**.
 
 ## Device profiles
@@ -128,7 +128,7 @@ Choose **New command** to add one.
 - **Impact**: **Normal**, **Disruptive** or **Destructive**. Disruptive and destructive commands
   wait for the device type's maintenance window. Normal commands are never held.
 - **Parameter schema** (optional): a JSON array describing the command's parameters, each with
-  a `name` and a `dataType`. Leave it blank for a command with no arguments. The console builds
+  a `name` and a `dataType`. Leave it blank to declare no parameters; the platform then does not check the parameters a command is sent with. The console builds
   the parameter form on a device's Commands tab from this schema.
 
 For LwM2M devices, **Add LwM2M standard commands** declares **Reboot** and

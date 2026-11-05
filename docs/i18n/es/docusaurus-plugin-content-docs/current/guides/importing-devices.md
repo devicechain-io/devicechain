@@ -37,7 +37,7 @@ Un archivo puede tener hasta 10 000 filas y 5 MiB. Un archivo mayor se rechaza a
 
 | Columna | Obligatoria | Significado |
 | --- | --- | --- |
-| `token` | Sí | El token del dispositivo: letras, dígitos, guiones y guiones bajos, comenzando por una letra o un dígito, hasta 128 caracteres. Es la clave con la que se reconoce una nueva ejecución. |
+| `token` | Sí | El token del dispositivo: letras, dígitos, guiones y guiones bajos, comenzando por una letra o un dígito, hasta 128 caracteres. Es la clave con la que se reconoce una nueva ejecución. Puede dejarse vacío solo en una fila que indique un `externalId` y un `provisioningProfileToken` que nombre un perfil de certificado: el servidor deriva entonces el token del id externo. |
 | `deviceTypeToken` | Sí, por fila o para todo el archivo | El token de un tipo de dispositivo existente. Un tipo desconocido deja la fila en `INVALID`. |
 | `externalId` | No | Tu identificador de negocio, hasta 256 caracteres, único en el tenant. Se comprueba para detectar conflictos y nunca es la clave. |
 | `name` | No | Hasta 128 caracteres. |

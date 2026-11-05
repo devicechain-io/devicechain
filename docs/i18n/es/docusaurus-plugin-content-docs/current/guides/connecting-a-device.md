@@ -13,7 +13,7 @@ La ingesta por MQTT y por HTTP está disponible. Los dispositivos restringidos p
 
 Un dispositivo que informa a través de un servidor de red LoRaWAN (ChirpStack, The Things Stack) o del webhook de otro sistema no se conecta por sí mismo; consulta [Integraciones de entrada](./inbound-integrations.md).
 
-Las conexiones se protegen en el broker. Los listeners de MQTT/NATS son TLS, y un auth-callout de NATS autentica cada conexión y la vincula a los subjects de ese único dispositivo, de modo que un dispositivo solo puede publicar sus propios eventos y leer sus propios comandos. La autenticación del dispositivo también se aplica por evento mediante credencial. El modo de autenticación de dispositivo predeterminado es `required`, así que se espera una credencial tanto en la conexión como en el evento. Consulta [Credenciales de dispositivo](./device-credentials.md). LwM2M y Sparkplug B autentican en el handshake del transporte en lugar de por evento.
+Las conexiones se protegen en el broker. Los listeners de MQTT/NATS son TLS, y un auth-callout de NATS autentica cada conexión y la vincula a los subjects de ese único dispositivo, de modo que un dispositivo solo puede publicar sus propios eventos y leer sus propios comandos. Por HTTP, la credencial de cada evento es lo que autentica al dispositivo. Por el broker MQTT de la plataforma, la conexión autenticada es la identidad: el cuerpo del evento no lleva credencial, y un evento que la incluya se rechaza. El modo de autenticación de dispositivo predeterminado es `required`, así que se espera una credencial en cada evento HTTP y en cada conexión MQTT. Consulta [Credenciales de dispositivo](./device-credentials.md). LwM2M y Sparkplug B autentican en el handshake del transporte en lugar de por evento.
 
 ## Tres identificadores {#three-identifiers}
 
@@ -58,13 +58,13 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
 - `device` — el token estable del dispositivo.
 - `eventType` — `Measurement`, `Location` o `Alert` (también `NewRelationship`).
 - `credentialType` / `credentialId` — la credencial que presenta el dispositivo **por HTTP**. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera que un evento HTTP lleve una credencial. **Por MQTT, omite los tres**: el broker ya autenticó al dispositivo al conectarse, y un evento en el broker MQTT de la plataforma que lleve cualquiera de ellos se rechaza (consulta la [Referencia del protocolo de dispositivos](../reference/device-protocol.md#rejections-at-the-door)).
-- `payload` — su forma depende de `eventType`, y todas las formas son `{ "entries": [ … ] }`. Consulta a continuación.
+- `payload` — su forma depende de `eventType`. `Measurement`, `Location` y `Alert` son `{ "entries": [ … ] }`; `NewRelationship` son tres campos directamente bajo `payload`. Consulta a continuación.
 
 Cada campo, con su tipo y si es obligatorio, incluidos los opcionales `altId` y `relationship`, está en la [Referencia del protocolo de dispositivo](../reference/device-protocol.md#device-event), junto con esquemas JSON con los que puedes validar lo que emite el firmware.
 
 ### Formas del payload {#payload-shapes}
 
-Todo payload envuelve su contenido en un arreglo `entries`, y la forma fija el tipo JSON de cada valor:
+Un payload `Measurement`, `Location` o `Alert` envuelve su contenido en un arreglo `entries` (uno `NewRelationship` lleva `relationshipType`, `targetType` y `target` directamente), y la forma fija el tipo JSON de cada valor:
 
 - Los valores de medición y todos los campos de `Location` son **cadenas JSON** (`"21.5"`, no `21.5`).
 - El `level` de una alerta es un **entero JSON sin comillas** de 0 a 2147483647.

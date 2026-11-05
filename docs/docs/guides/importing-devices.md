@@ -37,7 +37,7 @@ A file may hold up to 10,000 rows and 5 MiB. A larger file is refused before it 
 
 | Column | Required | Meaning |
 | --- | --- | --- |
-| `token` | Yes | The device's token: letters, digits, hyphens and underscores, starting with a letter or digit, up to 128 characters. It is the key a re-run matches on. |
+| `token` | Yes | The device's token: letters, digits, hyphens and underscores, starting with a letter or digit, up to 128 characters. It is the key a re-run matches on. It may be left empty only on a row that gives an `externalId` and a `provisioningProfileToken` naming a certificate profile: the server then derives the token from the external id. |
 | `deviceTypeToken` | Yes, per row or for the whole file | The token of an existing device type. An unknown type makes the row `INVALID`. |
 | `externalId` | No | Your business identifier, up to 256 characters, unique in the tenant. It is checked for conflicts and is never the key. |
 | `name` | No | Up to 128 characters. |

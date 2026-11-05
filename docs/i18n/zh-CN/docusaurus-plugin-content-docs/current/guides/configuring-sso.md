@@ -35,7 +35,7 @@ title: 配置单点登录
 
 ## 双重身份验证 {#two-factor}
 
-租户的[双重验证要求](./two-factor-authentication.md#require)只约束**密码**登录。通过单点登录登录的人不会遇到它，租户的该项设置也不适用于他们。决定 SSO 登录的是连接：在连接上要求某种认证方式（`requiredAmr`，例如 `["mfa"]`），使身份提供商必须已执行自己的第二因素。开启 **Require SSO** 的租户已没有可适用该要求的密码登录。
+租户的[双重验证要求](./two-factor-authentication.md#require)只约束**密码**登录。通过单点登录登录的人不会遇到它，租户的该项设置也不适用于他们。决定 SSO 登录的是连接：在连接上要求某种认证方式（`requiredAmr`，例如 `["mfa"]`），使身份提供商必须已执行自己的第二因素。开启 **Require SSO** 的租户，其成员已没有可适用该要求的密码登录（超级用户的密码登录仍被允许，并记录为 `sso_enforcement_bypassed`）。
 
 ## 在提供商处退出登录 {#provider-sign-out}
 
@@ -74,7 +74,7 @@ title: 配置单点登录
 1. 在 Okta 管理控制台，选择 **Applications → Create App Integration → OIDC - OpenID Connect → Web Application**。Sign-in redirect URI：`<callback URL>`。分配可以使用它的用户或组。
 2. 复制客户端 ID 和客户端密钥。
 3. Issuer：组织授权服务器使用你的 Okta 组织 URL（`https://<org>.okta.com`），或使用自定义授权服务器（`https://<org>.okta.com/oauth2/<id>`）。它必须与该服务器发现文档中的 `issuer` 完全一致。
-4. Okta 会发送 `email` 和 `email_verified`。如果你的 Okta 用户的邮箱未经验证，登录会被拒绝。
+4. Okta 会发送 `email` 和 `email_verified`。如果你的 Okta 用户的邮箱未经验证，尚未链接到身份的账户登录会被拒绝。
 5. 如需组映射：把 `groups` scope 加入连接的 scopes，并添加一个 **groups claim**（Sign On 选项卡，或授权服务器的 Claims），使用 “Starts with” 或 “Matches regex” 之类的过滤器，只发送你想要的组。映射组名。使用了多因素认证时，Okta 的 `amr` 会包含 `mfa`。
 6. Okta 没有像 `tid` 这样的租户固定声明；每个组织有自己的 issuer，由它起到固定作用。
 

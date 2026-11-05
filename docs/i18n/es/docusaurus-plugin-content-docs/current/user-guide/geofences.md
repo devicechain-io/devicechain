@@ -106,8 +106,7 @@ trazo discontinuo detrás, para que puedas compararlas.
 
 <GuideShot id="geofence-history" alt="La pestaña Historial de la geocerca Acme campus perimeter. El control Versión del conjunto de geocercas muestra 1, con los botones Anterior y Siguiente y la etiqueta Actual. El límite cuadrado se dibuja sobre el mapa del mundo incorporado, continuo para la versión 1 y discontinuo para la forma actual, con la leyenda debajo." />
 
-El mapa del Historial usa siempre el mapa del mundo incorporado, sin teselas, así que solo se ve la
-forma.
+El mapa del Historial usa el mismo mapa base que la pestaña Básica (tu preferencia del navegador, luego el mapa base del inquilino, y el mapa del mundo incorporado, sin teselas, cuando ninguno aporta uno), así que el pasado no se muestra sobre un mapa distinto.
 
 Si la geocerca no existía en la versión que eliges, la pestaña lo indica: se creó después, o se
 eliminó una geocerca con este token y el token se reutilizó.

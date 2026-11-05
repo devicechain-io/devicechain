@@ -35,7 +35,7 @@ Una conexión de instancia (para tus propios operadores) se crea del mismo modo 
 
 ## Autenticación en dos pasos {#two-factor}
 
-La [exigencia de dos pasos](./two-factor-authentication.md#require) de un inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único no la encuentra, y el ajuste del inquilino no se le aplica. Lo que rige un inicio de sesión SSO es la conexión: exige un método de autenticación en ella (`requiredAmr`, por ejemplo `["mfa"]`) para que el proveedor de identidad tenga que haber aplicado su propio segundo factor. Un inquilino que activa **Require SSO** ya no tiene inicios de sesión con contraseña a los que aplicar la exigencia.
+La [exigencia de dos pasos](./two-factor-authentication.md#require) de un inquilino obliga solo a los inicios de sesión **con contraseña**. Una persona que inicia sesión mediante el inicio de sesión único no la encuentra, y el ajuste del inquilino no se le aplica. Lo que rige un inicio de sesión SSO es la conexión: exige un método de autenticación en ella (`requiredAmr`, por ejemplo `["mfa"]`) para que el proveedor de identidad tenga que haber aplicado su propio segundo factor. Un inquilino que activa **Require SSO** ya no tiene inicios de sesión de miembros con contraseña a los que aplicar la exigencia (el inicio de sesión con contraseña de un superusuario sigue admitiéndose y se registra como `sso_enforcement_bypassed`).
 
 ## Cerrar sesión en el proveedor {#provider-sign-out}
 
@@ -74,7 +74,7 @@ En cada receta, reemplaza `<callback URL>` por la callback URL de la conexión.
 1. En la consola de administración de Okta, **Applications → Create App Integration → OIDC - OpenID Connect → Web Application**. Sign-in redirect URI: `<callback URL>`. Asigna las personas o grupos que pueden usarla.
 2. Copia el id de cliente y el secreto de cliente.
 3. Issuer: la URL de tu organización de Okta para el servidor de autorización de la organización (`https://<org>.okta.com`), o un servidor de autorización personalizado (`https://<org>.okta.com/oauth2/<id>`). Debe ser exactamente igual al `issuer` del documento de descubrimiento de ese servidor.
-4. Okta envía `email` y `email_verified`. Si los correos de tus usuarios de Okta no están verificados, los inicios de sesión se rechazan.
+4. Okta envía `email` y `email_verified`. Si los correos de tus usuarios de Okta no están verificados, se rechaza el inicio de sesión de una cuenta que aún no está vinculada a una identidad.
 5. Para la asignación de grupos: añade el scope `groups` a los scopes de la conexión, y añade una **groups claim** (pestaña Sign On, o los Claims del servidor de autorización) con un filtro como "Starts with" o "Matches regex" para que solo se envíen los grupos que quieres. Asigna los nombres de los grupos. El `amr` de Okta incluye `mfa` cuando se usó autenticación multifactor.
 6. Okta no tiene una afirmación que fije el inquilino como `tid`; cada organización tiene su propio emisor, que es lo que la fija.
 

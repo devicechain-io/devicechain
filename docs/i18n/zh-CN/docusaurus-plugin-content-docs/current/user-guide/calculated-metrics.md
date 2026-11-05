@@ -125,7 +125,7 @@ sidebar_position: 5
 
 公式可以读取属于某台**设备**而不是某次上报的数字，例如校准系数或电流互感器变比。写法是 `device.` 加名称：`voltage * device.calibration`。名称不是普通标识符时，写成 `device["ct-ratio"]`。`device` 这个名称为此保留：键为 `device` 的测量指标要通过 `m` 读取，并包上与其类型对应的转换，例如 `double(m["device"])`。
 
-这个数字来自**设备的元数据**。编辑设备，把常量以同名的 JSON 数字放进它的元数据：
+这个数字来自**设备的元数据**。通过 API 中 `updateDevice` 的 `metadata` 字段，把常量以同名的 JSON 数字放进设备的元数据（控制台的设备表单不编辑元数据）：
 
 ```json
 { "site": "north plant", "calibration": 1.02 }
