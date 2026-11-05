@@ -4,6 +4,9 @@
 package processor
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -307,21 +310,91 @@ func TestNothingOutsideTheIntegrationPathNamesTheIntegrationUplinkType(t *testin
 	require.Greater(t, scanned, 500, "the walk must have covered the workspace, not an empty directory")
 }
 
+// namesIntegrationUplinkType reports whether Go source uses the IntegrationUplink event type or
+// builds its payload. It parses the file and resolves the local name of the eventtype import, so
+// an import alias (et.IntegrationUplink) is seen as well as the plain spelling, and it also flags:
+//   - a conversion of the literal 7 to the eventtype's EventType (EventType(7));
+//   - a dot import of the eventtype package, whose bare IntegrationUplink is then the type;
+//   - a composite literal of UnresolvedIntegrationUplinkPayload, from any package name.
+//
+// REMAINING LIMITS (this is syntax, not go/types): a constant that happens to equal 7 and is
+// converted by name (const seven = 7; EventType(seven)), a value read back from a variable or the
+// wire, and a type reached through a re-declared alias of the payload struct. The backstop for
+// those is the resolver's own guard, which refuses a type it does not trust.
 func namesIntegrationUplinkType(src string) bool {
-	for _, line := range strings.Split(src, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+	f, err := parser.ParseFile(token.NewFileSet(), "", src, 0)
+	if err != nil {
+		// A file that does not parse cannot be shown clean.
+		return true
+	}
+	local, dot := "", false
+	for _, imp := range f.Imports {
+		if strings.Trim(imp.Path.Value, "\"") != "github.com/devicechain-io/dc-microservice/eventtype" {
 			continue
 		}
-		if strings.Contains(line, "eventtype.IntegrationUplink") {
-			return true
+		switch {
+		case imp.Name == nil:
+			local = "eventtype"
+		case imp.Name.Name == ".":
+			dot = true
+		case imp.Name.Name != "_":
+			local = imp.Name.Name
 		}
 	}
-	return false
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if id, ok := x.X.(*ast.Ident); ok && local != "" && id.Name == local && x.Sel.Name == "IntegrationUplink" {
+				found = true
+			}
+		case *ast.Ident:
+			if dot && x.Name == "IntegrationUplink" {
+				found = true
+			}
+		case *ast.CallExpr:
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && len(x.Args) == 1 {
+				if id, ok := sel.X.(*ast.Ident); ok && local != "" && id.Name == local && sel.Sel.Name == "EventType" {
+					if lit, ok := x.Args[0].(*ast.BasicLit); ok && lit.Kind == token.INT && lit.Value == "7" {
+						found = true
+					}
+				}
+			}
+		case *ast.CompositeLit:
+			switch t := x.Type.(type) {
+			case *ast.SelectorExpr:
+				found = found || t.Sel.Name == "UnresolvedIntegrationUplinkPayload"
+			case *ast.Ident:
+				found = found || t.Name == "UnresolvedIntegrationUplinkPayload"
+			}
+		}
+		return !found
+	})
+	return found
 }
 
-func TestTheIntegrationUplinkGuardSeesAUseAndIgnoresAComment(t *testing.T) {
-	require.True(t, namesIntegrationUplinkType("e.EventType = eventtype.IntegrationUplink"))
-	require.True(t, namesIntegrationUplinkType("case eventtype.IntegrationUplink:"))
-	require.False(t, namesIntegrationUplinkType("// eventtype.IntegrationUplink is the route's"))
-	require.False(t, namesIntegrationUplinkType("e.EventType = eventtype.Measurement"))
+func TestTheIntegrationUplinkGuardSeesEachSpellingAndIgnoresAComment(t *testing.T) {
+	const imp = `"github.com/devicechain-io/dc-microservice/eventtype"`
+	head := "package x\nimport " + imp + "\n"
+	aliased := "package x\nimport et " + imp + "\n"
+	for name, src := range map[string]string{
+		"plain":           head + "var _ = eventtype.IntegrationUplink",
+		"switch case":     head + "func f(e eventtype.EventType) { switch e { case eventtype.IntegrationUplink: } }",
+		"import alias":    aliased + "var _ = et.IntegrationUplink",
+		"literal 7":       head + "var _ = eventtype.EventType(7)",
+		"aliased literal": aliased + "var _ = et.EventType(7)",
+		"payload literal": "package x\nvar _ = &model.UnresolvedIntegrationUplinkPayload{}",
+		"dot import":      "package x\nimport . " + imp + "\nvar _ = IntegrationUplink",
+		"does not parse":  "package x\nfunc (",
+	} {
+		require.True(t, namesIntegrationUplinkType(src), name)
+	}
+	for name, src := range map[string]string{
+		"a comment":            head + "// eventtype.IntegrationUplink is the route's\nvar _ = eventtype.Measurement",
+		"another type":         head + "var _ = eventtype.EventType(2)",
+		"another alias":        aliased + "var _ = et.Measurement",
+		"a local of that name": "package x\nvar et struct{ IntegrationUplink int }\nvar _ = et.IntegrationUplink",
+	} {
+		require.False(t, namesIntegrationUplinkType(src), name)
+	}
 }
