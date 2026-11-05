@@ -52,8 +52,8 @@ type ReadinessGate struct {
 //
 // 🔴 IT STARTS WITH THE CLOSED AUDIENCE POLICY (enforce mode, no own area, no MCP resources),
 // which accepts only tokens that carry no audience. A production path that forgot to install
-// the configured policy therefore refuses the MCP pass-through loudly instead of silently
-// admitting every audience. Tests that build a gate by hand use first-party (aud-less) tokens
+// the configured policy therefore refuses the MCP pass-through loudly (the refusal is logged,
+// not counted: the closed policy has no recorder) instead of silently admitting every audience. Tests that build a gate by hand use first-party (aud-less) tokens
 // and are unaffected.
 func NewReadinessGate() *ReadinessGate {
 	g := &ReadinessGate{readyCh: make(chan struct{})}

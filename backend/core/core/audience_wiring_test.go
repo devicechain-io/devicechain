@@ -36,6 +36,7 @@ func claimsWithAud(aud ...string) *auth.Claims {
 // gate whose own-area resource is <base>/<area>, and which accepts the MCP resource. Without
 // the SetAudiencePolicy call the gate keeps the CLOSED policy and refuses the MCP audience.
 func TestLoadInstanceConfigurationInstallsTheAudiencePolicy(t *testing.T) {
+	keepGlobalLevel(t)
 	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 
@@ -54,6 +55,7 @@ func TestLoadInstanceConfigurationInstallsTheAudiencePolicy(t *testing.T) {
 }
 
 func TestLoadInstanceConfigurationHonoursAnExplicitMode(t *testing.T) {
+	keepGlobalLevel(t)
 	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, audienceDoc(chartDerivedAudience+`, "enforcement": "enforce"`))))
@@ -67,6 +69,7 @@ func TestLoadInstanceConfigurationHonoursAnExplicitMode(t *testing.T) {
 // resetting the count.
 func TestAudienceCounterRegisteredOncePerMicroservice(t *testing.T) {
 	reg := prometheus.NewRegistry()
+	keepGlobalLevel(t)
 	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
 	ms.UseMetricsRegistry(reg)
 	doc := instanceDoc(t, audienceDoc(chartDerivedAudience))
@@ -86,6 +89,7 @@ func TestAudienceCounterRegisteredOncePerMicroservice(t *testing.T) {
 // M29 / break-glass: a struct-literal Microservice with NO gate loads a document that carries
 // the block, without a nil dereference and without installing anything.
 func TestAudiencePolicyWiringSurvivesAMicroserviceWithNoGate(t *testing.T) {
+	keepGlobalLevel(t)
 	ms := &Microservice{FunctionalArea: "user-management"}
 	require.Nil(t, ms.Readiness)
 	require.NotPanics(t, func() {
@@ -96,6 +100,7 @@ func TestAudiencePolicyWiringSurvivesAMicroserviceWithNoGate(t *testing.T) {
 
 // A made-up area is a warn, not a failure, and gets no own-area resource.
 func TestAudiencePolicyForANonRosterAreaDoesNotFailStartup(t *testing.T) {
+	keepGlobalLevel(t)
 	for _, area := range []string{"log-level-test", ""} {
 		ms := &Microservice{FunctionalArea: area, Readiness: NewReadinessGate()}
 		ms.UseMetricsRegistry(prometheus.NewRegistry())
@@ -106,6 +111,7 @@ func TestAudiencePolicyForANonRosterAreaDoesNotFailStartup(t *testing.T) {
 
 // An invalid block stops the load, naming the key.
 func TestLoadInstanceConfigurationRefusesAnInvalidAudienceBlock(t *testing.T) {
+	keepGlobalLevel(t)
 	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
 	err := ms.LoadInstanceConfigurationFrom(instanceDoc(t, audienceDoc(`"enforcement": "maybe"`)))
 	require.Error(t, err)

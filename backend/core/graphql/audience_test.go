@@ -213,9 +213,12 @@ func TestDataPlaneAudienceRule(t *testing.T) {
 	}
 }
 
-// Observe-mode compat: the same request, with and without the policy, answers identically for
-// every class (a gate with a policy in observe mode is invisible to the caller).
-func TestObserveModeServesEveryClassIdenticallyToNoPolicy(t *testing.T) {
+// What this checks: in observe mode, attaching the recorder (counting plus the warning) does not
+// change what the caller receives, for any class. It compares an observe policy WITH a recorder
+// against an observe policy WITHOUT one; it is not a diff against pre-PR behaviour. That claim
+// rests on TestDataPlaneAudienceRule/observe, which asserts 200 with real GraphQL data for every
+// class.
+func TestObserveModeRecorderDoesNotChangeTheResponse(t *testing.T) {
 	h := newAudHarness(t, "observe")
 	bare := newAudHarness(t, "observe")
 	bare.gate = core.NewReadinessGate()

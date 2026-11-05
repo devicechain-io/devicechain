@@ -4,18 +4,16 @@
 package auth
 
 import (
-	"bytes"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -283,13 +281,11 @@ func TestWarnLimiterKeySetIsBounded(t *testing.T) {
 	assert.LessOrEqual(t, len(l.idx), warnKeys)
 }
 
-func captureLog(t *testing.T) *bytes.Buffer {
+// captureLog captures the process-wide log through the package's shared sink (installed from
+// TestMain); a test never swaps the global logger itself.
+func captureLog(t *testing.T) *dctest.LogSink {
 	t.Helper()
-	var buf bytes.Buffer
-	old := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = old })
-	return &buf
+	return logSink.Capture(t)
 }
 
 func TestWarnLineContentAndInjectionSafety(t *testing.T) {

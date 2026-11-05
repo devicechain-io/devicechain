@@ -142,15 +142,11 @@ func NewPlanePolicy(cfg config.TokenAudienceConfiguration, area string, rec Reco
 // and no MCP resources, so it accepts only tokens that carry no audience. A production path
 // that forgot to install the configured policy therefore breaks the MCP pass-through loudly
 // (refused) instead of silently admitting every audience.
-func NewClosedPlanePolicy() *PlanePolicy {
-	return &PlanePolicy{
-		mode:   config.TokenAudienceEnforce,
-		mcp:    map[string]struct{}{},
-		ext:    map[string]struct{}{},
-		others: map[string]struct{}{},
-		lim:    newWarnLimiter(time.Now),
-	}
-}
+//
+// It returns ONE shared instance, so every caller (a gate with no policy, a nil policy at a
+// call site) shares one warning limiter; a fresh copy per call would never rate limit. It has
+// no recorder, so its refusals are logged, not counted.
+func NewClosedPlanePolicy() *PlanePolicy { return closedPolicy }
 
 // Mode is the policy's effective mode.
 func (p *PlanePolicy) Mode() config.TokenAudienceMode {
@@ -224,7 +220,7 @@ func (c AudienceClass) accepted() bool {
 // A nil policy is the closed policy.
 func (p *PlanePolicy) Admit(c *Claims, plane Plane) error {
 	if p == nil {
-		p = closedFallback
+		p = closedPolicy
 	}
 	if c == nil {
 		return ErrAudienceRefused
@@ -249,8 +245,15 @@ func (p *PlanePolicy) Admit(c *Claims, plane Plane) error {
 	return err
 }
 
-// closedFallback serves a nil *PlanePolicy.
-var closedFallback = NewClosedPlanePolicy()
+// closedPolicy is the shared closed policy (see NewClosedPlanePolicy); it also serves a nil
+// *PlanePolicy.
+var closedPolicy = &PlanePolicy{
+	mode:   config.TokenAudienceEnforce,
+	mcp:    map[string]struct{}{},
+	ext:    map[string]struct{}{},
+	others: map[string]struct{}{},
+	lim:    newWarnLimiter(time.Now),
+}
 
 func (p *PlanePolicy) warn(c *Claims, plane Plane, class AudienceClass, verdict AudienceVerdict) {
 	suppressed, ok := p.lim.allow(string(plane) + "\x00" + string(class) + "\x00" + c.ClientId)
