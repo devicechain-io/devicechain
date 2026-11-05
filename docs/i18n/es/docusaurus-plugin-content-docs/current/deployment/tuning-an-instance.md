@@ -5,6 +5,10 @@ title: Ajustar una instancia
 
 # Ajustar una instancia {#tuning-an-instance}
 
+:::note Las cifras de dimensionamiento suponen la confirmación a prueba de fallos desactivada
+Las cifras de [Rendimiento medido](./bootstrap.md#measured-throughput) se tomaron con la [confirmación MQTT a prueba de fallos](./observability.md#mqtt-fail-closed) desactivada, el valor por defecto. Sin ella, una sobrecarga MQTT sostenida que supere el margen del flujo de captura descarta los eventos confirmados más antiguos (una [carencia aceptada](../concepts/security-model.md#accepted-gaps)). Si eso te importa, actívala con `--mqtt-fail-closed` y dimensiona por debajo de su techo más bajo.
+:::
+
 Ajustas una instancia (número de réplicas, CPU y memoria, la configuración propia de un área) con
 un archivo de valores. Se lo pasas a `dcctl bootstrap` o a `dcctl upgrade` con `--values`, y
 `dcctl` **lo registra en la instancia**, de modo que cada `dcctl upgrade` posterior lo aplica de

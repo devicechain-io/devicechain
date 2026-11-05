@@ -135,3 +135,17 @@ func sayMqttFailClosed(st *State) {
 			"  this cluster was installed without --ha: with one broker replica a node crash can lose what the file store had not yet synced, so a PUBACK is not a durability promise there"))
 	}
 }
+
+// mqttFailClosedHint is the closing line for an instance that has not turned fail-closed on.
+const mqttFailClosedHint = "note: with MQTT fail-closed off, sustained MQTT overload can drop already-acknowledged events from the capture stream. " +
+	"--mqtt-fail-closed prevents it (at a lower ingest ceiling): https://docs.devicechain.io/concepts/security-model#accepted-gaps"
+
+// sayMqttFailClosedHint closes a finished bootstrap or upgrade with one informational line
+// when fail-closed is not on: never chosen (nil) or chosen off (false). Said on completion,
+// not in the plan, and never when the operator turned it on.
+func sayMqttFailClosedHint(st *State) {
+	if st.MqttFailClosed != nil && *st.MqttFailClosed {
+		return
+	}
+	fmt.Println(color.WhiteString(mqttFailClosedHint))
+}

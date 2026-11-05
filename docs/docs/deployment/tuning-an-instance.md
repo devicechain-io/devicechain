@@ -5,6 +5,10 @@ title: Tuning an Instance
 
 # Tuning an Instance {#tuning-an-instance}
 
+:::note Sizing figures assume fail-closed off
+The throughput figures in [Measured throughput](./bootstrap.md#measured-throughput) were taken with the [fail-closed MQTT acknowledgement](./observability.md#mqtt-fail-closed) off, the default. Without it, sustained MQTT overload past the capture stream's margin drops the oldest acknowledged events (an [accepted gap](../concepts/security-model.md#accepted-gaps)). If that matters to you, turn it on with `--mqtt-fail-closed` and size below its lower ceiling.
+:::
+
 You tune an instance — replica counts, CPU and memory, an area's own configuration — with a
 values file. You give it to `dcctl bootstrap` or `dcctl upgrade` with `--values`, and `dcctl`
 **records it on the instance**, so every later `dcctl upgrade` applies it again without being

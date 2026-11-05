@@ -1281,6 +1281,7 @@ func stepReport(ctx context.Context, st *State) error {
 			fmt.Println(color.YellowString("  The TLS cert is self-signed (dev-grade), so your browser will warn once (or use --no-tls)."))
 			fmt.Printf("  A client that should verify it trusts the instance's CA instead: kubectl -n %s get secret %s -o jsonpath='{.data.ca\\.crt}' | base64 -d\n", InstanceNamespace(st.Instance), servingTLSSecret(st))
 		}
+		sayMqttFailClosedHint(st)
 	}
 	return nil
 }
