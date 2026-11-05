@@ -192,11 +192,12 @@ func deleteConfirmedKicks(db *gorm.DB, tenant string, rows []PendingSessionKick)
 //
 // 🔴 THE ONE CROSS-TENANT READ OF THE KICK QUEUE. It runs under a system context because the
 // answer to "which tenants owe a kick" cannot be scoped to one, and it selects only the tenant
-// ids: no kick row, device token or reason leaves it. Every row is then read and deleted under
-// core.WithTenant(tenant) (drainSessionKicks), so the predicate and the erasure fence apply to
-// all of the real work. Its callers are the background drain (scope: everything) and a repeated
-// DeleteDevice from a system context (scope: one device's delete debt), which has no tenant on
-// its context and no device row left to name one.
+// ids: no kick row, device token or reason leaves it, and it writes nothing. What follows is
+// scoped by explicit predicates, not by the context: drainSessionKicks filters tenant_id on every
+// read and delete (core.WithTenant keeps a system marker already on the context, so the
+// automatic predicate is NOT what protects those statements). Its callers are the background
+// drain (scope: everything) and a repeated DeleteDevice from a system context (scope: one
+// device's delete debt), which has no tenant on its context and no device row left to name one.
 func (api *Api) tenantsOwingKicks(ctx context.Context, scope func(*gorm.DB) *gorm.DB) ([]string, error) {
 	tenants := make([]string, 0)
 	if err := scope(api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{})).
