@@ -25,7 +25,7 @@ DeviceChain 由基于共享核心库构建的无状态 Go 微服务组成。Kube
 | `outbound-connectors` _（可选启用）_ | 向外部系统投递出站动作：HTTP/webhook 调用，以及向消息代理和云队列（MQTT、Kafka、AWS SNS/SQS）执行 `publish`。它使用限定于租户、支持版本管理的连接器，凭据保存在密钥存储中。服务在独立进程中运行，因此缓慢或行为异常的外部系统不会影响检测流水线。参见[出站连接器](./outbound-connectors.md)。 |
 | `mcp` _（可选启用）_ | 只读的 Model Context Protocol 服务器，使 AI 助手能够代表用户访问租户。它是 GraphQL API 上的一层轻量 OAuth 2.1 资源服务器，携带调用方自己的租户作用域令牌。它没有服务令牌，只提供经过选择的读取工具。参见 [AI 访问（MCP）](./mcp.md)。 |
 | `update-management` | 空中（OTA）更新：固件制品及其向设备的分配。它按租户保存不可变的固件、软件和配置镜像目录，并提供流式上传，按声明的大小和 SHA-256 摘要校验内容。可用制品被分配给设备后，设备通过其设备通道得知，并凭一个短期、可续传的授权下载镜像。服务会跟踪每次尝试，从下载、校验、安装、重启直到运行版本，并对不再出声的设备判定超时。制品由你注册的签名者签名，默认情况下只有已签名的制品才能被分配，由设备校验签名。发布会把制品分配给一个设备组，每次分配的设备数量有上限。它属于 `default` 配置档。参见[空中（OTA）更新](./over-the-air-updates.md)。 |
-| `operator` | 基于 controller-runtime 的 Operator，管理 `Instance` 自定义资源及其生命周期。目前协调循环只观察资源；聚合已渲染 Deployment 的就绪状态，是该循环计划中的后续功能。配置不会原地重新加载：服务只在启动时读取一次配置，通过滚动更新 Pod 采用更改。工作负载本身由 Helm Chart 渲染。租户是控制平面数据库记录，不是被协调的资源。 |
+| `operator` | 基于 controller-runtime 的 Operator，管理 `Instance` 自定义资源及其生命周期。其协调循环观察 Helm Chart 渲染的 Deployment，并把聚合状态条件、各区域的副本数和镜像以及正在运行的版本写入 `Instance.status`。配置不会原地重新加载：服务只在启动时读取一次配置，通过滚动更新 Pod 采用更改。工作负载本身由 Helm Chart 渲染。租户是控制平面数据库记录，不是被协调的资源。 |
 
 向多台设备分发同一条命令属于 `command-delivery`，不是独立服务。参见[一条命令，多台设备](./commands.md#command-batches)。调度功能仍在计划中；当前状态以仓库为准。
 
@@ -106,14 +106,17 @@ Operator 假定基础设施已经存在，负责 `Instance` 生命周期，而�
 
 服务间的大多数流量通过 NATS 异步传递。如果服务在执行操作时需要另一个服务立即返回结果或执行动作，则使用短期服务令牌直接调用该服务的 GraphQL 端点。例如，命令入队前检查设备是否存在，以及检测规则发送命令。
 
-除了每个服务提供的 `/healthz`、`/readyz` 和 `/metrics` 端点，以及只在启用开发者工具时提供的 `/graphiql` 浏览器外，非 GraphQL 的 HTTP 端点包括标准规定的端点和三个用途有限的端点。标准端点有：
+除了每个服务提供的 `/healthz`、`/readyz` 和 `/metrics` 端点，以及只在启用开发者工具时提供的 `/graphiql` 浏览器外，非 GraphQL 的 HTTP 端点包括标准规定的端点和几个用途有限的端点。标准端点有：
 
 - 令牌验证器获取的 JWKS 文档，在任何 Ingress 路由都无法到达的内部端口上提供
 - OAuth 2.1 授权服务器端点（`/oauth/authorize`、`/oauth/token`、`/oauth/userinfo`、`/oauth/jwks` 和 RFC 8414 元数据文档），由 `user-management` 在配置 issuer URL 后提供
 - 可选启用的 [MCP 服务器](./mcp.md)使用的基于 HTTP 的 JSON-RPC 传输，以及它发布的受保护资源元数据文档（RFC 9728）
 
-另外三个端点是：
+其余端点是：
 
 - 面向设备的 HTTP 事件接入端点（`POST /{instance}/{tenant}/events`），由 `event-sources` 在独立端口提供；默认配置包含一个 HTTP 来源
+- 入站集成端点（`POST /{instance}/{tenant}/integrations/{integration}`），同样由 `event-sources` 提供，网络服务器或 Webhook 使用集成的 Bearer 令牌调用
+- `device-management` 上的设备自注册端点（`POST /provisioning/{tenant}/register`）
+- `update-management` 上的更新制品上传（`PUT /updates/artifacts/{token}/content`）和下载（`GET /updates/download/{artifact}`）端点
 - `user-management` 上的租户徽标上传与下载端点（`/branding/logo`）
 - `user-management` 上供服务获取短期服务令牌的端点（`/auth/service-token`），在同一内部端口上提供，从不经过 Ingress
