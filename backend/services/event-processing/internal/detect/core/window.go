@@ -427,6 +427,7 @@ func (e *Engine) closePanes(wm time.Time) bool {
 		}
 		heap.Pop(&e.closes)
 		consumed = true
+		e.step(ordPane, top.end, top.pk.Rule, top.pk.Series, 0)
 		pa, ok := e.panes[top.pk]
 		if !ok {
 			continue
