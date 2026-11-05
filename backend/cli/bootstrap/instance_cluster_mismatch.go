@@ -5,6 +5,8 @@ package bootstrap
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 )
 
 // RefuseInstanceOnAnotherCluster stops a bootstrap whose instance name already has local
@@ -36,7 +38,9 @@ func RefuseInstanceOnAnotherCluster(instance string, target ClusterBinding, live
 	if derr != nil {
 		dir = "~/.devicechain/instances/" + instance
 	}
-	aside := dir + ".stale"
+	// Outside instances/: a copy left inside is enumerated by `instances list` and
+	// `destroy --all` as an instance whose record names another one.
+	aside := filepath.Join(filepath.Dir(filepath.Dir(dir)), instance+".stale-state")
 	return fmt.Errorf("instance %q already has local state on this machine, and it belongs to a "+
 		"different cluster than the one this run targets.\n"+
 		"  recorded cluster: %s (kube-system UID %s)\n"+
@@ -47,11 +51,14 @@ func RefuseInstanceOnAnotherCluster(instance string, target ClusterBinding, live
 		"  If that cluster is gone, move the directory aside (it holds credentials, so keep it "+
 		"rather than deleting it) and run this command again:\n\n"+
 		"    mv \"%s\" \"%s\"\n\n"+
-		"  (PowerShell: Move-Item \"%s\" \"%s\")\n\n"+
+		"  (PowerShell: Move-Item -LiteralPath '%s' -Destination '%s')\n\n"+
 		"  If the recorded cluster is still running, choose a different instance name for this "+
 		"one, or point --kube-context at it",
 		instance, rec.describeForMismatch(), rec.ClusterUID, target.Describe(), liveUID, dir,
-		dir, aside, dir, aside)
+		dir, aside, psQuote(dir), psQuote(aside))
 }
 
 func (r InstanceRecord) describeForMismatch() string { return r.Binding().Describe() }
+
+// psQuote escapes a path for a PowerShell single-quoted literal.
+func psQuote(p string) string { return strings.ReplaceAll(p, "'", "''") }

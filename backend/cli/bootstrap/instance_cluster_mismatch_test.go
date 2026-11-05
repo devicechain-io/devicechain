@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -32,7 +33,7 @@ func TestRefuseInstanceOnAnotherClusterNamesBothClustersAndTheRemedy(t *testing.
 		t.Fatal("a record for another cluster must be refused")
 	}
 	msg := err.Error()
-	for _, want := range []string{mismatchOldUID, mismatchNewUID, "dc-ha", "dc-single", dir, dir + ".stale", "outside dcctl"} {
+	for _, want := range []string{mismatchOldUID, mismatchNewUID, "dc-ha", "dc-single", dir, filepath.Join(filepath.Dir(filepath.Dir(dir)), "rc.stale-state"), "outside dcctl"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message missing %q:\n%s", want, msg)
 		}
