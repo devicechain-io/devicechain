@@ -414,7 +414,7 @@ func (g *GroupCommit) Add(tenant string, m FormedMember) error {
 		return ErrGroupCommitStopped
 	}
 	ready := g.f.Add(time.Now(), tenant, m)
-	g.wg.Add(len(ready))
+	g.countLocked(len(ready))
 	g.rearmLocked()
 	g.mu.Unlock()
 	g.flushAll(ready)
@@ -427,10 +427,26 @@ func (g *GroupCommit) rearmLocked() {
 	}
 }
 
+// countLocked registers n closed batches on the wait group. It never calls wg.Add(0): with the
+// counter at zero and Stop already in Wait, Add takes the release-the-waiters branch that only the
+// final Done is meant to reach. mu must be held, so a batch is counted in the critical section that
+// closed it.
+func (g *GroupCommit) countLocked(n int) {
+	if n > 0 {
+		g.wg.Add(n)
+	}
+}
+
 func (g *GroupCommit) tick() {
 	g.mu.Lock()
+	if g.stopped {
+		// Stop drained every open group and stopped the timer; a tick that was already running
+		// has nothing to close and must not re-arm the timer.
+		g.mu.Unlock()
+		return
+	}
 	ready := g.f.Expired(time.Now())
-	g.wg.Add(len(ready))
+	g.countLocked(len(ready))
 	g.rearmLocked()
 	g.mu.Unlock()
 	g.flushAll(ready)
@@ -463,7 +479,7 @@ func (g *GroupCommit) Stop() {
 	g.stopped = true
 	g.timer.Stop()
 	ready := g.f.Drain(time.Now())
-	g.wg.Add(len(ready))
+	g.countLocked(len(ready))
 	g.mu.Unlock()
 	g.flushAll(ready)
 	g.wg.Wait()

@@ -288,3 +288,52 @@ func TestGroupCommitNothingClosesAfterStopAndLateAddsAreRefused(t *testing.T) {
 		t.Fatalf("a member that arrived after Stop was published (flushed %d, want 4)", got)
 	}
 }
+
+// A tick that runs while Stop is inside Wait (the timer callback was already running when Stop
+// stopped the timer) closes nothing, re-arms nothing and does not touch the wait group, so it
+// cannot release Stop's waiter early or trip the WaitGroup's misuse check.
+func TestGroupCommitTickDuringStopsWaitPublishesNothingAndLeavesStopWaiting(t *testing.T) {
+	var flushed atomic.Int32
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(b FormedBatch) {
+		flushed.Add(int32(len(b.Members)))
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-hold
+	})
+	if err := g.Add("quiet", fm(1)); err != nil { // closes at once; its flush now blocks on hold
+		t.Fatal(err)
+	}
+	<-entered
+	stopped := make(chan struct{})
+	go func() { g.Stop(); close(stopped) }()
+	for { // Stop has set stopped and is on its way to (or in) Wait
+		g.mu.Lock()
+		st := g.stopped
+		g.mu.Unlock()
+		if st {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); g.tick() }()
+	}
+	wg.Wait()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a flush was still in flight")
+	default:
+	}
+	if got := flushed.Load(); got != 1 {
+		t.Fatalf("a tick after Stop published something: flushed=%d, want 1", got)
+	}
+	close(hold)
+	<-stopped
+}
