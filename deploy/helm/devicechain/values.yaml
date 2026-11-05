@@ -538,6 +538,16 @@ instance:
         # UNAVAILABLE, fail-closed (the form + canvas authoring doors are unaffected).
         hostname: ai-inference
         port: 8080
+      # tokenAudience (no default; all keys optional) decides which resource a token must be
+      # bound to. The chart WRITES areaBaseUrl (<ingress origin>/api, only for an https or
+      # loopback origin, so a plain-http ingress on a real host has no area audiences) and
+      # mcpResources (mcp's resolved resourceUrl, when mcp is deployed) from the ingress and the
+      # enabled areas, and refuses to render if either is set here. The operator's keys:
+      #   enforcement: observe | enforce            (unset = the release default, observe)
+      #   unscopedClientCredentials: observe | enforce
+      #   externalResources: [https://api.example.com]   (resource servers outside the platform)
+      # Under instance.existingSecret the chart does not write the document, so the supplier
+      # writes all five keys, and dcctl checks that mcpResources lists mcp's resourceUrl.
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint

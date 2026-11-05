@@ -108,6 +108,11 @@ var tunableValues = []string{
 	// The one upgrade that deliberately shortens the runway sets this and then unsets it; left
 	// on, every later upgrade could discard unread events.
 	"brokerAdmin.allowCeilingShrink",
+	// The token-audience policy's operator keys: whether a token bound to the wrong resource is
+	// refused (enforcement, unscopedClientCredentials) and which resource servers outside the
+	// platform the authorization server may issue for (externalResources). The two the chart
+	// derives are refused below (ownedWithinTunable).
+	"instance.config.infrastructure.tokenAudience",
 	// Alerting rules and dashboards.
 	"metrics.alerts",
 	"metrics.grafanaDashboards",
@@ -171,6 +176,10 @@ var ownedWithinTunable = []struct {
 		"device authentication is a security switch, not a tuning value: relaxing it accepts events from devices that present no credential"},
 	{"functionalAreas.user-management.config.auth",
 		"the identity service's issuer, signing keys, seeded clients and token lifetimes are the instance's identity, not tuning"},
+	{"instance.config.infrastructure.tokenAudience.areaBaseUrl",
+		"the token-audience base URL is derived from the ingress host and TLS setting, so the audiences the authorization server issues and the planes accept follow where the instance is actually reached"},
+	{"instance.config.infrastructure.tokenAudience.mcpResources",
+		"the MCP resources tokens may be bound to are derived from the MCP area's resource URL, which follows the instance's host; declare a resource server outside the platform with tokenAudience.externalResources instead"},
 	{"functionalAreas.mcp.config.resourceUrl",
 		"the MCP server's resource URL is the audience every token is bound to; it follows the instance's host"},
 	{"functionalAreas.mcp.config.issuerUrl",

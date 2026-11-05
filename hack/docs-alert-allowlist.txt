@@ -2,3 +2,7 @@
 # One name per line, with a `#` line above it saying why. The check fails on an
 # entry that is not a real alert or that is documented everywhere, so this list
 # can only shrink. Empty on purpose.
+# TokenAudienceWouldReject: its runbook entry ships with the token-audience documentation
+# (upgrade notes and the MCP/OAuth guide, all three locales), in the release that
+# introduces the check. Remove this entry when that page names the alert.
+TokenAudienceWouldReject

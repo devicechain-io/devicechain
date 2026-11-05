@@ -1,0 +1,138 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the token-audience rules.
+#
+# The series are the spec: devicechain_<area>_token_audience_checks_total{plane, audience,
+# verdict}, one counter per service, registered by core/auth (PromAudienceRecorder). The
+# counter carries NO tenant label, so neither does the alert. In observe mode a request whose
+# token is bound to another plane counts verdict="would_reject" and is served; in enforce mode
+# it counts "rejected", which this alert deliberately does not watch.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the rendered
+# group in beside this file as rendered-rules.yaml. Naming it below is not optional: promtool
+# with no rule_files loads no rules, and every quiet assertion then passes against nothing.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # MUST FIRE. A client sustains calls with another plane's token: a steady trickle of
+  # would_reject for well over the hour. Pending for the `for` hour, firing after it.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_token_audience_checks_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", plane="graphql", audience="other_area", verdict="would_reject"}'
+        values: '0+2x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: TokenAudienceWouldReject
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              job: devicechain/event-sources
+            exp_annotations:
+              summary: "A client is sending tokens that the next minor release will refuse"
+              description: "For at least an hour, devicechain/event-sources has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
+
+  # ------------------------------------------------------------------
+  # MUST NOT FIRE. Every request is accepted: own-area tokens, MCP-forwarded tokens and
+  # token-less calls, however fast they come. Accepted traffic is the normal state.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_token_audience_checks_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", plane="graphql", audience="own_area", verdict="accepted"}'
+        values: '0+500x180'
+      - series: 'devicechain_eventsources_token_audience_checks_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", plane="graphql", audience="mcp", verdict="accepted"}'
+        values: '0+500x180'
+      - series: 'devicechain_eventsources_token_audience_checks_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", plane="graphql", audience="none", verdict="accepted"}'
+        values: '0+500x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+      - eval_time: 170m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MUST NOT FIRE. The would_reject series exists but is flat at zero (the counter is created
+  # on first use, and a client that once misbehaved and was fixed leaves it flat).
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_token_audience_checks_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", plane="graphql", audience="other_area", verdict="would_reject"}'
+        values: '0x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MUST NOT FIRE. A single stray would-reject, then nothing. It must not hold the alert for
+  # an hour: the rate over the hour sees it for at most the hour after it, and the `for` hour
+  # cannot be completed by one sample.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_token_audience_checks_total{namespace="dci-devicechain", pod="dc-device-management-7c9f-abcde", job="devicechain/device-management", plane="graphql", audience="other_area", verdict="would_reject"}'
+        values: '0 1x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MUST NOT FIRE. Enforce mode: the same traffic is now "rejected" and refused, which the
+  # next release's alert watches; this one must stay quiet so the two never double-report.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_token_audience_checks_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-abcde", job="devicechain/event-sources", plane="graphql", audience="other_area", verdict="rejected"}'
+        values: '0+2x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: TokenAudienceWouldReject
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MUST FIRE, per service. Two services both observe would-rejects: one alert each, keyed by
+  # job, so the operator sees which service the client is calling. mcp's own counter is a
+  # different subsystem and is picked up by the by-name selector without a list to maintain.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_mcp_token_audience_checks_total{namespace="dci-devicechain", pod="dc-mcp-7c9f-abcde", job="devicechain/mcp", plane="graphql", audience="unlisted", verdict="would_reject"}'
+        values: '0+1x180'
+      - series: 'devicechain_usermanagement_token_audience_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", plane="graphql", audience="other_area", verdict="would_reject"}'
+        values: '0+1x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: TokenAudienceWouldReject
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              job: devicechain/mcp
+            exp_annotations:
+              summary: "A client is sending tokens that the next minor release will refuse"
+              description: "For at least an hour, devicechain/mcp has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              job: devicechain/user-management
+            exp_annotations:
+              summary: "A client is sending tokens that the next minor release will refuse"
+              description: "For at least an hour, devicechain/user-management has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."

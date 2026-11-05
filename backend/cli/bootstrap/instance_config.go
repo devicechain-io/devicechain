@@ -5,8 +5,10 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -331,7 +333,66 @@ func checkAuthoredTransforms(ch *chart.Chart, vals map[string]interface{}, manif
 			"infrastructure.aiInference block, as the chart does when it authors the document",
 			cfg.Infrastructure.AiInference.Hostname)
 	}
+	return checkAuthoredTokenAudience(manifest, areas, cfg)
+}
+
+// checkAuthoredTokenAudience is the third thing the chart does as author that validity cannot
+// see: it writes infrastructure.tokenAudience.mcpResources from mcp's resolved resourceUrl.
+// A supplier's document carries whatever they wrote, and a document with no entry for a
+// deployed mcp loads without complaint. The cost is that every call mcp forwards is counted
+// as a would-reject (and warned about) in observe mode, and refused in enforce mode, while
+// mcp itself reports healthy. mcp checks the same thing at its own startup; this moves the
+// report to deploy time.
+//
+// The value compared is the one mcp is HANDED, read out of the rendered per-service
+// ConfigMap, so the answer is the chart's own and not a second derivation.
+func checkAuthoredTokenAudience(manifest string, areas []string, cfg *config.InstanceConfiguration) error {
+	if !slices.Contains(areas, "mcp") {
+		return nil
+	}
+	resource := renderedMcpResourceURL(manifest)
+	if resource == "" {
+		return nil
+	}
+	if !slices.Contains(cfg.Infrastructure.TokenAudience.McpResources, resource) {
+		return fmt.Errorf("the supplied instance configuration does not list mcp's resource %q in "+
+			"infrastructure.tokenAudience.mcpResources, and this deploy runs mcp. Every call mcp "+
+			"forwards would be counted as carrying an unregistered token audience, and refused once "+
+			"enforcement is on, while mcp itself reports healthy. Add it to the list, as the chart "+
+			"does when it authors the document", resource)
+	}
 	return nil
+}
+
+// renderedMcpResourceURL is the resourceUrl mcp is handed, read from the rendered
+// per-service ConfigMap, or "" when mcp has none (or is not deployed).
+func renderedMcpResourceURL(manifest string) string {
+	for _, doc := range releaseutil.SplitManifests(manifest) {
+		var obj struct {
+			Kind string            `json:"kind"`
+			Data map[string]string `json:"data"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil || obj.Kind != "ConfigMap" {
+			continue
+		}
+		raw, ok := obj.Data["mcp"]
+		if !ok {
+			continue
+		}
+		var mcp map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &mcp); err != nil {
+			return ""
+		}
+		for k, v := range mcp {
+			if strings.EqualFold(k, "resourceUrl") {
+				if str, ok := v.(string); ok {
+					return str
+				}
+			}
+		}
+		return ""
+	}
+	return ""
 }
 
 // chartIntValue reads one top-level integer value the way Helm would: the
