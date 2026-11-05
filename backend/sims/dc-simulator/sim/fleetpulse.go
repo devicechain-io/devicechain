@@ -5,9 +5,13 @@ package sim
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"math"
+	"sync"
 	"sync/atomic"
 
+	"github.com/devicechain-io/dc-simulator/cmdreceiver"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,6 +23,14 @@ const (
 	FleetpulseDeviceTypeToken = "fleetpulse-vehicle"
 	FleetpulseSpeedKey        = "speed_mps"
 	FleetpulseHeadingKey      = "heading_deg"
+
+	// The one typed command the profile declares. FleetpulseSpeedLimitKey is read from two
+	// sides: the definition authored here and whatever issues it (the console's command
+	// form, a rule's sendCommand), so a vehicle that listened for any other spelling would
+	// answer FAILED to the command it was built for.
+	FleetpulseSpeedLimitCommandDef = "fleetpulse-set-speed-limit-cmd"
+	FleetpulseSpeedLimitKey        = "set-speed-limit"
+	FleetpulseSpeedLimitParameter  = "limit_mps"
 
 	// fleetpulseVehicleCount is the demo sizing: enough vehicles to see a fleet move
 	// together, small enough to watch. Resizable — this is a single population.
@@ -85,6 +97,15 @@ const (
 	fleetpulseAccuracyAmplitude = 1.5
 )
 
+// fleetpulseSpeedLimitSchema is the command's parameter schema: ONE required number, 5 to 30
+// m/s. It lives in a file of its own so the platform's own validator can be pointed at the
+// exact bytes this scenario publishes (device-management's model package reads it): the
+// range is enforced by the platform when the command is queued, not by this simulator, and a
+// test in the module that owns the validator is what proves it.
+//
+//go:embed fleetpulse_speed_limit_schema.json
+var fleetpulseSpeedLimitSchema string
+
 // fleetpulse is the L0b location scenario: a small fleet of vehicles driving a closed
 // loop, each tick emitting BOTH a Location and a Measurement.
 //
@@ -108,18 +129,123 @@ type fleetpulse struct {
 	load Load
 	// ticks counts Tick calls since process start, same role as devicepulse's.
 	ticks atomic.Int64
+	// limits is what the vehicles' set-speed-limit command has set. Empty until a command
+	// arrives, which is what keeps a run that never sends one byte-identical to before.
+	limits *fleetpulseLimits
+}
+
+// fleetpulseLimits is the per-vehicle speed limit the command sets.
+type fleetpulseLimits struct {
+	mu    sync.Mutex
+	byDev map[string]float64
+	// settled is the outcome of each command already worked, by device and delivery token,
+	// so a redelivery (the platform delivers at least once) is answered the same way without
+	// applying its limit a second time: a replay of an older command must not undo a newer one.
+	settled map[string]bool
+	order   []string
+}
+
+// fleetpulseSettledMax bounds settled; the oldest outcome is forgotten first.
+const fleetpulseSettledMax = 4096
+
+// apply works a command once. It returns the outcome, and whether this was the first receipt.
+func (l *fleetpulseLimits) apply(device, token string, limit float64, valid bool) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	key := device + "|" + token
+	if ok, seen := l.settled[key]; seen {
+		return ok
+	}
+	if valid {
+		if l.byDev == nil {
+			l.byDev = map[string]float64{}
+		}
+		l.byDev[device] = limit
+	}
+	if l.settled == nil {
+		l.settled = map[string]bool{}
+	}
+	l.settled[key] = valid
+	l.order = append(l.order, key)
+	if len(l.order) > fleetpulseSettledMax {
+		delete(l.settled, l.order[0])
+		l.order = l.order[1:]
+	}
+	return valid
+}
+
+// snapshot copies the limits in force, so one tick applies ONE set of them to both of its
+// passes: a command landing between the location pass and the measurement pass must not
+// leave a vehicle reporting two different speeds for the same instant.
+func (l *fleetpulseLimits) snapshot() map[string]float64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[string]float64, len(l.byDev))
+	for k, v := range l.byDev {
+		out[k] = v
+	}
+	return out
+}
+
+// capSpeed applies a vehicle's limit to a fix: the speed never exceeds it. A fix with no limit
+// set, or already under it, comes back untouched.
+func capSpeed(limits map[string]float64, device string, fix Fix) Fix {
+	limit, ok := limits[device]
+	if !ok || fix.Speed == nil || *fix.Speed <= limit {
+		return fix
+	}
+	capped := limit
+	fix.Speed = &capped
+	return fix
+}
+
+// fleetpulseHandler is the vehicles' device side of the command contract. Without it the
+// command receiver answers SUCCESSFUL on receipt whatever was asked, so the delivery would
+// complete without the vehicle having changed anything.
+type fleetpulseHandler struct{ limits *fleetpulseLimits }
+
+// Receive applies the limit, then answers. The answer is the vehicle's, sent after the limit
+// is in force, so SUCCESSFUL means the next reading is already capped.
+//
+// The range 5-30 is NOT checked here: the platform refuses an out-of-range value when the
+// command is queued, so one that reaches a vehicle is in range. This only refuses what the
+// vehicle cannot act on at all (another command, no number, a non-positive or non-finite
+// one), answering FAILED rather than inventing a limit.
+func (h fleetpulseHandler) Receive(device string, c cmdreceiver.Command, answer func(success bool)) {
+	var limit float64
+	valid := false
+	if c.Name == FleetpulseSpeedLimitKey {
+		var args map[string]json.Number
+		if err := json.Unmarshal(c.Payload, &args); err == nil {
+			if v, err := args[FleetpulseSpeedLimitParameter].Float64(); err == nil &&
+				v > 0 && !math.IsInf(v, 0) && !math.IsNaN(v) {
+				limit, valid = v, true
+			}
+		}
+	}
+	ok := h.limits.apply(device, c.Token, limit, valid)
+	// answer may block on the broker, and this runs on the broker's goroutine.
+	go answer(ok)
+}
+
+// CommandHandler makes the vehicles answer their own commands (see commandHandlerSource).
+func (s *fleetpulse) CommandHandler() cmdreceiver.Handler {
+	return fleetpulseHandler{limits: s.limits}
 }
 
 // NewFleetpulse returns the fleetpulse reference Sim seeded from the handshake.
 // Prefer NewSim, which validates load against the manifest.
 func NewFleetpulse(seed int64, load Load) Sim {
-	return &fleetpulse{seed: seed, load: load}
+	return &fleetpulse{seed: seed, load: load, limits: &fleetpulseLimits{}}
 }
 
 func (s *fleetpulse) Manifest() SimManifest {
 	return resize(s.load, SimManifest{
 		Name: "fleetpulse",
 		Seed: s.seed,
+		// The vehicles listen for set-speed-limit, so they need a far end: an HTTP-ingress
+		// device cannot receive, and the command would sit at SENT until it timed out.
+		CommandFarEnd: FarEndInternal,
 		Profiles: []ProfileSpec{
 			{
 				Token:    FleetpulseProfileToken,
@@ -133,6 +259,14 @@ func (s *fleetpulse) Manifest() SimManifest {
 				Metrics: []MetricSpec{
 					{Key: FleetpulseSpeedKey, Name: "Speed", DataType: "DOUBLE", Unit: "m/s"},
 					{Key: FleetpulseHeadingKey, Name: "Heading", DataType: "DOUBLE", Unit: "deg"},
+				},
+				Commands: []CommandSpec{
+					{
+						Token:           FleetpulseSpeedLimitCommandDef,
+						CommandKey:      FleetpulseSpeedLimitKey,
+						Name:            "Set speed limit",
+						ParameterSchema: fleetpulseSpeedLimitSchema,
+					},
 				},
 			},
 		},
@@ -172,15 +306,16 @@ func (s *fleetpulse) Tick(ctx context.Context, rt *Runtime) error {
 	}
 	workers := rt.Load.Workers(count)
 
-	locErr := EmitLocationAll(ctx, rt, workers, func(i int, _ DeviceInstance) (Fix, bool) {
-		return fleetpulseFix(s.seed, n, i, count), true
+	limits := s.limits.snapshot()
+	locErr := EmitLocationAll(ctx, rt, workers, func(i int, d DeviceInstance) (Fix, bool) {
+		return capSpeed(limits, d.Token, fleetpulseFix(s.seed, n, i, count)), true
 	})
 	if locErr != nil {
 		log.Error().Err(locErr).Msg("emit location failed")
 	}
 
-	measErr := EmitAll(ctx, rt, workers, func(i int, _ DeviceInstance) map[string]float64 {
-		fix := fleetpulseFix(s.seed, n, i, count)
+	measErr := EmitAll(ctx, rt, workers, func(i int, d DeviceInstance) map[string]float64 {
+		fix := capSpeed(limits, d.Token, fleetpulseFix(s.seed, n, i, count))
 		return map[string]float64{
 			FleetpulseSpeedKey:   *fix.Speed,
 			FleetpulseHeadingKey: *fix.Heading,

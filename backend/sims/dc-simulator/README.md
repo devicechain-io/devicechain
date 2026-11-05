@@ -28,7 +28,7 @@ identity and drives the same tenant-facing surfaces a real integration would.
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
 5. **Receives** commands, for a scenario whose manifest declares a **command far
-   end** (widgetlab; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
+   end** (widgetlab, towerpulse and fleetpulse; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
    dashboard offers a command-button otherwise enqueues real commands nothing
    answers: they reach `SENT` and expire days later, with every layer reporting
    success. Such a scenario subscribes every device to its own command topic on
@@ -273,6 +273,16 @@ off:
 - **one entry per event** — the per-entry time is discarded at persistence and
   identical positions in one batch collide, so batching loses data.
 
+Fleet Pulse also answers one typed command, `set-speed-limit`, with a required `limit_mps`
+parameter (a number from 5 to 30). The vehicle applies the limit, then answers `SUCCESSFUL`,
+and from its next reading on never reports a speed above it (the location fix and the
+`speed_mps` metric stay one value). The 5 to 30 range is enforced by the platform when the
+command is queued, against the published profile; the vehicle does not range-check, it only
+answers `FAILED` to a command it cannot act on. The limit lives in the process, so a restart
+clears it. A run that never sends the command behaves exactly as before. Because the scenario
+now declares a command far end, its handshake must carry `endpoints.mqttBroker` (a current
+`dcctl sim create` writes it), or the sim is started with `--no-command-far-end`.
+
 The emitter's tests run the exact bytes it produces through event-sources' own JSON
 decoder, so a change to that contract fails here rather than against a live cluster.
 
@@ -511,7 +521,7 @@ on its manifest, which has three settings:
 | `internal` | this process, per device | yes | allowed |
 | `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
 
-widgetlab and towerpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
+widgetlab, towerpulse and fleetpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.

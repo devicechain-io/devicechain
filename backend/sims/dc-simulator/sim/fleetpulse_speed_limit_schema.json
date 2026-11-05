@@ -1,0 +1,1 @@
+[{"name":"limit_mps","kind":"SCALAR","dataType":"DOUBLE","unit":"m/s","required":true,"minValue":5,"maxValue":30,"description":"Speed limit in metres per second. The vehicle will not report a speed above it."}]
