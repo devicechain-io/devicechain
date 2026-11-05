@@ -3200,14 +3200,23 @@ Why a certificate was revoked (RFC 5280 section 5.3.1). A manual revocation that
 UNSPECIFIED.
 """
 enum CertificateRevocationReason {
+    """No reason given."""
     UNSPECIFIED
+    """The certificate's private key is known or suspected to be compromised."""
     KEY_COMPROMISE
+    """The key of the CA that issued the certificate is known or suspected to be compromised."""
     CA_COMPROMISE
+    """The subject changed affiliation; the certificate no longer applies, and its key is not compromised."""
     AFFILIATION_CHANGED
+    """The certificate was replaced by another."""
     SUPERSEDED
+    """The certificate is no longer needed because its subject ceased operating."""
     CESSATION_OF_OPERATION
+    """The certificate is suspended, not permanently revoked."""
     CERTIFICATE_HOLD
+    """A privilege the certificate granted was withdrawn."""
     PRIVILEGE_WITHDRAWN
+    """The key of an attribute authority is known or suspected to be compromised."""
     AA_COMPROMISE
 }
 
