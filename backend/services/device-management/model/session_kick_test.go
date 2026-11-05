@@ -392,8 +392,12 @@ func TestADeleteWithNoTenantOnTheContextStillQueuesItsKick(t *testing.T) {
 	api.SessionKicker = k
 	require.NoError(t, api.RDB.DB(tctx).Create(&Device{TokenReference: rdb.TokenReference{Token: "dev-1"}}).Error)
 
-	_, err := api.DeleteDevice(core.WithSystemContext(context.Background()), "dev-1")
+	sys := core.WithSystemContext(context.Background())
+	_, err := api.DeleteDevice(sys, "dev-1")
 	require.ErrorIs(t, err, ErrSessionsNotEnded)
+	// Repeating it finds no device and no tenant, and must still ask again.
+	_, err = api.DeleteDevice(sys, "dev-1")
+	require.ErrorIs(t, err, ErrSessionsNotEnded, "the repeat recovers the tenant from the debt")
 	var rows []PendingSessionKick
 	require.NoError(t, api.RDB.DB(tctx).Find(&rows).Error)
 	require.Len(t, rows, 1)

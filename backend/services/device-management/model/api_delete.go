@@ -390,8 +390,22 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		if tenant == "" {
 			tenant, _ = core.TenantFromContext(ctx)
 		}
-		if tenant != "" {
-			if kerr := api.drainSessionKicks(ctx, tenant, 0, func(db *gorm.DB) *gorm.DB {
+		tenants := []string{tenant}
+		if tenant == "" && api.SessionKicker != nil {
+			// A system context names no tenant and a repeated delete finds no device, so the tenants
+			// that owe this device's kick are read from the debts themselves.
+			tenants = tenants[:0]
+			if perr := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{}).
+				Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token).
+				Distinct().Pluck("tenant_id", &tenants).Error; perr != nil {
+				return deleted, fmt.Errorf("%w: could not read the pending session kicks: %v", ErrSessionsNotEnded, perr)
+			}
+		}
+		for _, t := range tenants {
+			if t == "" {
+				continue
+			}
+			if kerr := api.drainSessionKicks(ctx, t, 0, func(db *gorm.DB) *gorm.DB {
 				return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
 			}); kerr != nil {
 				return deleted, kerr
