@@ -1,0 +1,1049 @@
+#!/usr/bin/env python3
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+"""
+video_capture.py -- records the console shots of a video's shot list, unattended, one 1080p mp4 per shot.
+
+    video_capture.py check  <shotlist.yaml>                       validate the shot list (no browser, no credentials read)
+    video_capture.py record <shotlist.yaml> --out <dir> [--shots a,b] [--base-url URL]
+
+Schema and conventions: README.md next to this file. Output: <out>/<shot id>.mp4 (H.264, yuv420p, 1920x1080, 30 or 60 fps),
+<out>/manifest.json (per-shot UTC start/end, trimmed duration, per-step marks in seconds from the clip start, so an edit can line a
+clip up with its voice-over line) and, for a shot that could not complete, <out>/failures/<shot id>.png (a screenshot of the console as
+it was, masks applied). Exit status: 0 all recorded, 1 a shot failed, 2 the shot list or the setup is wrong, 3 a secret reached the page.
+
+How a clip is made: the page's frames come from the browser's screencast (a frame whenever the page repaints, with its timestamp) and
+ffmpeg renders them at a constant frame rate, so motion is as smooth as the page was. A headless browser draws no cursor, so one is
+injected (a pointer that glides to each target, with a click ring).
+
+Secrets. The sign-in credential is read IN THIS PROCESS (a sim handshake record, the instance's superuser Secret through kubectl, or the
+environment), typed into the form and forgotten. It is never printed, logged, written to disk (no profile directory, no trace, no
+storage state file) or put in the manifest; every message that leaves this module passes through scrub(). The sign-in is not recorded.
+Regions the shot list marks `mask` are blurred in the page itself, so the frames never hold the value; a mask that matches nothing fails
+the shot (a mask that silently misses is a leak), and a recorded page whose text contains the password ends the run.
+
+Everything that decides something is a pure function above the I/O (tested by test_video_capture.py).
+"""
+
+import argparse
+import base64
+import datetime
+import json
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+EXIT_OK, EXIT_SHOT_FAILED, EXIT_BAD_SETUP, EXIT_SECRET_LEAK = 0, 1, 2, 3
+
+STEP_KINDS = ("goto", "click", "type", "press", "hover", "wait_for", "wait", "scroll", "mark")
+TARGET_KEYS = ("testid", "shot", "role", "name", "text", "label", "placeholder", "selector", "nth", "exact")
+SHOT_KEYS = ("id", "title", "line", "start", "steps", "mask", "min_s", "max_s", "trim", "retries", "reduce_motion")
+TOP_KEYS = ("version", "video", "base_url", "viewport", "fps", "login", "cursor", "reduce_motion", "locale", "timezone", "shots")
+LOGIN_MODES = ("sim", "superuser-secret", "env")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+class CaptureError(Exception):
+    """A shot (or the setup) could not complete. The message is already scrubbed."""
+
+    def __init__(self, msg, exit_code=EXIT_SHOT_FAILED, unsafe=False):
+        super().__init__(msg)
+        self.exit_code = exit_code
+        self.unsafe = unsafe  # a failure whose screenshot could show the secret the failure is about: none is taken
+
+
+class SecretLeak(CaptureError):
+    def __init__(self, msg):
+        super().__init__(msg, EXIT_SECRET_LEAK, unsafe=True)
+
+
+_SECRETS = []  # every secret read this run, so even the entry point's last message and the manifest can be scrubbed
+
+
+def scrub_obj(o, secrets):
+    """A JSON-able value with every string scrubbed (the manifest carries shot titles, marks and failure reasons)."""
+    if isinstance(o, str):
+        return scrub(o, secrets)
+    if isinstance(o, list):
+        return [scrub_obj(x, secrets) for x in o]
+    if isinstance(o, dict):
+        return {scrub(str(k), secrets): scrub_obj(x, secrets) for k, x in o.items()}
+    return o
+
+
+# ---------------------------------------------------------------------------------------------
+# pure parts
+
+
+def scrub(text, secrets):
+    """<text> with every secret value removed. Messages from the browser can echo a typed value; nothing leaves this module unscrubbed."""
+    text = str(text)
+    for s in secrets:
+        if s:
+            text = text.replace(s, "***")
+    return text
+
+
+def utc(ts):
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _is_num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _check_target(t, where, errs):
+    if not isinstance(t, dict) or not t:
+        errs.append(f"{where}: a target is a non-empty map (one of testid, shot, role, text, label, placeholder, selector)")
+        return
+    for k in t:
+        if k not in TARGET_KEYS:
+            errs.append(f"{where}: unknown target key '{k}'")
+    locators = [k for k in ("testid", "shot", "role", "text", "label", "placeholder", "selector") if k in t]
+    if len(locators) != 1:
+        errs.append(f"{where}: a target names exactly one of testid, shot, role, text, label, placeholder, selector (got {locators or 'none'})")
+    if "name" in t and "role" not in t:
+        errs.append(f"{where}: 'name' belongs with 'role'")
+    if "nth" in t and not (isinstance(t["nth"], int) and not isinstance(t["nth"], bool) and t["nth"] >= 0):
+        errs.append(f"{where}: nth is a non-negative integer")
+
+
+def validate_step(step, where):
+    errs = []
+    if not isinstance(step, dict) or len(step) < 1:
+        return [f"{where}: a step is a map with one verb ({', '.join(STEP_KINDS)})"]
+    verbs = [k for k in step if k in STEP_KINDS]
+    if len(verbs) != 1:
+        return [f"{where}: a step has exactly one verb of {', '.join(STEP_KINDS)} (got {verbs or list(step)})"]
+    verb = verbs[0]
+    body = step[verb]
+    extra = {"timeout_s", "label", "pause_ms", "pace_ms", "secret", "settle_s"}
+    for k in step:
+        if k != verb and k not in extra:
+            errs.append(f"{where}: unknown step key '{k}'")
+    if verb in ("click", "hover", "wait_for"):
+        _check_target(body, where + "." + verb, errs)
+    elif verb == "goto":
+        if not (isinstance(body, str) and body.startswith("/")):
+            errs.append(f"{where}: goto takes a route starting with '/'")
+    elif verb == "type":
+        if not isinstance(body, dict) or "text" not in body or "into" not in body:
+            errs.append(f"{where}: type takes {{into: <target>, text: <string>}}")
+        else:
+            _check_target(body["into"], where + ".type.into", errs)
+            if not isinstance(body["text"], str):
+                errs.append(f"{where}: type.text is a string")
+            for k in body:
+                if k not in ("into", "text"):
+                    errs.append(f"{where}: unknown type key '{k}'")
+    elif verb == "press":
+        if not isinstance(body, str) or not body:
+            errs.append(f"{where}: press takes a key name such as Escape or Enter")
+    elif verb == "wait":
+        if not _is_num(body) or body < 0:
+            errs.append(f"{where}: wait takes seconds (a non-negative number)")
+    elif verb == "scroll":
+        if not isinstance(body, dict) or len({"by", "to"} & set(body)) != 1 or set(body) - {"by", "to"}:
+            errs.append(f"{where}: scroll takes exactly one of {{by: <px>}} or {{to: <target>}}")
+        else:
+            if "by" in body and not _is_num(body["by"]):
+                errs.append(f"{where}: scroll.by is pixels (a number)")
+            if "to" in body:
+                _check_target(body["to"], where + ".scroll.to", errs)
+    elif verb == "mark":
+        if not isinstance(body, str) or not body:
+            errs.append(f"{where}: mark takes a name")
+    for k in ("timeout_s", "pause_ms", "pace_ms", "settle_s"):
+        if k in step and not (_is_num(step[k]) and step[k] >= 0):
+            errs.append(f"{where}: {k} is a non-negative number")
+    return errs
+
+
+def validate_mask(m, where):
+    errs = []
+    if not isinstance(m, dict):
+        return [f"{where}: a mask is a map"]
+    for k in m:
+        if k not in ("selector", "shot", "testid", "text_regex", "required", "style", "name"):
+            errs.append(f"{where}: unknown mask key '{k}'")
+    locs = [k for k in ("selector", "shot", "testid", "text_regex") if k in m]
+    if len(locs) != 1:
+        errs.append(f"{where}: a mask names exactly one of selector, shot, testid, text_regex")
+    if "text_regex" in m:
+        try:
+            re.compile(m["text_regex"])
+        except (re.error, TypeError):
+            errs.append(f"{where}: text_regex does not compile")
+    if m.get("style", "blur") not in ("blur", "box"):
+        errs.append(f"{where}: style is blur or box")
+    if "required" in m and not isinstance(m["required"], bool):
+        errs.append(f"{where}: required is true or false")
+    return errs
+
+
+def validate(doc):
+    """[problem] for a parsed shot list; empty means valid. Unknown keys are problems: a typo must not silently do nothing."""
+    errs = []
+    if not isinstance(doc, dict):
+        return ["the shot list is a map"]
+    for k in doc:
+        if k not in TOP_KEYS:
+            errs.append(f"unknown top-level key '{k}'")
+    if doc.get("version") != 1:
+        errs.append("version must be 1")
+    if not isinstance(doc.get("video"), str) or not doc.get("video"):
+        errs.append("video (the video's id) is required")
+    if doc.get("fps", 30) not in (30, 60):
+        errs.append("fps is 30 or 60")
+    vp = doc.get("viewport", {"width": 1920, "height": 1080})
+    if not (isinstance(vp, dict) and vp.get("width") == 1920 and vp.get("height") == 1080):
+        errs.append("viewport must be 1920x1080")
+    login = doc.get("login")
+    if not isinstance(login, dict) or login.get("mode") not in LOGIN_MODES:
+        errs.append(f"login.mode is one of {', '.join(LOGIN_MODES)}")
+    else:
+        need = {"sim": ("sim",), "superuser-secret": ("instance", "email"), "env": ("email_env", "password_env")}[login["mode"]]
+        for k in need:
+            if not login.get(k):
+                errs.append(f"login.{k} is required for mode {login['mode']}")
+        for k in login:
+            if k not in ("mode", "sim", "instance", "email", "email_env", "password_env", "namespace", "secret", "kube_context"):
+                errs.append(f"unknown login key '{k}'" + (": a shot list never carries a secret; name where to read it from" if k in ("password", "pass", "token") else ""))
+    shots = doc.get("shots")
+    if not isinstance(shots, list) or not shots:
+        errs.append("shots is a non-empty list")
+        return errs
+    seen = set()
+    for i, s in enumerate(shots):
+        w = f"shots[{i}]"
+        if not isinstance(s, dict):
+            errs.append(f"{w}: a shot is a map")
+            continue
+        sid = s.get("id")
+        w = f"shots[{i}] ({sid})"
+        if not isinstance(sid, str) or not ID_RE.match(sid):
+            errs.append(f"{w}: id is lowercase kebab-case")
+        elif sid in seen:
+            errs.append(f"{w}: duplicate id")
+        seen.add(sid)
+        for k in s:
+            if k not in SHOT_KEYS:
+                errs.append(f"{w}: unknown shot key '{k}'")
+        if not (isinstance(s.get("start"), str) and s["start"].startswith("/")):
+            errs.append(f"{w}: start is a route starting with '/'")
+        steps = s.get("steps")
+        if not isinstance(steps, list) or not steps:
+            errs.append(f"{w}: steps is a non-empty list (an empty shot records nothing worth keeping)")
+        else:
+            for j, st in enumerate(steps):
+                errs += validate_step(st, f"{w}.steps[{j}]")
+        masks = s.get("mask", []) or []
+        if not isinstance(masks, list):
+            errs.append(f"{w}: mask is a list")
+            masks = []
+        for j, m in enumerate(masks):
+            errs += validate_mask(m, f"{w}.mask[{j}]")
+        tr = s.get("trim", {})
+        if not isinstance(tr, dict) or any(k not in ("head_s", "tail_s") or not (_is_num(v) and v >= 0) for k, v in tr.items()):
+            errs.append(f"{w}: trim is {{head_s, tail_s}} of non-negative numbers")
+        for k in ("min_s", "max_s"):
+            if k in s and not (_is_num(s[k]) and s[k] > 0):
+                errs.append(f"{w}: {k} is a positive number of seconds")
+        if _is_num(s.get("min_s")) and _is_num(s.get("max_s")) and s["min_s"] > s["max_s"]:
+            errs.append(f"{w}: min_s exceeds max_s")
+        if "retries" in s and not (isinstance(s["retries"], int) and not isinstance(s["retries"], bool) and 0 <= s["retries"] <= 5):
+            errs.append(f"{w}: retries is 0 to 5")
+    return errs
+
+
+def target_spec(t):
+    """(kind, arg, nth, exact) for a validated target, which the browser layer turns into a Playwright locator."""
+    for k in ("testid", "shot", "text", "label", "placeholder", "selector"):
+        if k in t:
+            return k, t[k], t.get("nth", 0), t.get("exact", k == "text")
+    return "role", (t["role"], t.get("name")), t.get("nth", 0), t.get("exact", False)
+
+
+def regex_arg(s):
+    """A name written 're:<pattern>' is a case-insensitive regex; anything else is a literal."""
+    if isinstance(s, str) and s.startswith("re:"):
+        return re.compile(s[3:], re.I)
+    return s
+
+
+def _css_of(m):
+    if "selector" in m:
+        return m["selector"]
+    if "shot" in m:
+        return f'[data-shot="{m["shot"]}"]'
+    if "testid" in m:
+        return f'[data-testid="{m["testid"]}"]'
+    return None
+
+
+def mask_selectors(specs):
+    """[(index, css selector)] of the selector-style masks, in spec order."""
+    return [(i, _css_of(m)) for i, m in enumerate(specs) if _css_of(m)]
+
+
+def mask_css(specs, blur_px=14):
+    """The stylesheet that blurs (or boxes) every selector-style mask."""
+    rules = []
+    for i, m in enumerate(specs):
+        sel = _css_of(m)
+        if not sel:
+            continue
+        if m.get("style", "blur") == "box":
+            rules.append(f"{sel}{{filter:brightness(0) !important;background:#000 !important;color:transparent !important;user-select:none !important}} {sel} *{{visibility:hidden !important}}")
+        else:
+            rules.append(f"{sel}{{filter:blur({blur_px}px) !important;user-select:none !important}}")
+    return "\n".join(rules)
+
+
+def typing_delays(text, seed, pace_ms=85):
+    """Per-character delays (ms) that read as a person typing: a base pace, jitter, a longer beat after a space or punctuation. Seeded, so a
+    re-run types the same way."""
+    rng = random.Random(f"{seed}:{text}")
+    out = []
+    for ch in text:
+        d = pace_ms * rng.uniform(0.6, 1.5)
+        if ch in " .,-_/:":
+            d += pace_ms * rng.uniform(0.5, 1.2)
+        out.append(int(d))
+    return out
+
+
+def ease(t):
+    return t * t * (3 - 2 * t)
+
+
+def glide_points(x0, y0, x1, y1, steps=28):
+    """Points of a smooth ease-in-out move, the last one exactly the target."""
+    pts = [(x0 + (x1 - x0) * ease(i / steps), y0 + (y1 - y0) * ease(i / steps)) for i in range(1, steps + 1)]
+    pts[-1] = (x1, y1)
+    return pts
+
+
+def clip_timeline(frames, start, end):
+    """[(frame path, duration)] holding each frame until the next arrives and the last until <end>. <frames> is [(timestamp, path)]."""
+    frames = sorted(frames)
+    before = [f for f in frames if f[0] <= start]
+    inside = [f for f in frames if start < f[0] < end]
+    keep = ([(start, before[-1][1])] if before else []) + inside
+    if not keep and frames:
+        keep = [(start, frames[0][1])]  # nothing before the window: the first frame stands in until the next arrives
+    out = []
+    for i, (t, path) in enumerate(keep):
+        nxt = keep[i + 1][0] if i + 1 < len(keep) else end
+        out.append((path, max(min(nxt, end) - t, 0.001)))
+    return out
+
+
+def concat_script(timeline):
+    """ffmpeg concat-demuxer text for a timeline. The last file is named twice (the demuxer ignores the last duration otherwise)."""
+
+    def q(p):
+        return "file '" + p.replace("\\", "/").replace("'", "'\\''") + "'"
+
+    lines = []
+    for path, dur in timeline:
+        lines.append(q(path))
+        lines.append(f"duration {dur:.4f}")
+    if timeline:
+        lines.append(q(timeline[-1][0]))
+    return "\n".join(lines) + "\n"
+
+
+def trim_window(start, end, trim, min_s=None):
+    """(start, end) of the encoded clip after the head/tail trim; a clip shorter than min_s is held to min_s."""
+    head, tail = trim.get("head_s", 0.0), trim.get("tail_s", 0.0)
+    s, e = start + head, end - tail
+    if e <= s:
+        raise CaptureError(f"the trim ({head}s head, {tail}s tail) leaves nothing of a {end - start:.2f}s recording")
+    if min_s and e - s < min_s:
+        e = s + min_s
+    return s, e
+
+
+def shot_entry(shot, start, end, marks, trim, fps, attempts, win):
+    ws, we = win
+    return {
+        "shot": shot["id"],
+        "title": shot.get("title", ""),
+        "line": shot.get("line", ""),
+        "file": shot["id"] + ".mp4",
+        "start_utc": utc(ws),
+        "end_utc": utc(we),
+        "duration_s": round(we - ws, 3),
+        "recorded_s": round(end - start, 3),
+        "trim": trim,
+        "fps": fps,
+        "size": "1920x1080",
+        "attempts": attempts,
+        "marks": [{"at_s": round(t - ws, 3), "what": w} for t, w in marks if ws <= t <= we],
+    }
+
+
+def password_leaked(page_text, secrets):
+    """True when any non-trivial secret appears in the text. Values under 4 characters are skipped (a match on three characters proves nothing)."""
+    return any(s and len(s) >= 4 and s in page_text for s in secrets)
+
+
+# ---------------------------------------------------------------------------------------------
+# credentials (read in-process; never printed)
+
+
+def find_credentials(record):
+    """(email, password) from a sim handshake record (a parsed JSON value): the keys simEmail and simPassword, wherever they nest."""
+    found = {}
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, val in node.items():
+                if k in ("simEmail", "simPassword") and isinstance(val, str) and val:
+                    found.setdefault(k, val)
+                else:
+                    walk(val)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(record)
+    if "simEmail" not in found or "simPassword" not in found:
+        raise CaptureError("the sim record has no tenant user (simEmail / simPassword)", EXIT_BAD_SETUP)
+    return found["simEmail"], found["simPassword"]
+
+
+def kubectl_secret_args(login):
+    ns = login.get("namespace") or f"dci-{login['instance']}"
+    name = login.get("secret") or f"dci-{login['instance']}-superuser"
+    ctx = ["--context", login["kube_context"]] if login.get("kube_context") else []
+    return ns, name, ["kubectl"] + ctx + ["-n", ns, "get", "secret", name, "-o", "jsonpath={.data.password}"]
+
+
+def load_credentials(login, env=None, run=subprocess.run, home=None):
+    env = os.environ if env is None else env
+    mode = login["mode"]
+    if mode == "sim":
+        path = os.path.join(home or os.path.expanduser("~"), ".devicechain", "sims", login["sim"] + ".json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return find_credentials(json.load(f))
+        except (OSError, ValueError):
+            # the reason is the file's, never its content
+            raise CaptureError(f"the sim record for '{login['sim']}' could not be read (is the sim created? dcctl sim create)", EXIT_BAD_SETUP)
+    if mode == "env":
+        em, pw = env.get(login["email_env"], ""), env.get(login["password_env"], "")
+        if not em or not pw:
+            raise CaptureError(f"${login['email_env']} and ${login['password_env']} must both be set", EXIT_BAD_SETUP)
+        return em, pw
+    # superuser-secret: the Secret dcctl writes at bootstrap, read through kubectl (honours KUBECONFIG), decoded here
+    ns, name, cmd = kubectl_secret_args(login)
+    try:
+        r = run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise CaptureError("kubectl could not run: " + type(e).__name__, EXIT_BAD_SETUP)
+    if r.returncode != 0:
+        # fixed text: neither stdout (the value) nor stderr (arbitrary) is quoted; run the same kubectl command by hand to see why
+        raise CaptureError(f"kubectl could not read Secret {ns}/{name} (exit {r.returncode}); KUBECONFIG and the namespace are the usual causes", EXIT_BAD_SETUP)
+    try:
+        pw = base64.b64decode((r.stdout or "").strip(), validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise CaptureError(f"Secret {ns}/{name} is not a base64 password", EXIT_BAD_SETUP)
+    if not pw:
+        raise CaptureError(f"Secret {ns}/{name} has no password", EXIT_BAD_SETUP)
+    return login["email"], pw
+
+
+# ---------------------------------------------------------------------------------------------
+# the browser (everything below needs Playwright)
+
+CURSOR_JS = """
+(() => {
+  if (window.__dcCursor) return;
+  const make = () => {
+    if (!document.body) { return false; }
+    const c = document.createElement('div');
+    c.id = '__dc_cursor';
+    c.style.cssText = 'position:fixed;left:0;top:0;width:28px;height:28px;margin:-4px 0 0 -4px;z-index:2147483647;pointer-events:none;'
+      + 'transform:translate(-100px,-100px);will-change:transform;';
+    c.innerHTML = '<svg width="28" height="28" viewBox="0 0 28 28"><path d="M4 2 L4 22 L9.5 17.2 L13.2 25 L16.6 23.5 L12.9 15.8 L20.5 15.8 Z"'
+      + ' fill="#ffffff" stroke="#111111" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+    const ring = document.createElement('div');
+    ring.id = '__dc_ring';
+    ring.style.cssText = 'position:fixed;left:0;top:0;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;z-index:2147483646;'
+      + 'pointer-events:none;border:3px solid rgba(80,160,255,0.95);opacity:0;transform:translate(-100px,-100px) scale(0.4);';
+    document.body.appendChild(ring);
+    document.body.appendChild(c);
+    let last = [-100, -100];
+    try { const s = sessionStorage.getItem('__dc_cursor'); if (s) last = JSON.parse(s); } catch (e) {}
+    c.style.transform = 'translate(' + last[0] + 'px,' + last[1] + 'px)';
+    window.__dcCursor = {
+      move: (x, y) => { c.style.transform = 'translate(' + x + 'px,' + y + 'px)'; try { sessionStorage.setItem('__dc_cursor', JSON.stringify([x, y])); } catch (e) {} },
+      click: (x, y) => {
+        ring.style.transition = 'none';
+        ring.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(0.4)';
+        ring.style.opacity = '1';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          ring.style.transition = 'transform 380ms ease-out, opacity 380ms ease-out';
+          ring.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(1.25)';
+          ring.style.opacity = '0';
+        }));
+      },
+    };
+    document.addEventListener('mousemove', (e) => window.__dcCursor.move(e.clientX, e.clientY), true);
+    document.addEventListener('mousedown', (e) => window.__dcCursor.click(e.clientX, e.clientY), true);
+    return true;
+  };
+  if (!make()) { document.addEventListener('DOMContentLoaded', make); }
+})();
+"""
+
+# Masks. __SPEC__ is {css, selectors:[[i,sel]], regexes:[[i,pattern]], blur}. Applied inside the page, before paint: the frames never
+# hold the value. Each mask reports (once per document) that it matched something, through the exposed __dcMaskSeen binding.
+MASK_JS = """
+(() => {
+  const spec = __SPEC__;
+  // an init script runs before the document has a root: the stylesheet goes in the moment there is one (a throw here leaves NO mask)
+  const style = document.createElement('style');
+  style.id = '__dc_mask_css';
+  style.textContent = spec.css + ' input[type=password]{filter:blur(8px) !important}';
+  const inject = () => { const r = document.head || document.documentElement; if (r && !style.isConnected) r.appendChild(style); return !!r; };
+  if (!inject()) new MutationObserver((_, o) => { if (inject()) o.disconnect(); }).observe(document, {childList: true});
+  const seen = new Set();
+  // the binding may not exist yet when the init script first runs: a mask is "seen" only once the report got through, so it is retried
+  const report = (i) => { if (!seen.has(i) && typeof window.__dcMaskSeen === 'function') { try { window.__dcMaskSeen(i); seen.add(i); } catch (e) {} } };
+  const scan = (root) => {
+    for (const [i, sel] of spec.selectors) {
+      try { if ((root.querySelector && root.querySelector(sel)) || (root.matches && root.matches(sel))) report(i); } catch (e) {}
+    }
+  };
+  const rx = spec.regexes.map(([i, p]) => [i, new RegExp(p, 'g')]);
+  const wrap = (node) => {
+    if (!rx.length || !node.nodeValue || !node.parentNode) return;
+    if (node.parentElement && node.parentElement.classList.contains('__dc_masked')) return;
+    for (const [i, re] of rx) {
+      re.lastIndex = 0;
+      if (!re.test(node.nodeValue)) continue;
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0, m;
+      const v = node.nodeValue;
+      while ((m = re.exec(v)) !== null) {
+        if (m[0] === '') { re.lastIndex++; continue; }
+        frag.appendChild(document.createTextNode(v.slice(last, m.index)));
+        const s = document.createElement('span');
+        s.className = '__dc_masked';
+        s.style.cssText = 'filter:blur(' + spec.blur + 'px);user-select:none;';
+        s.textContent = m[0];
+        frag.appendChild(s);
+        last = m.index + m[0].length;
+        report(i);
+      }
+      frag.appendChild(document.createTextNode(v.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+      return;
+    }
+  };
+  const walk = (root) => {
+    if (!rx.length || !root) return;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (w.nextNode()) nodes.push(w.currentNode);
+    nodes.forEach(wrap);
+  };
+  const sweep = () => { scan(document); walk(document.body || document.documentElement); };
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      m.addedNodes.forEach((n) => { if (n.nodeType === 1) { scan(n); walk(n); } else if (n.nodeType === 3) wrap(n); });
+      if (m.type === 'characterData' && m.target.nodeType === 3) wrap(m.target);
+    }
+    scan(document);
+  }).observe(document, {childList: true, subtree: true, characterData: true});
+  document.addEventListener('DOMContentLoaded', sweep);
+  window.addEventListener('load', sweep);
+  sweep();
+})();
+"""
+
+QUIET_CSS = ("*,*::before,*::after{animation-duration:0.001s !important;animation-delay:0s !important;animation-iteration-count:1 !important;"
+             "transition-duration:0.001s !important;transition-delay:0s !important;scroll-behavior:auto !important;caret-color:transparent !important}")
+QUIET_JS = ("(() => { const s = document.createElement('style'); s.id='__dc_quiet'; s.textContent = %s;"
+            " const put = () => { const r = document.head || document.documentElement; if (r && !s.isConnected) r.appendChild(s); return !!r; };"
+            " if (!put()) new MutationObserver((_, o) => { if (put()) o.disconnect(); }).observe(document, {childList: true}); })();")
+
+
+class Clip:
+    """A recording in progress: the screencast's frames on disk with their timestamps."""
+
+    def __init__(self, session, workdir, fps):
+        self.session, self.dir, self.fps = session, workdir, fps
+        self.frames, self.n, self.start, self.marks = [], 0, None, []
+
+    def _store(self, ts, data):
+        self.n += 1
+        path = os.path.join(self.dir, f"f{self.n:06d}.jpg")
+        with open(path, "wb") as f:
+            f.write(data)
+        self.frames.append((ts, path))
+
+    def on_frame(self, params):
+        self._store(params["metadata"]["timestamp"], base64.b64decode(params["data"]))
+        self.session.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]})
+
+    def grab(self):
+        return base64.b64decode(self.session.send("Page.captureScreenshot", {"format": "jpeg", "quality": 95})["data"])
+
+    def begin(self):
+        self.session.on("Page.screencastFrame", self.on_frame)
+        self.start = time.time()
+        self.session.send("Page.startScreencast", {"format": "jpeg", "quality": 95, "maxWidth": 1920, "maxHeight": 1080, "everyNthFrame": 1})
+        self._store(self.start, self.grab())  # a still page sends no frame until it repaints
+
+    def note(self, what):
+        self.marks.append((time.time(), what))
+
+    def finish(self):
+        end = time.time()
+        try:
+            self.session.send("Page.stopScreencast")
+            self._store(end, self.grab())
+        finally:
+            try:
+                self.session.remove_listener("Page.screencastFrame", self.on_frame)
+            except Exception:  # noqa: BLE001 - a listener already gone is the state we want
+                pass
+        return self.start, end
+
+
+def encode(frames, start, end, dest, fps, threads=4):
+    """Renders a clip to <dest> (H.264, yuv420p, constant <fps>, 1920x1080)."""
+    timeline = clip_timeline(frames, start, end)
+    with tempfile.TemporaryDirectory() as td:
+        lst = os.path.join(td, "frames.txt")
+        with open(lst, "w", encoding="utf-8") as f:
+            f.write(concat_script(timeline))
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst,
+               "-vf", f"fps={fps},scale=1920:1080:flags=lanczos,format=yuv420p",
+               "-c:v", "libx264", "-preset", "medium", "-crf", "15", "-threads", str(threads), "-r", str(fps), "-movflags", "+faststart", dest]
+        subprocess.run(cmd, check=True)
+
+
+def encode_atomic(frames, start, end, dest, fps):
+    """encode() to a temporary name and rename on success: a failed encode leaves no plausible-looking clip behind."""
+    tmp = dest + ".part.mp4"
+    try:
+        encode(frames, start, end, tmp, fps)
+        if os.path.getsize(tmp) == 0:
+            raise CaptureError("the encoder wrote an empty clip")
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+class Recorder:
+    def __init__(self, doc, out_dir, base_url=None, say=None):
+        self.doc, self.out = doc, out_dir
+        self.base = (base_url or os.environ.get("DC_CONSOLE_URL") or doc.get("base_url") or "http://localhost").rstrip("/")
+        self.fps = doc.get("fps", 30)
+        self.say = say or (lambda m: print(m, file=sys.stderr, flush=True))
+        self.secrets = ()
+        self.password = ""
+        self.pos = (960, 540)
+        self.state = None
+        os.makedirs(out_dir, exist_ok=True)
+
+    def _say(self, m):
+        self.say(scrub(m, self.secrets))
+
+    # -- browser lifecycle
+
+    def __enter__(self):
+        from playwright.sync_api import sync_playwright
+
+        self.email, self.password = load_credentials(self.doc["login"])
+        self.secrets = (self.email, self.password)
+        _SECRETS[:] = [x for x in self.secrets if x]
+        self._pw = sync_playwright().start()
+        self.browser = self._pw.chromium.launch(headless=True, args=[
+            "--hide-scrollbars", "--force-color-profile=srgb", "--font-render-hinting=none", "--disable-lcd-text", "--renderer-process-limit=2"])
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self.browser.close()
+        finally:
+            self._pw.stop()
+
+    def new_context(self, state=None, reduce=True):
+        ctx = self.browser.new_context(
+            viewport={"width": 1920, "height": 1080}, device_scale_factor=1.0, color_scheme="dark",
+            locale=self.doc.get("locale", "en-US"), timezone_id=self.doc.get("timezone", "UTC"),
+            reduced_motion="reduce" if reduce else "no-preference", storage_state=state)
+        if reduce:
+            ctx.add_init_script(QUIET_JS % json.dumps(QUIET_CSS))
+        if self.doc.get("cursor", {}).get("highlight", True):
+            ctx.add_init_script(CURSOR_JS)
+        return ctx
+
+    # -- sign-in (not recorded; the typed values live in the page's inputs only)
+
+    def sign_in(self):
+        ctx = self.new_context()
+        p = ctx.new_page()
+        try:
+            p.goto(self.base + "/login")
+            p.fill("#email", self.email)
+            if not p.is_visible("#password"):  # the sign-in asks for the email first, then the password
+                p.click("button[type=submit]")
+                p.wait_for_selector("#password", state="visible", timeout=15000)
+            p.fill("#password", self.password)
+            p.click("button[type=submit]")
+            p.wait_for_url(lambda u: "/login" not in u, timeout=30000)
+            p.wait_for_load_state("networkidle")
+        except Exception as e:  # noqa: BLE001
+            raise CaptureError("the console did not sign in: " + (scrub(e, self.secrets).splitlines() or ["?"])[0], EXIT_BAD_SETUP)
+        self.state = ctx.storage_state()  # in memory only: never written to a file
+        ctx.close()
+        self._say("signed in (not recorded)")
+
+    # -- locators and actions
+
+    def locator(self, page, t):
+        kind, arg, nth, exact = target_spec(t)
+        if kind == "testid":
+            loc = page.get_by_test_id(arg)
+        elif kind == "shot":
+            loc = page.locator(f'[data-shot="{arg}"]')
+        elif kind == "text":
+            loc = page.get_by_text(regex_arg(arg), exact=exact)
+        elif kind == "label":
+            loc = page.get_by_label(regex_arg(arg), exact=exact)
+        elif kind == "placeholder":
+            loc = page.get_by_placeholder(regex_arg(arg), exact=exact)
+        elif kind == "selector":
+            loc = page.locator(arg)
+        else:
+            loc = page.get_by_role(arg[0], name=regex_arg(arg[1]), exact=exact) if arg[1] else page.get_by_role(arg[0])
+        return loc.nth(nth)
+
+    def glide(self, page, x, y):
+        x0, y0 = self.pos
+        for px, py in glide_points(x0, y0, x, y):
+            page.mouse.move(px, py)
+            page.wait_for_timeout(16)
+        self.pos = (x, y)
+
+    def center(self, loc, timeout):
+        loc.wait_for(state="visible", timeout=timeout)
+        loc.scroll_into_view_if_needed(timeout=timeout)
+        box = loc.bounding_box()
+        if not box:
+            raise CaptureError("a target is not on screen")
+        return box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+
+    def point(self, page, loc, timeout, pause):
+        x, y = self.center(loc, timeout)
+        self.glide(page, x, y)
+        page.wait_for_timeout(pause)  # rest, so the viewer sees where it is going
+
+    @staticmethod
+    def describe(body):
+        if isinstance(body, dict):
+            return ", ".join(f"{k}={v}" for k, v in body.items() if k in TARGET_KEYS and k not in ("nth", "exact")) or "target"
+        return str(body)
+
+    def do_step(self, page, clip, step, shot):
+        verb = next(k for k in STEP_KINDS if k in step)
+        body = step[verb]
+        timeout = int(step.get("timeout_s", 20) * 1000)
+        pause = int(step.get("pause_ms", 450))
+        label = step.get("label") or f"{verb} {self.describe(body)}"
+        if verb == "goto":
+            clip.note(label)
+            resp = page.goto(self.base + body)
+            if resp is not None and resp.status >= 400:
+                raise CaptureError(f"{body} answered HTTP {resp.status}")
+            page.wait_for_load_state("networkidle", timeout=timeout)
+            page.wait_for_timeout(int(step.get("settle_s", 0.8) * 1000))
+        elif verb in ("click", "hover"):
+            self.point(page, self.locator(page, body), timeout, pause)
+            clip.note(label)
+            if verb == "click":
+                page.mouse.down()
+                page.wait_for_timeout(70)
+                page.mouse.up()
+                page.wait_for_timeout(int(step.get("settle_s", 0.5) * 1000))
+        elif verb == "type":
+            self.point(page, self.locator(page, body["into"]), timeout, pause)
+            page.mouse.down()
+            page.wait_for_timeout(70)
+            page.mouse.up()
+            clip.note(step.get("label") or (f"type into {self.describe(body['into'])}" + ("" if step.get("secret") else f": {body['text']}")))
+            for ch, d in zip(body["text"], typing_delays(body["text"], shot["id"], int(step.get("pace_ms", 85)))):
+                page.keyboard.type(ch)
+                page.wait_for_timeout(d)
+            page.wait_for_timeout(int(step.get("settle_s", 0.4) * 1000))
+        elif verb == "press":
+            clip.note(label)
+            page.keyboard.press(body)
+            page.wait_for_timeout(int(step.get("settle_s", 0.5) * 1000))
+        elif verb == "wait_for":
+            self.locator(page, body).wait_for(state="visible", timeout=timeout)
+            clip.note(label)
+        elif verb == "wait":
+            clip.note(label)
+            end = time.time() + body
+            while time.time() < end:
+                page.wait_for_timeout(int(min(500, max(1, (end - time.time()) * 1000))))
+                self.guard(page, bool(shot.get("mask")))
+        elif verb == "scroll":
+            clip.note(label)
+            if "by" in body:
+                remaining, sign = abs(body["by"]), (1 if body["by"] >= 0 else -1)
+                while remaining > 0:
+                    d = min(40, remaining)
+                    page.mouse.wheel(0, sign * d)
+                    page.wait_for_timeout(16)
+                    remaining -= d
+            else:
+                loc = self.locator(page, body["to"])
+                loc.wait_for(state="attached", timeout=timeout)
+                box = loc.bounding_box()
+                if box and not (0 <= box["y"] <= 1080 - box["height"]):
+                    dy = box["y"] - 300
+                    for _ in range(max(1, int(abs(dy) // 40))):
+                        page.mouse.wheel(0, 40 if dy > 0 else -40)
+                        page.wait_for_timeout(16)
+            page.wait_for_timeout(300)
+        elif verb == "mark":
+            clip.note(body)
+
+    # -- one shot
+
+    def run_shot(self, shot):
+        retries = shot.get("retries", 1)
+        last = None
+        for stale in (os.path.join(self.out, shot["id"] + ".mp4"), os.path.join(self.out, "failures", shot["id"] + ".png")):
+            if os.path.exists(stale):
+                os.remove(stale)  # an earlier run's clip must never sit beside this run's failure
+        for attempt in range(1, retries + 2):
+            try:
+                return self.attempt(shot, attempt)
+            except SecretLeak:
+                raise
+            except CaptureError as e:
+                last = e
+            except Exception as e:  # noqa: BLE001 - a Playwright timeout etc.: the shot failed, the run goes on
+                last = CaptureError((scrub(e, self.secrets).splitlines() or [type(e).__name__])[0])
+            self._say(f"  attempt {attempt} of {retries + 1} failed: {last}")
+        raise last
+
+    @staticmethod
+    def mask_name(m):
+        return m.get("name") or next((f"{k}={m[k]}" for k in ("selector", "shot", "testid", "text_regex") if k in m), "?")
+
+    def attempt(self, shot, attempt):
+        specs = shot.get("mask", []) or []
+        reduce = shot.get("reduce_motion", self.doc.get("reduce_motion", True))
+        ctx = self.new_context(self.state, reduce=reduce)
+        seen = set()
+        ctx.expose_function("__dcMaskSeen", lambda i: seen.add(i))
+        spec = {"css": mask_css(specs), "selectors": mask_selectors(specs),
+                "regexes": [[i, m["text_regex"]] for i, m in enumerate(specs) if "text_regex" in m], "blur": 14}
+        ctx.add_init_script(MASK_JS.replace("__SPEC__", json.dumps(spec)))
+        page = ctx.new_page()
+        session = ctx.new_cdp_session(page)
+        td = tempfile.mkdtemp(prefix="vcclip-")
+        clip = Clip(session, td, self.fps)
+        failed_at = "start"
+        try:
+            self.pos = (960, 540)
+            resp = page.goto(self.base + shot["start"])
+            if resp is not None and resp.status >= 400:
+                raise CaptureError(f"{shot['start']} answered HTTP {resp.status}")
+            page.wait_for_load_state("networkidle", timeout=30000)
+            page.wait_for_timeout(800)
+            self.guard(page, bool(specs))
+            clip.begin()
+            for j, step in enumerate(shot["steps"]):
+                failed_at = f"step {j + 1} ({next(k for k in STEP_KINDS if k in step)})"
+                self.do_step(page, clip, step, shot)
+                self.guard(page, bool(specs))
+            failed_at = "end"
+            missing = [i for i, m in enumerate(specs) if m.get("required", True) and i not in seen]
+            if missing:
+                raise CaptureError("mask " + ", ".join(self.mask_name(specs[i]) for i in missing) +
+                                   " matched nothing: the region it hides is not on the page, so the shot is not safe to keep", unsafe=True)
+            if shot.get("min_s"):
+                need = shot["min_s"] + shot.get("trim", {}).get("head_s", 0) + shot.get("trim", {}).get("tail_s", 0)
+                while time.time() - clip.start < need:
+                    page.wait_for_timeout(int(min(500, max(1, (need - (time.time() - clip.start)) * 1000))))
+                    self.guard(page, bool(specs))
+            self.guard(page, bool(specs))
+            start, end = clip.finish()
+            if shot.get("max_s") and end - start > shot["max_s"]:
+                raise CaptureError(f"the shot took {end - start:.1f}s, over its max_s of {shot['max_s']}")
+            win = trim_window(start, end, shot.get("trim", {}), shot.get("min_s"))
+            encode_atomic(clip.frames, win[0], win[1], os.path.join(self.out, shot["id"] + ".mp4"), self.fps)
+            return shot_entry(shot, start, end, clip.marks, shot.get("trim", {}), self.fps, attempt, win)
+        except Exception as e:
+            if not (isinstance(e, CaptureError) and e.unsafe):
+                self.fail_shot(page, shot, failed_at)
+            else:
+                self._say("  no failure screenshot: this failure is about what the page shows")
+            if isinstance(e, CaptureError):
+                raise type(e)(f"{failed_at}: {e}") if isinstance(e, SecretLeak) else CaptureError(f"{failed_at}: {e}", e.exit_code, e.unsafe)
+            raise
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+            try:
+                ctx.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    PROBE = """(masking) => {
+      const texts = [document.body ? document.body.innerText : ''];
+      for (const e of document.querySelectorAll('input:not([type=password]),textarea,select')) texts.push(e.value || '');
+      const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { texts.push(el.shadowRoot.textContent || ''); walk(el.shadowRoot); } } };
+      walk(document);
+      const css = document.getElementById('__dc_mask_css');
+      return {text: texts.join('\\n'), masked: !masking || !!(css && css.isConnected), title: document.title};
+    }"""
+
+    def guard(self, page, masking=False):
+        """Ends the shot when the page is unsafe to record: the sign-in password in any frame's text or form values (SecretLeak, exit 3), the
+        mask stylesheet gone from a document that should have it, the sign-in page, or an unreadable page (fail closed, after one retry)."""
+        if "/login" in page.url:
+            raise CaptureError("the console sent the shot to the sign-in (the session was not accepted)", unsafe=True)
+        for attempt in (1, 2):
+            try:
+                probes = [f.evaluate(self.PROBE, masking) for f in page.frames]
+                break
+            except Exception:  # noqa: BLE001 - a frame mid-navigation: wait for it to settle once, then fail closed
+                if attempt == 2:
+                    raise CaptureError("the page could not be inspected for secrets, so it is not safe to keep", unsafe=True)
+                page.wait_for_timeout(500)
+        for k, pr in enumerate(probes):
+            if password_leaked(pr["text"] + "\n" + pr["title"], (self.password,)):
+                raise SecretLeak("the sign-in password is visible in a recorded page; no clip is kept")
+            if k == 0 and not pr["masked"]:  # the main document carries the init script; a child frame may be another origin
+                raise CaptureError("the mask stylesheet is missing from a recorded page, so it is not safe to keep", unsafe=True)
+
+    def fail_shot(self, page, shot, where):
+        d = os.path.join(self.out, "failures")
+        path = os.path.join(d, shot["id"] + ".png")
+        try:
+            os.makedirs(d, exist_ok=True)
+            page.screenshot(path=path)
+            self._say(f"  failure screenshot: {path} (at {where})")
+        except Exception:  # noqa: BLE001
+            self._say("  (no failure screenshot: the page is gone)")
+
+    def write_manifest(self, entries, failures):
+        doc = {"video": self.doc["video"], "fps": self.fps, "viewport": "1920x1080", "base_url": self.base,
+               "generated_utc": utc(time.time()), "clips": entries, "failed": failures}
+        path = os.path.join(self.out, "manifest.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(scrub_obj(doc, self.secrets), f, indent=2)
+            f.write("\n")
+        return path
+
+
+# ---------------------------------------------------------------------------------------------
+# entry points
+
+
+def load_shotlist(path):
+    import yaml
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as e:
+        raise CaptureError(f"{path}: {type(e).__name__}", EXIT_BAD_SETUP)
+    errs = validate(doc)
+    if errs:
+        raise CaptureError(f"{path} is not a valid shot list:\n  " + "\n  ".join(errs), EXIT_BAD_SETUP)
+    return doc
+
+
+def select(doc, only):
+    if not only:
+        return doc["shots"]
+    names = [s for s in only.split(",") if s]
+    have = {s["id"] for s in doc["shots"]}
+    bad = [n for n in names if n not in have]
+    if bad:
+        raise CaptureError("unknown shot " + ",".join(bad), EXIT_BAD_SETUP)
+    return [s for s in doc["shots"] if s["id"] in names]
+
+
+def posix_drive_path(p):
+    """True for '/c/Users/...' on Windows: Git Bash hands such a path to a native Python verbatim (MSYS_NO_PATHCONV), where it means C:/c/Users,
+    a stray tree on the drive. Refused rather than recorded into."""
+    return os.name == "nt" and re.match(r"^/[A-Za-z]/", p.replace("\\", "/")) is not None
+
+
+def record(args):
+    if posix_drive_path(args.out):
+        raise CaptureError(f"--out {args.out} is a POSIX-style drive path, which Windows Python reads as {os.sep}{args.out.lstrip('/')}; give a Windows path (C:/...)", EXIT_BAD_SETUP)
+    doc = load_shotlist(args.shotlist)
+    shots = select(doc, args.shots)
+    if not shutil.which("ffmpeg"):
+        raise CaptureError("ffmpeg is not on PATH", EXIT_BAD_SETUP)
+    entries, failures = [], []
+    rc = EXIT_OK
+    rec = Recorder(doc, args.out, args.base_url)
+    with rec:
+        rec.sign_in()
+        for shot in shots:
+            rec._say(f"shot {shot['id']}")
+            try:
+                entries.append(rec.run_shot(shot))
+                rec._say(f"  recorded {shot['id']}.mp4 ({entries[-1]['duration_s']}s)")
+            except SecretLeak as e:
+                failures.append({"shot": shot["id"], "error": str(e)})
+                rec._say(f"  SECRET: {e}")
+                rc = EXIT_SECRET_LEAK
+                break
+            except CaptureError as e:
+                failures.append({"shot": shot["id"], "error": str(e)})
+                rec._say(f"  FAILED {shot['id']}: {e}")
+                rc = rc or EXIT_SHOT_FAILED
+            rec.write_manifest(entries, failures)  # after every shot: a run that dies later still leaves the index of what it has
+        path = rec.write_manifest(entries, failures)
+        rec._say(f"manifest: {path}  ({len(entries)} recorded, {len(failures)} failed)")
+    return rc
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="mode", required=True)
+    c = sub.add_parser("check")
+    c.add_argument("shotlist")
+    r = sub.add_parser("record")
+    r.add_argument("shotlist")
+    r.add_argument("--out", required=True)
+    r.add_argument("--shots", default="", help="comma list of shot ids (default: all)")
+    r.add_argument("--base-url", default=None, help="the console's address (default: $DC_CONSOLE_URL, else the shot list's base_url)")
+    args = ap.parse_args(argv)
+    try:
+        if args.mode == "check":
+            doc = load_shotlist(args.shotlist)
+            print(f"{args.shotlist}: valid ({len(doc['shots'])} shots)")
+            return EXIT_OK
+        return record(args)
+    except CaptureError as e:
+        print("video-capture: " + scrub(e, _SECRETS), file=sys.stderr)
+        return e.exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
