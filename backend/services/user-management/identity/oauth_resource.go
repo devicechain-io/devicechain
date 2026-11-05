@@ -141,11 +141,6 @@ func (m *Manager) SetTokenAudience(cfg config.TokenAudienceConfiguration, metric
 		return err
 	}
 	m.resources = p
-	if cfg.EffectiveUnscopedClientCredentials() == config.TokenAudienceEnforce {
-		log.Warn().Msg("infrastructure.tokenAudience.unscopedClientCredentials is enforce, but this release only " +
-			"deprecates a client_credentials request that names a resource without a scope: it is counted and " +
-			"logged, never refused. The next major release refuses it.")
-	}
 	return nil
 }
 
@@ -239,6 +234,10 @@ func (p *resourcePolicy) checkRequested(resources, bound []string) ResourceCheck
 	case len(vals) == 1 && len(bound) == 1 && bound[0] == vals[0]:
 		return ResourceCheck{}
 	}
+	// The class is judged on the FIRST value even when it is empty-led or repeated, unlike
+	// /authorize where an empty-first shape is malformed: here nothing is ever bound from the
+	// request (no audience is added), so there is no hidden field to drop a value and the shape
+	// is just a mismatch like any other, whatever its class.
 	rc := p.check(vals[0], len(vals))
 	rc.Desc = "resource does not match the resource this grant is bound to"
 	if rc.Class == auth.ResMultiple {

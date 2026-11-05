@@ -51,7 +51,8 @@ type TokenAudienceConfiguration struct {
 	// tokens through /oauth/jwks. The authorization server may issue for them; no platform
 	// plane accepts them.
 	ExternalResources []string
-	// UnscopedClientCredentials is "observe", "enforce" or "" (observe through v1.x). It
+	// UnscopedClientCredentials is "observe" or "" (observe through v1.x). "enforce" is
+	// REFUSED by Validate until the release that refuses scope-less requests. It
 	// governs the client_credentials rule that a resource must be paired with a scope.
 	UnscopedClientCredentials string
 }
@@ -117,6 +118,13 @@ func (c TokenAudienceConfiguration) Validate() error {
 			return fmt.Errorf("infrastructure.tokenAudience.%s is %q; it must be %q or %q (or left unset)",
 				f.key, f.val, TokenAudienceObserve, TokenAudienceEnforce)
 		}
+	}
+	if c.UnscopedClientCredentials == string(TokenAudienceEnforce) {
+		// Accepting a value that does nothing would let an operator believe the rule is on.
+		return fmt.Errorf("infrastructure.tokenAudience.unscopedClientCredentials cannot be %q in this release: "+
+			"a client_credentials request that names a resource without a scope is counted and logged, not refused; "+
+			"refusal arrives in the next major release. Leave the key unset or set it to %q",
+			TokenAudienceEnforce, TokenAudienceObserve)
 	}
 	if c.AreaBaseUrl != "" {
 		if err := ValidateResourceURL("infrastructure.tokenAudience.areaBaseUrl", c.AreaBaseUrl, true); err != nil {

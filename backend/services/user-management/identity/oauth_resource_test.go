@@ -829,6 +829,40 @@ func TestRefreshInObserveModeRotatesOnceAndCounts(t *testing.T) {
 	require.EqualValues(t, 1, e.counts(t)["refresh_token/unlisted/would_reject"])
 }
 
+// In observe mode a mismatched `resource` is counted only if the request then succeeds: a
+// refresh of an already-rotated token, or one for a tenant that is gone, records nothing, and a
+// successful one records the mismatch once beside its own acceptance.
+func TestAnObserveMismatchIsCountedOnlyWhenTheRequestSucceeds(t *testing.T) {
+	e := newASEnv(t, "observe")
+	toks := e.session(t, rMCP)
+	base := e.counts(t)
+
+	rec := e.refreshHTTP(toks.RefreshToken, rArea)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	after := e.counts(t)
+	require.EqualValues(t, 1, after["refresh_token/area/would_reject"], "a served mismatch is counted once")
+	require.EqualValues(t, 1, after["refresh_token/mcp/accepted"])
+	for k, v := range base {
+		require.Equal(t, v, after[k], "an earlier series moved: %s", k)
+	}
+
+	// The same, already-rotated token: refused as before, and counted NOTHING.
+	errorOf(t, e.refreshHTTP(toks.RefreshToken, rArea), http.StatusBadRequest, "invalid_grant")
+	require.Equal(t, after, e.counts(t), "a refresh that failed was counted")
+
+	// An authorization code whose redemption fails after the resource check counts nothing.
+	code := e.browse(t, e.query(rMCP), nil).code(t)
+	before := e.counts(t)
+	form := url.Values{
+		"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {sessVerifier},
+		"redirect_uri": {sessRedirect}, "client_id": {sessClient}, "resource": {rArea},
+	}
+	_, err := e.m.RevokeSessions(context.Background(), rEmail)
+	require.NoError(t, err)
+	errorOf(t, e.tokenPost(form), http.StatusBadRequest, "invalid_grant")
+	require.Equal(t, before, e.counts(t), "a redemption that failed (its sign-in was revoked) was counted")
+}
+
 // An OAuth session that never named a resource (Grafana's) refreshes in both modes, and its
 // token keeps no audience.
 func TestARefreshWithNoAudienceIsUnchanged(t *testing.T) {
@@ -966,7 +1000,7 @@ func TestClientCredentialsPreAuthCountsNothing(t *testing.T) {
 // warned about, and served exactly as before in EVERY mode, with the account's full authorities.
 func TestRule3IsCountedAndNeverRefused(t *testing.T) {
 	for _, mode := range []string{"observe", "enforce"} {
-		for _, rule3 := range []string{"", "observe", "enforce"} {
+		for _, rule3 := range []string{"", "observe"} {
 			t.Run(mode+"/unscopedClientCredentials="+rule3, func(t *testing.T) {
 				cfg := rCfg(mode)
 				cfg.UnscopedClientCredentials = rule3

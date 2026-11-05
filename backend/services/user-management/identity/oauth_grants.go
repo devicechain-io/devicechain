@@ -295,17 +295,20 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 		rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, bound)
 		return nil, errInvalidGrant("the resource this code was issued for is no longer served")
 	}
-	if rc := rp.checkRequested(resources, rec.Audience); rc.Checked {
-		rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, rc)
-		if rc.Refused() {
-			return nil, errInvalidTarget(rc.Desc)
-		}
+	// A refusal is recorded where it happens. An observe-mode mismatch is only COLLECTED here and
+	// recorded beside the mint below, so a request that fails afterwards (a denied tenant, an
+	// ended session) is not counted.
+	reqCheck := rp.checkRequested(resources, rec.Audience)
+	if reqCheck.Refused() {
+		rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, reqCheck)
+		return nil, errInvalidTarget(reqCheck.Desc)
 	}
 
 	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.SessionEpoch, rec.SessionID, rec.Tenant, rec.Scope, rec.Scope, rec.Audience, rec.ClientId)
 	if err != nil {
 		return nil, err
 	}
+	rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, reqCheck)
 	m.recordAuth(ctx, rdb.AuditOpLogin, rec.Email, rec.Tenant)
 	return tokens, nil
 }
@@ -364,11 +367,13 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	// A `resource` on the request can only restate the grant's binding. The token is NOT burned
 	// for a mismatch: the grant is intact, it is this request that is wrong.
 	rp := m.resourcePolicy()
-	if rc := rp.checkRequested(resources, []string(claims.Audience)); rc.Checked {
-		rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, rc)
-		if rc.Refused() {
-			return nil, errInvalidTarget(rc.Desc)
-		}
+	// Only a refusal is recorded here; an observe-mode mismatch is collected and recorded beside
+	// the post-rotation record below, so a refresh that fails afterwards (already rotated, tenant
+	// denied) counts nothing.
+	reqCheck := rp.checkRequested(resources, []string(claims.Audience))
+	if reqCheck.Refused() {
+		rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, reqCheck)
+		return nil, errInvalidTarget(reqCheck.Desc)
 	}
 
 	entry, err := m.refreshKV.Get(claims.ID)
@@ -441,6 +446,7 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	// Counted once the refresh really rotated (accepted, or would_reject in observe mode), so a
 	// retried server_error does not count twice.
 	rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, bound)
+	rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, reqCheck)
 	m.recordAuth(ctx, rdb.AuditOpRefresh, claims.Username, claims.Tenant)
 	return tokens, nil
 }
