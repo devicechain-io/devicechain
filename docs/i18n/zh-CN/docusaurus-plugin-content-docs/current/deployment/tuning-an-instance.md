@@ -101,6 +101,26 @@ dcctl upgrade local my-instance --version <new-version>
 `EventStoreRefusingWrites` 会触发，`event-management` 会保留无法存储的事件而不是丢弃它们
 （见[事件库无法写入时](./observability.md#event-store-down)）。
 
+### 较高速率下的检查点、分块大小与压缩 {#event-store-checkpoints}
+
+当速率超过每秒几千次读数后，三项设置决定事件库的表现。
+
+- **检查点。** 检查点之后对每个页面的第一次修改，都会把整个 8 KB 页面写入预写日志，因此检查点
+  过于频繁会成倍放大日志量。事件库记录压缩后的页面镜像（`wal_compression = lz4`），并把
+  `checkpoint_timeout` 设为 15 分钟、`max_wal_size` 设为卷容量的五分之一（默认 32Gi 时为
+  6.4 GiB），因此每秒接收几千次读数的事件库按时钟做检查点，而不是日志一满就做。两者都通过重新加载
+  生效，无需重启。代价是崩溃恢复：非正常停止后，数据库会重放自上一次检查点以来写入的日志，最多
+  约 30 分钟的量，因为检查点会分散在其间隔的大部分时间内完成。为更高速率规划事件库时，请同时调高 `timescale_max_wal_size_mib` 并调低
+  `timescale_checkpoint_timeout`：要让检查点保持按时钟触发，`max_wal_size` 至少应为每个检查点
+  间隔内所写日志量的三倍。日志位于数据卷上，所以这个数值必须能放进数据卷。
+  升级时，这一设置也会按现有卷的当前大小应用到已有的事件库。如果该卷已接近写满，请把
+  `timescale_max_wal_size_mib` 设为 1024，以保留原来的 1 GiB。
+- **分块间隔。** `lifecycle.chunkIntervalHours` 默认为 24，且只影响修改之后创建的分块。写入期间，
+  分块的索引应能放进内存，活跃分块的索引应能放进数据库内存的约四分之一。每秒 1,000 次读数时，
+  一个按天的分块有几十 GB，默认值是合适的；达到每秒 10,000 次及以上时，请使用 1 到 6 小时。
+- **压缩延迟。** `lifecycle.compressAfterDays` 默认为 7，即保留一周未压缩的数据。每秒 10,000 次
+  读数时，这是数 TB 的热数据。如果您不读取一两天之前的原始数据，请把它设为 1，并据此规划卷容量。
+
 ### 在线扩卷 {#event-store-expand}
 
 在允许卷扩容的 StorageClass 上，提高事件库 Cluster 的容量。数据库算子会就地调整每个实例的卷声明，无需重启：

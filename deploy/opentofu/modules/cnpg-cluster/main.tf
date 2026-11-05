@@ -210,6 +210,26 @@ variable "parameters" {
   default     = {}
 }
 
+variable "max_wal_size" {
+  description = <<-EOT
+    Postgres max_wal_size, with its unit (for example "8192MB"). Empty leaves the
+    server's own value (1GB) unless var.parameters sets one. It is a SOFT limit on
+    the write-ahead log between checkpoints: with checkpoint_completion_target at its
+    default of 0.9 a checkpoint is requested after about a third of it has been
+    written, so a store writing more than max_wal_size / 3 per checkpoint_timeout is
+    checkpointed by WAL volume and not by the clock. Reload-only: no restart. The
+    caller's own var.parameters entry wins.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "checkpoint_timeout" {
+  description = "Postgres checkpoint_timeout, with its unit (for example 15min). Empty leaves the server's own value (5min) unless var.parameters sets one. Reload-only: no restart. Crash recovery replays from the last completed checkpoint, up to about twice this much time of WAL. The caller's own var.parameters entry wins."
+  type        = string
+  default     = ""
+}
+
 variable "statement_stats" {
   description = <<-EOT
     A profiling RUN switch, OFF by default: preload pg_stat_statements and turn on
@@ -575,6 +595,14 @@ locals {
       "track_io_timing"          = "on"
     } : k => v if var.statement_stats
   }
+  # The checkpoint pair, set only when asked for, so a store that does not pass them renders
+  # the values document it always did. The caller's own parameters win over these.
+  wal_parameters = {
+    for k, v in {
+      "max_wal_size"       = var.max_wal_size
+      "checkpoint_timeout" = var.checkpoint_timeout
+    } : k => v if v != ""
+  }
   stats_libraries = var.statement_stats && !contains(var.shared_preload_libraries, "pg_stat_statements") ? ["pg_stat_statements"] : []
 
   base_values = {
@@ -584,7 +612,7 @@ locals {
     instances              = var.instances
     aliasServiceName       = var.alias_service_name
     resources              = var.resources
-    parameters             = merge(local.stats_parameters, var.parameters)
+    parameters             = merge(local.stats_parameters, local.wal_parameters, var.parameters)
     sharedPreloadLibraries = concat(var.shared_preload_libraries, local.stats_libraries)
 
     nodeLossTolerationSeconds = var.node_loss_toleration_seconds

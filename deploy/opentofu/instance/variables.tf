@@ -918,6 +918,66 @@ variable "timescale_storage" {
   default     = "32Gi"
 }
 
+variable "timescale_checkpoint_timeout" {
+  description = <<-EOT
+    Postgres checkpoint_timeout for the event store (default 15min; Postgres's own is
+    5min). The first change to each page after a checkpoint logs a whole 8 KB image, so
+    fewer checkpoints means less WAL, and on this store those images were about half the
+    log. The cost is crash recovery: after an unclean stop Postgres replays from the
+    last COMPLETED checkpoint's start, and a checkpoint is spread over 90% of this interval,
+    so the replay can span up to about twice this much time of log (bounded as well by
+    max_wal_size). At the rates
+    measured so far (single-digit MB/s of WAL) that is seconds. At 100k events/s, about
+    150 MB/s of WAL, 15 minutes is over 100 GB of log (up to twice that to replay), which takes minutes:
+    lower this, or accept that recovery time, before sizing for that rate.
+    Reload-only: changing it restarts nothing.
+  EOT
+  type        = string
+  default     = "15min"
+
+  validation {
+    condition = can(regex("^[0-9]+(ms|s|min|h|d)?$", var.timescale_checkpoint_timeout)) && (
+      tonumber(regex("^[0-9]+", var.timescale_checkpoint_timeout)) * lookup(
+        { ms = 0.001, s = 1, min = 60, h = 3600, d = 86400 },
+        try(regex("[a-z]+$", var.timescale_checkpoint_timeout), "s"), 0
+      ) >= 30
+      && tonumber(regex("^[0-9]+", var.timescale_checkpoint_timeout)) * lookup(
+        { ms = 0.001, s = 1, min = 60, h = 3600, d = 86400 },
+        try(regex("[a-z]+$", var.timescale_checkpoint_timeout), "s"), 0
+      ) <= 86400
+    )
+    error_message = "timescale_checkpoint_timeout is a Postgres time with an optional unit (ms, s, min, h, d), such as 15min, between 30 seconds and 1 day (Postgres refuses to start outside that range). A bare number is in seconds."
+  }
+}
+
+variable "timescale_max_wal_size_mib" {
+  description = <<-EOT
+    The event store's max_wal_size in MiB. 0 (the default) derives it as a fifth of
+    timescale_storage, never below 1024 (Postgres's own 1GB).
+
+    Set it to size checkpoints for a rate. A checkpoint is requested after roughly a third
+    of max_wal_size has been written, so to keep checkpoints on the checkpoint_timeout
+    clock choose at least 3 x WAL-per-second x checkpoint_timeout. The measured figure with
+    wal_compression=lz4 is about 0.8 to 1.7 KB of WAL per event stored: 20,000 events/s at
+    1 KB is 20 MB/s, 18 GB per 15 minutes, so about 54 GB.
+    🔴 pg_wal sits on the data volume, so this must stay well inside timescale_storage;
+    with archiving behind, the log grows past it.
+    Reload-only: changing it restarts nothing.
+
+    🔴 UPGRADING an existing instance applies the derived value to the volume it already has:
+    on the default 32Gi the allowance goes from the stock 1 GiB to 6.4 GiB, and pg_wal may
+    now grow that far between checkpoints. An event store that is already close to full has
+    less room than that to give. To keep the stock allowance, set this to 1024.
+  EOT
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.timescale_max_wal_size_mib == floor(var.timescale_max_wal_size_mib) && (var.timescale_max_wal_size_mib == 0 || var.timescale_max_wal_size_mib >= 64)
+    error_message = "timescale_max_wal_size_mib is a whole number of MiB of at least 64 (Postgres refuses to start below twice its 16 MiB segment size, and a few segments of room is the practical floor), or 0 to derive it from timescale_storage."
+  }
+}
+
 variable "timescale_storage_class" {
   description = "StorageClass for the event store data volume. Empty uses the cluster default (often reclaimPolicy Delete). FOR PRODUCTION DURABILITY set this to a StorageClass whose reclaimPolicy is Retain, so the underlying volume and its data outlive PVC/PV deletion and can still be recovered FROM. 🔴 That is the whole guarantee: a retained PV goes to Released and will not bind a new claim without someone clearing its claimRef, and a new CloudNativePG Cluster bootstraps via initdb rather than adopting an existing PGDATA. It does NOT mean a redeploy comes back up on the old volume — an earlier version of this description said it did. The supported recovery path is bootstrap.recovery from a backup."
   type        = string

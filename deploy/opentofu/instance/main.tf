@@ -373,6 +373,32 @@ resource "terraform_data" "backup_prerequisite_guard" {
 # above one instance it no longer is — but renaming a DNS contract is a separate
 # change from replacing a storage tier, and doing both at once would make a
 # failure of either indistinguishable from the other.
+locals {
+  # 🔴 THE EVENT STORE'S max_wal_size IS SIZED FROM ITS VOLUME. pg_wal lives on the same
+  # volume as the data, and max_wal_size is the most it holds while archiving keeps up, so
+  # it is a fifth of the volume (never below Postgres's own 1 GiB): 6.4 GiB on the 32Gi
+  # default. At the rate measured on GKE (r26, about 6,000 events/s) that lets a checkpoint
+  # be requested by the 15-minute timer rather than by WAL volume. Under the stock 1 GiB a
+  # checkpoint was requested after about a third of that, every minute or two, and each one
+  # re-logged a full page for every page touched (full-page images were about half the log).
+  #
+  # It follows timescale_storage, which dcctl upgrade sets to the LIVE size, so an existing
+  # instance gets the value for the volume it has. A volume in a unit this cannot read
+  # (anything but Mi, Gi, Ti) falls back to the 1 GiB stock, never to a guess.
+  # var.timescale_max_wal_size_mib overrides it, and is how a store sized for sustained
+  # higher rates asks for more (see its description).
+  event_store_storage_parts = try(regex("^([0-9]+)(Mi|Gi|Ti)$", var.timescale_storage), null)
+  event_store_storage_mib = local.event_store_storage_parts == null ? null : (
+    tonumber(local.event_store_storage_parts[0]) * lookup({ Mi = 1, Gi = 1024, Ti = 1048576 }, local.event_store_storage_parts[1])
+  )
+  event_store_max_wal_mib = (
+    var.timescale_max_wal_size_mib > 0 ? var.timescale_max_wal_size_mib :
+    local.event_store_storage_mib == null ? 1024 :
+    max(1024, floor(local.event_store_storage_mib / 5))
+  )
+  event_store_max_wal_size = format("%dMB", local.event_store_max_wal_mib)
+}
+
 module "cnpg_tsdb" {
   source = "../modules/cnpg-cluster"
 
@@ -384,6 +410,10 @@ module "cnpg_tsdb" {
   username           = var.timescale_username
   storage            = var.timescale_storage
   storage_class      = var.timescale_storage_class
+
+  # Checkpoints on the clock, not on WAL volume. See local.event_store_max_wal_size.
+  max_wal_size       = local.event_store_max_wal_size
+  checkpoint_timeout = var.timescale_checkpoint_timeout
 
   # Where this store's instances may run (dcctl install --database-node-selector /
   # --database-toleration). Both stores take the same pair: the setting is the
@@ -436,7 +466,7 @@ module "cnpg_tsdb" {
 
   # 🔑 NO max_connections OVERRIDE HERE — the relational store carries one and this
   # store deliberately does not. (This block DOES set `parameters`, further down,
-  # for timescaledb.telemetry_level and wal_compression; add to that map rather than
+  # for timescaledb.telemetry_level and wal_compression (max_wal_size and checkpoint_timeout are module inputs); add to that map rather than
   # starting a second one.) timescale_analytics_readers' plan-time check reads the
   # resulting 97 usable as a literal: an override here must move it too.
   #
@@ -538,8 +568,10 @@ module "cnpg_tsdb" {
     # the next restart). The operand image's smoke test asserts it
     # (deploy/images/timescaledb/smoke.sql, section 8): move one and move the other.
     #
-    # max_wal_size is deliberately left alone: PostgresWALArchiveBacklog's threshold
-    # is derived from it (prometheusrule-database-backup.yaml).
+    # max_wal_size and checkpoint_timeout are not in this map: they are computed (from the
+    # volume) and so cannot be string literals; they travel as the module's own inputs.
+    # PostgresWALArchiveBacklog's threshold is an absolute count of unshipped segments and
+    # does not move with max_wal_size (prometheusrule-database-backup.yaml).
     #
     # The relational store does NOT set this; the reason is on its parameters in the
     # cluster root.

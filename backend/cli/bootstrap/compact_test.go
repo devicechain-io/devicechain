@@ -405,8 +405,9 @@ func TestCompactSizesEveryGrowingVolume(t *testing.T) {
 
 // The event store's volume, measured on GKE (v0.18.0, SSD persistent disks): a
 // stored measurement event cost about 1.05 KB on the primary (2.5 GB over 2.4M
-// events), and pg_wal about 1.1 GB more, held at max_wal_size only while archiving
-// keeps up. The upper end of each is used, and 10% of the volume is kept free.
+// events), and pg_wal about 1.1 GB more at the stock max_wal_size, held there only while
+// archiving keeps up. The instance root now sets max_wal_size to a fifth of the volume,
+// and eventStoreCapacity reserves that. 10% of the volume is kept free.
 const (
 	measuredEventStoreBytesPerEvent int64 = 1100
 	measuredEventStoreWALBytes      int64 = 1100 << 20
@@ -417,7 +418,11 @@ const (
 // 10% of it kept free.
 func eventStoreCapacity(t *testing.T, size string) int64 {
 	t.Helper()
-	return (volumeMiB(t, size)<<20 - measuredEventStoreWALBytes) * 9 / 10 / measuredEventStoreBytesPerEvent
+	vol := volumeMiB(t, size) << 20
+	// pg_wal is held at max_wal_size, which the instance root sets to a fifth of the volume
+	// (never below 1 GiB): reserve that, not the 1.1 GB measured at the stock setting.
+	wal := max(vol/5, int64(1)<<30)
+	return (vol - wal) * 9 / 10 / measuredEventStoreBytesPerEvent
 }
 
 // The default event-store volume alone holds six hours of one tenant sending at

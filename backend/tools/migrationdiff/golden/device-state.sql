@@ -94,7 +94,8 @@ CREATE TABLE "device-state".device_states (
  source text,
  scope_anchors text[],
  scope_anchors_at timestamp with time zone
-);
+)
+WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
 CREATE TABLE "device-state".dropped_measurements (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -122,7 +123,8 @@ CREATE TABLE "device-state".latest_locations (
  speed numeric(12,4),
  heading numeric(7,4),
  occurred_time timestamp with time zone NOT NULL
-);
+)
+WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
 CREATE TABLE "device-state".latest_measurements (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -136,7 +138,8 @@ CREATE TABLE "device-state".latest_measurements (
  occurred_time timestamp with time zone NOT NULL,
  unit text,
  data_type character varying(32)
-);
+)
+WITH (fillfactor='75', autovacuum_vacuum_scale_factor='0', autovacuum_vacuum_threshold='10000', autovacuum_vacuum_cost_limit='2000', autovacuum_analyze_scale_factor='0.02', autovacuum_analyze_threshold='10000');
 CREATE TABLE "device-state".purged_tenants (
  token character varying(128) NOT NULL,
  epoch timestamp with time zone NOT NULL,
