@@ -119,6 +119,10 @@ type externalConfigCoordinates struct {
 	// BlobDirectory is where the filesystem object store writes; empty when the instance
 	// has no filesystem store. The volume must mount exactly there.
 	BlobDirectory string
+	// EnvelopesOn is whether either event-envelope switch is on in the document. The chart
+	// reads the switches from instance.config for the event-processing memory floor, and
+	// under an external Secret that is its defaults, so it is restated as eventEnvelopesEnabled.
+	EnvelopesOn bool
 }
 
 // readConfigCoordinates takes them from the document itself, through the services'
@@ -159,6 +163,7 @@ func readConfigCoordinates(doc []byte) (externalConfigCoordinates, error) {
 	}
 	out.RdbPort = port
 	out.BlobDirectory = loaded.Infrastructure.Blob.Directory
+	out.EnvelopesOn = envelopesOn(loaded.Infrastructure.Messaging.Envelopes)
 	return out, nil
 }
 
@@ -255,6 +260,9 @@ func installValuesFor(authoring map[string]interface{}, instance string, doc []b
 				map[string]interface{}{"mountPath": coords.BlobDirectory}),
 		})
 	}
+	// Restated for the same reason, and unconditionally: false is a statement too (envelopes
+	// turned off again must lower the event-processing floor back).
+	vals["eventEnvelopesEnabled"] = coords.EnvelopesOn
 	vals["metrics"] = mergedStringKeyMap(authoring["metrics"], map[string]interface{}{
 		"natsBrokerHost": coords.NatsHost,
 	})

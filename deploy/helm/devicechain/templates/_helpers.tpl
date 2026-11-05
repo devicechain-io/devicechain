@@ -1317,6 +1317,18 @@ only when there is a merged limit and it is LOWER (no limit stays no limit). A r
 area (a plain area-level default would silently beat it), and an area's own limit is the
 operator's word and is never changed. */ -}}
 {{- $floor := get .areaCfg "memoryLimitFloor" | default "" | toString -}}
+{{- /* memoryLimitFloorWithEnvelopes: a higher floor that replaces memoryLimitFloor while either
+event-envelope switch is on (instance.config.infrastructure.messaging.envelopes.resolved or
+.inbound). With either on, event-processing keeps its duplicate guard (the identity of every
+event applied over about ten minutes), which measured 265 to 269 MiB resident at 4,500 to 6,000
+events/s and 388 MiB at 12,000, against 68 to 85 MiB with the switches off. Same rules as the
+floor: it never lowers a limit and never overrides one the operator set on the area. Under
+instance.existingSecret instance.config is not the mounted document, so eventEnvelopesEnabled
+(set by dcctl from the document it wrote) stands in for it. */ -}}
+{{- $envCfg := dig "infrastructure" "messaging" "envelopes" dict (.root.Values.instance.config | default dict) -}}
+{{- if and (or .root.Values.eventEnvelopesEnabled (get $envCfg "resolved") (get $envCfg "inbound")) (get .areaCfg "memoryLimitFloorWithEnvelopes") -}}
+{{- $floor = get .areaCfg "memoryLimitFloorWithEnvelopes" | toString -}}
+{{- end -}}
 {{- if and $floor (not (hasKey (dig "limits" dict $own) "memory")) -}}
 {{- $cur := dig "limits" "memory" "" $res | toString -}}
 {{- if and $cur (lt (include "devicechain.quantityScalar" (dict "dim" "memory" "q" $cur "area" $.area) | float64) (include "devicechain.quantityScalar" (dict "dim" "memory" "q" $floor "area" $.area) | float64)) -}}

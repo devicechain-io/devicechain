@@ -679,8 +679,11 @@ decide only whether a service writes them. Every rule below applies to either on
   is the one the event store uses, so two identical readings from one device at the same nanosecond
   are counted once by both.
 - **What it costs.** At about 20,000 events a second the memory holds roughly 12 million
-  identities, about 180 MB, in the detection leader only (a standby builds it when it takes over);
-  at 5,000 events a second about 45 MB. Above about 25,000 events a second a cap applies and the
+  identities, about 540 MB (extrapolated), in the detection leader only (a standby builds it when
+  it takes over). Measured, it added about 190 MB at 6,000 events a second and about 300 MB at
+  12,000, roughly 45 to 55 bytes for each identity held; at 5,000 events a second expect about 150 MB.
+  With a switch on, size `event-processing` as described in
+  [Service sizing](./bootstrap.md#service-sizing). Above about 25,000 events a second a cap applies and the
   memory covers less than ten minutes (about 2.7 minutes at 100,000 a second). After a restart or a
   change of leader the detection engine reads the last ten minutes of the stream again before it
   resumes, so that step takes longer on a busy stream; it is reported on
@@ -745,7 +748,15 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases are documented in full, newest first.
 
-### v1.2.0 — the detection engine can use more than one core {#v120-upgrade}
+### v1.2.0 {#v120-upgrade}
+
+`v1.2.0` is an in-place upgrade, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). The Helm values it changes are not covered by the compatibility policy, and this section is where a minor release says so.
+
+What needs action:
+
+- **Know that two memory limits are higher.** `device-management` is now limited to 512Mi (it was 256Mi), and `event-processing` is limited to 768Mi (it was 384Mi) while either event-envelope setting is on. Nothing changes for `event-processing` with both settings off. The memory requests do not change, so scheduling is the same; each limit is a ceiling the pod may use. See [Memory limits](#v120-memory).
+- **Check any memory limit you set yourself.** A limit you set on `device-management` or `event-processing` under `functionalAreas.<service>.resources.limits.memory` is used as written, and so is a higher top-level `resources.limits.memory`. If yours is below the figures in [Service sizing](./bootstrap.md#service-sizing) for your fleet or event rate, raise it.
+
 
 #### Detection shards run in parallel {#v120-detect-shards}
 
@@ -756,6 +767,15 @@ The `detectShards` setting of event-processing (default 1, range 1 to 64) splits
 - **Two alerts are new**: `DetectShardSaturated` (a shard is the limit on detection speed) and `DetectShardInvariantViolated` (the parts disagreed at a checkpoint and it was refused). They are installed at every setting but can only fire when `detectShards` is above 1. Add them to your alert routing. A new set of `detect_shard_*` metrics and `detect_barrier_wait_seconds` accompany them; the two unlabelled ones are exported as 0 at 1.
 - **Memory grows with `detectShards`.** Each shard holds up to 1024 queued messages, so a pod already running above 1 can hold up to that many times `detectShards` messages in memory while the loop is ahead of the slowest shard. Check the pod's memory limit before relying on the new setting.
 - **Going back** is a restart with the setting at the old value. The checkpoint is identical, so there is nothing to undo.
+
+#### Memory limits {#v120-memory}
+
+Both limits were within one step of what the services were measured to hold, on a Google Kubernetes Engine run at up to 16,000 events a second:
+
+- **`device-management`** keeps the whole device fleet in memory in every replica. Its Go heap was 154 MiB with 6,000 devices and 193 to 218 MiB with 12,000 to 16,000, against a 256Mi limit whose soft limit (`GOMEMLIMIT`) is 192 MiB. A fleet near 12,000 devices therefore reached the soft limit, and a larger one risked the pod being killed for exceeding its limit. The chart now floors the limit at 512Mi (soft limit 384 MiB).
+- **`event-processing` with event envelopes on** holds the duplicate guard described under [Event envelopes](#event-envelopes). It used 265 to 269 MiB at 4,500 to 6,000 events a second and 388 MiB at 12,000, with 353 MiB of Go heap, against a 384Mi limit with a 288 MiB soft limit. Above about 8,000 events a second the pod would have been held at its soft limit, collecting continuously, or killed. The chart now floors the limit at 768Mi (soft limit 576 MiB) while either `resolved` or `inbound` is on, and at 384Mi otherwise. The earlier figure for the guard (about 180 MB at 20,000 events a second) was three to four times too low; the corrected figures are under [Event envelopes](#event-envelopes).
+
+Both are floors, applied only when the limit that would otherwise apply is lower. A limit you set on the service, or a larger top-level limit, is used as written, and the soft limit follows whichever limit applies. The new value `functionalAreas.<service>.memoryLimitFloorWithEnvelopes` holds the envelope floor. `dcctl` sets `eventEnvelopesEnabled` from the instance configuration it writes. If you install the chart yourself with `instance.existingSecret`, the chart cannot read that configuration: set `eventEnvelopesEnabled: true` when you turn either envelope setting on.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 
@@ -931,7 +951,7 @@ An event envelope carries several events of one tenant in one message on the inb
 
 - **When it is safe.** Once every pod of the instance runs `v1.1.0` or later, and not before: a pod on an earlier release sets an envelope aside as failed. Upgrade first, wait until every pod has rolled, then set the switches.
 - **Inbound envelopes.** `event-sources` groups one tenant's events with a short, predictive wait: a quiet tenant publishes at once in the single-event shape, and a busy one waits at most `inboundLingerMillis` (default 5 ms, at most 10) for the next event. `HTTP /events` answers 202 only after the broker has acknowledged the message that holds the event. `device-management` then writes one resolved envelope for each inbound envelope.
-- **The detection engine skips duplicates.** With the switches on, the detection engine remembers the identity of each event it applied over the platform's own redelivery span (about ten minutes of broker time) and skips a second copy, counted on `detect_duplicate_events_skipped_total`. Memory is about 180 MB at 20,000 events/s, in the detection leader only. A copy arriving later than that span is applied twice; [Event envelopes](#event-envelopes) states the residual.
+- **The detection engine skips duplicates.** With the switches on, the detection engine remembers the identity of each event it applied over the platform's own redelivery span (about ten minutes of broker time) and skips a second copy, counted on `detect_duplicate_events_skipped_total`. Memory is about 190 MB at 6,000 events/s, 300 MB at 12,000 and about 540 MB at 20,000 (extrapolated), in the detection leader only; the chart raises the `event-processing` memory limit while a switch is on (see [Service sizing](./bootstrap.md#service-sizing)). A copy arriving later than that span is applied twice; [Event envelopes](#event-envelopes) states the residual.
 - **New metrics:** `inbound_envelope_members{hop}` (events per envelope) and `inbound_envelope_linger_seconds{hop}`, the settlement counters, and the `detect_guard_*` series.
 - **Measured on a local cluster, not yet on a cloud cluster.** On a three-worker local `kind` cluster at 1,500 events/s (1,000 over MQTT, 500 over HTTP), with both switches on and about eight events per envelope, broker messages per event fell about 41% (116.5 to 68.2), broker bytes per event about 37% to 40%, and total platform CPU per event about 12% (7.48 to 6.60 CPU-s per 1,000 events). `device-management` used 31% less CPU per event, `device-state` 24% less, the detection engine 47% less and the broker 14% less. The event store did more work, not less: its CPU per event rose about 23% and its rows per `INSERT` fell from 16.1 to 12.9, because it receives smaller, more numerous batches from envelope messages. Persist and acknowledgement latency showed no clear change within the noise of the rig. Treat the figures as the direction and rough size of the effect on one shape, and measure your own load before relying on them.
 - **Turning it off and going back.** Set both values to `false`. Envelopes already on the streams stay until they expire or are consumed. `dcctl upgrade` records when the switches were turned on and, when both are off and the rollout is done, the position of the newest message on each stream. It then refuses to move below `v1.1.0` while a switch is on or while a stream still holds a message from before they were turned off, naming each switch that is on. To go back, turn both switches off, let the streams pass the recorded position, then go back. `--allow-envelope-downgrade` skips the refusal with a warning, and a service on the earlier release then loses the events in any envelope it meets. The broker administrator has read access to those two streams for this check.
