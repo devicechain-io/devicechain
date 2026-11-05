@@ -1046,6 +1046,16 @@ gogc: 0
 # syntax (e.g. "192MiB"). Prefer the percentage, and read the note above first.
 goMemLimit: ""
 
+# eventEnvelopesEnabled restates whether either event-envelope switch
+# (instance.config.infrastructure.messaging.envelopes.resolved or .inbound) is on, for the
+# memory floor in functionalAreas.event-processing.memoryLimitFloorWithEnvelopes. The chart
+# reads the switches from instance.config; under instance.existingSecret (which is how dcctl
+# installs) that block is the chart's defaults, not the document the pods mount, so dcctl sets
+# this from the document it wrote. A chart-only install that mounts its own Secret sets it by
+# hand. true raises the floor even where instance.config says off; false leaves it to
+# instance.config.
+eventEnvelopesEnabled: false
+
 # Replica count per area (override per area under functionalAreas.<area>.replicas).
 # Recommend >= 2 in production for true zero-downtime rollouts (a single replica
 # still has a brief gap while its one pod is replaced) and node-failure survival.
@@ -1432,6 +1442,18 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
+    # MEMORY LIMIT raised from the 256Mi default to 512Mi, as a FLOOR (memoryLimitFloor), not as an
+    # area-level limit: it applies only when the merged limit is lower, so a raised top-level
+    # resources.limits.memory still reaches this service, and a functionalAreas.device-management
+    # .resources.limits.memory of your own is used as written. Every replica caches the whole
+    # device fleet, so the heap grows with the fleet, not with the ingest rate. Measured on GKE
+    # (round 29): Go heap in use 154 MiB at 6,000 devices and 193 to 218 MiB at 12,000 to 16,000,
+    # and 250 MiB resident at 16,000 devices, against the old 256Mi limit and its 192 MiB
+    # GOMEMLIMIT: a fleet near 12,000 devices reached the soft limit. At 512Mi the soft limit is
+    # 384 MiB, which that growth (about 6.4 MiB per 1,000 devices above a base near 115 MiB)
+    # reaches at a fleet of roughly 40,000 devices; size above that. Only the limit moves; the
+    # memory request stays 128Mi, so scheduling is unchanged. sizing_test.go holds it.
+    memoryLimitFloor: 512Mi
     # CPU REQUEST: what this service used at 6,000 events/s, applied while
     # useMeasuredRequests is on (not under --compact). Re-measured on GKE round 10 (3 x
     # n2-custom-4-8192 service nodes, --ha, shipped defaults): 0.072 cores per 1,000
@@ -2091,6 +2113,20 @@ functionalAreas:
     # area close to its soft limit. At 384Mi the soft limit is 288 MiB. Only the limit moves; the
     # memory request stays 128Mi. sizing_test.go holds it.
     memoryLimitFloor: 384Mi
+    # MEMORY LIMIT while either event-envelope switch is on
+    # (instance.config.infrastructure.messaging.envelopes.resolved or .inbound): 768Mi, replacing
+    # the floor above under the same rules (it never overrides a limit you set on the area, and a
+    # higher top-level limit is used as written). With either switch on, detection keeps a
+    # duplicate guard: the identity of every event it applied over about ten minutes. Measured on
+    # GKE (round 29), resident memory with the switches on was 265 to 269 MiB at 4,500 to 6,000
+    # events/s and 388 MiB at 12,000, against 68 to 85 MiB with them off (about +190 MiB at 6,000
+    # and +300 MiB at 12,000, which is 44 to 55 bytes for each identity held); Go heap in use
+    # reached 353 MiB at 12,000 events/s. At 384Mi (GOMEMLIMIT 288 MiB) the collector would have
+    # been held at its soft limit above about 8,000 events/s. At 768Mi the soft limit is 576 MiB:
+    # 1.5 times the 12,000 events/s heap, and the sizing rule in the deployment guide covers up
+    # to about 15,000 events/s. Above that, set this service's own limit (about 1Gi at 20,000).
+    # Switches off: the 384Mi floor above, unchanged. sizing_test.go holds all three.
+    memoryLimitFloorWithEnvelopes: 768Mi
     # CPU REQUEST (as device-management above), from its one UNTHROTTLED reading: 0.37
     # cores at 6,800 events/s with a 1-core limit, rounded up to 400m. At 6,000 under
     # its 500m limit it used 0.33-0.34, but it was throttled in about 5% of periods and

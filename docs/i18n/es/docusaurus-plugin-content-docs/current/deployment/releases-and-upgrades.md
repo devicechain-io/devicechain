@@ -721,8 +721,11 @@ escribe. Todas las reglas siguientes valen para cualquiera de los dos y para amb
   La identidad es la que usa el almacenamiento de eventos, de modo que dos lecturas idénticas de un
   mismo dispositivo en el mismo nanosegundo se cuentan una sola vez en ambos.
 - **Qué cuesta.** Con unos 20 000 eventos por segundo la memoria guarda unos 12 millones de
-  identidades, unos 180 MB, solo en el líder de detección (un suplente la construye al asumir el
-  cargo); con 5 000 eventos por segundo, unos 45 MB. Por encima de unos 25 000 eventos por segundo
+  identidades, unos 540 MB (extrapolado), solo en el líder de detección (un suplente la construye
+  al asumir el cargo). Medido, añadió unos 190 MB con 6 000 eventos por segundo y unos 300 MB con
+  12 000, aproximadamente 45 a 55 bytes por identidad; con 5 000 eventos por segundo, calcule unos
+  150 MB. Con un ajuste activado, dimensione `event-processing` como se describe en
+  [Dimensionamiento de los servicios](./bootstrap.md#service-sizing). Por encima de unos 25 000 eventos por segundo
   se aplica un tope y la memoria cubre menos de diez minutos (unos 2,7 minutos con 100 000 por
   segundo). Tras un reinicio o un cambio de líder, el motor de detección vuelve a leer los últimos
   diez minutos del flujo antes de continuar, así que ese paso tarda más en un flujo con mucho
@@ -790,7 +793,15 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes se documentan por completo, de la más nueva a la más antigua.
 
-### v1.2.0 — el motor de detección puede usar más de un núcleo {#v120-upgrade}
+### v1.2.0 {#v120-upgrade}
+
+`v1.2.0` es una actualización in situ, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Los valores de Helm que cambia esta versión no están cubiertos por la política de compatibilidad, y esta sección es donde una versión menor lo indica.
+
+Qué requiere acción:
+
+- **Tenga en cuenta que dos límites de memoria son más altos.** `device-management` tiene ahora un límite de 512Mi (antes 256Mi) y `event-processing` tiene un límite de 768Mi (antes 384Mi) mientras cualquiera de los ajustes de sobres de eventos esté activado. Nada cambia para `event-processing` con ambos ajustes desactivados. Las solicitudes de memoria no cambian, así que la planificación es la misma; cada límite es un techo que el pod puede usar. Consulte [Límites de memoria](#v120-memory).
+- **Revise cualquier límite de memoria que haya fijado usted.** Un límite fijado en `device-management` o `event-processing` con `functionalAreas.<servicio>.resources.limits.memory` se usa tal cual, igual que un `resources.limits.memory` superior de nivel superior. Si el suyo está por debajo de las cifras de [Dimensionamiento de los servicios](./bootstrap.md#service-sizing) para su flota o su ritmo de eventos, súbalo.
+
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
 
@@ -801,6 +812,15 @@ El ajuste `detectShards` de event-processing (1 por defecto, de 1 a 64) divide p
 - **Hay dos alertas nuevas**: `DetectShardSaturated` (una parte es el límite de la velocidad de detección) y `DetectShardInvariantViolated` (las partes discreparon en un punto de control y este se rechazó). Se instalan con cualquier valor, pero solo pueden dispararse con `detectShards` superior a 1. Añádalas a su enrutado de alertas. Las acompaña un conjunto nuevo de métricas `detect_shard_*` y `detect_barrier_wait_seconds`; las dos sin etiqueta se exportan a 0 con 1.
 - **La memoria crece con `detectShards`.** Cada parte retiene hasta 1024 mensajes en cola, así que un pod que ya funciona con un valor superior a 1 puede retener en memoria hasta `detectShards` veces esa cantidad mientras el bucle va por delante de la parte más lenta. Compruebe el límite de memoria del pod antes de contar con el nuevo ajuste.
 - **Volver atrás** es un reinicio con el ajuste en el valor anterior. El punto de control es idéntico, así que no hay nada que deshacer.
+
+#### Límites de memoria {#v120-memory}
+
+Ambos límites estaban a un paso de lo que se midió que los servicios ocupan, en una prueba en Google Kubernetes Engine de hasta 16 000 eventos por segundo:
+
+- **`device-management`** mantiene toda la flota de dispositivos en memoria en cada réplica. Su montón de Go fue de 154 MiB con 6 000 dispositivos y de 193 a 218 MiB con 12 000 a 16 000, frente a un límite de 256Mi cuyo límite blando (`GOMEMLIMIT`) es de 192 MiB. Una flota de unos 12 000 dispositivos alcanzaba por tanto el límite blando, y una mayor corría el riesgo de que el pod fuera terminado por superar su límite. El chart fija ahora el mínimo en 512Mi (límite blando de 384 MiB).
+- **`event-processing` con sobres de eventos activados** guarda la protección contra duplicados descrita en [Sobres de eventos](#event-envelopes). Usó de 265 a 269 MiB con 4 500 a 6 000 eventos por segundo y 388 MiB con 12 000, con 353 MiB de montón de Go, frente a un límite de 384Mi con un límite blando de 288 MiB. Por encima de unos 8 000 eventos por segundo el pod habría quedado retenido en su límite blando, recolectando sin parar, o habría sido terminado. El chart fija ahora el mínimo en 768Mi (límite blando de 576 MiB) mientras `resolved` o `inbound` esté activado, y en 384Mi en caso contrario. La cifra anterior para la protección (unos 180 MB a 20 000 eventos por segundo) era de tres a cuatro veces demasiado baja; las cifras corregidas están en [Sobres de eventos](#event-envelopes).
+
+Ambos son mínimos, aplicados solo cuando el límite que se aplicaría de otro modo es menor. Un límite fijado en el servicio, o un límite de nivel superior mayor, se usa tal cual, y el límite blando sigue al límite que se aplique. El nuevo valor `functionalAreas.<servicio>.memoryLimitFloorWithEnvelopes` contiene el mínimo con sobres. `dcctl` fija `eventEnvelopesEnabled` a partir de la configuración de instancia que escribe. Si instala el chart usted mismo con `instance.existingSecret`, el chart no puede leer esa configuración: fije `eventEnvelopesEnabled: true` cuando active cualquiera de los ajustes de sobres.
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 
@@ -976,7 +996,7 @@ Un sobre de eventos lleva varios eventos de un mismo inquilino en un único mens
 
 - **Cuándo es seguro.** Una vez que todos los pods de la instancia ejecutan `v1.1.0` o posterior, y no antes: un pod de una versión anterior aparta un sobre como fallido. Actualiza primero, espera a que todos los pods se hayan reiniciado y después define los ajustes.
 - **Sobres de entrada.** `event-sources` agrupa los eventos de un inquilino con una espera corta y predictiva: un inquilino tranquilo publica de inmediato en la forma de un solo evento, y uno ocupado espera como máximo `inboundLingerMillis` (5 ms por defecto, máximo 10) al siguiente evento. `HTTP /events` responde 202 solo después de que el broker haya confirmado el mensaje que contiene el evento. Después, `device-management` escribe un sobre resuelto por cada sobre de entrada.
-- **El motor de detección omite duplicados.** Con los ajustes activados, el motor de detección recuerda la identidad de cada evento aplicado durante el intervalo de reentrega de la propia plataforma (unos diez minutos de tiempo del broker) y omite una segunda copia, contada en `detect_duplicate_events_skipped_total`. La memoria es de unos 180 MB a 20.000 eventos/s, solo en el líder de detección. Una copia que llegue después de ese intervalo se aplica dos veces; [Sobres de eventos](#event-envelopes) indica el residuo.
+- **El motor de detección omite duplicados.** Con los ajustes activados, el motor de detección recuerda la identidad de cada evento aplicado durante el intervalo de reentrega de la propia plataforma (unos diez minutos de tiempo del broker) y omite una segunda copia, contada en `detect_duplicate_events_skipped_total`. La memoria es de unos 190 MB a 6.000 eventos/s, 300 MB a 12.000 y unos 540 MB a 20.000 (extrapolado), solo en el líder de detección; el chart sube el límite de memoria de `event-processing` mientras un ajuste está activado (consulte [Dimensionamiento de los servicios](./bootstrap.md#service-sizing)). Una copia que llegue después de ese intervalo se aplica dos veces; [Sobres de eventos](#event-envelopes) indica el residuo.
 - **Métricas nuevas:** `inbound_envelope_members{hop}` (eventos por sobre) e `inbound_envelope_linger_seconds{hop}`, los contadores de asentamiento y las series `detect_guard_*`.
 - **Medido en un clúster local, aún no en uno en la nube.** En un clúster `kind` local con tres workers a 1.500 eventos/s (1.000 por MQTT, 500 por HTTP), con ambos ajustes activados y unos ocho eventos por sobre, los mensajes del broker por evento bajaron un 41 % (de 116,5 a 68,2), los bytes del broker por evento entre un 37 % y un 40 %, y la CPU total de la plataforma por evento un 12 % (de 7,48 a 6,60 CPU-s por 1.000 eventos). `device-management` usó un 31 % menos de CPU por evento, `device-state` un 24 % menos, el motor de detección un 47 % menos y el broker un 14 % menos. El almacén de eventos hizo más trabajo, no menos: su CPU por evento subió un 23 % y sus filas por `INSERT` bajaron de 16,1 a 12,9, porque recibe lotes más pequeños y numerosos a partir de los mensajes de sobre. La latencia de persistencia y de confirmación no mostró un cambio claro dentro del ruido del banco de pruebas. Toma las cifras como la dirección y el tamaño aproximado del efecto en una forma de carga, y mide tu propia carga antes de fiarte de ellas.
 - **Desactivarlos y volver atrás.** Define ambos valores como `false`. Los sobres que ya están en los flujos permanecen hasta que caducan o se consumen. `dcctl upgrade` registra cuándo se activaron los ajustes y, cuando ambos están desactivados y el despliegue ha terminado, la posición del mensaje más reciente de cada flujo. Después se niega a pasar a una versión inferior a `v1.1.0` mientras un ajuste esté activado o mientras un flujo contenga todavía un mensaje anterior a su desactivación, y nombra cada ajuste que está activado. Para volver atrás, desactiva ambos ajustes, deja que los flujos superen la posición registrada y entonces vuelve. `--allow-envelope-downgrade` omite el rechazo con una advertencia, y un servicio de la versión anterior pierde entonces los eventos de cualquier sobre que encuentre. El administrador del broker tiene acceso de lectura a esos dos flujos para esta comprobación.

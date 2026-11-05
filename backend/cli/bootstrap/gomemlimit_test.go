@@ -80,13 +80,21 @@ func renderChart(t *testing.T, vals map[string]interface{}) (string, error) {
 		vals["instance"] = instance
 	}
 	instance["id"] = "dctest"
-	instance["config"] = map[string]interface{}{
-		"infrastructure": map[string]interface{}{
-			"secrets": map[string]interface{}{
-				"rootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
-			},
-		},
+	// A test may bring instance.config of its own (the envelope switches, for one); the root key
+	// is added to it rather than replacing it.
+	cfg, _ := instance["config"].(map[string]interface{})
+	if cfg == nil {
+		cfg = map[string]interface{}{}
 	}
+	infra, _ := cfg["infrastructure"].(map[string]interface{})
+	if infra == nil {
+		infra = map[string]interface{}{}
+	}
+	infra["secrets"] = map[string]interface{}{
+		"rootKey": base64.StdEncoding.EncodeToString(make([]byte, 32)),
+	}
+	cfg["infrastructure"] = infra
+	instance["config"] = cfg
 
 	inst := action.NewInstall(&action.Configuration{})
 	inst.ReleaseName = "dc-gomemlimit"
