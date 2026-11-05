@@ -762,6 +762,9 @@ type InfrastructureConfiguration struct {
 	Logging          LoggingConfiguration
 	Messaging        MessagingConfiguration
 	Http             HttpConfiguration
+	// TokenAudience is the token-audience policy (which `aud` an API plane accepts, which
+	// `resource` the authorization server may issue for). FIXED configuration.
+	TokenAudience TokenAudienceConfiguration
 }
 
 // HttpConfiguration is how the instance's HTTP servers read a request's origin.
@@ -1656,6 +1659,9 @@ func (c *InstanceConfiguration) Validate() error {
 		return err
 	}
 	if _, err := c.Infrastructure.Http.TrustedProxyPrefixes(); err != nil {
+		return err
+	}
+	if err := c.Infrastructure.TokenAudience.Validate(); err != nil {
 		return err
 	}
 	return nil

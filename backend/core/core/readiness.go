@@ -32,6 +32,10 @@ var authGateRetryInterval = 5 * time.Second
 type ReadinessGate struct {
 	once      sync.Once
 	validator atomic.Pointer[auth.Validator]
+	// audience is the token-audience policy (rule 2) every token-verifying handler of this
+	// service applies after the signature checks out. NewReadinessGate installs the CLOSED
+	// policy; LoadInstanceConfigurationFrom replaces it with the configured one.
+	audience atomic.Pointer[auth.PlanePolicy]
 	// readyCh is closed exactly once when the gate opens, so WaitReady can block
 	// without polling and Ready can test without a lock. Created at construction
 	// and never reassigned.
@@ -45,8 +49,34 @@ type ReadinessGate struct {
 }
 
 // NewReadinessGate creates a closed (not-ready) gate.
+//
+// 🔴 IT STARTS WITH THE CLOSED AUDIENCE POLICY (enforce mode, no own area, no MCP resources),
+// which accepts only tokens that carry no audience. A production path that forgot to install
+// the configured policy therefore refuses the MCP pass-through loudly (the refusal is logged,
+// not counted: the closed policy has no recorder) instead of silently admitting every audience. Tests that build a gate by hand use first-party (aud-less) tokens
+// and are unaffected.
 func NewReadinessGate() *ReadinessGate {
-	return &ReadinessGate{readyCh: make(chan struct{})}
+	g := &ReadinessGate{readyCh: make(chan struct{})}
+	g.audience.Store(auth.NewClosedPlanePolicy())
+	return g
+}
+
+// SetAudiencePolicy installs the token-audience policy. A nil policy re-installs the closed
+// one; it never opens the gate to every audience.
+func (g *ReadinessGate) SetAudiencePolicy(p *auth.PlanePolicy) {
+	if p == nil {
+		p = auth.NewClosedPlanePolicy()
+	}
+	g.audience.Store(p)
+}
+
+// AudiencePolicy returns the installed token-audience policy. It is never nil: a gate that
+// has none answers with the closed policy, and a nil *PlanePolicy behaves as closed anyway.
+func (g *ReadinessGate) AudiencePolicy() *auth.PlanePolicy {
+	if p := g.audience.Load(); p != nil {
+		return p
+	}
+	return auth.NewClosedPlanePolicy()
 }
 
 // Ready reports whether the gate has opened (auth is live).

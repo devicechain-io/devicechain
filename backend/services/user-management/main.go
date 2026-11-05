@@ -542,7 +542,7 @@ func registerSettingsHandler() {
 		graphql.ContextSettingsKey: SettingsService,
 	}
 	settingsSchema := gqlcore.MustParseSchema(graphql.SettingsSchemaContent, &graphql.SettingsResolver{})
-	Microservice.Mux().Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness))
+	Microservice.Mux().Handle("/settings/graphql", gqlcore.NewAdminHttpHandler(settingsSchema, settingsProviders, Microservice.Readiness, gqlcore.WithPlane(auth.PlaneSettings)))
 }
 
 // registerKeyHandlers serves the instance signing keys on the INTERNAL listener
