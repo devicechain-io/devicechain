@@ -6,6 +6,7 @@ package processor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -52,10 +53,44 @@ func (w *valueCapture) sorted() []string {
 	return out
 }
 
+// laneOrdered is every value published, grouped by its flush lane, (tenant, series), and in the
+// order each lane received them. Cross-lane order is concurrent by design and not compared; within a
+// lane the order is the contract (an alarm folds a device's edges in the order they arrive), and
+// sorted() throws it away. Two runs are the same when their lanes are the same, value for value.
+func (w *valueCapture) laneOrdered() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	lanes := map[string][]string{}
+	for _, v := range w.vals {
+		var d struct {
+			Tenant string `json:"tenant"`
+			Series string `json:"series"`
+		}
+		body := v[strings.IndexByte(v, '|')+1:]
+		if err := json.Unmarshal([]byte(body), &d); err != nil {
+			panic(fmt.Sprintf("a published value is not a derived event: %v: %s", err, body))
+		}
+		lane := d.Tenant + "/" + d.Series
+		lanes[lane] = append(lanes[lane], v)
+	}
+	keys := make([]string, 0, len(lanes))
+	for k := range lanes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []string
+	for _, k := range keys {
+		for _, v := range lanes[k] {
+			out = append(out, k+" :: "+v)
+		}
+	}
+	return out
+}
+
 // upsertSeq is the message before which the late rule is upserted into the running processor.
 const upsertSeq = 120
 
-func compileShardRule(t *testing.T, r rules0.Rule) *rules0.CompiledRule {
+func compileShardRule(t testing.TB, r rules0.Rule) *rules0.CompiledRule {
 	t.Helper()
 	cr, err := rules0.Compile(r, rules0.Limits{})
 	if err != nil {
@@ -65,7 +100,7 @@ func compileShardRule(t *testing.T, r rules0.Rule) *rules0.CompiledRule {
 }
 
 // lateRule is the rule the stream upserts partway through.
-func lateRule(t *testing.T) runtime.ScopedRule {
+func lateRule(t testing.TB) runtime.ScopedRule {
 	thr := 90.0
 	return runtime.ScopedRule{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: compileShardRule(t, rules0.Rule{
 		ID: "acme/late", Name: "late", Type: rules0.TypeThreshold,
@@ -77,7 +112,7 @@ func lateRule(t *testing.T) runtime.ScopedRule {
 // and descopes), a threshold (events), a correlation under an anchor (members of one anchor on
 // different devices) and an absence armed through the dead-man path. late adds the rule the stream
 // upserts at upsertSeq, for a processor that starts after it.
-func shardedRegistry(t *testing.T, late bool) *runtime.RuleRegistry {
+func shardedRegistry(t testing.TB, late bool) *runtime.RuleRegistry {
 	t.Helper()
 	thr, hot := 80.0, 95.0
 	sr := []runtime.ScopedRule{
@@ -118,7 +153,7 @@ func shardedRoster() ([]runtime.RosterEntry, []runtime.ActiveEntry) {
 // shardedProcessor is a processor over a shared snapshot store, configured for k shards, that
 // publishes into w, with the dead-man armer reconciled as a term build does. A fresh one stands for
 // a restart.
-func shardedProcessor(t *testing.T, ctx context.Context, store *model.SnapshotStore, w *valueCapture, k int, late bool) *ResolvedEventsProcessor {
+func shardedProcessor(t testing.TB, ctx context.Context, store *model.SnapshotStore, w *valueCapture, k int, late bool) *ResolvedEventsProcessor {
 	t.Helper()
 	reg := shardedRegistry(t, late)
 	rp := &ResolvedEventsProcessor{
@@ -138,6 +173,7 @@ func shardedProcessor(t *testing.T, ctx context.Context, store *model.SnapshotSt
 	}
 	rp.armer = runtime.NewDeadmanArmer(reg, rp.engine)
 	rp.armer.Reconcile(shardedRoster())
+	t.Cleanup(rp.closeDetector) // the shard goroutines end with the test
 	return rp
 }
 
@@ -185,7 +221,7 @@ func shardedMessage(t *testing.T, seq uint64) messaging.Message {
 
 // shardCount is K as the processor is actually running it.
 func shardCount(rp *ResolvedEventsProcessor) int {
-	if s, ok := rp.engine.(*detectcore.Sharded); ok {
+	if s, ok := rp.engine.(*detectcore.ConcurrentSharded); ok {
 		return s.Shards()
 	}
 	return 1
@@ -217,7 +253,7 @@ func runSegments(t *testing.T, ks []int, cuts []uint64) ([]string, []byte) {
 			if err != nil || !ok {
 				t.Fatalf("load final snapshot: ok=%v err=%v", ok, err)
 			}
-			return w.sorted(), snap.Payload
+			return w.laneOrdered(), snap.Payload
 		}
 	}
 	return nil, nil

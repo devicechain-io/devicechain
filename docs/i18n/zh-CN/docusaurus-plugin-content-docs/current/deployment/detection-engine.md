@@ -237,7 +237,7 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | 等待乱序事件多久，才认定某时刻已确定。如果事件批量到达或上游可能停顿，应**提高此值**；它是防止误报数据缺失的主要措施。还容忍解析引入的设备事件轻微乱序，该乱序随 `device-management` 副本数增加而增长：窗口规则仍统计范围内事件，持续时间、计数窗口和变化率规则按其时间放置，处于告警的阈值规则丢弃比设备最新读数更旧的读数，未处于告警的则仅在读数经过重试或途中滞留时，丢弃晚于此容忍时间到达的满足条件读数。它不覆盖发布失败后重试的事件，后者至少迟到 60 秒。 |
 | `idleAdvanceGuardSeconds` | 5 | 引擎必须静默多久，才按墙上时钟触发。负值关闭该路径：数据缺失规则只能由*后续事件*推动事件时间越过截止时刻，永久静默设备不会触发。计数窗口和变化率规则同样只在后续事件到达时，才判定静默前的最后一个读数。 |
-| `detectShards` | 1 | 引擎状态按各规则的序列（设备，关联规则则为其锚点）拆成多少份，范围 1 到 64（其他值在启动时被拒绝）。无论取何值，检测结果、事件时间时钟和已保存的检查点都完全一致，因此可在任意一次重启时上调或下调，无需任何迁移。当前版本中各份依次处理，大于 1 的值还不会让检测更快：除非正在做测量，请保持为 1。当前生效的值可在指标 `detect_shards` 中查看。 |
+| `detectShards` | 1 | 引擎状态按各规则的序列（设备，关联规则则为其锚点）拆成多少份，范围 1 到 64（其他值在启动时被拒绝）。无论取何值，检测结果、事件时间时钟和已保存的检查点都完全一致，因此可在任意一次重启时上调或下调，无需任何迁移。取值大于 1 时，每一份在各自的 goroutine 中运行，引擎因此可以使用多个核心；读取并规划消息的循环仍然只有一个，所以提升受该循环以及 Pod 获得的核心数限制（见[让引擎使用更多核心](#detect-shards)）。除非已测得瓶颈在引擎本身，而不是循环或数据库，否则请保持为 1。当前生效的值可在指标 `detect_shards` 中查看。 |
 | `checkpointEvents` | 1000 | 两次检查点之间最多处理的事件数。 |
 | `checkpointIntervalSeconds` | 10 | 检查点最大间隔，安静流也会提交。**最大 30**：检查点负责确认流，间隔接近或超过消息代理 60 秒确认窗口时，会导致安静流消息重新投递。30 秒为检查点本身留出时间，超过该值启动时拒绝。 |
 | `checkpointTimeoutSeconds` | 10 | 检查点中的单次调用（发布检测结果、保存快照）最长允许的时间，超时则放弃并将该检查点计为失败，避免检测被不再响应的数据库或消息代理卡住。最大 120。快照保存的上限会自动增长，为上一次成功保存耗时的四倍（最多两分钟），因此在较慢数据库上的大型引擎不会一直失败；仅当第一次保存就比该值慢时才需要调大。 |
@@ -346,6 +346,8 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | 信号 | 含义 |
 |---|---|
 | `DetectCheckpointsStalledWithBacklog` | **最重要的告警。** 有待处理工作时检查点停止，可能数据库或消息代理不可达，或循环卡住。检测没有推进。 |
+| `DetectShardSaturated` | 始终安装，但只有 `detectShards` 大于 1 时才可能触发：取 1 时没有分片序列。某一份检测分片在十分钟内有超过 90% 的时间处于忙碌状态，因此它是检测速度的上限。见[让引擎使用更多核心](#detect-shards)。 |
+| `DetectShardInvariantViolated` | 始终安装，但只有 `detectShards` 大于 1 时才可能触发。各分片在某次检查点上对时钟或位置意见不一致，该检查点被拒绝。没有保存任何错误内容，但在重启之前该 Pod 上的检查点会持续失败。这是缺陷：请重启告警中指明的 Pod 并上报。 |
 | `DetectLoopStalled` | 持有分区的副本上的检测循环已超过两分钟没有推进，但该副本仍报告自己处于活跃状态。循环卡在某次调用中，通常是一个已经不再响应的数据库或消息代理连接。本页其他指标都在同一个循环上读取，因此会停留在最后一次的值，看起来一切正常。检测没有进行；请重启告警所指的 Pod。待命副本不会触发该告警。 |
 | `DetectConsumerBacklogHigh` | 引擎落后。积压期间抑制**静默路径**的数据缺失检测；后续事件仍会触发超时数据缺失。 |
 | `DetectWatermarkLagHigh` | 引擎事件时间落后实际时间。 |
@@ -399,6 +401,30 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))
 ```
+
+### 让引擎使用更多核心 {#detect-shards}
+
+`detectShards` 大于 1 时，引擎的状态按键拆分，每一份拥有各自的 goroutine。每一份都会收到每条消息的时间和位置，
+但只收到属于自己键的读数，因此所有分片共用同一个时钟：无论取何值，检测结果、检查点的字节和引擎的行为都完全一致，
+该设置可在任意一次重启时更改，无需任何迁移。它带来的是引擎自身的工作（上表中的 `apply`）可以同时在多个核心上运行。
+读取、解码和规划消息的工作仍在同一个循环中进行，检查点仍要等待所有分片，所以当 `apply` 占循环时间的比例较大
+且 Pod 有核心可用时，这个设置最有帮助；当 `fetch_wait`、`save` 或 `publish` 占主导时，它没有作用。
+
+设置大于 1 时，引擎会导出以下带 `shard` 标签（取值 0 到 K-1）的指标：
+
+| 指标 | 含义 |
+|---|---|
+| `devicechain_eventprocessing_detect_shard_busy_seconds_total` | 该分片用于应用消息的秒数。其速率即分片的利用率。某个分片远高于其他分片说明存在热点键；全部接近 1 说明该设置或 CPU 限制偏低。 |
+| `devicechain_eventprocessing_detect_shard_queue_depth` | 该分片排队的消息数。队列持续满载说明循环在等待该分片。 |
+| `devicechain_eventprocessing_detect_shard_live_keys` | 该分片持有的活动窗口、定时器和锁存。分布不均说明键倾斜。 |
+| `devicechain_eventprocessing_detect_barrier_wait_seconds` | 检查点、规则变更或查询等待所有分片处理完已排队内容所花的时间。 |
+| `devicechain_eventprocessing_detect_shard_invariant_violations_total` | 因各分片意见不一致而被拒绝的检查点次数。必须保持为零。 |
+
+三个带标签的序列只在引擎有分片时存在。`detect_barrier_wait_seconds` 和 `detect_shard_invariant_violations_total` 不带标签，即使 `detectShards` 为 1 也会以 0 导出。
+
+内存：每个分片有一个最多 1024 条消息的队列，因此取值大于 1 时，当循环领先于最慢的分片，Pod 中最多可能积压 `detectShards` 倍于此数量的排队消息（连同其携带的读数）。调高该设置时请相应调整 Pod 的内存限制。
+
+时间戳有一处细节与 `detectShards` 为 1 时不同。没有消息作为来源的检测（仅指把设备移出缺失规则时产生的恢复）会以引擎收取它的时间作为时间戳；取 1 时则取下一条消息或推进的时间。该时间只用于对出站动作计量，不属于检测的标识，因此重复项仍会像以前一样合并。
 
 ## 删除租户 {#deleting-a-tenant}
 

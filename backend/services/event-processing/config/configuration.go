@@ -164,8 +164,9 @@ type EventProcessingConfiguration struct {
 	// unsplit engine; accepted range 1 to 64, anything else is refused at startup. Detections,
 	// the watermark and the committed snapshot are identical for every value, so it may be changed
 	// at any restart in either direction with no migration: the snapshot is re-split on restore.
-	// In this release the shards are applied one after another, not in parallel: the setting
-	// exists so the shard count can be chosen and observed before it buys anything.
+	// Above 1 each shard is applied on its own goroutine (core.ConcurrentSharded), so the engine's
+	// own work can use more than one core. The loop that reads, decodes and plans messages stays
+	// single, so the gain is bounded by it and by the CPU the pod is given.
 	DetectShards int
 
 	// IdleAdvanceGuardSeconds is how long the resolved stream must be quiet before DETECT
