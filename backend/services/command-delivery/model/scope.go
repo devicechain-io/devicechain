@@ -54,7 +54,7 @@ func (api *Api) requireOwnedDevice(ctx context.Context, deviceToken string) erro
 	found, err := api.DeviceAnchors.DeviceScopeAnchors(ctx, []string{deviceToken})
 	if err != nil {
 		log.Error().Err(err).Str("deviceToken", deviceToken).Msg("Device anchor lookup failed; refusing scoped read.")
-		return errUnavailable("cannot decide the device's ownership: validation is unavailable")
+		return unavailableOr(err, "cannot decide the device's ownership: validation is unavailable")
 	}
 	if anchors, ok := found[deviceToken]; !ok || !inScope(scope, anchors) {
 		return gorm.ErrRecordNotFound
@@ -132,7 +132,7 @@ func (api *Api) batchStamps(ctx context.Context, tokens []string) (map[string][]
 		found, err := api.DeviceAnchors.DeviceScopeAnchors(ctx, tokens[start:end])
 		if err != nil {
 			log.Error().Err(err).Msg("Device anchor lookup failed; refusing batch.")
-			return nil, errUnavailable("cannot enqueue command batch: validation is unavailable")
+			return nil, unavailableOr(err, "cannot enqueue command batch: validation is unavailable")
 		}
 		for device, anchors := range found {
 			stamps[device] = anchors

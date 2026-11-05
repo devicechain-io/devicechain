@@ -3,6 +3,12 @@
 
 package model
 
+import (
+	"errors"
+
+	"github.com/devicechain-io/dc-microservice/svcclient"
+)
+
 // UnavailableCode is the GraphQL `extensions.code` of a request the service could not DECIDE:
 // the enqueue gate, the maintenance-window schedule or a group's membership could not be read.
 // It is the same code the sign-in path answers when it cannot check a credential, so a client
@@ -22,6 +28,18 @@ const UnavailableCode = "UNAVAILABLE"
 type UnavailableError struct{ msg string }
 
 func errUnavailable(msg string) error { return &UnavailableError{msg: msg} }
+
+// unavailableOr is the error for a gate that failed with err: UNAVAILABLE when err means the
+// peer could not be reached or could not serve right now (see svcclient.IsUnavailable), and the
+// same sentence, uncoded, for any other failure. A peer that ANSWERED with a refusal, a response
+// too large to read or a body that would not decode is not an outage, and a client told to retry
+// one would retry for ever.
+func unavailableOr(err error, msg string) error {
+	if svcclient.IsUnavailable(err) {
+		return errUnavailable(msg)
+	}
+	return errors.New(msg)
+}
 
 func (e *UnavailableError) Error() string { return e.msg }
 

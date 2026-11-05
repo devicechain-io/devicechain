@@ -263,7 +263,7 @@ func (c *Client) query(ctx context.Context, baseURL, tenant, query string, varia
 	// peer's 500 behind a complaint about how long its error page was. A large error
 	// page is a peer that is failing, not a caller that is asking for too much.
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("svcclient: %s returned %d: %s", baseURL, resp.StatusCode, strings.TrimSpace(string(raw)))
+		return &StatusError{URL: baseURL, Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	if truncated {
 		responsesTruncated.WithLabelValues(baseURL).Inc()
@@ -299,6 +299,18 @@ func (c *Client) query(ctx context.Context, baseURL, tenant, query string, varia
 		}
 	}
 	return nil
+}
+
+// StatusError is Query's answer when the target returned an HTTP status other than 200: the peer
+// was reached and said it could not serve the request. Its text is the one this error always had.
+type StatusError struct {
+	URL    string
+	Status int
+	Body   string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("svcclient: %s returned %d: %s", e.URL, e.Status, e.Body)
 }
 
 // GraphQLError is Query's answer when the target served a GraphQL response carrying a

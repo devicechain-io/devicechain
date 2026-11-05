@@ -6,7 +6,10 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
@@ -175,7 +178,8 @@ func TestCreateCommandSuccessArmOnTheWire(t *testing.T) {
 func TestCreateCommandAvailabilityFailureStaysAGraphQLError(t *testing.T) {
 	ctx, api := newWireTestCtx(t)
 	api.EnqueueValidator = stubEnqueueValidator{
-		err: errUnreachable{"dial tcp 10.42.0.7:8080: connect: connection refused"},
+		err: &url.Error{Op: "Post", URL: "http://10.42.0.7:8080/graphql",
+			Err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}},
 	}
 
 	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})

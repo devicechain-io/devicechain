@@ -7,10 +7,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"syscall"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
 // A failure to ANSWER carries a machine-readable code, so a caller can tell "try again, nothing
@@ -19,22 +24,34 @@ import (
 // GraphQL layer unwrapped: graphql-go copies Extensions() only from the error a resolver
 // returns directly.
 
+// peerDown is what the service client returns when it cannot reach device-management: a transport
+// failure, the shape that means "try again".
+var peerDown error = &url.Error{Op: "Post", URL: "http://10.0.3.7:8080/graphql",
+	Err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}}
+
+// peerRefused is the peer ANSWERING with a refusal: asking again changes nothing.
+var peerRefused error = &svcclient.GraphQLError{URL: "http://10.0.3.7:8080/graphql",
+	Messages: []string{"forbidden"}, Codes: []string{"FORBIDDEN"}}
+
+// peerAnswers is the error an enqueue gate's call returns; the tests swap it.
+var peerAnswers = peerDown
+
 type failingEnqueueValidator struct{}
 
 func (failingEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, error) {
-	return nil, errors.New("device-management is unreachable at 10.0.3.7:8080")
+	return nil, peerAnswers
 }
 
 type failingBatchValidator struct{}
 
 func (failingBatchValidator) ValidateEnqueueBatch(context.Context, []string, string, []byte) ([]BatchDeviceRefusal, error) {
-	return nil, errors.New("device-management is unreachable at 10.0.3.7:8080")
+	return nil, peerAnswers
 }
 
 type failingScheduler struct{}
 
 func (failingScheduler) ScheduleDispatch(context.Context, []string, string, sql.NullTime) ([]DispatchHold, []BatchDeviceRefusal, error) {
-	return nil, nil, errors.New("window lookup failed at 10.0.3.7:8080")
+	return nil, nil, peerAnswers
 }
 
 type passingEnqueueValidator struct{}
@@ -102,5 +119,43 @@ func TestBatchValidationUnavailableCarriesTheCode(t *testing.T) {
 	api.BatchValidator = failingBatchValidator{}
 	ctx := core.WithTenant(context.Background(), "acme")
 	_, err := api.CreateCommandBatch(ctx, batchRequest("nightly", []string{"pump-1"}))
+	assertUnavailable(t, err)
+}
+
+// 🔴 ONLY AN OUTAGE IS UNAVAILABLE. A peer that answered with a refusal, a response too large to
+// read, or a body that would not decode is not temporary, and a client told to retry one would
+// retry for ever. The message is the same sentence; it just carries no code.
+//
+// Negative control: coding every gate failure UNAVAILABLE (the first version) fails these.
+func TestOnlyAnOutageIsCodedUnavailable(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "acme")
+	for name, answer := range map[string]error{
+		"the peer refused (FORBIDDEN)": peerRefused,
+		"response too large":           fmt.Errorf("%w: x", svcclient.ErrResponseTooLarge),
+		"decode error":                 errors.New("svcclient: decode data: bad json"),
+		"a 404":                        &svcclient.StatusError{Status: 404},
+	} {
+		t.Run(name, func(t *testing.T) {
+			peerAnswers = answer
+			t.Cleanup(func() { peerAnswers = peerDown })
+			api := newTestApi(t)
+			api.EnqueueValidator = failingEnqueueValidator{}
+			_, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "t", DeviceToken: "d", Name: "reboot"})
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if _, coded := err.(*UnavailableError); coded {
+				t.Fatalf("%v must not be coded UNAVAILABLE", err)
+			}
+			if err.Error() != "cannot enqueue command: validation is unavailable" {
+				t.Fatalf("the message moved: %q", err.Error())
+			}
+		})
+	}
+	peerAnswers = &svcclient.StatusError{Status: 503}
+	t.Cleanup(func() { peerAnswers = peerDown })
+	api := newTestApi(t)
+	api.EnqueueValidator = failingEnqueueValidator{}
+	_, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "t", DeviceToken: "d", Name: "reboot"})
 	assertUnavailable(t, err)
 }
