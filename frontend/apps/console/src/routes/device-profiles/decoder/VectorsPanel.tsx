@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { IconButton } from '@/components/ui/icon-button';
 import { cn } from '@/lib/utils';
 import { LIMITS, VECTOR_INPUT_KINDS, blankVector, defaultVectorKind, newId, pathHits, type Issue, type InputKind, type VectorState, type VectorInputKind } from './model';
+import '@/i18n/lazy/deviceProfiles';
 
 export interface VectorOutcome {
   name: string;

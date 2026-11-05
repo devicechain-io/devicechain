@@ -184,6 +184,9 @@ describe('free text cannot reshape an expression (injection)', () => {
     expect(wrappable('f(a, b) && c[0]')).toBe(true);
     expect(wrappable('s == ")"')).toBe(true);
     expect(wrappable('s == "a\\"b)"')).toBe(true);
+    expect(wrappable('size(br"\") == 1')).toBe(true);
+    expect(wrappable('s == r"\"')).toBe(true);
+    expect(wrappable('s == "\" && (1')).toBe(false);
     expect(wrappable('1) || (true')).toBe(false);
     expect(wrappable('(1')).toBe(false);
     expect(wrappable('x // trailing')).toBe(false);

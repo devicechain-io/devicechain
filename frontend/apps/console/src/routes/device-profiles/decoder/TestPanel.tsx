@@ -29,6 +29,7 @@ import { listIntegrations } from '@/lib/api/integrations';
 import { testPayloadDecoder, type PayloadDecoderTestInput, type PayloadDecoderTestResult } from '@/lib/api/payload-decoder';
 import { EXAMPLE } from './examples';
 import { blankVector, newId, type InputKind, type VectorState } from './model';
+import '@/i18n/lazy/deviceProfiles';
 
 export type TestMode = 'frame' | 'json' | 'webhook' | 'sample';
 

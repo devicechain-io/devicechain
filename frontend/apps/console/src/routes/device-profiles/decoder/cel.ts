@@ -80,7 +80,9 @@ export function wrappable(expr: string): boolean {
   for (let i = 0; i < expr.length; i++) {
     const c = expr[i];
     if (c === '"' || c === "'") {
-      const raw = i > 0 && (expr[i - 1] === 'r' || expr[i - 1] === 'R') && !/[A-Za-z0-9_]/.test(expr[i - 2] ?? ' ');
+      // A raw string is prefixed r or R, optionally with a b or B (bytes) before or after it: r, br, rb.
+      const m = /(?:^|[^A-Za-z0-9_])([bB]?[rR]|[rR][bB])$/.exec(expr.slice(0, i));
+      const raw = m !== null;
       const triple = expr.startsWith(c.repeat(3), i);
       const quote = triple ? c.repeat(3) : c;
       i += quote.length;

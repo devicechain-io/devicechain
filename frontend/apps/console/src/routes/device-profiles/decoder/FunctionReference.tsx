@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { LoadingState } from '@/components/ui/loading-state';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listPayloadDecoderFunctions } from '@/lib/api/payload-decoder';
+import '@/i18n/lazy/deviceProfiles';
 
 export function FunctionReference() {
   const { t } = useTranslation('deviceProfiles');

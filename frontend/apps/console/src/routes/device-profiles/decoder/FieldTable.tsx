@@ -36,6 +36,7 @@ import {
   type Row,
   type SectionState,
 } from './model';
+import '@/i18n/lazy/deviceProfiles';
 
 export interface FieldTableProps {
   state: EditorState;
