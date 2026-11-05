@@ -20,6 +20,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/prometheus/client_golang/prometheus"
@@ -132,6 +133,12 @@ type Microservice struct {
 	// nil for a Microservice built as a struct literal instead of by NewMicroservice.
 	// See MetricsRegisterer for what that means and why it is the safe direction.
 	metricsReg *prometheus.Registry
+
+	// audienceRec is the token-audience counter (see installAudiencePolicy). It is built on
+	// the first policy install and reused by every later one, because registering the same
+	// collector twice on one registry is an AlreadyRegistered error and the instance
+	// document may be loaded more than once (tests do).
+	audienceRec *auth.PromAudienceRecorder
 
 	// metricsHandedOut records that something has asked where to register, i.e. that a
 	// collector may already be sitting on whatever metricsReg was at the time. It is
@@ -860,6 +867,9 @@ func (ms *Microservice) LoadInstanceConfigurationFrom(path string) error {
 		return fmt.Errorf("instance configuration invalid: %w", err)
 	}
 	ms.InstanceConfiguration = *cfg
+	if err := ms.installAudiencePolicy(cfg.Infrastructure.TokenAudience); err != nil {
+		return fmt.Errorf("instance configuration invalid: %w", err)
+	}
 	log.Info().Str("eventWireFormat", wire.String()).Msg("Event wire format set from instance configuration")
 	log.Info().Str("level", logging.Level).Msg("Log level set from instance configuration")
 	zerolog.SetGlobalLevel(lvl)

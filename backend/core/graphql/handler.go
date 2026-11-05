@@ -179,29 +179,46 @@ type HttpHandler struct {
 	ExecTimeout time.Duration
 
 	policy authPolicy
+	// plane labels this handler's token-audience observations (see auth.Plane).
+	plane auth.Plane
+}
+
+// HandlerOption adjusts a handler at construction.
+type HandlerOption func(*HttpHandler)
+
+// WithPlane overrides the plane label the handler's token-audience observations carry. The
+// admin constructor labels "admin"; the settings mount passes auth.PlaneSettings so the two
+// are told apart in the metric. It changes the label only, never the rule.
+func WithPlane(plane auth.Plane) HandlerOption {
+	return func(h *HttpHandler) { h.plane = plane }
 }
 
 // Create new http handler for the data plane. gate may be nil only for a
 // deliberately unauthenticated server (tests); production services pass the
 // microservice readiness gate.
 func NewHttpHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
-	return newHandler(schema, providers, gate, tenantPolicy)
+	return newHandler(schema, providers, gate, tenantPolicy, auth.PlaneGraphQL)
 }
 
 // NewAdminHttpHandler creates the instance-scoped admin handler (ADR-033): it
 // requires an identity-tier token and runs in the system context (no tenant).
 // Resolvers still gate each operation on a specific system authority.
-func NewAdminHttpHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate) *HttpHandler {
-	return newHandler(schema, providers, gate, identityPolicy)
+func NewAdminHttpHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate, opts ...HandlerOption) *HttpHandler {
+	return newHandler(schema, providers, gate, identityPolicy, auth.PlaneAdmin, opts...)
 }
 
-func newHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate, policy authPolicy) *HttpHandler {
-	return &HttpHandler{
+func newHandler(schema *Schema, providers map[ContextKey]interface{}, gate *core.ReadinessGate, policy authPolicy, plane auth.Plane, opts ...HandlerOption) *HttpHandler {
+	h := &HttpHandler{
 		Schema:           schema,
 		ContextProviders: providers,
 		Gate:             gate,
 		policy:           policy,
+		plane:            plane,
 	}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 // validator returns the live validator, or nil when the gate is absent or still
@@ -254,6 +271,15 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, tenant, err := h.policy.authenticate(validator, token, r.Header.Get)
 	if err != nil {
+		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+	// 🔴 AFTER authenticate, NEVER BEFORE: the audience rule runs on a token whose signature,
+	// expiry and type have been verified, so a forged token is a plain 401 that never reaches
+	// it and the counters cannot be driven by one. A refusal writes the same 401 as an
+	// invalid token, so a caller cannot tell the two apart. The validator is non-nil here, so
+	// the gate is too.
+	if err := h.Gate.AudiencePolicy().Admit(claims, h.plane); err != nil {
 		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 		return
 	}

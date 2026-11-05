@@ -548,6 +548,11 @@ func (c *wsConnection) authenticate(ctx context.Context, payload json.RawMessage
 	if err != nil {
 		return nil, time.Time{}, errors.New("invalid or expired token")
 	}
+	// The audience rule, once per connection_init, AFTER the token verified (see HttpHandler).
+	// The refusal carries the same text as an invalid token.
+	if err := c.handler.Gate.AudiencePolicy().Admit(claims, auth.PlaneGraphQLWS); err != nil {
+		return nil, time.Time{}, errors.New("invalid or expired token")
+	}
 	// auth.Validator's parser is built with jwt.WithExpirationRequired()
 	// (auth/validator.go), so a token with no exp is refused above and this cannot
 	// happen today — no test can reach it. It is refused rather than trusted because
