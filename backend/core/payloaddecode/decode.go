@@ -211,7 +211,13 @@ func (p *Plan) Decode(in Input) (res *Result, derr *DecodeError) {
 	if len(in.Link) == 0 {
 		s.vals[slotLink] = emptyDoubleMap
 	} else {
-		s.vals[slotLink] = types.DefaultTypeAdapter.NativeToValue(in.Link)
+		// A map[string]any takes the adapter's fast path; map[string]float64 would be wrapped
+		// through reflection.
+		m := make(map[string]any, len(in.Link))
+		for k, v := range in.Link {
+			m[k] = v
+		}
+		s.vals[slotLink] = types.DefaultTypeAdapter.NativeToValue(m)
 	}
 
 	for _, l := range p.lets {
@@ -321,25 +327,32 @@ func (s *state) runSection(sec *section) (*Result, *DecodeError) {
 		}
 	}
 
-	// A scalar wins a key a map also yields; the map's entry is skipped and counted.
-	scalar := map[string]struct{}{}
-	for _, rd := range out {
-		if !rd.fromM {
-			scalar[rd.Key] = struct{}{}
+	// A scalar wins a key a map also yields; the map's entry is skipped and counted. The sets
+	// are tiny (at most 64), so a scan beats allocating maps on the hot path.
+	scalarHas := func(k string) bool {
+		for i := range out {
+			if !out[i].fromM && out[i].Key == k {
+				return true
+			}
 		}
+		return false
 	}
 	res := &Result{Section: sec.name, Skipped: skipped, Readings: make([]Reading, 0, len(out))}
-	seen := make(map[string]struct{}, len(out))
-	for _, rd := range out {
-		if _, dup := seen[rd.Key]; dup {
+	for i := range out {
+		rd := &out[i]
+		dup := false
+		if sec.hasMap {
+			for j := range res.Readings {
+				if res.Readings[j].Key == rd.Key {
+					dup = true
+					break
+				}
+			}
+		}
+		if dup || (rd.fromM && scalarHas(rd.Key)) {
 			res.Skipped = append(res.Skipped, Skip{rd.Key, "collision"})
 			continue
 		}
-		if _, sc := scalar[rd.Key]; sc && rd.fromM {
-			res.Skipped = append(res.Skipped, Skip{rd.Key, "collision"})
-			continue
-		}
-		seen[rd.Key] = struct{}{}
 		if rd.fromM {
 			txt, err := formatValue(rd.Key, rd.val, rd.typ, rd.typed)
 			if err != nil {
@@ -372,7 +385,10 @@ func (s *state) fail(r Reason, path, msg string) *DecodeError {
 // eval runs one expression and accumulates its actual cost.
 func (s *state) eval(e *expr) (ref.Val, *DecodeError) {
 	v, det, err := e.prog.Eval(s)
-	if det != nil {
+	if !e.tracked {
+		// Not watched: charged at its static estimate, an upper bound by construction.
+		s.cost += e.cost
+	} else if det != nil {
 		if c := det.ActualCost(); c != nil {
 			s.cost += *c
 		}

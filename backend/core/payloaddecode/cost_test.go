@@ -266,3 +266,42 @@ func TestJSONParseIsCharged(t *testing.T) {
 		t.Fatal("a decoder that never reads json must not be charged for it")
 	}
 }
+
+// Which expressions run under the runtime tracker: anything calling a size-dependent native,
+// and anything the static estimate does not show to be cheap. A plain tree of O(1) operations
+// is charged at its estimate and not watched.
+func TestTrackedExpressionPolicy(t *testing.T) {
+	cases := []struct {
+		expr    string
+		tracked bool
+	}{
+		{"double(i16be(frame, 1)) / 10.0", false},
+		{"u8(frame, 0) * 2 + bit(frame, 1, 2)", false},
+		{"bcd(frame, 0, 8)", false},
+		{"double(json.a.b) + double(link.rssi)", false},
+		{"size(slice(frame, 0, 4))", true},
+		{"u8(hex.decode(\"0a\"), 0)", true},
+		{"u8(base64.decode(\"AQ==\"), 0)", true},
+		{"size(frame) + " + strings.Repeat("u8(frame, 0) + ", 30) + "1", true}, // cheap per node, expensive in total
+	}
+	for _, c := range cases {
+		p := mustCompile(t, `{"kind":"CEL","envVersion":1,"input":"FRAME","sections":[{"name":"s","outputs":[{"key":"v","expr":`+fmt.Sprintf("%q", c.expr)+`}]}]}`, nil)
+		if got := p.sections[0].rows[0].value.tracked; got != c.tracked {
+			t.Errorf("%s: tracked = %v, want %v (cost %d)", c.expr, got, c.tracked, p.sections[0].rows[0].value.cost)
+		}
+	}
+	m := mustCompile(t, `{"kind":"CEL","envVersion":1,"input":"FRAME","let":[{"name":"m","expr":"lpp.decode(frame)"}],"sections":[{"name":"s","outputs":[{"key":"v","expr":"m.temperature_1"}]}]}`, nil)
+	if !m.lets[0].expr.tracked {
+		t.Error("lpp.decode must run under the tracker")
+	}
+	// Every size-dependent native is declared so; the rest are not.
+	want := map[string]bool{"slice": true, "hex.decode": true, "base64.decode": true, "lpp.decode": true}
+	for _, f := range ownedFuncs {
+		if strings.HasPrefix(f.name, "test.") {
+			continue
+		}
+		if f.sizeDependent != want[f.name] {
+			t.Errorf("%s: sizeDependent = %v, want %v", f.name, f.sizeDependent, want[f.name])
+		}
+	}
+}

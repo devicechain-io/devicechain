@@ -35,6 +35,30 @@ type expr struct {
 	path string
 	// cost is the static worst-case cost; it is also the program's runtime CostLimit.
 	cost uint64
+	// tracked says the program runs under cel's cost tracker and the runtime CostLimit.
+	tracked bool
+}
+
+// untrackedCostCeiling is the largest static cost an expression with no size-dependent call
+// may have and still skip the runtime tracker.
+const untrackedCostCeiling = 64
+
+// trackEveryExpression forces the runtime CostLimit onto every expression. Production leaves
+// it off; the property and fuzz tests turn it on, so the "runtime never exceeds the static
+// estimate" check covers every expression and not only the tracked ones.
+var trackEveryExpression = false
+
+// trackedExpression decides whether an expression runs under the runtime CostLimit.
+//
+// The limit is the authority for anything whose work depends on the size of its input: a
+// native Go call cannot be interrupted, so its declared cost must be enforced as it spends.
+// cel-go's tracker also costs about three times the evaluation it watches (it wraps every
+// node), which is most of a decode's time. An expression that calls nothing size-dependent
+// and is cheap by its own estimate is a tree of O(1) operations, each run at most once (the
+// language has no loop), so its work is bounded by its node count whatever the static
+// estimate says, and it is charged at that estimate without being watched.
+func trackedExpression(sizeDependent bool, staticCost uint64) bool {
+	return trackEveryExpression || sizeDependent || staticCost > untrackedCostCeiling
 }
 
 type row struct {
@@ -55,6 +79,9 @@ type section struct {
 	when   *expr
 	ignore bool
 	rows   []row
+	// hasMap says a row yields keys at run time, so collisions are possible. A section of
+	// scalar rows only cannot collide: duplicate scalar keys are refused at compile.
+	hasMap bool
 }
 
 type letDef struct {
@@ -273,6 +300,7 @@ func Compile(doc *Document, metrics Metrics) (*Plan, error) {
 				}
 			}
 			if isMap {
+				sec.hasMap = true
 				r.isMap, r.prefix, r.maxKeys = true, o.Prefix, o.MaxKeys
 				if o.MaxKeys < 1 || o.MaxKeys > MaxDecoderReadings {
 					c.issue(opath+".maxKeys", "maxKeys must be 1 to %d", MaxDecoderReadings)
@@ -427,12 +455,18 @@ func (c *compiler) compileExpr(env *cel.Env, est *estimator, letTypes map[string
 		c.issue(path, "estimated cost %d is above the ceiling of %d", maxCost, ExprCostCeiling)
 		return nil, nil, false
 	}
-	prog, err := env.Program(a, cel.CostTracking(actualCost{}), cel.CostLimit(maxCost))
+	tracked := trackedExpression(w.sizeDependent, maxCost)
+	var prog cel.Program
+	if tracked {
+		prog, err = env.Program(a, cel.CostTracking(actualCost{}), cel.CostLimit(maxCost))
+	} else {
+		prog, err = env.Program(a)
+	}
 	if err != nil {
 		c.issue(path, "build program: %v", err)
 		return nil, nil, false
 	}
-	return &expr{prog: prog, path: path, cost: maxCost}, a, true
+	return &expr{prog: prog, path: path, cost: maxCost, tracked: tracked}, a, true
 }
 
 func hasSlot(m map[string]int, k string) bool { _, ok := m[k]; return ok }
