@@ -198,6 +198,7 @@ say "nats: ${nats_pods[*]}; event-store primary: $tsdb_pod; relational primary: 
 psql_at() { # namespace pod sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "$3"
 }
+# shellcheck disable=SC2317  # called by name from dbstats_tables (lib/dbstats.sh)
 psql_db() { # namespace pod database sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$3" -c "$4"
 }

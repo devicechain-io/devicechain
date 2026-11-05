@@ -2,6 +2,10 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
+# shellcheck disable=SC2034,SC2154
+# (a sourced library: DBSTATS_TABLES_DELTA is read by the sourcing script, and the pod, namespace and
+# cluster variables listed under Needs: are assigned by it)
+#
 # Database write-behaviour snapshots shared by hack/perf-ab.sh (the kind A/B rig) and
 # hack/perf-collect.sh (the GKE round collector). SOURCE it; it defines functions only.
 #

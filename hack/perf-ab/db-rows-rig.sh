@@ -56,7 +56,7 @@ psql_db() { k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d
 source "$ROOT/hack/lib/dbstats.sh"
 
 primary_of() { # ns cluster
-  k get pods -n "$1" -l "cnpg.io/cluster=$2,cnpg.io/instanceRole=primary" -o json | jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | tr -d '\r' | head -1
+  k get pods -n "$1" -l "cnpg.io/cluster=$2,cnpg.io/instanceRole=primary" -o json | jq -r '.items[] | select(.status.phase == "Running") | .metadata.name' | tr -d '\r' | sed -n '1p'
 }
 
 cluster_yaml() { # ns name instances
