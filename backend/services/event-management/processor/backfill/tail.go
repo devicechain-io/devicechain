@@ -177,8 +177,9 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 	// hypertable behind it are shared by every tenant, so a refresh cannot be scoped to one. The statements
 	// run under this context are only the chunk catalog read (timescaledb_information.chunks, which holds
 	// time ranges and no tenant rows), set_config(statement_timeout) and CALL refresh_continuous_aggregate
-	// (below, in refreshWindow). Nothing here reads or writes a tenant row; the refresh recomputes the
-	// view from the hypertable inside the database.
+	// (below, in refreshWindow). This service issues no statement that selects or writes a tenant row:
+	// the refresh itself recomputes the view inside the database over the window, for every tenant at
+	// once (the view groups by tenant_id, so values never mix), and returns nothing to the caller.
 	windows, err := chunkWindows(s.rdb.DB(core.WithSystemContext(ctx)), s.floor(now), reach)
 	if err != nil {
 		return false, err
