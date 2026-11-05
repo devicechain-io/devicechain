@@ -4,7 +4,7 @@
 import { render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { configureStrictCsp, plainTooltipText } from './strict-csp';
+import { plainTooltipText } from './strict-csp';
 import { ALARM_LEVELS, SEVERITY_TOKENS, severityTokenCss } from './severity';
 import { FONT_TOKENS, SPACE_TOKENS, WidgetTokenStyles, densityScale, fontVar, spaceVar, tokenPx, tokenStyle } from './tokens';
 
@@ -55,8 +55,14 @@ describe('severity tokens', () => {
 });
 
 describe('WidgetTokenStyles in strict-CSP host mode', () => {
+  // The token CSS is adopted once per page, so each test loads a fresh copy of the modules.
+  async function load() {
+    vi.resetModules();
+    const [tokens, csp] = await Promise.all([import('./tokens'), import('./strict-csp')]);
+    return { Styles: tokens.WidgetTokenStyles, configureStrictCsp: csp.configureStrictCsp };
+  }
+
   afterEach(() => {
-    configureStrictCsp(false);
     vi.unstubAllGlobals();
     Reflect.deleteProperty(document, 'adoptedStyleSheets');
   });
@@ -76,27 +82,30 @@ describe('WidgetTokenStyles in strict-CSP host mode', () => {
     Object.defineProperty(document, 'adoptedStyleSheets', { value: [], writable: true, configurable: true });
   }
 
-  it('adopts the token CSS instead of rendering a <style> element', () => {
+  it('adopts the token CSS instead of rendering a <style> element', async () => {
+    const { Styles, configureStrictCsp } = await load();
     stubSheets(() => {});
     configureStrictCsp(true);
-    const { container } = render(<WidgetTokenStyles />);
+    const { container } = render(<Styles />);
     expect(container.querySelector('style')).toBeNull();
     const adopted = (document as unknown as { adoptedStyleSheets: Array<{ css: string }> }).adoptedStyleSheets;
     expect(adopted.map((s) => s.css)).toContain(severityTokenCss({ hostWins: true }));
   });
 
-  it('falls back to the <style> element when adoption fails', () => {
+  it('falls back to the <style> element when adoption fails', async () => {
+    const { Styles, configureStrictCsp } = await load();
     stubSheets(() => {
       throw new Error('nope');
     });
     configureStrictCsp(true);
-    const { container } = render(<WidgetTokenStyles />);
+    const { container } = render(<Styles />);
     expect(container.querySelector('style[data-dc-tokens]')!.textContent).toBe(severityTokenCss({ hostWins: true }));
   });
 
-  it('is the element by default, even where constructed stylesheets exist', () => {
+  it('is the element by default, even where constructed stylesheets exist', async () => {
+    const { Styles } = await load();
     stubSheets(() => {});
-    const { container } = render(<WidgetTokenStyles />);
+    const { container } = render(<Styles />);
     expect(container.querySelector('style[data-dc-tokens]')).not.toBeNull();
     expect((document as unknown as { adoptedStyleSheets: unknown[] }).adoptedStyleSheets).toHaveLength(0);
   });
