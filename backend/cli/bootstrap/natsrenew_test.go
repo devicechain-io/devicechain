@@ -402,3 +402,38 @@ func TestAnUnverifiedSwapFallsBackToARestart(t *testing.T) {
 		t.Error("the broker kept serving the old certificate behind a green renewal")
 	}
 }
+
+// 🔴 A BROKER WHOSE STATEFULSET WAS DELETED TO GROW ITS VOLUME CANNOT BE PATCHED TO RESTART. The
+// renewal runs before the infrastructure apply that recreates the StatefulSet, so a renewal that
+// needs a restart (here a CA change) must not fail the upgrade with "restart dc-nats by hand".
+//
+// Negative control: without the NotFound branch restartBroker patches a missing object and errors.
+func TestARenewalThatNeedsARestartSkipsItWhenTheStatefulSetIsGone(t *testing.T) {
+	c, st := anInstanceWithBrokerMaterialMintedAt(t, time.Now().UTC().Add(-335*24*time.Hour), 1)
+	podsServeTheSecret(t, c)
+	secrets := c.CoreV1().Secrets(InstanceNamespace(testInstance))
+	cur, err := secrets.Get(context.Background(), natsReleaseName+"-tls", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := mintNATSTLS(natsReleaseName, InstanceNamespace(testInstance), 1, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Data["ca.crt"] = []byte(other.CACertPEM)
+	if _, err := secrets.Update(context.Background(), cur, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AppsV1().StatefulSets(InstanceNamespace(testInstance)).Delete(context.Background(),
+		natsStatefulSetName, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := renewBrokerCertificate(context.Background(), c, st)
+	if err != nil {
+		t.Fatalf("the renewal failed over a missing StatefulSet: %v", err)
+	}
+	if restarted {
+		t.Error("a restart was reported although there is no StatefulSet to restart")
+	}
+}

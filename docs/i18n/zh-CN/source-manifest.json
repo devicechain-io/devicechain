@@ -123,12 +123,12 @@
       "translationSha256": "3202b9914833b23fd9610d811964cc220a9a7790673950b92af1a62759864d28"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "4cde6643566ad6f2396e4b4d54f4d87db94a74fcbb5f51df769cfde6eda0cda7",
-      "translationSha256": "5eeea61b615e2b9504f2daa79f10a10c8f6c34ca918b540d10787bcd3c4cbede"
+      "sourceSha256": "091a55512e6040540b4d9931d4edbfa5519b41c31d891246b5b0bae5d029be8c",
+      "translationSha256": "246e16f98369b674ecb7e7d27a20e851f7a9250e84d86d7e14ee388566158013"
     },
     "deployment/grafana-boards.md": {
-      "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",
-      "translationSha256": "3b051e1f38ed6656d7645a02085fb390f0359394c1cec79dddaa49ca74de2c51"
+      "sourceSha256": "abf322b0ca7918a2126a5ca450d7b6de96e0d0df26d5a511fb9069fbf332c55f",
+      "translationSha256": "2d7500f04bf6cc3e8a6e0b74ac1869e60afce22af94db84cfbafdc349d86f17c"
     },
     "deployment/ingress-cutover.md": {
       "sourceSha256": "11f7ba29969ace2fe2a0b03b8badf1191e767fcbb042c8238a543ff927d3cfec",
@@ -143,8 +143,8 @@
       "translationSha256": "b167cb0de6903ba7162bd9ee99d42432049d66047e33a875dc2b219c5f212425"
     },
     "deployment/observability.md": {
-      "sourceSha256": "f60b82ea332fbcdff6196c51ecf6c0f08a5b1903f81b8e5a7543a082f7e71451",
-      "translationSha256": "c3c290f25680c0878a9f1a7398dce1f30f4fcb007c247a6bd4775a982ae75691"
+      "sourceSha256": "d9fde79e6dd87d9707bca15b74b5ae1c7a8960bf30143e914dd37c0c4b50ed60",
+      "translationSha256": "f555f65be7fd929a5b36a83b8fe63eccfe6c7dae2aa4819babd6ab9f8274491b"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "39c4e4ed6ea3e8ca8f0f1b2f0782ee5bc73ac88b6fd253ca24134904caccdac4",
@@ -155,8 +155,8 @@
       "translationSha256": "4f4b3c9bce2fd5380aec6b86225dd3b6a37c80f073ed84ce12fbad9e97cf42e0"
     },
     "deployment/tuning-an-instance.md": {
-      "sourceSha256": "4319b42095ae1dbdb5f64e856d0bc15fb778e1bdf9ab83d6d3f3a06d58c0b963",
-      "translationSha256": "f1102ef7c0e0eb5a6887482e8942273f47e6c93d5b54c00d0822621fb228b91b"
+      "sourceSha256": "7763425f2071a4505987b281eec7ec43ec03789a2739ee59817d2f5bd3a4f513",
+      "translationSha256": "1844f550da6eb996fdf09d635e65a5c9309cf183e352539d676826d425f33da1"
     },
     "deployment/verifying-releases.md": {
       "sourceSha256": "c8a8d86631cca191ea70149ebdb7ae38dac2ed89a59f291a0c47246a951f1de6",

@@ -16,7 +16,12 @@
 #   2. A top-20 table per service and for NATS (`go tool pprof -top`, every pod's CPU profiles
 #      merged), flat and cumulative, plus the allocation view (alloc_space).
 #   3. NATS: RSS, JetStream memory and store, message rates, and the heaviest streams.
-#   4. Databases: the top statements by total time, WAL and checkpoint deltas.
+#   4. Databases: the top statements by total time, WAL (relational and event store alike) and
+#      checkpoint deltas with the CAUSE of the checkpoints (timed vs requested), and per table the
+#      inserts, updates, HOT-update ratio, dead tuples and autovacuum runs.
+#   5. Database CPU by INSTANCE: the postgres container of each database pod, split by the role
+#      it held (primary or replica), so the standby's replay cost is not folded into the primary's.
+#      A pod that changed role inside the window is named and left out.
 #
 # EVENTS STORED. --events N is taken as given. Otherwise it is the rows inserted into
 # --events-hypertable during the window (the event store's own pg_stat counters, in the
@@ -67,7 +72,7 @@ pprof_in() { local dir="$1"; shift; ( cd "$dir" && "$GO" tool pprof "$@" ); }
 # cpu_table <dir> <prefix> <manifest>: "component pods cpu_seconds window_seconds" per component, and
 # lines "INVALID pod reason" for pods whose counters cannot be trusted. Reads the cAdvisor files.
 cpu_rows() {
-  local d="$1" pre="$2" man="$3" f
+  local d="$1" pre="$2" man="$3" ctrf="${4:-}" f
   # pod -> component TSV
   "$JQ" -r '.pods[] | [.pod, .component] | @tsv' "$man" >"$d/.pod-component.tsv"
   "$JQ" -r '.artifacts[] | select(.invalid == true) | .pod' "$man" | sort -u >"$d/.invalid-pods.txt"
@@ -79,13 +84,14 @@ cpu_rows() {
     [[ -e "$f" ]] || continue
     cat "$f"
   done >"$d/.cad-post.all"
-  awk -v comp="$d/.pod-component.tsv" -v bad="$d/.invalid-pods.txt" '
+  awk -v comp="$d/.pod-component.tsv" -v bad="$d/.invalid-pods.txt" -v ctrf="$ctrf" '
     BEGIN { while ((getline l < comp) > 0) { split(l, a, "\t"); c[a[1]] = a[2] } while ((getline l < bad) > 0) b[l] = 1 }
     function label(s, k,   m) { if (match(s, k "=\"[^\"]*\"")) { m = substr(s, RSTART + length(k) + 2, RLENGTH - length(k) - 3); return m } return "" }
     FNR == 1 { file++ }
     /^container_cpu_usage_seconds_total\{/ {
       pod = label($0, "pod"); ctr = label($0, "container")
       if (pod == "" || ctr == "" || ctr == "POD") next
+      if (ctrf != "" && ctr != ctrf) next
       n = split($0, parts, " "); val = parts[n - 1]; ts = parts[n]
       if (n < 3) { val = parts[n]; ts = 0 }
       key = pod SUBSEP ctr
@@ -182,6 +188,31 @@ analyze() {
   echo "Counters are cAdvisor container CPU summed over every container of every pod of the component (sidecars included; replicas included)."
   echo
 
+  # ---- database CPU by instance and role (the postgres container only)
+  echo "## Database CPU by instance"
+  echo
+  "$JQ" -r '(.dbRolesBefore // []) as $b | .pods[] | select(.role != null) | . as $p
+    | [$p.pod, $p.component, ($b | map(select(.pod == $p.pod)) | .[0].role // "unknown"), $p.role] | @tsv' "$man" >"$d/.db-roles.tsv"
+  if [[ ! -s "$d/.db-roles.tsv" ]]; then
+    echo "**No database pods with a role in the manifest**: the DB CPU could not be split into primary and standby."
+  else
+    echo "The postgres container only (backup sidecars excluded), by the role the pod held at both ends of the window."
+    echo
+    echo "| store | pod | role | CPU-s over window | avg cores | CPU-s per 1,000 events |"
+    echo "|---|---|---|---:|---:|---:|"
+    awk -F'\t' -v events="$events" -v evrate="$ev_rate" -v roles="$d/.db-roles.tsv" '
+      BEGIN { while ((getline l < roles) > 0) { split(l, a, "\t"); before[a[1]] = a[3]; after[a[1]] = a[4]; store[a[1]] = (a[2] == "postgres" ? "relational" : "event store") } }
+      $1 == "POD" && ($2 == "postgres" || $2 == "timescaledb") {
+        pod = $3
+        if (before[pod] != after[pod]) { moved[pod] = before[pod] " -> " after[pod]; next }
+        rate = $4 / $5
+        if (evrate != "") per1k = rate / evrate * 1000; else per1k = $4 / (events / 1000)
+        printf "| %s | %s | %s | %.1f | %.2f | %.3f |\n", store[pod], pod, (after[pod] == "primary" ? "primary" : "standby"), $4, rate, per1k
+      }
+      END { for (p in moved) printf "| %s | %s | CHANGED ROLE (%s): left out | | | |\n", store[p], p, moved[p] }' <<<"$(cpu_rows "$d" "$pre" "$man" postgres)" | sort
+  fi
+  echo
+
   # ---- pprof tables
   echo "## Top 20 per service (CPU profiles merged across pods)"
   echo
@@ -274,8 +305,21 @@ analyze() {
       "wal_bytes: \(.wal.wal_bytes // "n/a")  (\(if $ev > 0 and .wal.wal_bytes then ((.wal.wal_bytes / ($ev/1000))|floor) else "n/a" end) bytes per 1,000 events)",
       "wal_fpi: \(.wal.wal_fpi // "n/a")  wal_records: \(.wal.wal_records // "n/a")",
       "checkpoints timed/requested: \((.checkpointer.num_timed // .bgwriter.checkpoints_timed) // "n/a") / \((.checkpointer.num_requested // .bgwriter.checkpoints_req) // "n/a")",
+      ((.checkpointer.num_timed // .bgwriter.checkpoints_timed // 0) as $t | (.checkpointer.num_requested // .bgwriter.checkpoints_req // 0) as $r
+        | "checkpoint cause: \(if $t == 0 and $r == 0 then "none in the window" elif $r == 0 then "timed (checkpoint_timeout)" elif $t == 0 then "requested (max_wal_size reached, or an explicit CHECKPOINT)" else "timed and requested" end)"),
       "buffers written by checkpointer: \((.checkpointer.buffers_written // .bgwriter.buffers_checkpoint) // "n/a")  bgwriter buffers_clean: \(.bgwriter.buffers_clean // "n/a")"' "$sysd"
     echo '```'
+    echo
+  done
+  local tbd
+  for tbd in "$d/$pre"-postgres-*-tables-delta.json "$d/$pre"-timescaledb-*-tables-delta.json; do
+    [[ -e "$tbd" ]] || continue
+    echo "### ${tbd##*/} -- table writes (top 15 by inserts + updates)"
+    echo
+    if [[ "$("$JQ" -r .valid "$tbd")" != true ]]; then echo "**INVALID: $("$JQ" -r .reason "$tbd")**"; echo; continue; fi
+    echo "| database | table | inserts | updates | HOT updates | HOT ratio | dead tuples (end) | autovacuum runs | autoanalyze runs |"
+    echo "|---|---|---:|---:|---:|---:|---:|---:|---:|"
+    "$JQ" -r '.tables[:15][] | "| \(.db) | \(.table) | \(.inserts) | \(.updates) | \(.hot_updates) | \(if .hot_ratio == null then "n/a" else "\((.hot_ratio * 1000 | round) / 10)%" end) | \(.dead_tuples) | \(.autovacuum_runs) | \(.autoanalyze_runs) |"' "$tbd"
     echo
   done
 }
@@ -290,7 +334,10 @@ self_test() {
   # manifest: two service pods + a tsdb primary; one invalid pod
   cat >"$d/$p-manifest.json" <<'JSON'
 {"namespace":"ns1","startedAt":"a","finishedAt":"b","complete":true,"steady":{"checked":true},
- "pods":[{"pod":"dm-1","component":"device-management"},{"pod":"dm-2","component":"device-management"},{"pod":"ds-1","component":"device-state"},{"pod":"gone-1","component":"event-sources"}],
+ "pods":[{"pod":"dm-1","component":"device-management"},{"pod":"dm-2","component":"device-management"},{"pod":"ds-1","component":"device-state"},{"pod":"gone-1","component":"event-sources"},
+         {"pod":"dc-rdb-1","component":"postgres","role":"primary"},{"pod":"dc-rdb-2","component":"postgres","role":"replica"},
+         {"pod":"dc-tsdb-1","component":"timescaledb","role":"replica"},{"pod":"dc-tsdb-2","component":"timescaledb","role":"primary"}],
+ "dbRolesBefore":[{"pod":"dc-rdb-1","role":"primary"},{"pod":"dc-rdb-2","role":"replica"},{"pod":"dc-tsdb-1","role":"primary"},{"pod":"dc-tsdb-2","role":"replica"}],
  "artifacts":[{"component":"event-sources","pod":"gone-1","kind":"heap","file":"x","invalid":true}]}
 JSON
   # cadvisor: dm-1 uses 30 CPU-s over 60 s, dm-2 uses 12, ds-1 uses 6, gone-1 counter goes backwards
@@ -300,16 +347,39 @@ JSON
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="ds-1",container="svc"} 10 1000000'
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="ds-1",container="POD"} 99 1000000'
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="gone-1",container="svc"} 500 1000000'
+    echo 'container_cpu_usage_seconds_total{namespace="dc-system",pod="dc-rdb-1",container="postgres"} 100 1000000'
+    echo 'container_cpu_usage_seconds_total{namespace="dc-system",pod="dc-rdb-1",container="plugin-barman-cloud"} 100 1000000'
+    echo 'container_cpu_usage_seconds_total{namespace="dc-system",pod="dc-rdb-2",container="postgres"} 50 1000000'
+    echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="dc-tsdb-1",container="postgres"} 10 1000000'
+    echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="dc-tsdb-2",container="postgres"} 10 1000000'
   } >"$d/$p-node-n1-cadvisor-pre.prom"
   {
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="dm-1",container="svc"} 130 1060000'
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="dm-2",container="svc"} 62 1060000'
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="ds-1",container="svc"} 16 1060000'
     echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="gone-1",container="svc"} 3 1060000'
+    echo 'container_cpu_usage_seconds_total{namespace="dc-system",pod="dc-rdb-1",container="postgres"} 160 1060000'
+    echo 'container_cpu_usage_seconds_total{namespace="dc-system",pod="dc-rdb-1",container="plugin-barman-cloud"} 130 1060000'
+    echo 'container_cpu_usage_seconds_total{namespace="dc-system",pod="dc-rdb-2",container="postgres"} 62 1060000'
+    echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="dc-tsdb-1",container="postgres"} 40 1060000'
+    echo 'container_cpu_usage_seconds_total{namespace="ns1",pod="dc-tsdb-2",container="postgres"} 20 1060000'
   } >"$d/$p-node-n1-cadvisor-post.prom"
   echo '{"valid":true,"from":"2026-11-02T10:00:00.123456+00:00","to":"2026-11-02T10:01:00.654321+00:00","hypertables":{"events":60000,"measurements":1000}}' >"$d/$p-timescaledb-t-1-sysstat-delta.json"
 
+  echo '{"valid":true,"wal":{"wal_bytes":6000000,"wal_records":1000,"wal_fpi":10},"checkpointer":{"num_timed":0,"num_requested":2,"buffers_written":5},"bgwriter":{"buffers_clean":1}}' >"$d/$p-postgres-dc-rdb-1-sysstat-delta.json"
+  echo '{"valid":true,"tables":[{"db":"app","table":"device-state/device_states","inserts":10,"updates":2000,"hot_updates":1500,"hot_ratio":0.75,"dead_tuples":7,"autovacuum_runs":3,"autoanalyze_runs":1}]}' >"$d/$p-postgres-dc-rdb-1-tables-delta.json"
+
   rep="$("$SELF" --dir "$d" --round rT --phase R1 --events-hypertable events 2>&1)" || { echo "self-test: analysis failed: $rep" >&2; return 1; }
+  # relational WAL is reported (6,000,000 B over 60,000 events = 100,000 per 1,000), with the checkpoint CAUSE
+  grep -q 'wal_bytes: 6000000  (100000 bytes per 1,000 events)' <<<"$rep" || { echo "self-test: the relational WAL was not reported per 1,000 events" >&2; echo "$rep" >&2; rc=1; }
+  grep -q 'checkpoint cause: requested (max_wal_size reached' <<<"$rep" || { echo "self-test: the checkpoint cause was not reported" >&2; rc=1; }
+  # table writes: HOT ratio, dead tuples, autovacuum
+  grep -q '| app | device-state/device_states | 10 | 2000 | 1500 | 75% | 7 | 3 | 1 |' <<<"$rep" || { echo "self-test: the table-write row is missing or wrong" >&2; echo "$rep" >&2; rc=1; }
+  # DB CPU by instance: the sidecar (30 CPU-s) is NOT in the primary's 60; the replica is its own row
+  grep -q '| relational | dc-rdb-1 | primary | 60.0 | 1.00 | 1.000 |' <<<"$rep" || { echo "self-test: the primary DB CPU is wrong (a sidecar counted?)" >&2; echo "$rep" >&2; rc=1; }
+  grep -q '| relational | dc-rdb-2 | standby | 12.0 | 0.20 | 0.200 |' <<<"$rep" || { echo "self-test: the standby DB CPU row is missing or wrong" >&2; rc=1; }
+  # a pod that swapped roles inside the window is named and left out of the split
+  grep -q 'dc-tsdb-1 | CHANGED ROLE (primary -> replica): left out' <<<"$rep" && ! grep -qE 'event store \| dc-tsdb-1 \| (primary|standby)' <<<"$rep" || { echo "self-test: a role change was not flagged and left out" >&2; echo "$rep" >&2; rc=1; }
   # device-management: 42 CPU-s over 60 s = 0.70 cores; 60,000 events in 60 s = 1000/s => 0.70/1000*1000 = 0.700 per 1k
   grep -q '| device-management | 2 | 42.0 | 0.70 | 0.700 |' <<<"$rep" || { echo "self-test: wrong CPU-s per 1k for device-management" >&2; echo "$rep" >&2; rc=1; }
   # device-state: 6 CPU-s, the POD pause container excluded => 0.10 cores => 0.100 per 1k

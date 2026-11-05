@@ -108,6 +108,15 @@ type Profile struct {
 
 	// Steady, when set, writes the steady-state marker for this drive (see SteadyMarker).
 	Steady *SteadyMarker
+
+	// AggregateLedger, when set, is where the run writes its expected per-device aggregates (see
+	// AggregateLedger) for the aggregate identity oracle to check against the store. A run that
+	// cannot write it fails: a requested artifact is not best-effort.
+	AggregateLedger string
+
+	// StartAt, when set, holds the drive until that instant (after provisioning). N harnesses
+	// given the same instant start their steady windows together; see the multi-harness driver.
+	StartAt time.Time
 }
 
 // Load returns the sim load profile this run drives with.
@@ -176,6 +185,9 @@ func (p Profile) Validate() error {
 	}
 	if p.Hold < 0 {
 		return fmt.Errorf("hold %s is negative", p.Hold)
+	}
+	if !p.StartAt.IsZero() && time.Until(p.StartAt) > MaxStartDelay {
+		return fmt.Errorf("start-at %s is more than %s away", p.StartAt.UTC().Format(time.RFC3339), MaxStartDelay)
 	}
 	if p.QuiescePoll < 0 || p.QuiesceTimeout < 0 || p.QuiesceSettle < 0 {
 		return fmt.Errorf("quiesce poll/timeout/settle must not be negative")

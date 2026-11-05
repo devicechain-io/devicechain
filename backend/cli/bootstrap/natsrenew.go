@@ -361,6 +361,19 @@ func renewBrokerCertificate(ctx context.Context, typed kubernetes.Interface, st 
 		return false, err
 	}
 
+	if apierrors.IsNotFound(stsErr) {
+		// 🔴 AN ORPHANED BROKER HAS NO STATEFULSET TO PATCH. The volume-growth recipe deletes it
+		// with --cascade=orphan and the infrastructure apply recreates it, so restarting it here
+		// would fail the whole upgrade with "restart dc-nats by hand" before that apply runs. The
+		// new certificate is in the Secret; the recreated StatefulSet's servers pick it up when
+		// they next start.
+		fmt.Println(color.WhiteString(
+			"  Broker certificate re-issued under the same authority (%s). The broker's StatefulSet is gone\n"+
+				"  (deleted to grow its volume), so no restart is made here; the servers present the new\n"+
+				"  certificate once the StatefulSet is recreated and they restart.", reason))
+		return false, nil
+	}
+
 	if hot {
 		fmt.Println(color.WhiteString(
 			"  Broker certificate re-issued under the same authority (%s). Waiting for the brokers to\n"+
