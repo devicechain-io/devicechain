@@ -737,6 +737,10 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 
 #### 实测吞吐量 {#measured-throughput}
 
+:::note 以下数据均在故障关闭确认关闭时测得
+下表各行均在[MQTT 故障关闭确认](./observability.md#mqtt-fail-closed)关闭（默认值）的情况下测得。若不启用它，持续的 MQTT 过载一旦超出捕获流的余量，就会丢弃代理已经确认过的最旧事件。这是[已接受的缺口](../concepts/security-model.md#accepted-gaps)之一。在 `dcctl bootstrap` 或 `dcctl upgrade` 上使用 `--mqtt-fail-closed` 可以消除它，代价是摄入上限更低，因此请把实例的规模定在该上限之下。
+:::
+
 | 版本 | 集群 | 设置 | 持续速率 | 结果 |
 | --- | --- | --- | --- | --- |
 | v0.18.0 | Google Kubernetes Engine，3 × n2-standard-8（每个 8 vCPU），SSD 持久盘，`--ha` | v0.18.0 发布时默认值，尚未采用上述容量配置 | 约 3,800 事件/秒 | 两次十分钟测试各提供 4,000 事件/秒，均存储 2,399,000 个事件，与接受数量相同，仅比较总数而非逐事件。一轮最慢阶段保持输入的 96.5%（解析每秒 3,858），另一轮 98%。实时状态受当时 `device-state` 500m 上限影响，只能跟上约 2,300 事件/秒。 |

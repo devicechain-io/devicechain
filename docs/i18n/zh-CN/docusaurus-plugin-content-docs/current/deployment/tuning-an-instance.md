@@ -5,6 +5,10 @@ title: 调优实例
 
 # 调优实例 {#tuning-an-instance}
 
+:::note 容量数据假定故障关闭确认处于关闭状态
+[实测吞吐量](./bootstrap.md#measured-throughput)中的数据均在[MQTT 故障关闭确认](./observability.md#mqtt-fail-closed)关闭（默认值）时测得。若不启用它，持续的 MQTT 过载一旦超出捕获流的余量，就会丢弃已确认的最旧事件（一项[已接受的缺口](../concepts/security-model.md#accepted-gaps)）。如果这对你很重要，请用 `--mqtt-fail-closed` 启用它，并把规模定在其较低的上限之下。
+:::
+
 你可以用一个 values 文件来调优实例：副本数、CPU 和内存、某个区域自身的配置。通过 `--values` 把它交给 `dcctl bootstrap` 或 `dcctl upgrade`，`dcctl` 会**把它记录在实例上**，此后每次 `dcctl upgrade` 都会自动再次应用，无需你重复指定。没有这条记录，升级会根据实例的声明重新生成其设置，你的调优就会被还原。
 
 ```yaml title="tuning.yaml"
