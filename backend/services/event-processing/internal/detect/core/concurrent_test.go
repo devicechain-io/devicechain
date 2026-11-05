@@ -293,6 +293,11 @@ func TestConcurrentCloseJoinsTheShards(t *testing.T) {
 		c.ProcessResolved(uint64(i+1), tm, evs)
 		engines = append(engines, c)
 	}
+	// A goroutine that has been started may not have been scheduled into its frame yet.
+	started := time.Now().Add(5 * time.Second)
+	for shardWorkers() < before+8*16 && time.Now().Before(started) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if during := shardWorkers(); during != before+8*16 {
 		t.Fatalf("expected %d shard goroutines, found %d", before+8*16, during)
 	}
