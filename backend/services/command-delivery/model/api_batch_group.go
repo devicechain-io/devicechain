@@ -153,7 +153,7 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 	// Consecutive pages that each promised a successor and added nobody. That is a broken
 	// pagination contract — a cursor that does not advance, or a page that always claims
 	// another — not a large fleet, so it is an error rather than a short target set.
-	return nil, fmt.Errorf("cannot resolve the group target: resolution did not terminate")
+	return nil, errUnavailable("cannot resolve the group target: resolution did not terminate")
 }
 
 // sameGroupVersion reports whether two pages resolved at the same group version; two static

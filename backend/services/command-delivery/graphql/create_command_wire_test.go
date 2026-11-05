@@ -193,6 +193,11 @@ func TestCreateCommandAvailabilityFailureStaysAGraphQLError(t *testing.T) {
 			t.Fatalf("the failure detail must not reach the tenant client (in-cluster topology): %q", e.Message)
 		}
 	}
+	// And it is machine-readable: graphql-go serves the code only from the error the resolver
+	// returned directly, so this is the wire check that nothing between wraps it.
+	if code, _ := res.Errors[0].Extensions["code"].(string); code != "UNAVAILABLE" {
+		t.Fatalf("extensions.code = %q, want UNAVAILABLE so a caller can tell a retry from a refusal", code)
+	}
 	if got, _ := api.CommandsByToken(ctx, []string{"wire-unavailable"}); len(got) != 0 {
 		t.Fatalf("an undecidable enqueue must fail CLOSED and persist nothing, found %+v", got)
 	}
