@@ -106,6 +106,10 @@ type Uplink struct {
 	// protobuf-JSON default, 0.
 	FPort int
 	FCnt  int64
+	// DepthErr is non-nil when Decoded nests deeper than MaxDepth (see CheckDepth). Like FrameErr
+	// it is retained, not acted on: Cut A flattens such an object and counts the skipped leaves,
+	// so only a route that carries the object whole to a decoder refuses it (400, too_deep).
+	DepthErr error
 }
 
 // NoLoRaWAN is the value of Uplink.FPort and Uplink.FCnt for an envelope that carries no LoRaWAN
@@ -250,6 +254,9 @@ func Decode(d *Descriptor, r *Request) (*Result, error) {
 		if err := checkAltId(res.Uplinks[i].AltId); err != nil {
 			return nil, err
 		}
+	}
+	for i := range res.Uplinks {
+		res.Uplinks[i].DepthErr = CheckDepth(res.Uplinks[i].Decoded)
 	}
 	return res, nil
 }

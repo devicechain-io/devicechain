@@ -158,3 +158,69 @@ func TestCheckDepthAgreesWithFlattensDepthCutoff(t *testing.T) {
 		require.Equal(t, CheckDepth(nested(n)) != nil, skipped, "depth %d", n)
 	}
 }
+
+// chain is {"a":{"a":...1...}} with n containers.
+func chain(n int) string {
+	return strings.Repeat(`{"a":`, n) + "1" + strings.Repeat("}", n)
+}
+
+// The depth walk runs in the codec on every uplink, and its verdict rides the Uplink for the
+// route to act on: Decode itself does not refuse, because Cut A flattens a deep object and counts
+// what it skipped.
+func TestEveryCodecRecordsHowDeepTheDecodedObjectIs(t *testing.T) {
+	cs := string(fixture(t, "chirpstack/up_decoded.json"))
+	i := strings.Index(cs, `"object"`)
+	require.Greater(t, i, 0)
+	tts0 := string(fixture(t, "tts/up_decoded.json"))
+	j := strings.Index(tts0, `"decoded_payload"`)
+	require.Greater(t, j, 0)
+
+	for _, depth := range []int{MaxDepth, MaxDepth + 1} {
+		wantErr := depth > MaxDepth
+
+		// An envelope with the deep object substituted: replace everything from the key to the
+		// end of its (balanced) value.
+		csBody := replaceValue(t, cs, `"object"`, chain(depth))
+		res, err := Decode(chirp(false), req([]byte(csBody), "up"))
+		require.NoError(t, err, "the codec does not refuse a deep object: Cut A flattens it")
+		require.Equal(t, wantErr, res.Uplinks[0].DepthErr != nil, "chirpstack depth %d", depth)
+
+		ttsBody := replaceValue(t, tts0, `"decoded_payload"`, chain(depth))
+		res, err = Decode(tts("DEV_EUI", false), ttsReq([]byte(ttsBody), ""))
+		require.NoError(t, err)
+		require.Equal(t, wantErr, res.Uplinks[0].DepthErr != nil, "tts depth %d", depth)
+
+		// The generic item is itself one container, so the chain below it is one shorter.
+		res, err = Decode(generic(GenericJSON, `{"idFrom":"pointer:/id"}`),
+			req([]byte(`{"id":"pump-1","x":`+chain(depth-1)+`}`), ""))
+		require.NoError(t, err)
+		require.Equal(t, wantErr, res.Uplinks[0].DepthErr != nil, "generic depth %d", depth)
+		if wantErr {
+			require.ErrorIs(t, res.Uplinks[0].DepthErr, ErrTooDeep)
+			require.ErrorIs(t, res.Uplinks[0].DepthErr, ErrMalformed)
+		}
+	}
+}
+
+// replaceValue swaps the JSON value after key (an object value, balanced) for repl.
+func replaceValue(t *testing.T, doc, key, repl string) string {
+	t.Helper()
+	i := strings.Index(doc, key)
+	require.GreaterOrEqual(t, i, 0)
+	k := strings.Index(doc[i:], "{")
+	require.GreaterOrEqual(t, k, 0)
+	start, depth := i+k, 0
+	for end := start; end < len(doc); end++ {
+		switch doc[end] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return doc[:start] + repl + doc[end+1:]
+			}
+		}
+	}
+	t.Fatal("unbalanced fixture")
+	return ""
+}
