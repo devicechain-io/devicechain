@@ -289,7 +289,8 @@ func revokeFingerprint(req *DeviceCertificateRevokeRequest) (string, error) {
 // bumpRevocationRows adds delta to the anchor's revocation_rows counter. The caller holds the
 // anchor FOR UPDATE.
 func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
-	return tx.Model(&DeviceTrustAnchor{}).Where("id = ?", anchorId).
+	// The model carries the anchor's id, so the audit journal names the row it changed.
+	return tx.Model(&DeviceTrustAnchor{Model: gorm.Model{ID: anchorId}}).
 		Update("revocation_rows", gorm.Expr("COALESCE(revocation_rows, 0) + ?", delta)).Error
 }
 
