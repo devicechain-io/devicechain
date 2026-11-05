@@ -136,6 +136,10 @@ func (m *Manager) BeginAuthorizeSso(ctx context.Context, email string, p Authori
 // from the record's pending parameters, and only then starts the session -- so a client
 // deleted or re-registered mid-flow ends in an error and leaves no session behind. Every
 // failure of the code itself is ErrSsoCodeInvalid.
+//
+// A request that fails validation after the client and redirect URI were re-resolved returns
+// the error WITH a partial AuthorizeResume (Params and Client only): the redirect URI in it is
+// trusted, so the page can report the error to the client. Every other failure returns nil.
 func (m *Manager) ResumeAuthorizeSso(ctx context.Context, code, browserSecret string) (*AuthorizeResume, error) {
 	if !m.SsoReady() {
 		return nil, ErrSsoUnavailable
@@ -167,8 +171,13 @@ func (m *Manager) ResumeAuthorizeSso(ctx context.Context, code, browserSecret st
 	if err != nil {
 		return nil, err
 	}
-	if verr := ValidateAuthorizeRequest(client, p); verr != nil {
-		return nil, verr
+	// Re-validated against the CURRENT allowlist, which may have changed while the person was at
+	// their provider. A resource that is no longer served is returned WITH the request, so the
+	// page can send the client the invalid_target the redirect URI (re-resolved above, so
+	// trusted) is for, rather than a dead-end page. Nothing is counted here: the entry request
+	// counted this flow once.
+	if _, verr := ValidateAuthorizeRequest(client, p, m.resourcePolicy()); verr != nil {
+		return &AuthorizeResume{Params: p, Client: client}, verr
 	}
 	ident, err := m.completeSsoRecord(ctx, rec)
 	if err != nil {

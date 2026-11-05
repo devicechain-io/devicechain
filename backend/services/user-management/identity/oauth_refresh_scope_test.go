@@ -126,7 +126,7 @@ func TestRefreshRefusesAScopeTheClientIsNoLongerRegisteredFor(t *testing.T) {
 	require.NoError(t, err)
 
 	// While the scope is registered, a refresh renews it and carries position.
-	renewed, err := e.m.RefreshOAuth(context.Background(), tokens.RefreshToken, "", client)
+	renewed, err := e.m.RefreshOAuth(context.Background(), tokens.RefreshToken, "", client, nil)
 	require.NoError(t, err, "a refresh for a registered scope must succeed")
 	require.Contains(t, e.claimsOf(t, renewed.AccessToken).Authorities, string(auth.LocationRead),
 		"the control: with the scope registered and the role held, position is carried")
@@ -134,7 +134,7 @@ func TestRefreshRefusesAScopeTheClientIsNoLongerRegisteredFor(t *testing.T) {
 	// The operator narrows the client's registration — the lever the release notes name.
 	e.registerScopes(t, client, auth.ScopeReadOnly)
 
-	_, err = e.m.RefreshOAuth(context.Background(), renewed.RefreshToken, "", client)
+	_, err = e.m.RefreshOAuth(context.Background(), renewed.RefreshToken, "", client, nil)
 	require.Error(t, err,
 		"de-registering a scope left the session holding it: the refresh renewed a grant "+
 			"the client is no longer registered for, and rotation renews its TTL every time")
@@ -156,7 +156,7 @@ func TestRefreshStillSucceedsForARegisteredScope(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
-		tokens, err = e.m.RefreshOAuth(context.Background(), tokens.RefreshToken, "", client)
+		tokens, err = e.m.RefreshOAuth(context.Background(), tokens.RefreshToken, "", client, nil)
 		require.NoErrorf(t, err, "refresh %d of a fully registered grant must succeed", i+1)
 		require.Contains(t, e.claimsOf(t, tokens.AccessToken).Authorities, string(auth.LocationRead))
 	}
@@ -176,12 +176,12 @@ func TestRefreshRequestNarrowingDoesNotDowngradeTheGrant(t *testing.T) {
 		scope, scope, nil, client)
 	require.NoError(t, err)
 
-	narrowed, err := e.m.RefreshOAuth(context.Background(), tokens.RefreshToken, auth.ScopeReadOnly, client)
+	narrowed, err := e.m.RefreshOAuth(context.Background(), tokens.RefreshToken, auth.ScopeReadOnly, client, nil)
 	require.NoError(t, err)
 	require.NotContains(t, e.claimsOf(t, narrowed.AccessToken).Authorities, string(auth.LocationRead),
 		"a request-narrowed access token must drop the scope it did not ask for")
 
-	widened, err := e.m.RefreshOAuth(context.Background(), narrowed.RefreshToken, scope, client)
+	widened, err := e.m.RefreshOAuth(context.Background(), narrowed.RefreshToken, scope, client, nil)
 	require.NoError(t, err, "the rotated refresh token keeps the ORIGINAL grant, so the "+
 		"client can widen back to it")
 	require.Contains(t, e.claimsOf(t, widened.AccessToken).Authorities, string(auth.LocationRead))
@@ -199,6 +199,6 @@ func TestRefreshCannotWidenBeyondTheGrant(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = e.m.RefreshOAuth(context.Background(),
-		tokens.RefreshToken, auth.ScopeReadOnly+" "+auth.ScopeLocation, client)
+		tokens.RefreshToken, auth.ScopeReadOnly+" "+auth.ScopeLocation, client, nil)
 	require.Error(t, err, "a refresh asked for more than the grant and was allowed it")
 }

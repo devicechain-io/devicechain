@@ -320,3 +320,25 @@ func TestValuesOverlayTokenAudienceKeys(t *testing.T) {
 		}
 	}
 }
+
+// The chart's schema refuses unscopedClientCredentials=enforce: the rule is counted and
+// warned in this release, never refused, so an accepted "enforce" would be a switch that does
+// nothing. The counterweights render.
+func TestChartRefusesUnscopedClientCredentialsEnforce(t *testing.T) {
+	t.Parallel()
+	ch := chartForTest(t)
+	_, err := renderChartClientSide(t.Context(), ch,
+		tokenAudienceValues(tlsIngress("iot.example.com"), "full", "", map[string]interface{}{"unscopedClientCredentials": "enforce"}))
+	if err == nil {
+		t.Fatal("unscopedClientCredentials=enforce rendered without complaint")
+	}
+	if !strings.Contains(err.Error(), "unscopedClientCredentials") {
+		t.Errorf("the refusal does not name the key: %v", err)
+	}
+	for _, v := range []string{"observe", ""} {
+		if _, err := renderChartClientSide(t.Context(), ch,
+			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "", map[string]interface{}{"unscopedClientCredentials": v})); err != nil {
+			t.Errorf("unscopedClientCredentials=%q was refused: %v", v, err)
+		}
+	}
+}

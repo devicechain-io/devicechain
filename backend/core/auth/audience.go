@@ -289,7 +289,12 @@ func subKind(c *Claims) string {
 // quoteAud renders an attacker-influenced audience for a log line: truncated to
 // maxLoggedAud bytes on a rune boundary and quoted, so it cannot inject lines or fields.
 func quoteAud(aud []string) string {
-	s := strings.Join(aud, " ")
+	return QuoteLogValue(strings.Join(aud, " "))
+}
+
+// QuoteLogValue renders an attacker-influenced string for a log line: truncated to 256 bytes
+// on a rune boundary and quoted, so it cannot inject lines or fields.
+func QuoteLogValue(s string) string {
 	if len(s) > maxLoggedAud {
 		cut := maxLoggedAud
 		for cut > 0 && !utf8.RuneStart(s[cut]) {
@@ -347,3 +352,22 @@ func (l *warnLimiter) allow(key string) (suppressed int, ok bool) {
 	}
 	return 0, true
 }
+
+// WarnLimiter is the rate limiter behind the audience warnings, exported so the
+// authorization server rate limits its own warnings the same way: one line per key per
+// minute, over a bounded key set (256, least recently used evicted, and eviction only ever
+// lets an extra line through). Key it on a bounded, authenticated identity such as
+// (grant, class, client_id), never on a value the sender chooses.
+type WarnLimiter struct{ l *warnLimiter }
+
+// NewWarnLimiter builds a limiter over the given clock (nil is time.Now).
+func NewWarnLimiter(now func() time.Time) *WarnLimiter {
+	if now == nil {
+		now = time.Now
+	}
+	return &WarnLimiter{l: newWarnLimiter(now)}
+}
+
+// Allow reports whether a line for key may be written now, and how many were held back
+// since the last one.
+func (w *WarnLimiter) Allow(key string) (suppressed int, ok bool) { return w.l.allow(key) }

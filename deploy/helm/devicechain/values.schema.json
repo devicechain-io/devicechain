@@ -181,10 +181,9 @@
                       "type": "string",
                       "enum": [
                         "",
-                        "observe",
-                        "enforce"
+                        "observe"
                       ],
-                      "description": "What happens to a client_credentials request that names a resource but no scope. observe counts and logs it and serves it as before; enforce refuses it. Unset means observe."
+                      "description": "What happens to a client_credentials request that names a resource but no scope. observe counts and logs it and serves it as before. Refusing it arrives in the next major release, so enforce is not accepted yet. Unset means observe."
                     },
                     "externalResources": {
                       "type": "array",

@@ -75,8 +75,8 @@ func extractClientCredentials(r *http.Request) (clientCredentials, *oauthError) 
 // grants never against the service accounts. The grant type decides the table.
 func TokenHandler(
 	authenticateClient func(ctx context.Context, clientID, secret string, presented bool) error,
-	redeemCode func(ctx context.Context, code, clientID, redirectURI, codeVerifier string) (*OAuthTokens, error),
-	refreshGrant func(ctx context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error),
+	redeemCode func(ctx context.Context, code, clientID, redirectURI, codeVerifier string, resources []string) (*OAuthTokens, error),
+	refreshGrant func(ctx context.Context, refreshToken, scope, clientID string, resources []string) (*OAuthTokens, error),
 	clientCredentials func(ctx context.Context, req ClientCredentialsRequest) (*OAuthTokens, error),
 ) http.Handler {
 	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,14 +140,16 @@ func TokenHandler(
 				writeTokenError(w, errInvalidRequest("code, code_verifier, client_id, and redirect_uri are required"))
 				return
 			}
-			tokens, err = redeemCode(r.Context(), code, creds.clientID, redirectURI, verifier)
+			// A `resource` here (RFC 8707 section 2.2) can only restate the audience the code was
+			// bound to at /authorize; the grant checks it and never adds it.
+			tokens, err = redeemCode(r.Context(), code, creds.clientID, redirectURI, verifier, r.PostForm["resource"])
 		case "refresh_token":
 			refreshToken := r.PostForm.Get("refresh_token")
 			if refreshToken == "" {
 				writeTokenError(w, errInvalidRequest("refresh_token is required"))
 				return
 			}
-			tokens, err = refreshGrant(r.Context(), refreshToken, r.PostForm.Get("scope"), creds.clientID)
+			tokens, err = refreshGrant(r.Context(), refreshToken, r.PostForm.Get("scope"), creds.clientID, r.PostForm["resource"])
 		case "":
 			writeTokenError(w, errInvalidRequest("grant_type is required"))
 			return
