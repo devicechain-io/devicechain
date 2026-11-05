@@ -346,6 +346,41 @@ func TestChartRendersTheLoadBalancerMode(t *testing.T) {
 	}
 }
 
+// TestChartRendersMQTTExposureUnderExistingSecret is the path dcctl actually takes: it composes the
+// instance config into a Secret of its own and hands the chart instance.existingSecret, so the chart
+// sees no config of its own beyond its defaults, which name no broker TLS. The gate must not read
+// that absence as "TLS off": it did, and refused every exposure dcctl asked for.
+func TestChartRendersMQTTExposureUnderExistingSecret(t *testing.T) {
+	t.Parallel()
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals := map[string]interface{}{
+		"instance": map[string]interface{}{
+			"id":                     "dctest",
+			"existingSecret":         "dci-dctest-config",
+			"existingSecretChecksum": strings.Repeat("a", 64),
+		},
+		"ingress":      map[string]interface{}{"enabled": true, "controller": "gateway", "host": "dc.example.com"},
+		"mqttExposure": map[string]interface{}{"mode": "loadbalancer", "host": "mqtt.example.com"},
+		"metrics":      map[string]interface{}{"natsBrokerHost": "dc-nats"},
+	}
+	inst := action.NewInstall(&action.Configuration{})
+	inst.ReleaseName = "dc-mqtt"
+	inst.Namespace = "default"
+	inst.DryRun = true
+	inst.ClientOnly = true
+	inst.APIVersions = []string{"monitoring.coreos.com/v1"}
+	rel, err := inst.RunWithContext(t.Context(), ch, vals)
+	if err != nil {
+		t.Fatalf("an exposure over dcctl's config Secret was refused: %v", err)
+	}
+	if find(objectsOf(t, rel.Manifest), "Service", "dc-nats-mqtt-lb") == nil {
+		t.Error("no LoadBalancer Service rendered")
+	}
+}
+
 func TestChartRefusesUnsafeMQTTExposure(t *testing.T) {
 	t.Parallel()
 	good := map[string]interface{}{"mode": "gateway", "host": "mqtt.example.com"}

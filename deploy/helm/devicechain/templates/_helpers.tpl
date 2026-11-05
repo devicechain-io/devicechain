@@ -1548,8 +1548,10 @@ render-time failure rather than a Service or route that quietly leaves the broke
 other way than the one asked for.
 
 Plaintext MQTT is never exposed off-cluster by this feature, so it refuses when the broker's own
-TLS is off (when the chart can read the instance config; under instance.existingSecret it cannot,
-and dcctl, which composes that config, makes the same refusal before it renders anything).
+TLS is off (when the chart renders the instance config itself). Under instance.existingSecret the
+config the broker's TLS flag lives in is dcctl's, not this chart's: the values then carry only the
+chart's own defaults, which name no TLS, so reading them would refuse EVERY exposure. dcctl always
+turns the broker's TLS on.
 */}}
 {{- define "devicechain.mqttExposure" -}}
 {{- $m := .Values.mqttExposure | default dict -}}
@@ -1566,7 +1568,7 @@ and dcctl, which composes that config, makes the same refusal before it renders 
 {{- $cfg := .Values.instance.config | default dict -}}
 {{- $infra := $cfg.infrastructure | default dict -}}
 {{- $nats := $infra.nats | default dict -}}
-{{- if and $infra (not (($nats.tls | default dict).enabled)) -}}
+{{- if and $infra (not .Values.instance.existingSecret) (not (($nats.tls | default dict).enabled)) -}}
 {{- fail "mqttExposure.mode is not none, but the broker's TLS is off (instance.config.infrastructure.nats.tls.enabled). Plaintext MQTT is never exposed outside the cluster; turn the broker's TLS on or leave mqttExposure.mode at none." -}}
 {{- end -}}
 {{- $parts := splitList "." ($nats.hostname | default "dc-nats") -}}
