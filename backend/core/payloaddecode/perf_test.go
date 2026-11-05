@@ -230,9 +230,7 @@ func gateRounds(name string, p *Plan, in Input, readings, rounds, per int) verdi
 // DECODE_PERF_ABSOLUTE=1, which is how the release checklist runs them on the reference
 // machine. Skipped under -short and -race.
 func TestPerfGate(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("timing gate: skipped under -short and -race")
-	}
+	skipUnlessPerfGate(t)
 	strict := os.Getenv("DECODE_PERF_ABSOLUTE") == "1"
 	rjs, rm := representativeDoc()
 	rp := mustCompile(t, rjs, rm)
@@ -285,17 +283,48 @@ func TestPerfGate(t *testing.T) {
 
 // A18's negative control: the gate must go red for a decoder with a deliberately slow native.
 func TestPerfGateGoesRedWithSlowNative(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("timing gate: skipped under -short and -race")
-	}
+	skipUnlessPerfGate(t)
 	js, m := representativeDoc()
-	// The same decoder with one row calling a native that sleeps 50 us.
+	in := representativeInput()
+	// Control one: the same decoder with one row calling a native that sleeps 50 us, through the
+	// same best-of-three path as the real gate.
 	slow := strings.Replace(js, `{"key":"rssi","expr":"link.rssi"}`, `{"key":"rssi","expr":"double(test.sleep(50))"}`, 1)
-	p := mustCompile(t, slow, m)
-	v := gateRounds("representative + sleep(50us)", p, representativeInput(), 14, 1, 40)
+	v := gate("representative + sleep(50us)", mustCompile(t, slow, m), in, 14)
 	t.Log(v)
 	if v.ok() {
 		t.Fatalf("the gate did NOT go red for a decoder whose native sleeps 50 us: %v", v)
+	}
+	// Control two, a realistic regression: about 1.6x the work, not an absurd one. Eight more
+	// rows of the same kind take the 12-row decoder to 20 (and the readings with them), which
+	// must be enough to fail the 1.5x gate.
+	var extra []string
+	for i := 0; i < 8; i++ {
+		key := fmt.Sprintf("x%d", i)
+		m.(testMetrics).types[key] = calcfield.Double
+		extra = append(extra, fmt.Sprintf(`{"key":%q,"expr":"double(i16be(frame, 1)) / 10.0 + double(u8(frame, 3))"}`, key))
+	}
+	heavy := strings.Replace(js, `{"key":"rssi","expr":"link.rssi"}`, `{"key":"rssi","expr":"link.rssi"},`+strings.Join(extra, ","), 1)
+	hp := mustCompile(t, heavy, m)
+	if r := decodeOK(t, hp, in); len(r.Readings) != 22 {
+		t.Fatalf("the regression decoder should produce 22 readings, got %d", len(r.Readings))
+	}
+	v = gate("representative with 8 more rows (about 1.6x)", hp, in, 14)
+	t.Log(v)
+	if v.ok() {
+		t.Fatalf("the gate did NOT go red for a 1.6x regression: %v", v)
+	}
+}
+
+// skipUnlessPerfGate skips a timing gate unless DECODE_PERF_GATE=1. The shared `go test ./...`
+// runs forty packages at once and a paired timing comparison needs a quiet machine, so CI runs
+// these in their own step (-p 1) with the variable set; that step is where they are enforced.
+func skipUnlessPerfGate(t *testing.T) {
+	t.Helper()
+	if testing.Short() || raceEnabled {
+		t.Skip("timing gate: skipped under -short and -race")
+	}
+	if os.Getenv("DECODE_PERF_GATE") != "1" {
+		t.Skip("perf gate: set DECODE_PERF_GATE=1 (CI runs it in its own step)")
 	}
 }
 

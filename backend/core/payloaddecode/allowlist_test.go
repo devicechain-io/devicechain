@@ -63,6 +63,9 @@ func TestOverloadAllowlist(t *testing.T) {
 		`json.a.contains("x") ? 1 : 0`,
 		// dyn / computed access
 		`json.a < json.b ? 1 : 0`,
+		`json.a == json.b ? 1 : 0`,
+		`json.a != json.b ? 1 : 0`,
+		`(fPort == 1 ? json.a : json.b) == json.c ? 1 : 0`,
 		`json.a >= 1 ? 1 : 0`,
 		`double(json[json.k])`,
 		`double(json[string(1)])`,
@@ -243,6 +246,41 @@ func TestWalkerAloneRefusesLoops(t *testing.T) {
 		w := &walker{ast: a.NativeRep(), lets: map[string]*types.Type{}}
 		if err := w.check(a.NativeRep().Expr()); err == nil {
 			t.Errorf("the walker must refuse %s", e)
+		}
+	}
+}
+
+// F4: the "literal on one side" rule for equality is the walker's own guard; the cost estimate
+// would refuse most of these anyway (an unsized dynamic comparison estimates enormous), which is
+// why the rule is tested with the walker ALONE, before any estimate.
+func TestWalkerAloneRefusesUnboundedEquality(t *testing.T) {
+	env, err := baseEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := []string{
+		`json.a == json.b`, `json.a != json.b`, `(fPort == 1 ? json.a : json.b) == json.c`,
+		`hex.decode(json.a) == hex.decode(json.b)`,
+	}
+	for _, e := range refused {
+		a, iss := env.Compile(e)
+		if iss != nil && iss.Err() != nil {
+			// Bytes equality is refused by the checker already; that is fine, it is still refused.
+			continue
+		}
+		w := &walker{ast: a.NativeRep(), lets: map[string]*types.Type{}}
+		if err := w.check(a.NativeRep().Expr()); err == nil {
+			t.Errorf("the walker must refuse %s", e)
+		}
+	}
+	for _, e := range []string{`json.a == "x"`, `"x" != json.a`, `json.a == 1`, `u8(frame, 0) == u8(frame, 1)`} {
+		a, iss := env.Compile(e)
+		if iss != nil && iss.Err() != nil {
+			t.Fatalf("%s: %v", e, iss.Err())
+		}
+		w := &walker{ast: a.NativeRep(), lets: map[string]*types.Type{}}
+		if err := w.check(a.NativeRep().Expr()); err != nil {
+			t.Errorf("the walker must admit %s: %v", e, err)
 		}
 	}
 }

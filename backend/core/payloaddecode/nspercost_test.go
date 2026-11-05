@@ -11,12 +11,15 @@ import (
 )
 
 // maxNSPerCost is the fixed bound on measured nanoseconds per unit of declared cost. cel-go's
-// own convention is about 50 ns a unit and an honest decoder measures 30-250 here, on a
-// loaded laptop; the bound is set so a native that under-declares by an order of magnitude or
+// own convention is about 50 ns a unit; an honest decoder measures 25-255 here on a loaded
+// laptop (the cost-1 readers sit near 130-255, which is the interpreter's own per-node
+// overhead, dense JSON 50-100); 300 leaves a little headroom over that and still sits below
+// the 0.3-units-a-byte parse price that this test is the control for (300-330 on the dense
+// shapes); the bound is set so a native that under-declares by an order of magnitude or
 // more is an outlier, with room for a slow CI runner. It is not a tight calibration.
 // Cheap natives are called many times in one expression so a decode's fixed overhead does not
 // swamp the measurement.
-const maxNSPerCost = 500
+const maxNSPerCost = 300
 
 // nsPerOp is the best (minimum) mean time of one Decode over `samples` timed loops: the
 // minimum is the least noisy estimate of the cost of the work itself.
@@ -145,6 +148,15 @@ func nsCases() []nsCase {
 	add("hex.decode 2000 x4", textDoc("hex.decode", hexLit), fin)
 	add("base64.decode 1920 x4", textDoc("base64.decode", b64Lit), fin)
 	add("json parse 64 KiB", jrow("double(json.k)"), jin)
+	// The densest shapes a 64 KiB body can take: the most tokens per byte.
+	dense := func(name, item string) {
+		body := `{"a":[` + strings.TrimSuffix(strings.Repeat(item+",", MaxJSONBytes/(len(item)+1)-4), ",") + `]}`
+		add(name, jrow("has(json.a) ? 1.0 : 0.0"), Input{Frame: frame, JSON: []byte(body)})
+	}
+	dense("json dense zeros", "0")
+	dense("json dense {}", "{}")
+	dense("json dense []", "[]")
+	dense("json dense one-char strings", `"a"`)
 	add("lpp.decode 4 KiB", `{"kind":"CEL","envVersion":1,"input":"FRAME","let":[{"name":"m","expr":"lpp.decode(frame)"}],"sections":[{"name":"s","outputs":[{"key":"v","expr":"m.temperature_0"}]}]}`, Input{Frame: lpp})
 	add("json select x32", jrow(rep("double(json.a.z)", R)), jin)
 	add("json in/==", jrow("(json.type == \"x\" || json.k in [1, 2, 3]) ? 1 : 0"), jin)
