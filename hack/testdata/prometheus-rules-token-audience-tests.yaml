@@ -136,3 +136,93 @@ tests:
             exp_annotations:
               summary: "A client is sending tokens that the next minor release will refuse"
               description: "For at least an hour, devicechain/user-management has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
+
+  # ==================================================================
+  # OAuthResourceWouldReject: the authorization server's twin. The series is
+  # devicechain_usermanagement_oauth_resource_checks_total{grant, resource, verdict}, no tenant.
+  # ==================================================================
+
+  # MUST FIRE. A client keeps asking for an unlisted resource at the authorization endpoint.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="authorization_code", resource="unlisted", verdict="would_reject"}'
+        values: '0+2x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: OAuthResourceWouldReject
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              devicechain_instance: devicechain
+              job: devicechain/user-management
+            exp_annotations:
+              summary: "A client is asking for tokens bound to a resource this instance does not serve"
+              description: "For at least an hour, devicechain/user-management has been receiving token or authorization requests that name a resource this instance does not serve. They are being served today and counted as would_reject. The next minor release refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for the release that introduced the check."
+
+  # MUST NOT FIRE. Accepted requests of every class, however fast: the normal state.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="authorization_code", resource="mcp", verdict="accepted"}'
+        values: '0+500x180'
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="client_credentials", resource="none", verdict="accepted"}'
+        values: '0+500x180'
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="refresh_token", resource="area", verdict="accepted"}'
+        values: '0+500x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+      - eval_time: 170m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+
+  # MUST NOT FIRE. Enforce mode: the same traffic is "rejected", which the next release's alert
+  # watches; this one stays quiet so the two never double-report.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="client_credentials", resource="unlisted", verdict="rejected"}'
+        values: '0+2x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+
+  # MUST NOT FIRE. A single stray would-reject: it cannot complete the `for` hour.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="refresh_token", resource="malformed", verdict="would_reject"}'
+        values: '0 1x180'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+
+  # MUST NOT FIRE, pre-`for`. Sustained would-reject, evaluated before the hour is up: pending,
+  # not firing.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="authorization_code", resource="multiple", verdict="would_reject"}'
+        values: '0+1x180'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
+
+  # MUST NOT FIRE. The series is flat at zero.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_oauth_resource_checks_total{namespace="dci-devicechain", pod="dc-user-management-7c9f-abcde", job="devicechain/user-management", grant="authorization_code", resource="unlisted", verdict="would_reject"}'
+        values: '0x180'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: OAuthResourceWouldReject
+        exp_alerts: []
