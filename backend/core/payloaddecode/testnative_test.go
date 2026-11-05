@@ -4,6 +4,7 @@
 package payloaddecode
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/cel-go/cel"
@@ -24,7 +25,7 @@ func nativeUnderRuntime() fnSpec {
 		name: "test.underRuntime", overload: "test_under_runtime", sig: "test.underRuntime(bytes) -> int", doc: "test only",
 		args: []*cel.Type{cel.BytesType}, ret: cel.IntType,
 		bind:   cel.UnaryBinding(func(ref.Val) ref.Val { return types.Int(1) }),
-		static: constCost(1), actual: constActual(500),
+		static: constCost(1), actual: constActual(500), sizeDependent: true,
 	}
 }
 
@@ -32,7 +33,7 @@ func nativeUnderRuntime() fnSpec {
 // `rounds` times. Static and runtime agree, so only measuring ns per cost can catch it.
 func nativeWalker(name string, rounds int) fnSpec {
 	return fnSpec{
-		name: name, overload: "test_" + name, sig: name + "(bytes) -> int", doc: "test only",
+		name: name, overload: "test_" + strings.ReplaceAll(name, ".", "_"), sig: name + "(bytes) -> int", doc: "test only",
 		args: []*cel.Type{cel.BytesType}, ret: cel.IntType,
 		bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
 			b := []byte(v.(types.Bytes))
@@ -44,7 +45,7 @@ func nativeWalker(name string, rounds int) fnSpec {
 			}
 			return types.Int(sum)
 		}),
-		static: constCost(1), actual: constActual(1),
+		static: constCost(1), actual: constActual(1), sizeDependent: true,
 	}
 }
 
@@ -64,7 +65,7 @@ func nativeSleeper() fnSpec {
 var _ checker.AstNode
 
 func init() {
-	ownedFuncs = append(ownedFuncs, nativeUnderRuntime(), nativeWalker("test.walk", 200), nativeSleeper())
+	ownedFuncs = append(ownedFuncs, nativeUnderRuntime(), nativeWalker("test.walk1", 1), nativeWalker("test.walk", 200), nativeSleeper())
 	for i := range ownedFuncs {
 		byName[ownedFuncs[i].name] = &ownedFuncs[i]
 	}

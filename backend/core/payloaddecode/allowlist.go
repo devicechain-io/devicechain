@@ -42,6 +42,9 @@ type walker struct {
 	// runtime charges one unit for each, and cel-go's static estimate does not, so the
 	// compiler adds them.
 	dynSelects uint64
+	// sizeDependent is set when the expression calls a function whose work grows with its
+	// input.
+	sizeDependent bool
 }
 
 func (w *walker) fail(format string, args ...any) {
@@ -194,8 +197,18 @@ func (w *walker) call(e celast.Expr) {
 		w.expr(args[0], true)
 		w.expr(args[1], true)
 		return
-	case operators.Less, operators.LessEquals, operators.Greater, operators.GreaterEquals,
-		operators.Add, operators.Subtract, operators.Multiply, operators.Divide, operators.Modulo, operators.Negate:
+	case operators.Less, operators.LessEquals, operators.Greater, operators.GreaterEquals:
+		// Ordering takes STATICALLY numeric operands. A dynamic operand would reach cel-go's
+		// generic comparison, which compares whatever the value is (two long strings, say) at a
+		// cost nothing here estimates. Convert first: double(json.a) < double(json.b).
+		for _, a := range args {
+			if !isKind(w.typeOf(a), types.IntKind, types.UintKind, types.DoubleKind) {
+				w.fail("%s works on int, uint and double values only; convert a dynamic value first, as double(json.x)", displayName(fn))
+			}
+			w.expr(a, false)
+		}
+		return
+	case operators.Add, operators.Subtract, operators.Multiply, operators.Divide, operators.Modulo, operators.Negate:
 		for _, a := range args {
 			if !w.numeric(a) {
 				w.fail("%s works on int, uint and double values only", displayName(fn))
@@ -227,7 +240,8 @@ func (w *walker) call(e celast.Expr) {
 		w.expr(args[0], false)
 		return
 	}
-	if _, ok := byName[fn]; ok {
+	if f, ok := byName[fn]; ok {
+		w.sizeDependent = w.sizeDependent || f.sizeDependent
 		for i, a := range args {
 			// The text a decode function reads may be a literal.
 			w.expr(a, i == 0 && (fn == "hex.decode" || fn == "base64.decode"))

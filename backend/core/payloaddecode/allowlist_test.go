@@ -62,6 +62,8 @@ func TestOverloadAllowlist(t *testing.T) {
 		`json.a.startsWith("x") ? 1 : 0`,
 		`json.a.contains("x") ? 1 : 0`,
 		// dyn / computed access
+		`json.a < json.b ? 1 : 0`,
+		`json.a >= 1 ? 1 : 0`,
 		`double(json[json.k])`,
 		`double(json[string(1)])`,
 		`json.a == json.b ? 1 : 0`,
@@ -101,6 +103,7 @@ func TestOverloadAllowlist(t *testing.T) {
 		`-u8(frame, 0)`,
 		`u8(frame, 0) > 3 && u8(frame, 1) <= 9 || !(u8(frame, 2) != 4) ? 1 : 0`,
 		`double(u8(frame,0)) < 2.5 ? 1.0 : 2.0`,
+		`double(json.a) < double(json.b) ? 1 : 0`,
 		`uint(u8(frame,0)) > uint(3) ? 1 : 0`,
 		`u8(frame, 0) > uint(3) ? 1 : 0`,
 		`json.type == "x" ? 1 : 0`,
