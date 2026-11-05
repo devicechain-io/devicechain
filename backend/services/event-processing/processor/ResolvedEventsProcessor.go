@@ -1775,6 +1775,11 @@ func (rp *ResolvedEventsProcessor) run() {
 			// the interval checkpoint below only handles the case idle-advance did not: buffered
 			// acks/detections from live messages, or a suppressed (not-caught-up) advance.
 			rp.idleAdvance(rp.pctx(), now)
+			// A control-plane disarm queues its Resolved in the engine and dirties nothing; drain it
+			// here so the gate below sees it and a quiet stream still delivers the clear.
+			if !rp.stale {
+				rp.drainControlPlane()
+			}
 			// 🔴 THE TICK'S PASS IS ONLY AS GOOD AS ITS CHECKPOINT. The interval checkpoint is the
 			// one piece of the arm's work that can fail, and a tick filed complete over a
 			// checkpoint that did not commit would keep detect_tick's last-success stamp fresh
@@ -2191,6 +2196,21 @@ func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replay
 		rp.dirty = true
 	}
 	return len(dets)
+}
+
+// drainControlPlane moves detections the engine queued OUTSIDE message application into the pending
+// buffer. A dead-man disarm (applyArmRecheck, ApplyActiveVersion, a roster fact) emits a Resolved the
+// moment it runs, but the only drains are the next message's (applyResolved) and the idle advance's, so
+// with no message after it the checkpoint would commit the cleared latch while the Resolved never left
+// the engine: the downstream alarm would stay raised forever, because a restored engine holds no latch
+// and never re-emits it.
+//
+// Every path that commits a snapshot calls this first, so a checkpoint never covers state whose
+// detections are not yet buffered for publication. The detections are stamped with the wall clock and
+// are not early-publishable: a control-plane clear is not a replay re-derivation, so it waits for the
+// checkpoint that commits the latch it clears. When there is nothing to drain this is a no-op.
+func (rp *ResolvedEventsProcessor) drainControlPlane() {
+	rp.drainDetections(rp.clock.Now(), false)
 }
 
 // consumerBacklog reports the resolved-events durable consumer's UNDELIVERED (pending) and
@@ -2851,6 +2871,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	// Deliver-before-checkpoint: hand off every buffered detection first. If any fails
 	// (retryable broker error), defer the entire checkpoint so the producing messages stay
 	// unacked and a replay re-derives/re-emits.
+	rp.drainControlPlane()
 	defer rp.phases.enter(rp.phases.enter(phasePublish)) // hands the stopwatch back on every return below
 	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
 	published := rp.publishPending(pubCtx)
@@ -3444,6 +3465,11 @@ func (rp *ResolvedEventsProcessor) checkpointTimeout() time.Duration {
 // message redelivers/replays instead). It uses a fresh, bounded context because the loop
 // context is already cancelled by the time this runs.
 func (rp *ResolvedEventsProcessor) finalCheckpoint() {
+	// A disarm leaves its Resolved in the engine and dirties nothing, so the clean-loop early return
+	// below would skip the one flush that could deliver it.
+	if !rp.stale {
+		rp.drainControlPlane()
+	}
 	if !rp.dirty && len(rp.pendingAcks) == 0 && len(rp.pendingDets) == 0 {
 		return
 	}
