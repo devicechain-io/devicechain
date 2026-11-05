@@ -856,9 +856,11 @@ bounded by the sources you configure, so none of them is a cardinality risk to s
 | Alert | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `Lwm2mIngestLeaderCountNotOne` | critical | For 2 minutes, the number of lwm2m-ingest replicas reporting that they hold the leadership lease has not been exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. | Read the lwm2m-ingest logs for why no replica acquired the lease; typically the platform's message broker is unreachable. |
+| `Lwm2mIngestLeaderMetricAbsent` | critical | For 5 minutes, the lwm2m-ingest deployment has had pods available while no replica exports the `is_leader` series at all, so `Lwm2mIngestLeaderCountNotOne` cannot fire (an empty sum is not 1, it is nothing). Whether the CoAP/DTLS transport is being read is unknown. | Check the scrape target for lwm2m-ingest in Prometheus (a ServiceMonitor or PodMonitor change, a network policy, the metrics port or TLS) and the pods' `/metrics`, before the logs. It does not fire for an area that is not deployed or has no pod available; `InstanceAreaUnavailable` covers that. |
 | `Lwm2mIngestLeaderNotServing` | critical | For 5 minutes, a pod has held the LwM2M lease while its CoAP/DTLS read loop is not running (`is_leader` is 1 and `is_serving` is 0). It is stuck building its term, typically reading the asserted-active devices from device-state, and because it keeps the lease no standby can take over. No LwM2M device is being served. | Read that pod's log around `Acquired LwM2M leadership`, then restart the pod so a standby can acquire the lease. |
 | `Lwm2mIngestDroppingNotifications` | warning | In the last 10 minutes, for 10 minutes, lwm2m-ingest has dropped the readings of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path, so a device that reports rarely loses its reading. | Check the message broker, the backlog of the inbound-events stream (see [Backpressure on the ingest path](./observability.md#ingest-backpressure)) and the lwm2m-ingest log. Counted in `notify_ingest_dropped_total`. |
 | `SparkplugIngestLeaderCountNotOne` | critical | For 2 minutes, the number of sparkplug-ingest replicas reporting that they hold the lease has not been exactly 1. At 0, no Sparkplug source is being read. Above 1, two replicas connect the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently. | Configure the pod's sources or leave the service out of the deployment. Otherwise read the sparkplug-ingest logs for why no replica acquired the lease. |
+| `SparkplugIngestLeaderMetricAbsent` | critical | For 5 minutes, the sparkplug-ingest deployment has had pods available while no replica exports the `is_leader` series at all, so `SparkplugIngestLeaderCountNotOne` cannot fire. Whether any Sparkplug source is being read is unknown. | Check the scrape target for sparkplug-ingest in Prometheus (a ServiceMonitor or PodMonitor change, a network policy, the metrics port or TLS) and the pods' `/metrics`, before the logs. It does not fire for an area that is not deployed or has no pod available; `InstanceAreaUnavailable` covers that. |
 | `SparkplugIngestBrokerUnreachable` | warning | In the last 10 minutes, for 10 minutes, sparkplug-ingest has failed to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. | A bad host, a rejected credential or a broker outage all raise it. The sparkplug-ingest log names the source and the reason. Counted in `connect_failures_total`. |
 | `SparkplugIngestSubscriptionRefused` | warning | In the last 15 minutes, for 5 minutes, a Sparkplug source has been abandoned and retried because its broker accepted the connection but refused, or never acknowledged, a group subscription. While any group is refused, the source ingests none of its groups and never announces ONLINE. | Compare the broker's access rules for the source's credential with the groups configured for it; the credential most likely may not read one of them. Counted in `subscribe_failures_total`. |
 | `SparkplugIngestDroppingData` | warning | In the last 10 minutes, for 10 minutes, sparkplug-ingest has abandoned messages it accepted: their readings or presence transitions were dropped after the retry budget was spent, at once under backpressure, or at shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. | Check device-management and the message broker, and the sparkplug-ingest log for `Dropping Sparkplug samples`. Counted in `ingest_failures_total`. |
@@ -870,15 +872,17 @@ bounded by the sources you configure, so none of them is a cardinality risk to s
 
 The two `LeaderCountNotOne` alerts are the most load-bearing signal on this whole surface: zero means
 nobody is serving that transport, and every device on it is silently unreachable. They fire on a
-sum other than one, and they deliberately carry **no `absent()` arm**. A service that is not deployed
-exports nothing, and the chart's rules are not told which services an install runs. A deployed service
-with no running pod exports nothing either; that is a pod failing loudly in its own right, through
-restarts and readiness. If you want to be paged when the series does not exist at all, add the pairing
-yourself:
+sum other than one, and they deliberately carry **no `absent()` arm**: a bare `absent()` would page
+every instance that does not run the service. A sum over a series that does not exist is empty rather
+than zero, so these two alone would stay silent if the series vanished.
 
-> `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
->
-> `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
+That case has its own pair, `Lwm2mIngestLeaderMetricAbsent` and `SparkplugIngestLeaderMetricAbsent`.
+They fire when kube-state-metrics reports pods available for the service's Deployment and no replica
+exports `is_leader` at all, which means the scrape is broken or the metric is gone while the pods run.
+Keying on the Deployment is what keeps them silent where the service is not deployed, was scaled to
+zero on purpose, or has no pod available (`InstanceAreaUnavailable` covers that last case). They need
+kube-state-metrics, as that alert does. A normal takeover or rollout never fires them, because the
+standby replica exports `is_leader` as 0 throughout.
 
 A Sparkplug pod running with its sources unset registers its `is_leader` gauge at initialization,
 before it checks whether it has anything to serve, and then never acquires the lease. It publishes the

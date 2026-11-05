@@ -13,10 +13,21 @@ subscription the broker refused, a Sparkplug source broker that cannot be reache
 Notify samples dropped because ingest refused them. Until this group, none of the edge services'
 metrics fed any alert.
 
-NO absent() ARM on the leader alerts, for the same reason the external MQTT source alert has
-none: a service that is not deployed exports nothing, and the chart's rule file is not told
-which services an install runs. A deployed service with no running pod exports nothing either,
-and that is a pod failing loudly in its own right (restarts, readiness).
+NO absent() ARM ON THE COUNT ALERTS, for the same reason the external MQTT source alert has none:
+`sum(x) != 1` over a series that does not exist is empty and never fires, but a bare absent()
+would page every instance that does not run the area, because the rule file is not told which
+services an install runs. ABSENCE IS ITS OWN PAIR OF ALERTS, GATED ON THE DEPLOYMENT: the
+*LeaderMetricAbsent alerts fire when kube-state-metrics says the area's Deployment has pods
+available and NO is_leader series exists in the namespace (a broken scrape, a changed monitor
+or network policy). Keying on the Deployment is what separates "absent" from "not installed":
+an area the profile does not run, or one an operator turned off, has no Deployment or none
+available, so the alert is empty there. They are separate alerts (not an `or` arm on the count
+alerts) because the count alerts' description quotes the number of replicas holding the lease and an
+absence has no count; the remedy differs too (the scrape, not the lease). A Deployment with no
+available pod is InstanceAreaUnavailable's business. A handover or rollout keeps the series
+present (the standby exports 0 throughout) and `for: 5m` rides out a fresh pod's first scrape.
+Needs kube-state-metrics, like InstanceAreaUnavailable; without it these are empty and the
+count alerts keep their sum-only behaviour.
 
 A Sparkplug ingest pod deployed with NO sources configured registers is_leader at start and never
 acquires a lease, so it reads 0 for the life of the pod and SparkplugIngestLeaderCountNotOne fires
@@ -59,6 +70,36 @@ spec:
           annotations:
             summary: "Sparkplug ingest is not served by exactly one replica"
             description: "For at least 2 minutes, {{ "{{ $value }}" }} sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
+        # ABSENCE, gated on the Deployment. See the header. count(...) > 0, not sum(0 * ...): the
+        # value is irrelevant, and a bare comparison is what keeps this from being an always-firing shape.
+        - alert: Lwm2mIngestLeaderMetricAbsent
+          expr: |
+            count(
+              kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="lwm2m-ingest"} > 0
+              unless on (namespace)
+              devicechain_lwm2mingest_is_leader{namespace="{{ $ns }}"}
+            ) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "LwM2M ingest has pods available but exports no leader series"
+            description: "For at least 5 minutes, the lwm2m-ingest deployment has had pod(s) available while no replica exports devicechain_lwm2mingest_is_leader, so whether the transport is being read cannot be known: Lwm2mIngestLeaderCountNotOne reads an empty sum as healthy and cannot fire. The usual causes are a broken scrape (a ServiceMonitor or PodMonitor change, a network policy, a metrics port or TLS change) or a build without the metric. Check the scrape target for lwm2m-ingest in Prometheus, then the pods' /metrics, before reading the logs. This does not fire for an area that is not deployed or has no pod available (InstanceAreaUnavailable covers that)."
+        - alert: SparkplugIngestLeaderMetricAbsent
+          expr: |
+            count(
+              kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="sparkplug-ingest"} > 0
+              unless on (namespace)
+              devicechain_sparkplugingest_is_leader{namespace="{{ $ns }}"}
+            ) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug ingest has pods available but exports no leader series"
+            description: "For at least 5 minutes, the sparkplug-ingest deployment has had pod(s) available while no replica exports devicechain_sparkplugingest_is_leader, so whether the transport is being read cannot be known: SparkplugIngestLeaderCountNotOne reads an empty sum as healthy and cannot fire. The usual causes are a broken scrape (a ServiceMonitor or PodMonitor change, a network policy, a metrics port or TLS change) or a build without the metric. Check the scrape target for sparkplug-ingest in Prometheus, then the pods' /metrics, before reading the logs. This does not fire for an area that is not deployed or has no pod available (InstanceAreaUnavailable covers that)."
         # Read the pair together: is_leader goes up when the lease is acquired, is_serving only when
         # the read loop runs. Leader and not serving past a takeover's worth of time is a leader
         # wedged in building its term, which readiness, liveness and is_leader all report as healthy.

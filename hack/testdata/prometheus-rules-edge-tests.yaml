@@ -715,3 +715,122 @@ tests:
       - eval_time: 35m
         alertname: SparkplugCommandResponsesFailing
         exp_alerts: []
+
+  # ABSENCE, gated on the Deployment. The count alerts read an empty sum as quiet, so a leader
+  # series that vanished while the pods run (a broken scrape) used to page nobody.
+  # sparkplug-ingest: pods available, no leader series -> fires after 5m, not before.
+  # lwm2m-ingest: also no series but NO pod available (InstanceAreaUnavailable's case) -> quiet.
+  - name: leader series absent while the deployment has pods available fires
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="sparkplug-ingest"}'
+        values: '1x40'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="lwm2m-ingest"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SparkplugIngestLeaderMetricAbsent
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: SparkplugIngestLeaderMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest has pods available but exports no leader series"
+              description: "For at least 5 minutes, the sparkplug-ingest deployment has had pod(s) available while no replica exports devicechain_sparkplugingest_is_leader, so whether the transport is being read cannot be known: SparkplugIngestLeaderCountNotOne reads an empty sum as healthy and cannot fire. The usual causes are a broken scrape (a ServiceMonitor or PodMonitor change, a network policy, a metrics port or TLS change) or a build without the metric. Check the scrape target for sparkplug-ingest in Prometheus, then the pods' /metrics, before reading the logs. This does not fire for an area that is not deployed or has no pod available (InstanceAreaUnavailable covers that)."
+      - eval_time: 20m
+        alertname: Lwm2mIngestLeaderMetricAbsent
+        exp_alerts: []
+
+  # Area disabled for this instance: no Deployment here (one in ANOTHER namespace, and an unrelated
+  # one here) -> both silent. Must not behave like a bare absent().
+  - name: area not deployed here stays silent
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-other", deployment="sparkplug-ingest"}'
+        values: '1x40'
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="device-state"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugIngestLeaderMetricAbsent
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: Lwm2mIngestLeaderMetricAbsent
+        exp_alerts: []
+
+  # Exactly one leader (plus a standby) with the Deployment available: every alert quiet.
+  - name: exactly one leader with an available deployment is quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="sparkplug-ingest"}'
+        values: '2x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugIngestLeaderMetricAbsent
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts: []
+
+  # Two leaders with an available Deployment: the count alert fires (reading 2); the absence
+  # alert stays quiet because the series exists.
+  - name: two leaders with an available deployment fire the count alert only
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="lwm2m-ingest"}'
+        values: '2x40'
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: Lwm2mIngestLeaderMetricAbsent
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 2 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
+
+  # A fresh pod: the Deployment is available before the first scrape lands, then the series
+  # appears inside the 5m pending window -> quiet.
+  - name: a series that appears within the pending window is quiet
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="sparkplug-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '_ _ _ 1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugIngestLeaderMetricAbsent
+        exp_alerts: []
+
+  # The LwM2M twin: pods available, no leader series -> fires.
+  - name: lwm2m leader series absent while the deployment has pods available fires
+    interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="dci-devicechain", deployment="lwm2m-ingest"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: Lwm2mIngestLeaderMetricAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest has pods available but exports no leader series"
+              description: "For at least 5 minutes, the lwm2m-ingest deployment has had pod(s) available while no replica exports devicechain_lwm2mingest_is_leader, so whether the transport is being read cannot be known: Lwm2mIngestLeaderCountNotOne reads an empty sum as healthy and cannot fire. The usual causes are a broken scrape (a ServiceMonitor or PodMonitor change, a network policy, a metrics port or TLS change) or a build without the metric. Check the scrape target for lwm2m-ingest in Prometheus, then the pods' /metrics, before reading the logs. This does not fire for an area that is not deployed or has no pod available (InstanceAreaUnavailable covers that)."
