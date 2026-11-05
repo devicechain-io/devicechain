@@ -384,8 +384,12 @@ type GroupCommit struct {
 	timer *time.Timer
 	// stopped refuses new work once Stop ran.
 	stopped bool
-	// wg counts the flushes in flight.
+	// wg counts the flushes in flight. A batch is counted under mu, in the same critical section
+	// that closed it, so Stop (which takes mu to set stopped) either sees the batch counted or the
+	// batch was never closed: there is no window in which a closed batch is uncounted.
 	wg sync.WaitGroup
+	// afterUnlock, when set (tests only), runs between releasing mu and starting the flushes.
+	afterUnlock func()
 }
 
 // ErrGroupCommitStopped answers an Add after Stop.
@@ -410,6 +414,7 @@ func (g *GroupCommit) Add(tenant string, m FormedMember) error {
 		return ErrGroupCommitStopped
 	}
 	ready := g.f.Add(time.Now(), tenant, m)
+	g.wg.Add(len(ready))
 	g.rearmLocked()
 	g.mu.Unlock()
 	g.flushAll(ready)
@@ -425,6 +430,7 @@ func (g *GroupCommit) rearmLocked() {
 func (g *GroupCommit) tick() {
 	g.mu.Lock()
 	ready := g.f.Expired(time.Now())
+	g.wg.Add(len(ready))
 	g.rearmLocked()
 	g.mu.Unlock()
 	g.flushAll(ready)
@@ -432,10 +438,18 @@ func (g *GroupCommit) tick() {
 
 // flushAll publishes each closed batch on a goroutine of its own, so a batch whose PubAck stalls
 // (one tenant's stream trouble, a slow broker) never delays another batch's answer: not the
-// requests behind it in the same call, not the timer's next tick.
+// requests behind it in the same call, not the timer's next tick. The caller has already counted
+// every batch in ready on wg, under mu, in the critical section that closed them.
+//
+// A batch closes only under mu and only before Stop: Add refuses once stopped, and Stop drains
+// every open group in the same critical section that sets stopped, so a timer tick that runs
+// after Stop finds nothing to close. Every batch ever closed is therefore published before Stop
+// returns; a request that arrives after Stop is refused with ErrGroupCommitStopped, never queued.
 func (g *GroupCommit) flushAll(ready []FormedBatch) {
+	if g.afterUnlock != nil && len(ready) > 0 {
+		g.afterUnlock()
+	}
 	for _, b := range ready {
-		g.wg.Add(1)
 		go func() {
 			defer g.wg.Done()
 			g.flush(b)
@@ -449,6 +463,7 @@ func (g *GroupCommit) Stop() {
 	g.stopped = true
 	g.timer.Stop()
 	ready := g.f.Drain(time.Now())
+	g.wg.Add(len(ready))
 	g.mu.Unlock()
 	g.flushAll(ready)
 	g.wg.Wait()

@@ -181,3 +181,116 @@ func (d deniedRounds) Get(context.Context, string, uint64) (StoredMessage, error
 }
 
 var _ = sync.Mutex{}
+
+// gcSeam holds a flush between mu being released and the flush starting, once armed. It is
+// installed straight after NewGroupCommit, before anything can read the hook concurrently.
+type gcSeam struct {
+	armed   atomic.Bool
+	atSeam  chan struct{}
+	release chan struct{}
+}
+
+func installSeam(g *GroupCommit) *gcSeam {
+	s := &gcSeam{atSeam: make(chan struct{}), release: make(chan struct{})}
+	g.afterUnlock = func() {
+		if s.armed.CompareAndSwap(true, false) {
+			close(s.atSeam)
+			<-s.release
+		}
+	}
+	return s
+}
+
+// stopMustWaitFor arms the seam, runs closeBatch (which must make g close a batch), and once the
+// batch is closed but its flush not started, starts Stop. It fails if Stop returns before the
+// flush has run: the window the old code left a closed batch uncounted in.
+func stopMustWaitFor(t *testing.T, g *GroupCommit, s *gcSeam, flushed *atomic.Int32, closeBatch func()) {
+	t.Helper()
+	s.armed.Store(true)
+	go closeBatch()
+	<-s.atSeam
+
+	stopped := make(chan struct{})
+	go func() { g.Stop(); close(stopped) }()
+	// Stop takes mu first thing; once it has set stopped it is on its way to Wait.
+	for {
+		g.mu.Lock()
+		st := g.stopped
+		g.mu.Unlock()
+		if st {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-stopped:
+		t.Fatalf("Stop returned with a closed batch not yet published (flushed=%d)", flushed.Load())
+	case <-time.After(100 * time.Millisecond): // Stop is correctly waiting
+	}
+	close(s.release)
+	<-stopped
+	if flushed.Load() != 1 {
+		t.Fatalf("the batch closed before Stop must be published before Stop returns, flushed=%d", flushed.Load())
+	}
+}
+
+// GUARD: a batch Add closed (under mu) is counted on the wait group before mu is released, so a
+// Stop that slips in right after cannot return ahead of its publish.
+func TestGroupCommitStopWaitsForABatchAddJustClosed(t *testing.T) {
+	var flushed atomic.Int32
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(FormedBatch) { flushed.Add(1) })
+	seam := installSeam(g)
+	stopMustWaitFor(t, g, seam, &flushed, func() {
+		_ = g.Add("quiet", fm(1)) // a quiet tenant's lone event closes at once
+	})
+}
+
+// GUARD: the same for a batch the linger timer closed.
+func TestGroupCommitStopWaitsForABatchTheTimerJustClosed(t *testing.T) {
+	var flushed atomic.Int32
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(FormedBatch) { flushed.Add(1) })
+	seam := installSeam(g)
+	// Teach the former that the tenant is busy, so the next event waits for company.
+	for i := 0; i < 4; i++ {
+		_ = g.Add("busy", fm(1))
+	}
+	for { // let the warm-up groups close (by the timer) and publish
+		g.mu.Lock()
+		open := len(g.f.open)
+		g.mu.Unlock()
+		if open == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	g.wg.Wait()
+	flushed.Store(0)
+	stopMustWaitFor(t, g, seam, &flushed, func() {
+		// The tenant is busy, so this event waits for company and the linger timer closes it.
+		_ = g.Add("busy", fm(1))
+	})
+}
+
+// Policy for work that arrives once Stop has begun: nothing is queued and nothing is dropped. Add
+// is refused with ErrGroupCommitStopped, so its caller knows; a timer tick that runs after Stop
+// finds no open group (Stop drained them all under mu), so no batch closes after Stop.
+func TestGroupCommitNothingClosesAfterStopAndLateAddsAreRefused(t *testing.T) {
+	var flushed atomic.Int32
+	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
+	g := NewGroupCommit(f, func(b FormedBatch) { flushed.Add(int32(len(b.Members))) })
+	for i := 0; i < 4; i++ {
+		_ = g.Add("busy", fm(1))
+	}
+	g.Stop()
+	before := flushed.Load()
+	if err := g.Add("busy", fm(1)); err != ErrGroupCommitStopped {
+		t.Fatalf("an Add after Stop must be refused with ErrGroupCommitStopped, got %v", err)
+	}
+	g.tick() // a tick that was already running when Stop stopped the timer
+	g.wg.Wait()
+	if got := flushed.Load(); got != before {
+		t.Fatalf("a member that arrived after Stop was published (flushed %d -> %d)", before, got)
+	}
+}
