@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // IsUnavailable reports whether err means the peer could not be REACHED or could not serve right
@@ -46,8 +47,15 @@ func IsUnavailable(err error) bool {
 	// unsupported scheme or a redirect loop is a request that can never succeed.
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return ue.Timeout() || (ue.Err != nil && IsUnavailable(ue.Err))
+		return ue.Timeout() || (ue.Err != nil && (IsUnavailable(ue.Err) || serverClosedIdle(ue.Err)))
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr)
+}
+
+// serverClosedIdle recognises the transport's error for a pooled connection the server closed while
+// a request was being sent. net/http keeps it unexported and plain (neither a net.Error nor
+// io.EOF), and does not retry a POST after it, yet it is exactly a transient connection failure.
+func serverClosedIdle(err error) bool {
+	return strings.Contains(err.Error(), "http: server closed idle connection")
 }

@@ -22,6 +22,7 @@ func TestIsUnavailable(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
+		{"the server closed a pooled connection mid-POST", &url.Error{Op: "Post", URL: "http://x", Err: errors.New("http: server closed idle connection")}, true},
 		{"an unsupported scheme", &url.Error{Op: "Post", URL: "ftp://x", Err: errors.New("unsupported protocol scheme")}, false},
 		{"a redirect loop", &url.Error{Op: "Post", URL: "http://x", Err: errors.New("stopped after 10 redirects")}, false},
 		{"cancelled by the caller", fmt.Errorf("svcclient: %w", context.Canceled), false},
