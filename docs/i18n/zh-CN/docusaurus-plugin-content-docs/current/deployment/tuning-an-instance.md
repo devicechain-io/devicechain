@@ -128,7 +128,7 @@ dcctl upgrade local my-instance --version <new-version>
   （`pg_stat_wal` 的 `wal_bytes` 在某个时间窗口内的增量），它取决于行宽和索引。GKE 基准测试中的实例：
   在默认的 13 GiB 上限下，事件库在每秒 8,000 个 MQTT 事件（日志 9.4 MB/s）时按时钟做检查点，但在
   每秒 12,000 个（15.3 MB/s）时会提前请求检查点，而不是等待计时器，因为 15 MB/s 不到八分钟就会写出
-  约 7 GB。按 15.3 MB/s，该规则给出约 26 GiB；每秒 20,000 个时约为 45 GiB。日志位于数据卷上，因此
+  约 7 GB。按 15.3 MB/s，该规则给出约 26 GiB；每秒 20,000 个时约为 45 GiB（后者是外推而非实测；请向上取整并测量您自己的速率）。日志位于数据卷上，因此
   规划卷容量时除数据外还要容纳这个上限。上文的三倍是在此最小值之上应保留的余量。
   这些设置只调优事件库。关系型数据库保持自己的默认值（`max_wal_size` 为 1 GB，`checkpoint_timeout`
   为 5 分钟）；同一次基准测试中它在每个 7.5 分钟窗口内请求了 3 到 6 次检查点，日志速率为
@@ -163,7 +163,7 @@ pvc` 仍显示旧容量，请自行扩容卷声明。关系型数据库（Cluste
 除事件库外，`DatabaseVolumeFillingUp`、`DatabaseVolumeAlmostFull` 和 `DatabaseVolumeCritical`
 也在监控它。
 
-1. 确认 StorageClass 允许扩容。否则修改会被拒绝，只剩上文所述的办法：
+1. 确认 StorageClass 允许扩容。否则修改会被拒绝，只剩缩短保留期（分块被删除时会释放空间）或恢复到更大的集群这两条路：
 
    ```bash
    kubectl -n <实例命名空间> get pvc dc-tsdb-1 -o jsonpath='{.spec.storageClassName}{"\n"}'
@@ -181,12 +181,12 @@ pvc` 仍显示旧容量，请自行扩容卷声明。关系型数据库（Cluste
    ```
 
 3. 让 Cluster 的 `spec.storage.size` 和 `timescale_storage` 设置保持同一容量（见上文），使算子和下一次
-   应用与您的操作一致。
+   应用与您的操作一致。如果您也扩容了 `-wal` 卷声明，请把 Cluster 的 `spec.walStorage.size` 同步设为相同值。
 
 确认完成之前请验证：
 
 - `kubectl -n <实例命名空间> get pvc` 在每个成员的 `CAPACITY` 列显示新容量。卷声明若停留在
-  `FileSystemResizePending` 状态，会在其 Pod 重启时扩容文件系统：删除该 Pod。
+  `FileSystemResizePending` 状态，会在其 Pod 重启时扩容文件系统：删除该 Pod，一次一个成员，等它恢复就绪后再处理下一个，主库最后。
 - 在数据库容器内执行 `df -h`（`kubectl -n <实例命名空间> exec dc-tsdb-1 -c postgres --
   df -h /var/lib/postgresql/data`）显示更大的文件系统。
 - 告警会随空闲比例上升而恢复：先是 `DatabaseVolumeCritical` 和 `DatabaseVolumeAlmostFull`，然后是

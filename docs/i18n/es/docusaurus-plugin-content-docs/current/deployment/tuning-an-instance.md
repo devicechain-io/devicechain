@@ -177,7 +177,8 @@ de lecturas por segundo.
   de 13 GiB, el almacén de eventos hizo puntos de control por reloj a 8.000 eventos MQTT por segundo
   (9,4 MB/s de registro), pero a 12.000 por segundo (15,3 MB/s) solicitó un punto de control en lugar
   de esperar al temporizador, porque 15 MB/s escriben unos 7 GB en menos de ocho minutos. A 15,3 MB/s
-  la regla da unos 26 GiB, y unos 45 GiB a 20.000 por segundo. El registro vive en el volumen de
+  la regla da unos 26 GiB, y unos 45 GiB a 20.000 por segundo (esta última cifra es una extrapolación, no una
+  medición; redondee hacia arriba y mida su propia tasa). El registro vive en el volumen de
   datos, así que dimensione el volumen para ese límite además de para los datos. El triple indicado
   arriba es el margen que conviene mantener sobre este mínimo.
   Estos ajustes afinan solo el almacén de eventos. La base de datos relacional conserva sus valores
@@ -226,7 +227,8 @@ datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `Data
 `DatabaseVolumeAlmostFull` y `DatabaseVolumeCritical` además del almacén de eventos.
 
 1. Compruebe que la StorageClass permite la expansión. Sin ella el cambio se rechaza y las únicas
-   salidas son las descritas arriba:
+   salidas son acortar la retención (que libera espacio al descartarse fragmentos) o restaurar en un
+   Cluster mayor:
 
    ```bash
    kubectl -n <espacio de nombres de la instancia> get pvc dc-tsdb-1 -o jsonpath='{.spec.storageClassName}{"\n"}'
@@ -246,13 +248,15 @@ datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `Data
    ```
 
 3. Mantenga `spec.storage.size` del Cluster y el ajuste `timescale_storage` en el mismo tamaño, como
-   se describió antes, para que el operador y la siguiente aplicación coincidan con lo que hizo.
+   se describió antes, para que el operador y la siguiente aplicación coincidan con lo que hizo. Si
+   también amplió reclamaciones `-wal`, ajuste `spec.walStorage.size` del Cluster al mismo valor.
 
 Verifique antes de darlo por terminado:
 
 - `kubectl -n <espacio de nombres de la instancia> get pvc` muestra la nueva capacidad en `CAPACITY`
   para todos los miembros. Una reclamación que queda con la condición `FileSystemResizePending`
-  amplía su sistema de archivos al reiniciarse su pod: elimine el pod.
+  amplía su sistema de archivos al reiniciarse su pod: elimine el pod, un miembro cada vez, esperando
+  a que vuelva a estar listo antes del siguiente, y el primario al final.
 - `df -h` dentro del contenedor de la base de datos (`kubectl -n <espacio de nombres de la
   instancia> exec dc-tsdb-1 -c postgres -- df -h /var/lib/postgresql/data`) informa del sistema de
   archivos mayor.

@@ -167,7 +167,8 @@ readings per second.
   default 13 GiB limit the event store checkpointed on the clock at 8,000 MQTT events a second
   (9.4 MB/s of log), but at 12,000 a second (15.3 MB/s) it requested a checkpoint instead of
   waiting for the timer, because 15 MB/s writes about 7 GB in under eight minutes. At 15.3 MB/s the
-  rule gives about 26 GiB, and about 45 GiB at 20,000 a second. The log lives on the data volume, so
+  rule gives about 26 GiB, and about 45 GiB at 20,000 a second (that last figure is an extrapolation, not a measurement: round
+  up and measure your own rate). The log lives on the data volume, so
   size the volume for that limit as well as for the data. The factor of three above is the margin to
   keep on top of this minimum.
   These settings tune the event store only. The relational database keeps its own defaults
@@ -214,7 +215,8 @@ same applies to the relational database (Cluster `dc-rdb`, claims `dc-rdb-N`), w
 the event store.
 
 1. Check that the StorageClass allows expansion. Without it the patch is refused, and the only ways
-   out are the ones above:
+   out are shortening retention (which frees space as chunks are dropped) or restoring into a larger
+   cluster:
 
    ```bash
    kubectl -n <instance namespace> get pvc dc-tsdb-1 -o jsonpath='{.spec.storageClassName}{"\n"}'
@@ -233,13 +235,15 @@ the event store.
    ```
 
 3. Keep the Cluster's `spec.storage.size` and the `timescale_storage` setting at the same size, as
-   described above, so the operator and the next apply agree with what you did.
+   described above, so the operator and the next apply agree with what you did. If you also grew
+   `-wal` claims, set the Cluster's `spec.walStorage.size` to match.
 
 Verify before you call it done:
 
 - `kubectl -n <instance namespace> get pvc` shows the new capacity under `CAPACITY` for every
   member. A claim left with a `FileSystemResizePending` condition grows its filesystem when its pod
-  restarts: delete the pod.
+  restarts: delete the pod, one member at a time, waiting for it to be ready again before the next,
+  and the primary last.
 - `df -h` inside the database container (`kubectl -n <instance namespace> exec dc-tsdb-1 -c postgres
   -- df -h /var/lib/postgresql/data`) reports the larger filesystem.
 - The alerts clear as the free fraction rises: `DatabaseVolumeCritical` and
