@@ -1,10 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package integration
+package integrationcodec
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"regexp"
 
@@ -38,6 +37,8 @@ type csUplink struct {
 	DeviceInfo      struct {
 		DevEui string `json:"devEui"`
 	} `json:"deviceInfo"`
+	FPort  json.Number     `json:"fPort"`
+	FCnt   json.Number     `json:"fCnt"`
 	Data   string          `json:"data"`
 	Object json.RawMessage `json:"object"`
 	RxInfo []struct {
@@ -83,14 +84,21 @@ func decodeChirpStack(d *Descriptor, r *Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	fPort, err := loraPort(up.FPort, "fPort")
+	if err != nil {
+		return nil, err
+	}
+	fCnt, err := loraCounter(up.FCnt, "fCnt")
+	if err != nil {
+		return nil, err
+	}
 	u := Uplink{
 		Identifier: eui, Scheme: devicealias.SchemeDevEUI,
 		AltId: "cs:" + up.DeduplicationId, Time: at, SenderTime: sender, Decoded: object,
+		FPort: fPort, FCnt: fCnt,
 	}
 	if up.Data != "" {
-		if frame, err := base64.StdEncoding.DecodeString(up.Data); err == nil {
-			u.Frame = frame
-		}
+		u.SetFrame(up.Data, EncodingBase64)
 	}
 	if d.LinkMetrics {
 		link := &Link{Gateways: len(up.RxInfo)}

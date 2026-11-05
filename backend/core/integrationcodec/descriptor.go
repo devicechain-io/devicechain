@@ -1,18 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package integration is event-sources' half of an inbound integration: a tenant's authenticated
+// Package integrationcodec is the parsing half of an inbound integration: a tenant's authenticated
 // sender of device data over HTTP, such as a LoRaWAN network server or a webhook.
 //
-// It holds the pieces the ingest route is built from and that carry no HTTP of their own: the
-// envelope codecs (ChirpStack v4 JSON, The Things Stack v3 JSON, generic JSON, generic binary),
-// the flattening of a network server's already-decoded object into measurement readings, the
-// cached pre-check that authenticates a sender before a byte of its body is read, the per-
-// integration bad-credential budget, and the cached device lookup.
-//
-// Nothing here publishes. The route owns the gates and the publish, and is the only code that
-// may mark an event as an integration's (see the guard in processor).
-package integration
+// It holds the envelope codecs (ChirpStack v4 JSON, The Things Stack v3 JSON, generic JSON,
+// generic binary) and the flattening of a network server's already-decoded object into
+// measurement readings. They carry no HTTP and no I/O of their own, and they live in core so that
+// event-sources (ingest) and device-management (the decoder test panel) run one parser and cannot
+// drift.
+package integrationcodec
 
 import (
 	"encoding/json"

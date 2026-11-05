@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -124,7 +125,7 @@ type Authenticator struct {
 }
 
 type authEntry struct {
-	desc *Descriptor
+	desc *integrationcodec.Descriptor
 	at   time.Time
 }
 
@@ -148,7 +149,7 @@ func NewAuthenticator(backend Backend, cfg AuthConfig) *Authenticator {
 type Checked struct {
 	// Descriptor is what the integration is. Enabled may be false: a switched-off integration's
 	// token is valid, and the caller refuses its traffic without calling it a bad credential.
-	Descriptor *Descriptor
+	Descriptor *integrationcodec.Descriptor
 	// Stale says the answer is older than Fresh and was served because device-management could
 	// not be asked (or the budget was spent).
 	Stale bool

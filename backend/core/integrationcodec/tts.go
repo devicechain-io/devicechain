@@ -1,10 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package integration
+package integrationcodec
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -39,6 +38,7 @@ type ttsUp struct {
 	} `json:"end_device_ids"`
 	ReceivedAt    *string `json:"received_at"`
 	UplinkMessage *struct {
+		FPort          json.Number     `json:"f_port"`
 		FCnt           json.Number     `json:"f_cnt"`
 		FrmPayload     string          `json:"frm_payload"`
 		DecodedPayload json.RawMessage `json:"decoded_payload"`
@@ -102,12 +102,18 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 		return nil, err
 	}
 	fcnt := "0"
+	var fCnt int64
 	if s := m.FCnt.String(); s != "" {
 		n, err := strconv.ParseUint(s, 10, 32)
 		if err != nil {
 			return nil, malformed("f_cnt is not a frame counter: %q", clip(s))
 		}
 		fcnt = strconv.FormatUint(n, 10)
+		fCnt = int64(n)
+	}
+	fPort, err := loraPort(m.FPort, "f_port")
+	if err != nil {
+		return nil, err
 	}
 	deviceKey := id
 	if scheme != devicealias.SchemeDevEUI && up.EndDeviceIds.DevEui != "" {
@@ -123,11 +129,10 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 		Identifier: id, Scheme: scheme,
 		AltId: "tts:" + deviceKey + ":" + fcnt + ":" + at.Format(time.RFC3339Nano),
 		Time:  at, SenderTime: true, Decoded: object,
+		FPort: fPort, FCnt: fCnt,
 	}
 	if m.FrmPayload != "" {
-		if frame, err := base64.StdEncoding.DecodeString(m.FrmPayload); err == nil {
-			u.Frame = frame
-		}
+		u.SetFrame(m.FrmPayload, EncodingBase64)
 	}
 	if d.LinkMetrics {
 		link := &Link{Gateways: len(m.RxMetadata)}

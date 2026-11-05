@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/integration"
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/stretchr/testify/require"
@@ -41,14 +42,14 @@ type routeBackend struct {
 	// good is the one bearer that authenticates; enabled says whether the integration is on.
 	good    string
 	enabled bool
-	desc    func() integration.Descriptor
+	desc    func() integrationcodec.Descriptor
 	down    bool
 	// resolve answers resolveIntegrationDevice; the default resolves every identifier.
 	resolve   func(scheme, value string) (integration.Resolution, error)
 	undecoded []string
 }
 
-func (b *routeBackend) Auth(_ context.Context, _, slug, bearer string) (*integration.Descriptor, error) {
+func (b *routeBackend) Auth(_ context.Context, _, slug, bearer string) (*integrationcodec.Descriptor, error) {
 	b.authCalls.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -58,7 +59,7 @@ func (b *routeBackend) Auth(_ context.Context, _, slug, bearer string) (*integra
 	if slug != "cs" || bearer != b.good {
 		return nil, nil
 	}
-	d := integration.Descriptor{Token: slug, Type: integration.ChirpStackV4, Enabled: b.enabled, Identity: "DEV_EUI"}
+	d := integrationcodec.Descriptor{Token: slug, Type: integrationcodec.ChirpStackV4, Enabled: b.enabled, Identity: "DEV_EUI"}
 	if b.desc != nil {
 		d = b.desc()
 		d.Token, d.Enabled = slug, b.enabled
@@ -198,7 +199,7 @@ func (h *routeHarness) post(path, bearer, body string, mutate ...func(*http.Requ
 
 func fixtureBody(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile("../integration/testdata/" + name)
+	b, err := os.ReadFile("../../../core/integrationcodec/testdata/" + name)
 	require.NoError(t, err)
 	return string(b)
 }
@@ -267,8 +268,8 @@ func TestAnIntegrationUplinkIsPublishedAsAnOrdinaryMeasurementMarkedAsTheIntegra
 
 func TestLinkMetricsAreStoredWhenTheIntegrationAsksForThem(t *testing.T) {
 	h := newRouteHarness(t)
-	h.backend.desc = func() integration.Descriptor {
-		return integration.Descriptor{Type: integration.ChirpStackV4, Identity: "DEV_EUI", LinkMetrics: true}
+	h.backend.desc = func() integrationcodec.Descriptor {
+		return integrationcodec.Descriptor{Type: integrationcodec.ChirpStackV4, Identity: "DEV_EUI", LinkMetrics: true}
 	}
 	require.Equal(t, http.StatusAccepted, h.up().Code)
 	m := h.published1().payload.(*model.UnresolvedMeasurementsPayload).Entries[0].Measurements
@@ -482,7 +483,7 @@ func TestARefusedBodyIsReportedAndNeverPublished(t *testing.T) {
 	require.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
 	require.Contains(t, rec.Body.String(), "JSON")
 
-	rec = h.post(csPath+upQuery, goodBearer, strings.Repeat("a", integration.MaxBodyBytes+1))
+	rec = h.post(csPath+upQuery, goodBearer, strings.Repeat("a", integrationcodec.MaxBodyBytes+1))
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 
 	bad := strings.Replace(fixtureBody(t, "chirpstack/up_decoded.json"), "0101010101010101", "01", 1)
@@ -584,8 +585,8 @@ func TestPathNamesAreValidated(t *testing.T) {
 
 func TestTheThingsStackPerMessagePathsAndGenericArrays(t *testing.T) {
 	h := newRouteHarness(t)
-	h.backend.desc = func() integration.Descriptor {
-		return integration.Descriptor{Type: integration.TTSV3, Identity: "DEV_EUI"}
+	h.backend.desc = func() integrationcodec.Descriptor {
+		return integrationcodec.Descriptor{Type: integrationcodec.TTSV3, Identity: "DEV_EUI"}
 	}
 	h.now = time.Date(2020, 2, 12, 15, 15, 47, 0, time.UTC)
 	body := fixtureBody(t, "tts/up_decoded.json")
@@ -598,9 +599,9 @@ func TestTheThingsStackPerMessagePathsAndGenericArrays(t *testing.T) {
 
 func TestAGenericArrayPublishesEveryKnownItemAndSkipsTheRest(t *testing.T) {
 	h := newRouteHarness(t)
-	h.backend.desc = func() integration.Descriptor {
+	h.backend.desc = func() integrationcodec.Descriptor {
 		g := `{"idFrom":"pointer:/sensor","itemsPointer":"/readings","timePointer":"/ts"}`
-		return integration.Descriptor{Type: integration.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
 	}
 	h.now = time.Date(2026, 10, 26, 10, 1, 0, 0, time.UTC)
 	h.backend.resolve = func(_, value string) (integration.Resolution, error) {
@@ -625,9 +626,9 @@ func TestAGenericArrayPublishesEveryKnownItemAndSkipsTheRest(t *testing.T) {
 
 func TestTheSameUplinkTwiceInOneRequestIsPublishedOnce(t *testing.T) {
 	h := newRouteHarness(t)
-	h.backend.desc = func() integration.Descriptor {
+	h.backend.desc = func() integrationcodec.Descriptor {
 		g := `{"idFrom":"pointer:/id","timePointer":"/t"}`
-		return integration.Descriptor{Type: integration.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
 	}
 	item := `{"id":"p1","v":1,"t":"2022-07-18T09:34:00Z"}`
 	require.Equal(t, http.StatusAccepted, h.post(csPath, goodBearer, "["+item+","+item+"]").Code)
@@ -639,9 +640,9 @@ func TestTheSameUplinkTwiceInOneRequestIsPublishedOnce(t *testing.T) {
 // and once more for each further uplink after the codec, before any device is looked up.
 func TestEachUplinkOfAnArrayIsChargedToTheMessageGateBeforeAnyLookup(t *testing.T) {
 	h := newRouteHarness(t)
-	h.backend.desc = func() integration.Descriptor {
+	h.backend.desc = func() integrationcodec.Descriptor {
 		g := `{"idFrom":"pointer:/id"}`
-		return integration.Descriptor{Type: integration.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericJSON, Identity: "ALIAS:custom.pump", Generic: &g}
 	}
 	lookups := 0
 	h.backend.resolve = func(_, v string) (integration.Resolution, error) {
@@ -674,9 +675,9 @@ func TestEachUplinkOfAnArrayIsChargedToTheMessageGateBeforeAnyLookup(t *testing.
 // A codec failure that is not the sender's mistake has a label of its own, not the pre-check's.
 func TestACodecDefectIsCountedAsAnInternalErrorNotAPreCheckOutage(t *testing.T) {
 	h := newRouteHarness(t)
-	h.backend.desc = func() integration.Descriptor {
+	h.backend.desc = func() integrationcodec.Descriptor {
 		g := `{"idFrom":"pointer:/id"}` // a binary integration cannot name a pointer into a body it cannot read
-		return integration.Descriptor{Type: integration.GenericBinary, Identity: "ALIAS:custom.pump", Generic: &g}
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericBinary, Identity: "ALIAS:custom.pump", Generic: &g}
 	}
 	rec := h.post(csPath, goodBearer, "")
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)

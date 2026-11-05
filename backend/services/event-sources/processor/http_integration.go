@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/devicechain-io/dc-microservice/transport"
@@ -107,8 +108,8 @@ var IntegrationUplinkResults = []string{
 // IntegrationTypes are the type label values of integration_requests_total: the four registered
 // types, and "unknown" for a request refused before its integration was known.
 var IntegrationTypes = []string{
-	string(integration.ChirpStackV4), string(integration.TTSV3), string(integration.GenericJSON),
-	string(integration.GenericBinary), "unknown",
+	string(integrationcodec.ChirpStackV4), string(integrationcodec.TTSV3), string(integrationcodec.GenericJSON),
+	string(integrationcodec.GenericBinary), "unknown",
 }
 
 // IntegrationMetrics is how the route reports. Any nil field is skipped. None of them carries a
@@ -295,13 +296,13 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 
 	// 4. The body.
-	r.Body = http.MaxBytesReader(w, r.Body, integration.MaxBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, integrationcodec.MaxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			m.request(typ, ResultTooLarge)
-			http.Error(w, fmt.Sprintf("request body is over the limit of %d bytes", integration.MaxBodyBytes), http.StatusRequestEntityTooLarge)
+			http.Error(w, fmt.Sprintf("request body is over the limit of %d bytes", integrationcodec.MaxBodyBytes), http.StatusRequestEntityTooLarge)
 			return
 		}
 		m.request(typ, ResultBadEnvelope)
@@ -311,18 +312,18 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	es.received(es.Id, body)
 	receivedAt := rt.now().UTC()
 
-	result, err := integration.Decode(desc, &integration.Request{
+	result, err := integrationcodec.Decode(desc, &integrationcodec.Request{
 		Body: body, Header: r.Header, Query: r.URL.Query(), ContentType: r.Header.Get("Content-Type"),
 		MessageType: messageType, ReceivedAt: receivedAt,
 	})
 	switch {
 	case err == nil:
-	case errors.Is(err, integration.ErrUnsupportedEncoding):
+	case errors.Is(err, integrationcodec.ErrUnsupportedEncoding):
 		m.request(typ, ResultUnsupportedEncoding)
 		http.Error(w, "the body is in an encoding this platform does not read: set the sender's integration "+
 			"encoding to JSON (ChirpStack: the HTTP integration's \"JSON\" encoding)", http.StatusUnsupportedMediaType)
 		return
-	case errors.Is(err, integration.ErrMalformed):
+	case errors.Is(err, integrationcodec.ErrMalformed):
 		m.request(typ, ResultBadEnvelope)
 		es.failed(es.Id, tenant, body, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -400,14 +401,14 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		var link *integration.Link
+		var link *integrationcodec.Link
 		if desc.LinkMetrics {
 			link = up.Link
 		}
-		var flat integration.Flattened
+		var flat integrationcodec.Flattened
 		if up.Decoded != nil {
-			flat, err = integration.Flatten(up.Decoded, link)
-			var tooMany integration.ErrTooManyReadings
+			flat, err = integrationcodec.Flatten(up.Decoded, link)
+			var tooMany integrationcodec.ErrTooManyReadings
 			if errors.As(err, &tooMany) {
 				m.uplink(UplinkTooManyReadings)
 				m.request(typ, ResultBadEnvelope)
@@ -513,7 +514,7 @@ func integrationDedupKey(deviceToken, altId string) string {
 // still produces the same id, which is the dedup this exists for.
 //
 // The device and AltId are hashed rather than concatenated: a device token and an AltId (up to
-// integration.MaxAltIdLen bytes) together would make a long id held for the whole window in every
+// integrationcodec.MaxAltIdLen bytes) together would make a long id held for the whole window in every
 // replica, and a hash is a fixed 43 bytes whatever either holds. 256 bits, so a collision is not a
 // concern. The tenant stays in the clear, as on every other inbound id.
 func integrationDedupID(tenant, deviceToken, altId string) string {

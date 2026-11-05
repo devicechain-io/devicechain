@@ -1,12 +1,10 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package integration
+package integrationcodec
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -144,29 +142,26 @@ func senderTime(item map[string]any, s *GenericSettings, r *Request) (time.Time,
 	return t.UTC(), true, nil
 }
 
-// frameOf reads the encoded raw frame an item carries at framePointer, only to sample it when
-// the item turns out to hold nothing to read.
-func frameOf(item map[string]any, s *GenericSettings) []byte {
+// frameTextOf reads the encoded raw frame an item carries at framePointer, as the text the
+// sender wrote and the encoding the integration says it is in. found is false when there is no
+// framePointer, nothing at it, or a value that is not text.
+func frameTextOf(item map[string]any, s *GenericSettings) (text, encoding string, found bool) {
 	if s.FramePointer == "" {
-		return nil
+		return "", "", false
 	}
 	v, ok := pointerGet(item, s.FramePointer)
 	if !ok {
-		return nil
+		return "", "", false
 	}
-	text, ok := v.(string)
+	text, ok = v.(string)
 	if !ok {
-		return nil
+		return "", "", false
 	}
-	switch strings.ToUpper(s.FrameEncoding) {
-	case "HEX":
-		b, _ := hex.DecodeString(text)
-		return b
-	case "BASE64":
-		b, _ := base64.StdEncoding.DecodeString(text)
-		return b
+	switch enc := strings.ToUpper(s.FrameEncoding); enc {
+	case EncodingHex, EncodingBase64:
+		return text, enc, true
 	}
-	return nil
+	return "", "", false
 }
 
 func decodeGenericJSON(d *Descriptor, r *Request) (*Result, error) {
@@ -248,7 +243,10 @@ func decodeGenericJSON(d *Descriptor, r *Request) (*Result, error) {
 			return nil, malformed("item %d: %v", i, err)
 		}
 
-		u := Uplink{Identifier: id, Scheme: scheme, Time: at, SenderTime: sender, Frame: frameOf(item, s)}
+		u := Uplink{Identifier: id, Scheme: scheme, Time: at, SenderTime: sender, FPort: NoLoRaWAN, FCnt: NoLoRaWAN}
+		if text, enc, ok := frameTextOf(item, s); ok {
+			u.SetFrame(text, enc)
+		}
 		digest := shaHex([]byte(id), canonical)
 		if sender {
 			u.AltId = "gen:" + digest + ":" + at.Format(time.RFC3339Nano)
@@ -300,6 +298,6 @@ func decodeGenericBinary(d *Descriptor, r *Request) (*Result, error) {
 	return &Result{Uplinks: []Uplink{{
 		Identifier: id, Scheme: scheme, Time: at,
 		AltId: "gen:" + shaHex([]byte(id), r.Body) + "-" + strconv.FormatInt(at.UnixMilli(), 10),
-		Frame: r.Body,
+		Frame: r.Body, FPort: NoLoRaWAN, FCnt: NoLoRaWAN,
 	}}}, nil
 }
