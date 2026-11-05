@@ -320,7 +320,7 @@ las alertas `Sso*` y de almacén de credenciales, `TenantPurge*`,
 **Úselo cuando los nodos Sparkplug dejan de reportar, o cuando el host Sparkplug no está leyendo.**
 Sigue un transporte desde la conexión con el broker hasta las lecturas almacenadas y los comandos
 enviados de vuelta a los nodos de borde. El servicio es opcional: en una instancia que no lo
-ejecuta, todos los paneles muestran «sin datos».
+ejecuta, todos los paneles muestran «sin datos» o cero.
 
 | Grupo | Qué muestra |
 | --- | --- |
@@ -338,7 +338,7 @@ Alertas que lo respaldan: las alertas `SparkplugIngest*` y `SparkplugCommand*` d
 **Úselo cuando no se puede alcanzar a los dispositivos LwM2M, dejan de reportar o sus comandos no llegan.**
 Cubre el servidor CoAP y DTLS, la flota que mantiene, las lecturas que almacena y la ruta de
 comandos hacia los dispositivos. El servicio es opcional: en una instancia que no lo ejecuta, todos
-los paneles muestran «sin datos».
+los paneles muestran «sin datos» o cero.
 
 | Grupo | Qué muestra |
 | --- | --- |

@@ -315,7 +315,7 @@ the `Sso*` and credential-store alerts, `TenantPurge*`,
 **Use it when Sparkplug nodes stop reporting, or when the Sparkplug host is not reading.** It
 follows one transport from the broker connection to the readings stored, and on to the commands
 sent back to edge nodes. The service is optional: on an instance that does not run it, every
-panel shows no data.
+panel shows no data or zero.
 
 | Group | What it shows |
 | --- | --- |
@@ -333,7 +333,7 @@ Alerts behind it: the `SparkplugIngest*` and `SparkplugCommand*` alerts in
 **Use it when LwM2M devices cannot be reached, stop reporting, or their commands do not land.**
 It covers the CoAP and DTLS server, the fleet it holds, the readings it stores, and the command
 path to devices. The service is optional: on an instance that does not run it, every panel shows
-no data.
+no data or zero.
 
 | Group | What it shows |
 | --- | --- |

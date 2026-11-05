@@ -517,7 +517,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "devicechain_edge_uplink_connected{job=~\"$job\", instance=~\"$instance\"}"
+          "expr": "max by (job, instance) (devicechain_edge_uplink_connected{job=~\"$job\", instance=~\"$instance\"})"
         },
         {
           "refId": "B",
@@ -527,7 +527,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "devicechain_edge_spool_oldest_age_seconds{job=~\"$job\", instance=~\"$instance\"}"
+          "expr": "max by (job, instance) (devicechain_edge_spool_oldest_age_seconds{job=~\"$job\", instance=~\"$instance\"})"
         },
         {
           "refId": "C",
@@ -567,7 +567,7 @@
           },
           "instant": true,
           "format": "table",
-          "expr": "devicechain_edge_local_auth_enabled{job=~\"$job\", instance=~\"$instance\"}"
+          "expr": "max by (job, instance) (devicechain_edge_local_auth_enabled{job=~\"$job\", instance=~\"$instance\"})"
         }
       ],
       "fieldConfig": {
