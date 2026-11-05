@@ -514,6 +514,12 @@ var bootstrapCmd = &cobra.Command{
 		// whether each is THIS cluster's, which needs its identity. Nothing a dry run does
 		// writes it anywhere.
 		binding.ClusterUID = clusterUID
+		// 🔴 LOCAL STATE FROM ANOTHER CLUSTER IS REFUSED BEFORE ANYTHING READS IT. See
+		// RefuseInstanceOnAnotherCluster; it runs ahead of the record write below, which
+		// would otherwise overwrite the evidence with this cluster's identity.
+		if err := bootstrap.RefuseInstanceOnAnotherCluster(opts.Instance, binding, clusterUID); err != nil {
+			return err
+		}
 
 		// The object store, now that the cluster is known: an unset --object-store means a
 		// small filesystem store on a cluster dcctl created and no store on one it was
