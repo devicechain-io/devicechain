@@ -173,6 +173,12 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 	margin := max(24*time.Hour, s.cfg.ChunkInterval)
 	// The policy owns a window that starts inside its reach less the margin; this owns the rest.
 	reach := now.Add(-rollupPolicyReach).Add(margin)
+	// 🔴 CROSS-TENANT BY DESIGN, and tenant-agnostic by construction: the continuous aggregate and the
+	// hypertable behind it are shared by every tenant, so a refresh cannot be scoped to one. The statements
+	// run under this context are only the chunk catalog read (timescaledb_information.chunks, which holds
+	// time ranges and no tenant rows), set_config(statement_timeout) and CALL refresh_continuous_aggregate
+	// (below, in refreshWindow). Nothing here reads or writes a tenant row; the refresh recomputes the
+	// view from the hypertable inside the database.
 	windows, err := chunkWindows(s.rdb.DB(core.WithSystemContext(ctx)), s.floor(now), reach)
 	if err != nil {
 		return false, err
@@ -200,6 +206,7 @@ func (s *TailSweeper) sweep(ctx context.Context) (complete bool, err error) {
 		}
 		ran, rerr := s.rdb.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(lockName), func(db *gorm.DB) error {
 			defer func() { _ = db.WithContext(context.Background()).Exec(`RESET statement_timeout`).Error }()
+			// Same sanction as above: refreshWindow issues only set_config and refresh_continuous_aggregate.
 			return s.refreshWindow(ctx, db.WithContext(core.WithSystemContext(ctx)), w)
 		})
 		if s.afterWindow != nil {
