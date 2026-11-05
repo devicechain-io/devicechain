@@ -83,26 +83,27 @@ func TestAnEvenBrokerIsLeftAlone(t *testing.T) {
 
 func TestAnUnsettledBrokerIsNotPlannedOver(t *testing.T) {
 	all := func(string) bool { return true }
+	none := func(string) bool { return false }
 	lagging := replication.Snapshot{Objects: []replication.Object{{Name: "a", Replicas: 3, Leader: "n1",
 		Peers: []replication.Peer{{Name: "n2", Current: false}}}}}
-	if brokerSettled(lagging, all) {
+	if brokerSettled(lagging, all, none) {
 		t.Error("a replica that is not current must hold the plan back")
 	}
 	leaderless := replication.Snapshot{Objects: []replication.Object{{Name: "a", Replicas: 3}}}
-	if brokerSettled(leaderless, all) {
+	if brokerSettled(leaderless, all, none) {
 		t.Error("a replicated group with no leader must hold the plan back")
 	}
 	// A consumer's replicas count as much as a stream's.
 	laggingConsumer := replication.Snapshot{Consumers: []replication.Consumer{{Stream: "a", Name: "c", Durable: true, Leader: "n1",
 		Peers: []replication.Peer{{Name: "n2", Current: false}}}}}
-	if brokerSettled(laggingConsumer, all) {
+	if brokerSettled(laggingConsumer, all, none) {
 		t.Error("a consumer replica that is not current must hold the plan back")
 	}
 	// What is not movable is not waited on: an ingest stream mid-election does not hold the rest.
-	if !brokerSettled(lagging, func(string) bool { return false }) {
+	if !brokerSettled(lagging, none, none) {
 		t.Error("a group that is never moved should not hold the plan back")
 	}
-	if !brokerSettled(replication.Snapshot{}, all) {
+	if !brokerSettled(replication.Snapshot{}, all, none) {
 		t.Error("an empty snapshot has nothing to wait for")
 	}
 }
@@ -218,93 +219,5 @@ func TestTheUpgradeRebalancesTheBrokerAfterTheServicesRoll(t *testing.T) {
 	}
 	if asExpr {
 		t.Error("the rebalance's outcome must not be returned from Upgrade")
-	}
-}
-
-// The wiring, on the instance's real stream names: after a roll one server leads the capture
-// stream, inbound-events and resolved-events while the others lead the cold streams. The counts
-// read even, which is why the old plan did nothing. Only resolved-events may move; the other two
-// are weighed and left.
-func TestBrokerPlanSeparatesResolvedEventsFromTheIngestStreams(t *testing.T) {
-	const inst = "dc"
-	three := []string{"n0", "n1", "n2"}
-	peers := func(leader string) []replication.Peer {
-		var out []replication.Peer
-		for _, s := range three {
-			if s != leader {
-				out = append(out, replication.Peer{Name: s, Current: true})
-			}
-		}
-		return out
-	}
-	led := map[string]string{
-		messaging.StreamName(inst, streams.InboundEvents):       "n2",
-		messaging.StreamName(inst, streams.ResolvedEvents):      "n2",
-		messaging.StreamName(inst, streams.DeviceEventsCapture): "n1",
-		messaging.StreamName(inst, streams.AlarmEvents):         "n0",
-		messaging.StreamName(inst, streams.EntityDeleted):       "n0",
-		messaging.StreamName(inst, streams.DeviceOwnership):     "n1",
-		messaging.StreamName(inst, streams.DeviceRoster):        "n0",
-	}
-	var snap replication.Snapshot
-	for name, l := range led {
-		snap.Objects = append(snap.Objects, replication.Object{Name: name, Replicas: 3, Leader: l, Peers: peers(l)})
-	}
-	movable := map[string]bool{}
-	for _, n := range messaging.RebalanceableStreams(inst) {
-		movable[n] = true
-	}
-	isMovable := func(s string) bool { return movable[s] }
-
-	opts := brokerPlanOptions(inst, isMovable)
-	plan := replication.PlanRebalance(snap, opts)
-	var moved *replication.Move
-	for i, m := range plan.Moves {
-		if m.Stream == messaging.StreamName(inst, streams.InboundEvents) || m.Stream == messaging.StreamName(inst, streams.DeviceEventsCapture) {
-			t.Errorf("moved an ingest-path stream: %+v", m)
-		}
-		if m.Stream == messaging.StreamName(inst, streams.ResolvedEvents) {
-			moved = &plan.Moves[i]
-		}
-	}
-	if moved == nil || moved.From != "n2" {
-		t.Fatalf("resolved-events must leave the server that leads inbound-events: %+v", plan.Moves)
-	}
-	if plan.LoadAfter["n2"] >= 200 {
-		t.Errorf("n2 still leads both: %v", plan.LoadAfter)
-	}
-	if got := summarizeRebalance(plan, nil); !strings.Contains(got, "traffic led") {
-		t.Errorf("the summary should show the traffic spread: %s", got)
-	}
-}
-
-// A hot stream the plan only weighs (the capture stream, never moved) holds the plan back while it
-// is leaderless or lagging: it would read as an empty server, and a movable stream would be sent
-// there and back again when it recovers.
-func TestAnUnsettledAnchorHoldsThePlanBack(t *testing.T) {
-	const inst = "dc"
-	opts := brokerPlanOptions(inst, func(string) bool { return false })
-	inPlay := planInPlay(opts)
-	capture := messaging.StreamName(inst, streams.DeviceEventsCapture)
-	cold := messaging.StreamName(inst, streams.DeviceOwnership)
-	if !inPlay(capture) || inPlay("$MQTT_sess") {
-		t.Fatalf("the capture stream is weighed, an undeclared stream is not")
-	}
-	ok := replication.Peer{Name: "n1", Current: true}
-	leaderless := replication.Snapshot{Objects: []replication.Object{
-		{Name: cold, Replicas: 3, Leader: "n0", Peers: []replication.Peer{ok}},
-		{Name: capture, Replicas: 3, Leader: "", Peers: []replication.Peer{ok}},
-	}}
-	if brokerSettled(leaderless, inPlay) {
-		t.Error("a leaderless anchor must hold the plan back")
-	}
-	lagging := replication.Snapshot{Objects: []replication.Object{
-		{Name: capture, Replicas: 3, Leader: "n0", Peers: []replication.Peer{{Name: "n1", Current: false}}},
-	}}
-	if brokerSettled(lagging, inPlay) {
-		t.Error("an anchor with a lagging replica must hold the plan back")
-	}
-	if !brokerSettled(leaderless, func(s string) bool { return s == cold }) {
-		t.Error("control: with the anchor out of play the same snapshot is settled")
 	}
 }

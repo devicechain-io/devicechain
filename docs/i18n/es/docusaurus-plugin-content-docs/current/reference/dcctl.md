@@ -372,6 +372,11 @@ group at a time, each waiting for the new leader to be current, and moves nothin
 no configuration. A broker that is already even is left alone. Each move is a brief leader
 election for one stream or consumer.
 
+First it keeps the streams every device event passes through on different servers: when the stream
+that carries resolved events is led by the same server as the device capture or the inbound stream,
+it is handed to a replica on a server that leads neither, and the balancing that follows leaves it
+there. With fewer servers than such streams it cannot, and the summary says the leaders are shared.
+
 Streams that hold device data already acknowledged to the device are never moved, and there is no
 option to include them: the broker's MQTT streams, the device capture stream and every stream an
 ingest service writes. A leader change on them has lost messages devices had been told were safe,

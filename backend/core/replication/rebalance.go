@@ -106,17 +106,14 @@ func ApplyMoves(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, mo
 			continue
 		}
 		leader, peers, err := groupState(js, m)
-		switch {
-		case err != nil:
+		if err != nil {
 			out = append(out, MoveResult{Move: m, Err: fmt.Errorf("reading the group before the move: %w", err)})
 			continue
-		case leader == m.To:
-			out = append(out, MoveResult{Move: m, Skipped: true})
+		}
+		if skip, err := precheck(leader, peers, m); err != nil {
+			out = append(out, MoveResult{Move: m, Err: err})
 			continue
-		case leader != m.From:
-			out = append(out, MoveResult{Move: m, Skipped: true})
-			continue
-		case !targetFit(peers, m.To):
+		} else if skip {
 			out = append(out, MoveResult{Move: m, Skipped: true})
 			continue
 		}
@@ -138,6 +135,23 @@ func ApplyMoves(ctx context.Context, nc *nats.Conn, js nats.JetStreamContext, mo
 		out = append(out, MoveResult{Move: m})
 	}
 	return out
+}
+
+// precheck judges a move against the group as it is NOW. It is skipped when the group no longer needs
+// it (the leader is already the target, or is neither of the servers the plan saw) or the target is
+// no longer a current, online replica. It is refused, as an error, while any replica of the group is
+// offline or behind: a plan is a snapshot, and an outage that began after it was taken is no time to
+// start an election.
+func precheck(leader string, peers []Peer, m Move) (skip bool, err error) {
+	switch {
+	case leader == m.To, leader != m.From:
+		return true, nil
+	case !targetFit(peers, m.To):
+		return true, nil
+	case !settled(leader, peers):
+		return false, fmt.Errorf("not moved: a replica of the group is offline or behind")
+	}
+	return false, nil
 }
 
 func targetFit(peers []Peer, to string) bool {

@@ -543,6 +543,7 @@ stream y consumidor sobrecargado que ceda el liderazgo a una réplica al día, e
 antes y después. Los movimientos se hacen de uno en uno, y cada uno espera a que el nuevo líder esté al día antes del siguiente. El paso está acotado y es de mejor esfuerzo: si no puede terminar, avisa y la actualización sigue
 siendo correcta.
 Los streams con datos de dispositivo ya confirmados al dispositivo no se reequilibran deliberadamente nunca: los streams MQTT del broker, el stream de captura de dispositivos y todo stream en el que escribe un servicio de ingesta. Un cambio de líder en ellos ha perdido mensajes que se habían dicho seguros a los dispositivos, así que ninguna ganancia de latencia lo compensa y no hay opción para incluirlos. Su desequilibrio se resuelve en el siguiente reinicio del broker, o por sí solo. `dcctl broker rebalance <instance>` ejecuta el mismo paso a demanda, para un broker reiniciado de otro modo.
+Antes de equilibrar, el stream que transporta cada evento resuelto se aparta del servidor que lidera la captura de dispositivos o el stream de entrada, que el equilibrado por sí solo podía dejar en un mismo servidor; con menos servidores que streams de este tipo no puede, y el resumen del paso indica que los líderes están compartidos.
 
 ### Qué más comprueba una actualización {#upgrade-checks}
 

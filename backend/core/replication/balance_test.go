@@ -181,154 +181,90 @@ func TestPlanRebalanceOnlyTouchesWhatTheCallerNames(t *testing.T) {
 	}
 }
 
-// hotLoad is the placement the GKE rounds measured after a roll: counts read even (3/3/3), but one
-// server leads both streams every event passes through (inbound, which may not move, and resolved,
-// which may) while the other two lead cold streams only.
-func hotLoad() (Snapshot, PlanOptions) {
+// Separation: the movable per-event stream is led away from the fixed ones, onto the replica with the
+// lowest led count, and is pinned there for the count balancing. The fixed ones never move.
+func TestPlanRebalanceSeparatesTheMovablePerEventStream(t *testing.T) {
 	var snap Snapshot
 	add := func(name, leader string) {
 		snap.Objects = append(snap.Objects, Object{Name: name, Replicas: 3, Leader: leader, Peers: peers(leader, three...)})
-		snap.Consumers = append(snap.Consumers, Consumer{Stream: name, Name: "c", Leader: leader, Peers: peers(leader, three...), Durable: true})
 	}
-	add("inbound", "dc-nats-2")
-	add("resolved", "dc-nats-2")
-	add("cold-a", "dc-nats-2")
-	add("cold-b", "dc-nats-0")
-	add("cold-c", "dc-nats-0")
-	add("cold-d", "dc-nats-0")
-	add("cold-e", "dc-nats-1")
-	add("cold-f", "dc-nats-1")
-	add("cold-g", "dc-nats-1")
-	weights := map[string]int{"inbound": 100, "resolved": 100}
-	return snap, PlanOptions{
-		// inbound is on the acknowledged-ingest path: weighed, never moved.
-		Movable: func(s string) bool { return s != "inbound" },
-		Weight: func(s string) int {
-			if w, ok := weights[s]; ok {
-				return w
-			}
-			return 1
-		},
+	add("capture", "dc-nats-0")
+	add("inbound", "dc-nats-1")
+	add("resolved", "dc-nats-0") // shares with capture
+	add("cold-a", "dc-nats-1")
+	add("cold-b", "dc-nats-1")
+	add("cold-c", "dc-nats-2")
+	opts := PlanOptions{
+		Movable:  func(s string) bool { return s != "capture" && s != "inbound" },
+		PerEvent: func(s string) bool { return s == "capture" || s == "inbound" || s == "resolved" },
 	}
-}
-
-// NEGATIVE CONTROL. Counting groups, this broker is already even and the plan does nothing, which
-// is the bug: both per-event streams sit on one server. The weighted plan must move resolved away.
-func TestPlanRebalanceByTrafficSeparatesTheHotStreams(t *testing.T) {
-	snap, opts := hotLoad()
-
-	counted := PlanRebalance(snap, PlanOptions{Movable: opts.Movable})
-	if len(counted.Moves) != 0 {
-		t.Fatalf("control: the count-based plan should see nothing to do, got %+v", counted.Moves)
-	}
-
 	plan := PlanRebalance(snap, opts)
-	var resolved *Move
-	for i, m := range plan.Moves {
-		if m.Stream == "inbound" {
-			t.Errorf("moved a stream that may not move: %+v", m)
-		}
-		if m.Stream == "resolved" && !m.IsConsumer() {
-			resolved = &plan.Moves[i]
-		}
+	if len(plan.Moves) == 0 || plan.Moves[0].Stream != "resolved" || plan.Moves[0].To != "dc-nats-2" {
+		t.Fatalf("resolved should go to the only server leading no per-event stream: %+v", plan.Moves)
 	}
-	if resolved == nil || resolved.From != "dc-nats-2" || resolved.To == "dc-nats-2" {
-		t.Fatalf("resolved should leave the server that leads inbound: %+v", plan.Moves)
-	}
-	if got := plan.LoadBefore["dc-nats-2"]; got != 402 {
-		t.Errorf("load before on dc-nats-2 = %d, want 402 (inbound+resolved+cold-a, streams and consumers)", got)
-	}
-	// What stays is the fixed inbound stream and its consumer (200), at most one cold pair more.
-	if got := plan.LoadAfter["dc-nats-2"]; got > 202 {
-		t.Errorf("the hot server still leads resolved: %v", plan.LoadAfter)
-	}
-}
-
-// Idempotence: planning again over the state a plan leaves moves nothing, so a second run (or the
-// upgrade's step after a manual one) is a no-op and the plan cannot ping-pong a stream.
-func TestPlanRebalanceByTrafficIsIdempotent(t *testing.T) {
-	snap, opts := hotLoad()
-	plan := PlanRebalance(snap, opts)
-	apply := func(leader *string, stream, consumer string) {
-		for _, m := range plan.Moves {
-			if m.Stream == stream && m.Consumer == consumer {
-				*leader = m.To
-			}
-		}
-	}
-	for i := range snap.Objects {
-		apply(&snap.Objects[i].Leader, snap.Objects[i].Name, "")
-		snap.Objects[i].Peers = peers(snap.Objects[i].Leader, three...)
-	}
-	for i := range snap.Consumers {
-		apply(&snap.Consumers[i].Leader, snap.Consumers[i].Stream, snap.Consumers[i].Name)
-		snap.Consumers[i].Peers = peers(snap.Consumers[i].Leader, three...)
-	}
-	if again := PlanRebalance(snap, opts); len(again.Moves) != 0 {
-		t.Fatalf("a second plan over the result moved %+v", again.Moves)
-	}
-}
-
-// A fixed hot stream is an anchor, never a candidate: with the movable streams all light, the plan
-// must not move the heavy fixed one however uneven the load, and must not move a group onto the
-// server whose gap it would widen.
-func TestPlanRebalanceByTrafficNeverMovesAFixedStreamOrWidensAGap(t *testing.T) {
-	snap, opts := hotLoad()
-	opts.Movable = func(s string) bool { return s != "inbound" && s != "resolved" }
-	plan := PlanRebalance(snap, opts)
 	for _, m := range plan.Moves {
-		if m.Stream == "inbound" || m.Stream == "resolved" {
+		if m.Stream == "capture" || m.Stream == "inbound" {
 			t.Errorf("moved a fixed stream: %+v", m)
 		}
-		if m.From == "dc-nats-0" || m.From == "dc-nats-1" {
-			// the light servers are never drained toward the heavy one
-			if m.To == "dc-nats-2" {
-				t.Errorf("moved load onto the heaviest server: %+v", m)
-			}
+	}
+	if plan.PerEventShared || plan.PerEventLeaders["resolved"] != "dc-nats-2" {
+		t.Errorf("leaders after: %v shared=%v", plan.PerEventLeaders, plan.PerEventShared)
+	}
+
+	// Control: without PerEvent the same broker is left sharing, by the count plan.
+	plain := PlanRebalance(snap, PlanOptions{Movable: opts.Movable})
+	for _, m := range plain.Moves {
+		if m.Stream == "resolved" && m.To == "dc-nats-2" {
+			t.Errorf("control: the count plan moved resolved to the free server by itself: %+v", m)
 		}
 	}
-	hi, _ := plan.LoadAfter.Max()
-	if before, _ := plan.LoadBefore.Max(); hi > before {
-		t.Errorf("max load rose from %d to %d", before, hi)
-	}
 }
 
-// Weights only add anchors: with no Weight the plan is the count-based one, and a stream the
-// options do not make movable is left out of the arithmetic entirely.
-func TestPlanRebalanceWithoutWeightsIgnoresUnmovableStreams(t *testing.T) {
-	snap, opts := hotLoad()
-	plan := PlanRebalance(snap, PlanOptions{Movable: opts.Movable})
-	if got := plan.StreamsBefore["dc-nats-2"]; got != 2 {
-		t.Errorf("unmovable inbound counted without weights: dc-nats-2 leads %d, want 2", got)
-	}
-}
-
-// A server pays for the consumers it leads as well as the streams, so they are one pool. Planned
-// apart, resolved's stream would go to C (it leads no stream) although C already leads two
-// consumers of equally hot streams: 200/200/200 would become 100/200/300.
-func TestPlanRebalanceByTrafficCountsConsumersAndStreamsTogether(t *testing.T) {
+// With no replica on a free server nothing is forced, and the plan says the leaders are shared.
+func TestPlanRebalanceReportsSharedLeadersWhenThereIsNowhereToGo(t *testing.T) {
 	var snap Snapshot
-	stream := func(name, leader string) {
-		snap.Objects = append(snap.Objects, Object{Name: name, Replicas: 3, Leader: leader, Peers: peers(leader, three...)})
+	snap.Objects = []Object{
+		{Name: "capture", Replicas: 2, Leader: "dc-nats-0", Peers: peers("dc-nats-0", "dc-nats-0", "dc-nats-1")},
+		{Name: "inbound", Replicas: 2, Leader: "dc-nats-1", Peers: peers("dc-nats-1", "dc-nats-0", "dc-nats-1")},
+		{Name: "resolved", Replicas: 2, Leader: "dc-nats-0", Peers: peers("dc-nats-0", "dc-nats-0", "dc-nats-1")},
 	}
-	consumer := func(name, leader string) {
-		snap.Consumers = append(snap.Consumers, Consumer{Stream: name, Name: "c", Leader: leader, Peers: peers(leader, three...), Durable: true})
-	}
-	a, b, c := three[0], three[1], three[2]
-	stream("inbound", a)
-	stream("capture", b)
-	stream("resolved", a)
-	consumer("inbound", c)
-	consumer("capture", c)
-	consumer("resolved", b)
 	plan := PlanRebalance(snap, PlanOptions{
-		Movable: func(s string) bool { return s == "resolved" },
-		Weight:  func(string) int { return 100 },
+		Movable:  func(s string) bool { return s == "resolved" },
+		PerEvent: func(string) bool { return true },
 	})
-	if hi, lo := plan.LoadBefore.Max(); hi != 200 || lo != 200 {
-		t.Fatalf("fixture should start level at 200 each: %v", plan.LoadBefore)
+	for _, m := range plan.Moves {
+		if m.Stream == "resolved" {
+			t.Errorf("resolved moved onto a server leading a per-event stream: %+v", m)
+		}
 	}
-	if len(plan.Moves) != 0 {
-		t.Fatalf("a level broker was disturbed: %+v (load after %v)", plan.Moves, plan.LoadAfter)
+	if !plan.PerEventShared {
+		t.Errorf("should read as shared: %v", plan.PerEventLeaders)
+	}
+}
+
+// A move is refused while any replica of its group is offline or behind, even when the target itself
+// is fine: an outage that began after the plan was made is no time to start an election.
+func TestPrecheckRefusesAMoveDuringAnOutage(t *testing.T) {
+	m := Move{Stream: "s", From: "a", To: "b"}
+	healthy := []Peer{{Name: "b", Current: true}, {Name: "c", Current: true}}
+	if skip, err := precheck("a", healthy, m); skip || err != nil {
+		t.Fatalf("healthy group: skip=%v err=%v", skip, err)
+	}
+	for name, peers := range map[string][]Peer{
+		"other replica offline": {{Name: "b", Current: true}, {Name: "c", Current: true, Offline: true}},
+		"other replica behind":  {{Name: "b", Current: true}, {Name: "c"}},
+	} {
+		if skip, err := precheck("a", peers, m); skip || err == nil {
+			t.Errorf("%s: skip=%v err=%v, want a refusal", name, skip, err)
+		}
+	}
+	if skip, _ := precheck("b", healthy, m); !skip {
+		t.Error("a group already led by the target is skipped")
+	}
+	if skip, _ := precheck("x", healthy, m); !skip {
+		t.Error("a group led by neither server is skipped")
+	}
+	if skip, err := precheck("a", []Peer{{Name: "b"}, {Name: "c", Current: true}}, m); !skip || err != nil {
+		t.Errorf("an unfit target is skipped: skip=%v err=%v", skip, err)
 	}
 }

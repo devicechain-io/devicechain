@@ -298,14 +298,17 @@ func RebalanceableStreams(instanceId string) []string {
 	return out
 }
 
-// StreamTrafficWeights maps every declared stream of an instance, by concrete name, to what leading
-// it costs a broker server (streams.Stream.TrafficWeight). It covers the streams RebalanceableStreams
-// leaves out as well: those are never moved, but they are load, and a movable stream is placed
-// away from them. Key-value buckets and the broker's own streams are absent, so they weigh nothing.
-func StreamTrafficWeights(instanceId string) map[string]int {
-	out := make(map[string]int, len(streams.All))
+// PerEventStreams are the streams of an instance every device event passes through, by concrete
+// name (streams.Stream.PerEvent). Some are on the acknowledged-ingest path and never move
+// (RebalanceableStreams leaves them out); they are still named here, because the one that may move
+// is kept off the server that leads each of the others.
+func PerEventStreams(instanceId string) []string {
+	var out []string
 	for _, s := range streams.All {
-		out[StreamName(instanceId, s.Suffix)] = s.TrafficWeight()
+		if s.PerEvent() {
+			out = append(out, StreamName(instanceId, s.Suffix))
+		}
 	}
+	slices.Sort(out)
 	return out
 }

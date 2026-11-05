@@ -508,8 +508,9 @@ Rolling the broker's servers leaves the one restarted last leading no streams or
 lead everything, and at a measured load that roughly doubled publish acknowledgement latency. After the
 services have rolled, an upgrade that touched the broker asks the leader of each over-loaded stream and
 consumer to hand over to a replica that is up to date, and prints how many each server leads before and
-after. Leadership is weighed by the traffic each stream carries rather than by how many streams a server leads, so the stream that carries every resolved event is not left on the server that leads the ingest stream. Moves run one at a time, each waiting for the new leader to be current before the next. The step is bounded and best effort: if it cannot finish it warns and the upgrade still succeeds.
+after. Moves run one at a time, each waiting for the new leader to be current before the next. The step is bounded and best effort: if it cannot finish it warns and the upgrade still succeeds.
 Streams that hold device data already acknowledged to the device are deliberately never rebalanced: the broker's MQTT streams, the device capture stream and every stream an ingest service writes. A leader change on them has lost messages that devices had been told were safe, so no latency gain is worth it and there is no option to include them. Their imbalance clears at the next broker roll, or on its own.
+Before the balancing, the stream that carries every resolved event is kept off the server that leads the device capture or the inbound stream, which the balancing alone could leave sharing one server; with fewer servers than such streams it cannot, and the step's summary says the leaders are shared.
 `dcctl broker rebalance <instance>` runs the same step on demand, for a broker restarted some other way.
 
 ### What else an upgrade checks {#upgrade-checks}
