@@ -122,9 +122,17 @@ type tailBackoff struct {
 // backfill worker is given, so the two agree on where the policy's reach ends.
 func NewTailSweeper(ms *core.Microservice, rdbm *rdb.RdbManager, cfg Config, metrics *Metrics,
 	callbacks core.LifecycleCallbacks) *TailSweeper {
-	s := &TailSweeper{rdb: rdbm, cfg: cfg, metrics: metrics, now: time.Now,
+	return newTailSweeper(ms, rdbm, cfg, metrics, callbacks, time.Now)
+}
+
+func newTailSweeper(ms *core.Microservice, rdbm *rdb.RdbManager, cfg Config, metrics *Metrics,
+	callbacks core.LifecycleCallbacks, now func() time.Time) *TailSweeper {
+	s := &TailSweeper{rdb: rdbm, cfg: cfg, metrics: metrics, now: now,
 		backoff: map[time.Time]tailBackoff{}, cycleDone: map[time.Time]struct{}{},
 		jitter: func() time.Duration { return rand.N(tailJitter) }}
+	// The first pass is due from CONSTRUCTION, not from the first tick: the task's first tick is a
+	// tick after start, and counting the delay from there would double it.
+	s.nextPass = now().Add(tailFirstDelay + s.jitter())
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "rollup-tail", tailTick, s.RunOnce, callbacks)
 	return s
 }

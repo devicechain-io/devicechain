@@ -93,9 +93,11 @@ func TestIntegrationALateReadingBeyondThePolicyReachReachesTheRollup(t *testing.
 // The first pass runs a couple of minutes after start, not an hour after, and not before.
 func TestIntegrationTheFirstTailPassIsDueSoonAfterStart(t *testing.T) {
 	r := newRig(t, "tailfirst")
-	s := r.sweeper()
 	clock := time.Now().UTC()
-	s.now = func() time.Time { return clock }
+	ms := &core.Microservice{FunctionalArea: "event-management", MicroserviceId: "event-management"}
+	s := newTailSweeper(ms, r.mgr, r.cfg, r.metrics, core.NewNoOpLifecycleCallbacks(), func() time.Time { return clock })
+	s.jitter = func() time.Duration { return 0 }
+	s.nextPass = clock.Add(tailFirstDelay) // as the constructor fixed it, with no jitter
 	var calls int
 	s.refresh = func(context.Context, *gorm.DB, time.Time, time.Time) error { calls++; return nil }
 	r.insertReading("m", clock.Add(-60*24*time.Hour), "a")
@@ -157,12 +159,27 @@ func TestIntegrationAWindowThatKeepsFailingDoesNotBlockTheOthers(t *testing.T) {
 	}
 	assert.Greater(t, testutil.ToFloat64(r.metrics.TailSkipped.WithLabelValues(tailSkipBackoff)), 0.0)
 
+	// The backoff is capped, and a success clears it.
+	for i := 0; i < 30; i++ {
+		s.skip(chunkWindow{Start: stuck}, errors.New("boom"))
+	}
+	assert.Equal(t, tailBackoffMax, s.backoff[stuck].delay)
+	s.backoff[stuck] = tailBackoff{until: clock.Add(tailBackoffBase), delay: tailBackoffBase}
+
 	// Past the backoff it is tried again, and backs off for longer.
 	clock = clock.Add(tailBackoffBase + time.Minute)
 	due(s)
 	_ = s.RunOnce(context.Background())
 	assert.Equal(t, 2, seen[stuck])
 	assert.Equal(t, 2*tailBackoffBase, s.backoff[stuck].delay)
+
+	// Once it can finish, the backoff is forgotten.
+	s.refresh = func(context.Context, *gorm.DB, time.Time, time.Time) error { return nil }
+	clock = clock.Add(2*tailBackoffBase + time.Minute)
+	due(s)
+	require.NoError(t, s.RunOnce(context.Background()))
+	_, still := s.backoff[stuck]
+	assert.False(t, still, "a window that finishes is no longer backed off")
 }
 
 // The lock is released between windows, so the policy job or a backfill can take it.
