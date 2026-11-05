@@ -110,6 +110,11 @@ type Uplink struct {
 	// it is retained, not acted on: Cut A flattens such an object and counts the skipped leaves,
 	// so only a route that carries the object whole to a decoder refuses it (400, too_deep).
 	DepthErr error
+	// MetaErr is non-nil when the envelope's fPort or fCnt was present and not a valid port or
+	// counter (FPort / FCnt are then NoLoRaWAN). Like FrameErr it is retained, not acted on: the
+	// endpoint has always accepted such a body, so only a route running a decoder that needs the
+	// value may refuse it.
+	MetaErr error
 }
 
 // NoLoRaWAN is the value of Uplink.FPort and Uplink.FCnt for an envelope that carries no LoRaWAN
@@ -163,8 +168,9 @@ var ErrTooDeep = errors.New("nested too deeply")
 
 // CheckDepth refuses a parsed JSON value that nests objects or arrays deeper than MaxDepth. A
 // flatten only skips the leaves below the cutoff, so it bounds nothing about the value a decoder
-// or a preview would be handed whole: this is the walk that does, and it stops descending the
-// moment the limit is passed, so its own cost is bounded by the limit and not by the document.
+// or a preview would be handed whole: this is the walk that does. It stops descending the moment
+// the limit is passed, but a wide, shallow document is walked in full: its cost is bounded by the
+// size of the document, which the 256 KiB body cap (MaxBodyBytes) bounds.
 // The error wraps ErrMalformed (a 400) and ErrTooDeep (the counted reason).
 func CheckDepth(v any) error {
 	if nestingExceeds(v, 0) {
@@ -199,29 +205,65 @@ func nestingExceeds(v any, open int) bool {
 	return false
 }
 
-// loraPort reads a LoRaWAN application port from a protobuf-JSON number. Absent is 0, the default
-// the encoding omits; a value outside 0-255 is not a port.
-func loraPort(n json.Number, what string) (int, error) {
-	if n.String() == "" {
+// loraPort reads a LoRaWAN application port from the raw protobuf-JSON value: a number, or a
+// string holding one. Absent and null are 0, the default the encoding omits. A value that is not
+// a port (outside 0-255, fractional, text) is an error for the caller to RECORD, not to refuse:
+// this field was never read before, so a sender that sent junk in it was accepted and must keep
+// being.
+func loraPort(raw json.RawMessage, what string) (int, error) {
+	text, ok := loraNumber(raw)
+	if !ok {
 		return 0, nil
 	}
-	v, err := strconv.ParseUint(n.String(), 10, 8)
+	v, err := strconv.ParseUint(text, 10, 8)
 	if err != nil {
-		return 0, malformed("%s is not a LoRaWAN port: %q", what, clip(n.String()))
+		return 0, malformed("%s is not a LoRaWAN port: %q", what, clip(text))
 	}
 	return int(v), nil
 }
 
-// loraCounter reads a LoRaWAN uplink frame counter, a 32-bit unsigned number. Absent is 0.
-func loraCounter(n json.Number, what string) (int64, error) {
-	if n.String() == "" {
+// loraCounter reads a LoRaWAN uplink frame counter (an unsigned 32-bit number) the same way.
+func loraCounter(raw json.RawMessage, what string) (int64, error) {
+	text, ok := loraNumber(raw)
+	if !ok {
 		return 0, nil
 	}
-	v, err := strconv.ParseUint(n.String(), 10, 32)
+	v, err := strconv.ParseUint(text, 10, 32)
 	if err != nil {
-		return 0, malformed("%s is not a frame counter: %q", what, clip(n.String()))
+		return 0, malformed("%s is not a frame counter: %q", what, clip(text))
 	}
 	return int64(v), nil
+}
+
+// loraNumber is the text of a raw JSON value read as a number, ok=false for absent and null. A
+// JSON string is unquoted; anything else is returned as written.
+func loraNumber(raw json.RawMessage) (string, bool) {
+	t := strings.TrimSpace(string(raw))
+	if t == "" || t == "null" {
+		return "", false
+	}
+	if t[0] == '"' {
+		var s string
+		if err := json.Unmarshal([]byte(t), &s); err == nil {
+			t = s
+		}
+	}
+	return t, true
+}
+
+// setMeta stores a port and counter on the uplink, or records why it could not. An invalid value
+// is left unset (NoLoRaWAN) and kept in MetaErr; the route refuses it only when a decoder needs it.
+func (u *Uplink) setMeta(port int, portErr error, cnt int64, cntErr error) {
+	u.FPort, u.FCnt = port, cnt
+	if portErr != nil {
+		u.FPort, u.MetaErr = NoLoRaWAN, portErr
+	}
+	if cntErr != nil {
+		u.FCnt = NoLoRaWAN
+		if u.MetaErr == nil {
+			u.MetaErr = cntErr
+		}
+	}
 }
 
 // MaxAltIdLen bounds a dedup key. It is the inbound message id too, held in the broker's memory for

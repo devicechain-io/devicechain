@@ -37,8 +37,8 @@ type csUplink struct {
 	DeviceInfo      struct {
 		DevEui string `json:"devEui"`
 	} `json:"deviceInfo"`
-	FPort  json.Number     `json:"fPort"`
-	FCnt   json.Number     `json:"fCnt"`
+	FPort  json.RawMessage `json:"fPort"`
+	FCnt   json.RawMessage `json:"fCnt"`
 	Data   string          `json:"data"`
 	Object json.RawMessage `json:"object"`
 	RxInfo []struct {
@@ -84,19 +84,13 @@ func decodeChirpStack(d *Descriptor, r *Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	fPort, err := loraPort(up.FPort, "fPort")
-	if err != nil {
-		return nil, err
-	}
-	fCnt, err := loraCounter(up.FCnt, "fCnt")
-	if err != nil {
-		return nil, err
-	}
+	fPort, portErr := loraPort(up.FPort, "fPort")
+	fCnt, cntErr := loraCounter(up.FCnt, "fCnt")
 	u := Uplink{
 		Identifier: eui, Scheme: devicealias.SchemeDevEUI,
 		AltId: "cs:" + up.DeduplicationId, Time: at, SenderTime: sender, Decoded: object,
-		FPort: fPort, FCnt: fCnt,
 	}
+	u.setMeta(fPort, portErr, fCnt, cntErr)
 	if up.Data != "" {
 		u.SetFrame(up.Data, EncodingBase64)
 	}

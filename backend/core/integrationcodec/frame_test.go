@@ -33,17 +33,60 @@ func TestChirpStackOmittedFPortAndFCntAreTheProtobufDefault(t *testing.T) {
 	require.Equal(t, int64(0), res.Uplinks[0].FCnt)
 }
 
-func TestChirpStackRefusesAPortOrCounterThatIsNotOne(t *testing.T) {
+// The endpoint accepted a body with a junk fPort or fCnt before the codecs read them, and still
+// does: the uplink decodes (so Cut A flattens it, 202), the value is left unset and the reason is
+// recorded for a route that runs a decoder to refuse on.
+func TestChirpStackAcceptsAPortOrCounterThatIsNotOneAndRecordsWhy(t *testing.T) {
 	good := string(fixture(t, "chirpstack/up_decoded.json"))
-	for name, body := range map[string]string{
-		"port over 255":    strings.Replace(good, `"fPort": 1,`, `"fPort": 256,`, 1),
-		"negative port":    strings.Replace(good, `"fPort": 1,`, `"fPort": -1,`, 1),
-		"fractional port":  strings.Replace(good, `"fPort": 1,`, `"fPort": 1.5,`, 1),
-		"counter over u32": strings.Replace(good, `"fCnt": 10,`, `"fCnt": 4294967296,`, 1),
+	for name, c := range map[string]struct {
+		body      string
+		port, cnt bool // which one is invalid
+	}{
+		"port over 255":    {strings.Replace(good, `"fPort": 1,`, `"fPort": 256,`, 1), true, false},
+		"negative port":    {strings.Replace(good, `"fPort": 1,`, `"fPort": -1,`, 1), true, false},
+		"fractional port":  {strings.Replace(good, `"fPort": 1,`, `"fPort": 1.5,`, 1), true, false},
+		"text port":        {strings.Replace(good, `"fPort": 1,`, `"fPort": "abc",`, 1), true, false},
+		"counter over u32": {strings.Replace(good, `"fCnt": 10,`, `"fCnt": 4294967296,`, 1), false, true},
 	} {
-		_, err := Decode(chirp(false), req([]byte(body), "up"))
-		require.ErrorIs(t, err, ErrMalformed, name)
+		res, err := Decode(chirp(false), req([]byte(c.body), "up"))
+		require.NoError(t, err, name+": Cut A accepted it")
+		u := res.Uplinks[0]
+		require.NotNil(t, u.Decoded, name)
+		require.Error(t, u.MetaErr, name)
+		require.ErrorIs(t, u.MetaErr, ErrMalformed, name)
+		if c.port {
+			require.Equal(t, NoLoRaWAN, u.FPort, name)
+		} else {
+			require.Equal(t, 1, u.FPort, name)
+		}
+		if c.cnt {
+			require.Equal(t, int64(NoLoRaWAN), u.FCnt, name)
+		} else {
+			require.Equal(t, int64(10), u.FCnt, name)
+		}
 	}
+}
+
+func TestAQuotedPortOrCounterIsRead(t *testing.T) {
+	good := string(fixture(t, "chirpstack/up_decoded.json"))
+	body := strings.Replace(strings.Replace(good, `"fPort": 1,`, `"fPort": "7",`, 1), `"fCnt": 10,`, `"fCnt": "4294967295",`, 1)
+	res, err := Decode(chirp(false), req([]byte(body), "up"))
+	require.NoError(t, err)
+	require.NoError(t, res.Uplinks[0].MetaErr)
+	require.Equal(t, 7, res.Uplinks[0].FPort)
+	require.Equal(t, int64(4294967295), res.Uplinks[0].FCnt)
+}
+
+func TestTheLargestFrameCounterIsKept(t *testing.T) {
+	cs := strings.Replace(string(fixture(t, "chirpstack/up_decoded.json")), `"fCnt": 10,`, `"fCnt": 4294967295,`, 1)
+	res, err := Decode(chirp(false), req([]byte(cs), "up"))
+	require.NoError(t, err)
+	require.Equal(t, int64(4294967295), res.Uplinks[0].FCnt)
+
+	tt := strings.Replace(string(fixture(t, "tts/up_decoded.json")), `"f_cnt": 1,`, `"f_cnt": 4294967295,`, 1)
+	res, err = Decode(tts("DEV_EUI", false), ttsReq([]byte(tt), ""))
+	require.NoError(t, err)
+	require.Equal(t, int64(4294967295), res.Uplinks[0].FCnt)
 }
 
 func TestTTSCarriesFPortAndFCnt(t *testing.T) {
@@ -56,10 +99,16 @@ func TestTTSCarriesFPortAndFCnt(t *testing.T) {
 	require.Equal(t, []byte{0x82, 0x41, 0xde}, u.Frame)
 }
 
-func TestTTSRefusesAPortThatIsNotOne(t *testing.T) {
+func TestTTSAcceptsAPortThatIsNotOneAndRecordsWhy(t *testing.T) {
 	good := string(fixture(t, "tts/up_decoded.json"))
-	_, err := Decode(tts("DEV_EUI", false), ttsReq([]byte(strings.Replace(good, `"f_port": 1,`, `"f_port": 300,`, 1)), ""))
-	require.ErrorIs(t, err, ErrMalformed)
+	for name, v := range map[string]string{"over 255": `300`, "text": `"abc"`, "fractional": `1.5`} {
+		res, err := Decode(tts("DEV_EUI", false), ttsReq([]byte(strings.Replace(good, `"f_port": 1,`, `"f_port": `+v+`,`, 1)), ""))
+		require.NoError(t, err, name)
+		u := res.Uplinks[0]
+		require.Error(t, u.MetaErr, name)
+		require.Equal(t, NoLoRaWAN, u.FPort, name)
+		require.Equal(t, int64(1), u.FCnt, name)
+	}
 }
 
 func TestGenericSendersCarryNoLoRaWANPortOrCounter(t *testing.T) {

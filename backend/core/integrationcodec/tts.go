@@ -38,7 +38,7 @@ type ttsUp struct {
 	} `json:"end_device_ids"`
 	ReceivedAt    *string `json:"received_at"`
 	UplinkMessage *struct {
-		FPort          json.Number     `json:"f_port"`
+		FPort          json.RawMessage `json:"f_port"`
 		FCnt           json.Number     `json:"f_cnt"`
 		FrmPayload     string          `json:"frm_payload"`
 		DecodedPayload json.RawMessage `json:"decoded_payload"`
@@ -111,10 +111,7 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 		fcnt = strconv.FormatUint(n, 10)
 		fCnt = int64(n)
 	}
-	fPort, err := loraPort(m.FPort, "f_port")
-	if err != nil {
-		return nil, err
-	}
+	fPort, portErr := loraPort(m.FPort, "f_port")
 	deviceKey := id
 	if scheme != devicealias.SchemeDevEUI && up.EndDeviceIds.DevEui != "" {
 		if eui, err := devicealias.Normalize(devicealias.SchemeDevEUI, up.EndDeviceIds.DevEui); err == nil {
@@ -129,8 +126,8 @@ func decodeTTS(d *Descriptor, r *Request) (*Result, error) {
 		Identifier: id, Scheme: scheme,
 		AltId: "tts:" + deviceKey + ":" + fcnt + ":" + at.Format(time.RFC3339Nano),
 		Time:  at, SenderTime: true, Decoded: object,
-		FPort: fPort, FCnt: fCnt,
 	}
+	u.setMeta(fPort, portErr, fCnt, nil)
 	if m.FrmPayload != "" {
 		u.SetFrame(m.FrmPayload, EncodingBase64)
 	}
