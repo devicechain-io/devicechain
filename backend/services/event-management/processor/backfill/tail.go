@@ -26,6 +26,15 @@ const (
 	// tailRefreshTries is how often one window's refresh is retried when it meets the aggregate
 	// policy's own refresh before the sweep leaves the window for the next one.
 	tailRefreshTries = 3
+	// tailBudget is the longest one sweep holds the instance lock. A sweep that runs out leaves
+	// the rest for the next: it starts again from the oldest window, and a window already
+	// refreshed is a no-op, so the progress it made is not repeated as work.
+	tailBudget = 10 * time.Minute
+	// tailFloorSlack is how far below the event-time floor an instance with no retention window
+	// still looks. A reading is checked against the floor when it ARRIVES, so one accepted at the
+	// limit can wait for a sweep that runs after the floor has moved past it (downtime, a busy
+	// lock); the slack keeps it reachable for that long.
+	tailFloorSlack = 90 * 24 * time.Hour
 )
 
 // TailSweeper keeps the rollup's old history correct.
@@ -91,12 +100,12 @@ func (s *TailSweeper) sweep(ctx context.Context, db *gorm.DB) error {
 	margin := max(24*time.Hour, s.cfg.ChunkInterval)
 	// The policy owns a window that starts inside its reach less the margin; this owns the rest.
 	reach := now.Add(-rollupPolicyReach).Add(margin)
-	floor := now.Add(-eventtime.MaxAge).Add(-s.cfg.ChunkInterval)
+	floor := now.Add(-eventtime.MaxAge).Add(-s.cfg.ChunkInterval).Add(-tailFloorSlack)
 	if s.cfg.RetentionDays > 0 {
-		if r := now.Add(-time.Duration(s.cfg.RetentionDays) * 24 * time.Hour); r.After(floor) {
-			floor = r
-		}
+		// Retention drops what is older, so there is nothing below it to be missing.
+		floor = now.Add(-time.Duration(s.cfg.RetentionDays) * 24 * time.Hour)
 	}
+	deadline := now.Add(tailBudget)
 	windows, err := chunkWindows(db, floor, reach)
 	if err != nil {
 		return err
@@ -106,6 +115,11 @@ func (s *TailSweeper) sweep(ctx context.Context, db *gorm.DB) error {
 	for i := len(windows) - 1; i >= 0; i-- { // oldest first
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if s.now().After(deadline) {
+			log.Info().Int("windowsLeft", i+1).
+				Msg("Rollup tail sweep reached its time budget; the rest is left for the next sweep.")
+			break
 		}
 		w := windows[i]
 		if !w.Start.Before(reach) {

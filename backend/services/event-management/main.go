@@ -236,6 +236,18 @@ func newBackfillRuntime(c *config.EventManagementConfiguration) (rt *model.Backf
 // aggregate policy does not reach (see backfill.TailSweeper). It is inert until a chunk older
 // than the policy's reach has an invalidation: a pass is one lock attempt and one catalog read.
 func wireRollupTail(ctx context.Context) error {
+	// A sweep pins one pooled connection for as long as it runs, the same as the backfill worker, so
+	// it needs the same room beside the persistence writers. On a pool without it the worker is
+	// already off; a sweep taking the last connection would starve the reads and the other
+	// maintenance that share it, which is worse than the rollup gap it closes.
+	if need, have := Configuration.Persistence.Writers+config.BackfillPoolConnections+config.PoolHeadroom,
+		rdb.EffectiveMaxOpenConnections(Configuration.TsdbConfiguration); need > have {
+		log.Warn().Int("needed", need).Int("poolSize", have).
+			Msg("Rollup tail sweep is not running: the event store's connection pool has no connection to spare " +
+				"beside the persistence writers. Readings dated more than 30 days back will not appear in " +
+				"rollup-backed bucketed reads. Raise tsdbConfiguration.maxOpenConnections or lower persistence.writers.")
+		return nil
+	}
 	RollupTail = backfill.NewTailSweeper(Microservice, RdbManager, backfill.Config{
 		ChunkInterval: time.Duration(Configuration.Lifecycle.ChunkIntervalHours) * time.Hour,
 		RetentionDays: Configuration.Lifecycle.RetentionDays,

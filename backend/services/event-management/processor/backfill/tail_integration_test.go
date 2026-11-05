@@ -80,7 +80,8 @@ func TestIntegrationALateReadingBeyondThePolicyReachReachesTheRollup(t *testing.
 	assert.EqualValues(t, 2, r.rollupCount("meter-1", from, to))
 }
 
-// The sweep never refreshes the window the policy owns, and respects retention as its floor.
+// The sweep refreshes only windows that start before the policy's reach (less its margin), and
+// takes retention as its floor.
 func TestIntegrationTheTailSweepStaysOutsidePolicyReachAndInsideRetention(t *testing.T) {
 	r := newRig(t, "tailbounds")
 	now := time.Now().UTC()
@@ -121,4 +122,27 @@ func TestIntegrationATailRefreshThatMeetsThePolicyIsRetriedThenLeft(t *testing.T
 	s.refresh = func(context.Context, *gorm.DB, time.Time, time.Time) error { tries++; return errors.New("boom") }
 	require.Error(t, s.RunOnce(context.Background()))
 	assert.Equal(t, 1, tries)
+}
+
+// One sweep does not hold the instance lock past its budget: the rest is left for the next, and
+// the next starts over from the oldest window, so a sweep that keeps running out still finishes.
+func TestIntegrationATailSweepStopsAtItsBudgetAndTheNextFinishes(t *testing.T) {
+	r := newRig(t, "tailbudget")
+	now := time.Now().UTC()
+	for i, d := range []int{50, 60, 70} {
+		r.insertReading("meter-1", now.Add(-time.Duration(d)*24*time.Hour), string(rune('a'+i)))
+	}
+	clock := now
+	var seen []time.Time
+	ms := &core.Microservice{FunctionalArea: "event-management", MicroserviceId: "event-management"}
+	s := NewTailSweeper(ms, r.mgr, r.cfg, r.metrics, core.NewNoOpLifecycleCallbacks())
+	s.now = func() time.Time { return clock }
+	s.refresh = func(_ context.Context, _ *gorm.DB, ws, _ time.Time) error {
+		seen = append(seen, ws)
+		clock = clock.Add(tailBudget + time.Minute) // each refresh "takes" longer than the budget
+		return nil
+	}
+	require.NoError(t, s.RunOnce(context.Background()))
+	require.Len(t, seen, 1, "the second window is past the budget and is left alone")
+	assert.True(t, seen[0].Before(now.Add(-65*24*time.Hour)), "oldest first: %v", seen[0])
 }
