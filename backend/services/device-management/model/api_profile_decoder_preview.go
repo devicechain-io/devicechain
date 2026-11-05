@@ -122,6 +122,9 @@ func (api *Api) TestPayloadDecoder(ctx context.Context, req *PayloadDecoderTestR
 	if req.WebhookBody != nil && req.IntegrationToken == nil {
 		return nil, &InvalidArgumentError{Msg: "webhookBody needs integrationToken: the stored integration's type and settings decide how the body is parsed"}
 	}
+	if req.WebhookBody != nil && (req.FPort != nil || req.FCnt != nil) {
+		return nil, &InvalidArgumentError{Msg: "fPort and fCnt apply only to a frame given as hex or base64: a webhook body carries its own"}
+	}
 	if req.WebhookBody == nil && (req.IntegrationToken != nil || len(req.Headers) > 0 || len(req.Query) > 0 ||
 		req.MessageType != nil || req.ContentType != nil) {
 		return nil, &InvalidArgumentError{Msg: "integrationToken, headers, query, messageType and contentType apply only with webhookBody"}

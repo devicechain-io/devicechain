@@ -41,7 +41,8 @@ type ProfileDecoderHealth struct {
 
 // ProfileDecoderSample is one stored failing uplink of a profile, kept so the decoder test panel
 // can replay it. Input is the canonical JSON of a payloaddecode.VectorInput (the shape a vector
-// uses, so a sample becomes a vector unchanged).
+// uses, so a sample becomes a vector unchanged). With a 64 KiB json, a 64 KiB decoded object and a
+// hex frame it can reach about 140 KiB or more.
 //
 // 🔴 A SAMPLE IS TENANT-ADMIN DATA. Running a decoder over a sample reveals its bytes
 // (`double(u8(frame, i))`), so evaluating one is reading it: both paths to a sample's bytes require

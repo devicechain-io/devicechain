@@ -93,7 +93,7 @@ func (r *SchemaResolver) TestPayloadDecoder(ctx context.Context, args struct {
 		}
 	}
 	if in.SampleId != nil {
-		id, err := strconv.ParseUint(string(*in.SampleId), 10, 64)
+		id, err := strconv.ParseUint(string(*in.SampleId), 10, strconv.IntSize)
 		if err != nil {
 			return nil, &model.InvalidArgumentError{Msg: "sampleId is not a sample id"}
 		}

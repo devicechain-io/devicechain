@@ -43,8 +43,9 @@ type profileDecoderHealth struct {
 }
 
 // profileDecoderSample is the SNAPSHOT of one stored failing uplink, kept so the test panel can
-// replay it. Input is the marshalled uplink payload, at most about 70 KiB; the platform serves
-// it only to DeviceWrite callers of the owning tenant.
+// replay it. Input is the canonical JSON of an uplink in the shape a decoder
+// vector uses; with a 64 KiB json, a 64 KiB decoded object and a hex frame it can reach about 140
+// KiB or more. The platform serves it only to DeviceWrite callers of the owning tenant.
 type profileDecoderSample struct {
 	ID              uint      `gorm:"primaryKey"`
 	TenantId        string    `gorm:"index;not null;size:128"`

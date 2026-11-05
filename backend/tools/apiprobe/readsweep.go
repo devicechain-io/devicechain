@@ -568,8 +568,9 @@ var sweepExemptions = map[string]string{
 		"the drill to reach through it",
 	"device-management.testPayloadDecoder": "an authoring preview: it runs a decoder document and an " +
 		"input (a frame, a body or a stored sample) the CALLER writes against a profile's draft metrics, " +
-		"and stores nothing, so there is no stored row for the drill to reach through it. A sample is " +
-		"read only with device:write, and the drill seeds none",
+		"and stores nothing, so there is no stored row for the drill to reach through it. Its sampleId " +
+		"path has nothing to read until the decode accounting slice (B3b) writes samples. " +
+		"TODO(B3b): seed a failing decode and exercise sampleId from the drill.",
 	"device-management.validateCommandEnqueue": "a pre-flight gate over a command the CALLER is about " +
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +

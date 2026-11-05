@@ -382,3 +382,43 @@ func (f *decoderFixture) metric2(ctx context.Context, key, dataType string) {
 		Token: "md-" + key, DeviceProfileToken: "meter", MetricKey: key, DataType: dataType})
 	require.NoError(f.t, err)
 }
+
+// fPort and fCnt belong to a frame given as hex or base64; a webhook body carries its own, so
+// naming them beside one is refused, not silently ignored.
+func TestTestDecoderRefusesFPortAndFCntBesideAWebhookBody(t *testing.T) {
+	f := newDecoderFixture(t)
+	f.createIntegration("chirp", "CHIRPSTACK_V4", "DEV_EUI", nil, false)
+	for name, req := range map[string]*PayloadDecoderTestRequest{
+		"fPort": {FPort: i32(2)},
+		"fCnt":  {FCnt: i32(1)},
+	} {
+		req.ProfileToken, req.Document = "meter", str(decoderDoc)
+		req.WebhookBody, req.IntegrationToken = str(chirpUp()), str("chirp")
+		_, err := f.api.TestPayloadDecoder(f.ctx, req)
+		var bad *InvalidArgumentError
+		assert.ErrorAs(t, err, &bad, name)
+	}
+}
+
+// An integration of another tenant is NOT FOUND on the webhook path; the same token in its own
+// tenant is found.
+func TestTestDecoderDoesNotFindAnotherTenantsIntegration(t *testing.T) {
+	f := newDecoderFixture(t)
+	f.createIntegration("chirp", "CHIRPSTACK_V4", "DEV_EUI", nil, false)
+	other := core.WithTenant(context.Background(), "other")
+	seedDeviceProfile(t, f.api, other, "meter")
+	f.metric2(other, "temperature", "DOUBLE")
+	f.metric2(other, "door", "INT")
+	req := func() *PayloadDecoderTestRequest {
+		return &PayloadDecoderTestRequest{ProfileToken: "meter", Document: str(decoderDoc), WebhookBody: str(chirpUp()),
+			IntegrationToken: str("chirp"), ContentType: str("application/json"),
+			Query: []NameValue{{Name: "event", Value: "up"}}}
+	}
+	res, err := f.api.TestPayloadDecoder(other, req())
+	assert.Nil(t, res)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "tenant other reached tenant acme's integration")
+
+	res, err = f.api.TestPayloadDecoder(f.ctx, req())
+	require.NoError(t, err)
+	assert.True(t, res.OK, "%+v", res.Failure)
+}

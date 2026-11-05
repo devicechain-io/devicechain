@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	gql "github.com/graph-gophers/graphql-go"
@@ -404,3 +406,51 @@ func TestGraphQLASampleIsEvaluatedOnlyForDeviceWriteOfTheOwningTenant(t *testing
 }
 
 func gormJSON(b []byte) datatypes.JSON { return datatypes.JSON(b) }
+
+// ---- the read fields do not amplify compiles -----------------------------------------------
+
+func TestReadingDecoderFiguresCompilesEachDistinctDocumentAtMostOnce(t *testing.T) {
+	w := newDecoderWire(t)
+	ctx := w.admin("acme")
+	var tokens []string
+	for i := 0; i < 50; i++ {
+		tok := fmt.Sprintf("p%d", i)
+		tokens = append(tokens, tok)
+		w.mustRun(ctx, createProfileMutation, map[string]any{"request": map[string]any{"token": tok}})
+		w.mustRun(ctx, `mutation ($request: MetricDefinitionCreateRequest) { createMetricDefinition(request: $request) { token } }`,
+			map[string]any{"request": map[string]any{"token": "md-" + tok, "deviceProfileToken": tok, "metricKey": "temperature", "dataType": "DOUBLE"}})
+		// Each document is distinct (its section name), except that profiles 40-49 repeat 30-39.
+		n := i
+		if i >= 40 {
+			n = i - 10
+		}
+		doc := fmt.Sprintf(`{"kind":"CEL","envVersion":1,"input":"FRAME","sections":[{"name":"s%d","outputs":[{"key":"temperature","expr":"double(u8(frame, 0))"}]}]}`, n)
+		w.mustRun(ctx, setDecoderMutation, map[string]any{"t": tok, "d": doc})
+	}
+
+	savedMemo, savedCompile := figureMemo, compileFigures
+	t.Cleanup(func() { figureMemo, compileFigures = savedMemo, savedCompile })
+	figureMemo = newFigureLRU(figureMemoSize)
+	var compiles atomic.Int32
+	compileFigures = func(d *payloaddecode.Document) decoderFigures { compiles.Add(1); return savedCompile(d) }
+
+	read := func(fields string) {
+		t.Helper()
+		w.mustRun(ctx, `query ($t: [String!]!) { deviceProfilesByToken(tokens: $t) { decoder { `+fields+` } } }`, map[string]any{"t": anyTokens(tokens)})
+	}
+	read("kind envVersion input document")
+	assert.Zero(t, compiles.Load(), "reading kind, envVersion, input or document compiled")
+
+	read("kind maxReadings estimatedCost")
+	assert.EqualValues(t, 40, compiles.Load(), "50 profiles holding 40 distinct documents")
+	read("maxReadings")
+	assert.EqualValues(t, 40, compiles.Load(), "a second read compiled again")
+}
+
+func anyTokens(in []string) []any {
+	out := make([]any, len(in))
+	for i, s := range in {
+		out[i] = s
+	}
+	return out
+}

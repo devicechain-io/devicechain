@@ -243,9 +243,9 @@ var tableSweepExemptions = map[string]string{
 	"device-management.profile_decoder_healths": "per-replica decode tallies, written by the resolver's " +
 		"accounting flusher when an integration uplink is decoded by a profile's published decoder. The " +
 		"seed ingests no uplink through an integration, so no decode runs and no tally exists.",
-	"device-management.profile_decoder_samples": "stored FAILING uplinks, written by the resolver when a " +
-		"decode fails within its sample budget. The seed ingests no uplink through an integration, and a " +
-		"drill that produced a failing decode would be reporting a defect, not covering this table.",
+	"device-management.profile_decoder_samples": "stored failing uplinks. Nothing writes a row until the " +
+		"decode accounting slice (B3b) lands the sample writer. TODO(B3b): seed one failing decode through " +
+		"an integration and drop this exemption.",
 
 	// ---- per-area journals, correctly empty ----------------------------------
 	//
