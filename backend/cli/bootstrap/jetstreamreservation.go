@@ -120,7 +120,7 @@ func precheckJetStreamReservation(ctx context.Context, st *State) error {
 		if err != nil {
 			return err
 		}
-		live, err := liveVolumesFrom(infra.Broker, infra.EventStore)
+		live, err := infra.volumes()
 		if err != nil {
 			return err
 		}

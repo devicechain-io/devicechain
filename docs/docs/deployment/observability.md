@@ -573,8 +573,13 @@ kubectl -n dci-my-instance get pvc          # then patch each broker claim's req
 kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests":{"storage":"36Gi"}}}}'
 ```
 
-and then run the `dcctl upgrade` again (this is the recipe `dcctl` prints when the volume differs).
-It needs a StorageClass that allows expansion.
+Patch every one of the broker's claims (`dc-nats-js-dc-nats-0`, `-1`, and so on, one per server), then
+run `dcctl upgrade` again. With the StatefulSet gone and its claims in place, the upgrade reads the
+new size from the claims (the smallest one, so a claim you have not patched yet shows as not grown),
+recreates the StatefulSet at that size around the servers that are still running, and derives the
+broker's file-store ceiling from it. It refuses, changing nothing, while one of those servers is not
+ready. The recreated StatefulSet is only applied when the size differs from the one the broker last
+ran with, which is what growing it means. The recipe needs a StorageClass that allows expansion.
 
 **The alerts.** A consumer that stops at the design rate fills its stream at a steady pace, so the
 warnings are timed against the moment the platform stops accepting events (90% of the stream),
