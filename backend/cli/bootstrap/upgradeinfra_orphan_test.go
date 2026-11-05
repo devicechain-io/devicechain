@@ -392,3 +392,14 @@ func TestAnOrphanedBrokerAtTheRecordedSizeIsRefusedBeforeAnyWrite(t *testing.T) 
 		}
 	})
 }
+
+// The renewal skips the restart when the StatefulSet is gone, so the certificate expiry (which
+// means "once the broker serves it") is not published until a later upgrade finds the servers back.
+func TestTheCertificateExpiryIsNotPublishedWhileTheStatefulSetIsGone(t *testing.T) {
+	if brokerExpiryUnverified(&State{}) {
+		t.Fatal("an ordinary broker's expiry was held back")
+	}
+	if !brokerExpiryUnverified(&State{OrphanedClaims: []OrphanedClaim{{Name: "dc-nats-js-dc-nats-0", Size: "36Gi"}}}) {
+		t.Fatal("an orphaned broker's expiry would be published before its servers serve the certificate")
+	}
+}
