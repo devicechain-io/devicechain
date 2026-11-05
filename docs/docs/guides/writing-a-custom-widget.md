@@ -106,7 +106,7 @@ A widget declares one channel:
 | `none` | No data. A static widget. | none |
 
 A binding value is a reference to an option key,
-`{ option: 'window', min: 1, default: 1 }`. Two bindings also accept a constant: `pageSize` takes a positive integer, `{ const: 25 }`, and `members` takes `{ const: true }`. The reference is checked against the option's kind when
+`{ option: 'window', min: 1, default: 1 }`. Some bindings also accept a constant, for example `pageSize` (a positive integer, `{ const: 25 }`) and switches such as `members`, `presence`, `history` and `countBySeverity` (`{ const: true }`). The reference is checked against the option's kind when
 you compile. You cannot supply a GraphQL string or a subscription function: the host owns the
 transport. The `selection` and `none` channels open no data channel and must declare
 `datasource: { mode: 'none' }`.

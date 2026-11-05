@@ -67,10 +67,10 @@ title: 设备凭据
 
 ## 两层检查：连接与事件 {#two-layers-the-connection-and-the-event}
 
-事件体凭据用于**逐事件**检查。MQTT 和 NATS **连接**也在消息代理本身认证：
+通过 HTTP 时，事件体中的凭据是逐事件检查。通过平台的 MQTT 代理时，连接就是身份：它在消息代理本身认证，事件体中携带凭据的事件会被拒绝。
 
 - **TLS。** MQTT 和 NATS 监听器使用 TLS，设备通过实例 CA 建立 TLS 连接。
-- **Auth-callout。** 消息代理要求平台批准每个新连接（NATS auth-callout）。平台认证连接，并将其限定在该设备的主题，而非整个租户主题。设备只能发布自己的事件、读取自己的命令，不能做其他事。`MQTT_BASIC` 设备使用 MQTT 用户名 `{tenant}:{credentialId}` 和凭据密码连接，与认证事件的凭据相同。无法认证的设备连连接都无法建立。
+- **Auth-callout。** 消息代理要求平台批准每个新连接（NATS auth-callout）。平台认证连接，并将其限定在该设备的主题，而非整个租户主题。设备只能发布自己的事件、读取自己的命令，不能做其他事。`MQTT_BASIC` 设备使用 MQTT 用户名 `{tenant}:{credentialId}` 和凭据密码连接。无法认证的设备连连接都无法建立。
 - **客户端 ID。** 连接还必须提供 MQTT 客户端 ID `{instanceId}:{tenant}:{deviceToken}`。可以加 `:` 和设备自选后缀，例如 `{instanceId}:{tenant}:{deviceToken}:cmd`。后缀允许第二个并发会话不踢掉第一个，例如一条连接发布，另一条订阅命令。不是以设备自身 `{instanceId}:{tenant}:{deviceToken}` 开头的 ID 会被拒绝。消息代理按客户端 ID 保存会话，自由选择会让设备接管另一设备会话。
 
 传输详情见[连接设备](./connecting-a-device.md)。

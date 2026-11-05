@@ -67,10 +67,10 @@ What a device presents is not kept in the clear on its way through the platform 
 
 ## Two layers: the connection and the event
 
-The credential in the event body is the **per-event** check. MQTT and NATS **connections** are also authenticated, at the broker itself:
+Over HTTP, the credential in the event body is the per-event check. Over the platform's MQTT broker the connection is the identity: it is authenticated at the broker itself, and an event that carries a credential in its body is refused.
 
 - **TLS.** The MQTT and NATS listeners use TLS. A device connects over TLS with the instance CA.
-- **Auth-callout.** The broker asks the platform to approve each new connection (a NATS auth-callout). The platform authenticates the connection and binds it to that one device's subjects, not its tenant's. The device can publish its own events and read its own commands, and nothing else. An `MQTT_BASIC` device connects with the MQTT username `{tenant}:{credentialId}` and the credential password: the same credential that authenticates its events. A device that can't authenticate can't even connect.
+- **Auth-callout.** The broker asks the platform to approve each new connection (a NATS auth-callout). The platform authenticates the connection and binds it to that one device's subjects, not its tenant's. The device can publish its own events and read its own commands, and nothing else. An `MQTT_BASIC` device connects with the MQTT username `{tenant}:{credentialId}` and the credential password. A device that can't authenticate can't even connect.
 - **Client id.** The connection must also present the MQTT client id `{instanceId}:{tenant}:{deviceToken}`. It may add `:` and a suffix of the device's choosing, for example `{instanceId}:{tenant}:{deviceToken}:cmd`. The suffix lets a second concurrent session run without evicting the first, such as one connection publishing and another subscribed for commands. Any id that does not start with the device's own `{instanceId}:{tenant}:{deviceToken}` is refused. The broker files a device's session under its client id, so letting the device choose it freely would let one device take over another's session.
 
 See [Connecting a Device](./connecting-a-device.md) for the transport details.

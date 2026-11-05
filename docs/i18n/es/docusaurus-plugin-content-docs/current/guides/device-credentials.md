@@ -67,10 +67,10 @@ Lo que presenta un dispositivo tampoco se guarda en claro mientras recorre la pl
 
 ## Dos capas: la conexión y el evento
 
-La credencial del cuerpo del evento es la verificación **por evento**. Las **conexiones** MQTT y NATS también se autentican, en el propio broker:
+Por HTTP, la credencial del cuerpo del evento es la verificación por evento. Por el broker MQTT de la plataforma, la conexión es la identidad: se autentica en el propio broker, y un evento que lleva una credencial en su cuerpo se rechaza.
 
 - **TLS.** Los listeners de MQTT y NATS usan TLS. Un dispositivo se conecta por TLS con la CA de la instancia.
-- **Auth-callout.** El broker pide a la plataforma que apruebe cada conexión nueva (un auth-callout de NATS). La plataforma autentica la conexión y la vincula a los subjects de ese único dispositivo, no a los de su inquilino. El dispositivo puede publicar sus propios eventos y leer sus propios comandos, y nada más. Un dispositivo `MQTT_BASIC` se conecta con el usuario MQTT `{tenant}:{credentialId}` y la contraseña de la credencial: la misma credencial que autentica sus eventos. Un dispositivo que no puede autenticarse ni siquiera puede conectarse.
+- **Auth-callout.** El broker pide a la plataforma que apruebe cada conexión nueva (un auth-callout de NATS). La plataforma autentica la conexión y la vincula a los subjects de ese único dispositivo, no a los de su inquilino. El dispositivo puede publicar sus propios eventos y leer sus propios comandos, y nada más. Un dispositivo `MQTT_BASIC` se conecta con el usuario MQTT `{tenant}:{credentialId}` y la contraseña de la credencial. Un dispositivo que no puede autenticarse ni siquiera puede conectarse.
 - **Client id.** La conexión también debe presentar el client id de MQTT `{instanceId}:{tenant}:{deviceToken}`. Puede añadir `:` y un sufijo a elección del dispositivo, por ejemplo `{instanceId}:{tenant}:{deviceToken}:cmd`. El sufijo permite que una segunda sesión concurrente funcione sin expulsar a la primera, como una conexión que publica y otra suscrita a los comandos. Cualquier id que no empiece por el propio `{instanceId}:{tenant}:{deviceToken}` del dispositivo se rechaza. El broker archiva la sesión de un dispositivo bajo su client id, así que dejar que el dispositivo lo eligiera libremente permitiría que uno se apropiara de la sesión de otro.
 
 Consulta [Conexión de un dispositivo](./connecting-a-device.md) para los detalles de transporte.
