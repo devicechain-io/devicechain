@@ -121,10 +121,12 @@ BOARDS=(
   delivery
   event-processing
   ingest
+  lwm2m-ingest
   messaging
   overview
   persistence
   platform
+  sparkplug-ingest
 )
 # ...and the two published names, spelled out from that list. This is the only
 # place they are derived: the list above is the literal, the names below are what

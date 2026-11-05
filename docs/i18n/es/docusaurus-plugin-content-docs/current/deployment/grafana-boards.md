@@ -6,10 +6,12 @@ title: Paneles de Grafana
 # Paneles de Grafana {#grafana-boards}
 
 La [pila de monitoreo](./observability.md#la-pila-de-monitoreo) que despliega `dcctl install`
-incluye ocho paneles de Grafana por instancia: un **resumen** que responde a "¿está todo en
-marcha?" y siete **paneles por etapa**, uno por cada etapa que atraviesa un mensaje desde un
-dispositivo hasta una notificación entregada, más la plataforma que los sostiene. Cada panel es
-el punto de partida para una pregunta, y cada uno enlaza con el siguiente que abriría.
+incluye diez paneles de Grafana por instancia: un **resumen** que responde a "¿está todo en
+marcha?", siete **paneles por etapa**, uno por cada etapa que atraviesa un mensaje desde un
+dispositivo hasta una notificación entregada, más la plataforma que los sostiene, y dos paneles
+para los [servicios opcionales Sparkplug y LwM2M](./edge-services.md). Cada panel es el punto de
+partida para una pregunta, y cada uno enlaza con el siguiente que abriría. El agente de borde se
+ejecuta fuera del clúster y tiene en su lugar su propio [archivo de panel](#edge-agent-dashboard).
 
 Todo lo que muestran los paneles se construye con las métricas que los servicios ya exportan
 (consulte la [referencia de métricas](./metrics-reference.md)) y con las series estándar de
@@ -167,7 +169,7 @@ a la espera de ser reenviados.
 | Protection of the MQTT message store | Consumidores requeridos presentes, ajustes del almacén restituidos, flujos de pasarela sin límite de tamaño y conexiones rechazadas porque el almacén está lleno u ocupado. |
 | Device presence and external sources | Cambios de conexión y desconexión no registrados, fuentes MQTT externas sin exactamente un lector y la caché de inicio de sesión de dispositivos. |
 | Device self-registration | Dispositivos registrados, rechazos por motivo y tiempo de respuesta. |
-| Sparkplug ingest, LwM2M ingest | Solo cuando se ejecutan esos servicios opcionales: lectores activos o estado de servicio, fallos y tráfico por protocolo. |
+| Sparkplug ingest, LwM2M ingest | Solo cuando se ejecutan esos servicios opcionales: lectores activos o estado de servicio, fallos y tráfico por protocolo. Cada uno tiene su propio panel completo: [Sparkplug ingest](#sparkplug-ingest-board) y [LwM2M ingest](#lwm2m-ingest-board). |
 
 Alertas que lo respaldan: las alertas de MQTT y del flujo de captura descritas en
 [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure) y
@@ -313,6 +315,69 @@ las alertas `Sso*` y de almacén de credenciales, `TenantPurge*`,
 [`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings), `RateLimiterOverflowInUse`,
 `RateMeteringClockFallback`, `ReactShedLettersOverBudget` y `ConnectorDispatchRateLimited`.
 
+## Sparkplug ingest {#sparkplug-ingest-board}
+
+**Úselo cuando los nodos Sparkplug dejan de reportar, o cuando el host Sparkplug no está leyendo.**
+Sigue un transporte desde la conexión con el broker hasta las lecturas almacenadas y los comandos
+enviados de vuelta a los nodos de borde. El servicio es opcional: en una instancia que no lo
+ejecuta, todos los paneles muestran «sin datos».
+
+| Grupo | Qué muestra |
+| --- | --- |
+| Is it reading? | Lectores activos (exactamente uno es lo sano), fallos de conexión con el broker, suscripciones de grupo rechazadas, mensajes descartados, mensajes que no se pudieron decodificar y nodos que no logran registrarse. |
+| What arrives | Mensajes por tipo, y las lecturas, los cambios de presencia y los dispositivos registrados que produjeron. |
+| What was not stored | Lecturas omitidas por motivo, y todo lo descartado: en la ingesta, sin decodificar, de dispositivos desconocidos, de un tenant en eliminación, demasiado antiguo y recortado por el límite de un tenant. |
+| Presence and rebirths | Solicitudes de rebirth y las descartadas, sondeos de vida y los dispositivos que marcaron como desconectados, recuperación de registro, y cuánto dura una pasada del sondeo y cuándo se ejecutó la última correcta. |
+| Commands to edge nodes | Comandos a la espera de un resultado, comandos sin confirmar, fallos de comandos, aperturas del interruptor y las fuentes cuyo interruptor no está cerrado, comandos por resultado, tiempo hasta la confirmación y el estado del interruptor de cada fuente. |
+
+Alertas que lo respaldan: las alertas `SparkplugIngest*` y `SparkplugCommand*` de
+[Ejecución de los servicios de borde](./edge-services.md#edge-alerts).
+
+## LwM2M ingest {#lwm2m-ingest-board}
+
+**Úselo cuando no se puede alcanzar a los dispositivos LwM2M, dejan de reportar o sus comandos no llegan.**
+Cubre el servidor CoAP y DTLS, la flota que mantiene, las lecturas que almacena y la ruta de
+comandos hacia los dispositivos. El servicio es opcional: en una instancia que no lo ejecuta, todos
+los paneles muestran «sin datos».
+
+| Grupo | Qué muestra |
+| --- | --- |
+| Is it serving? | Líderes y réplicas sirviendo (exactamente una de cada), notificaciones descartadas, comandos no ejecutados, handshakes rechazados y sesiones rechazadas por el límite. |
+| The fleet it holds | Registros, sesiones y observaciones, el ciclo de vida de los registros, marcas de conmutación por error, registros rechazados, handshakes DTLS y solicitudes del sondeo de salud. |
+| Readings | Notificaciones y lecturas almacenadas, notificaciones que no produjeron lectura, registros no numéricos, todo lo descartado y dispositivos creados por telemetría. |
+| Commands | Comandos despachados por operación, comandos apartados y por qué, comandos para dispositivos sin conexión o ajenos, fallos de comandos y el vaciado del retraso. |
+| Device information and housekeeping | Recopilaciones de información de dispositivos y sus problemas de escritura, y el barrido que elimina los registros de los tenants eliminados. |
+
+Alertas que lo respaldan: las alertas `Lwm2mIngest*` de
+[Ejecución de los servicios de borde](./edge-services.md#edge-alerts).
+
+## Edge agent {#edge-agent-dashboard}
+
+El agente de borde se ejecuta en hardware de tus plantas y su endpoint de métricas escucha solo en
+la dirección de loopback del equipo. El Prometheus de la instancia nunca lo recolecta, así que el
+chart no instala ningún panel para él. El panel es un archivo que importas en el Grafana que lee
+**tu propio** Prometheus: [`edge-agent.json`](https://github.com/devicechain-io/devicechain/blob/main/backend/edge/dc-edge-agent/dashboards/edge-agent.json).
+
+Para usarlo, lleva las métricas de los agentes a un Prometheus: ejecuta en cada equipo un colector,
+o un relevo accesible desde tu red, que recolecte `127.0.0.1:<metricsPort>` (por defecto 9090) y escriba en él. Después, en Grafana elige
+**Dashboards, New, Import**, sube el archivo y selecciona ese Prometheus como origen de datos. El
+panel tiene dos selectores, **Job** y **Agent**, tomados de las etiquetas de la recolección, de modo
+que un solo panel cubre toda la flota y cualquier subconjunto. No tiene tabla *Firing alerts*,
+porque el agente no distribuye reglas de alerta.
+
+| Grupo | Qué muestra |
+| --- | --- |
+| Is every site connected? | Agentes que reportan y desconectados, el evento más antiguo en el búfer, el búfer más lleno, eventos perdidos por desbordamiento, eventos rechazados, agentes con el puerto local abierto y una tabla con una fila por agente. |
+| Connectivity | El enlace con la nube de cada agente a lo largo del tiempo y las publicaciones a la espera de la nube. |
+| Store-and-forward backlog | Antigüedad del evento más antiguo en el búfer, eventos en el búfer, búfer usado frente a su límite, ocupación del búfer y eventos perdidos por desbordamiento. |
+| Throughput | Eventos leídos para reenviar y confirmados por la nube, reenviados por agente e intentos de reenvío fallidos. |
+| Refused and rejected events | Rechazos por motivo, eventos rechazados conservados o sin coincidencia, eventos descartados en el equipo y si el puerto local exige una credencial. |
+| The agent process | Memoria, CPU, goroutines y archivos abiertos de cada agente. |
+
+Cada panel lee una serie que el agente exporta. Una prueba en el árbol de código del agente
+comprueba el archivo contra las métricas reales del agente, de modo que una métrica renombrada
+rompe la compilación en lugar de dejar una planta con un gráfico vacío.
+
 ## Lo que los paneles no cubren {#not-covered}
 
 - **El operador de Kubernetes** se ejecuta en su propio namespace. Nada recolecta sus métricas y
@@ -325,7 +390,9 @@ las alertas `Sso*` y de almacén de credenciales, `TenantPurge*`,
   demora que crece. La medida real más cercana de antigüedad es `detect_watermark_lag_seconds`,
   que Event processing muestra como *Watermark lag*: cuánto se retrasa la marca de agua del motor
   de detección respecto al reloj.
-- **Los agentes de borde** se ejecutan en hardware del cliente y no se recolectan.
+- **Los agentes de borde** se ejecutan en hardware del cliente y el Prometheus de la instancia no los
+  recolecta, así que ningún panel del chart los muestra. Importa el
+  [panel del agente de borde](#edge-agent-dashboard) en el Grafana que lee tu propio Prometheus.
 
 ## Relacionado {#related}
 
