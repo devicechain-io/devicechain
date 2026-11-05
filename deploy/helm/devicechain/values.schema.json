@@ -165,6 +165,7 @@
                 },
                 "tokenAudience": {
                   "type": "object",
+                  "additionalProperties": false,
                   "description": "Which resource a token must be bound to. Every API plane checks the audience of the access token it is shown against the area it serves (or a registered MCP resource), and the authorization server checks the resource a client asks a token for. The chart derives areaBaseUrl and mcpResources itself and refuses a hand-set value for either; the other three keys are the operator's.",
                   "properties": {
                     "enforcement": {
@@ -189,7 +190,8 @@
                       "type": "array",
                       "maxItems": 8,
                       "items": {
-                        "type": "string"
+                        "type": "string",
+                        "pattern": "^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://(localhost|127[.]0[.]0[.]1))(:[0-9]+)?(/[^?#@\\s]*[^/?#@\\s])?$"
                       },
                       "description": "Resource servers outside the platform that validate DeviceChain tokens through the authorization server's JWKS endpoint. The authorization server may issue tokens bound to them; no DeviceChain plane accepts those tokens. Each entry is an https URL (http only for a loopback host) with a lowercase scheme and host, no query, fragment or trailing slash, that does not sit under the platform's own API address."
                     },

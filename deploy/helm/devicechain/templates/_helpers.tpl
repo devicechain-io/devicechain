@@ -617,17 +617,39 @@ devicechain.tokenAudienceBaseUrl is <origin>/api, the base each area's token aud
 built from (infrastructure.tokenAudience.areaBaseUrl), or empty when the origin is not
 servable (no ingress, or http on a real host). Empty means no area audience is issuable or
 matched, which matches that instance having no OAuth issuer either.
+
+It is also empty when the origin is not a URL the services' validator would accept: a bare
+IPv6 address ("::1" renders http://::1), or a host carrying a query, fragment or userinfo.
+A rendered value the validator refuses is a crash loop, so the shape is checked here with a
+pattern rather than parsed (urlParse aborts the render on exactly the input being guarded).
 */}}
 {{- define "devicechain.tokenAudienceBaseUrl" -}}
 {{- $origin := include "devicechain.publicOriginServable" . -}}
 {{- if $origin -}}
-{{- /* The origin guard compares the raw ingress.host; the validator parses the URL. A bare
-"::1" passes the first and renders http://::1, which is not a URL (and not loopback to the
-validator), and a rendered value the validator refuses is a crash loop. So http is derived only
-for a name that is loopback as a URL host: localhost or 127.0.0.1. */ -}}
 {{- $loopback := has $origin (list "http://localhost" "http://127.0.0.1") -}}
-{{- if or (hasPrefix "https://" $origin) $loopback -}}{{- printf "%s/api" $origin -}}{{- end -}}
+{{- if or (hasPrefix "https://" $origin) $loopback -}}
+{{- $base := printf "%s/api" $origin -}}
+{{- if regexMatch "^https?://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[^?#@[:space:]]*)?$" $base -}}{{- $base -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.tokenAudienceAreaNames is the platform areas whose resource identifier is an AREA
+audience (every area except mcp), as a JSON array. It mirrors the roster in
+devicechain.enabledAreas (`$known`).
+*/}}
+{{- define "devicechain.tokenAudienceAreaNames" -}}
+{{- list "user-management" "device-management" "event-sources" "event-management" "device-state" "dashboard-management" "command-delivery" "notification-management" "event-processing" "outbound-connectors" "ai-inference" "sparkplug-ingest" "lwm2m-ingest" "update-management" | toJson -}}
+{{- end -}}
+
+{{/*
+devicechain.tokenAudienceEnforced renders "true" when the operator set
+tokenAudience.enforcement to enforce, else nothing.
+*/}}
+{{- define "devicechain.tokenAudienceEnforced" -}}
+{{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
+{{- if eq (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "enforce" -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -637,9 +659,12 @@ handed, devicechain.mcpResourceUrl) when mcp is deployed, else []. Without it ev
 MCP-forwarded call would be counted a would-reject, and refused once enforcement is on.
 
 The entry is left out, rather than rendered, when the services' validator would refuse it:
-the tokenAudience fields additionally require a lowercase scheme and host, which mcp's own
-resourceUrl does not, so a mixed-case loopback override that starts today must not become a
-crash loop. mcp then reports the mismatch itself instead of the instance failing to start.
+the tokenAudience fields additionally require a lowercase scheme and host (which mcp's own
+resourceUrl does not), and an mcp override that is a platform area's identifier
+(<areaBaseUrl>/<area>) collides with the area set. Leaving it out keeps a value that starts
+today from becoming a crash loop. In observe mode the consequence is only that mcp's calls are
+counted as carrying an unregistered audience; once enforcement is on they would be refused, so
+under enforce the render FAILS instead of dropping the entry silently.
 */}}
 {{- define "devicechain.tokenAudienceMcpResources" -}}
 {{- $out := list -}}
@@ -650,16 +675,47 @@ crash loop. mcp then reports the mismatch itself instead of the instance failing
 uppercase one from a comparison of its fields). */ -}}
 {{- $head := regexFind "^[^/]*//[^/]*" $v -}}
 {{- $base := include "devicechain.tokenAudienceBaseUrl" . -}}
-{{- /* An entry that is one of the platform areas' identifiers (an mcp override of
-<areaBaseUrl>/<area>) would be refused by the validator, so it is left out. mcp's own derived
-<areaBaseUrl>/mcp is not an area and stays. */ -}}
-{{- $clash := and $base (hasPrefix (printf "%s/" $base) $v) (ne $v (printf "%s/mcp" $base)) (not (contains "/" (trimPrefix (printf "%s/" $base) $v))) -}}
+{{- $clash := false -}}
+{{- if and $base (hasPrefix (printf "%s/" $base) $v) -}}
+{{- $clash = has (trimPrefix (printf "%s/" $base) $v) (include "devicechain.tokenAudienceAreaNames" . | fromJsonArray) -}}
+{{- end -}}
 {{- if and (eq $head (lower $head)) (not $clash) -}}
 {{- $out = append $out $v -}}
+{{- else if include "devicechain.tokenAudienceEnforced" . -}}
+{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while tokenAudience.enforcement is enforce, so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set enforcement to observe." $v $base) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $out | toJson -}}
+{{- end -}}
+
+{{/*
+The chart-side check on tokenAudience.externalResources: an entry that repeats mcp's resource,
+repeats another entry, or sits at or under the platform's own API address (<areaBaseUrl>, so
+including every area's identifier) is refused by the services at startup, which is every pod
+crash-looping. Refused here with the reason instead. The shape (https, lowercase, no query,
+fragment, userinfo or trailing slash) is the values schema's pattern.
+*/}}
+{{- define "devicechain.validateTokenAudienceExternal" -}}
+{{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
+{{- $ext := (get (get $infra "tokenAudience" | default dict) "externalResources" | default list) -}}
+{{- if $ext -}}
+{{- $base := include "devicechain.tokenAudienceBaseUrl" . -}}
+{{- $mcp := include "devicechain.tokenAudienceMcpResources" . | fromJsonArray -}}
+{{- $seen := list -}}
+{{- range $e := $ext -}}
+  {{- if has $e $seen -}}
+    {{- fail (printf "instance.config.infrastructure.tokenAudience.externalResources lists %q twice; a resource may appear once." $e) -}}
+  {{- end -}}
+  {{- $seen = append $seen $e -}}
+  {{- if has $e $mcp -}}
+    {{- fail (printf "instance.config.infrastructure.tokenAudience.externalResources lists %q, which is this instance's own MCP resource. Remove it: the MCP resource is registered by the chart." $e) -}}
+  {{- end -}}
+  {{- if and $base (or (eq $e $base) (hasPrefix (printf "%s/" $base) $e)) -}}
+    {{- fail (printf "instance.config.infrastructure.tokenAudience.externalResources lists %q, which is at or under this instance's own API address %q, so it would re-label a platform area as external. Use an address outside it." $e $base) -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -860,6 +916,7 @@ a gate ends up trusted for something it never checked.
 {{- define "devicechain.validateInstanceConfigSource" -}}
 {{- include "devicechain.validateShutdownNotHandSet" . -}}
 {{- include "devicechain.validateTokenAudienceNotHandSet" . -}}
+{{- include "devicechain.validateTokenAudienceExternal" . -}}
 {{- $external := .Values.instance.existingSecret | default "" -}}
 {{- if $external -}}
   {{/* 🔴 THE NAME IS NOT FREE, AND LETTING IT BE FREE COSTS EVERY CREDENTIAL.
@@ -1565,6 +1622,7 @@ operator's own block. Without this block every MCP-forwarded call would be count
 would-reject. Empty values are left out, so an instance with no servable origin carries no
 area audiences. */ -}}
 {{- include "devicechain.validateTokenAudienceNotHandSet" . -}}
+{{- include "devicechain.validateTokenAudienceExternal" . -}}
 {{- $ta := deepCopy (get $infra "tokenAudience" | default dict) -}}
 {{- $base := include "devicechain.tokenAudienceBaseUrl" . -}}
 {{- if $base -}}{{- $_ := set $ta "areaBaseUrl" $base -}}{{- end -}}

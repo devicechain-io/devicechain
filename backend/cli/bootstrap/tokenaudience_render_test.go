@@ -46,6 +46,10 @@ func tokenAudienceValues(ingress map[string]interface{}, profile string, mcpReso
 		vals["functionalAreas"] = map[string]interface{}{
 			"mcp": map[string]interface{}{"config": map[string]interface{}{"resourceUrl": mcpResourceURL}},
 		}
+		if ingress == nil {
+			// With no ingress to derive from, mcp's issuer has to be stated too.
+			vals["functionalAreas"].(map[string]interface{})["mcp"].(map[string]interface{})["config"].(map[string]interface{})["issuerUrl"] = "https://iot.example.com/api/user-management"
+		}
 	}
 	return vals
 }

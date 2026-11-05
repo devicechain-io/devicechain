@@ -344,8 +344,8 @@ func checkAuthoredTransforms(ch *chart.Chart, vals map[string]interface{}, manif
 // A supplier's document carries whatever they wrote, and a document with no entry for a
 // deployed mcp loads without complaint. The cost is that every call mcp forwards is counted
 // as a would-reject (and warned about) in observe mode, and refused in enforce mode, while
-// mcp itself reports healthy. mcp checks the same thing at its own startup; this moves the
-// report to deploy time.
+// mcp itself reports healthy. mcp is meant to check the same thing at its own startup (a separate change);
+// this reports it at deploy time, before any pod starts.
 //
 // The value compared is the one mcp is HANDED, read out of the rendered per-service
 // ConfigMap, so the answer is the chart's own and not a second derivation.

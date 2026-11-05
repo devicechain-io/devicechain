@@ -36,13 +36,13 @@ spec:
   groups:
     - name: devicechain.token-audience
       rules:
-        # `for` equals the window. A rate over 1h that stays above zero for 1h means traffic
-        # arrived in every part of the hour or very nearly, which is a client doing this
-        # routinely and not one probe. One stray request cannot fire it, because rate() over
-        # the hour falls back to zero only after the hour has passed, which is also when the
-        # alert clears.
+        # `for` equals the window, so the alert needs would-reject traffic to keep the hour's
+        # rate above zero for a full hour. A lone request stops counting once it leaves the 1h
+        # window and the alert clears. It is not a guarantee of continuous traffic: one request
+        # every 59 minutes keeps the rate above zero. For an info-level nudge that is the right
+        # sensitivity.
         - alert: TokenAudienceWouldReject
-          expr: sum by (job) (rate({__name__=~"devicechain_.+_token_audience_checks_total", verdict="would_reject", namespace="{{ $ns }}"}[1h])) > 0
+          expr: sum by (job) (rate({__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject", namespace="{{ $ns }}"}[1h])) > 0
           for: 1h
           labels:
             severity: info
