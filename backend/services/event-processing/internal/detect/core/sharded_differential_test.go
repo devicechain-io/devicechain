@@ -500,9 +500,30 @@ func sortedKeys(keys []SeriesKey) string {
 }
 
 func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diffCrash) (*diffStats, error) {
+	return runDifferentialLazy(seed, nOps, ref, other, crash, 0)
+}
+
+// closeEngine stops an engine that has goroutines.
+func closeEngine(e detectEngine) {
+	if c, ok := e.(interface{ Close() }); ok {
+		c.Close()
+	}
+}
+
+// runDifferentialLazy is runDifferential with the comparison deferred: with lazyEvery > 0 the
+// engine under test is fed every operation and only the answers an operation gives back are
+// compared at once; its detections, its state and its snapshot are compared every lazyEvery
+// operations (and at a restart and at the end), against everything the plain engine emitted since
+// the last comparison. That is what leaves the engine under test free to run ahead of the reference,
+// which is the case a concurrent engine must get right.
+func runDifferentialLazy(seed int64, nOps int, ref, other engineBuilder, crash *diffCrash, lazyEvery int) (*diffStats, error) {
 	g := newDiffGen(seed)
 	a := ref.fresh(g.rulesNow(), diffLateness)
 	b := other.fresh(g.rulesNow(), diffLateness)
+	defer func() { closeEngine(a); closeEngine(b) }()
+	lazy := lazyEvery > 0
+	var refAcc []Detection
+	var checkState func(i int, desc string) error
 
 	compare := func(i int, desc string, ra, rb string) error {
 		fail := func(format string, args ...any) error {
@@ -511,9 +532,14 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 		if ra != rb {
 			return fail("operation result differs: plain=%q sharded=%q", ra, rb)
 		}
-		da, db := normDetections(a.Drain()), normDetections(b.Drain())
-		if at, ok := detectionsEqual(da, db); !ok {
-			return fail("detections differ (first at %d)\n  plain:%s\n  sharded:%s", at, describeDets(da), describeDets(db))
+		da := normDetections(a.Drain())
+		if lazy {
+			refAcc = append(refAcc, da...)
+		} else {
+			db := normDetections(b.Drain())
+			if at, ok := detectionsEqual(da, db); !ok {
+				return fail("detections differ (first at %d)\n  plain:%s\n  sharded:%s", at, describeDets(da), describeDets(db))
+			}
 		}
 		g.lastRaised = g.lastRaised[:0]
 		for _, d := range da {
@@ -531,6 +557,28 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 			if d.Kind == Absence && d.Edge == EdgeRaised && deviceIndex(d.Series) >= diffDevices {
 				g.stats.deadManFires++
 			}
+		}
+		if lazy {
+			return nil
+		}
+		return checkState(i, desc)
+	}
+	// settle is the deferred comparison: everything the plain engine emitted since the last one
+	// against everything the engine under test emitted, then the state.
+	settle := func(i int, desc string) error {
+		if !lazy {
+			return nil
+		}
+		da, db := normDetections(refAcc), normDetections(b.Drain())
+		refAcc = nil
+		if at, ok := detectionsEqual(da, db); !ok {
+			return fmt.Errorf("seed %d op %d (%s): detections differ (first at %d)\n  plain:%s\n  sharded:%s", seed, i, desc, at, describeDets(da), describeDets(db))
+		}
+		return checkState(i, desc)
+	}
+	checkState = func(i int, desc string) error {
+		fail := func(format string, args ...any) error {
+			return fmt.Errorf("seed %d op %d (%s): %s", seed, i, desc, fmt.Sprintf(format, args...))
 		}
 		if !a.Watermark().Equal(b.Watermark()) {
 			return fail("watermark differs: plain=%s sharded=%s", a.Watermark(), b.Watermark())
@@ -586,6 +634,9 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 
 	for i := 0; i < nOps; i++ {
 		if crash != nil && i == crash.at {
+			if err := settle(i, "before restart"); err != nil {
+				return &g.stats, err
+			}
 			sa, sb, err := snapshots(i, "before restart")
 			if err != nil {
 				return &g.stats, err
@@ -593,11 +644,20 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 			var rerr error
 			// Cross-restore: the plain engine resumes from the SHARDED engine's snapshot and the
 			// other from the plain engine's, the other at a different shard count.
+			closeEngine(a)
+			closeEngine(b)
 			if a, rerr = ref.restore(g.rulesNow(), diffLateness, sb); rerr != nil {
 				return &g.stats, fmt.Errorf("seed %d op %d: plain restore: %w", seed, i, rerr)
 			}
 			if b, rerr = crash.restoreAs.restore(g.rulesNow(), diffLateness, sa); rerr != nil {
 				return &g.stats, fmt.Errorf("seed %d op %d: %s restore: %w", seed, i, crash.restoreAs.name, rerr)
+			}
+			// An engine that drains inline (the plain one, the synchronous K-way one) can only be
+			// compared step by step: removing a rule drops its undrained detections, so WHEN the
+			// harness drains is part of what it observes. Only a pipelined engine, which drains as it
+			// goes, may run behind the reference.
+			if _, ok := b.(interface{ Sync() }); !ok {
+				lazy = false
 			}
 			g.stats.crashes++
 			if _, _, err := snapshots(i, "after restart"); err != nil {
@@ -721,11 +781,23 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 			}
 		}
 
-		if i%diffSnapEvery == 0 {
+		if lazy {
+			if i%lazyEvery == 0 {
+				if err := settle(i, "periodic"); err != nil {
+					return &g.stats, err
+				}
+				if _, _, err := snapshots(i, "periodic"); err != nil {
+					return &g.stats, err
+				}
+			}
+		} else if i%diffSnapEvery == 0 {
 			if _, _, err := snapshots(i, "periodic"); err != nil {
 				return &g.stats, err
 			}
 		}
+	}
+	if err := settle(nOps, "final"); err != nil {
+		return &g.stats, err
 	}
 	_, _, err := snapshots(nOps, "final")
 	return &g.stats, err

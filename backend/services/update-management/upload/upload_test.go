@@ -75,7 +75,7 @@ func newEnvWith(t *testing.T, maxConcurrent int) *env {
 	e := &env{t: t, api: api, store: store, dir: dir,
 		issuer: auth.NewIssuer(key, "https://as.example.com", time.Hour, time.Hour),
 		val:    auth.NewValidator(&key.PublicKey)}
-	e.h = New(api, func() *auth.Validator { return e.val }, maxConcurrent)
+	e.h = New(api, func() *auth.Validator { return e.val }, nil, maxConcurrent)
 	mux := http.NewServeMux()
 	mux.Handle(Path, e.h)
 	e.srv = httptest.NewServer(mux)

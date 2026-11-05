@@ -300,3 +300,35 @@ func judgePath(chain []*x509.Certificate, s RevocationState) pathVerdict {
 	}
 	return pathClear
 }
+
+// PathLink is the revocation identity of one non-anchor certificate on a path: what a stored
+// chain link records so a later revocation can find the credentials that relied on it. Issuer is
+// the certificate's issuer against its parent ON THAT PATH.
+type PathLink struct {
+	Fingerprint string
+	Issuer      IssuerID
+	// Serial is the minimal lowercase hex of a positive serial; SerialOK is false for a serial a
+	// CRL cannot name (zero or negative), in which case Serial is empty.
+	Serial   string
+	SerialOK bool
+}
+
+// PathLinks lists the identities of every certificate of one verified path except the anchor
+// (the last), leaf first. ok is false for a path shorter than two or holding a nil certificate:
+// not a verified path, and nothing to record.
+func PathLinks(chain []*x509.Certificate) (links []PathLink, ok bool) {
+	entries, ok := pathEntries(chain)
+	if !ok {
+		return nil, false
+	}
+	links = make([]PathLink, len(entries))
+	for i, e := range entries {
+		links[i] = PathLink{Fingerprint: e.fingerprint, Issuer: e.issuer, Serial: e.serial, SerialOK: e.serialOK}
+	}
+	return links, true
+}
+
+// IssuerNameHash is the hex SHA-256 of a certificate's byte-exact RawIssuer: the half of an
+// issuer identity that is derivable from the certificate alone. A credential recorded before
+// links existed has only this (its issuer's key is not in the leaf).
+func IssuerNameHash(cert *x509.Certificate) string { return sha256Hex(cert.RawIssuer) }

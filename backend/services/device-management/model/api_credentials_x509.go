@@ -132,7 +132,12 @@ func (api *Api) createX509Credential(ctx context.Context, device *Device, reques
 			return invalidAnchor("device %q already holds %d certificate credentials, the most it may hold; remove one first",
 				device.Token, n)
 		}
-		return tx.Create(created).Error
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		// The path it was created through, for a later revocation to find its sessions by. A
+		// hint, in the credential's own transaction so a credential never exists without it.
+		return writeChainLinks(tx, created.ID, anchor.ID, verified.Chain)
 	})
 	if err != nil {
 		return nil, referenceToNotFound(err, anchorToken)

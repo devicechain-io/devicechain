@@ -46,6 +46,9 @@ type PendingSessionKick struct {
 	Origin      uint      `gorm:"primaryKey;not null;autoIncrement:false"`
 	Generation  int64     `gorm:"not null"`
 	RequestedAt time.Time `gorm:"not null"`
+	// NotBefore is the instant a re-sweep row may first be drained; NULL for every other row. Added
+	// nullable and unread until the live-session slice uses it (an old replica ignores it).
+	NotBefore *time.Time
 }
 
 // kickOriginReset is the Origin of a device reset. Profile ids start at 1, so it is no profile.

@@ -493,6 +493,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	sayIdentityIntroduced(st)
 	sayAreaLoginsIntroduced(st)
 	sayAboutSharedLogin(st)
+	sayMqttFailClosedHint(st)
 	return nil
 }
 

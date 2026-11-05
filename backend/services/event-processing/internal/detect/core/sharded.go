@@ -6,7 +6,6 @@ package core
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -361,63 +360,11 @@ func (s *Sharded) Snapshot() ([]byte, error) {
 	if err := s.checkAligned(); err != nil {
 		return nil, err
 	}
-	m := s.shards[0].snapshotState()
-	for _, e := range s.shards[1:] {
-		x := e.snapshotState()
-		m.Active = append(m.Active, x.Active...)
-		m.Breaks = append(m.Breaks, x.Breaks...)
-		m.Timers = append(m.Timers, x.Timers...)
-		m.Gens = append(m.Gens, x.Gens...)
-		m.Sliding = append(m.Sliding, x.Sliding...)
-		m.Panes = append(m.Panes, x.Panes...)
-		m.Deltas = append(m.Deltas, x.Deltas...)
-		m.Counts = append(m.Counts, x.Counts...)
-		m.Sessions = append(m.Sessions, x.Sessions...)
-		m.Slides = append(m.Slides, x.Slides...)
-		m.Corr = append(m.Corr, x.Corr...)
-		m.Expected = append(m.Expected, x.Expected...)
-		m.Raised = append(m.Raised, x.Raised...)
-		m.Presence = append(m.Presence, x.Presence...)
-		m.Pending = append(m.Pending, x.Pending...)
-		m.Newest = append(m.Newest, x.Newest...)
+	parts := make([]snapshot, len(s.shards))
+	for i, e := range s.shards {
+		parts[i] = e.snapshotState()
 	}
-	// Each shard's sections are sorted already; the concatenation of K of them is not, and the
-	// canonical order is a total order over (rule, series), so a sort restores it exactly.
-	sortByRuleSeries(m.Active, func(i int) (string, string) { return m.Active[i].Rule, m.Active[i].Series })
-	sortByRuleSeries(m.Breaks, func(i int) (string, string) { return m.Breaks[i].Rule, m.Breaks[i].Series })
-	sortByRuleSeries(m.Gens, func(i int) (string, string) { return m.Gens[i].Rule, m.Gens[i].Series })
-	sortByRuleSeries(m.Sliding, func(i int) (string, string) { return m.Sliding[i].Rule, m.Sliding[i].Series })
-	sortByRuleSeries(m.Deltas, func(i int) (string, string) { return m.Deltas[i].Rule, m.Deltas[i].Series })
-	sortByRuleSeries(m.Counts, func(i int) (string, string) { return m.Counts[i].Rule, m.Counts[i].Series })
-	sortByRuleSeries(m.Sessions, func(i int) (string, string) { return m.Sessions[i].Rule, m.Sessions[i].Series })
-	sortByRuleSeries(m.Slides, func(i int) (string, string) { return m.Slides[i].Rule, m.Slides[i].Series })
-	sortByRuleSeries(m.Corr, func(i int) (string, string) { return m.Corr[i].Rule, m.Corr[i].Series })
-	sortByRuleSeries(m.Expected, func(i int) (string, string) { return m.Expected[i].Rule, m.Expected[i].Series })
-	sortByRuleSeries(m.Raised, func(i int) (string, string) { return m.Raised[i].Rule, m.Raised[i].Series })
-	sortByRuleSeries(m.Presence, func(i int) (string, string) { return m.Presence[i].Rule, m.Presence[i].Series })
-	sortByRuleSeries(m.Pending, func(i int) (string, string) { return m.Pending[i].Rule, m.Pending[i].Series })
-	sortByRuleSeries(m.Newest, func(i int) (string, string) { return m.Newest[i].Rule, m.Newest[i].Series })
-	sort.Slice(m.Timers, func(i, j int) bool {
-		a, b := m.Timers[i], m.Timers[j]
-		if !a.Deadline.Equal(b.Deadline) {
-			return a.Deadline.Before(b.Deadline)
-		}
-		if a.Rule != b.Rule {
-			return a.Rule < b.Rule
-		}
-		return a.Series < b.Series
-	})
-	sort.Slice(m.Panes, func(i, j int) bool {
-		a, b := m.Panes[i], m.Panes[j]
-		if a.Rule != b.Rule {
-			return a.Rule < b.Rule
-		}
-		if a.Series != b.Series {
-			return a.Series < b.Series
-		}
-		return a.Start < b.Start
-	})
-	return json.Marshal(m)
+	return json.Marshal(mergeSnapshots(parts))
 }
 
 // RestoreSharded rebuilds a K-way engine from a snapshot written by an engine of ANY shard count,

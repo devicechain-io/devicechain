@@ -218,6 +218,7 @@ func (e *Engine) flushPending() {
 			break
 		}
 		heap.Pop(&e.pendHeap)
+		e.step(ordPending, top.samples[0].t, top.key.Rule, top.key.Series, 0)
 		r, known := e.rules[top.key.Rule]
 		i := 0
 		for i < len(top.samples) && top.samples[i].t.Before(e.wm.now) {

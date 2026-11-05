@@ -61,6 +61,28 @@ func TestOnlyTheIntegrationRoutesPublishKeepsItsMarksAndSource(t *testing.T) {
 	require.Equal(t, "70B3D57ED0000001", decoded.IntegrationIdentifier)
 }
 
+// The integration uplink is the integration route's alone: the device-facing publish refuses it
+// whatever put it on the event, and the route's own publish carries it.
+func TestOnlyTheIntegrationRoutesPublishCarriesAnIntegrationUplink(t *testing.T) {
+	sealingFixture(t)
+	uplink := func() *model.UnresolvedEvent {
+		e := integrationEvent()
+		e.EventType = eventtype.IntegrationUplink
+		return e
+	}
+	payload := &model.UnresolvedIntegrationUplinkPayload{Frame: []byte{1, 2}, MaxReadings: 3}
+
+	_, _, ok := inboundEventMessage("http1", "acme", uplink(), payload, "")
+	require.False(t, ok, "the device-facing publish let an integration uplink through")
+
+	_, msg, ok := integrationEventMessage("http1", "acme", uplink(), payload, "acme:cs:1")
+	require.True(t, ok)
+	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
+	require.NoError(t, err)
+	require.Equal(t, eventtype.IntegrationUplink, decoded.EventType)
+	require.Equal(t, payload, decoded.Payload)
+}
+
 func integrationInfra() mscfg.InfrastructureConfiguration {
 	var infra mscfg.InfrastructureConfiguration
 	infra.ServiceAuth.Secret = "service-secret"

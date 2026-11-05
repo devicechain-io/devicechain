@@ -41,12 +41,18 @@ type BrandingLogoHandler struct {
 	store     blob.Store
 	identity  *identity.Manager
 	validator *auth.Validator
+	policy    PolicySource
 }
+
+// PolicySource yields the token-audience policy (rule 2), read per request. A nil source, or
+// one that returns nil, is the CLOSED policy (auth.PlanePolicy treats nil as closed), so a
+// registration that forgot it refuses audience-bound tokens loudly instead of admitting them.
+type PolicySource func() *auth.PlanePolicy
 
 // RegisterBrandingLogoHandler wires the branding-logo endpoints onto mux at
 // brandingLogoPath. store may be nil when the object store is unconfigured.
-func RegisterBrandingLogoHandler(mux *http.ServeMux, store blob.Store, mgr *identity.Manager, v *auth.Validator) {
-	h := &BrandingLogoHandler{store: store, identity: mgr, validator: v}
+func RegisterBrandingLogoHandler(mux *http.ServeMux, store blob.Store, mgr *identity.Manager, v *auth.Validator, policy PolicySource) {
+	h := &BrandingLogoHandler{store: store, identity: mgr, validator: v, policy: policy}
 	// Deadlines only: the upload authenticates first and then makes its own bounded
 	// read, so nothing is buffered for a caller without a token.
 	mux.Handle(brandingLogoPath, identity.RequestDeadlines(h))
@@ -75,6 +81,16 @@ func (h *BrandingLogoHandler) authenticate(w http.ResponseWriter, r *http.Reques
 	}
 	claims, err := h.validator.Validate(authz[len(prefix):])
 	if err != nil {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return nil, false
+	}
+	// 🔴 AFTER Validate, NEVER BEFORE (a forged token must not reach the counters), and before
+	// the body is read. A refusal is the same 401 an invalid token gets.
+	var p *auth.PlanePolicy
+	if h.policy != nil {
+		p = h.policy()
+	}
+	if err := p.Admit(claims, auth.PlaneBranding); err != nil {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return nil, false
 	}

@@ -65,6 +65,10 @@ type fnSpec struct {
 	static func(args []checker.AstNode) (cost uint64, size *checker.SizeEstimate)
 	// actual is the call's real cost from its arguments and result.
 	actual func(args []ref.Val, result ref.Val) uint64
+	// sizeDependent says the call's work grows with the size of its input (a copy, a decode).
+	// An expression containing one is always run under the runtime CostLimit; see
+	// trackedExpression.
+	sizeDependent bool
 }
 
 func constCost(c uint64) func([]checker.AstNode) (uint64, *checker.SizeEstimate) {
@@ -306,7 +310,7 @@ func buildOwned() []fnSpec {
 			},
 		},
 		fnSpec{
-			name: "slice", overload: "payloaddecode_slice", sig: "slice(bytes, int, int) -> bytes",
+			sizeDependent: true, name: "slice", overload: "payloaddecode_slice", sig: "slice(bytes, int, int) -> bytes",
 			doc:  "Copies len bytes starting at off; a range outside the value is an error.",
 			args: []*cel.Type{cel.BytesType, cel.IntType, cel.IntType}, ret: cel.BytesType,
 			bind: cel.FunctionBinding(func(a ...ref.Val) ref.Val {
@@ -338,7 +342,7 @@ func buildOwned() []fnSpec {
 			},
 		},
 		fnSpec{
-			name: "hex.decode", overload: "payloaddecode_hex_decode", sig: "hex.decode(string) -> bytes",
+			sizeDependent: true, name: "hex.decode", overload: "payloaddecode_hex_decode", sig: "hex.decode(string) -> bytes",
 			doc:  "Decodes hexadecimal text (even length, no separators) of at most 8192 characters.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
@@ -362,7 +366,7 @@ func buildOwned() []fnSpec {
 			actual: textActual,
 		},
 		fnSpec{
-			name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
+			sizeDependent: true, name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
 			doc:  "Decodes standard padded base64 text of at most 8192 characters into at most 4096 bytes.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
@@ -389,7 +393,7 @@ func buildOwned() []fnSpec {
 			actual: textActual,
 		},
 		fnSpec{
-			name: "lpp.decode", overload: "payloaddecode_lpp_decode", sig: "lpp.decode(bytes) -> map(string, double)",
+			sizeDependent: true, name: "lpp.decode", overload: "payloaddecode_lpp_decode", sig: "lpp.decode(bytes) -> map(string, double)",
 			doc:  "Decodes a Cayenne LPP frame into channel-suffixed keys such as temperature_1; a truncated or unknown record is an error.",
 			args: []*cel.Type{cel.BytesType}, ret: cel.MapType(cel.StringType, cel.DoubleType),
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {

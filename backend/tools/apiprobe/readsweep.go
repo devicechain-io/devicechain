@@ -520,6 +520,9 @@ var sweepTokenArgs = map[string]string{
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
 	"device-management.maintenanceWindowOpening.token":       "maintenance-window",
 	"device-management.integration.token":                    "integration",
+	// The revoked certificates of a trust anchor: a stored revocation store the drill's seed
+	// leaves empty, read through the anchor it did seed.
+	"device-management.deviceRevokedCertificates.anchorToken": "device-trust-anchor",
 	// The calculated-metric backfill doors read the seeded profile's PUBLISHED version
 	// snapshot and compile its formulas (the version is optional: omitted, it is the active
 	// one, which the publish table makes exist), and walk the devices of its types. A

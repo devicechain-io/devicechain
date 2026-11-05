@@ -1601,6 +1601,10 @@ compress.
 
 #### Measured throughput {#measured-throughput}
 
+:::note Measured with fail-closed off
+Every row below was measured with the [fail-closed MQTT acknowledgement](./observability.md#mqtt-fail-closed) off, which is the default. Without it, sustained MQTT overload past the capture stream's margin drops the oldest events the broker has already acknowledged. This is one of the [accepted gaps](../concepts/security-model.md#accepted-gaps). `--mqtt-fail-closed` on `dcctl bootstrap` or `dcctl upgrade` closes it, at a lower ingest ceiling, so size the instance below that ceiling.
+:::
+
 | Release | Cluster | Settings | Sustained rate | Result |
 | --- | --- | --- | --- | --- |
 | v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU each), SSD persistent disks, `--ha` | the defaults v0.18.0 shipped, before the sizing above | about 3,800 events/s | Two 10-minute runs at 4,000 events/s offered each stored 2,399,000 events, as many as were accepted (the totals were compared, not each event). The slowest stage kept 96.5% of the offered rate in one run (resolution, 3,858 per second) and 98% in the other. Live device state kept up only to about 2,300 events per second, at `device-state`'s then 500m limit. |

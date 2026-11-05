@@ -5,6 +5,7 @@ package model
 
 import (
 	"crypto/x509"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -43,6 +44,17 @@ type DeviceTrustAnchor struct {
 	// Enabled is whether chains to this anchor authenticate. Turning it off ends the live
 	// sessions of every device whose credential relies on it.
 	Enabled bool `gorm:"not null"`
+
+	// RevocationMode is the anchor's revocation mode (x509trust.Mode): NULL reads as ENTRIES, and
+	// a stored value outside the vocabulary is refused, never defaulted (RevocationModeOf).
+	RevocationMode sql.NullString `gorm:"size:32"`
+	// RevocationStaleGrace is, in seconds, how long past nextUpdate a list still counts as
+	// current under REQUIRE_CURRENT. NULL reads as DefaultRevocationStaleGrace.
+	RevocationStaleGrace sql.NullInt64
+	// RevocationRows counts the anchor's lists plus its manual entries, maintained by every
+	// revocation writer under the anchor's row lock. NULL reads as 0, and an ENTRIES anchor with
+	// none runs no revocation query on a connect.
+	RevocationRows sql.NullInt64
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, token as the unique tiebreak.

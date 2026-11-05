@@ -578,6 +578,18 @@ jobs:
         # reads as that test hanging rather than the package being long.
         run: go test -count=1 -timeout 20m ./...
 
+      # The payload decoder's performance gate, alone. It is a timing comparison (decode
+      # against Cut A's flatten, paired in one process), so it is skipped in the shared run
+      # above, where 40 other packages compete for the CPU, and run here with nothing else
+      # going (-p 1, after the suite). DECODE_PERF_GATE=1 is what turns it on; without it the
+      # tests skip, and this step is the only place they run.
+      - name: payload decoder perf gate
+        if: matrix.module == 'backend/core'
+        working-directory: ${{ matrix.module }}
+        env:
+          DECODE_PERF_GATE: "1"
+        run: go test -count=1 -p 1 -run '^(TestPerfGate|TestPerfGateGoesRed)' -v ./payloaddecode/
+
       # The docs-command gate (backend/cli/cmd/docs_commands_test.go) already ran in the
       # step above: every `dcctl` invocation in a shell block of the published docs, in
       # every locale, must name a real command with flags it accepts and the arguments it
@@ -3186,6 +3198,43 @@ jobs:
         run: hack/check-deprecation-window.sh
 
   # ---------------------------------------------------------------------------
+  # The payload decoder is a pure function of (document, input), and the readings it stores
+  # must be byte-identical whichever CPU a replica runs on (a float operation fused into an
+  # FMA on arm64 and not on amd64 is exactly the way two replicas would disagree about the
+  # same uplink). backend/core/payloaddecode/testdata/determinism.golden was written on
+  # amd64; the `go` matrix above runs the comparison on amd64, and this job runs it on a
+  # native arm64 runner. A runner that is not arm64 fails loudly rather than comparing
+  # amd64 with itself.
+  # ---------------------------------------------------------------------------
+  payloaddecode-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # backend/core is self-contained, so this job resolves and builds it alone (GOWORK=off)
+      # instead of downloading every module in the workspace.
+      - name: go mod download (backend/core)
+        working-directory: backend/core
+        env:
+          GOWORK: "off"
+        run: go mod download
+
+      - name: the runner is arm64
+        run: test "$(go env GOARCH)" = arm64
+
+      - name: decoder output is identical to the amd64 golden
+        working-directory: backend/core
+        env:
+          GOWORK: "off"
+        run: go test ./payloaddecode -run 'Determinism' -count=1 -v
+
+  # ---------------------------------------------------------------------------
   # The single required check.
   #
   # This job exists so branch protection has ONE stable name to require. The
@@ -3232,6 +3281,7 @@ jobs:
       - opentofu
       - image-smoke
       - api-compat
+      - payloaddecode-arm64
     steps:
       # ANY result other than success fails the gate, including `skipped` and
       # `cancelled`. No job in this workflow is conditional, so a skip here means

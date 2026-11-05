@@ -1157,7 +1157,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management)
+required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1208,7 +1208,7 @@ note "every rendered rule group parses"
 # loose: no rule files at all is refused outright, the extractor's required-groups
 # control catches a group that stopped rendering, and the per-file cross-count
 # catches a file the walk reads only part of.
-always_firing_floor=20
+always_firing_floor=40
 say "counting the rendered alerts"
 check_alert_census "$always_firing_floor" "${rule_files[@]}" ||
   fail "the always-firing check's liveness floor no longer proves the whole render was read"
@@ -1269,6 +1269,7 @@ declare -A rule_tests=(
   [update-management]="$repo_root/hack/testdata/prometheus-rules-update-management-tests.yaml"
   [broker]="$repo_root/hack/testdata/prometheus-rules-broker-tests.yaml"
   [event-management]="$repo_root/hack/testdata/prometheus-rules-event-management-tests.yaml"
+  [token-audience]="$repo_root/hack/testdata/prometheus-rules-token-audience-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop

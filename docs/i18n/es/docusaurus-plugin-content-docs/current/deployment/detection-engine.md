@@ -571,7 +571,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral en alarma descarta una lectura más antigua que la más reciente del dispositivo, mientras que una sin alarma descarta una lectura que cumple la condición y llega más tarde que este margen solo si se reintentó o se retuvo por el camino. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. Del mismo modo, las reglas de ventana de conteo y de tasa deciden la última lectura antes de un periodo de silencio solo cuando llega un evento posterior. |
-| `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. En esta versión las partes se procesan una tras otra, por lo que un valor superior a 1 todavía no acelera la detección: déjelo en 1 salvo que esté midiendo. El valor en vigor es la métrica `detect_shards`. |
+| `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. Con un valor superior a 1, cada parte se ejecuta en su propia goroutine, de modo que el motor puede usar más de un núcleo; el bucle que lee y planifica los mensajes sigue siendo uno solo, así que la mejora queda limitada por ese bucle y por los núcleos que se le den al pod (véase [Ejecutar el motor en más núcleos](#detect-shards)). Déjelo en 1 salvo que haya medido que el límite es el motor y no el bucle ni la base de datos. El valor en vigor es la métrica `detect_shards`. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. **Como máximo 30**: un punto de control es lo que confirma el flujo, así que un intervalo cercano o superior a la ventana de confirmación de 60 segundos del broker hace que los mensajes de un flujo tranquilo se vuelvan a entregar. 30 deja margen para el propio punto de control, y el servicio rechaza al arrancar cualquier valor mayor. |
 | `checkpointTimeoutSeconds` | 10 | Cuánto puede tardar una llamada de un punto de control (publicar detecciones, guardar la instantánea) antes de abandonarla y contar el punto de control como fallido, en lugar de bloquear la detección con una base de datos o un bróker que ha dejado de responder. Máximo 120. El límite del guardado de la instantánea crece solo, hasta cuatro veces el último guardado completado (con tope de dos minutos), de modo que un motor grande sobre una base de datos lenta no se queda fallando; súbalo solo si el primer guardado ya es más lento que este valor. |
@@ -787,6 +787,8 @@ de alarma por segundo que uno.
 | Señal | Significa |
 |---|---|
 | `DetectCheckpointsStalledWithBacklog` | **La alerta más importante de esta página.** Los puntos de control se han detenido mientras hay trabajo esperando: el motor no puede alcanzar su base de datos o el bróker, o su bucle está atascado. No se está detectando nada. |
+| `DetectShardSaturated` | Se instala siempre, pero solo puede dispararse con `detectShards` superior a 1: con 1 no hay series de partes. Una parte de la detección ha estado ocupada más del 90 % del tiempo durante diez minutos, así que es el límite de la velocidad de detección. Véase [Ejecutar el motor en más núcleos](#detect-shards). |
+| `DetectShardInvariantViolated` | Se instala siempre, pero solo puede dispararse con `detectShards` superior a 1. Las partes discreparon en el reloj o en la posición durante un punto de control y este se rechazó. No se guardó nada incorrecto, pero los puntos de control siguen fallando en ese pod hasta reiniciarlo. Es un defecto: reinicie el pod indicado en la alerta e infórmelo. |
 | `DetectLoopStalled` | El bucle de detección de la réplica que posee la partición lleva más de dos minutos sin avanzar, aunque la réplica sigue declarándose activa. El bucle está atascado dentro de una llamada, normalmente a una conexión de base de datos o de bróker que ha dejado de responder. Todas las demás métricas de esta página se leen en ese mismo bucle, así que permanecen congeladas en su último valor y parecen sanas. No se está detectando nada; reinicie el pod indicado en la alerta. Una réplica en espera nunca la dispara. |
 | `DetectConsumerBacklogHigh` | El motor va con retraso. Mientras lo esté, queda suprimida la detección de ausencias **por silencio**; un evento posterior sigue disparando una ausencia vencida, como se explica arriba. |
 | `DetectWatermarkLagHigh` | El sentido del tiempo del evento del motor se está quedando atrás respecto al tiempo real. |
@@ -868,6 +870,35 @@ de datos (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))
 ```
+
+### Ejecutar el motor en más núcleos {#detect-shards}
+
+`detectShards` superior a 1 divide el estado del motor por clave y da a cada parte su propia goroutine.
+A cada parte se le comunican la hora y la posición de todos los mensajes, y solo las lecturas de sus
+propias claves, de modo que todas comparten un único reloj: las detecciones, los bytes del punto de
+control y el comportamiento del motor son los mismos con cualquier valor, y el ajuste puede cambiarse en
+cualquier reinicio sin nada que migrar. Lo que aporta es que el trabajo propio del motor (`apply` en la
+tabla de fases anterior) se ejecute en varios núcleos a la vez. El trabajo de leer, decodificar y
+planificar un mensaje sigue ocurriendo en un solo bucle, y un punto de control sigue esperando a todas
+las partes, por lo que el ajuste ayuda más cuando `apply` ocupa buena parte del tiempo del bucle y el
+pod tiene núcleos que dar. Cuando dominan `fetch_wait`, `save` o `publish`, no hace nada.
+
+Con el ajuste superior a 1, el motor exporta las siguientes métricas, etiquetadas por `shard` (los
+números de 0 a K-1):
+
+| Métrica | Se lee como |
+|---|---|
+| `devicechain_eventprocessing_detect_shard_busy_seconds_total` | Segundos que la parte dedicó a aplicar mensajes. Su tasa es la utilización de la parte. Una parte muy por encima de las demás es una clave caliente; todas cerca de 1 significa que el ajuste, o el límite de CPU, es demasiado bajo. |
+| `devicechain_eventprocessing_detect_shard_queue_depth` | Mensajes en cola para la parte. Una cola que permanece llena significa que el bucle espera a esa parte. |
+| `devicechain_eventprocessing_detect_shard_live_keys` | Ventanas, temporizadores y cerrojos vivos que mantiene la parte. Un reparto desigual indica sesgo de claves. |
+| `devicechain_eventprocessing_detect_barrier_wait_seconds` | Cuánto esperó un punto de control, un cambio de regla o una consulta a que todas las partes terminaran lo que tenían en cola. |
+| `devicechain_eventprocessing_detect_shard_invariant_violations_total` | Puntos de control rechazados porque las partes discrepaban. Debe permanecer en cero. |
+
+Las tres series con etiqueta solo existen mientras el motor tiene partes. `detect_barrier_wait_seconds` y `detect_shard_invariant_violations_total` no llevan etiqueta y se exportan a 0 incluso con `detectShards` en 1.
+
+Memoria: cada parte tiene una cola de hasta 1024 mensajes, así que un valor superior a 1 puede retener en el pod hasta `detectShards` veces esa cantidad de mensajes en cola (con las lecturas que llevan) mientras el bucle va por delante de la parte más lenta. Dimensione el límite de memoria del pod al subir el ajuste.
+
+Un detalle de las marcas de tiempo difiere de `detectShards` en 1. Una detección producida sin un mensaje detrás, que es solo la resolución que genera retirar un dispositivo de una regla de ausencia, se marca con la hora en que el motor la recoge; con 1 recibe la hora del siguiente mensaje o avance. Esa hora solo mide las acciones salientes y no forma parte de la identidad de la detección, así que los duplicados siguen colapsando como antes.
 
 ## Eliminar un inquilino
 

@@ -58,6 +58,7 @@ var (
 		NewDeviceAliasesSchema(),
 		NewPendingSessionKicksSchema(),
 		NewDeviceTrustAnchorsSchema(),
+		NewX509RevocationSchema(),
 		NewProfileDecodersSchema(),
 	}
 )

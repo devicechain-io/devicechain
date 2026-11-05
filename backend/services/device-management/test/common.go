@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -190,6 +191,11 @@ func (api *MockApi) AuthenticateDeviceConnect(ctx context.Context, presented *mo
 func (api *MockApi) ResolveX509Connect(ctx context.Context, fingerprint string, now time.Time) (*model.X509Connect, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.X509Connect), args.Error(1)
+}
+
+func (api *MockApi) ResolveX509Revocation(ctx context.Context, anchor *model.DeviceTrustAnchor, keys x509trust.RevocationQuery, now time.Time) (x509trust.RevocationState, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(x509trust.RevocationState), args.Error(1)
 }
 
 func (api *MockApi) AuthenticateIntegration(ctx context.Context, integrationToken, presented string) (*model.Integration, error) {

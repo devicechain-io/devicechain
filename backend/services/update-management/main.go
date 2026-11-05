@@ -237,7 +237,7 @@ func registerDownloadHandler() {
 // registerUploadHandler mounts the artifact content endpoint on the microservice's OWN
 // mux (never http.DefaultServeMux, which no server here serves).
 func registerUploadHandler() {
-	upload.Register(Microservice.Mux(), Api, Microservice.Readiness.Validator, Configuration.Updates.MaxConcurrentUploads)
+	upload.Register(Microservice.Mux(), Api, Microservice.Readiness.Validator, Microservice.Readiness.AudiencePolicy, Configuration.Updates.MaxConcurrentUploads)
 }
 
 // buildApi assembles the artifact catalogue over the object store and the relational

@@ -494,3 +494,31 @@ func TestSerialHex(t *testing.T) {
 		}
 	}
 }
+
+func TestPathLinksNameEveryNonAnchorCertificateWithItsIssuer(t *testing.T) {
+	p := newBasicPKI(t)
+	root, inter, leaf := p.root.cert, p.inter.cert, p.leaf.cert
+	links, ok := PathLinks([]*x509.Certificate{leaf, inter, root})
+	if !ok || len(links) != 2 {
+		t.Fatalf("want two links (the anchor is not one), got %d ok=%v", len(links), ok)
+	}
+	if links[0].Fingerprint != Fingerprint(leaf) || links[0].Issuer != IssuerIDOfCA(inter) {
+		t.Errorf("the leaf link must name the leaf and the intermediate's key and name: %+v", links[0])
+	}
+	if links[1].Fingerprint != Fingerprint(inter) || links[1].Issuer != IssuerIDOfCA(root) {
+		t.Errorf("the intermediate link must name the intermediate and the root: %+v", links[1])
+	}
+	want, _ := SerialHex(leaf.SerialNumber)
+	if !links[0].SerialOK || links[0].Serial != want {
+		t.Errorf("serial: got %q ok=%v want %q", links[0].Serial, links[0].SerialOK, want)
+	}
+	if IssuerNameHash(leaf) != IssuerIDOfCA(inter).Name {
+		t.Error("IssuerNameHash of a leaf must equal its issuer's name identity")
+	}
+	if _, ok := PathLinks([]*x509.Certificate{root}); ok {
+		t.Error("a path of one is not a verified path")
+	}
+	if _, ok := PathLinks([]*x509.Certificate{leaf, nil}); ok {
+		t.Error("a nil certificate is not a verified path")
+	}
+}

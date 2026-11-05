@@ -39,6 +39,12 @@ func logoServer(t *testing.T) (*httptest.Server, string) {
 // can mint a token of its own shape.
 func logoServerAndIssuer(t *testing.T) (*httptest.Server, *auth.Issuer) {
 	t.Helper()
+	return logoServerWithPolicy(t, nil)
+}
+
+// logoServerWithPolicy is logoServerAndIssuer registered with a token-audience policy source.
+func logoServerWithPolicy(t *testing.T, policy PolicySource) (*httptest.Server, *auth.Issuer) {
+	t.Helper()
 	db := putest.NewSQLiteDB(t, &iam.Role{}, &iam.TenantTier{}, &iam.Tenant{},
 		&iam.OAuthClient{}, &iam.Identity{}, &iam.Membership{})
 	rdbm := &rdb.RdbManager{Database: db}
@@ -57,7 +63,7 @@ func logoServerAndIssuer(t *testing.T) (*httptest.Server, *auth.Issuer) {
 	require.NoError(t, err)
 
 	mux := http.NewServeMux()
-	RegisterBrandingLogoHandler(mux, blobs, mgr, auth.NewValidator(&key.PublicKey))
+	RegisterBrandingLogoHandler(mux, blobs, mgr, auth.NewValidator(&key.PublicKey), policy)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts, auth.NewIssuer(key, "https://as.example.com", 0, 0)

@@ -790,6 +790,18 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes se documentan por completo, de la más nueva a la más antigua.
 
+### v1.2.0 — el motor de detección puede usar más de un núcleo {#v120-upgrade}
+
+#### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
+
+El ajuste `detectShards` de event-processing (1 por defecto, de 1 a 64) divide por clave el estado del motor de detección. En `v1.1.0` las partes se aplicaban una tras otra, de modo que un valor superior a 1 daba los mismos resultados y ninguna aceleración. A partir de esta versión cada parte se ejecuta en su propia goroutine, así que el trabajo propio del motor puede usar varios núcleos. Las detecciones, el reloj del tiempo del evento y el punto de control guardado son los mismos con cualquier valor, por lo que no hay nada que migrar y el ajuste puede cambiarse o revertirse en cualquier reinicio.
+
+- **No hay que hacer nada si dejó `detectShards` en 1.** El motor es el mismo código de antes.
+- **Si fijó `detectShards` por encima de 1**, el pod de event-processing puede usar ahora hasta ese número de núcleos para el motor, además del bucle único que lee y planifica los mensajes. Compruebe el límite de CPU del pod antes de contar con ello, y lea [Ejecutar el motor en más núcleos](./detection-engine.md#detect-shards) para ver si el motor es realmente su límite.
+- **Hay dos alertas nuevas**: `DetectShardSaturated` (una parte es el límite de la velocidad de detección) y `DetectShardInvariantViolated` (las partes discreparon en un punto de control y este se rechazó). Se instalan con cualquier valor, pero solo pueden dispararse con `detectShards` superior a 1. Añádalas a su enrutado de alertas. Las acompaña un conjunto nuevo de métricas `detect_shard_*` y `detect_barrier_wait_seconds`; las dos sin etiqueta se exportan a 0 con 1.
+- **La memoria crece con `detectShards`.** Cada parte retiene hasta 1024 mensajes en cola, así que un pod que ya funciona con un valor superior a 1 puede retener en memoria hasta `detectShards` veces esa cantidad mientras el bucle va por delante de la parte más lenta. Compruebe el límite de memoria del pod antes de contar con el nuevo ajuste.
+- **Volver atrás** es un reinicio con el ajuste en el valor anterior. El punto de control es idéntico, así que no hay nada que deshacer.
+
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 
 `v1.1.0` es una actualización in situ desde `v1.0.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Durante la actualización se ejecutan dos migraciones añadidas (una en `event-management` y otra en `device-state`); cada una agrega una tabla y no reescribe ninguna fila existente. Los nuevos campos de `Instance` (consulta [Dispositivos fuera del clúster](#v110-mqtt-exposure)) se entregan con el operador, que `dcctl install` actualiza, así que ejecútalo antes de actualizar la instancia, como se indica arriba. Si vienes de `v0.27.0` o anterior, lee primero las [notas de `v1.0.0`](#v100-upgrade) y sigúelas con `--version v1.1.0`.

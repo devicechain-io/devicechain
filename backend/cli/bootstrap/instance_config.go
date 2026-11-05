@@ -5,11 +5,16 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"slices"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/fatih/color"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/releaseutil"
@@ -331,7 +336,81 @@ func checkAuthoredTransforms(ch *chart.Chart, vals map[string]interface{}, manif
 			"infrastructure.aiInference block, as the chart does when it authors the document",
 			cfg.Infrastructure.AiInference.Hostname)
 	}
+	return checkAuthoredTokenAudience(manifest, areas, cfg)
+}
+
+// checkAuthoredTokenAudience is the third thing the chart does as author that validity cannot
+// see: it writes infrastructure.tokenAudience.mcpResources from mcp's resolved resourceUrl.
+// A supplier's document carries whatever they wrote, and a document with no entry for a
+// deployed mcp loads without complaint. The cost is that every call mcp forwards is counted
+// as a would-reject (and warned about) in observe mode, and refused in enforce mode, while
+// mcp itself reports healthy. mcp is meant to check the same thing at its own startup (a separate change);
+// this reports it at deploy time, before any pod starts.
+//
+// The value compared is the one mcp is HANDED, read out of the rendered per-service
+// ConfigMap, so the answer is the chart's own and not a second derivation.
+func checkAuthoredTokenAudience(manifest string, areas []string, cfg *config.InstanceConfiguration) error {
+	if !slices.Contains(areas, "mcp") {
+		return nil
+	}
+	resource := renderedMcpResourceURL(manifest)
+	if resource == "" {
+		return nil
+	}
+	if slices.Contains(cfg.Infrastructure.TokenAudience.McpResources, resource) {
+		return nil
+	}
+	// A v1.1-era document cannot carry the block (v1.1 refuses the key), and an absent
+	// enforcement means observe, where the omission only counts and logs. Refusing an upgrade
+	// for that would be a new refusal in a minor release, so it is a warning that prints the
+	// block to add. Enforcing without the resource breaks MCP, so that stays a refusal.
+	if cfg.Infrastructure.TokenAudience.EffectiveEnforcement() == config.TokenAudienceEnforce {
+		return fmt.Errorf("the supplied instance configuration enforces token audiences "+
+			"(infrastructure.tokenAudience.enforcement: enforce) but does not list mcp's resource %q in "+
+			"infrastructure.tokenAudience.mcpResources, and this deploy runs mcp. Every call mcp "+
+			"forwards would be refused while mcp itself reports healthy. Add it to the list, as the "+
+			"chart does when it authors the document", resource)
+	}
+	fmt.Fprintln(authoredWarnOut, color.YellowString("  Warning: the supplied instance configuration does not list mcp's "+
+		"resource in infrastructure.tokenAudience.mcpResources, so every call mcp forwards is counted "+
+		"as carrying an unregistered token audience and logged. Add this to the document:\n"+
+		"    \"infrastructure\": {\"tokenAudience\": {\"mcpResources\": [%q]}}\n"+
+		"  It is only counted today; once enforcement is on, mcp calls would be refused.", resource))
 	return nil
+}
+
+// authoredWarnOut is where pre-flight warnings go; a variable so tests can read them.
+var authoredWarnOut io.Writer = os.Stdout
+
+// renderedMcpResourceURL is the resourceUrl mcp is handed, read from the rendered
+// per-service ConfigMap, or "" when mcp has none (or is not deployed).
+func renderedMcpResourceURL(manifest string) string {
+	for _, doc := range releaseutil.SplitManifests(manifest) {
+		var obj struct {
+			Kind string            `json:"kind"`
+			Data map[string]string `json:"data"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil || obj.Kind != "ConfigMap" {
+			continue
+		}
+		raw, ok := obj.Data["mcp"]
+		if !ok {
+			continue
+		}
+		var mcp map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &mcp); err != nil {
+			return ""
+		}
+		for k, v := range mcp {
+			if strings.EqualFold(k, "resourceUrl") {
+				if str, ok := v.(string); ok {
+					return str
+				}
+			}
+		}
+		return ""
+	}
+	return ""
 }
 
 // chartIntValue reads one top-level integer value the way Helm would: the

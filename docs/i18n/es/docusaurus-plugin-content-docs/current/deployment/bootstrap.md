@@ -1739,6 +1739,10 @@ comprimir.
 
 #### Rendimiento medido {#measured-throughput}
 
+:::note Medido con la confirmación a prueba de fallos desactivada
+Todas las filas siguientes se midieron con la [confirmación MQTT a prueba de fallos](./observability.md#mqtt-fail-closed) desactivada, que es el valor por defecto. Sin ella, una sobrecarga MQTT sostenida que supere el margen del flujo de captura descarta los eventos más antiguos que el broker ya había confirmado. Es una de las [carencias aceptadas](../concepts/security-model.md#accepted-gaps). `--mqtt-fail-closed` en `dcctl bootstrap` o `dcctl upgrade` la cierra, a cambio de un techo de ingesta menor, así que dimensiona la instancia por debajo de ese techo.
+:::
+
 | Versión | Clúster | Configuración | Ritmo sostenido | Resultado |
 | --- | --- | --- | --- | --- |
 | v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-8 (8 vCPU cada uno), discos persistentes SSD, `--ha` | los valores predeterminados de v0.18.0, anteriores al dimensionamiento de arriba | unos 3800 eventos/s | Dos ejecuciones de 10 minutos a 4000 eventos/s ofrecidos almacenaron cada una 2 399 000 eventos, tantos como se aceptaron (se compararon los totales, no cada evento). La etapa más lenta mantuvo el 96,5% del ritmo ofrecido en una ejecución (la resolución, 3858 por segundo) y el 98% en la otra. El estado en vivo de los dispositivos solo siguió el ritmo hasta unos 2300 eventos por segundo, con el límite de 500m que tenía entonces `device-state`. |
