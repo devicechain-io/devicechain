@@ -330,6 +330,13 @@ type emittedEvent struct {
 // reached the wire, having run EVERY body through the real decoder on the way.
 func runFleetpulseTick(t *testing.T, count int) []emittedEvent {
 	t.Helper()
+	return runFleetpulseTickWith(t, count, NewFleetpulse(7, Load{}))
+}
+
+// runFleetpulseTickWith is runFleetpulseTick against a driver the caller has already
+// configured (a command applied, say).
+func runFleetpulseTickWith(t *testing.T, count int, driver Sim) []emittedEvent {
+	t.Helper()
 	var (
 		mu   sync.Mutex
 		seen []emittedEvent
@@ -385,7 +392,6 @@ func runFleetpulseTick(t *testing.T, count int) []emittedEvent {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	driver := NewFleetpulse(7, Load{})
 	if err := driver.Tick(context.Background(), rt); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
