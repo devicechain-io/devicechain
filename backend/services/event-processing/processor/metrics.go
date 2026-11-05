@@ -44,7 +44,9 @@ type DetectMetrics struct {
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
 	// shards is detect_shards: K, how many ways the live engine's keyed state is split.
-	shards     prometheus.Gauge
+	shards prometheus.Gauge
+	// shard is the concurrent engine's own series (shard_metrics.go).
+	shard      *shardMetrics
 	isLeader   prometheus.Gauge
 	detectLive prometheus.Gauge
 
@@ -286,6 +288,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	for i := range m.loopSeconds {
 		m.loopSeconds[i] = loopSeconds.WithLabelValues(loopPhaseNames[i])
 	}
+	m.shard = newShardMetrics(ms)
 	m.checkpointDuration = ms.NewHistogramVec("detect_checkpoint_duration_seconds",
 		"Wall-clock cost of each committed snapshot (serialize plus store), as a distribution. detect_checkpoint_seconds keeps only the last one.",
 		nil, checkpointBuckets).WithLabelValues()

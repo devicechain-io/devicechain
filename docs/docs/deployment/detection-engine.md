@@ -516,7 +516,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, duration, count-window and rate rules place it by its own time, and a threshold rule in alarm discards a reading older than the device's newest, while one not in alarm discards a matching reading that arrives later than this margin only when it was retried or held up on its way. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. Count-window and rate rules likewise decide the last reading before a quiet spell only when a later event arrives. |
-| `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. In this release the shards are processed one after another, so a value above 1 does not make detection faster yet: leave it at 1 unless you are measuring. The value in force is the `detect_shards` metric. |
+| `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. Above 1, each shard runs on its own goroutine, so the engine can use more than one core; the loop that reads and plans messages stays single, so the gain is bounded by that loop and by how many cores the pod is given (see [Running the engine on more cores](#detect-shards)). Leave it at 1 unless you have measured that the engine, not the loop or the database, is the limit. The value in force is the `detect_shards` metric. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. **At most 30**: a checkpoint is what acknowledges the stream, so an interval near or past the broker's 60-second acknowledgement window makes messages on a quiet stream redeliver. 30 leaves room for the checkpoint itself, and the service refuses anything longer at startup. |
 | `checkpointTimeoutSeconds` | 10 | How long one checkpoint call (publishing detections, saving the snapshot) may take before it is abandoned and the checkpoint counts as failed, instead of hanging detection on a database or broker that has stopped answering. At most 120. The snapshot save's limit grows by itself, to four times the last save that completed (up to two minutes), so a large engine on a slow database is not stuck failing; raise this only when the very first save is slower than the value. |
@@ -717,6 +717,8 @@ statement) eight workers applied four to seven times as many alarm changes a sec
 | Signal | Means |
 |---|---|
 | `DetectCheckpointsStalledWithBacklog` | **The most important alert here.** Checkpoints have stopped while work is waiting: the engine cannot reach its database or the broker, or its loop is stuck. Detection is not happening. |
+| `DetectShardSaturated` | Installed always, but it can only fire with `detectShards` above 1: at 1 there are no shard series. One detection shard has been busy more than 90% of the time for ten minutes, so it is the limit on detection speed. See [Running the engine on more cores](#detect-shards). |
+| `DetectShardInvariantViolated` | Installed always, but it can only fire with `detectShards` above 1. The shards disagreed on the clock or the position at a checkpoint and the checkpoint was refused. Nothing wrong was saved, but checkpoints keep failing on that pod until it is restarted. This is a defect: restart the pod named on the alert and report it. |
 | `DetectLoopStalled` | The detection loop on the replica that holds the partition has stopped making progress for over two minutes, yet the replica still reports itself live. The loop is stuck inside a call, usually to a database or broker connection that has gone silent. Every other gauge on this page is read on that same loop, so they stay frozen at their last values and look healthy. Detection is not happening; restart the pod named on the alert. A standby never fires it. |
 | `DetectConsumerBacklogHigh` | The engine is behind. Absence detection **on silence** is suppressed while it is — a later event still fires an overdue absence, as above. |
 | `DetectWatermarkLagHigh` | The engine's sense of event time is falling behind real time. |
@@ -794,6 +796,33 @@ and then writing it to the database (`devicechain_eventprocessing_detect_checkpo
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))
 ```
+
+### Running the engine on more cores {#detect-shards}
+
+`detectShards` above 1 splits the engine's state by key and gives each part its own goroutine. Every
+part is told the time and position of every message, and only the readings of its own keys, so they
+all share one clock: detections, the checkpoint's bytes and the engine's behaviour are the same at
+every value, and the setting can change at any restart with nothing to migrate. What it buys is
+the engine's own work (`apply` in the phase table above) running on several cores at once. The work
+that reads, decodes and plans a message still happens on one loop, and a checkpoint still waits for
+every part, so the setting helps most when `apply` is a large share of the loop's time and the pod has
+cores to give it. When `fetch_wait`, `save` or `publish` dominate, it does nothing.
+
+With the setting above 1 the engine exports, labelled by `shard` (the numbers 0 to K-1):
+
+| Metric | Reads as |
+|---|---|
+| `devicechain_eventprocessing_detect_shard_busy_seconds_total` | Seconds the shard spent applying messages. Its rate is the shard's utilisation. One shard far above the others is a hot key; all of them near 1 means the setting, or the CPU limit, is too low. |
+| `devicechain_eventprocessing_detect_shard_queue_depth` | Messages queued for the shard. A queue that stays full means the loop is waiting for that shard. |
+| `devicechain_eventprocessing_detect_shard_live_keys` | Live windows, timers and latches the shard holds. An uneven spread is key skew. |
+| `devicechain_eventprocessing_detect_barrier_wait_seconds` | How long a checkpoint, a rule change or a query waited for every shard to finish what it had queued. |
+| `devicechain_eventprocessing_detect_shard_invariant_violations_total` | Checkpoints refused because the parts disagreed. Must stay zero. |
+
+The three labelled series only exist while the engine has shards. `detect_barrier_wait_seconds` and `detect_shard_invariant_violations_total` have no label and are exported at 0 even with `detectShards` at 1.
+
+Memory: each shard has a queue of up to 1024 messages, so a value above 1 can hold up to that many times `detectShards` queued messages (with the readings they carry) in the pod while the loop is ahead of the slowest shard. Size the pod's memory limit for it when you raise the setting.
+
+One detail of the stamps differs from `detectShards` at 1. A detection made with no message behind it, which is only the resolve that removing a device from an absence rule produces, is stamped with the time the engine took it in; at 1 it gets the time of the next message or advance. That time only meters outbound actions and is not part of the detection's identity, so duplicates still collapse as before.
 
 ## Deleting a tenant
 

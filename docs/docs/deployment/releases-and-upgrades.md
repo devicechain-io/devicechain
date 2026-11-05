@@ -745,6 +745,18 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases are documented in full, newest first.
 
+### v1.2.0 — the detection engine can use more than one core {#v120-upgrade}
+
+#### Detection shards run in parallel {#v120-detect-shards}
+
+The `detectShards` setting of event-processing (default 1, range 1 to 64) splits the detection engine's state by key. In `v1.1.0` the parts were applied one after another, so a value above 1 gave the same results and no speed-up. From this release each part runs on its own goroutine, so the engine's own work can use several cores. Detections, the event-time clock and the saved checkpoint are the same at every value, so nothing is migrated and the setting can be changed or reverted at any restart.
+
+- **Nothing needs doing if you left `detectShards` at 1.** The engine is the same code it was.
+- **If you set `detectShards` above 1**, the event-processing pod can now use up to that many cores for the engine, on top of the one loop that reads and plans messages. Check the pod's CPU limit before relying on it, and read [Running the engine on more cores](./detection-engine.md#detect-shards) to see whether the engine is your limit at all.
+- **Two alerts are new**: `DetectShardSaturated` (a shard is the limit on detection speed) and `DetectShardInvariantViolated` (the parts disagreed at a checkpoint and it was refused). They are installed at every setting but can only fire when `detectShards` is above 1. Add them to your alert routing. A new set of `detect_shard_*` metrics and `detect_barrier_wait_seconds` accompany them; the two unlabelled ones are exported as 0 at 1.
+- **Memory grows with `detectShards`.** Each shard holds up to 1024 queued messages, so a pod already running above 1 can hold up to that many times `detectShards` messages in memory while the loop is ahead of the slowest shard. Check the pod's memory limit before relying on the new setting.
+- **Going back** is a restart with the setting at the old value. The checkpoint is identical, so there is nothing to undo.
+
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 
 `v1.1.0` is an in-place upgrade from `v1.0.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Two appended migrations run on upgrade (one in `event-management`, one in `device-state`); each adds a table and rewrites no existing row. The new `Instance` fields (see [Devices outside the cluster](#v110-mqtt-exposure)) ship with the operator, which `dcctl install` updates, so run it before the instance upgrade, as above. Coming from `v0.27.0` or earlier, read the [`v1.0.0` notes](#v100-upgrade) first and follow them with `--version v1.1.0`.

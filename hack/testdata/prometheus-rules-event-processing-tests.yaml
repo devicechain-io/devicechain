@@ -1033,3 +1033,58 @@ tests:
       - eval_time: 45m
         alertname: DetectTenantOverStateBudget
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The concurrent engine's alerts. A shard busy the whole time pages after the ten-minute
+  # `for`; one that is busy half the time does not; a violation fires at once and carries no
+  # per-pod labels (the rule sums them away).
+  # ------------------------------------------------------------------
+  - name: a shard applying operations all the time fires DetectShardSaturated, the others stay quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_shard_busy_seconds_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", shard="0"}'
+        values: '0+60x40'
+      - series: 'devicechain_eventprocessing_detect_shard_busy_seconds_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", shard="1"}'
+        values: '0+30x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: DetectShardSaturated
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DetectShardSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              shard: "0"
+            exp_annotations:
+              summary: "A DETECT shard is busy more than 90% of the time"
+              description: "One detection shard has spent over 90% of the last ten minutes applying operations, so it is the limit on how fast detection can run. Compare devicechain_eventprocessing_detect_shard_busy_seconds_total across shards: one far above the rest is a hot key (a very busy device, or a correlation anchor with many members), all of them high means detectShards is too low for the load, or the CPU limit is."
+
+  - name: an engine with no shard series (detectShards 1, or a standby) raises neither shard alert
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: DetectShardSaturated, exp_alerts: []}
+      - {eval_time: 30m, alertname: DetectShardInvariantViolated, exp_alerts: []}
+
+  - name: a refused snapshot fires DetectShardInvariantViolated
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_shard_invariant_violations_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x10 1+0x20'
+    alert_rule_test:
+      - {eval_time: 8m, alertname: DetectShardInvariantViolated, exp_alerts: []}
+      - eval_time: 12m
+        alertname: DetectShardInvariantViolated
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              pod: dc-event-processing-6b7d-aaaaa
+            exp_annotations:
+              summary: "DETECT shards disagreed and a checkpoint was refused"
+              description: "The detection shards were not at the same watermark and position at a checkpoint, so the snapshot was refused (nothing wrong was saved). This is a defect, not load. Checkpoints keep failing on the pod named on this alert until it is restarted, which rebuilds the shards from the last good snapshot; restart that pod, then report it with its event-processing log from the first refusal."
+

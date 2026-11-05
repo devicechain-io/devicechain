@@ -594,6 +594,7 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 	//    release that lands leaves the marker PriorOwnerReleasedCleanly reads, so the
 	//    successor skips both.
 	rp.finalCheckpoint()
+	rp.closeDetector() // after the term's last use of the engine; its shard goroutines end here
 	rp.Gate.Exit()
 	// Not consuming from here on, though the entry may stay ours on the server for as
 	// long as the release retries — which is why is_leader stays up until after it.

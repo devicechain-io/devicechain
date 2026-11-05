@@ -1505,7 +1505,7 @@ func (rp *ResolvedEventsProcessor) newDetector() detectcore.Detector {
 	if rp.cfg.Shards <= 1 {
 		return detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
 	}
-	return detectcore.NewSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness)
+	return rp.observed(detectcore.NewConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness))
 }
 
 // restoreDetector rebuilds the live engine from a committed snapshot at the CONFIGURED shard
@@ -1517,13 +1517,18 @@ func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.D
 	if rp.cfg.Shards <= 1 {
 		return detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, payload)
 	}
-	return detectcore.RestoreSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload)
+	c, err := detectcore.RestoreConcurrentSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload)
+	if err != nil {
+		return nil, err
+	}
+	return rp.observed(c), nil
 }
 
 // restore loads the durable checkpoint and rebuilds the engine from it, or builds a
 // fresh empty engine when none exists (a new Instance). It runs before any loop, so
 // it needs no synchronization.
 func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
+	rp.closeDetector() // the previous term's engine, if it had shard goroutines
 	start := rp.clock.Now()
 	snap, ok, err := rp.Store.Load(ctx, rp.cfg.PartitionId)
 	if err != nil {
@@ -1589,6 +1594,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 				"leading from that checkpoint", rp.cfg.PartitionId)
 		}
 		observed := rp.restoredSeq
+		rp.closeDetector()
 		rp.engine = rp.newDetector()
 		rp.dirty = false
 		rp.committedSeq = 0
@@ -1774,9 +1780,12 @@ func (rp *ResolvedEventsProcessor) run() {
 			// checkpoint. idleAdvance itself commits (and delivers) whenever it moved state, so
 			// the interval checkpoint below only handles the case idle-advance did not: buffered
 			// acks/detections from live messages, or a suppressed (not-caught-up) advance.
+			rp.sampleShardLoad() // before idleAdvance: its emptiness check waits for the queues to drain
 			rp.idleAdvance(rp.pctx(), now)
 			// A control-plane disarm queues its Resolved in the engine and dirties nothing; drain it
-			// here so the gate below sees it and a quiet stream still delivers the clear.
+			// here so the gate below sees it and a quiet stream still delivers the clear. For a
+			// concurrent engine the same call takes in what its shards have finished (drainDetections
+			// collects without waiting), so the checks below and the early flush see that too.
 			if !rp.stale {
 				rp.drainControlPlane()
 			}
@@ -2087,6 +2096,7 @@ func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant stri
 	// latch is a no-op).
 	descoped := false
 	rp.phases.enter(phaseApply)
+	rp.tagNext(triggerTime(msg, event), true)
 	if msg.StreamSeq > prev {
 		for _, d := range plan.Descopes {
 			if rp.engine.Descope(d.RuleID, d.Series, d.At) {
@@ -2104,7 +2114,9 @@ func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant stri
 	// the number lives — a store-and-forward fleet whose windowed or duration rules stop firing
 	// shows up as a rising detect_late_samples_total instead of silence.
 	rp.metrics.recordLateSamples(rp.engine.DrainLateSamples())
-	rp.drainDetections(triggerTime(msg, event), true)
+	if rp.pipelined() == nil {
+		rp.drainDetections(triggerTime(msg, event), true)
+	}
 	if rp.engine.LastSeq() > prev || descoped {
 		rp.dirty = true
 		rp.metrics.recordApplied()
@@ -2184,6 +2196,12 @@ func triggerTime(msg messaging.Message, ev *resolvedevent.ResolvedEvent) time.Ti
 // replayable is whether the detections came from applying a stream event (true) or from a
 // wall-clock advance (false). Only the first can be published early.
 func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replayable bool) int {
+	if p := rp.pipelined(); p != nil {
+		// The shards stamped their own detections as they made them (tagNext); this takes in what
+		// is ready. applyEvent does not call it for a concurrent engine: a lock per shard per
+		// message to collect what a tick or a checkpoint collects anyway.
+		return rp.absorb(p.Collect())
+	}
 	dets := rp.engine.Drain()
 	for _, d := range dets {
 		rp.detOrd++
@@ -2305,14 +2323,17 @@ func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Tim
 	if rp.gapHeld != nil {
 		return // parked on a sequence gap: a wall-clock advance must not run ahead of unapplied events
 	}
-	if !rp.engine.HasPendingWork() {
-		return // nothing armed to fire: leave the frontier at rest (no perpetual idle checkpoint)
-	}
+	// The two time guards come first because they are free, and HasPendingWork is a barrier on a
+	// concurrent engine (it waits for every shard to drain). Each of the three only returns, so their
+	// order changes nothing for the single engine.
 	if now.Sub(rp.lastLiveRead) < rp.cfg.IdleAdvanceGuard {
 		return // recent read-loop activity: the reader's fetch buffer may still hold messages
 	}
 	if now.Sub(rp.lastCheckpoint) < rp.cfg.CheckpointInterval {
 		return // hold to the commit cadence: the frontier moves only at commit points
+	}
+	if !rp.engine.HasPendingWork() {
+		return // nothing armed to fire: leave the frontier at rest (no perpetual idle checkpoint)
 	}
 	if rp.backlogProbe == nil {
 		return // no way to confirm the broker tail is empty: fail safe, never advance blind
@@ -2337,6 +2358,7 @@ func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Tim
 	if rp.detectStaleOwner(ctx) {
 		return
 	}
+	rp.tagNext(now, false)
 	changed := rp.engine.Advance(now)
 	if n := rp.drainDetections(now, false); n > 0 {
 		rp.metrics.recordIdleAdvance(n)
@@ -2403,6 +2425,10 @@ func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
 // concern is inert; the deferred teardown path (ADR-023/052) that adds removal-driving facts
 // owns making them replay-durable.
 func (rp *ResolvedEventsProcessor) applyRuleUpdate(upd ruleUpdate) {
+	// Whether a detection may be published early is judged from its rule, at the moment it is
+	// taken into the buffer. A concurrent engine's shards may still hold detections made under the
+	// rule being replaced, so take them in first, as the single engine's per-message drain already has.
+	rp.syncDetector()
 	gcd := false
 	for i := range upd.upserts {
 		sr := upd.upserts[i]
@@ -2848,6 +2874,12 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	if rp.stale {
 		return false // a split-brain-losing writer: no publish, no commit, no ack (see stale)
 	}
+	// 🔴 EVERY MESSAGE THE SNAPSHOT WILL COVER MUST HAVE ITS DETECTIONS IN THE BUFFER FIRST. With
+	// concurrent shards the loop has queued messages the shards have not finished, so wait for
+	// them and take their detections in before anything is published or saved. A snapshot taken
+	// without this would cover a message whose detections were never buffered, so a crash after
+	// the commit would lose them.
+	rp.syncDetector()
 	// 🔴 THE OWNERSHIP CHECK GOES HERE, AND HERE IS NOT THE EXIT PATH.
 	//
 	// checkpoint() has seven callers and six of them are not shutdown: the batch-count
@@ -3014,7 +3046,10 @@ func earlyPublishableKind(kind detectcore.RuleKind, readsAttributes bool) bool {
 // succeeded and whose Save failed has always been.
 //
 // A detection is flushed only when no earlier detection of its tenant and series is being held
-// back, so a series is never published out of order.
+// back, so a series is never published out of order. "Earlier" is the single engine's emission
+// order, for a concurrent engine too: its Collect returns detections in exactly that order and only
+// as a strictly advancing prefix (nothing is handed over while a slower shard may still owe an
+// earlier one), so the buffer's order is the order the lane must keep whatever the shard count.
 //
 // A failed flush is not retried by the tick until a checkpoint has run, so a broker that has
 // stopped answering costs one bounded attempt per interval and not one per tick; the checkpoint
@@ -3186,6 +3221,9 @@ type stateBudgetStats struct {
 // measures only; slice 6c-2 acts on these same breaches.
 func (rp *ResolvedEventsProcessor) recordStateBudget() {
 	rp.metrics.recordStateBudget(rp.computeStateBudget())
+	if p := rp.pipelined(); p != nil {
+		rp.metrics.sampleShardKeys(p.ShardLiveKeys())
+	}
 }
 
 // sampleConsumerLag probes the resolved-events durable consumer's broker backlog and publishes it
@@ -3471,6 +3509,9 @@ func (rp *ResolvedEventsProcessor) finalCheckpoint() {
 	// A disarm leaves its Resolved in the engine and dirties nothing, so the clean-loop early return
 	// below would skip the one flush that could deliver it.
 	if !rp.stale {
+		// A concurrent engine may still hold the disarm in a shard's queue: wait for the shards
+		// before deciding there is nothing to flush, or the clean early return below would skip it.
+		rp.syncDetector()
 		rp.drainControlPlane()
 	}
 	if !rp.dirty && len(rp.pendingAcks) == 0 && len(rp.pendingDets) == 0 {
@@ -3517,6 +3558,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStop(ctx context.Context) error {
 	}
 	rp.pcancel()
 	rp.readerWG.Wait()
+	rp.closeDetector()
 	rp.stopRuleHealth(true, ctx)
 	return nil
 }

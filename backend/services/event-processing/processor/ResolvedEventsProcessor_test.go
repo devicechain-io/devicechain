@@ -228,7 +228,7 @@ func (r *fakeReplayReader) Close() error { r.closed = true; return nil }
 
 // newTestStore spins up an in-memory sqlite snapshot store with the DetectSnapshot
 // table migrated, exactly as production wiring does (minus the schema prefix).
-func newTestStore(t *testing.T) *model.SnapshotStore {
+func newTestStore(t testing.TB) *model.SnapshotStore {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

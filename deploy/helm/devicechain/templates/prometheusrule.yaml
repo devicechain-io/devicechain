@@ -94,6 +94,29 @@ spec:
           annotations:
             summary: "The DETECT loop on a live leader has stopped making progress"
             description: "A replica that holds the partition and reports itself live has not completed a pass of its detection loop in over 2m (a healthy loop passes at least once a second). The loop is hung inside a call, most likely against a black-holed database or broker connection, and every other DETECT gauge is sampled on that same loop, so they are frozen at their last values and look healthy. No rule is being evaluated for any tenant. Restart the pod named on the alert. A standby never fires this: it is not leading."
+        # The concurrent engine (detectShards above 1). Both rules are always rendered; at detectShards 1
+        # there are no shard series (and the violation counter stays 0), so neither can fire. Saturated: a shard that is applying operations
+        # nearly all the time is the limit, and raising detectShards (or the CPU it can use) is the
+        # remedy. A violation is a defect, not load: the shards disagreed at a snapshot, which was
+        # refused. `max by (shard)` keeps one series per shard and folds the replicas away, so a
+        # standby (which has no shard series at all) cannot hide or fake it.
+        - alert: DetectShardSaturated
+          expr: max by (shard) (rate(devicechain_eventprocessing_detect_shard_busy_seconds_total{namespace="{{ $ns }}"}[5m])) > 0.9
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A DETECT shard is busy more than 90% of the time"
+            description: "One detection shard has spent over 90% of the last ten minutes applying operations, so it is the limit on how fast detection can run. Compare devicechain_eventprocessing_detect_shard_busy_seconds_total across shards: one far above the rest is a hot key (a very busy device, or a correlation anchor with many members), all of them high means detectShards is too low for the load, or the CPU limit is."
+        - alert: DetectShardInvariantViolated
+          expr: sum by (pod) (increase(devicechain_eventprocessing_detect_shard_invariant_violations_total{namespace="{{ $ns }}"}[10m])) > 0
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "DETECT shards disagreed and a checkpoint was refused"
+            description: "The detection shards were not at the same watermark and position at a checkpoint, so the snapshot was refused (nothing wrong was saved). This is a defect, not load. Checkpoints keep failing on the pod named on this alert until it is restarted, which rebuilds the shards from the last good snapshot; restart that pod, then report it with its event-processing log from the first refusal."
         - alert: DetectFanoutEvalErrors
           expr: sum(rate(devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

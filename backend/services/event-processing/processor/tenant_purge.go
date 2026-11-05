@@ -327,6 +327,7 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 func (rp *ResolvedEventsProcessor) dropTenantBuffers(victim func(ruleID string) bool,
 	tenant string) int64 {
 	n := int64(0)
+	rp.syncDetector() // detections the shards made for the tenant that the buffer has not taken in yet
 	if len(rp.pendingDets) > 0 {
 		kept := rp.pendingDets[:0]
 		for _, d := range rp.pendingDets {

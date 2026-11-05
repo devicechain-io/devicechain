@@ -1208,7 +1208,7 @@ note "every rendered rule group parses"
 # loose: no rule files at all is refused outright, the extractor's required-groups
 # control catches a group that stopped rendering, and the per-file cross-count
 # catches a file the walk reads only part of.
-always_firing_floor=20
+always_firing_floor=40
 say "counting the rendered alerts"
 check_alert_census "$always_firing_floor" "${rule_files[@]}" ||
   fail "the always-firing check's liveness floor no longer proves the whole render was read"

@@ -504,6 +504,18 @@ dcctl bootstrap local devicechain
 
 最近三个次版本的说明完整保留，按从新到旧排列。
 
+### v1.2.0：检测引擎可以使用多个核心 {#v120-upgrade}
+
+#### 检测分片并行运行 {#v120-detect-shards}
+
+event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键拆分检测引擎的状态。在 `v1.1.0` 中各分片依次应用，因此大于 1 的取值结果相同、也没有提速。从本版本起每个分片在各自的 goroutine 中运行，引擎自身的工作可以使用多个核心。无论取何值，检测结果、事件时间时钟和已保存的检查点都完全一致，因此无需迁移，该设置可在任意一次重启时更改或还原。
+
+- **如果 `detectShards` 保持为 1，无需任何操作。** 引擎运行的仍是原来的代码。
+- **如果把 `detectShards` 设为大于 1**，除读取并规划消息的那一个循环外，event-processing Pod 现在最多可为引擎使用该数量的核心。依赖这一点之前请先检查 Pod 的 CPU 限制，并阅读[让引擎使用更多核心](./detection-engine.md#detect-shards)，确认引擎是否真是你的瓶颈。
+- **新增两条告警**：`DetectShardSaturated`（某个分片是检测速度的上限）和 `DetectShardInvariantViolated`（各分片在检查点上意见不一致，检查点被拒绝）。无论取何值都会安装，但只有 `detectShards` 大于 1 时才可能触发。请把它们加入告警路由。同时新增一组 `detect_shard_*` 指标和 `detect_barrier_wait_seconds`；其中两个不带标签的在取 1 时以 0 导出。
+- **内存随 `detectShards` 增长。** 每个分片最多持有 1024 条排队消息，因此已在大于 1 的取值下运行的 Pod，在循环领先于最慢分片时，内存中最多可能积压 `detectShards` 倍于此数量的消息。依赖新设置之前请检查 Pod 的内存限制。
+- **回退**只需用旧值重启。检查点完全相同，没有需要撤销的内容。
+
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 
 `v1.1.0` 是从 `v1.0.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。升级时会运行两个追加的迁移（一个在 `event-management`，一个在 `device-state`）；每个迁移只新增一张表，不改写任何现有行。`Instance` 的新字段（参见[集群外的设备](#v110-mqtt-exposure)）随 operator 一同发布，由 `dcctl install` 更新，因此请如上所述先运行它，再升级实例。如果从 `v0.27.0` 或更早版本升级，请先阅读 [`v1.0.0` 的说明](#v100-upgrade)，并在其中使用 `--version v1.1.0`。
