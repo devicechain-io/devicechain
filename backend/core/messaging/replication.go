@@ -297,3 +297,15 @@ func RebalanceableStreams(instanceId string) []string {
 	slices.Sort(out)
 	return out
 }
+
+// StreamTrafficWeights maps every declared stream of an instance, by concrete name, to what leading
+// it costs a broker server (streams.Stream.TrafficWeight). It covers the streams RebalanceableStreams
+// leaves out as well: those are never moved, but they are load, and a movable stream is placed
+// away from them. Key-value buckets and the broker's own streams are absent, so they weigh nothing.
+func StreamTrafficWeights(instanceId string) map[string]int {
+	out := make(map[string]int, len(streams.All))
+	for _, s := range streams.All {
+		out[StreamName(instanceId, s.Suffix)] = s.TrafficWeight()
+	}
+	return out
+}

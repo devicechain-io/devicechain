@@ -1307,3 +1307,35 @@ func (s Stream) OnIngestPath() bool {
 	}
 	return false
 }
+
+// Leader-placement weights: what leading a stream (or one of its consumers) costs the broker
+// server that does, in arbitrary units whose ratios matter. See Stream.TrafficWeight.
+const (
+	// WeightPerEvent is a stream every device event passes through.
+	WeightPerEvent = 100
+	// WeightHot is any other hot-tier stream: it scales with the fleet, not with the event rate.
+	WeightHot = 10
+	// WeightCold is a stream driven by human or CRUD activity.
+	WeightCold = 1
+)
+
+// perEvent are the streams every event passes through, one hop each: the capture the broker
+// writes a device publish into, the inbound stream the ingest areas write, and the resolved stream
+// device-management writes. Measured on GKE, the server leading two of them ran at 3.4 cores
+// against about 2 on the others.
+var perEvent = []string{DeviceEventsCapture, InboundEvents, ResolvedEvents}
+
+// TrafficWeight is the stream's design cost to the server that leads it, derived from the
+// declaration rather than measured, so it is the same on a quiet broker just after a roll as under
+// load. Leader placement balances the sum of these, not the number of streams: five cold streams on
+// one server weigh less than the one per-event stream on another.
+func (s Stream) TrafficWeight() int {
+	switch {
+	case slices.Contains(perEvent, s.Suffix):
+		return WeightPerEvent
+	case s.Tier == Hot:
+		return WeightHot
+	default:
+		return WeightCold
+	}
+}

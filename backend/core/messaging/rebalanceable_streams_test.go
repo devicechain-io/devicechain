@@ -41,3 +41,26 @@ func TestRebalanceableStreamsAreWhatTheImbalanceAlertCounts(t *testing.T) {
 		require.Equal(t, want, strings.Split(one[1], "|"), "the alert's stream list differs from RebalanceableStreams")
 	}
 }
+
+// The weights placement balances: the per-event streams are the heaviest and every declared stream
+// weighs something, including the ones that are never moved (they are load, and anchor the plan).
+// resolved-events is the one per-event stream placement may move; the others are fixed anchors.
+func TestStreamTrafficWeights(t *testing.T) {
+	w := StreamTrafficWeights("INST")
+	require.Len(t, w, len(streams.All))
+	for _, s := range streams.All {
+		require.Positive(t, w[StreamName("INST", s.Suffix)], s.Suffix)
+	}
+	movable := RebalanceableStreams("INST")
+	for _, suffix := range []string{streams.DeviceEventsCapture, streams.InboundEvents, streams.ResolvedEvents} {
+		n := StreamName("INST", suffix)
+		require.Equal(t, streams.WeightPerEvent, w[n], suffix)
+		require.Equal(t, suffix == streams.ResolvedEvents, slices.Contains(movable, n), suffix)
+	}
+	for n, v := range w {
+		if v == streams.WeightPerEvent {
+			continue
+		}
+		require.Less(t, v, streams.WeightPerEvent, n)
+	}
+}

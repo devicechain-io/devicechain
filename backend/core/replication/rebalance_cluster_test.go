@@ -143,3 +143,87 @@ func leaderNow(t *testing.T, js nats.JetStreamContext, stream string) string {
 	}
 	return si.Cluster.Leader
 }
+
+// The post-roll pile-up the GKE rounds measured, on a real three-server cluster: the stream every
+// event enters through (which may not move) and the one every event leaves through (which may) are
+// led by the same server, while the counts read even. Weighted by traffic, the plan moves the second
+// one away, and the broker agrees afterwards; the first stays where it was.
+func TestRebalanceByTrafficSeparatesHotStreamsOnARealCluster(t *testing.T) {
+	servers := dctest.StartJetStreamCluster(t, 3)
+	nc, err := nats.Connect(servers[0].ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2 hot + 4 cold: counts 2/2/2 once the hot pair shares a server and the cold ones fill the rest.
+	names := []string{"TRAF_IN", "TRAF_OUT", "TRAF_C0", "TRAF_C1", "TRAF_C2", "TRAF_C3"}
+	for i, n := range names {
+		if _, err := js.AddStream(&nats.StreamConfig{Name: n, Subjects: []string{fmt.Sprintf("traf.%d", i)},
+			Storage: nats.FileStorage, Replicas: 3}); err != nil {
+			t.Fatalf("add %s: %v", n, err)
+		}
+	}
+	// Place: IN and OUT on server 0; the cold streams two on server 1, two on server 2.
+	place := map[string]string{"TRAF_IN": servers[0].Name(), "TRAF_OUT": servers[0].Name(),
+		"TRAF_C0": servers[1].Name(), "TRAF_C1": servers[1].Name(), "TRAF_C2": servers[2].Name(), "TRAF_C3": servers[2].Name()}
+	for n, to := range place {
+		if leaderNow(t, js, n) != to {
+			stepDown(t, nc, js, n, to)
+		}
+	}
+	waitFor(t, func() bool {
+		for n, to := range place {
+			si, err := js.StreamInfo(n)
+			if err != nil || si.Cluster == nil || si.Cluster.Leader != to {
+				return false
+			}
+		}
+		return true
+	})
+
+	opts := replication.PlanOptions{
+		Movable: func(s string) bool { return s != "TRAF_IN" },
+		Weight: func(s string) int {
+			if s == "TRAF_IN" || s == "TRAF_OUT" {
+				return 100
+			}
+			return 1
+		},
+	}
+	snap, err := replication.Collect(js, replication.Expectation{Prefixes: []string{"TRAF_"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Control: by count this broker is balanced and the old plan leaves it alone.
+	if old := replication.PlanRebalance(snap, replication.PlanOptions{Movable: opts.Movable}); len(old.Moves) != 0 {
+		t.Fatalf("control: count-based plan should not move anything, got %+v", old.Moves)
+	}
+	plan := replication.PlanRebalance(snap, opts)
+	t.Logf("plan: %+v, load %v -> %v", plan.Moves, plan.LoadBefore, plan.LoadAfter)
+	if len(plan.Moves) == 0 {
+		t.Fatalf("a hot pair on one server produced no plan: load %v", plan.LoadBefore)
+	}
+	for _, r := range replication.ApplyMoves(context.Background(), nc, js, plan.Moves, replication.ApplyOptions{PerMove: 10 * time.Second}) {
+		if r.Err != nil {
+			t.Errorf("move %+v: %v", r.Move, r.Err)
+		}
+	}
+	waitFor(t, func() bool {
+		in, out := leaderNow(t, js, "TRAF_IN"), leaderNow(t, js, "TRAF_OUT")
+		return in != "" && out != "" && in != out
+	})
+	if got := leaderNow(t, js, "TRAF_IN"); got != servers[0].Name() {
+		t.Errorf("the fixed stream moved: now led by %s", got)
+	}
+	snap, err = replication.Collect(js, replication.Expectation{Prefixes: []string{"TRAF_"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := replication.PlanRebalance(snap, opts); len(again.Moves) != 0 {
+		t.Errorf("a second plan over the result still moves %+v", again.Moves)
+	}
+}
