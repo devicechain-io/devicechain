@@ -26,11 +26,18 @@ const X509Username = "@x509"
 // The results callout_x509_total is counted by. A closed list, so a series exists at zero for
 // every one and an alert on a rate sees a zero series rather than none.
 const (
-	x509ResultOK                = "ok"
-	x509ResultNoCert            = "no_cert"
-	x509ResultChainInvalid      = "chain_invalid"
-	x509ResultAnchorDisabled    = "anchor_disabled"
-	x509ResultRevoked           = "revoked"
+	x509ResultOK             = "ok"
+	x509ResultNoCert         = "no_cert"
+	x509ResultChainInvalid   = "chain_invalid"
+	x509ResultAnchorDisabled = "anchor_disabled"
+	x509ResultRevoked        = "revoked"
+	// x509ResultCertRevoked: the certificate (or a CA above it on every verified path) is revoked,
+	// by a stored CRL or by a manual entry. Kept apart from revoked, which is a credential or a
+	// device DeviceChain itself disabled, so an operator can tell "the CA revoked it" from "we did".
+	// x509ResultRevocationUnknown: the anchor requires current revocation data and a path's issuer
+	// has no list, or one past nextUpdate plus the grace.
+	x509ResultCertRevoked       = "cert_revoked"
+	x509ResultRevocationUnknown = "revocation_unknown"
 	x509ResultClientIDMismatch  = "client_id_mismatch"
 	x509ResultUnknownPin        = "unknown_pin"
 	x509ResultMisconfigured     = "misconfigured"
@@ -63,7 +70,7 @@ const (
 )
 
 var x509Results = []string{
-	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked,
+	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked, x509ResultCertRevoked, x509ResultRevocationUnknown,
 	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultIssuerUnpinned, x509ResultIssuerPending, x509ResultPinUnavailable, x509ResultCertMalformed,
 	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
@@ -110,6 +117,9 @@ func (c *CalloutResponder) refuseX509(obs *calloutObs, result string) (string, s
 //  5. the credential's trust anchor, which must exist and be enabled;
 //  6. the chain, verified against THAT anchor (x509trust.VerifyClientChain: the one definition of
 //     the decision);
+//     6a. REVOCATION, on the paths that verified (applyRevocation): the anchor's revocation store,
+//     read UNCACHED (model.ResolveX509Revocation), drops every path that holds a revoked
+//     certificate, and the session is clamped to the path that SURVIVED. A lookup error refuses.
 //  7. the same tail as every device connect (grantSession): the device enabled, the MQTT client
 //     id its own, the erasure fence, the session clamped, then signed. The clamp is the earlier
 //     of the credential's expiry and the earliest notAfter over the verified chain
@@ -242,6 +252,14 @@ func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationR
 			Msg("Auth-callout refused a certificate connect: the chain does not verify to the credential's trust anchor.")
 		return c.refuseX509(obs, x509ResultChainInvalid)
 	}
+	// 🔴 THE REVOCATION CHECK, uncached, on the paths that verified and before the session is
+	// clamped, so the clamp follows the path that SURVIVED.
+	verified, refusal := c.applyRevocation(ctx, tenant, found.Anchor, verified)
+	if refusal != "" {
+		log.Debug().Str("tenant", tenant).Str("device", device.Token).Str("host", req.ClientInformation.Host).Str("result", refusal).
+			Msg("Auth-callout refused a certificate connect on revocation.")
+		return c.refuseX509(obs, refusal)
+	}
 	// The device is a copy carrying the credential's expiry (withConnectExpiry); the session is
 	// clamped to the earlier of that and the chain's.
 	device.ConnectCredentialExpiresAt = earliestExpiry(device.ConnectCredentialExpiresAt, verified.NotAfter)
@@ -265,6 +283,45 @@ func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationR
 	}
 }
 
+// applyRevocation is the revocation check of a connect whose chain has verified: it reads the
+// anchor's revocation state (ResolveX509Revocation, uncached, one indexed read, none for an
+// ENTRIES anchor with nothing recorded), drops every verified path that holds a revoked
+// certificate, and returns what survives, or the callout result that counts the refusal.
+//
+// 🔴 FAIL CLOSED, EVERYWHERE. A lookup that errors is "error", never a pass. An ApplyRevocation
+// error is classified by ReasonOf, and the switch REFUSES BY DEFAULT: an error whose reason is
+// empty (an unclassifiable state, an unknown mode) is "error" as well. The only road to a nil
+// refusal is a nil error from ApplyRevocation.
+func (c *CalloutResponder) applyRevocation(ctx context.Context, tenant string, anchor *model.DeviceTrustAnchor,
+	verified *x509trust.Verified) (*x509trust.Verified, string) {
+	state, err := c.api.ResolveX509Revocation(ctx, anchor, verified.RevocationKeys(), c.now())
+	if err != nil {
+		c.logAuthFailure(tenant, err)
+		return nil, x509ResultError
+	}
+	survivor, err := verified.ApplyRevocation(state)
+	if err != nil {
+		return nil, revocationRefusal(err)
+	}
+	if survivor == nil {
+		return nil, x509ResultError
+	}
+	return survivor, ""
+}
+
+// revocationRefusal is the result a non-nil ApplyRevocation (or registration recheck) error is
+// counted as. The default arm refuses.
+func revocationRefusal(err error) string {
+	switch x509trust.ReasonOf(err) {
+	case x509trust.ReasonRevoked:
+		return x509ResultCertRevoked
+	case x509trust.ReasonRevocationUnknown:
+		return x509ResultRevocationUnknown
+	default:
+		return x509ResultError
+	}
+}
+
 // earliestExpiry is the earlier of an optional credential expiry and a chain's notAfter.
 func earliestExpiry(credentialExpiry sql.NullTime, chainNotAfter time.Time) sql.NullTime {
 	if credentialExpiry.Valid && credentialExpiry.Time.Before(chainNotAfter) {
@@ -277,7 +334,7 @@ func earliestExpiry(credentialExpiry sql.NullTime, chainNotAfter time.Time) sql.
 func newX509Counter(ms *core.Microservice) *prometheus.CounterVec {
 	v := ms.NewCounterVec("callout_x509_total",
 		"Device connects by certificate (MQTT username {tenant}:@x509), by result. ok is a granted session; "+
-			"no_cert, chain_invalid, anchor_disabled, revoked, client_id_mismatch, unknown_pin, misconfigured, "+
+			"no_cert, chain_invalid, anchor_disabled, revoked, cert_revoked, revocation_unknown, client_id_mismatch, unknown_pin, misconfigured, "+
 			"password_presented, unsealed, issuer_unpinned, issuer_pin_pending, issuer_pin_unavailable, cert_malformed, tenant_refused and error are refusals, each answered with the same generic denial. "+
 			"x509_cert_ignored counts a certificate presented with a token or password username, which authenticates "+
 			"on that credential alone. The jit_ results are registration on first connect: jit_created, jit_adopted, "+

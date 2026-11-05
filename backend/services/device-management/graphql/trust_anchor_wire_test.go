@@ -98,7 +98,8 @@ func newTrustAnchorWireFixture(t *testing.T) scopeFixture {
 		t.Fatal(err)
 	}
 	return seedScopeFixture(t, db, &model.ProvisioningProfile{}, &model.DeviceCredential{},
-		&model.DeviceTrustAnchor{}, &model.PendingSessionKick{})
+		&model.DeviceTrustAnchor{}, &model.PendingSessionKick{}, &model.DeviceRevocationIssuer{},
+		&model.DeviceRevocationList{}, &model.DeviceRevokedCertificate{}, &model.DeviceCredentialChainLink{})
 }
 
 func errCode(t *testing.T, s served) any {

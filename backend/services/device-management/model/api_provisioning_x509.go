@@ -42,6 +42,12 @@ type X509Registration struct {
 	// when it is checked under the lock.
 	AnchorId          uint
 	AnchorFingerprint string
+	// Verified is the chain after the revocation gate (x509trust.Verified.ApplyRevocation): the
+	// paths that survived it. It is re-checked INSIDE the registration's transaction, under the
+	// anchor's share lock, so a revocation that commits between the gate and the insert refuses
+	// the registration with nothing written; and its Chain is what the credential's chain links
+	// record. Required: a registration without it is refused, never waved through.
+	Verified *x509trust.Verified
 }
 
 // X509ProfileAnchor is one X.509 provisioning profile with the trust anchor it authenticates by.
@@ -126,6 +132,9 @@ func (api *Api) prepareCertificateRegistration(request *ProvisionRequest) error 
 	if request.ExternalId != "" && request.ExternalId != cn {
 		return errors.New("a certificate registration's external id is the certificate's common name")
 	}
+	if reg.Verified == nil || reg.Verified.Leaf == nil || !reg.Verified.Leaf.Equal(reg.Leaf) {
+		return errors.New("a certificate registration needs the verified chain of its leaf, to re-check its revocation under the lock")
+	}
 	request.ExternalId = cn
 	return nil
 }
@@ -159,7 +168,13 @@ func lockCertificateProfile(tx *gorm.DB, profile *ProvisioningProfile, request *
 	if !anchor.Enabled || anchor.FingerprintSha256 != reg.AnchorFingerprint {
 		return ErrProvisioningFailed
 	}
-	return nil
+	// 🔴 THE REVOCATION RECHECK, under the share lock just taken. Every revocation write takes
+	// this anchor FOR UPDATE first, so one that is committing waits for this registration to
+	// commit (and then finds the credential and its links), and one that already committed is
+	// read here: the registration is refused with nothing written. Without it a revocation that
+	// lands between the callout's gate and this insert would leave a registered, revoked device.
+	// The anchor passed is the row read under the lock, so a mode changed meanwhile is the one used.
+	return recheckRevocationLocked(tx, anchor.TenantId, &anchor, reg.Verified)
 }
 
 // decideKnownDeviceByCertificate is decideKnownDevice's steps 5 to 8 for a certificate. The
@@ -217,7 +232,10 @@ func insertCertificateCredential(tx *gorm.DB, profile *ProvisioningProfile, devi
 		ProvisioningProfileId: &profileId,
 	}
 	cred.Token = core.DeriveDeviceToken(request.ExternalId, provisionedCredentialTokenPrefix)
-	return tx.Omit("Device").Create(cred).Error
+	if err := tx.Omit("Device").Create(cred).Error; err != nil {
+		return err
+	}
+	return writeChainLinks(tx, cred.ID, anchorId, reg.Verified.Chain)
 }
 
 // ProvisioningCodes is the closed vocabulary of refusal codes, in a fixed order. A caller that

@@ -78,3 +78,18 @@ func (r *SchemaResolver) anchorResolvers(ctx context.Context, found []*model.Dev
 	}
 	return out
 }
+
+// List the revoked certificates of a trust anchor.
+func (r *SchemaResolver) DeviceRevokedCertificates(ctx context.Context, args struct {
+	AnchorToken string
+	Criteria    model.DeviceRevokedCertificateSearchCriteria
+}) (*DeviceRevokedCertificateSearchResultsResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	results, err := r.GetApi(ctx).DeviceRevokedCertificates(ctx, args.AnchorToken, args.Criteria)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceRevokedCertificateSearchResultsResolver{M: *results, S: r, C: ctx}, nil
+}

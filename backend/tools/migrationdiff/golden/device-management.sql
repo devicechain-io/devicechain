@@ -19,6 +19,9 @@ ALTER SEQUENCE "device-management".device_profile_activations_id_seq OWNED BY "d
 ALTER SEQUENCE "device-management".device_profile_versions_id_seq OWNED BY "device-management".device_profile_versions.id;
 ALTER SEQUENCE "device-management".device_profiles_id_seq OWNED BY "device-management".device_profiles.id;
 ALTER SEQUENCE "device-management".device_replacements_id_seq OWNED BY "device-management".device_replacements.id;
+ALTER SEQUENCE "device-management".device_revocation_issuers_id_seq OWNED BY "device-management".device_revocation_issuers.id;
+ALTER SEQUENCE "device-management".device_revocation_lists_id_seq OWNED BY "device-management".device_revocation_lists.id;
+ALTER SEQUENCE "device-management".device_revoked_certificates_id_seq OWNED BY "device-management".device_revoked_certificates.id;
 ALTER SEQUENCE "device-management".device_trust_anchors_id_seq OWNED BY "device-management".device_trust_anchors.id;
 ALTER SEQUENCE "device-management".device_types_id_seq OWNED BY "device-management".device_types.id;
 ALTER SEQUENCE "device-management".devices_id_seq OWNED BY "device-management".devices.id;
@@ -97,6 +100,12 @@ ALTER TABLE ONLY "device-management".device_configuration_revisions ALTER COLUMN
 ALTER TABLE ONLY "device-management".device_configuration_states
  ADD CONSTRAINT device_configuration_states_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_configuration_states ALTER COLUMN id SET DEFAULT nextval('"device-management".device_configuration_states_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_credential_chain_links
+ ADD CONSTRAINT device_credential_chain_links_pkey PRIMARY KEY (credential_id, depth);
+ALTER TABLE ONLY "device-management".device_credential_chain_links
+ ADD CONSTRAINT fk_device_credential_chain_links_credential FOREIGN KEY (credential_id) REFERENCES "device-management".device_credentials(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".device_credential_chain_links
+ ADD CONSTRAINT fk_device_credential_chain_links_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY "device-management".device_credentials
  ADD CONSTRAINT "fk_device-management_device_credentials_device" FOREIGN KEY (device_id) REFERENCES "device-management".devices(id);
 ALTER TABLE ONLY "device-management".device_credentials
@@ -122,6 +131,25 @@ ALTER TABLE ONLY "device-management".device_replacements
 ALTER TABLE ONLY "device-management".device_replacements
  ADD CONSTRAINT device_replacements_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_replacements ALTER COLUMN id SET DEFAULT nextval('"device-management".device_replacements_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_revocation_issuers
+ ADD CONSTRAINT device_revocation_issuers_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_revocation_issuers
+ ADD CONSTRAINT fk_device_revocation_issuers_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".device_revocation_issuers ALTER COLUMN id SET DEFAULT nextval('"device-management".device_revocation_issuers_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_revocation_lists
+ ADD CONSTRAINT device_revocation_lists_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_revocation_lists
+ ADD CONSTRAINT fk_device_revocation_lists_issuer FOREIGN KEY (revocation_issuer_id) REFERENCES "device-management".device_revocation_issuers(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".device_revocation_lists
+ ADD CONSTRAINT fk_device_revocation_lists_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".device_revocation_lists ALTER COLUMN id SET DEFAULT nextval('"device-management".device_revocation_lists_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".device_revoked_certificates
+ ADD CONSTRAINT device_revoked_certificates_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_revoked_certificates
+ ADD CONSTRAINT fk_device_revoked_certificates_list FOREIGN KEY (revocation_list_id) REFERENCES "device-management".device_revocation_lists(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".device_revoked_certificates
+ ADD CONSTRAINT fk_device_revoked_certificates_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "device-management".device_revoked_certificates ALTER COLUMN id SET DEFAULT nextval('"device-management".device_revoked_certificates_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_trust_anchors
  ADD CONSTRAINT device_trust_anchors_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_trust_anchors ALTER COLUMN id SET DEFAULT nextval('"device-management".device_trust_anchors_id_seq'::regclass);
@@ -244,6 +272,7 @@ CREATE INDEX "idx_device-management_device_claims_deleted_at" ON "device-managem
 CREATE INDEX "idx_device-management_device_claims_tenant_id" ON "device-management".device_claims USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_configuration_revisions_tenant_id" ON "device-management".device_configuration_revisions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_configuration_states_tenant_id" ON "device-management".device_configuration_states USING btree (tenant_id);
+CREATE INDEX "idx_device-management_device_credential_chain_links_tenant_id" ON "device-management".device_credential_chain_links USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_credentials_credential_type" ON "device-management".device_credentials USING btree (credential_type);
 CREATE INDEX "idx_device-management_device_credentials_deleted_at" ON "device-management".device_credentials USING btree (deleted_at);
 CREATE INDEX "idx_device-management_device_credentials_device_id" ON "device-management".device_credentials USING btree (device_id);
@@ -260,6 +289,10 @@ CREATE INDEX "idx_device-management_device_replacements_deleted_at" ON "device-m
 CREATE INDEX "idx_device-management_device_replacements_device_id" ON "device-management".device_replacements USING btree (device_id);
 CREATE INDEX "idx_device-management_device_replacements_occurred_time" ON "device-management".device_replacements USING btree (occurred_time);
 CREATE INDEX "idx_device-management_device_replacements_tenant_id" ON "device-management".device_replacements USING btree (tenant_id);
+CREATE INDEX "idx_device-management_device_revocation_issuers_tenant_id" ON "device-management".device_revocation_issuers USING btree (tenant_id);
+CREATE INDEX "idx_device-management_device_revocation_lists_deleted_at" ON "device-management".device_revocation_lists USING btree (deleted_at);
+CREATE INDEX "idx_device-management_device_revocation_lists_tenant_id" ON "device-management".device_revocation_lists USING btree (tenant_id);
+CREATE INDEX "idx_device-management_device_revoked_certificates_tenant_id" ON "device-management".device_revoked_certificates USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_trust_anchors_deleted_at" ON "device-management".device_trust_anchors USING btree (deleted_at);
 CREATE INDEX "idx_device-management_device_trust_anchors_tenant_id" ON "device-management".device_trust_anchors USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_trust_anchors_token" ON "device-management".device_trust_anchors USING btree (token);
@@ -336,7 +369,13 @@ CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING b
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
+CREATE INDEX ix_device_credential_chain_links_fingerprint ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, fingerprint);
+CREATE INDEX ix_device_credential_chain_links_issuer_serial ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, issuer_name, serial);
 CREATE INDEX ix_device_profile_activations_profile_id ON "device-management".device_profile_activations USING btree (device_profile_id);
+CREATE INDEX ix_device_revocation_lists_anchor ON "device-management".device_revocation_lists USING btree (trust_anchor_id);
+CREATE INDEX ix_device_revoked_certificates_fingerprint ON "device-management".device_revoked_certificates USING btree (tenant_id, trust_anchor_id, fingerprint) WHERE (fingerprint IS NOT NULL);
+CREATE INDEX ix_device_revoked_certificates_list ON "device-management".device_revoked_certificates USING btree (revocation_list_id) WHERE (revocation_list_id IS NOT NULL);
+CREATE INDEX ix_device_revoked_certificates_serial ON "device-management".device_revoked_certificates USING btree (tenant_id, trust_anchor_id, issuer_key, issuer_name, serial) WHERE (serial IS NOT NULL);
 CREATE INDEX ix_devices_list_order ON "device-management".devices USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_lookup ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, entity_id) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, value) WHERE (deleted_at IS NULL);
@@ -465,6 +504,24 @@ CREATE SEQUENCE "device-management".device_profiles_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".device_replacements_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_revocation_issuers_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_revocation_lists_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_revoked_certificates_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -815,6 +872,16 @@ CREATE TABLE "device-management".device_configuration_states (
  reported_at timestamp with time zone,
  last_sync_at timestamp with time zone
 );
+CREATE TABLE "device-management".device_credential_chain_links (
+ credential_id bigint NOT NULL,
+ depth smallint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ fingerprint character varying(64) NOT NULL,
+ issuer_key character varying(64),
+ issuer_name character varying(64) NOT NULL,
+ serial character varying(64) NOT NULL
+);
 CREATE TABLE "device-management".device_credentials (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -891,6 +958,49 @@ CREATE TABLE "device-management".device_replacements (
  new_credential_token character varying(128) NOT NULL,
  new_credential_type character varying(32) NOT NULL
 );
+CREATE TABLE "device-management".device_revocation_issuers (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ issuer_key character varying(64) NOT NULL,
+ issuer_name character varying(64) NOT NULL,
+ high_water_crl_number numeric(50,0) NOT NULL
+);
+CREATE TABLE "device-management".device_revocation_lists (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ revocation_issuer_id bigint NOT NULL,
+ issuer_key character varying(64) NOT NULL,
+ issuer_name character varying(64) NOT NULL,
+ issuer_certificate_pem text NOT NULL,
+ issuer_subject character varying(1024) NOT NULL,
+ crl_number numeric(50,0) NOT NULL,
+ this_update timestamp with time zone NOT NULL,
+ next_update timestamp with time zone NOT NULL,
+ entry_count integer NOT NULL,
+ crl_sha256 character varying(64) NOT NULL,
+ source character varying(16) NOT NULL
+);
+CREATE TABLE "device-management".device_revoked_certificates (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ kind character varying(16) NOT NULL,
+ revocation_list_id bigint,
+ fingerprint character varying(64),
+ issuer_key character varying(64),
+ issuer_name character varying(64),
+ serial character varying(64),
+ reason character varying(32) NOT NULL,
+ revoked_at timestamp with time zone NOT NULL,
+ created_at timestamp with time zone,
+ created_by character varying(255),
+ CONSTRAINT ck_device_revoked_certificates_kind CHECK (((((kind)::text = 'MANUAL'::text) AND (fingerprint IS NOT NULL) AND (serial IS NULL) AND (revocation_list_id IS NULL)) OR (((kind)::text = 'CRL'::text) AND (fingerprint IS NULL) AND (issuer_key IS NOT NULL) AND (issuer_name IS NOT NULL) AND (serial IS NOT NULL) AND (revocation_list_id IS NOT NULL))))
+);
 CREATE TABLE "device-management".device_trust_anchors (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -907,7 +1017,10 @@ CREATE TABLE "device-management".device_trust_anchors (
  issuer character varying(1024) NOT NULL,
  not_before timestamp with time zone NOT NULL,
  not_after timestamp with time zone NOT NULL,
- enabled boolean NOT NULL
+ enabled boolean NOT NULL,
+ revocation_mode character varying(32),
+ revocation_stale_grace bigint,
+ revocation_rows bigint
 );
 CREATE TABLE "device-management".device_types (
  id bigint NOT NULL,
@@ -1186,7 +1299,8 @@ CREATE TABLE "device-management".pending_session_kicks (
  device_token character varying(255) NOT NULL,
  origin bigint NOT NULL,
  generation bigint NOT NULL,
- requested_at timestamp with time zone NOT NULL
+ requested_at timestamp with time zone NOT NULL,
+ not_before timestamp with time zone
 );
 CREATE TABLE "device-management".provisioning_profiles (
  id bigint NOT NULL,
@@ -1239,6 +1353,8 @@ CREATE UNIQUE INDEX uix_device_aliases_tenant_scheme_value ON "device-management
 CREATE UNIQUE INDEX uix_device_credentials_tenant_token ON "device-management".device_credentials USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_profile_versions_profile_version ON "device-management".device_profile_versions USING btree (device_profile_id, version);
 CREATE UNIQUE INDEX uix_device_profiles_tenant_token ON "device-management".device_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_device_revocation_issuers_identity ON "device-management".device_revocation_issuers USING btree (tenant_id, trust_anchor_id, issuer_key, issuer_name);
+CREATE UNIQUE INDEX uix_device_revocation_lists_identity ON "device-management".device_revocation_lists USING btree (tenant_id, trust_anchor_id, issuer_key, issuer_name) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_trust_anchors_tenant_fingerprint ON "device-management".device_trust_anchors USING btree (tenant_id, fingerprint_sha256) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_trust_anchors_tenant_token ON "device-management".device_trust_anchors USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_device_types_tenant_token ON "device-management".device_types USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

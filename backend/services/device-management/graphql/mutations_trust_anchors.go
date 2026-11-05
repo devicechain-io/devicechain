@@ -46,3 +46,34 @@ func (r *SchemaResolver) DeleteDeviceTrustAnchor(ctx context.Context, args struc
 	}
 	return r.GetApi(ctx).DeleteDeviceTrustAnchor(ctx, args.Token)
 }
+
+// Revoke a certificate under a trust anchor.
+func (r *SchemaResolver) RevokeDeviceCertificate(ctx context.Context, args struct {
+	AnchorToken       string
+	CertificatePem    *string
+	FingerprintSha256 *string
+	Reason            *string
+}) (*DeviceRevokedCertificateResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	revoked, err := r.GetApi(ctx).RevokeDeviceCertificate(ctx, &model.DeviceCertificateRevokeRequest{
+		AnchorToken: args.AnchorToken, CertificatePem: args.CertificatePem,
+		FingerprintSha256: args.FingerprintSha256, Reason: args.Reason,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceRevokedCertificateResolver{M: *revoked, S: r, C: ctx}, nil
+}
+
+// Remove a manual revocation.
+func (r *SchemaResolver) UnrevokeDeviceCertificate(ctx context.Context, args struct {
+	AnchorToken       string
+	FingerprintSha256 string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+	return r.GetApi(ctx).UnrevokeDeviceCertificate(ctx, args.AnchorToken, args.FingerprintSha256)
+}

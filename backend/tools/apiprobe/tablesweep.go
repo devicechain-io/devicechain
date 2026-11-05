@@ -172,6 +172,18 @@ var tableSweepExemptions = map[string]string{
 	"event-processing.device_attribute_deletions": "the tombstone side of the attribute projection. " +
 		"It records a REMOVAL, and the seed sets an attribute and never unsets it — an entry here " +
 		"would mean the drill had deleted data it just wrote.",
+	"device-management.device_revoked_certificates": "a revoked certificate, from a manual revocation or a stored " +
+		"CA revocation list. The drill's seed does not revoke anything yet: a revocation changes what the seeded " +
+		"devices may do, so seeding one belongs with the slice that gives the drill a certificate device to " +
+		"revoke and to prove the refusal on. Correctly empty until then; the purge coverage gate proves the " +
+		"table's tenant column.",
+	"device-management.device_revocation_lists": "the current CA revocation list per issuer under a trust " +
+		"anchor, written by the list upload that a later slice adds. Nothing writes it yet.",
+	"device-management.device_revocation_issuers": "one row per issuer a list was ever stored for, carrying " +
+		"its CRL-number high-water mark. Written with the first list upload (a later slice); nothing writes it yet.",
+	"device-management.device_credential_chain_links": "the path a certificate credential was created " +
+		"through, written alongside the credential. The drill's seed pins no X.509 credential (it registers " +
+		"no CA), so there is no credential to hang a link off.",
 	"device-management.device_configuration_states": "the configuration state a device last REPORTED or synced. " +
 		"The only writer is device-management's consumer of the device-reports channel, which acts on " +
 		"messages published by a device under its own broker grant; no GraphQL mutation reaches the " +
