@@ -65,6 +65,10 @@ var (
 	// BackfillWorker is the calculated-metric backfill worker, nil when it is switched off.
 	BackfillMetrics *backfill.Metrics
 	BackfillWorker  *backfill.Worker
+	// RollupTail keeps the measurement rollup's history older than its refresh policy's reach
+	// correct, for readings the platform accepted dated that far back. It runs whether or not the
+	// calculated-metric backfill does.
+	RollupTail *backfill.TailSweeper
 )
 
 func main() {
@@ -228,6 +232,17 @@ func newBackfillRuntime(c *config.EventManagementConfiguration) (rt *model.Backf
 	}, why
 }
 
+// wireRollupTail builds the sweep that refreshes the measurement rollup over the history its
+// aggregate policy does not reach (see backfill.TailSweeper). It is inert until a chunk older
+// than the policy's reach has an invalidation: a pass is one lock attempt and one catalog read.
+func wireRollupTail(ctx context.Context) error {
+	RollupTail = backfill.NewTailSweeper(Microservice, RdbManager, backfill.Config{
+		ChunkInterval: time.Duration(Configuration.Lifecycle.ChunkIntervalHours) * time.Hour,
+		RetentionDays: Configuration.Lifecycle.RetentionDays,
+	}, BackfillMetrics, core.NewNoOpLifecycleCallbacks())
+	return RollupTail.Initialize(ctx)
+}
+
 // wireBackfill builds the calculated-metric backfill worker (ADR-082), unless it is off: the
 // operator switched it off, or left it unset on a pool with no room for it
 // (CalculatedBackfillConfiguration.Runs). It is inert until a job exists: a pass is one lock attempt and one query.
@@ -384,7 +399,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err := wireAnchorSweep(ctx); err != nil {
 				return err
 			}
-			return wireBackfill(ctx)
+			if err := wireBackfill(ctx); err != nil {
+				return err
+			}
+			return wireRollupTail(ctx)
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
@@ -455,6 +473,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// Start the rollup tail sweep.
+	if RollupTail != nil {
+		if err := RollupTail.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -464,6 +489,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// a pass in flight rolls its batch back and stops at the next statement.
 	if BackfillWorker != nil {
 		if err := BackfillWorker.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
+	if RollupTail != nil {
+		if err := RollupTail.Stop(ctx); err != nil {
 			return err
 		}
 	}

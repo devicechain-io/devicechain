@@ -143,7 +143,7 @@ query {
 
 :::caution 深度回填的读数不会出现在 `bucketedMeasurements` 中
 **现在写入，但按设备控制的 `occurredTime` 标为 30 天前**的读数，
-会由 `measurementEvents` 返回，却不由 `bucketedMeasurements` 返回，也没有错误提示。
+会由 `measurementEvents` 立即返回，而 `bucketedMeasurements` 要等到下一次每小时清扫后才会显示。
 这只影响缓冲超过一个月的设备，或时钟存在如此大偏差的设备。
 参见[回填读数和汇总](#backfilled-readings-and-the-rollup)。
 :::
@@ -151,13 +151,9 @@ query {
 ### 回填读数和汇总 {#backfilled-readings-and-the-rollup}
 
 `intervalSeconds` 为 60 的整倍数且没有锚点过滤的分桶查询，使用预聚合汇总，而非原始读数。
-汇总会更新**最近 30 天的窗口**。更早的数据只在数据库创建时物化过一次。
+汇总每分钟会更新**最近 30 天的窗口**。更早的数据在数据库创建时物化过一次，此后由每小时运行一次的清扫再次刷新：每次处理一天的历史，范围从平台保留（或接受）的最早读数到该窗口。
 
-现在写入但标记为 30 天前的读数落在两者之间：对刷新窗口而言太旧，对一次性处理而言太晚。
-原始历史完整，所以 `measurementEvents` 会返回它；`bucketedMeasurements` 则不会显示。
-
-这个边界看的是读数被标记为多么**久远**的过去，而非数据本身有多旧。
-回填一小时、一天或三周的读数会在一分钟内被纳入，没有问题。
+现在写入但标记为 30 天前的读数会立即存储，因此 `measurementEvents` 马上返回它，而 `bucketedMeasurements` 要等到下一次清扫（大约一小时内）才会显示（若某次清扫发现汇总正忙，会把当天留给下一次）。标记在最近 30 天内的读数在一分钟内被纳入。标记为一年以前的读数在到达时就会被拒绝。
 小于一分钟的间隔，以及按锚点限定的查询使用原始读数，不受影响。
 
 ## 探索 Schema {#exploring-the-schema}

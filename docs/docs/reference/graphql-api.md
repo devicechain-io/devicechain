@@ -196,25 +196,24 @@ query {
 
 :::caution Deeply backfilled readings are missing from `bucketedMeasurements`
 A reading **written now but stamped more than 30 days in the past** (by its own `occurredTime`,
-which a device controls) is returned by `measurementEvents` but not by `bucketedMeasurements`, and no
-error says so. This only reaches a device that buffered for over a month, or one whose clock is wrong
-by that much. See [Backfilled readings and the rollup](#backfilled-readings-and-the-rollup).
+which a device controls) is returned by `measurementEvents` at once but appears in
+`bucketedMeasurements` only after the next hourly sweep. This only reaches a device that buffered for
+over a month, or one whose clock is wrong by that much. See [Backfilled readings and the rollup](#backfilled-readings-and-the-rollup).
 :::
 
 ### Backfilled readings and the rollup {#backfilled-readings-and-the-rollup}
 
 A bucketed read whose `intervalSeconds` is a whole multiple of 60 and which carries no anchor filter
 is served from a pre-aggregated rollup rather than from the raw readings. The rollup keeps itself
-current over a **trailing 30-day window**. Everything older than that was materialized once, when the
-database was created.
+current over a **trailing 30-day window**, every minute. Everything older than that was materialized
+once, when the database was created, and is refreshed again by a sweep that runs hourly, one day of
+history at a time, from the oldest reading the platform keeps (or accepts) up to that window.
 
-A reading written now but stamped more than 30 days back falls between the two: too old for the
-refresh window, too late for the one-time pass. The raw history is complete, so `measurementEvents`
-returns it; `bucketedMeasurements` does not show it.
-
-The boundary is how far **back** the reading is stamped, not how old the data is. A reading
-backfilled by an hour, a day, or three weeks is picked up within a minute and is fine. Sub-minute
-intervals and anchor-scoped reads are served from the raw readings and are unaffected.
+A reading written now but stamped more than 30 days back is stored at once, so `measurementEvents`
+returns it, but `bucketedMeasurements` shows it only after the next sweep, within about an hour (a
+sweep that finds the rollup busy leaves that day for the next). A reading stamped within 30 days is
+picked up within a minute. A reading stamped more than a year back is refused when it arrives.
+Sub-minute intervals and anchor-scoped reads are served from the raw readings and are unaffected.
 
 ## Exploring the schema {#exploring-the-schema}
 
