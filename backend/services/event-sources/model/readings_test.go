@@ -21,6 +21,9 @@ func TestReadingCountKnowsEveryPayloadKind(t *testing.T) {
 		{&UnresolvedLocationsPayload{Entries: make([]UnresolvedLocationEntry, 2)}, "location", 2},
 		{&UnresolvedAlertsPayload{Entries: make([]UnresolvedAlertEntry, 2)}, "alert", 2},
 		{&UnresolvedNewRelationshipPayload{}, "relationship", 1},
+		// What the route charged: the decoder's output is produced later, so this is the count the
+		// tenant was admitted for. It is never the size of the frame or of the JSON it carries.
+		{&UnresolvedIntegrationUplinkPayload{MaxReadings: 11, Frame: make([]byte, 4096)}, "integration-uplink", 11},
 	} {
 		kind, n, ok := ReadingCount(c.payload)
 		if !ok || kind != c.kind || n != c.count {
@@ -47,5 +50,17 @@ func TestAnUnmeteredPayloadKindIsRefusedButNotAsOversized(t *testing.T) {
 	}
 	if err := CheckReadingCount(&UnresolvedNewRelationshipPayload{}); err != nil {
 		t.Errorf("a relationship is one reading and must pass: %v", err)
+	}
+}
+
+// An integration uplink is metered by its charged count like any other kind, so a charge over the
+// per-event limit is refused whole and a charge within it passes.
+func TestAnIntegrationUplinkIsHeldToThePerEventLimit(t *testing.T) {
+	if err := CheckReadingCount(&UnresolvedIntegrationUplinkPayload{MaxReadings: 64}); err != nil {
+		t.Errorf("a charge within the limit must pass: %v", err)
+	}
+	err := CheckReadingCount(&UnresolvedIntegrationUplinkPayload{MaxReadings: 1 << 20})
+	if !errors.Is(err, ErrTooManyReadings) {
+		t.Errorf("a charge over the limit must be refused as oversized, got %v", err)
 	}
 }

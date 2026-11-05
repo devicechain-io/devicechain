@@ -43,6 +43,11 @@ func ReadingCount(payload interface{}) (kind string, count int, ok bool) {
 		return "location", len(p.Entries), true
 	case *UnresolvedAlertsPayload:
 		return "alert", len(p.Entries), true
+	case *UnresolvedIntegrationUplinkPayload:
+		// What the route charged for this uplink. The decoder produces the readings later, in
+		// the resolver, and its output is not countable here: the charge is the count the tenant
+		// was admitted for.
+		return "integration-uplink", int(p.MaxReadings), true
 	case *UnresolvedNewRelationshipPayload:
 		// A relationship carries no entries: it is one indivisible unit of work.
 		return "relationship", 1, true

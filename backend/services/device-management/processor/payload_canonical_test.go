@@ -129,6 +129,10 @@ var notResolvedAsPayload = map[eventtype.EventType]string{
 	eventtype.NewRelationship:   "resolved on its own path, not through ResolveEventPayload",
 	eventtype.CommandInvocation: "not routed to a payload resolver",
 	eventtype.CommandResponse:   "not routed to a payload resolver",
+	// Resolved by resolveIntegrationEvent into an ordinary Measurement; it never reaches
+	// ResolveEventPayload as itself. The slice that makes device-management decode it replaces
+	// this exclusion with a fixture.
+	eventtype.IntegrationUplink: "decoded into a Measurement by the integration resolver, not routed to a payload resolver",
 }
 
 // declaredEventTypes walks the EventType enum itself, using the fact that stringer returns
