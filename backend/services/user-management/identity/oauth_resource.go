@@ -258,6 +258,14 @@ func (p *resourcePolicy) checkRequested(resources, bound []string) ResourceCheck
 // trustworthy log fields, and the limiter is keyed on (grant, class, client_id), never on
 // the resource, which the sender chooses.
 func (p *resourcePolicy) record(g OAuthGrant, clientID, tenant string, rc ResourceCheck) {
+	p.recordAs(g, clientID, tenant, true, rc)
+}
+
+// recordAs is record with the sender's authentication stated. The authorization endpoint's
+// entry request is PRE-LOGIN by nature: the client_id and redirect URI are public values, so
+// anyone who knows them can send it. It is therefore a request-volume signal, and its warning
+// says so (sender_authenticated=false) instead of presenting the client_id as established.
+func (p *resourcePolicy) recordAs(g OAuthGrant, clientID, tenant string, authenticated bool, rc ResourceCheck) {
 	if !rc.Checked {
 		return
 	}
@@ -275,6 +283,7 @@ func (p *resourcePolicy) record(g OAuthGrant, clientID, tenant string, rc Resour
 		Str("verdict", string(rc.Verdict)).
 		Str("client_id", clientID).
 		Str("tenant", tenant).
+		Bool("sender_authenticated", authenticated).
 		Str("resource", auth.QuoteLogValue(rc.Resource)).
 		Int("suppressed", suppressed).
 		Msg("OAuth resource is not one this instance serves")

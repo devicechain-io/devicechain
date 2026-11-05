@@ -266,7 +266,11 @@ type resourceCase struct {
 var resourceCases = []resourceCase{
 	{"absent", nil, "none", true, ""},
 	{"an empty value is absent", []string{""}, "none", true, ""},
-	{"an empty value then a listed one", []string{"", rMCP}, "none", true, ""},
+	// The ambiguous shape: Resource keeps the (empty) first value, so the hidden field would drop
+	// the second and the token would be audience-less while the request asked for one. Not absent.
+	{"an empty value then a listed one", []string{"", rMCP}, "malformed", false, ""},
+	{"an empty value then a foreign one", []string{"", rEvil}, "malformed", false, ""},
+	{"an empty value, a listed one and another", []string{"", rMCP, rArea}, "multiple", false, ""},
 	{"a listed one then an empty value", []string{rMCP, ""}, "mcp", true, rMCP},
 	{"mcp", []string{rMCP}, "mcp", true, rMCP},
 	{"an area", []string{rArea}, "area", true, rArea},
@@ -869,11 +873,16 @@ func TestClientCredentialsEnforcesTheAllowlist(t *testing.T) {
 	e := newCCAS(t, rCfg("enforce"))
 	id, secret := e.account(t, "acme", "ci", nil, "device:read")
 
-	// Negative control: an unlisted resource is refused before the account is looked up, and an
-	// unauthenticated refusal counts nothing.
+	// Negative control: an unlisted resource is refused for an AUTHENTICATED sender, and counted.
 	rec := e.grant(t, id, secret, "scope", auth.ScopeReadOnly, "resource", rEvil)
 	errorOf(t, rec, http.StatusBadRequest, "invalid_target")
-	require.Empty(t, e.counts(t))
+	require.Equal(t, map[string]float64{"client_credentials/unlisted/rejected": 1}, e.counts(t))
+
+	// An unauthenticated sender asking for the same gets the one invalid_client every failure
+	// gets, and moves nothing.
+	bad := e.grant(t, id, secret+"x", "scope", auth.ScopeReadOnly, "resource", rEvil)
+	errorOf(t, bad, http.StatusUnauthorized, "invalid_client")
+	require.Equal(t, map[string]float64{"client_credentials/unlisted/rejected": 1}, e.counts(t))
 
 	// Counterweights: listed and absent pass, with the audience unchanged from today's.
 	for name, c := range map[string]struct {
@@ -930,12 +939,8 @@ func TestClientCredentialsPreAuthCountsNothing(t *testing.T) {
 
 			// An unlisted resource with no scope, wrong secret.
 			rec := e.grant(t, id, secret+"x", "resource", rEvil)
-			if mode == "enforce" {
-				// The existing pre-auth refusal: the allowlist is public, so it answers before the lookup.
-				require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-			} else {
-				require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
-			}
+			// The same answer in both modes: authentication fails before the allowlist is acted on.
+			require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
 			require.Empty(t, e.counts(t))
 			require.Empty(t, e.unscoped(t))
 
@@ -1026,6 +1031,18 @@ func TestTheWarningIsRateLimitedPerClient(t *testing.T) {
 	p.record(GrantAuthorizationCode, "client-a", "acme", rc)
 	require.Equal(t, 2, lineCount(logs.String(), `"client_id":"client-a"`))
 	require.Contains(t, logs.String(), `"suppressed":49`, "the line reports what it held back")
+}
+
+// The authorization endpoint's entry request is pre-login: its warning says the sender is not
+// authenticated, where the token endpoint's (client secret checked) says it is.
+func TestTheEntryWarningSaysTheSenderIsNotAuthenticated(t *testing.T) {
+	e := newASEnv(t, "observe")
+	logs := logSink.Capture(t)
+	require.Equal(t, http.StatusOK, e.authzGet(e.query(rEvil)).Code)
+	out := logs.String()
+	require.Contains(t, out, warnResource, "the sink is detached: an empty capture proves nothing")
+	require.Contains(t, out, `"sender_authenticated":false`)
+	require.Contains(t, out, `"client_id":"`+sessClient+`"`)
 }
 
 // Another grant or class for the same client is its own key, and an acceptance never warns.

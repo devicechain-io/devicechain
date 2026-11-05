@@ -149,6 +149,16 @@ func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams, rp *re
 // membership: a caller that reordered the steps cannot get a code for a resource the request
 // check would have refused.
 func checkAuthorizeResource(p AuthorizeParams, rp *resourcePolicy) ResourceCheck {
+	if p.Resource == "" && p.ResourceCount == 1 {
+		// `resource=&resource=X`: Resource keeps the first value only, which is empty, so the
+		// hidden field would drop X and a token would be minted with no audience while the request
+		// plainly asked for one. An ambiguous shape is not "absent": it is judged malformed
+		// (refused in enforce, counted and served as before in observe, where the token is
+		// audience-less exactly as it was).
+		rc := ResourceCheck{Checked: true, Class: auth.ResMalformed, Desc: "an empty resource must not precede another"}
+		rc.Verdict = rp.verdictFor(rc.Class)
+		return rc
+	}
 	return rp.check(p.Resource, p.resourceCount())
 }
 
@@ -166,10 +176,11 @@ func (m *Manager) ValidateAuthorize(client *iam.OAuthClient, p AuthorizeParams) 
 }
 
 // RecordAuthorizeResource counts one authorization request's resource decision. The caller
-// has resolved the client and its redirect URI, so client is a registered one and its id is a
-// trustworthy log field; no tenant is known yet.
+// has resolved the client and its redirect URI, so client is a registered one; the SENDER is not
+// authenticated (the entry request is pre-login and those values are public), so this is a
+// request-volume signal and its warning says sender_authenticated=false. No tenant is known yet.
 func (m *Manager) RecordAuthorizeResource(client *iam.OAuthClient, rc ResourceCheck) {
-	m.resourcePolicy().record(GrantAuthorizationCode, client.ClientId, "", rc)
+	m.resourcePolicy().recordAs(GrantAuthorizationCode, client.ClientId, "", false, rc)
 }
 
 // IssueAuthorizationCode mints a one-time authorization code for an authenticated,
