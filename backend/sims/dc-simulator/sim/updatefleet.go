@@ -40,14 +40,19 @@ func newMqttUpdateFleet(instanceID, tenant, broker string, tlsConfig *tls.Config
 // the capability URL in a download grant names that hostname, which would not resolve here: the
 // download then dials the address the handshake's endpoints name and still presents the hostname.
 // Empty means the URL's own host is dialled.
-func downloadDialAddr(rt *Runtime) (string, error) {
-	if rt.HostHeader == "" {
-		return "", nil
-	}
+//
+// Without a host header the capability URL still names the instance on its default port, which is
+// wrong when the sim reached the instance on a remapped one (--server localhost:9180): the
+// second result redirects a connection to the endpoint's host, whatever port the URL names, to
+// the endpoint's own address.
+func downloadDialAddr(rt *Runtime) (dial, redirect string, err error) {
 	raw := rt.Endpoints.UserGraphQL
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
-		return "", fmt.Errorf("the handshake carries a host header but its endpoint %q names no address to dial for downloads", raw)
+	u, perr := url.Parse(raw)
+	if perr != nil || u.Hostname() == "" {
+		if rt.HostHeader != "" {
+			return "", "", fmt.Errorf("the handshake carries a host header but its endpoint %q names no address to dial for downloads", raw)
+		}
+		return "", "", nil
 	}
 	port := u.Port()
 	if port == "" {
@@ -56,7 +61,11 @@ func downloadDialAddr(rt *Runtime) (string, error) {
 			port = "443"
 		}
 	}
-	return net.JoinHostPort(u.Hostname(), port), nil
+	addr := net.JoinHostPort(u.Hostname(), port)
+	if rt.HostHeader != "" {
+		return addr, "", nil
+	}
+	return "", addr, nil
 }
 
 // attachUpdateFleet gives every provisioned device an update client when the operator asked for
@@ -95,11 +104,11 @@ func (l *Lifecycle) attachUpdateFleet(ctx context.Context) error {
 	}
 
 	o := *opts
-	addr, err := downloadDialAddr(l.rt)
+	dial, redirect, err := downloadDialAddr(l.rt)
 	if err != nil {
 		return err
 	}
-	o.DownloadDialAddr, o.DownloadInsecure = addr, l.rt.MqttTLSInsecure
+	o.DownloadDialAddr, o.DownloadRedirectAddr, o.DownloadInsecure = dial, redirect, l.rt.MqttTLSInsecure
 
 	factory := l.rt.NewUpdateFleet
 	if factory == nil {

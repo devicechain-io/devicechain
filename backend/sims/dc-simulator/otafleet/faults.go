@@ -131,7 +131,9 @@ func (t *faultTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	switch t.mode {
 	case BadHash:
-		if start != 0 {
+		// The first window this device fetches, wherever it starts: a device resumed from a
+		// persisted state dir picks up at a nonzero offset and must still be served bad bytes.
+		if t.corrupted.Load() > 0 {
 			return resp, nil
 		}
 		body, err := readAll(resp)
@@ -212,12 +214,25 @@ func parseContentRange(h string) (start, end, total int64, ok bool) {
 // reached through (a port-forward, a load balancer) while the capability URL names the instance
 // host, which stays the TLS server name and the Host header. insecure skips verification of the
 // instance's certificate, the same trust decision the handshake records for the MQTT gateway.
-func DownloadTransport(dialAddr string, insecure bool) *http.Transport {
+//
+// redirectAddr, when set (and dialAddr is not), redirects a connection to the same HOST as that
+// address but another port: a capability URL names the instance on its default port while the sim
+// reached the instance on a remapped one (--server localhost:9180).
+func DownloadTransport(dialAddr, redirectAddr string, insecure bool) *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	if dialAddr != "" {
-		d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	switch {
+	case dialAddr != "":
 		t.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return d.DialContext(ctx, network, dialAddr)
+		}
+	case redirectAddr != "":
+		rh, _, _ := net.SplitHostPort(redirectAddr)
+		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if h, _, err := net.SplitHostPort(addr); err == nil && strings.EqualFold(h, rh) {
+				addr = redirectAddr
+			}
+			return d.DialContext(ctx, network, addr)
 		}
 	}
 	if insecure {

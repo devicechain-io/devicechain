@@ -144,24 +144,32 @@ func TestUpdateFleetFailsLoudly(t *testing.T) {
 }
 
 // A sim reached through an address downloads through that address, presenting the host the
-// capability URL names; one reached by its hostname dials the URL as it is.
+// capability URL names; one reached by a hostname on a remapped port redirects that host's
+// connections to the endpoint's own port.
 func TestDownloadDialAddr(t *testing.T) {
 	rt := &Runtime{}
-	if a, err := downloadDialAddr(rt); err != nil || a != "" {
-		t.Errorf("no host header: %q, %v", a, err)
+	if d, r, err := downloadDialAddr(rt); err != nil || d != "" || r != "" {
+		t.Errorf("no endpoint: %q %q, %v", d, r, err)
 	}
 	rt = &Runtime{HostHeader: "x.devicechain.test"}
 	rt.Endpoints.UserGraphQL = "https://127.0.0.1:8443/api/user-management/graphql"
-	if a, err := downloadDialAddr(rt); err != nil || a != "127.0.0.1:8443" {
-		t.Errorf("port-forward: %q, %v", a, err)
+	if d, r, err := downloadDialAddr(rt); err != nil || d != "127.0.0.1:8443" || r != "" {
+		t.Errorf("port-forward: %q %q, %v", d, r, err)
 	}
 	rt.Endpoints.UserGraphQL = "https://10.0.0.5/graphql"
-	if a, _ := downloadDialAddr(rt); a != "10.0.0.5:443" {
-		t.Errorf("default https port: %q", a)
+	if d, _, _ := downloadDialAddr(rt); d != "10.0.0.5:443" {
+		t.Errorf("default https port: %q", d)
 	}
 	rt.Endpoints.UserGraphQL = ""
-	if _, err := downloadDialAddr(rt); err == nil {
+	if _, _, err := downloadDialAddr(rt); err == nil {
 		t.Error("a host header with no address to dial must be an error")
+	}
+	// --server localhost:9180, no host header: the capability URL says http://localhost/..., the
+	// sim reaches the instance on 9180.
+	rt = &Runtime{}
+	rt.Endpoints.UserGraphQL = "http://localhost:9180/api/user-management/graphql"
+	if d, r, err := downloadDialAddr(rt); err != nil || d != "" || r != "localhost:9180" {
+		t.Errorf("remapped port: %q %q, %v", d, r, err)
 	}
 }
 

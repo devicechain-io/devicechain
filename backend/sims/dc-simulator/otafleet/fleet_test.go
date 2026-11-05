@@ -539,3 +539,45 @@ func TestCancelMidDownloadIsHonoured(t *testing.T) {
 	p.await("dev-0", ota.StateCancelled)
 	assert.Equal(t, "1.0.0", p.version(f, "dev-0"))
 }
+
+// Close racing Attach (run under -race) leaves nothing behind: no panic, no WaitGroup misuse, and
+// no live session.
+func TestCloseDuringAttach(t *testing.T) {
+	for range 20 {
+		p := newPlatform(t)
+		f, err := otafleet.New(instance, tenant, p.broker.URL(), nil, otafleet.Options{InitialVersion: "1.0.0", AllowUnsigned: true,
+			Faults: otafleet.Faults{Offline: 1, OfflineFor: time.Millisecond}})
+		require.NoError(t, err)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for i := range 4 {
+				_ = f.Attach(context.Background(), fmt.Sprintf("dev-%d", i), "c", i)
+			}
+		}()
+		f.Close()
+		<-done
+		f.Close()
+	}
+}
+
+// An offline device whose first attempts to come online are refused keeps trying, with backoff,
+// until it is on the broker.
+func TestOfflineDeviceRetriesComingOnline(t *testing.T) {
+	p := newPlatform(t)
+	var mu sync.Mutex
+	refusals := 0
+	p.broker.Authorize = func(string, string, string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if refusals < 2 {
+			refusals++
+			return false
+		}
+		return true
+	}
+	f := p.fleet(otafleet.Options{AllowUnsigned: true, Faults: otafleet.Faults{Offline: 1, OfflineFor: 50 * time.Millisecond}}, 1)
+	require.Eventually(t, func() bool { return p.broker.Subscribers(p.desired("dev-0")) == 1 }, 15*time.Second, 50*time.Millisecond)
+	d, _ := f.Device("dev-0")
+	assert.True(t, d.Connected)
+}

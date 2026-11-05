@@ -757,13 +757,13 @@ openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ota-signer.p
 openssl pkey -in ota-signer.pem -pubout -out ota-signer.pub.pem
 
 dcctl sim create fleet --manifest devicepulse          # your usual create flags
-export DC_SIM_OTA=1 DC_SIM_OTA_TRUSTED_KEY=ota-signer.pub.pem \
+export DC_SIM_OTA=1 DC_SIM_DEVICES=8 DC_SIM_OTA_TRUSTED_KEY=ota-signer.pub.pem \
        DC_SIM_OTA_BAD_HASH=1 DC_SIM_OTA_INTERRUPTED=2 DC_SIM_OTA_OFFLINE=1 \
        DC_SIM_OTA_STEP_DELAY=300ms DC_SIM_OTA_CHUNK=8192
 dcctl sim run fleet
 ```
 
-or directly: `dc-simulator --handshake <handshake.json> --ota --ota-trusted-key ota-signer.pub.pem
+or directly: `dc-simulator --handshake <handshake.json> --devices 8 --ota --ota-trusted-key ota-signer.pub.pem
 --ota-bad-hash 1 --ota-interrupted 2 --ota-offline 1`.
 
 On the platform side (the tenant GraphQL of the update service; `hack/ota-rig.sh` has the same calls
@@ -775,6 +775,21 @@ put the sim's devices in an entity group; `createUpdateRollout(request: {token, 
 groupToken, maxInFlight: 2})` and `startUpdateRollout`. Watch `/status` on the sim and the rollout's
 progress in the console: the healthy devices go `UPDATED`, the bad-hash and offline ones fail or
 time out, the interrupted ones finish after a resume, and `maxInFlight` is never exceeded.
+
+What a live run needs:
+
+- The scenario must have at least as many devices as faults (`devicepulse` has one unless you pass
+  `--devices` / `DC_SIM_DEVICES`); the sim refuses to start otherwise.
+- An instance whose update service has an object store and a `downloadBaseUrl` (the update service
+  reports `downloadsConfigured`); without them there is nowhere to download from.
+- On a kind cluster whose ports are remapped, create the sim with `--server 127.0.0.1:<port>
+  --host-header localhost`. The simulator downloads through the address the sim was created with:
+  with a host header it dials that address and presents the instance host; without one, a capability
+  URL naming the same host on another port is redirected to the address's port.
+- Leave `failureThreshold` out of the rollout (or set it above the number of faulty devices): a
+  bad-hash failure can otherwise pause it, which is correct platform behaviour but not the demo.
+- `--ota-offline-for` is measured from the simulator's bootstrap, not from the rollout's start.
+  Start the rollout first if the offline devices should miss the assignment and catch up on sync.
 
 The tests run the real devices over a real socket against an in-process broker (`internal/fakemqtt`)
 with the real update reducer as the platform, including a group rollout with `maxInFlight`, each

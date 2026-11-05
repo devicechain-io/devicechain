@@ -81,7 +81,9 @@ type Options struct {
 	// DownloadDialAddr and DownloadInsecure shape the artifact download connection; see
 	// DownloadTransport. Both zero is a plain client.
 	DownloadDialAddr string
-	DownloadInsecure bool
+	// DownloadRedirectAddr redirects a download to the same host on this host:port; see DownloadTransport.
+	DownloadRedirectAddr string
+	DownloadInsecure     bool
 	// Transport, when set, replaces the download transport (tests).
 	Transport http.RoundTripper
 }
@@ -184,7 +186,7 @@ func (f *Fleet) Attach(ctx context.Context, deviceToken, credentialID string, in
 	}
 	base := f.opts.Transport
 	if base == nil {
-		base = DownloadTransport(f.opts.DownloadDialAddr, f.opts.DownloadInsecure)
+		base = DownloadTransport(f.opts.DownloadDialAddr, f.opts.DownloadRedirectAddr, f.opts.DownloadInsecure)
 	}
 	d.faultRT = &faultTransport{next: base, mode: d.mode}
 
@@ -207,17 +209,23 @@ func (f *Fleet) Attach(ctx context.Context, deviceToken, credentialID string, in
 	}
 
 	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return errors.New("otafleet: the fleet is closed")
+	}
 	f.devices[deviceToken] = d
 	f.order = append(f.order, deviceToken)
+	f.wg.Add(1) // under mu while open: Close sets closed under mu before it waits
+	if d.mode == Offline && f.opts.Faults.OfflineFor > 0 {
+		f.wg.Add(1)
+	}
 	f.mu.Unlock()
 
-	f.wg.Add(1)
 	go func() { defer f.wg.Done(); d.run(f.ctx) }()
 
 	if d.mode == Offline {
 		d.setError("offline (injected)")
 		if after := f.opts.Faults.OfflineFor; after > 0 {
-			f.wg.Add(1)
 			go func() {
 				defer f.wg.Done()
 				select {
@@ -225,12 +233,22 @@ func (f *Fleet) Attach(ctx context.Context, deviceToken, credentialID string, in
 				case <-f.ctx.Done():
 					return
 				}
-				if err := d.connect(f.ctx); err != nil {
+				// Retry with backoff until it is on the broker or the fleet closes: one failed
+				// attempt must not leave a device offline for good.
+				for backoff := time.Second; ; backoff = min(backoff*2, 30*time.Second) {
+					err := d.connect(f.ctx)
+					if err == nil {
+						d.setError("")
+						return
+					}
 					d.setError("coming online: " + err.Error())
-					log.Warn().Err(err).Str("device", deviceToken).Msg("otafleet: offline device could not come online")
-					return
+					log.Warn().Err(err).Str("device", deviceToken).Msg("otafleet: offline device could not come online; retrying")
+					select {
+					case <-time.After(backoff):
+					case <-f.ctx.Done():
+						return
+					}
 				}
-				d.setError("")
 			}()
 		}
 		return nil
@@ -353,6 +371,16 @@ func (d *device) connect(ctx context.Context) error {
 		return err
 	}
 	tok := c.Connect()
+	defer func() {
+		// Close may have run between the registration above and the connect completing; it
+		// disconnected a client that was not yet connected, so tear this one down here.
+		d.mu.Lock()
+		closed := d.closed
+		d.mu.Unlock()
+		if closed {
+			c.Disconnect(0)
+		}
+	}()
 	if !tok.WaitTimeout(connectTimeout) {
 		return fail(fmt.Errorf("device %q: MQTT connect to %s timed out", d.token, f.broker))
 	}
