@@ -62,9 +62,10 @@ there is no separate broker to run. Devices outside the cluster reach it over TL
 operator has switched that on; see [Connecting devices from outside the cluster](../deployment/connecting-from-outside.md).
 
 - **Subscribe ◐** — the device publishes to its own events topic, and the broker captures the
-  message durably before any platform code sees it. Authentication has two independent layers:
-  the connection is authenticated at the broker and bound to that one device's subjects, and the
-  event carries a credential that is checked again in the pipeline.
+  message durably before any platform code sees it. Authentication happens at the broker:
+  the connection is authenticated and bound to that one device's subjects, and the pipeline checks
+  that the event's device is the one the topic names. The event carries no credential of its own,
+  and one that includes it is refused.
 
   There is one hole, and it is why this is not `●`. A message that arrives while the tenant is
   over its **ingest ceiling, counted in readings,** is acknowledged to the broker and dropped. The
@@ -151,8 +152,9 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   transport name for a device that arrived over HTTP (the device's recorded source is the id the
   operator gave the event source), so the gate that recognises an undeliverable transport cannot
   recognise this one. The command is accepted, published where no device is subscribed to
-  receive it, marked `SENT`, and ends as `TIMEOUT`. Sparkplug is the only row on this page where
-  a `○` in this column produces a prompt `FAILED` instead (Sparkplug does so when its commands are not enabled).
+  receive it, marked `SENT`, and ends as `TIMEOUT`. Sparkplug (when its commands are not enabled) and
+  [inbound integrations](../guides/inbound-integrations.md#commands) are the only rows on this page where
+  a `○` in this column produces a prompt `FAILED` instead.
 - The ingest listener terminates plain HTTP and has no transport authentication of its own;
   device credentials ride in the event body. Where you need TLS, it comes from whatever fronts the
   service.

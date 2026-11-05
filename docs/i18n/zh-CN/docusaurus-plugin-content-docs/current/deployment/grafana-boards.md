@@ -185,7 +185,7 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 四个积压面板都使用[代理回退](#backlog-panels)。
 
-支撑它的告警：`ConnectorDispatchRateLimited`、`ReactConnectorEgressShedding` 和 `ReactShedLettersOverBudget`。通知和软件更新分组没有专属告警，请在这个仪表盘上查看。
+支撑它的告警：`ConnectorDispatchRateLimited`、`ReactConnectorEgressShedding` 和 `ReactShedLettersOverBudget`。通知分组没有专属告警，请在这个仪表盘上查看。软件更新分组有四条：`UpdateDownloadsNotConfigured`、`UpdateReportsMostlyRefused`、`UpdateRolloutStepsFailing` 和 `UpdateAttemptsGoingUnknown`。
 
 ## Platform {#platform-board}
 

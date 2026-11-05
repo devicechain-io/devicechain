@@ -962,7 +962,7 @@ Deployment 转发只到**一个** Pod。多副本时按名称选择目标：`kub
 
 ### 不提供什么，以及原因 {#what-it-does-not-serve-and-why}
 
-- **`block` 和 `mutex` 返回 404。** 服务未启用采样，总是空会被误解为无争用，实际是未测量。
+- **除非启用采样，`block` 和 `mutex` 返回 404。** 采样默认关闭，总是空会被误解为无争用，实际是未测量。进行性能分析时，请在 `profiler.enabled` 之外设置正数的 `functionalAreas.<area>.profiler.blockRate` 或 `.mutexFraction`，它们随即可以获取。
 - **拒绝带时间窗口的堆或分配分析（`?seconds=`）。** 获取两次快照，用 `go tool pprof -base first.pb.gz second.pb.gz` 比较。
 - **不提供 `cmdline` 和 `symbol`。** 分析自身包含符号。
 - **同时最多一个 CPU 分析和一个追踪。** 第二个同类请求返回 409，直到第一个结束。

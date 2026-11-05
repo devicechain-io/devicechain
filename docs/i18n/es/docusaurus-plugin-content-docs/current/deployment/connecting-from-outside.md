@@ -73,7 +73,7 @@ En EKS, un Service `LoadBalancer` obtiene un balanceador Classic salvo que se an
 
 ### Qué hace una actualización {#enable-effects}
 
-El ajuste se registra en la instancia y lo conserva cada `dcctl upgrade` posterior, así que das las opciones una sola vez. El nombre de host se añade al certificado del bróker. El bróker adopta en caliente un certificado que solo ha ganado el nombre de host, sin reiniciarse y sin desconectar a los dispositivos conectados; el certificado se vuelve a emitir bajo la misma autoridad, así que no hay nada que volver a confiar. (Un cambio que además altere las rutas del bróker o su autoridad sigue reiniciando el bróker, y un reinicio del bróker es, como cualquier reinicio, una ventana en la que se pueden perder mensajes ya confirmados salvo que el [MQTT fail-closed](../reference/transport-matrix.md#mqtt--the-platform-broker) esté activado.) Si el certificado no se puede volver a emitir, porque la instancia no conserva la autoridad que lo firmó, `dcctl` se detiene antes de cambiar nada y lo indica.
+El ajuste se registra en la instancia y lo conserva cada `dcctl upgrade` posterior, así que das las opciones una sola vez. El nombre de host se añade al certificado del bróker. Normalmente el bróker adopta en caliente un certificado que solo ha ganado el nombre de host, sin reiniciarse y sin desconectar a los dispositivos conectados (si los brókers no cambian a él dentro del tiempo límite, o el conjunto de brókers no es aquel para el que se emitió el certificado, `dcctl` reinicia el bróker); el certificado se vuelve a emitir bajo la misma autoridad, así que no hay nada que volver a confiar. (Un cambio que además altere las rutas del bróker o su autoridad sigue reiniciando el bróker, y un reinicio del bróker es, como cualquier reinicio, una ventana en la que se pueden perder mensajes ya confirmados salvo que el [MQTT fail-closed](../reference/transport-matrix.md#mqtt--the-platform-broker) esté activado.) Si el certificado no se puede volver a emitir, porque la instancia no conserva la autoridad que lo firmó, `dcctl` se detiene antes de cambiar nada y lo indica.
 
 Para desactivar la exposición usa `--mqtt-exposure none`. Elimina la ruta o el Service; el certificado conserva el nombre adicional hasta su próxima renovación, lo que es inofensivo.
 
@@ -112,7 +112,7 @@ Un puerto abierto a internet está abierto a cualquiera que se conecte, sea un d
 - Limita el bróker con `--broker-max-connections` en `dcctl bootstrap` o `dcctl upgrade`. Fija el `max_connections` del bróker, contando por igual dispositivos y clientes de la plataforma. Sin él, el bróker conserva el límite propio del servidor, como antes. Defínelo por encima de tu flota, con margen para una tormenta de reconexiones, y por debajo de lo que pueden soportar los pods del bróker; los dispositivos que lo superen se rechazan. Se registra en la instancia y lo conservan las actualizaciones posteriores; `--broker-max-connections=0` vuelve al límite del servidor.
 - Vigila las métricas de conexiones y autenticación del bróker (consulta [Observabilidad](./observability.md)).
 
-Los inicios de sesión propios de la plataforma en el bróker están limitados al protocolo NATS y no pueden usarse por este puerto: una credencial de la plataforma filtrada no puede presentarse por MQTT. Solo el inicio de sesión de event-sources, que ejecuta la fuente MQTT de la plataforma, puede hablar MQTT.
+Los inicios de sesión propios de la plataforma en el bróker están limitados al protocolo NATS y no pueden usarse por este puerto: una credencial de la plataforma filtrada no puede presentarse por MQTT. Solo el inicio de sesión de event-sources, que ejecuta la fuente MQTT de la plataforma, puede hablar MQTT, junto con el inicio de sesión de servicio compartido transitorio en una instancia que aún lo conserva.
 
 ## El certificado en el que deben confiar tus dispositivos {#certificates}
 
@@ -139,19 +139,19 @@ openssl s_client -connect mqtt.acme.example.com:8883 \
   | grep -E 'subject=|Verify return code'
 ```
 
-Deberías ver el nombre de host en el sujeto (o entre los nombres alternativos) y `Verify return code: 0 (ok)`.
+Deberías ver `Verify return code: 0 (ok)`, que con `-verify_hostname` significa además que el nombre de host está entre los nombres del certificado. (El sujeto muestra el nombre interno del bróker, no el nombre de host.)
 
 ```bash
 # 2. Un dispositivo puede conectarse y publicar
 mosquitto_pub --cafile instance-ca.crt \
   -h mqtt.acme.example.com -p 8883 \
-  -i 'devicechain:acme:sensor-001' \
+  -i 'acme:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t 'devicechain/acme/devices/sensor-001/events' \
+  -t 'acme/acme/devices/sensor-001/events' \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-Añade `-d` para ver el `CONNACK` del bróker y el `PUBLISH`. Un dispositivo que se autentica con un certificado añade `--cert` y `--key`, como en [Conectar con un certificado](../guides/device-x509.md).
+El client id es `{instancia}:{inquilino}:{dispositivo}` y el topic empieza por `{instancia}/{inquilino}`; el ejemplo es para una instancia llamada `acme` con un inquilino llamado `acme`. Añade `-d` para ver el `CONNACK` del bróker y el `PUBLISH`. Un dispositivo que se autentica con un certificado añade `--cert` y `--key`, usa el nombre de usuario `acme:@x509` y no envía contraseña, como en [Conectar con un certificado](../guides/device-x509.md).
 
 ## Cuando no funciona {#troubleshooting}
 
