@@ -547,7 +547,8 @@ instance:
       #   unscopedClientCredentials: observe | enforce
       #   externalResources: [https://api.example.com]   (resource servers outside the platform)
       # Under instance.existingSecret the chart does not write the document, so the supplier
-      # writes all five keys, and dcctl checks that mcpResources lists mcp's resourceUrl.
+      # writes the keys they need, and dcctl checks that mcpResources lists mcp's resourceUrl (a warning
+      # while enforcement is observe or unset, a refusal under enforce).
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint
