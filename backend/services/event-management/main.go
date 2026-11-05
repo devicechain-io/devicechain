@@ -65,6 +65,10 @@ var (
 	// BackfillWorker is the calculated-metric backfill worker, nil when it is switched off.
 	BackfillMetrics *backfill.Metrics
 	BackfillWorker  *backfill.Worker
+	// RollupTail keeps the measurement rollup's history older than its refresh policy's reach
+	// correct, for readings the platform accepted dated that far back. It runs whether or not the
+	// calculated-metric backfill does.
+	RollupTail *backfill.TailSweeper
 )
 
 func main() {
@@ -228,6 +232,29 @@ func newBackfillRuntime(c *config.EventManagementConfiguration) (rt *model.Backf
 	}, why
 }
 
+// wireRollupTail builds the sweep that refreshes the measurement rollup over the history its
+// aggregate policy does not reach (see backfill.TailSweeper). It is inert until a chunk older
+// than the policy's reach has an invalidation: a pass is one lock attempt and one catalog read.
+func wireRollupTail(ctx context.Context) error {
+	// A sweep pins one pooled connection for as long as it runs, the same as the backfill worker, so
+	// it needs the same room beside the persistence writers. On a pool without it the worker is
+	// already off; a sweep taking the last connection would starve the reads and the other
+	// maintenance that share it, which is worse than the rollup gap it closes.
+	if need, have := Configuration.Persistence.Writers+config.BackfillPoolConnections+config.PoolHeadroom,
+		rdb.EffectiveMaxOpenConnections(Configuration.TsdbConfiguration); need > have {
+		log.Warn().Int("needed", need).Int("poolSize", have).
+			Msg("Rollup tail sweep is not running: the event store's connection pool has no connection to spare " +
+				"beside the persistence writers. Readings dated more than 30 days back will not appear in " +
+				"rollup-backed bucketed reads. Raise tsdbConfiguration.maxOpenConnections or lower persistence.writers.")
+		return nil
+	}
+	RollupTail = backfill.NewTailSweeper(Microservice, RdbManager, backfill.Config{
+		ChunkInterval: time.Duration(Configuration.Lifecycle.ChunkIntervalHours) * time.Hour,
+		RetentionDays: Configuration.Lifecycle.RetentionDays,
+	}, BackfillMetrics, core.NewNoOpLifecycleCallbacks())
+	return RollupTail.Initialize(ctx)
+}
+
 // wireBackfill builds the calculated-metric backfill worker (ADR-082), unless it is off: the
 // operator switched it off, or left it unset on a pool with no room for it
 // (CalculatedBackfillConfiguration.Runs). It is inert until a job exists: a pass is one lock attempt and one query.
@@ -384,7 +411,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err := wireAnchorSweep(ctx); err != nil {
 				return err
 			}
-			return wireBackfill(ctx)
+			if err := wireBackfill(ctx); err != nil {
+				return err
+			}
+			return wireRollupTail(ctx)
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
@@ -455,6 +485,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// Start the rollup tail sweep.
+	if RollupTail != nil {
+		if err := RollupTail.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -464,6 +501,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// a pass in flight rolls its batch back and stops at the next statement.
 	if BackfillWorker != nil {
 		if err := BackfillWorker.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
+	if RollupTail != nil {
+		if err := RollupTail.Stop(ctx); err != nil {
 			return err
 		}
 	}

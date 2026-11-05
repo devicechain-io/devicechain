@@ -143,8 +143,8 @@
       "translationSha256": "b167cb0de6903ba7162bd9ee99d42432049d66047e33a875dc2b219c5f212425"
     },
     "deployment/observability.md": {
-      "sourceSha256": "d9fde79e6dd87d9707bca15b74b5ae1c7a8960bf30143e914dd37c0c4b50ed60",
-      "translationSha256": "f555f65be7fd929a5b36a83b8fe63eccfe6c7dae2aa4819babd6ab9f8274491b"
+      "sourceSha256": "258b9039bfb974e8cf5ee8e101ff745c5e9f477d6e43a2d47a494be33f925d73",
+      "translationSha256": "1dac486aba516d294f6326dd62c6047695b332ba05d64b3095afb7e408a76e6d"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "39c4e4ed6ea3e8ca8f0f1b2f0782ee5bc73ac88b6fd253ca24134904caccdac4",
@@ -279,8 +279,8 @@
       "translationSha256": "8f537a406cd85ee8e0a0b30317d1b935ce43f501d884af8202cf6f9bc9e550e9"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "a1841d601d8861c8952bbb8fee59c1cc5be30d9330de13c5f7f4370e08f0906c",
-      "translationSha256": "dcc0e20e7dde7103c149510d988f1dfc5f17f895ce0639d0f83b20b532fb3333"
+      "sourceSha256": "f48a97ea382a527031ccc8232b2726c92c141a73fb45211aca2240a03c8ba8bc",
+      "translationSha256": "5f1eeeab54ad0dabf222f74578aeec83e071734c9862092afedb5fcc6cb1c175"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "8aec3c86d55a8224a7c1dfbe466881120197effa64f0a428b17e6ece4299c3ac",

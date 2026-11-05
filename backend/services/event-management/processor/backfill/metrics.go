@@ -23,6 +23,8 @@ type Metrics struct {
 	BatchSeconds     prometheus.Observer
 	RefreshSeconds   prometheus.Observer
 	RefreshConflicts prometheus.Counter
+	// TailSkipped counts rollup tail windows a pass did not refresh, by reason.
+	TailSkipped *prometheus.CounterVec
 }
 
 // NewMetrics builds the instruments exactly once for the service (a second registration
@@ -50,6 +52,11 @@ func NewMetrics(ms *core.Microservice) *Metrics {
 			[]float64{.1, .5, 1, 5, 15, 60, 300, 900}).WithLabelValues(),
 		RefreshConflicts: ms.NewCounter("calc_backfill_rollup_refresh_conflicts_total",
 			"Rollup refreshes that met the aggregate policy job's own refresh (55P03) and were retried."),
+		TailSkipped: ms.NewCounterVec("calc_backfill_rollup_tail_windows_skipped_total",
+			"Chunk windows the rollup tail sweep did not refresh: timeout, conflict (the policy job's lock), error, or backoff (a window that failed recently).", []string{"reason"}),
+	}
+	for _, s := range []string{"timeout", "conflict", "error", "backoff"} {
+		m.TailSkipped.WithLabelValues(s)
 	}
 	for _, s := range []string{"compressed", "retention"} {
 		m.WindowsSkipped.WithLabelValues(s)
