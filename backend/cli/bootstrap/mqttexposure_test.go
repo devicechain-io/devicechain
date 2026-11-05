@@ -470,3 +470,44 @@ func TestChartRefusesUnsafeMQTTExposure(t *testing.T) {
 		}
 	}
 }
+
+// A string where the chart wants a boolean is not "on": "false" is a non-empty string and truthy.
+func TestChartMQTTExposureTLSMustBeABooleanTrue(t *testing.T) {
+	t.Parallel()
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tls := range map[string]interface{}{"string false": "false", "string true": "true", "number": 1} {
+		vals := map[string]interface{}{
+			"instance": map[string]interface{}{"id": "dctest", "config": map[string]interface{}{
+				"infrastructure": map[string]interface{}{
+					"secrets": map[string]interface{}{"rootKey": base64.StdEncoding.EncodeToString(make([]byte, 32))},
+					"nats":    map[string]interface{}{"hostname": "dc-nats", "tls": map[string]interface{}{"enabled": tls}},
+				}}},
+			"mqttExposure": map[string]interface{}{"mode": "loadbalancer", "host": "mqtt.example.com"},
+		}
+		inst := action.NewInstall(&action.Configuration{})
+		inst.ReleaseName, inst.Namespace, inst.DryRun, inst.ClientOnly = "dc-mqtt", "default", true, true
+		inst.APIVersions = []string{"monitoring.coreos.com/v1"}
+		if _, err := inst.RunWithContext(t.Context(), ch, vals); err == nil {
+			t.Errorf("%s: inline tls.enabled was accepted as on", name)
+		}
+	}
+}
+
+func TestSkipInfrastructureIsRefusedWhileMQTTIsExposed(t *testing.T) {
+	t.Parallel()
+	if err := refuseSkipInfrastructureWhileExposed(&State{SkipInfrastructure: true, MQTTExposure: "gateway"}); err == nil {
+		t.Error("an exposed instance was upgraded without applying its infrastructure")
+	}
+	for _, st := range []*State{
+		{SkipInfrastructure: true, MQTTExposure: MQTTExposureNone},
+		{SkipInfrastructure: true},
+		{MQTTExposure: "gateway"},
+	} {
+		if err := refuseSkipInfrastructureWhileExposed(st); err != nil {
+			t.Errorf("%+v refused: %v", st, err)
+		}
+	}
+}

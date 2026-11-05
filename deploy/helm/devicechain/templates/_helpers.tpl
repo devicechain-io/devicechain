@@ -1573,10 +1573,10 @@ depends on who composes the instance config:
 {{- $infra := $cfg.infrastructure | default dict -}}
 {{- $nats := $infra.nats | default dict -}}
 {{- if .Values.instance.existingSecret -}}
-{{- if not $m.brokerTLSConfirmed -}}
+{{- if not (and (kindIs "bool" $m.brokerTLSConfirmed) $m.brokerTLSConfirmed) -}}
 {{- fail "mqttExposure.mode is not none, but nothing states that the broker's TLS is on: this release's instance configuration lives in the Secret named by instance.existingSecret, which the chart cannot read. Plaintext MQTT is never exposed outside the cluster. Set mqttExposure.brokerTLSConfirmed=true only if the broker terminates TLS, or leave mqttExposure.mode at none." -}}
 {{- end -}}
-{{- else if not (($nats.tls | default dict).enabled) -}}
+{{- else if not (and (kindIs "bool" ($nats.tls | default dict).enabled) ($nats.tls | default dict).enabled) -}}
 {{- fail "mqttExposure.mode is not none, but the broker's TLS is not on in instance.config.infrastructure.nats.tls.enabled. Plaintext MQTT is never exposed outside the cluster; turn the broker's TLS on or leave mqttExposure.mode at none." -}}
 {{- end -}}
 {{- $parts := splitList "." ($nats.hostname | default "dc-nats") -}}
