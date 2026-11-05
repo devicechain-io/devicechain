@@ -23,10 +23,14 @@ import { embedRequested, parseTheme } from './host-options';
 import { setReplayLocale } from './i18n/config';
 import themeCss from './theme.css?inline';
 
-// The theme is injected as a style element rather than linked, so the page needs only the
-// one module script. (Inline styles are within the site's content-security policy.)
+// The theme is installed by script rather than linked, so the page needs only the one module
+// script -- and WITHOUT a <style> element: that is blocked by a content-security policy whose
+// style-src lacks 'unsafe-inline'. The CSS goes in a constructed stylesheet adopted by the
+// document (CSSOM, which style-src does not govern). A browser without adoptedStyleSheets
+// (Safari before 16.4) gets a <style> element as before, which such a policy would refuse; the
+// replay then draws unstyled rather than not at all.
 //
-// The light tokens (theme-light.css) are a second style element, fetched only for a light
+// The light tokens (theme-light.css) are a second sheet, fetched only for a light
 // page, alongside the page's language; if they cannot be fetched, the replay draws in the dark
 // theme every token falls back to.
 //
@@ -34,8 +38,21 @@ import themeCss from './theme.css?inline';
 // .board-replay-root (the app's own root element), and this file touches nothing outside
 // the mount element: no class, attribute or style on <html> or <body>, and the language is
 // set on the app root, not on the document.
+const installed = new Set<string>();
+
 function installStyle(id: string, css: string): void {
-  if (document.getElementById(id)) return;
+  if (installed.has(id) || document.getElementById(id)) return;
+  installed.add(id);
+  if ('adoptedStyleSheets' in document && typeof CSSStyleSheet === 'function') {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(css);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      return;
+    } catch {
+      // fall through to the element
+    }
+  }
   const style = document.createElement('style');
   style.id = id;
   style.textContent = css;

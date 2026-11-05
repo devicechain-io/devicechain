@@ -22,7 +22,7 @@
 // table in ./severity (WidgetTokenStyles below injects them), so no colour is typed twice.
 
 import { DENSITY_SCALE, SPACE_TOKEN_PX, type CanvasDensity } from '@devicechain/dashboards';
-import type { CSSProperties } from 'react';
+import { useLayoutEffect, type CSSProperties } from 'react';
 
 import { severityTokenCss } from './severity';
 
@@ -81,6 +81,37 @@ export function tokenStyle(scale: number): CSSProperties {
 // does not still gets the colours. They sit on the document root, where useSeverityColors
 // reads them -- nothing is scoped to a board element, so no WidgetThemeRoot registration is
 // needed for them to resolve.
+//
+// 🔴 NO <style> ELEMENT WHERE THE BROWSER CAN AVOID ONE. A page whose content-security policy
+// has no `style-src 'unsafe-inline'` refuses a <style> element, so where constructed
+// stylesheets exist the CSS is adopted by the document instead (CSSOM, which style-src does not
+// govern) -- once per page, however many boards mount. Elsewhere (older Safari, jsdom) it is
+// the element, as before.
+const adoptedTokenCss = new Set<string>();
+
+function canAdoptStyles(): boolean {
+  return typeof document !== 'undefined' && 'adoptedStyleSheets' in document && typeof CSSStyleSheet === 'function';
+}
+
+function adoptTokenCss(css: string): boolean {
+  if (adoptedTokenCss.has(css)) return true;
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    adoptedTokenCss.add(css);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function WidgetTokenStyles() {
-  return <style data-dc-tokens="">{severityTokenCss({ hostWins: true })}</style>;
+  const css = severityTokenCss({ hostWins: true });
+  const adopt = canAdoptStyles();
+  useLayoutEffect(() => {
+    if (adopt) adoptTokenCss(css);
+  }, [adopt, css]);
+  if (adopt) return null;
+  return <style data-dc-tokens="">{css}</style>;
 }

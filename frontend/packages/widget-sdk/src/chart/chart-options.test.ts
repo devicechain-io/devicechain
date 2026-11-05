@@ -84,6 +84,10 @@ describe('buildLineOption units, precision and thresholds', () => {
     expect(o.tooltip.valueFormatter(20.123456)).toBe('20.1 degC');
   });
 
+  it('draws the tooltip on the canvas: an HTML tooltip needs style attributes a strict CSP refuses', () => {
+    expect(opt(buildLineOption(data, theme)).tooltip.renderMode).toBe('richText');
+  });
+
   it('rounds axis labels to the precision, and leaves ECharts ticks alone when unset', () => {
     const o = opt(buildLineOption(data, theme, { precision: 0 }));
     expect(o.yAxis.axisLabel.formatter(20.6)).toBe('21');

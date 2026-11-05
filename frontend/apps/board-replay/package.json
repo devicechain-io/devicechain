@@ -15,6 +15,8 @@
     "test": "vitest run",
     "pretest:readability": "node ../../scripts/build-packages.mjs",
     "test:readability": "playwright test",
+    "pretest:csp": "node ../../scripts/build-packages.mjs",
+    "test:csp": "vite build && playwright test -c playwright.csp.config.ts",
     "lint": "eslint \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {

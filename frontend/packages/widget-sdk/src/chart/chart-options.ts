@@ -185,6 +185,10 @@ export function buildLineOption(
     grid: { left: 8, right: 12, top: names.length > 1 || options.unit ? 28 : 12, bottom: 8, containLabel: true },
     tooltip: {
       trigger: 'axis',
+      // Drawn on the canvas, not as HTML: the HTML tooltip's rows carry `style=""` attributes in
+      // markup, which a page without `style-src 'unsafe-inline'` refuses (the rows lose their
+      // spacing and colour keys). richText has no DOM content to refuse.
+      renderMode: 'richText',
       valueFormatter: (v: unknown) => (typeof v === 'number' ? `${formatValue(v, precision)}${suffix}` : String(v ?? '—')),
     },
     legend:
