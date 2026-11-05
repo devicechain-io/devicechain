@@ -512,6 +512,7 @@ dcctl bootstrap local devicechain
 
 - **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
 - **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
+- **`dcctl bootstrap` 现在会拒绝属于另一个集群的本地状态。** 包括 `--dry-run`。如果您在 `dcctl` 之外重建了集群并复用实例名，请先移开 `~/.devicechain/instances/<名称>`；详见[说明](#v120-stale-state)。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}
@@ -532,6 +533,16 @@ event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键
 - **开启事件信封的 `event-processing`** 会保存[事件信封](#event-envelopes)中描述的重复防护。在每秒 4,500 至 6,000 个事件时占用 265 至 269 MiB，在每秒 12,000 个事件时占用 388 MiB（Go 堆 353 MiB），而上限为 384Mi，软上限为 288 MiB。在每秒约 8,000 个事件以上，Pod 会被软上限卡住、持续回收垃圾，或被终止。只要 `resolved` 或 `inbound` 之一开启，chart 现在就把下限设为 768Mi（软上限 576 MiB），否则为 384Mi。此前对该防护的估计（每秒 20,000 个事件时约 180 MB）低了三到四倍；更正后的数字见[事件信封](#event-envelopes)。
 
 两者都是下限，仅在本来适用的上限更低时才生效。你在服务上设置的上限，或更大的顶层上限，按原值使用，软上限随实际生效的上限而定。新值 `functionalAreas.<服务>.memoryLimitFloorWithEnvelopes` 保存开启信封时的下限。`dcctl` 会根据它写入的实例配置设置 `eventEnvelopesEnabled`。如果你自己用 `instance.existingSecret` 安装 chart，chart 读不到该配置：开启任一信封设置时，请设置 `eventEnvelopesEnabled: true`。
+
+#### `dcctl bootstrap` 会拒绝属于另一个集群的本地状态 {#v120-stale-state}
+
+当某个实例名在 `~/.devicechain/instances/<名称>` 下的本地状态记录的是与命令所指向的集群不同的集群时，`dcctl bootstrap`（以及 `dcctl bootstrap --dry-run`）现在会拒绝执行。以前这份记录会被新集群的标识悄悄改写，随后基于旧集群的 OpenTofu 状态和 broker 凭据做规划，之后以无关的信息失败（例如拒绝缩减一个并不存在的 broker 集群）。拒绝信息会列出两个集群并打印修复命令。如果记录的集群已经不在了，请把该目录移到一边；其中有凭据，请保留而不要删除：
+
+```bash
+mv ~/.devicechain/instances/<名称> ~/.devicechain/<名称>.stale-state
+```
+
+如果记录的集群仍在运行，请换一个实例名。由不含集群标识的旧版 `dcctl` 写下的记录不会被拒绝。没有 `dcctl` 命令或标志发生变化。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 

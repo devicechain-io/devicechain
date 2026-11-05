@@ -801,6 +801,7 @@ Qué requiere acción:
 
 - **Tenga en cuenta que dos límites de memoria son más altos.** `device-management` tiene ahora un límite de 512Mi (antes 256Mi) y `event-processing` tiene un límite de 768Mi (antes 384Mi) mientras cualquiera de los ajustes de sobres de eventos esté activado. Nada cambia para `event-processing` con ambos ajustes desactivados. Las solicitudes de memoria no cambian, así que la planificación es la misma; cada límite es un techo que el pod puede usar. Consulte [Límites de memoria](#v120-memory).
 - **Revise cualquier límite de memoria que haya fijado usted.** Un límite fijado en `device-management` o `event-processing` con `functionalAreas.<servicio>.resources.limits.memory` se usa tal cual, igual que un `resources.limits.memory` superior de nivel superior. Si el suyo está por debajo de las cifras de [Dimensionamiento de los servicios](./bootstrap.md#service-sizing) para su flota o su ritmo de eventos, súbalo.
+- **`dcctl bootstrap` ahora rechaza el estado local que pertenece a otro clúster.** Incluye `--dry-run`. Si reconstruyó un clúster fuera de `dcctl` y reutiliza un nombre de instancia, mueva antes `~/.devicechain/instances/<nombre>`; vea [los detalles](#v120-stale-state).
 
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
@@ -821,6 +822,16 @@ Ambos límites estaban a un paso de lo que se midió que los servicios ocupan, e
 - **`event-processing` con sobres de eventos activados** guarda la protección contra duplicados descrita en [Sobres de eventos](#event-envelopes). Usó de 265 a 269 MiB con 4 500 a 6 000 eventos por segundo y 388 MiB con 12 000, con 353 MiB de montón de Go, frente a un límite de 384Mi con un límite blando de 288 MiB. Por encima de unos 8 000 eventos por segundo el pod habría quedado retenido en su límite blando, recolectando sin parar, o habría sido terminado. El chart fija ahora el mínimo en 768Mi (límite blando de 576 MiB) mientras `resolved` o `inbound` esté activado, y en 384Mi en caso contrario. La cifra anterior para la protección (unos 180 MB a 20 000 eventos por segundo) era de tres a cuatro veces demasiado baja; las cifras corregidas están en [Sobres de eventos](#event-envelopes).
 
 Ambos son mínimos, aplicados solo cuando el límite que se aplicaría de otro modo es menor. Un límite fijado en el servicio, o un límite de nivel superior mayor, se usa tal cual, y el límite blando sigue al límite que se aplique. El nuevo valor `functionalAreas.<servicio>.memoryLimitFloorWithEnvelopes` contiene el mínimo con sobres. `dcctl` fija `eventEnvelopesEnabled` a partir de la configuración de instancia que escribe. Si instala el chart usted mismo con `instance.existingSecret`, el chart no puede leer esa configuración: fije `eventEnvelopesEnabled: true` cuando active cualquiera de los ajustes de sobres.
+
+#### `dcctl bootstrap` rechaza el estado local que pertenece a otro clúster {#v120-stale-state}
+
+`dcctl bootstrap` (y `dcctl bootstrap --dry-run`) ahora se niega cuando el estado local de ese nombre de instancia, en `~/.devicechain/instances/<nombre>`, se registró contra un clúster distinto del que el comando apunta. Antes se reescribía en silencio con la identidad del clúster nuevo y se planificaba sobre el estado de OpenTofu y las credenciales del broker del clúster anterior, lo que fallaba después con un mensaje sin relación (por ejemplo, la negativa a reducir un clúster de brokers que no existe). El rechazo nombra ambos clústeres e imprime el comando que lo resuelve. Si el clúster registrado ya no existe, mueva el directorio a otro lugar; contiene credenciales, así que conserve la copia en lugar de borrarla:
+
+```bash
+mv ~/.devicechain/instances/<nombre> ~/.devicechain/<nombre>.stale-state
+```
+
+Si el clúster registrado sigue en marcha, use otro nombre de instancia. Un registro de un `dcctl` anterior sin identidad de clúster no se rechaza. No cambió ningún comando ni opción de `dcctl`.
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 
