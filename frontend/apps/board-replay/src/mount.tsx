@@ -16,6 +16,7 @@
 //                   how a page that IS the embed sets them on its URL instead)
 
 import { StrictMode } from 'react';
+import { configureStrictCsp } from '@devicechain/widget-sdk';
 import { createRoot, type Root } from 'react-dom/client';
 
 import ReplayApp, { loadEmbed } from './App';
@@ -64,6 +65,8 @@ function installStyle(id: string, css: string): void {
 }
 
 export async function mountBoardReplay(el: HTMLElement): Promise<Root> {
+  // The replay is served under `style-src 'self'`: canvas tooltips and adopted token CSS.
+  configureStrictCsp(true);
   const theme = parseTheme(el.dataset, location.search);
   installStyle('board-replay-theme', themeCss);
   await Promise.all([

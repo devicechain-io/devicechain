@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { configureStrictCsp, plainTooltipText } from './strict-csp';
 import { ALARM_LEVELS, SEVERITY_TOKENS, severityTokenCss } from './severity';
 import { FONT_TOKENS, SPACE_TOKENS, WidgetTokenStyles, densityScale, fontVar, spaceVar, tokenPx, tokenStyle } from './tokens';
 
@@ -50,5 +51,60 @@ describe('severity tokens', () => {
       expect(css).toContain(`--sev-${level}: ${SEVERITY_TOKENS[level].light};`);
       expect(css).toContain(`--sev-${level}: ${SEVERITY_TOKENS[level].dark};`);
     }
+  });
+});
+
+describe('WidgetTokenStyles in strict-CSP host mode', () => {
+  afterEach(() => {
+    configureStrictCsp(false);
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(document, 'adoptedStyleSheets');
+  });
+
+  // jsdom has no constructed stylesheets: a minimal stand-in that records what was adopted.
+  function stubSheets(replaceSync: (css: string) => void) {
+    vi.stubGlobal(
+      'CSSStyleSheet',
+      class {
+        css = '';
+        replaceSync(css: string) {
+          replaceSync(css);
+          this.css = css;
+        }
+      },
+    );
+    Object.defineProperty(document, 'adoptedStyleSheets', { value: [], writable: true, configurable: true });
+  }
+
+  it('adopts the token CSS instead of rendering a <style> element', () => {
+    stubSheets(() => {});
+    configureStrictCsp(true);
+    const { container } = render(<WidgetTokenStyles />);
+    expect(container.querySelector('style')).toBeNull();
+    const adopted = (document as unknown as { adoptedStyleSheets: Array<{ css: string }> }).adoptedStyleSheets;
+    expect(adopted.map((s) => s.css)).toContain(severityTokenCss({ hostWins: true }));
+  });
+
+  it('falls back to the <style> element when adoption fails', () => {
+    stubSheets(() => {
+      throw new Error('nope');
+    });
+    configureStrictCsp(true);
+    const { container } = render(<WidgetTokenStyles />);
+    expect(container.querySelector('style[data-dc-tokens]')!.textContent).toBe(severityTokenCss({ hostWins: true }));
+  });
+
+  it('is the element by default, even where constructed stylesheets exist', () => {
+    stubSheets(() => {});
+    const { container } = render(<WidgetTokenStyles />);
+    expect(container.querySelector('style[data-dc-tokens]')).not.toBeNull();
+    expect((document as unknown as { adoptedStyleSheets: unknown[] }).adoptedStyleSheets).toHaveLength(0);
+  });
+});
+
+describe('plainTooltipText', () => {
+  it('neutralizes the rich-text delimiters and leaves other text alone', () => {
+    expect(plainTooltipText('a {b|c} <img onerror=x>')).not.toMatch(/[{}]/);
+    expect(plainTooltipText('plain')).toBe('plain');
   });
 });

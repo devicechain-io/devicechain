@@ -17,6 +17,7 @@ globalThis.ResizeObserver ??= class {
 } as unknown as typeof ResizeObserver;
 
 const getDataURL = vi.fn((_options: unknown) => 'data:image/png;base64,CHART');
+const dispatchAction = vi.fn((_action: unknown) => {});
 
 vi.mock('echarts/core', async (importOriginal) => {
   const real = await importOriginal<typeof import('echarts/core')>();
@@ -24,7 +25,7 @@ vi.mock('echarts/core', async (importOriginal) => {
     ...real,
     init: (el: HTMLElement) => {
       el.setAttribute('_echarts_instance_', 'stub');
-      return { setOption: () => {}, resize: () => {}, dispose: () => {}, getDataURL };
+      return { setOption: () => {}, resize: () => {}, dispose: () => {}, getDataURL, dispatchAction };
     },
   };
 });
@@ -39,6 +40,7 @@ beforeEach(() => {
   document.body.style.background = 'rgb(250, 250, 250)';
   clicked = [];
   getDataURL.mockClear();
+  dispatchAction.mockClear();
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
     clicked.push({ href: this.href, download: this.download });
   });
@@ -60,6 +62,9 @@ describe('a chart inside a frame', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Download image (PNG)' }));
     await waitFor(() => expect(clicked).toHaveLength(1));
     expect(getDataURL).toHaveBeenCalledWith({ type: 'png', pixelRatio: 2, backgroundColor: 'rgb(250, 250, 250)' });
+    // A canvas-drawn tooltip is hidden first, so it is not baked into the image.
+    expect(dispatchAction).toHaveBeenCalledWith({ type: 'hideTip' });
+    expect(dispatchAction.mock.invocationCallOrder[0]).toBeLessThan(getDataURL.mock.invocationCallOrder[0]);
     expect(clicked[0].href).toBe('data:image/png;base64,CHART');
     expect(clicked[0].download).toMatch(/^Temperature-\d{8}T\d{4}Z\.png$/);
   });

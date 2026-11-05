@@ -34,24 +34,27 @@ const STRICT_CSP = [
   "connect-src 'self'",
 ].join('; ');
 
-// Two committed boards: Towerpulse (timeseries charts, gauges) and Sitepulse (adds the map).
+// Two committed boards: Towerpulse (timeseries charts, gauges) and Sitepulse (adds the map), and
+// the light theme, which loads a second stylesheet. `tooltip`: the first chart on the page is a
+// timeseries with data, so a hover must visibly draw a tooltip.
 const CASES = [
-  { name: 'towerpulse', board: 'tp-dashboard.json', recording: 'towerpulse-fixture.json' },
-  { name: 'sitepulse', board: 'sp-dashboard.json', recording: 'sitepulse-showcase.json' },
+  { name: 'towerpulse', board: 'tp-dashboard.json', recording: 'towerpulse-fixture.json', theme: 'dark', tooltip: true },
+  { name: 'sitepulse', board: 'sp-dashboard.json', recording: 'sitepulse-showcase.json', theme: 'dark', tooltip: false },
+  { name: 'towerpulse (light theme)', board: 'tp-dashboard.json', recording: 'towerpulse-fixture.json', theme: 'light', tooltip: true },
 ].map((c) => {
   const board = readFileSync(path.join(FRONTEND, 'testdata/sim-dashboards', c.board));
   const doc = JSON.parse(readFileSync(path.join(FRONTEND, 'testdata/board-replay', c.recording), 'utf-8'));
   // The fixtures pin the board as it was when they were cut; point the pin at the board on disk,
   // as the unit suites do.
   doc.board = { ...doc.board, sha256: createHash('sha256').update(board).digest('hex') };
-  return { name: c.name, board, recording: JSON.stringify(doc) };
+  return { ...c, board, recording: JSON.stringify(doc) };
 });
 
 const TYPES: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 
 // A host page like the website's: one mount element, one module script, nothing inline.
-const HOST = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>host</title></head>
-<body><div id="board-replay" data-recording="/data/recording.json" data-board="/data/board.json"></div>
+const host = (theme: string) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>host</title></head>
+<body><div id="board-replay" data-theme="${theme}" data-recording="/data/recording.json" data-board="/data/board.json"></div>
 <script type="module" src="/dist/main.js"></script></body></html>`;
 
 let server: Server;
@@ -67,10 +70,13 @@ test.beforeAll(async () => {
       res.setHeader('Content-Security-Policy', STRICT_CSP);
       res.end(body);
     };
-    if (url === '/') return send(HOST, 'text/html');
-    // The negative control's page: the same policy, plus the one thing the policy forbids.
-    if (url === '/control') return send('<!doctype html><title>c</title><body><script src="/control.js"></script>', 'text/html');
-    if (url === '/control.js') return send("document.head.appendChild(Object.assign(document.createElement('style'), { textContent: 'body{color:red}' }));", 'text/javascript');
+    if (url === '/') return send(host(current.theme), 'text/html');
+    // The negative controls' pages: the same policy, plus a thing it forbids -- one per channel the
+    // bundle could leak through (a <style> element: style-src-elem; a style attribute in markup:
+    // style-src-attr).
+    if (url === '/control/element' || url === '/control/attr') return send(`<!doctype html><title>c</title><body><script src="${url}.js"></script>`, 'text/html');
+    if (url === '/control/element.js') return send("document.head.appendChild(Object.assign(document.createElement('style'), { textContent: 'body{color:red}' }));", 'text/javascript');
+    if (url === '/control/attr.js') return send("document.body.insertAdjacentHTML('beforeend', '<i style=\"color:red\">x</i>');", 'text/javascript');
     if (url === '/data/recording.json') return send(current.recording, 'application/json');
     if (url === '/data/board.json') return send(current.board, 'application/json');
     if (url.startsWith('/dist/')) {
@@ -103,8 +109,16 @@ const violations = (page: Page) => page.evaluate(() => (window as unknown as Spy
 
 test('negative control: the policy reports an injected <style> element', async ({ page }) => {
   await watchViolations(page);
-  await page.goto(`${origin}/control`);
+  await page.goto(`${origin}/control/element`);
   await expect.poll(() => violations(page)).toHaveLength(1);
+  expect((await violations(page))[0]).toContain('style-src-elem');
+});
+
+test('negative control: the policy reports a style attribute written through markup', async ({ page }) => {
+  await watchViolations(page);
+  await page.goto(`${origin}/control/attr`);
+  await expect.poll(() => violations(page)).toHaveLength(1);
+  expect((await violations(page))[0]).toContain('style-src-attr');
 });
 
 for (const c of CASES) {
@@ -123,6 +137,10 @@ test(`the ${c.name} replay draws and plays under style-src self with zero violat
   expect(await page.locator('[data-widget]').count()).toBeGreaterThan(1);
   const bg = await page.getByTestId('replay-root').evaluate((el) => getComputedStyle(el).backgroundColor);
   expect(bg, 'the theme stylesheet did not apply').not.toBe('rgba(0, 0, 0, 0)');
+  // ...and the RIGHT theme: the light tokens are a second stylesheet, fetched only for a light page.
+  const lum = bg.match(/\d+/g)!.slice(0, 3).reduce((a, n) => a + Number(n), 0);
+  if (c.theme === 'light') expect(lum, `light theme expected, root is ${bg}`).toBeGreaterThan(600);
+  else expect(lum, `dark theme expected, root is ${bg}`).toBeLessThan(300);
   // Chart widgets are canvases drawn by ECharts, whose container is styled through CSSOM.
   await expect(page.locator('canvas').first()).toBeVisible({ timeout: 30_000 });
 
@@ -133,7 +151,29 @@ test(`the ${c.name} replay draws and plays under style-src self with zero violat
   await bar.locator('button').first().click(); // Play
   await expect(page.getByTestId('replay-state')).toHaveText(/play/i);
   await page.waitForTimeout(4000);
+  await bar.locator('button').first().click(); // Pause: the charts hold still for the tooltip check
+  await expect(page.getByTestId('replay-state')).toHaveText(/paus/i);
   const canvases = page.locator('canvas');
+
+  // A tooltip really was drawn. It is canvas-drawn, so there is no element to find: compare the
+  // chart's pixels with the pointer away and over the plot.
+  if (c.tooltip) {
+    const chart = canvases.first();
+    await chart.scrollIntoViewIfNeeded();
+    const box = (await chart.boundingBox())!;
+    const pixels = () => chart.evaluate((el) => Array.from((el as HTMLCanvasElement).getContext('2d')!.getImageData(0, 0, (el as HTMLCanvasElement).width, (el as HTMLCanvasElement).height).data));
+    await page.mouse.move(2, 2);
+    await page.waitForTimeout(500);
+    const before = await pixels();
+    await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.5, { steps: 6 });
+    await page.waitForTimeout(500);
+    const after = await pixels();
+    let changed = 0;
+    for (let i = 0; i < before.length; i += 4) if (before[i] !== after[i] || before[i + 1] !== after[i + 1] || before[i + 2] !== after[i + 2]) changed++;
+    // A tooltip box is thousands of pixels; the axis-pointer line alone is a few hundred.
+    expect(changed, 'hovering the chart did not draw a tooltip').toBeGreaterThan(3000);
+  }
+
   for (let i = 0; i < (await canvases.count()); i++) {
     await canvases.nth(i).scrollIntoViewIfNeeded();
     const box = await canvases.nth(i).boundingBox();
