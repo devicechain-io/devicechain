@@ -455,7 +455,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		case err != nil:
 			log.Error().Err(err).Str("deviceToken", request.DeviceToken).Str("command", request.Name).
 				Msg("Command enqueue validation failed; refusing enqueue.")
-			return nil, fmt.Errorf("cannot enqueue command: validation is unavailable")
+			return nil, errUnavailable("cannot enqueue command: validation is unavailable")
 		}
 	} else if scope.IsScoped() {
 		// No gate means no anchors: nothing can say whether the member owns the device, and

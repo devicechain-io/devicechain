@@ -508,7 +508,7 @@ func (api *Api) resolveBatchTargets(ctx context.Context, request *CommandBatchCr
 		// Fail closed. A group target with nothing able to resolve it must not silently
 		// become an empty batch, which would report success for a fleet write that
 		// reached nobody.
-		return nil, fmt.Errorf("cannot resolve a group target: group resolution is unavailable")
+		return nil, errUnavailable("cannot resolve a group target: group resolution is unavailable")
 	}
 	return api.resolveGroupTargets(ctx, request)
 }
@@ -551,7 +551,7 @@ func (api *Api) validateBatchTargets(ctx context.Context, tokens []string, name 
 		}
 		chunk, err := api.BatchValidator.ValidateEnqueueBatch(ctx, tokens[start:end], name, payload)
 		if err != nil {
-			return nil, fmt.Errorf("cannot enqueue command batch: validation is unavailable")
+			return nil, errUnavailable("cannot enqueue command batch: validation is unavailable")
 		}
 		refusals = append(refusals, chunk...)
 	}
