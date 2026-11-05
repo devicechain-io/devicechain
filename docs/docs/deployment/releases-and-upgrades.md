@@ -756,6 +756,7 @@ What needs action:
 
 - **Know that two memory limits are higher.** `device-management` is now limited to 512Mi (it was 256Mi), and `event-processing` is limited to 768Mi (it was 384Mi) while either event-envelope setting is on. Nothing changes for `event-processing` with both settings off. The memory requests do not change, so scheduling is the same; each limit is a ceiling the pod may use. See [Memory limits](#v120-memory).
 - **Check any memory limit you set yourself.** A limit you set on `device-management` or `event-processing` under `functionalAreas.<service>.resources.limits.memory` is used as written, and so is a higher top-level `resources.limits.memory`. If yours is below the figures in [Service sizing](./bootstrap.md#service-sizing) for your fleet or event rate, raise it.
+- **`dcctl bootstrap` now refuses local state that belongs to another cluster.** This includes `--dry-run`. If you rebuilt a cluster outside `dcctl` and reuse an instance name, move `~/.devicechain/instances/<name>` aside first; see [the details](#v120-stale-state).
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -776,6 +777,16 @@ Both limits were within one step of what the services were measured to hold, on 
 - **`event-processing` with event envelopes on** holds the duplicate guard described under [Event envelopes](#event-envelopes). It used 265 to 269 MiB at 4,500 to 6,000 events a second and 388 MiB at 12,000, with 353 MiB of Go heap, against a 384Mi limit with a 288 MiB soft limit. Above about 8,000 events a second the pod would have been held at its soft limit, collecting continuously, or killed. The chart now floors the limit at 768Mi (soft limit 576 MiB) while either `resolved` or `inbound` is on, and at 384Mi otherwise. The earlier figure for the guard (about 180 MB at 20,000 events a second) was three to four times too low; the corrected figures are under [Event envelopes](#event-envelopes).
 
 Both are floors, applied only when the limit that would otherwise apply is lower. A limit you set on the service, or a larger top-level limit, is used as written, and the soft limit follows whichever limit applies. The new value `functionalAreas.<service>.memoryLimitFloorWithEnvelopes` holds the envelope floor. `dcctl` sets `eventEnvelopesEnabled` from the instance configuration it writes. If you install the chart yourself with `instance.existingSecret`, the chart cannot read that configuration: set `eventEnvelopesEnabled: true` when you turn either envelope setting on.
+
+#### `dcctl bootstrap` refuses local state that belongs to another cluster {#v120-stale-state}
+
+`dcctl bootstrap` (and `dcctl bootstrap --dry-run`) now refuses when the local state for that instance name, under `~/.devicechain/instances/<name>`, was recorded against a different cluster than the one the command targets. This used to be silently rewritten with the new cluster's identity, and the old cluster's OpenTofu state and broker credentials were then planned against, which failed later with an unrelated message (for example a refusal to shrink a broker cluster that is not there). The refusal names both clusters and prints the command that fixes it. If the recorded cluster is gone, move the directory aside; it holds credentials, so keep it rather than deleting it:
+
+```bash
+mv ~/.devicechain/instances/<name> ~/.devicechain/<name>.stale-state
+```
+
+If the recorded cluster is still running, use a different instance name. A record written by an older `dcctl` that has no cluster identity is not refused. No `dcctl` command or flag changed.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 
