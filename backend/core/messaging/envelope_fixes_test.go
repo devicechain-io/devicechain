@@ -246,31 +246,24 @@ func TestGroupCommitStopWaitsForABatchAddJustClosed(t *testing.T) {
 	})
 }
 
-// GUARD: the same for a batch the linger timer closed.
+// GUARD: the same for a batch the linger timer closed. The group is opened with controlled
+// timestamps (a tenant whose rate predicts company, one event waiting, long past its linger), so
+// it is tick, not Add, that closes it, whatever the scheduler does.
 func TestGroupCommitStopWaitsForABatchTheTimerJustClosed(t *testing.T) {
 	var flushed atomic.Int32
 	f := newTestFormer(t, FormerConfig{Linger: 5 * time.Millisecond})
 	g := NewGroupCommit(f, func(FormedBatch) { flushed.Add(1) })
 	seam := installSeam(g)
-	// Teach the former that the tenant is busy, so the next event waits for company.
-	for i := 0; i < 4; i++ {
-		_ = g.Add("busy", fm(1))
+	t0 := time.Now().Add(-time.Hour)
+	g.mu.Lock()
+	closed := f.Add(t0, "busy", fm(1)) // no rate yet: closes alone (discarded; nothing waits on it)
+	waiting := f.Add(t0.Add(time.Millisecond), "busy", fm(1))
+	open := len(f.open)
+	g.mu.Unlock()
+	if len(closed) != 1 || len(waiting) != 0 || open != 1 {
+		t.Fatalf("setup: want one event waiting for the timer, got closed=%d waiting=%d open=%d", len(closed), len(waiting), open)
 	}
-	for { // let the warm-up groups close (by the timer) and publish
-		g.mu.Lock()
-		open := len(g.f.open)
-		g.mu.Unlock()
-		if open == 0 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	g.wg.Wait()
-	flushed.Store(0)
-	stopMustWaitFor(t, g, seam, &flushed, func() {
-		// The tenant is busy, so this event waits for company and the linger timer closes it.
-		_ = g.Add("busy", fm(1))
-	})
+	stopMustWaitFor(t, g, seam, &flushed, g.tick)
 }
 
 // Policy for work that arrives once Stop has begun: nothing is queued and nothing is dropped. Add
@@ -284,13 +277,14 @@ func TestGroupCommitNothingClosesAfterStopAndLateAddsAreRefused(t *testing.T) {
 		_ = g.Add("busy", fm(1))
 	}
 	g.Stop()
-	before := flushed.Load()
+	if got := flushed.Load(); got != 4 {
+		t.Fatalf("Stop must return only after every accepted member is published, got %d of 4", got)
+	}
 	if err := g.Add("busy", fm(1)); err != ErrGroupCommitStopped {
 		t.Fatalf("an Add after Stop must be refused with ErrGroupCommitStopped, got %v", err)
 	}
 	g.tick() // a tick that was already running when Stop stopped the timer
-	g.wg.Wait()
-	if got := flushed.Load(); got != before {
-		t.Fatalf("a member that arrived after Stop was published (flushed %d -> %d)", before, got)
+	if got := flushed.Load(); got != 4 {
+		t.Fatalf("a member that arrived after Stop was published (flushed %d, want 4)", got)
 	}
 }
