@@ -61,9 +61,10 @@ type ConcurrentSharded struct {
 	obs     PipelineObserver
 
 	// The dispatcher's own state. Single goroutine, no locking.
-	lastSeq uint64 // mirror of every shard's LastSeq
-	item    uint64 // number of the last operation sent, the merge key for detections
-	tag     Tag    // the tag for the next operation that carries one, then reset
+	lastSeq uint64   // mirror of every shard's LastSeq
+	sent    []uint64 // per shard, the number of the last operation queued to it
+	item    uint64   // number of the last operation sent, the merge key for detections
+	tag     Tag      // the tag for the next operation that carries one, then reset
 	closed  bool
 
 	evPool sync.Pool // *[]Event, the per-shard event batches handed to the workers
@@ -169,6 +170,8 @@ type shardWorker struct {
 
 	late atomic.Uint64
 	busy atomic.Uint64
+	// doneItem is the number of the last operation this shard has finished applying and harvesting.
+	doneItem atomic.Uint64
 }
 
 // NewConcurrentSharded builds an empty K-way engine with a goroutine per shard. K is clamped to
@@ -188,7 +191,7 @@ func RestoreConcurrentSharded(k int, rules []Rule, allowedLateness time.Duration
 }
 
 func wrapConcurrent(s *Sharded) *ConcurrentSharded {
-	c := &ConcurrentSharded{s: s, lastSeq: s.shards[0].LastSeq()}
+	c := &ConcurrentSharded{s: s, lastSeq: s.shards[0].LastSeq(), sent: make([]uint64, len(s.shards))}
 	c.evPool.New = func() any { b := make([]Event, 0, 8); return &b }
 	c.workers = make([]*shardWorker, len(s.shards))
 	for i, e := range s.shards {
@@ -243,6 +246,7 @@ func (w *shardWorker) apply(op shardOp) {
 		w.late.Add(n)
 	}
 	w.busy.Add(uint64(time.Since(start)))
+	w.doneItem.Store(op.item) // after the harvest: a reader of doneItem sees every detection up to it
 }
 
 func evsOf(p *[]Event) []Event {
@@ -269,6 +273,7 @@ func (w *shardWorker) harvest(item uint64, tag Tag) {
 // send queues op on shard i, numbering it. It blocks while the queue is full.
 func (c *ConcurrentSharded) send(i int, op shardOp) {
 	op.item = c.item
+	c.sent[i] = op.item
 	if c.closed {
 		// A closed engine has no goroutines left and keeps working, synchronously, so a call that
 		// outlives the term it belonged to computes the right answer rather than panicking.
@@ -490,12 +495,35 @@ func (c *ConcurrentSharded) ClearRaised(key SeriesKey) {
 
 // Collect returns the detections the shards have made so far without waiting, ordered by
 // (operation number, shard).
+//
+// It returns only the detections of operations every shard has finished: a frontier F such that no
+// operation numbered at or below F is still queued anywhere. A fast shard's detection from a later
+// operation is held back until the slower shards have caught up to it, so successive calls hand over
+// a strictly advancing prefix of the (operation, shard) order. Without that, a series' detections
+// from different rules (different shards) could be collected, and so published, out of the order the
+// single engine made them in. A shard with nothing queued does not hold the frontier back.
 func (c *ConcurrentSharded) Collect() []TaggedDetection {
+	frontier := c.item
+	for i, w := range c.workers {
+		if done := w.doneItem.Load(); done < c.sent[i] && done < frontier {
+			frontier = done
+		}
+	}
 	var all []taggedOut
 	for _, w := range c.workers {
 		w.mu.Lock()
-		all = append(all, w.out...)
-		w.out = nil
+		if len(w.out) > 0 {
+			keep := w.out[:0]
+			for _, o := range w.out {
+				if o.item <= frontier {
+					all = append(all, o)
+				} else {
+					keep = append(keep, o)
+				}
+			}
+			clear(w.out[len(keep):])
+			w.out = keep
+		}
 		w.mu.Unlock()
 	}
 	if len(all) == 0 {

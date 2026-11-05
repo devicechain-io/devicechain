@@ -6,6 +6,7 @@ package core
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -555,5 +556,47 @@ func BenchmarkConcurrentProcessResolved(b *testing.B) {
 			c.Sync()
 			c.Collect()
 		})
+	}
+}
+
+// Collect hands over a strictly advancing prefix of the (operation, shard) order. With one shard
+// held up, a detection a fast shard made for a LATER operation is not collected, because the slow
+// shard may still owe an earlier detection for the same series (another rule on the same device).
+func TestConcurrentCollectWaitsForTheSlowestShard(t *testing.T) {
+	g := newDiffGen(11)
+	c := NewConcurrentSharded(2, g.rulesNow(), diffLateness)
+	defer c.Close()
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	defer release()                           // a failing check must not leave shard 1 stuck for Close to wait on
+	c.ownerAsync(1, func(*Engine) { <-gate }) // shard 1 is stuck on its first operation
+	seq := uint64(0)
+	for i := 0; i < 400; i++ {
+		_, tm, evs := g.message()
+		seq++
+		c.ProcessResolved(seq, tm, evs)
+	}
+	// Shard 0 runs to the end of its queue.
+	deadline := time.Now().Add(10 * time.Second)
+	for c.workers[0].doneItem.Load() < c.sent[0] {
+		if time.Now().After(deadline) {
+			t.Fatal("shard 0 never finished its queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	c.workers[0].mu.Lock()
+	made := len(c.workers[0].out)
+	c.workers[0].mu.Unlock()
+	if made == 0 {
+		t.Fatal("shard 0 made no detections: the check means nothing")
+	}
+	if got := c.Collect(); len(got) != 0 {
+		t.Fatalf("collected %d detections while shard 1 had not applied its first operation", len(got))
+	}
+	release()
+	c.Sync()
+	if got := c.Collect(); len(got) < made {
+		t.Fatalf("after the shards caught up, collected %d, shard 0 alone made %d", len(got), made)
 	}
 }
