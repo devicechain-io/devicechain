@@ -25,7 +25,7 @@ DeviceChain is a set of stateless Go microservices built on a shared core librar
 | `outbound-connectors` _(opt-in)_ | Delivers outbound actions to external systems: an HTTP/webhook call, and a `publish` to message brokers and cloud queues (MQTT, Kafka, AWS SNS/SQS). It uses tenant-scoped, versioned connectors whose credentials are held in the secret store. It runs in its own process, so a slow or misbehaving external system can't affect the detection pipeline. See [Outbound Connectors](./outbound-connectors.md). |
 | `mcp` _(opt-in)_ | A read-only Model Context Protocol server that lets AI assistants operate a tenant on a user's behalf. It is a thin OAuth 2.1 resource server over the GraphQL API that carries the caller's own tenant-scoped token. It has no service token and offers curated read tools only. See [AI Access (MCP)](./mcp.md). |
 | `update-management` | Over-the-air updates: firmware artifacts and their assignment to devices. It keeps a per-tenant, immutable catalogue of firmware, software and configuration images, with a streaming upload that verifies the content against its declared size and SHA-256 digest. An available artifact is assigned to a device, which is told over its device channel and downloads the image with a short-lived, resumable grant. The service tracks each attempt through download, verification, installation and reboot to the running version, and times out a device that goes quiet. An artifact is signed by a signer you register, and by default only a signed artifact can be assigned; the device verifies the signature. A rollout assigns an artifact to a device group a capped number of devices at a time. It is part of the `default` profile. See [Over-the-Air Updates](./over-the-air-updates.md). |
-| `operator` | A controller-runtime operator that owns the `Instance` custom resource and its lifecycle. Today its reconcile loop only observes the resource; readiness-status aggregation across the rendered Deployments is a planned follow-up on that loop. Config is not reloaded in place: a service reads its configuration once at startup, and a change is adopted by rolling the pods. The Helm chart renders the workloads themselves. Tenants are control-plane database records, not reconciled resources. |
+| `operator` | A controller-runtime operator that owns the `Instance` custom resource and its lifecycle. Its reconcile loop observes the chart-rendered Deployments and writes the aggregate conditions, per-area replica counts and images, and the running version to `Instance.status`. Config is not reloaded in place: a service reads its configuration once at startup, and a change is adopted by rolling the pods. The Helm chart renders the workloads themselves. Tenants are control-plane database records, not reconciled resources. |
 
 Fanning one command out to many devices is part of `command-delivery`, not a separate service. See [One command, many devices](./commands.md#command-batches). Scheduling is still planned; see the repository for current status.
 
@@ -106,14 +106,17 @@ The platform's data and admin APIs are GraphQL, which is introspectable and self
 
 Most traffic between services is asynchronous over NATS. When a service needs an answer or an action from another service at the moment it acts, it calls that service's GraphQL endpoint directly, using a short-lived service token. Checking that a device exists before a command is enqueued is one example; a detection rule sending a command is another.
 
-Apart from the `/healthz`, `/readyz` and `/metrics` endpoints every service serves, and the `/graphiql` explorer served only when developer tools are enabled, the non-GraphQL HTTP endpoints are the ones a standard dictates, plus three narrow ones. The standard ones are:
+Apart from the `/healthz`, `/readyz` and `/metrics` endpoints every service serves, and the `/graphiql` explorer served only when developer tools are enabled, the non-GraphQL HTTP endpoints are the ones a standard dictates, plus a few narrow ones. The standard ones are:
 
 - the JWKS document that token validators fetch, served on an internal port that no ingress route reaches
 - the OAuth 2.1 authorization-server endpoints (`/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`, `/oauth/jwks` and the RFC 8414 metadata document), which `user-management` serves once an issuer URL is configured
 - the JSON-RPC-over-HTTP transport spoken by the opt-in [MCP server](./mcp.md), and the protected-resource metadata document (RFC 9728) it publishes
 
-The three others are:
+The others are:
 
 - the device-facing HTTP event-ingest endpoint (`POST /{instance}/{tenant}/events`), which `event-sources` serves on its own port; the default configuration includes an HTTP source
+- the inbound-integration endpoint (`POST /{instance}/{tenant}/integrations/{integration}`), also on `event-sources`, which a network server or webhook calls with an integration's bearer token
+- the device self-registration endpoint (`POST /provisioning/{tenant}/register`) on `device-management`
+- the update-artifact upload (`PUT /updates/artifacts/{token}/content`) and download (`GET /updates/download/{artifact}`) endpoints on `update-management`
 - the tenant logo upload and download endpoint (`/branding/logo`) on `user-management`
 - the endpoint where services obtain their short-lived service token (`/auth/service-token`) on `user-management`, served on the same internal port and never through the ingress

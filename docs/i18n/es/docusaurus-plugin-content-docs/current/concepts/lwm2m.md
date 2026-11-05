@@ -90,7 +90,7 @@ Leer es la única forma de seguir el progreso. DeviceChain solo observa el rango
 - Los enlaces de descarga de la plataforma son más largos de lo que admite el recurso Package URI: en la versión 1.0 del objeto 5 el recurso es una cadena de como máximo 255 bytes.
 - El objeto 5 no tiene ningún recurso que lleve una firma. El propio formato de firmware del dispositivo hace su verificación, y la plataforma no tiene adónde retransmitir una firma, así que una asignación podría parecer autenticada sin serlo.
 - LwM2M no tiene identificador de arranque, así que la prueba que necesita un intento, un arranque nuevo que ejecuta la versión objetivo, habría que inferirla de un registro nuevo y del objeto Device.
-- La plataforma sirve las descargas solo por HTTPS, y un dispositivo puede admitir solo CoAP para descargar firmware.
+- La plataforma sirve las descargas por HTTP o HTTPS (HTTPS en una instancia con TLS), nunca por CoAP, y un dispositivo puede admitir solo CoAP para descargar firmware.
 
 Trata el procedimiento como la forma de actualizar dispositivos LwM2M. Las pruebas automáticas de interoperabilidad cubren el registro y la telemetría, no los comandos, así que prueba la secuencia con el modelo de tu dispositivo antes de depender de ella.
 
