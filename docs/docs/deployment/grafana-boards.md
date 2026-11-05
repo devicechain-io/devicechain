@@ -284,8 +284,9 @@ connector and software-update groups appear for the optional services that run t
 All four backlog panels use the [broker fallback](#backlog-panels).
 
 Alerts behind it: `ConnectorDispatchRateLimited`, `ReactConnectorEgressShedding` and
-`ReactShedLettersOverBudget`. The notification and software-update groups have no alert of
-their own; read them on this board.
+`ReactShedLettersOverBudget`. The notification group has no alert of its own; read it on this
+board. The software-update group has four: `UpdateDownloadsNotConfigured`,
+`UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` and `UpdateAttemptsGoingUnknown`.
 
 ## Platform {#platform-board}
 

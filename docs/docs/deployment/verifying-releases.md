@@ -5,8 +5,9 @@ title: Verifying releases
 
 # Verifying releases {#verifying-releases}
 
-Every container image and the Helm chart a DeviceChain release publishes is **signed**, and carries
-two signed statements about how it was made. You can check all of it before you run anything, with
+Every container image and the Helm chart a DeviceChain release publishes is **signed**. Each carries a signed
+statement of how it was made (build provenance), and each image also carries a signed list of what is
+inside it (an SBOM). You can check all of it before you run anything, with
 no key to obtain; checking the provenance needs a GitHub sign-in.
 
 | What | Where it lives | What it tells you |

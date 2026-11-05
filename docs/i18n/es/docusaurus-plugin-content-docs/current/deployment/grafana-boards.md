@@ -289,8 +289,9 @@ opcionales que los ejecutan.
 Los cuatro paneles de retraso usan la [alternativa del broker](#backlog-panels).
 
 Alertas que lo respaldan: `ConnectorDispatchRateLimited`, `ReactConnectorEgressShedding` y
-`ReactShedLettersOverBudget`. Los grupos de notificaciones y de actualizaciones de software no
-tienen alerta propia; léalos en este panel.
+`ReactShedLettersOverBudget`. El grupo de notificaciones no tiene alerta propia; léalo en este
+panel. El de actualizaciones de software tiene cuatro: `UpdateDownloadsNotConfigured`,
+`UpdateReportsMostlyRefused`, `UpdateRolloutStepsFailing` y `UpdateAttemptsGoingUnknown`.
 
 ## Platform {#platform-board}
 

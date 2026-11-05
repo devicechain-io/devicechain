@@ -589,14 +589,14 @@ The provisioning-profile operations belong to [device self-registration](../guid
 
 | Operation | What it does |
 | --- | --- |
-| `createProvisioningProfile` | Creates a profile and returns `{ profile, issuedSecret }`. The server generates the secret (43 characters, 256 bits) and this response is the only place it appears: the platform stores a digest. The request has no `provisionSecret`. `maxDevices` (at least 1, or omitted for no cap) bounds how many devices the profile registers. |
-| `rotateProvisioningProfileSecret(token)` | Replaces the secret and returns the new one once. The old secret stops working at once, with no overlap. Registered devices are unaffected. It is also what brings a profile created before the server generated secrets into service. |
+| `createProvisioningProfile` | Creates a profile and returns `{ profile, issuedSecret }`. For a secret profile the server generates the secret (43 characters, 256 bits) and this response is the only place it appears: the platform stores a digest. The request has no `provisionSecret`. A certificate profile, which names a trust anchor, has no secret, and `issuedSecret` is `null`. `maxDevices` (at least 1, or omitted for no cap) bounds how many devices the profile registers. |
+| `rotateProvisioningProfileSecret(token)` | Replaces the secret and returns the new one once. The old secret stops working at once, with no overlap. Registered devices are unaffected. It is also what brings a profile created before the server generated secrets into service. A certificate profile has no secret, so rotating one is refused. |
 | `updateProvisioningProfile` | A partial update. It has no secret field. `maxDevices` can be set, or cleared with `null`. |
 | `revokeProvisionedDevices(profileToken)` | Disables every credential the profile issued, ends those devices' live sessions, and returns how many it disabled. |
 | `resetDeviceProvisioning(deviceToken)` | Deletes the credentials self-registration issued to a device and ends its sessions. The device keeps its earmark, so it can register again. |
 | `deleteProvisioningProfile(token)` | Refused (`REFERENCE_VIOLATION`) while any device holds a credential the profile issued, revoked ones included. |
 
-On the types, `ProvisioningProfile` gains `maxDevices`, `provisionedDeviceCount` and `secretIssued` (false until the server has generated the secret, which is when the profile is **Rotate required**). A device gains `expectedProvisioningProfile`, its earmark, and a credential gains `provisioningProfile`. `createDevice` and `importDevices` take `provisioningProfileToken` to earmark a device, and `DeviceSearchCriteria` takes `provisioningProfile` and `expectedProvisioningProfile`. The endpoint itself is plain HTTP and described in the [device protocol reference](./device-protocol.md#self-registration).
+On the types, `ProvisioningProfile` gains `maxDevices`, `provisionedDeviceCount` and `secretIssued` (false until the server has generated the secret, which is when the profile is **Rotate required**; a certificate profile has no secret, so it is always false). A device gains `expectedProvisioningProfile`, its earmark, and a credential gains `provisioningProfile`. `createDevice` and `importDevices` take `provisioningProfileToken` to earmark a device, and `DeviceSearchCriteria` takes `provisioningProfile` and `expectedProvisioningProfile`. The endpoint itself is plain HTTP and described in the [device protocol reference](./device-protocol.md#self-registration).
 
 ## Inbound integrations {#integrations}
 

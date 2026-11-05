@@ -443,7 +443,9 @@ did not exist: the first upgrade of an instance built before the device authenti
 encrypted mints that callout's encryption key, stores it with the issuer seed in the instance's
 callout Secret, and never replaces it afterwards. The same goes for the login of the broker's identity
 account, which holds the sign-in state: it is minted once, stored in a Secret only `user-management`
-mounts, and kept from then on. Sign-in state is not restored from a backup, so everyone signs in again
+mounts, and kept from then on. The per-service broker logins are the same: an instance built before
+each service had its own login gets them minted once on its first upgrade, and keeps them from then
+on. Sign-in state is not restored from a backup, so everyone signs in again
 after a rebuild.
 
 ### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}

@@ -207,7 +207,7 @@ LwM2M 的 `ep` 只记日志，其他用途忽略。固件发送 `ep=urn:imei:35�
 
 实际后果是，自动预配设备**完全没有名称**。注册仅携带令牌、外部 ID 和设备类型。控制台设备列表因此以生成的 `sp-…` / `lw-…` 令牌显示，Name 列为 `—`，没有其他易识别名称。
 
-也不能搜索。控制台设备列表**没有搜索框**，只是 Status、Token、Name、Type、Description 和 Created 的分页列表，没有外部 ID 列。API 设备搜索仅接受页码、页大小和设备类型。查找设备时：
+也不能搜索。控制台设备列表**没有搜索框**，只是 Status、Token、Name、Type、Description 和 Created 的分页列表，没有外部 ID 列。API 设备搜索接受页码和页大小，可以按设备类型、预配配置文件或精确别名过滤，但不支持按外部 ID 搜索。查找设备时：
 
 - **控制台中**按令牌找。生成令牌包含外部 ID 的变形（`plant-a/line-3/press-1` → `sp-plant-a-line-3-press-1-…`），翻页读取 Token 列就是查找方式。
 - **API 中**使用 `devicesByExternalId`，接受精确外部 ID 并返回设备。它是精确匹配查找，不支持前缀或子字符串；控制台未调用它，所以仅 API 可用。

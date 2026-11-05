@@ -225,9 +225,10 @@ Cada servicio mantiene abiertas entre usos todas las conexiones que ha abierto s
 tamaño del pool (20 si no se fija `maxOpenConnections`), y cierra cada una una hora después de
 abrirla. La reserva permite a cada área un pod con un pool completo del tamaño predeterminado, más
 otro pod durante un despliegue, así que con los valores predeterminados todos los pools caben en ella. Un
-servicio con `replicas` por encima de 1, o con un `maxOpenConnections` mayor, puede mantener más
-que eso después de un periodo de mucha carga, así que comprueba esos ajustes frente al límite de
-conexiones de la instancia.
+valor de `replicas` o un `maxOpenConnections` mayor fijados mediante `--values` se cuentan en la
+reserva, incluido el pod del despliegue, así que la comprobación de presupuesto anterior los cubre.
+El mismo cambio hecho de otra forma no se cuenta y puede mantener más que la reserva después de un
+periodo de mucha carga, así que compruébalo frente al límite de conexiones de la instancia.
 
 El presupuesto es el único ajuste de instalación que puede cambiar con instancias en marcha, y
 solo hacia arriba: vuelve a ejecutar `dcctl install` con un `--max-connections` mayor. No sale
@@ -1164,7 +1165,9 @@ En ambos casos, la capa de mensajería conserva los eventos hasta que se almacen
 entrega hasta cinco veces, con un minuto entre entregas, antes de abandonarlo y
 [registrarlo como no entregado](./observability.md#max-delivery-records). Por eso una
 interrupción de la base de datos de menos de unos cuatro minutos no deja ningún evento sin
-entregar.
+entregar. El almacén de eventos va más allá: mientras su base de datos no está disponible, conserva
+sin confirmar los eventos que ha tomado y los informa como en curso, así que la espera no agota
+sus cinco entregas.
 
 Una instancia que se está deteniendo dispone como máximo de dos minutos en total. Si para
 entonces no se ha detenido, se detiene de forma forzosa y se elimina su pod. El motivo más

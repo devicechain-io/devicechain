@@ -1830,9 +1830,10 @@ réplica, reenvía al pod que quieres por su nombre (`kubectl port-forward pod/<
 
 ### Qué no sirve, y por qué
 
-- **`block` y `mutex` responden 404.** Su muestreo está desactivado en estos servicios, así que
+- **`block` y `mutex` responden 404 salvo que su muestreo esté activado.** Está desactivado por defecto, así que
   estarían siempre vacíos, y un perfil vacío se leería como "sin contención" cuando no se midió
-  nada.
+  nada. Para una sesión de profiling, fija un `functionalAreas.<area>.profiler.blockRate` o
+  `.mutexFraction` positivo junto con `profiler.enabled`, y se sirven.
 - **Se rechaza un perfil de heap o de asignaciones sobre una ventana de tiempo (`?seconds=` en
   ellos).** Toma dos instantáneas y compáralas con `go tool pprof -base first.pb.gz second.pb.gz`.
 - **`cmdline` y `symbol` no se sirven.** Los perfiles llevan sus propios símbolos.

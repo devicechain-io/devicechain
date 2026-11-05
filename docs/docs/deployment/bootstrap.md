@@ -212,9 +212,10 @@ instances, or instances with many areas enabled, needs a larger budget.
 Each service keeps every connection its pool has opened, up to the pool size (20 unless
 `maxOpenConnections` is set), open between uses, and closes each one an hour after it was
 opened. The reservation allows each area one pod with a full pool of the default size, plus one
-more pod during a rollout, so at the defaults every pool fits within it. A service run at `replicas`
-above 1, or with a raised `maxOpenConnections`, can hold more than that after a busy period, so
-check those settings against the instance's connection limit.
+more pod during a rollout, so at the defaults every pool fits within it. A `replicas` count or a raised
+`maxOpenConnections` set through `--values` is counted in the reservation, rollout pod included, so
+the budget check above covers it. The same change made any other way is not counted and can hold
+more than the reservation after a busy period, so check it against the instance's connection limit.
 
 The budget is the one install setting that can change under running instances, and only
 upwards: re-run `dcctl install` with a larger `--max-connections`. It is not free. Changing
@@ -1083,7 +1084,9 @@ takes longer.
 Either way, events are held by the messaging layer until they are stored. Each one is
 delivered up to five times, a minute apart, before it is given up on and
 [recorded as undelivered](./observability.md#max-delivery-records). A database outage shorter
-than about four minutes therefore leaves no event undelivered.
+than about four minutes therefore leaves no event undelivered. The event store goes further: while
+its database is unavailable it keeps the events it has taken unacknowledged and reports them in
+progress, so the wait does not use up their five deliveries.
 
 A stopping instance is given at most two minutes in all. If it has not stopped by then, it is
 stopped forcibly and its pod is removed. The most likely reason is that it is still trying to

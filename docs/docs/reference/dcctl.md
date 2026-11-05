@@ -714,8 +714,8 @@ the instance is already on, and waits for every area to be ready. The next
 It does not move the instance's version. It refuses when this dcctl belongs to a
 different release than the instance's services, because it would apply this
 release's chart and infrastructure configuration under the old images; upgrade
-the instance first. Like 'dcctl upgrade', it needs 'tofu' on PATH and this
-machine's state for the instance, and it mints no credentials.
+the instance first. It needs 'tofu' on PATH and this
+machine's state for the instance, and it creates no credentials.
 
 Asking for an area the instance already runs is not an error. When every area
 named is already declared and the instance's last run ended Ready, nothing is
@@ -1929,10 +1929,13 @@ install command that fixes it. An operator installed by hand carries no record o
 which release put it there, and dcctl cannot tell that apart from one an older
 dcctl overwrote — so that case is allowed through with a note rather than refused.
 
-It mints no credentials. Every credential the instance is running on is read back
+It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the
 cross-service secret and the secret-store root key. A version change here cannot
-become a credential change.
+become a credential change. The one thing it can create is a credential that did not
+exist yet: the first upgrade of an instance built before them mints the device
+authentication callout's encryption key, the login of the broker's identity account
+and the per-service broker logins, once each.
 
 The one thing it removes is the shared message broker login of an instance upgraded
 from a release that had one. The upgrade that gives every area a login of its own

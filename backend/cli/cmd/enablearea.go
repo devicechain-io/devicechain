@@ -45,8 +45,8 @@ the instance is already on, and waits for every area to be ready. The next
 It does not move the instance's version. It refuses when this dcctl belongs to a
 different release than the instance's services, because it would apply this
 release's chart and infrastructure configuration under the old images; upgrade
-the instance first. Like 'dcctl upgrade', it needs 'tofu' on PATH and this
-machine's state for the instance, and it mints no credentials.
+the instance first. It needs 'tofu' on PATH and this
+machine's state for the instance, and it creates no credentials.
 
 Asking for an area the instance already runs is not an error. When every area
 named is already declared and the instance's last run ended Ready, nothing is

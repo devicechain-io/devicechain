@@ -469,7 +469,7 @@ cifrara la devolución de llamada de autenticación de dispositivos acuña la cl
 devolución, la guarda junto con la semilla del emisor en el Secret de la instancia para ella, y no
 la reemplaza nunca después. Lo mismo vale para la credencial de la cuenta de identidad del broker,
 que guarda el estado de inicio de sesión: se acuña una sola vez, se guarda en un Secret que solo
-monta `user-management` y se conserva desde entonces. El estado de inicio de sesión no se restaura
+monta `user-management` y se conserva desde entonces. Lo mismo vale para el inicio de sesión propio de cada servicio en el broker: una instancia construida antes de que cada servicio tuviera el suyo los recibe acuñados una sola vez en su primera actualización, y los conserva desde entonces. El estado de inicio de sesión no se restaura
 desde una copia, así que tras una reconstrucción todos inician sesión de nuevo.
 
 ### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
