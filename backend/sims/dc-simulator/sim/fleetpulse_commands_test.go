@@ -8,11 +8,29 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-simulator/cmdreceiver"
 )
+
+// set and get are the test's direct view of the limits in force.
+func (l *fleetpulseLimits) set(device string, limit float64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.byDev == nil {
+		l.byDev = map[string]float64{}
+	}
+	l.byDev[device] = limit
+}
+
+func (l *fleetpulseLimits) get(device string) (float64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	v, ok := l.byDev[device]
+	return v, ok
+}
 
 // fleetpulseFarEndRig brings a fleetpulse up through the REAL lifecycle wiring against a fake
 // far end, so what a test drives is the handler the lifecycle actually handed the far end,
@@ -60,6 +78,11 @@ func newFleetpulseFarEndRig(t *testing.T) *fleetpulseFarEndRig {
 // vehicle answered with. It fails the test if the vehicle never answers.
 func (r *fleetpulseFarEndRig) send(t *testing.T, device, key string, payload any) bool {
 	t.Helper()
+	return r.sendToken(t, "cmd-1", device, key, payload)
+}
+
+func (r *fleetpulseFarEndRig) sendToken(t *testing.T, token, device, key string, payload any) bool {
+	t.Helper()
 	if r.fe.handler == nil {
 		t.Fatal("the scenario handed the far end no handler, so every command is answered " +
 			"SUCCESSFUL on receipt whatever it asked and nothing about the vehicle changes")
@@ -69,7 +92,7 @@ func (r *fleetpulseFarEndRig) send(t *testing.T, device, key string, payload any
 		t.Fatal(err)
 	}
 	got := make(chan bool, 1)
-	r.fe.handler.Receive(device, cmdreceiver.Command{Token: "cmd-1", Nonce: "n1", Name: key, Payload: raw},
+	r.fe.handler.Receive(device, cmdreceiver.Command{Token: token, Nonce: "n-" + token, Name: key, Payload: raw},
 		func(ok bool) { got <- ok })
 	select {
 	case ok := <-got:
@@ -215,5 +238,55 @@ func TestFleetpulseTheCommandSetsTheLimitTheNextTickUses(t *testing.T) {
 	got := fleetpulseSpeeds(t, runFleetpulseTickWith(t, fleetpulseVehicleCount, r.driver))
 	if sp := got["dev-00003"]; sp[0] != 7 || sp[1] != 7 {
 		t.Errorf("after set-speed-limit 7 the vehicle reports %v", sp)
+	}
+}
+
+// The platform delivers at least once. A redelivery of an OLDER command arriving after a newer
+// one must be answered as before and must not put the old limit back in force.
+func TestFleetpulseARedeliveredOlderCommandDoesNotUndoANewerOne(t *testing.T) {
+	r := newFleetpulseFarEndRig(t)
+	const dev = "dev-00004"
+	for _, step := range []struct {
+		token string
+		limit float64
+	}{{"cmd-a", 20}, {"cmd-b", 6}, {"cmd-a", 20}} {
+		if !r.sendToken(t, step.token, dev, FleetpulseSpeedLimitKey, map[string]any{"limit_mps": step.limit}) {
+			t.Fatalf("%s answered FAILED", step.token)
+		}
+	}
+	if got, _ := r.driver.limits.get(dev); got != 6 {
+		t.Errorf("limit after cmd-a, cmd-b, cmd-a (redelivered) is %v, want 6", got)
+	}
+}
+
+// One tick reports one speed per vehicle on both paths even when a command lands between the
+// location pass and the measurement pass.
+func TestFleetpulseACommandMidTickDoesNotSplitTheTwoPaths(t *testing.T) {
+	d := NewFleetpulse(7, Load{}).(*fleetpulse)
+	var once sync.Once
+	land := func() {
+		// A command lands as the first event of the tick reaches the ingress.
+		once.Do(func() {
+			for i := 1; i <= fleetpulseVehicleCount; i++ {
+				d.limits.set(renderPattern("dev-{n:05d}", i), 5)
+			}
+		})
+	}
+	seen := runFleetpulseTickHook(t, fleetpulseVehicleCount, d, land)
+	speeds := fleetpulseSpeeds(t, seen)
+	if len(speeds) != fleetpulseVehicleCount {
+		t.Fatalf("captured %d vehicles, want %d", len(speeds), fleetpulseVehicleCount)
+	}
+	for dev, sp := range speeds {
+		if sp[0] != sp[1] {
+			t.Errorf("%s reported location speed %v but speed_mps %v in one tick", dev, sp[0], sp[1])
+		}
+	}
+	// The command still takes effect on the NEXT tick.
+	next := fleetpulseSpeeds(t, runFleetpulseTickWith(t, fleetpulseVehicleCount, d))
+	for dev, sp := range next {
+		if sp[0] != 5 || sp[1] != 5 {
+			t.Errorf("%s next tick reports %v, want both capped at 5", dev, sp)
+		}
 	}
 }

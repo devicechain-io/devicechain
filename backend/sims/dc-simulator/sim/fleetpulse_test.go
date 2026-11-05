@@ -337,11 +337,21 @@ func runFleetpulseTick(t *testing.T, count int) []emittedEvent {
 // configured (a command applied, say).
 func runFleetpulseTickWith(t *testing.T, count int, driver Sim) []emittedEvent {
 	t.Helper()
+	return runFleetpulseTickHook(t, count, driver, nil)
+}
+
+// runFleetpulseTickHook additionally calls onRequest, when set, as each event reaches the
+// ingress -- how a test lands something in the middle of a tick.
+func runFleetpulseTickHook(t *testing.T, count int, driver Sim, onRequest func()) []emittedEvent {
+	t.Helper()
 	var (
 		mu   sync.Mutex
 		seen []emittedEvent
 	)
 	rt := fakeIngress(t, count, func(w http.ResponseWriter, r *http.Request) {
+		if onRequest != nil {
+			onRequest()
+		}
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read body: %v", err)

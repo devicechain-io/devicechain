@@ -138,28 +138,59 @@ type fleetpulse struct {
 type fleetpulseLimits struct {
 	mu    sync.Mutex
 	byDev map[string]float64
+	// settled is the outcome of each command already worked, by device and delivery token,
+	// so a redelivery (the platform delivers at least once) is answered the same way without
+	// applying its limit a second time: a replay of an older command must not undo a newer one.
+	settled map[string]bool
+	order   []string
 }
 
-func (l *fleetpulseLimits) set(device string, limit float64) {
+// fleetpulseSettledMax bounds settled; the oldest outcome is forgotten first.
+const fleetpulseSettledMax = 4096
+
+// apply works a command once. It returns the outcome, and whether this was the first receipt.
+func (l *fleetpulseLimits) apply(device, token string, limit float64, valid bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.byDev == nil {
-		l.byDev = map[string]float64{}
+	key := device + "|" + token
+	if ok, seen := l.settled[key]; seen {
+		return ok
 	}
-	l.byDev[device] = limit
+	if valid {
+		if l.byDev == nil {
+			l.byDev = map[string]float64{}
+		}
+		l.byDev[device] = limit
+	}
+	if l.settled == nil {
+		l.settled = map[string]bool{}
+	}
+	l.settled[key] = valid
+	l.order = append(l.order, key)
+	if len(l.order) > fleetpulseSettledMax {
+		delete(l.settled, l.order[0])
+		l.order = l.order[1:]
+	}
+	return valid
 }
 
-func (l *fleetpulseLimits) get(device string) (float64, bool) {
+// snapshot copies the limits in force, so one tick applies ONE set of them to both of its
+// passes: a command landing between the location pass and the measurement pass must not
+// leave a vehicle reporting two different speeds for the same instant.
+func (l *fleetpulseLimits) snapshot() map[string]float64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	v, ok := l.byDev[device]
-	return v, ok
+	out := make(map[string]float64, len(l.byDev))
+	for k, v := range l.byDev {
+		out[k] = v
+	}
+	return out
 }
 
 // capSpeed applies a vehicle's limit to a fix: the speed never exceeds it. A fix with no limit
 // set, or already under it, comes back untouched.
-func (l *fleetpulseLimits) capSpeed(device string, fix Fix) Fix {
-	limit, ok := l.get(device)
+func capSpeed(limits map[string]float64, device string, fix Fix) Fix {
+	limit, ok := limits[device]
 	if !ok || fix.Speed == nil || *fix.Speed <= limit {
 		return fix
 	}
@@ -181,17 +212,18 @@ type fleetpulseHandler struct{ limits *fleetpulseLimits }
 // vehicle cannot act on at all (another command, no number, a non-positive or non-finite
 // one), answering FAILED rather than inventing a limit.
 func (h fleetpulseHandler) Receive(device string, c cmdreceiver.Command, answer func(success bool)) {
-	ok := false
+	var limit float64
+	valid := false
 	if c.Name == FleetpulseSpeedLimitKey {
 		var args map[string]json.Number
 		if err := json.Unmarshal(c.Payload, &args); err == nil {
-			if limit, err := args[FleetpulseSpeedLimitParameter].Float64(); err == nil &&
-				limit > 0 && !math.IsInf(limit, 0) && !math.IsNaN(limit) {
-				h.limits.set(device, limit)
-				ok = true
+			if v, err := args[FleetpulseSpeedLimitParameter].Float64(); err == nil &&
+				v > 0 && !math.IsInf(v, 0) && !math.IsNaN(v) {
+				limit, valid = v, true
 			}
 		}
 	}
+	ok := h.limits.apply(device, c.Token, limit, valid)
 	// answer may block on the broker, and this runs on the broker's goroutine.
 	go answer(ok)
 }
@@ -274,15 +306,16 @@ func (s *fleetpulse) Tick(ctx context.Context, rt *Runtime) error {
 	}
 	workers := rt.Load.Workers(count)
 
+	limits := s.limits.snapshot()
 	locErr := EmitLocationAll(ctx, rt, workers, func(i int, d DeviceInstance) (Fix, bool) {
-		return s.limits.capSpeed(d.Token, fleetpulseFix(s.seed, n, i, count)), true
+		return capSpeed(limits, d.Token, fleetpulseFix(s.seed, n, i, count)), true
 	})
 	if locErr != nil {
 		log.Error().Err(locErr).Msg("emit location failed")
 	}
 
 	measErr := EmitAll(ctx, rt, workers, func(i int, d DeviceInstance) map[string]float64 {
-		fix := s.limits.capSpeed(d.Token, fleetpulseFix(s.seed, n, i, count))
+		fix := capSpeed(limits, d.Token, fleetpulseFix(s.seed, n, i, count))
 		return map[string]float64{
 			FleetpulseSpeedKey:   *fix.Speed,
 			FleetpulseHeadingKey: *fix.Heading,
