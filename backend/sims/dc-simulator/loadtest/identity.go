@@ -222,22 +222,8 @@ func ReconcileIdentity(led sim.IdentitySnapshot, stored storedIdentities, tenant
 		rep.Inconclusive = append(rep.Inconclusive, fmt.Sprintf(format, args...))
 	}
 
-	// The ledger against the driver's own counters.
-	if led.All.Accepted != drive.Emitted {
-		inconclusive("the ledger and the driver's counters disagree: ledger accepted %d, driver accepted %d", led.All.Accepted, drive.Emitted)
-	}
-	if led.All.Refused < drive.Shed+drive.Backpressured+drive.ConnectRefused {
-		inconclusive("the ledger filed %d refusals, fewer than the driver's %d shed, %d backpressured and %d connect-refused", led.All.Refused, drive.Shed, drive.Backpressured, drive.ConnectRefused)
-	}
-	if led.All.Refused+led.All.Ambiguous > drive.Shed+drive.Backpressured+drive.ConnectRefused+drive.Failed {
-		inconclusive("the ledger filed %d refused and %d ambiguous, more than the driver's %d shed, %d backpressured, %d connect-refused and %d failed",
-			led.All.Refused, led.All.Ambiguous, drive.Shed, drive.Backpressured, drive.ConnectRefused, drive.Failed)
-	}
-	if led.Unparsed > 0 {
-		inconclusive("%d sent occurredTime value(s) did not parse back", led.Unparsed)
-	}
-	if led.SubMicro > 0 {
-		inconclusive("%d sent occurredTime value(s) carry a part below the microsecond, which the store does not keep", led.SubMicro)
+	for _, why := range ledgerInconsistencies(led, drive) {
+		inconclusive("%s", why)
 	}
 	if meas.Accepted+meas.Refused+meas.Ambiguous == 0 {
 		inconclusive("the ledger holds no Measurement emit, so there is nothing to reconcile")
@@ -280,72 +266,7 @@ func ReconcileIdentity(led sim.IdentitySnapshot, stored storedIdentities, tenant
 			continue
 		}
 		rep.Persisted += int64(len(times))
-		counts := map[int64]*keyCounts{}
-		at := func(us int64) *keyCounts {
-			c := counts[us]
-			if c == nil {
-				c = &keyCounts{}
-				counts[us] = c
-			}
-			return c
-		}
-		ids := led.Devices[dev]
-		for _, us := range ids.Accepted {
-			at(us).a++
-		}
-		for _, us := range ids.Refused {
-			at(us).r++
-		}
-		for _, us := range ids.Ambiguous {
-			at(us).m++
-		}
-		for _, us := range times {
-			at(us).s++
-		}
-		keys := make([]int64, 0, len(counts))
-		for us := range counts {
-			keys = append(keys, us)
-		}
-		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-		for _, us := range keys {
-			c := counts[us]
-			key := IdentityKey{Device: dev, OccurredMicros: us}.String()
-			switch {
-			case c.a+c.r+c.m > 1:
-				rep.Collisions++
-			case c.a == 1:
-				if c.s == 0 {
-					rep.Missing++
-					sample(&rep.Samples.Missing, key)
-				} else if c.s > 1 {
-					rep.DuplicateKeys++
-					rep.ExtraCopies += int64(c.s - 1)
-					sample(&rep.Samples.Duplicate, fmt.Sprintf("%s x%d", key, c.s))
-				}
-			case c.m == 1:
-				switch c.s {
-				case 0:
-					rep.AmbiguousAbsent++
-					sample(&rep.Samples.AmbiguousAbsent, key)
-				case 1:
-					rep.AmbiguousStored++
-					sample(&rep.Samples.AmbiguousStored, key)
-				default:
-					rep.DuplicateKeys++
-					rep.ExtraCopies += int64(c.s - 1)
-					sample(&rep.Samples.Duplicate, fmt.Sprintf("%s x%d", key, c.s))
-				}
-			case c.r == 1:
-				if c.s > 0 {
-					rep.RefusedStored++
-					rep.Unexpected += int64(c.s)
-					sample(&rep.Samples.Unexpected, "refused:"+key)
-				}
-			default:
-				rep.Unexpected += int64(c.s)
-				sample(&rep.Samples.Unexpected, key)
-			}
-		}
+		classifyDevice(&rep, dev, led.Devices[dev], times)
 	}
 	if rep.Collisions > 0 {
 		inconclusive("%d identities were filed more than once in the ledger (a harness defect)", rep.Collisions)
@@ -366,6 +287,103 @@ func ReconcileIdentity(led sim.IdentitySnapshot, stored storedIdentities, tenant
 
 	rep.Reconciled = len(rep.Inconclusive) == 0 && rep.Missing == 0 && rep.DuplicateKeys == 0 && rep.Unexpected == 0
 	return rep, Invariant{Name: InvIdentity, Passed: rep.Reconciled, Detail: identityDetail(rep)}
+}
+
+// ledgerInconsistencies checks the simulator's ledger against the driver's own counters and
+// returns one sentence per disagreement; an empty result means the ledger is consistent with
+// what the driver says it did. The per-device read-back and the aggregate oracle share it, so
+// the two cannot disagree about what a sound ledger is.
+func ledgerInconsistencies(led sim.IdentitySnapshot, drive sim.Snapshot) []string {
+	var out []string
+	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+	if led.All.Accepted != drive.Emitted {
+		add("the ledger and the driver's counters disagree: ledger accepted %d, driver accepted %d", led.All.Accepted, drive.Emitted)
+	}
+	if led.All.Refused < drive.Shed+drive.Backpressured+drive.ConnectRefused {
+		add("the ledger filed %d refusals, fewer than the driver's %d shed, %d backpressured and %d connect-refused", led.All.Refused, drive.Shed, drive.Backpressured, drive.ConnectRefused)
+	}
+	if led.All.Refused+led.All.Ambiguous > drive.Shed+drive.Backpressured+drive.ConnectRefused+drive.Failed {
+		add("the ledger filed %d refused and %d ambiguous, more than the driver's %d shed, %d backpressured, %d connect-refused and %d failed",
+			led.All.Refused, led.All.Ambiguous, drive.Shed, drive.Backpressured, drive.ConnectRefused, drive.Failed)
+	}
+	if led.Unparsed > 0 {
+		add("%d sent occurredTime value(s) did not parse back", led.Unparsed)
+	}
+	if led.SubMicro > 0 {
+		add("%d sent occurredTime value(s) carry a part below the microsecond, which the store does not keep", led.SubMicro)
+	}
+	return out
+}
+
+// classifyDevice is the per-identity verdict for ONE device: ids is the ledger's view of it and
+// times what the store holds (with repeats). It adds to rep exactly as ReconcileIdentity's rules
+// say (see there), and is shared with the aggregate oracle's exact drill-down.
+func classifyDevice(rep *IdentityReport, dev string, ids sim.DeviceIdentities, times []int64) {
+	counts := map[int64]*keyCounts{}
+	at := func(us int64) *keyCounts {
+		c := counts[us]
+		if c == nil {
+			c = &keyCounts{}
+			counts[us] = c
+		}
+		return c
+	}
+	for _, us := range ids.Accepted {
+		at(us).a++
+	}
+	for _, us := range ids.Refused {
+		at(us).r++
+	}
+	for _, us := range ids.Ambiguous {
+		at(us).m++
+	}
+	for _, us := range times {
+		at(us).s++
+	}
+	keys := make([]int64, 0, len(counts))
+	for us := range counts {
+		keys = append(keys, us)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	for _, us := range keys {
+		c := counts[us]
+		key := IdentityKey{Device: dev, OccurredMicros: us}.String()
+		switch {
+		case c.a+c.r+c.m > 1:
+			rep.Collisions++
+		case c.a == 1:
+			if c.s == 0 {
+				rep.Missing++
+				sample(&rep.Samples.Missing, key)
+			} else if c.s > 1 {
+				rep.DuplicateKeys++
+				rep.ExtraCopies += int64(c.s - 1)
+				sample(&rep.Samples.Duplicate, fmt.Sprintf("%s x%d", key, c.s))
+			}
+		case c.m == 1:
+			switch c.s {
+			case 0:
+				rep.AmbiguousAbsent++
+				sample(&rep.Samples.AmbiguousAbsent, key)
+			case 1:
+				rep.AmbiguousStored++
+				sample(&rep.Samples.AmbiguousStored, key)
+			default:
+				rep.DuplicateKeys++
+				rep.ExtraCopies += int64(c.s - 1)
+				sample(&rep.Samples.Duplicate, fmt.Sprintf("%s x%d", key, c.s))
+			}
+		case c.r == 1:
+			if c.s > 0 {
+				rep.RefusedStored++
+				rep.Unexpected += int64(c.s)
+				sample(&rep.Samples.Unexpected, "refused:"+key)
+			}
+		default:
+			rep.Unexpected += int64(c.s)
+			sample(&rep.Samples.Unexpected, key)
+		}
+	}
 }
 
 // identityDetail renders the verdict line.

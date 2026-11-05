@@ -17,7 +17,11 @@
 #                                /varz, /jsz?streams=1&consumers=1, /connz before and after (.json)
 #   each database primary        pg_stat_statements before/after + their delta, the delta against
 #                                the previous phase, pg_stat_bgwriter/checkpointer/WAL and the
-#                                per-hypertable rows inserted, before/after + delta       (.json)
+#                                per-hypertable rows inserted, before/after + delta       (.json);
+#                                per-table counters (inserts, updates, HOT updates, dead tuples,
+#                                autovacuum runs), before/after + delta                   (.json)
+#   the manifest also records     the role (primary or replica) every database pod held before and
+#                                after the window, so the analysis can split DB CPU by instance
 #   the nodes                    cAdvisor container CPU/memory series before/after (.prom): the
 #                                exact CPU-seconds counters the analysis divides by events
 #   the namespace                metrics-API pod and node usage before/after (.json)
@@ -51,6 +55,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELF="$ROOT/hack/$(basename "${BASH_SOURCE[0]}")"
+# shellcheck source=lib/dbstats.sh
+source "$ROOT/hack/lib/dbstats.sh"
 KUBECTL="${KUBECTL:-kubectl}"
 CURL="${CURL:-curl}"
 jq_real="${JQ:-jq}"
@@ -203,6 +209,8 @@ case "${args[0]}" in
       echo '{"takenAt":"t","statsReset":"r","dealloc":0,"statements":[{"key":"1/2/3/t","db":"d","queryid":"3","query":"select 1","calls":5,"total_exec_time":10.5,"rows":5}]}'
     elif [[ "${args[*]}" == *"pg_database"* ]]; then echo "appdb"
     elif [[ "${args[*]}" == *"pg_stat_bgwriter"* ]]; then echo '{"takenAt":"t","bgwriter":{"buffers_clean":1},"wal":{"wal_bytes":100},"hypertables":{"events":10}}'
+    # after the bgwriter branch: the event store's sysstat query reads pg_stat_user_tables too
+    elif [[ "${args[*]}" == *"pg_stat_user_tables"* ]]; then echo '[{"t":"device-state/device_states","i":10,"u":2000,"h":1500,"d":0,"live":100,"dead":7,"av":3,"aa":1,"vc":0}]'
     else echo "stub kubectl: unhandled exec: ${args[*]}" >&2; exit 9; fi ;;
   port-forward)
     echo "Forwarding from 127.0.0.1:${STUB_PORT:-43210} -> 6060"; exec sleep 600 ;;
@@ -250,6 +258,22 @@ STUB
   done
   jq -e '.complete == true and (.artifacts | length) > 20 and .steady.checked == true and (.images | length) >= 5' "$d/out/rT-R1-manifest.json" >/dev/null \
     || { echo "self-test: the manifest of a healthy run does not say complete" >&2; rc=1; }
+  # the table snapshots are collected for BOTH databases and the roles are in the manifest
+  for f in rT-R1-postgres-dc-rdb-1-tables-pre.json rT-R1-postgres-dc-rdb-1-tables-post.json rT-R1-postgres-dc-rdb-1-tables-delta.json \
+           rT-R1-timescaledb-dc-tsdb-1-tables-delta.json; do
+    [[ -s "$d/out/$f" ]] || { echo "self-test: expected table output $f is missing or empty" >&2; rc=1; }
+  done
+  jq -e '.valid == true and (.tables | length) == 1' "$d/out/rT-R1-postgres-dc-rdb-1-tables-delta.json" >/dev/null \
+    || { echo "self-test: the tables delta is not valid" >&2; rc=1; }
+  jq -e '(.dbRolesBefore | map(select(.pod == "dc-rdb-1" and .role == "primary")) | length) == 1 and (.pods | map(select(.pod == "dc-rdb-1" and .role == "primary")) | length) == 1' \
+    "$d/out/rT-R1-manifest.json" >/dev/null || { echo "self-test: the manifest does not record the database roles before and after" >&2; rc=1; }
+  # the delta maths, on literal documents: 1,000 updates of which 750 HOT; and a counter that went backwards is INVALID
+  local ta='{"app":[{"t":"s/t","i":0,"u":100,"h":50,"d":0,"live":5,"dead":1,"av":1,"aa":0,"vc":0}]}' tb='{"app":[{"t":"s/t","i":9,"u":1100,"h":800,"d":0,"live":5,"dead":40,"av":3,"aa":1,"vc":0}]}'
+  jq -n --argjson a "$ta" --argjson b "$tb" '. as $_ | '"$DBSTATS_TABLES_DELTA" \
+    | jq -e '.valid == true and .tables[0].updates == 1000 and .tables[0].hot_updates == 750 and .tables[0].hot_ratio == 0.75 and .tables[0].dead_tuples == 40 and .tables[0].autovacuum_runs == 2 and .tables[0].autoanalyze_runs == 1' >/dev/null \
+    || { echo "self-test: the table delta arithmetic is wrong" >&2; rc=1; }
+  jq -n --argjson a "$tb" --argjson b "$ta" '. as $_ | '"$DBSTATS_TABLES_DELTA" | jq -e '.valid == false' >/dev/null \
+    || { echo "self-test: a table counter going backwards was not invalid" >&2; rc=1; }
 
   # 2. NOT STEADY (every state but steady, a wrong phase, no marker): refused, exit 3, nothing written.
   for st in warmup ended aborted; do
@@ -468,7 +492,7 @@ if [[ "$dry_run" -eq 1 ]]; then
     case "$tgt" in
       service) echo "  $comp $pod :$port  -> cpu1..$cpu_profiles heap allocs mutex block" ;;
       nats)    echo "  $comp $pod :${port}  -> cpu1..$cpu_profiles heap allocs [block]; varz/jsz/connz pre+post" ;;
-      db)      echo "  $comp $pod  -> pgss pre/post/delta/delta-prev, sysstat pre/post/delta" ;;
+      db)      echo "  $comp $pod  -> pgss pre/post/delta/delta-prev, sysstat pre/post/delta, tables pre/post/delta" ;;
     esac
   done
   echo "  nodes: ${nodes[*]:-none}  -> cadvisor pre+post; metrics-api pods/nodes pre+post"
@@ -488,6 +512,9 @@ started_at="$(now_utc)"
 # snapshot of pod identity, to detect a restart or replacement during the window
 identity() { "$JQ" -c '[.items[]|{pod:.metadata.name,uid:.metadata.uid,restarts:([.status.containerStatuses[]?.restartCount]|add // 0)}]|sort_by(.pod)' <<<"$1"; }
 identity_before="$(identity "$pods_json")"
+# The role every database pod holds BEFORE the window; the manifest carries the roles after it, so a
+# failover inside the window is visible and the per-instance DB CPU is not split by a stale role.
+roles_before="$("$JQ" -c '[.items[] | select(.metadata.labels["cnpg.io/cluster"]) | {pod: .metadata.name, role: (.metadata.labels["cnpg.io/instanceRole"] // null)}]' <<<"$pods_json")"
 
 artifact() { # component pod kind file   (file already written)
   local c="$1" p="$2" kd="$3" f="$4" bytes
@@ -586,6 +613,9 @@ nats_monitor() { # pod when(pre|post)
 psql_json() { # pod database sql -> stdout
   k exec -n "${psql_ns:-$ns}" "$1" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$2" -c "$3"
 }
+psql_db_pod() { # namespace pod database sql -> stdout   (the shape lib/dbstats.sh calls)
+  psql_ns="$1"; psql_json "$2" "$3" "$4"
+}
 PGSS_SQL="SELECT jsonb_build_object('takenAt', now(), 'statsReset', (SELECT stats_reset FROM pg_stat_statements_info), 'dealloc', (SELECT dealloc FROM pg_stat_statements_info), 'statements', coalesce((SELECT jsonb_agg(jsonb_build_object('key', s.userid::text||'/'||s.dbid::text||'/'||s.queryid::text||'/'||s.toplevel::text, 'db', d.datname, 'queryid', s.queryid::text, 'query', left(s.query, 400), 'calls', s.calls, 'total_exec_time', s.total_exec_time, 'rows', s.rows, 'shared_blks_hit', s.shared_blks_hit, 'shared_blks_read', s.shared_blks_read, 'wal_bytes', s.wal_bytes, 'wal_records', s.wal_records)) FROM pg_stat_statements s LEFT JOIN pg_database d ON d.oid = s.dbid), '[]'::jsonb))"
 SYS_SQL_BASE="'takenAt', now(), 'inRecovery', pg_is_in_recovery(), 'walLsn', pg_current_wal_lsn()::text, 'statsReset', (SELECT stats_reset FROM pg_stat_bgwriter), 'bgwriter', (SELECT to_jsonb(b) - 'stats_reset' FROM pg_stat_bgwriter b), 'wal', (SELECT to_jsonb(w) - 'stats_reset' FROM pg_stat_wal w)"
 HYPER_SQL="'hypertables', coalesce((SELECT jsonb_object_agg(h, n) FROM (SELECT c.hypertable_name h, sum(t.n_tup_ins) n FROM timescaledb_information.chunks c JOIN pg_stat_user_tables t ON t.schemaname = c.chunk_schema AND t.relname = c.chunk_name GROUP BY 1) x), '{}'::jsonb)"
@@ -648,6 +678,13 @@ db_snapshot() { # component pod when(pre|post)
   else
     fail_rec "$c" "$p" "sysstat-$when" "statistics are not readable: $(head -c 300 "$errf" | tr '\n' ' ')"
   fi
+  # per-table write and vacuum counters, every application database of the cluster
+  f="$(outname "$c" "$p" "tables-$when" json)"
+  if sj="$(dbstats_tables psql_db_pod "${psql_ns:-$ns}" "$p" 2>"$errf")" && "$JQ" -e . >/dev/null 2>&1 <<<"$sj"; then
+    printf '%s\n' "$sj" >"$f"; artifact "$c" "$p" "tables-$when" "$f" || true
+  else
+    fail_rec "$c" "$p" "tables-$when" "table statistics are not readable: $(head -c 300 "$errf" | tr '\n' ' ')"
+  fi
 }
 
 db_deltas() { # component pod
@@ -674,6 +711,13 @@ db_deltas() { # component pod
     "$JQ" -n --slurpfile a "$pre" --slurpfile b "$post" '$a[0] as $a | $b[0] as $b | '"$SYS_DELTA" >"$d"
     "$JQ" -e '.valid' "$d" >/dev/null || fail_rec "$c" "$p" sysstat-delta "$("$JQ" -r .reason "$d")"
     artifact "$c" "$p" sysstat-delta "$d" || true
+  fi
+  pre="$(outname "$c" "$p" tables-pre json)"; post="$(outname "$c" "$p" tables-post json)"
+  if [[ -s "$pre" && -s "$post" ]]; then
+    d="$(outname "$c" "$p" tables-delta json)"
+    "$JQ" -n --slurpfile a "$pre" --slurpfile b "$post" '$a[0] as $a | $b[0] as $b | '"$DBSTATS_TABLES_DELTA" >"$d"
+    "$JQ" -e '.valid' "$d" >/dev/null || fail_rec "$c" "$p" tables-delta "$("$JQ" -r .reason "$d")"
+    artifact "$c" "$p" tables-delta "$d" || true
   fi
 }
 
@@ -767,7 +811,7 @@ manifest="$prefix-manifest.json"
 marker_doc="null"; [[ "$steady_check" -eq 1 && -s "$marker" ]] && marker_doc="$("$JQ" -c . "$marker")"
 "$JQ" -n --arg round "$round" --arg phase "$phase" --arg ns "$ns" --arg s "$started_at" --arg f "$finished_at" \
   --argjson secs "$secs" --argjson k "$cpu_profiles" --argjson checked "$([[ $steady_check -eq 1 ]] && echo true || echo false)" \
-  --argjson marker "$marker_doc" --argjson invalid "$invalid_pods" \
+  --argjson marker "$marker_doc" --argjson invalid "$invalid_pods" --argjson rolesBefore "$roles_before" \
   --slurpfile pods "$pf_dir/pods_after.json" \
   --slurpfile rows "$rows_file" --slurpfile fails "$failures_file" \
   --arg rdb "$rdb_cluster" --arg tsdb "$tsdb_cluster" '
@@ -783,6 +827,7 @@ marker_doc="null"; [[ "$steady_check" -eq 1 && -s "$marker" ]] && marker_doc="$(
      complete: (($fails | length) == 0),
      failures: $fails,
      artifacts: $arts,
+     dbRolesBefore: $rolesBefore,
      pods: [$pods[0].items[] | select(comp_of != null) | {pod:.metadata.name, component:comp_of, node:.spec.nodeName, uid:.metadata.uid,
              role:(.metadata.labels["cnpg.io/instanceRole"] // null)}],
      images: [$pods[0].items[] | select(comp_of != null) | . as $p | .status.containerStatuses[]? | {pod:$p.metadata.name, component:($p | comp_of), container:.name, image:.image, imageID:.imageID, restartCount:.restartCount}]}' >"$manifest"
