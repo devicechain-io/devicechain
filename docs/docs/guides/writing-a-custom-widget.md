@@ -321,6 +321,22 @@ live tail, and needs no change. A widget that wants to say "fixed window" reads 
 `formatValue(value)` with no precision prints at most 3 decimals, or 4 significant digits below 1;
 pass a precision to fix the number of decimals.
 
+## Serving under a strict content-security policy {#strict-csp}
+
+By default the SDK draws chart tooltips as HTML and renders the severity-token CSS as a `<style>`
+element. Both are refused by a page whose policy has no `style-src 'unsafe-inline'` (for example
+`style-src 'self'`). A host that serves under such a policy calls `configureStrictCsp(true)` from
+`@devicechain/widget-sdk` once, before it mounts a board:
+
+- chart tooltips are drawn on the canvas instead of as HTML, so a custom tooltip formatter must
+  return plain text, not HTML. A `{` or `}` in a series name can cut a tooltip line short, and the
+  tooltip's `extraCssText`, `className` and `appendTo` options have no effect;
+- the token CSS is adopted by the document as a constructed stylesheet, so a board hosted inside a
+  shadow root does not receive it. Browsers without constructed stylesheets (Safari before 16.4)
+  fall back to the `<style>` element.
+
+The setting is off by default and changes nothing for a host that does not call it.
+
 ## Interactions and the trust model
 
 `interactions` lists the host callbacks the widget uses: `alarmActions` (acknowledge and clear, alarm

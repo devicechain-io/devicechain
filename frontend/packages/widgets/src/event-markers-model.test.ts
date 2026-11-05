@@ -5,6 +5,7 @@
 // where each one is placed, what colour it takes, and the cap.
 
 import type { AlarmRow, CommandRow } from '@devicechain/dashboards';
+import { configureStrictCsp } from '@devicechain/widget-sdk';
 import type { ChartTheme } from '@devicechain/widget-sdk/echarts';
 import { describe, expect, it } from 'vitest';
 
@@ -207,11 +208,25 @@ describe('commands', () => {
     expect(tip).toContain('succeeded');
   });
 
-  it('escape the name in the tooltip, which ECharts renders as HTML', () => {
+  it('escape the name in the default HTML tooltip', () => {
     const items = commandEvents([command({ name: '<img src=x onerror=alert(1)>' })], range, words, fmt);
     const tip = helper(decorated(items)).markLine!.tooltip.formatter({ name: 'c1' });
     expect(tip).not.toContain('<img');
     expect(tip).toContain('&lt;img');
+  });
+
+  it('keep the name as written in the canvas tooltip of strict-CSP host mode, with rich-text braces neutralized', () => {
+    configureStrictCsp(true);
+    try {
+      const items = commandEvents([command({ name: '<img src=x onerror=alert(1)>{a|b}' })], range, words, fmt);
+      const tip = helper(decorated(items)).markLine!.tooltip.formatter({ name: 'c1' });
+      expect(tip).toContain('<img src=x onerror=alert(1)>');
+      expect(tip).not.toMatch(/[{}]/);
+      expect(tip).not.toContain('<b>');
+      expect(tip).toContain('\n');
+    } finally {
+      configureStrictCsp(false);
+    }
   });
 
   it('write their name on the canvas only on a roomy chart with few lines', () => {

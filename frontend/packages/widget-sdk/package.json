@@ -34,6 +34,10 @@
       "types": "./dist/empty-state.d.ts",
       "import": "./dist/empty-state.js"
     },
+    "./strict-csp": {
+      "types": "./dist/strict-csp.d.ts",
+      "import": "./dist/strict-csp.js"
+    },
     "./echarts": {
       "types": "./dist/echarts.d.ts",
       "import": "./dist/echarts.js"
