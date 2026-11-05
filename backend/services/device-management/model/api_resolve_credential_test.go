@@ -17,7 +17,7 @@ import (
 // MQTT_BASIC credential "cred-1" storing "s3cret-0123456789".
 func resolveFixture(t *testing.T) (*Api, context.Context) {
 	t.Helper()
-	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...), &DeviceCredential{})...)
+	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &PendingSessionKick{})...)
 	ctx := partialUpdateCtx()
 	if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
 		t.Fatalf("seed device type: %v", err)

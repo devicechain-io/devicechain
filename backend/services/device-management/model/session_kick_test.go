@@ -183,3 +183,52 @@ func TestTheConnectLookupsCarryTheCredentialsExpiry(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// 🔴 A DEVICE DISABLE'S KICK IS DURABLE. A kick that could not be confirmed after the disable
+// committed used to be retried only if an operator repeated the call; it is now a queued debt
+// (as a trust anchor's is) that the background drain clears once the broker answers, and that
+// re-enabling the device withdraws.
+//
+// Negative control: with the queue call removed from UpdateDevice there is no row and the drain
+// below has nothing to retry.
+func TestADisableWhoseKickFailedIsRetriedByTheBackgroundDrain(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	k := &togglingKicker{}
+	api.SessionKicker = k
+
+	_, err := api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+	require.ErrorIs(t, err, ErrSessionsNotEnded, "the caller is told the disable is saved but the sessions are not confirmed ended")
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Len(t, rows, 1, "the unconfirmed kick is on record")
+	require.Equal(t, kickOriginDeviceDisabled, rows[0].Origin)
+
+	// The responder comes back; nobody repeats the call. The background pass asks again.
+	k.set(true)
+	res, err := api.DrainSessionKicks(ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Tenants)
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows, "a confirmed kick clears its row")
+	last := k.calls[len(k.calls)-1]
+	require.Equal(t, togglingCall{messaging.SessionKickDeviceDisabled, []string{"dev"}}, last, "the kick carries the device-disabled reason")
+}
+
+func TestReEnablingADeviceWithdrawsItsOwedKick(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	k := &togglingKicker{}
+	api.SessionKicker = k
+	_, err := api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+
+	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(true)})
+	require.NoError(t, err)
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows, "an enabled device that has reconnected must not be kicked by a stale debt")
+	k.set(true)
+	calls := len(k.calls)
+	_, err = api.DrainSessionKicks(ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
+	require.Len(t, k.calls, calls, "the drain asks the broker about nothing")
+}

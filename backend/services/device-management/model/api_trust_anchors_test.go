@@ -242,6 +242,9 @@ func TestAnAnchorKickThatCouldNotBeConfirmedIsOwedAndRetried(t *testing.T) {
 // disable are three different debts, so their origins must be three different numbers.
 func TestKickOriginsDoNotCollide(t *testing.T) {
 	assert.NotEqual(t, kickOriginReset, anchorKickOrigin(1))
+	for _, anchorID := range []uint{1, 2, 1000, 1 << 20, 1 << 39} {
+		assert.NotEqual(t, kickOriginDeviceDisabled, anchorKickOrigin(anchorID))
+	}
 	for _, profileID := range []uint{1, 2, 1000, 1 << 20, 1 << 32} {
 		for _, anchorID := range []uint{1, 2, 1000, 1 << 20} {
 			assert.NotEqual(t, profileID, anchorKickOrigin(anchorID), "profile %d vs anchor %d", profileID, anchorID)

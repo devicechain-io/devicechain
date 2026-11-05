@@ -15,7 +15,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
-	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -835,6 +834,23 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		if err := tx.Omit(omit...).Save(updated).Error; err != nil {
 			return err
 		}
+		// 🔴 THE KICK IS RECORDED WITH THE DISABLE, in this transaction, the way a trust anchor's
+		// is: a kick that could not be confirmed after the commit is then retried by the background
+		// drain, not only by an operator who repeats the call. A disabled device's events are
+		// refused anyway (resolve_device_disabled_total), but its session is the only thing that
+		// still shows it connected and the only way its commands and configuration channel stay
+		// open. Re-enabling clears the debt: it would otherwise end the session of a device that
+		// has just reconnected.
+		if updated.DisabledAt.Valid {
+			if err := api.queueSessionKicksOnTx(tx, updated.TenantId, kickOriginDeviceDisabled, []string{updated.Token}); err != nil {
+				return err
+			}
+		} else if toggled && api.SessionKicker != nil {
+			if err := tx.Where("tenant_id = ? AND device_token = ? AND origin = ?",
+				updated.TenantId, updated.Token, kickOriginDeviceDisabled).Delete(&PendingSessionKick{}).Error; err != nil {
+				return err
+			}
+		}
 		if !aliasesSet {
 			return nil
 		}
@@ -851,10 +867,13 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// is what makes it wrong: the event would resolve to the old type's profile.
 	api.evictDeviceByToken(ctx, updated.Token)
 	// A device that is DISABLED (quarantined) has its open sessions ended, on every update that
-	// leaves it disabled, so repeating a disable whose kick failed is the retry. Enabling it, or
+	// leaves it disabled. A kick that is not confirmed stays queued (recorded above, with the
+	// disable) for the background drain, and repeating the call asks again. Enabling it, or
 	// editing an enabled device, ends nothing.
 	if updated.DisabledAt.Valid {
-		if kerr := api.endDeviceSessions(ctx, updated.TenantId, messaging.SessionKickDeviceDisabled, updated.Token); kerr != nil {
+		if kerr := api.drainSessionKicks(ctx, updated.TenantId, 0, func(db *gorm.DB) *gorm.DB {
+			return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDisabled, updated.Token)
+		}); kerr != nil {
 			return updated, kerr
 		}
 	}

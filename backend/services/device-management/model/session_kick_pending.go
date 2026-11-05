@@ -63,6 +63,9 @@ func (r PendingSessionKick) reason() string {
 	if r.Origin == kickOriginReset {
 		return messaging.SessionKickCredentialDeleted
 	}
+	if r.Origin == kickOriginDeviceDisabled {
+		return messaging.SessionKickDeviceDisabled
+	}
 	return messaging.SessionKickCredentialChanged
 }
 

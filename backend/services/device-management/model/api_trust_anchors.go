@@ -48,6 +48,12 @@ const kickOriginAnchorBase uint = 1 << 40
 // anchorKickOrigin is the queue Origin of a kick owed because trust anchor id was disabled.
 func anchorKickOrigin(id uint) uint { return kickOriginAnchorBase + id }
 
+// kickOriginDeviceDisabled is the queue Origin of a kick owed because the DEVICE was disabled.
+// The device is the key's own second column, so one constant names the debt for every device. It
+// sits above every anchor origin (kickOriginAnchorBase + an anchor id) as it sits above every
+// profile id; TestKickOriginsDoNotCollide pins it.
+const kickOriginDeviceDisabled uint = 1 << 41
+
 // lockTrustAnchorByToken reads the anchor with this token on tx, locking its row FOR UPDATE.
 // Disable, delete and every write that binds something to an anchor serialize on it. A token
 // that names nothing in the tenant is gorm.ErrRecordNotFound.
