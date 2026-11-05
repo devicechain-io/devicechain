@@ -143,8 +143,8 @@
       "translationSha256": "90a357307ab5cd14bba444c9c12a2097dee536c9acc0e8407e4ddf20e53e761c"
     },
     "deployment/observability.md": {
-      "sourceSha256": "d5058ea8a8c8f31417f44135ad143cd0224996dcbd9080e6dc5294a3174f1c54",
-      "translationSha256": "ffc400e7c72532c8141833e083084cb3cf0179e09266f66ebc33e52a6957ab76"
+      "sourceSha256": "bc5b4f47cc2fbc4cc5700fa9eca37ebcb43aba8be550841c707d6f6d0e85b517",
+      "translationSha256": "cd1331d47b7d2205100e16f3825f916e285b0e0362da57c70d0ecfe443e504cc"
     },
     "deployment/releases-and-upgrades.md": {
       "sourceSha256": "cc8853ca01ac090ff132ef7839e15f955f17c8a58527546200bf8dacc1319053",

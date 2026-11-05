@@ -46,6 +46,39 @@ func derivedMaxFileStore(volume string) (int64, error) {
 	return q.Value() * 9 / 10, nil
 }
 
+// maxStoreAfterGrowth drops the recorded file-store ceiling when the apply is about to
+// re-derive it, which is when the JetStream volume the upgrade passes is not the one the
+// release recorded and the recorded ceiling is the one that size derived (not a hand-set
+// nats_jetstream_max_file_store, which stays and is what the precheck must honour).
+//
+// 🔴 WITHOUT THIS A GROWN VOLUME IS CHECKED AGAINST ITS OWN OLD CEILING. The release records
+// the ceiling it was applied with, a 16Gi volume's 14Gi, and the reservation check prefers a
+// recorded ceiling. The volume-growth recipe leaves the claims at the new size, the apply
+// derives the new ceiling from it, and the check would still refuse the reservation the
+// growth was made to hold.
+func maxStoreAfterGrowth(state *tfjson.State, rootdir, liveVolume, recordedMax string) string {
+	if recordedMax == "" || liveVolume == "" {
+		return recordedMax
+	}
+	vals, found, err := releaseValuesInState(state, natsReleaseAddress)
+	if err != nil || !found {
+		return recordedMax
+	}
+	size, ok := nestedString(vals, "config", "jetstream", "fileStore", "pvc", "size")
+	if !ok || size == "" {
+		return recordedMax
+	}
+	rq, rerr := resource.ParseQuantity(size)
+	lq, lerr := resource.ParseQuantity(liveVolume)
+	if rerr != nil || lerr != nil || rq.Cmp(lq) == 0 {
+		return recordedMax // the volume did not move: the recorded ceiling is still the broker's
+	}
+	if statedByOperator(rootdir, "nats_jetstream_max_file_store") {
+		return recordedMax // the operator stated it (tfvars or TF_VAR), so the apply keeps it
+	}
+	return ""
+}
+
 // liveMaxFileStore reads the file-store ceiling the broker was last applied with out of the
 // instance root's state, or "" when the state does not carry one. It is the ceiling an
 // operator's hand-set nats_jetstream_max_file_store arrives as.
@@ -120,7 +153,16 @@ func precheckJetStreamReservation(ctx context.Context, st *State) error {
 		if err != nil {
 			return err
 		}
-		live, err := liveVolumesFrom(infra.Broker, infra.EventStore)
+		if infra.Broker == nil {
+			// Only an infrastructure apply recreates the StatefulSet and re-derives the broker's
+			// ceiling from the grown volume; the services alone would reserve against a ceiling the
+			// running servers do not have.
+			return fmt.Errorf("instance %q's broker StatefulSet is gone (deleted with --cascade=orphan to grow "+
+				"its volume), so the broker's ceiling is not what its volume claims say until an infrastructure "+
+				"apply recreates it. Nothing has been changed. Run the upgrade without --skip-infrastructure",
+				st.Instance)
+		}
+		live, err := infra.volumes()
 		if err != nil {
 			return err
 		}
