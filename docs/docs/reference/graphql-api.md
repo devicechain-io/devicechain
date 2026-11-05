@@ -197,7 +197,7 @@ query {
 :::caution Deeply backfilled readings are missing from `bucketedMeasurements`
 A reading **written now but stamped more than 30 days in the past** (by its own `occurredTime`,
 which a device controls) is returned by `measurementEvents` at once but appears in
-`bucketedMeasurements` only after the next hourly sweep. This only reaches a device that buffered for
+`bucketedMeasurements` only after the next sweep, usually within about an hour. This only reaches a device that buffered for
 over a month, or one whose clock is wrong by that much. See [Backfilled readings and the rollup](#backfilled-readings-and-the-rollup).
 :::
 
@@ -206,13 +206,18 @@ over a month, or one whose clock is wrong by that much. See [Backfilled readings
 A bucketed read whose `intervalSeconds` is a whole multiple of 60 and which carries no anchor filter
 is served from a pre-aggregated rollup rather than from the raw readings. The rollup keeps itself
 current over a **trailing 30-day window**, every minute. Everything older than that was materialized
-once, when the database was created, and is refreshed again by a sweep that runs hourly, one day of
-history at a time, from the oldest reading the platform keeps (or accepts) up to that window.
+once, when the database was created, and is refreshed again by a sweep that runs hourly (and a few
+minutes after a restart), one chunk of history at a time, from the oldest reading the platform keeps
+(or accepts) up to that window.
 
 A reading written now but stamped more than 30 days back is stored at once, so `measurementEvents`
-returns it, but `bucketedMeasurements` shows it only after the next sweep, within about an hour (a
-sweep that finds the rollup busy leaves that day for the next). A reading stamped within 30 days is
-picked up within a minute. A reading stamped more than a year back is refused when it arrives.
+returns it, but `bucketedMeasurements` shows it only after the next sweep, usually within about an
+hour. Three things delay it. A calculated-metric backfill in progress holds the rollup, and the sweep
+retries every five minutes until it is free. An instance whose event-store connection pool has no
+connection to spare does not run the sweep at all (the service logs that at start), so such readings
+never appear until the pool is enlarged. And a chunk that keeps failing to refresh is skipped and
+retried after a growing delay; `devicechain_eventmanagement_calc_backfill_rollup_tail_windows_skipped_total{reason}`
+counts those. A reading stamped within 30 days is picked up within a minute. A reading stamped more than a year back is refused when it arrives.
 Sub-minute intervals and anchor-scoped reads are served from the raw readings and are unaffected.
 
 ## Exploring the schema {#exploring-the-schema}

@@ -1170,6 +1170,7 @@ días), el tamaño de lote y la regla de un trabajo activo por inquilino son fij
 | `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | Antigüedad del trabajo en cola o en curso más antiguo; `0` si no hay. Un trabajo atascado la hace crecer sin límite, así que conviene alertar sobre ella. |
 | `devicechain_eventmanagement_calc_backfill_batch_seconds`, `..._rollup_refresh_seconds` | Tiempo para procesar un lote y para refrescar el agregado de mediciones sobre un tramo. |
 | `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | Refrescos que coincidieron con el propio trabajo de política del agregado y se reintentaron. |
+| `devicechain_eventmanagement_calc_backfill_rollup_tail_windows_skipped_total{reason}` | Fragmentos de historial antiguo de la preagregación que el barrido horario no refrescó: `timeout`, `conflict` (el bloqueo del trabajo de política), `error` o `backoff` (un fragmento que falló hace poco y espera una demora creciente). Un `timeout` o `error` sostenido es un fragmento cuyas lecturas fechadas más de 30 días atrás aún no están en los gráficos basados en la preagregación. |
 
 Cada toma de un trabajo, final de porción y estado final también se registra una vez, con el
 inquilino, el token del trabajo, el perfil, la versión, los recuentos y cualquier fallo.

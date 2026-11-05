@@ -1120,6 +1120,7 @@ size and the one-active-job-per-tenant rule are fixed.
 | `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | Age of the oldest queued or running job; `0` when none. A job that is stuck makes it grow without bound, so alert on it. |
 | `devicechain_eventmanagement_calc_backfill_batch_seconds`, `..._rollup_refresh_seconds` | Time to process one batch, and to refresh the measurement rollup over one stretch. |
 | `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | Refreshes that met the rollup's own policy job and were retried. |
+| `devicechain_eventmanagement_calc_backfill_rollup_tail_windows_skipped_total{reason}` | Chunks of old rollup history the hourly sweep did not refresh: `timeout`, `conflict` (the policy job's lock), `error`, or `backoff` (a chunk that failed recently and is waiting out a growing delay). A steady `timeout` or `error` is a chunk whose readings dated more than 30 days back are not yet in rollup-backed charts. |
 
 Each claim, slice end and final status is also logged once, with the tenant, job token, profile,
 version, counts and any failure.
