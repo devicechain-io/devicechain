@@ -6,6 +6,7 @@ package core
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -283,7 +284,7 @@ func TestConcurrentSnapshotRefusesShardsOutOfStep(t *testing.T) {
 
 // Close joins every shard goroutine, and is idempotent.
 func TestConcurrentCloseJoinsTheShards(t *testing.T) {
-	before := runtime.NumGoroutine()
+	before := shardWorkers()
 	var engines []*ConcurrentSharded
 	g := newDiffGen(1)
 	for i := 0; i < 8; i++ {
@@ -292,16 +293,29 @@ func TestConcurrentCloseJoinsTheShards(t *testing.T) {
 		c.ProcessResolved(uint64(i+1), tm, evs)
 		engines = append(engines, c)
 	}
-	if during := runtime.NumGoroutine(); during < before+8*16 {
-		t.Fatalf("expected %d shard goroutines, saw %d more", 8*16, during-before)
+	if during := shardWorkers(); during != before+8*16 {
+		t.Fatalf("expected %d shard goroutines, found %d", before+8*16, during)
 	}
 	for _, c := range engines {
 		c.Close()
 		c.Close()
 	}
-	if after := runtime.NumGoroutine(); after > before {
-		t.Fatalf("%d goroutines outlived Close", after-before)
+	// Close returns when the workers have signalled; give each a moment to leave its frame.
+	deadline := time.Now().Add(5 * time.Second)
+	for shardWorkers() > before && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
+	if after := shardWorkers(); after > before {
+		t.Fatalf("%d shard goroutines outlived Close", after-before)
+	}
+}
+
+// shardWorkers counts the running shard goroutines by their stacks; the process's total goroutine
+// count also moves with the race detector and the test runner, which is not what is being asked.
+func shardWorkers() int {
+	buf := make([]byte, 4<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	return strings.Count(string(buf), "(*shardWorker).run")
 }
 
 // A redelivery at or below the position is ignored by every shard, and by the dispatcher without
