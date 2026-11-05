@@ -134,6 +134,31 @@ Three alerts watch the volume, in the order you want to hear them: `DatabaseVolu
 instead of dropping them (see [When the event store cannot take
 writes](./observability.md#event-store-down)).
 
+### Checkpoints, chunk size and compression at higher rates {#event-store-checkpoints}
+
+Three settings decide how the event store behaves once the rate climbs past a few thousand
+readings per second.
+
+- **Checkpoints.** The first change to each page after a checkpoint writes the whole 8 KB page to
+  the write-ahead log, so checkpoints that arrive too often multiply the log. The event store
+  logs compressed page images (`wal_compression = lz4`) and sets `checkpoint_timeout` to 15
+  minutes and `max_wal_size` to a fifth of the volume (6.4 GiB on the default 32Gi), so a store
+  taking a few thousand readings per second checkpoints on the clock instead of whenever the log
+  fills. Both are applied by reload, with no restart. The cost is crash recovery: after an unclean
+  stop the database replays the log written since its last checkpoint, up to 15 minutes of it.
+  Raise `timescale_max_wal_size_mib` and lower `timescale_checkpoint_timeout` together when you
+  size the store for a higher rate: to keep checkpoints on the clock, `max_wal_size` wants to be
+  at least three times the log written per checkpoint interval. The log lives on the data volume,
+  so that figure has to fit inside it.
+- **Chunk interval.** `lifecycle.chunkIntervalHours` is 24 by default and only affects chunks
+  created after it changes. A chunk's indexes should fit in memory while it is being written, and
+  the active chunks' indexes should fit in about a quarter of the database's RAM. At 1,000
+  readings per second a daily chunk is tens of gigabytes and the default is right. At
+  10,000 and above, use 1 to 6 hours.
+- **Compress-after.** `lifecycle.compressAfterDays` is 7 by default, which keeps a week of data
+  uncompressed. At 10,000 readings per second that is several terabytes of hot data. If you
+  do not read raw data older than a day or two, set it to 1 and size the volume for that.
+
 ### Expanding the volume online {#event-store-expand}
 
 On a StorageClass that allows volume expansion, raise the size on the event store's Cluster. The

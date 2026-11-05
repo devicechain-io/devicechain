@@ -141,6 +141,34 @@ modos, salta `EventStoreRefusingWrites` y `event-management` retiene los eventos
 almacenar en lugar de descartarlos (vea [Cuando el almacén de eventos no puede aceptar
 escrituras](./observability.md#event-store-down)).
 
+### Puntos de control, tamaño de fragmento y compresión con tasas altas {#event-store-checkpoints}
+
+Tres ajustes deciden cómo se comporta el almacén de eventos cuando la tasa supera unos pocos miles
+de lecturas por segundo.
+
+- **Puntos de control.** El primer cambio en cada página tras un punto de control escribe la página
+  completa de 8 KB en el registro de escritura anticipada, de modo que unos puntos de control
+  demasiado frecuentes multiplican el registro. El almacén de eventos registra imágenes de página
+  comprimidas (`wal_compression = lz4`) y fija `checkpoint_timeout` en 15 minutos y `max_wal_size`
+  en una quinta parte del volumen (6,4 GiB en los 32Gi predeterminados), de modo que un almacén que
+  recibe unos pocos miles de lecturas por segundo hace los puntos de control por reloj y no cada
+  vez que se llena el registro. Ambos se aplican por recarga, sin reinicio. El coste es la
+  recuperación tras una caída: después de una parada no limpia, la base de datos reproduce el
+  registro escrito desde su último punto de control, hasta 15 minutos. Al dimensionar el almacén
+  para una tasa mayor, suba `timescale_max_wal_size_mib` y baje `timescale_checkpoint_timeout`
+  juntos: para que los puntos de control sigan el reloj, `max_wal_size` debe ser al menos el triple
+  del registro escrito por intervalo de punto de control. El registro vive en el volumen de datos,
+  así que esa cifra tiene que caber en él.
+- **Intervalo de fragmento.** `lifecycle.chunkIntervalHours` es 24 por defecto y solo afecta a los
+  fragmentos creados después de cambiarlo. Los índices de un fragmento deben caber en memoria
+  mientras se escribe en él, y los de los fragmentos activos en aproximadamente una cuarta parte
+  de la RAM de la base de datos. A 1.000 lecturas por segundo un fragmento diario ocupa decenas de
+  gigabytes y el valor predeterminado es correcto. A 10.000 o más, use de 1 a 6 horas.
+- **Compresión tras N días.** `lifecycle.compressAfterDays` es 7 por defecto, lo que deja una
+  semana de datos sin comprimir. A 10.000 lecturas por segundo son varios terabytes de datos
+  calientes. Si no consulta datos en bruto de más de uno o dos días, fíjelo en 1 y dimensione el
+  volumen en consecuencia.
+
 ### Ampliar el volumen en línea {#event-store-expand}
 
 En una StorageClass que permita ampliar volúmenes, suba el tamaño en el Cluster del almacén de
