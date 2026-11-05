@@ -22,7 +22,7 @@ The server exposes eleven **read** tools. Each one is a query against the same G
 
 - `list_devices` — list devices, with filtering.
 - `get_device` — a single device's details.
-- `get_device_capabilities` — what a device can measure, and the published commands it accepts, with each command's parameter schema.
+- `get_device_capabilities` — what a device can measure, and the published commands it accepts, with each command's parameter schema. The metrics come from the profile's current definitions, so they can include one that has not been published yet; the commands are always the published ones.
 
 `list_devices` and `get_device` do not yet say whether a device is disabled, and `list_devices` cannot filter by it. A disabled device is listed exactly like a live one, so an assistant cannot tell a quarantined device from a working one through these tools. Check a device's status in the console, where a disabled device carries a **Disabled** badge; see [Disabling and enabling a device](../user-guide/devices.md#disabling-and-enabling-a-device).
 
@@ -54,7 +54,7 @@ MCP is becoming a standard way to give AI assistants real capabilities. The risk
 
 - **It carries the user's token, never a service token.** The MCP server holds no privileged platform credential. Every tool call forwards the *caller's* validated, tenant-scoped JWT to the underlying GraphQL service, so the agent reaches exactly what the user reaches. Giving an AI a service identity of its own would let it act across tenants on anyone's request, and that is the one thing this design refuses.
 - **The tenant is pinned at grant time, not passed as a parameter.** Authorization decides which tenant the token can act in, and the token carries that tenant. No tool takes a "tenant" argument an agent could change.
-- **Tokens are audience-bound.** An access token issued for the MCP server names that server as its intended audience (RFC 8707) and is rejected anywhere else. A token minted for one resource can't be replayed against another.
+- **Tokens are audience-bound.** An access token issued for the MCP server names that server as its intended audience (RFC 8707). The MCP server rejects any token that does not name it as its audience, so a token minted for another resource can't be replayed against the MCP server.
 - **Read-only, and curated.** Every tool is a query. There is no write path, no generic query escape hatch, and no exposure of sensitive objects.
 - **Every call is authenticated and re-checked.** On each request the server validates the bearer token against `user-management`'s public keys and enforces a read-only scope. The underlying GraphQL service then independently re-applies the same tenant and role checks the console gets.
 

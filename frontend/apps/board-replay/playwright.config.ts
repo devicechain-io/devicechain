@@ -19,6 +19,8 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 export default defineConfig({
   testDir: './e2e',
   testMatch: '*.e2e.ts',
+  // csp.e2e.ts serves the BUILT bundle and has its own config (playwright.csp.config.ts, `npm run test:csp`).
+  testIgnore: 'csp.e2e.ts',
   outputDir: './test-results',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,

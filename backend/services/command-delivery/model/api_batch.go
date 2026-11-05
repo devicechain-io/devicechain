@@ -551,7 +551,7 @@ func (api *Api) validateBatchTargets(ctx context.Context, tokens []string, name 
 		}
 		chunk, err := api.BatchValidator.ValidateEnqueueBatch(ctx, tokens[start:end], name, payload)
 		if err != nil {
-			return nil, fmt.Errorf("cannot enqueue command batch: validation is unavailable")
+			return nil, unavailableOr(err, "cannot enqueue command batch: validation is unavailable")
 		}
 		refusals = append(refusals, chunk...)
 	}

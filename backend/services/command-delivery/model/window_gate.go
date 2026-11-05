@@ -6,7 +6,6 @@ package model
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -321,7 +320,7 @@ func (api *Api) windowHoldFor(ctx context.Context, deviceToken, commandKey strin
 	if err != nil {
 		log.Error().Err(err).Str("deviceToken", deviceToken).Str("command", commandKey).
 			Msg("Maintenance window check failed; refusing enqueue.")
-		return nil, fmt.Errorf("cannot enqueue command: validation is unavailable")
+		return nil, unavailableOr(err, "cannot enqueue command: validation is unavailable")
 	}
 	for _, refusal := range refusals {
 		if refusal.DeviceToken == deviceToken {
@@ -367,7 +366,7 @@ func (api *Api) scheduleBatchHolds(ctx context.Context, tokens []string, command
 		if err != nil {
 			log.Error().Err(err).Str("command", commandKey).
 				Msg("Maintenance window check failed; refusing batch.")
-			return nil, nil, fmt.Errorf("cannot enqueue command batch: validation is unavailable")
+			return nil, nil, unavailableOr(err, "cannot enqueue command batch: validation is unavailable")
 		}
 		for _, hold := range chunkHolds {
 			holds[hold.DeviceToken] = hold

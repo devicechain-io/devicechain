@@ -194,6 +194,61 @@ The per-event identity ledger lives in memory for the length of the run (`--iden
 keeps it, since `auto` decides after the drive; a 60 minute run at 6,000/s holds about 21M
 entries, a few hundred MB).
 
+### The aggregate identity oracle (`dc-loadtest-aggoracle`)
+
+The per-device read-back (`--identity full`) pages every stored event back through the tenant API:
+about 90M events at 100k/s for fifteen minutes, hours of reads that load the shard under test. The
+aggregate oracle asks the event store's Postgres for one grouped result per tenant instead:
+
+```
+per device:  ( count,  sum over rows of  hash(occurred_time in microseconds)  mod 2^64 )
+```
+
+computed in SQL on the shard and compared with the same pair the harness computed from what it sent.
+It catches loss (both fall), duplication (both rise) and substitution (the count agrees, the hash sum
+does not: `A,A,C,D` stored for `A,B,C,D`), which is what the equal-totals count cannot see. The hash is
+the first eight bytes of SHA-256 of the instant, so regular timestamps do not sum to colliding totals;
+a loss is missed only if a different row set hashes to the same 64-bit total.
+
+```bash
+# the harnesses write their expected aggregates (a few KB per device thousand, not per event)
+./dc-loadtest-mqtt --handshake ... --rate 6000 --duration 15m --aggregate-ledger run-a.json
+# anywhere the event store's Postgres is reachable (a port-forward); one --ledger per harness
+DC_EVENTSTORE_DSN=postgres://... ./dc-loadtest-aggoracle verify --ledger run-a.json --ledger run-b.json
+```
+
+A device whose pair is neither its accepted events nor its accepted plus all ambiguous ones is read
+exactly and judged by identity with multiplicity, so the report names the missing and the duplicated
+instants. A moving store (rows still arriving) is inconclusive, not clean: `--settle` reads twice.
+The command needs direct, read-only access to the event store; the harness itself still has none.
+
+**The oracle is proven before it is trusted.** `dc-loadtest-aggoracle rig --scratch` seeds a scratch
+database (10M rows by default), then perturbs it one row at a time beneath the API, **red stages first**:
+one row deleted (must be red, naming the row); a row on another device duplicated so every total is
+equal again (must be red, naming both, while a grand-total count comparison stays green); both put
+back (must be green); one row's instant moved by a microsecond so no device count changes (must be red
+while a per-device count comparison stays green); put back (must be green). The comparators that stay
+green are the mutants the oracle must beat. It also checks the SQL hash against the Go one, negative
+instants included.
+
+### Many harnesses, one measurement (`dc-loadtest-multi`)
+
+One harness is one tenant from one process; a single pod cannot offer 100k. A fleet is N harnesses on
+as many pods, each with its own tenant and ledger. Give every one the same `--start-at` (an RFC3339
+instant, held after provisioning and, for MQTT, after the fleet connected) and merge their reports:
+
+```bash
+./dc-loadtest-multi merge --expect 6 harness-*.json        # pods elsewhere; reads dc-loadtest and dc-loadtest-mqtt reports
+./dc-loadtest-multi run --handshake a.json --handshake b.json ... --lead 3m --hold 10m   # N HTTP harnesses from one process
+```
+
+The merged run passes only if every harness passed (`harnesses-passed`), no tenant is driven twice
+(`tenants-distinct`: two harnesses on one tenant would each count the other's events as unexpected),
+the windows overlap (`windows-aligned`: start spread within `--align-tolerance`, and all harnesses
+driving together for `--min-overlap` of the mean hold, since a summed rate is only a rate of one
+window), and, with `--expect`, no harness failed to write a report (`harness-count`). Exit `3` if any
+harness lost PUBACKed events.
+
 ### Location events
 
 `fleetpulse` is the scenario that reports position: a small fleet driving a closed

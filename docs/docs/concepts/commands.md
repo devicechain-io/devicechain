@@ -272,7 +272,9 @@ lowered per tenant.
 
 #### Retrying a ceiling refusal {#retrying-a-ceiling-refusal}
 
-`HELD_CEILING_EXCEEDED` is the **only temporary refusal** the enqueue path produces. Every other
+`HELD_CEILING_EXCEEDED` is the **only temporary coded refusal** the enqueue path produces. (If a service the
+enqueue depends on is unreachable, the enqueue fails with an uncoded `validation is unavailable` error,
+which can succeed on a retry once the service is back.) Every other coded
 rejection describes a request that will be exactly as wrong on the next attempt; this one clears on
 its own as the backlog goes out. It is the one code worth retrying, and the rest are worth
 surfacing to a person. See
@@ -281,7 +283,9 @@ surfacing to a person. See
 ### Who reports the outcome {#who-reports-the-outcome}
 
 Only the device can report success. `SUCCESSFUL` and a device-reported `FAILED` are the two
-outcomes only the device can produce. Every other terminal state is one the platform writes on its
+outcomes only the device can produce. (The exception is a Sparkplug write, whose success the
+platform infers from the node's reported state, which can mean the value was already there; see
+[Sparkplug B](./sparkplug.md).) Every other terminal state is one the platform writes on its
 own:
 
 - `TIMEOUT`, `EXPIRED` or `CANCELLED`;

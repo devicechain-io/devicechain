@@ -21,7 +21,7 @@ title: 架构概览
 
 跟随一条读数(燃油液位)从设备到仪表板,再看规则如何处理它。
 
-1. **设备发布。** 它用自己的凭据连接平台 broker,把一个 JSON 事件发布到自己的主题 `{instance}/{tenant}/devices/{token}/events`。broker 只允许它发布到这个主题。参见[连接设备](../guides/connecting-a-device.md)。
+1. **设备发布。** 它用自己的凭据连接平台 broker,把一个 JSON 事件发布到自己的主题 `{instance}/{tenant}/devices/{token}/events`。broker 把它的遥测限定在这个主题。参见[连接设备](../guides/connecting-a-device.md)。
 2. **接入服务解码。** `event-sources` 接收消息,检查消息体中的设备与主题中的设备是否一致,应用该租户的接入速率限制,并把解码后的事件发布到处理管道。无法解码的消息会进入 `failed-decode` 流。
 3. **事件被解析。** `device-management` 认证设备,查找它的[设备类型与配置档](./domain-model.md)、分配关系,以及被跟踪的关系(客户、区域、资产)。它把这些信息作为索引维度写入事件,并发布解析后的事件。
 4. **事件被存储。** `event-management` 将其批量写入 TimescaleDB,并按租户分区。生命周期策略(压缩、保留、汇总)在那里执行。

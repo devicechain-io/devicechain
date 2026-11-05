@@ -3276,7 +3276,13 @@
             "graphMode": "area",
             "textMode": "auto",
             "justifyMode": "auto"
-          }
+          },
+          "links": [
+            {
+              "title": "Sparkplug ingest board",
+              "url": "/d/@board:sparkplug-ingest@?var-datasource=${datasource}"
+            }
+          ]
         },
         {
           "id": 42,
@@ -3545,7 +3551,13 @@
             "graphMode": "area",
             "textMode": "auto",
             "justifyMode": "auto"
-          }
+          },
+          "links": [
+            {
+              "title": "LwM2M ingest board",
+              "url": "/d/@board:lwm2m-ingest@?var-datasource=${datasource}"
+            }
+          ]
         },
         {
           "id": 47,

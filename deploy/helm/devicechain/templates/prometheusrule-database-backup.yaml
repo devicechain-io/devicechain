@@ -185,8 +185,9 @@ spec:
         # collector exports `value="ready"` and `value="done"` on every member, and a
         # standby reports ready 0 (it marks received segments done).
         #
-        # 32 segments = 512 MiB, half of the store's max_wal_size (64 segments). An
-        # archiver that keeps up holds a handful: the benchmark cluster read ready 0
+        # 32 segments = 512 MiB. It was half of the store's stock max_wal_size (64 segments);
+        # the event store's max_wal_size is now sized from its volume, so this is an
+        # absolute count and no longer follows it. An archiver that keeps up holds a handful: the benchmark cluster read ready 0
         # on its primary at rest — a loaded healthy value was not captured, which is
         # why the threshold sits well above "a handful" rather than near it. 5m so a
         # catch-up burst after the store comes back (a reconnect, a restart of the

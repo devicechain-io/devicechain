@@ -46,10 +46,6 @@ what people ask for, so tell us if it should change.
   and can map a generic JSON body. The next step is a decoder you author per device profile, in the
   same expression language the detection engine uses. See
   [inbound integrations](https://docs.devicechain.io/guides/inbound-integrations).
-- **Self-registration from a certificate authority.** A device presenting a certificate issued by a
-  CA you trust would be created on first connect against a profile, without a pre-shared secret. See
-  [X.509 devices](https://docs.devicechain.io/guides/device-x509) and
-  [self-registration](https://docs.devicechain.io/guides/device-self-registration).
 - **Certificate sign-in for the edge agent.** The agent's uplink authenticates with an `MQTT_BASIC`
   credential today and has no client-certificate setting. See
   [edge services](https://docs.devicechain.io/deployment/edge-services).

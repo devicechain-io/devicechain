@@ -5,7 +5,7 @@ title: Grafana 仪表盘
 
 # Grafana 仪表盘 {#grafana-boards}
 
-`dcctl install` 部署的[监控栈](./observability.md#the-monitoring-stack)为每个实例提供八个 Grafana 仪表盘：一个回答“一切都在运行吗？”的**总览**，以及七个**阶段仪表盘**，分别对应消息从设备到送达通知所经过的各个阶段，外加支撑这些阶段的平台层。每个仪表盘用于回答一个问题，并链接到你接下来会打开的仪表盘。
+`dcctl install` 部署的[监控栈](./observability.md#the-monitoring-stack)为每个实例提供十个 Grafana 仪表盘：一个回答“一切都在运行吗？”的**总览**，七个**阶段仪表盘**，分别对应消息从设备到送达通知所经过的各个阶段，外加支撑这些阶段的平台层，以及两个面向可选的 [Sparkplug 与 LwM2M 服务](./edge-services.md)的仪表盘。每个仪表盘用于回答一个问题，并链接到你接下来会打开的仪表盘。边缘代理运行在集群之外，改用它自己的[仪表盘文件](#edge-agent-dashboard)。
 
 仪表盘上的所有内容都来自服务已经导出的指标（参见[指标参考](./metrics-reference.md)），以及监控栈采集的标准 Kubernetes、数据库和消息代理序列。无需额外开启任何东西。
 
@@ -95,7 +95,7 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 | Protection of the MQTT message store | 必需消费者是否在位、被恢复的存储设置、没有大小上限的网关流，以及因存储已满或繁忙而被拒绝的连接。 |
 | Device presence and external sources | 未记录的上线与下线变化、读取方不是恰好一个的外部 MQTT 来源，以及设备登录缓存。 |
 | Device self-registration | 已注册设备、按原因划分的拒绝，以及响应时间。 |
-| Sparkplug ingest, LwM2M ingest | 仅在这些可选服务运行时出现：活跃读取方或服务状态、失败，以及各协议的流量。 |
+| Sparkplug ingest, LwM2M ingest | 仅在这些可选服务运行时出现：活跃读取方或服务状态、失败，以及各协议的流量。两者各有完整的仪表盘：[Sparkplug ingest](#sparkplug-ingest-board) 和 [LwM2M ingest](#lwm2m-ingest-board)。 |
 
 支撑它的告警：[接入链路背压](./observability.md#ingest-backpressure)和[消费者从未读取的消息](./observability.md#unread-loss)中介绍的 MQTT 与捕获流告警，[无人读取的外部 MQTT 来源](./observability.md#external-mqtt-owner)中的外部来源告警，[设备自注册](./observability.md#self-registration-alerts)中的注册告警，以及凭据缓存和速率限制器告警，还有 Sparkplug 与 LwM2M 接入告警。
 
@@ -205,12 +205,77 @@ Messaging 的 *Messages waiting to be redelivered* 始终是代理自己的计�
 
 支撑它的告警：[`InstanceContainerRestarted`](./observability.md#container-restarts)、`Sso*` 和凭据存储告警、`TenantPurge*`、[`SafetyGateDisabled`](./observability.md#safety-gates) 和 [`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings)、`RateLimiterOverflowInUse`、`RateMeteringClockFallback`、`ReactShedLettersOverBudget` 和 `ConnectorDispatchRateLimited`。
 
+## Sparkplug ingest {#sparkplug-ingest-board}
+
+**Sparkplug 节点不再上报，或 Sparkplug 主机没有在读取时，使用它。**它沿着一条传输链路，从与代理的连接一路跟到已存储的读数，再到发回边缘节点的命令。该服务是可选的：未运行它的实例上，所有面板都显示“无数据”或零。
+
+| 分组 | 显示内容 |
+| --- | --- |
+| Is it reading? | 活跃读取方（恰好一个才健康）、代理连接失败、被拒绝的分组订阅、被丢弃的消息、无法解码的消息，以及无法注册的节点。 |
+| What arrives | 按类型划分的消息，以及它们产生的读数、在线状态变化和已注册设备。 |
+| What was not stored | 按原因划分的被跳过读数，以及所有被丢弃的内容：接入时丢弃、无法解码、来自未知设备、属于正在删除的租户、过旧，以及超出租户上限而被限流。 |
+| Presence and rebirths | rebirth 请求及被丢弃的请求、存活探测及其标记为离线的设备、注册恢复，以及一次探测需要多久、最近一次成功是什么时候。 |
+| Commands to edge nodes | 等待结果的命令、未确认命令、命令故障、熔断器触发次数和熔断器未闭合的来源、按结果划分的命令、确认耗时，以及每个来源的熔断器状态。 |
+
+支撑它的告警：[运行边缘服务](./edge-services.md#edge-alerts)中的 `SparkplugIngest*` 和 `SparkplugCommand*` 告警。
+
+## LwM2M ingest {#lwm2m-ingest-board}
+
+**LwM2M 设备无法访问、不再上报，或命令没有送达时使用。**它覆盖 CoAP 与 DTLS 服务器、它所持有的设备群、它存储的读数，以及通向设备的命令路径。该服务是可选的：未运行它的实例上，所有面板都显示“无数据”或零。
+
+| 分组 | 显示内容 |
+| --- | --- |
+| Is it serving? | 主实例与正在服务的副本（各恰好一个）、被丢弃的通知、未执行的命令、被拒绝的握手，以及因达到上限被拒绝的会话。 |
+| The fleet it holds | 注册、会话与观察、注册生命周期、故障切换标记、被拒绝的注册、DTLS 握手，以及健康探测请求。 |
+| Readings | 通知与已存储读数、未产生读数的通知、非数值记录、所有被丢弃的内容，以及由遥测创建的设备。 |
+| Commands | 按操作划分的已分发命令、被暂存的命令及原因、发往离线或其他设备的命令、命令故障，以及积压的排空。 |
+| Device information and housekeeping | 设备信息采集及其写入问题，以及清除已删除租户注册的清扫任务。 |
+
+支撑它的告警：[运行边缘服务](./edge-services.md#edge-alerts)中的 `Lwm2mIngest*` 告警。
+
+## Edge agent {#edge-agent-dashboard}
+
+边缘代理运行在你站点的硬件上，它的指标端点只监听该设备的回环地址。实例的 Prometheus 永远不会采集它，因此 chart 不为它安装仪表盘。这个仪表盘是一个文件，导入读取**你自己的** Prometheus 的 Grafana 即可：[`edge-agent.json`](https://github.com/devicechain-io/devicechain/blob/main/backend/edge/dc-edge-agent/dashboards/edge-agent.json)。
+
+使用时，先把各代理的指标送进一个 Prometheus。指标端点只监听设备的回环地址（`127.0.0.1`，端口为 `local.metricsPort`，默认 9090），因此采集器必须是设备本机上的进程：设备之外的任何东西都无法访问它。每个代理的序列都必须带有**唯一的 `agent` 标签**。仪表盘的选择器、图例和分组都使用它；没有它，不同设备的序列标签完全相同，在接收端会互相覆盖。请在每台设备的采集器上把它设为外部标签。以 Prometheus 的 agent 模式为例：
+
+```yaml
+global:
+  external_labels:
+    agent: site-berlin-01   # unique per box
+scrape_configs:
+  - job_name: dc-edge-agent
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+remote_write:
+  - url: https://prometheus.example.com/api/v1/write
+```
+
+代理的默认端口 9090 同时也是 Prometheus 的默认监听端口，所以要让其中一个换端口：像下面这样让采集器使用另一个端口，或在代理配置中设置 `local.metricsPort` 并抓取该端口。
+
+```bash
+prometheus --enable-feature=agent --config.file=agent.yml --web.listen-address=127.0.0.1:9091
+```
+
+然后在 Grafana 中选择 **Dashboards, New, Import**，上传该文件，并把那个 Prometheus 选为数据源。仪表盘有两个选择器：**Agent**（所有发送该标签的代理）和 **Lookback**（向前回溯多久来寻找已停止上报的代理）。失去链路的站点会停止发送一切，包括它自己的断开状态，因此 *Known agents reporting*、*Agents silent* 两个指标块和 *Agents* 表会把当前正在上报的代理与回溯窗口内见到过的代理做对比。仪表盘没有 *Firing alerts* 表，因为代理不附带告警规则。
+
+| 分组 | 显示内容 |
+| --- | --- |
+| Is every site connected? | 正在上报的已知代理占比、静默的代理、已断开的代理、最旧的缓冲事件、最满的缓冲区、因溢出而丢失的事件、被拒绝的事件、本地端口开放的代理，以及每个代理一行的表格。 |
+| Connectivity | 各代理随时间变化的云端链路，以及等待云端确认的发布。 |
+| Store-and-forward backlog | 最旧缓冲事件的年龄、缓冲事件数、缓冲区用量与上限、缓冲区占用率，以及因溢出而丢失的事件。 |
+| Throughput | 读取待转发的事件与云端已确认的事件、各代理的转发量，以及失败的转发尝试。 |
+| Refused and rejected events | 按原因划分的拒绝、被保留或未匹配的被拒绝事件、在设备上被丢弃的事件，以及本地端口是否要求凭据。 |
+| The agent process | 各代理的内存、CPU、goroutine 与打开的文件。 |
+
+每个面板读取的都是代理导出的序列。代理源码树中的一项测试会把该文件与代理的真实指标核对，因此指标改名会让构建失败，而不是让某个站点留下一张空图。
+
 ## 仪表盘未覆盖的内容 {#not-covered}
 
 - **Kubernetes Operator** 运行在它自己的命名空间中。没有任何组件采集它的指标，也没有仪表盘显示它，连副本面板也不显示，因为那些面板只读取本实例的命名空间。
 - 每个服务的 **HTTP 与 GraphQL 请求速率、错误和延迟**没有导出，因此没有仪表盘绘制它们。
 - 从接入到存储或检测的**端到端事件年龄**没有被测量。积压面板只是替代：积压增长就意味着延迟增长。最接近的真实年龄度量是 `detect_watermark_lag_seconds`，Event processing 将其显示为 *Watermark lag*，即检测引擎水位线落后墙上时钟多少。
-- **边缘代理**运行在客户硬件上，不被采集。
+- **边缘代理**运行在客户硬件上，实例的 Prometheus 不会采集它，因此 chart 中没有任何仪表盘显示它。请把[边缘代理仪表盘](#edge-agent-dashboard)导入读取你自己的 Prometheus 的 Grafana。
 
 ## 相关内容 {#related}
 

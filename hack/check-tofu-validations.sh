@@ -403,6 +403,15 @@ run_assertions() {
   for v in 0 1 3 5; do accepts nats_cluster_replicas "$v"; done
   for v in 2 4 6 7 -1; do rejects nats_cluster_replicas "$v"; done
 
+  # --- the event store's checkpoint pair -----------------------------------------
+  # checkpoint_timeout is a Postgres time between 30 seconds and a day; a bare number
+  # is seconds. max_wal_size is a whole number of MiB, 0 to derive it from the volume,
+  # and at least 64 otherwise (Postgres refuses to start below twice its segment size).
+  for v in 15min 30s 45 1h 1d; do accepts timescale_checkpoint_timeout "$v"; done
+  for v in 29s 2d 0 5ms 15m; do rejects timescale_checkpoint_timeout "$v"; done
+  for v in 0 64 8192; do accepts timescale_max_wal_size_mib "$v"; done
+  for v in 1 63 -1 1.5; do rejects timescale_max_wal_size_mib "$v"; done
+
   # --- each NATS server's requests and memory limit ----------------------------
   # A bare number is cores, as Kubernetes reads it, so "1" is accepted on purpose.
   # Zero is refused in every spelling: a zero request is the BestEffort broker these

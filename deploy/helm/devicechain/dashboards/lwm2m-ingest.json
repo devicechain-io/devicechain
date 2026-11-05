@@ -1,0 +1,2266 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "devicechain",
+    "lwm2m",
+    "edge"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "DeviceChain — LwM2M Ingest",
+  "uid": "dc-lwm2m-ingest-ops",
+  "description": "The LwM2M transport over CoAP and DTLS: whether the one server is serving, the fleet it holds, the readings it stores and drops, and the commands it carries to devices. This service is optional. Start with the tiles: failures should stay at zero. Each instance gets its own copy of this board, scoped to it.",
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "id": 100,
+      "type": "table",
+      "title": "Firing alerts",
+      "description": "Alerts firing right now for this instance. An empty table means none are firing. Alerts come from the instance's Prometheus rules, so the table stays empty if those rules are not installed.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "instant": true,
+          "format": "table",
+          "expr": "max by (alertname, severity) (ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=~\"Lwm2m.*\"} or ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=\"InstanceAreaUnavailable\", deployment=\"lwm2m-ingest\"} or ALERTS{alertstate=\"firing\", devicechain_instance=\"$instance\", alertname=\"InstanceContainerRestarted\", pod=~\"lwm2m-ingest-.*\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "warning": {
+                        "color": "yellow",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "severity",
+            "desc": false
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            },
+            "indexByName": {
+              "alertname": 0,
+              "severity": 1
+            },
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "severity"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Is it serving?",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "panels": []
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Pods available",
+      "description": "Pods of the lwm2m-ingest deployment that Kubernetes reports available. Zero while the service is deployed means it is down, and every tile below then keeps its last value or shows no data, so read this first. Not reporting means the service is not deployed on this instance. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(kube_deployment_status_replicas_available{namespace=\"$namespace\", deployment=\"lwm2m-ingest\"})",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "Not reporting"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      },
+      "links": [
+        {
+          "title": "Ingest board",
+          "url": "/d/@board:ingest@?var-datasource=${datasource}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Leaders",
+      "description": "Replicas holding the LwM2M leadership lease. Exactly one is healthy: zero means every LwM2M device is unreachable although every pod looks healthy, and more than one means two replicas are serving at once. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_lwm2mingest_is_leader{namespace=\"$namespace\"})",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "noValue": "Not reporting"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Serving",
+      "description": "Replicas whose CoAP and DTLS read loop is running. Read it with Leaders: a leader that is not serving for longer than a takeover takes is stuck building its term, and because it keeps the lease no standby can take over. Restart that pod. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_lwm2mingest_is_serving{namespace=\"$namespace\"})",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          },
+          "noValue": "Not reporting"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Notifications dropped, over the range",
+      "description": "Notify messages whose readings were dropped because ingest failed or refused them, backpressure included. There is no retry, so a device that reports rarely loses its reading. Above zero: check the message broker, the inbound-events backlog and the service log. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_notify_ingest_dropped_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Commands not carried out, over the range",
+      "description": "Commands not sent because command delivery could not confirm them immediately before they reached the device. They are retried, not lost, but a sustained count means no LwM2M command is reaching its device. Check command delivery. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_command_live_claim_errors_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Command results not published, over the range",
+      "description": "Command outcomes that could not be published back after local retries. The command already ran, so it is not redelivered and will show as timed out. Above zero: check the message broker and command delivery. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_command_response_publish_failures_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Handshakes refused, over the range",
+      "description": "DTLS handshakes refused because the client presented an identity that is not provisioned. Expected for a stray device; a burst means a fleet whose identities are missing or were rotated. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_handshake_failures_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Sessions refused at the ceiling, over the range",
+      "description": "New sessions refused because the live-session ceiling was reached. Above zero: the fleet has outgrown the configured ceiling; raise it or investigate devices that reconnect in a loop. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 12
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_sessions_rejected_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "The fleet it holds",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Registrations, sessions and observations",
+      "description": "Live registrations, DTLS sessions and observations as the service sees them. Watch observations across a restart or a leadership change: observations are not re-established until each device registers again, so this is how you see the loss and the recovery. Right after a takeover registrations include rebuilt placeholders. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_lwm2mingest_active_registrations{namespace=\"$namespace\"})",
+          "legendFormat": "registrations"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_lwm2mingest_active_sessions{namespace=\"$namespace\"})",
+          "legendFormat": "sessions"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(devicechain_lwm2mingest_active_observations{namespace=\"$namespace\"})",
+          "legendFormat": "observations"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Registration lifecycle",
+      "description": "Per second: devices registering, refreshing their registration, deregistering on purpose, and registrations that lapsed with no refresh. A steady expiry rate means devices vanishing without saying goodbye. Devices registered counts new devices created at first sight. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_registrations_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "registered"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_registration_updates_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "refreshed"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_deregistrations_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "deregistered"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_registration_expiries_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "expired"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_devices_registered_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "new devices created"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Failover markers",
+      "description": "Registrations rebuilt from stored state after a leadership change, and presence changes written and dropped, per second. A spike in rebuilt registrations is the fingerprint of a failover. Dropped presence changes are an unregistered device on a credential that may not create devices, or a write that ran out of budget. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_shadows_reconstructed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "registrations rebuilt"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_presence_emitted_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "presence changes stored"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_presence_dropped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "presence changes dropped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Refused registrations",
+      "description": "Per second: registrations refused because the device is disabled, requests with no usable authenticated identity, and malformed requests. Any standing rate is a device or a credential to look at. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_registrations_disabled_refused_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "device disabled"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_auth_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "no authenticated identity"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_bad_requests_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "malformed"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "DTLS handshakes",
+      "description": "Completed handshakes (each a new authenticated session), handshakes refused for an unprovisioned identity, and new sessions refused at the session ceiling, per second. A burst of completed handshakes is a fleet reconnecting, as after a failover. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_handshakes_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "completed"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_handshake_failures_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "refused, unknown identity"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_sessions_rejected_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "refused, session ceiling"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Health-probe requests by response code",
+      "description": "Transport-level CoAP requests answered by the built-in health probe, per second, by response code. Registrations are counted separately above. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (code) (rate(devicechain_lwm2mingest_coap_requests_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{code}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "Readings",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Notifications and readings stored",
+      "description": "Notify messages received and measurement samples written to the inbound-events stream, per second. Notifications arriving with no readings stored means they are being skipped or dropped; read the two panels below. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notifies_received_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "notifications received"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_measurements_emitted_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "readings stored"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Notifications that produced no reading",
+      "description": "Per second: payloads that could not be decoded, payloads in a format that is not decoded, and records skipped as NaN or infinite or as unnamed. All are device faults. Observe requests refused is the symptom of a 1.0-only client that never notifies; observations ended by the device are normal. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notify_decode_failures_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "undecodable"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notify_unknown_content_format_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "unsupported format"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notify_records_non_finite_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "NaN or infinite"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notify_records_unnamed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "no resource path"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_observe_establish_refused_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "observe requests refused"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_observe_terminal_notifications_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "observations ended by the device"
+        },
+        {
+          "refId": "G",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_observation_overflow_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "resources over the observe cap"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Non-numeric records",
+      "description": "Records skipped for carrying no numeric value, per second. Normal for a boolean or string reading, and it is what tells a device working correctly apart from one that has gone quiet. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notify_records_non_numeric_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "non-numeric records"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Readings dropped",
+      "description": "Per second: notifications dropped at ingest, readings from an unregistered device with auto-registration off, readings for a tenant being deleted, readings older than 366 days, and messages and readings shed because a tenant is over its ingest ceiling. A standing rate on any line is lost data. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_notify_ingest_dropped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "notifications dropped at ingest"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_telemetry_unknown_dropped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "unknown device"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_telemetry_tenant_deleted_dropped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "tenant being deleted"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_telemetry_too_old_dropped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "older than 366 days"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_ingest_messages_shed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "messages over the tenant ceiling"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_ingest_samples_shed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "readings over the tenant ceiling"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Devices created by telemetry",
+      "description": "Devices created on a first telemetry sample, per second. Rare: LwM2M devices are normally created when they register. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_telemetry_devices_registered_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "devices created"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "row",
+      "title": "Commands",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "panels": []
+    },
+    {
+      "id": 25,
+      "type": "stat",
+      "title": "Commands dispatched, over the range",
+      "description": "Commands sent to live devices over the time range (the device acknowledged or rejected each one). Compare with the failed rate in the panel beside it. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "round((sum(increase(devicechain_lwm2mingest_commands_attempted_total{namespace=\"$namespace\"}[$__range])) or vector(0)))",
+          "legendFormat": "__auto",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Commands dispatched, by operation",
+      "description": "Commands sent to live devices per second, split into those the device acknowledged and those it rejected, timed out on or that failed local validation, by operation. A failed rate that tracks the attempted rate is a device or an object that does not support the operation. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 4,
+        "y": 67
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (op) (rate(devicechain_lwm2mingest_commands_succeeded_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "succeeded: {{op}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (op) (rate(devicechain_lwm2mingest_commands_failed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "failed: {{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Commands not sent straight away",
+      "description": "Commands set aside in command delivery instead of being sent, per second, by reason. full: the device's queue was full. offline: no live connection. bind: the device had just connected and its waiting commands were not delivered yet; expect a spike after a failover. unconfirmed: a command ahead of it could not be confirmed. They are delivered in order moments later. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (reason) (rate(devicechain_lwm2mingest_commands_overflow_parked_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_overflow_blocked_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "adapter had to wait"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Commands for offline or other devices",
+      "description": "Per second: commands for a device this service holds with no live connection (parked until it wakes), commands for devices this service does not serve (a mirror of the instance's command traffic, not a fault), commands dropped as unprocessable, commands for a tenant being deleted, and deliveries discarded because the platform had already re-sent them (a duplicate actuation avoided). This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_commands_served_offline_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "device offline"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_commands_not_served_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "not served here"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_commands_poison_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "unprocessable"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_commands_tenant_deleted_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "tenant being deleted"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_commands_stale_dispatch_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "already re-sent"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 29,
+      "type": "timeseries",
+      "title": "Command faults",
+      "description": "Per second: commands not carried out because command delivery could not confirm them, outcomes that could not be published back, and hand-backs to command delivery that failed. A hand-back that fails leaves the command stuck until a retry succeeds. Settled and skipped hand-backs are outcomes, not faults. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 83
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_live_claim_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "not confirmed with command delivery"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_response_publish_failures_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "outcome not published"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_park_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "hand-back failed"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_park_settled_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "hand-back already settled"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_park_skipped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "hand-back skipped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Draining the command backlog",
+      "description": "Per second: backlogged commands delivered by a drain, drain turns run (each delivers at most four commands of one device), drain fetches that failed, and claims lost to another dispatcher or that could not be established. A rising turn rate with a flat parked rate means backlogs are being worked off. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 83
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_commands_drained_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "commands delivered"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_drain_turns_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "drain turns"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_drain_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "fetches failed"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_drain_claims_lost_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "claims lost"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_command_drain_claim_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "claims not established"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "row",
+      "title": "Device information and housekeeping",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "panels": []
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Device information harvests",
+      "description": "Reads of a newly reachable device's information object per second, by outcome: complete, partial, empty, or unanswered (the device did not respond). Retries and skipped requests are shown beside them. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (outcome) (rate(devicechain_lwm2mingest_device_info_harvests_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_device_info_harvest_retries_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "retried"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_device_info_harvest_skipped_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "skipped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Harvest write problems",
+      "description": "Harvested attributes that could not be written to device management, and batches dropped because the write pool was busy, per second. Both are retried at the device's next harvest. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 92
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_device_info_attribute_write_errors_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "write errors"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(devicechain_lwm2mingest_device_info_attribute_writes_shed_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "batches dropped, pool busy"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Tenant sweep passes",
+      "description": "Passes of the sweep that removes registrations of deleted tenants, per second by outcome, how long a pass takes (99th percentile) and the seconds since the last pass that completed, fully or partly (both right axis). Failed passes leave a deleted tenant's registrations in memory. This service is optional; when it is not installed the panel shows no data or zero.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 100
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (outcome) (rate(devicechain_lwm2mingest_tenant_sweep_passes_total{namespace=\"$namespace\"}[$__rate_interval]))",
+          "legendFormat": "passes: {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_lwm2mingest_tenant_sweep_pass_duration_seconds_bucket{namespace=\"$namespace\"}[$__rate_interval])))",
+          "legendFormat": "pass time, p99"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max(devicechain_lwm2mingest_tenant_sweep_last_success_timestamp_seconds{namespace=\"$namespace\"})",
+          "legendFormat": "seconds since last good pass"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "pass time, p99|seconds since last good pass"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "label": "Data source",
+        "refresh": 1,
+        "regex": ""
+      },
+      {
+        "name": "namespace",
+        "type": "constant",
+        "label": "Instance",
+        "query": "",
+        "hide": 2,
+        "description": "The instance this board reads. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant naming the instance it installs, so every namespace=\"$namespace\" selector reads that instance's series and no other. There is no instance picker: each instance ships its own copy of this board, in its own Grafana folder."
+      },
+      {
+        "name": "instance",
+        "type": "constant",
+        "label": "Instance ID",
+        "query": "",
+        "hide": 2,
+        "description": "The instance ID, used to select this instance's alerts. Empty on purpose: the chart's templates/grafana-dashboard.yaml replaces this entry with a hidden constant holding the ID of the instance it installs."
+      }
+    ]
+  }
+}

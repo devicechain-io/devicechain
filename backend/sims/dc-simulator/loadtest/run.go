@@ -70,6 +70,11 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 
+	// Hold at the barrier: every harness given the same StartAt begins its drive together.
+	if err := awaitStart(ctx, p.StartAt); err != nil {
+		return nil, fmt.Errorf("waiting for the start instant: %w", err)
+	}
+
 	start, end, err := driveMarked(ctx, rt, driver, p.Hold, p.Steady)
 	if err != nil {
 		// The drive was aborted (context cancelled). No verdict — the accepted
@@ -82,6 +87,14 @@ func Run(ctx context.Context, hs *sim.Handshake, p Profile) (*Report, error) {
 	// Reconcile against settled platform truth: poll until the persisted count
 	// reaches the accepted target or the timeout backstops, then reconcile every event
 	// by identity.
+	if p.AggregateLedger != "" {
+		// Written BEFORE the read-back: the ledger is final once the drive has stopped, and a
+		// read-back that fails or hangs must not cost the run the artifact the offline oracle needs.
+		led := NewAggregateLedger(hs.Tenant, p.Manifest, hs.Seed, deriveWindow(start, end), rt.Identity.Snapshot(), snap, false)
+		if err := led.WriteFile(p.AggregateLedger); err != nil {
+			return nil, fmt.Errorf("write the aggregate ledger: %w", err)
+		}
+	}
 	reader := &graphqlIdentityReader{session: rt.Session, endpoint: eventEndpoint}
 	v, err := reconcileDrive(ctx, counter, reader, rt.Identity, deviceTokens(rt.Devices), snap, deriveWindow(start, end), end, p)
 	if err != nil {

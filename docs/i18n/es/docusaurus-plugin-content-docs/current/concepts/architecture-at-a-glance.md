@@ -21,7 +21,7 @@ Esta página es la versión corta. Muestra el camino que sigue un evento desde u
 
 Sigue una lectura, un nivel de combustible, desde un dispositivo hasta un panel, y luego mira qué hace una regla con ella.
 
-1. **El dispositivo publica.** Se conecta al broker de la plataforma con su credencial y publica un evento JSON en su propio tema, `{instance}/{tenant}/devices/{token}/events`. El broker le permite publicar en ese tema y en ningún otro. Consulta [Conectar un dispositivo](../guides/connecting-a-device.md).
+1. **El dispositivo publica.** Se conecta al broker de la plataforma con su credencial y publica un evento JSON en su propio tema, `{instance}/{tenant}/devices/{token}/events`. El broker limita su telemetría a ese tema. Consulta [Conectar un dispositivo](../guides/connecting-a-device.md).
 2. **La ingesta lo decodifica.** `event-sources` toma el mensaje, comprueba que el dispositivo del cuerpo es el del tema, aplica el límite de ingesta del inquilino y publica el evento decodificado en la canalización. Un mensaje que no puede decodificar va a un flujo `failed-decode`.
 3. **El evento se resuelve.** `device-management` autentica el dispositivo y busca su [tipo y perfil de dispositivo](./domain-model.md), sus asignaciones y sus relaciones rastreadas, hasta el cliente, el área y el activo. Lo escribe en el evento como dimensiones de índice y publica el evento resuelto.
 4. **El evento se almacena.** `event-management` lo escribe en TimescaleDB, por lotes, particionado por inquilino. Allí se aplican las políticas de ciclo de vida (compresión, retención, agregados).

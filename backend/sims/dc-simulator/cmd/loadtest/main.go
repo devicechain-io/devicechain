@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -61,6 +62,10 @@ func main() {
 		"how long after the drive the live device state may take to reach every device's last accepted event (0 = do not check)")
 	reportPath := flag.String("report", envOr("DC_LOADTEST_REPORT", ""),
 		"write the JSON correctness report to this path (also printed to stderr)")
+	aggregateLedger := flag.String("aggregate-ledger", envOr("DC_LOADTEST_AGGREGATE_LEDGER", ""),
+		"write the run's expected per-device aggregates (count and hash sum) to this path, for the aggregate identity oracle (dc-loadtest-aggoracle) to check against the event store")
+	startAtFlag := flag.String("start-at", envOr("DC_LOADTEST_START_AT", ""),
+		"hold the drive until this RFC3339 instant, after provisioning, so N harnesses on N pods start their steady windows together (dc-loadtest-multi merge checks the alignment)")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -86,7 +91,12 @@ func main() {
 	if *steadyMarker != "" {
 		steady = &loadtest.SteadyMarker{Path: *steadyMarker, Phase: *steadyPhase, Warmup: *steadyWarmup}
 	}
+	startAt, err := parseStartAt(*startAtFlag)
+	if err != nil {
+		log.Fatal().Err(err).Msg("--start-at")
+	}
 	profile := loadtest.Profile{
+		AggregateLedger: *aggregateLedger, StartAt: startAt,
 		Steady:         steady,
 		Manifest:       manifestId,
 		Seed:           hs.Seed,
@@ -169,4 +179,16 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 		log.Fatal().Str(key, v).Msg("not a duration (want e.g. 200ms, 5s)")
 	}
 	return d
+}
+
+// parseStartAt reads --start-at: empty means start at once.
+func parseStartAt(v string) (time.Time, error) {
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%q is not an RFC3339 instant (for example 2026-11-05T14:00:00Z): %w", v, err)
+	}
+	return t, nil
 }

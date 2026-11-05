@@ -296,7 +296,7 @@ kubectl -n dci-my-instance get pvc          # 然后把代理每个卷声明的�
 kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests":{"storage":"36Gi"}}}}'
 ```
 
-然后再次运行 `dcctl upgrade`（这与卷大小不一致时 `dcctl` 打印的步骤相同）。这需要允许扩容的 StorageClass。
+请修改代理的每一个卷声明（`dc-nats-js-dc-nats-0`、`-1` 等，每台服务器一个），然后再次运行 `dcctl upgrade`。StatefulSet 已被删除而其卷声明仍在时，升级会从卷声明读取新的大小（取其中最小的一个，因此尚未修改的卷声明会显示为未扩容），按该大小在仍在运行的服务器周围重建 StatefulSet，并据此推导代理的文件存储上限。只要有卷声明仍在扩容，或存在但未就绪的服务器，升级就会拒绝执行，且不做任何更改；请等 `kubectl get pvc,pods` 稳定后再次运行。完全消失的服务器（StatefulSet 被移除后被删除或驱逐）不会阻止升级：除重建的 StatefulSet 外没有任何东西会启动它。当所有卷声明仍是代理上次运行时的大小时，升级同样会拒绝执行并列出低于最大值的卷声明，因为只有大小发生变化（即“扩容”）时才会重建 StatefulSet。该步骤需要允许扩容的 StorageClass。
 
 **告警。** 消费者按设计速率停止后，流会以稳定速度被填满，因此各告警都以平台停止接收事件的时刻（流的 90%）为基准；对 R 分钟的缓冲时长，该时刻是 0.9R。`JetStreamOutageRunwayShort` 做预测：当按过去五分钟积压的增长速度，流将在二十分钟内开始拒绝时触发；在最短的缓冲时长（10 分钟）下，这大约比拒绝提前五分钟。`JetStreamUnreadBacklogNearFull` 在 75% 持续一分钟时随后触发，流开始拒绝后则由 `JetStreamIngestBackpressureEngaged` 触发。
 
