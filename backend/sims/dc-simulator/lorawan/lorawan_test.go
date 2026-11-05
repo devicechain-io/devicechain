@@ -17,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/devicechain-io/dc-event-sources/integration"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 )
 
 var fixedNow = time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
@@ -31,19 +31,19 @@ func cfg(ns string) Config {
 
 // request parses what Build made through the REAL codec the platform's route uses, so a payload the
 // simulator and the platform disagree about fails here and not on a cluster.
-func decode(t *testing.T, ns string, r Request, link bool) *integration.Result {
+func decode(t *testing.T, ns string, r Request, link bool) *integrationcodec.Result {
 	t.Helper()
 	u, err := url.Parse(r.URL)
 	require.NoError(t, err)
-	typ := integration.ChirpStackV4
+	typ := integrationcodec.ChirpStackV4
 	msgType := ""
 	if ns == TTS {
-		typ = integration.TTSV3
+		typ = integrationcodec.TTSV3
 		msgType = strings.TrimPrefix(u.Path[strings.LastIndex(u.Path, "/lora"):], "/lora/")
 	}
-	d := &integration.Descriptor{Token: "lora", Type: typ, Enabled: true, Identity: "DEV_EUI", LinkMetrics: link}
+	d := &integrationcodec.Descriptor{Token: "lora", Type: typ, Enabled: true, Identity: "DEV_EUI", LinkMetrics: link}
 	require.NoError(t, d.Prepare())
-	res, err := integration.Decode(d, &integration.Request{
+	res, err := integrationcodec.Decode(d, &integrationcodec.Request{
 		Body: r.Body, Query: u.Query(), ContentType: r.ContentType, MessageType: msgType,
 		Header: http.Header{}, ReceivedAt: fixedNow,
 	})
@@ -67,16 +67,16 @@ func TestBuildIsReadByThePlatformCodecs(t *testing.T) {
 			require.Equal(t, 2, u.Link.Gateways)
 			require.True(t, u.Link.HasSignal)
 
-			flat, err := integration.Flatten(u.Decoded, u.Link)
+			flat, err := integrationcodec.Flatten(u.Decoded, u.Link)
 			require.NoError(t, err)
 			require.Contains(t, flat.Readings, "temperature")
 			require.Contains(t, flat.Readings, "battery.voltage")
 			require.Equal(t, "1", flat.Readings["door"], "an odd uplink has the door open: a boolean is stored as 1")
 			require.Equal(t, 4, flat.Leaves, "temperature, humidity, battery.voltage and door; the status string is skipped")
-			require.Equal(t, 1, flat.Skipped[integration.SkipString])
-			require.Contains(t, flat.Readings, integration.KeyRSSI)
-			require.Contains(t, flat.Readings, integration.KeyGateways)
-			require.Equal(t, "2", flat.Readings[integration.KeyGateways])
+			require.Equal(t, 1, flat.Skipped[integrationcodec.SkipString])
+			require.Contains(t, flat.Readings, integrationcodec.KeyRSSI)
+			require.Contains(t, flat.Readings, integrationcodec.KeyGateways)
+			require.Equal(t, "2", flat.Readings[integrationcodec.KeyGateways])
 		})
 	}
 }

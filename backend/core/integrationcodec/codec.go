@@ -1,11 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package integration
+package integrationcodec
 
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -88,9 +89,60 @@ type Uplink struct {
 	// none. Numbers keep their written form (json.Number).
 	Decoded map[string]any
 	Link    *Link
-	// Frame is the raw frame when the sender supplied one, kept only to sample an undecoded
-	// uplink.
+	// Frame is the raw frame when the sender supplied one and it decoded. The route samples an
+	// undecoded uplink with it, and a payload decoder reads it.
 	Frame []byte
+	// FrameText, FrameEncoding and FrameErr are the frame as the sender wrote it. A codec decodes
+	// the frame before the device or its decoder plan is known, so it cannot decide what a bad
+	// encoding means: it keeps the text, the encoding it was read under and the error, and the
+	// route applies strictness once it knows a decoder needs the frame. FrameErr is non-nil exactly
+	// when FrameText is set and did not decode, and Frame is then nil. A frame that arrives raw
+	// (a binary body) has no text, no encoding and no error.
+	FrameText     string
+	FrameEncoding string
+	FrameErr      error
+	// FPort and FCnt are the LoRaWAN application port and uplink frame counter, or NoLoRaWAN
+	// when the envelope is not a LoRaWAN one. A LoRaWAN envelope that omits either carries the
+	// protobuf-JSON default, 0.
+	FPort int
+	FCnt  int64
+	// DepthErr is non-nil when Decoded nests deeper than MaxDepth (see CheckDepth). Like FrameErr
+	// it is retained, not acted on: Cut A flattens such an object and counts the skipped leaves,
+	// so only a route that carries the object whole to a decoder refuses it (400, too_deep).
+	DepthErr error
+	// MetaErr is non-nil when the envelope's fPort or fCnt was present and not a valid port or
+	// counter (FPort / FCnt are then NoLoRaWAN). Like FrameErr it is retained, not acted on: the
+	// endpoint has always accepted such a body, so only a route running a decoder that needs the
+	// value may refuse it.
+	MetaErr error
+}
+
+// NoLoRaWAN is the value of Uplink.FPort and Uplink.FCnt for an envelope that carries no LoRaWAN
+// port or counter (a generic sender).
+const NoLoRaWAN = -1
+
+// The encodings a frame can be written in.
+const (
+	EncodingBase64 = "BASE64"
+	EncodingHex    = "HEX"
+)
+
+// SetFrame records a frame written as text under the encoding, keeping the text and any error
+// beside the decoded bytes. It does not refuse: see Uplink.FrameText.
+func (u *Uplink) SetFrame(text, encoding string) {
+	u.FrameText, u.FrameEncoding, u.Frame, u.FrameErr = text, encoding, nil, nil
+	var err error
+	switch encoding {
+	case EncodingBase64:
+		u.Frame, err = base64.StdEncoding.DecodeString(text)
+	case EncodingHex:
+		u.Frame, err = hex.DecodeString(text)
+	default:
+		err = fmt.Errorf("unknown frame encoding %q", encoding)
+	}
+	if err != nil {
+		u.Frame, u.FrameErr = nil, err
+	}
 }
 
 // SampleHex is the frame's hex encoding, cut to MaxSampleBytes.
@@ -108,6 +160,110 @@ type Result struct {
 	// turn into events (a join, a status, a downlink acknowledgement). The route answers 204.
 	Ignored bool
 	Uplinks []Uplink
+}
+
+// ErrTooDeep is the root of a refusal for a JSON value nested deeper than MaxDepth. It always
+// arrives wrapped in ErrMalformed.
+var ErrTooDeep = errors.New("nested too deeply")
+
+// CheckDepth refuses a parsed JSON value that nests objects or arrays deeper than MaxDepth. A
+// flatten only skips the leaves below the cutoff, so it bounds nothing about the value a decoder
+// or a preview would be handed whole: this is the walk that does. It stops descending the moment
+// the limit is passed, but a wide, shallow document is walked in full: its cost is bounded by the
+// size of the document, which the 256 KiB body cap (MaxBodyBytes) bounds.
+// The error wraps ErrMalformed (a 400) and ErrTooDeep (the counted reason).
+func CheckDepth(v any) error {
+	if nestingExceeds(v, 0) {
+		return fmt.Errorf("%w: %w: the JSON is nested more than %d levels deep", ErrMalformed, ErrTooDeep, MaxDepth)
+	}
+	return nil
+}
+
+// nestingExceeds reports whether v holds more than MaxDepth levels of container; open is how
+// many containers are already open above v.
+func nestingExceeds(v any, open int) bool {
+	switch n := v.(type) {
+	case map[string]any:
+		if open+1 > MaxDepth {
+			return true
+		}
+		for _, c := range n {
+			if nestingExceeds(c, open+1) {
+				return true
+			}
+		}
+	case []any:
+		if open+1 > MaxDepth {
+			return true
+		}
+		for _, c := range n {
+			if nestingExceeds(c, open+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// loraPort reads a LoRaWAN application port from the raw protobuf-JSON value: a number, or a
+// string holding one. Absent and null are 0, the default the encoding omits. A value that is not
+// a port (outside 0-255, fractional, text) is an error for the caller to RECORD, not to refuse:
+// this field was never read before, so a sender that sent junk in it was accepted and must keep
+// being.
+func loraPort(raw json.RawMessage, what string) (int, error) {
+	text, ok := loraNumber(raw)
+	if !ok {
+		return 0, nil
+	}
+	v, err := strconv.ParseUint(text, 10, 8)
+	if err != nil {
+		return 0, malformed("%s is not a LoRaWAN port: %q", what, clip(text))
+	}
+	return int(v), nil
+}
+
+// loraCounter reads a LoRaWAN uplink frame counter (an unsigned 32-bit number) the same way.
+func loraCounter(raw json.RawMessage, what string) (int64, error) {
+	text, ok := loraNumber(raw)
+	if !ok {
+		return 0, nil
+	}
+	v, err := strconv.ParseUint(text, 10, 32)
+	if err != nil {
+		return 0, malformed("%s is not a frame counter: %q", what, clip(text))
+	}
+	return int64(v), nil
+}
+
+// loraNumber is the text of a raw JSON value read as a number, ok=false for absent and null. A
+// JSON string is unquoted; anything else is returned as written.
+func loraNumber(raw json.RawMessage) (string, bool) {
+	t := strings.TrimSpace(string(raw))
+	if t == "" || t == "null" {
+		return "", false
+	}
+	if t[0] == '"' {
+		var s string
+		if err := json.Unmarshal([]byte(t), &s); err == nil {
+			t = s
+		}
+	}
+	return t, true
+}
+
+// setMeta stores a port and counter on the uplink, or records why it could not. An invalid value
+// is left unset (NoLoRaWAN) and kept in MetaErr; the route refuses it only when a decoder needs it.
+func (u *Uplink) setMeta(port int, portErr error, cnt int64, cntErr error) {
+	u.FPort, u.FCnt = port, cnt
+	if portErr != nil {
+		u.FPort, u.MetaErr = NoLoRaWAN, portErr
+	}
+	if cntErr != nil {
+		u.FCnt = NoLoRaWAN
+		if u.MetaErr == nil {
+			u.MetaErr = cntErr
+		}
+	}
 }
 
 // MaxAltIdLen bounds a dedup key. It is the inbound message id too, held in the broker's memory for
@@ -140,6 +296,9 @@ func Decode(d *Descriptor, r *Request) (*Result, error) {
 		if err := checkAltId(res.Uplinks[i].AltId); err != nil {
 			return nil, err
 		}
+	}
+	for i := range res.Uplinks {
+		res.Uplinks[i].DepthErr = CheckDepth(res.Uplinks[i].Decoded)
 	}
 	return res, nil
 }

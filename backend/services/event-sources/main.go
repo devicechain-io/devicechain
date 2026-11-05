@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-event-sources/integration"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/graphql"
@@ -438,7 +439,7 @@ func initializeIntegrationMetrics() {
 	for _, r := range processor.IntegrationUplinkResults {
 		IntegrationUplinksCounter.WithLabelValues(r)
 	}
-	for _, r := range integration.SkipReasons {
+	for _, r := range integrationcodec.SkipReasons {
 		IntegrationFlattenSkippedCounter.WithLabelValues(r)
 	}
 }

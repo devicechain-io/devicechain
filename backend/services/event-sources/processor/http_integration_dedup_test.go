@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/integration"
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -36,7 +37,7 @@ type aliasBackend struct {
 	*routeBackend
 }
 
-func (b aliasBackend) Auth(ctx context.Context, tenant, slug, bearer string) (*integration.Descriptor, error) {
+func (b aliasBackend) Auth(ctx context.Context, tenant, slug, bearer string) (*integrationcodec.Descriptor, error) {
 	d, err := b.routeBackend.Auth(ctx, tenant, "cs", bearer)
 	if d != nil {
 		d.Token = slug
@@ -48,8 +49,8 @@ func (b aliasBackend) Auth(ctx context.Context, tenant, slug, bearer string) (*i
 // identifiers resolve to the scheme's own device, and returns the path to post to.
 func aliasRoute(h *routeHarness, scheme string) string {
 	settings := `{"idFrom":"header:X-Device","timePointer":"/at"}`
-	h.backend.desc = func() integration.Descriptor {
-		return integration.Descriptor{Type: integration.GenericJSON, Identity: "ALIAS:" + scheme, Generic: &settings}
+	h.backend.desc = func() integrationcodec.Descriptor {
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericJSON, Identity: "ALIAS:" + scheme, Generic: &settings}
 	}
 	h.backend.resolve = func(_, _ string) (integration.Resolution, error) {
 		return integration.Resolution{Outcome: integration.Resolved, DeviceToken: "device-" + scheme}, nil
@@ -93,7 +94,7 @@ func TestDistinctDevicesDoNotShareABrokerDedupID(t *testing.T) {
 // The id is a function of (tenant, device, AltId) with no ambiguity between the parts, bounded
 // whatever the AltId holds, and still names the tenant in the clear.
 func TestIntegrationDedupIDShape(t *testing.T) {
-	long := strings.Repeat("a", integration.MaxAltIdLen)
+	long := strings.Repeat("a", integrationcodec.MaxAltIdLen)
 	id := integrationDedupID("acme", "dev-1", long)
 	require.True(t, strings.HasPrefix(id, "acme:"))
 	require.Len(t, id, len("acme:")+43)

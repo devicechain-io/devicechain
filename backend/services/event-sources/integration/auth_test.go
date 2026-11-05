@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +42,7 @@ func newFakeBackend() *fakeBackend {
 	return &fakeBackend{good: map[string]string{"acme/cs": "right-token"}, disabled: map[string]bool{}}
 }
 
-func (f *fakeBackend) Auth(_ context.Context, tenant, integration, bearer string) (*Descriptor, error) {
+func (f *fakeBackend) Auth(_ context.Context, tenant, integration, bearer string) (*integrationcodec.Descriptor, error) {
 	f.authCalls.Add(1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -51,7 +52,7 @@ func (f *fakeBackend) Auth(_ context.Context, tenant, integration, bearer string
 	if want, ok := f.good[tenant+"/"+integration]; !ok || want != bearer {
 		return nil, nil
 	}
-	d := &Descriptor{Token: integration, Type: ChirpStackV4, Enabled: !f.disabled[tenant+"/"+integration], Identity: "DEV_EUI"}
+	d := &integrationcodec.Descriptor{Token: integration, Type: integrationcodec.ChirpStackV4, Enabled: !f.disabled[tenant+"/"+integration], Identity: "DEV_EUI"}
 	return d, d.Prepare()
 }
 

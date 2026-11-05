@@ -6,6 +6,8 @@ package integration
 import (
 	"context"
 	"fmt"
+
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 )
 
 // Outcome is what device-management concluded about a sender-named device.
@@ -39,7 +41,7 @@ type Resolution struct {
 type Backend interface {
 	// Auth proves a bearer token belongs to the integration. A nil descriptor with a nil error is
 	// the answer to both an unknown integration and a wrong token.
-	Auth(ctx context.Context, tenant, integration, bearer string) (*Descriptor, error)
+	Auth(ctx context.Context, tenant, integration, bearer string) (*integrationcodec.Descriptor, error)
 	// Resolve turns the sender's identifier into a device.
 	Resolve(ctx context.Context, tenant, integration, bearer, scheme, value string) (Resolution, error)
 	// RecordUndecoded adds to the integration's undecoded tally.
@@ -81,9 +83,9 @@ type DM struct {
 // NewDM binds a backend to a service-token client and device-management's GraphQL URL.
 func NewDM(client GraphQLClient, graphqlURL string) *DM { return &DM{client: client, url: graphqlURL} }
 
-func (d *DM) Auth(ctx context.Context, tenant, integration, bearer string) (*Descriptor, error) {
+func (d *DM) Auth(ctx context.Context, tenant, integration, bearer string) (*integrationcodec.Descriptor, error) {
 	var out struct {
-		IntegrationAuth *Descriptor `json:"integrationAuth"`
+		IntegrationAuth *integrationcodec.Descriptor `json:"integrationAuth"`
 	}
 	vars := map[string]any{"token": integration, "secret": bearer}
 	if err := d.client.Query(ctx, d.url, tenant, authQuery, vars, &out); err != nil {

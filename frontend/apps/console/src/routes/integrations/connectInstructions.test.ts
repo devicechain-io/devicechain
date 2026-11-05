@@ -82,7 +82,7 @@ describe('a generic source', () => {
 });
 
 describe('a generic source with an items pointer', () => {
-  // The codec's resolution (event-sources/integration generic.go): the array is at itemsPointer in
+  // The codec's resolution (core/integrationcodec generic.go): the array is at itemsPointer in
   // the document; the identifier pointer is then resolved against each ITEM.
   const get = (node: unknown, pointer: string): unknown =>
     pointer

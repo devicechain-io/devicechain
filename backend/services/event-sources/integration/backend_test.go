@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/require"
 )
@@ -173,7 +174,7 @@ func TestAuthAnswersNilForAnUnknownTokenAndADescriptorOtherwise(t *testing.T) {
 	s.response = `{"data":{"integrationAuth":{"token":"cs","type":"CHIRPSTACK_V4","enabled":false,"identity":"DEV_EUI","generic":null,"linkMetrics":true}}}`
 	d, err = dm.Auth(context.Background(), "acme", "cs", "right")
 	require.NoError(t, err)
-	require.Equal(t, ChirpStackV4, d.Type)
+	require.Equal(t, integrationcodec.ChirpStackV4, d.Type)
 	require.False(t, d.Enabled, "a switched-off integration comes back with enabled false")
 	require.True(t, d.LinkMetrics)
 
