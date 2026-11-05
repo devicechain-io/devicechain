@@ -78,7 +78,7 @@ var resolveRigTables = []any{&model.Device{}, &model.DeviceType{}, &model.Device
 	&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 	&model.DetectionRule{}, &model.DetectionRuleScopeRef{}, &model.EntityRelationship{},
 	&model.EntityRelationshipType{}, &model.GeoFenceSetVersion{}, &model.EntityGroupFacetRef{},
-	&model.EntityGroupMembership{}, &model.DeviceCredential{}}
+	&model.EntityGroupMembership{}, &model.DeviceCredential{}, &model.PendingSessionKick{}}
 
 // buildResolveRig seeds the rig into db. extraMetrics declares that many more metrics on
 // the profile beside "temp", to size the published version the per-type entry carries.

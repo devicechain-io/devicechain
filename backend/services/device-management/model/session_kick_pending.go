@@ -129,6 +129,10 @@ func (api *Api) drainSessionKicks(ctx context.Context, tenant string, limit int,
 	if err := q.Find(&rows).Error; err != nil {
 		return fmt.Errorf("%w: could not read the pending session kicks: %v", ErrSessionsNotEnded, err)
 	}
+	var err error
+	if rows, err = api.dropWithdrawnDeviceDisabledKicks(db, tenant, rows); err != nil {
+		return fmt.Errorf("%w: could not re-check the disabled devices: %v", ErrSessionsNotEnded, err)
+	}
 	// Per device: its rows, and the strongest reason among them. tokens keeps first-seen order.
 	var tokens []string
 	reasonOf := map[string]string{}
@@ -268,4 +272,53 @@ func (api *Api) DrainSessionKicksLocked(ctx context.Context) error {
 		log.Debug().Int("tenants", res.Tenants).Msg("Retried pending session kicks")
 	}
 	return err
+}
+
+// dropWithdrawnDeviceDisabledKicks removes, and returns the rows without, the device-disabled
+// debts of devices that are ENABLED now.
+//
+// 🔴 THE DEBT IS CHECKED AGAIN AT THE MOMENT IT IS COLLECTED. Re-enabling a device deletes its
+// row, but a drain that had already read the row would still ask the broker, and a replica
+// still running a release that does not clear the row on enable leaves it for the drain. Either
+// would end the session of a device that has just reconnected. The window between this check
+// and the broker's answer remains, and is the width of one request.
+func (api *Api) dropWithdrawnDeviceDisabledKicks(db *gorm.DB, tenant string, rows []PendingSessionKick) ([]PendingSessionKick, error) {
+	var tokens []string
+	for _, r := range rows {
+		if r.Origin == kickOriginDeviceDisabled {
+			tokens = append(tokens, r.DeviceToken)
+		}
+	}
+	if len(tokens) == 0 {
+		return rows, nil
+	}
+	disabled := map[string]bool{}
+	for chunk := range slices.Chunk(tokens, rdb.MaxLookupKeys) {
+		var still []string
+		// A deleted device is not enabled: its own delete queued a kick of its own, and a debt
+		// with no live row to re-check is kept rather than guessed away.
+		if err := db.Unscoped().Model(&Device{}).
+			Where("tenant_id = ? AND token IN ? AND (disabled_at IS NOT NULL OR deleted_at IS NOT NULL)", tenant, chunk).
+			Pluck("token", &still).Error; err != nil {
+			return nil, err
+		}
+		for _, t := range still {
+			disabled[t] = true
+		}
+	}
+	kept := rows[:0:0]
+	var gone []PendingSessionKick
+	for _, r := range rows {
+		if r.Origin == kickOriginDeviceDisabled && !disabled[r.DeviceToken] {
+			gone = append(gone, r)
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if len(gone) > 0 {
+		if err := deleteConfirmedKicks(db, tenant, gone); err != nil {
+			return nil, err
+		}
+	}
+	return kept, nil
 }

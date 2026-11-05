@@ -232,3 +232,40 @@ func TestReEnablingADeviceWithdrawsItsOwedKick(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, k.calls, calls, "the drain asks the broker about nothing")
 }
+
+// A process restarted WITHOUT the callout still clears the debt when the device is enabled.
+func TestEnablingADeviceClearsItsOwedKickEvenWithNoKickerWired(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	api.SessionKicker = &togglingKicker{}
+	_, err := api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+
+	api.SessionKicker = nil
+	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(true)})
+	require.NoError(t, err)
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows)
+}
+
+// A debt that outlived the disable (a replica on a release that does not clear it on enable, or a
+// drain that read the row before the enable deleted it) is dropped at collection, not acted on.
+func TestTheDrainDropsADeviceDisabledDebtOfAnEnabledDevice(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	k := &togglingKicker{up: true}
+	api.SessionKicker = k
+	require.NoError(t, api.RDB.DB(ctx).Create(&PendingSessionKick{TenantId: partialUpdateTenant, DeviceToken: "dev",
+		Origin: kickOriginDeviceDisabled, Generation: 1, RequestedAt: time.Now()}).Error)
+
+	_, err := api.DrainSessionKicks(ctx, SessionKickDrainPageSize)
+	require.NoError(t, err)
+	require.Empty(t, k.calls, "the device is enabled: ending its session would drop a healthy connection")
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(ctx).Find(&rows).Error)
+	require.Empty(t, rows)
+
+	// While it is disabled, the same row is collected and the kick is made.
+	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
+	require.NoError(t, err)
+	require.Len(t, k.calls, 1)
+}

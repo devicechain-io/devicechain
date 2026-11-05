@@ -830,6 +830,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	}
 	// The row and its alias set are written in ONE transaction, so an alias another device holds
 	// (CONFLICT) refuses the whole update rather than applying the fields it liked first.
+	storedDisabled := false
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Omit(omit...).Save(updated).Error; err != nil {
 			return err
@@ -841,11 +842,23 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		// still shows it connected and the only way its commands and configuration channel stay
 		// open. Re-enabling clears the debt: it would otherwise end the session of a device that
 		// has just reconnected.
-		if updated.DisabledAt.Valid {
+		//
+		// 🔴 DECIDED FROM THE ROW AS STORED, UNDER THE LOCK THE SAVE JUST TOOK, not from the copy
+		// read before the transaction: a metadata edit that read the device disabled must not queue
+		// a debt for one that was enabled in between (the save omits DisabledAt, so the stored value
+		// is the other request's), and an enable whose read was stale must still clear the debt.
+		// The debt is cleared whenever the call asked to enable, kicker wired or not: a process
+		// restarted without the callout must not leave a row for one that has it to act on later.
+		var stored []sql.NullTime
+		if err := tx.Model(&Device{}).Where("id = ?", updated.ID).Pluck("disabled_at", &stored).Error; err != nil {
+			return err
+		}
+		storedDisabled = len(stored) == 1 && stored[0].Valid
+		if storedDisabled {
 			if err := api.queueSessionKicksOnTx(tx, updated.TenantId, kickOriginDeviceDisabled, []string{updated.Token}); err != nil {
 				return err
 			}
-		} else if toggled && api.SessionKicker != nil {
+		} else if request.Enabled.Set {
 			if err := tx.Where("tenant_id = ? AND device_token = ? AND origin = ?",
 				updated.TenantId, updated.Token, kickOriginDeviceDisabled).Delete(&PendingSessionKick{}).Error; err != nil {
 				return err
@@ -870,7 +883,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// leaves it disabled. A kick that is not confirmed stays queued (recorded above, with the
 	// disable) for the background drain, and repeating the call asks again. Enabling it, or
 	// editing an enabled device, ends nothing.
-	if updated.DisabledAt.Valid {
+	if storedDisabled {
 		if kerr := api.drainSessionKicks(ctx, updated.TenantId, 0, func(db *gorm.DB) *gorm.DB {
 			return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDisabled, updated.Token)
 		}); kerr != nil {
