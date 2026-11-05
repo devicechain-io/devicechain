@@ -831,11 +831,17 @@ the readings tolerant of a repeat.
 
 ## What to watch {#what-to-watch}
 
+Every metric below is on a Grafana board. The chart ships a board for
+[Sparkplug ingestion](./grafana-boards.md#sparkplug-ingest-board) and one for
+[LwM2M ingestion](./grafana-boards.md#lwm2m-ingest-board) with every instance. The edge agent's
+metrics never reach the instance's Prometheus, so its board is a
+[dashboard file](./grafana-boards.md#edge-agent-dashboard) you import into your own Grafana.
+
 :::note Ten alerts ship for these two services
 The chart ships ten alert rules for sparkplug-ingest and lwm2m-ingest, described under
 [Alerts that ship](#edge-alerts): whether each transport is being read at all, a LwM2M leader that is
-stuck, the ways the two services drop data, and the Sparkplug command downlink. **Every other metric in the tables below has no alert
-and no dashboard panel.** It is emitted and scraped, and nothing will page you about it until you write
+stuck, the ways the two services drop data, and the Sparkplug command downlink. **Every other metric in the tables below has no alert.**
+It is emitted and shown on a [board](./grafana-boards.md), but nothing will page you about it until you write
 the rule yourself. The edge agent has no shipped alert at all.
 :::
 

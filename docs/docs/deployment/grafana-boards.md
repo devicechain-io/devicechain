@@ -6,10 +6,12 @@ title: Grafana Boards
 # Grafana Boards {#grafana-boards}
 
 The [monitoring stack](./observability.md#the-monitoring-stack) that `dcctl install` deploys
-ships eight Grafana boards for every instance: an **overview** that answers "is everything
-up?", and seven **stage boards**, one for each stage a message passes through on its way from
-a device to a delivered notification, plus the platform underneath them. Each board is a
-starting point for one question, and each links to the next board you would open.
+ships ten Grafana boards for every instance: an **overview** that answers "is everything
+up?", seven **stage boards**, one for each stage a message passes through on its way from
+a device to a delivered notification, plus the platform underneath them, and two boards for the
+optional [Sparkplug and LwM2M services](./edge-services.md). Each board is a starting point for
+one question, and each links to the next board you would open. The edge agent runs outside the
+cluster and has its own [dashboard file](#edge-agent-dashboard) instead.
 
 Everything on the boards is built from the metrics the services already export (see the
 [metrics reference](./metrics-reference.md)) and from the standard Kubernetes, database and
@@ -164,7 +166,7 @@ MQTT messages waiting to be forwarded.
 | Protection of the MQTT message store | Required consumers present, store settings put back, gateway streams without a size limit, and connections refused because the store is full or busy. |
 | Device presence and external sources | Online and offline changes not recorded, external MQTT sources without exactly one reader, and the device sign-in cache. |
 | Device self-registration | Devices registered, refusals by reason, and time to answer. |
-| Sparkplug ingest, LwM2M ingest | Only when those optional services run: active readers or serving state, failures, and per-protocol traffic. |
+| Sparkplug ingest, LwM2M ingest | Only when those optional services run: active readers or serving state, failures, and per-protocol traffic. Each has a full board of its own: [Sparkplug ingest](#sparkplug-ingest-board) and [LwM2M ingest](#lwm2m-ingest-board). |
 
 Alerts behind it: the MQTT and capture-stream alerts described in
 [Backpressure on the ingest path](./observability.md#ingest-backpressure) and
@@ -308,6 +310,96 @@ the `Sso*` and credential-store alerts, `TenantPurge*`,
 [`TenantsMeteredAtPlatformDefault`](./observability.md#tenant-ceilings), `RateLimiterOverflowInUse`,
 `RateMeteringClockFallback`, `ReactShedLettersOverBudget` and `ConnectorDispatchRateLimited`.
 
+## Sparkplug ingest {#sparkplug-ingest-board}
+
+**Use it when Sparkplug nodes stop reporting, or when the Sparkplug host is not reading.** It
+follows one transport from the broker connection to the readings stored, and on to the commands
+sent back to edge nodes. The service is optional: on an instance that does not run it, every
+panel shows no data or zero.
+
+| Group | What it shows |
+| --- | --- |
+| Is it reading? | Active readers (exactly one is healthy), broker connection failures, refused group subscriptions, messages dropped, undecodable messages, and nodes that cannot register. |
+| What arrives | Messages by type, and the readings, presence changes and devices registered that they produced. |
+| What was not stored | Readings skipped by reason, and everything dropped: at ingest, undecodable, from unknown devices, for a tenant being deleted, too old, and shed over a tenant's ceiling. |
+| Presence and rebirths | Rebirth requests and the ones dropped, liveness probes and the devices they marked offline, registration recovery, and how long a probe pass takes and when the last good one ran. |
+| Commands to edge nodes | Commands awaiting an outcome, unconfirmed commands, command faults, breaker trips and the sources whose breaker is not closed, commands by result, time to confirm, and each source's breaker state. |
+
+Alerts behind it: the `SparkplugIngest*` and `SparkplugCommand*` alerts in
+[Running the Edge Services](./edge-services.md#edge-alerts).
+
+## LwM2M ingest {#lwm2m-ingest-board}
+
+**Use it when LwM2M devices cannot be reached, stop reporting, or their commands do not land.**
+It covers the CoAP and DTLS server, the fleet it holds, the readings it stores, and the command
+path to devices. The service is optional: on an instance that does not run it, every panel shows
+no data or zero.
+
+| Group | What it shows |
+| --- | --- |
+| Is it serving? | Leaders and serving replicas (each exactly one), notifications dropped, commands not carried out, handshakes refused, and sessions refused at the ceiling. |
+| The fleet it holds | Registrations, sessions and observations, the registration lifecycle, failover markers, refused registrations, DTLS handshakes, and health-probe requests. |
+| Readings | Notifications and readings stored, notifications that produced no reading, non-numeric records, everything dropped, and devices created by telemetry. |
+| Commands | Commands dispatched by operation, commands set aside and why, commands for offline or other devices, command faults, and the drain of the backlog. |
+| Device information and housekeeping | Device information harvests and their write problems, and the sweep that removes deleted tenants' registrations. |
+
+Alerts behind it: the `Lwm2mIngest*` alerts in
+[Running the Edge Services](./edge-services.md#edge-alerts).
+
+## Edge agent {#edge-agent-dashboard}
+
+The edge agent runs on hardware at your sites, and its metrics endpoint listens on the box's
+loopback address only. The instance's Prometheus never scrapes it, so the chart installs no board
+for it. The dashboard is a file you import into the Grafana that reads **your own** Prometheus:
+[`edge-agent.json`](https://github.com/devicechain-io/devicechain/blob/main/backend/edge/dc-edge-agent/dashboards/edge-agent.json).
+
+To use it, get the agents' metrics into a Prometheus. The metrics endpoint listens on the box's
+loopback address (`127.0.0.1`, port `local.metricsPort`, default 9090), so the collector has to be a
+process on the box itself: nothing off the box can reach it. Every agent's series must carry a
+**unique `agent` label**. The board's picker, legends and groupings all use it, and without one the
+series of different boxes have identical labels and overwrite one another where they are received.
+Set it as an external label on each box's collector. For Prometheus in agent mode:
+
+```yaml
+global:
+  external_labels:
+    agent: site-berlin-01   # unique per box
+scrape_configs:
+  - job_name: dc-edge-agent
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+remote_write:
+  - url: https://prometheus.example.com/api/v1/write
+```
+
+The agent's default port, 9090, is also Prometheus's default listen port, so give one of them another:
+start the collector on a different one, as below, or set `local.metricsPort` in the agent's
+configuration and scrape that port.
+
+```bash
+prometheus --enable-feature=agent --config.file=agent.yml --web.listen-address=127.0.0.1:9091
+```
+
+Then in Grafana choose **Dashboards, New, Import**, upload the file, and pick that Prometheus as the
+data source. The board has two pickers, **Agent** (every agent that sends the label) and **Lookback**
+(how far back to look for agents that have stopped reporting). A site that loses its link stops
+sending anything, including its own disconnected state, so the *Known agents reporting* and *Agents
+silent* tiles and the *Agents* table compare what is reporting now with what was seen in the
+lookback window. The board has no *Firing alerts* table, because the agent ships no alert rules.
+
+| Group | What it shows |
+| --- | --- |
+| Is every site connected? | The share of known agents reporting, agents silent and agents disconnected, the oldest buffered event, the fullest buffer, events lost to overflow, events refused, agents with an open local port, and a table with one row per agent. |
+| Connectivity | The cloud link of each agent over time, and publishes waiting for the cloud. |
+| Store-and-forward backlog | Age of the oldest buffered event, buffered events, buffer used against its limit, buffer fill, and events lost to overflow. |
+| Throughput | Events read for forwarding and acknowledged by the cloud, forwarded per agent, and failed forward attempts. |
+| Refused and rejected events | Refusals by reason, refused events kept or unmatched, events discarded on the box, and whether the local port requires a credential. |
+| The agent process | Memory, CPU, goroutines and open files of each agent. |
+
+Every panel reads a series the agent exports. A test in the agent's source tree checks the file
+against the agent's real metrics, so a renamed metric fails the build instead of leaving a site with
+an empty graph.
+
 ## What the boards do not cover {#not-covered}
 
 - **The Kubernetes operator** runs in its own namespace. Nothing scrapes its metrics, and no
@@ -318,7 +410,9 @@ the `Sso*` and credential-store alerts, `TenantPurge*`,
   panels are a stand-in: a growing backlog is a growing delay. The nearest actual measure of
   age is `detect_watermark_lag_seconds`, shown on Event processing as *Watermark lag*, which
   is how far the detection engine's watermark trails the wall clock.
-- **Edge agents** run on customer hardware and are not scraped.
+- **Edge agents** run on customer hardware and are not scraped by the instance's Prometheus, so
+  no board in the chart shows them. Import the [edge agent dashboard](#edge-agent-dashboard) into
+  the Grafana that reads your own Prometheus.
 
 ## Related {#related}
 

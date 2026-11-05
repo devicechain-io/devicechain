@@ -526,8 +526,10 @@ topic write spBv1.0/plant-a/DCMD/+/+
 
 ## 应监控什么 {#what-to-watch}
 
+下面的每个指标都在某个 Grafana 仪表盘上。Chart 随每个实例附带一个 [Sparkplug 接入](./grafana-boards.md#sparkplug-ingest-board)仪表盘和一个 [LwM2M 接入](./grafana-boards.md#lwm2m-ingest-board)仪表盘。边缘代理的指标永远不会到达实例的 Prometheus，所以它的仪表盘是一个[仪表盘文件](./grafana-boards.md#edge-agent-dashboard)，需要导入你自己的 Grafana。
+
 :::note 这两个服务附带十条告警
-Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随附告警](#edge-alerts)：每种传输是否在被读取、卡住的 LwM2M 主实例，两个服务丢弃数据的几种情形，以及 Sparkplug 命令下行通道。**下表中其余所有指标都没有告警，也没有仪表盘面板。** 指标都会发出并被抓取，但编写自己的规则前，不会通知你。边缘代理没有任何随附告警。
+Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随附告警](#edge-alerts)：每种传输是否在被读取、卡住的 LwM2M 主实例，两个服务丢弃数据的几种情形，以及 Sparkplug 命令下行通道。**下表中其余所有指标都没有告警。** 指标都会发出并显示在[仪表盘](./grafana-boards.md)上，但编写自己的规则前，不会通知你。边缘代理没有任何随附告警。
 :::
 
 所有指标带 `devicechain_` 和服务段前缀：`devicechain_sparkplugingest_`、`devicechain_lwm2mingest_`、`devicechain_edge_`。没有逐设备标签。只有 `command_breaker_state` 带有 `tenant` 和 `source` 标签，其数量受你配置的来源限制，因此抓取不存在高基数风险。

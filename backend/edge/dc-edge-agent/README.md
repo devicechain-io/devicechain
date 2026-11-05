@@ -202,6 +202,12 @@ does not reset across a restart (both its operands are durable); the other `_tot
 counters are per-process. `GET /healthz` → `200` when up and healthy, else `503`.
 `local_auth_enabled` (E4) is `1` when the local listener requires a credential, else `0`.
 
+A Grafana dashboard for these series ships beside the agent, in `dashboards/edge-agent.json`: import it into the Grafana that
+reads the Prometheus scraping your agents. The endpoint is loopback-only, so a collector on the box has to relay it, and it must
+set a unique `agent` external label (the board's picker and groupings use it; without it series from different boxes collide).
+`agent/dashboard_test.go` checks every panel query against the registry `newEdgeMetrics` builds, so a renamed or retyped metric
+fails the build, and a new `devicechain_edge_*` metric fails it until a panel reads it.
+
 ### Known gaps / accepted risks (tracked)
 
 - **Power-loss durability** rides an fsync-on-every-store (`SyncAlways`), so the floor

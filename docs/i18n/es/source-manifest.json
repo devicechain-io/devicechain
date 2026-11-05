@@ -123,12 +123,12 @@
       "translationSha256": "0159c13b06c2cfdec5d470d9ff2c53a12407a655541f8088e1a8a801a3d857b0"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "4cde6643566ad6f2396e4b4d54f4d87db94a74fcbb5f51df769cfde6eda0cda7",
-      "translationSha256": "06e5a9bfc0748fd659d3d40628ec8e8582932328d28ffe8fb7a6dc79fd0502da"
+      "sourceSha256": "091a55512e6040540b4d9931d4edbfa5519b41c31d891246b5b0bae5d029be8c",
+      "translationSha256": "adbbe8547a1d71ea71864231cf4d34db5e232da56e140325082cec90315101f3"
     },
     "deployment/grafana-boards.md": {
-      "sourceSha256": "dcb3e71bc1562c5a1d04b26790b48404340efff24bc75be3f2900eedf4034cf2",
-      "translationSha256": "964f639b83f99dee546dcb719302f59efae4bda556a276790b767bdc81020dcc"
+      "sourceSha256": "abf322b0ca7918a2126a5ca450d7b6de96e0d0df26d5a511fb9069fbf332c55f",
+      "translationSha256": "6a7719b5ebb91173cf78d101d236c688b7cbb4a189ff24c7bf1dd93a21cb4f2e"
     },
     "deployment/ingress-cutover.md": {
       "sourceSha256": "11f7ba29969ace2fe2a0b03b8badf1191e767fcbb042c8238a543ff927d3cfec",
