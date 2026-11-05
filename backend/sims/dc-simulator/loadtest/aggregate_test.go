@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,15 +37,27 @@ func (f *fakeAgg) DeviceAggregates(context.Context, Window) (map[string]DeviceAg
 	return f.stored, nil
 }
 
-// fakeExact is the drill-down reader: the exact stored instants per device.
+// fakeExact is the drill-down reader: the exact stored instants per device. readStoredIdentities
+// calls it from a pool of workers, so the record of what was read is guarded.
 type fakeExact struct {
 	times map[string][]int64
+
+	mu    sync.Mutex
 	reads []string
 }
 
 func (f *fakeExact) DeviceIdentities(_ context.Context, dev string, _ Window) ([]int64, int, error) {
+	f.mu.Lock()
 	f.reads = append(f.reads, dev)
+	f.mu.Unlock()
 	return f.times[dev], 1, nil
+}
+
+// readDevices is a copy of the devices read so far, in the order the pool read them.
+func (f *fakeExact) readDevices() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.reads...)
 }
 
 // storedOf is what a faithful store holds for the ledger's accepted events, as aggregates.
@@ -124,8 +137,8 @@ func TestAggregateFindsOneDeletedRow(t *testing.T) {
 	if rep.Reconciled || rep.Missing != 1 || !reflect.DeepEqual(rep.Samples.Missing, []string{key("dev-ab", victim)}) || rep.DevicesDrilled != 1 {
 		t.Fatalf("the drill-down must name the deleted identity %s: %+v", key("dev-ab", victim), rep)
 	}
-	if !reflect.DeepEqual(ex.reads, []string{"dev-ab"}) {
-		t.Fatalf("only the mismatching device may be read exactly, read %v", ex.reads)
+	if !reflect.DeepEqual(ex.readDevices(), []string{"dev-ab"}) {
+		t.Fatalf("only the mismatching device may be read exactly, read %v", ex.readDevices())
 	}
 }
 

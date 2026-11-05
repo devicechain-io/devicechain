@@ -620,15 +620,16 @@ func TestHTTPGroupRefusedUnderBackpressureRefusesAndCountsEveryRequest(t *testin
 
 // A group the envelope encoder refuses (a token that is not UTF-8) is published event by event, so
 // each request gets its own answer: the good ones succeed, nothing is lost to the bad neighbour.
+//
+// The group is handed to flush already formed. Whether three concurrent requests land in ONE group
+// is the former's call, made from the tenant's learned arrival rate and a linger capped at
+// 10 ms, so a test that relies on goroutine timing to get one group sometimes gets two (a lone
+// request, then a pair of good ones that envelope fine) on a loaded runner. The former has its own
+// tests; this one is about what flush does with a group the encoder refuses.
 func TestHTTPGroupTheEncoderRefusesFallsBackToSinglesWithTheirOwnAnswers(t *testing.T) {
 	var mu sync.Mutex
 	var singles, envs int
-	gated := make(chan struct{})
-	var open atomic.Bool
 	h := newHTTPEnv(t, func(_ context.Context, _ string, msg messaging.Message) error {
-		if open.Load() {
-			<-gated
-		}
 		mu.Lock()
 		defer mu.Unlock()
 		if msg.Headers[eventenvelope.HeaderName] != "" {
@@ -638,24 +639,26 @@ func TestHTTPGroupTheEncoderRefusesFallsBackToSinglesWithTheirOwnAnswers(t *test
 		}
 		return nil
 	})
-	for i := 0; i < 20; i++ {
-		_ = h.Publish(core.WithTenant(context.Background(), "acme"), "w", "acme", messaging.Message{Value: pbDevice("w")})
-	}
-	mu.Lock()
-	singles, envs = 0, 0
-	mu.Unlock()
-	open.Store(true)
-	errs := make(chan error, 3)
 	bodies := [][]byte{pbDevice("good-1"), {0xff, 0xfe}, pbDevice("good-2")}
-	for _, v := range bodies {
-		go func() {
-			errs <- h.Publish(core.WithTenant(context.Background(), "acme"), "http", "acme", messaging.Message{Value: v})
-		}()
+	batch := messaging.FormedBatch{Tenant: "acme"}
+	pend := make([]*httpPending, len(bodies))
+	for i, v := range bodies {
+		pend[i] = &httpPending{
+			ctx:    core.WithTenant(context.Background(), "acme"),
+			msg:    messaging.Message{Value: v},
+			source: "http",
+			done:   make(chan error, 1),
+		}
+		batch.Members = append(batch.Members, messaging.FormedMember{Bytes: v, Token: pend[i]})
 	}
-	time.Sleep(30 * time.Millisecond)
-	close(gated)
-	for i := 0; i < 3; i++ {
-		require.NoError(t, <-errs)
+	h.flush(batch)
+	for i, p := range pend {
+		select {
+		case err := <-p.done:
+			require.NoError(t, err, "request %d", i)
+		default:
+			t.Fatalf("request %d was never answered", i)
+		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
