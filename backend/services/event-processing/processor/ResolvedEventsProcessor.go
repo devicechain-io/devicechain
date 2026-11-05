@@ -2210,6 +2210,9 @@ func (rp *ResolvedEventsProcessor) drainDetections(triggeredAt time.Time, replay
 // are not early-publishable: a control-plane clear is not a replay re-derivation, so it waits for the
 // checkpoint that commits the latch it clears. When there is nothing to drain this is a no-op.
 func (rp *ResolvedEventsProcessor) drainControlPlane() {
+	if rp.engine == nil {
+		return // a term that ended before its engine was built has nothing to drain
+	}
 	rp.drainDetections(rp.clock.Now(), false)
 }
 
