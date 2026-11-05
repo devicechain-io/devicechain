@@ -244,6 +244,13 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     """
     configurationDeclaration: [ConfigurationKey!]!
     """
+    The profile's DRAFT payload decoder: the rules that turn a binary frame or a webhook's JSON
+    into measurements, or null when none is saved. Like every draft field, it reaches devices
+    only when the profile is published; the decoder frozen into each published version never
+    changes.
+    """
+    decoder: PayloadDecoder
+    """
     The published version a device currently resolves through this profile, with the
     content frozen into it, or null until the profile is first published. Read the
     declaration devices actually see from here, not from the draft fields above.
@@ -388,6 +395,11 @@ type DeviceProfileVersion {
     changes after publication.
     """
     configurationDeclaration: [ConfigurationKey!]!
+    """
+    The payload decoder frozen into this version, or null when it declared none, including
+    every version published before decoders existed. It never changes after publication.
+    """
+    decoder: PayloadDecoder
     """
     This version as a W3C Web of Things Thing Model (TD 1.1), as JSON-LD text. Each metric
     is a read-only, observable property typed from its data type, with its unit, bounds,
@@ -598,6 +610,183 @@ input MetricValueInput {
     constant, a number such as `1.02`.
     """
     value: String!
+}
+
+"""
+The engine a payload decoder runs on. Only CEL is executable; a WASM document is refused with
+UNSUPPORTED_DECODER_KIND.
+"""
+enum PayloadDecoderKind {
+    """Expressions in a bounded, loop-free expression language over a library of byte and bit readers."""
+    CEL
+    """Reserved. Refused wherever a decoder is saved or published."""
+    WASM
+}
+
+"""Which input of an uplink a decoder reads. An uplink without it fails to decode with missing_input."""
+enum PayloadDecoderInput {
+    """The raw frame: a LoRaWAN payload, or a binary webhook body."""
+    FRAME
+    """A JSON item from a generic webhook."""
+    JSON
+    """The object a network server already decoded."""
+    DECODED
+}
+
+"""
+A payload decoder: the rules that turn a binary frame, a generic webhook's JSON or a network
+server's decoded object into measurements.
+"""
+type PayloadDecoder {
+    """The engine the decoder runs on."""
+    kind: PayloadDecoderKind!
+    """The version of the function library the decoder was written against. It never changes meaning."""
+    envVersion: Int!
+    """Which input of an uplink the decoder reads."""
+    input: PayloadDecoderInput!
+    """The whole decoder document as JSON text, exactly as saved."""
+    document: String!
+    """
+    The most readings one uplink can produce: the largest section's scalar rows plus its map
+    rows' maxKeys. Ingest is charged this many readings per uplink.
+    """
+    maxReadings: Int!
+    """The decoder's worst-case static cost, in the units the function reference gives."""
+    estimatedCost: Int!
+}
+
+"""One header of a pasted webhook request."""
+input HeaderInput {
+    """The header name."""
+    name: String!
+    """The header value."""
+    value: String!
+}
+
+"""One query parameter of a pasted webhook request."""
+input QueryParamInput {
+    """The parameter name."""
+    name: String!
+    """The parameter value."""
+    value: String!
+}
+
+"""
+A decoder and one input to run it over. Name at most one of frameHex, frameBase64, json,
+webhookBody and sampleId; naming none runs only the saved vectors.
+"""
+input PayloadDecoderTestInput {
+    """Token of the profile whose draft metrics the decoder is checked against."""
+    profileToken: String!
+    """The decoder document as JSON text. Omit to test the profile's saved draft decoder."""
+    document: String
+    """The frame as hex; whitespace is ignored. At most 4096 bytes once decoded."""
+    frameHex: String
+    """The frame as base64. At most 4096 bytes once decoded."""
+    frameBase64: String
+    """A JSON object, given to the decoder's JSON or DECODED input, whichever it declares."""
+    json: String
+    """
+    A whole network-server or generic webhook body, up to 256 KiB, parsed by the same code
+    that parses it at ingest. Needs integrationToken.
+    """
+    webhookBody: String
+    """Token of the stored integration whose type and settings parse webhookBody."""
+    integrationToken: String
+    """With webhookBody: the request headers, which a generic integration may read its device id from."""
+    headers: [HeaderInput!]
+    """With webhookBody: the query parameters, such as the event type of a network server."""
+    query: [QueryParamInput!]
+    """With webhookBody: the message-type path segment some network servers post each message type to."""
+    messageType: String
+    """With webhookBody: the request's content type. A network server integration refuses a non-JSON one."""
+    contentType: String
+    """The LoRaWAN application port, for a frame given as hex or base64."""
+    fPort: Int
+    """The LoRaWAN uplink frame counter, for a frame given as hex or base64."""
+    fCnt: Int
+    """
+    Load the input from a stored failure sample of this profile instead. Running a decoder
+    over a sample reveals its bytes, so this needs device:write, not device:read. A sample of
+    another tenant or profile is NOT_FOUND.
+    """
+    sampleId: ID
+}
+
+"""One value a decoder produced, as it would be stored."""
+type PayloadDecoderReading {
+    """The measurement key."""
+    key: String!
+    """The value, formatted by the target metric's type."""
+    value: String!
+}
+
+"""A value the decode did not store, and why."""
+type PayloadDecoderSkip {
+    """The key that was skipped."""
+    key: String!
+    """Why: undeclared (no such metric), collision (a scalar row writes the key), reserved, or invalid."""
+    reason: String!
+}
+
+"""Why a test produced no readings."""
+type PayloadDecoderError {
+    """
+    The reason: compile_failed, env_unsupported, eval_error, cost_exceeded, invalid_output,
+    no_section, no_outputs, missing_input, map_overflow, input_too_large, input_malformed,
+    unsupported_encoding or ignored_message.
+    """
+    reason: String!
+    """The expression that failed, such as `sections[1].outputs[2].expr`, or empty when it is not one."""
+    path: String!
+    """What went wrong. It names the function and offset, never platform internals."""
+    message: String!
+    """The byte offset a reader refused, or null."""
+    offset: Int
+}
+
+"""One saved vector's outcome."""
+type PayloadDecoderVectorResult {
+    """The vector's name."""
+    name: String!
+    """Whether the decoder produced exactly the readings the vector expects."""
+    ok: Boolean!
+    """Why it failed, or null."""
+    error: String
+    """The cost the run spent."""
+    cost: Int!
+}
+
+"""What a decoder made of one input, through the code that runs at ingest. Nothing is stored."""
+type PayloadDecoderTestResult {
+    """True when the decoder compiled and the input decoded (an ignore section counts)."""
+    ok: Boolean!
+    """True when an ignore section matched: the uplink would be accepted and store nothing."""
+    ignored: Boolean!
+    """The name of the section that matched, or null."""
+    section: String
+    """The readings that would be stored, with link metrics appended when the integration asks for them."""
+    readings: [PayloadDecoderReading!]!
+    """Values the decode produced or the envelope carried that were not stored."""
+    skipped: [PayloadDecoderSkip!]!
+    """Why the test failed, or null. A document that does not compile is reported here."""
+    error: PayloadDecoderError
+    """The cost the decode spent."""
+    cost: Int!
+    """The saved vectors, each run through the decoder."""
+    vectors: [PayloadDecoderVectorResult!]!
+    """How many uplinks a webhook body held; the first one was tested. Zero when the input was not a webhook body."""
+    uplinks: Int!
+}
+
+"""One function of the decoder library."""
+type PayloadDecoderFunction {
+    """The function's name, such as `i16be`."""
+    name: String!
+    """Its signature."""
+    signature: String!
+    """What it does, including its limits."""
+    description: String!
 }
 
 """
@@ -4128,6 +4317,25 @@ type Query {
         constants: [MetricValueInput!]
     ): MetricFormulaTest!
     """
+    Runs a payload decoder over one input and reports the readings it would store, what it
+    skipped, the error with its expression path and the cost, then runs the profile's saved
+    vectors. The decoder is checked against the profile's DRAFT metrics with the same compiler
+    and the same output validation that run at ingest, and a webhook body is parsed by the same
+    code as ingest. Nothing is stored. A document that does not compile is reported in error,
+    not as a request error. Limited to 10 requests per second per tenant (RATE_LIMITED).
+    Requires device:read, except that sampleId requires device:write. A caller limited to part
+    of the tenant is refused.
+    """
+    testPayloadDecoder(
+        """The decoder and the input."""
+        input: PayloadDecoderTestInput!
+    ): PayloadDecoderTestResult!
+    """
+    The decoder function library, in a stable order: every function a decoder expression may
+    call, with its signature and limits. It drives the editor's help. Requires device:read.
+    """
+    payloadDecoderFunctions: [PayloadDecoderFunction!]!
+    """
     Returns the command definitions with the given ids. Ids that match nothing are omitted,
     an id that is not a number fails the request, and more than 1000 ids are refused with
     LIMIT_EXCEEDED. Requires device:read.
@@ -4804,6 +5012,31 @@ type Mutation {
         token: String!
         """The complete new declaration, replacing the current one."""
         keys: [ConfigurationKeyInput!]!
+    ): DeviceProfile!
+    """
+    Saves a profile's DRAFT payload decoder, replacing any earlier one. The document is parsed
+    strictly (an unknown key is refused) and compiled in full against the profile's draft
+    metrics: every scalar output key must be a declared, measured metric of the profile (a
+    calculated metric cannot be one, and `lorawan.` keys are reserved for link metrics), a key
+    may be written once per section, and every expression must type-check and fit its cost
+    ceiling. The refusal is INVALID_DECODER and names the failing expression. A WASM document
+    is refused with UNSUPPORTED_DECODER_KIND. Saved vectors need not pass here; they gate the
+    publish. Published versions keep their decoder: this changes only what the next publish
+    freezes. Returns the updated profile. Requires device:write.
+    """
+    setDeviceProfileDecoder(
+        """Token of the profile."""
+        profileToken: String!
+        """The decoder document as JSON text, at most 32 KiB."""
+        document: String!
+    ): DeviceProfile!
+    """
+    Withdraws a profile's DRAFT payload decoder. Published versions keep theirs. Returns the
+    updated profile. Requires device:write.
+    """
+    clearDeviceProfileDecoder(
+        """Token of the profile."""
+        profileToken: String!
     ): DeviceProfile!
     """
     Makes a device's desired configuration equal to the content of one of its own earlier

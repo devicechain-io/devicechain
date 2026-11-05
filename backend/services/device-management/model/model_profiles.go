@@ -89,6 +89,11 @@ type DeviceProfile struct {
 	// written through ConfigurationKeys / encodeConfigurationDeclaration; frozen into
 	// ProfileSnapshot.Configuration at publish.
 	ConfigurationDeclaration *datatypes.JSON
+	// DecoderDeclaration is the DRAFT payload decoder: one nullable JSON document (NULL = no
+	// decoder), a payloaddecode.Document. It is written only by SetDeviceProfileDecoder and
+	// ClearDeviceProfileDecoder, after a full compile, and frozen into ProfileSnapshot.Decoder at
+	// publish. UpdateDeviceProfile omits it, as it does ConfigurationDeclaration.
+	DecoderDeclaration *datatypes.JSON
 	// Provenance is a reserved, nullable link recording that this profile was
 	// fork-adopted from an ADR-046 catalog entry ("catalog-profile@version"). Unset
 	// and unused in v1; present so the future catalog drops in additively.

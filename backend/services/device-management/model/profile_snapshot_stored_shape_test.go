@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -88,7 +89,18 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	// omitempty, so it is set below to exercise the full key set. A snapshot published
 	// without the "configuration" key reads as nothing declared, which is correct.
 	wantConfiguration := []string{"description", "key", "valueType"}
-	wantTop := []string{"commands", "configuration", "location", "metrics", "rules"}
+	// The decoder is carried as the core library's own document, verbatim, so ITS json tags are
+	// part of the stored shape: a rename there silently empties every stored decoder. Every
+	// optional field is set below so the whole key set is exercised. A snapshot published
+	// without the "decoder" key reads as no decoder, which is correct: such a profile's uplinks
+	// were always flattened.
+	wantDecoder := []string{"envVersion", "input", "kind", "let", "sections", "table", "vectors"}
+	wantDecoderLet := []string{"expr", "name"}
+	wantDecoderSection := []string{"ignore", "name", "outputs", "when"}
+	wantDecoderOutput := []string{"key", "expr", "map", "maxKeys", "prefix", "when"}
+	wantDecoderVector := []string{"expect", "input", "name"}
+	wantDecoderVectorInput := []string{"decoded", "fCnt", "fPort", "frameBase64", "frameHex", "json", "link"}
+	wantTop := []string{"commands", "configuration", "decoder", "location", "metrics", "rules"}
 
 	enum := datatypes.JSON([]byte(`["LOW","HIGH"]`))
 	schema := datatypes.JSON([]byte(`[{"key":"level","type":"INT"}]`))
@@ -132,6 +144,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 			ExpectedUpdateIntervalSeconds: &interval,
 		},
 		Configuration: []ConfigurationKey{{Key: "mode", ValueType: "STRING", Description: "d"}},
+		Decoder:       fullDecoderDocument(t),
 	}
 
 	raw, err := json.Marshal(snap)
@@ -174,6 +187,52 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 		t.Fatalf("configuration is not a one-element list of objects: %v", err)
 	}
 	checkKeys(t, "a stored configuration key", cfg[0], wantConfiguration)
+
+	var dec map[string]json.RawMessage
+	if err := json.Unmarshal(doc["decoder"], &dec); err != nil {
+		t.Fatalf("decoder is not an object: %v", err)
+	}
+	checkKeys(t, "the stored decoder document", dec, wantDecoder)
+	first := func(what string, raw json.RawMessage) map[string]json.RawMessage {
+		var objs []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &objs); err != nil || len(objs) == 0 {
+			t.Fatalf("%s is not a non-empty list of objects: %v", what, err)
+		}
+		return objs[0]
+	}
+	checkKeys(t, "a stored decoder let", first("let", dec["let"]), wantDecoderLet)
+	section := first("sections", dec["sections"])
+	checkKeys(t, "a stored decoder section", section, wantDecoderSection)
+	checkKeys(t, "a stored decoder output", first("outputs", section["outputs"]), wantDecoderOutput)
+	vector := first("vectors", dec["vectors"])
+	checkKeys(t, "a stored decoder vector", vector, wantDecoderVector)
+	var vin map[string]json.RawMessage
+	if err := json.Unmarshal(vector["input"], &vin); err != nil {
+		t.Fatalf("vector input is not an object: %v", err)
+	}
+	checkKeys(t, "a stored decoder vector input", vin, wantDecoderVectorInput)
+}
+
+// fullDecoderDocument is a decoder with every field of the document set, built from the core
+// library's own types so that a field added there appears here and fails the pin until someone
+// decides what an old snapshot without it means.
+func fullDecoderDocument(t *testing.T) json.RawMessage {
+	t.Helper()
+	port, cnt := 2, 9
+	raw, err := json.Marshal(payloaddecode.Document{
+		Kind: payloaddecode.KindCEL, EnvVersion: payloaddecode.EnvVersion, Input: payloaddecode.InputFrame,
+		Let: []payloaddecode.Let{{Name: "hdr", Expr: "u8(frame, 0)"}},
+		Sections: []payloaddecode.Section{{Name: "s", When: "fPort == 2", Ignore: true, Outputs: []payloaddecode.Output{{
+			Key: "k", Expr: "1", When: "true", Map: "m", Prefix: "p.", MaxKeys: 3}}}},
+		Vectors: []payloaddecode.Vector{{Name: "v", Expect: map[string]json.Number{"k": "1"},
+			Input: payloaddecode.VectorInput{FrameHex: "00", FrameBase64: "AA==", JSON: json.RawMessage(`{}`),
+				Decoded: json.RawMessage(`{}`), FPort: &port, FCnt: &cnt, Link: map[string]float64{"rssi": 1}}}},
+		Table: json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal decoder: %v", err)
+	}
+	return raw
 }
 
 // checkKeys reports the difference as ADDED and REMOVED rather than as two sorted lists to
