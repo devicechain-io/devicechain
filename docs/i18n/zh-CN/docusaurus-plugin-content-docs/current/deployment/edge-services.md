@@ -539,9 +539,11 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随�
 | 告警 | 严重程度 | 含义 | 处理方法 |
 | --- | --- | --- | --- |
 | `Lwm2mIngestLeaderCountNotOne` | critical | 持续 2 分钟，报告持有领导租约的 lwm2m-ingest 副本数不是恰好 1。为 0 时，无人读取 CoAP/DTLS 传输，所有 LwM2M 设备都不可达，尽管每个 Pod 看起来都健康。大于 1 时，两个副本同时在提供服务。 | 查看 lwm2m-ingest 日志，了解没有副本取得租约的原因；通常是平台的消息代理不可达。 |
+| `Lwm2mIngestLeaderMetricAbsent` | critical | 持续 5 分钟，lwm2m-ingest 的 Deployment 有可用 Pod，但没有任何副本导出 `is_leader` 序列，因此 `Lwm2mIngestLeaderCountNotOne` 无法触发（空的总和不是 1，而是什么都没有）。无法得知 CoAP/DTLS 传输是否在被读取。 | 先在 Prometheus 中检查 lwm2m-ingest 的抓取目标（ServiceMonitor 或 PodMonitor 的变更、网络策略、指标端口或 TLS）以及 Pod 的 `/metrics`，再看日志。对于未部署或没有可用 Pod 的区域不会触发；后者由 `InstanceAreaUnavailable` 负责。 |
 | `Lwm2mIngestLeaderNotServing` | critical | 持续 5 分钟，某个 Pod 持有 LwM2M 租约，但其 CoAP/DTLS 读取循环没有运行（`is_leader` 为 1 且 `is_serving` 为 0）。它卡在构建任期的过程中，通常是在从 device-state 读取已断言在线的设备，并且因为它一直持有租约，没有备用实例能够接管。没有任何 LwM2M 设备得到服务。 | 查看该 Pod 日志中 `Acquired LwM2M leadership` 前后的内容，然后重启该 Pod，让备用实例取得租约。 |
 | `Lwm2mIngestDroppingNotifications` | warning | 过去 10 分钟内，持续 10 分钟，lwm2m-ingest 因接入失败或被拒绝（包括背压）而丢弃了 Notify 消息的读数。Notify 路径没有重试，因此上报不频繁的设备会丢失其读数。 | 检查消息代理、入站事件流的积压（参见[接入链路背压](./observability.md#ingest-backpressure)）以及 lwm2m-ingest 日志。计入 `notify_ingest_dropped_total`。 |
 | `SparkplugIngestLeaderCountNotOne` | critical | 持续 2 分钟，报告持有租约的 sparkplug-ingest 副本数不是恰好 1。为 0 时，没有任何 Sparkplug 来源在被读取。大于 1 时，两个副本连接相同的来源。部署时未配置来源的 Pod 永远不会取得租约，其值永久为 0。 | 为该 Pod 配置来源，或将该服务从部署中去掉。否则查看 sparkplug-ingest 日志，了解没有副本取得租约的原因。 |
+| `SparkplugIngestLeaderMetricAbsent` | critical | 持续 5 分钟，sparkplug-ingest 的 Deployment 有可用 Pod，但没有任何副本导出 `is_leader` 序列，因此 `SparkplugIngestLeaderCountNotOne` 无法触发。无法得知是否有 Sparkplug 来源在被读取。 | 先在 Prometheus 中检查 sparkplug-ingest 的抓取目标（ServiceMonitor 或 PodMonitor 的变更、网络策略、指标端口或 TLS）以及 Pod 的 `/metrics`，再看日志。对于未部署或没有可用 Pod 的区域不会触发；后者由 `InstanceAreaUnavailable` 负责。 |
 | `SparkplugIngestBrokerUnreachable` | warning | 过去 10 分钟内，持续 10 分钟，sparkplug-ingest 连接某个已配置的 Sparkplug 代理失败。就绪状态刻意不以代理可达为条件，因此 Pod 看起来健康，而该来源什么也没有接入。 | 主机错误、凭据被拒绝或代理故障都会触发。sparkplug-ingest 日志会指出来源和原因。计入 `connect_failures_total`。 |
 | `SparkplugIngestSubscriptionRefused` | warning | 过去 15 分钟内，持续 5 分钟，某个 Sparkplug 来源因其代理接受了连接，却拒绝或从未确认某个分组订阅，而被放弃并重试。只要有任一分组被拒绝，该来源就不接入其任何分组，也从不宣告 ONLINE。 | 将代理对该来源凭据的访问规则与为其配置的分组进行比较；最可能是该凭据无权读取其中某个分组。计入 `subscribe_failures_total`。 |
 | `SparkplugIngestDroppingData` | warning | 过去 10 分钟内，持续 10 分钟，sparkplug-ingest 放弃了它已接受的消息：其读数或在线状态转换在重试预算用尽后、在背压下立即，或在关闭时被丢弃。Sparkplug 主机不会得到代理的重投递，因此每一条都会丢失。 | 检查 device-management 和消息代理，并在 sparkplug-ingest 日志中查找 `Dropping Sparkplug samples`。计入 `ingest_failures_total`。 |
@@ -551,11 +553,9 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随�
 
 ### 主实例告警 {#no-leader-alert}
 
-两条 `LeaderCountNotOne` 告警是整个部分最关键的信号：零表示无人提供该传输服务，其所有设备都静默不可达。它们在总和不为一时触发，并且刻意**不带 `absent()` 分支**。未部署的服务不导出任何内容，而 Chart 的规则并不知道某次安装运行了哪些服务。已部署但没有运行 Pod 的服务同样不导出任何内容；那是一个 Pod 自身通过重启和就绪状态大声报告的故障。如果希望在序列完全不存在时也收到通知，请自行添加配对表达式：
+两条 `LeaderCountNotOne` 告警是整个部分最关键的信号：零表示无人提供该传输服务，其所有设备都静默不可达。它们在总和不为一时触发，并且刻意**不带 `absent()` 分支**：单独的 `absent()` 会让每个没有运行该服务的实例都告警。对不存在的序列求和得到的是空结果而不是零，所以如果序列消失，仅靠这两条会保持沉默。
 
-> `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
->
-> `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
+这种情况由专门的一对告警负责：`Lwm2mIngestLeaderMetricAbsent` 和 `SparkplugIngestLeaderMetricAbsent`。当 kube-state-metrics 报告该服务的 Deployment 有可用 Pod，而没有任何副本导出 `is_leader` 时触发，也就是 Pod 在运行但抓取已损坏或指标已消失。由于以 Deployment 为条件，服务未部署、被有意缩容到零或没有可用 Pod（最后一种情况由 `InstanceAreaUnavailable` 负责）时它们保持沉默。它们与那条告警一样需要 kube-state-metrics。正常的接管或滚动发布不会触发它们，因为待命副本全程导出值为 0 的 `is_leader`。
 
 未配置来源的 Sparkplug Pod 在初始化时就注册其 `is_leader` 指标，先于检查是否有服务内容，随后永远不会取得租约。它整个生命周期都发布读数为 **0** 的序列，`SparkplugIngestLeaderCountNotOne` 会自行对此触发。这是刻意的：没有内容可服务的传输服务，要么是需要修正的配置，要么是应从部署中去掉的服务。
 
