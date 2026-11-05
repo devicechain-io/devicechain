@@ -56,7 +56,7 @@ func derivedMaxFileStore(volume string) (int64, error) {
 // recorded ceiling. The volume-growth recipe leaves the claims at the new size, the apply
 // derives the new ceiling from it, and the check would still refuse the reservation the
 // growth was made to hold.
-func maxStoreAfterGrowth(state *tfjson.State, liveVolume, recordedMax string) string {
+func maxStoreAfterGrowth(state *tfjson.State, rootdir, liveVolume, recordedMax string) string {
 	if recordedMax == "" || liveVolume == "" {
 		return recordedMax
 	}
@@ -73,10 +73,8 @@ func maxStoreAfterGrowth(state *tfjson.State, liveVolume, recordedMax string) st
 	if rerr != nil || lerr != nil || rq.Cmp(lq) == 0 {
 		return recordedMax // the volume did not move: the recorded ceiling is still the broker's
 	}
-	derived, derr := derivedMaxFileStore(size)
-	have, herr := resource.ParseQuantity(recordedMax)
-	if derr != nil || herr != nil || have.Value() != derived {
-		return recordedMax // not what the recorded size derives: an operator set it
+	if statedByOperator(rootdir, "nats_jetstream_max_file_store") {
+		return recordedMax // the operator stated it (tfvars or TF_VAR), so the apply keeps it
 	}
 	return ""
 }

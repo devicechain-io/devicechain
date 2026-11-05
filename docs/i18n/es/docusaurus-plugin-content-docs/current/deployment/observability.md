@@ -597,9 +597,13 @@ después vuelva a ejecutar `dcctl upgrade`. Con el StatefulSet eliminado y sus r
 sitio, la actualización lee el nuevo tamaño de las reclamaciones (la menor, de modo que una
 reclamación aún sin ajustar aparece como no ampliada), recrea el StatefulSet con ese tamaño alrededor
 de los servidores que siguen en marcha y deriva de él el límite de almacenamiento de archivos del
-broker. Se niega, sin cambiar nada, mientras alguno de esos servidores no esté listo. El StatefulSet
-recreado solo se aplica cuando el tamaño difiere del que el broker usó por última vez, que es lo que
-significa ampliarlo. La receta requiere una StorageClass que permita la expansión.
+broker. Se niega, sin cambiar nada, mientras una reclamación sigue expandiéndose o un servidor que
+existe no está listo; espere a que `kubectl get pvc,pods` se estabilice y ejecútelo de nuevo. Un
+servidor que ha desaparecido por completo (eliminado o expulsado tras quitar el StatefulSet) no lo
+bloquea: nada más lo arrancaría, y el StatefulSet recreado sí. También se niega, nombrando las
+reclamaciones por debajo de la mayor, cuando todas siguen en el tamaño con el que el broker se ejecutó
+por última vez, porque el StatefulSet solo se recrea cuando el tamaño difiere, que es lo que significa
+ampliarlo. La receta requiere una StorageClass que permita la expansión.
 
 **Las alertas.** Un consumidor que se detiene a la tasa de diseño llena su flujo a un ritmo constante,
 así que los avisos se miden contra el momento en que la plataforma deja de aceptar eventos (el 90% del

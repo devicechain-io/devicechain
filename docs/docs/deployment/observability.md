@@ -577,9 +577,13 @@ Patch every one of the broker's claims (`dc-nats-js-dc-nats-0`, `-1`, and so on,
 run `dcctl upgrade` again. With the StatefulSet gone and its claims in place, the upgrade reads the
 new size from the claims (the smallest one, so a claim you have not patched yet shows as not grown),
 recreates the StatefulSet at that size around the servers that are still running, and derives the
-broker's file-store ceiling from it. It refuses, changing nothing, while one of those servers is not
-ready. The recreated StatefulSet is only applied when the size differs from the one the broker last
-ran with, which is what growing it means. The recipe needs a StorageClass that allows expansion.
+broker's file-store ceiling from it. It refuses, changing nothing, while a claim is still expanding or
+while a server that exists is not ready; wait for `kubectl get pvc,pods` to settle and run it again.
+A server that is gone altogether (deleted or evicted after the StatefulSet was removed) does not block
+it: nothing else would start that server, and the recreated StatefulSet does. It also refuses, naming
+the claims below the largest, when every claim is still at the size the broker last ran with, because
+the StatefulSet is only recreated when the size differs, which is what growing it means. The recipe
+needs a StorageClass that allows expansion.
 
 **The alerts.** A consumer that stops at the design rate fills its stream at a steady pace, so the
 warnings are timed against the moment the platform stops accepting events (90% of the stream),

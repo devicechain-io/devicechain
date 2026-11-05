@@ -5,6 +5,10 @@ package bootstrap
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -174,16 +178,29 @@ func TestAGrownVolumeIsNotCheckedAgainstItsOldDerivedCeiling(t *testing.T) {
 		name, recordedSize, recordedMax, live, want string
 	}{
 		{"grown, ceiling was derived: re-derived by the apply", "16Gi", "14Gi", "36Gi", ""},
-		{"grown, ceiling hand-set: honoured", "16Gi", "15Gi", "36Gi", "15Gi"},
 		{"not grown: the recorded ceiling is the broker's", "16Gi", "14Gi", "16Gi", "14Gi"},
 		{"nothing recorded", "16Gi", "", "36Gi", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if got := maxStoreAfterGrowth(state(c.recordedSize, c.recordedMax), c.live, liveMaxFileStore(state(c.recordedSize, c.recordedMax))); got != c.want {
+			if got := maxStoreAfterGrowth(state(c.recordedSize, c.recordedMax), t.TempDir(), c.live, liveMaxFileStore(state(c.recordedSize, c.recordedMax))); got != c.want {
 				t.Fatalf("ceiling = %q, want %q", got, c.want)
 			}
 		})
 	}
+
+	// 🔴 STATED, NOT COMPARED. An operator who set nats_jetstream_max_file_store to the very value
+	// the old volume derives (14Gi for 16Gi) is indistinguishable by value from nobody having set
+	// it; the setting being stated in the root's tfvars is what says so.
+	t.Run("hand-set to the old derived value: kept", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "terraform.tfvars"),
+			[]byte("nats_jetstream_max_file_store = \"14Gi\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := maxStoreAfterGrowth(state("16Gi", "14Gi"), dir, "36Gi", "14Gi"); got != "14Gi" {
+			t.Fatalf("a stated ceiling was dropped: %q", got)
+		}
+	})
 }
 
 func TestAnOrphanedBrokerThatIsNotWholeIsRefused(t *testing.T) {
@@ -199,15 +216,14 @@ func TestAnOrphanedBrokerThatIsNotWholeIsRefused(t *testing.T) {
 		name, want string
 		mutate     func([]runtime.Object) []runtime.Object
 	}{
-		{"a server is gone", "2 servers are running for 3 volume claims", func(o []runtime.Object) []runtime.Object {
-			var out []runtime.Object
+		{"a resize is still being applied to the filesystem", "volume expansion has not finished for dc-nats-js-dc-nats-1", func(o []runtime.Object) []runtime.Object {
 			for _, x := range o {
-				if p, ok := x.(*corev1.Pod); ok && p.Name == "dc-nats-2" {
-					continue
+				if c, ok := x.(*corev1.PersistentVolumeClaim); ok && c.Name == "dc-nats-js-dc-nats-1" {
+					c.Status.Conditions = []corev1.PersistentVolumeClaimCondition{
+						{Type: corev1.PersistentVolumeClaimFileSystemResizePending, Status: corev1.ConditionTrue}}
 				}
-				out = append(out, x)
 			}
-			return out
+			return o
 		}},
 		{"a server is terminating with a stale Ready", "dc-nats-1", func(o []runtime.Object) []runtime.Object {
 			for _, x := range o {
@@ -249,4 +265,130 @@ func TestSkippingInfrastructureOverAnOrphanedBrokerIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "without --skip-infrastructure") {
 		t.Fatalf("services were checked against a broker nobody owns: %v", err)
 	}
+}
+
+// 🔴 A SERVER THAT IS GONE DOES NOT BLOCK THE UPGRADE. Nothing owns an orphaned pod, so one that was
+// deleted or evicted never comes back by itself; the recreated StatefulSet is what starts it.
+// Refusing on it would leave the operator unable to do the one thing that fixes it. A server that
+// EXISTS and is not ready still blocks (TestAnOrphanedBrokerThatIsNotWholeIsRefused).
+//
+// Negative control: counting pods against claims (the earlier rule) refuses all three cases.
+func TestAMissingServerDoesNotBlockTakingOverAnOrphanedBroker(t *testing.T) {
+	for name, drop := range map[string][]string{
+		"one of three": {"dc-nats-2"},
+		"two of three": {"dc-nats-1", "dc-nats-2"},
+		"every server": {"dc-nats-0", "dc-nats-1", "dc-nats-2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var objs []runtime.Object
+			for _, x := range orphanedBrokerObjects([]string{"36Gi", "36Gi", "36Gi"}, true) {
+				if p, ok := x.(*corev1.Pod); ok && slices.Contains(drop, p.Name) {
+					continue
+				}
+				objs = append(objs, x)
+			}
+			infra, err := readInfraFrom(context.Background(), fake.NewSimpleClientset(objs...), storeDynamic(t), InstanceNamespace("prod"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if why := orphanedBrokerNotReady(infra.BrokerPods, infra.BrokerClaims); why != "" {
+				t.Fatalf("a missing server blocked the upgrade: %s", why)
+			}
+		})
+	}
+}
+
+// A Terminating claim is on its way out, and a claim of a server the instance no longer runs (a
+// scaled-down cluster leaves them) neither sets the volume's size nor blocks; it is named in a note.
+//
+// Negative control: counting every claim makes the stale 8Gi claim the volume's size.
+func TestOnlyTheClaimsOfTheServersThatRunCount(t *testing.T) {
+	objs := orphanedBrokerObjects([]string{"36Gi", "36Gi", "36Gi"}, true)
+	now := metav1.NewTime(time.Now())
+	objs = append(objs,
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "dc-nats-js-dc-nats-3", Namespace: InstanceNamespace("prod")},
+			Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("8Gi")}}}},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "dc-nats-js-dc-nats-4", Namespace: InstanceNamespace("prod"), DeletionTimestamp: &now},
+			Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("4Gi")}}}})
+	infra, err := readInfraFrom(context.Background(), fake.NewSimpleClientset(objs...), storeDynamic(t), InstanceNamespace("prod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range infra.BrokerClaims {
+		if c.Name == "dc-nats-js-dc-nats-4" {
+			t.Fatal("a Terminating claim was counted")
+		}
+	}
+	narrowed, extra := infra.forReplicas(3)
+	if !reflect.DeepEqual(extra, []string{"dc-nats-js-dc-nats-3"}) {
+		t.Fatalf("extra = %v", extra)
+	}
+	vols, err := narrowed.volumes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vols.JetStream != "36Gi" {
+		t.Fatalf("the stale claim set the volume: %q", vols.JetStream)
+	}
+}
+
+// 🔴 REFUSED BEFORE ANY WRITE when nothing would recreate the StatefulSet: the claims are at the
+// size the release last applied, so the plan is empty. The refusal names the claims below the
+// largest, which is what a half-finished patch leaves.
+//
+// Negative control: without the call in prepareUpgradePlan the plan is made and the upgrade goes on
+// to wait out a StatefulSet that never comes back.
+func TestAnOrphanedBrokerAtTheRecordedSizeIsRefusedBeforeAnyWrite(t *testing.T) {
+	nats := func(size string) *tfjson.State {
+		return &tfjson.State{Values: &tfjson.StateValues{RootModule: &tfjson.StateModule{
+			Resources: []*tfjson.StateResource{{Address: natsReleaseAddress, AttributeValues: valuesAttr(t,
+				map[string]interface{}{"config": map[string]interface{}{"jetstream": map[string]interface{}{
+					"fileStore": map[string]interface{}{"maxSize": "14Gi", "pvc": map[string]interface{}{"size": size}}}}})}}}}}
+	}
+	st := func(sizes ...string) *State {
+		s := &State{Instance: "prod", KubeContext: "gke_p_z_c", Values: map[string]string{}}
+		var objs []runtime.Object
+		for _, o := range orphanedBrokerObjects(sizes, true) {
+			objs = append(objs, o)
+		}
+		infra, err := readInfraFrom(context.Background(), fake.NewSimpleClientset(objs...), storeDynamic(t), InstanceNamespace("prod"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range infra.BrokerClaims {
+			q := c.Spec.Resources.Requests[corev1.ResourceStorage]
+			s.OrphanedClaims = append(s.OrphanedClaims, OrphanedClaim{Name: c.Name, Size: q.String()})
+		}
+		vols, err := infra.volumes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.LiveVolumes = vols
+		return s
+	}
+
+	t.Run("half-patched: the smallest is the recorded size", func(t *testing.T) {
+		_, err := prepareUpgradePlan(context.Background(), st("36Gi", "16Gi", "36Gi"),
+			&fakeUpgradeTofu{plans: []*tfjson.Plan{{}}, state: nats("16Gi")}, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "nothing would recreate") ||
+			!strings.Contains(err.Error(), "dc-nats-js-dc-nats-1 (16Gi)") || !strings.Contains(err.Error(), "Nothing has been changed") {
+			t.Fatalf("not refused as expected: %v", err)
+		}
+	})
+	t.Run("unpatched: all at the recorded size", func(t *testing.T) {
+		_, err := prepareUpgradePlan(context.Background(), st("16Gi", "16Gi", "16Gi"),
+			&fakeUpgradeTofu{plans: []*tfjson.Plan{{}}, state: nats("16Gi")}, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "nothing would recreate") {
+			t.Fatalf("not refused: %v", err)
+		}
+	})
+	t.Run("grown: not refused", func(t *testing.T) {
+		if err := refuseUnchangedOrphanedVolume(nats("16Gi"), st("36Gi", "36Gi", "36Gi")); err != nil {
+			t.Fatalf("a grown volume was refused: %v", err)
+		}
+	})
 }
