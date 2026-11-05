@@ -109,6 +109,9 @@ type Event struct {
 	// sends presence session ids as strings over JSON for exactly this reason — so the engine
 	// never routes it through Value/Match.
 	Presence *PresenceEdge
+	// idx is the event's position in its message, set by the sharded engine so a detection can be
+	// ordered among the message's others (ord.go). Unset, and unused, for the single engine.
+	idx int32
 }
 
 // PresenceEdge is the payload of a Connectivity Event: the transition's session epoch (the
@@ -220,6 +223,8 @@ type Detection struct {
 	// distinguishes "value is 0.0" from "no value": timer-driven silence fires (Absence, Duration),
 	// Correlation, and a metric-less Threshold/Repeating leaf (a raw-CEL gate that reads no single
 	// sample) all carry none (HasValue=false).
+	// ord is set only while a sharded engine's shard holds the detection (ord.go).
+	ord      emitOrd
 	Value    float64
 	HasValue bool
 }
@@ -284,6 +289,8 @@ type Engine struct {
 	// as the first transition — the fail-safe (never re-raise a stale offline alarm).
 	presenceState map[SeriesKey]presence.Prior
 	out           []Detection
+	trackOrd      bool    // record each detection's place in its operation (ord.go); on only for a shard
+	cur           emitOrd // the step in progress
 	// lateSamples counts samples the sliding kinds declined to fold in because they arrived
 	// after their own trailing window had passed the frontier (foldsIn), and samples a Duration
 	// rule refused as more than its hold behind the frontier or as a break older than a raise
@@ -934,6 +941,9 @@ func (e *Engine) HasPendingWork() bool {
 func (e *Engine) Drain() []Detection {
 	out := e.out
 	e.out = nil
+	for i := range out {
+		out[i].ord = emitOrd{} // the place is the sharded engine's business, not the caller's
+	}
 	return out
 }
 
@@ -1083,6 +1093,7 @@ func (e *Engine) advance(t time.Time) bool {
 	moved := e.wm.observe(t)
 	due := e.wheel.popDue(e.wm.now)
 	for _, ft := range due {
+		e.step(ordTimer, ft.deadline, ft.key.Rule, ft.key.Series, 0)
 		e.fire(ft.key, ft.deadline)
 	}
 	closed := e.closePanes(e.wm.now)
@@ -1093,6 +1104,7 @@ func (e *Engine) advance(t time.Time) bool {
 }
 
 func (e *Engine) apply(ev Event) {
+	e.step(ordEvent, time.Time{}, "", "", ev.idx)
 	r, ok := e.rules[ev.Key.Rule]
 	if !ok {
 		return
@@ -1280,7 +1292,7 @@ func (e *Engine) emit(r Rule, key SeriesKey, at time.Time) {
 		return
 	}
 	e.raised[key] = at
-	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at})
+	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at}))
 }
 
 // emitValue raises a detection carrying a COMPUTED scalar the fire is about (the delta/rate, or a
@@ -1290,7 +1302,7 @@ func (e *Engine) emitValue(r Rule, key SeriesKey, at time.Time, value float64) {
 		return
 	}
 	e.raised[key] = at
-	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Value: value, HasValue: true})
+	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Value: value, HasValue: true}))
 }
 
 // emitSample raises a detection carrying the triggering EVENT's own sample value (Threshold,
@@ -1318,7 +1330,7 @@ func (e *Engine) emitSampleAt(r Rule, ev Event, at time.Time) {
 	if hasValue && (math.IsNaN(value) || math.IsInf(value, 0)) {
 		value, hasValue = 0, false
 	}
-	e.out = append(e.out, Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: at, Value: value, HasValue: hasValue})
+	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: at, Value: value, HasValue: hasValue}))
 }
 
 // resolve emits a Resolved detection (ADR-057 falling edge) for a series that is currently raised,
@@ -1363,7 +1375,7 @@ func (e *Engine) resolve(r Rule, key SeriesKey, at time.Time) {
 		return
 	}
 	delete(e.raised, key)
-	e.out = append(e.out, Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Edge: EdgeResolved})
+	e.out = append(e.out, e.stamp(Detection{RuleID: r.ID, Series: key.Series, Kind: r.Kind, At: at, Edge: EdgeResolved}))
 }
 
 // ClearRaised drops the two-edge latch for a series WITHOUT emitting a Resolved — the escape hatch

@@ -40,10 +40,10 @@ import (
 //
 // DETECTIONS. A shard drains its engine after every operation and keeps the detections, each with
 // the Tag the operation was sent under (the platform time of the message that caused it) and the
-// operation's number. Collect and Drain return them ordered by (operation number, shard), which
-// keeps every series' detections in the order its engine emitted them; across series the order is
-// not the single engine's and nothing relies on it. Detections made by a barrier call are
-// collected right after it.
+// operation's number and its place inside the operation (ord.go). Collect and Drain return them
+// ordered by (operation number, place, shard), which is exactly the sequence the single engine emits
+// them in, across series as well as within one. Detections made by a barrier call are collected
+// right after it.
 //
 // WHY THIS CANNOT CHANGE A RESULT. A key's state changes only through the operations addressed to
 // it, applied in queue order by its one owner, against a watermark that is the same function of the
@@ -195,6 +195,7 @@ func wrapConcurrent(s *Sharded) *ConcurrentSharded {
 	c.evPool.New = func() any { b := make([]Event, 0, 8); return &b }
 	c.workers = make([]*shardWorker, len(s.shards))
 	for i, e := range s.shards {
+		e.trackOrd = true
 		w := &shardWorker{idx: i, e: e, ch: make(chan shardOp, ShardQueueDepth), done: make(chan struct{}, 1), c: c}
 		c.workers[i] = w
 		c.wg.Add(1)
@@ -259,7 +260,7 @@ func evsOf(p *[]Event) []Event {
 // harvest moves what the engine emitted into the shard's output, under the operation's number and
 // tag. It runs on the shard's goroutine, or on the dispatcher at a barrier when the shard is idle.
 func (w *shardWorker) harvest(item uint64, tag Tag) {
-	dets := w.e.Drain()
+	dets := w.e.drainOrdered()
 	if len(dets) == 0 {
 		return
 	}
@@ -444,7 +445,9 @@ func (c *ConcurrentSharded) dispatch(kind opKind, seq uint64, t time.Time, r Rec
 			if batches[o] == nil {
 				batches[o] = c.evPool.Get().(*[]Event)
 			}
-			*batches[o] = append(*batches[o], evs[i])
+			ev := evs[i]
+			ev.idx = int32(i)
+			*batches[o] = append(*batches[o], ev)
 		}
 	}
 	for i := 0; i < k; i++ {
@@ -493,13 +496,16 @@ func (c *ConcurrentSharded) ClearRaised(key SeriesKey) {
 	c.ownerAsync(c.ownerOf(key.Rule, key.Series), func(e *Engine) { e.ClearRaised(key) })
 }
 
-// Collect returns the detections the shards have made so far without waiting, ordered by
-// (operation number, shard).
+// Collect returns the detections the shards have made so far without waiting, in exactly the order
+// one engine would have emitted them: by operation, then by the place inside the operation (ord.go:
+// timers, then panes, then released samples, then the message's events in message order), then by
+// shard for the control-plane emissions that have no finer place. Two rules firing on one device in
+// one message therefore come out in the order the plain engine emits them, whichever shards own them.
 //
 // It returns only the detections of operations every shard has finished: a frontier F such that no
 // operation numbered at or below F is still queued anywhere. A fast shard's detection from a later
 // operation is held back until the slower shards have caught up to it, so successive calls hand over
-// a strictly advancing prefix of the (operation, shard) order. Without that, a series' detections
+// a strictly advancing prefix of the single engine's emission order. Without that, a series' detections
 // from different rules (different shards) could be collected, and so published, out of the order the
 // single engine made them in. A shard with nothing queued does not hold the frontier back.
 func (c *ConcurrentSharded) Collect() []TaggedDetection {
@@ -533,11 +539,15 @@ func (c *ConcurrentSharded) Collect() []TaggedDetection {
 		if all[i].item != all[j].item {
 			return all[i].item < all[j].item
 		}
+		if all[i].ord != all[j].ord {
+			return all[i].ord.less(all[j].ord)
+		}
 		return all[i].shard < all[j].shard
 	})
 	out := make([]TaggedDetection, len(all))
 	for i := range all {
 		out[i] = all[i].TaggedDetection
+		out[i].Detection.ord = emitOrd{}
 	}
 	return out
 }
