@@ -188,6 +188,24 @@ func deleteConfirmedKicks(db *gorm.DB, tenant string, rows []PendingSessionKick)
 	return nil
 }
 
+// tenantsOwingKicks lists the tenants that hold a pending session kick matching scope, ordered.
+//
+// 🔴 THE ONE CROSS-TENANT READ OF THE KICK QUEUE. It runs under a system context because the
+// answer to "which tenants owe a kick" cannot be scoped to one, and it selects only the tenant
+// ids: no kick row, device token or reason leaves it. Every row is then read and deleted under
+// core.WithTenant(tenant) (drainSessionKicks), so the predicate and the erasure fence apply to
+// all of the real work. Its callers are the background drain (scope: everything) and a repeated
+// DeleteDevice from a system context (scope: one device's delete debt), which has no tenant on
+// its context and no device row left to name one.
+func (api *Api) tenantsOwingKicks(ctx context.Context, scope func(*gorm.DB) *gorm.DB) ([]string, error) {
+	tenants := make([]string, 0)
+	if err := scope(api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{})).
+		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+		return nil, err
+	}
+	return tenants, nil
+}
+
 // SessionKickDrainResult counts what one background pass did.
 type SessionKickDrainResult struct {
 	Tenants int
@@ -203,11 +221,8 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 	if api.SessionKicker == nil {
 		return res, nil
 	}
-	tenants := make([]string, 0)
-	// Cross-tenant by necessity: which tenants owe a kick. Only the tenant ids are read; every
-	// row is then read and deleted under that tenant (drainSessionKicks).
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{}).
-		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+	tenants, err := api.tenantsOwingKicks(ctx, func(db *gorm.DB) *gorm.DB { return db })
+	if err != nil {
 		return res, fmt.Errorf("listing tenants with pending session kicks: %w", err)
 	}
 	res.Tenants = len(tenants)

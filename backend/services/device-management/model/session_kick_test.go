@@ -404,3 +404,58 @@ func TestADeleteWithNoTenantOnTheContextStillQueuesItsKick(t *testing.T) {
 	require.Equal(t, "acme", rows[0].TenantId)
 	require.Equal(t, kickOriginDeviceDeleted, rows[0].Origin)
 }
+
+// A repeated system-context delete reads which tenants owe the kick, and drains only the one
+// debt it names. It touches no other tenant's rows and no other device's.
+//
+// Negative control: draining without the origin/token scope clears acme's other rows too.
+func TestARepeatedSystemDeleteTouchesOnlyTheDebtItNames(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	acme := core.WithTenant(context.Background(), "acme")
+	globex := core.WithTenant(context.Background(), "globex")
+	k := &togglingKicker{up: true}
+	api.SessionKicker = k
+	now := time.Now()
+	seed := func(tenant, token string, origin uint) {
+		require.NoError(t, api.RDB.DB(core.WithTenant(context.Background(), tenant)).Create(
+			&PendingSessionKick{TenantId: tenant, DeviceToken: token, Origin: origin, Generation: 1, RequestedAt: now}).Error)
+	}
+	seed("acme", "gone", kickOriginDeviceDeleted)
+	seed("acme", "other", kickOriginDeviceDeleted)
+	seed("globex", "bystander", kickOriginDeviceDeleted)
+
+	deleted, err := api.DeleteDevice(core.WithSystemContext(context.Background()), "gone")
+	require.NoError(t, err)
+	require.False(t, deleted)
+
+	var rows []PendingSessionKick
+	require.NoError(t, api.RDB.DB(acme).Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, "other", rows[0].DeviceToken)
+	require.NoError(t, api.RDB.DB(globex).Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, "bystander", rows[0].DeviceToken)
+	for _, c := range k.calls {
+		require.Equal(t, []string{"gone"}, c.tokens, "only the named device is asked about")
+	}
+}
+
+// A token that owes a kick in two tenants is ambiguous for a system caller: it is refused and
+// nothing is cleared, rather than ending sessions in a tenant the call was not about.
+func TestARepeatedSystemDeleteOfATokenOwedByTwoTenantsIsRefused(t *testing.T) {
+	api := newDeleteEmitTestApi(t)
+	k := &togglingKicker{up: true}
+	api.SessionKicker = k
+	for _, tenant := range []string{"acme", "globex"} {
+		require.NoError(t, api.RDB.DB(core.WithTenant(context.Background(), tenant)).Create(
+			&PendingSessionKick{TenantId: tenant, DeviceToken: "shared", Origin: kickOriginDeviceDeleted, Generation: 1, RequestedAt: time.Now()}).Error)
+	}
+	_, err := api.DeleteDevice(core.WithSystemContext(context.Background()), "shared")
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+	require.Empty(t, k.calls, "no tenant was asked about")
+	for _, tenant := range []string{"acme", "globex"} {
+		var rows []PendingSessionKick
+		require.NoError(t, api.RDB.DB(core.WithTenant(context.Background(), tenant)).Find(&rows).Error)
+		require.Len(t, rows, 1, tenant)
+	}
+}

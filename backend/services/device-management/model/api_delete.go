@@ -391,14 +391,23 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			tenant, _ = core.TenantFromContext(ctx)
 		}
 		tenants := []string{tenant}
-		if tenant == "" && api.SessionKicker != nil {
-			// A system context names no tenant and a repeated delete finds no device, so the tenants
-			// that owe this device's kick are read from the debts themselves.
-			tenants = tenants[:0]
-			if perr := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{}).
-				Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token).
-				Distinct().Pluck("tenant_id", &tenants).Error; perr != nil {
+		if tenant == "" && api.SessionKicker != nil && core.IsSystemContext(ctx) {
+			// A system caller names no tenant and a repeated delete finds no device, so the tenants
+			// that owe this device's kick are read from the debts themselves. Only a genuine system
+			// context gets here; a tenant-facing call always carries its tenant, and a context with
+			// neither is refused before this point.
+			var perr error
+			if tenants, perr = api.tenantsOwingKicks(ctx, func(db *gorm.DB) *gorm.DB {
+				return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
+			}); perr != nil {
 				return deleted, fmt.Errorf("%w: could not read the pending session kicks: %v", ErrSessionsNotEnded, perr)
+			}
+			if len(tenants) > 1 {
+				// A token alone does not name one tenant's device. Draining every owner would end
+				// sessions in tenants this call was never about, so refuse and leave the debts to the
+				// per-tenant background drain.
+				return deleted, fmt.Errorf("%w: the token %q owes a kick in %d tenants; repeat the delete under one tenant",
+					ErrSessionsNotEnded, token, len(tenants))
 			}
 		}
 		for _, t := range tenants {
