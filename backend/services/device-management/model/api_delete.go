@@ -335,6 +335,9 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 // the tenant and device each row RETURNED, so a device with no credential evicts nothing.
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	var credentials []DeviceCredential
+	// kickTenant is the tenant the device's row names, read inside the transaction: a system
+	// context carries no tenant of its own, and the kick must name the one that owns the device.
+	kickTenant := ""
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
 		func(tx *gorm.DB, id uint) ([]uint, error) {
 			// A gateway that still has children is not deleted (ErrGatewayHasChildren): a device
@@ -345,6 +348,20 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			credentials = credentials[:0]
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return nil, err
+			}
+			// The kick is recorded with the delete, in this transaction: the device row is about to
+			// be gone, and a retry could not rediscover it. Cleared only by a confirmed kick.
+			if api.SessionKicker != nil {
+				var tenants []string
+				if err := tx.Unscoped().Model(&Device{}).Where("id = ?", id).Pluck("tenant_id", &tenants).Error; err != nil {
+					return nil, err
+				}
+				if len(tenants) == 1 && tenants[0] != "" {
+					kickTenant = tenants[0]
+					if err := api.queueSessionKicksOnTx(tx, kickTenant, kickOriginDeviceDeleted, []string{token}); err != nil {
+						return nil, err
+					}
+				}
 			}
 			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error; err != nil {
 				return nil, err
@@ -359,16 +376,49 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		})
 	if err == nil && deleted {
 		api.evictCredentialOwners(ctx, credentials)
+	}
+	if err == nil {
 		// The device is gone and so is every credential it held: end whatever sessions it still has.
-		tenant := ""
+		// Run whether or not THIS call deleted anything, so repeating a delete whose kick could not
+		// be confirmed asks again instead of reporting success for a session that may live on.
+		tenant := kickTenant
 		for _, c := range credentials {
-			tenant = c.TenantId
+			if tenant == "" {
+				tenant = c.TenantId
+			}
 		}
 		if tenant == "" {
 			tenant, _ = core.TenantFromContext(ctx)
 		}
-		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickDeviceDeleted, token); kerr != nil {
-			return deleted, kerr
+		tenants := []string{tenant}
+		if tenant == "" && api.SessionKicker != nil && core.IsSystemContext(ctx) {
+			// A system caller names no tenant and a repeated delete finds no device, so the tenants
+			// that owe this device's kick are read from the debts themselves. Only a genuine system
+			// context gets here; a tenant-facing call always carries its tenant, and a context with
+			// neither is refused before this point.
+			var perr error
+			if tenants, perr = api.tenantsOwingKicks(ctx, func(db *gorm.DB) *gorm.DB {
+				return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
+			}); perr != nil {
+				return deleted, fmt.Errorf("%w: could not read the pending session kicks: %v", ErrSessionsNotEnded, perr)
+			}
+			if len(tenants) > 1 {
+				// A token alone does not name one tenant's device. Draining every owner would end
+				// sessions in tenants this call was never about, so refuse and leave the debts to the
+				// per-tenant background drain.
+				return deleted, fmt.Errorf("%w: the token %q owes a kick in %d tenants; repeat the delete under one tenant",
+					ErrSessionsNotEnded, token, len(tenants))
+			}
+		}
+		for _, t := range tenants {
+			if t == "" {
+				continue
+			}
+			if kerr := api.drainSessionKicks(ctx, t, 0, func(db *gorm.DB) *gorm.DB {
+				return db.Where("origin = ? AND device_token = ?", kickOriginDeviceDeleted, token)
+			}); kerr != nil {
+				return deleted, kerr
+			}
 		}
 	}
 	return deleted, inUseOn(err, fmt.Sprintf("device %q is still referenced", token))

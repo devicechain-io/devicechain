@@ -63,6 +63,12 @@ func (r PendingSessionKick) reason() string {
 	if r.Origin == kickOriginReset {
 		return messaging.SessionKickCredentialDeleted
 	}
+	if r.Origin == kickOriginDeviceDisabled {
+		return messaging.SessionKickDeviceDisabled
+	}
+	if r.Origin == kickOriginDeviceDeleted {
+		return messaging.SessionKickDeviceDeleted
+	}
 	return messaging.SessionKickCredentialChanged
 }
 
@@ -126,6 +132,10 @@ func (api *Api) drainSessionKicks(ctx context.Context, tenant string, limit int,
 	if err := q.Find(&rows).Error; err != nil {
 		return fmt.Errorf("%w: could not read the pending session kicks: %v", ErrSessionsNotEnded, err)
 	}
+	var err error
+	if rows, err = api.dropWithdrawnDeviceDisabledKicks(db, tenant, rows); err != nil {
+		return fmt.Errorf("%w: could not re-check the disabled devices: %v", ErrSessionsNotEnded, err)
+	}
 	// Per device: its rows, and the strongest reason among them. tokens keeps first-seen order.
 	var tokens []string
 	reasonOf := map[string]string{}
@@ -178,6 +188,25 @@ func deleteConfirmedKicks(db *gorm.DB, tenant string, rows []PendingSessionKick)
 	return nil
 }
 
+// tenantsOwingKicks lists the tenants that hold a pending session kick matching scope, ordered.
+//
+// 🔴 THE ONE CROSS-TENANT READ OF THE KICK QUEUE. It runs under a system context because the
+// answer to "which tenants owe a kick" cannot be scoped to one, and it selects only the tenant
+// ids: no kick row, device token or reason leaves it, and it writes nothing. What follows is
+// scoped by explicit predicates, not by the context: drainSessionKicks filters tenant_id on every
+// read and delete (core.WithTenant keeps a system marker already on the context, so the
+// automatic predicate is NOT what protects those statements). Its callers are the background
+// drain (scope: everything) and a repeated DeleteDevice from a system context (scope: one
+// device's delete debt), which has no tenant on its context and no device row left to name one.
+func (api *Api) tenantsOwingKicks(ctx context.Context, scope func(*gorm.DB) *gorm.DB) ([]string, error) {
+	tenants := make([]string, 0)
+	if err := scope(api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{})).
+		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+		return nil, err
+	}
+	return tenants, nil
+}
+
 // SessionKickDrainResult counts what one background pass did.
 type SessionKickDrainResult struct {
 	Tenants int
@@ -193,11 +222,8 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 	if api.SessionKicker == nil {
 		return res, nil
 	}
-	tenants := make([]string, 0)
-	// Cross-tenant by necessity: which tenants owe a kick. Only the tenant ids are read; every
-	// row is then read and deleted under that tenant (drainSessionKicks).
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&PendingSessionKick{}).
-		Distinct().Order("tenant_id").Pluck("tenant_id", &tenants).Error; err != nil {
+	tenants, err := api.tenantsOwingKicks(ctx, func(db *gorm.DB) *gorm.DB { return db })
+	if err != nil {
 		return res, fmt.Errorf("listing tenants with pending session kicks: %w", err)
 	}
 	res.Tenants = len(tenants)
@@ -265,4 +291,53 @@ func (api *Api) DrainSessionKicksLocked(ctx context.Context) error {
 		log.Debug().Int("tenants", res.Tenants).Msg("Retried pending session kicks")
 	}
 	return err
+}
+
+// dropWithdrawnDeviceDisabledKicks removes, and returns the rows without, the device-disabled
+// debts of devices that are ENABLED now: a device whose row EXISTS and is not disabled. A device
+// whose row is gone (deleted, soft or hard) keeps its debt: a disabled device that was then
+// deleted still has a session to end, and a missing row is never read as "enabled".
+//
+// 🔴 THE DEBT IS CHECKED AGAIN AT THE MOMENT IT IS COLLECTED. Re-enabling a device deletes its
+// row, but a drain that had already read the row would still ask the broker, and a replica
+// still running a release that does not clear the row on enable leaves it for the drain. Either
+// would end the session of a device that has just reconnected. The window between this check
+// and the broker's answer remains, and is the width of one request.
+func (api *Api) dropWithdrawnDeviceDisabledKicks(db *gorm.DB, tenant string, rows []PendingSessionKick) ([]PendingSessionKick, error) {
+	var tokens []string
+	for _, r := range rows {
+		if r.Origin == kickOriginDeviceDisabled {
+			tokens = append(tokens, r.DeviceToken)
+		}
+	}
+	if len(tokens) == 0 {
+		return rows, nil
+	}
+	enabledNow := map[string]bool{}
+	for chunk := range slices.Chunk(tokens, rdb.MaxLookupKeys) {
+		var enabled []string
+		if err := db.Unscoped().Model(&Device{}).
+			Where("tenant_id = ? AND token IN ? AND disabled_at IS NULL AND deleted_at IS NULL", tenant, chunk).
+			Pluck("token", &enabled).Error; err != nil {
+			return nil, err
+		}
+		for _, t := range enabled {
+			enabledNow[t] = true
+		}
+	}
+	kept := rows[:0:0]
+	var gone []PendingSessionKick
+	for _, r := range rows {
+		if r.Origin == kickOriginDeviceDisabled && enabledNow[r.DeviceToken] {
+			gone = append(gone, r)
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if len(gone) > 0 {
+		if err := deleteConfirmedKicks(db, tenant, gone); err != nil {
+			return nil, err
+		}
+	}
+	return kept, nil
 }
