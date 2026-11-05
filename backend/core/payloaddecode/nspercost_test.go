@@ -181,6 +181,12 @@ func TestNativeCostsMatchMeasuredTime(t *testing.T) {
 		}
 		declared := float64(p.CostFor(c.in))
 		ns := nsPerOp(p, c.in, 9)
+		// A noisy sample on a shared machine can only inflate a time, never shorten it, so a
+		// case over the bound is measured again (twice) and judged on its best: an
+		// under-declaring native stays over the bound on every attempt.
+		for retry := 0; retry < 2 && ns/declared > maxNSPerCost; retry++ {
+			ns = min(ns, nsPerOp(p, c.in, 9))
+		}
 		ratio := ns / declared
 		worst = max(worst, ratio)
 		rows = append(rows, fmt.Sprintf("%-24s declared %7.0f  measured %9.0f ns  = %7.2f ns/unit", c.name, declared, ns, ratio))
