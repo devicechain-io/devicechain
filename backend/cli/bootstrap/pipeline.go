@@ -361,6 +361,11 @@ type State struct {
 	// from the instance root's state; empty when unread. It is what a hand-set
 	// nats_jetstream_max_file_store arrives as. See jetstreamreservation.go.
 	LiveMaxFileStore string
+	// OrphanedClaims are the broker's JetStream claims when its StatefulSet is gone (deleted with
+	// --cascade=orphan to grow the volume), and OrphanExtraClaims the ones left out of that count
+	// because the instance no longer runs their server. Empty on an ordinary broker.
+	OrphanedClaims    []OrphanedClaim
+	OrphanExtraClaims []string
 	// InfraNotes are what an upgrade's settle found worth saying with the plan — a broker
 	// roll an earlier run left unfinished, which this apply replaces. Empty on a bootstrap.
 	InfraNotes []string
@@ -601,3 +606,6 @@ func requireResolvedImages(st *State, what string) error {
 	}
 	return nil
 }
+
+// OrphanedClaim is one of an orphaned broker's volume claims and the size it asks for.
+type OrphanedClaim struct{ Name, Size string }

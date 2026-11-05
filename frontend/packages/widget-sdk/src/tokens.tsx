@@ -25,6 +25,7 @@ import { DENSITY_SCALE, SPACE_TOKEN_PX, type CanvasDensity } from '@devicechain/
 import type { CSSProperties } from 'react';
 
 import { severityTokenCss } from './severity';
+import { strictCspEnabled } from './strict-csp';
 
 export const FONT_TOKENS = {
   xs: 11,
@@ -81,6 +82,33 @@ export function tokenStyle(scale: number): CSSProperties {
 // does not still gets the colours. They sit on the document root, where useSeverityColors
 // reads them -- nothing is scoped to a board element, so no WidgetThemeRoot registration is
 // needed for them to resolve.
+//
+// 🔴 STRICT-CSP HOST MODE (configureStrictCsp). A page whose content-security policy has no
+// `style-src 'unsafe-inline'` refuses a <style> element, so in that mode, where constructed
+// stylesheets exist, the CSS is adopted by the document instead (CSSOM, which style-src does not
+// govern) -- once per page, however many boards mount. Otherwise, and whenever adoption fails, it
+// is the element, exactly as it always was.
+const adoptedTokenCss = new Set<string>();
+
+function adoptTokenCss(css: string): boolean {
+  if (adoptedTokenCss.has(css)) return true;
+  if (typeof document === 'undefined' || !('adoptedStyleSheets' in document) || typeof CSSStyleSheet !== 'function') return false;
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    adoptedTokenCss.add(css);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function WidgetTokenStyles() {
-  return <style data-dc-tokens="">{severityTokenCss({ hostWins: true })}</style>;
+  const css = severityTokenCss({ hostWins: true });
+  // Adopted DURING render, not in an effect: an effect runs after the first commit, by which time a
+  // <style> element would already have been rendered (and refused). The adoption is idempotent
+  // (once per distinct CSS per page), so a repeated or discarded render does no harm.
+  if (strictCspEnabled() && adoptTokenCss(css)) return <></>;
+  return <style data-dc-tokens="">{css}</style>;
 }

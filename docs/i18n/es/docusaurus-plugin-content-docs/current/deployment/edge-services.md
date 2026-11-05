@@ -879,11 +879,17 @@ agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 
 ## Qué vigilar {#what-to-watch}
 
+Cada métrica de abajo está en un panel de Grafana. El chart distribuye con cada instancia un panel de
+[ingesta Sparkplug](./grafana-boards.md#sparkplug-ingest-board) y otro de
+[ingesta LwM2M](./grafana-boards.md#lwm2m-ingest-board). Las métricas del agente de borde nunca llegan
+al Prometheus de la instancia, así que su panel es un
+[archivo de panel](./grafana-boards.md#edge-agent-dashboard) que importas en tu propio Grafana.
+
 :::note Se distribuyen diez alertas para estos dos servicios
 El chart distribuye diez reglas de alerta para sparkplug-ingest y lwm2m-ingest, descritas en
 [Alertas que se distribuyen](#edge-alerts): si cada transporte se está leyendo siquiera, un líder de
 LwM2M atascado las maneras en que los dos servicios pierden datos y el canal descendente de comandos de Sparkplug. **Cualquier otra métrica de las
-tablas de abajo no tiene alerta ni panel.** Se emite y se recoge, y nada te avisará de ella hasta que
+tablas de abajo no tiene alerta.** Se emite y se muestra en un [panel](./grafana-boards.md), pero nada te avisará de ella hasta que
 escribas la regla tú mismo. El agente de borde no tiene ninguna alerta distribuida.
 :::
 

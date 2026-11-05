@@ -13,6 +13,7 @@ import {
   severityFill,
   wrapHeading,
 } from './chart-options';
+import { configureStrictCsp } from '../strict-csp';
 import type { ChartTheme } from './chart-theme';
 
 const theme: ChartTheme = {
@@ -82,6 +83,16 @@ describe('buildLineOption units, precision and thresholds', () => {
     const o = opt(buildLineOption(data, theme, { unit: 'degC', precision: 1 }));
     expect(o.yAxis.name).toBe('degC');
     expect(o.tooltip.valueFormatter(20.123456)).toBe('20.1 degC');
+  });
+
+  it('keeps the HTML tooltip by default, and draws it on the canvas in strict-CSP host mode', () => {
+    expect(opt(buildLineOption(data, theme)).tooltip.renderMode).toBeUndefined();
+    configureStrictCsp(true);
+    try {
+      expect(opt(buildLineOption(data, theme)).tooltip.renderMode).toBe('richText');
+    } finally {
+      configureStrictCsp(false);
+    }
   });
 
   it('rounds axis labels to the precision, and leaves ECharts ticks alone when unset', () => {

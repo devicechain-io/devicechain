@@ -40,7 +40,7 @@ The platform accepts a device certificate only when all of these hold:
 | **Pinned credential** | Create the device, then add an `X509_CERTIFICATE` credential holding its certificate and naming the anchor. | The device you created. Its token is whatever you chose. |
 | **Registration on first connect** | Create a **certificate profile**: a provisioning profile that names an anchor. Devices whose certificates chain to the anchor register themselves the first time they connect. | A device created for the certificate. Its external id is the certificate's common name, and its token is derived from it. |
 
-A **pinned credential** is identified by the SHA-256 of the certificate, which the server computes. The credential records the anchor the certificate must chain to, and the earliest expiry along the whole chain. A device can hold up to three live certificate credentials at once, so a replacement can be added before the old one expires.
+A **pinned credential** is identified by the SHA-256 of the certificate, which the server computes. The credential records the anchor the certificate must chain to, and the earliest expiry along the whole chain. A device can hold up to three certificate credentials at once, so a replacement can be added before the old one expires. Disabled and expired credentials count toward the three until you delete them.
 
 A **certificate profile** has no provision secret to guard or rotate, because the certificate is the proof. It uses the same controls as [self-registration](../guides/device-self-registration.md): the strategy, a cap on devices, an expiry, and revoking what it registered. A tenant can hold eight certificate profiles.
 
@@ -54,7 +54,8 @@ pv-{slug}-{hash}
 
 - `slug` is the common name with every character other than letters, digits, `-` and `_` replaced by `-`, and leading and trailing `-` and `_` removed.
 - `hash` is the first 12 hexadecimal characters of the SHA-256 of the common name.
-- The whole token is at most 128 characters; a long `slug` is cut to fit.
+- The whole token is at most 128 characters; a long `slug` is cut to fit, and any `-` or `_` the cut leaves at its end is removed.
+- If no character of the common name survives into a `slug`, the token is `pv-{hash}`.
 
 A device's firmware can therefore compute its own client id from its own certificate. The [guide](../guides/device-x509.md#client-id) has a worked example. A connect whose client id does not match is refused before anything is created, so a refused connect never leaves a device behind.
 

@@ -387,11 +387,19 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// pessimistic date stays (TestTheExpiryIsPublishedOnlyAfterTheBrokerRestartIsWaitedOn).
 	// Published whether or not anything was renewed, so an instance bootstrapped before the
 	// date existed gets it on its first upgrade.
-	doing("publishing the broker certificate's expiry")
-	if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
-		return fail("publishing the broker certificate's expiry", err)
+	if brokerExpiryUnverified(st) {
+		// The servers have not been restarted onto the renewed certificate and no StatefulSet
+		// exists to restart them, so the date would claim a certificate nobody serves yet. The next
+		// upgrade, with the StatefulSet back, publishes it.
+		fmt.Println(color.WhiteString("  Not publishing the broker certificate's expiry: the broker's StatefulSet " +
+			"is gone, so its servers cannot have been restarted onto the renewed certificate yet."))
+	} else {
+		doing("publishing the broker certificate's expiry")
+		if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
+			return fail("publishing the broker certificate's expiry", err)
+		}
+		done()
 	}
-	done()
 
 	// THE BROKER AND THE EVENT STORE, BEFORE THE SERVICES.
 	//
@@ -1090,3 +1098,8 @@ func beginUpgradeClaim(ctx context.Context, kubeContext, instance string) *Claim
 	}
 	return claim
 }
+
+// brokerExpiryUnverified reports whether the broker's certificate expiry cannot be published yet
+// because the servers' StatefulSet is gone (deleted to grow its volume): the renewal skipped the
+// restart, and the published date means "the Secret's certificate, once the broker serves it".
+func brokerExpiryUnverified(st *State) bool { return len(st.OrphanedClaims) > 0 }

@@ -6,7 +6,10 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
@@ -175,7 +178,8 @@ func TestCreateCommandSuccessArmOnTheWire(t *testing.T) {
 func TestCreateCommandAvailabilityFailureStaysAGraphQLError(t *testing.T) {
 	ctx, api := newWireTestCtx(t)
 	api.EnqueueValidator = stubEnqueueValidator{
-		err: errUnreachable{"dial tcp 10.42.0.7:8080: connect: connection refused"},
+		err: &url.Error{Op: "Post", URL: "http://10.42.0.7:8080/graphql",
+			Err: &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}},
 	}
 
 	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
@@ -192,6 +196,11 @@ func TestCreateCommandAvailabilityFailureStaysAGraphQLError(t *testing.T) {
 		if strings.Contains(e.Message, "10.42.0.7") || strings.Contains(e.Message, "connection refused") {
 			t.Fatalf("the failure detail must not reach the tenant client (in-cluster topology): %q", e.Message)
 		}
+	}
+	// And it is machine-readable: graphql-go serves the code only from the error the resolver
+	// returned directly, so this is the wire check that nothing between wraps it.
+	if code, _ := res.Errors[0].Extensions["code"].(string); code != "UNAVAILABLE" {
+		t.Fatalf("extensions.code = %q, want UNAVAILABLE so a caller can tell a retry from a refusal", code)
 	}
 	if got, _ := api.CommandsByToken(ctx, []string{"wire-unavailable"}); len(got) != 0 {
 		t.Fatalf("an undecidable enqueue must fail CLOSED and persist nothing, found %+v", got)

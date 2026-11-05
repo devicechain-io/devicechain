@@ -191,3 +191,41 @@ func TestTheEventStoreCompressesItsWriteAheadLog(t *testing.T) {
 		})
 	}
 }
+
+// The event store's checkpoints are meant to arrive on the clock rather than whenever the
+// log fills. Both settings are computed in the instance root (max_wal_size follows the
+// volume), so they cannot sit in the literal parameters map the test above reads; they are
+// inputs of the module, and what this proves is that the root hands them over and that they
+// reach the rendered Cluster beside the literals, with backups on and off.
+func TestTheEventStoreCheckpointsOnTheClock(t *testing.T) {
+	root := readTF(t, assets.OpenTofuInstance(), "main.tf")
+	body := tfBlockBody(t, root, `module "cnpg_tsdb"`)
+	for _, want := range []string{
+		`max_wal_size       = local.event_store_max_wal_size`,
+		`checkpoint_timeout = var.timescale_checkpoint_timeout`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the event store's module block no longer contains %q", want)
+		}
+	}
+	if !strings.Contains(root, `max(1024, floor(local.event_store_storage_mib / 5))`) {
+		t.Errorf("the event store's max_wal_size is no longer a fifth of its volume, floored at 1 GiB")
+	}
+
+	vars := readTF(t, assets.OpenTofuInstance(), "variables.tf")
+	if m := regexp.MustCompile(`(?s)variable "timescale_checkpoint_timeout".*?default\s*=\s*"([^"]+)"`).FindStringSubmatch(vars); m == nil || m[1] != "15min" {
+		t.Errorf("timescale_checkpoint_timeout default = %v, want 15min", m)
+	}
+
+	for _, backups := range []bool{false, true} {
+		rendered := renderedClusterParameters(t, map[string]string{
+			"wal_compression":    "lz4",
+			"max_wal_size":       "8192MB",
+			"checkpoint_timeout": "15min",
+		}, backups)
+		if rendered["max_wal_size"] != "8192MB" || rendered["checkpoint_timeout"] != "15min" {
+			t.Errorf("backups=%v: the Cluster renders max_wal_size=%q checkpoint_timeout=%q, want 8192MB and 15min",
+				backups, rendered["max_wal_size"], rendered["checkpoint_timeout"])
+		}
+	}
+}

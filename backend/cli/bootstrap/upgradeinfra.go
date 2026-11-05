@@ -21,6 +21,7 @@ import (
 	tfjson "github.com/hashicorp/terraform-json"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -103,9 +104,14 @@ func volumeSize(live, otherwise string) string {
 
 // liveInfra is what the instance's broker and event store are running as.
 type liveInfra struct {
-	Broker     *appsv1.StatefulSet
-	BrokerPods []corev1.Pod
-	EventStore *unstructured.Unstructured
+	// Broker is nil only when the StatefulSet is gone but the broker's volume claims are
+	// not: the state the documented volume-growth recipe (delete the StatefulSet with
+	// --cascade=orphan, patch the claims) leaves behind. BrokerClaims then carry the
+	// volume size, and the apply recreates the StatefulSet.
+	Broker       *appsv1.StatefulSet
+	BrokerClaims []corev1.PersistentVolumeClaim
+	BrokerPods   []corev1.Pod
+	EventStore   *unstructured.Unstructured
 	// StoreImages are the postgres container images of the event store's pods.
 	StoreImages []string
 }
@@ -127,17 +133,33 @@ var readLiveInfra = func(ctx context.Context, kubeContext, instance string) (liv
 func readInfraFrom(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, ns string) (liveInfra, error) {
 	var out liveInfra
 	sts, err := typed.AppsV1().StatefulSets(ns).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
-	if err != nil {
-		return liveInfra{}, fmt.Errorf("reading the broker (StatefulSet %s/%s): %w", ns, natsStatefulSetName, err)
-	}
-	out.Broker = sts
-	if sel := sts.Spec.Selector; sel != nil {
-		pods, err := typed.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: metav1.FormatLabelSelector(sel)})
-		if err != nil {
-			return liveInfra{}, fmt.Errorf("listing the broker's pods in %s: %w", ns, err)
+	switch {
+	case apierrors.IsNotFound(err):
+		// 🔴 A MISSING STATEFULSET IS NOT ALWAYS A MISSING BROKER. Growing the JetStream volume
+		// is documented as: delete the StatefulSet with --cascade=orphan (its claims and pods
+		// stay), patch the claims, run the upgrade again. That upgrade must be able to START
+		// from exactly that state, or the recipe cannot be completed. The claims are then the
+		// record of the volume's size, and the apply recreates the StatefulSet from them.
+		claims, pods, cerr := orphanedBroker(ctx, typed, ns)
+		if cerr != nil {
+			return liveInfra{}, cerr
 		}
-		out.BrokerPods = pods.Items
+		if len(claims) == 0 {
+			return liveInfra{}, fmt.Errorf("reading the broker (StatefulSet %s/%s): %w", ns, natsStatefulSetName, err)
+		}
+		out.BrokerClaims, out.BrokerPods = claims, pods
+	case err != nil:
+		return liveInfra{}, fmt.Errorf("reading the broker (StatefulSet %s/%s): %w", ns, natsStatefulSetName, err)
+	default:
+		out.Broker = sts
+		if sel := sts.Spec.Selector; sel != nil {
+			pods, err := typed.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: metav1.FormatLabelSelector(sel)})
+			if err != nil {
+				return liveInfra{}, fmt.Errorf("listing the broker's pods in %s: %w", ns, err)
+			}
+			out.BrokerPods = pods.Items
+		}
 	}
 	cl, err := dyn.Resource(clusterGVR).Namespace(ns).Get(ctx, TsdbClusterName, metav1.GetOptions{})
 	if err != nil {
@@ -148,6 +170,156 @@ func readInfraFrom(ctx context.Context, typed kubernetes.Interface, dyn dynamic.
 		return liveInfra{}, err
 	}
 	return out, nil
+}
+
+var (
+	brokerClaimNameRe = regexp.MustCompile(`^` + regexp.QuoteMeta(natsStatefulSetName+"-js-"+natsStatefulSetName) + `-\d+$`)
+	brokerPodNameRe   = regexp.MustCompile(`^` + regexp.QuoteMeta(natsStatefulSetName) + `-\d+$`)
+)
+
+// orphanedBroker finds the broker's JetStream claims and pods by name, for a broker whose
+// StatefulSet has been deleted with --cascade=orphan. A StatefulSet names its claims
+// <template>-<pod>, so a claim is dc-nats-js-dc-nats-N.
+func orphanedBroker(ctx context.Context, typed kubernetes.Interface, ns string) ([]corev1.PersistentVolumeClaim, []corev1.Pod, error) {
+	cl, err := typed.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing the broker's volume claims in %s: %w", ns, err)
+	}
+	var claims []corev1.PersistentVolumeClaim
+	for _, c := range cl.Items {
+		// A claim that is being deleted is on its way out, not part of the volume.
+		if brokerClaimNameRe.MatchString(c.Name) && c.DeletionTimestamp == nil {
+			claims = append(claims, c)
+		}
+	}
+	if len(claims) == 0 {
+		return nil, nil, nil
+	}
+	pl, err := typed.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing the broker's pods in %s: %w", ns, err)
+	}
+	var pods []corev1.Pod
+	for _, p := range pl.Items {
+		if brokerPodNameRe.MatchString(p.Name) {
+			pods = append(pods, p)
+		}
+	}
+	return claims, pods, nil
+}
+
+// ordinalOf is the trailing server number of a claim or pod name (dc-nats-js-dc-nats-2, dc-nats-2).
+func ordinalOf(name string) int {
+	i := strings.LastIndex(name, "-")
+	n, err := strconv.Atoi(name[i+1:])
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// forReplicas narrows an orphaned broker to the servers this instance is configured to run: a
+// claim left by a larger cluster that was scaled down (the StatefulSet never deletes them) is not
+// part of the volume, and a stale higher-ordinal claim must not set its size or block an upgrade.
+// extra names the claims left out.
+func (i liveInfra) forReplicas(replicas int) (narrowed liveInfra, extra []string) {
+	if i.Broker != nil || len(i.BrokerClaims) == 0 {
+		return i, nil
+	}
+	narrowed = i
+	narrowed.BrokerClaims, narrowed.BrokerPods = nil, nil
+	for _, c := range i.BrokerClaims {
+		if o := ordinalOf(c.Name); o >= 0 && o < replicas {
+			narrowed.BrokerClaims = append(narrowed.BrokerClaims, c)
+		} else {
+			extra = append(extra, c.Name)
+		}
+	}
+	for _, p := range i.BrokerPods {
+		if o := ordinalOf(p.Name); o >= 0 && o < replicas {
+			narrowed.BrokerPods = append(narrowed.BrokerPods, p)
+		}
+	}
+	sort.Strings(extra)
+	return narrowed, extra
+}
+
+// volumes reads the two volume sizes off the running objects: the StatefulSet's template,
+// or, for a broker whose StatefulSet is gone, the SMALLEST of its claims (the one that
+// bounds what the servers can store, so a half-patched set reads as not yet grown).
+func (i liveInfra) volumes() (liveVolumes, error) {
+	if i.Broker != nil || len(i.BrokerClaims) == 0 {
+		return liveVolumesFrom(i.Broker, i.EventStore)
+	}
+	var smallest *resource.Quantity
+	for _, c := range i.BrokerClaims {
+		q, ok := c.Spec.Resources.Requests[corev1.ResourceStorage]
+		if !ok {
+			return liveVolumes{}, fmt.Errorf("the broker's volume claim %q states no storage size", c.Name)
+		}
+		if smallest == nil || q.Cmp(*smallest) < 0 {
+			q := q
+			smallest = &q
+		}
+	}
+	// The event store is read the same way whichever way the broker's size was found.
+	return liveVolumesFrom(&appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{
+		VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
+			ObjectMeta: metav1.ObjectMeta{Name: natsStatefulSetName + "-js"},
+			Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: *smallest}}},
+		}}}}, i.EventStore)
+}
+
+// orphanedBrokerNotReady says what stops an orphaned broker being taken over, or "" when nothing
+// does: a volume claim whose expansion has not finished, or a server that EXISTS and is not ready.
+//
+// 🔴 A SERVER THAT IS GONE DOES NOT STOP IT. Nothing owns an orphaned pod, so a pod that was
+// deleted or evicted never comes back by itself, and the only thing that starts it is the
+// StatefulSet this apply recreates. Refusing on it would leave an operator unable to do the one
+// thing that fixes it. Proceeding with fewer servers than the claims is what a normal Helm upgrade
+// of a broker that lost a node does too: the quorum that was up stays up while the rest start.
+func orphanedBrokerNotReady(pods []corev1.Pod, claims []corev1.PersistentVolumeClaim) string { // A volume claim whose expansion has not finished still has its old capacity, and the
+	// broker's file-store ceiling would be derived from a size the disk does not have yet.
+	var growing []string
+	for _, c := range claims {
+		want, ok := c.Spec.Resources.Requests[corev1.ResourceStorage]
+		if !ok {
+			continue
+		}
+		have, ok := c.Status.Capacity[corev1.ResourceStorage]
+		if !ok || have.Cmp(want) < 0 {
+			growing = append(growing, c.Name)
+		}
+		for _, cond := range c.Status.Conditions {
+			if (cond.Type == corev1.PersistentVolumeClaimResizing || cond.Type == corev1.PersistentVolumeClaimFileSystemResizePending) &&
+				cond.Status == corev1.ConditionTrue {
+				growing = append(growing, c.Name)
+				break
+			}
+		}
+	}
+	if len(growing) > 0 {
+		sort.Strings(growing)
+		return "volume expansion has not finished for " + strings.Join(growing, ", ")
+	}
+	var stuck []string
+	for _, p := range pods {
+		ready := false
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue && p.DeletionTimestamp == nil {
+				ready = true
+			}
+		}
+		if !ready {
+			stuck = append(stuck, p.Name+" "+string(p.Status.Phase))
+		}
+	}
+	sort.Strings(stuck)
+	if len(stuck) > 0 {
+		return "not ready: " + strings.Join(stuck, ", ")
+	}
+	return ""
 }
 
 // liveVolumesFrom reads the two volume sizes off the running objects. A missing
@@ -302,6 +474,15 @@ func pollUntil(ctx context.Context, timeout, interval time.Duration, consecutive
 func waitForBrokerRollout(ctx context.Context, typed kubernetes.Interface, ns string, timeout, interval time.Duration) error {
 	_, err := pollUntil(ctx, timeout, interval, 1, func() (bool, string, error) {
 		sts, err := typed.AppsV1().StatefulSets(ns).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			// The release plans no change when the volume size it is given equals the one it
+			// last applied, and a release that plans no change does not recreate a StatefulSet
+			// somebody deleted.
+			return false, "", fmt.Errorf("the broker's StatefulSet %s/%s still does not exist after the "+
+				"apply. Its release only recreates it when it has a change to apply, which the grown "+
+				"JetStream volume is: patch the broker's claims to a size larger than the one the release "+
+				"last applied, then run the upgrade again", ns, natsStatefulSetName)
+		}
 		if err != nil {
 			return false, "", err
 		}
@@ -396,7 +577,15 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	if err != nil {
 		return err
 	}
-	if st.LiveVolumes, err = liveVolumesFrom(infra.Broker, infra.EventStore); err != nil {
+	infra, st.OrphanExtraClaims = infra.forReplicas(haFor(st.HA).ServerReplicas)
+	st.OrphanedClaims = nil
+	if infra.Broker == nil {
+		for _, c := range infra.BrokerClaims {
+			q := c.Spec.Resources.Requests[corev1.ResourceStorage]
+			st.OrphanedClaims = append(st.OrphanedClaims, OrphanedClaim{Name: c.Name, Size: q.String()})
+		}
+	}
+	if st.LiveVolumes, err = infra.volumes(); err != nil {
 		return err
 	}
 
@@ -416,7 +605,25 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	// whether the new template rolls out. A broker short of a server on the template it
 	// already runs (a lost node, a crashing server nobody changed) is still refused: an
 	// apply would add a restart to it and fix nothing.
-	if !statefulSetRolledOut(infra.Broker) {
+	if infra.Broker == nil {
+		// The StatefulSet was deleted with --cascade=orphan to grow the volume: its servers
+		// run on, unowned, and this apply recreates the StatefulSet around them.
+		if why := orphanedBrokerNotReady(infra.BrokerPods, infra.BrokerClaims); why != "" {
+			return fmt.Errorf("instance %q's broker StatefulSet is gone and %s, so recreating it would "+
+				"restart servers of a broker that is not settled. Nothing has been changed. Wait for the "+
+				"claims to finish expanding and the servers that exist to become ready (kubectl -n %s get "+
+				"pvc,pods), then run the upgrade again. A server that is gone altogether does not block it: "+
+				"the recreated StatefulSet starts it", st.Instance, why, InstanceNamespace(st.Instance))
+		}
+		if len(st.OrphanExtraClaims) > 0 {
+			st.InfraNotes = append(st.InfraNotes, fmt.Sprintf("volume claim(s) %s belong to servers this "+
+				"instance no longer runs (a scaled-down cluster leaves them) and were not counted",
+				strings.Join(st.OrphanExtraClaims, ", ")))
+		}
+		st.InfraNotes = append(st.InfraNotes, fmt.Sprintf("the broker's StatefulSet is gone (deleted with "+
+			"--cascade=orphan) and its servers run unowned; this apply recreates it with its JetStream "+
+			"volume at %s, the size of the broker's volume claims", st.LiveVolumes.JetStream))
+	} else if !statefulSetRolledOut(infra.Broker) {
 		if !brokerRollUnfinished(infra.Broker) {
 			return fmt.Errorf("instance %q's broker is not healthy (%s), so this upgrade would restart "+
 				"servers of a broker that is already short of one. Nothing has been changed. Bring it "+
@@ -1237,7 +1444,10 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 	if err := spellVolumesAsRecorded(st, state); err != nil {
 		return nil, err
 	}
-	st.LiveMaxFileStore = liveMaxFileStore(state)
+	if err := refuseUnchangedOrphanedVolume(state, st); err != nil {
+		return nil, err
+	}
+	st.LiveMaxFileStore = maxStoreAfterGrowth(state, rootdir, st.LiveVolumes.JetStream, liveMaxFileStore(state))
 	vars, err := instanceRootVars(st)
 	if err != nil {
 		return nil, err
@@ -1358,4 +1568,51 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		return err
 	}
 	return waits.store(ctx)
+}
+
+// refuseUnchangedOrphanedVolume refuses, before anything is written, an upgrade over an orphaned
+// broker whose claims are all still at the size the release last applied.
+//
+// 🔴 NOTHING WOULD RECREATE THE STATEFULSET. The helm provider upgrades a release only when its
+// plan has a difference, and the only difference an orphaned broker brings is a volume size that
+// moved. With the claims at the recorded size the plan is empty, the apply does nothing, and the
+// upgrade would finish all its other work and then wait out the broker's rollout for a
+// StatefulSet that was never coming back. The refusal names every claim below the largest, which
+// is the one a half-finished patch leaves behind.
+func refuseUnchangedOrphanedVolume(state *tfjson.State, st *State) error {
+	if len(st.OrphanedClaims) == 0 {
+		return nil
+	}
+	vals, found, err := releaseValuesInState(state, natsReleaseAddress)
+	if err != nil || !found {
+		return nil
+	}
+	recorded, ok := nestedString(vals, "config", "jetstream", "fileStore", "pvc", "size")
+	if !ok || recorded == "" {
+		return nil
+	}
+	rq, rerr := resource.ParseQuantity(recorded)
+	lq, lerr := resource.ParseQuantity(st.LiveVolumes.JetStream)
+	if rerr != nil || lerr != nil || rq.Cmp(lq) != 0 {
+		return nil
+	}
+	largest := resource.Quantity{}
+	for _, c := range st.OrphanedClaims {
+		if q, err := resource.ParseQuantity(c.Size); err == nil && q.Cmp(largest) > 0 {
+			largest = q
+		}
+	}
+	var below []string
+	for _, c := range st.OrphanedClaims {
+		if q, err := resource.ParseQuantity(c.Size); err == nil && q.Cmp(largest) < 0 {
+			below = append(below, fmt.Sprintf("%s (%s)", c.Name, c.Size))
+		}
+	}
+	msg := fmt.Sprintf("instance %q's broker StatefulSet is gone, but its volume claims are at %s, the size the "+
+		"broker was last applied with, so the apply has nothing to change and nothing would recreate the "+
+		"StatefulSet. Nothing has been changed. Patch every claim to the new size first", st.Instance, recorded)
+	if len(below) > 0 {
+		msg += "; these are below the largest: " + strings.Join(below, ", ")
+	}
+	return fmt.Errorf("%s", msg)
 }

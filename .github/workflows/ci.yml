@@ -1759,6 +1759,12 @@ jobs:
       - name: Board readability gate
         run: npm run test:readability -w @devicechain/board-replay
 
+      # The replay bundle under `style-src 'self'` (no 'unsafe-inline'): builds dist/, serves it
+      # with that policy and fails on any securitypolicyviolation or an undrawn board. Same browser
+      # as the readability gate. The website serves this bundle under that policy.
+      - name: Board replay strict-CSP gate
+        run: npm run test:csp -w @devicechain/board-replay
+
       # ADVISORY: a full-page screenshot of every board the gate measured, for a reviewer to
       # look at. Nothing compares them with a baseline and nothing fails on them.
       - name: Upload the readability screenshots (advisory)

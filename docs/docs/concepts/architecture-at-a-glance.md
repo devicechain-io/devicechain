@@ -37,8 +37,8 @@ store.
 Follow one reading, a fuel level, from a device to a dashboard, then see what a rule does with it.
 
 1. **The device publishes.** It connects to the platform broker with its credential and publishes a
-   JSON event to its own topic, `{instance}/{tenant}/devices/{token}/events`. The broker lets it
-   publish to that topic and no other. See [Connecting a Device](../guides/connecting-a-device.md).
+   JSON event to its own topic, `{instance}/{tenant}/devices/{token}/events`. The broker confines its
+   telemetry to that topic. See [Connecting a Device](../guides/connecting-a-device.md).
 2. **Ingest decodes it.** `event-sources` takes the message, checks that the device in the body is
    the device in the topic, applies the tenant's ingest rate limit, and publishes the decoded event
    onto the pipeline. A message it cannot decode goes to a `failed-decode` stream instead.

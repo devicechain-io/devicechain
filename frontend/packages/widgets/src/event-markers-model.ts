@@ -19,7 +19,7 @@
 //   - The markers sit on a helper series of their own, so the reading series are untouched.
 
 import type { AlarmRow, CommandRow } from '@devicechain/dashboards';
-import { levelColor, type AlarmLevel } from '@devicechain/widget-sdk';
+import { levelColor, plainTooltipText, strictCspEnabled, type AlarmLevel } from '@devicechain/widget-sdk';
 import { severityFill, type ChartTheme, type EChartOption } from '@devicechain/widget-sdk/echarts';
 
 import type { EventKind, EventMarkerStrings } from './event-markers-strings';
@@ -152,6 +152,20 @@ export function commandEvents(
   return out;
 }
 
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const escapeHtml = (s: string): string => s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+
+// The tooltip text for an event, in whichever form the chart will draw it. The default HTML
+// tooltip parses what it is given, so the user-supplied title and detail are ESCAPED; the
+// strict-CSP host mode draws the tooltip on the canvas (richText), which parses no HTML, so the
+// text goes in as written, with the rich-text delimiters neutralized. The mode is read when the
+// tooltip is shown, so the safety of each form rests on this function, not on a default elsewhere.
+function tipText(title: string, detail: string): string {
+  return strictCspEnabled()
+    ? `${plainTooltipText(title)}\n${plainTooltipText(detail)}`
+    : `<b>${escapeHtml(title)}</b><br/>${escapeHtml(detail)}`;
+}
+
 export interface MarkerPlan {
   // The events drawn, oldest first.
   shown: EventItem[];
@@ -160,8 +174,6 @@ export interface MarkerPlan {
   decorate: (option: EChartOption, size?: { width: number; height: number }) => EChartOption;
 }
 
-const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-const escapeHtml = (s: string): string => s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 
 export function planMarkers(items: readonly EventItem[], range: EventRange, theme: ChartTheme): MarkerPlan {
   // Newest first, so the cap keeps what just happened; drawn and listed oldest first.
@@ -170,12 +182,12 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
   const hidden = byNewest.length - shown.length;
 
   const neutral = theme.mutedForeground;
-  const tips: Record<string, string> = {};
+  const tips: Record<string, [title: string, detail: string]> = {};
   const lines: Record<string, unknown>[] = [];
   const areas: unknown[] = [];
   const strips: Array<(top: number) => unknown> = [];
   for (const e of shown) {
-    const tip = `<b>${escapeHtml(e.title)}</b><br/>${escapeHtml(e.detail)}`;
+    const tip: [string, string] = [e.title, e.detail];
     if (e.kind === 'command') {
       tips[e.id] = tip;
       lines.push({ name: e.id, xAxis: e.at, lineStyle: { color: neutral, type: 'dotted', width: 2 }, labelText: e.name });
@@ -206,7 +218,11 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
     }
   }
 
-  const tooltip = { trigger: 'item', formatter: (p: { name?: string }) => tips[p.name ?? ''] ?? '' };
+  const tooltip = { trigger: 'item', formatter: (p: { name?: string }) => {
+      const tip = tips[p.name ?? ''];
+      return tip ? tipText(tip[0], tip[1]) : '';
+    },
+  };
 
   const decorate: MarkerPlan['decorate'] = (option, size) => {
     if (lines.length === 0 && areas.length === 0) return option;

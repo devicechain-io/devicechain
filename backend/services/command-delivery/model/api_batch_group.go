@@ -95,7 +95,7 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 		resolved, err := api.GroupTargetResolver.ResolveGroupTargets(ctx, *request.GroupToken,
 			pin, cursor, groupTargetPageSize)
 		if err != nil {
-			return nil, fmt.Errorf("cannot resolve the group target: group resolution is unavailable")
+			return nil, unavailableOr(err, "cannot resolve the group target: group resolution is unavailable")
 		}
 		if resolved.Rejected {
 			// The owner OWNS why a group is unusable, so its code is relayed alongside the

@@ -205,3 +205,35 @@ flagged (they are mostly timed calls, so per event they follow the rate).
 `perf-ab.sh --self-test` and `perf-ab-compare.sh --self-test` check the arithmetic, the refusals
 (a `pg_stat_statements` reset), and that identical arms flag nothing while a 24 percent change is
 flagged.
+
+### Database write behaviour and per-instance DB CPU
+
+The arm summary carries, for both the event store (`tsdb`) and the relational store (`rdb`), the rows
+that tell a WAL or vacuum problem from a CPU one:
+
+| Row | Meaning |
+|---|---|
+| `db.<store>.wal_*_per_event` | WAL bytes (not compared if a checkpoint fell in the window), records and full-page images per event, for the relational store as well as the event store |
+| `db.<store>.checkpoints_timed`, `..._requested`, and `info.checkpoint_cause` | why the checkpoints in the window ran: `timed` is `checkpoint_timeout`, `requested` is `max_wal_size` or an explicit `CHECKPOINT`. They have different fixes, so they are never summed |
+| `db.<store>.hot_ratio`, `db.<store>.hot_ratio.<schema>/<table>` | `n_tup_hot_upd / n_tup_upd` from `pg_stat_user_tables`. A non-HOT update writes every index of the table. Absent (not zero) under 1,000 updates in the window |
+| `db.<store>.tuple_updates_per_event` | row updates per stored event |
+| `db.<store>.dead_tuples`, `..dead_tuples.<table>` | dead tuples at the END of the window (a gauge), the eight worst tables |
+| `db.<store>.autovacuum_runs`, `..autoanalyze_runs` | runs started in the window |
+| `cpu.dbinst.<store>.primary`, `cpu.dbinst.<store>.standby` `.s_per_1k_events` | the `postgres` container only, split by the role the CNPG pod held at both ends of the window. The component rows (`cpu.dc-tsdb`) fold primary, standby and sidecars into one number |
+
+Dead tuples, autovacuum runs and checkpoint counts are shown but never flagged (they follow timing, not
+work); the HOT ratio and the instance CPU are compared like any other row. A pod that changed role
+inside the window (a failover) invalidates that store's instance rows and says so; a table counter that
+went backwards (a crash or a stats reset) invalidates the table rows and says so.
+
+`hack/perf-collect.sh` (the GKE collector) now also writes `tables-{pre,post,delta}` per database
+primary and records every database pod's role before and after the window in its manifest;
+`hack/perf-analyze.sh` renders the table-writes table, the checkpoint cause and a "Database CPU by
+instance" section from them. Both scripts share their SQL with the rig through `hack/lib/dbstats.sh`.
+
+**Showing the rows on a real cluster without the platform:** `hack/perf-ab/db-rows-rig.sh` creates two
+two-instance CloudNativePG clusters shaped like the platform's, runs the *real* snapshot function and the
+*real* summarizer around a synthetic write load, and checks the rows. It carries a negative control: a
+second window whose updates all change an indexed column must read a LOW HOT ratio, so a ratio that
+reads high everywhere cannot pass. It needs a CNPG operator and about three CPUs and is manual, like the
+other rigs.

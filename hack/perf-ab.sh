@@ -23,8 +23,14 @@
 #                        bytes and JetStream API calls (varz jetstream.stats.api.total)
 #   database WAL         pg_current_wal_lsn() bytes, WAL records and full-page images on the event-store
 #                        and the relational primary (bytes are not reported if a checkpoint fell in the window)
+#   checkpoint cause     per database, checkpoints timed (checkpoint_timeout) vs requested (max_wal_size or
+#                        an explicit CHECKPOINT), and a one-word cause for the window
+#   table writes         per table, from pg_stat_user_tables: the HOT-update ratio (n_tup_hot_upd / n_tup_upd),
+#                        dead tuples at the end of the window, autovacuum and autoanalyze runs in it
 #   statements           rows per INSERT into events and per device_states upsert, statements/s
-#   CPU                  cAdvisor container CPU-seconds per 1,000 events, per component
+#   CPU                  cAdvisor container CPU-seconds per 1,000 events, per component; and the postgres
+#                        container of each database split by ROLE (cpu.dbinst.<store>.primary / .standby),
+#                        so the standby replay cost is not folded into the primary's
 #   the harness verdict  accepted, persisted, loss and duplicates, from dc-loadtest(-mqtt)'s own report
 #
 # WHAT TRANSFERS TO GKE, and what does not
@@ -192,6 +198,12 @@ say "nats: ${nats_pods[*]}; event-store primary: $tsdb_pod; relational primary: 
 psql_at() { # namespace pod sql -> stdout
   k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d postgres -c "$3"
 }
+# shellcheck disable=SC2317  # called by name from dbstats_tables (lib/dbstats.sh)
+psql_db() { # namespace pod database sql -> stdout
+  k exec -n "$1" "$2" -c postgres -- psql -X -At -v ON_ERROR_STOP=1 -d "$3" -c "$4"
+}
+# shellcheck source=lib/dbstats.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/dbstats.sh"
 for pair in "$ns:$tsdb_pod" "$rdb_ns:$rdb_pod"; do
   psql_at "${pair%%:*}" "${pair#*:}" "CREATE EXTENSION IF NOT EXISTS pg_stat_statements" >/dev/null 2>&1 || true
   psql_at "${pair%%:*}" "${pair#*:}" "SELECT count(*) FROM pg_stat_statements_info" >/dev/null 2>&1 \
@@ -299,10 +311,7 @@ else sim_m="${sim_prefix}-${max_rate}-m"; sim_h="${sim_prefix}-${max_rate}-h"; f
 # Snapshots. Every source is read in parallel so the "before" (and "after") instants
 # are within a second or two of each other.
 # ---------------------------------------------------------------------------
-ckpt_view="$(psql_at "$ns" "$tsdb_pod" "SELECT CASE WHEN to_regclass('pg_stat_checkpointer') IS NOT NULL THEN 'pg_stat_checkpointer' ELSE 'pg_stat_bgwriter' END" | tr -d '\r')"
-if [[ "$ckpt_view" == pg_stat_checkpointer ]]; then ckpt_expr="(SELECT num_timed + num_requested FROM pg_stat_checkpointer)"
-else ckpt_expr="(SELECT checkpoints_timed + checkpoints_req FROM pg_stat_bgwriter)"; fi
-STMT_SQL="SELECT jsonb_build_object('t', extract(epoch from clock_timestamp()), 'ckpt', $ckpt_expr, 'lsn', pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0'), 'lsnText', pg_current_wal_lsn()::text, 'inRecovery', pg_is_in_recovery(), 'wal', (SELECT to_jsonb(w) - 'stats_reset' FROM pg_stat_wal w), 'reset', (SELECT stats_reset FROM pg_stat_statements_info), 'dealloc', (SELECT dealloc FROM pg_stat_statements_info), 'stmts', coalesce((SELECT jsonb_agg(jsonb_build_object('q', left(s.query, 300), 'id', s.queryid::text, 'db', d.datname, 'calls', s.calls, 'rows', s.rows, 'ms', s.total_exec_time, 'walb', s.wal_bytes, 'walr', s.wal_records)) FROM pg_stat_statements s LEFT JOIN pg_database d ON d.oid = s.dbid WHERE s.calls > 0), '[]'::jsonb))"
+dbstats_init
 
 snap() { # label
   local d="$raw/$1" p n pid rc=0
@@ -319,8 +328,9 @@ snap() { # label
     ) &
     pids+=($!)
   done
-  ( psql_at "$ns" "$tsdb_pod" "$STMT_SQL" > "$d/db-tsdb.json" ) & pids+=($!)
-  ( psql_at "$rdb_ns" "$rdb_pod" "$STMT_SQL" > "$d/db-rdb.json" ) & pids+=($!)
+  # The database snapshots (statements, WAL, checkpoint cause, per-table writes, pod roles) are one
+  # shared function, so hack/perf-ab/db-rows-rig.sh runs exactly the code a real arm runs.
+  ( dbstats_snap_dbs "$d" ) & pids+=($!)
   for n in "${node_names[@]}"; do
     ( k get --raw "/api/v1/nodes/$n/proxy/metrics/cadvisor" \
         | grep -E '^container_cpu_(usage_seconds_total|cfs_throttled_seconds_total)\{' > "$d/cadvisor-$n.prom" || true ) &
