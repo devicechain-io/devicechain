@@ -43,6 +43,15 @@ const (
 	// ReasonNameConstraints: a CA in the chain carries name constraints, which this verifier
 	// cannot honour (see VerifyClientChain).
 	ReasonNameConstraints Reason = "name_constraints_unsupported"
+	// ReasonNotCA and ReasonNoCRLSign: the CA-side twin (VerifyCAChain) was given a signer that
+	// is not a CA, or a CA that may not sign CRLs.
+	ReasonNotCA     Reason = "not_ca"
+	ReasonNoCRLSign Reason = "no_crl_sign"
+	// ReasonRevoked: every verified path contains a revoked certificate (ApplyRevocation).
+	ReasonRevoked Reason = "revoked"
+	// ReasonRevocationUnknown: no verified path could be shown unrevoked, because the issuer's
+	// revocation data is missing or stale under a mode that requires it (ApplyRevocation).
+	ReasonRevocationUnknown Reason = "revocation_unknown"
 )
 
 // ErrChainInvalid is the sentinel every refusal wraps.
@@ -81,8 +90,14 @@ type Verified struct {
 	Leaf *x509.Certificate
 	// Fingerprint is the hex SHA-256 of the leaf DER: the value a credential pins.
 	Fingerprint string
-	// Chain is the verified path, leaf first, ending in the anchor.
+	// Chain is the verified path, leaf first, ending in the anchor. When several paths verify
+	// (a cross-signed or re-issued intermediate), it is the longest-lived one.
 	Chain []*x509.Certificate
+	// Chains is EVERY verified path, leaf first and ending in the anchor, in the order the
+	// verifier listed them; Chain is one of them. Revocation is decided over these and nothing
+	// else: it must not depend on which certificates the device chose to present, only on the
+	// paths that actually verified (see ApplyRevocation).
+	Chains [][]*x509.Certificate
 	// NotAfter is the earliest notAfter over the whole verified path (leaf, intermediates and
 	// the anchor): the instant after which the chain no longer authenticates. A session must not
 	// outlive it.
@@ -226,19 +241,34 @@ func VerifyClientChain(anchor *x509.Certificate, presented []*x509.Certificate, 
 	// however long whichever path the verifier listed first does. Every certificate on every
 	// path is a presented one or the anchor, all of which passed the key and signature policy
 	// above.
-	var best *Verified
-	for _, chain := range chains {
-		na := chain[0].NotAfter
-		for _, c := range chain[1:] {
-			if c.NotAfter.Before(na) {
-				na = c.NotAfter
-			}
-		}
-		if best == nil || na.After(best.NotAfter) {
-			best = &Verified{Leaf: leaf, Fingerprint: Fingerprint(leaf), Chain: chain, NotAfter: na.UTC()}
+	return pickLongestLived(leaf, chains), nil
+}
+
+// pathNotAfter is the earliest notAfter over a path.
+func pathNotAfter(chain []*x509.Certificate) time.Time {
+	na := chain[0].NotAfter
+	for _, c := range chain[1:] {
+		if c.NotAfter.Before(na) {
+			na = c.NotAfter
 		}
 	}
-	return best, nil
+	return na.UTC()
+}
+
+// pickLongestLived keeps every path in Chains and selects the longest-lived as Chain (the first
+// of equals). chains must not be empty. It is the one definition of that choice, shared by
+// VerifyClientChain and ApplyRevocation so the survivor of a revocation is picked by the same
+// rule as the original.
+func pickLongestLived(leaf *x509.Certificate, chains [][]*x509.Certificate) *Verified {
+	var best *Verified
+	for _, chain := range chains {
+		na := pathNotAfter(chain)
+		if best == nil || na.After(best.NotAfter) {
+			best = &Verified{Leaf: leaf, Fingerprint: Fingerprint(leaf), Chain: chain, NotAfter: na}
+		}
+	}
+	best.Chains = chains
+	return best
 }
 
 func hasClientAuth(c *x509.Certificate) bool {

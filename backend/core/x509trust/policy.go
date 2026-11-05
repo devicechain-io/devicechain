@@ -49,8 +49,12 @@ func CheckPublicKey(pub any) error {
 // weakSignature is whether the certificate is signed with a hash that must not carry trust.
 // Go's verifier already refuses most of these; naming them here makes the refusal a classified
 // one and keeps it from depending on the verifier's defaults.
-func weakSignature(c *x509.Certificate) bool {
-	switch c.SignatureAlgorithm {
+func weakSignature(c *x509.Certificate) bool { return weakSigAlg(c.SignatureAlgorithm) }
+
+// weakSigAlg is weakSignature for a bare algorithm, so a CRL's signature is judged by the same
+// set as a certificate's.
+func weakSigAlg(a x509.SignatureAlgorithm) bool {
+	switch a {
 	case x509.MD2WithRSA, x509.MD5WithRSA, x509.SHA1WithRSA, x509.DSAWithSHA1, x509.ECDSAWithSHA1:
 		return true
 	}
