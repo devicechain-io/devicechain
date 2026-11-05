@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -474,6 +475,11 @@ type DeviceManagementApi interface {
 	// AuthenticateDeviceConnect it is never answered from memory. What it returns is NOT
 	// authenticated until the caller has verified the presented chain to the anchor.
 	ResolveX509Connect(ctx context.Context, fingerprint string, now time.Time) (*X509Connect, error)
+	// ResolveX509Revocation reads what the connect's trust anchor knows about the identities on
+	// the verified paths, for x509trust.Verified.ApplyRevocation. Never answered from memory, for
+	// the reason ResolveX509Connect is not: a cached "not revoked" outlives the revocation. Any
+	// error refuses the connect.
+	ResolveX509Revocation(ctx context.Context, anchor *DeviceTrustAnchor, keys x509trust.RevocationQuery, now time.Time) (x509trust.RevocationState, error)
 
 	// AuthenticateIntegration proves an inbound integration's bearer token (the resolver's check
 	// of an integration's event). It returns the integration with its scope loaded; every

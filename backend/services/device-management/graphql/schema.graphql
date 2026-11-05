@@ -3195,6 +3195,69 @@ input DeviceTrustAnchorUpdateRequest {
     metadata: String
 }
 
+"""
+Why a certificate was revoked (RFC 5280 section 5.3.1). A manual revocation that names none is
+UNSPECIFIED.
+"""
+enum CertificateRevocationReason {
+    """No reason given."""
+    UNSPECIFIED
+    """The certificate's private key is known or suspected to be compromised."""
+    KEY_COMPROMISE
+    """The key of the CA that issued the certificate is known or suspected to be compromised."""
+    CA_COMPROMISE
+    """The subject changed affiliation; the certificate no longer applies, and its key is not compromised."""
+    AFFILIATION_CHANGED
+    """The certificate was replaced by another."""
+    SUPERSEDED
+    """The certificate is no longer needed because its subject ceased operating."""
+    CESSATION_OF_OPERATION
+    """The certificate is suspended, not permanently revoked."""
+    CERTIFICATE_HOLD
+    """A privilege the certificate granted was withdrawn."""
+    PRIVILEGE_WITHDRAWN
+    """The key of an attribute authority is known or suspected to be compromised."""
+    AA_COMPROMISE
+}
+
+"""
+One revoked certificate in a trust anchor's revocation store. A MANUAL entry names a certificate by
+fingerprint and refuses it wherever it appears on a verified path (a leaf or an intermediate),
+registered or not, whatever later becomes of its credential or its device.
+"""
+type DeviceRevokedCertificate {
+    """MANUAL (revoked here, by fingerprint) or CRL (from a stored CA revocation list)."""
+    kind: String!
+    """SHA-256 of the certificate, hex. Set on a MANUAL entry."""
+    fingerprintSha256: String
+    """SHA-256 of the issuing CA's public key, hex. Set on a CRL entry."""
+    issuerKey: String
+    """The certificate's serial number, hex. Set on a CRL entry."""
+    serial: String
+    """Why it was revoked."""
+    reason: CertificateRevocationReason!
+    """When it was revoked, as an RFC 3339 timestamp."""
+    revokedAt: String!
+}
+
+"""Criteria used when listing the revoked certificates of a trust anchor."""
+input DeviceRevokedCertificateSearchCriteria {
+    """1-based page number."""
+    pageNumber: Int!
+    """Entries per page."""
+    pageSize: Int!
+    """Only MANUAL or only CRL entries."""
+    kind: String
+}
+
+"""A page of revoked certificates."""
+type DeviceRevokedCertificateSearchResults {
+    """The entries on this page."""
+    results: [DeviceRevokedCertificate!]!
+    """Where this page sits in the whole result."""
+    pagination: SearchResultsPagination!
+}
+
 """Criteria used when searching for trust anchors."""
 input DeviceTrustAnchorSearchCriteria {
     """1-based page number."""
@@ -4608,6 +4671,13 @@ type Query {
         """Paging and filters."""
         criteria: DeviceTrustAnchorSearchCriteria!
     ): DeviceTrustAnchorSearchResults!
+    """List the revoked certificates of a trust anchor, newest first."""
+    deviceRevokedCertificates(
+        """Token of the anchor."""
+        anchorToken: String!
+        """Paging and filters."""
+        criteria: DeviceRevokedCertificateSearchCriteria!
+    ): DeviceRevokedCertificateSearchResults!
     # Get a device's current possession claim, or null if it has none.
     deviceClaim(deviceToken: String!): DeviceClaim
 
@@ -5191,6 +5261,35 @@ type Mutation {
     deleteDeviceTrustAnchor(
         """Token of the anchor."""
         token: String!
+    ): Boolean!
+    """
+    Revoke a certificate under a trust anchor, on the platform's own authority: the certificate is
+    refused from the next connect on every replica, whether or not it is registered, and deleting
+    its credential or its device does not let it register again. It applies to any certificate on a
+    verified path, a leaf or an intermediate. Name it with exactly one of certificatePem and
+    fingerprintSha256. Revoking one already revoked returns the existing entry. The anchor's own
+    certificate is refused (disable the anchor instead). This does not end sessions already open.
+    """
+    revokeDeviceCertificate(
+        """Token of the trust anchor."""
+        anchorToken: String!
+        """The certificate, PEM. Exactly one of this and fingerprintSha256."""
+        certificatePem: String
+        """SHA-256 of the certificate, hex. Exactly one of this and certificatePem."""
+        fingerprintSha256: String
+        """Defaults to UNSPECIFIED."""
+        reason: CertificateRevocationReason
+    ): DeviceRevokedCertificate!
+    """
+    Remove a manual revocation. True if there was one. The certificate is admitted again from the
+    next connect unless something else refuses it; nothing is kicked, and the device reconnects
+    on its own.
+    """
+    unrevokeDeviceCertificate(
+        """Token of the trust anchor."""
+        anchorToken: String!
+        """SHA-256 of the certificate, hex."""
+        fingerprintSha256: String!
     ): Boolean!
     """
     Create an inbound integration. The response carries the bearer token the server

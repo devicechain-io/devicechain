@@ -343,6 +343,17 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 			return fmt.Errorf("%w: %d credential(s) and %d provisioning profile(s) rely on trust anchor %q; remove them first",
 				ErrEntityInUse, creds, profiles, token)
 		}
+		// Its revocation store goes nowhere silently: the entries are the tenant's record of what it
+		// refused, and an issuer row carries the CRL numbers that stop an older list being replayed.
+		// The foreign keys refuse the delete as well; this says why.
+		revocations, err := revocationRowsOf(tx, locked.ID)
+		if err != nil {
+			return err
+		}
+		if revocations > 0 {
+			return fmt.Errorf("%w: trust anchor %q holds %d revocation record(s); remove them first",
+				ErrEntityInUse, token, revocations)
+		}
 		result := tx.Unscoped().Delete(locked)
 		if result.Error != nil {
 			return result.Error

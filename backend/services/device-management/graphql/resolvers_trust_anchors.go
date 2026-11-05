@@ -67,3 +67,38 @@ func (r *DeviceTrustAnchorSearchResultsResolver) Results() []*DeviceTrustAnchorR
 func (r *DeviceTrustAnchorSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
 	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
 }
+
+// DeviceRevokedCertificateResolver resolves DeviceRevokedCertificate.
+type DeviceRevokedCertificateResolver struct {
+	M model.DeviceRevokedCertificate
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DeviceRevokedCertificateResolver) Kind() string               { return r.M.Kind }
+func (r *DeviceRevokedCertificateResolver) FingerprintSha256() *string { return r.M.Fingerprint }
+func (r *DeviceRevokedCertificateResolver) IssuerKey() *string         { return r.M.IssuerKey }
+func (r *DeviceRevokedCertificateResolver) Serial() *string            { return r.M.Serial }
+func (r *DeviceRevokedCertificateResolver) Reason() string {
+	return model.RevocationReasonEnum(r.M.Reason)
+}
+func (r *DeviceRevokedCertificateResolver) RevokedAt() string { return *util.FormatTime(r.M.RevokedAt) }
+
+// DeviceRevokedCertificateSearchResultsResolver resolves DeviceRevokedCertificateSearchResults.
+type DeviceRevokedCertificateSearchResultsResolver struct {
+	M model.DeviceRevokedCertificateSearchResults
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DeviceRevokedCertificateSearchResultsResolver) Results() []*DeviceRevokedCertificateResolver {
+	out := make([]*DeviceRevokedCertificateResolver, 0, len(r.M.Results))
+	for _, current := range r.M.Results {
+		out = append(out, &DeviceRevokedCertificateResolver{M: current, S: r.S, C: r.C})
+	}
+	return out
+}
+
+func (r *DeviceRevokedCertificateSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
+	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
+}

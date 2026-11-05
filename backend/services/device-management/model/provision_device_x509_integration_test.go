@@ -59,7 +59,7 @@ func (f *pgCertFixture) registerLeaf(leaf *pkiNode) (*ProvisionResult, error) {
 		return nil, err
 	}
 	return f.api.ProvisionDevice(f.ctx, &ProvisionRequest{Profile: profiles[0].Profile, Certificate: &X509Registration{
-		Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: f.anchor.ID, AnchorFingerprint: f.anchor.FingerprintSha256}})
+		Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: f.anchor.ID, AnchorFingerprint: f.anchor.FingerprintSha256, Verified: verified}})
 }
 
 // 🔑 TWO OR TWENTY CONNECTS WITH THE SAME NEW CERTIFICATE CREATE EXACTLY ONE DEVICE: one CREATED, the

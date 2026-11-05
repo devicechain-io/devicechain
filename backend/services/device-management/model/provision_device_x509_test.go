@@ -48,7 +48,7 @@ func (f *jitFixture) registration(leaf *pkiNode, inters ...*pkiNode) *X509Regist
 	verified, err := x509trust.VerifyClientChain(f.ca.cert, chain, time.Now())
 	require.NoError(f.t, err)
 	return &X509Registration{Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: f.anchor.ID,
-		AnchorFingerprint: f.anchor.FingerprintSha256}
+		AnchorFingerprint: f.anchor.FingerprintSha256, Verified: verified}
 }
 
 // profileRow is the profile as the callout reads it.
@@ -350,6 +350,11 @@ func TestCertificateRegistrationValidatesItsInput(t *testing.T) {
 		"no anchor":  func(r *X509Registration) { r.AnchorId = 0 },
 		"no expiry":  func(r *X509Registration) { r.NotAfter = time.Time{} },
 		"no fingerp": func(r *X509Registration) { r.AnchorFingerprint = "" },
+		"no verified chain (the revocation recheck would have nothing to judge)": func(r *X509Registration) { r.Verified = nil },
+		"a verified chain of another leaf": func(r *X509Registration) {
+			other := f.registration(f.ca.leaf(t, "SN-OTHER"))
+			r.Verified = other.Verified
+		},
 	} {
 		reg := *good
 		mutate(&reg)
@@ -435,7 +440,7 @@ func TestCertificateRegistrationRefusesAnAnchorThatIsNotTheProfilesOwn(t *testin
 	leaf := otherCA.leaf(t, "SN-1")
 	verified, err := x509trust.VerifyClientChain(otherCA.cert, []*x509.Certificate{leaf.cert}, time.Now())
 	require.NoError(t, err)
-	reg := &X509Registration{Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: other.ID, AnchorFingerprint: other.FingerprintSha256}
+	reg := &X509Registration{Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: other.ID, AnchorFingerprint: other.FingerprintSha256, Verified: verified}
 	f.refused509(ErrProvisioningFailed, "pp-x", reg)
 	// The control: the same device under the profile's own anchor registers.
 	_, err = f.register509("pp-x", f.registration(f.ca.leaf(t, "SN-1")))
