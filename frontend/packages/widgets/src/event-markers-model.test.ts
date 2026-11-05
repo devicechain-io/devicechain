@@ -207,11 +207,11 @@ describe('commands', () => {
     expect(tip).toContain('succeeded');
   });
 
-  it('escape the name in the tooltip, which ECharts renders as HTML', () => {
+  it('keep the name literal in the tooltip, which is drawn on the canvas and never parsed as HTML', () => {
     const items = commandEvents([command({ name: '<img src=x onerror=alert(1)>' })], range, words, fmt);
     const tip = helper(decorated(items)).markLine!.tooltip.formatter({ name: 'c1' });
-    expect(tip).not.toContain('<img');
-    expect(tip).toContain('&lt;img');
+    expect(tip).toContain('<img src=x onerror=alert(1)>');
+    expect(tip).not.toContain('<b>');
   });
 
   it('write their name on the canvas only on a roomy chart with few lines', () => {

@@ -34,13 +34,18 @@ const STRICT_CSP = [
   "connect-src 'self'",
 ].join('; ');
 
-const BOARD = readFileSync(path.join(FRONTEND, 'testdata/sim-dashboards/tp-dashboard.json'));
-const RECORDING = (() => {
-  const doc = JSON.parse(readFileSync(path.join(FRONTEND, 'testdata/board-replay/towerpulse-fixture.json'), 'utf-8'));
-  // The fixture pins a placeholder board hash; point it at the board on disk, as the unit suites do.
-  doc.board = { ...doc.board, sha256: createHash('sha256').update(BOARD).digest('hex') };
-  return JSON.stringify(doc);
-})();
+// Two committed boards: Towerpulse (timeseries charts, gauges) and Sitepulse (adds the map).
+const CASES = [
+  { name: 'towerpulse', board: 'tp-dashboard.json', recording: 'towerpulse-fixture.json' },
+  { name: 'sitepulse', board: 'sp-dashboard.json', recording: 'sitepulse-showcase.json' },
+].map((c) => {
+  const board = readFileSync(path.join(FRONTEND, 'testdata/sim-dashboards', c.board));
+  const doc = JSON.parse(readFileSync(path.join(FRONTEND, 'testdata/board-replay', c.recording), 'utf-8'));
+  // The fixtures pin the board as it was when they were cut; point the pin at the board on disk,
+  // as the unit suites do.
+  doc.board = { ...doc.board, sha256: createHash('sha256').update(board).digest('hex') };
+  return { name: c.name, board, recording: JSON.stringify(doc) };
+});
 
 const TYPES: Record<string, string> = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 
@@ -50,6 +55,7 @@ const HOST = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <script type="module" src="/dist/main.js"></script></body></html>`;
 
 let server: Server;
+let current = CASES[0];
 let origin = '';
 
 test.beforeAll(async () => {
@@ -65,8 +71,8 @@ test.beforeAll(async () => {
     // The negative control's page: the same policy, plus the one thing the policy forbids.
     if (url === '/control') return send('<!doctype html><title>c</title><body><script src="/control.js"></script>', 'text/html');
     if (url === '/control.js') return send("document.head.appendChild(Object.assign(document.createElement('style'), { textContent: 'body{color:red}' }));", 'text/javascript');
-    if (url === '/data/recording.json') return send(RECORDING, 'application/json');
-    if (url === '/data/board.json') return send(BOARD, 'application/json');
+    if (url === '/data/recording.json') return send(current.recording, 'application/json');
+    if (url === '/data/board.json') return send(current.board, 'application/json');
     if (url.startsWith('/dist/')) {
       const file = path.join(DIST, path.normalize(url.slice('/dist/'.length)));
       if (file.startsWith(DIST) && existsSync(file)) return send(readFileSync(file), TYPES[path.extname(file)] ?? 'application/octet-stream');
@@ -101,7 +107,9 @@ test('negative control: the policy reports an injected <style> element', async (
   await expect.poll(() => violations(page)).toHaveLength(1);
 });
 
-test('the replay bundle draws and plays under style-src self with zero violations', async ({ page }) => {
+for (const c of CASES) {
+test(`the ${c.name} replay draws and plays under style-src self with zero violations`, async ({ page }) => {
+  current = c;
   const consoleErrors: string[] = [];
   page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
@@ -139,3 +147,4 @@ test('the replay bundle draws and plays under style-src self with zero violation
   expect(await violations(page)).toEqual([]);
   expect(consoleErrors.filter((m) => /content security policy|refused to apply/i.test(m))).toEqual([]);
 });
+}

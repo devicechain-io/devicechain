@@ -38,15 +38,19 @@ import themeCss from './theme.css?inline';
 // .board-replay-root (the app's own root element), and this file touches nothing outside
 // the mount element: no class, attribute or style on <html> or <body>, and the language is
 // set on the app root, not on the document.
-const installed = new Set<string>();
+const sheets = new Map<string, CSSStyleSheet>();
 
 function installStyle(id: string, css: string): void {
-  if (installed.has(id) || document.getElementById(id)) return;
-  installed.add(id);
+  if (document.getElementById(id)) return;
   if ('adoptedStyleSheets' in document && typeof CSSStyleSheet === 'function') {
     try {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync(css);
+      let sheet = sheets.get(id);
+      if (sheet && document.adoptedStyleSheets.includes(sheet)) return;
+      if (!sheet) {
+        sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        sheets.set(id, sheet);
+      }
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
       return;
     } catch {

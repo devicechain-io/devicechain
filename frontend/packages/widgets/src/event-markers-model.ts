@@ -160,8 +160,6 @@ export interface MarkerPlan {
   decorate: (option: EChartOption, size?: { width: number; height: number }) => EChartOption;
 }
 
-const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-const escapeHtml = (s: string): string => s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 
 export function planMarkers(items: readonly EventItem[], range: EventRange, theme: ChartTheme): MarkerPlan {
   // Newest first, so the cap keeps what just happened; drawn and listed oldest first.
@@ -175,7 +173,10 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
   const areas: unknown[] = [];
   const strips: Array<(top: number) => unknown> = [];
   for (const e of shown) {
-    const tip = `<b>${escapeHtml(e.title)}</b><br/>${escapeHtml(e.detail)}`;
+    // Plain text: the chart's tooltip is drawn on the canvas (richText), which shows markup
+    // literally and so needs no escaping -- and, unlike an HTML tooltip, no style attributes.
+    const tip = `${e.title}
+${e.detail}`;
     if (e.kind === 'command') {
       tips[e.id] = tip;
       lines.push({ name: e.id, xAxis: e.at, lineStyle: { color: neutral, type: 'dotted', width: 2 }, labelText: e.name });
