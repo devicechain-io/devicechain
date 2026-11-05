@@ -198,8 +198,8 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    pérdida, aunque no falsificación, llenando un flujo en el que puede crear consumidores hasta que se descartan mensajes más antiguos.
 2. **El inicio de sesión de la base de datos es compartido por todos los servicios de una instancia.** Todos los servicios acceden a la base de datos
    relacional de la instancia con un único inicio de sesión, así que un servicio comprometido podría leer y escribir las tablas de otra área. El aislamiento de inquilinos
-   en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. Los roles separados por
-   servicio están previstos para una versión 1.0.x.
+   en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. La plataforma no
+   ofrece roles de base de datos separados por servicio.
 3. **Confirmaciones MQTT que el broker puede perder.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
    perderlo después de dos formas. Una es mientras el flujo de captura cambia de líder, algo que provoca un reinicio del broker, una
    actualización o la pérdida de un nodo, con cualquier carga. La otra no necesita ningún reinicio: con carga sostenida, si
