@@ -61,10 +61,18 @@ const (
 // yet and every request is refused.
 type ValidatorSource func() *auth.Validator
 
+// PolicySource yields the token-audience policy (rule 2), read per request so a policy
+// installed after the handler was registered is the one applied. A nil source, or a source
+// that returns nil, is the CLOSED policy (auth.PlanePolicy treats nil as closed): a handler
+// whose wiring was forgotten refuses every token that carries an audience, loudly, instead
+// of admitting them all.
+type PolicySource func() *auth.PlanePolicy
+
 // Handler serves the artifact content endpoint.
 type Handler struct {
 	api       *model.Api
 	validator ValidatorSource
+	policy    PolicySource
 	// idle is the per-read stall allowance; a field so a test can shorten it.
 	idle time.Duration
 	// window is the whole-upload allowance for an artifact of a given size; a field so a
@@ -78,17 +86,17 @@ type Handler struct {
 // New builds the handler. api carries the object store and the catalogue, and
 // maxConcurrent bounds the uploads this process streams at once (it must be positive:
 // an unbounded handler is the thing the bound exists to prevent).
-func New(api *model.Api, validator ValidatorSource, maxConcurrent int) *Handler {
+func New(api *model.Api, validator ValidatorSource, policy PolicySource, maxConcurrent int) *Handler {
 	if maxConcurrent <= 0 {
 		panic("upload.New: maxConcurrent must be positive")
 	}
-	return &Handler{api: api, validator: validator, idle: idleTimeout,
+	return &Handler{api: api, validator: validator, policy: policy, idle: idleTimeout,
 		window: model.UploadWindow, slots: make(chan struct{}, maxConcurrent)}
 }
 
 // Register mounts the handler on mux.
-func Register(mux *http.ServeMux, api *model.Api, validator ValidatorSource, maxConcurrent int) {
-	mux.Handle(Path, New(api, validator, maxConcurrent))
+func Register(mux *http.ServeMux, api *model.Api, validator ValidatorSource, policy PolicySource, maxConcurrent int) {
+	mux.Handle(Path, New(api, validator, policy, maxConcurrent))
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +286,18 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*auth.Cl
 	}
 	claims, err := v.Validate(authz[len(prefix):])
 	if err != nil {
+		refuse(w, r, http.StatusUnauthorized, "invalid token")
+		return nil, false
+	}
+	// 🔴 AFTER Validate, NEVER BEFORE: the audience rule runs on a token whose signature,
+	// expiry and type were verified, so a forged token never reaches it and cannot drive
+	// the counters. It runs before anything reads the body. A refusal is the same 401 an
+	// invalid token gets, so a caller cannot tell the two apart.
+	var p *auth.PlanePolicy
+	if h.policy != nil {
+		p = h.policy()
+	}
+	if err := p.Admit(claims, auth.PlaneUpload); err != nil {
 		refuse(w, r, http.StatusUnauthorized, "invalid token")
 		return nil, false
 	}

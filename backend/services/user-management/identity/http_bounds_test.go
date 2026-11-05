@@ -101,7 +101,7 @@ func TestStalledBodyIsAnsweredAtTheDeadline(t *testing.T) {
 	}{
 		{"token", blockingTokenHandler(), stalled(http.MethodPost, TokenPath, "")},
 		{"authorize", AuthorizeHandler(&fakeAuthorizeSvc{}), stalled(http.MethodPost, AuthorizePath, "")},
-		{"userinfo", UserinfoHandler(func(string) (*auth.Claims, error) { return claimsFor("a@b.c", "t", false), nil }),
+		{"userinfo", UserinfoHandler(func(string) (*auth.Claims, error) { return claimsFor("a@b.c", "t", false), nil }, nil),
 			stalled(http.MethodPost, UserinfoPath, "Authorization: Bearer x\r\n")},
 		{"service-token", ServiceTokenHandler(func() string { return "s" }, func(string, []string) (auth.IssuedToken, error) {
 			return auth.IssuedToken{}, nil
