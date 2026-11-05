@@ -248,11 +248,18 @@ func newSingleConnStore(t *testing.T) *model.SnapshotStore {
 	return model.NewSnapshotStore(&rdb.RdbManager{Database: db})
 }
 
-// TestFinalCheckpointWithoutAnEngineIsANoOp: a term can end before its engine is built (a failed
-// restore); the final flush must not dereference it.
-func TestFinalCheckpointWithoutAnEngineIsANoOp(t *testing.T) {
+// TestAFinalFlushBeforeTheEngineExistsIsANoOp: a term can stop during its handover wait, before
+// restore has built the engine; endTerm still runs finalCheckpoint (and a stray checkpoint or tick
+// reaches the same helper), so none of them may dereference the engine, and nothing is published.
+func TestAFinalFlushBeforeTheEngineExistsIsANoOp(t *testing.T) {
 	rp := newTestProcessor(newTestStore(t), nil, 1)
+	w := &orderWriter{store: rp.Store, partition: rp.cfg.PartitionId}
+	rp.publisher = runtime.NewPublisher(w, rp.registry, (*DetectMetrics)(nil))
 	rp.engine = nil
 	rp.finalCheckpoint()
 	rp.drainControlPlane()
+	rp.checkpoint(context.Background())
+	if got := w.edgesNow(); len(got) != 0 {
+		t.Fatalf("published with no engine: %v", got)
+	}
 }
