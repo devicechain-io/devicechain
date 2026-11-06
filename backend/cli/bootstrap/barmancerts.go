@@ -189,47 +189,49 @@ func recreateCertificate(ctx context.Context, dyn dynamic.Interface, old *unstru
 }
 
 // cnpgNamespaceOf is the namespace the operator declared for the CloudNativePG operator and the
-// Barman Cloud plugin: cnpg_namespace in TF_VAR_cnpg_namespace or in a variables file the cluster
-// root loads on its own, or "" for the root's default. The healer must watch the namespace the
+// Barman Cloud plugin: cnpg_namespace in a variables file the cluster root loads on its own, or
+// in TF_VAR_cnpg_namespace, or "" for the root's default. The healer must watch the namespace the
 // plugin is installed into, not a hard-coded one, or it heals nothing on an install that moved it.
+//
+// OpenTofu's precedence is followed: the environment is the weakest source, then terraform.tfvars
+// (and its .json form), then the *.auto.tfvars files in lexical order, each overriding the last.
+// A commented-out assignment declares nothing.
 func cnpgNamespaceOf(rootdir string) string {
-	if v := strings.TrimSpace(os.Getenv("TF_VAR_cnpg_namespace")); v != "" {
-		return v
-	}
+	found := strings.TrimSpace(os.Getenv("TF_VAR_cnpg_namespace"))
 	entries, err := os.ReadDir(rootdir)
 	if err != nil {
-		return ""
+		return found
 	}
-	hcl := regexp.MustCompile(`(?m)^\s*cnpg_namespace\s*=\s*"([^"]+)"`)
-	var found string
-	// Tofu loads terraform.tfvars first, then *.auto.tfvars in lexical order (ReadDir order), the
-	// later file winning.
-	order := func(n string) bool {
-		return n == "terraform.tfvars" || n == "terraform.tfvars.json" ||
-			strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json")
+	blockComment := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	assign := regexp.MustCompile(`(?m)^[ \t]*cnpg_namespace[ \t]*=[ \t]*"([^"]+)"`)
+	read := func(n string) {
+		b, err := os.ReadFile(filepath.Join(rootdir, n))
+		if err != nil {
+			return
+		}
+		if strings.HasSuffix(n, ".json") {
+			var m map[string]json.RawMessage
+			var v string
+			if json.Unmarshal(b, &m) == nil && json.Unmarshal(m["cnpg_namespace"], &v) == nil && v != "" {
+				found = v
+			}
+			return
+		}
+		if all := assign.FindAllSubmatch(blockComment.ReplaceAll(b, nil), -1); len(all) > 0 {
+			found = string(all[len(all)-1][1])
+		}
 	}
-	for _, pass := range []func(string) bool{
-		func(n string) bool { return n == "terraform.tfvars" || n == "terraform.tfvars.json" },
-		func(n string) bool { return order(n) && n != "terraform.tfvars" && n != "terraform.tfvars.json" },
-	} {
+	for _, n := range []string{"terraform.tfvars", "terraform.tfvars.json"} {
 		for _, e := range entries {
-			n := e.Name()
-			if e.IsDir() || !pass(n) {
-				continue
+			if !e.IsDir() && e.Name() == n {
+				read(n)
 			}
-			b, err := os.ReadFile(filepath.Join(rootdir, n))
-			if err != nil {
-				continue
-			}
-			if strings.HasSuffix(n, ".json") {
-				var m map[string]json.RawMessage
-				var v string
-				if json.Unmarshal(b, &m) == nil && json.Unmarshal(m["cnpg_namespace"], &v) == nil && v != "" {
-					found = v
-				}
-			} else if m := hcl.FindSubmatch(b); m != nil {
-				found = string(m[1])
-			}
+		}
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() && (strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json")) {
+			read(n)
 		}
 	}
 	return found

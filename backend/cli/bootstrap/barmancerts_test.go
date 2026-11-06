@@ -109,6 +109,14 @@ func TestCnpgNamespaceOfReadsWhatTheOperatorDeclared(t *testing.T) {
 			t.Fatalf("got %q", got)
 		}
 	})
+	t.Run("a file beats the environment, and a commented assignment declares nothing", func(t *testing.T) {
+		t.Setenv("TF_VAR_cnpg_namespace", "fromenv")
+		d := t.TempDir()
+		write(t, d, "terraform.tfvars", "/*\ncnpg_namespace = \"old\"\n*/\n# cnpg_namespace = \"older\"\ncnpg_namespace = \"new\"\n")
+		if got := cnpgNamespaceOf(d); got != "new" {
+			t.Fatalf("got %q", got)
+		}
+	})
 	t.Run("json", func(t *testing.T) {
 		d := t.TempDir()
 		write(t, d, "terraform.tfvars.json", `{"cnpg_namespace":"jsonns"}`)
