@@ -1396,6 +1396,8 @@ it is collected. To resolve a fleet
 faster you can also add resolvers (`resolution.workers`, within the connection pool) or
 `device-management` replicas.
 
+A payload decoder is compiled when a device type's resolution is read and its decoded copy is not held, and a large decoder takes tens of milliseconds, so decoders that are let go and compiled again slow the events themselves. `payload_decoder_compiles_total` counts the compiles, and `PayloadDecoderRecompileSustained` (warning) fires when a replica compiles more than once a second for 15 minutes while its resolution cache is also evicting entries for room (`reason` `capacity` or `tenant_share`), which separates it from many small decoders simply expiring. The cause is the decoders a tenant keeps in use not fitting in its share of the resolution cache (about 6 MiB each for a maximal one, against 8 MiB at the defaults): compare `kv_cache_local_evictions_total{cache="profile-resolution-by-type"}` by `reason`, where `tenant_share` points at the share and `capacity` at the whole cache. Raise `inMemoryCache.profileResolutionCacheMiB` or `inMemoryCache.profileResolutionTenantSharePercent`, and the memory limit with them.
+
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the
 service logs `A key-value cache eviction failed`, and the old entry can be served until it
