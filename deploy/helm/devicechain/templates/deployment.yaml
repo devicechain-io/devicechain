@@ -290,7 +290,7 @@ spec:
             for event-sources and no other area. */}}
             {{- if eq $area "event-sources" }}
             - name: EVENT_SOURCES_INGEST_METERING
-              value: {{ $root.Values.eventSources.ingestMetering | default "legacy" | quote }}
+              value: {{ (($root.Values.eventSources).ingestMetering) | default "legacy" | quote }}
             {{- end }}
             {{- /* user-management's superuser SEED password, from the instance's own
             Secret (devicechain.superuserSecret) — never from a config document, and

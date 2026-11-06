@@ -61,13 +61,15 @@ import (
 // switches source all have no stamp to measure from, and crediting them 0 would shed exactly the
 // compliant traffic this exists to protect. That errs lenient only, bounded by the lag itself.
 //
-// # Exit-grant suppression
+// # No exit-grant suppression
 //
-// When a source leaves its backlog phase, the bucket must not hand a tenant that SPENT the backlog
-// route's allowance the whole phase's accrual as a fresh burst on top of it. For such a tenant (one
-// the caller reported with NoteBacklog) the first admission after an exit accrues only from
-// exitAt − creditCap. A tenant that sent nothing during the phase spent no second allowance and is
-// accrued normally: an idle tenant is not penalised for another tenant's stall.
+// When a source leaves its backlog phase the bucket is accrued normally. A version that withheld the
+// phase's accrual from a tenant that had used the backlog route shed COMPLIANT tenants (a conformant
+// burst after the exit found a bucket that had earned only the last cover) and, for tiers whose
+// burst/rate exceeds the cover, refilled only rate*cover. What a tenant can gain from the normal
+// accrual is bounded by the capacity clamp, and the hysteresis bounds how often a stream can exit: an
+// over-ceiling tenant is over-admitted by at most burst + rate*cover per backlog phase of a stream
+// (the residual recorded with the design), and a compliant tenant is never shed.
 //
 // # What it is not
 //
@@ -101,16 +103,12 @@ type lagCreditShard struct {
 }
 
 // lagCreditBucket is one tenant's state: the token level on the pod clock, the last stamp read per
-// source, and the exit epoch last accounted for per source.
+// source.
 type lagCreditBucket struct {
 	tokens    float64
 	last      time.Time // pod time tokens was last brought up to
 	lastStamp []time.Time
-	seenEpoch []uint64
-	// backlogUsed[k] is set when the tenant was charged on source k's backlog route since the last
-	// exit this bucket accounted for.
-	backlogUsed []bool
-	lastSeen    time.Time
+	lastSeen  time.Time
 }
 
 // LagCreditOption configures a LagCreditLimiter at construction.
@@ -142,15 +140,17 @@ func WithLagCreditIdle(ttl, sweepEvery time.Duration) LagCreditOption {
 type LagCreditSource struct {
 	// Lag is the source's current head-of-line lag, corrected for the broker's clock skew and never
 	// negative: how far behind this reader is, an upper bound on the age of any message it has yet to
-	// read. A reader that is caught up reports 0.
+	// read.
+	//
+	// 🔴 It must bound the message being ADMITTED as well, not only the next unread one: a message that
+	// was read before this admission but is still being charged (it sat in a decode queue, or the caller
+	// takes the lag from a gauge sampled before the read) is older than the head of the line that is
+	// left. A lag taken from "the next message after this one" under-credits exactly the tenant whose
+	// message it is. A reader that is caught up reports 0.
 	Lag time.Duration
 	// Skew is the estimated offset of the broker's stamps from pod time (see the corrected age of a
 	// stamp: now − stamp − Skew).
 	Skew time.Duration
-	// ExitEpoch counts how many times this source has left its backlog phase, and ExitAt is the pod
-	// time of the latest exit. A source that never entered backlog has epoch 0.
-	ExitEpoch uint64
-	ExitAt    time.Time
 }
 
 // LagCreditRequest is one admission.
@@ -173,7 +173,9 @@ type LagCreditRequest struct {
 	// Delay is extra credit added on top of the measured one (the reading stage adds the time the
 	// message sat between the two stages). Never negative.
 	Delay time.Duration
-	// CreditCap bounds the credit. Zero means the tenant's own cover (LagCreditMax).
+	// CreditCap bounds the credit. Zero means the tenant's own cover (LagCreditMax). It is supplied by
+	// the caller and NOT clamped here: a caller that passes more than the cover (the reading stage does,
+	// by the decode delay) is responsible for the extra, and the over-admission bound grows with it.
 	CreditCap time.Duration
 }
 
@@ -276,13 +278,8 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 	fresh := b == nil
 	if fresh {
 		b = &lagCreditBucket{
-			last:        now,
-			lastStamp:   make([]time.Time, l.sources),
-			seenEpoch:   make([]uint64, l.sources),
-			backlogUsed: make([]bool, l.sources),
-		}
-		for k, s := range req.Sources {
-			b.seenEpoch[k] = s.ExitEpoch
+			last:      now,
+			lastStamp: make([]time.Time, l.sources),
 		}
 		sh.buckets[req.Tenant] = b
 	}
@@ -305,20 +302,6 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 		b.tokens = capacity
 	}
 
-	// Exit-grant suppression: the first admission after a source left its backlog phase accrues only
-	// from exitAt − creditCap, not across the whole phase.
-	for k, s := range req.Sources {
-		if b.seenEpoch[k] < s.ExitEpoch {
-			if b.backlogUsed[k] {
-				if from := s.ExitAt.Add(-creditCap); from.After(b.last) {
-					b.last = from
-				}
-				b.backlogUsed[k] = false
-			}
-			b.seenEpoch[k] = s.ExitEpoch
-		}
-	}
-
 	// Capacity first, then accrual: the clamp uses THIS admission's capacity, so a stall's worth of
 	// accrual is not cut back to the capacity the bucket had before the lag was known.
 	if now.After(b.last) {
@@ -333,22 +316,6 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 	}
 	b.tokens -= float64(req.N)
 	return LagCreditDecision{Admitted: true, Credit: credit}
-}
-
-// NoteBacklog records that the tenant was charged on source's backlog route, so that the exit of that
-// source's backlog phase suppresses the tenant's accrual across the phase (see the type comment). A
-// tenant with no bucket has nothing to suppress: its bucket will be born full. An out-of-range source
-// is a programming error and panics.
-func (l *LagCreditLimiter) NoteBacklog(tenant string, source int) {
-	if source < 0 || source >= l.sources {
-		panic(fmt.Sprintf("core.LagCreditLimiter.NoteBacklog: source %d out of range", source))
-	}
-	sh := l.shardFor(tenant)
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	if b := sh.buckets[tenant]; b != nil {
-		b.backlogUsed[source] = true
-	}
 }
 
 // creditLocked is the credit bound for a bucket now, before any caller delay: the largest, over all

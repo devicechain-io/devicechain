@@ -358,54 +358,34 @@ func TestLagCreditCapacityIsSizedBeforeAccrual(t *testing.T) {
 	require.Equal(t, 3000, n, "3 s of accrual must be kept: the capacity is burst + rate·credit = 4000")
 }
 
-// EXIT-GRANT SUPPRESSION. A source that leaves its backlog phase must not hand a tenant that spent its
-// bucket before the phase the whole phase's accrual as a second burst.
-func TestLagCreditExitGrantIsSuppressed(t *testing.T) {
-	run := func(exit bool) int {
-		clk := &lagClock{t: simEpoch}
-		l := NewLagCreditLimiter(StaticCeiling(1000, 2000), 1, WithLagCreditClock(clk.now))
-		cur := make([]LagCreditSource, 1)
-		for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
-		}
-		l.NoteBacklog("t", 0)
-		// two minutes of backlog phase with no fresh charge, then the phase exits.
-		clk.t = simEpoch.Add(2 * time.Minute)
-		srcs := []LagCreditSource{{}}
-		if exit {
-			srcs[0].ExitEpoch, srcs[0].ExitAt = 1, clk.t
-		}
-		n := 0
-		for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: clk.t, Sources: srcs}).Admitted {
-			n++
-		}
-		return n
+// THERE IS NO EXIT-GRANT SUPPRESSION. A bucket that sat unused through a backlog phase is accrued like
+// any other: the capacity clamp bounds what the idle time can earn, and a conformant burst after the
+// phase finds the bucket the sender's own oracle says it has. (A version that withheld the phase's
+// accrual shed a conformant 2000-burst after an exit, and refilled a burst/rate > cover tier by only
+// rate*cover.)
+func TestLagCreditAccruesAcrossAPhaseWithNoSuppression(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rate  float64
+		burst int
+	}{
+		{"default tier", 1000, 2000},
+		{"burst/rate above the cover", 10, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clk := &lagClock{t: simEpoch}
+			l := NewLagCreditLimiter(StaticCeiling(tc.rate, tc.burst), 1, WithLagCreditClock(clk.now))
+			cur := make([]LagCreditSource, 1)
+			for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
+			}
+			clk.t = simEpoch.Add(8 * time.Minute) // under the idle TTL
+			n := 0
+			for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: clk.t, Sources: cur}).Admitted {
+				n++
+			}
+			require.Equal(t, tc.burst, n, "the bucket refilled to its whole burst across the idle time")
+		})
 	}
-	require.Equal(t, 2000, run(false), "with no exit marks the bucket refills to its burst (the baseline)")
-	got := run(true)
-	require.Equal(t, 2000, got, "accrual runs from exitAt − cover = 2 s, which is exactly one burst at this ceiling")
-
-	// A shorter cover than the burst makes the suppression bite: 10/s with a burst of 100 has a 5 s cover
-	// and 50 tokens of accrual from exitAt − cover.
-	clk := &lagClock{t: simEpoch}
-	l := NewLagCreditLimiter(StaticCeiling(10, 100), 1, WithLagCreditClock(clk.now))
-	cur := make([]LagCreditSource, 1)
-	for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
-	}
-	l.NoteBacklog("t", 0)
-	clk.t = simEpoch.Add(8 * time.Minute) // under the idle TTL, or the bucket is swept and starts full
-	srcs := []LagCreditSource{{ExitEpoch: 1, ExitAt: clk.t}}
-	n := 0
-	for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: clk.t, Sources: srcs}).Admitted {
-		n++
-	}
-	require.Equal(t, 50, n, "after an exit the bucket earned only the last cover (5 s at 10/s), not eight minutes")
-	// And only the FIRST admission after the exit is suppressed; later time accrues normally.
-	clk.t = clk.t.Add(10 * time.Second)
-	n = 0
-	for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: clk.t, Sources: srcs}).Admitted {
-		n++
-	}
-	require.Equal(t, 100, n, "10 s of ordinary accrual at 10/s fills the burst of 100")
 }
 
 // A float64 bucket stays exact at the largest bursts a tier can set.
@@ -485,22 +465,4 @@ func TestLagCreditDelayLendsCreditUpToTheCap(t *testing.T) {
 	require.Equal(t, 3000, admitted(time.Second, 4*time.Second), "a second of delay lends a second of rate")
 	require.Equal(t, 4000, admitted(10*time.Second, 2*time.Second), "capped by the credit cap")
 	require.Equal(t, 2000, admitted(-time.Second, 0), "a negative delay lends nothing")
-}
-
-// A tenant that sent nothing on the backlog route spent no second allowance, so another tenant's stall
-// and its stream's exit do not touch the accrual it earned while idle.
-func TestLagCreditExitDoesNotPenaliseATenantThatNeverUsedTheBacklog(t *testing.T) {
-	clk := &lagClock{t: simEpoch}
-	l := NewLagCreditLimiter(StaticCeiling(10, 100), 1, WithLagCreditClock(clk.now))
-	cur := make([]LagCreditSource, 1)
-	for l.Admit(LagCreditRequest{Tenant: "idle", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
-	}
-	clk.t = simEpoch.Add(8 * time.Minute)
-	srcs := []LagCreditSource{{ExitEpoch: 1, ExitAt: clk.t}}
-	n := 0
-	for l.Admit(LagCreditRequest{Tenant: "idle", N: 1, Scale: 1, Source: 0, Stamp: clk.t, Sources: srcs}).Admitted {
-		n++
-	}
-	require.Equal(t, 100, n, "an idle tenant earned its whole burst back; the exit must not take half of it")
-	require.Panics(t, func() { l.NoteBacklog("idle", 1) })
 }

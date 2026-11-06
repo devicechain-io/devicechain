@@ -73,6 +73,9 @@ type replayTenant struct {
 	name  string
 	kind  replayKind
 	class governance.ShedClass
+	// rate and burst override the scenario's ceiling for this tenant (a mixed-tier row); zero keeps it.
+	rate  float64
+	burst int
 	sends []time.Time
 	// source says which reader source carries message i: 0.. an index into sources, -1 external MQTT
 	// (no stamp, metered at arrival). Nil means source 0 for every message.
@@ -112,10 +115,6 @@ type replayScenario struct {
 	modelSkip string
 	// redeliverEvery, when positive, interleaves a redelivery of an earlier message after every Nth message.
 	redeliverEvery int
-	// noFreshBound turns off the contended-tenant bound on fresh traffic for a row, naming why. The
-	// model keeps a stream on the backlog route for the whole phase (drain plus 30 s of calm), so the
-	// young traffic of a stalled stream is held to the ceiling but not contention-scaled in that tail.
-	noFreshBound string
 }
 
 func at(offset time.Duration) time.Time { return replayEpoch.Add(offset) }
@@ -206,7 +205,35 @@ func (sc *replayScenario) readTime(k int, send time.Time) time.Time {
 	return r
 }
 
-// cover is the time a tenant's base burst covers: the cutoff the legacy gate and the lag credit share.
+// ceilOf is a tenant's base ceiling: its own when the row gives it one, the scenario's otherwise.
+func (sc *replayScenario) ceilOf(ti int) (float64, int) {
+	tn := sc.tenants[ti]
+	if tn.rate > 0 && tn.burst > 0 {
+		return tn.rate, tn.burst
+	}
+	return sc.rate, sc.burst
+}
+
+// resolver is the base ceiling resolver every arm meters against.
+func (sc *replayScenario) resolver() core.TenantCeilingResolver {
+	return func(tenant string) core.TenantCeiling {
+		for ti, tn := range sc.tenants {
+			if tn.name == tenant {
+				r, b := sc.ceilOf(ti)
+				return core.TenantCeiling{RatePerSecond: r, Burst: b, Source: core.CeilingStatic}
+			}
+		}
+		return core.TenantCeiling{RatePerSecond: sc.rate, Burst: sc.burst, Source: core.CeilingStatic}
+	}
+}
+
+// coverOf is the time a tenant's base burst covers: the cutoff the legacy gate and the lag credit share.
+func (sc *replayScenario) coverOf(ti int) time.Duration {
+	r, b := sc.ceilOf(ti)
+	return core.LagCreditMax(core.TenantCeiling{RatePerSecond: r, Burst: b})
+}
+
+// cover is the scenario default tenant's cover.
 func (sc *replayScenario) cover() time.Duration {
 	return core.LagCreditMax(core.TenantCeiling{RatePerSecond: sc.rate, Burst: sc.burst})
 }
@@ -338,7 +365,7 @@ func newLegacyGate(sc *replayScenario, clk *replayClock) replayGate {
 
 func (g *legacyGate) restart() {
 	sc := g.sc
-	base := core.StaticCeiling(sc.rate, sc.burst)
+	base := sc.resolver()
 	class := func(tenant string) governance.ShedClass {
 		for _, tn := range sc.tenants {
 			if tn.name == tenant {
@@ -434,10 +461,9 @@ func newModelGate(sc *replayScenario, clk *replayClock) replayGate {
 
 func (g *modelGate) restart() {
 	g.meter = core.NewLagCreditMeter(core.LagCreditMeterConfig{
-		Streams: len(g.sc.sources), Ceiling: core.StaticCeiling(g.sc.rate, g.sc.burst), Clock: g.clk.now,
-		PhaseThreshold: g.sc.cover(),
+		Streams: len(g.sc.sources), Ceiling: g.sc.resolver(), Clock: g.clk.now,
 	})
-	base := governance.ReadingCeiling(core.StaticCeiling(g.sc.rate, g.sc.burst))
+	base := governance.ReadingCeiling(g.sc.resolver())
 	g.readCeiling = core.NewLagCreditLimiter(base, len(g.sc.sources), core.WithLagCreditClock(g.clk.now))
 	g.readBacklog = nil
 	for range g.sc.sources {
@@ -489,7 +515,7 @@ func (g *modelGate) reading(m replayMsg, delay time.Duration) bool {
 	}
 	srcs := g.sourcesAt()
 	return g.readCeiling.Admit(core.LagCreditRequest{Tenant: tenant, N: 1, Scale: 1, Source: m.src, Stamp: m.stamp,
-		Sources: srcs, Delay: delay, CreditCap: g.sc.cover() + delay}).Admitted
+		Sources: srcs, Delay: delay, CreditCap: g.sc.coverOf(m.tenant) + delay}).Admitted
 }
 
 // ---- control arms ----
@@ -506,7 +532,8 @@ func replayRefuseAll(*replayScenario, *replayClock) replayGate { return fixedGat
 
 // oracleExcess counts how many of a tenant's TRUE sends an offline token bucket at the base ceiling refuses.
 func (sc *replayScenario) oracleExcess(ti int) int {
-	bucket := newReplayBucket(sc.rate, sc.burst)
+	rate, burst := sc.ceilOf(ti)
+	bucket := newReplayBucket(rate, burst)
 	excess := 0
 	for _, s := range sc.tenants[ti].sends {
 		if !bucket.take(s) {
@@ -564,8 +591,8 @@ func (r *replayResult) expect() error {
 		admitted    int
 		first, last time.Time
 	}, len(sc.tenants))
-	cover := sc.cover()
 	for i, m := range r.msgs {
+		cover := sc.coverOf(m.tenant)
 		c := &counts[m.tenant]
 		c.sent++
 		if r.outcomes[i].admitted {
@@ -602,11 +629,13 @@ func (r *replayResult) expect() error {
 			errs = append(errs, fmt.Sprintf("%s: %d sent but %d admitted + %d shed", tn.name, c.sent, c.admitted, c.shed))
 		}
 		contended := sc.level > 0 && sc.factorOf(ti) < 1
-		if contended && sc.factorOf(ti) > 0 && sc.noFreshBound == "" {
+		rate, burst := sc.ceilOf(ti)
+		cover := sc.coverOf(ti)
+		if contended && sc.factorOf(ti) > 0 {
 			// Policy: fresh traffic is held to the factor's share of the ceiling, plus a cover of lag credit.
 			f := sc.factorOf(ti)
 			span := fresh[ti].last.Sub(fresh[ti].first).Seconds()
-			bound := f*(float64(sc.burst)+sc.rate*(span+cover.Seconds())) + 1
+			bound := f*(float64(burst)+rate*(span+cover.Seconds())) + 1
 			if float64(fresh[ti].admitted) > bound {
 				errs = append(errs, fmt.Sprintf("%s: %d fresh messages admitted under a factor of %v; policy allows %.0f",
 					tn.name, fresh[ti].admitted, f, bound))
@@ -617,9 +646,16 @@ func (r *replayResult) expect() error {
 			errs = append(errs, fmt.Sprintf("%s: %d of %d messages of a tenant within its ceiling were shed", tn.name, c.shed, c.sent))
 		case tn.kind == kindOver && !contended:
 			want := sc.oracleExcess(ti)
-			tol := (sc.burst + int(sc.rate*cover.Seconds())) * max(sc.episodes, 1)
-			if c.shed > want+tol || c.shed < want-tol {
-				errs = append(errs, fmt.Sprintf("%s: shed %d, the offline bucket sheds %d (tolerance %d)", tn.name, c.shed, want, tol))
+			// ONE-SIDED on both ends. A tenant may not be admitted more than the offline bucket admits plus one
+			// burst and one cover of lag credit per stall episode, and may not be shed more than the offline
+			// bucket sheds (plus a hair for the quantisation of the sends).
+			wantAdmitted := c.sent - want
+			tol := (burst + int(rate*cover.Seconds())) * max(sc.episodes, 1)
+			if c.admitted > wantAdmitted+tol {
+				errs = append(errs, fmt.Sprintf("%s: admitted %d, the offline bucket admits %d (allowance %d): over its ceiling", tn.name, c.admitted, wantAdmitted, tol))
+			}
+			if slack := max(20, c.sent/100); c.shed > want+slack {
+				errs = append(errs, fmt.Sprintf("%s: shed %d, the offline bucket sheds %d: shed beyond its excess", tn.name, c.shed, want))
 			}
 		}
 	}
@@ -678,6 +714,33 @@ func bursty(name string, to time.Duration, burstAt time.Duration, n int) replayT
 		sends: join(steady(platformRate, 0, to), burstOf(n, burstAt))}
 }
 
+// lane is a tenant's sends on one reader source.
+type lane struct {
+	src   int
+	sends []time.Time
+}
+
+// merge interleaves lanes into one send sequence and the source of each message in it.
+func merge(lanes ...lane) ([]time.Time, func(int) int) {
+	type tagged struct {
+		at  time.Time
+		src int
+	}
+	var all []tagged
+	for _, l := range lanes {
+		for _, t := range l.sends {
+			all = append(all, tagged{t, l.src})
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
+	sends := make([]time.Time, len(all))
+	srcs := make([]int, len(all))
+	for i, a := range all {
+		sends[i], srcs[i] = a.at, a.src
+	}
+	return sends, func(i int) int { return srcs[i] }
+}
+
 func capture(stalls ...replayStallWindow) replaySource {
 	return replaySource{base: 5 * time.Millisecond, stalls: stalls}
 }
@@ -713,9 +776,9 @@ func replayTable() []*replayScenario {
 	})
 	// The counterweight: above the ceiling is still shed.
 	add(&replayScenario{
-		id: "A-over-ceiling-3s", about: "TestAPlatformStallStillShedsATenantAboveItsCeiling: 3x the ceiling, 3 s stall",
+		id: "A-over-ceiling-3s", about: "TestAPlatformStallStillShedsATenantAboveItsCeiling: 3x the ceiling for 6 s, 3 s stall",
 		sources: []replaySource{capture(replayStallWindow{0, 3 * s})}, episodes: 1,
-		tenants: []replayTenant{{name: "flood", kind: kindOver, class: governance.ShedBronze, sends: steady(3*platformRate, 0, 3*s)}},
+		tenants: []replayTenant{{name: "flood", kind: kindOver, class: governance.ShedBronze, sends: steady(3*platformRate, 0, 6*s)}},
 	})
 	// P1: capture and the message store drain independently and share a mark on main.
 	add(&replayScenario{
@@ -800,8 +863,7 @@ func replayTable() []*replayScenario {
 	add(&replayScenario{
 		id: "B2-60s-stall-at-L1", about: "60 s stall, best-effort tenant, L1: the stalled backlog drains unshed",
 		sources: []replaySource{capture(replayStallWindow{0, 60 * s})}, level: 1,
-		noFreshBound: "after a 60 s stall the stream is in its backlog phase for the tail of the drain; see TestReplayModelPhaseTailIsNotContended",
-		tenants:      []replayTenant{{name: "besteffort", kind: kindCompliant, class: governance.ShedBestEffort, sends: steady(platformRate, 0, 60*s)}},
+		tenants: []replayTenant{{name: "besteffort", kind: kindCompliant, class: governance.ShedBestEffort, sends: steady(platformRate, 0, 60*s)}},
 	})
 	// The hard drop at L3 is a boolean, at any burst (P2-4), and gold is untouched beside it.
 	for _, burst := range []int{platformBurst, math.MaxInt32} {
@@ -829,14 +891,69 @@ func replayTable() []*replayScenario {
 		tenants:     []replayTenant{bursty("bursty", 1500*ms, 1100*ms, 1000)},
 		legacyLoses: true,
 	})
-	// Review fix (a): the pod restarts while one of its two sources lags and the other is current, so
-	// the tenant's bucket is born knowing nothing about the lagging source.
+	// Review fix (a): the pod restarts while one of its two sources lags and the other is current, so the
+	// tenant's bucket is born knowing nothing about the lagging source. 600/s is on the current source and
+	// 400/s plus a 1500-burst on the source that is stalled until 1.9 s (inside the 2 s cover, so it rides
+	// the fresh route); the restart is at 1.2 s. The conformant dump the lagging source delivers at 1.9 s
+	// exceeds the base burst: it is admitted only because the unknown source is credited its lag, and
+	// "an unknown last stamp counts as 0" sheds it here.
+	lanes, laneOf := merge(lane{0, steady(600, 0, 1900*ms)}, lane{1, join(steady(400, 0, 1900*ms), burstOf(1500, 1800*ms))})
 	add(&replayScenario{
-		id: "R-restart-two-sources", about: "restart 1.2 s into a 2.8 s stall of the store source; capture is current",
-		sources: []replaySource{capture(), capture(replayStallWindow{0, 2800 * ms})},
-		tenants: []replayTenant{{name: "qos1", kind: kindCompliant, class: governance.ShedBronze,
-			sends: join(steady(platformRate, 0, 2800*ms), burstOf(1000, 2400*ms)), source: func(i int) int { return i % 2 }}},
-		restartAt: 1200 * ms,
+		id: "R-restart-two-sources", about: "restart at 1.2 s; capture is current, the store source is stalled until 1.9 s",
+		sources:   []replaySource{capture(), capture(replayStallWindow{0, 1900 * ms})},
+		tenants:   []replayTenant{{name: "qos1", kind: kindCompliant, class: governance.ShedBronze, sends: lanes, source: laneOf}},
+		restartAt: 1200 * ms, legacyLoses: true,
+	})
+	// Exit marks. A 2000 burst, one backlog-route message that takes capture into its backlog phase, the
+	// phase exits, and then a conformant 2000 burst plus 900/s on a source stalled 1.5 s: 3351 messages,
+	// all within the ceiling. Withholding the phase's accrual at the exit sheds 1342 of them.
+	exitLanes, exitOf := merge(lane{0, join(burstOf(2000, 0), burstOf(1, 11*s), burstOf(2000, 90*s))},
+		lane{1, steady(900, 88500*ms, 90*s)})
+	add(&replayScenario{
+		id: "X-exit-then-burst", about: "phase exits, then a conformant burst plus a stalled second source",
+		sources: []replaySource{capture(replayStallWindow{10 * s, 13500 * ms}), capture(replayStallWindow{88500 * ms, 90 * s})},
+		tenants: []replayTenant{
+			{name: "c", kind: kindCompliant, class: governance.ShedBronze, sends: exitLanes, source: exitOf},
+			{name: "calm", kind: kindCompliant, class: governance.ShedBronze, sends: steady(10, 0, 95*s)},
+		},
+		legacyLoses: true,
+	})
+	// The saw band. A 3x tenant (200/s, burst 400, so a 2 s cover) whose reader lag saws across its cover
+	// every 3 s for a minute, beside a tenant of another tier (cover 5 s, so a stream-wide default
+	// threshold would be 5 s): the route must not flip between the two allowances message by message.
+	var saw []replayStallWindow
+	for k := 0; k < 20; k++ {
+		from := time.Duration(1+3*k) * s
+		length := 2300 * ms
+		if k%2 == 1 {
+			length = 2100 * ms
+		}
+		saw = append(saw, replayStallWindow{from, from + length})
+	}
+	add(&replayScenario{
+		id: "F2-saw-band-mixed-tier", about: "3x tenant with the lag sawing across its 2 s cover; a tenant of another tier beside it",
+		sources: []replaySource{capture(saw...)}, episodes: 1,
+		tenants: []replayTenant{
+			{name: "flood", kind: kindOver, class: governance.ShedBronze, rate: 200, burst: 400, sends: steady(600, 0, 60*s)},
+			{name: "small", kind: kindCompliant, class: governance.ShedBronze, rate: 50, burst: 500, sends: steady(25, 0, 60*s)},
+		},
+		legacyLoses: true,
+	})
+	// Contention in the tail of a stall. After a 10 s stall the stream is in its backlog phase for the drain
+	// and 30 s of calm; contention is a filter and must still reach the current traffic.
+	add(&replayScenario{
+		id: "T-L3-phase-tail", about: "L3 after a 10 s stall: best-effort young traffic refused through the phase tail, gold untouched",
+		sources: []replaySource{capture(replayStallWindow{0, 10 * s})}, level: 3,
+		tenants: []replayTenant{
+			{name: "besteffort", kind: kindCompliant, class: governance.ShedBestEffort, sends: steady(500, 0, 40*s)},
+			{name: "gold", kind: kindCompliant, class: governance.ShedGold, sends: steady(500, 0, 40*s)},
+		},
+		legacyLoses: true,
+	})
+	add(&replayScenario{
+		id: "T-L1-phase-tail", about: "L1 after a 10 s stall: best-effort held to a quarter of its ceiling through the phase tail",
+		sources: []replaySource{capture(replayStallWindow{0, 10 * s})}, level: 1,
+		tenants: []replayTenant{{name: "besteffort", kind: kindCompliant, class: governance.ShedBestEffort, sends: steady(platformRate, 0, 40*s)}},
 	})
 	return rows
 }
@@ -906,9 +1023,9 @@ func TestReplayOracleNegativeControls(t *testing.T) {
 	policing, protecting := 0, 0
 	for _, sc := range replayTable() {
 		hasOver, hasCompliant := false, false
-		cover := sc.cover()
 		for ti, tn := range sc.tenants {
-			hasOver = hasOver || tn.kind == kindOver || (sc.level > 0 && sc.noFreshBound == "")
+			cover := sc.coverOf(ti)
+			hasOver = hasOver || tn.kind == kindOver || sc.level > 0
 			contended := sc.level > 0 && sc.factorOf(ti) < 1
 			if tn.kind == kindCompliant && !contended {
 				hasCompliant = true
@@ -944,33 +1061,59 @@ func TestReplayLagCreditGateway(t *testing.T) {
 	}
 }
 
-// PINS A FINDING, not a virtue. While a stream is in its backlog phase every message on it is metered on
-// the backlog route, and the backlog route is exempt from contention: so after a stall long enough to
-// enter the phase, the young traffic of that stream escapes the contention factor for the drain and the
-// 30 s of calm that follow, though it is still held to the ceiling. Contention reaches only traffic that
-// is read within the cover of its send AND while the stream is out of backlog. If the maintainer rules
-// that young traffic must stay contended, this test is the one to change.
-func TestReplayModelPhaseTailIsNotContended(t *testing.T) {
-	var sc *replayScenario
-	for _, r := range replayTable() {
-		if r.id == "B2-60s-stall-at-L1" {
-			sc = r
+// CONTENTION IS NOT PHASE-BOUND. After a 10 s stall the stream is in its backlog phase for the drain and the
+// calm period, and the CEILING route is phase-wide, but the overload bands still reach every message read
+// within its cover: at L3 best-effort young traffic is refused outright (a boolean), at L1 it is held to
+// its share, and whatever is older than the cover still drains unshed. Gold is untouched.
+func TestReplayModelPhaseTailIsContended(t *testing.T) {
+	find := func(id string) *replayScenario {
+		for _, r := range replayTable() {
+			if r.id == id {
+				return r
+			}
 		}
+		t.Fatalf("no row %s", id)
+		return nil
 	}
-	require.NotNil(t, sc)
+	sc := find("T-L3-phase-tail")
 	res := sc.run(newModelGate)
 	cover := sc.cover()
-	young, admitted := 0, 0
+	young, youngAdmitted, aged, agedAdmitted, goldShed := 0, 0, 0, 0, 0
 	for i, m := range res.msgs {
-		if m.readAge <= cover {
+		switch {
+		case sc.tenants[m.tenant].class == governance.ShedGold:
+			if !res.outcomes[i].admitted {
+				goldShed++
+			}
+		case m.readAge <= cover:
 			young++
 			if res.outcomes[i].admitted {
-				admitted++
+				youngAdmitted++
+			}
+		default:
+			aged++
+			if res.outcomes[i].admitted {
+				agedAdmitted++
 			}
 		}
 	}
-	require.Greater(t, young, 1000)
-	require.Equal(t, young, admitted, "young traffic in the phase tail is expected to ride the backlog route, unscaled")
+	require.Greater(t, young, 15000, "the tail must be long enough to mean something")
+	require.Zero(t, youngAdmitted, "the hard drop must refuse young traffic in the phase tail (legacy and the previous routing admitted all of it)")
+	require.Positive(t, aged)
+	require.Equal(t, aged, agedAdmitted, "a backlog older than the cover drains unshed even at L3")
+	require.Zero(t, goldShed)
+
+	sc = find("T-L1-phase-tail")
+	res = sc.run(newModelGate)
+	youngAdmitted = 0
+	for i, m := range res.msgs {
+		if m.readAge <= cover && res.outcomes[i].admitted {
+			youngAdmitted++
+		}
+	}
+	// 30 s of tail at a quarter of 1000/s is about 7500; unscaled it would be about 30000
+	require.Less(t, youngAdmitted, 12000, "best-effort at L1 must be held to its share in the phase tail")
+	require.Greater(t, youngAdmitted, 4000)
 }
 
 // REDELIVERIES ARE INERT. A message the broker re-offers during a drain is admitted uncharged and moves

@@ -15,7 +15,6 @@ import (
 func newTestMeter(c *lagClock, rate float64, burst, streams int) *LagCreditMeter {
 	return NewLagCreditMeter(LagCreditMeterConfig{
 		Streams: streams, Ceiling: StaticCeiling(rate, burst), Clock: c.now,
-		PhaseThreshold: LagCreditMax(TenantCeiling{RatePerSecond: rate, Burst: burst}),
 	})
 }
 
@@ -243,8 +242,7 @@ func TestMeterRejectsMisuseLoudly(t *testing.T) {
 
 // A smooth compliant tenant (at most its rate, any phase of any stall length, split over sources
 // with unstamped traffic mixed in) loses nothing through the whole meter, backlog route and phase
-// transitions included. Bursts right after a long backlog are the documented residual (the exit grant
-// is suppressed) and are not part of this property.
+// transitions included. Bursting tenants are covered by the next property.
 func TestMeterSmoothCompliantTenantLosesNothingThroughAnyStall(t *testing.T) {
 	for seed := int64(0); seed < int64(propertySeeds); seed++ {
 		rng := rand.New(rand.NewSource(seed))
@@ -328,9 +326,9 @@ func TestMeterCoverIgnoresTheShedFactor(t *testing.T) {
 	require.True(t, d.Admitted, "a drained backlog is exempt from the hard drop")
 }
 
-// The meter hands the limiter its streams' exit marks: after a stream leaves backlog, a tenant that had
-// spent its fresh bucket is not refilled for the whole phase, only for the cover before the exit.
-func TestMeterPassesExitMarksToTheCeiling(t *testing.T) {
+// A stream's exit from backlog takes nothing from a tenant: both the one that used the backlog route and
+// a bystander find their buckets refilled, and a conformant burst after the exit is admitted whole.
+func TestMeterExitShedsNoCompliantTenant(t *testing.T) {
 	clk := &lagClock{t: simEpoch}
 	m := NewLagCreditMeter(LagCreditMeterConfig{Streams: 1, Ceiling: StaticCeiling(10, 100), Clock: clk.now}) // cover 5 s
 	one := func(tenant string, stamp time.Time, lag time.Duration) MeterDecision {
@@ -338,28 +336,156 @@ func TestMeterPassesExitMarksToTheCeiling(t *testing.T) {
 	}
 	for one("t", clk.t, 0).Admitted { // spend the fresh bucket
 	}
-	require.False(t, one("t", clk.t, 0).Admitted)
-	for one("idle", clk.t, 0).Admitted { // a bystander spends its bucket too, then sits out the phase
+	for one("idle", clk.t, 0).Admitted {
 	}
-
-	// The tenant sends one message 6 s late on the backlog route (and so spends that allowance) and takes
-	// the stream into backlog; a minute and a half of calm traffic brings it out again.
 	require.Equal(t, RouteBacklog, one("t", clk.t.Add(-6*time.Second), 6*time.Second).Route)
 	clk.t = clk.t.Add(time.Minute)
 	one("other", clk.t, 0)
 	clk.t = clk.t.Add(31 * time.Second)
 	one("other", clk.t, 0)
 	require.False(t, m.Phase(0).Backlog())
+	for _, tenant := range []string{"t", "idle"} {
+		n := 0
+		for one(tenant, clk.t, 0).Admitted {
+			n++
+		}
+		require.Equal(t, 100, n, "%s: a conformant burst after the exit must be admitted whole", tenant)
+	}
+}
 
-	n := 0
-	for one("t", clk.t, 0).Admitted {
-		n++
+// The reviewer's repro. Default tier 1000/2000, two sources. A 2000 burst on source 0, one message on the
+// backlog route, the phase exits at 90 s, then a conformant 2000 burst plus 900/s on source 1, stalled
+// 1.5 s. 3351 messages, all within the ceiling: none may be shed.
+func TestMeterReviewerReproNoLossAfterAnExit(t *testing.T) {
+	clk := &lagClock{t: simEpoch}
+	m := NewLagCreditMeter(LagCreditMeterConfig{Streams: 2, Ceiling: StaticCeiling(1000, 2000), Clock: clk.now})
+	cur := idleSources(2)
+	admit := func(tenant string, src int, stamp time.Time, srcs []LagCreditSource) MeterDecision {
+		return m.Admit(MeterRequest{Tenant: tenant, N: 1, Source: src, Stamp: stamp, Sources: srcs, Factor: 1})
 	}
-	require.Equal(t, 50, n, "after the exit the tenant earned only the last cover (5 s at 10/s), not the whole phase")
-	// The bystander used no backlog allowance, so the exit takes nothing from what it earned while idle.
-	n = 0
-	for one("idle", clk.t, 0).Admitted {
-		n++
+	for i := 0; i < 2000; i++ {
+		require.True(t, admit("c", 0, clk.t, cur).Admitted)
 	}
-	require.Equal(t, 100, n, "a tenant that never used the backlog route is not penalised for another tenant's stall")
+	clk.t = simEpoch.Add(10 * time.Second)
+	late := admit("c", 0, clk.t.Add(-2500*time.Millisecond), []LagCreditSource{{Lag: 2500 * time.Millisecond}, {}})
+	require.Equal(t, RouteBacklog, late.Route)
+	for _, at := range []time.Duration{11 * time.Second, 42 * time.Second, 90 * time.Second} {
+		clk.t = simEpoch.Add(at)
+		admit("bystander", 0, clk.t, cur)
+	}
+	require.False(t, m.Phase(0).Backlog(), "the phase exited")
+
+	shed, total := 0, 0
+	for i := 0; i < 2000; i++ { // the conformant burst, on the now-current source 0
+		total++
+		if !admit("c", 0, clk.t, []LagCreditSource{{}, {Lag: 1500 * time.Millisecond}}).Admitted {
+			shed++
+		}
+	}
+	for i := 0; i < 1350; i++ { // 900/s for the 1.5 s source 1 sat stalled, read now
+		sent := clk.t.Add(-1500*time.Millisecond + time.Duration(i)*time.Second/900)
+		total++
+		if !admit("c", 1, sent, []LagCreditSource{{}, {Lag: clk.t.Sub(sent)}}).Admitted {
+			shed++
+		}
+	}
+	require.Zero(t, shed, "%d of %d conformant messages shed after the exit", shed, total)
+}
+
+// Contention is a filter and is not phase-bound: in the tail of a stall, while the stream is still in its
+// backlog phase, factor 0 refuses young traffic and a fractional factor holds it to its share, while
+// anything older than the cover still drains unshed.
+func TestMeterPhaseTailIsContended(t *testing.T) {
+	newMeter := func() (*LagCreditMeter, *lagClock) {
+		clk := &lagClock{t: simEpoch.Add(time.Hour)}
+		m := NewLagCreditMeter(LagCreditMeterConfig{Streams: 1, Ceiling: StaticCeiling(1000, 2000), Clock: clk.now})
+		// a 10 s stall's oldest message takes the stream into backlog
+		d := m.Admit(MeterRequest{Tenant: "x", N: 1, Source: 0, Stamp: clk.t.Add(-10 * time.Second),
+			Sources: []LagCreditSource{{Lag: 10 * time.Second}}, Factor: 1})
+		require.Equal(t, RouteBacklog, d.Route)
+		require.True(t, m.Phase(0).Backlog())
+		return m, clk
+	}
+	young := func(m *LagCreditMeter, clk *lagClock, f float64) (admitted int, last MeterDecision) {
+		for i := 0; i < 3000; i++ {
+			last = m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t.Add(-100 * time.Millisecond),
+				Sources: []LagCreditSource{{Lag: 100 * time.Millisecond}}, Factor: f})
+			if last.Admitted {
+				admitted++
+			}
+		}
+		return
+	}
+	m, clk := newMeter()
+	n, last := young(m, clk, 0)
+	require.Zero(t, n, "the hard drop reaches young traffic in the phase tail")
+	require.Equal(t, CauseHardDrop, last.Cause)
+
+	m, clk = newMeter()
+	n, _ = young(m, clk, 0.25)
+	require.LessOrEqual(t, n, int(0.25*(2000+1000*0.1+1000*2))+2, "a quarter factor holds young traffic to its share in the tail")
+	require.Greater(t, n, 100)
+
+	m, clk = newMeter()
+	n, _ = young(m, clk, 1)
+	require.Equal(t, 2000, n, "no contention: the ceiling alone")
+
+	// a true backlog (older than the cover) is still exempt
+	m, clk = newMeter()
+	old := 0
+	for i := 0; i < 1500; i++ {
+		d := m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t.Add(-4*time.Second + time.Duration(i)*time.Millisecond),
+			Sources: []LagCreditSource{{Lag: 4 * time.Second}}, Factor: 0})
+		if d.Admitted {
+			old++
+		}
+	}
+	require.Equal(t, 1500, old, "older than the cover drains unshed even at factor 0")
+}
+
+// A conformant BURSTING tenant loses nothing through the whole meter across stalls of any length, with
+// the phase entering and exiting under it: the generator that exercises the exit.
+func TestMeterConformantBurstyTenantLosesNothingAcrossPhases(t *testing.T) {
+	exits := 0
+	for seed := int64(0); seed < int64(propertySeeds); seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		horizon := 70 * time.Second
+		rate := float64(50 + rng.Intn(250))
+		burst := 1 + rng.Intn(1200)
+		cfg := simCfg{rate: rate, burst: burst, sources: 1 + rng.Intn(3)}
+		cfg.base = make([]time.Duration, cfg.sources)
+		cfg.offsets = make([]time.Duration, cfg.sources)
+		cfg.stalls = make([][]simStall, cfg.sources)
+		for k := 0; k < cfg.sources; k++ {
+			cfg.offsets[k] = time.Duration(rng.Intn(400)-200) * time.Millisecond
+			for tt := time.Duration(rng.Intn(5000)) * time.Millisecond; tt < horizon && rng.Intn(5) != 0; {
+				dur := time.Duration(rng.Intn(14000)) * time.Millisecond
+				cfg.stalls[k] = append(cfg.stalls[k], simStall{start: simEpoch.Add(tt), dur: dur})
+				tt += dur + time.Duration(rng.Intn(50000))*time.Millisecond
+			}
+		}
+		sends := conform(genSends(rng, rate, burst, horizon, 3), rate, burst)
+		msgs := buildMsgs(rng, cfg, sends, 0.15)
+		queues := splitQueues(msgs, cfg.sources)
+		heads := make([]int, cfg.sources)
+		clk := &lagClock{t: simEpoch}
+		m := newTestMeter(clk, rate, burst, cfg.sources)
+		prev := make([]uint64, cfg.sources)
+		for _, msg := range order(rng, msgs, cfg.sources) {
+			clk.t = msg.read
+			srcs := laggingSources(cfg, queues, heads, msg.read)
+			d := m.Admit(MeterRequest{Tenant: "t", N: 1, Source: msg.src, Stamp: msg.stamp, Sources: srcs, Factor: 1})
+			if msg.src >= 0 {
+				heads[msg.src]++
+			}
+			require.Truef(t, d.Admitted, "seed %d: a conformant message was shed on the %v route (rate %v burst %d)", seed, d.Route, rate, burst)
+			for k := range prev {
+				if e, _ := m.Phase(k).Exit(); e > prev[k] {
+					exits += int(e - prev[k])
+					prev[k] = e
+				}
+			}
+		}
+	}
+	require.Greater(t, exits, propertySeeds/4, "the generator barely exercised a phase exit (%d)", exits)
 }

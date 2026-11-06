@@ -150,16 +150,17 @@ func (c IngestCause) String() string {
 //     backlog bucket is a full allowance of its own, and a tenant draining two backlogs while also sending
 //     live spends all of them. That is bounded (it needs a platform lag beyond the cover, which a tenant
 //     cannot steer) and it matches the 2x a tenant already has on the gate it replaces while draining.
-//   - A stream in its backlog phase meters ALL of its messages on the backlog route, young ones included,
-//     until the hysteresis lets it out. That keeps a reader hovering at the cover from flipping messages
-//     between routes, and it means that for the tail of a stall (the drain plus the calm period) the
-//     stream's traffic is held to the ceiling but is not contention-scaled.
+//   - A stream in its backlog phase meters ALL of its messages' CEILING on the backlog route, young ones
+//     included, until the hysteresis lets it out. That keeps a reader hovering at the cover from flipping
+//     messages between the two ceiling allowances. CONTENTION is a filter and is not phase-bound: it is
+//     applied to every message read within its own cover, in or out of the phase, so the overload bands
+//     and the hard drop reach a recovering stream's current traffic. Only a message older than its cover
+//     (a true backlog) is exempt from contention.
 //
 // Redeliveries are not the meter's business: a redelivery already paid on delivery 1, and must not be
 // presented here (it would feed the last-stamp the credit is measured from).
 type LagCreditMeter struct {
 	now        func() time.Time
-	threshold  time.Duration
 	ceiling    *LagCreditLimiter
 	contention *LagCreditLimiter
 	backlog    []*TenantRateLimiter
@@ -174,8 +175,6 @@ type LagCreditMeterConfig struct {
 	// Ceiling is the base per-tenant ceiling. The backlog buckets and the fresh route's cover use it;
 	// a contention factor never reaches it.
 	Ceiling TenantCeilingResolver
-	// PhaseThreshold is the corrected age beyond which a stream is in backlog. Zero uses LagCreditMaxCover.
-	PhaseThreshold time.Duration
 	// PhaseCalm is how long a stream stays calm before leaving backlog. Zero uses DefaultIngestPhaseCalm.
 	PhaseCalm time.Duration
 	// Clock replaces time.Now (tests). Nil is time.Now.
@@ -191,13 +190,8 @@ func NewLagCreditMeter(cfg LagCreditMeterConfig) *LagCreditMeter {
 	if now == nil {
 		now = time.Now
 	}
-	threshold := cfg.PhaseThreshold
-	if threshold <= 0 {
-		threshold = LagCreditMaxCover
-	}
 	m := &LagCreditMeter{
 		now:        now,
-		threshold:  threshold,
 		ceiling:    NewLagCreditLimiter(cfg.Ceiling, cfg.Streams, WithLagCreditClock(now)),
 		contention: NewLagCreditLimiter(cfg.Ceiling, cfg.Streams, WithLagCreditClock(now)),
 		base:       cfg.Ceiling,
@@ -220,8 +214,7 @@ type MeterRequest struct {
 	// (external MQTT). Stamp is the broker append time; zero means none, and the message is RouteLive.
 	Source int
 	Stamp  time.Time
-	// Sources describes every stream's lag and skew (see LagCreditSource); ExitEpoch/ExitAt are filled in
-	// by the meter from its own phases.
+	// Sources describes every stream's lag and skew (see LagCreditSource).
 	Sources []LagCreditSource
 	// Factor is the contention factor for this message's tenant class: 1 means none (gold, or no
 	// overload), a value in (0,1) scales the tenant's allowance, and 0 refuses fresh traffic outright.
@@ -258,23 +251,23 @@ func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
 		panic(fmt.Sprintf("core.LagCreditMeter.Admit: source %d out of range", req.Source))
 	}
 
-	// The sources handed to the limiter carry the phases' exit marks.
-	srcs := make([]LagCreditSource, len(req.Sources))
-	copy(srcs, req.Sources)
-	for k := range srcs {
-		srcs[k].ExitEpoch, srcs[k].ExitAt = m.phases[k].Exit()
-	}
+	srcs := req.Sources
 
 	if stamped {
 		alpha := max(now.Sub(req.Stamp)-srcs[req.Source].Skew, 0)
 		cover := LagCreditMax(m.base(req.Tenant))
-		inBacklog := m.phases[req.Source].Observe(alpha, m.threshold, now)
-		if inBacklog || alpha > cover {
+		// Entry at age > the tenant's own cover and the hysteresis around it decide the route; there is no
+		// separate per-message cutoff, so the two cannot disagree.
+		if m.phases[req.Source].Observe(alpha, cover, now) {
+			if alpha <= cover {
+				if d, refused := m.contend(req, srcs, req.Source, req.Stamp, RouteBacklog); refused {
+					return d
+				}
+			}
 			// Metered on the send timeline, with the broker's skew taken back out of the stamp: a leader
 			// whose clock runs ahead would otherwise stamp the stream's own near-future, which the limiter
 			// clamps to now, charging a whole drain at one instant.
 			sent := req.Stamp.Add(srcs[req.Source].Skew)
-			m.ceiling.NoteBacklog(req.Tenant, req.Source)
 			ok := m.backlog[req.Source].AllowNAt(req.Tenant, sent, req.N)
 			d := MeterDecision{Admitted: ok, Route: RouteBacklog}
 			if !ok {
@@ -293,16 +286,8 @@ func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
 		source, stamp = -1, time.Time{}
 	}
 
-	// Contention first, on its own bucket, so a denial there spends nothing of the ceiling budget.
-	if req.Factor == 0 {
-		return MeterDecision{Route: route, Cause: CauseHardDrop}
-	}
-	if req.Factor < 1 {
-		d := m.contention.Admit(LagCreditRequest{Tenant: req.Tenant, N: req.N, Scale: req.Factor,
-			Source: source, Stamp: stamp, Sources: srcs, Delay: req.Delay, CreditCap: req.CreditCap})
-		if !d.Admitted {
-			return MeterDecision{Route: route, Cause: CauseContention, Credit: d.Credit}
-		}
+	if d, refused := m.contend(req, srcs, source, stamp, route); refused {
+		return d
 	}
 	d := m.ceiling.Admit(LagCreditRequest{Tenant: req.Tenant, N: req.N, Scale: 1,
 		Source: source, Stamp: stamp, Sources: srcs, Delay: req.Delay, CreditCap: req.CreditCap})
@@ -310,4 +295,21 @@ func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
 		return MeterDecision{Route: route, Cause: CauseCeiling, Credit: d.Credit}
 	}
 	return MeterDecision{Admitted: true, Route: route, Credit: d.Credit}
+}
+
+// contend applies the overload bands to one message: factor 0 is a boolean refusal, a factor below 1
+// charges the contention bucket (never the ceiling), and a denial there is final. It reports refused
+// true with the decision to return; false means the message passed (or was not contended).
+func (m *LagCreditMeter) contend(req MeterRequest, srcs []LagCreditSource, source int, stamp time.Time, route IngestRoute) (MeterDecision, bool) {
+	if req.Factor == 0 {
+		return MeterDecision{Route: route, Cause: CauseHardDrop}, true
+	}
+	if req.Factor < 1 {
+		d := m.contention.Admit(LagCreditRequest{Tenant: req.Tenant, N: req.N, Scale: req.Factor,
+			Source: source, Stamp: stamp, Sources: srcs, Delay: req.Delay, CreditCap: req.CreditCap})
+		if !d.Admitted {
+			return MeterDecision{Route: route, Cause: CauseContention, Credit: d.Credit}, true
+		}
+	}
+	return MeterDecision{}, false
 }
