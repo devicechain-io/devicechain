@@ -4,7 +4,6 @@
 package processor
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -131,92 +130,21 @@ func TestARateGateIsStillOneTokenPerMessage(t *testing.T) {
 	}
 }
 
-// MeterAt is the one live/backlog decision: a recent or absent send time is live (zero), an old
-// one is metered at itself, and "old" is the lesser of BacklogThreshold and the time the tenant's
-// live burst covers.
-func TestMeterAtDecidesLiveOrBacklog(t *testing.T) {
-	meter := NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)))
-	assert.True(t, meter("acme", time.Time{}).IsZero())
-	assert.True(t, meter("acme", time.Now()).IsZero(), "a fresh message is live")
-	assert.True(t, meter("acme", time.Now().Add(time.Hour)).IsZero(), "a future append time is live, never backlog")
-	old := time.Now().Add(-time.Hour)
-	assert.Equal(t, old, meter("acme", old), "an old message is metered at its send time")
-
-	// Between the two thresholds: 3 s old is past the 2 s the platform default's burst covers
-	// but inside the fixed 5 s, and must already be backlog.
-	mid := time.Now().Add(-3 * time.Second)
-	assert.Equal(t, mid, meter("acme", mid), "a delay the live burst cannot absorb is metered at its send time")
-	// A tenant never judged backlog: a delay the live burst can absorb is live.
-	young := time.Now().Add(-time.Second)
-	assert.True(t, meter("fresh", young).IsZero(), "a delay the live burst can absorb is live")
-}
-
-// Once a tenant has been judged backlog it stays on the send timeline for as long as it keeps
-// sending, however fresh a message is: a handoff to the live bucket while traffic flows would
-// grant (or take away) a burst, because the live bucket sat idle through the stall. It returns
-// live only after a quiet period of the time its burst covers (100 ms here), when both buckets
-// are full. Recovery is per tenant.
-func TestMeterAtKeepsARecoveringTenantOnTheSendTimelineUntilItGoesQuiet(t *testing.T) {
-	// rate 1000, burst 100: the burst covers 100 ms.
-	meter := NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(1000, 100)))
-	old := time.Now().Add(-3 * time.Second)
-	assert.Equal(t, old, meter("acme", old))
-	young := time.Now().Add(-50 * time.Millisecond) // younger than the threshold
-	assert.Equal(t, young, meter("acme", young), "the young tail of a stall is still backlog")
-	fresh := time.Now().Add(-time.Millisecond)
-	assert.Equal(t, fresh, meter("acme", fresh), "a caught-up reader's message does not end the drain")
-	assert.True(t, meter("other", time.Now().Add(-50*time.Millisecond)).IsZero(), "recovery is per tenant")
-	assert.True(t, meter("acme", time.Time{}).IsZero(), "an absent send time is live")
-
-	time.Sleep(150 * time.Millisecond) // quiet for longer than the burst covers
-	assert.True(t, meter("acme", time.Now().Add(-time.Millisecond)).IsZero(), "quiet ends the recovery")
-	assert.True(t, meter("acme", time.Now().Add(-50*time.Millisecond)).IsZero(), "and the tenant is live again")
-}
-
-// Idle recovery entries are collected, so tenants that churn or are deleted do not accumulate.
-func TestMeterAtForgetsTenantsThatWentQuiet(t *testing.T) {
-	clock := time.Now()
-	tr := newRecoveryTracker(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)),
-		func() time.Time { return clock })
-	for i := 0; i < 100; i++ {
-		tr.meterAt(fmt.Sprintf("t%d", i), clock.Add(-10*time.Second))
+// MeterAt decides the time a message is metered at: the broker's own timestamp, capped at now
+// (a broker clock ahead of this pod must never move a bucket's clock into the future), and the
+// zero time, meaning now on the live limiter, for a source with no broker timestamp. Message age
+// plays no part in it: a stall of any length is the same timeline.
+func TestMeterAtIsTheBrokerTimeCappedAtNow(t *testing.T) {
+	meter := NewMeterAt()
+	assert.True(t, meter("acme", time.Time{}).IsZero(), "no broker timestamp: live")
+	for _, age := range []time.Duration{time.Millisecond, time.Second, 1900 * time.Millisecond, 3 * time.Second, time.Hour} {
+		sent := time.Now().Add(-age)
+		assert.Equalf(t, sent, meter("acme", sent), "a message %v old is metered at the time the broker stored it", age)
 	}
-	require.Len(t, tr.last, 100)
-	clock = clock.Add(2 * recoverySweepEvery)
-	tr.meterAt("still", clock.Add(-10*time.Second)) // any call after the sweep interval collects
-	assert.Len(t, tr.last, 1, "only the tenant still recovering is kept")
-}
-
-func TestBacklogAfterIsTheLesserOfTheThresholdAndTheBurstCover(t *testing.T) {
-	cases := []struct {
-		name string
-		c    core.TenantCeiling
-		want time.Duration
-	}{
-		{"platform default covers 2s", core.TenantCeiling{RatePerSecond: 1000, Burst: 2000}, 2 * time.Second},
-		{"a long burst is capped at the fixed threshold", core.TenantCeiling{RatePerSecond: 100, Burst: 10000}, BacklogThreshold},
-		{"a short burst is a short threshold", core.TenantCeiling{RatePerSecond: 100, Burst: 10}, 100 * time.Millisecond},
-		{"no rate keeps the fixed threshold", core.TenantCeiling{RatePerSecond: 0, Burst: 10}, BacklogThreshold},
-		{"no burst keeps the fixed threshold", core.TenantCeiling{RatePerSecond: 10, Burst: 0}, BacklogThreshold},
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.want, backlogAfter(tc.c), tc.name)
-	}
-}
-
-// The threshold follows the TENANT: one with a tight burst is backlog sooner than one with a
-// generous burst, read from the same limiter.
-func TestMeterAtIsPerTenant(t *testing.T) {
-	live := core.NewTenantRateLimiter(func(tenant string) core.TenantCeiling {
-		if tenant == "tight" {
-			return core.TenantCeiling{RatePerSecond: 1000, Burst: 1000} // covers 1 s
-		}
-		return core.TenantCeiling{RatePerSecond: 1000, Burst: 4000} // covers 4 s
-	})
-	meter := NewMeterAt(live)
-	sent := time.Now().Add(-2 * time.Second)
-	assert.Equal(t, sent, meter("tight", sent))
-	assert.True(t, meter("roomy", sent).IsZero())
+	ahead := time.Now().Add(time.Hour)
+	got := meter("acme", ahead)
+	assert.False(t, got.IsZero(), "a broker clock ahead is still a broker-stamped message")
+	assert.False(t, got.After(time.Now()), "and is metered at now, never in the future")
 }
 
 // readingsOf charges what model.ReadingCount counts: the metric keys of a measurement, not
@@ -360,11 +288,9 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 	require.True(t, ack.settled(t), "message never settled")
 
 	fresh := &recordingAck{}
-	// Another tenant: acme, having just drained a backlog, stays on the send timeline while it
-	// keeps sending (see recoveryTracker), so a live first delivery is shown by a tenant that
-	// has not been behind.
-	m = capturedMsg("inst-1.globex.devices.d1.events", wideEntryBody(5), 1, 8, fresh)
-	m.AppendTime = time.Now()
+	m = capturedMsg("inst-1.acme.devices.d1.events", wideEntryBody(5), 1, 8, fresh)
+	freshAt := time.Now()
+	m.AppendTime = freshAt
 	h.source.handle(m)
 	require.True(t, fresh.settled(t), "message never settled")
 
@@ -374,8 +300,8 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 	require.Len(t, calls, 2)
 	assert.Equal(t, readingCall{"acme", appended, true, OriginAuthenticated, 3}, calls[0],
 		"a backlog redelivery: metered at its append time, flagged, authenticated, 3 readings")
-	assert.Equal(t, readingCall{"globex", time.Time{}, false, OriginAuthenticated, 5}, calls[1],
-		"a live first delivery is metered at now")
+	assert.Equal(t, readingCall{"acme", freshAt, false, OriginAuthenticated, 5}, calls[1],
+		"a fresh first delivery is metered at the time the broker stored it")
 }
 
 // ==================== External MQTT ====================

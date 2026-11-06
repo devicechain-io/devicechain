@@ -108,6 +108,9 @@ type CaptureEnvelopes struct {
 	Rounds  messaging.RoundPublisher
 	Former  messaging.FormerConfig
 	Metrics *messaging.EnvelopeMetrics
+	// TenantGone is the deleted-tenant gate (see messaging.RoundEngineConfig.TenantGone); nil when
+	// user-management is unconfigured.
+	TenantGone func(tenant string) bool
 }
 
 // UseEnvelopes turns on inbound envelopes for this source. Call it before Start, beside
@@ -150,7 +153,7 @@ func (es *GatewayJetStreamSource) newCaptureEngine() (*captureEngine, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	engine, err := messaging.NewRoundEngine(messaging.RoundEngineConfig{
 		Kind: eventenvelope.KindUnresolved, DedupKind: captureDedupKind,
-		Writer: aw, Rounds: es.envelopes.Rounds, Ctx: ctx, Metrics: es.envelopes.Metrics,
+		Writer: aw, Rounds: es.envelopes.Rounds, Ctx: ctx, Metrics: es.envelopes.Metrics, TenantGone: es.envelopes.TenantGone,
 	})
 	if err != nil {
 		cancel()

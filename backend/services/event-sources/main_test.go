@@ -101,3 +101,26 @@ func TestShedAdjustedShedsLowerTiers(t *testing.T) {
 		t.Errorf("bronze at floor 2 rps = %v, want throttled below 1000", rps)
 	}
 }
+
+// shedUnits prices the shed for broker-stamped traffic: 1 when nothing is shed (no contention,
+// gold, an unresolved tenant), ceil(1/factor) for a throttle, and the hard drop for a zero factor.
+func TestShedUnitsPricesTheShedFactor(t *testing.T) {
+	withFloor(t, 0)
+	if got := shedUnits(resolved(bestEffortPriority))("acme"); got != 1 {
+		t.Errorf("no contention = %d units, want 1", got)
+	}
+	withFloor(t, 1) // best-effort throttles to 0.25
+	if got := shedUnits(resolved(bestEffortPriority))("acme"); got != 4 {
+		t.Errorf("best-effort at L1 = %d units, want 4", got)
+	}
+	if got := shedUnits(resolved(goldPriority))("acme"); got != 1 {
+		t.Errorf("gold = %d units, want 1: gold is never shed", got)
+	}
+	if got := shedUnits(func(string) (int, bool) { return bestEffortPriority, false })("acme"); got != 1 {
+		t.Errorf("unresolved = %d units, want 1: an unclassified tenant is not shed", got)
+	}
+	withFloor(t, 3) // best-effort hard drop
+	if got := shedUnits(resolved(bestEffortPriority))("acme"); got < 1<<20 {
+		t.Errorf("hard drop = %d units, want a price no burst can pay", got)
+	}
+}

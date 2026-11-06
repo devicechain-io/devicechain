@@ -727,6 +727,13 @@ func (es *GatewayJetStreamSource) settler(msg messaging.Message, tenant string) 
 			}
 			return
 		}
+		if errors.Is(handleErr, messaging.ErrRoundWalkStopped) || errors.Is(handleErr, messaging.ErrTenantGone) {
+			// A shutdown cancelled the walk before it knew the outcome (the pod stopping, not the
+			// message failing), or the tenant is being erased and routing its payload to
+			// failed-decode would store it again: even on its last delivery it is left unacked,
+			// never dead-lettered as poison.
+			return
+		}
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			// The worker may have ALREADY tried the failed-decode route and failed —
 			// that is what ErrDeadLetterUnavailable marks. Re-attempting a route that

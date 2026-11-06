@@ -24,30 +24,27 @@ const (
 	platformBurst = 2000
 )
 
-// newTestGate builds the gate the way production wires it: the routing decision (MeterAt) is made
-// from the live limiter's own ceiling and handed to the gate, which only follows it. A test that
-// hands the gate a send time therefore goes through the same decision a source makes.
+// newTestGate builds the gate the way production wires it: the metering time (MeterAt) is decided
+// once and handed to the gate, which only follows it. A test that hands the gate a send time
+// therefore goes through the same decision a source makes.
 func newTestGate() (RateGate, *int) {
 	shed := 0
 	limits := core.StaticCeiling(testCeiling, testBurst)
-	live := core.NewTenantRateLimiter(limits)
 	inner := NewRateGate(
-		live,
+		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		core.NewTenantRateLimiter(limits),
 		func(string, string) { shed++ })
-	meter := NewMeterAt(live)
+	meter := NewMeterAt()
 	return func(source, tenant string, sentAt time.Time, redelivery bool, origin Origin) bool {
 		return inner(source, tenant, meter(tenant, sentAt), redelivery, origin)
 	}, &shed
 }
 
 // harnessMeter is the routing decision the capture-source test harness is built with: the
-// platform default ceiling, the ceiling the strategy's measurements ran at.
-func harnessMeter() MeterAt {
-	return NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)))
-}
+// the broker-time decision, as production builds it.
+func harnessMeter() MeterAt { return NewMeterAt() }
 
 // THE MINTING BYPASS — the defect this gate's two-limiter shape exists to close.
 //
@@ -130,28 +127,25 @@ func TestGateAdmitsACompliantBacklogInFull(t *testing.T) {
 	require.Zero(t, *shed, "nothing should have been reported shed")
 }
 
-// Steady state routes to the LIVE limiter, so the ceiling is enforced exactly and
-// the backlog limiter never engages. Without this, a caught-up consumer would meter
-// on a second bucket and every tenant would quietly get twice their ceiling.
-func TestCaughtUpTrafficIsMeteredOnTheLiveLimiter(t *testing.T) {
+// Everything the broker stamped is metered on ONE allowance, the backlog limiter, however fresh:
+// the ceiling is enforced exactly on a caught-up consumer, and a stall never moves traffic
+// between buckets. Traffic with no broker timestamp (an external broker, broker presence) is the
+// live limiter's, a separate allowance.
+func TestCaughtUpCaptureTrafficIsMeteredOnTheBrokerTimeline(t *testing.T) {
 	gate, _ := newTestGate()
 
-	// Fresh captured messages: below the tenant's backlog threshold (the time its burst covers),
-	// so they are live.
-	fresh := time.Now().Add(-backlogAfter(core.TenantCeiling{RatePerSecond: testCeiling, Burst: testBurst}) / 2)
+	fresh := time.Now().Add(-10 * time.Millisecond)
 	admitted := 0
 	for i := 0; i < 500; i++ {
 		if gate("gw", "acme", fresh, false, OriginAuthenticated) {
 			admitted++
 		}
 	}
-	require.LessOrEqual(t, admitted, testBurst+2,
-		"a caught-up capture consumer must meter as live traffic, not get its own ceiling")
+	require.LessOrEqual(t, admitted, testBurst+2, "a caught-up capture consumer is held to its ceiling")
 
-	// And having done so, the live bucket is spent — an external-broker message from
-	// the same tenant is shed rather than served from a second, untouched bucket.
-	require.False(t, gate("mqtt", "acme", time.Time{}, false, OriginAuthenticated),
-		"authenticated live traffic must share one bucket across transports when nothing is lagging")
+	// The live allowance (no broker timestamp) is untouched by it.
+	require.True(t, gate("mqtt", "acme", time.Time{}, false, OriginAuthenticated),
+		"capture traffic spent the allowance of the sources that have no broker timestamp")
 }
 
 // HTTP names its tenant before any credential is checked, so an HTTP flood naming a
@@ -207,7 +201,7 @@ func TestARateGateNeedsAllFourLimiters(t *testing.T) {
 func TestBacklogLimiterSurvivesABackwardsAppendTime(t *testing.T) {
 	gate, _ := newTestGate()
 
-	base := time.Now().Add(-time.Hour) // well past BacklogThreshold: the backlog limiter
+	base := time.Now().Add(-time.Hour)
 	admitted := 0
 	for i := 0; i < 100; i++ { // 1 s at exactly the ceiling: compliant
 		if gate("gw", "acme", base.Add(time.Duration(i)*10*time.Millisecond), false, OriginAuthenticated) {

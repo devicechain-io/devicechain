@@ -190,6 +190,13 @@ type RoundEngineConfig struct {
 	ChunkMax func() int
 	// Metrics may be nil.
 	Metrics *EnvelopeMetrics
+	// TenantGone, when set, reports whether a tenant has been deleted or is being erased (or
+	// whether that cannot be established: it must fail closed). It is asked when a round's message
+	// is found evicted, because "not found" also covers a message tenant erasure purged: stepping
+	// past it would store the erased tenant's member again. For a gone tenant the members are left
+	// unsettled (ErrTenantGone) instead. Nil means there is no deletion authority to ask, and an
+	// evicted round is always stepped past.
+	TenantGone func(tenant string) bool
 }
 
 // RoundEngine is documented above. Publish is called by ONE goroutine (the Writer's submitter);
@@ -560,7 +567,14 @@ func (e *RoundEngine) beat(ms []RoundMember) {
 	}
 }
 
-var errRoundWalkStopped = errors.New("envelope: stopped before the round's outcome was known")
+// ErrTenantGone is the outcome of a member whose round was found missing for a tenant that is
+// deleted or being erased: it is left unacknowledged rather than stored again.
+var ErrTenantGone = errors.New("envelope: the tenant is deleted or being erased; its event is not stored again")
+
+// ErrRoundWalkStopped is the outcome of a walk that was cancelled (a shutdown) before it knew
+// whether its round was stored. It says nothing about the message: a source settled with it is
+// left unacknowledged for the next pod and is NOT poison, however many times it was delivered.
+var ErrRoundWalkStopped = errors.New("envelope: stopped before the round's outcome was known")
 
 // walk settles ms starting at round: publish it (or, with dup set, take the answer already in
 // hand), and while the broker says a round is already stored, read what it carries, settle those
@@ -629,6 +643,14 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 		}
 		// The round is stored: read what it carries.
 		held, err := e.heldOf(ctx, k, round, ack.Sequence)
+		if err != nil && errors.Is(err, nats.ErrMsgNotFound) && e.cfg.TenantGone != nil && e.cfg.TenantGone(k.Tenant) {
+			// Not evicted by retention but quite possibly purged by this tenant's erasure: storing
+			// its member again in the next round would resurrect erased data. Leave it unsettled.
+			log.Warn().Str("tenant", k.Tenant).Uint64("bucket", k.Bucket).Uint32("round", round).
+				Msg("An envelope round is gone and its tenant is deleted or being erased; not storing its members again")
+			e.settle(ms, ErrTenantGone)
+			return
+		}
 		if err != nil && errors.Is(err, nats.ErrMsgNotFound) {
 			// The broker remembers this round's id (the duplicate window) but retention has since
 			// discarded the message, so what it carried can never be read. That is not a fault a
@@ -694,7 +716,7 @@ func (e *RoundEngine) publishRound(ctx context.Context, k RoundKey, msg Message,
 		}
 		select {
 		case <-ctx.Done():
-			return ack, errRoundWalkStopped
+			return ack, ErrRoundWalkStopped
 		case <-giveUp:
 			return ack, err
 		case <-time.After(backoff):

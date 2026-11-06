@@ -84,8 +84,9 @@ func newEnvelopeEngine(ctx context.Context, iproc *InboundEventsProcessor, w mes
 		Rounds:          rp,
 		Ctx:             ctx,
 		// A bucket's members cannot exceed bucketSize x fanSlots, and every round carries at least one.
-		MaxRounds: bucketSize * fanSlots,
-		ChunkMax:  func() int { return iproc.envelopeChunkMax },
+		MaxRounds:  bucketSize * fanSlots,
+		TenantGone: iproc.tenantGone,
+		ChunkMax:   func() int { return iproc.envelopeChunkMax },
 		Metrics: messaging.NewEnvelopeCounters(iproc.metrics.envDuplicates, iproc.metrics.envRecoverySteps,
 			iproc.metrics.envProbeFailures, iproc.metrics.envRetries).WithProbeDenied(iproc.metrics.envProbeDenied).WithRoundsEvicted(iproc.metrics.envRoundsEvicted),
 	})

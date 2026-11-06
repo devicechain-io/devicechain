@@ -367,3 +367,43 @@ type brokenRounds struct{ fakeRoundPub }
 func (brokenRounds) Get(context.Context, string, uint64) (StoredMessage, error) {
 	return StoredMessage{}, errors.New("nats: timeout")
 }
+
+// "Not found" also covers a message tenant erasure purged. For a tenant that is deleted or being
+// erased the walk must NOT step to the next round (that would store the erased tenant's member
+// again): the member is left unsettled with ErrTenantGone and nothing is published.
+func TestRoundEngineAnErasedTenantsMissingRoundIsNotSteppedPast(t *testing.T) {
+	b := newFakeBroker()
+	k, _, _ := RoundKeyOf("acme", 515, time.Time{})
+	newTestEngine(t, b).Publish(context.Background(), k, []RoundMember{newRoundOutcomes().member(1, false)})
+	b.evict(1)
+
+	var asked atomic.Int32
+	e, err := NewRoundEngine(RoundEngineConfig{Kind: eventenvelope.KindUnresolved, DedupKind: "C",
+		Writer: fakeWriter{b}, Rounds: fakeRoundPub{b},
+		TenantGone: func(tenant string) bool { asked.Add(1); return tenant == "acme" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := newRoundOutcomes()
+	e.Publish(context.Background(), k, []RoundMember{o.member(7, false)})
+	e.Wait()
+	if o.n[7] != 1 || !errors.Is(o.errs[7], ErrTenantGone) {
+		t.Fatalf("a member of an erased tenant must be left unsettled with ErrTenantGone: settled %d err %v", o.n[7], o.errs[7])
+	}
+	if _, stored := b.bySeq[2]; stored {
+		t.Fatal("the erased tenant's member was stored again")
+	}
+	if asked.Load() != 1 || e.Evicted.Load() != 0 {
+		t.Fatalf("asked %d, evicted %d", asked.Load(), e.Evicted.Load())
+	}
+
+	// A tenant that is not gone is stepped past as before.
+	e2, _ := NewRoundEngine(RoundEngineConfig{Kind: eventenvelope.KindUnresolved, DedupKind: "C",
+		Writer: fakeWriter{b}, Rounds: fakeRoundPub{b}, TenantGone: func(string) bool { return false }})
+	o2 := newRoundOutcomes()
+	e2.Publish(context.Background(), k, []RoundMember{o2.member(8, false)})
+	e2.Wait()
+	if o2.errs[8] != nil || e2.Evicted.Load() != 1 {
+		t.Fatalf("a live tenant's evicted round must be stepped past: err %v evicted %d", o2.errs[8], e2.Evicted.Load())
+	}
+}

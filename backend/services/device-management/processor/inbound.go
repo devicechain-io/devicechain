@@ -143,6 +143,7 @@ type InboundEventsProcessor struct {
 	envelopeChunkMax   int
 	env                *envelopeEngine
 	envCancel          context.CancelFunc
+	tenantGone         func(tenant string) bool
 	// envWalkGrace is how long the envelope walks get to finish once the readers have stopped,
 	// before they are cancelled; zero means the default. Tests shorten it.
 	envWalkGrace time.Duration
@@ -358,6 +359,13 @@ func WithSplitWriter(w messaging.MessageWriter) InboundOption {
 // message (resolved_envelope.go). enabled false changes nothing at all. enabled true needs the
 // resolved writer to be a messaging.AckedWriter and rounds to be non-nil, and the processor
 // refuses to start without them - it will not publish envelopes it cannot settle.
+// WithTenantGone gives the envelope walks the erasure fence: asked when a round's message is found
+// missing, so an evicted round is not stepped past for a tenant whose data is being erased (the
+// purge is also "not found"). It must fail closed: report true when the fence cannot be read.
+func WithTenantGone(gone func(tenant string) bool) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.tenantGone = gone }
+}
+
 func WithResolvedEnvelopes(enabled bool, rounds messaging.RoundPublisher) InboundOption {
 	return func(iproc *InboundEventsProcessor) {
 		iproc.envelopeResolved = enabled

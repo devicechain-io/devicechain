@@ -5,7 +5,6 @@ package processor
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -40,10 +39,12 @@ import (
 // A zero sentAt is read as now by core.TenantRateLimiter.AllowAt, so "I do not
 // know when this was sent" degrades to today's behaviour rather than to unmetered.
 //
-// 🔴 A NON-ZERO sentAt MEANS "THIS MESSAGE IS BACKLOG", NOT "THIS IS WHEN IT WAS SENT". The gate
-// does not judge age: whether a message is live or backlog is decided once, per tenant, by
-// MeterAt (see there), and the source hands the gate that decision. A caller that passes a raw
-// send time for a message that is not backlog meters it in the backlog allowance.
+// 🔴 A NON-ZERO sentAt IS A BROKER TIMESTAMP, AND THE MESSAGE IS METERED ON THAT TIMELINE. The
+// gate does not judge age to choose a bucket: every message the broker stamped is charged to ONE
+// allowance (the backlog limiter) at the time the broker stored it, which MeterAt has already
+// capped at now. A stall of any length is therefore irrelevant to the metering, since a tenant
+// within its ceiling is admitted in full on the timeline it sent on. Only the contention shed
+// (ADR-063) looks at age: see FreshAge.
 //
 // redelivery says the broker is re-offering a message it has already delivered
 // once. 🔴 IT IS A PARAMETER RATHER THAN A CONDITION AT THE CALL SITE, and that
@@ -137,21 +138,51 @@ func RefuseDeletedTenants(tenantDeleted func(string) bool, next RateGate, onRefu
 	}
 }
 
-// BacklogThreshold is the CEILING on how far behind a message may be before it is metered as
-// BACKLOG on the send timeline rather than as live traffic at now. The threshold a tenant is
-// actually held to is the lesser of this and the time its live burst covers (backlogAfter).
-//
-// It sits well above the lag of a caught-up capture consumer (milliseconds) and
-// well below any outage worth recovering from, so the steady state routes almost entirely
-// to the live limiter and the backlog limiter engages only when there is a real backlog.
-//
-// 🔴 IT IS NOT SAFE ALONE. Used as a fixed 5 s it left a dead zone: a platform stall of d
-// seconds queues d seconds of a tenant's traffic, and when it ends that queue is metered at
-// now. The live bucket absorbs burst/rate seconds of it (2 s at the platform default of
-// 1000/s with burst 2000); a stall longer than that and shorter than this constant shed the
-// rest, so a tenant AT its ceiling lost messages it had already been PUBACKed for, charged
-// to the tenant when the delay was the platform's. Hence the per-tenant bound (backlogAfter).
-const BacklogThreshold = 5 * time.Second
+// FreshAge is how old a broker-stamped message may be and still count as NEW INGRESS rather than
+// a drained backlog. The ADR-063 contention shed applies to fresh messages only: a message the
+// broker stored longer ago than this was durably accepted (ADR-030) before this pod ever read it,
+// and shedding it would retroactively discard accepted data, which ADR-063 forbids. It sits well
+// above the lag of a caught-up capture consumer (milliseconds) and far below any stall worth
+// recovering from, so the steady state is entirely fresh and a drain is entirely not.
+const FreshAge = 250 * time.Millisecond
+
+// maxShedUnits caps what one fresh message may be charged for the shed, so a hard drop (a factor
+// of zero) can never overflow when multiplied by a reading count, and always exceeds any burst.
+const maxShedUnits = 1 << 20
+
+// ShedUnits says how many tokens one fresh message of the tenant costs under the ADR-063 shed
+// factor: 1 at no contention or for a class that is never shed, ceil(1/factor) otherwise, and
+// maxShedUnits for the hard drop. Charging 1/factor from a bucket of (rate, burst) is the same
+// as charging 1 from a bucket of (rate*factor, burst*factor), which is how the live limiters
+// shed, but it lets a message be shed without being metered on a different bucket than the
+// backlog it may be interleaved with.
+type ShedUnits func(tenant string) int
+
+// GateOption configures NewRateGate and NewReadingGate.
+type GateOption func(*gateOptions)
+
+type gateOptions struct{ shedUnits ShedUnits }
+
+// WithShedUnits gives the gate the contention shed it applies to fresh broker-stamped messages.
+// Without it nothing is shed by contention.
+func WithShedUnits(u ShedUnits) GateOption { return func(o *gateOptions) { o.shedUnits = u } }
+
+func buildGateOptions(opts []GateOption) gateOptions {
+	var o gateOptions
+	for _, f := range opts {
+		f(&o)
+	}
+	return o
+}
+
+// unitsFor is the number of tokens a charge of one costs: the shed cost for a fresh authenticated
+// broker-stamped message, 1 for everything else (a backlog message is never shed by contention).
+func (o gateOptions) unitsFor(tenant string, sentAt time.Time, origin Origin) int {
+	if o.shedUnits == nil || origin != OriginAuthenticated || sentAt.IsZero() || time.Since(sentAt) >= FreshAge {
+		return 1
+	}
+	return min(max(o.shedUnits(tenant), 1), maxShedUnits)
+}
 
 // NewRateGate builds the ingest gate over three per-tenant limiters, routing each
 // message to the one that meters it. onShed, when non-nil, is called for each shed
@@ -210,14 +241,17 @@ const BacklogThreshold = 5 * time.Second
 // # The residual
 //
 // Each limiter resolves the tenant's ceiling independently, so the ceiling is a ceiling
-// per allowance, not per tenant. A tenant simultaneously live AND draining a genuine
-// backlog may be admitted up to twice its ceiling until the drain catches up; one also
-// sending over HTTP, up to one ceiling more, and one also posting through an inbound
-// integration, one more again — four times its ceiling per replica at worst. That is bounded and predictable, and it multiplies with the exposure the
+// per allowance, not per tenant. Everything the platform broker stamped (live traffic and a
+// drained backlog alike) shares ONE allowance, the backlog limiter, so a drain never doubles a
+// tenant; the live limiter meters only what has no broker timestamp (broker presence). So a tenant
+// also sending presence may be admitted up to twice its ceiling; one also sending over HTTP, up
+// to one ceiling more, and one also posting through an inbound integration, one more again —
+// four times its ceiling per replica at worst. That is bounded and predictable, and it multiplies with the exposure the
 // platform already carries from running N replicas with independent limiters. The same
 // holds, allowance by allowance, for the readings NewReadingGate charges.
 func NewRateGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
-	onShed func(source string, tenant string)) RateGate {
+	onShed func(source string, tenant string), opts ...GateOption) RateGate {
+	o := buildGateOptions(opts)
 	if live == nil || backlog == nil || untrusted == nil || integration == nil {
 		panic("processor.NewRateGate: the live, backlog, untrusted and integration limiters are all required")
 	}
@@ -240,7 +274,7 @@ func NewRateGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
 		if redelivery {
 			return true
 		}
-		if admitN(live, backlog, untrusted, integration, tenant, sentAt, origin, 1) {
+		if admitN(live, backlog, untrusted, integration, tenant, sentAt, origin, o.unitsFor(tenant, sentAt, origin)) {
 			return true
 		}
 		if onShed != nil {
@@ -250,110 +284,30 @@ func NewRateGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
 	}
 }
 
-// MeterAt decides, for one authenticated message, the send time it is metered at: sentAt itself
-// when the message is BACKLOG (older than the tenant's threshold, or any message of a tenant still
-// recovering from one: see recoveryTracker), and the zero time, meaning now, when it is live. Build it with
-// NewMeterAt over the same live limiter the gates use.
+// MeterAt decides, for one broker-stamped message, the time it is metered at: the time the broker
+// stored it, capped at now, or the zero time (meaning now, on the live limiter) when the source
+// has no broker timestamp. It is computed once, before the first stage, and handed to both gates,
+// so the message stage and the reading stage charge the same timeline.
 //
-// It is the ONE routing decision between the live and backlog limiters, and the gates do not
-// repeat it: admitN routes by whether the time it is handed is zero. A source that meters a
-// message twice (once as a message before decode, once for its readings after) calls this once,
-// before the first stage, and passes the result to both, so the two stages cannot route one
-// message to different limiters. Recomputed at decode, a message that sat in the decode queue
-// past its threshold would be charged its readings in the un-shed backlog allowance after being
-// charged as a message in the live one.
+// 🔴 THE CAP IS WHAT MAKES A BROKER CLOCK AHEAD OF THIS POD HARMLESS. The append time is stamped
+// by the stream leader's wall clock, which can run ahead of this pod's. Left alone, such a time
+// would move the backlog bucket's clock into the future and let the tenant mint tokens as the
+// real clock caught up. Charged at min(appendTime, now) it is metered as live traffic. A clock
+// BEHIND this pod's is indistinguishable from a backlog and is metered on its own consistent
+// timeline, with the contention shed skipped for it (see FreshAge).
 type MeterAt func(tenant string, sentAt time.Time) time.Time
 
-// NewMeterAt builds the routing decision over the live message limiter, whose ceiling for the
-// tenant sets the threshold (backlogAfter). A nil limiter panics, as the gates do.
-func NewMeterAt(live *core.TenantRateLimiter) MeterAt {
-	if live == nil {
-		panic("processor.NewMeterAt: the live limiter is required")
-	}
-	return newRecoveryTracker(live, time.Now).meterAt
-}
-
-// recoveryTracker is the state behind MeterAt: which tenants are RECOVERING, that is metered on
-// the send timeline although a given message of theirs is younger than the threshold.
-//
-// 🔴 YOUNGER THAN THE THRESHOLD IS NOT THE SAME AS CAUGHT UP. The reader of a stalled stream
-// drains the queue at fetch speed, so the tail of the queue is younger than burst/rate while it
-// is still queue: a compliant sender's sustained traffic over that span plus a burst it was
-// permitted can exceed what the live bucket holds at now, and shedding it discards messages
-// already PUBACKed. And no age cutoff fixes that, because the live bucket was idle through the
-// stall and is full, while the backlog bucket holds what the stall's traffic really spent: any
-// handoff while traffic is flowing grants the tenant a second burst or takes one away.
-//
-// So a tenant judged backlog STAYS on the send timeline for as long as it keeps sending, and
-// returns to the live bucket only after it has been quiet for the time its burst covers
-// (backlogAfter), by which time both buckets have refilled to full and the handoff is exact.
-// The entry is per tenant and shared by every reader that holds the MeterAt, so one reader
-// seeing a fresh message never ends another reader's drain.
-//
-// Entries die when the quiet period passes, found either by the tenant's next message or by a
-// sweep (at most one a minute, on a call), so churning or deleted tenants do not accumulate.
-type recoveryTracker struct {
-	live *core.TenantRateLimiter
-	now  func() time.Time
-
-	mu        sync.Mutex
-	last      map[string]time.Time // tenant -> wall time of its last recovering message
-	lastSweep time.Time
-}
-
-// recoverySweepEvery bounds how often idle entries are collected.
-const recoverySweepEvery = time.Minute
-
-func newRecoveryTracker(live *core.TenantRateLimiter, now func() time.Time) *recoveryTracker {
-	return &recoveryTracker{live: live, now: now, last: make(map[string]time.Time)}
-}
-
-func (r *recoveryTracker) meterAt(tenant string, sentAt time.Time) time.Time {
-	after := backlogAfter(r.live.Ceiling(tenant))
-	now := r.now()
-	if sentAt.IsZero() || !sentAt.Before(now) {
-		return time.Time{} // an absent or future send time is live, never backlog
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if now.Sub(r.lastSweep) >= recoverySweepEvery {
-		r.lastSweep = now
-		for t, at := range r.last {
-			if now.Sub(at) >= max(backlogAfter(r.live.Ceiling(t)), time.Second) {
-				delete(r.last, t)
-			}
+// NewMeterAt builds the metering time decision.
+func NewMeterAt() MeterAt {
+	return func(_ string, sentAt time.Time) time.Time {
+		if sentAt.IsZero() {
+			return time.Time{}
 		}
-	}
-	if at, behind := r.last[tenant]; behind && now.Sub(at) >= after {
-		delete(r.last, tenant) // quiet for the burst's cover: both buckets are full again
-	}
-	if _, behind := r.last[tenant]; behind || now.Sub(sentAt) > after {
-		r.last[tenant] = now
+		if now := time.Now(); sentAt.After(now) {
+			return now
+		}
 		return sentAt
 	}
-	return time.Time{}
-}
-
-// backlogAfter is how old a tenant's message must be before it is backlog: the lesser of
-// BacklogThreshold and the time the tenant's live burst covers (burst / rate).
-//
-// 🔴 The second term is what closes the dead zone. A delay the live burst can absorb is metered
-// at now and absorbed; any delay it cannot absorb is metered on the timeline the device sent on,
-// where a tenant within its ceiling is admitted in full and one above it is shed by exactly the
-// amount it exceeded. The test a stall must pass is therefore not "is it older than 5 s" but
-// "could the live bucket have taken it": a message older than burst/rate cannot be one the
-// bucket is able to absorb.
-//
-// A ceiling with no usable rate or burst admits nothing wherever it is metered, so it keeps the
-// fixed threshold.
-func backlogAfter(c core.TenantCeiling) time.Duration {
-	if c.RatePerSecond <= 0 || c.Burst <= 0 {
-		return BacklogThreshold
-	}
-	if cover := time.Duration(float64(c.Burst) / c.RatePerSecond * float64(time.Second)); cover < BacklogThreshold {
-		return cover
-	}
-	return BacklogThreshold
 }
 
 // admitN routes a charge of n units to the limiter that meters it, and is the one routing
@@ -370,7 +324,7 @@ func admitN(live, backlog, untrusted, integration *core.TenantRateLimiter, tenan
 	if origin != OriginAuthenticated {
 		return untrusted.AllowUntrustedN(tenant, n)
 	}
-	// sentAt is already the decision (MeterAt): non-zero is backlog, metered at that time.
+	// sentAt is already the decision (MeterAt): non-zero is a broker timestamp, metered at that time.
 	if !sentAt.IsZero() {
 		return backlog.AllowNAt(tenant, sentAt, n)
 	}
@@ -397,7 +351,8 @@ type ReadingGate func(source, tenant string, sentAt time.Time, redelivery bool, 
 // would spend a tenant's message allowance on its readings. onShed, when non-nil, receives
 // each shed message's reading count. A nil limiter panics, as in NewRateGate.
 func NewReadingGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
-	onShed func(source, tenant string, readings int)) ReadingGate {
+	onShed func(source, tenant string, readings int), opts ...GateOption) ReadingGate {
+	o := buildGateOptions(opts)
 	if live == nil || backlog == nil || untrusted == nil || integration == nil {
 		panic("processor.NewReadingGate: the live, backlog, untrusted and integration reading limiters are all required")
 	}
@@ -405,7 +360,7 @@ func NewReadingGate(live, backlog, untrusted, integration *core.TenantRateLimite
 		if redelivery || readings <= 0 {
 			return true
 		}
-		if admitN(live, backlog, untrusted, integration, tenant, sentAt, origin, readings) {
+		if admitN(live, backlog, untrusted, integration, tenant, sentAt, origin, readings*o.unitsFor(tenant, sentAt, origin)) {
 			return true
 		}
 		if onShed != nil {

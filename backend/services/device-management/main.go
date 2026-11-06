@@ -335,10 +335,20 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		processor.WithDeadLetters(DeadLetters),
 		processor.WithSplitWriter(InboundSplitWriter),
 		processor.WithResolvedEnvelopes(resolvedEnvelopesOn(), ResolvedRoundPublisher),
+		processor.WithTenantGone(erasureFenced),
 		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
 		processor.WithSecretTransit(SecretTransit),
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
 			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)))
+}
+
+// erasureFenced reports whether a tenant's data is being erased here, from this service's own
+// schema. It fails CLOSED: a fence that cannot be read counts as erased, so an envelope walk
+// never stores a member again on the strength of a database it could not ask.
+func erasureFenced(tenant string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return RdbManager == nil || rdb.CheckTenantFence(ctx, RdbManager.Database, tenant) != nil
 }
 
 // newStoreHold builds the Holder that keeps a consumer's messages unacked, outside their
