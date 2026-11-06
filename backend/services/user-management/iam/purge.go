@@ -470,8 +470,20 @@ func (s *Store) CompleteTenantPurge(ctx context.Context, t *Tenant, rec *TenantP
 		}
 		// The placement pin is retained through the purge (the sweep finds the tenant's stores
 		// through it) and cleared here, with the token. A pin that outlived the release would be
-		// inherited by whoever next takes the token. Lock order is tenant row (deleted above),
-		// then the placement config row, as in SetTenantOverride.
+		// inherited by whoever next takes the token.
+		//
+		// 🔴 LOCK ORDER IS TENANT ROW (deleted above), THEN THE CONFIG ROW, THEN THE PIN: the same
+		// order as SetTenantOverride and ClearTenantOverride (changePlacement), which take the
+		// config row first and only then insert or delete the pin. The pin DELETE is a row lock
+		// like any other, so deleting it before the config row is locked is the inverse order and
+		// deadlocks against a concurrent ClearTenantOverride (it holds config and waits for the
+		// pin; this holds the pin and waits for config). The config row is therefore locked
+		// whether or not a pin exists: whether one does is only known after the delete.
+		var cfg PartitionConfig
+		cfgErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cfg, partitionConfigID).Error
+		if cfgErr != nil && !errors.Is(cfgErr, gorm.ErrRecordNotFound) {
+			return cfgErr
+		}
 		pins := tx.Where("tenant_token = ?", t.Token).Delete(&TenantVPartitionOverride{})
 		if pins.Error != nil {
 			return pins.Error
@@ -479,9 +491,9 @@ func (s *Store) CompleteTenantPurge(ctx context.Context, t *Tenant, rec *TenantP
 		if pins.RowsAffected == 0 {
 			return nil
 		}
-		var cfg PartitionConfig
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cfg, partitionConfigID).Error; err != nil {
-			return err
+		if cfgErr != nil {
+			// A pin with no placement config cannot be: refuse rather than bump nothing.
+			return cfgErr
 		}
 		return tx.Model(&PartitionConfig{}).Where("id = ?", partitionConfigID).
 			UpdateColumn("generation", gorm.Expr("generation + 1")).Error
