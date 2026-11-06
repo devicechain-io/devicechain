@@ -150,9 +150,17 @@ func applyMoves(ctx context.Context, io moveIO, moves []Move, o ApplyOptions) []
 			out = append(out, MoveResult{Move: m, Err: err})
 			continue
 		}
-		if err := awaitSettled(ctx, io.state, m, o); err != nil {
+		landed, err := awaitSettled(ctx, io.state, m, o)
+		if err != nil {
 			stopped = fmt.Errorf("not attempted: an earlier move did not settle")
 			out = append(out, MoveResult{Move: m, Err: err})
+			continue
+		}
+		if landed != m.To {
+			// The broker honours the step-down's placement as a preference. A group that settled
+			// on a third server is steady, so the run goes on, but the move did not do what the
+			// plan said and must not read as done.
+			out = append(out, MoveResult{Move: m, Err: fmt.Errorf("moved, not to plan: the group settled on %q, not %q", landed, m.To)})
 			continue
 		}
 		out = append(out, MoveResult{Move: m})
@@ -223,8 +231,8 @@ func targetPresent(peers []Peer, to string) bool {
 }
 
 // awaitSettled waits for the group's leader to be elected (somewhere other than where it was) and all
-// its replicas current.
-func awaitSettled(ctx context.Context, read stateReader, m Move, o ApplyOptions) error {
+// its replicas current, and returns the leader it saw.
+func awaitSettled(ctx context.Context, read stateReader, m Move, o ApplyOptions) (string, error) {
 	deadline := time.Now().Add(o.Settle)
 	var last string
 	for {
@@ -232,7 +240,7 @@ func awaitSettled(ctx context.Context, read stateReader, m Move, o ApplyOptions)
 		// Settled means the leadership LEFT the old leader: a reading of the old one after an accepted
 		// step-down is the election not yet seen, and the next move must not start on it.
 		if err == nil && leader != m.From && settled(leader, peers) {
-			return nil
+			return leader, nil
 		}
 		if err != nil {
 			last = err.Error()
@@ -240,7 +248,7 @@ func awaitSettled(ctx context.Context, read stateReader, m Move, o ApplyOptions)
 			last = fmt.Sprintf("leader %q, replicas %v", leader, peers)
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return fmt.Errorf("the group had not settled %s after the move (%s)", o.Settle, last)
+			return "", fmt.Errorf("the group had not settled %s after the move (%s)", o.Settle, last)
 		}
 		select {
 		case <-ctx.Done():
