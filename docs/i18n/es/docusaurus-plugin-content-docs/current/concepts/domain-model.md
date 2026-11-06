@@ -18,6 +18,8 @@ DeviceChain modela el mundo físico con un pequeño conjunto de conceptos compon
 
 Los dispositivos, activos, áreas, clientes y grupos se direccionan todos de la misma manera: mediante un tipo de entidad más un token estable por inquilino. Esa dirección uniforme es lo que permite que las relaciones, los grupos y la indexación de eventos funcionen de forma genérica sobre todos ellos. Los tipos de dispositivo y los perfiles de dispositivo no son entidades direccionables en este sentido; son configuración a través de la cual se resuelve un dispositivo.
 
+Un token tiene como máximo 128 caracteres, solo puede contener letras, dígitos, guiones (`-`) y guiones bajos (`_`), y debe empezar por una letra o un dígito. Se rechaza un punto, un espacio, una barra o cualquier otro carácter, y se conservan las mayúsculas y minúsculas tal como se escriben. Cuando un nombre que ya tienes contiene un punto, como la clave de métrica `battery.voltage`, conviértelo en un guion en el token (`battery-voltage`): el punto se queda en la clave que envía el dispositivo y nunca va en el token.
+
 ## Relaciones {#relationships}
 
 DeviceChain no vincula un dispositivo a una única asignación fija `(customer, area, asset)`. En su lugar, conecta las entidades con relaciones tipadas y dirigidas:

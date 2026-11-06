@@ -653,6 +653,7 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **`dcctl sim create` 与层级。**`--tier` 指向已存在的层级时，该层级必须声明场景或 `--tier-config` 所列出的每一项限额，否则 `create` 会拒绝并指出缺失的键：`dcctl` 只会提高限额，看不到继承的默认值。由 `create` 自己创建的层级不受影响。`--tier-config` 中的 `null` 会被拒绝，而不再被读作 0。
 - **`dcctl upgrade` 与 broker 的卷。**如果某个声明唯一未完成的步骤是扩容的文件系统部分，并且它的 broker 服务器 Pod 已不存在，升级不再永远被拒绝：升级重新创建的 StatefulSet 会完成这次扩容。正在进行的扩容、没有扩容记录却容量不足的声明、节点侧扩容失败以及仍存在的 Pod，依然会导致拒绝。滚动结束后，升级会按上面列表所述检查这些声明。不带 `--mqtt-host` 的 `dcctl upgrade --mqtt-exposure <模式>` 会沿用实例已记录的主机；若没有记录，仍会被拒绝。
 - **`dcctl sim`。**`dcctl sim status`、`start` 和 `stop` 在输出到终端时会缩进控制 API 的 JSON；管道输出不变。模拟设备群可以运行空中升级的设备端（`--ota`，并可注入错误哈希、错误签名、中断的下载和离线设备）。
+- **当实例不是默认实例时，`dcctl bootstrap` 和 `dcctl sim create` 会给出更多信息。**bootstrap 摘要中的 `GraphQL:` 行现在与 `Console:` 行使用相同的主机和端口，此前它会省略非默认端口。当 `--instance` 仍是默认值 `devicechain`，导致 `dcctl sim create`（或 `sim destroy`）无法读取超级用户密码时，错误信息现在会附上本机已记录的实例，并建议使用 `--instance <name>`。标志、默认值以及命令作用于哪个实例都没有变化。
 - **`dcctl bootstrap` 和 `dcctl upgrade` 多打印一行**：当 MQTT 接入路径未设置为失败即关闭时，提示在持续过载下已确认的事件可能被丢弃，并给出 `--mqtt-fail-closed`。你不操作就不会有任何变化。
 - **`dcctl broker rebalance` 让最繁忙的两个逐事件流保持在不同服务器上。**broker 滚动之后，`resolved-events` 与固定的接入流的 leader 可能落在同一台服务器上，按流数量均衡看不出这一点。该步骤现在会在有可用服务器时，把 `resolved-events` 移到不领导任何逐事件流的服务器上，其摘要会把它报告为已分离、共享或未确认。v1.0 摘要中的字段保持不变。
 - **事件库：早于刷新策略覆盖范围的历史数据。**日期早于 `bucketedMeasurements` 背后的汇总所刷新的最近 30 天的读数（先存后发、回填），此前会被存储并由 `measurementEvents` 返回，却从未进入汇总。现在每小时一次的清扫会刷新它，因此这类读数大约一小时内就会出现在分桶查询中。没有架构变更。

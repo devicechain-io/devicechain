@@ -108,7 +108,7 @@ Elige **Nueva métrica** para añadir una, o edita una fila para cambiarla. Una 
 
 - una **Clave de la métrica**: el nombre que llevan las mediciones del dispositivo, como
   `temperature`;
-- un token y un **Tipo de datos**;
+- un token y un **Tipo de datos**. El token es un identificador de la métrica, distinto de su clave, y solo admite letras, dígitos, `-` y `_`. Para una clave como `battery.voltage`, usa un token como `battery-voltage`; la clave conserva su punto;
 - una **Unidad**, escrita en UCUM, como `Cel`;
 - un **Mín.** y un **Máx.** opcionales, que se muestran como rango;
 - un nombre y una descripción.

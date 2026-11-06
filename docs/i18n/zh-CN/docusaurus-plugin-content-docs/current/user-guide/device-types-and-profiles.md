@@ -75,7 +75,7 @@ import GuideShot from '@site/src/components/GuideShot';
 选择 **New metric**（新建指标）添加指标，或选择某一行的 **Edit**（编辑）进行修改。一个指标包含：
 
 - **Metric key**（指标键）：设备的测量值携带的名称，例如 `temperature`；
-- 令牌和 **Data type**（数据类型）；
+- 令牌和 **Data type**（数据类型）。令牌是指标的标识，与指标键相互独立，只能使用字母、数字、`-` 和 `_`。对于 `battery.voltage` 这样的键，令牌可以用 `battery-voltage`；键本身保留点号；
 - **Unit**（单位），使用 UCUM 书写，例如 `Cel`；
 - 可选的 **Min**（最小值）和 **Max**（最大值），显示在 **Range**（范围）列中；
 - 名称和描述。
