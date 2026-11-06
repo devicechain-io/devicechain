@@ -517,6 +517,7 @@ dcctl bootstrap local devicechain
 - **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
+- **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}
@@ -571,6 +572,14 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 **已弃用：指定了 `resource` 却未指定 `scope` 的 `client_credentials` 请求。** 这样的令牌带有服务账号各角色的全部权限。请随资源一起发送 `scope`（`read-only`，可同时加上 `location`）。带 scope 的令牌只带有该 scope 的读取权限，因此需要写入的集成应改为省略 `resource`。本版本中缺少 scope 本身从不构成拒绝的理由，所以该请求仍然成功。每次都会计入 `devicechain_usermanagement_oauth_unscoped_client_credentials_total`，并连同其客户端记录到日志，它将在下一个主版本中以 `invalid_scope` 被拒绝。在此之前，`infrastructure.tokenAudience.unscopedClientCredentials: enforce` 在启动时会被拒绝。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
 
 **回退。** `v1.1` 的服务在启动时会拒绝 `tokenAudience` 配置块。`dcctl` 渲染的 `v1.1` 配置不含它。如果你自己编写配置，请在回退前删除该配置块并更新 `instance.existingSecretChecksum`。
+
+#### 滚动升级期间的配置文件变更 {#v120-profile-cache}
+
+`device-management` 现在用一个新的键缓存每个设备类型的配置文件解析结果，因此运行本版本的副本不会读取旧副本写入的条目（旧条目不含载荷解码器）。在本版本副本上所做的每次变更都会同时清除两个键下的条目。在**旧**副本上所做的变更只清除旧键，因此已升级的副本会继续提供其持有的内容，直到条目过期。
+
+- **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
+- **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
+- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户只会驱逐自己的条目，而不会驱逐其他租户的。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 

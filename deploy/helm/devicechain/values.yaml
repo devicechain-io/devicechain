@@ -1451,7 +1451,10 @@ functionalAreas:
     # and 250 MiB resident at 16,000 devices, against the old 256Mi limit and its 192 MiB
     # GOMEMLIMIT: a fleet near 12,000 devices reached the soft limit. At 512Mi the soft limit is
     # 384 MiB, which that growth (about 6.4 MiB per 1,000 devices above a base near 115 MiB)
-    # reaches at a fleet of roughly 40,000 devices; size above that. Only the limit moves; the
+    # reaches at a fleet of roughly 40,000 devices, or about 37,000 when the replica also holds
+    # a full payload-decoder cache (its in-process copy is now bounded at 32 MiB rather than
+    # 4 MiB, inMemoryCache.profileResolutionCacheMiB, so up to 28 MiB more is live); size above
+    # that. Only the limit moves; the
     # memory request stays 128Mi, so scheduling is unchanged. sizing_test.go holds it.
     memoryLimitFloor: 512Mi
     # CPU REQUEST: what this service used at 6,000 events/s, applied while

@@ -41,6 +41,47 @@ func (r *IntegrationDeviceResolutionResolver) DeviceTypeToken() *string {
 func (r *IntegrationDeviceResolutionResolver) Overflow() bool { return r.M.Overflow }
 
 // ---------------------------------------------------
+// The answer to integrationDecoder
+// ---------------------------------------------------
+
+// IntegrationDecoderPlanResolver serves what the ingest path needs to know about a type's decoder.
+type IntegrationDecoderPlanResolver struct {
+	M *model.IntegrationDecoderAnswer
+}
+
+func (r *IntegrationDecoderPlanResolver) Present() bool { return r.M.Present }
+
+func (r *IntegrationDecoderPlanResolver) Input() *string {
+	// Only a value of the PayloadDecoderInput enum: a document written by a newer release may name
+	// an input kind this schema does not know, and returning it would be a GraphQL error, which the
+	// ingest path turns into a 503 for every uplink. Null says "present, input unknown".
+	switch r.M.Input {
+	case "FRAME", "JSON", "DECODED":
+		if r.M.Present {
+			return &r.M.Input
+		}
+	}
+	return nil
+}
+
+func (r *IntegrationDecoderPlanResolver) MaxReadings() int32 {
+	return clampInt32(int64(r.M.MaxReadings))
+}
+
+func (r *IntegrationDecoderPlanResolver) EstimatedCost() int32 {
+	return clampInt32(int64(min(r.M.EstimatedCost, math.MaxInt32)))
+}
+
+func (r *IntegrationDecoderPlanResolver) ProfileVersionToken() string { return r.M.ProfileVersionToken }
+
+func clampInt32(v int64) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(v)
+}
+
+// ---------------------------------------------------
 // Unregistered integration devices
 // ---------------------------------------------------
 

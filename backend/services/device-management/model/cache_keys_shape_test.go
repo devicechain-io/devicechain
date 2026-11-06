@@ -20,8 +20,12 @@ func TestCacheKeysMatchTheirFormattedShape(t *testing.T) {
 			if got, want := relationshipsBySourceKey(tenant, id), fmt.Sprintf("%s|%d", tenant, id); got != want {
 				t.Errorf("relationshipsBySourceKey(%q, %d) = %q, want %q", tenant, id, got, want)
 			}
-			if got, want := profileResolutionByTypeKey(tenant, id), fmt.Sprintf("%s|%d", tenant, id); got != want {
+			if got, want := profileResolutionByTypeKey(tenant, id), fmt.Sprintf("%s|v2|%d", tenant, id); got != want {
 				t.Errorf("profileResolutionByTypeKey(%q, %d) = %q, want %q", tenant, id, got, want)
+			}
+			// The key builds before the payload decoder wrote, which this build deletes and never reads.
+			if got, want := legacyProfileResolutionByTypeKey(tenant, id), fmt.Sprintf("%s|%d", tenant, id); got != want {
+				t.Errorf("legacyProfileResolutionByTypeKey(%q, %d) = %q, want %q", tenant, id, got, want)
 			}
 			for _, etype := range []string{"", "Device", "Area"} {
 				if got, want := membershipsByEntityKey(tenant, etype, id), fmt.Sprintf("%s|%s|%d", tenant, etype, id); got != want {

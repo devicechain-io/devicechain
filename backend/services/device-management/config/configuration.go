@@ -161,8 +161,9 @@ const MaxInboundReaders = 4
 // DefaultPerDeviceCacheEntries and DefaultPerDeviceCacheMiB bound what one replica keeps
 // in memory of EACH of the three caches keyed by device: a device by its token, a device's
 // tracked relationships, and an entity's group memberships (keyed by device, and by each
-// area or asset a device is tracked to). The two caches keyed by device type and by tenant
-// keep messaging's 4,096 entries and 4 MiB; there are few of those keys.
+// area or asset a device is tracked to). The cache keyed by tenant keeps messaging's
+// 4,096 entries and 4 MiB; there are few of those keys. The one keyed by device type has its own
+// bound (DefaultProfileResolutionCacheMiB).
 //
 // What an entry costs, as the cache counts it (key, the value's allocation, and 192 B for
 // the list element, entry and map slot, which the messaging package measured and holds
@@ -194,11 +195,15 @@ const MaxInboundReaders = 4
 // 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the six
 // in-process caches — these three, the two keyed by device type and by tenant, and the
 // credential cache, 32 MiB (inMemoryCache.credentialCacheMiB) — hold at most
-// 3 × 24 + 2 × 4 + 32 = 112 MiB, counted as above. With no GOMEMLIMIT set (the chart's
+// 3 × 24 + 4 + 32 + 32 = 140 MiB, counted as above: the three keyed by device, the
+// one keyed by tenant (4), the credential cache (32), and the profile resolution cache, which
+// is 32 now that an entry may hold a compiled payload decoder (inMemoryCache.profileResolutionCacheMiB;
+// it was 4). With no GOMEMLIMIT set (the chart's
 // default), the heap can grow to about twice what is live before a collection: about
-// 224 MiB for full caches, plus the rest of the service (a replica resolving several
+// 280 MiB for full caches, plus the rest of the service (a replica resolving several
 // thousand events a second on a three-node GKE cluster used 32 MiB in all, its then 4-MiB
-// caches included), about 256 MiB against device-management's 256 MiB memory limit. That is
+// caches included), about 312 MiB against the chart's 512 MiB memory floor for this service (the
+// limit was 256 MiB when the caches were smaller). That is
 // the worst case, with every cache full: a fleet that fills them is the fleet to raise the
 // memory limit for.
 //
@@ -249,6 +254,20 @@ const (
 	// (inMemoryCache.ttlSeconds). A bucket-backed cache never keeps one longer than its own
 	// time to live above, so the shorter of the two applies.
 	DefaultInMemoryCacheTtlSeconds = DefaultCacheTtlSeconds
+)
+
+// DefaultProfileResolutionCacheMiB bounds the per-device-type profile resolution cache's in-process
+// copy (inMemoryCache.profileResolutionCacheMiB). It was 4 MiB while an entry held only metric
+// definitions (about 1 KiB). An entry that carries a payload decoder holds its compiled programs,
+// measured at 1 to 5 MB for a decoder of any realistic size and about 6 MB charged for a maximal
+// one, so 32 MiB keeps about five maximal decoders decoded; beyond that the oldest are let go and
+// compiled again when next read. DefaultProfileResolutionTenantSharePercent keeps one tenant from
+// taking all of it: at 25% a tenant holds at most 8 MiB of it, and a tenant past that evicts its
+// own entries and never another tenant's.
+const (
+	DefaultProfileResolutionCacheMiB           = 32
+	MaxProfileResolutionCacheMiB               = 256
+	DefaultProfileResolutionTenantSharePercent = 25
 )
 
 // DefaultCredentialCacheMiB bounds the credential cache. An entry is about 1.1 KB, so 32 MiB
@@ -349,6 +368,15 @@ type InMemoryCacheConfiguration struct {
 	// PerDeviceCacheMiB bounds each such cache's memory, in MiB. Unset (0) defaults to
 	// DefaultPerDeviceCacheMiB.
 	PerDeviceCacheMiB int
+	// ProfileResolutionCacheMiB bounds the in-process copy of the per-device-type profile
+	// resolution cache, in MiB. Unset (0) defaults to DefaultProfileResolutionCacheMiB. A
+	// resolution that carries a payload decoder holds its compiled programs, about 5 to 6 MB
+	// for a maximal one, so this is what bounds how many such decoders a replica keeps decoded.
+	ProfileResolutionCacheMiB int
+	// ProfileResolutionTenantSharePercent is the most of that bound one tenant may hold, 1 to
+	// 100. Unset (0) defaults to DefaultProfileResolutionTenantSharePercent. A tenant past its
+	// share evicts its own entries and never another tenant's.
+	ProfileResolutionTenantSharePercent int
 }
 
 // ApplyDefaults fills each bound that is unset.
@@ -364,6 +392,12 @@ func (c *InMemoryCacheConfiguration) ApplyDefaults() {
 	}
 	if c.PerDeviceCacheMiB == 0 {
 		c.PerDeviceCacheMiB = DefaultPerDeviceCacheMiB
+	}
+	if c.ProfileResolutionCacheMiB == 0 {
+		c.ProfileResolutionCacheMiB = DefaultProfileResolutionCacheMiB
+	}
+	if c.ProfileResolutionTenantSharePercent == 0 {
+		c.ProfileResolutionTenantSharePercent = DefaultProfileResolutionTenantSharePercent
 	}
 }
 
@@ -385,6 +419,14 @@ func (c InMemoryCacheConfiguration) Validate() error {
 	if c.PerDeviceCacheMiB < 1 || c.PerDeviceCacheMiB > MaxPerDeviceCacheMiB {
 		return fmt.Errorf("inMemoryCache.perDeviceCacheMiB must be between 1 and %d (got %d)",
 			MaxPerDeviceCacheMiB, c.PerDeviceCacheMiB)
+	}
+	if c.ProfileResolutionCacheMiB < 1 || c.ProfileResolutionCacheMiB > MaxProfileResolutionCacheMiB {
+		return fmt.Errorf("inMemoryCache.profileResolutionCacheMiB must be between 1 and %d (got %d)",
+			MaxProfileResolutionCacheMiB, c.ProfileResolutionCacheMiB)
+	}
+	if c.ProfileResolutionTenantSharePercent < 1 || c.ProfileResolutionTenantSharePercent > 100 {
+		return fmt.Errorf("inMemoryCache.profileResolutionTenantSharePercent must be between 1 and 100 (got %d)",
+			c.ProfileResolutionTenantSharePercent)
 	}
 	return nil
 }

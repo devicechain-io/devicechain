@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -209,5 +210,95 @@ func TestDecodedChargeIsAppliedToTheByteCap(t *testing.T) {
 	_, after := c.local.len()
 	if want := len(hit.data)*4 + 10; after-before != want {
 		t.Fatalf("attach charged %d B, want %d", after-before, want)
+	}
+}
+
+// TestDecodedChargeOfChargesByTheValue: a value the charger recognizes is charged what it says, not
+// by the factor; one it does not recognize falls back; the byte cap still decides whether a value
+// that is too large to hold at that charge is attached at all.
+func TestDecodedChargeOfChargesByTheValue(t *testing.T) {
+	ctx := context.Background()
+	var seen []int
+	c := NewCacheOver(newCountingStore(), WithDecodedCharge(4, 10), WithLocalBounds(100, 1<<20),
+		WithDecodedChargeOf(func(v any, encodedLen int) (int, bool) {
+			seen = append(seen, encodedLen)
+			if _, ok := v.(*typedValue); ok {
+				return 5000, true
+			}
+			return 0, false
+		}))
+	if err := c.Set(ctx, "t|k", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	_, before := c.local.len()
+	if _, _, err := GetCloned(ctx, c, "t|k", cloneTypedValue); err != nil {
+		t.Fatal(err)
+	}
+	_, after := c.local.len()
+	if after-before != 5000 {
+		t.Fatalf("attach charged %d B, want the 5000 the charger gave", after-before)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("the charger ran %d times for one attach", len(seen))
+	}
+
+	// Too large at the charged size: the entry is held undecoded rather than attached.
+	small := NewCacheOver(newCountingStore(), WithLocalBounds(100, 3000),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 5000, true }))
+	if err := small.Set(ctx, "t|k", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := GetCloned(ctx, small, "t|k", cloneTypedValue); err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := small.local.getHit("t|k", small.now()); !ok || h.val != nil {
+		t.Fatalf("a value charged past the cap was attached (hit %v, decoded %v)", ok, h.val != nil)
+	}
+}
+
+// TestATenantOverItsShareEvictsItsOwnEntries: with a tenant share, a tenant that stores past it
+// loses its own least recently used entries and never another tenant's; a value over the share on
+// its own is not held.
+func TestATenantOverItsShareEvictsItsOwnEntries(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 40000), WithLocalTenantShare(25),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 4000, true }))
+	for _, k := range []string{"quiet|1", "quiet|2"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The noisy tenant decodes ten entries of about 4 KB each: its share is 10,000 bytes.
+	for i := 0; i < 10; i++ {
+		k := fmt.Sprintf("noisy|%d", i)
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, k, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"quiet|1", "quiet|2"} {
+		if _, ok := c.local.getHit(k, c.now()); !ok {
+			t.Fatalf("%s was evicted by another tenant's entries", k)
+		}
+	}
+	held := 0
+	for i := 0; i < 10; i++ {
+		if _, ok := c.local.getHit(fmt.Sprintf("noisy|%d", i), c.now()); ok {
+			held++
+		}
+	}
+	if held == 0 || held >= 10 {
+		t.Fatalf("the noisy tenant holds %d of its 10 entries; its share should hold some and not all", held)
+	}
+	if _, ok := c.local.getHit("noisy|9", c.now()); !ok {
+		t.Fatal("the newest entry of the noisy tenant was evicted instead of its oldest")
+	}
+	c.local.mu.Lock()
+	over := c.local.tenantBytes["noisy"] > c.local.tenantCap
+	c.local.mu.Unlock()
+	if over {
+		t.Fatal("the tenant is over its share")
 	}
 }

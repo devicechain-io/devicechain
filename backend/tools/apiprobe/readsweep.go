@@ -554,6 +554,10 @@ var sweepExemptions = map[string]string{
 	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
 		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
 		"entity reads the stored row back through integration",
+	"device-management.integrationDecoder": "it answers the ingest path's question about a device type's " +
+		"decoder for an integration, authenticated with the bearer token the platform showed once and " +
+		"stores only a digest of, so the sweep has no value to supply; the decoder itself is read back " +
+		"through the device profile and its versions",
 	"device-management.unregisteredIntegrationDevices": "it lists the sightings of ONE integration, named " +
 		"inside its criteria, which are written only by the ingest path's service-plane lookup " +
 		"(resolveIntegrationDevice, which needs the integration's bearer token), so the drill has no " +

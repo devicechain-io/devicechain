@@ -761,6 +761,7 @@ What needs action:
 - **Move `client_credentials` requests that name a `resource` to also name a `scope`.** Such a request is counted and logged in this release and still succeeds. It is refused only in the next major release. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you write the instance configuration yourself** (`instance.existingSecret`), add `infrastructure.tokenAudience`. When the MCP area is deployed and the document does not list its resource, `dcctl upgrade` prints a warning with the block to add, and refuses once `enforcement` is `enforce`. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you set the MCP server's `resourceUrl` yourself, write its scheme and host in lowercase** before enforcement. See [Tokens are checked against their resource](#v120-token-audience).
+- **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -815,6 +816,14 @@ The chart and `dcctl` write `infrastructure.tokenAudience` for you, from the ing
 **Deprecated: a `client_credentials` request that names a `resource` without a `scope`.** Such a token carries every authority of the service account's roles. Send a `scope` with the resource (`read-only`, optionally with `location`). A scoped token carries only the scope's read authorities, so an integration that needs to write should leave out the `resource` instead. The missing scope is never a reason for refusal in this release, so the request still succeeds. Each one is counted in `devicechain_usermanagement_oauth_unscoped_client_credentials_total` and logged with its client, and it is refused with `invalid_scope` in the next major release. `infrastructure.tokenAudience.unscopedClientCredentials: enforce` is refused at startup until then. See [Service accounts](../user-guide/service-accounts.md#binding-a-token-to-a-resource).
 
 **Going back.** Services from `v1.1` refuse the `tokenAudience` block at startup. `dcctl` renders the `v1.1` configuration without it. If you write the configuration yourself, remove the block and update `instance.existingSecretChecksum` before you go back.
+
+#### Profile changes during a rolling upgrade {#v120-profile-cache}
+
+`device-management` now caches each device type's profile resolution under a new key, so that a replica running this release never reads an entry an older replica wrote (older entries would not carry the payload decoder). Every change made on a replica of this release drops the entry under both keys. A change made on an **older** replica drops only the old key, so upgraded replicas keep serving what they hold until it expires.
+
+- **Profile and device-type changes made while a rolling upgrade is in progress can take up to about twice the cache time to live to reach upgraded replicas** (about 10 minutes at the default 300 seconds of `metricDefCacheTtlSeconds` and `inMemoryCache.ttlSeconds`). That covers a publish, a rollback, a re-profile of a device type and a geofence change. Once every replica runs this release, changes take effect at once as before.
+- **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published from an older replica does not contain the decoder.
+- **The in-process copy of this cache is larger.** It is bounded at 32 MiB per replica (it was 4 MiB), because an entry that carries a payload decoder holds its compiled programs. Entries without a decoder are unchanged in size. The bound is `inMemoryCache.profileResolutionCacheMiB`, and `inMemoryCache.profileResolutionTenantSharePercent` (default 25) caps how much of it one tenant may hold, so a tenant with many large decoders evicts its own entries and never another tenant's. Replicas also export `payload_decoder_compiles_total`. If you set a memory limit yourself, count the extra 28 MiB.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 
