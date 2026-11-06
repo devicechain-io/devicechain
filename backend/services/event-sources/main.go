@@ -125,6 +125,10 @@ var (
 	IntegrationRateLimiter        *core.TenantRateLimiter
 	IntegrationReadingRateLimiter *core.TenantRateLimiter
 
+	// TenantGone is the FAIL-CLOSED reading of the deleted-tenant lifecycle, shared with the
+	// envelope walks so an evicted round is not stepped past for an erased tenant: true unless a
+	// fresh answer says the tenant is active. Nil when user-management is unconfigured.
+	TenantGone func(string) bool
 	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
 	// user-management, cached like the ingest ceiling. It is what turns the contention
 	// floor into a per-tenant shed factor and what labels a shed by its class. nil when
@@ -731,8 +735,10 @@ func buildEventSources() error {
 	// CONNECTS are stopped at the broker callout (but an established session keeps its
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	tenantGate, tenantGoneStrict := ingestTenantGates(infra, safetyGates)
+	TenantGone = tenantGoneStrict
 	ingestGate = processor.RefuseDeletedTenants(
-		ingestTenantGate(infra, safetyGates),
+		tenantGate,
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
 		onTenantGone)
 	// The live/backlog routing decision the capture source makes once per message, sized to
@@ -1413,7 +1419,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 				return err
 			}
 			if err := GatewaySource.UseEnvelopes(processor.CaptureEnvelopes{
-				Rounds: rounds, Former: inboundFormerConfig(), Metrics: InboundEnvelopeMetrics,
+				Rounds: rounds, Former: inboundFormerConfig(), Metrics: InboundEnvelopeMetrics, TenantGone: TenantGone,
 			}); err != nil {
 				return err
 			}
@@ -1447,10 +1453,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
 var safetyGates *governance.SafetyGates
 
-// ingestTenantGate is the deleted-tenant gate every ingest transport refuses work through: nil when
-// user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way.
-func ingestTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
-	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
+// ingestTenantGates builds the deleted-tenant gate every ingest transport refuses work through (nil
+// when user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way)
+// plus the strict (fail-closed) reading of the same cache,
+// which the envelope walks ask before stepping past a missing round (see TenantGone).
+func ingestTenantGates(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) (gate, strict func(string) bool) {
+	return governance.NewTenantLifecycleGates(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
 }
 
 func afterMicroserviceInitialized(ctx context.Context) error {

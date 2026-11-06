@@ -143,6 +143,10 @@ type InboundEventsProcessor struct {
 	envelopeChunkMax   int
 	env                *envelopeEngine
 	envCancel          context.CancelFunc
+	tenantGone         func(tenant string) bool
+	// envWalkGrace is how long the envelope walks get to finish once the readers have stopped,
+	// before they are cancelled; zero means the default. Tests shorten it.
+	envWalkGrace time.Duration
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -258,6 +262,7 @@ type ResolveMetrics struct {
 	envProbeFailures prometheus.Counter
 	envRetries       prometheus.Counter
 	envProbeDenied   prometheus.Counter
+	envRoundsEvicted prometheus.Counter
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -299,6 +304,8 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 			"Resolved-envelope rounds the broker rejected, published again under the same id until their outcome was known"),
 		envProbeDenied: ms.NewCounter("resolve_envelope_probe_denied_total",
 			"Read-backs of a stored resolved envelope the broker REFUSED: this writer lacks the read-back grant, which no retry cures; each leaves its sources unacknowledged"),
+		envRoundsEvicted: ms.NewCounter("resolve_envelope_rounds_evicted_total",
+			"Resolved-envelope rounds a duplicate answer named whose message retention had already evicted, so the walk stepped past them: the stream holds less than one duplicate window of messages"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -352,6 +359,13 @@ func WithSplitWriter(w messaging.MessageWriter) InboundOption {
 // message (resolved_envelope.go). enabled false changes nothing at all. enabled true needs the
 // resolved writer to be a messaging.AckedWriter and rounds to be non-nil, and the processor
 // refuses to start without them - it will not publish envelopes it cannot settle.
+// WithTenantGone gives the envelope walks the erasure fence: asked when a round's message is found
+// missing, so an evicted round is not stepped past for a tenant whose data is being erased (the
+// purge is also "not found"). It must fail closed: report true when the fence cannot be read.
+func WithTenantGone(gone func(tenant string) bool) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.tenantGone = gone }
+}
+
 func WithResolvedEnvelopes(enabled bool, rounds messaging.RoundPublisher) InboundOption {
 	return func(iproc *InboundEventsProcessor) {
 		iproc.envelopeResolved = enabled
@@ -1131,6 +1145,21 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 		iproc.procCancel()
 	}
 	iproc.readerWG.Wait() // every reader stopped: no more sends to messages
+	// 🔴 The walk-cancel grace is armed HERE, before the resolver and outbound waits below, not
+	// after them. A full walk pool blocks a writer's settle callback in startWalk, which backs up
+	// the submitters and the resolvers behind it; armed after those waits, the timer that frees
+	// the pool would never be set. Walks get 5 s from the readers stopping to finish, then are
+	// cancelled: what they leave unsettled stays unacknowledged for the next pod. Without the
+	// bound a walk retrying a round against a broker that is down would hold the shutdown past
+	// its budget.
+	if iproc.envCancel != nil {
+		wait := iproc.envWalkGrace
+		if wait <= 0 {
+			wait = 5 * time.Second
+		}
+		grace := time.AfterFunc(wait, iproc.envCancel)
+		defer grace.Stop()
+	}
 	// Nothing more is fetched from here on, so a failing stream no longer needs its
 	// consumption slowed: what is left is only what this pod already holds, and every
 	// source a failure leaves unacked is redelivered either way.
@@ -1153,14 +1182,12 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	// publish was still settling here — held past AckWait — is published again by whichever
 	// pod gets it, and the dedup id (sourceDedupID) keeps that copy out of the stream for the
 	// stream's duplicate window (streams.RedeliveryDuplicateWindowSeconds).
-	// Walks (duplicate recoveries, retried rounds) get a short grace to finish, then are cancelled:
-	// what they leave unsettled stays unacknowledged for the next pod. Without the bound a walk
-	// retrying a round against a broker that is down would hold the shutdown past its budget.
-	if iproc.envCancel != nil {
-		grace := time.AfterFunc(5*time.Second, iproc.envCancel)
-		defer grace.Stop()
-		defer iproc.envCancel()
-	}
+	// Walks are cancelled at the latest when this returns (see the grace armed above).
+	defer func() {
+		if iproc.envCancel != nil {
+			iproc.envCancel()
+		}
+	}()
 	if iproc.ResolvedEventsWriter != nil {
 		iproc.ResolvedEventsWriter.Close()
 	}

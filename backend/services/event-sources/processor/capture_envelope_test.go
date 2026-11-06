@@ -30,6 +30,8 @@ type envBroker struct {
 	bySeq map[uint64]storedEnv
 	seq   uint64
 	failN map[string]int // ids whose next N publishes (either path) are rejected
+	// rejectAll rejects every round publish, whatever its id: a broker that is down for rounds.
+	rejectAll atomic.Bool
 }
 
 type storedEnv struct {
@@ -62,6 +64,9 @@ func (b *envBroker) store(ctx context.Context, msg messaging.Message) (messaging
 
 // reject reports whether the next publish of id is to be rejected, and uses one rejection up.
 func (b *envBroker) reject(id string) bool {
+	if b.rejectAll.Load() {
+		return true
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.failN[id] > 0 {
@@ -670,4 +675,45 @@ func TestHTTPGroupTheEncoderRefusesFallsBackToSinglesWithTheirOwnAnswers(t *test
 	defer mu.Unlock()
 	assert.Equal(t, 0, envs, "an unencodable group is never published as an envelope")
 	assert.Equal(t, 3, singles, "each request was published on its own")
+}
+
+// A FULL WALK POOL MUST NOT WEDGE THE SHUTDOWN. Every bucket's round is rejected, so each holds a
+// walker retrying, and the pool (16) fills. The next walk blocks the writer's settle callback in
+// startWalk, which backs the submitter, the decode workers and finally the read loop's hand-off
+// up behind it. ExecuteStop used to wait for that read loop BEFORE it cancelled the walks that
+// held the pool, so the stop sat out its whole deadline; it must cancel them first.
+func TestStopWithAFullWalkPoolDoesNotWaitOutTheDeadline(t *testing.T) {
+	b := newEnvBroker()
+	b.rejectAll.Store(true)
+	es := envSourceUnmanaged(t, b)
+	t.Cleanup(func() { es.ce.cancel() })
+
+	// A stand-in read loop: hands the source far more buckets than the pool holds, then returns.
+	es.drained = make(chan struct{})
+	base := midBucket()
+	go func() {
+		defer close(es.drained)
+		for i := 0; i < 600; i++ {
+			at := base.Add(time.Duration(i) * messaging.RoundBucketSeconds * time.Second)
+			es.handle(envCaptured("acme", uint64(i+1), 1, at, &recordingAck{}))
+		}
+	}()
+	// Wait until the hand-off is wedged: the loop has not finished and nothing has progressed.
+	time.Sleep(500 * time.Millisecond)
+	select {
+	case <-es.drained:
+		t.Fatal("setup: the read loop finished, so the pool never filled")
+	default:
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, es.ExecuteStop(ctx))
+	assert.Less(t, time.Since(start), 2*time.Second, "the stop waited on a read loop wedged behind a full walk pool")
+	select {
+	case <-es.workersDone:
+	default:
+		t.Fatal("the stop gave up before the decode workers finished")
+	}
 }

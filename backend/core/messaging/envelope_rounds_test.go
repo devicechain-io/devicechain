@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 )
 
@@ -83,7 +85,7 @@ func (r fakeRoundPub) Get(_ context.Context, tenant string, seq uint64) (StoredM
 	defer r.b.mu.Unlock()
 	m, ok := r.b.bySeq[seq]
 	if !ok {
-		return StoredMessage{}, fmt.Errorf("no message at %d", seq)
+		return StoredMessage{}, fmt.Errorf("no message at %d: %w", seq, nats.ErrMsgNotFound)
 	}
 	return StoredMessage{Sequence: seq, Subject: "i." + tenant + ".inbound-events", Value: m.Value, Headers: m.Headers}, nil
 }
@@ -302,5 +304,106 @@ func TestRoundKeyIsBoundedInTimeAsWellAsSequence(t *testing.T) {
 	}
 	if _, _, ok := RoundKeyOf("acme", 0, t0); ok {
 		t.Fatal("a message with no sequence was given a key")
+	}
+}
+
+// evict drops the stored message at seq while the broker still remembers its dedup id: the state
+// of a stream whose retention discarded a message inside the duplicate window.
+func (f *fakeBroker) evict(seq uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.bySeq, seq)
+}
+
+// A round whose message retention has evicted, while its id is still inside the duplicate window,
+// answers a new member's publish as a duplicate of a message that can no longer be read. That is
+// terminal for THAT round (nothing can ever say what it held), not a transient fault: the walk
+// steps to the next round, the member is stored, its source settles, and the eviction is counted.
+func TestRoundEngineAnEvictedRoundIsSteppedPastNotRetried(t *testing.T) {
+	b := newFakeBroker()
+	k, _, _ := RoundKeyOf("acme", 515, time.Time{})
+	newTestEngine(t, b).Publish(context.Background(), k, []RoundMember{newRoundOutcomes().member(1, false)})
+	b.evict(1)
+
+	e := newTestEngine(t, b) // another pod: it has never seen round 0
+	o := newRoundOutcomes()
+	e.Publish(context.Background(), k, []RoundMember{o.member(7, false)})
+	e.Wait()
+	if o.n[7] != 1 || o.errs[7] != nil {
+		t.Fatalf("a member behind an evicted round must be stored by the next round: settled %d err %v", o.n[7], o.errs[7])
+	}
+	if m, ok := b.bySeq[2]; !ok || m.DedupID != EnvelopeDedupID("C", "acme", k.Source(), 1) {
+		t.Fatalf("the member was not stored as round 1: %+v", m)
+	}
+	if e.Evicted.Load() != 1 {
+		t.Fatalf("evicted rounds %d, want 1", e.Evicted.Load())
+	}
+}
+
+// Only an eviction is terminal for a round. Any other read-back failure still leaves the source
+// unacknowledged.
+func TestRoundEngineAFailedReadBackIsStillTransient(t *testing.T) {
+	b := newFakeBroker()
+	k, _, _ := RoundKeyOf("acme", 515, time.Time{})
+	newTestEngine(t, b).Publish(context.Background(), k, []RoundMember{newRoundOutcomes().member(1, false)})
+	e, err := NewRoundEngine(RoundEngineConfig{Kind: eventenvelope.KindUnresolved, DedupKind: "C",
+		Writer: fakeWriter{b}, Rounds: brokenRounds{fakeRoundPub{b}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := newRoundOutcomes()
+	e.Publish(context.Background(), k, []RoundMember{o.member(7, false)})
+	e.Wait()
+	if o.n[7] != 1 || o.errs[7] == nil {
+		t.Fatalf("a timed-out read-back must fail the source: settled %d err %v", o.n[7], o.errs[7])
+	}
+	if e.Evicted.Load() != 0 {
+		t.Fatal("a timeout was counted as an eviction")
+	}
+}
+
+type brokenRounds struct{ fakeRoundPub }
+
+func (brokenRounds) Get(context.Context, string, uint64) (StoredMessage, error) {
+	return StoredMessage{}, errors.New("nats: timeout")
+}
+
+// "Not found" also covers a message tenant erasure purged. For a tenant that is deleted or being
+// erased the walk must NOT step to the next round (that would store the erased tenant's member
+// again): the member is left unsettled with ErrTenantGone and nothing is published.
+func TestRoundEngineAnErasedTenantsMissingRoundIsNotSteppedPast(t *testing.T) {
+	b := newFakeBroker()
+	k, _, _ := RoundKeyOf("acme", 515, time.Time{})
+	newTestEngine(t, b).Publish(context.Background(), k, []RoundMember{newRoundOutcomes().member(1, false)})
+	b.evict(1)
+
+	var asked atomic.Int32
+	e, err := NewRoundEngine(RoundEngineConfig{Kind: eventenvelope.KindUnresolved, DedupKind: "C",
+		Writer: fakeWriter{b}, Rounds: fakeRoundPub{b},
+		TenantGone: func(tenant string) bool { asked.Add(1); return tenant == "acme" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := newRoundOutcomes()
+	e.Publish(context.Background(), k, []RoundMember{o.member(7, false)})
+	e.Wait()
+	if o.n[7] != 1 || !errors.Is(o.errs[7], ErrTenantGone) {
+		t.Fatalf("a member of an erased tenant must be left unsettled with ErrTenantGone: settled %d err %v", o.n[7], o.errs[7])
+	}
+	if _, stored := b.bySeq[2]; stored {
+		t.Fatal("the erased tenant's member was stored again")
+	}
+	if asked.Load() != 1 || e.Evicted.Load() != 0 {
+		t.Fatalf("asked %d, evicted %d", asked.Load(), e.Evicted.Load())
+	}
+
+	// A tenant that is not gone is stepped past as before.
+	e2, _ := NewRoundEngine(RoundEngineConfig{Kind: eventenvelope.KindUnresolved, DedupKind: "C",
+		Writer: fakeWriter{b}, Rounds: fakeRoundPub{b}, TenantGone: func(string) bool { return false }})
+	o2 := newRoundOutcomes()
+	e2.Publish(context.Background(), k, []RoundMember{o2.member(8, false)})
+	e2.Wait()
+	if o2.errs[8] != nil || e2.Evicted.Load() != 1 {
+		t.Fatalf("a live tenant's evicted round must be stepped past: err %v evicted %d", o2.errs[8], e2.Evicted.Load())
 	}
 }

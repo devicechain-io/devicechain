@@ -687,3 +687,16 @@ func TestADeliberateDropOnThePipelinedPathIsAcked(t *testing.T) {
 	calls, _, _ := w.snapshot()
 	require.Zero(t, countOf(calls, "publish"), "a dropped message must not be published")
 }
+
+// A shutdown that cancels an envelope walk settles its sources with ErrRoundWalkStopped. On a
+// message's LAST delivery that must not read as poison: it is left unacked for the next pod, not
+// routed to failed-decode and acked away.
+func TestAStoppedWalkOnTheLastDeliveryIsNotPoison(t *testing.T) {
+	w := newHeldWriter(0)
+	pc := startPipelineCase(t, w, 1, messaging.MaxDeliver, func() error { return nil })
+	w.waitHeld(t, 1)
+	w.release(0, fmt.Errorf("walk: %w", messaging.ErrRoundWalkStopped))
+	pc.source.poison.running.Wait()
+	require.Equal(t, []int{0}, pc.acked(), "a message whose walk was stopped by a shutdown was acked")
+	require.Zero(t, pc.failed(), "a stopped walk was dead-lettered as poison")
+}

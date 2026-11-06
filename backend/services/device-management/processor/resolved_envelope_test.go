@@ -576,3 +576,35 @@ func testEngine(iproc *InboundEventsProcessor, w messaging.AckedWriter, r messag
 func gid(tenant string, bucket uint64, round uint32) string {
 	return messaging.EnvelopeDedupID(messaging.EnvelopeDedupKind, tenant, bucketKey{Bucket: bucket}.Source(), round)
 }
+
+// A FULL WALK POOL MUST NOT WEDGE THE SHUTDOWN. The broker is down for rounds, so every bucket's
+// walk retries and holds a walker; the pool (16) fills, the next walk blocks the writer's settle
+// callback in startWalk, and the outbound loop that feeds it blocks with it. The walk-cancel
+// grace used to be armed only AFTER the outbound wait, so nothing could ever free the pool and
+// the stop never returned; it is armed before the waits now.
+func TestStopWithAFullWalkPoolIsFreedByTheWalkGrace(t *testing.T) {
+	w := newFakeAckedWriter()
+	w.fail = errors.New("broker down")
+	rounds := &fakeRounds{w: w}
+	iproc := readersProcessor(t, []messaging.MessageReader{&sliceReader{}})
+	iproc.ResolvedEventsWriter = w
+	WithResolvedEnvelopes(true, rounds)(iproc)
+	iproc.envWalkGrace = 100 * time.Millisecond
+	require.NoError(t, iproc.Start(context.Background()))
+
+	// Far more buckets than the pool holds (one per 256 sequences), each its own walk.
+	for i := 0; i < 200; i++ {
+		src, _ := envTestSource(uint64(i)*256 + 1)
+		iproc.resolved <- envTestItem(&ackCoord{src: src, remaining: 1}, 0, "dev")
+	}
+	time.Sleep(500 * time.Millisecond) // the pool is full and the loop is wedged behind it
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- iproc.ExecuteStop(context.Background()) }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stop is wedged behind a full envelope walk pool")
+	}
+}
