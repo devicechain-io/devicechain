@@ -803,6 +803,8 @@ type planReview struct {
 	// move. Warnings are said loudly.
 	Lines    []string
 	Warnings []string
+	// WALRise is set when the event store's max_wal_size rises. See eventstorewal.go.
+	WALRise *walRise
 }
 
 // operatorInputs says where an instance-root variable's value comes from, for the
@@ -949,6 +951,9 @@ func reviewReleaseChange(out *planReview, rc *tfjson.ResourceChange, in operator
 	if rc.Address == natsReleaseAddress {
 		out.Warnings = append(out.Warnings, brokerResourceDecreases(before, after, in)...)
 		return nil
+	}
+	if r, ok := walRiseOf(before, after); ok {
+		out.WALRise = &r
 	}
 	return refuseEventStoreLosses(before, after, in)
 }
@@ -1371,6 +1376,9 @@ type upgradeInfraPlan struct {
 	review   planReview
 	kept     []string
 	notes    []string
+	// walNotice and walWarnings are said when the event store's max_wal_size rises.
+	walNotice   string
+	walWarnings []string
 }
 
 // say prints what the plan changes. It never prints a value outside shownValuePaths.
@@ -1397,6 +1405,12 @@ func (p *upgradeInfraPlan) say() {
 	}
 	for _, n := range p.notes {
 		fmt.Println(color.YellowString("    ⚠ %s", n))
+	}
+	if p.walNotice != "" {
+		fmt.Println(color.YellowString("    %s", p.walNotice))
+	}
+	for _, w := range p.walWarnings {
+		fmt.Println(color.RedString("    ⚠ %s", w))
 	}
 	for _, w := range p.review.Warnings {
 		fmt.Println(color.YellowString("    ⚠ %s", w))
@@ -1427,6 +1441,9 @@ func planUpgradeInfra(ctx context.Context, st *State) (*upgradeInfraPlan, error)
 	if err != nil {
 		_ = hardenStateFiles(inst.rootdir)
 		return nil, err
+	}
+	if r := p.review.WALRise; r != nil {
+		p.walNotice, p.walWarnings = walNotices(ctx, st, *r)
 	}
 	return p, nil
 }
@@ -1552,6 +1569,7 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 			return fmt.Errorf("%w (the apply that triggered the re-plan failed with: %v)", perr, err)
 		}
 		again.kept, again.notes = p.kept, p.notes
+		again.walNotice, again.walWarnings = p.walNotice, p.walWarnings
 		*p = *again
 		p.say()
 		if rerr := p.tf.Apply(ctx, tfexec.DirOrPlan(p.planPath)); rerr != nil {
@@ -1564,6 +1582,9 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		return err
 	}
 	st.InfraApplied = true
+	if err := writeEventStoreVarFile(p.rootdir, st); err != nil {
+		return err
+	}
 	if err := waits.broker(ctx); err != nil {
 		return err
 	}

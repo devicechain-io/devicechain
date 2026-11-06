@@ -241,6 +241,8 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
+Dé a `dcctl install` los mismos ajustes con los que se instaló el clúster, como `--ha` o `--compact`. Se niega a cambiarlos mientras una instancia se ejecuta en el clúster; consulte [Volver a ejecutar install](./bootstrap.md#re-running-install).
+
 :::note Qué se ha medido
 La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
 actualizó in situ con tráfico MQTT en marcha (cuatro dispositivos publicando con QoS 1, 20 mensajes por
@@ -807,6 +809,7 @@ Qué requiere acción:
 - **Si escribe usted mismo la configuración de la instancia** (`instance.existingSecret`), añada `infrastructure.tokenAudience`. Cuando el área MCP está desplegada y el documento no incluye su recurso, `dcctl upgrade` muestra un aviso con el bloque que hay que añadir, y se niega a continuar cuando `enforcement` es `enforce`. Consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 - **Si fija usted mismo la `resourceUrl` del servidor MCP, escriba su esquema y su host en minúsculas** antes de la aplicación obligatoria. Consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 - **Espere que los cambios de perfil y de tipo de dispositivo lleguen tarde a las réplicas actualizadas mientras dura el despliegue.** Consulte [Cambios de perfil durante una actualización progresiva](#v120-profile-cache).
+- **Compruebe el espacio libre del almacén de eventos antes de actualizar.** En una instancia existente, `dcctl upgrade` sube el `max_wal_size` del almacén de eventos a una quinta parte de su volumen (6,4 GiB con los 32Gi predeterminados, frente a 1 GiB), y el registro de escritura anticipada puede crecer ahora hasta ese tamaño en el volumen de datos. La actualización imprime un aviso cuando el valor sube y advierte si el volumen tiene menos espacio libre que el nuevo tamaño. Para conservar la asignación anterior, ejecute `dcctl upgrade --event-store-max-wal-mib 1024`. Consulte [Asignación del registro de escritura anticipada del almacén de eventos](#v120-event-store-wal).
 
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
@@ -869,6 +872,24 @@ El chart y `dcctl` escriben `infrastructure.tokenAudience` por usted, a partir d
 - **Los cambios de perfil y de tipo de dispositivo hechos mientras se actualiza de forma progresiva pueden tardar hasta aproximadamente el doble del tiempo de vida de la caché en llegar a las réplicas actualizadas** (unos 10 minutos con los 300 segundos predeterminados de `metricDefCacheTtlSeconds` e `inMemoryCache.ttlSeconds`). Esto abarca una publicación, una reversión, un cambio de perfil de un tipo de dispositivo y un cambio de geovalla. Cuando todas las réplicas ejecutan esta versión, los cambios surten efecto de inmediato como antes.
 - **Publique el decodificador de carga útil de un perfil solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada desde una réplica anterior no contiene el decodificador.
 - **La copia en proceso de esta caché es mayor.** Está limitada a 32 MiB por réplica (antes 4 MiB), porque una entrada con un decodificador de carga útil contiene sus programas compilados. Las entradas sin decodificador no cambian de tamaño. El límite es `inMemoryCache.profileResolutionCacheMiB`, y `inMemoryCache.profileResolutionTenantSharePercent` (25 por defecto) limita cuánto puede ocupar un solo inquilino, de modo que un inquilino con muchos decodificadores grandes expulsa sus propias entradas y nunca las de otro. Las réplicas exportan además `payload_decoder_compiles_total`. Si fija usted mismo un límite de memoria, cuente los 28 MiB adicionales.
+
+#### Asignación del registro de escritura anticipada del almacén de eventos {#v120-event-store-wal}
+
+El `max_wal_size` del almacén de eventos es ahora una quinta parte de su volumen, nunca por debajo del 1 GiB propio de Postgres, y una actualización lo aplica a un almacén existente con el volumen que ya tiene. Con los 32Gi predeterminados son 6,4 GiB, donde una instancia actualizada tenía 1 GiB. `max_wal_size` es un techo, no una reserva: el registro solo lo alcanza cuando los puntos de control se retrasan o el archivado de WAL se detiene. Sin embargo, reside en el volumen de datos, así que un almacén que ya está casi lleno tiene menos margen que ese.
+
+- **`dcctl upgrade` avisa cuando el valor sube.** El plan imprime una línea con el tamaño anterior y el nuevo. También lee el espacio libre del volumen del almacén de eventos e imprime una advertencia si es menor que el nuevo tamaño, o si no pudo leerlo. No se niega a continuar: el registro solo alcanza el techo bajo estrés, y el remedio es una opción.
+- **Para conservar una asignación menor**, pase `--event-store-max-wal-mib` a la actualización, por ejemplo `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` para el 1 GiB anterior. `--dry-run` muestra antes el efecto. Las actualizaciones posteriores conservan el valor cuando se omite la opción, y `--event-store-max-wal-mib 0` vuelve al valor derivado. `--event-store-checkpoint-timeout` fija del mismo modo el intervalo entre puntos de control (`15min` por defecto). Ambos se aplican por recarga, sin reiniciar el almacén de eventos. `dcctl` los registra en `dcctl-event-store.auto.tfvars.json`, junto al estado de OpenTofu de la instancia, en la máquina que ejecuta la actualización; consulte [Ajuste del almacén de eventos](./tuning-an-instance.md).
+- **Si gestiona usted mismo el OpenTofu de la instancia**, fije `timescale_max_wal_size_mib` y `timescale_checkpoint_timeout` como antes.
+
+#### Cambios de esquema y cómo volver atrás {#v120-going-back}
+
+Tres migraciones añaden lo siguiente. Toda columna nueva admite nulos, así que un servicio de `v1.1.0` que se ejecute con el esquema nuevo escribe filas que sigue pudiendo almacenar.
+
+- **Revocación X.509** (`device-management`, migración `20261105100000`). Cuatro tablas nuevas: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` y `device_credential_chain_links`. Cuatro columnas nuevas: `revocation_mode`, `revocation_stale_grace` y `revocation_rows` en `device_trust_anchors`, y `not_before` en `pending_session_kicks`. Las anclas de confianza existentes dejan `revocation_mode` vacío, lo que se lee como `ENTRIES`: un certificado se rechaza solo cuando figura en la lista.
+- **Decodificadores de carga útil** (`device-management`, migración `20261110120000`). Dos tablas nuevas, `profile_decoder_healths` y `profile_decoder_samples`, y una columna nueva, `decoder_declaration` en `device_profiles`.
+- **Almacenamiento de proyecciones** (`device-state`, migración `20261104120000`). No añade tablas ni columnas. Fija parámetros de almacenamiento (un factor de relleno de 75 y umbrales de autovacuum) en `device_states`, `latest_measurements` y `latest_locations`. Las filas que ya existen ganan el margen del factor de relleno solo a medida que se reescriben sus páginas, así que una instancia actualizada nota el cambio lentamente.
+
+Todas las tablas nuevas empiezan vacías. **No hay que deshacer nada en una base de datos para volver a `v1.1.0`:** las tablas, columnas y parámetros de almacenamiento nuevos se quedan donde están y los servicios de `v1.1.0` los ignoran. Avance cuando pueda: una actualización fallida se arregla ejecutando `dcctl upgrade` de nuevo. Para el cambio de configuración que exige volver atrás, consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 

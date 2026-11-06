@@ -213,6 +213,10 @@ type State struct {
 	BrokerMaxConnections       int
 	BrokerMaxConnectionsGiven  *int
 	BrokerMaxConnectionsChange bool
+	// EventStoreMaxWALMiB and EventStoreCheckpointTimeout are this run's flags for the event store's
+	// WAL allowance and checkpoint cadence (nil: not given). See eventstorewal.go.
+	EventStoreMaxWALMiB         *int
+	EventStoreCheckpointTimeout *string
 	// TrustedProxiesOverride is --trusted-proxies as given: nil when not given, ["auto"] to drop
 	// an explicit list, otherwise the operator's CIDRs. TrustedProxies and TrustedProxiesExplicit
 	// are what the run settled and renders (infrastructure.http.trustedProxies), and
