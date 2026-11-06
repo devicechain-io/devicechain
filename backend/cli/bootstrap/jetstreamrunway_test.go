@@ -31,7 +31,7 @@ func TestTheRunwayIsRefusedWhenTheVolumeCannotHoldIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 20,000 events/s, 15-minute runway fit a 14Gi store: the check cannot refuse")
 	}
-	for _, want := range []string{"outage runway", "20000 events a second", "15 minutes", "streamDesignRate", "dcctl upgrade <provider> <instance> --values", "at least 33Gi"} {
+	for _, want := range []string{"outage runway", "20000 events a second", "15 minutes", "streamDesignRate", "dcctl upgrade <provider> <instance> --values", "at least 34Gi"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}

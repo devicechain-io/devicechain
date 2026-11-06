@@ -754,6 +754,12 @@ var All = []Stream{
 	// backpressure reader that is not running closes no gate. Until then the stream only holds what
 	// event-sources writes, and event-sources only writes it for a device type whose decoder a
 	// device-management answered for.
+	//
+	// 🔴 IT IS UNCAPPED, LIKE EVERY STREAM THAT HOLDS PROMISED DATA (see MaxBytesCap), AND THAT IS A
+	// DEPLOYMENT-VISIBLE NUMBER: a Hot stream reserves a gibibyte up front, so the default JetStream
+	// reservation grows from 11.6 to 12.6 GiB (the 20,000 events/s runway needs a 34Gi volume, up
+	// from 33Gi). The default 16Gi volume holds it. A volume sized to the previous total does not,
+	// and dcctl's reservation precheck says so before anything is changed.
 	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindEvent,
 		Why:            "an integration sender's raw frame or JSON, held for the profile's payload decoder"},

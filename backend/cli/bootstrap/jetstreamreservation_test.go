@@ -49,11 +49,11 @@ func TestShippedAndCompactVolumesPassTheReservationCheck(t *testing.T) {
 // raise the reservation past what it holds, naming the numbers and the way back.
 func TestAShrunkLiveVolumeIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	t.Parallel()
-	err := precheckJetStreamReservation(t.Context(), reservationState(false, "14Gi", "", boolPtr(true)))
+	err := precheckJetStreamReservation(t.Context(), reservationState(false, "15Gi", "", boolPtr(true)))
 	if err == nil {
-		t.Fatal("a 14Gi JetStream volume (a 12Gi ceiling) was let through with fail-closed on")
+		t.Fatal("a 15Gi JetStream volume (a 13Gi ceiling) was let through with fail-closed on")
 	}
-	for _, want := range []string{"MiB of JetStream storage", "90% of its 14Gi", "--mqtt-fail-closed=false", "Nothing has been changed"} {
+	for _, want := range []string{"MiB of JetStream storage", "90% of its 15Gi", "--mqtt-fail-closed=false", "Nothing has been changed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
@@ -61,8 +61,8 @@ func TestAShrunkLiveVolumeIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	// The same volume holds everything it held before the setting: the refusal is the
 	// setting's own doing, not the volume's.
 	for _, off := range []*bool{nil, boolPtr(false)} {
-		if err := precheckJetStreamReservation(t.Context(), reservationState(false, "14Gi", "", off)); err != nil {
-			t.Errorf("a 14Gi volume was refused with the setting %v: %v", off, err)
+		if err := precheckJetStreamReservation(t.Context(), reservationState(false, "15Gi", "", off)); err != nil {
+			t.Errorf("a 15Gi volume was refused with the setting %v: %v", off, err)
 		}
 	}
 }
