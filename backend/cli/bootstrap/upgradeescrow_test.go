@@ -256,9 +256,11 @@ func TestAnExplicitEscrowFileWinsAndIsRemembered(t *testing.T) {
 	}
 
 	other := "other"
-	escrowAt(t, filepath.Join(t.TempDir(), "o.escrow"), key)
-	st := aBootstrapOf(other)
-	reconcileUpgradeEscrow(st, key, UpgradeOptions{EscrowFile: filepath.Join(t.TempDir(), "o.escrow")})
+	oPath := filepath.Join(t.TempDir(), "o.escrow")
+	escrowAt(t, oPath, key)
+	if got := reconcileUpgradeEscrow(aBootstrapOf(other), key, UpgradeOptions{EscrowFile: oPath}); got != escrowVerified {
+		t.Fatalf("reported %q for an artifact that is there", got)
+	}
 	if _, err := ReadInstanceRecord(other); err != ErrNoInstanceRecord {
 		t.Errorf("a record was invented for an instance that had none: %v", err)
 	}
@@ -276,5 +278,21 @@ func TestEscrowPathToRecordOmitsTheDefault(t *testing.T) {
 	custom := filepath.Join(t.TempDir(), "k.escrow")
 	if got := EscrowPathToRecord(testInstance, custom); got != custom {
 		t.Errorf("a custom path recorded as %q; want %q", got, custom)
+	}
+}
+
+// A restore writes no artifact; the one it restored from is the second copy, and is what is
+// recorded (absolute), unless it sits at the default path.
+func TestARestorePlanRecordsTheArtifactItRestoredFrom(t *testing.T) {
+	fakeHome(t)
+	src := filepath.Join(t.TempDir(), "restore-from.escrow")
+	if got := EscrowPlanPathToRecord(testInstance, EscrowPlan{RestoredFrom: src}); got != src {
+		t.Errorf("recorded %q; want %q", got, src)
+	}
+	if got := EscrowPlanPathToRecord(testInstance, EscrowPlan{Path: src, RestoredFrom: "ignored"}); got != src {
+		t.Errorf("a written artifact's path must win: %q", got)
+	}
+	if got := EscrowPlanPathToRecord(testInstance, EscrowPlan{}); got != "" {
+		t.Errorf("an empty plan recorded %q", got)
 	}
 }

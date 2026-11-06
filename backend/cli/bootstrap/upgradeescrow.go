@@ -146,6 +146,22 @@ func escrowPathToCheck(instance, explicit string) string {
 	return ""
 }
 
+// EscrowPlanPathToRecord is EscrowPathToRecord for a settled plan: where the artifact was
+// written, or, for a restore (which writes none), the artifact the key was restored from,
+// which stays the instance's second copy. A dry run's restore plan names it too; the record
+// is not written on a dry run.
+func EscrowPlanPathToRecord(instance string, plan EscrowPlan) string {
+	path := plan.Path
+	if path == "" && plan.RestoredFrom != "" {
+		if abs, err := filepath.Abs(plan.RestoredFrom); err == nil {
+			path = abs
+		} else {
+			path = plan.RestoredFrom
+		}
+	}
+	return EscrowPathToRecord(instance, path)
+}
+
 // EscrowPathToRecord is what InstanceRecord.EscrowPath should hold for an artifact at path:
 // empty when that is the default location, which needs no record.
 func EscrowPathToRecord(instance, path string) string {
