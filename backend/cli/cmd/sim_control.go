@@ -4,14 +4,18 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/devicechain-io/dcctl/sim"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var simStatusCmd = &cobra.Command{
@@ -73,6 +77,28 @@ func simControl(cmd *cobra.Command, name, method, path string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sim control %s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	fmt.Println(strings.TrimSpace(string(body)))
+	fmt.Println(renderControlBody(strings.TrimSpace(string(body)), stdoutIsTerminal()))
 	return nil
+}
+
+// stdoutIsTerminal is the seam for "is a person reading this", indirected so a test can
+// drive either branch (a `go test` run from a shell has a real terminal on stdout).
+var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+
+// renderControlBody is what `sim status|start|stop` print.
+//
+// The sim's control API answers one line of JSON, and that line is what a script gets
+// when it pipes or captures this command: it is passed through BYTE FOR BYTE, because a
+// script may parse it and dcctl output is a served interface. Only when stdout is a
+// terminal is it indented, since there a one-line object is unreadable and nothing can
+// be parsing it. A body that is not valid JSON is printed as received either way.
+func renderControlBody(body string, toTerminal bool) string {
+	if !toTerminal || !json.Valid([]byte(body)) {
+		return body
+	}
+	var out bytes.Buffer
+	if err := json.Indent(&out, []byte(body), "", "  "); err != nil {
+		return body
+	}
+	return out.String()
 }
