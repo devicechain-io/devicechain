@@ -187,12 +187,12 @@
       "translationSha256": "da1dfa08f13d523288f4d9b6afff276030f174a4216596a9e8d38d06aaf17a08"
     },
     "guides/connecting-a-device.md": {
-      "sourceSha256": "0fa34a03d1a422de687066dea75512f313a82785421add6090f168dfbae674aa",
-      "translationSha256": "56ec3fab81d20b8a87eb2a73ba670fe9dd359872423fc192f5fde5b9d87b25ab"
+      "sourceSha256": "53d9e8fc63e9d1ac9db169e3f99039e28f758dd4751a98ea08f47fef57200461",
+      "translationSha256": "64fb501f042b638e5c6f63c0c63ac90fa14164347409f8b9793cc42900b3e464"
     },
     "guides/device-credentials.md": {
-      "sourceSha256": "85e08f974839189a4aeaa4611d33d5961f1dde81d189ef8618e05e7ee1f3b654",
-      "translationSha256": "17e06ba5cb13b71316c9e0b9fc15608e74e7d55c8b1195787b703dd88d676288"
+      "sourceSha256": "b268fcb19f862481c63d261dac7851b64c3d82c0789271684b53fcb805f7746a",
+      "translationSha256": "c752bc957250dfdace3e7b8981a44b2a6a83b2bd9115eaf01ea0155aaf537fd0"
     },
     "guides/device-self-registration.md": {
       "sourceSha256": "ccabe4eea783879462d0d2d93260a8032de15ec4fab38e45716fbf484470627e",
@@ -271,8 +271,8 @@
       "translationSha256": "f244c19f027f30c0957fe19913abbb76765cb7d14e5a9262d08ab3fa6343649b"
     },
     "quickstart/first-device.md": {
-      "sourceSha256": "f6c6c7f58e8b5f7d79aaf873fe651c1f6c1984af090b91774149460b77694e3f",
-      "translationSha256": "76ac3ab7d0a220e6a0165a27a15e1b54970319af994971602ecaf748fd428bd1"
+      "sourceSha256": "db250d8ac0b7f34cc389517e548ab150ef52df181306fe625d740c3d24650539",
+      "translationSha256": "065399a3a8320f824ebc8490ee2cc44b5c4a64f96d7386d4932fd3d2f5f7bdb0"
     },
     "reference/dcctl.md": {
       "sourceSha256": "00a283c50ec0346e71c45b41c63ff1df3c1162cea772a95cbf3e4000cd7a8ccd",

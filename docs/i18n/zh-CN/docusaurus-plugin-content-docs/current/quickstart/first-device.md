@@ -186,17 +186,23 @@ curl -s -X POST http://localhost/api/device-management/graphql \
 
 现在给设备添加凭据。设备提交凭据来证明自己的身份，平台默认要求提供凭据。
 
+先生成凭据 ID 并保存在 shell 变量中，这样本步骤和第 6 步会使用同一个值：
+
+```bash
+export DC_CRED_ID="$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
+```
+
 ```bash
 curl -s -X POST http://localhost/api/device-management/graphql \
   -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"mutation($r:DeviceCredentialCreateRequest!){createDeviceCredential(request:$r){token}}",
        "variables":{"r":{"token":"sensor-001-cred","deviceToken":"sensor-001",
                          "credentialType":"ACCESS_TOKEN",
-                         "credentialId":"5f989616-2a0d-4160-8ae1-da5fad2898b2",
+                         "credentialId":"'"$DC_CRED_ID"'",
                          "enabled":true}}}'
 ```
 
-请选择自己的 `credentialId`：任意不可猜测的字符串即可。对于 `ACCESS_TOKEN` 凭据，`credentialId` **本身就是**设备提交的密钥，因此应像保护密码一样保护它，而不是把它当成名称。平台只保存它的单向摘要，所以请自己保留一份：这次请求的响应是它最后一次可被读取。
+`credentialId` 可以是任意不可猜测的字符串；上面的命令已为你生成了一个，因此每位读者得到的密钥都不同。对于 `ACCESS_TOKEN` 凭据，`credentialId` **本身就是**设备提交的密钥，因此应像保护密码一样保护它，而不是把它当成名称。平台只保存它的单向摘要，所以请自己保留一份：这次请求的响应是它最后一次可被读取。
 
 刷新控制台的**设备（Devices）**列表。`sensor-001` 已出现在列表中，但还没有数据。
 
@@ -224,7 +230,7 @@ curl -i -X POST http://localhost:8081/devicechain/sim-demo/events \
   -d '{"device":"sensor-001",
        "eventType":"Measurement",
        "credentialType":"ACCESS_TOKEN",
-       "credentialId":"5f989616-2a0d-4160-8ae1-da5fad2898b2",
+       "credentialId":"'"$DC_CRED_ID"'",
        "payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
@@ -245,7 +251,7 @@ for t in 21.9 22.4 22.1 23.0; do
     -H 'Content-Type: application/json' \
     -d "{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",
          \"credentialType\":\"ACCESS_TOKEN\",
-         \"credentialId\":\"5f989616-2a0d-4160-8ae1-da5fad2898b2\",
+         \"credentialId\":\"$DC_CRED_ID\",
          \"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$t\"}}]}}"
   sleep 1
 done
