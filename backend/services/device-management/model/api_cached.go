@@ -4,8 +4,10 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"hash/fnv"
 	"strconv"
 	"time"
 
@@ -624,15 +626,34 @@ func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
 // nothing for this.
 func (capi *CachedApi) decodeOnce(key string) func([]byte) (*ProfileResolution, error) {
 	return func(raw []byte) (*ProfileResolution, error) {
-		gen := capi.caches.ProfileResolutionByType.Generation()
-		out, err, _ := capi.fills.Do("decode|"+key+"|"+strconv.FormatUint(gen, 10), func() (any, error) {
-			return decodeProfileResolution(raw)
-		})
+		// 🔴 THE FLIGHT IS KEYED ON THE BYTES BEING DECODED, NOT ON A CACHE GENERATION. A caller
+		// that read the bytes of version 2 before a publish, and one that reads the refilled bytes
+		// of version 3 after it, can both see the same generation (a fill does not move it); one
+		// flight for both would hand version 2's decode to the second, and attach it to version 3's
+		// entry, which then serves the superseded decoder and metrics until it expires. Same
+		// bytes, same decode; different bytes never share. The joiner also checks the bytes the
+		// leader decoded are its own, whatever the key says.
+		h := fnv.New64a()
+		_, _ = h.Write(raw)
+		out, err, _ := capi.fills.Do("decode|"+key+"|"+strconv.FormatUint(h.Sum64(), 16)+"|"+strconv.Itoa(len(raw)),
+			func() (any, error) {
+				res, err := decodeProfileResolution(raw)
+				return decoded{raw, res}, err
+			})
 		if err != nil {
 			return nil, err
 		}
-		return out.(*ProfileResolution), nil
+		if d := out.(decoded); bytes.Equal(d.raw, raw) {
+			return d.res, nil
+		}
+		return decodeProfileResolution(raw)
 	}
+}
+
+// decoded is a decode and the bytes it was made from.
+type decoded struct {
+	raw []byte
+	res *ProfileResolution
 }
 
 // resolutionRead is what one read of the cache answered, carried through a flight.

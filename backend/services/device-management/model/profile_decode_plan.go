@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -91,6 +92,17 @@ func (e *DecodePlanError) Unwrap() error { return e.Err }
 // stated as this number, and tests read it.
 var decodePlanBuilds atomic.Int64
 
+// decoderCompileMetric counts decoder compiles by result (ok, env_unsupported, compile_failed). It
+// is set once, at start, by InitializeCaches; nil counts nothing. Low cardinality on purpose: no
+// tenant or profile label, which a tenant could grow without bound.
+var decoderCompileMetric atomic.Pointer[prometheus.CounterVec]
+
+func countCompile(result string) {
+	if m := decoderCompileMetric.Load(); m != nil {
+		m.WithLabelValues(result).Inc()
+	}
+}
+
 // decodePlanBuildHook, when set by a test before it starts goroutines, runs at the start of every
 // compile, so a test can hold one open while others arrive.
 var decodePlanBuildHook func()
@@ -113,6 +125,7 @@ func buildDecodePlan(scope ProfileScope, metrics []ResolvedMetric, raw json.RawM
 	}
 	headErr := json.Unmarshal(raw, &head)
 	invalid := func(reason payloaddecode.Reason, err error) *decodePlan {
+		countCompile(string(reason))
 		log.Error().Err(err).Str("profileVersion", scope.ProfileVersionToken).Str("reason", string(reason)).
 			Msg("A published version's payload decoder cannot be compiled by this build; integration uplinks for its device types fail with a decode error until it is replaced")
 		return &decodePlan{err: &DecodePlanError{Reason: reason, Err: err}, input: head.Input}
@@ -132,6 +145,7 @@ func buildDecodePlan(scope ProfileScope, metrics []ResolvedMetric, raw json.RawM
 	if err != nil {
 		return invalid(classify(err), err)
 	}
+	countCompile("ok")
 	return &decodePlan{plan: plan, heap: decodeHeapCharge(doc, len(raw))}
 }
 

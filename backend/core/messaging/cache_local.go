@@ -63,6 +63,9 @@ type cacheOptions struct {
 	// crossReplica makes a Delete tell every other replica to drop its in-process copy.
 	// See WithCrossReplicaEviction.
 	crossReplica bool
+	// tenantSharePercent caps what one tenant may hold of maxBytes; 0 is no cap. See
+	// WithLocalTenantShare.
+	tenantSharePercent int
 }
 
 func defaultCacheOptions() cacheOptions {
@@ -107,6 +110,21 @@ func WithDecodedCharge(factor, base int) CacheOption {
 // and must not call the cache. A negative answer is treated as zero.
 func WithDecodedChargeOf(charge func(v any, encodedLen int) (int, bool)) CacheOption {
 	return func(o *cacheOptions) { o.decodedChargeOf = charge }
+}
+
+// WithLocalTenantShare keeps one tenant from taking the whole in-process tier: a tenant may hold
+// at most percent (1 to 100) of the byte bound, and when a store would take it past that it
+// evicts that tenant's OWN least recently used entries, never another tenant's. The tenant is the
+// key's leading segment (see WithCrossReplicaEviction). It is for a cache whose entries differ
+// enormously in size by tenant's choice, such as one that holds tenant-authored compiled
+// programs: without it a tenant with enough large entries evicts everyone else's, and itself
+// thrashes. A value larger than the share on its own is not held at all. It panics outside 1 to
+// 100, as WithLocalTTL does.
+func WithLocalTenantShare(percent int) CacheOption {
+	if percent < 1 || percent > 100 {
+		panic("messaging: WithLocalTenantShare needs a percentage from 1 to 100")
+	}
+	return func(o *cacheOptions) { o.tenantSharePercent = percent }
 }
 
 // WithLocalTTL sets how long this Cache keeps a value in process memory. It is still capped
@@ -180,6 +198,9 @@ type localCache struct {
 
 	decodedFactor, decodedBase int
 	decodedChargeOf            func(v any, encodedLen int) (int, bool)
+	// tenantCap is the most bytes one tenant may hold (0: no cap), and tenantBytes what each holds.
+	tenantCap   int
+	tenantBytes map[string]int
 	// gen is bumped by every write to this tier made on behalf of the bucket changing (a
 	// Set, a Delete). A Get records it before asking the bucket and fills only if it has
 	// not moved, so a read that was in flight across a change on this replica cannot put
@@ -231,6 +252,8 @@ func newLocalCache(o cacheOptions, obs *cacheObserver) *localCache {
 		decodedFactor:   o.decodedFactor,
 		decodedBase:     o.decodedBase,
 		decodedChargeOf: o.decodedChargeOf,
+		tenantCap:       o.maxBytes / 100 * o.tenantSharePercent,
+		tenantBytes:     map[string]int{},
 		order:           list.New(),
 		byKey:           map[string]*list.Element{},
 		obs:             obs,
@@ -325,12 +348,14 @@ func (l *localCache) attach(key string, e *localEntry, val any) {
 			extra = max(c, 0)
 		}
 	}
-	if e.size+extra > l.maxBytes {
+	if e.size+extra > l.maxBytes || (l.tenantCap > 0 && e.size+extra > l.tenantCap) {
 		return
 	}
 	e.val = &decodedValue{v: val}
 	e.size += extra
 	l.bytes += extra
+	l.tenantBytes[tenantOfKey(key)] += extra
+	l.trimTenant(tenantOfKey(key), el)
 	// Make room from the least recently used end, never evicting the entry just attached
 	// to: if it is itself the least recently used, the one before it goes. The loop ends
 	// because the entry fits alone (checked above), so while the cap is exceeded another
@@ -477,11 +502,14 @@ func (l *localCache) insert(key string, data []byte, now time.Time) {
 		l.remove(el, "")
 	}
 	size := len(key) + cap(data) + localEntryOverhead
-	if size > l.maxBytes {
+	if size > l.maxBytes || (l.tenantCap > 0 && size > l.tenantCap) {
 		return
 	}
-	l.byKey[key] = l.order.PushFront(&localEntry{key: key, data: data, expires: now.Add(l.ttl), size: size})
+	el := l.order.PushFront(&localEntry{key: key, data: data, expires: now.Add(l.ttl), size: size})
+	l.byKey[key] = el
 	l.bytes += size
+	l.tenantBytes[tenantOfKey(key)] += size
+	l.trimTenant(tenantOfKey(key), el)
 	for l.order.Len() > l.maxEntries || l.bytes > l.maxBytes {
 		l.remove(l.order.Back(), "capacity")
 	}
@@ -497,8 +525,30 @@ func (l *localCache) remove(el *list.Element, reason string) {
 	l.order.Remove(el)
 	delete(l.byKey, e.key)
 	l.bytes -= e.size
+	t := tenantOfKey(e.key)
+	if l.tenantBytes[t] -= e.size; l.tenantBytes[t] <= 0 {
+		delete(l.tenantBytes, t)
+	}
 	if reason != "" {
 		l.obs.localEvicted(reason)
+	}
+}
+
+// trimTenant evicts the tenant's own least recently used entries, never keep, while it holds more
+// than its share. Called with mu held.
+func (l *localCache) trimTenant(tenant string, keep *list.Element) {
+	for l.tenantCap > 0 && l.tenantBytes[tenant] > l.tenantCap {
+		var victim *list.Element
+		for el := l.order.Back(); el != nil; el = el.Prev() {
+			if el != keep && tenantOfKey(el.Value.(*localEntry).key) == tenant {
+				victim = el
+				break
+			}
+		}
+		if victim == nil {
+			return
+		}
+		l.remove(victim, "tenant_share")
 	}
 }
 

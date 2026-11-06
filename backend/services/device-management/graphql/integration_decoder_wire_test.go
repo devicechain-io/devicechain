@@ -224,3 +224,26 @@ func TestIntegrationDecoderReadsThroughTheResolversCache(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, false, ask()["present"])
 }
+
+// F5. A decoder written by a newer release may name an input kind this schema does not know. The
+// question must still be answered (present, input null), not fail: its error would be a 503 for
+// every uplink of the type.
+func TestIntegrationDecoderToleratesAnInputKindItDoesNotKnow(t *testing.T) {
+	f, issued := newIntegrationDecoderFixture(t)
+	f.publishDecoder(t, wireFrameDecoder)
+	var row model.DeviceProfileVersion
+	db := f.db.WithContext(f.operator())
+	require.NoError(t, db.Where("version = ?", 1).First(&row).Error)
+	var snap map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(row.Snapshot, &snap))
+	snap["decoder"] = json.RawMessage(`{"kind":"CEL","envVersion":2,"input":"STREAM","sections":[]}`)
+	raw, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.DeviceProfileVersion{}).Where("id = ?", row.ID).Update("snapshot", raw).Error)
+
+	res := serve(t, service(f), wireIntegrationDecoder, map[string]any{"i": "chirp-1", "s": issued, "t": "pump"})
+	require.Empty(t, res.errs, "an unknown input kind became a GraphQL error")
+	got := decoderPlanOf(t, res)
+	assert.Equal(t, true, got["present"])
+	assert.Nil(t, got["input"])
+}

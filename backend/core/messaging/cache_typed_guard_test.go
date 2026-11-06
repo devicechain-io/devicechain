@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
 
@@ -252,5 +253,52 @@ func TestDecodedChargeOfChargesByTheValue(t *testing.T) {
 	}
 	if h, ok := small.local.getHit("t|k", small.now()); !ok || h.val != nil {
 		t.Fatalf("a value charged past the cap was attached (hit %v, decoded %v)", ok, h.val != nil)
+	}
+}
+
+// TestATenantOverItsShareEvictsItsOwnEntries: with a tenant share, a tenant that stores past it
+// loses its own least recently used entries and never another tenant's; a value over the share on
+// its own is not held.
+func TestATenantOverItsShareEvictsItsOwnEntries(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 40000), WithLocalTenantShare(25),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 4000, true }))
+	for _, k := range []string{"quiet|1", "quiet|2"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The noisy tenant decodes ten entries of about 4 KB each: its share is 10,000 bytes.
+	for i := 0; i < 10; i++ {
+		k := fmt.Sprintf("noisy|%d", i)
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, k, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"quiet|1", "quiet|2"} {
+		if _, ok := c.local.getHit(k, c.now()); !ok {
+			t.Fatalf("%s was evicted by another tenant's entries", k)
+		}
+	}
+	held := 0
+	for i := 0; i < 10; i++ {
+		if _, ok := c.local.getHit(fmt.Sprintf("noisy|%d", i), c.now()); ok {
+			held++
+		}
+	}
+	if held == 0 || held >= 10 {
+		t.Fatalf("the noisy tenant holds %d of its 10 entries; its share should hold some and not all", held)
+	}
+	if _, ok := c.local.getHit("noisy|9", c.now()); !ok {
+		t.Fatal("the newest entry of the noisy tenant was evicted instead of its oldest")
+	}
+	c.local.mu.Lock()
+	over := c.local.tenantBytes["noisy"] > c.local.tenantCap
+	c.local.mu.Unlock()
+	if over {
+		t.Fatal("the tenant is over its share")
 	}
 }

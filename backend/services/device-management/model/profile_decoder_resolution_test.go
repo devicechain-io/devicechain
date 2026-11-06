@@ -19,6 +19,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -500,7 +502,7 @@ func TestAMaximalDecoderIsKeptDecodedByTheProductionCache(t *testing.T) {
 	doc, defs := maximalDecoder(t)
 	built := NewProfileResolutionWithDecoder(ProfileScope{ProfileVersionToken: "p@1"}, defs, doc)
 	require.NotNil(t, built.Decoder().Plan())
-	c := newMemoryCache(profileResolutionCacheOptions()...)
+	c := newMemoryCache(profileResolutionCacheOptions(32, 25)...)
 	require.NoError(t, c.Set(context.Background(), "acme|v2|1", built))
 
 	before := decodePlanBuilds.Load()
@@ -522,7 +524,7 @@ func newMemoryCache(opts ...messaging.CacheOption) *messaging.Cache {
 func TestAReplicaHoldsAtMostItsBoundOfDecoders(t *testing.T) {
 	doc, defs := maximalDecoder(t)
 	built := NewProfileResolutionWithDecoder(ProfileScope{ProfileVersionToken: "p@1"}, defs, doc)
-	c := newMemoryCache(profileResolutionCacheOptions()...)
+	c := newMemoryCache(profileResolutionCacheOptions(32, 25)...)
 	ctx := context.Background()
 	const n = 12 // twice what the bound holds at about 6 MB each
 	for i := 0; i < n; i++ {
@@ -622,4 +624,103 @@ func TestAnExpiredLeaderDoesNotFailItsJoiners(t *testing.T) {
 	}
 	wg.Wait()
 	assert.Error(t, leaderErr, "the control: the leader, whose deadline passed, did fail")
+}
+
+// F1. A decode in flight for the bytes of version 2 must not be handed to a reader of version 3's
+// bytes, even though a fill does not move the cache generation and both read the same one: the
+// decoded value is attached to the entry the reader holds, so the replica would serve the
+// superseded decoder and metrics until the entry expired.
+func TestADecodeInFlightIsNotSharedAcrossDifferentBytes(t *testing.T) {
+	r := decoderRig(t) // version 2, with a decoder
+	key := profileResolutionByTypeKey(partialUpdateTenant, r.typeId)
+	old := r.read(t)
+	raw2, err := json.Marshal(old)
+	require.NoError(t, err)
+	r.editUnitAndPublish(t, "K") // version 3
+	raw3, err := json.Marshal(r.read(t))
+	require.NoError(t, err)
+	require.NotEqual(t, raw2, raw3)
+	decode := r.capi.decodeOnce(key)
+
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	var claimed atomic.Bool
+	decodePlanBuildHook = func() {
+		if claimed.CompareAndSwap(false, true) { // only the decode of version 2 is held
+			close(entered)
+			<-proceed
+		}
+	}
+	defer func() { decodePlanBuildHook = nil }()
+
+	var stale *ProfileResolution
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var err error
+		stale, err = decode(raw2)
+		assert.NoError(t, err)
+	}()
+	<-entered
+
+	type answer struct {
+		res *ProfileResolution
+		err error
+	}
+	asked := make(chan answer, 1)
+	go func() { res, err := decode(raw3); asked <- answer{res, err} }()
+	select {
+	case a := <-asked:
+		require.NoError(t, a.err)
+		assert.Equal(t, "p@3", a.res.Scope().ProfileVersionToken, "the decode of version 3's bytes was handed version 2's result")
+	case <-time.After(5 * time.Second):
+		close(proceed)
+		wg.Wait()
+		t.Fatal("the decode of version 3's bytes waited on the decode of version 2's")
+	}
+	close(proceed)
+	wg.Wait()
+	assert.Equal(t, "p@2", stale.Scope().ProfileVersionToken)
+}
+
+// F2. One tenant with more maximal decoders than its share evicts its own, never another
+// tenant's: the quiet tenant's decoded entry is still held, with no recompile, after the noisy
+// tenant has stored far more than the whole cache could keep.
+func TestANoisyTenantEvictsItsOwnDecodersNotAnothersOwn(t *testing.T) {
+	doc, defs := maximalDecoder(t)
+	built := NewProfileResolutionWithDecoder(ProfileScope{ProfileVersionToken: "p@1"}, defs, doc)
+	c := newMemoryCache(profileResolutionCacheOptions(32, 25)...)
+	ctx := context.Background()
+	read := func(key string) {
+		_, found, err := messaging.GetShared(ctx, c, key, decodeProfileResolution)
+		require.NoError(t, err)
+		require.True(t, found)
+	}
+	require.NoError(t, c.Set(ctx, "quiet|v2|1", built))
+	read("quiet|v2|1") // the oldest entry in the cache
+	for i := 0; i < 8; i++ {
+		k := fmt.Sprintf("noisy|v2|%d", i)
+		require.NoError(t, c.Set(ctx, k, built))
+		read(k)
+	}
+	before := decodePlanBuilds.Load()
+	read("quiet|v2|1")
+	assert.Equal(t, int64(0), decodePlanBuilds.Load()-before, "another tenant's decoders evicted the quiet tenant's")
+
+	// The control: the noisy tenant could not keep them all, so reading its oldest compiles again.
+	read("noisy|v2|0")
+	assert.Equal(t, int64(1), decodePlanBuilds.Load()-before, "the noisy tenant kept more than its share")
+}
+
+func TestCompileCounterHasNoTenantLabel(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	vec := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "x"}, []string{"result"})
+	reg.MustRegister(vec)
+	decoderCompileMetric.Store(vec)
+	defer decoderCompileMetric.Store(nil)
+	NewProfileResolutionWithDecoder(ProfileScope{}, []*MetricDefinition{{MetricKey: "temp", DataType: "DOUBLE"}}, json.RawMessage(resolutionDecoder))
+	NewProfileResolutionWithDecoder(ProfileScope{}, nil, json.RawMessage(`{"kind":"CEL","envVersion":2,"input":"FRAME"}`))
+	assert.Equal(t, 1.0, testutil.ToFloat64(vec.WithLabelValues("ok")))
+	assert.Equal(t, 1.0, testutil.ToFloat64(vec.WithLabelValues("env_unsupported")))
 }

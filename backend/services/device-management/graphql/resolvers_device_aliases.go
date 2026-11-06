@@ -52,10 +52,16 @@ type IntegrationDecoderPlanResolver struct {
 func (r *IntegrationDecoderPlanResolver) Present() bool { return r.M.Present }
 
 func (r *IntegrationDecoderPlanResolver) Input() *string {
-	if !r.M.Present || r.M.Input == "" {
-		return nil
+	// Only a value of the PayloadDecoderInput enum: a document written by a newer release may name
+	// an input kind this schema does not know, and returning it would be a GraphQL error, which the
+	// ingest path turns into a 503 for every uplink. Null says "present, input unknown".
+	switch r.M.Input {
+	case "FRAME", "JSON", "DECODED":
+		if r.M.Present {
+			return &r.M.Input
+		}
 	}
-	return &r.M.Input
+	return nil
 }
 
 func (r *IntegrationDecoderPlanResolver) MaxReadings() int32 {

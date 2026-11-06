@@ -54,3 +54,28 @@ func TestInMemoryCacheSettingsAreBounded(t *testing.T) {
 	require.NoError(t, core.LoadConfiguration(
 		[]byte(`{"inMemoryCache":{"perDeviceCacheEntries":4194304,"perDeviceCacheMiB":256}}`), cfg))
 }
+
+// The resolution cache's bytes and per-tenant share default, load, and are bounded.
+func TestProfileResolutionCacheSettings(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{}`), cfg))
+	assert.Equal(t, 32, cfg.InMemoryCache.ProfileResolutionCacheMiB)
+	assert.Equal(t, 25, cfg.InMemoryCache.ProfileResolutionTenantSharePercent)
+
+	cfg = &DeviceManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration(
+		[]byte(`{"inMemoryCache":{"profileResolutionCacheMiB":64,"profileResolutionTenantSharePercent":50}}`), cfg))
+	assert.Equal(t, 64, cfg.InMemoryCache.ProfileResolutionCacheMiB)
+	assert.Equal(t, 50, cfg.InMemoryCache.ProfileResolutionTenantSharePercent)
+
+	for _, tc := range []struct{ doc, key string }{
+		{`{"inMemoryCache":{"profileResolutionCacheMiB":-1}}`, "inMemoryCache.profileResolutionCacheMiB"},
+		{`{"inMemoryCache":{"profileResolutionCacheMiB":257}}`, "inMemoryCache.profileResolutionCacheMiB"},
+		{`{"inMemoryCache":{"profileResolutionTenantSharePercent":101}}`, "inMemoryCache.profileResolutionTenantSharePercent"},
+		{`{"inMemoryCache":{"profileResolutionTenantSharePercent":-5}}`, "inMemoryCache.profileResolutionTenantSharePercent"},
+	} {
+		err := core.LoadConfiguration([]byte(tc.doc), &DeviceManagementConfiguration{})
+		require.Error(t, err, tc.doc)
+		assert.Contains(t, err.Error(), tc.key)
+	}
+}

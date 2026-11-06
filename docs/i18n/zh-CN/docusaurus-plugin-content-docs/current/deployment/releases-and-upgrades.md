@@ -512,6 +512,7 @@ dcctl bootstrap local devicechain
 
 - **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
 - **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
+- **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}
@@ -532,6 +533,14 @@ event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键
 - **开启事件信封的 `event-processing`** 会保存[事件信封](#event-envelopes)中描述的重复防护。在每秒 4,500 至 6,000 个事件时占用 265 至 269 MiB，在每秒 12,000 个事件时占用 388 MiB（Go 堆 353 MiB），而上限为 384Mi，软上限为 288 MiB。在每秒约 8,000 个事件以上，Pod 会被软上限卡住、持续回收垃圾，或被终止。只要 `resolved` 或 `inbound` 之一开启，chart 现在就把下限设为 768Mi（软上限 576 MiB），否则为 384Mi。此前对该防护的估计（每秒 20,000 个事件时约 180 MB）低了三到四倍；更正后的数字见[事件信封](#event-envelopes)。
 
 两者都是下限，仅在本来适用的上限更低时才生效。你在服务上设置的上限，或更大的顶层上限，按原值使用，软上限随实际生效的上限而定。新值 `functionalAreas.<服务>.memoryLimitFloorWithEnvelopes` 保存开启信封时的下限。`dcctl` 会根据它写入的实例配置设置 `eventEnvelopesEnabled`。如果你自己用 `instance.existingSecret` 安装 chart，chart 读不到该配置：开启任一信封设置时，请设置 `eventEnvelopesEnabled: true`。
+
+#### 滚动升级期间的配置文件变更 {#v120-profile-cache}
+
+`device-management` 现在用一个新的键缓存每个设备类型的配置文件解析结果，因此运行本版本的副本不会读取旧副本写入的条目（旧条目不含载荷解码器）。在本版本副本上所做的每次变更都会同时清除两个键下的条目。在**旧**副本上所做的变更只清除旧键，因此已升级的副本会继续提供其持有的内容，直到条目过期。
+
+- **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
+- **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
+- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户只会驱逐自己的条目，而不会驱逐其他租户的。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 

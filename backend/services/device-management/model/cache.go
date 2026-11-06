@@ -174,10 +174,16 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	// worth the break.
 	profileResolutionByType, err := nmgr.NewCache(CACHE_NAME_PROFILE_RESOLUTION_BY_TYPE,
 		time.Duration(cfg.MetricDefCacheTtlSeconds)*time.Second,
-		append(common, profileResolutionCacheOptions()...)...)
+		append(common, profileResolutionCacheOptions(cfg.InMemoryCache.ProfileResolutionCacheMiB,
+			cfg.InMemoryCache.ProfileResolutionTenantSharePercent)...)...)
 	if err != nil {
 		return nil, err
 	}
+	decoderCompileMetric.Store(nmgr.Microservice.NewCounterVec("payload_decoder_compiles_total",
+		"Payload decoder compiles on this replica, by result: ok, env_unsupported (the version names a "+
+			"library this build does not know) or compile_failed. A compile happens once per cache fill of a "+
+			"device type's resolution, so a rate here is the cost of publishes and of entries let go for room.",
+		[]string{"result"}))
 	membershipsByEntity, err := nmgr.NewCache(CACHE_NAME_MEMBERSHIPS_BY_ENTITY,
 		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second,
 		append(common, perDevice, membershipsCharge.option())...)
@@ -236,25 +242,23 @@ func (c decodedCharge) option() messaging.CacheOption {
 	return messaging.WithDecodedCharge(c.factor, c.base)
 }
 
-// ProfileResolutionLocalEntries and ProfileResolutionLocalMiB bound the in-process copy of the
-// per-type resolution cache. The entry count is messaging's default, kept on purpose (there are
-// few device types). The bytes are NOT: a resolution that carries a payload decoder holds its
-// compiled programs, megabytes for a large one (see decodeHeapCharge), so the default 4 MiB would
-// not hold even one maximal decoder, and an entry that cannot be attached is decoded, which means
-// compiled, again on every read. 32 MiB holds several; entries without a decoder (about 1 KiB)
-// are unaffected, and a replica's memory is bounded by this number however many decoders there are.
-const (
-	ProfileResolutionLocalEntries = 4096
-	ProfileResolutionLocalMiB     = 32
-)
+// ProfileResolutionLocalEntries is the entry bound of the per-type resolution cache's in-process
+// copy: messaging's default, kept on purpose (there are few device types). The BYTES are
+// configurable (config.InMemoryCacheConfiguration.ProfileResolutionCacheMiB, 32 by default, not
+// messaging's 4 MiB), because a resolution that carries a payload decoder holds its compiled
+// programs, megabytes for a large one (see decodeHeapCharge): an entry that cannot be attached is
+// decoded, which means compiled, again on every read. A replica's memory is bounded by that number
+// however many decoders there are, and no tenant may hold more than a share of it.
+const ProfileResolutionLocalEntries = 4096
 
 // profileResolutionCacheOptions are the per-type resolution cache's own options: how it charges
-// what it decodes, and how much of it a replica keeps.
-func profileResolutionCacheOptions() []messaging.CacheOption {
+// what it decodes, how much of it a replica keeps, and how much of that one tenant may.
+func profileResolutionCacheOptions(miB, tenantSharePercent int) []messaging.CacheOption {
 	return []messaging.CacheOption{
 		resolutionCharge.option(),
 		messaging.WithDecodedChargeOf(resolutionChargeOf),
-		messaging.WithLocalBounds(ProfileResolutionLocalEntries, ProfileResolutionLocalMiB<<20),
+		messaging.WithLocalBounds(ProfileResolutionLocalEntries, miB<<20),
+		messaging.WithLocalTenantShare(tenantSharePercent),
 	}
 }
 

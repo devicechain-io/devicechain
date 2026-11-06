@@ -756,6 +756,7 @@ What needs action:
 
 - **Know that two memory limits are higher.** `device-management` is now limited to 512Mi (it was 256Mi), and `event-processing` is limited to 768Mi (it was 384Mi) while either event-envelope setting is on. Nothing changes for `event-processing` with both settings off. The memory requests do not change, so scheduling is the same; each limit is a ceiling the pod may use. See [Memory limits](#v120-memory).
 - **Check any memory limit you set yourself.** A limit you set on `device-management` or `event-processing` under `functionalAreas.<service>.resources.limits.memory` is used as written, and so is a higher top-level `resources.limits.memory`. If yours is below the figures in [Service sizing](./bootstrap.md#service-sizing) for your fleet or event rate, raise it.
+- **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -776,6 +777,14 @@ Both limits were within one step of what the services were measured to hold, on 
 - **`event-processing` with event envelopes on** holds the duplicate guard described under [Event envelopes](#event-envelopes). It used 265 to 269 MiB at 4,500 to 6,000 events a second and 388 MiB at 12,000, with 353 MiB of Go heap, against a 384Mi limit with a 288 MiB soft limit. Above about 8,000 events a second the pod would have been held at its soft limit, collecting continuously, or killed. The chart now floors the limit at 768Mi (soft limit 576 MiB) while either `resolved` or `inbound` is on, and at 384Mi otherwise. The earlier figure for the guard (about 180 MB at 20,000 events a second) was three to four times too low; the corrected figures are under [Event envelopes](#event-envelopes).
 
 Both are floors, applied only when the limit that would otherwise apply is lower. A limit you set on the service, or a larger top-level limit, is used as written, and the soft limit follows whichever limit applies. The new value `functionalAreas.<service>.memoryLimitFloorWithEnvelopes` holds the envelope floor. `dcctl` sets `eventEnvelopesEnabled` from the instance configuration it writes. If you install the chart yourself with `instance.existingSecret`, the chart cannot read that configuration: set `eventEnvelopesEnabled: true` when you turn either envelope setting on.
+
+#### Profile changes during a rolling upgrade {#v120-profile-cache}
+
+`device-management` now caches each device type's profile resolution under a new key, so that a replica running this release never reads an entry an older replica wrote (older entries would not carry the payload decoder). Every change made on a replica of this release drops the entry under both keys. A change made on an **older** replica drops only the old key, so upgraded replicas keep serving what they hold until it expires.
+
+- **Profile and device-type changes made while a rolling upgrade is in progress can take up to about twice the cache time to live to reach upgraded replicas** (about 10 minutes at the default 300 seconds of `metricDefCacheTtlSeconds` and `inMemoryCache.ttlSeconds`). That covers a publish, a rollback, a re-profile of a device type and a geofence change. Once every replica runs this release, changes take effect at once as before.
+- **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published from an older replica does not contain the decoder.
+- **The in-process copy of this cache is larger.** It is bounded at 32 MiB per replica (it was 4 MiB), because an entry that carries a payload decoder holds its compiled programs. Entries without a decoder are unchanged in size. The bound is `inMemoryCache.profileResolutionCacheMiB`, and `inMemoryCache.profileResolutionTenantSharePercent` (default 25) caps how much of it one tenant may hold, so a tenant with many large decoders evicts its own entries and never another tenant's. Replicas also export `payload_decoder_compiles_total`. If you set a memory limit yourself, count the extra 28 MiB.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 
