@@ -415,6 +415,16 @@ func HTTPRunner(base Profile) Runner {
 	}
 }
 
+// CheckLaunchCount refuses a run whose explicit expectation disagrees with the handshakes given: an
+// operator who said six harnesses and named five has lost one before anything started, and RunMany
+// (which counts what it launched) would report "5 of 5" and pass. expect 0 means unchecked.
+func CheckLaunchCount(expect, launched int) error {
+	if expect > 0 && expect != launched {
+		return fmt.Errorf("--expect %d, but %d handshake(s) were given: a harness is missing from (or added to) the launch", expect, launched)
+	}
+	return nil
+}
+
 // RunMany runs one harness per handshake concurrently with one shared start instant (now +
 // lead, which must exceed the slowest harness's provisioning, or the merge reports the late
 // starters' spread), then merges their reports. A harness that fails to produce a report is
