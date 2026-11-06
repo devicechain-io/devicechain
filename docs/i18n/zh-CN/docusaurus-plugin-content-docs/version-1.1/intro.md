@@ -4,11 +4,19 @@ sidebar_position: 1
 title: 简介
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
 # DeviceChain {#devicechain}
 
 DeviceChain 是一个使用 Go 和 React 构建的云原生 **IoT 应用使能平台**。它连接和管理大规模、多种类型的设备群，并处理这些设备的数据。平台涵盖设备生命周期、遥测数据接入、命令与控制、组织建模和多租户管理，并通过 GraphQL API 以及可嵌入、支持版本管理的仪表板提供这些功能。
 
 DeviceChain 从头重建了 SiteWhere 平台。它保留了 SiteWhere 经过实践验证的领域模型，将庞大的 Java/Spring 技术栈替换为高效、运维简单的微服务，可运行于任何 Kubernetes 集群。
+
+## 完整演示 {#see-it-end-to-end}
+
+在真实实例上运行的模拟采石场,从一条读数到规则、告警和命令。
+
+<YouTubeLite id="VMoWwXf4IAI" title="模拟采石场中的 DeviceChain:读数、规则、告警、命令" />
 
 ## 为什么选择 DeviceChain {#why-devicechain}
 

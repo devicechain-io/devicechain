@@ -2,6 +2,8 @@
 title: Tu primer dispositivo
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
 # Tu primer dispositivo {#your-first-device-end-to-end}
 
 Al terminar esta página, un dispositivo que creaste habrá enviado una lectura y la estarás viendo en
@@ -9,6 +11,10 @@ la consola. No necesitas hardware ni firmware. El «dispositivo» es un comando 
 que un dispositivo es visto desde la plataforma.
 
 Calcula alrededor de media hora, la mayor parte esperando al arranque inicial.
+
+**¿Prefieres verlo?** El video sigue esta página: instala DeviceChain en un portátil y envía la primera lectura de un dispositivo. Tiene audio en inglés, con subtítulos en inglés y subtítulos en español, y capítulos.
+
+<YouTubeLite id="fWnVhI7icOk" title="Instala DeviceChain en un portátil y envía la primera lectura de un dispositivo" />
 
 :::note Qué da por supuesto esta página
 Necesitas `dcctl` más cinco herramientas en tu `PATH`: `docker`, `kubectl`, `helm`,
