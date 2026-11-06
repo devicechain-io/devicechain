@@ -17,10 +17,10 @@ type SeriesKey struct {
 	Series string
 }
 
-// timer is one scheduled deadline for a SeriesKey. gen is a generation stamp: a timer
-// is stale (and silently discarded when popped) if its gen != the wheel's live gen for
-// that key. This gives O(1) logical reset/cancel — the survey's acid-test primitive:
-// reset-per-event, fire-off-watermark, survive-restart-via-snapshot.
+// timer is the one scheduled deadline for a SeriesKey. The wheel holds AT MOST ONE timer per
+// key: a reschedule moves this entry with heap.Fix and a cancel removes it, so the heap's size is
+// the number of armed keys, never the number of events. gen is the key's generation stamp at the
+// time of scheduling; it is what the snapshot serializes beside the deadline.
 type timer struct {
 	deadline time.Time
 	key      SeriesKey
@@ -61,39 +61,52 @@ func (p *timerPQ) Pop() any {
 	return t
 }
 
-// timerWheel is a heap-ordered timer index with lazy, generation-stamped cancellation.
-// Generations are strictly MONOTONIC per key and never recycled (a fired timer bumps the
-// gen rather than deleting it): if the counter ever restarted at 1, a stale timer still in
-// the heap could match a recycled live gen and fire falsely — and because snapshot() keeps
-// only live timers, that revival would also make a restored run diverge from the clean one.
-// The gens map is thus bounded by the number of distinct keys with timer history (the same
-// cardinality class as every other per-key structure, governed by the state budget), not by
-// event volume. live records each key's current deadline so a reschedule can refuse to move
-// it EARLIER (see scheduleForward).
+// timerWheel is a heap-ordered timer index holding one entry per armed key.
+//
+// The heap is ordered by the total order (deadline, rule, series), so with one entry per key the
+// firing order is a function of the SET of armed deadlines alone — not of the insertion history
+// that produced it. That is what makes moving an entry (heap.Fix) indistinguishable, in output,
+// from the earlier "push a new entry and leave the superseded one to be discarded when popped":
+// the superseded entries never fired and never ordered anything.
+//
+// Generations are strictly MONOTONIC per key and never recycled (a fired timer bumps the gen
+// rather than deleting it). They no longer guard a stale heap entry — there are none — but they
+// are part of the serialized snapshot (snapGen, snapTimer.Gen), and a rule purge restarts them by
+// design; keeping the same bump discipline keeps the snapshot bytes identical to what the
+// push-per-event wheel wrote. The gens map is bounded by the number of distinct keys with timer
+// history, not by event volume. live is each armed key's heap entry; it carries the current
+// deadline so a reschedule can refuse to move it EARLIER (see scheduleForward).
 type timerWheel struct {
 	pq   timerPQ
-	gens map[SeriesKey]uint64    // live generation per key (monotonic; never recycled)
-	live map[SeriesKey]time.Time // current live deadline per key
+	gens map[SeriesKey]uint64 // generation per key (monotonic; never recycled)
+	live map[SeriesKey]*timer // the key's one heap entry, while armed
 }
 
 func newTimerWheel() *timerWheel {
-	return &timerWheel{gens: map[SeriesKey]uint64{}, live: map[SeriesKey]time.Time{}}
+	return &timerWheel{gens: map[SeriesKey]uint64{}, live: map[SeriesKey]*timer{}}
 }
 
-// hasTimers reports whether any timer is scheduled (heap non-empty). The heap may hold
-// stale (superseded) entries, so this can be conservatively true when the only remaining
-// timers are stale — a harmless over-report for the idle-advance HasPendingWork gate (at
-// worst one extra bare-move advance, which popDue then cleans up).
+// hasTimers reports whether any timer is armed. It is exact: the push-per-event wheel also
+// answered true while only superseded or cancelled entries remained, which let the idle-advance
+// gate (HasPendingWork) take one extra bare watermark move after a cancel. That move is driven by
+// the wall clock, is never replayed from the log, and was already absent after any restore (a
+// snapshot keeps live timers only), so nothing replay-correct depended on it.
 func (w *timerWheel) hasTimers() bool { return w.pq.Len() > 0 }
 
-// schedule sets (or resets) the deadline for key unconditionally. Any previously-scheduled
-// timer for the same key is invalidated by the generation bump. Used by Duration, where a
-// fresh matched run may legitimately set an earlier deadline than a stale, already-cancelled
-// timer.
+// schedule sets (or resets) the deadline for key unconditionally: the key's existing entry is
+// moved in place (heap.Fix), or one is pushed when the key was not armed. Used by Duration, where
+// a fresh matched run may legitimately set an earlier deadline than the one it replaces.
 func (w *timerWheel) schedule(key SeriesKey, deadline time.Time) {
 	w.gens[key]++
-	w.live[key] = deadline
-	heap.Push(&w.pq, &timer{deadline: deadline, key: key, gen: w.gens[key]})
+	if t, ok := w.live[key]; ok {
+		t.deadline = deadline
+		t.gen = w.gens[key]
+		heap.Fix(&w.pq, t.index)
+		return
+	}
+	t := &timer{deadline: deadline, key: key, gen: w.gens[key]}
+	w.live[key] = t
+	heap.Push(&w.pq, t)
 }
 
 // scheduleForward resets the deadline for key but NEVER moves it earlier. Absence and Session
@@ -101,17 +114,20 @@ func (w *timerWheel) schedule(key SeriesKey, deadline time.Time) {
 // must not shrink a deadline a later event time already extended — doing so fires the
 // dead-man prematurely (a false detection) or splits one session in two.
 func (w *timerWheel) scheduleForward(key SeriesKey, deadline time.Time) {
-	if cur, ok := w.live[key]; ok && !deadline.After(cur) {
+	if cur, ok := w.live[key]; ok && !deadline.After(cur.deadline) {
 		return // a later (or equal) deadline already stands
 	}
 	w.schedule(key, deadline)
 }
 
-// cancel invalidates any pending timer for key without scheduling a new one.
+// cancel removes any pending timer for key without scheduling a new one.
 func (w *timerWheel) cancel(key SeriesKey) {
 	if _, ok := w.gens[key]; ok {
 		w.gens[key]++
-		delete(w.live, key)
+		if t, armed := w.live[key]; armed {
+			heap.Remove(&w.pq, t.index)
+			delete(w.live, key)
+		}
 	}
 }
 
@@ -163,9 +179,8 @@ type firedTimer struct {
 	deadline time.Time
 }
 
-// popDue returns the live timers whose deadline is <= wm, in deterministic deadline
-// order, removing them from the wheel. Stale timers (superseded by reset/cancel) are
-// discarded silently.
+// popDue returns the armed timers whose deadline is <= wm, in deterministic (deadline, key)
+// order, removing them from the wheel.
 func (w *timerWheel) popDue(wm time.Time) []firedTimer {
 	var fired []firedTimer
 	for w.pq.Len() > 0 {
@@ -174,13 +189,9 @@ func (w *timerWheel) popDue(wm time.Time) []firedTimer {
 			break
 		}
 		heap.Pop(&w.pq)
-		if top.gen != w.gens[top.key] {
-			continue // stale: superseded by a later reset/cancel
-		}
 		fired = append(fired, firedTimer{key: top.key, deadline: top.deadline})
 		// One-shot: firing consumes the live timer. BUMP (never delete) the gen so the value
-		// is never recycled — a later schedule for this key gets a strictly higher gen, so no
-		// stale heap entry can ever masquerade as live.
+		// is never recycled — a later schedule for this key gets a strictly higher gen.
 		w.gens[top.key]++
 		delete(w.live, top.key)
 	}
@@ -202,14 +213,12 @@ type snapGen struct {
 	Gen    uint64 `json:"gen"`
 }
 
-// snapshot captures only LIVE timers (gen == live gen) plus the generation table, in a
-// stable order so the serialized bytes are deterministic.
+// snapshot captures the armed timers (the heap holds nothing else) plus the generation table, in
+// a stable order so the serialized bytes are deterministic.
 func (w *timerWheel) snapshot() ([]snapTimer, []snapGen) {
 	timers := make([]snapTimer, 0, w.pq.Len())
 	for _, t := range w.pq {
-		if t.gen == w.gens[t.key] {
-			timers = append(timers, snapTimer{Deadline: t.deadline, Rule: t.key.Rule, Series: t.key.Series, Gen: t.gen})
-		}
+		timers = append(timers, snapTimer{Deadline: t.deadline, Rule: t.key.Rule, Series: t.key.Series, Gen: t.gen})
 	}
 	sort.Slice(timers, func(i, j int) bool {
 		if !timers[i].Deadline.Equal(timers[j].Deadline) {
@@ -242,8 +251,21 @@ func restoreTimerWheel(timers []snapTimer, gens []snapGen) *timerWheel {
 	// current live deadline — enough to rebuild the forward-only `live` map exactly.
 	for _, t := range timers {
 		key := SeriesKey{Rule: t.Rule, Series: t.Series}
-		heap.Push(&w.pq, &timer{deadline: t.Deadline, key: key, gen: t.Gen})
-		w.live[key] = t.Deadline
+		if t.Gen != w.gens[key] {
+			continue // not the key's live timer (only a hand-edited snapshot says so): the old wheel discarded it when popped
+		}
+		if cur, dup := w.live[key]; dup {
+			// Two timers for one key (a hand-edited snapshot; snapshot() never writes it). The old
+			// wheel restored both and the EARLIER fired, its generation bump voiding the other.
+			if t.Deadline.Before(cur.deadline) {
+				cur.deadline = t.Deadline
+				heap.Fix(&w.pq, cur.index)
+			}
+			continue
+		}
+		nt := &timer{deadline: t.Deadline, key: key, gen: t.Gen}
+		w.live[key] = nt
+		heap.Push(&w.pq, nt)
 	}
 	return w
 }
