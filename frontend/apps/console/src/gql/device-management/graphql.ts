@@ -166,6 +166,13 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+/** How an anchor treats the completeness of its revocation lists. */
+export type CertificateRevocationMode =
+  /** A listed certificate is refused; an issuer with no list, or a stale one, is allowed. */
+  | 'ENTRIES'
+  /** A listed certificate is refused, and so is one whose issuer has no current list. */
+  | 'REQUIRE_CURRENT';
+
 /** Fields for a new command definition. */
 export type CommandDefinitionCreateRequest = {
   /**
@@ -730,6 +737,18 @@ export type DeviceTrustAnchorUpdateRequest = {
   metadata?: string | null | undefined;
   /** Human-readable name. Null clears it. */
   name?: string | null | undefined;
+  /**
+   * Required and unclearable. Switching to REQUIRE_CURRENT is refused while the anchor holds no
+   * current revocation list, or a registered certificate under it was issued by a CA that has none:
+   * the switch would refuse every such device.
+   */
+  revocationMode?: CertificateRevocationMode | null | undefined;
+  /**
+   * A Go duration of whole seconds, 0s to 168h. Null restores the instance default. While the
+   * anchor is in REQUIRE_CURRENT, a change is refused if it would leave an issuer without a current
+   * list.
+   */
+  revocationStaleGrace?: string | null | undefined;
 };
 
 /** Fields for a new device type. */

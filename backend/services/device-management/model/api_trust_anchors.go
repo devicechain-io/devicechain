@@ -269,6 +269,9 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 		if err != nil {
 			return err
 		}
+		if err := api.applyRevocationSettings(tx, locked, request); err != nil {
+			return err
+		}
 		locked.Name = request.Name.ApplyToNullString(locked.Name)
 		locked.Description = request.Description.ApplyToNullString(locked.Description)
 		locked.Metadata = metadataJSON
@@ -343,16 +346,22 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 			return fmt.Errorf("%w: %d credential(s) and %d provisioning profile(s) rely on trust anchor %q; remove them first",
 				ErrEntityInUse, creds, profiles, token)
 		}
-		// Its revocation store goes nowhere silently: the entries are the tenant's record of what it
-		// refused, and an issuer row carries the CRL numbers that stop an older list being replayed.
-		// The foreign keys refuse the delete as well; this says why.
-		revocations, err := revocationRowsOf(tx, locked.ID)
+		// MANUAL revocations are the tenant's own decisions about its certificates and go nowhere
+		// silently: un-revoke them first. Everything that came from a CRL (the lists, their
+		// entries and the issuer rows that carry the CRL-number marks) is derived from the CA's
+		// publication, and an anchor with no credential and no profile left has nothing to
+		// enforce it on, so it is discarded with the anchor. Without that, an anchor that ever held
+		// a CRL could never be deleted: the issuer rows are never deleted by any other path.
+		manual, err := manualRevocationRows(tx, locked.ID)
 		if err != nil {
 			return err
 		}
-		if revocations > 0 {
-			return fmt.Errorf("%w: trust anchor %q holds %d revocation record(s); remove them first",
-				ErrEntityInUse, token, revocations)
+		if manual > 0 {
+			return fmt.Errorf("%w: trust anchor %q holds %d manual revocation(s); un-revoke them first",
+				ErrEntityInUse, token, manual)
+		}
+		if err := discardCrlRevocations(tx, locked.TenantId, locked.ID); err != nil {
+			return err
 		}
 		result := tx.Unscoped().Delete(locked)
 		if result.Error != nil {
