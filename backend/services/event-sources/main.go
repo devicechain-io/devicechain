@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -126,18 +125,16 @@ var (
 	IntegrationRateLimiter        *core.TenantRateLimiter
 	IntegrationReadingRateLimiter *core.TenantRateLimiter
 
+	// TenantGone is the FAIL-CLOSED reading of the deleted-tenant lifecycle, shared with the
+	// envelope walks so an evicted round is not stepped past for an erased tenant: true unless a
+	// fresh answer says the tenant is active. Nil when user-management is unconfigured.
+	TenantGone func(string) bool
 	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
 	// user-management, cached like the ingest ceiling. It is what turns the contention
 	// floor into a per-tenant shed factor and what labels a shed by its class. nil when
 	// user-management is not configured (the degenerate no-overrides path), in which
 	// case every tenant resolves to the fail-safe bronze band.
 	ShedPriorityResolver *governance.ShedPriorityResolver
-	// TenantGone is the deleted-tenant gate the ingest gate refuses through, shared with the
-	// envelope walks so an evicted round is not stepped past for an erased tenant. Nil when
-	// user-management is unconfigured.
-	TenantGone func(string) bool
-	// ShedUnitsResolver prices the contention shed for broker-stamped traffic (see shedUnits).
-	ShedUnitsResolver processor.ShedUnits
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
@@ -589,36 +586,6 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 	}
 }
 
-// shedUnits is the ADR-063 shed as the broker-stamped (capture) traffic sees it. That traffic is
-// metered on ONE bucket on the broker's timeline, so the contention shed cannot be a lowered
-// ceiling on a bucket of its own (a second bucket is exactly what let a stalled tenant's tail be
-// shed after the broker PUBACKed it). It is a higher price instead: a fresh message costs
-// ceil(1/factor) tokens, which is the same as metering it against a ceiling of factor times the
-// rate and burst. The gate charges it only to fresh messages (processor.FreshAge); a drained
-// backlog costs 1, because shedding durably accepted data is what ADR-063 forbids.
-//
-// A tenant whose priority has not resolved is not shed, for the reason shedAdjusted gives.
-func shedUnits(shedPriority func(string) (int, bool)) processor.ShedUnits {
-	return func(tenant string) int {
-		level := contentionLevel()
-		if level <= 0 {
-			return 1
-		}
-		prio, resolved := shedPriority(tenant)
-		if !resolved {
-			return 1
-		}
-		f := governance.ShedFactor(governance.ShedClassOf(prio), level)
-		switch {
-		case math.IsNaN(f) || f >= 1.0:
-			return 1
-		case f <= 0:
-			return math.MaxInt32 // the hard drop; the gate caps it
-		}
-		return int(math.Ceil(1 / f))
-	}
-}
-
 // buildRateLimiter constructs the per-tenant ingest limiters. When the service
 // secret and user-management endpoint are configured, per-tenant overrides
 // (ADR-023) and shed priorities (ADR-063) are fetched from user-management over a
@@ -653,7 +620,6 @@ func buildRateLimiter() {
 		// transiently down, so the default is the real answer here — unlike the
 		// UM-backed path, where an unfetched tenant is genuinely unresolved).
 		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
-		ShedUnitsResolver = shedUnits(shedPrio)
 		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
@@ -665,7 +631,6 @@ func buildRateLimiter() {
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
 	ShedPriorityResolver = governance.NewShedPriorityResolver(client, umURL)
-	ShedUnitsResolver = shedUnits(ShedPriorityResolver.Resolve)
 	// Both limiters share the ceiling resolver, so a tenant's ADR-023 override applies
 	// to their live traffic and their backlog alike — the ceiling is the same, only the
 	// timeline each bucket measures against differs.
@@ -731,20 +696,19 @@ func buildEventSources() error {
 	// CONNECTS are stopped at the broker callout (but an established session keeps its
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	tenantGone := ingestTenantGate(infra, safetyGates)
-	TenantGone = tenantGone
+	tenantGate, tenantGoneStrict := ingestTenantGates(infra, safetyGates)
+	TenantGone = tenantGoneStrict
 	ingestGate = processor.RefuseDeletedTenants(
-		tenantGone,
-		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed,
-			processor.WithShedUnits(ShedUnitsResolver)),
+		tenantGate,
+		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
 		onTenantGone)
 	// The live/backlog routing decision the capture source makes once per message, sized to
-	// broker time, capped at now (see processor.NewMeterAt).
-	meterAt := processor.NewMeterAt()
+	// the tenant's live burst (see processor.NewMeterAt).
+	meterAt := processor.NewMeterAt(RateLimiter)
 	// The reading stage, charged after decode on every transport. One gate, built once,
 	// for the same reason as ingestGate.
 	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter, IntegrationReadingRateLimiter,
-		onReadingShed, processor.WithShedUnits(ShedUnitsResolver))
+		onReadingShed)
 
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
@@ -1425,10 +1389,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
 var safetyGates *governance.SafetyGates
 
-// ingestTenantGate is the deleted-tenant gate every ingest transport refuses work through: nil when
-// user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way.
-func ingestTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
-	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
+// ingestTenantGates builds the deleted-tenant gate every ingest transport refuses work through (nil
+// when user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way)
+// plus the strict (fail-closed) reading of the same cache,
+// which the envelope walks ask before stepping past a missing round (see TenantGone).
+func ingestTenantGates(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) (gate, strict func(string) bool) {
+	return governance.NewTenantLifecycleGates(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
 }
 
 func afterMicroserviceInitialized(ctx context.Context) error {

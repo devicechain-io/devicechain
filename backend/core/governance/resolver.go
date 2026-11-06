@@ -199,6 +199,26 @@ func (r *tenantResolver[V]) resolve(tenant string) V {
 	return v
 }
 
+// resolveFresh returns the tenant's value only when it is an AUTHORITATIVE LIVE answer: fetched
+// successfully, not past its refresh time, and not superseded by a failed refresh. A cold miss, an
+// unresolvable tenant, a failed refresh of a known tenant and a stale entry all report false (and
+// trigger a refresh as resolve does). A caller that must act only on a live answer, and refuse on
+// anything else, reads this rather than resolve, whose default is a live-looking value.
+func (r *tenantResolver[V]) resolveFresh(tenant string) (V, bool) {
+	r.mu.Lock()
+	e, ok := r.cache[tenant]
+	now := r.now()
+	fresh := ok && e.have && e.cause == core.CeilingPending && now.Before(e.nextRefreshAt)
+	if !ok || !now.Before(e.nextRefreshAt) {
+		r.triggerRefreshLocked(tenant)
+	}
+	r.mu.Unlock()
+	if !fresh {
+		return r.def, false
+	}
+	return e.val, true
+}
+
 // resolveOK is resolve plus where the value came from. It is the ONE reader of that
 // fact: the rate limiter's ceiling Source and the shed resolver's "resolved" bool are
 // both this answer.

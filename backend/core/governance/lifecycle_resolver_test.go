@@ -193,3 +193,60 @@ func TestNewTenantLifecycleGateIsOffWhenUnconfigured(t *testing.T) {
 	assert.False(t, gate("acme"),
 		"a freshly built gate has fetched nothing yet and must fail open, not refuse")
 }
+
+// GoneOrUnverified is the fail-CLOSED reading: gone unless a fresh, successful answer says active.
+// A cold cache, an unresolvable tenant, a failed refresh of a known tenant and a stale entry all
+// read gone, where Deleted (fail-open) reads each of them active.
+func TestGoneOrUnverifiedFailsClosedWhereDeletedFailsOpen(t *testing.T) {
+	// Cold and failing: nothing has ever answered.
+	down := &fixedLifecycle{err: errors.New("user-management unreachable")}
+	r := lifecycleWith(down.fetch)
+	assert.False(t, r.Deleted("acme"), "premise: the fail-open gate reads a cold tenant active")
+	assert.True(t, r.GoneOrUnverified("acme"), "a cold, unresolvable tenant must read gone")
+	require.Eventually(t, func() bool { return down.callCount() > 0 }, time.Second, 5*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	assert.True(t, r.GoneOrUnverified("acme"), "a tenant whose lookups fail must read gone")
+
+	// A fresh active answer is the only thing that reads active.
+	up := &fixedLifecycle{state: LifecycleActive}
+	r = lifecycleWith(up.fetch)
+	assert.True(t, r.GoneOrUnverified("acme"), "before the first answer lands: gone")
+	require.Eventually(t, func() bool { return !r.GoneOrUnverified("acme") }, time.Second, 5*time.Millisecond,
+		"a fresh active answer reads active")
+
+	// A deleted tenant, and one in a state this reader cannot name, read gone.
+	for _, state := range []string{"purging", "some-future-state", ""} {
+		f := &fixedLifecycle{state: state}
+		r = lifecycleWith(f.fetch)
+		r.GoneOrUnverified("acme")
+		require.Eventually(t, func() bool { return f.callCount() > 0 }, time.Second, 5*time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
+		assert.Truef(t, r.GoneOrUnverified("acme"), "state %q reads gone", state)
+	}
+}
+
+// A stale entry (past its TTL) and an entry whose latest refresh failed are not authoritative
+// even though they hold a value that says active.
+func TestGoneOrUnverifiedDistrustsAStaleOrFailedEntry(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	f := &fixedLifecycle{state: LifecycleActive}
+	r := lifecycleWith(f.fetch)
+	r.Configure(ResolverOptions{TTL: time.Minute, NegativeTTL: time.Minute, Clock: clock})
+
+	r.GoneOrUnverified("acme")
+	require.Eventually(t, func() bool { return !r.GoneOrUnverified("acme") }, time.Second, 5*time.Millisecond)
+
+	mu.Lock()
+	now = now.Add(2 * time.Minute) // past the TTL
+	mu.Unlock()
+	f.mu.Lock()
+	f.err = errors.New("down") // and the refresh it triggers fails
+	f.mu.Unlock()
+	assert.True(t, r.GoneOrUnverified("acme"), "a stale entry must read gone")
+	require.Eventually(t, func() bool { return f.callCount() >= 2 }, time.Second, 5*time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	assert.True(t, r.GoneOrUnverified("acme"), "an entry whose refresh failed must read gone")
+	assert.False(t, r.Deleted("acme"), "premise: the fail-open gate still serves the last-known active")
+}

@@ -130,21 +130,55 @@ func TestARateGateIsStillOneTokenPerMessage(t *testing.T) {
 	}
 }
 
-// MeterAt decides the time a message is metered at: the broker's own timestamp, capped at now
-// (a broker clock ahead of this pod must never move a bucket's clock into the future), and the
-// zero time, meaning now on the live limiter, for a source with no broker timestamp. Message age
-// plays no part in it: a stall of any length is the same timeline.
-func TestMeterAtIsTheBrokerTimeCappedAtNow(t *testing.T) {
-	meter := NewMeterAt()
-	assert.True(t, meter("acme", time.Time{}).IsZero(), "no broker timestamp: live")
-	for _, age := range []time.Duration{time.Millisecond, time.Second, 1900 * time.Millisecond, 3 * time.Second, time.Hour} {
-		sent := time.Now().Add(-age)
-		assert.Equalf(t, sent, meter("acme", sent), "a message %v old is metered at the time the broker stored it", age)
+// MeterAt is the one live/backlog decision: a recent or absent send time is live (zero), an old
+// one is metered at itself, and "old" is the lesser of BacklogThreshold and the time the tenant's
+// live burst covers.
+func TestMeterAtDecidesLiveOrBacklog(t *testing.T) {
+	meter := NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)))
+	assert.True(t, meter("acme", time.Time{}).IsZero())
+	assert.True(t, meter("acme", time.Now()).IsZero(), "a fresh message is live")
+	assert.True(t, meter("acme", time.Now().Add(time.Hour)).IsZero(), "a future append time is live, never backlog")
+	old := time.Now().Add(-time.Hour)
+	assert.Equal(t, old, meter("acme", old), "an old message is metered at its send time")
+
+	// Between the two thresholds: 3 s old is past the 2 s the platform default's burst covers
+	// but inside the fixed 5 s, and must already be backlog.
+	mid := time.Now().Add(-3 * time.Second)
+	assert.Equal(t, mid, meter("acme", mid), "a delay the live burst cannot absorb is metered at its send time")
+	young := time.Now().Add(-time.Second)
+	assert.True(t, meter("acme", young).IsZero(), "a delay the live burst can absorb is live")
+}
+
+func TestBacklogAfterIsTheLesserOfTheThresholdAndTheBurstCover(t *testing.T) {
+	cases := []struct {
+		name string
+		c    core.TenantCeiling
+		want time.Duration
+	}{
+		{"platform default covers 2s", core.TenantCeiling{RatePerSecond: 1000, Burst: 2000}, 2 * time.Second},
+		{"a long burst is capped at the fixed threshold", core.TenantCeiling{RatePerSecond: 100, Burst: 10000}, BacklogThreshold},
+		{"a short burst is a short threshold", core.TenantCeiling{RatePerSecond: 100, Burst: 10}, 100 * time.Millisecond},
+		{"no rate keeps the fixed threshold", core.TenantCeiling{RatePerSecond: 0, Burst: 10}, BacklogThreshold},
+		{"no burst keeps the fixed threshold", core.TenantCeiling{RatePerSecond: 10, Burst: 0}, BacklogThreshold},
 	}
-	ahead := time.Now().Add(time.Hour)
-	got := meter("acme", ahead)
-	assert.False(t, got.IsZero(), "a broker clock ahead is still a broker-stamped message")
-	assert.False(t, got.After(time.Now()), "and is metered at now, never in the future")
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, backlogAfter(tc.c), tc.name)
+	}
+}
+
+// The threshold follows the TENANT: one with a tight burst is backlog sooner than one with a
+// generous burst, read from the same limiter.
+func TestMeterAtIsPerTenant(t *testing.T) {
+	live := core.NewTenantRateLimiter(func(tenant string) core.TenantCeiling {
+		if tenant == "tight" {
+			return core.TenantCeiling{RatePerSecond: 1000, Burst: 1000} // covers 1 s
+		}
+		return core.TenantCeiling{RatePerSecond: 1000, Burst: 4000} // covers 4 s
+	})
+	meter := NewMeterAt(live)
+	sent := time.Now().Add(-2 * time.Second)
+	assert.Equal(t, sent, meter("tight", sent))
+	assert.True(t, meter("roomy", sent).IsZero())
 }
 
 // readingsOf charges what model.ReadingCount counts: the metric keys of a measurement, not
@@ -289,8 +323,7 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 
 	fresh := &recordingAck{}
 	m = capturedMsg("inst-1.acme.devices.d1.events", wideEntryBody(5), 1, 8, fresh)
-	freshAt := time.Now()
-	m.AppendTime = freshAt
+	m.AppendTime = time.Now()
 	h.source.handle(m)
 	require.True(t, fresh.settled(t), "message never settled")
 
@@ -300,8 +333,8 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 	require.Len(t, calls, 2)
 	assert.Equal(t, readingCall{"acme", appended, true, OriginAuthenticated, 3}, calls[0],
 		"a backlog redelivery: metered at its append time, flagged, authenticated, 3 readings")
-	assert.Equal(t, readingCall{"acme", freshAt, false, OriginAuthenticated, 5}, calls[1],
-		"a fresh first delivery is metered at the time the broker stored it")
+	assert.Equal(t, readingCall{"acme", time.Time{}, false, OriginAuthenticated, 5}, calls[1],
+		"a live first delivery is metered at now")
 }
 
 // ==================== External MQTT ====================

@@ -58,13 +58,15 @@ func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
 	infra := fullInfra()
 	infra.UserManagement.Hostname = ""
 	gates, read := gateReading(t, "event-sources")
-	assert.Nil(t, ingestTenantGate(infra, gates))
+	g, _ := ingestTenantGates(infra, gates)
+	assert.Nil(t, g)
 	v, ok := read(governance.GateTenantLifecycle)
 	assert.True(t, ok, "an OFF gate must be a present series")
 	assert.Equal(t, 0.0, v)
 
 	gates, read = gateReading(t, "event-sources")
-	assert.NotNil(t, ingestTenantGate(fullInfra(), gates))
+	g, _ = ingestTenantGates(fullInfra(), gates)
+	assert.NotNil(t, g)
 	v, ok = read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
@@ -73,7 +75,7 @@ func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
 }
 
 // The gate decisions this service makes, by function name.
-var decisions = []string{"ingestTenantGate"}
+var decisions = []string{"ingestTenantGates"}
 
 // callSitesPassTheServiceGates is a SOURCE-LEVEL check, chosen because afterMicroserviceInitialized
 // cannot run in a unit test (it needs the whole microservice, a database and a broker). It parses
@@ -129,4 +131,21 @@ func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
 	for _, want := range decisions {
 		assert.GreaterOrEqualf(t, calls[want], 1, "no call to %s found: renamed, or no longer wired", want)
 	}
+}
+
+// The envelope walks ask the STRICT reading of the lifecycle: for a tenant nothing has answered
+// for (user-management unreachable here) the admission gate reads active and the walk's reading
+// reads gone, so an evicted round is not stepped past on a guess.
+func TestIngestTenantGatesGiveTheWalksAFailClosedReading(t *testing.T) {
+	infra := fullInfra() // user-management at a host nothing answers
+	gate, strict := ingestTenantGates(infra, nil)
+	require.NotNil(t, gate)
+	require.NotNil(t, strict)
+	assert.False(t, gate("cold-tenant"), "premise: the admission gate fails open on a cold tenant")
+	assert.True(t, strict("cold-tenant"), "the walk's reading must fail closed on a cold tenant")
+
+	infra.UserManagement.Hostname = ""
+	gate, strict = ingestTenantGates(infra, nil)
+	assert.Nil(t, gate)
+	assert.Nil(t, strict, "no lifecycle authority: nothing to ask")
 }
