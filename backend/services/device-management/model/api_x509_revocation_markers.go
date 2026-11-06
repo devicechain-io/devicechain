@@ -177,8 +177,12 @@ func (api *Api) expandMarkerOnTx(tx *gorm.DB, m PendingRevocationKick) (int, err
 
 // expandRevocationMarkers expands the markers of tenant, those of one anchor when anchorId is not
 // 0, each in its own transaction that holds no anchor lock. A marker another expander holds is
-// skipped (FOR UPDATE SKIP LOCKED), not waited for. It returns every error after trying every
-// marker it read.
+// WAITED for (FOR UPDATE), then found gone and skipped: the writer's call reports a revocation settled
+// only when no marker of its anchor stands, so a concurrent writer or the background drain expanding
+// the same marker must not make it report "not yet" for the few milliseconds the other needs. Waiting
+// cannot deadlock: every expander takes the marker row first and the queue rows after, in sorted
+// order, and nothing that holds a queue row waits for a marker. It returns every error after trying
+// every marker it read.
 func (api *Api) expandRevocationMarkers(ctx context.Context, tenant string, anchorId uint) error {
 	if api.SessionKicker == nil {
 		return nil
@@ -198,7 +202,7 @@ func (api *Api) expandRevocationMarkers(ctx context.Context, tenant string, anch
 			// Re-read under the row lock: another expander may have finished it since the list.
 			lock := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND generation = ?", tenant, m.TrustAnchorId, m.Generation)
 			if tx.Dialector.Name() == "postgres" {
-				lock = lock.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"})
+				lock = lock.Clauses(clause.Locking{Strength: "UPDATE"})
 			}
 			var held []PendingRevocationKick
 			if err := lock.Find(&held).Error; err != nil {
