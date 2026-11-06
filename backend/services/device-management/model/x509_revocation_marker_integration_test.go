@@ -492,3 +492,50 @@ func TestRevocationMarkerSystemDeleteOfATokenInTwoTenantsQueuesBoth(t *testing.T
 		assert.Equal(t, devices[i], rows[0].DeviceToken)
 	}
 }
+
+// Two moves of one credential race: the second read the owner (A) before the first committed, but
+// acts on the owner in force under the credential row lock (X), so X is the device it queues.
+func TestRevocationMarkerSecondMoveQueuesTheOwnerTheFirstLeftItWith(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, tokens := pgIntermediateFleet(t, f, 1)
+	f.device("first-dev")
+	f.device("second-dev")
+	var creds []DeviceCredential
+	require.NoError(t, f.api.RDB.DB(f.ctx).Joins("JOIN devices ON devices.id = device_credentials.device_id").
+		Where("devices.token = ? AND device_credentials.credential_type = ?", tokens[0], string(CredentialX509Certificate)).Find(&creds).Error)
+	require.Len(t, creds, 1)
+	cred := creds[0].Token
+	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+		return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+			RevocationDelta{Fingerprints: []string{x509trust.Fingerprint(inter.cert)}, CA: true}, true)
+	}))
+
+	reached, release := f.holdAfterCredentialSave(cred)
+	first := make(chan error, 1)
+	go func() {
+		_, err := f.api.UpdateDeviceCredential(f.ctx, cred, &DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf("first-dev")})
+		first <- err
+	}()
+	awaitSignal(t, reached, "the first move to save the credential")
+	second := make(chan error, 1)
+	go func() {
+		_, err := f.api.UpdateDeviceCredential(f.ctx, cred, &DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf("second-dev")})
+		second <- err
+	}()
+	waitForBlockedBackend(t, f.mgr.Database)
+	release()
+	for _, ch := range []chan error{first, second} {
+		if err := <-ch; err != nil {
+			require.ErrorIs(t, err, ErrSessionsNotEnded)
+		}
+	}
+
+	require.NoError(t, f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID))
+	owed := map[string]bool{}
+	for _, r := range f.revocationKickRows() {
+		owed[r.DeviceToken] = true
+	}
+	assert.True(t, owed[tokens[0]], "the device the first move left")
+	assert.True(t, owed["first-dev"], "the device the second move left")
+}
