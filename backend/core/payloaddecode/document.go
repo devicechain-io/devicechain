@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 )
 
 // Limits. They are part of the function-library contract: raising one is compatible, lowering
@@ -19,22 +21,22 @@ const (
 	// EnvVersion is the function-library version this build compiles against.
 	EnvVersion = 1
 
-	MaxFrameBytes      = 4096       // the raw frame an uplink may carry
-	MaxJSONBytes       = 64 << 10   // the canonical JSON of `json` or `decoded`
-	MaxJSONDepth       = 32         // nesting past this is refused before the value is carried
-	MaxDocumentBytes   = 32 << 10   // the whole decoder document
-	MaxExpressionBytes = 2048       // one expression's source
-	MaxLets            = 16         // let bindings
-	MaxSections        = 8          // sections
-	MaxVectors         = 20         // saved vectors
-	MaxDecoderReadings = 64         // readings one section may emit, scalar rows plus map maxKeys
-	MaxTextBytes       = 8192       // text a hex.decode / base64.decode call accepts
-	MaxInKeys          = 16         // literals in one constant `in` list
-	MaxNameBytes       = 64         // a let, section or vector name
-	MaxKeyBytes        = 128        // an output key or prefix
-	ExprCostCeiling    = 10_000     // static cost of one expression
-	DecoderCostCeiling = 50_000     // static cost of a whole decoder
-	ReservedKeyPrefix  = "lorawan." // link metrics, appended by the platform, never a decoder output
+	MaxFrameBytes      = plancost.MaxFrameBytes // the raw frame an uplink may carry
+	MaxJSONBytes       = plancost.MaxJSONBytes  // the canonical JSON of `json` or `decoded`
+	MaxJSONDepth       = plancost.MaxJSONDepth  // nesting past this is refused before the value is carried
+	MaxDocumentBytes   = 32 << 10               // the whole decoder document
+	MaxExpressionBytes = 2048                   // one expression's source
+	MaxLets            = 16                     // let bindings
+	MaxSections        = 8                      // sections
+	MaxVectors         = 20                     // saved vectors
+	MaxDecoderReadings = 64                     // readings one section may emit, scalar rows plus map maxKeys
+	MaxTextBytes       = 8192                   // text a hex.decode / base64.decode call accepts
+	MaxInKeys          = 16                     // literals in one constant `in` list
+	MaxNameBytes       = 64                     // a let, section or vector name
+	MaxKeyBytes        = 128                    // an output key or prefix
+	ExprCostCeiling    = 10_000                 // static cost of one expression
+	DecoderCostCeiling = 50_000                 // static cost of a whole decoder
+	ReservedKeyPrefix  = "lorawan."             // link metrics, appended by the platform, never a decoder output
 )
 
 // Kind is a decoder's engine.

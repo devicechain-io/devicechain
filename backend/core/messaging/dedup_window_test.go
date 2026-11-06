@@ -95,6 +95,10 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		// covered only up to about 8 minutes: that residual is the declared trade-off, and
 		// the budget below is why (TestDuplicateWindowsFitTheBrokerMemoryLimit).
 		streams.InboundEvents: onRedelivery,
+		// event-sources' integration route, once per uplink (integrationDedupID), exactly as it
+		// stamps the same events on inbound-events: a sender's retry of one uplink is recognised
+		// for the window, and nothing re-publishes it later.
+		streams.IntegrationUplinks: onRedelivery,
 		// device-management, once per resolved event (processor.resolvedDedupID), on each
 		// redelivery of its inbound source.
 		streams.ResolvedEvents: onRedelivery,

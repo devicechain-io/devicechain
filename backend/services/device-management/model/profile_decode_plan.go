@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
+	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -226,6 +227,15 @@ func (p PayloadDecoder) EstimatedCost() uint64 {
 		return 0
 	}
 	return p.d.plan.EstimatedCost()
+}
+
+// CostShape is what EstimatedCost is made of; the zero shape when the version has no usable
+// decoder.
+func (p PayloadDecoder) CostShape() plancost.Shape {
+	if p.Plan() == nil {
+		return plancost.Shape{}
+	}
+	return p.d.plan.CostShape()
 }
 
 // heapCharge is what the programs this resolution holds cost the cache, beyond the entry's

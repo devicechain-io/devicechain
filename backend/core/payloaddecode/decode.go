@@ -18,6 +18,7 @@ import (
 	"github.com/google/cel-go/interpreter"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 )
 
 // internalErrorMessage is the text of a recovered panic. It must never be seen: the fuzz and
@@ -136,7 +137,7 @@ func CheckJSON(raw []byte) *DecodeError {
 // on 64 KiB, the cheapest shape (a few long strings) parses in about 1 ms and the densest
 // (nested empty arrays or objects, a long array of zeros, one-character strings) in 4-6 ms,
 // which is 60-100 ns a unit: inside the band the natives measure in.
-func ParseCost(n int) uint64 { return uint64(max(n, 0)) }
+func ParseCost(n int) uint64 { return plancost.ParseCost(n) }
 
 func parseObject(raw []byte, what string) (ref.Val, *DecodeError) {
 	if de := CheckJSON(raw); de != nil {

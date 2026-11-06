@@ -481,6 +481,29 @@ const (
 	CommandResponses  = "command-responses"
 	ConnectorDispatch = "connector-dispatch"
 
+	// IntegrationUplinks carries an inbound integration's raw input (an IntegrationUplink event)
+	// to the decoder on the device's profile.
+	//
+	// 🔴 IT IS ITS OWN SUBJECT, NOT A NEW EVENT TYPE ON InboundEvents, AND THE REASON IS A
+	// MEASURED ONE. A device-management replica built before payload decoders unmarshals every
+	// message it fetches from inbound-events before any resolver guard runs, and an event type it
+	// does not know fails there: the message is written to failed-events as Invalid and ACKED on
+	// delivery 1, so it is neither stored nor redelivered to a newer replica. Publishing the
+	// carrier there would lose every decoder uplink for as long as any old replica held a slice
+	// of the consumer, with nothing to say so but a failed-events row per message.
+	//
+	// A stream and a durable that only builds with payload decoders create cannot be seen by an
+	// old replica at all: it never subscribes, the message waits in the stream until a newer
+	// consumer pulls it, and nothing is dead-lettered. Event-sources only publishes here once a
+	// device-management that can decode has answered that the device type has a decoder, so such
+	// a consumer exists by the time a message does.
+	//
+	// Append-only like every declaration: an older event-sources never writes it, and an older
+	// device-management never reads it, so the rolling upgrade needs no ordering. Hot, because
+	// its volume is the decoder integrations' uplink rate; it carries no runway sizing, which
+	// would reserve a per-event ceiling for a stream that holds only the decoder subset.
+	IntegrationUplinks = "integration-uplinks"
+
 	// DeviceEventsCapture is the durable capture of raw inbound device telemetry
 	// (ADR-030 amendment). It backs the ShapeDeviceEvents subject, so its suffix
 	// names the stream but never appears in a subject.
@@ -647,6 +670,10 @@ const (
 // MaxDeliveryRecordsWaiting and near-full alerts are there to make visible first.
 const maxDeliveriesMaxBytesCap = 8 << 20
 
+// integrationUplinksMaxBytesCap is the ceiling of the integration-uplinks stream: small and fixed,
+// safe only because its reader is a backpressure reader (see its declaration).
+const integrationUplinksMaxBytesCap = 32 << 20
+
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
 //
 // A derived suffix names a REAL stream that reserves REAL disk, so anything this
@@ -721,6 +748,36 @@ var All = []Stream{
 		ReadBackWriters:       []string{"event-sources"},
 		Forwards:              map[string]string{"device-management": ResolvedEvents},
 		Why:                   "raw device telemetry — the primary ingest path"},
+	// The carrier of an integration's raw input to a profile's payload decoder. See
+	// IntegrationUplinks for why it is a stream of its own.
+	//
+	// 🔴 IT DECLARES NO READER YET, ON PURPOSE, AND THE CHANGE THAT DECLARES ONE MERGES DIRECTLY AFTER
+	// THIS ONE, WITH NO RELEASE BETWEEN. The device-management resolver that consumes it, its
+	// durable, its backpressure gate (BackpressureReaders) and its forward into resolved-events
+	// (Forwards) are declared in the change that builds that consumer, together: a declared
+	// reader nothing builds is a grant to nothing (core/test's catalog-usage check says so), and a
+	// backpressure reader that is not running closes no gate. Until then the stream only holds what
+	// event-sources writes, and event-sources only writes it for a device type whose decoder a
+	// device-management answered for.
+	//
+	// 🔴 IT HAS A SMALL FIXED CEILING (MaxBytesCap), AND THE REASON IS THE GATE, NOT THE SIZE. A
+	// Hot stream reserves its whole ceiling up front, and a default-sized one (a gibibyte) would
+	// move the published JetStream sizing table: the 20,000 events/s row clears its volume by under
+	// 50 MiB. The rule that a stream holding promised data is never capped exists because
+	// DeviceEventsCapture had no gate, so a full stream silently evicted PUBACKed events. This
+	// stream has one: device-management is its backpressure reader, so the gate closes before
+	// eviction and overflow is a 503 to the sender (who retries), never a loss.
+	//
+	// 32 MiB is a ceiling that moves no row of that table (the 20,000 row has 42 MiB to spare), fail-closed MQTT on or off
+	// (TestThePublishedSizingTableRowsHold), with the key-value buckets' reservation as it is. It
+	// is a runway of seconds at the top decoder-integration rates, not the 15-minute outage
+	// runway the event streams are sized for: during a longer device-management outage decoder
+	// uplinks are refused with a 503 and retried by the sender, while uplinks for types with no
+	// decoder (Cut A) are unaffected. Raising it is a sizing-table change, not a tuning knob.
+	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+		MaxBytesCap:    integrationUplinksMaxBytesCap,
+		DeadLetterKind: kindEvent,
+		Why:            "an integration sender's raw frame or JSON, held for the profile's payload decoder"},
 	//
 	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
 	// snapshot checkpoint covers it, applies every delivery on first sight (true while the
