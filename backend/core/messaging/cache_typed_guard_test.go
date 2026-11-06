@@ -302,3 +302,62 @@ func TestATenantOverItsShareEvictsItsOwnEntries(t *testing.T) {
 		t.Fatal("the tenant is over its share")
 	}
 }
+
+// TestAFullTierMakesRoomFromTheLargestHolder: when the tier as a whole is full, the entry that
+// goes is the largest holder's, not the least recently used of whoever happens to hold it. A
+// tenant within its share keeps its entries while a larger holder has entries to give, which is
+// what lets the documentation say that one tenant does not evict another's.
+func TestAFullTierMakesRoomFromTheLargestHolder(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 40000), WithLocalTenantShare(40),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 7000, true }))
+	// The quiet tenant's single entry is the oldest in the tier: plain least-recently-used
+	// eviction would take it first.
+	for _, k := range []string{"quiet|1", "big1|1", "big1|2", "big2|1", "big2|2", "late|1"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, k, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"quiet|1", "late|1"} {
+		if h, ok := c.local.getHit(k, c.now()); !ok || h.val == nil {
+			t.Fatalf("%s lost its decoded entry to a larger holder's store (held %v)", k, ok)
+		}
+	}
+	lost := 0
+	for _, k := range []string{"big1|1", "big1|2", "big2|1", "big2|2"} {
+		if h, ok := c.local.getHit(k, c.now()); !ok || h.val == nil {
+			lost++
+		}
+	}
+	if lost != 1 {
+		t.Fatalf("the larger holders lost %d decoded entries between them, want exactly 1", lost)
+	}
+	c.local.mu.Lock()
+	over := c.local.bytes > c.local.maxBytes
+	c.local.mu.Unlock()
+	if over {
+		t.Fatal("the tier is over its byte bound")
+	}
+}
+
+// TestAFullTierNeverEvictsTheEntryJustStored: the tenant that is storing is never made to
+// evict the entry it just stored, even when it is the largest holder.
+func TestAFullTierNeverEvictsTheEntryJustStored(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 20000), WithLocalTenantShare(100),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 9000, true }))
+	for _, k := range []string{"a|1", "b|1", "b|2"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, k, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h, ok := c.local.getHit("b|2", c.now()); !ok || h.val == nil {
+		t.Fatal("the entry just stored was evicted to make room for itself")
+	}
+}

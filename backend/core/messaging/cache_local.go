@@ -118,8 +118,10 @@ func WithDecodedChargeOf(charge func(v any, encodedLen int) (int, bool)) CacheOp
 // key's leading segment (see WithCrossReplicaEviction). It is for a cache whose entries differ
 // enormously in size by tenant's choice, such as one that holds tenant-authored compiled
 // programs: without it a tenant with enough large entries evicts everyone else's, and itself
-// thrashes. A value larger than the share on its own is not held at all. It panics outside 1 to
-// 100, as WithLocalTTL does.
+// thrashes. A value larger than the share on its own is not held at all. When the tier as a whole
+// is full, room is made from the tenant holding the most, so a tenant within its share does not
+// lose an entry to another tenant's store while a larger holder has entries to give. It panics
+// outside 1 to 100, as WithLocalTTL does.
 func WithLocalTenantShare(percent int) CacheOption {
 	if percent < 1 || percent > 100 {
 		panic("messaging: WithLocalTenantShare needs a percentage from 1 to 100")
@@ -361,11 +363,7 @@ func (l *localCache) attach(key string, e *localEntry, val any) {
 	// because the entry fits alone (checked above), so while the cap is exceeded another
 	// entry exists.
 	for l.bytes > l.maxBytes {
-		victim := l.order.Back()
-		if victim == el {
-			victim = victim.Prev()
-		}
-		l.remove(victim, "capacity")
+		l.removeForCapacity(el)
 	}
 	l.report()
 }
@@ -511,7 +509,7 @@ func (l *localCache) insert(key string, data []byte, now time.Time) {
 	l.tenantBytes[tenantOfKey(key)] += size
 	l.trimTenant(tenantOfKey(key), el)
 	for l.order.Len() > l.maxEntries || l.bytes > l.maxBytes {
-		l.remove(l.order.Back(), "capacity")
+		l.removeForCapacity(el)
 	}
 	for back := l.order.Back(); !now.Before(back.Value.(*localEntry).expires); back = l.order.Back() {
 		l.remove(back, "expired")
@@ -532,6 +530,39 @@ func (l *localCache) remove(el *list.Element, reason string) {
 	if reason != "" {
 		l.obs.localEvicted(reason)
 	}
+}
+
+// removeForCapacity evicts one entry, other than keep, to bring the whole tier back under its
+// bounds. Called with mu held, and only while the tier holds an entry other than keep.
+//
+// Without a tenant share it is the least recently used entry. With one it is the least recently
+// used entry of the tenant that holds the MOST bytes (keep's own tenant included), so a tenant that
+// stays within its share is not made to give up an entry for another tenant's store while a larger
+// holder exists: every tenant is within its share by now (trimTenant), so "most over" is the
+// largest holder, and the tenant that is storing pays first only when it is the largest. A tenant
+// whose only entry is keep is passed over for the next largest.
+func (l *localCache) removeForCapacity(keep *list.Element) {
+	if l.tenantCap <= 0 {
+		victim := l.order.Back()
+		if victim == keep {
+			victim = victim.Prev()
+		}
+		l.remove(victim, "capacity")
+		return
+	}
+	var victim *list.Element
+	victimTenantBytes := -1
+	for el := l.order.Back(); el != nil; el = el.Prev() {
+		if el == keep {
+			continue
+		}
+		// The first entry met for a tenant is its least recently used (the list is walked from the
+		// least recently used end), so a later entry of a tenant at least as large never replaces it.
+		if tb := l.tenantBytes[tenantOfKey(el.Value.(*localEntry).key)]; tb > victimTenantBytes {
+			victim, victimTenantBytes = el, tb
+		}
+	}
+	l.remove(victim, "capacity")
 }
 
 // trimTenant evicts the tenant's own least recently used entries, never keep, while it holds more
