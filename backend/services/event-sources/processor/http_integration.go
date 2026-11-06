@@ -119,10 +119,14 @@ const (
 	// LookupUnsupported is a device-management that predates payload decoders: Cut A.
 	LookupUnsupported = "unsupported"
 	LookupError       = "error"
+	// LookupStale marks a lookup answered from a remembered plan older than the TTL because
+	// device-management could not be asked. It is counted in ADDITION to the result the plan
+	// gave (present, absent or unsupported), as precheck_stale is for authentication.
+	LookupStale = "stale"
 )
 
 // IntegrationDecoderLookupResults lists every lookup result.
-var IntegrationDecoderLookupResults = []string{LookupPresent, LookupAbsent, LookupUnsupported, LookupError}
+var IntegrationDecoderLookupResults = []string{LookupPresent, LookupAbsent, LookupUnsupported, LookupError, LookupStale}
 
 // IntegrationTypes are the type label values of integration_requests_total: the four registered
 // types, and "unknown" for a request refused before its integration was known.
@@ -467,6 +471,9 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 				m.request(typ, ResultResolveUnavailable)
 				http.Error(w, "device lookup is unavailable; retry later", http.StatusServiceUnavailable)
 				return
+			}
+			if dl.Stale {
+				m.decoderLookup(LookupStale)
 			}
 			switch {
 			case dl.Unsupported:

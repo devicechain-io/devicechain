@@ -596,7 +596,7 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 #### 解码器上行消息与 device-management 中断 {#v120-decoder-stream}
 
-带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503，由网络服务器重试；已被接受的数据不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行足够多的 device-management 副本，使重启其中一个不会中断读取。
+带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503。会重试失败投递的发送方会在该流排空后送达上行消息；不重试的发送方则不会。The Things Stack 的 webhook 仅在启用其可选的 webhook 重试功能（Cloud Plus 功能，任何非 2xx 响应都算一次失败尝试）时才会重试失败的投递，而 ChirpStack v4 的 HTTP 集成没有文档说明任何重试，因此应将其在中断期间发送的上行消息视为不会被重新投递。已被接受（返回 202）的上行消息不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行多个 device-management 副本（至少足以让重启其中一个不会中断读取），使中断保持短暂。
 
 #### 滚动升级期间的配置文件变更 {#v120-profile-cache}
 

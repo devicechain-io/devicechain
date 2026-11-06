@@ -765,13 +765,15 @@ var All = []Stream{
 	// 50 MiB. The rule that a stream holding promised data is never capped exists because
 	// DeviceEventsCapture had no gate, so a full stream silently evicted PUBACKed events. This
 	// stream has one: device-management is its backpressure reader, so the gate closes before
-	// eviction and overflow is a 503 to the sender (who retries), never a loss.
+	// eviction and overflow is a 503 to the sender, never a loss of anything already accepted.
 	//
 	// 32 MiB is a ceiling that moves no row of that table (the 20,000 row has 42 MiB to spare), fail-closed MQTT on or off
 	// (TestThePublishedSizingTableRowsHold), with the key-value buckets' reservation as it is. It
 	// is a runway of seconds at the top decoder-integration rates, not the 15-minute outage
 	// runway the event streams are sized for: during a longer device-management outage decoder
-	// uplinks are refused with a 503 and retried by the sender, while uplinks for types with no
+	// uplinks are refused with a 503, which a sender that retries will redeliver and one that does not
+	// (a ChirpStack v4 HTTP integration documents no retry) will not; uplinks already accepted are
+	// never lost, and uplinks for types with no
 	// decoder (Cut A) are unaffected. Raising it is a sizing-table change, not a tuning knob.
 	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		MaxBytesCap:         integrationUplinksMaxBytesCap,
