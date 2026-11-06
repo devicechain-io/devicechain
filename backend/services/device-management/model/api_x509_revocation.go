@@ -404,7 +404,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		}
 		// The sessions this entry ends are queued in the same transaction (lock order: anchor,
 		// then the entry, then the kick rows).
-		if _, err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+		if err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
 			RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
 			return err
 		}

@@ -87,7 +87,7 @@ func TestTrustAnchorExpiryGaugeIsRegisteredByBuildMetrics(t *testing.T) {
 		}
 		return 0, false
 	}
-	Api = model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, &model.DeviceTrustAnchor{}, &model.DeviceCredential{}, &model.PendingSessionKick{}, &model.Device{}, &model.ProvisioningProfile{})})
+	Api = model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, &model.DeviceTrustAnchor{}, &model.DeviceCredential{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationSerial{}, &model.Device{}, &model.ProvisioningProfile{})})
 	ctx := putest.TenantContext("acme")()
 	ca := func(cn string, life time.Duration) string {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

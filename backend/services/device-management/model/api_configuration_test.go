@@ -45,7 +45,7 @@ func configTestApiAt(t *testing.T, dsn string) (*Api, context.Context) {
 		&EntityAttribute{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &EntityRelationship{}, &PendingOwnershipFact{}, &Alarm{},
 		&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},
-		&DetectionRule{}, &DetectionRuleScopeRef{}, &PendingSessionKick{},
+		&DetectionRule{}, &DetectionRuleScopeRef{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationSerial{},
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

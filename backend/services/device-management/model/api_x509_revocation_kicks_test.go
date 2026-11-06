@@ -69,6 +69,20 @@ func (f *revKickFixture) revokeFp(anchor string, fp string) (*DeviceRevokedCerti
 	return f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: anchor, FingerprintSha256: &fp})
 }
 
+// queueDelta queues the kicks of a delta the way a writer of its kind does: a manual entry writes the
+// marker, and a serial delta (a CRL's, which production stashes and joins in SQL) is targeted here and
+// its per-device rows written directly, so the targeting stays covered whatever the delta carries.
+func (f *revKickFixture) queueDelta(tx *gorm.DB, anchorId uint, d RevocationDelta, whole bool) error {
+	if len(d.Serials) == 0 {
+		return f.api.queueRevocationKicksOnTx(tx, "acme", anchorId, d, whole)
+	}
+	tokens, _, err := revocationKickTargets(tx, "acme", anchorId, d, whole)
+	if err != nil {
+		return err
+	}
+	return f.api.queueSessionKicksOnTx(tx, "acme", revocationKickOrigin(anchorId), tokens)
+}
+
 // seam runs a revocation writer's three calls with a delta of its own: what a CRL upload does.
 func (f *revKickFixture) seam(anchor string, d RevocationDelta) error {
 	f.t.Helper()
@@ -76,7 +90,7 @@ func (f *revKickFixture) seam(anchor string, d RevocationDelta) error {
 	require.NoError(f.t, err)
 	whole := f.api.prepareRevocationKicks(f.ctx, "acme", anchor)
 	require.NoError(f.t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := f.api.queueRevocationKicksOnTx(tx, "acme", a.ID, d, whole)
+		err := f.queueDelta(tx, a.ID, d, whole)
 		return err
 	}))
 	return f.api.endRevokedSessions(f.ctx, "acme", a.ID)
@@ -366,7 +380,7 @@ func TestTheLegacyReconcilerIsBoundedAndAnIncompleteOneWidensTheKick(t *testing.
 	serial, _ := x509trust.SerialHex(ca.leaf(t, "nobody").cert.SerialNumber)
 	nobody := RevocationDelta{Serials: []x509trust.IssuerSerial{{Issuer: x509trust.IssuerID{Key: "k", Name: "n"}, Serial: serial}}}
 	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := f.api.queueRevocationKicksOnTx(tx, "acme", a.ID, nobody, whole)
+		err := f.queueDelta(tx, a.ID, nobody, whole)
 		return err
 	}))
 	require.NoError(t, f.api.endRevokedSessions(f.ctx, "acme", a.ID))
@@ -609,8 +623,8 @@ func TestARequeueDuringTheFirstSweepIsNotSettledByIt(t *testing.T) {
 	requeue.hook = func() {
 		// While the broker is being asked: another revocation of the same anchor queues the device.
 		require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-			_, err := f.api.queueRevocationKicksOnTx(tx, "acme", a.ID, RevocationDelta{Fingerprints: []string{fp}}, true)
-			return err
+			// The expansion of that revocation's marker writes exactly this row.
+			return f.api.queueSessionKicksOnTx(tx, "acme", revocationKickOrigin(a.ID), []string{"dev-1"})
 		}))
 	}
 	var once atomic.Bool

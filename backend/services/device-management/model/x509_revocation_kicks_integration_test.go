@@ -92,10 +92,11 @@ func TestRevocationKickPostgres(t *testing.T) {
 
 	// Re-queued while waiting out the re-sweep: the first sweep is due again (not_before reset).
 	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		_, qerr := f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+		qerr := f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
 			RevocationDelta{Fingerprints: []string{x509trust.Fingerprint(inter.cert)}}, true)
 		return qerr
 	}))
+	require.NoError(t, f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID), "the marker is expanded outside the lock")
 	for _, r := range rows() {
 		assert.Nil(t, r.NotBefore, "a requeued debt's first sweep is due at once")
 	}
@@ -118,7 +119,7 @@ func BenchmarkQueueSessionKicksOnTx(b *testing.B) {
 			// The rows are this benchmark's alone to leave behind: a shared server's background
 			// drain would otherwise find a hundred thousand debts of a tenant that never existed.
 			b.Cleanup(func() {
-				_ = api.RDB.DB(ctx).Where("tenant_id = ?", tenant).Delete(&PendingSessionKick{}).Error
+				_ = api.RDB.DB(ctx).Where("tenant_id = ?", tenant).Delete(&PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationSerial{}).Error
 			})
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {

@@ -313,9 +313,21 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 	if err != nil {
 		return res, fmt.Errorf("listing tenants with pending session kicks: %w", err)
 	}
+	// A tenant owing only an unexpanded revocation marker (a crash between the revocation's commit and
+	// its expansion) owes a kick as well: its per-device rows do not exist yet.
+	owingMarkers, err := api.tenantsOwingMarkers(ctx)
+	if err != nil {
+		return res, fmt.Errorf("listing tenants with pending revocation markers: %w", err)
+	}
+	tenants = slices.Compact(slices.Sorted(slices.Values(append(tenants, owingMarkers...))))
 	res.Tenants = len(tenants)
 	var lastErr error
 	for _, tenant := range tenants {
+		if err := api.expandRevocationMarkers(ctx, tenant, 0); err != nil {
+			res.Failed++
+			lastErr = err
+			continue
+		}
 		// A fleet-sized debt (a revoked CA) is more than one page: keep paging while every page
 		// is confirmed and more is due, to a bound, so one tenant cannot hold the pass for ever.
 		passStarted := time.Now()
@@ -362,6 +374,12 @@ func (api *Api) observeSessionKicks(ctx context.Context) {
 		log.Warn().Err(err).Msg("Unable to count the pending session kicks")
 		return
 	}
+	var markers int64
+	if err := db.Model(&PendingRevocationKick{}).Count(&markers).Error; err != nil {
+		log.Warn().Err(err).Msg("Unable to count the pending revocation markers")
+		return
+	}
+	n += markers
 	var age time.Duration
 	if n > 0 {
 		var oldest []PendingSessionKick
@@ -371,6 +389,16 @@ func (api *Api) observeSessionKicks(ctx context.Context) {
 		}
 		if len(oldest) == 1 {
 			age = max(time.Since(oldest[0].RequestedAt), 0)
+		}
+	}
+	if markers > 0 {
+		var oldest []PendingRevocationKick
+		if err := db.Order("requested_at ASC").Limit(1).Find(&oldest).Error; err != nil {
+			log.Warn().Err(err).Msg("Unable to read the oldest pending revocation marker")
+			return
+		}
+		if len(oldest) == 1 {
+			age = max(age, time.Since(oldest[0].RequestedAt))
 		}
 	}
 	api.SessionKickObserver(int(n), age)

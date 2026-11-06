@@ -92,7 +92,7 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	db := putest.NewSQLiteDB(t, &model.DeviceTrustAnchor{}, &model.DeviceCredential{}, &model.PendingSessionKick{},
+	db := putest.NewSQLiteDB(t, &model.DeviceTrustAnchor{}, &model.DeviceCredential{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.PendingRevocationSerial{},
 		&model.DeviceRevocationIssuer{}, &model.DeviceRevocationList{}, &model.DeviceRevokedCertificate{}, &model.DeviceCredentialChainLink{})
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	key, err := auth.GenerateKeyPair()
