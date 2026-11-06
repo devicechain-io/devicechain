@@ -27,6 +27,8 @@ func TestTheDeprecatedInactivityAlarmTimeKeepsItsV10Behaviour(t *testing.T) {
 		{"disconnect report, never swept", model.DeviceState{PresenceSource: model.PresenceSourceInferred, LastDisconnectTime: swept}, nil},
 		{"active again", model.DeviceState{Active: true, PresenceSource: model.PresenceSourceInferred, LastDisconnectTime: swept}, nil},
 		{"active with a stale stored value", model.DeviceState{Active: true, InactivityAlarmTime: swept}, nil},
+		{"stale value older than the last connect", model.DeviceState{PresenceSource: model.PresenceSourceInferred, LastConnectTime: other, LastDisconnectTime: other, InactivityAlarmTime: swept}, nil},
+		{"value after the last connect", model.DeviceState{PresenceSource: model.PresenceSourceInferred, LastConnectTime: swept, LastDisconnectTime: other, InactivityAlarmTime: other}, ptr("2026-09-01T12:05:00Z")},
 		{"never disconnected", model.DeviceState{PresenceSource: model.PresenceSourceInferred}, nil},
 	} {
 		got := (&DeviceStateResolver{M: tc.row}).InactivityAlarmTime()

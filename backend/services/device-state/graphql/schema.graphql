@@ -90,7 +90,7 @@ type DeviceState implements Model {
     device that went offline by a disconnect report rather than by silence. Deprecated: it
     keeps working as before until the next major release.
     """
-    inactivityAlarmTime: String @deprecated(reason: "Use lastDisconnectTime, which holds the same instant for a device the inactivity sweep marked inactive, and also covers a disconnect report. This field keeps its behaviour until the next major release.")
+    inactivityAlarmTime: String @deprecated(reason: "Use lastDisconnectTime, which holds the same instant when the sweep marked the device inactive, unless a disconnect report followed, and also covers a disconnect report. This field keeps its behaviour until the next major release.")
     """
     Seconds without activity after which an INFERRED device is marked inactive. One value for
     the whole platform (600); it is not configurable per device. It does not apply to an

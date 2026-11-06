@@ -90,6 +90,38 @@ func TestInactivityAlarmTimeIsSetBySweepAndNotByADisconnectReport(t *testing.T) 
 	}
 }
 
+// An authoritative CONNECTED clears the stored value, so a later disconnect report cannot expose
+// the old sweep episode through the deprecated field.
+func TestAnAssertedConnectClearsTheInactivityAlarmTime(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	sys := core.WithSystemContext(ctx)
+	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := api.MergeDeviceState(ctx, "d", t0, nil, DeviceIdentity{}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := api.SweepInactive(sys, t0.Add(2*time.Hour)); err != nil || n != 1 {
+		t.Fatalf("sweep: %v (%d)", err, n)
+	}
+	if !stateOf(t, api, ctx, "d").InactivityAlarmTime.Valid {
+		t.Fatal("the sweep did not stamp the alarm time")
+	}
+	c := t0.Add(3 * time.Hour)
+	if _, err := api.MergeDeviceState(ctx, "d", c, conn(1, c), DeviceIdentity{}); err != nil {
+		t.Fatal(err)
+	}
+	if st := stateOf(t, api, ctx, "d"); st.InactivityAlarmTime.Valid {
+		t.Fatalf("an asserted CONNECTED left the old alarm time: %+v", st)
+	}
+	d := c.Add(time.Minute)
+	if _, err := api.MergeDeviceState(ctx, "d", d, disc(1, d), DeviceIdentity{}); err != nil {
+		t.Fatal(err)
+	}
+	if st := stateOf(t, api, ctx, "d"); st.Active || st.InactivityAlarmTime.Valid {
+		t.Fatalf("a disconnect report after a connect exposes the old episode: %+v", st)
+	}
+}
+
 func stateOf(t *testing.T, api *Api, ctx context.Context, token string) DeviceState {
 	t.Helper()
 	rows, err := api.DeviceStates(ctx, DeviceStateSearchCriteria{})

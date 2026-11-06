@@ -854,16 +854,17 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	return Svc.Terminate(ctx)
 }
 
-// detectProcessorConfig maps the service's typed configuration onto the DETECT processor's. It is
-// a function of its own so a test can see that every setting it carries arrives.
 // appliedGuardEnabled is whether live DETECT runs its duplicate-event guard: it exists for event
 // envelopes and for nothing else, so with them off DETECT builds, primes and consults none. The
-// replay preview asks the same function, so the two cannot disagree.
+// replay preview asks the same function, so the two cannot disagree. The preview follows the
+// CURRENT envelope mode, not the mode live ran under when the replayed history was processed.
 func appliedGuardEnabled() bool {
 	env := Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes
 	return env.Resolved || env.Inbound
 }
 
+// detectProcessorConfig maps the service's typed configuration onto the DETECT processor's. It is
+// a function of its own so a test can see that every setting it carries arrives.
 func detectProcessorConfig(c *config.EventProcessingConfiguration) processor.Config {
 	lateness := time.Duration(c.WatermarkLatenessSeconds) * time.Second
 	if lateness < 0 {
