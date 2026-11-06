@@ -5,6 +5,8 @@ package bootstrap
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -77,4 +79,41 @@ func TestHealBarmanCertificates_LeavesAYoungNotReadyCertificate(t *testing.T) {
 	if got.GetUID() != "old-uid" {
 		t.Fatal("a Certificate still inside its grace period must not be touched")
 	}
+}
+
+// The healer must watch the namespace the plugin is installed into. Negative control: returning ""
+// unconditionally (the earlier hard-coded namespace) fails every case but the default.
+func TestCnpgNamespaceOfReadsWhatTheOperatorDeclared(t *testing.T) {
+	write := func(t *testing.T, dir, name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("default", func(t *testing.T) {
+		if got := cnpgNamespaceOf(t.TempDir()); got != "" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("environment", func(t *testing.T) {
+		t.Setenv("TF_VAR_cnpg_namespace", "databases")
+		if got := cnpgNamespaceOf(t.TempDir()); got != "databases" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("tfvars, overridden by an auto file", func(t *testing.T) {
+		d := t.TempDir()
+		write(t, d, "terraform.tfvars", "cnpg_namespace = \"first\"\n")
+		write(t, d, "z.auto.tfvars", "cnpg_namespace = \"second\"\n")
+		if got := cnpgNamespaceOf(d); got != "second" {
+			t.Fatalf("got %q", got)
+		}
+	})
+	t.Run("json", func(t *testing.T) {
+		d := t.TempDir()
+		write(t, d, "terraform.tfvars.json", `{"cnpg_namespace":"jsonns"}`)
+		if got := cnpgNamespaceOf(d); got != "jsonns" {
+			t.Fatalf("got %q", got)
+		}
+	})
 }

@@ -279,24 +279,44 @@ func (i liveInfra) volumes() (liveVolumes, error) {
 // StatefulSet this apply recreates. Refusing on it would leave an operator unable to do the one
 // thing that fixes it. Proceeding with fewer servers than the claims is what a normal Helm upgrade
 // of a broker that lost a node does too: the quorum that was up stays up while the rest start.
-func orphanedBrokerNotReady(pods []corev1.Pod, claims []corev1.PersistentVolumeClaim) string { // A volume claim whose expansion has not finished still has its old capacity, and the
+func orphanedBrokerNotReady(pods []corev1.Pod, claims []corev1.PersistentVolumeClaim) string {
+	// A volume claim whose expansion has not finished still has its old capacity, and the
 	// broker's file-store ceiling would be derived from a size the disk does not have yet.
+	//
+	// 🔴 EXCEPT A CLAIM WHOSE ONLY OUTSTANDING STEP IS THE FILESYSTEM HALF AND WHOSE SERVER IS GONE.
+	// The controller half of the expansion is done (FileSystemResizePending, no Resizing), and the
+	// filesystem half completes only when a pod mounts the claim. Nothing owns an orphaned pod, so
+	// the only thing that starts that pod is the StatefulSet this apply recreates: refusing would
+	// be a permanent deadlock. With the server present the refusal stands (it is mounted and the
+	// resize is still being applied, or it is not ready), and so does every other unfinished state.
+	present := make(map[int]bool, len(pods))
+	for _, p := range pods {
+		present[ordinalOf(p.Name)] = true
+	}
 	var growing []string
 	for _, c := range claims {
 		want, ok := c.Spec.Resources.Requests[corev1.ResourceStorage]
 		if !ok {
 			continue
 		}
-		have, ok := c.Status.Capacity[corev1.ResourceStorage]
-		if !ok || have.Cmp(want) < 0 {
-			growing = append(growing, c.Name)
-		}
+		resizing, fsPending := false, false
 		for _, cond := range c.Status.Conditions {
-			if (cond.Type == corev1.PersistentVolumeClaimResizing || cond.Type == corev1.PersistentVolumeClaimFileSystemResizePending) &&
-				cond.Status == corev1.ConditionTrue {
-				growing = append(growing, c.Name)
-				break
+			if cond.Status != corev1.ConditionTrue {
+				continue
 			}
+			switch cond.Type {
+			case corev1.PersistentVolumeClaimResizing:
+				resizing = true
+			case corev1.PersistentVolumeClaimFileSystemResizePending:
+				fsPending = true
+			}
+		}
+		if fsPending && !resizing && !present[ordinalOf(c.Name)] {
+			continue
+		}
+		have, ok := c.Status.Capacity[corev1.ResourceStorage]
+		if !ok || have.Cmp(want) < 0 || resizing || fsPending {
+			growing = append(growing, c.Name)
 		}
 	}
 	if len(growing) > 0 {

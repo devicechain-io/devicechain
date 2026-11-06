@@ -44,12 +44,25 @@ variables {
 run "unset_leaves_every_login_unrestricted" {
   command = plan
 
+  # The key must be ABSENT, not null: the chart renders a null as JSON null and `nats-server -t`
+  # refuses it (invalid connection types ["NULL"]). Negative control: restoring the null makes
+  # `can()` succeed for every user and fails all three asserts.
   assert {
     condition = alltrue([
       for u in yamldecode(helm_release.nats.values[0]).config.merge.accounts.APP.users :
-      !can(u.allowed_connection_types) || u.allowed_connection_types == null
+      !can(u.allowed_connection_types)
     ])
-    error_message = "with mqtt_capable_users unset no login may be restricted: that is what earlier releases ran"
+    error_message = "with mqtt_capable_users unset no login may carry allowed_connection_types, not even null: that is what earlier releases ran, and nats-server refuses a null"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.nats.values[0]).config.merge.accounts.SYS.users[0].allowed_connection_types)
+    error_message = "with mqtt_capable_users unset the system login may not carry allowed_connection_types"
+  }
+
+  assert {
+    condition     = !can(yamldecode(helm_release.nats.values[0]).config.merge.accounts.IDENTITY.users[0].allowed_connection_types)
+    error_message = "with mqtt_capable_users unset the identity login may not carry allowed_connection_types"
   }
 }
 

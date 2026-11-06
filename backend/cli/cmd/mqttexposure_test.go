@@ -107,6 +107,25 @@ func TestMQTTExposureFlagsFailClosedUpFront(t *testing.T) {
 	}
 }
 
+// An upgrade may switch the mode and keep the recorded host, so the up-front check cannot call a
+// missing host an error; the pipeline's settlement against the record still does. Bootstrap has no
+// record, so its check keeps refusing. Negative control: routing the upgrade through
+// CheckMQTTExposureFlags fails the first case.
+func TestUpgradeMQTTExposureCheckAllowsARecordedHost(t *testing.T) {
+	if err := bootstrap.CheckMQTTExposureFlagsForUpgrade("loadbalancer", ""); err != nil {
+		t.Errorf("a mode switch that keeps the recorded host was refused up front: %v", err)
+	}
+	if err := bootstrap.CheckMQTTExposureFlags("loadbalancer", ""); err == nil {
+		t.Error("bootstrap accepted a mode with no host")
+	}
+	if err := bootstrap.CheckMQTTExposureFlagsForUpgrade("loadbalancer", "mqtt"); err == nil {
+		t.Error("a malformed host was accepted")
+	}
+	if err := bootstrap.CheckMQTTExposureFlagsForUpgrade("internet", ""); err == nil {
+		t.Error("an unknown mode was accepted")
+	}
+}
+
 func TestBrokerMaxConnectionsReachesTheOptionsOnlyWhenGiven(t *testing.T) {
 	if got := bootstrap.BrokerMaxConnectionsFromFlag(false, 5); got != nil {
 		t.Errorf("a flag not given arrived as %d, want nil (keep what is recorded)", *got)

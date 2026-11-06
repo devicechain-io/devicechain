@@ -22,6 +22,7 @@ func TestCustomTierRefusesWhatIsNotAnObjectOfIntegers(t *testing.T) {
 		"string value": `{"ingestBurst":"lots"}`,
 		"float value":  `{"ingestBurst":1.5}`,
 		"array":        `[1]`,
+		"null value":   `{"integrationsPerTenant":null}`,
 	} {
 		if _, err := CustomTier("rc-100k", raw); err == nil {
 			t.Errorf("%s: expected an error", name)

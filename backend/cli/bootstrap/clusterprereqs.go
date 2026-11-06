@@ -122,7 +122,7 @@ func applyClusterPrereqs(ctx context.Context, st *State, uid string, vars []stri
 	// The apply also runs under the Barman Cloud plugin certificate healer: the plugin's
 	// chart can leave one of its two Certificates un-issued, which stalls the very
 	// release this apply is waiting on — see withBarmanCertHealer.
-	healed := barmanHealingApplier{tf: tf, kubeContext: st.KubeContext}
+	healed := barmanHealingApplier{tf: tf, kubeContext: st.KubeContext, namespace: cnpgNamespaceOf(rootdir)}
 	if err := applyWithCNPGAdmissionRetry(ctx, healed, opts, "tofu apply (cluster prerequisites)", func(ctx context.Context) error {
 		return waitForCNPGAdmission(ctx, st.KubeContext, cnpgAdmissionTimeout)
 	}); err != nil {

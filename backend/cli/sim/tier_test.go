@@ -119,8 +119,32 @@ func TestEnsureTierRaisesOnlyWhatIsBelowItsFloor(t *testing.T) {
 	if got["ingestReadingsPerSecond"] != 5000 || got["shedPriority"] != 10 {
 		t.Errorf("an operator's higher or unrelated key was lost: %v", got)
 	}
-	if got["ingestBurst"] != 2000 {
-		t.Errorf("a missing floor key was not added: %v", got)
+	if _, ok := got["ingestBurst"]; ok {
+		t.Errorf("a key the tier omits (and so inherits) was written: %v", got)
+	}
+}
+
+// 🔴 A KEY THE TIER OMITS IS INHERITED, NOT ZERO: raising it to the floor would LOWER the limit for
+// every tenant on the tier whenever the floor is under the inherited default. A tier that states
+// nothing below its floors is therefore not written at all, and neither is one whose key is null.
+//
+// Negative control: with the earlier rule (`!ok || have < floor`) the tier is rewritten with the
+// floors and both subtests fail.
+func TestEnsureTierNeverLowersAnInheritedLimit(t *testing.T) {
+	for name, existing := range map[string]string{
+		"config omits every floor key": `[{"token":"tp-showcase","config":"{\"shedPriority\":10}"}]`,
+		"config is empty":              `[{"token":"tp-showcase","config":null}]`,
+		"floor key is null":            `[{"token":"tp-showcase","config":"{\"ingestBurst\":null}"}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &tierStub{existing: existing}
+			if err := s.ensure(t); err != nil {
+				t.Fatal(err)
+			}
+			if len(s.mutations) != 0 {
+				t.Fatalf("an inherited limit was overwritten: %v %v", s.mutations, s.vars)
+			}
+		})
 	}
 }
 

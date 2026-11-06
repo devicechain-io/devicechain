@@ -232,7 +232,7 @@ when they are in a terraform.tfvars beside its state
 		}
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		upgradeBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
-		if err := bootstrap.CheckMQTTExposureFlags(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
+		if err := bootstrap.CheckMQTTExposureFlagsForUpgrade(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
 			return err
 		}
 		if upgradeResetValues && len(upgradeValues) > 0 {

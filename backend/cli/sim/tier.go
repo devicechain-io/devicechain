@@ -55,15 +55,24 @@ var manifestTiers = map[string]TierSpec{
 // run names (--tier) can be made by the same command that uses it: dcctl bootstrap seeds only
 // the platform tiers, and there is no tier command.
 func CustomTier(token, rawConfig string) (TierSpec, error) {
-	var cfg map[string]int
+	// *int, not int: a JSON null decodes into a plain int as 0 with no error, which would create a
+	// tier that forbids the resource.
+	var raw map[string]*int
 	dec := json.NewDecoder(strings.NewReader(rawConfig))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return TierSpec{}, fmt.Errorf("--tier-config must be a JSON object of integer limits, such as "+
 			`{"ingestReadingsPerSecond":100000}: %w`, err)
 	}
-	if len(cfg) == 0 {
+	if len(raw) == 0 {
 		return TierSpec{}, fmt.Errorf("--tier-config names no limits")
+	}
+	cfg := make(map[string]int, len(raw))
+	for k, v := range raw {
+		if v == nil {
+			return TierSpec{}, fmt.Errorf("--tier-config: %q is null; give an integer limit or leave the key out", k)
+		}
+		cfg[k] = *v
 	}
 	return TierSpec{
 		Token:       token,
@@ -109,7 +118,8 @@ func (e *TierRefusedError) Unwrap() error { return e.Cause }
 
 // EnsureTier makes the tier exist with at least the spec's config. It is idempotent: an absent
 // tier is created, one already at or above every floor is left alone, and one below a floor has
-// only those keys raised (its other keys, and any key above its floor, are kept). Any failure is
+// only those keys raised (its other keys, any key above its floor, and any key it omits and so
+// inherits, are kept). Any failure is
 // returned as a *TierRefusedError.
 func (a *Admin) EnsureTier(ctx context.Context, spec TierSpec) error {
 	if err := a.ensureTier(ctx, spec); err != nil {
@@ -162,8 +172,8 @@ func (a *Admin) ensureTier(ctx context.Context, spec TierSpec) error {
 	return tolerateExists(fmt.Errorf("create tier %q: %w", spec.Token, err), err)
 }
 
-// raiseToFloors returns current with every floor key that is missing or lower raised to the
-// floor, and whether anything changed.
+// raiseToFloors returns current with every floor key whose STATED value is lower raised to the
+// floor, and whether anything changed. A key the config omits is inherited and is never touched.
 func raiseToFloors(current map[string]any, floors map[string]int) (map[string]any, bool) {
 	out := make(map[string]any, len(current)+len(floors))
 	for k, v := range current {
@@ -176,8 +186,12 @@ func raiseToFloors(current map[string]any, floors map[string]int) (map[string]an
 	sort.Strings(keys)
 	changed := false
 	for _, k := range keys {
+		// 🔴 A KEY THE TIER DOES NOT STATE IS INHERITED, NOT ZERO. The tier's effective value is a
+		// default this code cannot see, and writing the floor over it would LOWER the limit for
+		// every tenant on the tier whenever the floor is below that default. Only a stated number
+		// below its floor is raised; a missing or null key is left to inherit.
 		have, ok := out[k].(float64)
-		if !ok || have < float64(floors[k]) {
+		if ok && have < float64(floors[k]) {
 			out[k] = floors[k]
 			changed = true
 		}

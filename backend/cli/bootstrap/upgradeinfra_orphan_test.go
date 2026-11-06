@@ -403,3 +403,55 @@ func TestTheCertificateExpiryIsNotPublishedWhileTheStatefulSetIsGone(t *testing.
 		t.Fatal("an orphaned broker's expiry would be published before its servers serve the certificate")
 	}
 }
+
+// 🔴 A PENDING FILESYSTEM RESIZE ON A CLAIM WHOSE SERVER IS GONE DOES NOT BLOCK THE UPGRADE. The
+// filesystem half of an expansion completes only when a pod mounts the claim, and only the
+// StatefulSet this apply recreates starts that pod; refusing is a permanent deadlock. Every other
+// unfinished state still refuses, and so does the same state with the server present.
+//
+// Negative control: the earlier rule (any FileSystemResizePending or short capacity refuses) fails
+// the "deadlock" case; dropping the pod-absent or the not-Resizing condition fails the others.
+func TestAPendingFilesystemResizeWithNoServerDoesNotDeadlockTheUpgrade(t *testing.T) {
+	cond := func(t corev1.PersistentVolumeClaimConditionType) []corev1.PersistentVolumeClaimCondition {
+		return []corev1.PersistentVolumeClaimCondition{{Type: t, Status: corev1.ConditionTrue}}
+	}
+	for _, c := range []struct {
+		name       string
+		dropPod    bool
+		conditions []corev1.PersistentVolumeClaimCondition
+		capacity   string
+		wantRefuse bool
+	}{
+		{"deadlock: resize pending, server gone", true, cond(corev1.PersistentVolumeClaimFileSystemResizePending), "16Gi", false},
+		{"resize pending, server present", false, cond(corev1.PersistentVolumeClaimFileSystemResizePending), "16Gi", true},
+		{"controller still resizing, server gone", true, cond(corev1.PersistentVolumeClaimResizing), "16Gi", true},
+		{"short capacity with no condition, server gone", true, nil, "16Gi", true},
+		{"resize pending and controller resizing, server gone", true, append(cond(corev1.PersistentVolumeClaimFileSystemResizePending), cond(corev1.PersistentVolumeClaimResizing)...), "16Gi", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var objs []runtime.Object
+			for _, x := range orphanedBrokerObjects([]string{"36Gi", "36Gi", "36Gi"}, true) {
+				switch o := x.(type) {
+				case *corev1.PersistentVolumeClaim:
+					if o.Name == "dc-nats-js-dc-nats-1" {
+						o.Status.Conditions = c.conditions
+						o.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(c.capacity)}
+					}
+				case *corev1.Pod:
+					if c.dropPod && o.Name == "dc-nats-1" {
+						continue
+					}
+				}
+				objs = append(objs, x)
+			}
+			infra, err := readInfraFrom(context.Background(), fake.NewSimpleClientset(objs...), storeDynamic(t), InstanceNamespace("prod"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			why := orphanedBrokerNotReady(infra.BrokerPods, infra.BrokerClaims)
+			if c.wantRefuse != (why != "") {
+				t.Fatalf("refused = %v (%q), want refused = %v", why != "", why, c.wantRefuse)
+			}
+		})
+	}
+}

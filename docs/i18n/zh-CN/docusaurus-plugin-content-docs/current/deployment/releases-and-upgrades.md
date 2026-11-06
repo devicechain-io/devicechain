@@ -517,6 +517,7 @@ dcctl bootstrap local devicechain
 - **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
+- **请让 `infrastructure.tokenAudience.externalResources` 的每个条目在路径中不含百分号转义。** chart 现在会拒绝路径中含有 `%` 的条目，因为编码后的结尾斜杠（`%2F`）能通过 chart 的检查，却会在服务启动时被服务端的检查拒绝。请直接使用原字符。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 
 

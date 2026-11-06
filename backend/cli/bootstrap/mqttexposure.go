@@ -355,6 +355,18 @@ func mqttGatewayPlan(ctx context.Context, typed kubernetes.Interface, dyn dynami
 // exists. With no mode given there is nothing to judge here: a host alone is meaningful over an
 // instance that already records an exposure, which only the pipeline can see.
 func CheckMQTTExposureFlags(mode, host string) error {
+	return checkMQTTExposureFlags(mode, host, false)
+}
+
+// CheckMQTTExposureFlagsForUpgrade is CheckMQTTExposureFlags for `dcctl upgrade`, where the instance
+// may already record a host: `--mqtt-exposure loadbalancer` alone switches the mode and keeps it. A
+// missing host is therefore not judged here (nothing can read the record before the cluster is
+// reached); the in-pipeline settlement against the record still refuses a mode with no host.
+func CheckMQTTExposureFlagsForUpgrade(mode, host string) error {
+	return checkMQTTExposureFlags(mode, host, true)
+}
+
+func checkMQTTExposureFlags(mode, host string, hostMayBeRecorded bool) error {
 	if err := ValidateMQTTExposure(mode); err != nil {
 		return err
 	}
@@ -362,6 +374,9 @@ func CheckMQTTExposureFlags(mode, host string) error {
 		if host != "" {
 			return ValidateMQTTHost(host)
 		}
+		return nil
+	}
+	if hostMayBeRecorded && host == "" && mode != MQTTExposureNone {
 		return nil
 	}
 	_, err := settleMQTTExposure("", "", mode, host)
