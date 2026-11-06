@@ -347,7 +347,7 @@ func TestEdgeDashboardProcessSeriesAreScopedToTheAgentsJob(t *testing.T) {
 	if err := json.Unmarshal(readDashboard(t), &doc); err != nil {
 		t.Fatal(err)
 	}
-	shared := regexp.MustCompile(`(process_[a-z_]+|go_[a-z_]+)\{([^}]*)\}`)
+	shared := regexp.MustCompile(`\b(process_[a-z_]+|go_[a-z_]+)\{([^}]*)\}`)
 	checked := 0
 	for _, p := range doc.Panels {
 		for _, tg := range p.Targets {

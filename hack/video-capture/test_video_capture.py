@@ -212,6 +212,8 @@ class AuditLows(unittest.TestCase):
             self.assertTrue(bad(lambda d, x=x: d["shots"][0].update(steps=[{"wait": x}])), repr(x))
             self.assertTrue(bad(lambda d, x=x: d["shots"][0].update(max_s=x)), repr(x))
         self.assertEqual(bad(lambda d: d["shots"][0].update(max_s=30)), [])
+        self.assertTrue(v._is_num(10 ** 400), "an int of any size is finite; it must not crash validation")
+        self.assertFalse(v._is_num(True))
 
     def test_guard_stops_a_shot_that_runs_past_max_s(self):
         r = self.recorder()

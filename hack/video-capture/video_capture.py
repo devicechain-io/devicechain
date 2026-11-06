@@ -99,7 +99,9 @@ def utc(ts):
 
 def _is_num(x):
     # json.load accepts NaN and Infinity: a non-finite wait or deadline would never end (or never fire)
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    return isinstance(x, int) or math.isfinite(x)  # an int of any size is finite (and float() of a huge one would overflow)
 
 
 def pid_alive(pid):
@@ -109,11 +111,11 @@ def pid_alive(pid):
         return False
     if os.name == "nt":
         import ctypes
-        k32 = ctypes.windll.kernel32
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         k32.OpenProcess.restype = ctypes.c_void_p
         h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
-            return False
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists, we may not look at it; only "no such process" is dead
         try:
             code = ctypes.c_ulong()
             return bool(k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
