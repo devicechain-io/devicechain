@@ -263,16 +263,16 @@
       "translationSha256": "161df67a0815f393d31cd8ab10191ddacd9c9b03f2b651156de9512d0714289a"
     },
     "intro.md": {
-      "sourceSha256": "2f4e7f87a57fccfbfa33d4ee3b9bd5bd31db089b892a61ef249c675af8da6f05",
-      "translationSha256": "9e9ccbfcd72c26cd8c0bc400d98c39457a597644d34a93ec44c244eaecaf45c4"
+      "sourceSha256": "58223c2ad1585ffea04fb364527e6c4430ca2ceaa26b4df0fe9c8d514fd268c6",
+      "translationSha256": "6f7f6113edd7ee066a098483828421ab6b985f80630b24dc6d68b9e2dc6f148d"
     },
     "quickstart/feature-tour.md": {
       "sourceSha256": "a7862064ae2b3d948a073ff08c25dec88cc369fdc7c47ab07607d02e6dd06fc1",
       "translationSha256": "f244c19f027f30c0957fe19913abbb76765cb7d14e5a9262d08ab3fa6343649b"
     },
     "quickstart/first-device.md": {
-      "sourceSha256": "d38d4c8c580b9390a3862f564671389c73eb81b949db1fd8d73bd69433f7241f",
-      "translationSha256": "e5256712ec6c7ea0aa8ac96169f57f6f6c55b21260300e9d9dc79fafd5b34d7f"
+      "sourceSha256": "f6c6c7f58e8b5f7d79aaf873fe651c1f6c1984af090b91774149460b77694e3f",
+      "translationSha256": "76ac3ab7d0a220e6a0165a27a15e1b54970319af994971602ecaf748fd428bd1"
     },
     "reference/dcctl.md": {
       "sourceSha256": "00a283c50ec0346e71c45b41c63ff1df3c1162cea772a95cbf3e4000cd7a8ccd",
