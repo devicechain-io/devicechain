@@ -560,10 +560,24 @@ variable "memory_limit" {
     (830 MiB), and that total has to stay 15% under the 80% soft limit.
     TestDuplicateWindowsFitTheBrokerMemoryLimit (backend/core/messaging) holds the
     instance root's default to that. Those were steady-ingest runs: a server rejoining
-    its cluster or catching up a large backlog after a node loss was not measured, so
-    raise this if a server is ever OOM-killed. A limit reserves nothing on the node:
-    the request is what places a server. Binary units only: GOMEMLIMIT is derived from
-    the number, and a decimal unit would make it off by the factor between G and Gi.
+    its cluster or catching up a large backlog after a node loss was not measured.
+    RAISE THIS WHEN A SERVER'S WORKING SET SITS AT ITS SOFT LIMIT, NOT ONLY AFTER AN
+    OOM KILL. A server at GOMEMLIMIT is never killed: it collects continuously, which
+    shows as higher broker CPU per event and slower acknowledgements (PUBACK p99
+    101 ms at 12,000 events/s at 4Gi, 25 ms at 20Gi, and 9% less broker CPU per event)
+    with no restart to point at. Compare the server's working set
+    (container_memory_working_set_bytes) with 80% of this limit: within 10% of it, raise
+    the limit. Sizing rule, measured on GKE round 30 on one server with the stream
+    deduplication windows on (non-HA; a clustered server was not re-measured): the
+    working set was 1.9, 3.0, 3.8 and 4.8 GiB at a sustained 8,000, 12,000, 16,000 and
+    20,000 events/s, about 0.24 GiB per 1,000 events/s, so the 3.2 GiB soft limit of the
+    default 4Gi is reached at about 12,000 events/s (3.0 GiB) and exceeded above it. Size the limit at the rate you
+    design for, at 0.35 GiB per 1,000 events/s (the working set, 15% headroom, over the
+    80% soft limit), rounded up: 3Gi at 8,000, 5Gi at 12,000, 6Gi at 16,000, 7Gi at
+    20,000. A limit reserves nothing on the node: the request is what places a server,
+    so the node must still have the room when the working set grows into it. Binary
+    units only: GOMEMLIMIT is derived from the number, and a decimal unit would make it
+    off by the factor between G and Gi.
   EOT
   type        = string
   default     = "4Gi"

@@ -946,7 +946,7 @@ medida.
 | `inMemoryCache.ttlSeconds` | `300` | Cuánto tiempo guarda una réplica un valor en su propia memoria, de 1 a 3600 segundos. Un cambio descarta el valor en todas las réplicas a la vez, así que esto solo acota un mensaje de descarte que se perdió. El tiempo de vida de la propia caché de clave-valor lo limita (véase más abajo). Consulte [Cachés que dejan de responder](#kv-caches). |
 | `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` | `300` | El tiempo de vida de cada caché de clave-valor en el broker, de 1 a 3600 segundos. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | Cuántas entradas, como máximo, guarda cada réplica en memoria de cada una de las tres cachés que se guardan por dispositivo: un dispositivo por su token, sus relaciones seguidas y sus pertenencias a grupos. Consulte [Cachés que dejan de responder](#kv-caches). |
-| `inMemoryCache.perDeviceCacheMiB` | `24` | Cuánta memoria, en MiB, ocupa como máximo cada una de esas tres cachés en cada réplica. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
+| `inMemoryCache.perDeviceCacheMiB` | `80` | Cuánta memoria, en MiB, ocupa como máximo cada una de esas tres cachés en cada réplica: unos 4 por cada 1.000 dispositivos que se resuelven por su token. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
 | `inMemoryCache.credentialCacheMiB` | `32` | Cuánta memoria, en MiB, ocupa como máximo la caché de credenciales de dispositivo en cada réplica, de 1 a 256. En el valor por defecto caben unos 29.000 dispositivos con credencial; 60.000 necesitan unos 70. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
 
 Súbalo cuando `resolve_inflight` se mantenga en `resolve_workers` mientras al pod le sobra CPU. Si
@@ -1002,7 +1002,7 @@ Limitaciones conocidas del ajuste:
 - La sobrecarga aún no genera contrapresión, y el ajuste no es una garantía ante un bróker que se queda sin memoria. En la configuración descrita en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service), una de tres ejecuciones a 9000 eventos QoS 1 por segundo dejó a un servidor del bróker sin memoria y perdió 294 740 de 2,64 millones de eventos confirmados; a 12 000 por segundo lo hicieron los tres servidores y se perdieron 621 280 de 3,36 millones (18,5 %). Ni el límite de tamaño del almacén ni el rechazo de conexiones al 80 % llegaron a actuar: el almacén estaba por debajo del 30 % cuando cayeron los servidores, porque lo que crecía era la cola de publicaciones del bróker pendientes de guardar, antes del almacén. La pérdida empezó antes de agotarse la memoria, ningún contador se movió y no se ha determinado dónde se pierden los eventos. Manténgase por debajo del techo medido allí (unos 8000 por segundo) y no cuente con el ajuste ante la caída de un bróker.
 - El almacén le cuesta al bróker más por publicación que el stream de captura, y con el ajuste activado la plataforma sostiene menos tráfico. En la configuración descrita en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service), los PUBACK en el percentil 99 tardaron 45 ms a 6000 eventos por segundo, 485 ms a 7500 y 1,12 s a 8250, frente a 55 ms a 6000 con el ajuste desactivado; el techo limpio medido con él activado es de unos 8000 por segundo.
 - El mecanismo de espera mide el tamaño del almacén en bytes y solo rechaza conexiones nuevas: los dispositivos ya conectados siguen publicando. Un atraso muy por debajo del 80 % del límite puede ser grande igualmente.
-- Un atraso en el propio almacén ocupa poca memoria del bróker, decenas de MiB por servidor con el almacén lleno. La memoria de cada servidor NATS se va sobre todo en las ventanas de detección de duplicados, unos 89 KiB de heap vivo por cada evento por segundo sostenido en cada servidor, y la memoria residente de un servidor es de aproximadamente el doble de su heap vivo, así que a 8000 eventos por segundo sostenidos un servidor ya ronda los 3 GiB de su límite de 4 GiB, con el ajuste activado o desactivado. Un servidor al que le falta CPU también acumula trabajo en memoria, así que si alguna vez el sistema mata un servidor por falta de memoria (OOM), aumente `nats_memory_limit`. Ninguna alerta vigila la memoria del bróker: como un servidor sano funciona cerca de su límite, un umbral sobre ella callaría hasta que lo maten. `InstanceContainerRestarted` informa de esa muerte (un contenedor del bróker cuyo último estado es `OOMKilled`), y esa es la señal a la que hay que actuar.
+- Un atraso en el propio almacén ocupa poca memoria del bróker, decenas de MiB por servidor con el almacén lleno. La memoria de cada servidor NATS se va sobre todo en las ventanas de detección de duplicados, unos 89 KiB de heap vivo por cada evento por segundo sostenido en cada servidor, y la memoria residente de un servidor es de aproximadamente el doble de su heap vivo, así que a 8000 eventos por segundo sostenidos un servidor ya ronda los 3 GiB de su límite de 4 GiB, con el ajuste activado o desactivado. Un servidor al que le falta CPU también acumula trabajo en memoria. Aumente `nats_memory_limit` cuando el conjunto de trabajo de un servidor esté en su límite blando, y no solo después de que el sistema lo mate por falta de memoria (OOM): un servidor en el límite blando recolecta sin parar y se vuelve lento sin reiniciarse. [La memoria del bróker](./bootstrap.md#broker-sizing) tiene el conjunto de trabajo medido de 8.000 a 20.000 eventos por segundo y una regla para el límite. Ninguna alerta vigila la memoria del bróker, porque un servidor sano funciona cerca de su límite. `InstanceContainerRestarted` informa de una muerte (un contenedor del bróker cuyo último estado es `OOMKilled`).
 
 ## Persistencia de eventos {#event-persistence}
 
@@ -1384,9 +1384,36 @@ en él, durante hasta cinco minutos (`inMemoryCache.ttlSeconds`, y nunca más qu
 de la caché), y responde desde ahí sin preguntar a NATS, incluso mientras el bucket se está
 omitiendo. El tiempo cuenta desde que se leyó el valor, no desde la última vez que se usó. Las
 tres cachés que se guardan por dispositivo (un dispositivo por su token, sus relaciones seguidas y
-sus pertenencias a grupos) guardan cada una hasta 131.072 entradas o 24 MiB por réplica, según
-`inMemoryCache.perDeviceCacheEntries` e `inMemoryCache.perDeviceCacheMiB`. Eso son unos 87.000
-dispositivos sin ninguna relación seguida, o unos 26.000 con una. Las cachés de perfil y de alcance
+sus pertenencias a grupos) guardan cada una hasta 131.072 entradas o 80 MiB por réplica, según
+`inMemoryCache.perDeviceCacheEntries` e `inMemoryCache.perDeviceCacheMiB`. Un dispositivo ocupa de 2,5 a
+3,1 KB en la caché por token (el dispositivo y su tipo de dispositivo, guardados codificados y
+decodificados), así que 80 MiB guardan unos 27.000 dispositivos ahí; la caché de relaciones seguidas
+guarda unos 34.000 dispositivos con una relación seguida, o las 131.072 entradas para los que no tienen ninguna. La caché por
+token se llena primero. El límite era de 24 MiB antes de la `v1.2.0`, y solo guardaba de 8.000 a
+10.000 dispositivos: con 16.000 dispositivos la caché por token expulsó una entrada en el 73 % de las
+consultas, la CPU que costaba cada evento en `device-management` pasó de 0,048 a 0,105 segundos de
+CPU por cada 1.000 eventos entre 8.000 y 16.000 dispositivos, y con 20.000 las lecturas pasaban al
+cubo clave-valor y agotaban el tiempo.
+
+**Dimensionar las cachés por dispositivo para una flota.** Cada réplica guarda toda la flota activa,
+no su parte, porque el consumidor de `inbound-events` es compartido y una réplica resuelve el
+siguiente lote que obtenga. Para N dispositivos que informan dentro de `inMemoryCache.ttlSeconds`:
+
+- `inMemoryCache.perDeviceCacheMiB`: 4 por cada 1.000 dispositivos que se resuelven por su token
+  (N × 3,1 KB, más una cuarta parte; 3 por cada 1.000 dispositivos que presentan una credencial y tienen una relación seguida). Los 80 por defecto cubren 20.000 dispositivos con una cuarta
+  parte de margen. Una flota de más de unos 131.000 dispositivos sube también
+  `perDeviceCacheEntries`.
+- `inMemoryCache.credentialCacheMiB`: 1,4 por cada 1.000 dispositivos que presentan una credencial.
+  Un evento toma un camino o el otro, así que las dos se llenan con dispositivos distintos.
+- El límite de memoria del servicio: 2 × (3 × `perDeviceCacheMiB` + `credentialCacheMiB` + 36 + 60)
+  MiB. Los 36 son las dos cachés pequeñas y los 60 el resto del servicio. Los 768Mi por defecto son
+  esta regla para los límites por defecto. La regla cuenta las tres cachés por dispositivo como
+  llenas, y con estos tamaños solo la de por token lo está, así que es el lado prudente.
+
+Para 60.000 dispositivos que se resuelven por su token, fije `perDeviceCacheMiB` en 240 y el límite de
+memoria en 1,7Gi. `DeviceLookupCacheTooSmall` salta cuando la caché de una réplica está llena y
+expulsa más del 5 % de las consultas durante 15 minutos; es la señal de que la flota ha superado el
+ajuste. Las cachés de perfil y de alcance
 de grupos, que se guardan por tipo de dispositivo y por inquilino, guardan 4096 entradas o 4 MiB.
 Cada una descarta primero la entrada usada hace más tiempo cuando está llena. Al guardar una
 entrada nueva también descarta las caducadas desde su extremo de uso más antiguo, y se detiene en
@@ -1423,11 +1450,13 @@ réplicas: el flujo de entrada es un único consumidor duradero compartido por t
 que los eventos no se reparten entre réplicas por dispositivo, y cuando el número de réplicas por el
 intervalo de informe de un dispositivo es menor que el tiempo, cada réplica ve casi todos los
 dispositivos. Una caché menor que la flota la recorre en ciclo y casi no responde nada. Por ejemplo,
-60.000 dispositivos que informan cada 10 s, cada uno con una relación seguida, necesitan en cada
-réplica un `inMemoryCache.credentialCacheMiB` de unos 80 (una entrada ocupa unos 1,1 KB) y un
-`inMemoryCache.perDeviceCacheMiB` de unos 64 (un conjunto de relaciones ocupa unos 950 bytes), y un
-límite de memoria de 768Mi para alojarlos. La señal es
-`kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` cerca del ritmo de
+60.000 dispositivos que informan cada 10 s, cada uno con una relación seguida y que presentan una
+credencial, necesitan en cada réplica un `inMemoryCache.credentialCacheMiB` de unos 80 (una entrada
+ocupa unos 1,1 KB) y un `inMemoryCache.perDeviceCacheMiB` de unos 180 (un conjunto de relaciones
+cuesta unos 2,4 KB contado), y un límite de memoria de 1,4Gi para alojarlos; la misma flota resolviendo
+por su token necesita un `perDeviceCacheMiB` de 240 y 1,7Gi (vea la regla de arriba). La señal es
+`kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` (o
+`cache="device-by-token"`) cerca del ritmo de
 eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por debajo de
 `kv_cache_local_max_entries`. Una flota demasiado grande para la caché muestra en cambio
 `kv_cache_local_evictions_total{reason="capacity"}` creciendo cerca del ritmo de eventos, con
@@ -1437,7 +1466,7 @@ eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por deb
 `DeviceCredentialCacheTooSmall` y `DeviceLookupCacheTooSmall` (aviso): una réplica cuyas expulsiones
 por capacidad llevan 15 minutos por encima del 5% de sus consultas. Cuando salte una, suba el límite
 (`inMemoryCache.credentialCacheMiB` o `inMemoryCache.perDeviceCacheMiB`), y con él el límite
-de memoria: con los valores por defecto las seis cachés en memoria guardan como máximo 112 MiB.
+de memoria: con los valores por defecto las seis cachés en memoria guardan como máximo 308 MiB.
 `device-management` se ejecuta con `GOGC=400` y un límite blando de memoria (`GOMEMLIMIT`) al 75 %
 de su límite de memoria, de modo que el recolector deja crecer el heap hasta unas cinco veces lo
 que guarda, y trabaja más al acercarse a ese límite blando; donde no hay `GOMEMLIMIT`, el heap

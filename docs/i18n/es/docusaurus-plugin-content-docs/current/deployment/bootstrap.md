@@ -1488,7 +1488,7 @@ base pueda seguirla, o donde puedas permitirte recrear la base.
 ### Dimensionamiento de los servicios {#service-sizing}
 
 Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, salvo
-`device-management`, cuyo límite es 512Mi, y `event-processing`, cuyo límite es 384Mi, o 768Mi mientras
+`device-management`, cuyo límite es 768Mi, y `event-processing`, cuyo límite es 384Mi, o 768Mi mientras
 cualquiera de los ajustes de [sobres de eventos](./releases-and-upgrades.md#event-envelopes) esté activado
 (cada uno es un mínimo: un `resources.limits.memory` superior de nivel superior, o un límite propio de ese servicio, se usa tal cual). La CPU se dimensiona por servicio a partir de mediciones:
 
@@ -1523,17 +1523,31 @@ no solo de los valores por defecto. Las cifras se ajustaron a una prueba en Goog
 y son aproximadas; deje un margen de al menos la mitad sobre ellas.
 
 - **`device-management` según el tamaño de la flota.** Cada réplica guarda en caché toda la flota,
-  así que el montón sigue al número de dispositivos, no al ritmo de eventos. Fue de 154 MiB con
-  6 000 dispositivos y de 193 a 218 MiB con 12 000 a 16 000: unos 115 MiB más 6,4 MiB por cada 1 000
-  dispositivos. Fije el límite al doble. Los 512Mi por defecto cubren una flota de unos 20 000
-  dispositivos; para 40 000 dispositivos fije 768Mi, y para 100 000 unos 1,5Gi. Se fija con
-  `functionalAreas.device-management.resources.limits.memory`.
+  así que el montón sigue al número de dispositivos, no al ritmo de eventos, y sus cachés también.
+  Su límite, `inMemoryCache.perDeviceCacheMiB`, es de 80 MiB por defecto. Era de 24, que solo
+  guardaba de 8 000 a 10 000 dispositivos (un dispositivo ocupa de 2,5 a 3,1 KB en la caché por
+  token), así que una flota de 12 000 a 20 000 dispositivos recorría la caché en ciclo y costaba hasta
+  cuatro veces más CPU por evento. Fije el límite en 4 MiB por cada 1 000 dispositivos que se
+  resuelven por su token, y el límite de memoria en 2 × (3 × `perDeviceCacheMiB` +
+  `credentialCacheMiB` + 36 + 60) MiB, donde 36 son las dos cachés pequeñas y 60 el resto del
+  servicio. Los 768Mi por defecto son esa regla para los límites por defecto (80 y 32): guardan una
+  flota de 20 000 dispositivos con una cuarta parte de margen, y con todas las cachés llenas el límite
+  blando sigue siendo 1,5 veces lo vivo. Para 60 000 dispositivos por el camino del token, fije
+  `perDeviceCacheMiB` en 240 y el límite en 1,7Gi. El montón de Go fue de 206 a 243 MiB con 8 000 a
+  20 000 dispositivos con el límite antiguo lleno. El límite se fija con
+  `functionalAreas.device-management.resources.limits.memory`; los ajustes de las cachés están en
+  [Cachés que dejan de responder](./observability.md#kv-caches).
 - **`event-processing` con sobres de eventos activados, según el ritmo de eventos.** La protección
   contra duplicados guarda la identidad de cada evento aplicado durante unos diez minutos. La memoria
   residente fue de 265 a 269 MiB con 4 500 a 6 000 eventos por segundo y de 388 MiB con 12 000 (de 68
   a 85 MiB con los ajustes desactivados): unos 150 MiB más 22 MiB por cada 1 000 eventos por segundo.
-  Fije el límite en una vez y media esa cifra. Los 768Mi por defecto cubren unos 15 000 eventos por
-  segundo; para 20 000 fije 1Gi. Se fija con
+  Fije el límite en una vez y media esa cifra. Los 768Mi por defecto son un mínimo fijo y no crecen con el ritmo.
+  Cubren unos 12 000 eventos por segundo con margen: el montón de Go fue de 441, 488, 511 y 516 MiB
+  (residente de 500 a 571 MiB) con 8 000, 12 000, 16 000 y 20 000 eventos por segundo, frente a un
+  límite blando de 576 MiB, así que desde unos 16 000 eventos por segundo sostenidos el pod recolecta
+  en su límite blando. **Con sobres activados y 16 000 eventos por segundo o más, fije unos 1Gi.** La
+  protección guarda el ritmo por diez minutos, así que un ritmo que se alcanzó en rampa se lee más
+  alto que el mismo ritmo alcanzado desde reposo. Se fija con
   `functionalAreas.event-processing.resources.limits.memory`. Con ambos ajustes desactivados, los
   384Mi no cambian.
 
@@ -1692,6 +1706,20 @@ un nodo se quedaba sin memoria.
   4Gi, que lo deja un 15 % por debajo del límite blando del 80 %. Se tarda 10 minutos de ingesta
   constante en llegar ahí. Si fijas `nats_memory_limit` por debajo de 4Gi, reduce en proporción
   el ritmo que puedes sostener.
+- **Los 4Gi por defecto alcanzan su límite blando a unos 12 000 eventos por segundo, y estar ahí es
+  lento, no fatal.** Medido en un servidor con las ventanas activadas, el conjunto de trabajo fue de 1,9, 3,0,
+  3,8 y 4,8 GiB con 8 000, 12 000, 16 000 y 20 000 eventos por segundo sostenidos (unos 0,24 GiB por
+  cada 1 000), frente a un límite blando de 3,2 GiB. Un servidor en su límite blando no muere:
+  recolecta sin parar, lo que cuesta CPU del bróker y tiempo de confirmación y no deja ningún reinicio
+  que buscar. A 12 000 eventos por segundo el tiempo de confirmación en el percentil 99 fue de 101 ms
+  con 4Gi y de 25 ms con 20Gi, y el bróker usó un 9 % menos de CPU por evento. Por eso, aumente
+  `nats_memory_limit` cuando el `container_memory_working_set_bytes` de un servidor esté a menos del
+  10 % del 80 % de su límite, y no solo después de un `OOMKilled`. Para dimensionarlo para un ritmo de
+  diseño, cuente 0,35 GiB por cada 1 000 eventos por segundo (el conjunto de trabajo, un 15 % de
+  margen, sobre el límite blando del 80 %) y redondee hacia arriba: 3Gi a 8 000, 5Gi a 12 000, 6Gi a
+  16 000, 7Gi a 20 000. Esto se midió en un servidor de una instancia sin `--ha`; un servidor en
+  clúster no se midió de nuevo. Un límite no reserva nada, así que el nodo debe tener el espacio
+  cuando el conjunto de trabajo crezca hasta él.
 - **Un reinicio de más de unos 8 minutos puede guardar un evento dos veces.** Los 10 minutos
   cubren toda reentrega mientras hay un consumidor en marcha. También cubren un pod de
   `event-sources` o `device-management` que muere y vuelve en unos 8 minutos. Si tarda más, los

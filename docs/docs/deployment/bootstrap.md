@@ -1379,7 +1379,7 @@ store.
 ### Service sizing {#service-sizing}
 
 Every backend service requests 128Mi of memory and is limited to 256Mi, except `device-management`,
-which is limited to 512Mi, and `event-processing`, which is limited to 384Mi, or to 768Mi while either
+which is limited to 768Mi, and `event-processing`, which is limited to 384Mi, or to 768Mi while either
 [event-envelope](./releases-and-upgrades.md#event-envelopes) setting is on (each a floor: a higher top-level
 `resources.limits.memory`, or a limit of your own on that service, is used as written). CPU is sized per service from measurement:
 
@@ -1412,15 +1412,28 @@ defaults alone. The figures are fitted to a Google Kubernetes Engine run and are
 a margin of at least one half over them.
 
 - **`device-management` by fleet size.** Every replica caches the whole fleet, so the heap follows
-  the number of devices, not the event rate. It was 154 MiB with 6,000 devices and 193 to 218 MiB
-  with 12,000 to 16,000: about 115 MiB plus 6.4 MiB for each 1,000 devices. Set the limit to twice
-  that. The 512Mi default covers a fleet of about 20,000 devices; for 40,000 devices set 768Mi, for
-  100,000 about 1.5Gi. Set it with `functionalAreas.device-management.resources.limits.memory`.
+  the number of devices, not the event rate, and so do its caches. Their bound,
+  `inMemoryCache.perDeviceCacheMiB`, is 80 MiB by default. It was 24, which held only 8,000 to
+  10,000 devices (a device costs 2.5 to 3.1 KB in the by-token cache), so a fleet of 12,000 to
+  20,000 devices cycled the cache and cost up to four times the CPU per event. Set the bound to 4
+  MiB for each 1,000 devices that resolve on their token, and the limit to 2 × (3 ×
+  `perDeviceCacheMiB` + `credentialCacheMiB` + 36 + 60) MiB, where 36 is the two small caches and
+  60 the rest of the service. The 768Mi default is that rule for the default bounds (80 and 32): it
+  holds a fleet of 20,000 devices with a quarter over, and with every cache full the soft limit is
+  still 1.5 times what is live. For 60,000 devices on the token path, set `perDeviceCacheMiB` to
+  240 and the limit to 1.7Gi. The Go heap was 206 to 243 MiB at 8,000 to 20,000 devices with the old
+  bound full. Set the limit with `functionalAreas.device-management.resources.limits.memory`, and see
+  [Caches that stop answering](./observability.md#kv-caches) for the cache settings.
 - **`event-processing` with event envelopes on, by event rate.** The duplicate guard holds the
   identity of every event applied over about ten minutes. Resident memory was 265 to 269 MiB at
   4,500 to 6,000 events a second and 388 MiB at 12,000 (68 to 85 MiB with the settings off): about
   150 MiB plus 22 MiB for each 1,000 events a second. Set the limit to one and a half times that.
-  The 768Mi default covers about 15,000 events a second; for 20,000 set 1Gi. Set it with
+  The 768Mi default is a flat floor and does not grow with the rate. It covers about 12,000 events
+  a second with room: the Go heap was 441, 488, 511 and 516 MiB (resident 500 to 571 MiB) at 8,000,
+  12,000, 16,000 and 20,000 events a second, against a 576 MiB soft limit, so from about 16,000
+  events a second sustained the pod collects at its soft limit. **With envelopes on at 16,000
+  events a second or more, set about 1Gi.** The guard holds the rate times ten minutes, so a rate
+  that was ramped up reads higher than the same rate reached from idle. Set it with
   `functionalAreas.event-processing.resources.limits.memory`. With both settings off, 384Mi is
   unchanged.
 
@@ -1564,6 +1577,19 @@ first in line for eviction when a node ran short of memory.
   needs about 2.6 GiB, which is why the limit is 4Gi: that keeps it 15% under the 80% soft limit.
   It takes 10 minutes of steady ingest to reach. If you set `nats_memory_limit` below 4Gi, scale
   the rate you can sustain with it.
+- **The 4Gi default reaches its soft limit at about 12,000 events per second, and being there is
+  slow, not fatal.** Measured on one server with the windows on, the working set was 1.9, 3.0, 3.8 and 4.8 GiB
+  at a sustained 8,000, 12,000, 16,000 and 20,000 events per second (about 0.24 GiB for each 1,000),
+  against a 3.2 GiB soft limit. A server at its soft limit is not killed: it collects continuously,
+  which costs broker CPU and acknowledgement time and leaves no restart to look for. At 12,000 events
+  per second the acknowledgement time at the 99th percentile was 101 ms at 4Gi and 25 ms at 20Gi,
+  and the broker used 9% less CPU per event. So raise `nats_memory_limit` when a server's
+  `container_memory_working_set_bytes` is within 10% of 80% of its limit, not only after an
+  `OOMKilled`. To size it for a rate you design for, allow 0.35 GiB for each 1,000 events per second
+  (the working set, 15% headroom, over the 80% soft limit) and round up: 3Gi at 8,000, 5Gi at 12,000,
+  6Gi at 16,000, 7Gi at 20,000. This was measured on one server of an instance without `--ha`; a
+  clustered server was not measured again. A limit reserves nothing, so the node must have the room
+  when the working set grows into it.
 - **A restart longer than about 8 minutes can store an event twice.** The 10 minutes cover every
   redelivery while a consumer is running. They also cover an `event-sources` or
   `device-management` pod that dies and comes back within about 8 minutes. If it takes longer, the

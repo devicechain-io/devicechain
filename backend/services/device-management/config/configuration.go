@@ -165,13 +165,33 @@ const MaxInboundReaders = 4
 // 4,096 entries and 4 MiB; there are few of those keys. The one keyed by device type has its own
 // bound (DefaultProfileResolutionCacheMiB).
 //
-// What an entry costs, as the cache counts it (key, the value's allocation, and 192 B for
-// the list element, entry and map slot, which the messaging package measured and holds
-// with a test): a device with no tracked relationship is about 290 B in the relationships
-// cache (a 72-byte value), and one with a single tracked relationship about 950 B (a value
-// of about 650 to 700 bytes). So 24 MiB holds about 87,000 unassigned devices or 26,000
-// singly assigned ones, and the entry bound is set above either so that memory, not the
-// count, is what binds.
+// What an entry costs, as the cache counts it (key, the value's allocation, 192 B for the
+// list element, entry and map slot, which the messaging package measured and holds with a
+// test, and, for a value read back as a struct, a second charge for the decoded copy kept
+// beside the encoded bytes):
+//
+//   - a device in the device-by-token cache is the LARGEST of the three, because its value is
+//     the device row with its device type, about 1.1 to 1.3 KB of JSON, charged twice (encoded
+//     and decoded): 2.5 KB for a bare device and 2.7 KB with a name, description and a few
+//     metadata keys, and 3.1 KB is planned for richer ones
+//     (TestDeviceByTokenEntryCostSetsTheDefaultBound holds the first two). So 24 MiB held only
+//     8,000 to 10,000 devices, which round 30 on GKE found out:
+//     the cache was fine at 8,000 devices, evicted on 73% of lookups at 16,000 (DM CPU per
+//     event 0.048 at 8,000, 0.105 at 16,000, 0.191 at 20,000 CPU-s per 1,000 events), and at
+//     20,000 the lookups fell through to the broker's key-value bucket and timed out. It had
+//     been sized from the other two caches' entries, not from this one's;
+//   - a device with no tracked relationship is about 500 B in the relationships cache (a
+//     72-byte value, charged encoded and decoded), and one with a single tracked
+//     relationship about 2.4 KB (a value of about 650 to 700 bytes, charged the same way and
+//     held with the decoded charge relationshipsCharge makes);
+//   - an entity's group memberships are smaller than either.
+//
+// So the bound is set from the device-by-token entry, the larger of the two for a device that
+// is also assigned: 80 MiB holds 27,000 devices at the planned 3.1 KB (31,000 at 2.7 KB,
+// 33,000 at 2.5 KB), which is the 20,000-device fleet the sizing tables target plus a quarter
+// of headroom. The same 80 MiB holds about 34,000 singly assigned devices in the
+// relationships cache, or all 131,072 entries for unassigned ones; the entry bound is what
+// binds there, so a fleet past 131,000 devices raises it as well.
 //
 // 🔑 AN ENTRY LIVES inMemoryCache.ttlSeconds (5 MINUTES BY DEFAULT), SO SIZE EACH REPLICA FOR
 // THE WHOLE ACTIVE FLEET. An entry expires that long after it was stored, whether or not it
@@ -185,43 +205,62 @@ const MaxInboundReaders = 4
 // used to be, the working set was 5 s × the replica's event rate and a fleet reporting less
 // often than every 5 s got nothing from memory at all.
 //
-// WORKED EXAMPLE, 60,000 devices each reporting every 10 s, each with one tracked edge:
-// credentials 60,000 × about 1.1 KB = about 66 MB, so credentialCacheMiB 80; relationships
-// 60,000 × about 950 B = about 57 MB, so perDeviceCacheMiB 64 (the entry bound of 131,072
-// already covers 60,000); the two small caches and the group memberships add little. That
-// is about 150 MiB of live cache per replica, and the heap can be a multiple of that before
-// a collection, so raise the memory limit to 512Mi.
+// PER-FLEET RULE. Per replica, for N devices reporting within the time:
+//
+//	perDeviceCacheMiB >= N × 3.1 KB × 1.25, which is 4 MiB for each 1,000 devices that
+//	                     resolve on their token (the device-by-token cache binds first); a
+//	                     fleet on the credential path binds on the relationships cache at
+//	                     2.4 KB a singly assigned device, 3 MiB for each 1,000
+//	credentialCacheMiB >= N × 1.1 KB × 1.25, which is 1.4 MiB for each 1,000 devices that
+//	                     present a credential (an event takes one path or the other)
+//	memory limit >= 2 × (3 × perDeviceCacheMiB + credentialCacheMiB + 36 + 60) MiB
+//
+// where 36 is the other two caches (4 MiB by tenant and 32 MiB by device type) and 60 is the
+// rest of the service. The limit rule counts all three per-device caches full, which only the
+// token cache does at this fleet, so it is the conservative side; it is the arithmetic the
+// 768Mi chart floor is set by (below).
+//
+// WORKED EXAMPLE, 60,000 devices on the token path, each reporting every 10 s, each with one
+// tracked edge: device-by-token 60,000 × 3.1 KB × 1.25 = about 222 MiB, so perDeviceCacheMiB
+// 240 by the rule (the entry bound of 131,072 already covers 60,000), which holds the
+// relationships (60,000 × about 2.4 KB = 137 MiB) and the memberships with room to spare. The
+// same fleet authenticating by credential fills the credential cache instead: 60,000 × about
+// 1.1 KB = about 63 MiB, so credentialCacheMiB 80, and perDeviceCacheMiB 180 for the
+// relationships. For the token path the rule gives a memory limit of
+// 2 × (3 × 240 + 32 + 36 + 60) = about 1.7 GiB, and for the credential path
+// 2 × (3 × 180 + 80 + 36 + 60) = about 1.4 GiB.
 //
 // 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the six
 // in-process caches — these three, the two keyed by device type and by tenant, and the
 // credential cache, 32 MiB (inMemoryCache.credentialCacheMiB) — hold at most
-// 3 × 24 + 4 + 32 + 32 = 140 MiB, counted as above: the three keyed by device, the
-// one keyed by tenant (4), the credential cache (32), and the profile resolution cache, which
-// is 32 now that an entry may hold a compiled payload decoder (inMemoryCache.profileResolutionCacheMiB;
-// it was 4). With no GOMEMLIMIT set (the chart's
-// default), the heap can grow to about twice what is live before a collection: about
-// 280 MiB for full caches, plus the rest of the service (a replica resolving several
-// thousand events a second on a three-node GKE cluster used 32 MiB in all, its then 4-MiB
-// caches included), about 312 MiB against the chart's 512 MiB memory floor for this service (the
-// limit was 256 MiB when the caches were smaller). That is
-// the worst case, with every cache full: a fleet that fills them is the fleet to raise the
-// memory limit for.
+// 3 × 80 + 4 + 32 + 32 = 308 MiB, counted as above: the three keyed by device, the one keyed
+// by tenant (4), the credential cache (32), and the profile resolution cache, which is 32
+// now that an entry may hold a compiled payload decoder (inMemoryCache.profileResolutionCacheMiB;
+// it was 4). Add the rest of the service (a replica resolving several thousand events a
+// second used 32 MiB in all with its then 4-MiB caches; round 30 measured a Go heap of 219 to
+// 243 MiB at 8,000 to 20,000 devices with the 24-MiB bound full) and the worst case is about
+// 370 MiB live. The chart gives this service a 768Mi memory limit (a floor, memoryLimitFloor)
+// and a GOMEMLIMIT of 75% of it, 576 MiB, so with every cache full the soft limit is still
+// 1.5 times what is live; at the 512Mi the limit was before this bound grew, it was 1.04
+// times (384 MiB against about 370), the collector held at its limit. That is the worst case,
+// with every cache full: a fleet that fills them is the fleet to raise the memory limit for.
 //
-// Full caches need a large fleet on one replica. Three full 24-MiB caches at once take
+// Full caches need a large fleet on one replica. Three full 80-MiB caches at once take
 // device-by-token being read (devices authenticated at the transport, or device auth set to
 // optional or disabled) and a tenant with rule-scoped groups. Device-by-token and the
 // credential cache are filled by DISJOINT events — an event either presents a credential or
-// resolves on its token — so both full needs about 50,000 token-path devices (24 MiB at
-// about 500 B) and about 29,000 credentialed ones (32 MiB at about 1.1 KB) each reporting
+// resolves on its token — so both full needs about 27,000 token-path devices (80 MiB at
+// about 3.1 KB) and about 29,000 credentialed ones (32 MiB at about 1.1 KB) each reporting
 // within the time to live on one replica. Raising either setting needs the memory limit
-// raised with it; MaxPerDeviceCacheMiB is well past what 256 MiB can hold.
+// raised with it; MaxPerDeviceCacheMiB is well past what the chart's floor can hold.
 //
-// That budget is why the default is 24 MiB and not the ~33 MiB that 35,000 singly assigned
-// devices would need: 32 MiB per cache would put full caches at about 240 MiB under the
-// same arithmetic, too close to the limit for a default.
+// That budget is why the default is 80 MiB and not the 24 MiB it was: 24 MiB filled at 8,000
+// to 10,000 devices, below the 12,000 to 20,000 the sizing tables cover, and a cache that
+// cycles answers almost nothing (see above). 64 MiB would hold 21,000 devices at 3.1 KB,
+// a 5% margin over the 20,000 fleet; 80 keeps a quarter.
 const (
 	DefaultPerDeviceCacheEntries = 131072
-	DefaultPerDeviceCacheMiB     = 24
+	DefaultPerDeviceCacheMiB     = 80
 	MaxPerDeviceCacheEntries     = 4 << 20
 	MaxPerDeviceCacheMiB         = 256
 )
