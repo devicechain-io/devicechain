@@ -190,12 +190,14 @@ func TestOnlyTheValidationErrorOfAnOlderDeviceManagementIsTolerated(t *testing.T
 	require.NotEmpty(t, old.Messages)
 	require.True(t, IsDecoderUnsupported(old), "%v", old.Messages)
 
-	// The release that serves the query without the fields the charge needs.
+	// The release that serves the query without the fields the charge needs can have a decoder:
+	// flattening that type's uplinks would store what the decoder was meant to produce, so it is
+	// an error (a 503), not "no decoder".
 	partial := validationErrorsOf(t, `schema { query: Query }
 type Query { integrationDecoder(integration: String!, secret: String!, deviceTypeToken: String!): IntegrationDecoderPlan }
 type IntegrationDecoderPlan { present: Boolean! input: String maxReadings: Int! estimatedCost: Int! profileVersionToken: String! }`)
 	require.NotEmpty(t, partial.Messages)
-	require.True(t, IsDecoderUnsupported(partial), "%v", partial.Messages)
+	require.False(t, IsDecoderUnsupported(partial), "%v", partial.Messages)
 
 	// The release that has them all validates clean.
 	current := validationErrorsOf(t, `schema { query: Query }
@@ -283,4 +285,21 @@ func TestAPlanIsNeverSharedAcrossTenants(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, g.Plan.Present, "tenant A's decoder was served for tenant B's device type")
 	}
+}
+
+// One integration's view of a type is not another's: DM answers "no decoder" for a type an
+// integration's scope no longer reaches, and that answer must not be served to an integration whose
+// scope still does.
+func TestAnIntegrationsOutOfScopeAnswerIsNotServedToAnother(t *testing.T) {
+	f := &decoderFake{plan: &DecoderPlan{}}
+	d := NewDecoders(f, DecoderConfig{})
+	ctx := context.Background()
+	got, err := d.Lookup(ctx, "acme", "cs-a", "tok", "meter")
+	require.NoError(t, err)
+	require.False(t, got.Plan.Present)
+
+	f.plan = &DecoderPlan{Present: true, ProfileVersionToken: "meter@1"}
+	got, err = d.Lookup(ctx, "acme", "cs-b", "tok", "meter")
+	require.NoError(t, err)
+	require.True(t, got.Plan.Present, "integration A's negative answer was served to integration B")
 }

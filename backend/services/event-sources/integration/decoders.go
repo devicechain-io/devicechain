@@ -48,20 +48,22 @@ type DecoderBackend interface {
 	Decoder(ctx context.Context, tenant, integration, bearer, deviceTypeToken string) (*DecoderPlan, error)
 }
 
-// The query. Every field is named so that a device-management that serves the query but not one
-// of them is told apart from one that serves none: both are "no decoder", neither is a 503.
+// The query.
 const decoderQuery = `query($integration: String!, $secret: String!, $deviceTypeToken: String!) {
   integrationDecoder(integration: $integration, secret: $secret, deviceTypeToken: $deviceTypeToken) {
     present input maxReadings composedCost parsesJson parsesDecoded profileVersionToken
   }
 }`
 
-// unsupportedField matches the validation error a device-management without the query (or without
-// one of the plan's fields) answers: graphql-go's FieldsOnCorrectTypeRule. It is deliberately
-// narrow. Any other error, including a validation error about some other field, is a failure to
+// unsupportedField matches the validation error a device-management without the QUERY answers:
+// graphql-go's FieldsOnCorrectTypeRule. It is deliberately narrow. Any other error is a failure to
 // ask, because the 503 it becomes is the safe answer to something this build does not understand.
-var unsupportedField = regexp.MustCompile(
-	`Cannot query field "(integrationDecoder|composedCost|parsesJson|parsesDecoded)" on type "(Query|IntegrationDecoderPlan)"`)
+//
+// 🔴 A DEVICE-MANAGEMENT THAT SERVES THE QUERY BUT NOT ONE OF THE PLAN'S FIELDS IS NOT "NO
+// DECODER". It can have a decoder, and flattening that type's uplinks would store readings the
+// decoder was meant to produce; so the missing field is an error, and the uplink waits (503) for a
+// device-management that can answer completely.
+var unsupportedField = regexp.MustCompile(`Cannot query field "integrationDecoder" on type "Query"`)
 
 // IsDecoderUnsupported reports whether err is exactly the validation error of a device-management
 // that predates the decoder query, and nothing else: every message must be one.
@@ -153,7 +155,7 @@ type DecoderLookup struct {
 	Unsupported bool
 }
 
-// Decoders remembers, per (tenant, device type), whether the type has a payload decoder and how
+// Decoders remembers, per (tenant, integration, device type), whether the type has a decoder and how
 // an uplink for it is charged.
 //
 // 🔴 EVERY ANSWER IS ADVISORY, NOT AN AUTHORITY. The resolver decides what runs at the event from
@@ -190,7 +192,7 @@ func NewDecoders(backend DecoderBackend, cfg DecoderConfig) *Decoders {
 // answer, and must be answered 503, except ErrDecoderUnauthenticated, which the route answers as
 // it answers a token that stopped matching.
 func (d *Decoders) Lookup(ctx context.Context, tenant, integration, bearer, deviceTypeToken string) (DecoderLookup, error) {
-	key := tenant + "\x00" + deviceTypeToken
+	key := tenant + "\x00" + integration + "\x00" + deviceTypeToken
 	if e, ok := d.get(key, d.cfg.Now()); ok {
 		return DecoderLookup{Plan: e.plan, Cached: true, Unsupported: e.unsupported}, nil
 	}

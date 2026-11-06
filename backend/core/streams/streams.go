@@ -745,9 +745,16 @@ var All = []Stream{
 		Forwards:              map[string]string{"device-management": ResolvedEvents},
 		Why:                   "raw device telemetry — the primary ingest path"},
 	// The carrier of an integration's raw input to a profile's payload decoder. See
-	// IntegrationUplinks for why it is a stream of its own. Written by event-sources only, and read
-	// by the device-management resolver in builds that decode.
-	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	// IntegrationUplinks for why it is a stream of its own.
+	//
+	// 🔴 IT DECLARES NO READER YET, ON PURPOSE. The device-management resolver that consumes it, its
+	// durable, its backpressure gate (BackpressureReaders) and its forward into resolved-events
+	// (Forwards) are declared in the change that builds that consumer, together: a declared
+	// reader nothing builds is a grant to nothing (core/test's catalog-usage check says so), and a
+	// backpressure reader that is not running closes no gate. Until then the stream only holds what
+	// event-sources writes, and event-sources only writes it for a device type whose decoder a
+	// device-management answered for.
+	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindEvent,
 		Why:            "an integration sender's raw frame or JSON, held for the profile's payload decoder"},
 	//
