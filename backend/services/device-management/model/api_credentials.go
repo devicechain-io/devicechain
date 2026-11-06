@@ -373,6 +373,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// profile of a credential that was removed and re-issued meanwhile). trust_anchor_id and
 	// certificate_pem are the certificate credential's, fixed at create, so an update has no
 	// reason to write them either.
+	var lockedOwnerId uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		x509 := CredentialType(updated.CredentialType) == CredentialX509Certificate
 		// A certificate credential moved onto another device counts against THAT device's limit,
@@ -401,6 +402,18 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		var cur DeviceCredential
 		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
 			return err
+		}
+		// The inline kick after the commit names the owner in force too, not the one the unlocked read saw.
+		lockedOwnerId = cur.DeviceId
+		if cur.DeviceId != priorDeviceId {
+			var owners []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+				Pluck("token", &owners).Error; err != nil {
+				return err
+			}
+			if len(owners) == 1 {
+				currentDeviceToken = owners[0]
+			}
 		}
 		if !repoint && cur.DeviceId != updated.DeviceId {
 			updated.DeviceId = cur.DeviceId
@@ -446,7 +459,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// EVERY committed update evicts, a metadata-only edit included: one database read on
 	// the device's next event, in place of a field-by-field judgement of which changes
 	// matter that would have to be kept right forever.
-	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId)
+	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId, lockedOwnerId)
 	// A change that withdraws or alters what a session authenticated with ends the device's
 	// open sessions; a rename or a metadata edit does not. A credential that is DISABLED
 	// re-asks on every update, so repeating the disable after a failed kick is the retry.
