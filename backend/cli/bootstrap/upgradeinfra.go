@@ -1148,7 +1148,7 @@ func brokerResourceDecreases(before, after map[string]interface{}, in operatorIn
 		}
 		what := fmt.Sprintf("the broker's %s is LOWERED from %s to %s.", strings.Join(path[1:], "."), b, a)
 		if in.passed(r.variable) {
-			out = append(out, what+fmt.Sprintf(" dcctl sets %s itself for this instance (--compact), "+
+			out = append(out, what+fmt.Sprintf(" dcctl sets %s itself for this instance (--compact or --size), "+
 				"so a value in terraform.tfvars would not change it", r.variable))
 			continue
 		}
@@ -1437,6 +1437,14 @@ func sayKeptVolumes(st *State) []string {
 
 // releaseVolumeSize is the size this release gives a NEW instance's volume.
 func releaseVolumeSize(st *State, name string) string {
+	if p := sizeFor(st); p != nil {
+		switch name {
+		case "nats_jetstream_storage":
+			return p.JetStreamStorage
+		case "timescale_storage":
+			return p.TimescaleStorage
+		}
+	}
 	if st.Compact {
 		switch name {
 		case "nats_jetstream_storage":
@@ -1560,6 +1568,8 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 	if err != nil {
 		return nil, err
 	}
+	// Precedence layer 5 (size.go): a variable the operator states is theirs, not the preset's.
+	vars = operatorWinsOverSize(st, vars, rootdir)
 	p, err := planGated(ctx, tf, rootdir, vars, st.Instance)
 	if err != nil {
 		return nil, err

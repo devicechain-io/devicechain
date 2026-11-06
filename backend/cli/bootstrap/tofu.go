@@ -69,6 +69,8 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err != nil {
 		return err
 	}
+	// Precedence layer 5 (size.go): a variable the operator states is theirs, not the preset's.
+	instanceVars = operatorWinsOverSize(st, instanceVars, inst.rootdir)
 	defer func() {
 		if herr := hardenStateFiles(inst.rootdir); herr != nil && err == nil {
 			err = herr
@@ -640,6 +642,13 @@ func infraVars(st *State) []string {
 		)
 		// cert-manager and database backups are dropped by --compact --no-tls; see
 		// certManagerEnabled and databaseBackupsEnabled, which the emission above reads.
+	} else if p := sizeFor(st); p != nil {
+		// A size preset's broker, volumes and WAL allowance (size.go). A volume the instance
+		// already has is kept by volumeSize, as on the path below. instanceRootVars' callers
+		// drop any of these the operator states themselves.
+		for _, v := range p.tofuVars(st.LiveVolumes.JetStream, st.LiveVolumes.EventStore) {
+			vars = append(vars, v.Name+"="+v.Value)
+		}
 	} else {
 		// The full-size volumes are the roots' own defaults, so nothing is emitted for
 		// them — unless this instance already HAS volumes of another size. See

@@ -776,7 +776,7 @@ What needs action:
 - **Check the event store's free space before you upgrade.** On an existing instance, `dcctl upgrade` raises the event store's `max_wal_size` to a fifth of its volume (6.4 GiB on the default 32Gi, up from 1 GiB), and the write-ahead log may now grow that far on the data volume. The upgrade prints a notice when the value rises and warns when the volume has less free space than the new size. To keep the previous allowance, run `dcctl upgrade --event-store-max-wal-mib 1024`. See [Event store write-ahead log allowance](#v120-event-store-wal).
 - **`dcctl sim create` now refuses an existing tier that does not state a limit it was asked to hold.** With `--tier` naming a tier that already exists, `dcctl` only raises limits that are below what the scenario or `--tier-config` names, and it cannot see a default that the tier inherits. Until now a limit the tier left out was read as 0 and set to the floor, which could replace a larger value the tier inherited; the tier is now refused, naming the missing key. Add the key to the tier (the `updateTenantTier` mutation on the user-management admin API), or choose a tier that states it. A `dcctl sim create --tier-config` run on `v1.1` could write such keys into an existing tier, as the `v1.1.0` notes describe; from this release it does not. A `null` limit in `--tier-config` is refused too; it used to be read as 0. See [Other changes](#v120-other-changes).
 - **Know that `dcctl upgrade` can now fail with `upgrade incomplete` after the broker rolls.** Once the broker servers are ready, the upgrade re-reads their volume claims for up to two minutes and fails if one still has less capacity than it requests, because the broker's file-store ceiling follows the request. Finish or revert the volume resize (`kubectl -n <namespace> describe pvc`) and run `dcctl upgrade` again. See [Other changes](#v120-other-changes).
-
+- **Nothing needs doing for the new `--size` option.** `dcctl bootstrap --size perf-12k` applies a measured high-throughput sizing, and `dcctl install --size compact` is the same as `--compact`, which stays. An instance that names no size renders exactly what it did before. See [Size presets](#v120-size-presets).
 
 #### Detection shards run in parallel {#v120-detect-shards}
 
@@ -884,6 +884,15 @@ The event store's `max_wal_size` is now a fifth of its volume, never below Postg
 - **`dcctl upgrade` says when the value rises.** The plan prints one line with the old and new size. It also reads the free space on the event store's volume and prints a warning when that is below the new size, or when it could not read it. It does not refuse: the log reaches the ceiling only under stress, and the remedy is one flag.
 - **To keep a smaller allowance**, give the upgrade `--event-store-max-wal-mib`, for example `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` for the previous 1 GiB. `--dry-run` shows the effect first. The value is kept by later upgrades when you leave the flag out, and `--event-store-max-wal-mib 0` returns to the derived value. `--event-store-checkpoint-timeout` sets the checkpoint interval the same way (default `15min`). Both are applied by reload, with no restart of the event store. `dcctl` records them in `zz-dcctl-event-store.auto.tfvars.json` beside the instance's OpenTofu state, on the machine that runs the upgrade; see [Event store tuning](./tuning-an-instance.md).
 - **If you manage the instance's OpenTofu yourself**, set `timescale_max_wal_size_mib` and `timescale_checkpoint_timeout` as before.
+
+#### Size presets {#v120-size-presets}
+
+`dcctl bootstrap` has a new `--size` option, and `dcctl install` accepts `--size base` and `--size compact`. Nothing changes unless you pass it: an instance without a size renders byte for byte what `v1.1.0` rendered, and `--compact` works exactly as before.
+
+- **`perf-12k` is the first size.** It sets replicas, CPU and memory for the five busy services, the broker's requests and memory limit, the JetStream and event store volumes and the event store's write-ahead log allowance, as measured on one cluster sustaining 12,000 events a second with event envelopes on. The numbers are in [Choosing a size](./sizing.md#perf-12k).
+- **It is recorded on the instance** (`spec.size` on the declaration, empty for base) and every `dcctl upgrade` applies it again. A release that retunes a size changes the instances recorded with it on their next upgrade, and says so here.
+- **Your own settings win.** Order, lowest to highest: chart defaults, the size, what `dcctl` works out itself, your `--values` overlay, then an OpenTofu variable you state yourself. See [Which value wins](./sizing.md#precedence).
+- **It is not a switch for anything else.** A size does not turn event envelopes or the fail-closed MQTT acknowledgement on, and with `--ha` it prints that the combination has not been measured.
 
 #### Other changes in this release {#v120-other-changes}
 

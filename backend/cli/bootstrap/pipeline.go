@@ -156,6 +156,10 @@ type State struct {
 	// Compact applies the small-footprint preset (compactSizing). The cluster's
 	// setting, read back from the install record like NoMonitoring.
 	Compact bool
+	// Size is the non-compact size preset ("perf-12k"), or "" for base. A compact cluster's size is
+	// Compact, so this stays empty there. The instance's own setting: recorded on the declaration
+	// (spec.size) and re-applied by every upgrade. See size.go.
+	Size string
 	// HA applies the ADR-020 messaging topology (haTopology). The cluster's setting,
 	// read back from the install record like NoMonitoring.
 	HA bool

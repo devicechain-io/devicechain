@@ -60,6 +60,7 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 		Profile:       st.Profile,
 		HA:            st.HA,
 		Compact:       st.Compact,
+		Size:          recordedSize(st),
 		Monitoring:    !st.NoMonitoring,
 		CNPG:          !st.NoCNPG,
 		Host:          host,
@@ -111,6 +112,9 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 	if spec.Provider == "" {
 		return fmt.Errorf("the instance declaration names no provider, so nothing could later " +
 			"tell which kind of cluster this instance lives in")
+	}
+	if err := validateRecordedSize(spec); err != nil {
+		return err
 	}
 	if spec.RestoredAt != nil && !spec.Restored {
 		return fmt.Errorf("the instance declaration carries a restore timestamp and says the " +

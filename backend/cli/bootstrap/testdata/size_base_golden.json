@@ -1,0 +1,633 @@
+{
+  "compact": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": false
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "kvCacheMaxBytes": 4194304,
+              "kvStateMaxBytes": 16777216,
+              "mqttQoS2StoreMaxBytes": 8388608,
+              "mqttStoreMaxBytes": 33554432,
+              "streamDesignRate": 50,
+              "streamMaxBytes": 67108864,
+              "streamMaxBytesCold": 16777216,
+              "streamReplicas": 1,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": false
+      },
+      "profile": "default",
+      "resources": {
+        "requests": {
+          "cpu": "25m",
+          "memory": "64Mi"
+        }
+      },
+      "useMeasuredRequests": false
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=false",
+      "nats_cluster_replicas=1",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "enable_monitoring=false",
+      "monitoring_unscraped_control_plane=[]",
+      "enable_cert_manager=false",
+      "enable_database_backups=false",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_jetstream_storage=3Gi",
+      "postgres_storage=2Gi",
+      "timescale_storage=4Gi",
+      "backup_object_store_storage=20Gi",
+      "nats_prom_exporter=false",
+      "nats_cpu_request=25m",
+      "nats_memory_request=64Mi",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "default": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": true
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "streamDesignRate": 1000,
+              "streamReplicas": 1,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": true
+      },
+      "profile": "default"
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=false",
+      "nats_cluster_replicas=1",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "monitoring_unscraped_control_plane=[]",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "default-live-vo": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": true
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "streamDesignRate": 1000,
+              "streamReplicas": 1,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": true
+      },
+      "profile": "default"
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=false",
+      "nats_cluster_replicas=1",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "monitoring_unscraped_control_plane=[]",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "timescale_storage=64Gi",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "full": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": true
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "streamDesignRate": 1000,
+              "streamReplicas": 1,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": true
+      },
+      "profile": "full"
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=false",
+      "nats_cluster_replicas=1",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "monitoring_unscraped_control_plane=[]",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "ha": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 2
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": true
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "streamDesignRate": 1000,
+              "streamReplicas": 3,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": true
+      },
+      "profile": "default"
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=true",
+      "nats_cluster_replicas=3",
+      "event_management_replicas=2",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "monitoring_unscraped_control_plane=[]",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "ha-compact": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": false
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "kvCacheMaxBytes": 4194304,
+              "kvStateMaxBytes": 16777216,
+              "mqttQoS2StoreMaxBytes": 8388608,
+              "mqttStoreMaxBytes": 33554432,
+              "streamDesignRate": 50,
+              "streamMaxBytes": 67108864,
+              "streamMaxBytesCold": 16777216,
+              "streamReplicas": 3,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": false
+      },
+      "profile": "default",
+      "resources": {
+        "requests": {
+          "cpu": "25m",
+          "memory": "64Mi"
+        }
+      },
+      "useMeasuredRequests": false
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=true",
+      "nats_cluster_replicas=3",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "enable_monitoring=false",
+      "monitoring_unscraped_control_plane=[]",
+      "enable_cert_manager=false",
+      "enable_database_backups=false",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_jetstream_storage=3Gi",
+      "postgres_storage=2Gi",
+      "timescale_storage=4Gi",
+      "backup_object_store_storage=20Gi",
+      "nats_prom_exporter=false",
+      "nats_cpu_request=25m",
+      "nats_memory_request=64Mi",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "ingest-only": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": true
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "streamDesignRate": 1000,
+              "streamReplicas": 1,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": true
+      },
+      "profile": "ingest-only"
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=false",
+      "nats_cluster_replicas=1",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "monitoring_unscraped_control_plane=[]",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  },
+  "telemetry": {
+    "helmValues": {
+      "functionalAreas": {
+        "event-management": {
+          "replicas": 1
+        }
+      },
+      "image": {
+        "registry": "ghcr.io/devicechain-io",
+        "tag": "v0.0.0-test"
+      },
+      "ingress": {
+        "controller": "gateway",
+        "enabled": true,
+        "host": "localhost",
+        "tls": {
+          "enabled": true
+        }
+      },
+      "instance": {
+        "config": {
+          "infrastructure": {
+            "nats": {
+              "auth": {
+                "calloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+                "password": "test-service-password",
+                "user": "dc_service"
+              },
+              "streamDesignRate": 1000,
+              "streamReplicas": 1,
+              "tls": {
+                "ca": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+                "enabled": true
+              }
+            },
+            "secrets": {
+              "rootKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }
+          }
+        },
+        "id": "dctest"
+      },
+      "metrics": {
+        "cnpgNamespace": "",
+        "databaseBackupSnapshots": false,
+        "databaseBackups": false,
+        "databaseNamespace": "dc-system",
+        "enabled": true
+      },
+      "profile": "telemetry"
+    },
+    "infraVars": [
+      "kubeconfig_context=kind-dctest",
+      "timescale_database=dctest",
+      "instance_namespace=dci-dctest",
+      "nats_ca_cert_pem=-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+      "nats_server_image_repository=ghcr.io/devicechain-io/dc-nats-server",
+      "nats_server_image_tag=v0.0.0-test",
+      "ha=false",
+      "nats_cluster_replicas=1",
+      "event_management_replicas=1",
+      "monitoring_slim=true",
+      "traefik_service_type=NodePort",
+      "nats_mqtt_node_port=31883",
+      "monitoring_unscraped_control_plane=[]",
+      "database_node_selector={}",
+      "database_tolerations=[]",
+      "nats_enable_auth=true",
+      "nats_callout_issuer_public=AtestissuerpublicvaluefortestingONLY",
+      "nats_service_password_bcrypt=",
+      "nats_mqtt_capable_users=[\"dc-event-sources-g1\",\"dc_service\"]"
+    ]
+  }
+}

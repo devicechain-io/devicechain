@@ -1143,6 +1143,12 @@ func stepReport(ctx context.Context, st *State) error {
 	if st.Compact {
 		fmt.Printf("  %s %s\n", color.WhiteString("Footprint:"), color.GreenString(compact.summary()))
 	}
+	if p := sizeFor(st); p != nil {
+		fmt.Printf("  %s %s\n", color.WhiteString("Size:"), color.GreenString(p.summary()))
+		for _, n := range sizeNotices(st, overlayEnvelopesOn(st.ValuesOverlay)) {
+			fmt.Printf("  %s %s\n", color.WhiteString("Note:"), color.YellowString(n))
+		}
+	}
 	// The messaging topology, and only when it is the replicated one. Printed from
 	// the SAME haTopology both tools rendered from, so the summary cannot describe a
 	// topology the instance does not have — and printed at all because "is this
