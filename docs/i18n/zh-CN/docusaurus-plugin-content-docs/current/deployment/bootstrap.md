@@ -303,6 +303,13 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **OpenTofu 1.9 或更新版本**（`tofu`，也支持 `terraform` 1.9 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
 - **`kubectl`、`helm`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
 - **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
+- **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
 - **`ko`** 仅 `--build` 源码构建需要，缺少时预检警告而非失败。
 
 ## 镜像来源 {#image-source}
