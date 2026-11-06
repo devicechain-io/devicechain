@@ -68,6 +68,11 @@ type Config struct {
 	Client *http.Client
 	// Gateways is how many gateways report each uplink (default 2).
 	Gateways int
+	// Binary plays a network server with no codec for the device: the uplink carries only the raw
+	// application frame (BinaryFrame, on BinaryFPort) and no decoded object, so what is stored is
+	// whatever the device profile's payload decoder (BinaryDecoder) makes of the frame. Without a
+	// published decoder the platform stores nothing from such an uplink.
+	Binary bool
 }
 
 // Summary is what a run did, printed as one line of JSON.
@@ -213,13 +218,13 @@ func Build(c Config, runID, devEUI string, n int, at time.Time) (Request, error)
 	}
 	switch c.NS {
 	case ChirpStack:
-		body, err := chirpstackUplink(runID, devEUI, n, at, r, gateways)
+		body, err := chirpstackUplink(runID, devEUI, n, at, r, gateways, c.Binary)
 		if err != nil {
 			return Request{}, err
 		}
 		return Request{URL: strings.TrimRight(c.URL, "/") + "?event=up", ContentType: "application/json", Body: body}, nil
 	case TTS:
-		body, err := ttsUplink(devEUI, n, at, r, gateways)
+		body, err := ttsUplink(devEUI, n, at, r, gateways, c.Binary)
 		if err != nil {
 			return Request{}, err
 		}
@@ -283,12 +288,22 @@ func uuidOf(parts ...string) string {
 
 func gatewayID(i int) string { return fmt.Sprintf("0016c001ff10%04x", i+1) }
 
-func chirpstackUplink(runID, devEUI string, n int, at time.Time, r Readings, gateways int) ([]byte, error) {
+// payloadOf is the application frame and port of an uplink, and the decoded object a network
+// server with a codec would add (nil in binary mode).
+func payloadOf(devEUI string, n int, r Readings, binary bool) (fr []byte, port int, object map[string]any) {
+	if binary {
+		return BinaryFrame(r), BinaryFPort, nil
+	}
+	return frame(devEUI, n), 1, r.decoded()
+}
+
+func chirpstackUplink(runID, devEUI string, n int, at time.Time, r Readings, gateways int, binary bool) ([]byte, error) {
+	fr, port, object := payloadOf(devEUI, n, r, binary)
 	rx := make([]map[string]any, gateways)
 	for i := range rx {
 		rx[i] = map[string]any{"gatewayId": gatewayID(i), "rssi": -80 - 7*i, "snr": 8.5 - 2.5*float64(i)}
 	}
-	return json.Marshal(map[string]any{
+	msg := map[string]any{
 		"deduplicationId": uuidOf("cs", runID, devEUI, fmt.Sprint(n)),
 		"time":            at.UTC().Format(time.RFC3339Nano),
 		"deviceInfo": map[string]any{
@@ -299,15 +314,19 @@ func chirpstackUplink(runID, devEUI string, n int, at time.Time, r Readings, gat
 		"adr":       true,
 		"dr":        5,
 		"fCnt":      n,
-		"fPort":     1,
+		"fPort":     port,
 		"confirmed": false,
-		"data":      base64.StdEncoding.EncodeToString(frame(devEUI, n)),
-		"object":    r.decoded(),
+		"data":      base64.StdEncoding.EncodeToString(fr),
 		"rxInfo":    rx,
-	})
+	}
+	if object != nil {
+		msg["object"] = object
+	}
+	return json.Marshal(msg)
 }
 
-func ttsUplink(devEUI string, n int, at time.Time, r Readings, gateways int) ([]byte, error) {
+func ttsUplink(devEUI string, n int, at time.Time, r Readings, gateways int, binary bool) ([]byte, error) {
+	fr, port, object := payloadOf(devEUI, n, r, binary)
 	rx := make([]map[string]any, gateways)
 	for i := range rx {
 		rx[i] = map[string]any{
@@ -316,7 +335,7 @@ func ttsUplink(devEUI string, n int, at time.Time, r Readings, gateways int) ([]
 		}
 	}
 	stamp := at.UTC().Format(time.RFC3339Nano)
-	return json.Marshal(map[string]any{
+	msg := map[string]any{
 		"end_device_ids": map[string]any{
 			"device_id":       "sim-" + strings.ToLower(devEUI),
 			"application_ids": map[string]any{"application_id": "sim"},
@@ -327,14 +346,17 @@ func ttsUplink(devEUI string, n int, at time.Time, r Readings, gateways int) ([]
 		"correlation_ids": []string{fmt.Sprintf("as:up:SIM%d", n)},
 		"received_at":     stamp,
 		"uplink_message": map[string]any{
-			"f_port":          1,
-			"f_cnt":           n,
-			"frm_payload":     base64.StdEncoding.EncodeToString(frame(devEUI, n)),
-			"decoded_payload": r.decoded(),
-			"rx_metadata":     rx,
-			"received_at":     stamp,
+			"f_port":      port,
+			"f_cnt":       n,
+			"frm_payload": base64.StdEncoding.EncodeToString(fr),
+			"rx_metadata": rx,
+			"received_at": stamp,
 		},
-	})
+	}
+	if object != nil {
+		msg["uplink_message"].(map[string]any)["decoded_payload"] = object
+	}
+	return json.Marshal(msg)
 }
 
 // ParseDevEUIs splits a comma-separated list, dropping blanks and repeats.

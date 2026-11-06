@@ -39,7 +39,7 @@ Por HTTP, la credencial viaja en el cuerpo del evento (consulta [Conexión de un
 {
   "device": "sensor-001",
   "credentialType": "ACCESS_TOKEN",
-  "credentialId": "5f989616-2a0d-4160-8ae1-da5fad2898b2",
+  "credentialId": "<your-generated-credential-id>",
   "eventType": "Measurement",
   "payload": { "entries": [ { "measurements": { "temperature": "21.5" } } ] }
 }
@@ -159,7 +159,7 @@ mutation {
     token: "b2e1…",                 # un token de credencial nuevo y único
     deviceToken: "sensor-001",
     credentialType: "ACCESS_TOKEN",
-    credentialId: "5f989616-2a0d-4160-8ae1-da5fad2898b2",
+    credentialId: "<your-generated-credential-id>",
     enabled: true
   }) { id token credentialType credentialId enabled }
 }

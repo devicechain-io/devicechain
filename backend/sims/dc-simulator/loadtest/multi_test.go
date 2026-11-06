@@ -299,3 +299,19 @@ func TestRunManyEnforcesTheLaunchedCount(t *testing.T) {
 		t.Fatalf("five reports of six launched passed because Expect said five:\n%s", m.Human())
 	}
 }
+
+// An explicit --expect that disagrees with the handshakes given is refused before anything starts.
+func TestCheckLaunchCount(t *testing.T) {
+	if err := CheckLaunchCount(6, 5); err == nil {
+		t.Fatal("--expect 6 with five handshakes was accepted; RunMany would have reported 5 of 5")
+	}
+	if err := CheckLaunchCount(5, 6); err == nil {
+		t.Fatal("--expect 5 with six handshakes was accepted")
+	}
+	if err := CheckLaunchCount(5, 5); err != nil {
+		t.Fatalf("a matching count was refused: %v", err)
+	}
+	if err := CheckLaunchCount(0, 5); err != nil {
+		t.Fatalf("an unset expectation was refused: %v", err)
+	}
+}
