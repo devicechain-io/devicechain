@@ -189,6 +189,8 @@ const sidebars: SidebarsConfig = {
             'guides/importing-devices',
             'guides/migrating-from-another-platform',
             'guides/inbound-integrations',
+            'guides/payload-decoders',
+            'guides/lorawan-uplink-to-alarm',
             'guides/why-isnt-my-data-showing-up',
             'guides/managing-assignments',
           ],
