@@ -990,7 +990,7 @@ El error por demasiados intentos no lleva código, igual que la [espera entre in
 ## Límites de las solicitudes {#request-limits}
 
 Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,
-antes de ejecutar nada de ella. La única excepción es el límite de comprobaciones de credenciales, que
+antes de ejecutar nada de ella. Las excepciones son el límite de tiempo de ejecución, que cancela el trabajo ya en curso cuando vence el plazo, y el límite de comprobaciones de credenciales, que
 se aplica mientras la solicitud se ejecuta (consulta
 [Comprobaciones de credenciales por petición](#credential-checks-per-request)).
 
@@ -1008,8 +1008,8 @@ defecto: ninguno puede desactivarse.
 | Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
 | Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña de una misma petición que superan este número (consulta [más abajo](#credential-checks-per-request)). |
 
-Salvo con el límite del cuerpo y el de comprobaciones de credenciales, una solicitud rechazada recibe
-HTTP 200 con una sola entrada en `errors`, sin `data` y sin haber ejecutado nada. El límite de
+Salvo con el límite del cuerpo, el de tiempo de ejecución y el de comprobaciones de credenciales, una solicitud rechazada recibe
+HTTP 200 con una sola entrada en `errors`, sin `data` y sin haber ejecutado nada. Una solicitud cancelada al vencer el plazo de ejecución ya había empezado, así que la respuesta lleva un error por el trabajo interrumpido. El límite de
 comprobaciones de credenciales rechaza solo las comprobaciones que lo superan, cada una con su propio
 error, y el resto de la solicitud se ejecuta. El rechazo por campos raíz lleva `extensions.code` con
 el valor `TOO_MANY_ROOT_FIELDS`:

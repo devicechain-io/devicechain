@@ -145,9 +145,9 @@ openssl s_client -connect mqtt.acme.example.com:8883 \
 # 2. 设备可以连接并发布
 mosquitto_pub --cafile instance-ca.crt \
   -h mqtt.acme.example.com -p 8883 \
-  -i 'devicechain:acme:sensor-001' \
+  -i 'acme:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t 'devicechain/acme/devices/sensor-001/events' \
+  -t 'acme/acme/devices/sensor-001/events' \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
