@@ -16,7 +16,7 @@ On Windows pass a Windows path to `--out` (`C:/...`): Git Bash with `MSYS_NO_PAT
 means `C:\c\...`. The recorder refuses `/c/...`, a bare `/c` and `/cygdrive/...`.
 
 Exit status: `0` all shots recorded, `1` a shot failed (screenshot written, the rest still run), `2` the shot list or setup is wrong,
-`3` the sign-in password appeared in a recorded page (the run stops, no clip and no screenshot is kept).
+`3` the sign-in password appeared in a recorded page, or a password field was on screen without its blur (the run stops, no clip and no screenshot is kept).
 A password shorter than 4 characters is refused up front (exit 2): the guard cannot be trusted with it.
 
 ## Output
@@ -41,11 +41,13 @@ reduce_motion: true              # default true: prefers-reduced-motion + CSS th
 locale: en-US                    # default; timezone: UTC default (fixed so dates in the console do not move between machines)
 cursor: {highlight: true}        # the injected pointer + click ring
 login:                           # where to READ the credential; a shot list never carries one
-  mode: sim                      # sim | superuser-secret | env
+  mode: sim                      # sim | superuser-secret | env | none
   sim: abt-1000-h                #   sim: ~/.devicechain/sims/<sim>.json (simEmail, simPassword)
   # superuser-secret: {instance: guide, email: superuser@devicechain.local, [namespace], [secret], [kube_context]}
   #   reads Secret dci-<instance>/dci-<instance>-superuser key password with kubectl (honours KUBECONFIG)
   # env: {email_env: DC_EMAIL, password_env: DC_PASSWORD}
+  # none: nothing else. The recorder reads no credential and signs in to nothing; shots start signed out (an invitation link, /login,
+  #   an SSO return). A `signin` step is refused with it (there is no credential to sign in with). Unknown modes are refused.
 shots:
   - id: profile-metrics          # lowercase kebab-case, unique; the clip's file name
     title: ...                   # free text, copied to the manifest
@@ -89,6 +91,43 @@ One verb per step. Optional keys on any step: `timeout_s` (default 20), `pause_m
 | `wait` | seconds | a hold |
 | `scroll` | `{by: 600}` or `{to: target}` | smooth wheel scroll |
 | `mark` | `name` | records a named time in the manifest and does nothing else |
+| `signin` | `dash` | signs in to `/dash` through its own form, see below. `dash` is the only target; anything else is refused by `check` |
+
+### Signing in to /dash
+
+`/dash` keeps its session in the page's memory (not cookies or storage), so the recorder's console sign-in does not carry over; a shot that
+starts on `/dash/` lands on its sign-in form. `signin: dash` fills that form (`data-shot` `dash-email`, `dash-password`,
+`dash-signin-submit`) from the `login` source, in the shot's own page, on every attempt, and waits for the form to go. The credential is read
+in-process exactly as for the console and never printed; a shot list still carries none. It needs a `login` mode other than `none`.
+
+```yaml
+  - id: c13-dash
+    start: /dash/
+    mask: [{shot: dash-email}]           # the email shows in the form when it is typed on camera; the password never needs a mask entry
+    steps:
+      - signin: dash                     # TRIMMED (default): runs before the clip starts, so no frame of it exists. Must be the first step.
+      - wait_for: {shot: dash-load}
+  # or, to show a person signing in:
+      - signin: dash
+        on_camera: true                  # recorded: cursor glides, email then password typed at human pace (pace_ms), then Sign in. Any position.
+```
+
+At most one `signin` per shot. Its password is protected the same way as every other secret, and the guard cannot be switched off for it:
+
+- **The field must be masked before the first character.** Every visible `input[type=password]` (shadow DOM included) must carry a blur,
+  which the recorder's stylesheet puts on all of them. If a page defeats it (or the stylesheet is missing) the run ends with exit 3 and no
+  clip, before anything is typed. The same check runs on **every** shot, `login: none` included, and on every guard pass: a signed-out shot
+  that is redirected to a password page whose blur was defeated also ends with exit 3.
+- The field must really be `type=password`; a page that turns it into plain text is exit 3 (the per-change report compares every other input
+  value with the password). The one thing the report skips is the `value` attribute a controlled React field mirrors onto a password input, which
+  draws bullets and is covered by the blur check above.
+- The whole guard (password in text, attribute, input value, title; the HTTP and GraphQL error checks) runs before and after **each typed
+  character** of an on-camera sign-in.
+- A refused credential, a second factor or a tenant picker leaves the form on screen: the shot fails (exit 1) with fixed text and no clip.
+  Only accounts with a single membership and no second factor can sign in unattended.
+- A `type` step marked `secret: true` also registers its text with the guard from the moment it is typed (it must be 4+ characters), so a
+  signed-out shot that types a one-time code or a new password is covered by the same per-change leak check. Typing is not the whole story:
+  mask what the page shows afterwards.
 
 ### Masks (secret regions)
 
@@ -107,7 +146,7 @@ mask:
   - {selector: ".token", required: false}               # required defaults to true
 ```
 
-`input[type=password]` is always blurred. A **required mask that matched nothing during the shot fails the shot** (a mask that silently
+`input[type=password]` is always blurred, and a visible one that is not (a page overriding the blur) ends the run, see above. A **required mask that matched nothing during the shot fails the shot** (a mask that silently
 misses is a leak); so does a mask stylesheet that has gone missing from the page.
 
 ## Fail-loud checks (all of these end the shot; none leaves a clip)
@@ -144,8 +183,14 @@ trim it out.
 `python3 -m unittest -v test_video_capture` (pure functions: schema validation, targets, masks, timeline, credentials, scrubbing); no browser,
 this is what CI runs.
 
-`DC_BROWSER_TESTS=1 <venv python> -m unittest -v test_browser_paths` runs the real recorder against a throwaway local web server and judges each
+`cd hack/video-capture && DC_BROWSER_TESTS=1 <venv python> -m unittest -v test_browser_paths` (maintainer-run; about 3 minutes, one Chromium
+per case; run it whenever `video_capture.py` changes) runs the real recorder against a throwaway local web server and judges each
 negative control by what it leaves behind: a planted password (a transient toast, an attribute) is exit 3 with no mp4 and no screenshot; a
 required mask that matches nothing, a 404 start page, a 500 fetch and a GraphQL `errors` body are exit 1 with no mp4; a short password is exit 2;
 a good shot is exit 0 with both mask kinds. It needs Chromium and ffmpeg (`setup.sh`), so CI does not run it. To see the leak tests fail, make
 `_on_text` a no-op and `password_leaked` return False: both exit-3 tests then fail with exit 0 and a clip kept.
+
+The sign-in controls (`login: none`, `signin: dash`): a good signed-out shot exits 0 and the server counts **no** login POST; a signed-out shot
+redirected to a password page with the blur defeated, and a `/dash` sign-in (on camera and trimmed) on a page that defeats the password blur, are exit 3 with no mp4 and
+no screenshot; a `/dash` whose sign-in answers 401 is exit 1 with no mp4; a good `/dash` sign-in, on camera and trimmed, is exit 0 and the password is in no output file. To see
+them fail, make the `pr["bare"]` test in `guard` unreachable (`if False and pr["bare"]`): the three exit-3 controls then exit 0 and keep a clip.

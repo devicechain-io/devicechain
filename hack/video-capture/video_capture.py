@@ -41,11 +41,12 @@ from urllib.parse import urlsplit
 
 EXIT_OK, EXIT_SHOT_FAILED, EXIT_BAD_SETUP, EXIT_SECRET_LEAK = 0, 1, 2, 3
 
-STEP_KINDS = ("goto", "click", "type", "press", "hover", "wait_for", "wait", "scroll", "mark")
+STEP_KINDS = ("goto", "click", "type", "press", "hover", "wait_for", "wait", "scroll", "mark", "signin")
+SIGNIN_TARGETS = ("dash",)  # what a `signin` step can sign in to; anything else is refused at `check`
 TARGET_KEYS = ("testid", "shot", "role", "name", "text", "label", "placeholder", "selector", "nth", "exact")
 SHOT_KEYS = ("id", "title", "line", "start", "steps", "mask", "min_s", "max_s", "trim", "retries", "reduce_motion")
 TOP_KEYS = ("version", "video", "base_url", "viewport", "fps", "login", "cursor", "reduce_motion", "locale", "timezone", "shots")
-LOGIN_MODES = ("sim", "superuser-secret", "env")
+LOGIN_MODES = ("sim", "superuser-secret", "env", "none")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 ANCHOR_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")  # a data-shot / data-testid value: no quote, bracket or backslash can reach a selector
 
@@ -127,7 +128,7 @@ def validate_step(step, where):
         return [f"{where}: a step has exactly one verb of {', '.join(STEP_KINDS)} (got {verbs or list(step)})"]
     verb = verbs[0]
     body = step[verb]
-    extra = {"timeout_s", "label", "pause_ms", "pace_ms", "secret", "settle_s"}
+    extra = {"timeout_s", "label", "pause_ms", "pace_ms", "secret", "settle_s", "on_camera"}
     for k in step:
         if k != verb and k not in extra:
             errs.append(f"{where}: unknown step key '{k}'")
@@ -163,9 +164,34 @@ def validate_step(step, where):
     elif verb == "mark":
         if not isinstance(body, str) or not body:
             errs.append(f"{where}: mark takes a name")
+    elif verb == "signin":
+        if body not in SIGNIN_TARGETS:
+            errs.append(f"{where}: signin takes one of {', '.join(SIGNIN_TARGETS)} (got {body!r})")
+    if "on_camera" in step:
+        if verb != "signin":
+            errs.append(f"{where}: on_camera belongs to a signin step")
+        elif not isinstance(step["on_camera"], bool):
+            errs.append(f"{where}: on_camera is true or false")
     for k in ("timeout_s", "pause_ms", "pace_ms", "settle_s"):
         if k in step and not (_is_num(step[k]) and step[k] >= 0):
             errs.append(f"{where}: {k} is a non-negative number")
+    return errs
+
+
+def validate_signin_steps(steps, where, login):
+    """A signin step reads the login source (so `mode: none` cannot carry one), a shot has at most one, and a trimmed (off-camera) one runs
+    before the clip starts, so it must be the first step and leave another step to record."""
+    errs = []
+    idx = [j for j, st in enumerate(steps) if isinstance(st, dict) and "signin" in st]
+    if not idx:
+        return errs
+    if not isinstance(login, dict) or login.get("mode") in (None, "none"):
+        errs.append(f"{where}: a signin step needs a login source (login.mode sim, superuser-secret or env), not 'none': the credential has to come from somewhere")
+    if len(idx) > 1:
+        errs.append(f"{where}: a shot has at most one signin step")
+    for j in idx:
+        if not steps[j].get("on_camera", False) and (j != 0 or len(steps) < 2):
+            errs.append(f"{where}.steps[{j}]: a signin that is not on_camera runs before recording starts, so it is the first step and another step must follow")
     return errs
 
 
@@ -215,12 +241,16 @@ def validate(doc):
     if not isinstance(login, dict) or login.get("mode") not in LOGIN_MODES:
         errs.append(f"login.mode is one of {', '.join(LOGIN_MODES)}")
     else:
-        need = {"sim": ("sim",), "superuser-secret": ("instance", "email"), "env": ("email_env", "password_env")}[login["mode"]]
+        need = {"sim": ("sim",), "superuser-secret": ("instance", "email"), "env": ("email_env", "password_env"), "none": ()}[login["mode"]]
         for k in need:
             if not login.get(k):
                 errs.append(f"login.{k} is required for mode {login['mode']}")
+        if login["mode"] == "none":
+            allowed = ("mode",)
+        else:
+            allowed = ("mode", "sim", "instance", "email", "email_env", "password_env", "namespace", "secret", "kube_context")
         for k in login:
-            if k not in ("mode", "sim", "instance", "email", "email_env", "password_env", "namespace", "secret", "kube_context"):
+            if k not in allowed:
                 errs.append(f"unknown login key '{k}'" + (": a shot list never carries a secret; name where to read it from" if k in ("password", "pass", "token") else ""))
     shots = doc.get("shots")
     if not isinstance(shots, list) or not shots:
@@ -250,6 +280,7 @@ def validate(doc):
         else:
             for j, st in enumerate(steps):
                 errs += validate_step(st, f"{w}.steps[{j}]")
+            errs += validate_signin_steps(steps, w, login)
         masks = s.get("mask", []) or []
         if not isinstance(masks, list):
             errs.append(f"{w}: mask is a list")
@@ -437,6 +468,8 @@ def kubectl_secret_args(login):
 def load_credentials(login, env=None, run=subprocess.run, home=None):
     env = os.environ if env is None else env
     mode = login["mode"]
+    if mode == "none":
+        return "", ""  # a shot list that starts signed out reads no credential at all
     if mode == "sim":
         path = os.path.join(home or os.path.expanduser("~"), ".devicechain", "sims", login["sim"] + ".json")
         try:
@@ -588,7 +621,11 @@ MASK_JS = """
   };
 
   // ---- the per-change secret report
-  const attrs = (el) => { let o = []; for (const a of el.attributes || []) o.push(a.value); return o.join(' '); };
+  // A controlled React password field mirrors what is typed into its `value` attribute. A password-type input draws bullets, never that
+  // value, and its blur is enforced separately (the probe), so the mirror is not reported; if the field ever stops being type=password the
+  // sweep below reads its value like any other input and the run ends.
+  const pwValueAttr = (el, name) => name === 'value' && el.matches && el.matches('input[type=password]');
+  const attrs = (el) => { let o = []; for (const a of el.attributes || []) if (!pwValueAttr(el, a.name)) o.push(a.value); return o.join(' '); };
   const inLayer = (n) => layer && (n === layer || (n.nodeType === 1 || n.parentElement) && layer.contains(n.nodeType === 1 ? n : n.parentElement));
   new MutationObserver((muts) => {
     const out = [];
@@ -600,7 +637,7 @@ MASK_JS = """
           else out.push(n.nodeValue || '');
         });
       } else if (m.type === 'characterData') out.push(m.target.nodeValue || '');
-      else if (m.type === 'attributes') out.push(m.target.getAttribute(m.attributeName) || '');
+      else if (m.type === 'attributes') { if (!pwValueAttr(m.target, m.attributeName)) out.push(m.target.getAttribute(m.attributeName) || ''); }
     }
     send(out.join('\\n'));
     scan(document);
@@ -706,6 +743,8 @@ class Recorder:
         self.say = say or (lambda m: print(m, file=sys.stderr, flush=True))
         self.secrets = ()
         self.password = ""
+        self.signed_out = False   # login mode none: no credential, no sign-in, a start page on /login is allowed
+        self.typed_secrets = []   # `type` steps marked secret: guarded from the moment they are typed (the only credential a signed-out shot has)
         self.pos = (960, 540)
         self.state = None
         self.leaked = False       # set by the page's per-change report (see MASK_JS) the moment the password appears in any text or value
@@ -727,7 +766,8 @@ class Recorder:
         self.email, self.password = load_credentials(self.doc["login"])
         self.secrets = (self.email, self.password)
         _SECRETS[:] = [x for x in self.secrets if x]
-        if len(self.password) < 4:
+        self.signed_out = self.doc["login"]["mode"] == "none"
+        if not self.signed_out and len(self.password) < 4:
             raise CaptureError("the sign-in password is shorter than 4 characters, so the password guard cannot be trusted; refusing to record", EXIT_BAD_SETUP)
         os.makedirs(self.frames_root, exist_ok=True)
         self._pw = sync_playwright().start()
@@ -756,6 +796,9 @@ class Recorder:
     # -- sign-in (not recorded; the typed values live in the page's inputs only)
 
     def sign_in(self):
+        if self.signed_out:
+            self._say("login mode none: not signing in")
+            return
         ctx = self.new_context()
         p = ctx.new_page()
         try:
@@ -820,6 +863,68 @@ class Recorder:
             return ", ".join(f"{k}={v}" for k, v in body.items() if k in TARGET_KEYS and k not in ("nth", "exact")) or "target"
         return str(body)
 
+    def add_typed_secret(self, text):
+        if len(text) < 4:
+            raise CaptureError("a secret typed by a step is shorter than 4 characters, so the guard cannot be trusted with it; refusing to record", EXIT_BAD_SETUP)
+        if text not in self.typed_secrets:
+            self.typed_secrets.append(text)
+            self.secrets = (*self.secrets, text)
+            _SECRETS.append(text)
+
+    def click_here(self, page):
+        page.mouse.down()
+        page.wait_for_timeout(70)
+        page.mouse.up()
+
+    def signin_dash(self, page, clip, step, shot, masking):
+        """Signs in to /dash through its own form (data-shot dash-email, dash-password, dash-signin-submit). /dash keeps its session in the
+        page's memory, not in cookies, so the console's sign-in does not carry over and this runs in the shot's own page, every attempt.
+        The password field is checked masked BEFORE the first character goes in, and the whole guard runs after every character. Hidden
+        (the default) it runs before the clip starts, so no frame of it exists; on_camera it is recorded with human pacing."""
+        timeout = int(step.get("timeout_s", 30) * 1000)
+        card = page.locator('[data-shot="dash-signin"]')
+        email, pw = page.locator('[data-shot="dash-email"]'), page.locator('[data-shot="dash-password"]')
+        submit = page.locator('[data-shot="dash-signin-submit"]')
+        pause = int(step.get("pause_ms", 450))
+        pace = int(step.get("pace_ms", 85))
+        try:
+            card.wait_for(state="visible", timeout=timeout)
+            pw.wait_for(state="visible", timeout=timeout)
+        except Exception:  # noqa: BLE001
+            raise CaptureError("the /dash sign-in form is not on the page (is the start route /dash/ and the user signed out?)")
+        if pw.get_attribute("type") != "password":
+            raise SecretLeak("the /dash password field is not a password input, so what is typed into it would be drawn; no clip is kept")
+        self.guard(page, masking)  # a password field with no blur on it ends the shot here, before a character is typed
+        if step.get("on_camera"):
+            clip.note(step.get("label") or "sign in to /dash")
+            self.point(page, email, timeout, pause)
+            self.click_here(page)
+            for ch, d in zip(self.email, typing_delays(self.email, shot["id"] + ":email", pace)):
+                page.keyboard.type(ch)
+                page.wait_for_timeout(d)
+            self.point(page, pw, timeout, pause)
+            self.click_here(page)
+            for ch, d in zip(self.password, typing_delays(self.password, shot["id"] + ":password", pace)):
+                self.guard(page, masking)
+                page.keyboard.type(ch)
+                page.wait_for_timeout(d)
+            self.guard(page, masking)
+            self.point(page, submit, timeout, pause)
+            self.click_here(page)
+        else:
+            email.fill(self.email)
+            pw.fill(self.password)
+            self.guard(page, masking)
+            submit.click()
+        try:
+            card.wait_for(state="detached", timeout=timeout)
+        except Exception:  # noqa: BLE001 - the form is still there: the credential was refused, there is a second factor or a tenant to pick
+            self.guard(page, masking)
+            raise CaptureError("the /dash sign-in did not complete (the form is still showing: the credential was refused, or the user needs a second factor)")
+        page.wait_for_load_state("networkidle", timeout=timeout)
+        self.guard(page, masking)
+        page.wait_for_timeout(int(step.get("settle_s", 0.6) * 1000))
+
     def do_step(self, page, clip, step, shot):
         verb = next(k for k in STEP_KINDS if k in step)
         body = step[verb]
@@ -842,6 +947,8 @@ class Recorder:
                 page.mouse.up()
                 page.wait_for_timeout(int(step.get("settle_s", 0.5) * 1000))
         elif verb == "type":
+            if step.get("secret"):
+                self.add_typed_secret(body["text"])
             self.point(page, self.locator(page, body["into"]), timeout, pause)
             page.mouse.down()
             page.wait_for_timeout(70)
@@ -885,6 +992,8 @@ class Recorder:
             page.wait_for_timeout(300)
         elif verb == "mark":
             clip.note(body)
+        elif verb == "signin":
+            self.signin_dash(page, clip, step, shot, bool(shot.get("mask")))
 
     # -- one shot
 
@@ -916,8 +1025,12 @@ class Recorder:
 
     def _on_text(self, text):
         """called by the page for every changed text, attribute and input value: the password in any of them marks the run as leaked"""
-        if password_leaked(text, (self.password,)):
+        if password_leaked(text, self.guarded()):
             self.leaked = True
+
+    def guarded(self):
+        """every value the per-change report and the page probe compare with: the sign-in password and any secret a step has typed"""
+        return (self.password, *self.typed_secrets)
 
     def _on_response(self, resp):
         self.pending.append(resp)
@@ -949,6 +1062,10 @@ class Recorder:
         specs = shot.get("mask", []) or []
         reduce = shot.get("reduce_motion", self.doc.get("reduce_motion", True))
         self.leaked, self.pending = False, []
+        steps = shot["steps"]
+        hidden = None
+        if "signin" in steps[0] and not steps[0].get("on_camera"):
+            hidden, steps = steps[0], steps[1:]  # runs before the clip starts: no frame of it is ever kept
         ctx = page = td = None
         failed_at = "start"
         masking = bool(specs)
@@ -972,8 +1089,11 @@ class Recorder:
             page.wait_for_load_state("networkidle", timeout=30000)
             page.wait_for_timeout(800)
             self.guard(page, masking)
+            if hidden:
+                failed_at = "sign-in to /dash (not recorded)"
+                self.signin_dash(page, None, hidden, shot, masking)
             clip.begin()
-            for j, step in enumerate(shot["steps"]):
+            for j, step in enumerate(steps):
                 failed_at = f"step {j + 1} ({next(k for k in STEP_KINDS if k in step)})"
                 self.do_step(page, clip, step, shot)
                 self.guard(page, masking)
@@ -1018,7 +1138,16 @@ class Recorder:
       const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { texts.push(el.shadowRoot.textContent || ''); walk(el.shadowRoot); } } };
       walk(document);
       const css = document.getElementById('__dc_mask_css');
-      return {text: texts.join('\\n'), masked: !masking || !!(css && css.isConnected), title: document.title};
+      // a password field the viewer can see must carry a blur (the stylesheet puts one on every input[type=password]); a page that defeats
+      // it, or a mask that never loaded, would draw whatever the field shows
+      let bare = false;
+      const shown = (e) => { const cs = getComputedStyle(e); return e.getClientRects().length > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'; };
+      const scan = (root) => {
+        for (const e of root.querySelectorAll('input[type=password]')) if (shown(e) && !/blur\\(\\s*[1-9]/.test(getComputedStyle(e).filter)) bare = true;
+        for (const el of root.querySelectorAll('*')) if (el.shadowRoot) scan(el.shadowRoot);
+      };
+      scan(document);
+      return {text: texts.join('\\n'), masked: !masking || !!(css && css.isConnected), bare: bare, title: document.title};
     }"""
 
     def guard(self, page, masking=False):
@@ -1026,7 +1155,7 @@ class Recorder:
         mask stylesheet gone from a document that should have it, the sign-in page, or an unreadable page (fail closed, after one retry)."""
         if self.leaked:
             raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
-        if "/login" in page.url:
+        if "/login" in page.url and not self.signed_out:
             raise CaptureError("the console sent the shot to the sign-in (the session was not accepted)", unsafe=True)
         self.drain()
         for attempt in (1, 2):
@@ -1038,12 +1167,14 @@ class Recorder:
                     raise CaptureError("the page could not be inspected for secrets, so it is not safe to keep", unsafe=True)
                 page.wait_for_timeout(500)
         for k, pr in enumerate(probes):
-            if password_leaked(pr["text"] + "\n" + pr["title"], (self.password,)):
+            if password_leaked(pr["text"] + "\n" + pr["title"], self.guarded()):
                 raise SecretLeak("the sign-in password is visible in a recorded page; no clip is kept")
-        if self.leaked:
-            raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
+            if pr["bare"]:
+                raise SecretLeak("a password field is on screen without its blur mask (the page defeated it, or the stylesheet is missing); no clip is kept")
             if k == 0 and not pr["masked"]:  # the main document carries the init script; a child frame may be another origin
                 raise CaptureError("the mask stylesheet is missing from a recorded page, so it is not safe to keep", unsafe=True)
+        if self.leaked:
+            raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
 
     def fail_shot(self, page, shot, where, masking=False):
         """A screenshot of the failed page, taken only when the page passes the guard: a SecretLeak propagates, and any other guard failure
