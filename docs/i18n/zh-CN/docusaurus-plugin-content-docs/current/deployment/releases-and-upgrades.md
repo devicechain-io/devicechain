@@ -521,6 +521,7 @@ dcctl bootstrap local devicechain
 - **检查是否有客户端为本实例不提供的资源申请令牌。** 默认情况下，本版本会统计这类请求以及使用这些令牌的 API 调用，但一律不拒绝。`v1.3` 默认拒绝它们。`infrastructure.tokenAudience.enforcement: observe` 可以在那一个次版本内保留本版本的行为，`v1.4` 会在启动时以及在 chart 的 values schema 中拒绝 `observe`。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
+- **请知悉：滚动升级期间重启的 `v1.1` Pod 将无法启动。**实例配置现在带有 `infrastructure.tokenAudience`，而 `v1.1` 的服务在启动时会拒绝它不认识的键。在配置变更之后、滚动替换它之前被重新调度、驱逐或重启的 `v1.1` Pod，会一直无法启动，直到被 `v1.2` 的 Pod 替换，因此请让滚动升级持续进行，不要中途暂停。已经在运行的 Pod 继续运行。参见[令牌按其资源校验](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 - **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
@@ -529,6 +530,8 @@ dcctl bootstrap local devicechain
 - **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
 - **升级前检查事件库的剩余空间。** 对已有实例，`dcctl upgrade` 会把事件库的 `max_wal_size` 提高到其卷容量的五分之一（默认 32Gi 时为 6.4 GiB，原为 1 GiB），预写日志现在可以在数据卷上增长到这么大。该值升高时，升级会打印一条提示；卷的剩余空间小于新值时，会给出警告。要保留原来的额度，请运行 `dcctl upgrade --event-store-max-wal-mib 1024`。参见[事件库的预写日志额度](#v120-event-store-wal)。
+- **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
+- **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}
@@ -607,14 +610,14 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 - **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
 - **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
-- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户只会驱逐自己的条目，而不会驱逐其他租户的。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
+- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户会被限制在自己的份额内，并先驱逐自己的条目。该份额并不保证其他租户安全：整个缓存占满时，驱逐不看租户，因此其他租户的条目也可能被驱逐。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
 #### 载荷解码器 {#v120-payload-decoders}
 
 设备配置文件现在可以携带**载荷解码器**：用表达式写成的规则，把二进制帧、通用 JSON 正文或网络服务器解码出的对象转换成测量。新的[载荷解码器](../guides/payload-decoders.md)指南对它们做了说明，[函数参考](../reference/decoder-functions.md)列出了函数库中的函数和各项限制。升级本身无需做任何事，没有解码器的配置文件行为与以前完全一致。
 
 - **编写和测试包含在本版本中。**控制台的配置文件页面有一个 **Decoder** 选项卡。在 `device-management` 的 GraphQL API 上，`setDeviceProfileDecoder` 和 `clearDeviceProfileDecoder` 写入配置文件的草稿解码器，`testPayloadDecoder` 在不存储任何内容的情况下对一个输入运行解码器，`payloadDecoderFunctions` 列出函数库。`DeviceProfile.decoder` 和 `DeviceProfileVersion.decoder` 是新增的可空字段。以上全部是增量变化。
-- **对实时上行的解码将在 v1.2 中提供。**本构建中的集成端点不运行解码器，因此已保存或已发布的解码器不会改变[入站集成](../guides/inbound-integrations.md)所存储的内容。
+- **对实时上行的解码已包含在本版本中。**当[入站集成](../guides/inbound-integrations.md)上行所属的设备，其设备类型的配置文件版本带有解码器时，`device-management` 会用该解码器解码这条上行，网络服务器解码出的内容不会被存储。event-sources 会把设备类型的解码器查询结果记住约一分钟，因此在你发布解码器之后的一分钟内，上行仍可能按网络服务器解码出的内容存储。没有解码器的设备类型的上行照旧存储。上行在被接受时计入租户的接入额度：至少是解码器的最大读数数（集成存储链路指标时再加 3），运行代价高的解码器更多，且最多 256。如果期间发布的解码器产生了更多读数，这些读数仍会被存储，`device-management` 会统计超出的部分。解码失败的上行不会存储任何内容，而是被记录为原因为 `DECODE_FAILED` 的失败事件；参见[新的失败事件原因](#v120-decode-failed)。集成端点现在还会向 `device-management` 询问设备的类型是否有解码器，无法得到答复、且没有记住最近 15 分钟内的答复时返回 `503`，而不是存储本应由解码器产生的读数。如果 `device-management` 还不认识这个查询（滚动升级期间可能出现），上行照旧存储。
 - **发布取决于解码器。**带有解码器的配置文件，只有在解码器能针对该版本的指标编译、且所有已保存的测试向量都通过时，才能发布或回滚到该版本。没有解码器的配置文件不受影响。
 - **迁移是增量的。**它为设备配置文件增加一个可空列，以及两张目前还没有任何内容写入的表。旧副本不会读取它们。
 - **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
@@ -637,6 +640,25 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **该值升高时，`dcctl upgrade` 会告知。** 计划中会打印一行，写明旧值和新值。它还会读取事件库卷的剩余空间，在剩余空间小于新值或无法读取时打印警告。它不会拒绝执行：日志只有在压力下才会涨到上限，而补救办法只需一个标志。
 - **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`）。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
 - **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
+
+#### 本版本的其他变更 {#v120-other-changes}
+
+除上面列表中的两项 `dcctl` 变更外，这里的内容都不需要你采取行动。每一项都是对已发布功能的修复或补充。
+
+- **`dcctl sim create` 与层级。**`--tier` 指向已存在的层级时，该层级必须声明场景或 `--tier-config` 所列出的每一项限额，否则 `create` 会拒绝并指出缺失的键：`dcctl` 只会提高限额，看不到继承的默认值。由 `create` 自己创建的层级不受影响。`--tier-config` 中的 `null` 会被拒绝，而不再被读作 0。
+- **`dcctl upgrade` 与 broker 的卷。**如果某个声明唯一未完成的步骤是扩容的文件系统部分，并且它的 broker 服务器 Pod 已不存在，升级不再永远被拒绝：升级重新创建的 StatefulSet 会完成这次扩容。正在进行的扩容、没有扩容记录却容量不足的声明、节点侧扩容失败以及仍存在的 Pod，依然会导致拒绝。滚动结束后，升级会按上面列表所述检查这些声明。不带 `--mqtt-host` 的 `dcctl upgrade --mqtt-exposure <模式>` 会沿用实例已记录的主机；若没有记录，仍会被拒绝。
+- **`dcctl sim`。**`dcctl sim status`、`start` 和 `stop` 在输出到终端时会缩进控制 API 的 JSON；管道输出不变。模拟设备群可以运行空中升级的设备端（`--ota`，并可注入错误哈希、错误签名、中断的下载和离线设备）。
+- **`dcctl bootstrap` 和 `dcctl upgrade` 多打印一行**：当 MQTT 接入路径未设置为失败即关闭时，提示在持续过载下已确认的事件可能被丢弃，并给出 `--mqtt-fail-closed`。你不操作就不会有任何变化。
+- **`dcctl broker rebalance` 让最繁忙的两个逐事件流保持在不同服务器上。**broker 滚动之后，`resolved-events` 与固定的接入流的 leader 可能落在同一台服务器上，按流数量均衡看不出这一点。该步骤现在会在有可用服务器时，把 `resolved-events` 移到不领导任何逐事件流的服务器上，其摘要会把它报告为已分离、共享或未确认。v1.0 摘要中的字段保持不变。
+- **事件库：早于刷新策略覆盖范围的历史数据。**日期早于 `bucketedMeasurements` 背后的汇总所刷新的最近 30 天的读数（先存后发、回填），此前会被存储并由 `measurementEvents` 返回，却从未进入汇总。现在每小时一次的清扫会刷新它，因此这类读数大约一小时内就会出现在分桶查询中。没有架构变更。
+- **禁用或删除设备会可靠地结束它的 broker 会话。**以前，结束会话只是在变更保存后尝试一次；如果 broker 没有确认，只能靠重复调用来重试。现在它会与变更一起排队并在后台重试，与凭据吊销已有的做法一致，重新启用设备会撤回尚未执行的结束请求。
+- **表示“请重试”的命令入队失败。**当平台因所需服务不可用而无法决定一次入队（校验关卡、归属查询、分组成员关系、维护窗口计划）时，GraphQL 错误会带上 `extensions.code: UNAVAILABLE`。消息不变，它仍是错误，而不是拒绝。
+- **检测：由死人开关撤防而清除的告警，不再停留在触发状态。**此前如果之后没有新消息就遇到检查点或引擎任期结束，待发布的 Resolved 会丢失；现在会先发布。
+- **事件信封（可选）：消息已从流中被淘汰的轮次会被跳过**并计数（`envelope_rounds_evicted_total`、`resolve_envelope_rounds_evicted_total`），遍历池占满也不再阻止服务关闭。
+- **新增两条告警**：`SparkplugIngestLeaderMetricAbsent` 和 `Lwm2mIngestLeaderMetricAbsent`。已部署的边缘接入服务如果不导出 leader 序列，原有的 leader 数量告警会保持沉默。请把它们加入你的告警路由。图表中新增两块 Grafana 看板，分别用于 Sparkplug 和 LwM2M 接入；仓库还附带一个边缘代理的仪表盘文件；参见 [Grafana 看板](./grafana-boards.md)。
+- **控制台**在设备有未完成命令时会轮询其命令状态，告警值的格式与仪表盘一致，自动化画布的缩放控件会应用主题，设备配置文件列表以名称为首。
+- **严格 CSP 宿主中的仪表盘。**`configureStrictCsp`（默认关闭，因此不会有变化）让看板回放包可以在 `style-src 'self'` 下运行；参见[编写自定义小组件](../guides/writing-a-custom-widget.md)。
+- **基础设施。**未设置 `nats_mqtt_capable_users` 时，OpenTofu 的 broker 模块不再写出会被 broker 拒绝的空 `allowed_connection_types`；事件库备份的证书修复器会监视运营商配置的命名空间。
 
 #### 架构变更与回退 {#v120-going-back}
 
