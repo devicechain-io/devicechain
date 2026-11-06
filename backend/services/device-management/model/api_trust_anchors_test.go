@@ -247,18 +247,6 @@ func TestKickOriginsDoNotCollide(t *testing.T) {
 	}
 	assert.Greater(t, kickOriginDeviceDisabled, anchorKickOrigin(1<<50), "far above any id a sequence will issue")
 	assert.NotEqual(t, kickOriginDeviceDisabled, kickOriginDeviceDeleted)
-	// The certificate-revocation namespace: above every anchor origin, below the device origins.
-	assert.NotEqual(t, kickOriginReset, revocationKickOrigin(1))
-	assert.Greater(t, kickOriginRevocationBase, anchorKickOrigin(1<<39), "no anchor origin reaches the revocation base")
-	assert.Less(t, revocationKickOrigin(1<<39), kickOriginDeviceDisabled)
-	for _, id := range []uint{1, 2, 1000, 1 << 20, 1 << 39} {
-		assert.NotEqual(t, anchorKickOrigin(id), revocationKickOrigin(id), "anchor %d: disable vs revocation", id)
-		assert.True(t, isRevocationKickOrigin(revocationKickOrigin(id)))
-		assert.False(t, isRevocationKickOrigin(anchorKickOrigin(id)))
-	}
-	assert.False(t, isRevocationKickOrigin(kickOriginReset))
-	assert.False(t, isRevocationKickOrigin(kickOriginDeviceDisabled))
-	assert.False(t, isRevocationKickOrigin(kickOriginDeviceDeleted))
 	assert.Greater(t, kickOriginDeviceDeleted, anchorKickOrigin(1<<50))
 	assert.LessOrEqual(t, uint64(kickOriginDeviceDeleted), uint64(1<<63-1))
 	assert.LessOrEqual(t, uint64(kickOriginDeviceDisabled), uint64(1<<63-1), "a bigint holds it")

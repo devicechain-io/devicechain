@@ -291,7 +291,7 @@ func newX509FixtureWith(t *testing.T, o fixtureOpts) *x509Fixture {
 		tables := []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
 			&model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 			&model.DetectionRuleScopeRef{}, &model.ProvisioningProfile{}, &model.DeviceCredential{},
-			&model.PendingSessionKick{}, &model.DeviceTrustAnchor{}, &model.DeviceRevocationIssuer{},
+			&model.PendingSessionKick{}, &model.PendingRevocationKick{}, &model.DeviceTrustAnchor{}, &model.DeviceRevocationIssuer{},
 			&model.DeviceRevocationList{}, &model.DeviceRevokedCertificate{}, &model.DeviceCredentialChainLink{}}
 		api = model.NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
 	}

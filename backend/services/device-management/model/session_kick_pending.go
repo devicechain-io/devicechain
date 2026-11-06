@@ -46,11 +46,6 @@ type PendingSessionKick struct {
 	Origin      uint      `gorm:"primaryKey;not null;autoIncrement:false"`
 	Generation  int64     `gorm:"not null"`
 	RequestedAt time.Time `gorm:"not null"`
-	// NotBefore is the instant a certificate-revocation row's RE-SWEEP may be drained; NULL for
-	// every other row, and for a revocation row whose first sweep has not been confirmed yet. A
-	// drain reads only the rows that are due (NULL, or in the past). An old replica ignores the
-	// column, so it may drain a re-sweep row early: one kick instead of two.
-	NotBefore *time.Time
 }
 
 // kickOriginReset is the Origin of a device reset. Profile ids start at 1, so it is no profile.
@@ -73,9 +68,6 @@ func (r PendingSessionKick) reason() string {
 	}
 	if r.Origin == kickOriginDeviceDeleted {
 		return messaging.SessionKickDeviceDeleted
-	}
-	if isRevocationKickOrigin(r.Origin) {
-		return messaging.SessionKickCertificateRevoked
 	}
 	return messaging.SessionKickCredentialChanged
 }
@@ -116,10 +108,8 @@ func (api *Api) queueSessionKicksOnTx(tx *gorm.DB, tenant string, origin uint, d
 		rows[i] = PendingSessionKick{TenantId: tenant, DeviceToken: t, Origin: origin, Generation: rand.Int64(), RequestedAt: now}
 	}
 	err := rdb.CreateChunked(tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "origin"}},
-		// not_before is reset too: a debt queued again is a NEW withdrawal whose first sweep is
-		// due now, even when the row it lands on had already moved on to its re-sweep.
-		DoUpdates: clause.AssignmentColumns([]string{"generation", "requested_at", "not_before"}),
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}, {Name: "origin"}},
+		DoUpdates: clause.AssignmentColumns([]string{"generation", "requested_at"}),
 	}), &rows).Error
 	if err != nil {
 		return fmt.Errorf("recording the session kicks of %d device(s): %w", len(tokens), err)
@@ -142,9 +132,7 @@ func (api *Api) drainSessionKicks(ctx context.Context, tenant string, limit int,
 		return nil
 	}
 	db := api.RDB.DB(core.WithTenant(ctx, tenant))
-	// Only the debts that are DUE: a revocation row waiting out its re-sweep delay is not.
-	q := scope(db.Where("tenant_id = ? AND (not_before IS NULL OR not_before <= ?)", tenant, time.Now().UTC())).
-		Order("requested_at ASC, device_token ASC, origin ASC")
+	q := scope(db.Where("tenant_id = ?", tenant)).Order("requested_at ASC, device_token ASC, origin ASC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
@@ -203,7 +191,7 @@ func (api *Api) drainSessionKicks(ctx context.Context, tenant string, limit int,
 			for _, t := range chunk {
 				done = append(done, rowsOf[t]...)
 			}
-			if derr := api.settleConfirmedKicks(db, tenant, done); derr != nil {
+			if derr := deleteConfirmedKicks(db, tenant, done); derr != nil {
 				errs = append(errs, fmt.Errorf("%w: confirmed, but could not clear the pending kick: %v", ErrSessionsNotEnded, derr))
 			}
 		}
@@ -226,38 +214,6 @@ var (
 // maxConsecutiveKickFailures is how many kick requests in a row one drain may see fail before it
 // stops asking and leaves the remaining rows for the next pass.
 const maxConsecutiveKickFailures = 3
-
-// settleConfirmedKicks settles rows whose kick was just confirmed. A certificate-revocation row
-// on its FIRST sweep is not deleted: it is rescheduled (NotBefore) for its RE-SWEEP, because an
-// admission that read "not revoked" just before the revocation committed can still be granted
-// after the first sweep found the broker empty. Every other row, and a revocation row already on
-// its re-sweep, is deleted. Both are conditional on the Generation that was read, so a row queued
-// again meanwhile keeps its place with a due first sweep.
-func (api *Api) settleConfirmedKicks(db *gorm.DB, tenant string, done []PendingSessionKick) error {
-	var first, final []PendingSessionKick
-	for _, r := range done {
-		if isRevocationKickOrigin(r.Origin) && r.NotBefore == nil {
-			first = append(first, r)
-		} else {
-			final = append(final, r)
-		}
-	}
-	if len(first) > 0 {
-		due := time.Now().UTC().Add(api.revocationResweepAfter())
-		for chunk := range slices.Chunk(first, rdb.MaxLookupKeys) {
-			keys := make([][]any, len(chunk))
-			for i, r := range chunk {
-				keys[i] = []any{r.DeviceToken, r.Origin, r.Generation}
-			}
-			if err := db.Model(&PendingSessionKick{}).
-				Where("tenant_id = ? AND (device_token, origin, generation) IN ?", tenant, keys).
-				Update("not_before", due).Error; err != nil {
-				return err
-			}
-		}
-	}
-	return deleteConfirmedKicks(db, tenant, final)
-}
 
 // deleteConfirmedKicks deletes the given rows where each still holds the Generation that was
 // read, so a row re-queued while its kick was in flight survives for the next pass.
@@ -313,6 +269,11 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 	if err != nil {
 		return res, fmt.Errorf("listing tenants with pending session kicks: %w", err)
 	}
+	revTenants, err := api.tenantsOwingRevocationKicks(ctx)
+	if err != nil {
+		return res, fmt.Errorf("listing tenants with pending certificate-revocation kicks: %w", err)
+	}
+	tenants = mergeSortedTenants(tenants, revTenants)
 	res.Tenants = len(tenants)
 	var lastErr error
 	for _, tenant := range tenants {
@@ -330,6 +291,19 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 				break
 			}
 		}
+		// The certificate-revocation queue is its own table (see PendingRevocationKick).
+		passStarted = time.Now()
+		for page := 0; page < maxDrainPagesPerTenant && time.Since(passStarted) < sessionKickPassBudget; page++ {
+			if err := api.drainRevocationKicks(ctx, tenant, pageSize, 0); err != nil {
+				res.Failed++
+				lastErr = err
+				break
+			}
+			more, merr := api.hasDueRevocationKicks(ctx, tenant)
+			if merr != nil || !more {
+				break
+			}
+		}
 	}
 	return res, core.PassResult(res.Tenants, res.Failed, lastErr)
 }
@@ -340,9 +314,7 @@ const maxDrainPagesPerTenant = 20
 // hasDueKicks reports whether the tenant still holds a pending kick that is due.
 func (api *Api) hasDueKicks(ctx context.Context, tenant string) (bool, error) {
 	var one []PendingSessionKick
-	err := api.RDB.DB(core.WithTenant(ctx, tenant)).
-		Where("tenant_id = ? AND (not_before IS NULL OR not_before <= ?)", tenant, time.Now().UTC()).
-		Limit(1).Find(&one).Error
+	err := api.RDB.DB(core.WithTenant(ctx, tenant)).Where("tenant_id = ?", tenant).Limit(1).Find(&one).Error
 	return len(one) > 0, err
 }
 
@@ -373,7 +345,13 @@ func (api *Api) observeSessionKicks(ctx context.Context) {
 			age = max(time.Since(oldest[0].RequestedAt), 0)
 		}
 	}
-	api.SessionKickObserver(int(n), age)
+	// The certificate-revocation queue counts too: the same alert covers it.
+	rn, rage, rerr := api.revocationQueueGauge(db)
+	if rerr != nil {
+		log.Warn().Err(rerr).Msg("Unable to read the pending certificate-revocation kicks")
+		return
+	}
+	api.SessionKickObserver(int(n)+rn, max(age, rage))
 }
 
 // sessionKickDrainLockName names the advisory lock one background pass runs under.

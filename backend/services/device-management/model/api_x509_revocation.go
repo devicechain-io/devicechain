@@ -374,6 +374,20 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		}
 		if len(existing) == 1 {
 			out = &existing[0]
+			// A repeat finds the entry; whether the kick debt for it was ever recorded is the entry's
+			// own marker. An entry made before the debt existed (or with no session kicker wired) has
+			// none: queue it now, once, and say so on the entry.
+			if api.SessionKicker != nil && out.KickQueuedAt == nil {
+				if _, err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+					RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
+					return err
+				}
+				queuedAt := time.Now().UTC()
+				if err := tx.Model(out).Update("kick_queued_at", queuedAt).Error; err != nil {
+					return err
+				}
+				out.KickQueuedAt = &queuedAt
+			}
 			return nil
 		}
 		if err := lockTenantCreates(tx, tenant, "manual_revocations"); err != nil {
@@ -395,6 +409,9 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.Username != "" {
 			by := claims.Username
 			entry.CreatedBy = &by
+		}
+		if api.SessionKicker != nil {
+			entry.KickQueuedAt = &now
 		}
 		if err := tx.Create(entry).Error; err != nil {
 			return err

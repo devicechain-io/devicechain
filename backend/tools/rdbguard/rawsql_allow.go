@@ -114,10 +114,12 @@ var rawSQLAllowList = []siteEntry{
 			"same statement, and only one runs. Only package constants are formatted into the text.",
 	},
 	{
-		Path: "backend/services/device-management/model/api_x509_revocation_kicks.go", Func: "Api.queueCrlRevocationKicksOnTx", Count: 1,
+		Path: "backend/services/device-management/model/api_x509_revocation_kicks.go", Func: "Api.queueCrlRevocationKicksOnTx", Count: 3,
 		Why: "joins the transaction's own TEMP table of newly revoked serials to device_credential_chain_links. " +
-			"The text is constant, the WHERE binds tenant_id and trust_anchor_id explicitly (plus the issuer " +
-			"name and key), and the only formatted-in name is a package constant naming the temp table.",
+			"Three statements, each constant text whose WHERE binds tenant_id and trust_anchor_id explicitly (plus " +
+			"the issuer name and key where it applies): the join of the transaction's own TEMP table of newly " +
+			"revoked serials to the links, the count of serials no link accounts for, and the legacy " +
+			"depth-0 links of other issuers. The only formatted-in name is a package constant naming the temp table.",
 	},
 
 	// --- erasure ---

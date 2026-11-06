@@ -60,8 +60,8 @@ func TestRevocationKickPostgres(t *testing.T) {
 		}
 		return c
 	}
-	rows := func() []PendingSessionKick {
-		var out []PendingSessionKick
+	rows := func() []PendingRevocationKick {
+		var out []PendingRevocationKick
 		require.NoError(t, f.api.RDB.DB(f.ctx).Where("origin = ?", revocationKickOrigin(f.anchor.ID)).Find(&out).Error)
 		return out
 	}
@@ -77,7 +77,7 @@ func TestRevocationKickPostgres(t *testing.T) {
 	// The re-sweep runs when due and clears the row.
 	require.Eventually(t, func() bool {
 		// This tenant's pass only: a shared server holds other tests' debts.
-		require.NoError(t, f.api.drainSessionKicks(f.ctx, f.tenant, 0, func(db *gorm.DB) *gorm.DB { return db }))
+		require.NoError(t, f.api.drainRevocationKicks(f.ctx, f.tenant, 0, 0))
 		return len(rows()) == 0
 	}, 10*time.Second, 100*time.Millisecond)
 	assert.Equal(t, 2, revoked(), "swept twice")
@@ -123,7 +123,7 @@ func BenchmarkQueueSessionKicksOnTx(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				require.NoError(b, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-					return api.queueSessionKicksOnTx(tx, tenant, revocationKickOrigin(1), tokens)
+					return api.queueRevocationKickRowsOnTx(tx, tenant, 1, tokens)
 				}))
 			}
 		})
