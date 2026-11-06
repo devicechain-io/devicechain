@@ -4,8 +4,10 @@
 package core
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"testing"
 	"time"
 
@@ -218,14 +220,17 @@ func TestMeterRoutes(t *testing.T) {
 	require.Equal(t, RouteLive, m.Admit(MeterRequest{Tenant: "t", N: 1, Source: -1, Stamp: clk.t, Sources: src(0), Factor: 1}).Route, "no source")
 	require.Equal(t, RouteBacklog, m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t.Add(-3 * time.Second), Sources: src(3 * time.Second), Factor: 1}).Route)
 	// The stream is now in backlog: even a current message routes there until 30 s of calm.
-	require.True(t, m.Phase(0).Backlog())
+	inBacklog, _ := m.Phase(0, "t")
+	require.True(t, inBacklog)
+	inBacklog, _ = m.Phase(0, "someone else")
+	require.False(t, inBacklog, "another tenant's phase is its own")
 	require.Equal(t, RouteBacklog, m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t, Sources: src(0), Factor: 1}).Route)
 	clk.t = clk.t.Add(31 * time.Second)
 	m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t, Sources: src(0), Factor: 1}) // starts the calm clock
 	clk.t = clk.t.Add(31 * time.Second)
 	d := m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t, Sources: src(0), Factor: 1})
 	require.Equal(t, RouteFresh, d.Route)
-	epoch, _ := m.Phase(0).Exit()
+	_, epoch := m.Phase(0, "t")
 	require.Equal(t, uint64(1), epoch)
 }
 
@@ -340,12 +345,17 @@ func TestMeterExitShedsNoCompliantTenant(t *testing.T) {
 	}
 	require.Equal(t, RouteBacklog, one("t", clk.t.Add(-6*time.Second), 6*time.Second).Route)
 	clk.t = clk.t.Add(time.Minute)
-	one("other", clk.t, 0)
+	one("t", clk.t, 0) // t's own calm traffic: the first starts the calm clock, the second 31 s on ends the phase
 	clk.t = clk.t.Add(31 * time.Second)
-	one("other", clk.t, 0)
-	require.False(t, m.Phase(0).Backlog())
+	exit := one("t", clk.t, 0)
+	inBacklog, _ := m.Phase(0, "t")
+	require.False(t, inBacklog)
+	require.Equal(t, RouteFresh, exit.Route)
 	for _, tenant := range []string{"t", "idle"} {
 		n := 0
+		if tenant == "t" {
+			n = 1 // the message that ended the phase was admitted on the fresh route
+		}
 		for one(tenant, clk.t, 0).Admitted {
 			n++
 		}
@@ -370,10 +380,16 @@ func TestMeterReviewerReproNoLossAfterAnExit(t *testing.T) {
 	late := admit("c", 0, clk.t.Add(-2500*time.Millisecond), []LagCreditSource{{Lag: 2500 * time.Millisecond}, {}})
 	require.Equal(t, RouteBacklog, late.Route)
 	for _, at := range []time.Duration{11 * time.Second, 42 * time.Second, 90 * time.Second} {
-		clk.t = simEpoch.Add(at)
-		admit("bystander", 0, clk.t, cur)
+		clk.t = simEpoch.Add(at) // c's own calm trickle: calm from 11 s, so the phase ends by 42 s
+		lags := cur
+		if at == 90*time.Second {
+			lags = []LagCreditSource{{}, {Lag: 1500 * time.Millisecond}} // source 1 has been stalled since 88.5 s
+		}
+		require.True(t, admit("c", 0, clk.t, lags).Admitted)
 	}
-	require.False(t, m.Phase(0).Backlog(), "the phase exited")
+	inBacklog, epoch := m.Phase(0, "c")
+	require.False(t, inBacklog, "the phase exited")
+	require.Equal(t, uint64(1), epoch)
 
 	shed, total := 0, 0
 	for i := 0; i < 2000; i++ { // the conformant burst, on the now-current source 0
@@ -400,10 +416,11 @@ func TestMeterPhaseTailIsContended(t *testing.T) {
 		clk := &lagClock{t: simEpoch.Add(time.Hour)}
 		m := NewLagCreditMeter(LagCreditMeterConfig{Streams: 1, Ceiling: StaticCeiling(1000, 2000), Clock: clk.now})
 		// a 10 s stall's oldest message takes the stream into backlog
-		d := m.Admit(MeterRequest{Tenant: "x", N: 1, Source: 0, Stamp: clk.t.Add(-10 * time.Second),
+		d := m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t.Add(-10 * time.Second),
 			Sources: []LagCreditSource{{Lag: 10 * time.Second}}, Factor: 1})
 		require.Equal(t, RouteBacklog, d.Route)
-		require.True(t, m.Phase(0).Backlog())
+		inBacklog, _ := m.Phase(0, "t")
+		require.True(t, inBacklog)
 		return m, clk
 	}
 	young := func(m *LagCreditMeter, clk *lagClock, f float64) (admitted int, last MeterDecision) {
@@ -480,7 +497,7 @@ func TestMeterConformantBurstyTenantLosesNothingAcrossPhases(t *testing.T) {
 			}
 			require.Truef(t, d.Admitted, "seed %d: a conformant message was shed on the %v route (rate %v burst %d)", seed, d.Route, rate, burst)
 			for k := range prev {
-				if e, _ := m.Phase(k).Exit(); e > prev[k] {
+				if _, e := m.Phase(k, "t"); e > prev[k] {
 					exits += int(e - prev[k])
 					prev[k] = e
 				}
@@ -488,4 +505,140 @@ func TestMeterConformantBurstyTenantLosesNothingAcrossPhases(t *testing.T) {
 		}
 	}
 	require.Greater(t, exits, propertySeeds/4, "the generator barely exercised a phase exit (%d)", exits)
+}
+
+// TENANT ISOLATION OF THE PHASE. Tenants of different covers share streams, stalls and sources. Run
+// together, every tenant gets exactly the verdicts it gets when its messages are presented to a meter
+// alone (given the same per-source lag and skew inputs): no tenant's cover, ceiling, flood or phase
+// changes another tenant's allowance. A phase shared by a stream fails this immediately: the shortest
+// cover in the mix holds it open for everyone.
+func TestMeterTenantsOfMixedCoversDoNotAffectEachOther(t *testing.T) {
+	type tagged struct {
+		simMsg
+		tenant int
+	}
+	for seed := int64(0); seed < int64(propertySeeds); seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		horizon := 20 * time.Second
+		base := randomCfg(rng, horizon)
+		for k := range base.stalls { // stalls of up to the longest cover, so every tenant's phase can be in play
+			base.stalls[k] = append(base.stalls[k], simStall{start: simEpoch.Add(time.Duration(rng.Intn(8000)) * time.Millisecond),
+				dur: time.Duration(rng.Intn(4000)) * time.Millisecond})
+			sort.Slice(base.stalls[k], func(i, j int) bool { return base.stalls[k][i].start.Before(base.stalls[k][j].start) })
+		}
+		// the stall list must stay monotone for a FIFO reader: drop overlaps
+		for k := range base.stalls {
+			var kept []simStall
+			var end time.Time
+			for _, st := range base.stalls[k] {
+				if st.start.Before(end) {
+					continue
+				}
+				kept = append(kept, st)
+				end = st.start.Add(st.dur)
+			}
+			base.stalls[k] = kept
+		}
+		type tenantCfg struct {
+			name  string
+			rate  float64
+			burst int
+			simCfg
+		}
+		var tenants []tenantCfg
+		var all []tagged
+		for ti := 0; ti < 3; ti++ {
+			c := base
+			c.rate = float64(5 + rng.Intn(1200))
+			c.burst = 1 + rng.Intn(3000)
+			if ti == 0 {
+				c.rate, c.burst = 10, 1 // a 100 ms cover beside everyone else
+			}
+			sends := genSends(rng, c.rate, c.burst, horizon, 4)
+			for _, m := range buildMsgs(rng, c, sends, 0.2) {
+				all = append(all, tagged{m, ti})
+			}
+			tenants = append(tenants, tenantCfg{name: fmt.Sprintf("t%d", ti), rate: c.rate, burst: c.burst, simCfg: c})
+		}
+		sort.SliceStable(all, func(i, j int) bool { return all[i].send.Before(all[j].send) })
+
+		resolve := func(name string) TenantCeiling {
+			for _, tc := range tenants {
+				if tc.name == name {
+					return TenantCeiling{RatePerSecond: tc.rate, Burst: tc.burst, Source: CeilingStatic}
+				}
+			}
+			return TenantCeiling{RatePerSecond: 1, Burst: 1}
+		}
+		newMeter := func(clk *lagClock) *LagCreditMeter {
+			return NewLagCreditMeter(LagCreditMeterConfig{Streams: base.sources, Ceiling: resolve, Clock: clk.now})
+		}
+		// order all messages for delivery
+		flat := make([]simMsg, len(all))
+		for i, a := range all {
+			a.simMsg.seq = i
+			flat[i] = a.simMsg
+		}
+		ordered := order(rng, flat, base.sources)
+		queues := splitQueues(flat, base.sources)
+		heads := make([]int, base.sources)
+
+		type call struct {
+			req MeterRequest
+			at  time.Time
+		}
+		calls := make([]call, len(ordered))
+		clk := &lagClock{t: simEpoch}
+		together := newMeter(clk)
+		verdicts := make([]MeterDecision, len(ordered))
+		for i, m := range ordered {
+			clk.t = m.read
+			srcs := laggingSources(base, queues, heads, m.read)
+			if m.src >= 0 {
+				heads[m.src]++
+			}
+			ti := all[m.seq].tenant
+			req := MeterRequest{Tenant: tenants[ti].name, N: 1, Source: m.src, Stamp: m.stamp, Sources: srcs, Factor: 1}
+			calls[i] = call{req, m.read}
+			verdicts[i] = together.Admit(req)
+		}
+		for ti := range tenants {
+			aclk := &lagClock{t: simEpoch}
+			alone := newMeter(aclk)
+			for i, c := range calls {
+				if c.req.Tenant != tenants[ti].name {
+					continue
+				}
+				aclk.t = c.at
+				d := alone.Admit(c.req)
+				require.Equalf(t, d, verdicts[i], "seed %d: tenant %s got a different verdict beside its neighbours (message %d, %v route)",
+					seed, tenants[ti].name, i, verdicts[i].Route)
+			}
+		}
+	}
+}
+
+// The per-(stream, tenant) phase table is bounded: tenants that come and go leave nothing behind past the
+// idle TTL.
+func TestMeterPhaseTableIsBoundedUnderTenantChurn(t *testing.T) {
+	clk := &lagClock{t: simEpoch}
+	m := NewLagCreditMeter(LagCreditMeterConfig{Streams: 2, Ceiling: StaticCeiling(1000, 2000), Clock: clk.now})
+	lag := []LagCreditSource{{Lag: 10 * time.Second}, {Lag: 10 * time.Second}}
+	peak := 0
+	for i := 0; i < 60000; i++ {
+		clk.t = clk.t.Add(100 * time.Millisecond) // 600 tenants a minute, each seen once and in backlog
+		d := m.Admit(MeterRequest{Tenant: fmt.Sprintf("tenant-%d", i), N: 1, Source: i % 2, Stamp: clk.t.Add(-10 * time.Second), Sources: lag, Factor: 1})
+		require.Equal(t, RouteBacklog, d.Route)
+		peak = max(peak, m.PhaseCount())
+	}
+	require.LessOrEqual(t, peak, 600*11+64, "idle phases were not evicted")
+	require.Less(t, peak, 30000)
+
+	// and a tenant that is never in backlog never costs an entry
+	clk2 := &lagClock{t: simEpoch}
+	m2 := NewLagCreditMeter(LagCreditMeterConfig{Streams: 1, Ceiling: StaticCeiling(1000, 2000), Clock: clk2.now})
+	for i := 0; i < 5000; i++ {
+		m2.Admit(MeterRequest{Tenant: fmt.Sprintf("calm-%d", i), N: 1, Source: 0, Stamp: clk2.t, Sources: idleSources(1), Factor: 1})
+	}
+	require.Zero(t, m2.PhaseCount())
 }

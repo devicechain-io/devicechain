@@ -905,9 +905,9 @@ func replayTable() []*replayScenario {
 		restartAt: 1200 * ms, legacyLoses: true,
 	})
 	// Exit marks. A 2000 burst, one backlog-route message that takes capture into its backlog phase, the
-	// phase exits, and then a conformant 2000 burst plus 900/s on a source stalled 1.5 s: 3351 messages,
+	// phase exits (the tenant's own calm trickle ends it: the phase is the tenant's alone), and then a conformant 2000 burst plus 900/s on a source stalled 1.5 s: 3351 messages,
 	// all within the ceiling. Withholding the phase's accrual at the exit sheds 1342 of them.
-	exitLanes, exitOf := merge(lane{0, join(burstOf(2000, 0), burstOf(1, 11*s), burstOf(2000, 90*s))},
+	exitLanes, exitOf := merge(lane{0, join(burstOf(2000, 0), burstOf(1, 11*s), steady(1, 14*s, 89*s), burstOf(2000, 90*s))},
 		lane{1, steady(900, 88500*ms, 90*s)})
 	add(&replayScenario{
 		id: "X-exit-then-burst", about: "phase exits, then a conformant burst plus a stalled second source",
@@ -954,6 +954,20 @@ func replayTable() []*replayScenario {
 		id: "T-L1-phase-tail", about: "L1 after a 10 s stall: best-effort held to a quarter of its ceiling through the phase tail",
 		sources: []replaySource{capture(replayStallWindow{0, 10 * s})}, level: 1,
 		tenants: []replayTenant{{name: "besteffort", kind: kindCompliant, class: governance.ShedBestEffort, sends: steady(platformRate, 0, 40*s)}},
+	})
+	// Tenant isolation of the phase. A neighbour at 10/s with burst 1 has a 100 ms cover, and the stream's
+	// constant 200 ms reader lag is past it, so the neighbour is permanently in its OWN backlog phase.
+	// That must change nothing for the 1000/2000 tenant beside it, which is within its cover: with a phase
+	// shared by the stream it was pushed onto the backlog route too and was admitted a second allowance
+	// alongside its external-MQTT one (about 2x its ceiling, indefinitely).
+	isoLanes, isoOf := merge(lane{0, steady(1000, 0, 30*s)}, lane{-1, steady(1000, 0, 30*s)})
+	add(&replayScenario{
+		id: "I-short-cover-neighbour", about: "a 10/s burst-1 neighbour at a constant 200 ms lag beside a 1000/2000 tenant spread over the gateway and external MQTT",
+		sources: []replaySource{{base: 200 * ms}}, episodes: 1,
+		tenants: []replayTenant{
+			{name: "target", kind: kindOver, class: governance.ShedBronze, sends: isoLanes, source: isoOf},
+			{name: "tiny", kind: kindCompliant, class: governance.ShedBronze, rate: 10, burst: 1, sends: steady(1, 0, 30*s)},
+		},
 	})
 	return rows
 }

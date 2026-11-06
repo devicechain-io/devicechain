@@ -5,15 +5,17 @@ package core
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"time"
 )
 
-// IngestPhase is the routing phase of ONE reader stream: fresh while the reader is within reach of
-// the head of its stream, backlog while it is draining something older.
+// IngestPhase is the routing phase of ONE tenant on ONE reader stream: fresh while that tenant's
+// messages are read within their cover of being sent, backlog while it is draining something older.
 //
-// The phase is per STREAM and driven only by the broker's own stamps of first deliveries, so no
-// tenant can hold it open, and it has hysteresis so a reader hovering at the threshold does not flip
+// The phase is driven only by the broker's own stamps of first deliveries, so a tenant cannot steer
+// it, and it is the tenant's alone (see phaseTable). It has hysteresis, entered at an age above the
+// observed message's OWN cover and left after the calm period below half of it, so a reader hovering at the threshold does not flip
 // every message between the two routes (each flip would otherwise hand the tenant a second allowance).
 type IngestPhase struct {
 	mu sync.Mutex
@@ -150,7 +152,7 @@ func (c IngestCause) String() string {
 //     backlog bucket is a full allowance of its own, and a tenant draining two backlogs while also sending
 //     live spends all of them. That is bounded (it needs a platform lag beyond the cover, which a tenant
 //     cannot steer) and it matches the 2x a tenant already has on the gate it replaces while draining.
-//   - A stream in its backlog phase meters ALL of its messages' CEILING on the backlog route, young ones
+//   - A tenant in its backlog phase on a stream meters ALL of its messages' CEILING on the backlog route, young ones
 //     included, until the hysteresis lets it out. That keeps a reader hovering at the cover from flipping
 //     messages between the two ceiling allowances. CONTENTION is a filter and is not phase-bound: it is
 //     applied to every message read within its own cover, in or out of the phase, so the overload bands
@@ -164,7 +166,8 @@ type LagCreditMeter struct {
 	ceiling    *LagCreditLimiter
 	contention *LagCreditLimiter
 	backlog    []*TenantRateLimiter
-	phases     []*IngestPhase
+	streams    int
+	phases     *phaseTable
 	base       TenantCeilingResolver
 }
 
@@ -191,6 +194,8 @@ func NewLagCreditMeter(cfg LagCreditMeterConfig) *LagCreditMeter {
 		now = time.Now
 	}
 	m := &LagCreditMeter{
+		streams:    cfg.Streams,
+		phases:     newPhaseTable(cfg.PhaseCalm, now),
 		now:        now,
 		ceiling:    NewLagCreditLimiter(cfg.Ceiling, cfg.Streams, WithLagCreditClock(now)),
 		contention: NewLagCreditLimiter(cfg.Ceiling, cfg.Streams, WithLagCreditClock(now)),
@@ -198,13 +203,17 @@ func NewLagCreditMeter(cfg LagCreditMeterConfig) *LagCreditMeter {
 	}
 	for i := 0; i < cfg.Streams; i++ {
 		m.backlog = append(m.backlog, NewTenantRateLimiter(cfg.Ceiling, WithClock(now)))
-		m.phases = append(m.phases, NewIngestPhase(cfg.PhaseCalm))
 	}
 	return m
 }
 
-// Phase exposes one stream's phase tracker (for metrics and tests).
-func (m *LagCreditMeter) Phase(stream int) *IngestPhase { return m.phases[stream] }
+// Phase reports one tenant's phase on one stream (for metrics and tests).
+func (m *LagCreditMeter) Phase(stream int, tenant string) (backlog bool, exitEpoch uint64) {
+	return m.phases.state(stream, tenant)
+}
+
+// PhaseCount is the number of per-(stream, tenant) phase entries currently held.
+func (m *LagCreditMeter) PhaseCount() int { return m.phases.count() }
 
 // MeterRequest is one first-delivery message presented to the meter.
 type MeterRequest struct {
@@ -236,8 +245,8 @@ type MeterDecision struct {
 
 // Admit routes and charges one first-delivery message.
 func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
-	if len(req.Sources) != len(m.phases) {
-		panic(fmt.Sprintf("core.LagCreditMeter.Admit: %d sources described, meter has %d streams", len(req.Sources), len(m.phases)))
+	if len(req.Sources) != m.streams {
+		panic(fmt.Sprintf("core.LagCreditMeter.Admit: %d sources described, meter has %d streams", len(req.Sources), m.streams))
 	}
 	if req.Factor < 0 || req.Factor > 1 {
 		panic(fmt.Sprintf("core.LagCreditMeter.Admit: factor %v is outside [0,1]", req.Factor))
@@ -247,7 +256,7 @@ func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
 	}
 	now := m.now()
 	stamped := req.Source >= 0 && !req.Stamp.IsZero()
-	if req.Source >= len(m.phases) {
+	if req.Source >= m.streams {
 		panic(fmt.Sprintf("core.LagCreditMeter.Admit: source %d out of range", req.Source))
 	}
 
@@ -258,7 +267,7 @@ func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
 		cover := LagCreditMax(m.base(req.Tenant))
 		// Entry at age > the tenant's own cover and the hysteresis around it decide the route; there is no
 		// separate per-message cutoff, so the two cannot disagree.
-		if m.phases[req.Source].Observe(alpha, cover, now) {
+		if m.phases.observe(req.Source, req.Tenant, alpha, cover, now) {
 			if alpha <= cover {
 				if d, refused := m.contend(req, srcs, req.Source, req.Stamp, RouteBacklog); refused {
 					return d
@@ -312,4 +321,104 @@ func (m *LagCreditMeter) contend(req MeterRequest, srcs []LagCreditSource, sourc
 		}
 	}
 	return MeterDecision{}, false
+}
+
+// phaseTable holds the phase of every (stream, tenant) that has one.
+//
+// 🔴 THE PHASE IS KEYED BY TENANT, NOT BY STREAM ALONE. A tenant's cover is its own (burst/rate), so a
+// phase shared by a stream was entered and held by whichever tenant had the shortest cover: a 10/s
+// burst-1 neighbour (100 ms cover) at a constant 200 ms lag kept the whole stream in backlog, and a
+// 1000/2000 tenant within its 2 s cover was pushed onto the backlog route as well, gaining a second
+// allowance beside its fresh one. One tenant's ceiling must never change another's allowance, so each
+// tenant's phase is driven by that tenant's own broker-stamped ages and nothing else. A tenant cannot
+// steer it: the ages are the broker's stamps against the pod clock.
+//
+// An entry exists only once a tenant has been in backlog; a message that is calm and has no entry
+// allocates nothing. Entries are evicted after the same idle TTL the limiters use, swept at most once a
+// sweep interval per shard, so the table is bounded by the tenants active in the last TTL.
+type phaseTable struct {
+	calm time.Duration
+	now  func() time.Time
+
+	shards [lagCreditShards]phaseShard
+}
+
+type phaseKey struct {
+	stream int
+	tenant string
+}
+
+type phaseEntry struct {
+	phase    *IngestPhase
+	lastSeen time.Time
+}
+
+type phaseShard struct {
+	mu        sync.Mutex
+	entries   map[phaseKey]*phaseEntry
+	lastSweep time.Time
+}
+
+func newPhaseTable(calm time.Duration, now func() time.Time) *phaseTable {
+	t := &phaseTable{calm: calm, now: now}
+	for i := range t.shards {
+		t.shards[i].entries = make(map[phaseKey]*phaseEntry)
+	}
+	return t
+}
+
+func (t *phaseTable) shardFor(tenant string) *phaseShard {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tenant))
+	return &t.shards[h.Sum32()&(lagCreditShards-1)]
+}
+
+// observe feeds one first delivery's corrected age to the tenant's phase on the stream and returns
+// whether that phase is backlog afterwards.
+func (t *phaseTable) observe(stream int, tenant string, alpha, ownCover time.Duration, now time.Time) bool {
+	sh := t.shardFor(tenant)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if now.Sub(sh.lastSweep) >= defaultRateLimiterSweepInterval {
+		sh.lastSweep = now
+		for k, e := range sh.entries {
+			if now.Sub(e.lastSeen) >= defaultRateLimiterIdleTTL {
+				delete(sh.entries, k)
+			}
+		}
+	}
+	key := phaseKey{stream, tenant}
+	e := sh.entries[key]
+	if e == nil {
+		if alpha <= ownCover {
+			return false // calm and not in backlog: nothing to remember
+		}
+		e = &phaseEntry{phase: NewIngestPhase(t.calm)}
+		sh.entries[key] = e
+	}
+	e.lastSeen = now
+	return e.phase.Observe(alpha, ownCover, now)
+}
+
+func (t *phaseTable) state(stream int, tenant string) (bool, uint64) {
+	sh := t.shardFor(tenant)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e := sh.entries[phaseKey{stream, tenant}]
+	if e == nil {
+		return false, 0
+	}
+	epoch, _ := e.phase.Exit()
+	return e.phase.Backlog(), epoch
+}
+
+func (t *phaseTable) count() int {
+	n := 0
+	for i := range t.shards {
+		sh := &t.shards[i]
+		sh.mu.Lock()
+		n += len(sh.entries)
+		sh.mu.Unlock()
+	}
+	return n
 }
