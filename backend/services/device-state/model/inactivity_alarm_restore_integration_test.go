@@ -28,6 +28,9 @@ func TestTheInactivityAlarmRestoreRepairsOnlyWhatV11Left(t *testing.T) {
 		{DeviceToken: "asserted", PresenceSource: PresenceSourceAsserted, LastDisconnectTime: at(3)},
 		{DeviceToken: "already-set", PresenceSource: PresenceSourceInferred, LastDisconnectTime: at(5), InactivityAlarmTime: at(4)},
 		{DeviceToken: "never-disconnected", PresenceSource: PresenceSourceInferred},
+		// A v1.0 sweep at 1h, back at 2h under v1.1 (no clear), swept again at 3h (no stamp).
+		{DeviceToken: "older-episode", PresenceSource: PresenceSourceInferred, LastConnectTime: at(2), LastDisconnectTime: at(3), InactivityAlarmTime: at(1)},
+		{DeviceToken: "older-episode-asserted", PresenceSource: PresenceSourceAsserted, LastConnectTime: at(2), LastDisconnectTime: at(3), InactivityAlarmTime: at(1)},
 	}
 	for i := range rows {
 		rows[i].TenantId = "bt"
@@ -42,6 +45,7 @@ func TestTheInactivityAlarmRestoreRepairsOnlyWhatV11Left(t *testing.T) {
 		}
 		want := map[string]sql.NullTime{
 			"stale-active": {}, "swept-by-v11": at(2), "asserted": {}, "already-set": at(4), "never-disconnected": {},
+			"older-episode": at(3), "older-episode-asserted": {},
 		}
 		for tok, w := range want {
 			var ds DeviceState
