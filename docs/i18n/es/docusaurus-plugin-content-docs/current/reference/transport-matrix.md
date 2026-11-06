@@ -381,7 +381,9 @@ del inquilino. El dispositivo nunca se conecta a DeviceChain.
   asignación de ingesta se responde con `202` y se descarta, porque un rechazo lo perdería de todos modos
   y algunos servidores de red suspenden un webhook al que se rechaza. Por tanto, no se avisa al remitente.
   Un uplink sin nada decodificado se confirma y no guarda nada, y se cuenta. `IntegrationShedAccepted` e
-  `IntegrationUndecodedHigh` informan de ambos casos.
+  `IntegrationUndecodedHigh` informan de ambos casos. Un [decodificador de payload](../guides/payload-decoders.md)
+  escrito en el perfil de dispositivo puede decodificar en su lugar la trama cruda en la plataforma;
+  decodifica uplinks en vivo a partir de la v1.2.
 - **Escritura ○ / Lectura ○**: no hay downlink. Un comando emitido a un dispositivo que informó por última
   vez a través de una integración **se acepta y luego falla** en el siguiente barrido de entrega con
   `COMMAND_TRANSPORT_UNSUPPORTED`, en lugar de esperar hasta caducar. El fallo es definitivo. Un
