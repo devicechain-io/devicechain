@@ -129,17 +129,22 @@ func deriveWindow(start, end time.Time) Window {
 // ~3.5 minutes past it), and an event stamped after a fixed end-of-drive pad is outside the
 // window the store is read in, so a stored, PUBACKed event reads as missing. The window end is
 // therefore the later of the padded drive end and the padded latest accepted instant: bounded
-// by what was actually acknowledged, never by an arbitrary extra margin. Loss is still seen:
+// by what the harness actually sent and had acknowledged or written, never by an arbitrary extra margin. Loss is still seen:
 // an accepted event the store lacks is inside the window and absent from it.
 func ledgerWindow(start, end time.Time, led *sim.IdentityLedger) Window {
 	w := deriveWindow(start, end)
 	if led == nil {
 		return w
 	}
-	latest, _ := led.LatestAccepted()
-	for _, at := range latest {
-		if e := at.Add(windowPad); e.After(w.End) {
-			w.End = e
+	// Accepted (QoS 1 PUBACKs) and ambiguous (QoS 0 writes, unconfirmed publishes) both name rows
+	// that may be stored, so both bound the window.
+	for _, d := range led.Snapshot().Devices {
+		for _, set := range [][]int64{d.Accepted, d.Ambiguous} {
+			for _, us := range set {
+				if e := time.UnixMicro(us).Add(windowPad); e.After(w.End) {
+					w.End = e
+				}
+			}
 		}
 	}
 	return w

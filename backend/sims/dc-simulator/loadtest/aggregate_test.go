@@ -508,3 +508,14 @@ func TestAggregateDrillLimitIsHonouredAndLoud(t *testing.T) {
 		t.Fatalf("default drill limit %d is too small for an overload run", DefaultAggregateDrillMax)
 	}
 }
+
+func TestLedgerWindowCoversAQoS0WriteStampedAfterTheDrive(t *testing.T) {
+	start := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
+	end := start.Add(time.Minute)
+	led := sim.NewIdentityLedger()
+	late := end.Add(2 * time.Minute)
+	led.Record(sim.OutcomeAmbiguous, "dev-1", "Measurement", late.Format(time.RFC3339Nano))
+	if got, want := ledgerWindow(start, end, led).End, late.Add(windowPad); !got.Equal(want) {
+		t.Fatalf("window end %s, want %s", got, want)
+	}
+}
