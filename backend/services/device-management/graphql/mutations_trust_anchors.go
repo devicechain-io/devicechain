@@ -109,8 +109,13 @@ func (r *SchemaResolver) PutDeviceRevocationList(ctx context.Context, args struc
 		AnchorToken: args.AnchorToken, Crl: []byte(args.CrlPem), IssuerChainPem: chain,
 		MaxBytes: api.GraphqlCrlTextBound(),
 	})
-	if err != nil {
+	// The list is stored even when its sessions could not be confirmed ended: that is the result's
+	// sessionsEnded, not a failed mutation.
+	if _, err = model.SessionsEndedOf(err); err != nil {
 		return nil, err
+	}
+	if res == nil {
+		return nil, errors.New("the upload returned no result")
 	}
 	grace := api.RevocationLimits().DefaultStaleGrace
 	if anchor, aerr := api.DeviceTrustAnchorsByToken(ctx, []string{args.AnchorToken}); aerr == nil && len(anchor) == 1 {
