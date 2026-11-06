@@ -942,3 +942,23 @@ func TestTheRehearsalUnderSkipInfrastructureSaysWhatItLeaves(t *testing.T) {
 		t.Errorf("a finished upgrade under --skip-infrastructure does not say what it left:\n%s", out)
 	}
 }
+
+// The post-rollout claim check runs after the broker wait and before the store wait, and its failure
+// fails the apply. Negative control: dropping the call from applyUpgradeInfra leaves err nil.
+func TestApplyUpgradeInfraFailsWhenTheClaimCheckFails(t *testing.T) {
+	var b, s int
+	w := noopWaits(&b, &s)
+	w.claims = func(context.Context) error { return errors.New("upgrade incomplete: claim x capacity < request") }
+	tf := &fakeUpgradeTofu{plans: []*tfjson.Plan{{}}}
+	p, err := planGated(context.Background(), tf, t.TempDir(), nil, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = applyUpgradeInfra(context.Background(), &State{Values: map[string]string{}}, p, w)
+	if err == nil || !strings.Contains(err.Error(), "upgrade incomplete") {
+		t.Fatalf("err = %v", err)
+	}
+	if s != 0 {
+		t.Fatal("the store was waited on after the claims check failed")
+	}
+}

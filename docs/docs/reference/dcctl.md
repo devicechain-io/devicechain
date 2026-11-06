@@ -1579,7 +1579,9 @@ and sim destroy leaves it in place because it is shared by every towerpulse sim.
 --tier to use an existing tier instead; that tier is then never created or changed.
 dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger one
 (--tier rc-100k, say) adds --tier-config with the limits it must hold and create makes
-the tier the same way, raising but never lowering it.
+the tier the same way, raising but never lowering it. A tier that already exists must state
+every limit the config names (dcctl cannot see an inherited default), or create refuses and
+names the missing key.
 
 ```
 dcctl sim create <name> [flags]
@@ -1598,7 +1600,7 @@ dcctl sim create <name> [flags]
       --shed-priority int    shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band
       --tenant-name string   the tenant's display name, as the console shows it (default: the scenario's own, else "<sim> (sim)")
       --tier string          tenant tier to package the sim at (default: the tier the scenario needs, which create makes if absent, else silver)
-      --tier-config string   with --tier: JSON object of integer limits the named tier must hold, such as '{"ingestReadingsPerSecond":100000}'; create makes the tier if absent and raises (never lowers) a present one
+      --tier-config string   with --tier: JSON object of integer limits the named tier must hold, such as '{"ingestReadingsPerSecond":100000}'; create makes the tier if absent and raises (never lowers) a present one, which must already state every limit named
 ```
 
 ### Options inherited from parent commands

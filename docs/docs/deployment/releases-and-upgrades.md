@@ -761,7 +761,6 @@ What needs action:
 - **Move `client_credentials` requests that name a `resource` to also name a `scope`.** Such a request is counted and logged in this release and still succeeds. It is refused only in the next major release. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you write the instance configuration yourself** (`instance.existingSecret`), add `infrastructure.tokenAudience`. When the MCP area is deployed and the document does not list its resource, `dcctl upgrade` prints a warning with the block to add, and refuses once `enforcement` is `enforce`. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you set the MCP server's `resourceUrl` yourself, write its scheme and host in lowercase** before enforcement. See [Tokens are checked against their resource](#v120-token-audience).
-- **Write each `infrastructure.tokenAudience.externalResources` entry without percent-escapes in its path.** The chart now refuses a path containing `%`, because an encoded trailing slash (`%2F`) passed the chart's check and then failed the services' check at startup. Use the plain character instead.
 - **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
 
 

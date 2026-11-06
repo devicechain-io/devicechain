@@ -16,6 +16,7 @@ import (
 	tfjson "github.com/hashicorp/terraform-json"
 
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -407,26 +408,39 @@ func TestTheCertificateExpiryIsNotPublishedWhileTheStatefulSetIsGone(t *testing.
 // 🔴 A PENDING FILESYSTEM RESIZE ON A CLAIM WHOSE SERVER IS GONE DOES NOT BLOCK THE UPGRADE. The
 // filesystem half of an expansion completes only when a pod mounts the claim, and only the
 // StatefulSet this apply recreates starts that pod; refusing is a permanent deadlock. Every other
-// unfinished state still refuses, and so does the same state with the server present.
+// unfinished state still refuses: the same state with the server present, a controller still
+// resizing, a node-side failure (NodeResizeError / NodeResizeInfeasible, which a started pod will
+// not cure), and a request that was raised again mid-resize (the controller has not allocated it).
 //
 // Negative control: the earlier rule (any FileSystemResizePending or short capacity refuses) fails
-// the "deadlock" case; dropping the pod-absent or the not-Resizing condition fails the others.
+// the "deadlock" case; removing the pod-absent, not-Resizing, node-failure or allocated-resources
+// check fails the case that names it.
 func TestAPendingFilesystemResizeWithNoServerDoesNotDeadlockTheUpgrade(t *testing.T) {
-	cond := func(t corev1.PersistentVolumeClaimConditionType) []corev1.PersistentVolumeClaimCondition {
-		return []corev1.PersistentVolumeClaimCondition{{Type: t, Status: corev1.ConditionTrue}}
+	cond := func(ts ...corev1.PersistentVolumeClaimConditionType) []corev1.PersistentVolumeClaimCondition {
+		var out []corev1.PersistentVolumeClaimCondition
+		for _, ct := range ts {
+			out = append(out, corev1.PersistentVolumeClaimCondition{Type: ct, Status: corev1.ConditionTrue})
+		}
+		return out
 	}
+	pending := corev1.PersistentVolumeClaimFileSystemResizePending
 	for _, c := range []struct {
 		name       string
 		dropPod    bool
 		conditions []corev1.PersistentVolumeClaimCondition
-		capacity   string
-		wantRefuse bool
+		allocated  string // "" = the claim reports no allocation
+		infeasible bool
+		wantRefuse string // "" = proceeds
 	}{
-		{"deadlock: resize pending, server gone", true, cond(corev1.PersistentVolumeClaimFileSystemResizePending), "16Gi", false},
-		{"resize pending, server present", false, cond(corev1.PersistentVolumeClaimFileSystemResizePending), "16Gi", true},
-		{"controller still resizing, server gone", true, cond(corev1.PersistentVolumeClaimResizing), "16Gi", true},
-		{"short capacity with no condition, server gone", true, nil, "16Gi", true},
-		{"resize pending and controller resizing, server gone", true, append(cond(corev1.PersistentVolumeClaimFileSystemResizePending), cond(corev1.PersistentVolumeClaimResizing)...), "16Gi", true},
+		{"deadlock: resize pending, server gone", true, cond(pending), "36Gi", false, ""},
+		{"resize pending, server present", false, cond(pending), "36Gi", false, "volume expansion has not finished"},
+		{"controller still resizing, server gone", true, cond(corev1.PersistentVolumeClaimResizing), "36Gi", false, "volume expansion has not finished"},
+		{"short capacity with no condition, server gone", true, nil, "36Gi", false, "volume expansion has not finished"},
+		{"pending and resizing, server gone", true, cond(pending, corev1.PersistentVolumeClaimResizing), "36Gi", false, "volume expansion has not finished"},
+		{"node resize error, server gone", true, cond(pending, corev1.PersistentVolumeClaimNodeResizeError), "36Gi", false, "node failed to resize the volume of dc-nats-js-dc-nats-1"},
+		{"node resize infeasible, server gone", true, cond(pending), "36Gi", true, "node failed to resize the volume of dc-nats-js-dc-nats-1"},
+		{"request raised again mid-resize, server gone", true, cond(pending), "16Gi", false, "volume expansion has not finished"},
+		{"no allocation reported, server gone", true, cond(pending), "", false, "volume expansion has not finished"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var objs []runtime.Object
@@ -435,7 +449,14 @@ func TestAPendingFilesystemResizeWithNoServerDoesNotDeadlockTheUpgrade(t *testin
 				case *corev1.PersistentVolumeClaim:
 					if o.Name == "dc-nats-js-dc-nats-1" {
 						o.Status.Conditions = c.conditions
-						o.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(c.capacity)}
+						o.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("16Gi")}
+						if c.allocated != "" {
+							o.Status.AllocatedResources = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(c.allocated)}
+						}
+						if c.infeasible {
+							o.Status.AllocatedResourceStatuses = map[corev1.ResourceName]corev1.ClaimResourceStatus{
+								corev1.ResourceStorage: corev1.PersistentVolumeClaimNodeResizeInfeasible}
+						}
 					}
 				case *corev1.Pod:
 					if c.dropPod && o.Name == "dc-nats-1" {
@@ -449,8 +470,53 @@ func TestAPendingFilesystemResizeWithNoServerDoesNotDeadlockTheUpgrade(t *testin
 				t.Fatal(err)
 			}
 			why := orphanedBrokerNotReady(infra.BrokerPods, infra.BrokerClaims)
-			if c.wantRefuse != (why != "") {
-				t.Fatalf("refused = %v (%q), want refused = %v", why != "", why, c.wantRefuse)
+			if c.wantRefuse == "" && why != "" {
+				t.Fatalf("a deadlock case was refused: %s", why)
+			}
+			if c.wantRefuse != "" && !strings.Contains(why, c.wantRefuse) {
+				t.Fatalf("refusal = %q, want it to contain %q", why, c.wantRefuse)
+			}
+		})
+	}
+}
+
+// 🔴 AFTER THE ROLLOUT THE CLAIMS MUST HAVE THE CAPACITY THEY ASKED FOR. The broker's file-store
+// ceiling is sized from the request, so a resize that never completed would let JetStream write past
+// the disk. A claim of a server beyond the replicas is not judged.
+//
+// Negative control: without the capacity comparison the short-claim cases pass.
+func TestTheUpgradeFailsWhenAClaimIsStillSmallerThanItsRequestAfterTheRollout(t *testing.T) {
+	ns := InstanceNamespace("prod")
+	replicas := int32(2)
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: natsStatefulSetName, Namespace: ns},
+		Spec: appsv1.StatefulSetSpec{Replicas: &replicas}}
+	claim := func(name, req, have string) *corev1.PersistentVolumeClaim {
+		c := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(req)}}}}
+		if have != "" {
+			c.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(have)}
+		}
+		return c
+	}
+	for _, c := range []struct {
+		name    string
+		claims  []runtime.Object
+		wantErr string
+	}{
+		{"all grown", []runtime.Object{claim("dc-nats-js-dc-nats-0", "36Gi", "36Gi"), claim("dc-nats-js-dc-nats-1", "36Gi", "36Gi")}, ""},
+		{"one short", []runtime.Object{claim("dc-nats-js-dc-nats-0", "36Gi", "36Gi"), claim("dc-nats-js-dc-nats-1", "36Gi", "16Gi")}, "claim dc-nats-js-dc-nats-1 capacity 16Gi < request 36Gi"},
+		{"no capacity reported", []runtime.Object{claim("dc-nats-js-dc-nats-0", "36Gi", "")}, "claim dc-nats-js-dc-nats-0 capacity"},
+		{"a stale claim beyond the replicas is not judged", []runtime.Object{claim("dc-nats-js-dc-nats-0", "36Gi", "36Gi"), claim("dc-nats-js-dc-nats-1", "36Gi", "36Gi"), claim("dc-nats-js-dc-nats-3", "36Gi", "8Gi")}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cs := fake.NewSimpleClientset(append(c.claims, sts)...)
+			err := verifyBrokerClaimsGrown(context.Background(), cs, ns, 50*time.Millisecond, 10*time.Millisecond)
+			switch {
+			case c.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), "upgrade incomplete") || !strings.Contains(err.Error(), c.wantErr)):
+				t.Fatalf("err = %v, want upgrade incomplete naming %q", err, c.wantErr)
 			}
 		})
 	}

@@ -806,7 +806,6 @@ Qué requiere acción:
 - **Haga que las solicitudes `client_credentials` que indican un `resource` indiquen también un `scope`.** Una solicitud así se cuenta y se registra en esta versión y sigue funcionando. Solo se rechaza en la próxima versión mayor. Consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 - **Si escribe usted mismo la configuración de la instancia** (`instance.existingSecret`), añada `infrastructure.tokenAudience`. Cuando el área MCP está desplegada y el documento no incluye su recurso, `dcctl upgrade` muestra un aviso con el bloque que hay que añadir, y se niega a continuar cuando `enforcement` es `enforce`. Consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 - **Si fija usted mismo la `resourceUrl` del servidor MCP, escriba su esquema y su host en minúsculas** antes de la aplicación obligatoria. Consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
-- **Escriba cada entrada de `infrastructure.tokenAudience.externalResources` sin secuencias de escape con `%` en la ruta.** El chart ahora rechaza una ruta que contenga `%`, porque una barra final codificada (`%2F`) pasaba la comprobación del chart y luego fallaba la de los servicios al arrancar. Use el carácter sin codificar.
 - **Espere que los cambios de perfil y de tipo de dispositivo lleguen tarde a las réplicas actualizadas mientras dura el despliegue.** Consulte [Cambios de perfil durante una actualización progresiva](#v120-profile-cache).
 
 
