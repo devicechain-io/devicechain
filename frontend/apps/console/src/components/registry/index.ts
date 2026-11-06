@@ -13,6 +13,7 @@ export { ResourceDetailPage } from './ResourceDetailPage';
 export {
   tokenColumn,
   nameColumn,
+  nameWithTokenColumn,
   descriptionColumn,
   createdColumn,
   groupColumns,

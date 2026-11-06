@@ -22,7 +22,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { errMessage, typeCountLabel, StatusBadge } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  tokenColumn,
+  nameWithTokenColumn,
   descriptionColumn,
   createdColumn,
   type RegistryResource,
@@ -308,7 +308,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   tokenOf: (p) => p.token,
   nameOf: (p) => p.name ?? null,
   columns: [
-    tokenColumn<DeviceProfile>(),
+    nameWithTokenColumn<DeviceProfile>(),
     { header: 'entities:deviceProfileColCategory', cell: (p) => p.category || <Dash /> },
     {
       header: 'entities:deviceProfileColUsedBy',

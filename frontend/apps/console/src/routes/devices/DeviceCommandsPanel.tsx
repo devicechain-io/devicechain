@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Send } from 'lucide-react';
-import { isCancellableCommandStatus, type CommandParameter } from '@devicechain/dashboards';
+import { isCancellableCommandStatus, isTerminalCommandStatus, type CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
   defaultValues,
@@ -52,6 +52,12 @@ import {
 import { getDeviceCommandVocabulary, type PublishedCommand } from '@/lib/api/device-management';
 
 const pageSize = 25;
+
+// How often the history re-reads while at least one command is still in flight. There is no
+// command-status subscription on the platform, so this is the console's usual live-data
+// shape for a record that changes server-side (see RolloutDetailPage): poll while something
+// is outstanding, stop once everything has settled.
+export const COMMAND_POLL_MS = 3000;
 
 // Four states are still in flight — QUEUED / HELD / SENT / PARKED — but only THREE of
 // them can still be cancelled. SENT is the exception: the command is already at the
@@ -103,10 +109,31 @@ export function DeviceCommandsPanel({
   const [submitting, setSubmitting] = useState(false);
   const [version, reload] = useReload();
 
+  // Bumped by the poll below. A separate counter from `version` on purpose: `version` also
+  // keys the held-while-disabled notice, which must not re-read every few seconds.
+  const [pollTick, setPollTick] = useState(0);
+
   const { data, loading, error } = useQuery(
     () => listCommands({ deviceToken, pageNumber: 1, pageSize }),
-    [deviceToken, version],
+    [deviceToken, version, pollTick],
   );
+
+  // 🔴 `data` is STICKY (see useQuery): it is the previous answer while a re-read is in
+  // flight or has failed. That is what lets a poll repaint rows in place instead of
+  // flashing a spinner every few seconds, but it may also be ANOTHER device's history while
+  // this device's loads. Rows carry their device, so only this device's rows are shown.
+  const history = data && data.results.every((c) => c.deviceToken === deviceToken) ? data : null;
+  const commands = history?.results ?? [];
+
+  // Poll only while something can still change. An unrecognised status reads as in flight
+  // (isTerminalCommandStatus), so a status this build has never heard of keeps polling
+  // rather than freezing the row.
+  const outstanding = commands.some((c) => !isTerminalCommandStatus(c.status));
+  useEffect(() => {
+    if (!outstanding) return;
+    const id = setInterval(() => setPollTick((n) => n + 1), COMMAND_POLL_MS);
+    return () => clearInterval(id);
+  }, [outstanding]);
 
   // The device's PUBLISHED vocabulary — what the enqueue gate will actually accept.
   // Loaded separately from the history so a vocabulary failure degrades the form
@@ -266,8 +293,6 @@ export function DeviceCommandsPanel({
     }
   };
 
-  const commands = data?.results ?? [];
-
   return (
     <div className="space-y-6">
       {/* Commands queued for a DISABLED device are held, not sent and not cancelled. */}
@@ -374,9 +399,9 @@ export function DeviceCommandsPanel({
       </div>}
 
       {/* History / audit trail. */}
-      {loading ? (
+      {loading && !history ? (
         <LoadingState description={t('loadingCommands')} />
-      ) : error ? (
+      ) : error && !history ? (
         <ErrorState description={error} />
       ) : commands.length === 0 ? (
         <EmptyState description={t('noCommandsIssued')} />

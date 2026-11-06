@@ -283,3 +283,15 @@
   height: 0.875rem;
   border-width: 2px;
 }
+
+/* The automation canvas's zoom controls (@xyflow/react). The library paints them with its
+ * own light/dark defaults, keyed to a colorMode prop this app never sets, so in dark mode
+ * they rendered as a white box. xyflow reads these override variables first; pointing them
+ * at the theme tokens makes the controls follow the app's theme in both modes. */
+.react-flow {
+  --xy-controls-button-background-color: hsl(var(--card));
+  --xy-controls-button-background-color-hover: hsl(var(--accent));
+  --xy-controls-button-color: hsl(var(--foreground));
+  --xy-controls-button-color-hover: hsl(var(--accent-foreground));
+  --xy-controls-button-border-color: hsl(var(--border));
+}
