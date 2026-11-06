@@ -90,12 +90,13 @@ func Encode(t Table) ([]byte, error) {
 	return json.Marshal(t)
 }
 
-// Decode parses and validates a mirrored table. Unknown fields are refused: a table written by a
-// newer release that this reader would half-understand must fail loudly, not route on the half.
+// Decode parses and validates a mirrored table. A Format newer than this build's is refused: a
+// table a newer release wrote that this reader would half-understand must fail loudly, not route
+// on the half. Unknown fields under a known format are tolerated, so a minor can add a field
+// without stopping an older reader.
 func Decode(b []byte) (Table, error) {
 	var t Table
 	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&t); err != nil {
 		return Table{}, fmt.Errorf("partition: the mirrored table does not parse: %w", err)
 	}
