@@ -657,3 +657,35 @@ func TestTheUpgradeMountPrecheckPrecedesTheRecordedVersion(t *testing.T) {
 			fset.Position(guard.Pos()), fset.Position(records[0]))
 	}
 }
+
+// 🔴 A MODE SWITCH WITH NO --mqtt-host KEEPS THE RECORDED HOST; WITH NONE RECORDED IT IS REFUSED.
+// The pre-cluster flag check cannot see the record, so it lets the combination through
+// (CheckMQTTExposureFlagsForUpgrade); this is the settlement that decides.
+//
+// Negative control: settling against an empty record (the old pre-cluster behaviour) refuses the
+// first case with "needs --mqtt-host", and dropping the missing-host check accepts the second.
+func TestAnUpgradeModeSwitchKeepsTheRecordedHostAndRefusesWhenThereIsNone(t *testing.T) {
+	settle := func(inst *dcv1beta1.Instance) (*State, error) {
+		st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+		err := applyUpgradeDeclaration(st, inst, UpgradeOptions{
+			Options: Options{Instance: "guide", MQTTExposure: MQTTExposureLoadBalancer},
+		})
+		return st, err
+	}
+	t.Run("recorded host is kept", func(t *testing.T) {
+		inst := readyGuide()
+		inst.Spec.MQTTExposure, inst.Spec.MQTTHost = MQTTExposureGateway, "mqtt.example.com"
+		st, err := settle(inst)
+		if err != nil {
+			t.Fatalf("a mode switch that keeps the recorded host was refused: %v", err)
+		}
+		if st.MQTTExposure != MQTTExposureLoadBalancer || st.MQTTHost != "mqtt.example.com" {
+			t.Fatalf("settled %q on %q, want loadbalancer on the recorded host", st.MQTTExposure, st.MQTTHost)
+		}
+	})
+	t.Run("no recorded host is refused", func(t *testing.T) {
+		if _, err := settle(readyGuide()); err == nil || !strings.Contains(err.Error(), "needs --mqtt-host") {
+			t.Fatalf("err = %v, want it to say it needs --mqtt-host", err)
+		}
+	})
+}

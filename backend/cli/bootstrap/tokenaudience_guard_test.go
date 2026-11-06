@@ -25,6 +25,7 @@ func TestTokenAudienceSchemaRefusesUnknownKeysAndBadExternalResources(t *testing
 		{"external over plain http on a real host", map[string]interface{}{"externalResources": []interface{}{"http://partner.example.org"}}},
 		{"external with an uppercase host", map[string]interface{}{"externalResources": []interface{}{"https://Partner.example.org"}}},
 		{"external with a trailing slash", map[string]interface{}{"externalResources": []interface{}{"https://partner.example.org/"}}},
+		{"external with an encoded trailing slash", map[string]interface{}{"externalResources": []interface{}{"https://partner.example.org/v1%2F"}}},
 		{"external with a query", map[string]interface{}{"externalResources": []interface{}{"https://partner.example.org/x?a=b"}}},
 		{"external with userinfo", map[string]interface{}{"externalResources": []interface{}{"https://u@partner.example.org"}}},
 	} {

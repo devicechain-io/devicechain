@@ -67,6 +67,9 @@ const (
 	// brokerRolloutTimeout matches the nats release's own timeout
 	// (modules/nats/main.tf), which is sized for a rolling restart of every server.
 	brokerRolloutTimeout = 15 * time.Minute
+	// brokerClaimGrowTimeout is how long the claims get, after the servers are ready, to show the
+	// capacity they asked for (a filesystem resize finishes seconds after a pod mounts the claim).
+	brokerClaimGrowTimeout = 2 * time.Minute
 )
 
 // liveVolumes are the sizes an existing instance's volumes have.
@@ -279,25 +282,65 @@ func (i liveInfra) volumes() (liveVolumes, error) {
 // StatefulSet this apply recreates. Refusing on it would leave an operator unable to do the one
 // thing that fixes it. Proceeding with fewer servers than the claims is what a normal Helm upgrade
 // of a broker that lost a node does too: the quorum that was up stays up while the rest start.
-func orphanedBrokerNotReady(pods []corev1.Pod, claims []corev1.PersistentVolumeClaim) string { // A volume claim whose expansion has not finished still has its old capacity, and the
+func orphanedBrokerNotReady(pods []corev1.Pod, claims []corev1.PersistentVolumeClaim) string {
+	// A volume claim whose expansion has not finished still has its old capacity, and the
 	// broker's file-store ceiling would be derived from a size the disk does not have yet.
-	var growing []string
+	//
+	// 🔴 EXCEPT A CLAIM WHOSE ONLY OUTSTANDING STEP IS THE FILESYSTEM HALF AND WHOSE SERVER IS GONE.
+	// The controller half of the expansion is done (FileSystemResizePending, no Resizing), and the
+	// filesystem half completes only when a pod mounts the claim. Nothing owns an orphaned pod, so
+	// the only thing that starts that pod is the StatefulSet this apply recreates: refusing would
+	// be a permanent deadlock. With the server present the refusal stands (it is mounted and the
+	// resize is still being applied, or it is not ready), and so does every other unfinished state.
+	// The exception also needs the controller to have allocated the FULL request (a request raised
+	// again mid-resize is not yet allocated, and only the controller can take it further), and no
+	// node-side failure: a resize the node reported impossible will not finish by a pod starting.
+	present := make(map[int]bool, len(pods))
+	for _, p := range pods {
+		present[ordinalOf(p.Name)] = true
+	}
+	var growing, failed []string
 	for _, c := range claims {
 		want, ok := c.Spec.Resources.Requests[corev1.ResourceStorage]
 		if !ok {
 			continue
 		}
-		have, ok := c.Status.Capacity[corev1.ResourceStorage]
-		if !ok || have.Cmp(want) < 0 {
-			growing = append(growing, c.Name)
-		}
+		resizing, fsPending, nodeFailed := false, false, false
 		for _, cond := range c.Status.Conditions {
-			if (cond.Type == corev1.PersistentVolumeClaimResizing || cond.Type == corev1.PersistentVolumeClaimFileSystemResizePending) &&
-				cond.Status == corev1.ConditionTrue {
-				growing = append(growing, c.Name)
-				break
+			if cond.Status != corev1.ConditionTrue {
+				continue
+			}
+			switch cond.Type {
+			case corev1.PersistentVolumeClaimResizing:
+				resizing = true
+			case corev1.PersistentVolumeClaimFileSystemResizePending:
+				fsPending = true
+			case corev1.PersistentVolumeClaimNodeResizeError:
+				nodeFailed = true
 			}
 		}
+		if c.Status.AllocatedResourceStatuses[corev1.ResourceStorage] == corev1.PersistentVolumeClaimNodeResizeInfeasible {
+			nodeFailed = true
+		}
+		if nodeFailed {
+			failed = append(failed, c.Name)
+			continue
+		}
+		allocated, hasAllocated := c.Status.AllocatedResources[corev1.ResourceStorage]
+		if fsPending && !resizing && hasAllocated && allocated.Cmp(want) >= 0 && !present[ordinalOf(c.Name)] {
+			continue
+		}
+		have, ok := c.Status.Capacity[corev1.ResourceStorage]
+		if !ok || have.Cmp(want) < 0 || resizing || fsPending {
+			growing = append(growing, c.Name)
+		}
+	}
+	if len(failed) > 0 {
+		sort.Strings(failed)
+		return "the node failed to resize the volume of " + strings.Join(failed, ", ") +
+			" (NodeResizeError or NodeResizeInfeasible): starting a server will not finish it, so the " +
+			"broker's file-store ceiling would be sized from a disk that is not there. Fix the " +
+			"resize (kubectl -n <namespace> describe pvc) or set the claim's request back"
 	}
 	if len(growing) > 0 {
 		sort.Strings(growing)
@@ -465,6 +508,54 @@ func pollUntil(ctx context.Context, timeout, interval time.Duration, consecutive
 		case <-time.After(wait):
 		}
 	}
+}
+
+// verifyBrokerClaimsGrown fails the upgrade when a broker server's volume claim is still smaller
+// than its request once the servers run. The broker's file-store ceiling is sized from the REQUEST,
+// so a resize that never completed (a node-side failure) would let JetStream write past a disk
+// that is not there. Claims of servers beyond the StatefulSet's replicas are not judged.
+func verifyBrokerClaimsGrown(ctx context.Context, typed kubernetes.Interface, ns string, timeout, interval time.Duration) error {
+	_, err := pollUntil(ctx, timeout, interval, 1, func() (bool, string, error) {
+		sts, err := typed.AppsV1().StatefulSets(ns).Get(ctx, natsStatefulSetName, metav1.GetOptions{})
+		if err != nil {
+			return false, "", fmt.Errorf("reading the broker to check its volumes: %w", err)
+		}
+		replicas := 1
+		if sts.Spec.Replicas != nil {
+			replicas = int(*sts.Spec.Replicas)
+		}
+		cl, err := typed.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return false, "", fmt.Errorf("listing the broker's volume claims in %s: %w", ns, err)
+		}
+		var short []string
+		for _, c := range cl.Items {
+			if !brokerClaimNameRe.MatchString(c.Name) || c.DeletionTimestamp != nil {
+				continue
+			}
+			if o := ordinalOf(c.Name); o < 0 || o >= replicas {
+				continue
+			}
+			want, ok := c.Spec.Resources.Requests[corev1.ResourceStorage]
+			if !ok {
+				continue
+			}
+			have, ok := c.Status.Capacity[corev1.ResourceStorage]
+			if !ok || have.Cmp(want) < 0 {
+				short = append(short, fmt.Sprintf("claim %s capacity %s < request %s", c.Name, have.String(), want.String()))
+			}
+		}
+		if len(short) > 0 {
+			sort.Strings(short)
+			return false, strings.Join(short, "; "), nil
+		}
+		return true, "", nil
+	})
+	if err != nil {
+		return fmt.Errorf("upgrade incomplete: %w. The broker's file-store ceiling follows the request, so "+
+			"do not leave it: finish or revert the volume resize (kubectl -n %s describe pvc)", err, ns)
+	}
+	return nil
 }
 
 // waitForBrokerRollout blocks until every broker server runs the current template and
@@ -1500,6 +1591,9 @@ type infraWaits struct {
 	admission func(context.Context) error
 	broker    func(context.Context) error
 	store     func(context.Context) error
+	// claims re-reads the broker's volume claims after the rollout and fails when one is still
+	// smaller than its request. Nil in a test that does not exercise it.
+	claims func(context.Context) error
 }
 
 func clusterInfraWaits(st *State, typed kubernetes.Interface, dyn dynamic.Interface) infraWaits {
@@ -1510,6 +1604,9 @@ func clusterInfraWaits(st *State, typed kubernetes.Interface, dyn dynamic.Interf
 		},
 		broker: func(ctx context.Context) error {
 			return waitForBrokerRollout(ctx, typed, ns, brokerRolloutTimeout, rolloutPollInterval)
+		},
+		claims: func(ctx context.Context) error {
+			return verifyBrokerClaimsGrown(ctx, typed, ns, brokerClaimGrowTimeout, rolloutPollInterval)
 		},
 		store: func(ctx context.Context) error {
 			if err := waitForCNPGClusterReady(ctx, dyn, typed, ns, TsdbClusterName, cnpgClusterReadyTimeout, rolloutPollInterval); err != nil {
@@ -1566,6 +1663,11 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 	st.InfraApplied = true
 	if err := waits.broker(ctx); err != nil {
 		return err
+	}
+	if waits.claims != nil {
+		if err := waits.claims(ctx); err != nil {
+			return err
+		}
 	}
 	return waits.store(ctx)
 }

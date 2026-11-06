@@ -5,7 +5,12 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,8 +54,8 @@ const (
 	barmanCertGrace = 3 * time.Minute
 	// barmanCertPoll is the gap between looks.
 	barmanCertPoll = 10 * time.Second
-	// barmanCertNamespace is the operator/plugin namespace; dcctl never overrides the
-	// cluster root's cnpg_namespace default.
+	// barmanCertNamespace is the operator/plugin namespace when the operator does not set the
+	// cluster root's cnpg_namespace; see cnpgNamespaceOf.
 	barmanCertNamespace = "cnpg-system"
 )
 
@@ -61,27 +66,33 @@ var barmanPluginCertificates = []string{"barman-cloud-server", "barman-cloud-cli
 type barmanHealingApplier struct {
 	tf          tofuApplier
 	kubeContext string
+	// namespace is where the plugin's Certificates live: the cluster root's cnpg_namespace. Empty
+	// means the default.
+	namespace string
 }
 
 func (b barmanHealingApplier) Apply(ctx context.Context, opts ...tfexec.ApplyOption) error {
-	return withBarmanCertHealer(ctx, b.kubeContext, func() error { return b.tf.Apply(ctx, opts...) })
+	return withBarmanCertHealer(ctx, b.kubeContext, b.namespace, func() error { return b.tf.Apply(ctx, opts...) })
 }
 
 // withBarmanCertHealer runs apply while a healer watches the plugin's Certificates, and stops
 // it when apply returns. The healer's own problems are reported, never returned.
-func withBarmanCertHealer(ctx context.Context, kubeContext string, apply func() error) error {
+func withBarmanCertHealer(ctx context.Context, kubeContext, namespace string, apply func() error) error {
 	dyn, _, _, err := kubeClients(kubeContext)
 	if err != nil {
 		// Not being able to watch must not stop the apply from running.
 		fmt.Println(color.YellowString("   cannot watch the Barman Cloud plugin certificates: %v", err))
 		return apply()
 	}
+	if namespace == "" {
+		namespace = barmanCertNamespace
+	}
 	hctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		healBarmanCertificates(hctx, dyn, barmanCertNamespace, barmanCertGrace, barmanCertPoll)
+		healBarmanCertificates(hctx, dyn, namespace, barmanCertGrace, barmanCertPoll)
 	}()
 	defer func() { cancel(); wg.Wait() }()
 	return apply()
@@ -175,4 +186,53 @@ func recreateCertificate(ctx context.Context, dyn dynamic.Interface, old *unstru
 		return fmt.Errorf("creating: %w", err)
 	}
 	return nil
+}
+
+// cnpgNamespaceOf is the namespace the operator declared for the CloudNativePG operator and the
+// Barman Cloud plugin: cnpg_namespace in a variables file the cluster root loads on its own, or
+// in TF_VAR_cnpg_namespace, or "" for the root's default. The healer must watch the namespace the
+// plugin is installed into, not a hard-coded one, or it heals nothing on an install that moved it.
+//
+// OpenTofu's precedence is followed: the environment is the weakest source, then terraform.tfvars
+// (and its .json form), then the *.auto.tfvars files in lexical order, each overriding the last.
+// A commented-out assignment declares nothing.
+func cnpgNamespaceOf(rootdir string) string {
+	found := strings.TrimSpace(os.Getenv("TF_VAR_cnpg_namespace"))
+	entries, err := os.ReadDir(rootdir)
+	if err != nil {
+		return found
+	}
+	blockComment := regexp.MustCompile(`(?s)/\*.*?\*/`)
+	assign := regexp.MustCompile(`(?m)^[ \t]*cnpg_namespace[ \t]*=[ \t]*"([^"]+)"`)
+	read := func(n string) {
+		b, err := os.ReadFile(filepath.Join(rootdir, n))
+		if err != nil {
+			return
+		}
+		if strings.HasSuffix(n, ".json") {
+			var m map[string]json.RawMessage
+			var v string
+			if json.Unmarshal(b, &m) == nil && json.Unmarshal(m["cnpg_namespace"], &v) == nil && v != "" {
+				found = v
+			}
+			return
+		}
+		if all := assign.FindAllSubmatch(blockComment.ReplaceAll(b, nil), -1); len(all) > 0 {
+			found = string(all[len(all)-1][1])
+		}
+	}
+	for _, n := range []string{"terraform.tfvars", "terraform.tfvars.json"} {
+		for _, e := range entries {
+			if !e.IsDir() && e.Name() == n {
+				read(n)
+			}
+		}
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if !e.IsDir() && (strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json")) {
+			read(n)
+		}
+	}
+	return found
 }

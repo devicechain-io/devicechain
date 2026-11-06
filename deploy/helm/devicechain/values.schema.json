@@ -190,9 +190,9 @@
                       "maxItems": 8,
                       "items": {
                         "type": "string",
-                        "pattern": "^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://(localhost|127[.]0[.]0[.]1))(:[0-9]+)?(/[^?#@\\s]*[^/?#@\\s])?$"
+                        "pattern": "^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://(localhost|127[.]0[.]0[.]1))(:[0-9]+)?(/[^?#@%\\s]*[^/?#@%\\s])?$"
                       },
-                      "description": "Resource servers outside the platform that validate DeviceChain tokens through the authorization server's JWKS endpoint. The authorization server may issue tokens bound to them; no DeviceChain plane accepts those tokens. Each entry is an https URL (http only for a loopback host) with a lowercase scheme and host, no query, fragment or trailing slash, that does not sit under the platform's own API address."
+                      "description": "Resource servers outside the platform that validate DeviceChain tokens through the authorization server's JWKS endpoint. The authorization server may issue tokens bound to them; no DeviceChain plane accepts those tokens. Each entry is an https URL (http only for a loopback host) with a lowercase scheme and host, no query, fragment, percent-escape or trailing slash, that does not sit under the platform's own API address."
                     },
                     "areaBaseUrl": {
                       "type": "string",

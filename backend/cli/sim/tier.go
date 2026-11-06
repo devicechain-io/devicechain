@@ -55,15 +55,24 @@ var manifestTiers = map[string]TierSpec{
 // run names (--tier) can be made by the same command that uses it: dcctl bootstrap seeds only
 // the platform tiers, and there is no tier command.
 func CustomTier(token, rawConfig string) (TierSpec, error) {
-	var cfg map[string]int
+	// *int, not int: a JSON null decodes into a plain int as 0 with no error, which would create a
+	// tier that forbids the resource.
+	var raw map[string]*int
 	dec := json.NewDecoder(strings.NewReader(rawConfig))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return TierSpec{}, fmt.Errorf("--tier-config must be a JSON object of integer limits, such as "+
 			`{"ingestReadingsPerSecond":100000}: %w`, err)
 	}
-	if len(cfg) == 0 {
+	if len(raw) == 0 {
 		return TierSpec{}, fmt.Errorf("--tier-config names no limits")
+	}
+	cfg := make(map[string]int, len(raw))
+	for k, v := range raw {
+		if v == nil {
+			return TierSpec{}, fmt.Errorf("--tier-config: %q is null; give an integer limit or leave the key out", k)
+		}
+		cfg[k] = *v
 	}
 	return TierSpec{
 		Token:       token,
@@ -109,7 +118,8 @@ func (e *TierRefusedError) Unwrap() error { return e.Cause }
 
 // EnsureTier makes the tier exist with at least the spec's config. It is idempotent: an absent
 // tier is created, one already at or above every floor is left alone, and one below a floor has
-// only those keys raised (its other keys, and any key above its floor, are kept). Any failure is
+// only those keys raised (its other keys and any key above its floor are kept). A tier that omits a
+// key the floors name is refused, naming the key: its inherited value is not visible here.. Any failure is
 // returned as a *TierRefusedError.
 func (a *Admin) EnsureTier(ctx context.Context, spec TierSpec) error {
 	if err := a.ensureTier(ctx, spec); err != nil {
@@ -138,7 +148,10 @@ func (a *Admin) ensureTier(ctx context.Context, spec TierSpec) error {
 				return fmt.Errorf("tier %q has a config that is not a JSON object: %w", spec.Token, err)
 			}
 		}
-		merged, changed := raiseToFloors(current, spec.Config)
+		merged, changed, unstated := raiseToFloors(current, spec.Config)
+		if len(unstated) > 0 {
+			return &unstatedFloorsError{tier: spec.Token, keys: unstated, floors: spec.Config}
+		}
 		if !changed {
 			return nil
 		}
@@ -162,9 +175,43 @@ func (a *Admin) ensureTier(ctx context.Context, spec TierSpec) error {
 	return tolerateExists(fmt.Errorf("create tier %q: %w", spec.Token, err), err)
 }
 
-// raiseToFloors returns current with every floor key that is missing or lower raised to the
-// floor, and whether anything changed.
-func raiseToFloors(current map[string]any, floors map[string]int) (map[string]any, bool) {
+// unstatedFloorsError refuses a floor on an existing tier that does not state the key.
+//
+// 🔴 WE CANNOT SEE WHAT THE TIER INHERITS, SO WE NEITHER WRITE NOR ASSUME. Writing the floor could
+// LOWER an inherited limit for every tenant on the tier; leaving the key alone could leave it BELOW
+// the floor the scenario needs (a missing calculatedMetricsPerProfile inherits 0). Neither is a
+// value to guess: the operator states it on the tier, and then the raise-only rule applies.
+// (The platform defaults live in the services' governance package, which dcctl does not link; a
+// copy here would drift from them.)
+type unstatedFloorsError struct {
+	tier   string
+	keys   []string
+	floors map[string]int
+}
+
+func (e *unstatedFloorsError) Error() string {
+	parts := make([]string, 0, len(e.keys))
+	for _, k := range e.keys {
+		parts = append(parts, fmt.Sprintf("%q:%d", k, e.floors[k]))
+	}
+	return fmt.Sprintf("tier %q does not state %s; dcctl cannot see the inherited value, so it will not guess. "+
+		"State it on the tier (updateTenantTier on /admin/graphql with a config that includes {%s}), "+
+		"then run this again and it is raised if below",
+		e.tier, strings.Join(quoteAll(e.keys), ", "), strings.Join(parts, ","))
+}
+
+func quoteAll(ks []string) []string {
+	out := make([]string, len(ks))
+	for i, k := range ks {
+		out[i] = fmt.Sprintf("%q", k)
+	}
+	return out
+}
+
+// raiseToFloors returns current with every floor key whose STATED value is lower raised to the
+// floor, whether anything changed, and the floor keys the config does not state (sorted). It never
+// writes an unstated key: see unstatedFloorsError.
+func raiseToFloors(current map[string]any, floors map[string]int) (map[string]any, bool, []string) {
 	out := make(map[string]any, len(current)+len(floors))
 	for k, v := range current {
 		out[k] = v
@@ -175,12 +222,18 @@ func raiseToFloors(current map[string]any, floors map[string]int) (map[string]an
 	}
 	sort.Strings(keys)
 	changed := false
+	var unstated []string
 	for _, k := range keys {
+		// A KEY THE TIER DOES NOT STATE IS INHERITED, NOT ZERO. Only a stated number below its floor
+		// is raised; a missing or null key is reported, not written.
 		have, ok := out[k].(float64)
-		if !ok || have < float64(floors[k]) {
+		switch {
+		case !ok:
+			unstated = append(unstated, k)
+		case have < float64(floors[k]):
 			out[k] = floors[k]
 			changed = true
 		}
 	}
-	return out, changed
+	return out, changed, unstated
 }

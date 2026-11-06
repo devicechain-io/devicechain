@@ -36,7 +36,9 @@ and sim destroy leaves it in place because it is shared by every towerpulse sim.
 --tier to use an existing tier instead; that tier is then never created or changed.
 dcctl bootstrap seeds only the platform tiers, so a load run that needs a bigger one
 (--tier rc-100k, say) adds --tier-config with the limits it must hold and create makes
-the tier the same way, raising but never lowering it.`,
+the tier the same way, raising but never lowering it. A tier that already exists must state
+every limit the config names (dcctl cannot see an inherited default), or create refuses and
+names the missing key.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runSimCreate,
 	SilenceUsage: true,
@@ -51,7 +53,7 @@ func init() {
 		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
 	simCreateCmd.Flags().String("tenant-name", "", "the tenant's display name, as the console shows it (default: the scenario's own, else \"<sim> (sim)\")")
 	simCreateCmd.Flags().String("tier", "", "tenant tier to package the sim at (default: the tier the scenario needs, which create makes if absent, else "+sim.DefaultTenantTier+")")
-	simCreateCmd.Flags().String("tier-config", "", "with --tier: JSON object of integer limits the named tier must hold, such as '{\"ingestReadingsPerSecond\":100000}'; create makes the tier if absent and raises (never lowers) a present one")
+	simCreateCmd.Flags().String("tier-config", "", "with --tier: JSON object of integer limits the named tier must hold, such as '{\"ingestReadingsPerSecond\":100000}'; create makes the tier if absent and raises (never lowers) a present one, which must already state every limit named")
 	simCreateCmd.Flags().Int("shed-priority", 0, "shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
 }
