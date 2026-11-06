@@ -1095,8 +1095,10 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 
 	// Start flushing the payload decoders' health and failure samples.
-	if err = DecodeAccounting.Start(ctx); err != nil {
-		return err
+	if DecodeAccounting != nil {
+		if err = DecodeAccounting.Start(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Start the device auth-callout responder once the broker is configured for it
