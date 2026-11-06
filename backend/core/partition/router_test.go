@@ -103,8 +103,8 @@ func TestRouterRefusesAfterAnIncompatibleMirror(t *testing.T) {
 	_, err := r.ShardGroup("a")
 	require.NoError(t, err)
 
-	// A table from a newer release (unknown field) must stop routing, not be ignored.
-	b.m[TableKey] = []byte(`{"p":64,"groups":[],"future":1}`)
+	// A table in a NEWER FORMAT must stop routing, not be ignored.
+	b.m[TableKey] = withJSON(t, tbl, `"format":2`)
 	require.Error(t, r.Refresh(b))
 	_, err = r.ShardGroup("a")
 	require.Error(t, err)
@@ -154,4 +154,42 @@ func TestRouterConcurrentUpdatesNeverGoBackwards(t *testing.T) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	require.Equal(t, uint64(200), r.table.Generation)
+}
+
+// withJSON is the encoding of tbl with an extra raw member spliced in.
+func withJSON(t *testing.T, tbl Table, member string) []byte {
+	t.Helper()
+	enc, err := Encode(tbl)
+	require.NoError(t, err)
+	return append(append(enc[:len(enc)-1:len(enc)-1], ',', ' '), append([]byte(member), '}')...)
+}
+
+func TestRouterAcceptsAnAdditiveFieldUnderAKnownFormat(t *testing.T) {
+	b := newMapBucket()
+	r := NewRouter("inst")
+	tbl := NewTable(DefaultP)
+	tbl.Generation = 1
+	b.m[TableKey] = withJSON(t, tbl, `"future":{"x":1}`)
+	require.NoError(t, r.Refresh(b))
+	_, err := r.ShardGroup("a")
+	require.NoError(t, err)
+	// ...and the same under an explicit current format.
+	tbl.Generation = 2
+	b.m[TableKey] = withJSON(t, tbl, `"format":1,"future":2`)
+	require.NoError(t, r.Refresh(b))
+}
+
+func TestFormatZeroAndOneAreTheSameTable(t *testing.T) {
+	a, b := NewTable(DefaultP), NewTable(DefaultP)
+	b.Format = TableFormat
+	require.True(t, a.Equal(b))
+	two := NewTable(DefaultP)
+	two.Format = TableFormat + 1
+	require.False(t, a.Equal(two))
+	enc, err := Encode(a)
+	require.NoError(t, err)
+	require.NotContains(t, string(enc), "format", "the first format adds nothing to the wire")
+	c := NewTable(DefaultP)
+	c.Format = TableFormat + 1
+	require.Error(t, c.Validate())
 }

@@ -17,6 +17,17 @@ var ErrNoPlacement = errors.New("partition: no placement loaded yet; refusing to
 // ErrNoTenant is returned by Router when asked to route an empty tenant.
 var ErrNoTenant = errors.New("partition: a tenant is required to route")
 
+// KNOWN LIMITS, documented rather than solved here:
+//
+//   - A Refresh that reads the mirror, then loses a race with a concurrent Update, can leave the
+//     router refusing (bad set) although a good table has since been adopted; the next good
+//     Refresh clears it. Routing fails closed in the meantime, never open.
+//   - The generation is a counter, not an epoch. After a disaster-recovery restore that lowers
+//     it, a router that already holds a higher generation answers ErrStale and keeps the old
+//     placement, while a freshly started pod adopts the lower one, so pods can disagree until
+//     the generation passes the old value. A restore must therefore restart every pod that
+//     routes, or the generation must be advanced past the old one before serving.
+//
 // Router answers tenant -> shard group from the latest placement table. It is the reader side of
 // the mirror: a service builds one, feeds it from the KV bucket, and hands it to whatever routes
 // by lane. The hot path is one atomic load and a hash; it never touches a database.
