@@ -576,8 +576,14 @@ var sweepExemptions = map[string]string{
 	"device-management.testPayloadDecoder": "an authoring preview: it runs a decoder document and an " +
 		"input (a frame, a body or a stored sample) the CALLER writes against a profile's draft metrics, " +
 		"and stores nothing, so there is no stored row for the drill to reach through it. Its sampleId " +
-		"path has nothing to read until the decode accounting slice (B3b) writes samples. " +
-		"TODO(B3b): seed a failing decode and exercise sampleId from the drill.",
+		"path reads a sample the resolver stores for a failing uplink, which only a decoded uplink " +
+		"through the ingest path can produce, so the drill has none to name",
+	"device-management.payloadDecoderHealth": "a profile's decode tally, written by the resolver as it " +
+		"decodes uplinks (per replica, once a minute), so the drill has no row to seed; the profile it " +
+		"names is swept through deviceProfile. It needs device:write, which the sweep's reads do not rely on",
+	"device-management.payloadDecoderSamples": "a profile's stored failing uplinks, written by the resolver " +
+		"when a decode fails inside its budget, so the drill has no row to seed; the profile it names is " +
+		"swept through deviceProfile. It lists no bytes, and needs device:write",
 	"device-management.validateCommandEnqueue": "a pre-flight gate over a command the CALLER is about " +
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +
