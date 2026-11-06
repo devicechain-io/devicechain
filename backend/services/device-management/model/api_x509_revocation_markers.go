@@ -48,6 +48,16 @@ import (
 // so a tx2 that ran twice, or two expanders, converge on the same rows; the re-sweep already
 // covers an admission that was in flight at the commit.
 //
+// KNOWN RESIDUAL (found in review, deliberately not closed here). The argument covers credentials
+// that ENTER the set after tx1. It does not cover a credential that LEAVES or MOVES between tx1's
+// commit and tx2's read: delete the sole certificate credential of device A, or re-point it, in that
+// window and A is no longer a target, whereas the previous design had queued A durably under the
+// lock. The window is the gap between two statements of one call (milliseconds), or the time until the
+// background drain if the process died in between, and a loss needs the deleting call's OWN inline
+// kick to fail too (a credential delete queues no durable kick of its own). Closing it means every
+// credential delete or move under an anchor with a pending marker must queue the device's kick in
+// its own transaction; that touches several write paths and is left to a follow-up.
+//
 // The lock order is unchanged: crl-writers advisory, anchor row, then queue rows. tx2 takes the
 // marker row and then queue rows, and neither of the former.
 
