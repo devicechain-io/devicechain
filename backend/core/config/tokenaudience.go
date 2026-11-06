@@ -29,6 +29,12 @@ const (
 // MaxTokenAudienceResources is the most entries either resource list may hold.
 const MaxTokenAudienceResources = 8
 
+// MaxTokenAudienceResourceLen is the longest resource identifier the authorization server will
+// accept in a request (user-management's ValidateResource refuses anything longer as
+// invalid_target). A configured identifier above it could never match a request, so the
+// configuration refuses it at startup instead of enforcing a list that can never be satisfied.
+const MaxTokenAudienceResourceLen = 2048
+
 // TokenAudienceConfiguration is the instance's token-audience policy: which `aud` values an
 // API plane accepts and which `resource` values the authorization server may issue for.
 //
@@ -135,6 +141,10 @@ func (c TokenAudienceConfiguration) Validate() error {
 	areas := map[string]struct{}{}
 	for _, a := range AreaAudiences() {
 		if r := AreaResource(c.AreaBaseUrl, a); r != "" {
+			if len(r) > MaxTokenAudienceResourceLen {
+				return fmt.Errorf("infrastructure.tokenAudience.areaBaseUrl: the %s area's resource identifier is %d bytes; at most %d are allowed",
+					a, len(r), MaxTokenAudienceResourceLen)
+			}
 			areas[r] = struct{}{}
 		}
 	}
@@ -156,6 +166,10 @@ func (c TokenAudienceConfiguration) Validate() error {
 			field := fmt.Sprintf("infrastructure.tokenAudience.%s[%d]", l.key, i)
 			if err := ValidateResourceURL(field, e, true); err != nil {
 				return err
+			}
+			if len(e) > MaxTokenAudienceResourceLen {
+				return fmt.Errorf("%s: %d bytes; at most %d are allowed (a longer identifier is refused as invalid_target on every request)",
+					field, len(e), MaxTokenAudienceResourceLen)
 			}
 			if prev, dup := seen[e]; dup {
 				return fmt.Errorf("%s: %q is already listed in %s; a resource may appear once", field, e, prev)

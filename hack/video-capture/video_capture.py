@@ -29,6 +29,7 @@ import argparse
 import base64
 import datetime
 import json
+import math
 import os
 import random
 import re
@@ -97,7 +98,51 @@ def utc(ts):
 
 
 def _is_num(x):
-    return isinstance(x, (int, float)) and not isinstance(x, bool)
+    # json.load accepts NaN and Infinity: a non-finite wait or deadline would never end (or never fire)
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        return False
+    return isinstance(x, int) or math.isfinite(x)  # an int of any size is finite (and float() of a huge one would overflow)
+
+
+def pid_alive(pid):
+    """Whether a process with this id is running. os.kill(pid, 0) is not a probe on Windows (it terminates the process), so
+    that platform asks the kernel for the process's exit status instead."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists, we may not look at it; only "no such process" is dead
+        try:
+            code = ctypes.c_ulong()
+            return bool(k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stale_frame_dirs(out_dir, alive=pid_alive, me=None):
+    """The `.frames-<pid>` directories of recorders that are gone: a recorder that was killed leaves its frames behind, and one that is
+    still running (another recorder on the same --out) must keep its own. A name that carries no pid is nobody's, so it is stale."""
+    me = os.getpid() if me is None else me
+    out = []
+    for d in os.listdir(out_dir):
+        if not d.startswith(".frames-"):
+            continue
+        tail = d[len(".frames-"):]
+        pid = int(tail) if tail.isdigit() else None
+        if pid is None or pid == me or not alive(pid):
+            out.append(d)
+    return out
 
 
 def _check_target(t, where, errs):
@@ -749,10 +794,10 @@ class Recorder:
         self.state = None
         self.leaked = False       # set by the page's per-change report (see MASK_JS) the moment the password appears in any text or value
         self.pending = []         # responses seen by the page, checked at each step
+        self.deadline = None      # wall-clock end of the shot being recorded (its max_s), checked by every guard
         os.makedirs(out_dir, exist_ok=True)
-        for d in os.listdir(out_dir):  # frames of a run that was killed
-            if d.startswith(".frames-"):
-                shutil.rmtree(os.path.join(out_dir, d), ignore_errors=True)
+        for d in stale_frame_dirs(out_dir):  # frames of a run that was killed; a live recorder's are left alone
+            shutil.rmtree(os.path.join(out_dir, d), ignore_errors=True)
         self.frames_root = os.path.join(out_dir, f".frames-{os.getpid()}")
 
     def _say(self, m):
@@ -1064,7 +1109,8 @@ class Recorder:
     def attempt(self, shot, attempt):
         specs = shot.get("mask", []) or []
         reduce = shot.get("reduce_motion", self.doc.get("reduce_motion", True))
-        self.leaked, self.pending = False, []
+        self.leaked, self.pending, self.deadline = False, [], None
+        seen = set()
         steps = shot["steps"]
         hidden = None
         if "signin" in steps[0] and not steps[0].get("on_camera"):
@@ -1074,7 +1120,6 @@ class Recorder:
         masking = bool(specs)
         try:
             ctx = self.new_context(self.state, reduce=reduce)
-            seen = set()
             ctx.expose_function("__dcMaskSeen", lambda i: seen.add(i))
             ctx.expose_function("__dcLeak", self._on_text)
             spec = {"css": mask_css(specs), "selectors": mask_selectors(specs),
@@ -1096,6 +1141,8 @@ class Recorder:
                 failed_at = "sign-in to /dash (not recorded)"
                 self.signin_dash(page, None, hidden, shot, masking)
             clip.begin()
+            if shot.get("max_s"):
+                self.deadline = clip.start + shot["max_s"]
             for j, step in enumerate(steps):
                 failed_at = f"step {j + 1} ({next(k for k in STEP_KINDS if k in step)})"
                 self.do_step(page, clip, step, shot)
@@ -1120,13 +1167,15 @@ class Recorder:
             return shot_entry(shot, start, end, clip.marks, shot.get("trim", {}), self.fps, attempt, win)
         except Exception as e:
             if page is not None and not (isinstance(e, CaptureError) and e.unsafe):
-                self.fail_shot(page, shot, failed_at, masking)  # runs the guard first; raises SecretLeak instead of photographing a leak
+                unmatched = [i for i, m in enumerate(specs) if m.get("required", True) and i not in seen]
+                self.fail_shot(page, shot, failed_at, masking, unmatched and [self.mask_name(specs[i]) for i in unmatched])  # runs the guard first; raises SecretLeak instead of photographing a leak
             elif page is not None:
                 self._say("  no failure screenshot: this failure is about what the page shows")
             if isinstance(e, CaptureError):
                 raise type(e)(f"{failed_at}: {e}") if isinstance(e, SecretLeak) else CaptureError(f"{failed_at}: {e}", e.exit_code, e.unsafe)
             raise
         finally:
+            self.deadline = None
             if td:
                 shutil.rmtree(td, ignore_errors=True)
             if ctx is not None:
@@ -1158,6 +1207,8 @@ class Recorder:
         mask stylesheet gone from a document that should have it, the sign-in page, or an unreadable page (fail closed, after one retry)."""
         if self.leaked:
             raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
+        if self.deadline is not None and time.time() > self.deadline:
+            raise CaptureError("the shot ran past its max_s while recording; it is stopped instead of filling the disk with frames")
         if "/login" in page.url and not self.signed_out:
             raise CaptureError("the console sent the shot to the sign-in (the session was not accepted)", unsafe=True)
         self.drain()
@@ -1179,7 +1230,7 @@ class Recorder:
         if self.leaked:
             raise SecretLeak("the sign-in password appeared in the page (a text change, an attribute or an input value); no clip is kept")
 
-    def fail_shot(self, page, shot, where, masking=False):
+    def fail_shot(self, page, shot, where, masking=False, unmatched=()):
         """A screenshot of the failed page, taken only when the page passes the guard: a SecretLeak propagates, and any other guard failure
         (or an unreadable page) means no screenshot."""
         try:
@@ -1188,6 +1239,11 @@ class Recorder:
             raise
         except Exception:  # noqa: BLE001
             self._say("  no failure screenshot: the page could not be shown to be safe")
+            return
+        if unmatched:
+            # A mask that has matched nothing so far may be hiding nothing, or may be a selector the page renamed over a token that
+            # is on screen now: the guard cannot tell, and a PNG is not re-checked the way a clip is. No screenshot.
+            self._say("  no failure screenshot: a required mask has matched nothing yet (" + ", ".join(unmatched) + ")")
             return
         d = os.path.join(self.out, "failures")
         path = os.path.join(d, shot["id"] + ".png")

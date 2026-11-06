@@ -106,7 +106,7 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 
 ### 确认消息代理监听器运行 {#confirming-the-tap}
 
-从 DeviceChain 自身消息代理读取连接需要四项条件。缺少任一项，监听器都会**拒绝启动**，记录原因并设置 `presence_tap_off{reason}` 说明具体哪项。从未明确上报的 MQTT 设备保持推断，看起来与从未提供该能力的实例相同，因为功能上确实如此。四项要求是：
+从 DeviceChain 自身消息代理读取连接需要四项条件。缺少任一项，监听器都会**拒绝启动**，记录原因并设置 `devicechain_eventsources_presence_tap_off{reason}` 说明具体哪项。从未明确上报的 MQTT 设备保持推断，看起来与从未提供该能力的实例相同，因为功能上确实如此。四项要求是：
 
 - `brokerPresence.enabled` 未设为 `false`。
 - 配置了 NATS 系统账户凭据。`dcctl bootstrap` 会生成；手动组装实例缺少监听器，通常因为没有凭据。
@@ -137,13 +137,13 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 
 两个信号说明监听器未运行，覆盖不同故障。
 
-`presence_tap_off{reason}` 是直接信号。每条拒绝启动路径都会将它设为 1，标签指出原因。它回答设备群静默时原本无法回答的问题：长期 MQTT 设备群可以数天没有连接/断开通知，因此普通在线状态事件流无法区分正在监听的实例与从未成功启动监听器的实例。
+`devicechain_eventsources_presence_tap_off{reason}` 是直接信号。每条拒绝启动路径都会将它设为 1，标签指出原因。它回答设备群静默时原本无法回答的问题：长期 MQTT 设备群可以数天没有连接/断开通知，因此普通在线状态事件流无法区分正在监听的实例与从未成功启动监听器的实例。
 
-它不覆盖启动后停止工作的监听器，因为没有拒绝启动发生。**`presence_canary_missed_total` 覆盖这种情况，是应设置告警的计数器。** 服务每分钟打开自己的 MQTT 连接，只为了让正常监听器能够观察。健康监听器的 `presence_canary_observed_total` 增长，链路损坏时 `presence_canary_missed_total` 增长。
+它不覆盖启动后停止工作的监听器，因为没有拒绝启动发生。**`devicechain_eventsources_presence_canary_missed_total` 覆盖这种情况，是应设置告警的计数器。** 服务每分钟打开自己的 MQTT 连接，只为了让正常监听器能够观察。健康监听器的 `devicechain_eventsources_presence_canary_observed_total` 增长，链路损坏时 `devicechain_eventsources_presence_canary_missed_total` 增长。
 
 探针按自身计划运行，独立于下述修复扫描。这种分离使计数器可信：只有被观察对象健康时才能报告的测量工具，会在最重要时刻沉默。
 
-其他在线状态计数器应理解为流量，而非健康。安静设备群的 `presence_events_total` 可以正常保持不变；刚关闭的监听器中它也可以正常*变化*，因为释放设备会为每台设备产生 `presence_events_total{state="demoted"}` 事件。两种趋势都不能说明是否仍在读取在线状态。
+其他在线状态计数器应理解为流量，而非健康。安静设备群的 `devicechain_eventsources_presence_events_total` 可以正常保持不变；刚关闭的监听器中它也可以正常*变化*，因为释放设备会为每台设备产生 `devicechain_eventsources_presence_events_total{state="demoted"}` 事件。两种趋势都不能说明是否仍在读取在线状态。
 
 ### 调整监听器 {#broker-presence-settings}
 
@@ -153,7 +153,7 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 |---|---|---|
 | `enabled` | 未设置时开启 | 运行监听器。设为 `false` 有意关闭消息代理明确上报 MQTT 状态，例如代理与不允许系统账户订阅者的系统共享。MQTT 设备随后使用推断，监听器原先明确上报的设备在之后几分钟内按节奏改回推断。 |
 | `reconcileSeconds` | `300` | 消息代理实际连接列表与平台列表双向比较的频率。**这不是兜底。** 正常重启不报告任何断开，因此这轮扫描是唯一纠正这些设备的机制，明确上报设备也没有不活跃扫描。降低值可加快修复，代价是每轮进行一次全代理集群清点和每租户一次读取。 |
-| `canarySeconds` | `60` | 服务打开自身 MQTT 连接证明监听器存活的频率，也是 `presence_canary_missed_total` 计数对应的计划。 |
+| `canarySeconds` | `60` | 服务打开自身 MQTT 连接证明监听器存活的频率，也是 `devicechain_eventsources_presence_canary_missed_total` 计数对应的计划。 |
 | `canaryDeadlineSeconds` | `15` | 单次探针时限。过短会报告不存在的故障。 |
 | `inventoryGatherSeconds` | `5` | 扫描收集代理集群回复的时间。过短会将缓慢节点视为缺失，使该轮所有断开判断被暂缓。 |
 
@@ -161,14 +161,14 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 
 ### 修复扫描超时会明确报告 {#reconcile-pass-timeout}
 
-每轮修复遍历实例所有租户，并读取其明确上报设备，大实例扫描时间较长。扫描有预算限制，无法及时完成就停止，报告 `presence_reconcile_runs_total{outcome="timeout"}`，并记录处理了多少租户。
+每轮修复遍历实例所有租户，并读取其明确上报设备，大实例扫描时间较长。扫描有预算限制，无法及时完成就停止，报告 `devicechain_eventsources_presence_reconcile_runs_total{outcome="timeout"}`，并记录处理了多少租户。
 
 下轮从首个未处理租户继续，而不是从头开始。否则，预算始终不够的设备群每次只修复前几个租户，其余永远不会处理，不是延迟，而是永远没有。
 
 - 偶尔 `timeout` 表示修复落后，但每个租户仍轮得到。
 - 持续出现表示实例需要更多余量。轮转末尾设备遗漏断开的纠正最晚。
 
-`presence_reconcile_runs_total` 为每轮提供一个结果：
+`devicechain_eventsources_presence_reconcile_runs_total` 为每轮提供一个结果：
 
 | 结果 | 含义 |
 | --- | --- |
@@ -182,7 +182,7 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 
 ### 状态变化计入租户接入上限 {#presence-and-the-ingest-ceiling}
 
-连接与断开变化通过与遥测相同的每租户[接入限制](./governance.md)。**租户达到上限时会被拒绝**，计入 `presence_events_refused_total`。
+连接与断开变化通过与遥测相同的每租户[接入限制](./governance.md)。**租户达到上限时会被拒绝**，计入 `devicechain_eventsources_presence_events_refused_total`。
 
 这是有意的。连接反复变化完全由设备控制，否则没有成本：不断重连的设备会成为接入限制看不到的无计量写入放大器。
 
@@ -200,6 +200,6 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 
 代价是无法区分一种情况：**有意缩小消息代理集群**。回复节点数少于记忆最大值，之后每轮都被视为不完整，离线修复永远不执行，不只是下一轮之前，而是整个进程生命周期。被移除节点遗留的设备无限期在线，且明确上报设备没有不活跃兜底，超时也不会纠正。
 
-**缩小 NATS 集群后，重启 `event-sources`。** 需要重启却未执行时，`presence_reconcile_withheld_disconnects_total` 持续增长。扩容不需要操作。
+**缩小 NATS 集群后，重启 `event-sources`。** 需要重启却未执行时，`devicechain_eventsources_presence_reconcile_withheld_disconnects_total` 持续增长。扩容不需要操作。
 
 如果重启必须等待，遗留设备无需等待。对该来源运行 `dcctl presence demote`，将设备改回推断方式，十分钟不活跃扫描可根据自身证据将其标为离线。参见[将设备改回推断在线状态](../deployment/edge-services.md#demoting-a-device)。降级修复已错误的设备，重启仍是防止后续设备出错的必要步骤。

@@ -66,7 +66,11 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | El listener de profiling de diagnóstico, desactivado por defecto (véase [Observabilidad](./observability.md)). Su `address` no es ajustable |
 | `frontend.replicas`, `frontend.resources` | Los pods de la consola |
 | `metrics.alerts`, `metrics.grafanaDashboards` | Reglas de alerta y paneles |
-| `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | Cómo se publica el ingress y quién puede llegar a los pods |
+| `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | Cómo se publica el ingress y quién puede llegar a los pods |
+| `mqttExposure.loadBalancer` | Los ajustes de nube del balanceador de carga de MQTT, como un balanceador interno y los rangos de origen permitidos |
+| `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | El margen de interrupción para el que se dimensionan los streams de eventos y sus techos de bytes y mensajes. La reserva se comprueba con el volumen del broker antes de escribir nada |
+| `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Si los eventos se escriben como envelopes, desactivado por defecto |
+| `brokerAdmin.allowCeilingShrink` | Permite que una actualización baje un techo de stream por debajo de lo que contiene. Fíjalo para esa actualización y quítalo después |
 
 `functionalAreas.event-management.replicas` no es ajustable aunque el resto de esa área sí lo
 sea: lo fija `--ha`, y la reserva de conexiones del almacén de eventos se dimensiona según ese

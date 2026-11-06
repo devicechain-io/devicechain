@@ -158,7 +158,7 @@ whenever the device returns.
 - If device management cannot be reached when you enqueue, the command is refused rather than sent
   ungated.
 
-The counter `command_delivery_window_restamps_total` counts commands whose hold was moved by an edit,
+The counter `devicechain_commanddelivery_command_delivery_window_restamps_total` counts commands whose hold was moved by an edit,
 a delete, a window that closed again before the device returned, or their device type moving to
-another window or losing its window. The counter `command_delivery_window_commands_undefined_total`
+another window or losing its window. The counter `devicechain_commanddelivery_command_delivery_window_commands_undefined_total`
 counts waiting commands failed because their device's profile no longer defines them.

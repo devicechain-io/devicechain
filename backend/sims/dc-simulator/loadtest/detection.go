@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/graphqlws"
 	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-simulator/loadtest/detmonitor"
 	"github.com/devicechain-io/dc-simulator/mqttload"
@@ -899,7 +900,7 @@ func RunDetectionProbes(ctx context.Context, hs *sim.Handshake, cfg DetectionCon
 			if terr != nil {
 				return nil, fmt.Errorf("%s: %w", liveTokenAbsentReason(window, terr), terr)
 			}
-			dm, derr := detmonitor.Dial(dctx, hs.Endpoints.EventProcessingWS, liveToken)
+			dm, derr := detmonitor.Dial(dctx, hs.Endpoints.EventProcessingWS, liveToken, graphqlws.WithHost(hs.HostHeader))
 			if derr != nil {
 				return nil, fmt.Errorf("the detectionStream dial failed: %w", derr)
 			}

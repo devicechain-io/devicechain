@@ -302,3 +302,126 @@ func TestATenantOverItsShareEvictsItsOwnEntries(t *testing.T) {
 		t.Fatal("the tenant is over its share")
 	}
 }
+
+// TestAFullTierMakesRoomFromTheLargestHolder: when the tier as a whole is full, the entry that
+// goes is the largest holder's, not the least recently used of whoever happens to hold it. A
+// tenant within its share keeps its entries while a larger holder has entries to give, which is
+// what lets the documentation say that one tenant does not evict another's.
+func TestAFullTierMakesRoomFromTheLargestHolder(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 40000), WithLocalTenantShare(40),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 7000, true }))
+	// The quiet tenant's single entry is the oldest in the tier: plain least-recently-used
+	// eviction would take it first.
+	for _, k := range []string{"quiet|1", "big1|1", "big1|2", "big2|1", "big2|2", "late|1"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, k, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"quiet|1", "late|1"} {
+		if h, ok := c.local.getHit(k, c.now()); !ok || h.val == nil {
+			t.Fatalf("%s lost its decoded entry to a larger holder's store (held %v)", k, ok)
+		}
+	}
+	lost := 0
+	for _, k := range []string{"big1|1", "big1|2", "big2|1", "big2|2"} {
+		if h, ok := c.local.getHit(k, c.now()); !ok || h.val == nil {
+			lost++
+		}
+	}
+	if lost != 1 {
+		t.Fatalf("the larger holders lost %d decoded entries between them, want exactly 1", lost)
+	}
+	c.local.mu.Lock()
+	over := c.local.bytes > c.local.maxBytes
+	c.local.mu.Unlock()
+	if over {
+		t.Fatal("the tier is over its byte bound")
+	}
+}
+
+// TestAFullTierNeverEvictsTheEntryJustStored: the tenant that is storing is never made to evict the
+// entry it just stored, even when it is the largest holder and that entry is its only one; the next
+// largest holder gives one up instead.
+func TestAFullTierNeverEvictsTheEntryJustStored(t *testing.T) {
+	ctx := context.Background()
+	charge := 0
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 20000), WithLocalTenantShare(100),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return charge, true }))
+	for _, e := range []struct {
+		key    string
+		charge int
+	}{{"b|1", 4000}, {"b|2", 4000}, {"c|1", 4000}, {"a|1", 9000}} {
+		charge = e.charge
+		if err := c.Set(ctx, e.key, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, e.key, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h, ok := c.local.getHit("a|1", c.now()); !ok || h.val == nil {
+		t.Fatal("the entry just stored was evicted to make room for itself")
+	}
+	if h, ok := c.local.getHit("b|1", c.now()); ok && h.val != nil {
+		t.Fatal("the next largest holder kept its oldest decoded entry")
+	}
+}
+
+// TestTheEntryCountBoundIsLeastRecentlyUsed: when only the entry count is exceeded, the oldest
+// entry goes, not the one belonging to the tenant holding the most bytes.
+func TestTheEntryCountBoundIsLeastRecentlyUsed(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(3, 1<<20), WithLocalTenantShare(100),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 100000, true }))
+	if err := c.Set(ctx, "light|1", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set(ctx, "heavy|1", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := GetCloned(ctx, c, "heavy|1", cloneTypedValue); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"light|2", "light|3"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := c.local.getHit("light|1", c.now()); ok {
+		t.Fatal("the oldest entry survived the entry-count bound")
+	}
+	if _, ok := c.local.getHit("heavy|1", c.now()); !ok {
+		t.Fatal("the biggest holder lost an entry to the entry-count bound, which is not about bytes")
+	}
+}
+
+// TestACacheWithoutAShareEvictsLeastRecentlyUsed: with no tenant share set, a full tier makes room
+// from the least recently used end whoever holds it, as it always did.
+func TestACacheWithoutAShareEvictsLeastRecentlyUsed(t *testing.T) {
+	ctx := context.Background()
+	charge := 0
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 20000),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return charge, true }))
+	for _, e := range []struct {
+		key    string
+		charge int
+	}{{"small|1", 2000}, {"big|1", 9000}, {"big|2", 9000}} {
+		charge = e.charge
+		if err := c.Set(ctx, e.key, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, e.key, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h, ok := c.local.getHit("small|1", c.now()); ok && h.val != nil {
+		t.Fatal("the least recently used entry kept its decoded value while a bigger holder's was dropped")
+	}
+	if h, ok := c.local.getHit("big|1", c.now()); !ok || h.val == nil {
+		t.Fatal("a more recent entry was evicted ahead of the least recently used one")
+	}
+}
