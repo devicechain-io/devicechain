@@ -2,10 +2,10 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# render-take.sh -- turns two RECORDED runs into the Towerpulse cut and the website loop, from Git Bash on Windows.
+# render-take.sh -- turns the RECORDED runs (A, B and, optionally, the rule-disabled control) into the Towerpulse cut and the website loop, from Git Bash on Windows.
 #
-#   render-take.sh plan   --run-a DIR --run-b DIR            writes tools/take/take-plan.json from what the two recordings say happened
-#   render-take.sh render --run-a DIR --run-b DIR            replays each run through the player's frame renderer and encodes every shot to an mp4
+#   render-take.sh plan   --run-a DIR --run-b DIR [--control DIR]   writes tools/take/take-plan.json from what the recordings say happened
+#   render-take.sh render --run-a DIR --run-b DIR [--control DIR]   replays each run through the player's frame renderer and encodes every shot to an mp4
 #   render-take.sh owner  --stills DIR                       the annex owner's part (10 s) from console_stills.py's PNGs: the annex board with data, then devices, then alarms
 #   render-take.sh cut    [--owner-clip FILE]                joins the shots (and the console's part, if there is one) into the 90-second cut
 #   render-take.sh loop                                      the 25-second website loop, from the same footage, as mp4 and webp
@@ -14,7 +14,10 @@
 # Everything is written under Build/take/ (ignored by git): frames/ (deleted after each shot is encoded, only the sampled frames stay in samples/),
 # shots/<id>.mp4, towerpulse-cut.mp4, towerpulse-loop.mp4, towerpulse-loop.webp, contact-sheet.jpg.
 #
-# The player is Build/Towerpulse.exe, started once per run with -tp-replay (the recording), -tp-render (the plan), -tp-run A|B and -tp-out. There is no
+# --control DIR is the rule-disabled run's recording (acceptance.sh rule-disabled): the plan gains a `control` shot (the room overheats, no alarm, no
+# command) and `render` films it like the other runs. A plan that has a control shot cannot be rendered without --control, and the reverse is refused too.
+#
+# The player is Build/Towerpulse.exe, started once per run with -tp-replay (the recording), -tp-render (the plan), -tp-run A|B|control and -tp-out. There is no
 # platform and no network: a take is rendered from what a run recorded, the HUD says REPLAY and the run's id, and every shot whose clock jumps says so.
 # Needs ffmpeg and python on PATH. 1920x1080, 30 fps, H.264 yuv420p, no audio. The loop is sized like the Sitepulse one (720x406, 10 fps webp).
 
@@ -38,11 +41,12 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required on PATH"; }
 cmd="${1:-}"
 [ -n "$cmd" ] || { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; }
 shift
-RUN_A="" RUN_B="" OWNER_CLIP="" STILLS=""
+RUN_A="" RUN_B="" RUN_C="" OWNER_CLIP="" STILLS=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--run-a) RUN_A="${2:?--run-a needs a recording directory}"; shift ;;
 	--run-b) RUN_B="${2:?--run-b needs a recording directory}"; shift ;;
+	--control) RUN_C="${2:?--control needs a recording directory}"; shift ;;
 	--owner-clip) OWNER_CLIP="${2:?--owner-clip needs a file}"; shift ;;
 	--stills) STILLS="${2:?--stills needs a directory}"; shift ;;
 	--out) OUT="${2:?--out needs a directory}"; shift ;;
@@ -56,7 +60,12 @@ PY="$(command -v python3 || command -v python)" || die "python is required"
 
 cmd_plan() {
 	[ -d "$RUN_A" ] && [ -d "$RUN_B" ] || die "--run-a and --run-b must be recording directories"
-	"$PY" -I "$HERE/take_plan.py" --run-a "$RUN_A" --run-b "$RUN_B" --out "$PLAN"
+	if [ -n "$RUN_C" ]; then
+		[ -d "$RUN_C" ] || die "--control must be a recording directory"
+		"$PY" -I "$HERE/take_plan.py" --run-a "$RUN_A" --run-b "$RUN_B" --control "$RUN_C" --out "$PLAN"
+	else
+		"$PY" -I "$HERE/take_plan.py" --run-a "$RUN_A" --run-b "$RUN_B" --out "$PLAN"
+	fi
 }
 
 plan_shots() { # plan_shots <run>: the shot ids of a run in show order
@@ -67,7 +76,7 @@ encode_shot() { # encode_shot <frames dir> <out mp4>
 	ffmpeg -nostdin -loglevel error -y -framerate "$FPS" -i "$1/frame_%06d.jpg" -c:v libx264 -pix_fmt yuv420p -crf 17 -movflags +faststart "$2"
 }
 
-render_run() { # render_run <A|B> <recording dir>
+render_run() { # render_run <A|B|control> <recording dir>
 	local run="$1" rec="$2" frames="$OUT/frames/$1"
 	[ -d "$rec" ] || die "$rec is not a recording directory"
 	rm -rf "$frames"
@@ -98,8 +107,14 @@ cmd_render() {
 	[ -f "$PLAYER" ] || die "no player at $PLAYER: build it first"
 	[ -f "$PLAN" ] || die "no plan at $PLAN: run '$0 plan' first"
 	need ffmpeg
+	# the plan and the arguments must agree about the control run: a control shot with no recording, or a recording the plan has no shot for, is a mistake
+	local has_control
+	has_control="$(plan_shots control | wc -l)"
+	if [ "$has_control" -gt 0 ] && [ -z "$RUN_C" ]; then die "the plan has a control shot: pass --control DIR (the rule-disabled run's recording)"; fi
+	if [ "$has_control" -eq 0 ] && [ -n "$RUN_C" ]; then die "--control was given but the plan has no control shot: re-run '$0 plan ... --control DIR'"; fi
 	render_run A "$RUN_A"
 	render_run B "$RUN_B"
+	[ -z "$RUN_C" ] || render_run control "$RUN_C"
 	log "done: $(find "$OUT/shots" -name "*.mp4" | wc -l) shot clips in $OUT/shots"
 }
 
@@ -188,7 +203,10 @@ cmd_sheet() {
 duration 1
 " "$(win "$OUT/owner-samples/frame_$k.jpg")" >>"$list"; done
 	fi
-	ffmpeg -nostdin -loglevel error -y -f concat -safe 0 -i "$list" -vf "fps=1,scale=480:-2,tile=4x9:padding=4:margin=4:color=0x20242c" -frames:v 1 -q:v 3 "$OUT/contact-sheet.jpg"
+	# one row per shot, plus the console's part (the plan has 8 shots, 9 with the control run)
+	local rows
+	rows="$("$PY" -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["shots"]) + (1 if sys.argv[2] == "1" else 0))' "$PLAN" "$([ -f "$OUT/owner-samples/frame_0.jpg" ] && echo 1 || echo 0)" | tr -d '\015')"
+	ffmpeg -nostdin -loglevel error -y -f concat -safe 0 -i "$list" -vf "fps=1,scale=480:-2,tile=4x${rows}:padding=4:margin=4:color=0x20242c" -frames:v 1 -q:v 3 "$OUT/contact-sheet.jpg"
 	log "contact sheet -> $OUT/contact-sheet.jpg"
 }
 
