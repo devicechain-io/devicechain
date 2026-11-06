@@ -887,9 +887,10 @@ The event store's `max_wal_size` is now a fifth of its volume, never below Postg
 
 #### Size presets {#v120-size-presets}
 
-`dcctl bootstrap` has a new `--size` option, and `dcctl install` accepts `--size base` and `--size compact`. Nothing changes unless you pass it: an instance without a size renders byte for byte what `v1.1.0` rendered, and `--compact` works exactly as before.
+`dcctl bootstrap` has a new `--size` option, and `dcctl install` accepts `--size base` and `--size compact`. Nothing changes unless you pass it: an instance without a size renders byte for byte what it rendered before this change, and `--compact` works exactly as before.
 
 - **`perf-12k` is the first size.** It sets replicas, CPU and memory for the five busy services, the broker's requests and memory limit, the JetStream and event store volumes and the event store's write-ahead log allowance, as measured on one cluster sustaining 12,000 events a second with event envelopes on. The numbers are in [Choosing a size](./sizing.md#perf-12k).
+- **Existing compact instances gain `spec.size: "compact"` on their next write.** The declaration of an instance built with `--compact` is rewritten with the size named beside `compact: true` the next time `dcctl` writes it (an upgrade does); nothing about the instance changes.
 - **It is recorded on the instance** (`spec.size` on the declaration, empty for base) and every `dcctl upgrade` applies it again. A release that retunes a size changes the instances recorded with it on their next upgrade, and says so here.
 - **Your own settings win.** Order, lowest to highest: chart defaults, the size, what `dcctl` works out itself, your `--values` overlay, then an OpenTofu variable you state yourself. See [Which value wins](./sizing.md#precedence).
 - **It is not a switch for anything else.** A size does not turn event envelopes or the fail-closed MQTT acknowledgement on, and with `--ha` it prints that the combination has not been measured.

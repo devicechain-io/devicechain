@@ -24,7 +24,7 @@ var sizeInstallUsage = "cluster size: base (the default) or compact, which is th
 
 // resolveInstallSize folds `--size` into the --compact flag, which stays a permanent alias: compact
 // is true for either spelling, and a --size that contradicts --compact is refused.
-func resolveInstallSize(compact bool, size string) (bool, error) {
+func resolveInstallSize(compact, compactGiven bool, size string) (bool, error) {
 	if err := bootstrap.ValidateSize(size); err != nil {
 		return false, fmt.Errorf("--size: %w", err)
 	}
@@ -35,6 +35,9 @@ func resolveInstallSize(compact bool, size string) (bool, error) {
 		}
 		return compact, nil
 	case bootstrap.SizeCompact:
+		if compactGiven && !compact {
+			return false, fmt.Errorf("--compact=false and --size compact contradict each other")
+		}
 		return true, nil
 	default:
 		return false, fmt.Errorf("--size %s is chosen per instance: run `dcctl bootstrap --size %s`. "+

@@ -278,34 +278,6 @@ func sizeNotices(st *State, envelopesOn bool) []string {
 	return out
 }
 
-// dropOperatorStated removes from vars (name=value) every size-preset assignment the operator
-// states themselves. OpenTofu takes a -var over TF_VAR_*, terraform.tfvars and *.auto.tfvars, so a
-// variable dcctl passes is a variable the operator cannot set: the preset must not pass one they
-// did. stated reports whether the operator declared a name.
-func (p *sizePreset) dropOperatorStated(vars []string, stated func(string) bool) []string {
-	if p == nil {
-		return vars
-	}
-	mine := map[string]bool{}
-	for _, n := range p.tofuVarNames() {
-		mine[n] = true
-	}
-	// Only the FIRST assignment of a name goes: the preset's is emitted before any other of dcctl's
-	// for the same variable (an explicit --event-store-max-wal-mib is appended later), so a flag
-	// given on this very run survives, and OpenTofu takes the last -var.
-	dropped := map[string]bool{}
-	out := make([]string, 0, len(vars))
-	for _, v := range vars {
-		name, _, _ := strings.Cut(v, "=")
-		if mine[name] && !dropped[name] && stated(name) {
-			dropped[name] = true
-			continue
-		}
-		out = append(out, v)
-	}
-	return out
-}
-
 // recordedSize is the size the declaration records: empty for base, so every instance built before
 // the axis existed, and every base instance since, reads and writes the same declaration.
 func recordedSize(st *State) string {
@@ -421,11 +393,49 @@ func (p *sizePreset) docInfraRows() []string {
 	return out
 }
 
-// operatorWinsOverSize is precedence layer 5 for an instance root's variables: the size's variables
-// the operator states in rootdir (terraform.tfvars, *.auto.tfvars, TF_VAR_) are not passed. One
-// function for the bootstrap and the upgrade, so the two cannot disagree about who wins.
-func operatorWinsOverSize(st *State, vars []string, rootdir string) []string {
-	return sizeFor(st).dropOperatorStated(vars, func(name string) bool { return statedByOperator(rootdir, name) })
+// volumeVars are the two preset variables that name a volume an apply must never resize.
+var volumeVars = map[string]bool{"nats_jetstream_storage": true, "timescale_storage": true}
+
+// tofuVarsFor is the preset's variables for this run with precedence layer 5 applied: a variable the
+// operator states (stated) is not emitted, so what they wrote reaches OpenTofu.
+//
+// 🔴 THE TWO VOLUME VARIABLES ARE THE EXCEPTION ONCE THE VOLUME EXISTS. A volume's size is the live
+// one on every path (volumeSize), so an upgrade cannot resize it; leaving the assignment out because
+// a file states the variable would let that file's value grow or shrink a live volume. On a first
+// bootstrap there is no live volume and the operator's statement is honoured like any other.
+func (p *sizePreset) tofuVarsFor(st *State, stated func(string) bool) []sizeVar {
+	var out []sizeVar
+	for _, v := range p.tofuVars(st.LiveVolumes.JetStream, st.LiveVolumes.EventStore) {
+		if volumeVars[v.Name] {
+			live := st.LiveVolumes.JetStream
+			if v.Name == "timescale_storage" {
+				live = st.LiveVolumes.EventStore
+			}
+			if live != "" {
+				out = append(out, v)
+				continue
+			}
+		}
+		if stated(v.Name) {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// verifySizeRecorded refuses a declaration that came back without the preset this run asked it to
+// keep. The API server prunes a field its CRD does not declare, so a cluster whose Instance
+// definition predates spec.size accepts the write, drops the size and reports success; the run
+// would then go on to build base after printing the preset's summary. Compact is not judged here:
+// spec.compact carries it and has always been recorded.
+func verifySizeRecorded(want, got string) error {
+	if want == "" || want == got {
+		return nil
+	}
+	return fmt.Errorf("this cluster's Instance definition does not record size (the declaration came back " +
+		"without the size this run asked it to keep), so a later upgrade would build the instance as base. " +
+		"Run `dcctl install` to move the cluster's definitions onto this release, then run this again")
 }
 
 // adoptRecordedSize settles a re-run's size against the declaration already in the cluster.

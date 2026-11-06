@@ -157,6 +157,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	if err := verifyFailClosedRecorded(st.MqttFailClosed, inst.Spec.MQTTFailClosed); err != nil {
 		return err
 	}
+	if err := verifySizeRecorded(st.Size, inst.Spec.Size); err != nil {
+		return err
+	}
 	if err := ValidateInstanceSpec(inst.Spec); err != nil {
 		return fmt.Errorf("the declaration read back from the cluster is not usable: %w", err)
 	}

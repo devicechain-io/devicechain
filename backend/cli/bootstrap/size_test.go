@@ -7,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -409,33 +407,6 @@ func TestPerf12kKeepsLiveVolumes(t *testing.T) {
 	}
 }
 
-// Precedence layer 5: a variable the operator states is not passed at all.
-func TestOperatorStatedVariablesBeatThePreset(t *testing.T) {
-	p := sizeFor(perfState(false))
-	all := []string{"kubeconfig_context=x"}
-	for _, v := range p.tofuVars("", "") {
-		all = append(all, v.Name+"="+v.Value)
-	}
-	stated := map[string]bool{"nats_memory_limit": true, "timescale_max_wal_size_mib": true, "not_a_preset_var": true}
-	got := p.dropOperatorStated(all, func(n string) bool { return stated[n] })
-	has := func(name string) bool { return passedIn(got, name) }
-	if has("nats_memory_limit") || has("timescale_max_wal_size_mib") {
-		t.Errorf("a stated variable was still passed: %v", got)
-	}
-	if !has("nats_cpu_request") || !has("timescale_storage") || !has("kubeconfig_context") {
-		t.Errorf("an unstated variable was dropped: %v", got)
-	}
-	// A nil preset (base, compact) filters nothing, including a variable dcctl owns.
-	if got := (*sizePreset)(nil).dropOperatorStated(all, func(string) bool { return true }); len(got) != len(all) {
-		t.Error("base dropped variables")
-	}
-	// And through the real detector: TF_VAR_ stated, then not.
-	t.Setenv("TF_VAR_nats_memory_limit", "12Gi")
-	if !statedByOperator(t.TempDir(), "nats_memory_limit") {
-		t.Fatal("TF_VAR_ not detected")
-	}
-}
-
 func TestSizeNoticesNameWhatWasNotMeasured(t *testing.T) {
 	st := perfState(true)
 	n := strings.Join(sizeNotices(st, false), "|")
@@ -513,33 +484,6 @@ func TestUpgradeReappliesTheRecordedSize(t *testing.T) {
 	}
 }
 
-// The caller, not just the function: the variables both applies run with, filtered against a real
-// directory of the operator's files.
-func TestOperatorWinsOverSizeReadsTheRootDirectory(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "terraform.tfvars"), []byte("nats_memory_limit = \"12Gi\""+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "zz-dcctl-event-store.auto.tfvars.json"), []byte(`{"timescale_max_wal_size_mib": 4096}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	st := perfState(false)
-	got := operatorWinsOverSize(st, infraVars(st), dir)
-	if passedIn(got, "nats_memory_limit") || passedIn(got, "timescale_max_wal_size_mib") {
-		t.Errorf("a variable the operator states is still passed: %v", got)
-	}
-	for _, n := range []string{"nats_cpu_request", "nats_jetstream_storage", "timescale_storage"} {
-		if !passedIn(got, n) {
-			t.Errorf("%s was dropped though the operator stated nothing", n)
-		}
-	}
-	// Base is never filtered: the variables it passes (the compact preset's, a live volume) are dcctl's.
-	b := persistenceState(false, true, "default")
-	if all := infraVars(b); len(operatorWinsOverSize(b, all, dir)) != len(all) {
-		t.Error("a non-preset instance had variables dropped")
-	}
-}
-
 // The merge ORDER, tested where the two layers really do disagree. perf-12k states no key dcctl also
 // states, so a test on it alone cannot tell "dcctl over the preset" from "preset over dcctl". This one
 // registers a throwaway preset that states event-management's replicas, which --ha decides itself.
@@ -564,34 +508,6 @@ func TestDcctlComputedValuesBeatAPresetThatDisagrees(t *testing.T) {
 	nats := helmValues(st)["instance"].(map[string]interface{})["config"].(map[string]interface{})["infrastructure"].(map[string]interface{})["nats"].(map[string]interface{})
 	if fmt.Sprint(nats["streamDesignRate"]) != "99" {
 		t.Errorf("streamDesignRate %v, want the preset's 99", nats["streamDesignRate"])
-	}
-}
-
-// An explicit --event-store-max-wal-mib on this run is the operator speaking now: it survives the
-// filter that removes the preset's own assignment, even when a file also states the variable.
-func TestExplicitWalFlagSurvivesTheSizeFilter(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "zz-dcctl-event-store.auto.tfvars.json"), []byte(`{"timescale_max_wal_size_mib": 4096}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	st := perfState(false)
-	wal := 1024
-	st.EventStoreMaxWALMiB = &wal
-	var got []string
-	for _, v := range operatorWinsOverSize(st, infraVars(st), dir) {
-		if strings.HasPrefix(v, "timescale_max_wal_size_mib=") {
-			got = append(got, v)
-		}
-	}
-	if len(got) != 1 || got[0] != "timescale_max_wal_size_mib=1024" {
-		t.Errorf("WAL assignments %v, want only the flag's 1024", got)
-	}
-	// Without the flag, the recorded file value is left to win: nothing is passed.
-	st.EventStoreMaxWALMiB = nil
-	for _, v := range operatorWinsOverSize(st, infraVars(st), dir) {
-		if strings.HasPrefix(v, "timescale_max_wal_size_mib=") {
-			t.Errorf("the preset's WAL allowance is still passed over a recorded one: %s", v)
-		}
 	}
 }
 

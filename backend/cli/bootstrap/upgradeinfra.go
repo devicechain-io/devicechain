@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1378,8 +1379,12 @@ func flattenValues(prefix string, v interface{}, out map[string]interface{}) {
 // on top: a value set there survives every bootstrap and upgrade, one passed by hand
 // with -var survives none.
 func statedByOperator(rootdir, name string) bool {
-	if os.Getenv("TF_VAR_"+name) != "" {
-		return true
+	// The exact, case-sensitive prefix OpenTofu reads. os.Getenv is case-insensitive on Windows,
+	// where tf_var_nats_memory_limit would otherwise count as stated and tofu would ignore it.
+	for _, e := range os.Environ() {
+		if v, ok := strings.CutPrefix(e, "TF_VAR_"+name+"="); ok && v != "" {
+			return true
+		}
 	}
 	entries, err := os.ReadDir(rootdir)
 	if err != nil {
@@ -1388,6 +1393,10 @@ func statedByOperator(rootdir, name string) bool {
 	decl := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=`)
 	for _, e := range entries {
 		n := e.Name()
+		if runtime.GOOS == "windows" {
+			// The file system finds Terraform.tfvars for tofu; match it the same way.
+			n = strings.ToLower(n)
+		}
 		if e.IsDir() || !(n == "terraform.tfvars" || n == "terraform.tfvars.json" ||
 			strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json")) {
 			continue
@@ -1564,12 +1573,10 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 		return nil, err
 	}
 	st.LiveMaxFileStore = maxStoreAfterGrowth(state, rootdir, st.LiveVolumes.JetStream, liveMaxFileStore(state))
-	vars, err := instanceRootVars(st)
+	vars, err := instanceRootVarsIn(st, rootdir)
 	if err != nil {
 		return nil, err
 	}
-	// Precedence layer 5 (size.go): a variable the operator states is theirs, not the preset's.
-	vars = operatorWinsOverSize(st, vars, rootdir)
 	p, err := planGated(ctx, tf, rootdir, vars, st.Instance)
 	if err != nil {
 		return nil, err

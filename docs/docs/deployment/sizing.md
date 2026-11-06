@@ -18,7 +18,7 @@ from `--ha`, which decides how many copies run, while a size decides how big eac
 | --- | --- | --- |
 | `base` | A laptop or a small cluster. The default: an instance that names no size is `base`, and renders exactly what it rendered before sizes existed. | The standard sizing, described in [Service sizing](./bootstrap.md#service-sizing). |
 | `compact` | A laptop with little to spare. The cluster's setting, chosen at install; `--compact` is the same thing and stays. | Described under [`--compact`](./bootstrap.md#--compact). |
-| `perf-12k` | One cluster without `--ha`, about 48 vCPU, sustained 12,000 events a second with event envelopes on. | Measured: 12,000 events a second held clean on GKE, with every event accounted for. |
+| `perf-12k` | One cluster without `--ha`, platform pools of about 40 vCPU, sustained 12,000 events a second with event envelopes on. | The shape was measured: 12,000 events a second held clean on GKE, with every event accounted for. Some values are derived from that run and not yet run as written; see below. |
 
 A size for a higher rate is added only after a measurement shows that rate clean. The name is the
 claim, so a size is never published as a target.
@@ -39,8 +39,7 @@ instances recorded with it on their next upgrade, and its upgrade notes say so.
 
 ## What `perf-12k` sets {#perf-12k}
 
-Each row is one pod. With `--ha` the counts below are multiplied by what HA decides, and the
-sizes of each copy stay as written.
+Each row is one pod. `--ha` decides the replica count of `event-management` (two) and the number of broker servers and database instances (three each); the replica counts below for the other services stay as written, and the size of every copy stays as written.
 
 <!-- size-table:perf-12k:areas -->
 | Service | Replicas | CPU limit | Memory limit | CPU request |
@@ -73,6 +72,10 @@ The broker, the volumes and the event store's write-ahead log allowance:
 The JetStream volume is sized so that the reservation of the design rate fits in it; a volume
 that an instance already has is never resized by an upgrade, so a size applied to an existing
 instance keeps the volumes it was built with.
+
+### Measured and derived {#perf-12k-derived}
+
+The shape (the replicas and CPU limits above, and the 12,000 events a second) was measured on GKE with 40 vCPU of platform pools; the rest of the 48 vCPU of that cluster was the load generator. The measured run used a broker memory limit of 20Gi, an event store volume of 260Gi, a write-ahead log allowance of 46080 MiB and an event-processing pod of 4 CPU and 768Mi. The values this size sets instead are **derived** from that run and have not yet been run as written: the broker's 8Gi limit, the 28Gi JetStream and 160Gi event store volumes, the 20480 MiB allowance, and event-processing's 2 CPU and 1Gi. The next GKE round confirms or corrects them, and the upgrade notes will say if they move.
 
 ### What `perf-12k` does not set {#perf-12k-not}
 

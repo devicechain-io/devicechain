@@ -20,7 +20,7 @@ grande que es cada copia.
 | --- | --- | --- |
 | `base` | Un portátil o un clúster pequeño. Es el valor por defecto: una instancia que no indica tamaño es `base` y genera exactamente lo que generaba antes de que existieran los tamaños. | El dimensionamiento estándar, descrito en [Dimensionamiento de servicios](./bootstrap.md#service-sizing). |
 | `compact` | Un portátil con pocos recursos. Es un ajuste del clúster, elegido al instalar; `--compact` es lo mismo y se mantiene. | Descrito en [`--compact`](./bootstrap.md#--compact). |
-| `perf-12k` | Un clúster sin `--ha`, unas 48 vCPU, 12 000 eventos por segundo sostenidos con los sobres de eventos activados. | Medido: 12 000 eventos por segundo sostenidos sin incidencias en GKE, con todos los eventos contabilizados. |
+| `perf-12k` | Un clúster sin `--ha`, grupos de plataforma de unas 40 vCPU, 12 000 eventos por segundo sostenidos con los sobres de eventos activados. | La configuración se midió: 12 000 eventos por segundo sostenidos sin incidencias en GKE, con todos los eventos contabilizados. Algunos valores se derivan de esa ejecución y aún no se han ejecutado tal cual; véase más abajo. |
 
 Un tamaño para una tasa mayor se añade solo después de que una medición demuestre esa tasa sin
 incidencias. El nombre es la afirmación, así que un tamaño nunca se publica como objetivo.
@@ -42,8 +42,7 @@ actualización lo indican.
 
 ## Qué establece `perf-12k` {#perf-12k}
 
-Cada fila es un pod. Con `--ha`, los recuentos de abajo se multiplican por lo que decida HA, y el
-tamaño de cada copia sigue siendo el indicado.
+Cada fila es un pod. `--ha` decide el número de réplicas de `event-management` (dos) y el número de servidores del broker y de instancias de base de datos (tres de cada); los recuentos de réplicas de abajo para los demás servicios se mantienen, y el tamaño de cada copia sigue siendo el indicado.
 
 <!-- size-table:perf-12k:areas -->
 | Servicio | Réplicas | Límite de CPU | Límite de memoria | Solicitud de CPU |
@@ -77,6 +76,10 @@ El broker, los volúmenes y la asignación del registro de escritura anticipada 
 El volumen de JetStream se dimensiona para que quepa la reserva de la tasa de diseño; una
 actualización nunca cambia el tamaño de un volumen que la instancia ya tiene, así que un tamaño
 aplicado a una instancia existente conserva los volúmenes con los que se creó.
+
+### Medido y derivado {#perf-12k-derived}
+
+La configuración (las réplicas y los límites de CPU de arriba, y los 12 000 eventos por segundo) se midió en GKE con 40 vCPU de grupos de plataforma; el resto de las 48 vCPU de ese clúster era el generador de carga. La ejecución medida usó un límite de memoria del broker de 20Gi, un volumen del almacén de eventos de 260Gi, una asignación del registro de escritura anticipada de 46080 MiB y un pod de event-processing de 4 CPU y 768Mi. Los valores que establece este tamaño en su lugar son **derivados** de esa ejecución y aún no se han ejecutado tal cual: el límite de 8Gi del broker, los volúmenes de 28Gi de JetStream y 160Gi del almacén de eventos, la asignación de 20480 MiB y 2 CPU y 1Gi de event-processing. La próxima ronda en GKE los confirmará o corregirá, y las notas de actualización lo indicarán si cambian.
 
 ### Lo que `perf-12k` no establece {#perf-12k-not}
 

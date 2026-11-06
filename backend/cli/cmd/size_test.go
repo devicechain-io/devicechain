@@ -33,7 +33,7 @@ func TestResolveInstallSize(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveInstallSize(tc.compact, tc.size)
+			got, err := resolveInstallSize(tc.compact, tc.compact, tc.size)
 			if tc.refused != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refused) {
 					t.Fatalf("err %v, want a refusal containing %q", err, tc.refused)
@@ -71,5 +71,15 @@ func TestSizeFlagIsWired(t *testing.T) {
 	}
 	if bootstrapCmd.Flags().Lookup("size").Usage == "" || strings.Contains(sizeUsage, "perf-20k") {
 		t.Error("--size help is empty or names an unshipped size")
+	}
+}
+
+// An explicit --compact=false beside --size compact is a contradiction, not a silent win for one.
+func TestExplicitCompactFalseContradictsSizeCompact(t *testing.T) {
+	if _, err := resolveInstallSize(false, true, "compact"); err == nil || !strings.Contains(err.Error(), "contradict") {
+		t.Fatalf("err %v", err)
+	}
+	if got, err := resolveInstallSize(false, false, "compact"); err != nil || !got {
+		t.Fatalf("--size compact alone: %v %v", got, err)
 	}
 }

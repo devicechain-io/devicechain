@@ -243,7 +243,7 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
-		compactOn, err := resolveInstallSize(installCompact, installSize)
+		compactOn, err := resolveInstallSize(installCompact, cmd.Flags().Changed("compact"), installSize)
 		if err != nil {
 			return err
 		}

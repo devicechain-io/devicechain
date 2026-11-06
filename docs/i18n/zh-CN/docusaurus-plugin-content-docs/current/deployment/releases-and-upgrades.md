@@ -643,9 +643,10 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 #### 规格预设 {#v120-size-presets}
 
-`dcctl bootstrap` 新增了 `--size` 选项，`dcctl install` 接受 `--size base` 和 `--size compact`。不传就没有任何变化：未指定规格的实例渲染结果与 `v1.1.0` 逐字节一致，`--compact` 的行为与之前完全相同。
+`dcctl bootstrap` 新增了 `--size` 选项，`dcctl install` 接受 `--size base` 和 `--size compact`。不传就没有任何变化：未指定规格的实例渲染结果与此变更之前逐字节一致，`--compact` 的行为与之前完全相同。
 
 - **`perf-12k` 是第一个规格。** 它设置五个繁忙服务的副本数、CPU 与内存，Broker 的请求与内存上限，JetStream 与事件库的卷，以及事件库预写日志的额度，这些数值来自一个在开启事件信封的情况下持续每秒 12,000 个事件的集群。具体数字见[选择规格](./sizing.md#perf-12k)。
+- **已有的紧凑实例会在下次写入时获得 `spec.size: "compact"`。** 用 `--compact` 构建的实例，其声明会在 `dcctl` 下次写入时（升级会写入）连同 `compact: true` 一起写上规格名；实例本身没有任何变化。
 - **它记录在实例上**（声明中的 `spec.size`，base 时为空），每次 `dcctl upgrade` 都会重新应用。某个版本如果调整了某个规格，用该规格记录的实例会在下一次升级时随之改变，并在此说明。
 - **你自己的设置优先。** 从低到高：Chart 默认值、规格、`dcctl` 自己算出的内容、你的 `--values` 覆盖文件，最后是你自行声明的 OpenTofu 变量。见[哪个值优先](./sizing.md#precedence)。
 - **它不会开启别的东西。** 规格不会开启事件信封或 MQTT 故障关闭确认；与 `--ha` 同用时，会提示这种组合尚未实测。

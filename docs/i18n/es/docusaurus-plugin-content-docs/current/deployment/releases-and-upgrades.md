@@ -932,9 +932,10 @@ El `max_wal_size` del almacén de eventos es ahora una quinta parte de su volume
 
 #### Preajustes de tamaño {#v120-size-presets}
 
-`dcctl bootstrap` tiene una nueva opción `--size`, y `dcctl install` acepta `--size base` y `--size compact`. No cambia nada salvo que la indique: una instancia sin tamaño genera byte por byte lo que generaba `v1.1.0`, y `--compact` funciona exactamente igual que antes.
+`dcctl bootstrap` tiene una nueva opción `--size`, y `dcctl install` acepta `--size base` y `--size compact`. No cambia nada salvo que la indique: una instancia sin tamaño genera byte por byte lo que generaba antes de este cambio, y `--compact` funciona exactamente igual que antes.
 
 - **`perf-12k` es el primer tamaño.** Establece réplicas, CPU y memoria de los cinco servicios más ocupados, las solicitudes y el límite de memoria del broker, los volúmenes de JetStream y del almacén de eventos y la asignación del registro de escritura anticipada del almacén de eventos, tal como se midieron en un clúster que sostiene 12 000 eventos por segundo con los sobres de eventos activados. Las cifras están en [Elegir un tamaño](./sizing.md#perf-12k).
+- **Las instancias compactas existentes ganan `spec.size: "compact"` en su próxima escritura.** La declaración de una instancia creada con `--compact` se reescribe con el tamaño junto a `compact: true` la próxima vez que `dcctl` la escribe (una actualización lo hace); nada de la instancia cambia.
 - **Queda registrado en la instancia** (`spec.size` en la declaración, vacío para base) y cada `dcctl upgrade` lo vuelve a aplicar. Una versión que reajusta un tamaño cambia las instancias registradas con él en su siguiente actualización, y lo indica aquí.
 - **Prevalecen sus propios ajustes.** De menor a mayor prioridad: los valores por defecto del chart, el tamaño, lo que `dcctl` calcula por sí mismo, su superposición `--values` y, por último, una variable de OpenTofu que usted indique. Consulte [Qué valor prevalece](./sizing.md#precedence).
 - **No activa nada más.** Un tamaño no activa los sobres de eventos ni la confirmación MQTT a prueba de fallos, y con `--ha` avisa de que la combinación no se ha medido.
