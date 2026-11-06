@@ -761,6 +761,13 @@ Las alertas de las instantáneas se describen en
 - **Puertos libres 80, 443 y 1883 del host** para un clúster local de kind, que los publica para
   la consola, HTTPS y MQTT. `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
   en lugar de dejar que la creación del clúster falle con el error de enlace de Docker.
+- **En Linux, un límite de inotify más alto.** `dcctl preflight local` exige `fs.inotify.max_user_instances` de al menos 256 para un clúster local de kind, y Ubuntu 24.04 de serie trae 128, por lo que falla e imprime el comando que hay que ejecutar. La primera línea sube el límite (la segunda, `max_user_watches`, es solo un aviso) y `/etc/sysctl.d` lo conserva tras los reinicios:
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
 - **`ko`**, solo para compilar imágenes desde el código fuente con `--build`. La comprobación
   previa avisa, en lugar de fallar, cuando falta.
 
@@ -1481,7 +1488,9 @@ base pueda seguirla, o donde puedas permitirte recrear la base.
 ### Dimensionamiento de los servicios {#service-sizing}
 
 Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, salvo
-`event-processing`, cuyo límite es 384Mi (un mínimo: un `resources.limits.memory` superior de nivel superior, o un límite propio de ese servicio, se usa tal cual). La CPU se dimensiona por servicio a partir de mediciones:
+`device-management`, cuyo límite es 512Mi, y `event-processing`, cuyo límite es 384Mi, o 768Mi mientras
+cualquiera de los ajustes de [sobres de eventos](./releases-and-upgrades.md#event-envelopes) esté activado
+(cada uno es un mínimo: un `resources.limits.memory` superior de nivel superior, o un límite propio de ese servicio, se usa tal cual). La CPU se dimensiona por servicio a partir de mediciones:
 
 | Servicio | Solicitud de CPU | Límite de CPU |
 | --- | --- | --- |
@@ -1508,6 +1517,29 @@ el montón supere el límite. Por eso `event-processing` tiene 384Mi, ya que su 
 llegó a 174 MiB de 256Mi en esa prueba. Ponga `functionalAreas.<servicio>.gogc` y
 `functionalAreas.<servicio>.goMemLimitPercent` a `0` para desactivar cualquiera de los dos en un
 servicio.
+
+**Dimensionar la memoria para su flota y su ritmo de eventos.** Dos límites dependen del despliegue,
+no solo de los valores por defecto. Las cifras se ajustaron a una prueba en Google Kubernetes Engine
+y son aproximadas; deje un margen de al menos la mitad sobre ellas.
+
+- **`device-management` según el tamaño de la flota.** Cada réplica guarda en caché toda la flota,
+  así que el montón sigue al número de dispositivos, no al ritmo de eventos. Fue de 154 MiB con
+  6 000 dispositivos y de 193 a 218 MiB con 12 000 a 16 000: unos 115 MiB más 6,4 MiB por cada 1 000
+  dispositivos. Fije el límite al doble. Los 512Mi por defecto cubren una flota de unos 20 000
+  dispositivos; para 40 000 dispositivos fije 768Mi, y para 100 000 unos 1,5Gi. Se fija con
+  `functionalAreas.device-management.resources.limits.memory`.
+- **`event-processing` con sobres de eventos activados, según el ritmo de eventos.** La protección
+  contra duplicados guarda la identidad de cada evento aplicado durante unos diez minutos. La memoria
+  residente fue de 265 a 269 MiB con 4 500 a 6 000 eventos por segundo y de 388 MiB con 12 000 (de 68
+  a 85 MiB con los ajustes desactivados): unos 150 MiB más 22 MiB por cada 1 000 eventos por segundo.
+  Fije el límite en una vez y media esa cifra. Los 768Mi por defecto cubren unos 15 000 eventos por
+  segundo; para 20 000 fije 1Gi. Se fija con
+  `functionalAreas.event-processing.resources.limits.memory`. Con ambos ajustes desactivados, los
+  384Mi no cambian.
+
+Suba un límite solo en un nodo con memoria que dar: la solicitud sigue siendo 128Mi, así que el
+planificador no reserva la diferencia, y un pod que crece hasta su límite en un nodo lleno es
+desalojado o terminado.
 
 Los cuatro primeros servicios hacen el trabajo por evento: recibir, resolver y almacenar cada
 evento, y fusionarlo en el estado en vivo de cada dispositivo. `event-processing` ejecuta la

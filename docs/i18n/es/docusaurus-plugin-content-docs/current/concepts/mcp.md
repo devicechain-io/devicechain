@@ -54,7 +54,7 @@ MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA c
 
 - **Porta el token del usuario, nunca un token de servicio.** El servidor MCP no posee ninguna credencial privilegiada de plataforma. Cada llamada a una herramienta reenvía el JWT validado y con alcance de inquilino del *solicitante* al servicio GraphQL subyacente, de modo que el agente alcanza exactamente lo que alcanza el usuario. Dar a una IA una identidad de servicio propia le permitiría actuar entre inquilinos a petición de cualquiera, y eso es lo único que este diseño rechaza.
 - **El inquilino se fija en el momento de la concesión, no se pasa como parámetro.** La autorización decide en qué inquilino puede actuar el token, y el token lleva ese inquilino. Ninguna herramienta recibe un argumento de "inquilino" que un agente pudiera cambiar.
-- **Los tokens están vinculados a una audiencia.** Un token de acceso emitido para el servidor MCP nombra a ese servidor como su audiencia prevista (RFC 8707). El servidor MCP rechaza cualquier token que no lo nombre como su audiencia, así que un token acuñado para otro recurso no puede reproducirse contra el servidor MCP.
+- **Los tokens están vinculados a una audiencia.** Un token de acceso emitido para el servidor MCP nombra a ese servidor como su audiencia prevista (RFC 8707). El servidor MCP rechaza cualquier token que no lo nombre como su audiencia, así que un token acuñado para otro recurso no puede reproducirse contra el servidor MCP. Las propias API de la plataforma también comprueban las audiencias, y aceptan el vínculo MCP porque este servidor reenvía el token del usuario; consulta [Audiencia del token](#token-audience).
 - **De solo lectura, y curado.** Todas las herramientas son consultas. No hay ruta de escritura, ni escotilla de escape de consulta genérica, ni exposición de objetos sensibles.
 - **Cada llamada se autentica y se vuelve a verificar.** En cada solicitud, el servidor valida el token portador contra las claves públicas de `user-management` y hace cumplir un alcance de solo lectura. Después, el servicio GraphQL subyacente vuelve a aplicar de forma independiente las mismas verificaciones de inquilino y rol que recibe la consola.
 
@@ -137,6 +137,15 @@ El servidor MCP mantiene la sesión de protocolo de cada cliente en memoria, en 
 :::warning Ejecuta exactamente una réplica
 Instalar el área `mcp` con más de una réplica se rechaza de plano, en lugar de dejar que falle de forma intermitente en tiempo de ejecución.
 :::
+
+## Audiencia del token {#token-audience}
+
+La dirección de [Adónde apuntar un cliente](#where-to-point-a-client) es el **identificador de recurso** del servidor. Un token que el cliente pide para ella nombra esa dirección como su audiencia, y, cuando la aplicación obligatoria está activada, el servidor de autorización solo vincula un token a una dirección que figure en la lista de permitidos de la instancia. Esa misma dirección debe estar registrada para que las API de la plataforma acepten las llamadas que este servidor reenvía, porque esas llamadas llevan el vínculo MCP. [Audiencia del token](./security-model.md#token-audience) explica la lista de permitidos y los modos observar y aplicar.
+
+- **El chart la registra.** Escribe la `resourceUrl` del servidor en `infrastructure.tokenAudience.mcpResources`. No tienes que hacer nada.
+- **El servidor lo comprueba al arrancar.** Si su `resourceUrl` no está en esa lista, registra un Error en cada arranque e informa de `devicechain_mcp_token_audience_registered` con valor 0 mientras sigue funcionando, y cada llamada que reenvía se cuenta como un rechazo que se habría producido. Cuando la aplicación obligatoria está activada, se niega a arrancar y nombra la clave. En una instancia cuya configuración escribes tú mismo (`instance.existingSecret`) y que no tiene bloque `tokenAudience`, el medidor se queda en 0 hasta que añadas uno.
+- **Escribe la dirección con esquema y host en minúsculas.** La comparación es byte a byte. Una `resourceUrl` que fijes a mano con una mayúscula en el esquema o en el host no se admite en la lista, así que cámbiala a minúsculas antes de la aplicación obligatoria.
+- **Un cliente debe enviar la misma dirección** como su `resource`. Un cliente que no envía nada, o envía otro valor, recibe un token que no está vinculado a este servidor o, cuando la aplicación obligatoria está activada, es rechazado.
 
 ## Límites y fronteras {#limits-and-boundaries}
 

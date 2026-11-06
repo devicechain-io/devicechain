@@ -12,8 +12,9 @@ acceptance.sh provisions a fresh sim, launches the player (the 31 devices), and 
     counters   --out DIR --name before|after     snapshot the calculated-metric counters (kubectl, no credentials)
     segment-a  --runner URL --out DIR --mode control|rule-disabled --since ISO --quit-file F
                the F4-East beat: alarm, boost SENT, SUCCESSFUL only at setpoint, clear (control); or no alarm, no boost, and an overheated room (rule-disabled)
-    segment-b  --runner URL --out DIR --since ISO --quit-file F
-               the annex chiller beat: silent, rule R4 alarm, `restart` through the API, SUCCESSFUL, back
+    segment-b  --runner URL --out DIR --since ISO --quit-file F [--restart api|console] [--restart-wait S]
+               the annex chiller beat: silent, rule R4 alarm, `restart` SUCCESSFUL, back. `api` (the default) sends the restart through the API;
+               `console` sends nothing: it WAITS up to --restart-wait seconds for an operator to issue it from the console, and fails if none comes
     common     --runner URL --out DIR --since ISO   31 sessions, telemetry of every type, calculated metrics (needs counters before/after)
     owner      --sim NAME --out DIR                 the annex owner signs in and sees only the annex
     summary    --out DIR --title T                  SUMMARY.md from items.jsonl
@@ -690,6 +691,37 @@ def cmd_segment_a(a):
     return 0 if overall(items) else 1
 
 
+def find_external_restart(cmds, since):
+    """The earliest `restart` queued at or after `since`, from a device's command list: the one an operator issued from the console."""
+    mine = [c for c in cmds if c.get("name") == RESTART and c.get("queuedTime") and parse_time(c["queuedTime"]) >= parse_time(since)]
+    return sorted(mine, key=lambda c: parse_time(c["queuedTime"]))[0] if mine else None
+
+
+def obtain_restart(p, ch_tok, since, how, wait_s, sleep=time.sleep, clock=time.time):
+    """Get the chiller's restart command: ("api") send it here, the way the acceptance always has; ("console") send NOTHING and wait for an operator
+    to issue it from the console, which is how the recorded video does it. Returns (command token, items); the token is None only in console mode when no restart came.
+    In console mode a restart that
+    never comes is a loud failure, never a fall back to sending it here: that would pass an acceptance whose point is that a human did it."""
+    if how == "api":
+        token = "accept-restart-" + os.urandom(4).hex()
+        res = p.create_command(ch_tok, RESTART, token)
+        return token, [Item("b-restart-created", "restart was sent through the API (the operator's console path)", bool(res.get("command")), f"rejection: {res.get('rejection')}")]
+    if how != "console":
+        raise ValueError("restart is api or console, not %r" % how)
+    say(f"WAITING up to {wait_s:.0f} s for the operator to issue `{RESTART}` to {ANNEX_CHILLER} from the console (this script sends nothing)")
+    deadline = clock() + wait_s
+    found = None
+    while True:
+        found = find_external_restart(p.commands(ch_tok), since)
+        if found or clock() >= deadline:
+            break
+        sleep(5)
+    if not found:
+        say(f"TIMED OUT: no `{RESTART}` was issued to {ANNEX_CHILLER} from the console within {wait_s:.0f} s")
+        return None, [Item("b-restart-issued", "an operator issued restart from the console", False, f"no restart command reached {ANNEX_CHILLER} within {wait_s:.0f} s; none was sent by the script")]
+    return found["token"], [Item("b-restart-issued", "an operator issued restart from the console", True, f"command {found['token']} queued {found['queuedTime']}")]
+
+
 def cmd_segment_b(a):
     p = Platform(a.runner)
     since = a.since
@@ -709,11 +741,13 @@ def cmd_segment_b(a):
     items.append(Item("b-silent", "the annex chiller reported, then went silent for at least the rule's two minutes",
                       reported and gap >= ABSENCE_S, f"last reading before the gap {last and iso(last)}, longest gap {gap:.0f} s"))
     items.append(Item("b-r4-alarm", "R4 raised a CRITICAL chiller-silent alarm", raised, detail))
-    cmd_token = "accept-restart-" + os.urandom(4).hex()
     cmd = None
     if raised:
-        res = p.create_command(ch_tok, RESTART, cmd_token)
-        items.append(Item("b-restart-created", "restart was sent through the API (the operator's console path)", bool(res.get("command")), f"rejection: {res.get('rejection')}"))
+        cmd_token, issue_items = obtain_restart(p, ch_tok, since, a.restart, a.restart_wait)
+        items += issue_items
+        if cmd_token is None:
+            append_items(a.out, items)
+            return 1
         end = time.time() + 600
         while time.time() < end:
             cmd = p.command(cmd_token)
@@ -868,7 +902,8 @@ def main(argv=None):
     add("counters", cmd_counters, out=out, name=dict(required=True), namespace=ns)
     add("segment-a", cmd_segment_a, runner=runner, out=out, mode=dict(choices=["control", "rule-disabled"], required=True), since=dict(required=True),
         quit_file=dict(required=False), timeout=dict(type=float, default=2400))
-    add("segment-b", cmd_segment_b, runner=runner, out=out, since=dict(required=True), quit_file=dict(required=False), timeout=dict(type=float, default=1500))
+    add("segment-b", cmd_segment_b, runner=runner, out=out, since=dict(required=True), quit_file=dict(required=False), timeout=dict(type=float, default=1500),
+        restart=dict(choices=["api", "console"], default="api"), restart_wait=dict(type=float, default=900))
     add("common", cmd_common, runner=runner, out=out, since=dict(required=True), recording=dict(default=None), namespace=ns)
     add("calc", cmd_calc, runner=runner, out=out, since=dict(required=True), recording=dict(required=True), namespace=ns)
     add("owner", cmd_owner, runner=runner, sim=dict(required=True), out=out, since=dict(required=True))

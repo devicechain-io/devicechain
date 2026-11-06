@@ -85,14 +85,15 @@ func TestValidateAuthorizeRequest(t *testing.T) {
 	client := &iam.OAuthClient{Scopes: []string{"read-only"}}
 	base := AuthorizeParams{ResponseType: "code", CodeChallenge: "abc", CodeChallengeMethod: "S256", Scope: "read-only"}
 
-	if err := ValidateAuthorizeRequest(client, base); err != nil {
+	if _, err := ValidateAuthorizeRequest(client, base, defaultResourcePolicy); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
 	}
 
 	bad := func(mut func(*AuthorizeParams)) error {
 		p := base
 		mut(&p)
-		return ValidateAuthorizeRequest(client, p)
+		_, err := ValidateAuthorizeRequest(client, p, defaultResourcePolicy)
+		return err
 	}
 	assertRedirectErr := func(t *testing.T, err error, code string) {
 		t.Helper()
@@ -123,7 +124,7 @@ func TestValidateAuthorizeRequest(t *testing.T) {
 func TestValidateAuthorizeRequest_ScopeNotRegistered(t *testing.T) {
 	client := &iam.OAuthClient{Scopes: []string{}} // registered for no scopes
 	p := AuthorizeParams{ResponseType: "code", CodeChallenge: "abc", CodeChallengeMethod: "S256", Scope: "read-only"}
-	err := ValidateAuthorizeRequest(client, p)
+	_, err := ValidateAuthorizeRequest(client, p, defaultResourcePolicy)
 	if err == nil {
 		t.Fatal("expected rejection for a scope the client is not registered for")
 	}

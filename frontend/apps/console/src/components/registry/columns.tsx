@@ -19,6 +19,25 @@ export function nameColumn<T extends { name?: string | null }>(): RegistryColumn
   return { header: 'common:colName', cell: (x) => x.name || '—', className: 'font-medium text-foreground' };
 }
 
+// For a family whose list leads with the human name: the name is the primary text and the
+// token rides beneath it as the secondary line. An unnamed row falls back to the token alone
+// (it IS the identity), exactly like a detail page's title. Replaces tokenColumn for such a
+// family, so the identifying column is one, not two.
+export function nameWithTokenColumn<T extends { token: string; name?: string | null }>(): RegistryColumn<T> {
+  return {
+    header: 'common:colName',
+    cell: (x) =>
+      x.name ? (
+        <>
+          <div className="font-medium text-foreground">{x.name}</div>
+          <div className="font-mono text-xs text-muted-foreground">{x.token}</div>
+        </>
+      ) : (
+        <span className="font-mono text-xs text-foreground">{x.token}</span>
+      ),
+  };
+}
+
 export function descriptionColumn<T extends { description?: string | null }>(): RegistryColumn<T> {
   return {
     header: 'common:colDescription',

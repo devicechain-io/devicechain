@@ -1,0 +1,61 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The pipeline PoC's console shots ("what a device profile is"): the recorder's first fixture. Schema: ../README.md.
+# Needs a tenant with a device profile named devicepulse-profile (the devicepulse sim). Record with:
+#   KUBECONFIG=<lane-private> python video_capture.py record shots/poc-device-profile.yaml --out <dir>
+version: 1
+video: poc
+base_url: http://localhost:8080          # the shared kind cluster's ingress; $DC_CONSOLE_URL or --base-url overrides
+fps: 30
+login:
+  mode: sim                                # reads ~/.devicechain/sims/<sim>.json in this process; never printed or written
+  sim: abt-1000-h
+shots:
+  - id: profile-metrics
+    title: A device profile, its metrics, a new metric typed in
+    line: L03
+    start: /device-profiles
+    min_s: 16
+    max_s: 40
+    retries: 1
+    # The signed-in user's address and the tenant chip are the stand-in for a "secret region": blurred in the page itself.
+    mask:
+      - {shot: user-menu, name: account email}
+      - {shot: tenant-chip, name: tenant chip}
+    steps:
+      - wait_for: {text: devicepulse-profile}
+      - mark: device-profile-list
+      - click: {text: devicepulse-profile}
+      - wait_for: {role: tab, name: Metrics}
+      - mark: profile-open
+      - click: {role: tab, name: Metrics}
+      - wait_for: {text: speed_kph}
+      - mark: metrics-listed
+      - wait: 1.2
+      - click: {role: button, name: New metric}
+      - wait_for: {shot: drawer}
+      - type: {into: {selector: "#m-key"}, text: temperature_c}
+        label: key-typed
+      - wait: 1.0
+      - press: Escape
+      - wait: 0.8
+  - id: profile-tabs
+    title: The rest of a profile - commands, rules, versions
+    line: L04
+    start: /device-profiles/devicepulse-profile
+    min_s: 12
+    max_s: 40
+    mask:
+      - {shot: user-menu, name: account email}
+      - {shot: tenant-chip, name: tenant chip}
+      # the Versions table names who published: an address in running text, found by pattern
+      - {text_regex: '[A-Za-z0-9._-]+@sim\.devicechain\.local', name: published-by address}
+    steps:
+      - wait_for: {role: tab, name: Commands}
+      - click: {role: tab, name: Commands}
+      - wait: 1.4
+      - click: {role: tab, name: Detection Rules}
+      - wait: 1.4
+      - click: {role: tab, name: Versions}
+      - wait: 1.2

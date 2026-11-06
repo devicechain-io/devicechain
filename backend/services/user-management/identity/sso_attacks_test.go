@@ -226,7 +226,7 @@ func TestSsoCodeRefusedByOAuthRedeemerAndTheReverse(t *testing.T) {
 	l, verifier, _, _ := e.signIn(t, "acme-idp", "sub-pat", linkedEmail)
 	require.NotEmpty(t, l.Code)
 	// The SSO login code, presented as an OAuth authorization code.
-	_, err := e.m.RedeemAuthorizationCode(ctx, l.Code, sessClient, sessRedirect, sessVerifier)
+	_, err := e.m.RedeemAuthorizationCode(ctx, l.Code, sessClient, sessRedirect, sessVerifier, nil)
 	assertOAuthErrorCode(t, err, "invalid_grant")
 	// ...and the same code is still there for its own redeemer (it was a different bucket).
 	_, err = e.m.CompleteSso(ctx, l.Code, verifier)
@@ -257,7 +257,7 @@ func TestEachRedeemerChecksTheRecordKindFirst(t *testing.T) {
 	// Plant the SSO login code record where OAuth codes live.
 	_, err = e.m.codesKV.Create(l.Code, entry.Value())
 	require.NoError(t, err)
-	_, err = e.m.RedeemAuthorizationCode(ctx, l.Code, sessClient, sessRedirect, verifier)
+	_, err = e.m.RedeemAuthorizationCode(ctx, l.Code, sessClient, sessRedirect, verifier, nil)
 	assertOAuthErrorCode(t, err, "invalid_grant")
 
 	// And the OAuth record where SSO codes live.

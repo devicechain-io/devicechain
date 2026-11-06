@@ -161,7 +161,7 @@ func (e *sessionEnv) issueCode(t *testing.T, identityToken string) (string, erro
 }
 
 func (e *sessionEnv) redeem(code string) (*OAuthTokens, error) {
-	return e.m.RedeemAuthorizationCode(context.Background(), code, sessClient, sessRedirect, sessVerifier)
+	return e.m.RedeemAuthorizationCode(context.Background(), code, sessClient, sessRedirect, sessVerifier, nil)
 }
 
 // oauthSession runs the whole authorize → token flow and returns the tokens.
@@ -175,7 +175,7 @@ func (e *sessionEnv) oauthSession(t *testing.T, identityToken string) *OAuthToke
 }
 
 func (e *sessionEnv) refreshOAuth(token string) (*OAuthTokens, error) {
-	return e.m.RefreshOAuth(context.Background(), token, "", sessClient)
+	return e.m.RefreshOAuth(context.Background(), token, "", sessClient, nil)
 }
 
 // forge signs a token with the instance key directly, bypassing the issuer's refusal

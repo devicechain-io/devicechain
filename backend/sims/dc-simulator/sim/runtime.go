@@ -11,6 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/httptransport"
 	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dc-simulator/otafleet"
 )
 
 // httpTimeout bounds a single provisioning/emit round-trip.
@@ -292,6 +293,14 @@ type Runtime struct {
 	// cmdreceiver); a test substitutes a fake so the ATTACH WIRING is gated without
 	// a broker — which is the half that was missing, not the receiver itself.
 	NewFarEnd FarEndFactory
+
+	// UpdateFleet, when set, gives every provisioned device a simulated OTA update client against
+	// the instance's broker (--ota). Nil is no update devices, the default.
+	UpdateFleet *otafleet.Options
+
+	// NewUpdateFleet builds the update fleet. Nil in production (the real MQTT one); a test
+	// substitutes a fake so the attach wiring is gated without a broker.
+	NewUpdateFleet UpdateFleetFactory
 
 	// Load is the run-time load profile, carried here because Runtime is the
 	// handle every Tick already receives — so a scenario derives its emit

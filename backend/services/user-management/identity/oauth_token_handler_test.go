@@ -28,8 +28,8 @@ func postForm(h http.Handler, form url.Values) *httptest.ResponseRecorder {
 }
 
 func newTestHandler(
-	redeem func(ctx context.Context, code, clientID, redirectURI, verifier string) (*OAuthTokens, error),
-	refresh func(ctx context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error),
+	redeem func(ctx context.Context, code, clientID, redirectURI, verifier string, resources []string) (*OAuthTokens, error),
+	refresh func(ctx context.Context, refreshToken, scope, clientID string, resources []string) (*OAuthTokens, error),
 ) http.Handler {
 	// Default authenticator: accept everyone (public-client behavior) so the existing
 	// grant-shaping tests are unaffected. Confidential-client auth is exercised by
@@ -41,17 +41,19 @@ func newTestHandler(
 // test can assert the pre-grant client-auth step.
 func newTestHandlerAuth(
 	authClient func(ctx context.Context, clientID, secret string, presented bool) error,
-	redeem func(ctx context.Context, code, clientID, redirectURI, verifier string) (*OAuthTokens, error),
-	refresh func(ctx context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error),
+	redeem func(ctx context.Context, code, clientID, redirectURI, verifier string, resources []string) (*OAuthTokens, error),
+	refresh func(ctx context.Context, refreshToken, scope, clientID string, resources []string) (*OAuthTokens, error),
 ) http.Handler {
 	if authClient == nil {
 		authClient = func(context.Context, string, string, bool) error { return nil }
 	}
 	if redeem == nil {
-		redeem = func(context.Context, string, string, string, string) (*OAuthTokens, error) { return okTokens(), nil }
+		redeem = func(context.Context, string, string, string, string, []string) (*OAuthTokens, error) {
+			return okTokens(), nil
+		}
 	}
 	if refresh == nil {
-		refresh = func(context.Context, string, string, string) (*OAuthTokens, error) { return okTokens(), nil }
+		refresh = func(context.Context, string, string, string, []string) (*OAuthTokens, error) { return okTokens(), nil }
 	}
 	return TokenHandler(authClient, redeem, refresh, nil)
 }
@@ -85,7 +87,7 @@ func TestTokenHandler_AuthCodeMissingParams(t *testing.T) {
 	// Missing code_verifier / client_id / redirect_uri → invalid_request before the
 	// grant func is called.
 	called := false
-	h := newTestHandler(func(context.Context, string, string, string, string) (*OAuthTokens, error) {
+	h := newTestHandler(func(context.Context, string, string, string, string, []string) (*OAuthTokens, error) {
 		called = true
 		return okTokens(), nil
 	}, nil)
@@ -98,7 +100,7 @@ func TestTokenHandler_AuthCodeMissingParams(t *testing.T) {
 
 func TestTokenHandler_AuthCodeSuccess(t *testing.T) {
 	var gotCode, gotClient, gotRedirect, gotVerifier string
-	h := newTestHandler(func(_ context.Context, code, clientID, redirectURI, verifier string) (*OAuthTokens, error) {
+	h := newTestHandler(func(_ context.Context, code, clientID, redirectURI, verifier string, _ []string) (*OAuthTokens, error) {
 		gotCode, gotClient, gotRedirect, gotVerifier = code, clientID, redirectURI, verifier
 		return okTokens(), nil
 	}, nil)
@@ -132,7 +134,7 @@ func TestTokenHandler_RefreshSuccessAndScopePassthrough(t *testing.T) {
 	var gotToken, gotScope, gotClientID string
 	// A confidential client refreshing over Basic: the authenticated client_id must
 	// reach the refresh grant so it can enforce the token's client binding.
-	h := newTestHandlerAuth(nil, nil, func(_ context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error) {
+	h := newTestHandlerAuth(nil, nil, func(_ context.Context, refreshToken, scope, clientID string, _ []string) (*OAuthTokens, error) {
 		gotToken, gotScope, gotClientID = refreshToken, scope, clientID
 		return okTokens(), nil
 	})
@@ -158,7 +160,7 @@ func TestTokenHandler_RefreshMissingToken(t *testing.T) {
 }
 
 func TestTokenHandler_MapsOAuthError(t *testing.T) {
-	h := newTestHandler(func(context.Context, string, string, string, string) (*OAuthTokens, error) {
+	h := newTestHandler(func(context.Context, string, string, string, string, []string) (*OAuthTokens, error) {
 		return nil, errInvalidGrant("bad code")
 	}, nil)
 	rec := postForm(h, url.Values{
@@ -172,7 +174,7 @@ func TestTokenHandler_MapsOAuthError(t *testing.T) {
 }
 
 func TestTokenHandler_GenericErrorBecomesServerError(t *testing.T) {
-	h := newTestHandlerAuth(nil, nil, func(context.Context, string, string, string) (*OAuthTokens, error) {
+	h := newTestHandlerAuth(nil, nil, func(context.Context, string, string, string, []string) (*OAuthTokens, error) {
 		return nil, context.DeadlineExceeded // a non-oauthError
 	})
 	rec := postForm(h, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"x"}})
@@ -199,7 +201,7 @@ func TestTokenHandler_ClientAuthRejected(t *testing.T) {
 	grantCalled := false
 	h := newTestHandlerAuth(
 		func(context.Context, string, string, bool) error { return errInvalidClient("nope") },
-		func(context.Context, string, string, string, string) (*OAuthTokens, error) {
+		func(context.Context, string, string, string, string, []string) (*OAuthTokens, error) {
 			grantCalled = true
 			return okTokens(), nil
 		}, nil)
@@ -228,7 +230,7 @@ func TestTokenHandler_BasicClientIdReachesGrant(t *testing.T) {
 			gotClientID, gotSecret, gotPresented = clientID, secret, presented
 			return nil
 		},
-		func(_ context.Context, _, clientID, _, _ string) (*OAuthTokens, error) {
+		func(_ context.Context, _, clientID, _, _ string, _ []string) (*OAuthTokens, error) {
 			if clientID != "grafana" {
 				t.Errorf("grant clientID = %q, want grafana (from Basic)", clientID)
 			}

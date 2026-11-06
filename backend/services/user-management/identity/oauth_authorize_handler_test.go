@@ -29,6 +29,7 @@ type fakeAuthorizeSvc struct {
 	mfaResult   *IdentityAuth
 	mfaErr      error
 	mfaGot      [3]string // challenge, code, source of the last VerifyMfa
+	recorded    []ResourceCheck
 }
 
 func (f *fakeAuthorizeSvc) ResolveAuthorizeClient(context.Context, string, string) (*iam.OAuthClient, error) {
@@ -46,6 +47,13 @@ func (f *fakeAuthorizeSvc) IdentitySubject(string) (IdentitySubject, error) {
 }
 func (f *fakeAuthorizeSvc) IssueAuthorizationCode(context.Context, *iam.OAuthClient, AuthorizeParams, IdentitySubject, string) (string, error) {
 	return f.code, f.codeErr
+}
+
+func (f *fakeAuthorizeSvc) ValidateAuthorize(client *iam.OAuthClient, p AuthorizeParams) (ResourceCheck, error) {
+	return ValidateAuthorizeRequest(client, p, defaultResourcePolicy)
+}
+func (f *fakeAuthorizeSvc) RecordAuthorizeResource(_ *iam.OAuthClient, rc ResourceCheck) {
+	f.recorded = append(f.recorded, rc)
 }
 
 func (f *fakeAuthorizeSvc) SsoReady() bool { return false }

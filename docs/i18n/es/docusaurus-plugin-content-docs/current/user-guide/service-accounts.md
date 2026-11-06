@@ -103,7 +103,8 @@ Lo que conviene saber del token:
 - Dos campos de formulario opcionales lo acotan. `scope` limita el token al techo de un ámbito de
   OAuth (por ejemplo, `read-only`). `resource` lo vincula a un servidor de recursos por su
   dirección (un URI `https` absoluto): el servidor MCP, por ejemplo, solo acepta un token
-  vinculado a su propia dirección.
+  vinculado a su propia dirección. Envía un `scope` con cada `resource`; consulta
+  [Vincular un token a un recurso](#binding-a-token-to-a-resource).
 - El endpoint de tokens tiene límite de frecuencia. Cada cuenta puede obtener aproximadamente un
   token cada 30 segundos, tras una ráfaga de 10, y cada dirección de origen puede hacer
   aproximadamente un intento cada 3 segundos, tras una ráfaga de 20. A un cliente que pide
@@ -117,6 +118,26 @@ cuál fue. A una cuenta de un inquilino deshabilitado o en proceso de eliminaci�
 
 El requisito de inicio de sesión único del propio inquilino se aplica a las personas, no a las
 cuentas de servicio.
+
+## Vincular un token a un recurso {#binding-a-token-to-a-resource}
+
+Sin `resource`, el token no está vinculado a nada y las API de la plataforma lo aceptan, con todas las autoridades de los roles de la cuenta, o con el techo del `scope` que envíes. Es el token adecuado para una integración que llama a las API de la plataforma. El servidor MCP no lo acepta, porque exige un token vinculado a sí mismo.
+
+Con `resource`, el token nombra ese recurso como su audiencia. Cuando la aplicación obligatoria está activada, el servidor de autorización solo vincula un token a un recurso que sirve: el servidor MCP, la API de un área en `<origin>/api/<área>` o una dirección que el operador haya enumerado como recurso externo. Consulta [Audiencia del token](../concepts/security-model.md#token-audience). Una API acepta un token vinculado a nada, al área de esa misma API o al servidor MCP. Rechaza un token vinculado a cualquier otra cosa, y hasta que la aplicación obligatoria esté activada lo cuenta y lo registra.
+
+Pide un recurso solo cuando algo distinto de la plataforma comprueba la audiencia, como un servicio tuyo que valida el token con el conjunto de claves publicado de la instancia, y **envía siempre un `scope` con él**:
+
+```bash
+curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials \
+  -d scope=read-only \
+  --data-urlencode "resource=https://my-service.example.com/api" \
+  https://dc.example.com/api/user-management/oauth/token
+```
+
+Una solicitud con `resource` y sin `scope` está **obsoleta**. Sigue funcionando y el token lleva todas las autoridades de los roles de la cuenta. La plataforma la cuenta en `devicechain_usermanagement_oauth_unscoped_client_credentials_total` y escribe un aviso con el nombre de tu cliente, y la próxima versión mayor la rechaza con `invalid_scope`. Un token con ámbito lleva solo las autoridades de lectura del ámbito. Una integración que tiene que escribir debe omitir el `resource` y obtener un token sin vínculo.
+
+Una solicitud cuyo `resource` la instancia no sirve se cuenta y se registra en esta versión, y se rechaza desde `v1.3` con `invalid_target`. En el endpoint de token, una solicitud con más de un `resource`, o con uno que no es una URL `https` absoluta (`http` solo se acepta para `localhost`, `127.0.0.1` y `::1`), se rechaza hoy.
 
 ## Rotar un secreto {#rotating-a-secret}
 

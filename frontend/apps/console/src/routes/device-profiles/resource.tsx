@@ -4,7 +4,7 @@
 // The device-profile registry resource (ADR-045). A profile is the reusable
 // capability contract a device type adopts: it owns the metric and command
 // definitions, versioned as one unit. The Basic tab edits the profile header; the
-// Metrics / Commands / Detection Rules tabs author its draft definitions; the Versions
+// Metrics / Commands / Decoder / Detection Rules tabs author its draft definitions; the Versions
 // tab publishes/rolls back what devices actually resolve. Alarm authoring moved off the
 // profile-owned AlarmDefinition to the DETECT DetectionRule path (ADR-057); the
 // Detection Rules tab is that path's console form (slice 7a).
@@ -22,7 +22,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { errMessage, typeCountLabel, StatusBadge } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  tokenColumn,
+  nameWithTokenColumn,
   descriptionColumn,
   createdColumn,
   type RegistryResource,
@@ -30,6 +30,7 @@ import {
 import { DefinitionsPanel, type DefinitionColumn } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { ConfigurationDeclarationPanel } from './ConfigurationDeclarationPanel';
+import { DecoderPanel } from './decoder/DecoderPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
 import { Lwm2mStandardCommands } from './Lwm2mStandardCommands';
 import { SparkplugStandardCommands } from './SparkplugStandardCommands';
@@ -307,7 +308,7 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
   tokenOf: (p) => p.token,
   nameOf: (p) => p.name ?? null,
   columns: [
-    tokenColumn<DeviceProfile>(),
+    nameWithTokenColumn<DeviceProfile>(),
     { header: 'entities:deviceProfileColCategory', cell: (p) => p.category || <Dash /> },
     {
       header: 'entities:deviceProfileColUsedBy',
@@ -332,6 +333,13 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
       value: 'configuration',
       label: 'entities:deviceProfileConfigurationTab',
       render: (p) => <ConfigurationDeclarationPanel key={p.token} profileToken={p.token} />,
+    },
+    {
+      value: 'decoder',
+      label: 'entities:deviceProfileDecoderTab',
+      // Keyed by token: the panel also refuses to show another profile's decoder while a new one
+      // loads, but a remount is what resets the editor's own state (test input, vectors, unsaved edits).
+      render: (p) => <DecoderPanel key={p.token} profileToken={p.token} activeVersion={p.activeVersion ?? null} />,
     },
     {
       value: 'detection-rules',

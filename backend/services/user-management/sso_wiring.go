@@ -18,7 +18,8 @@ import (
 )
 
 // newIdentityManager builds the identity Manager AND gives it the HTTP client every
-// external-identity-provider request goes through.
+// external-identity-provider request goes through, and the authorization server's resource
+// allowlist built from the instance's token-audience block.
 //
 // It is a function of its own so the test that proves a private discovery URL is refused
 // builds the Manager exactly as the service does, rather than a copy of it. That is the
@@ -45,6 +46,15 @@ func newIdentityManager(ms *core.Microservice, db *rdb.RdbManager, lock *messagi
 		return nil, err
 	}
 	m.SetSsoClientFactory(factory)
+	// The authorization server's resource allowlist (rule 1) is built from the SAME instance
+	// document every API plane reads. A Microservice-less build (a test) counts nothing.
+	var metrics *identity.OAuthResourceMetrics
+	if ms != nil {
+		metrics = identity.NewOAuthResourceMetrics(ms.MetricsRegisterer(), ms.MetricsSubsystem())
+	}
+	if err := m.SetTokenAudience(infra.TokenAudience, metrics); err != nil {
+		return nil, err
+	}
 	return m, nil
 }
 

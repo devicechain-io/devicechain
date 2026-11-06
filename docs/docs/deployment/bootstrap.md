@@ -698,6 +698,16 @@ The alerts for snapshots are described under
 - **Free host ports 80, 443 and 1883** for a local kind cluster, which publishes them for the
   console, HTTPS and MQTT. `dcctl preflight local` fails, naming the container that holds one,
   rather than letting the cluster create fail on Docker's bind error.
+- **On Linux, a raised inotify limit.** `dcctl preflight local` requires `fs.inotify.max_user_instances` of at least 256 for a local kind cluster, and a stock Ubuntu 24.04 ships 128, so it fails
+  on it and prints the command to run. The first line raises
+  the limit (the second, `max_user_watches`, is only a warning) and `/etc/sysctl.d` keeps it
+  across reboots:
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
 - **`ko`**, only to build images from source with `--build`. The preflight check warns rather
   than fails when it is missing.
 
@@ -1368,8 +1378,10 @@ store.
 
 ### Service sizing {#service-sizing}
 
-Every backend service requests 128Mi of memory and is limited to 256Mi, except `event-processing`,
-which is limited to 384Mi (a floor: a higher top-level `resources.limits.memory`, or a limit of your own on that service, is used as written). CPU is sized per service from measurement:
+Every backend service requests 128Mi of memory and is limited to 256Mi, except `device-management`,
+which is limited to 512Mi, and `event-processing`, which is limited to 384Mi, or to 768Mi while either
+[event-envelope](./releases-and-upgrades.md#event-envelopes) setting is on (each a floor: a higher top-level
+`resources.limits.memory`, or a limit of your own on that service, is used as written). CPU is sized per service from measurement:
 
 | Service | CPU request | CPU limit |
 | --- | --- | --- |
@@ -1394,6 +1406,27 @@ often. The soft limit is what keeps the larger heap inside the container: it mak
 work harder instead of letting the heap pass the limit. It is why `event-processing` has 384Mi, since
 its working set reached 174 MiB of 256Mi in that run. Set `functionalAreas.<service>.gogc` and
 `functionalAreas.<service>.goMemLimitPercent` to `0` to turn either off for one service.
+
+**Sizing memory for your fleet and event rate.** Two limits depend on the deployment, not on the
+defaults alone. The figures are fitted to a Google Kubernetes Engine run and are approximate; leave
+a margin of at least one half over them.
+
+- **`device-management` by fleet size.** Every replica caches the whole fleet, so the heap follows
+  the number of devices, not the event rate. It was 154 MiB with 6,000 devices and 193 to 218 MiB
+  with 12,000 to 16,000: about 115 MiB plus 6.4 MiB for each 1,000 devices. Set the limit to twice
+  that. The 512Mi default covers a fleet of about 20,000 devices; for 40,000 devices set 768Mi, for
+  100,000 about 1.5Gi. Set it with `functionalAreas.device-management.resources.limits.memory`.
+- **`event-processing` with event envelopes on, by event rate.** The duplicate guard holds the
+  identity of every event applied over about ten minutes. Resident memory was 265 to 269 MiB at
+  4,500 to 6,000 events a second and 388 MiB at 12,000 (68 to 85 MiB with the settings off): about
+  150 MiB plus 22 MiB for each 1,000 events a second. Set the limit to one and a half times that.
+  The 768Mi default covers about 15,000 events a second; for 20,000 set 1Gi. Set it with
+  `functionalAreas.event-processing.resources.limits.memory`. With both settings off, 384Mi is
+  unchanged.
+
+Raise a limit only on a node with the memory to give: the request stays 128Mi, so the scheduler
+does not reserve the difference, and a pod that grows to its limit on a full node is evicted or
+killed.
 
 The first four services do the per-event work: receiving, resolving and storing every event, and
 merging it into each device's live state. `event-processing` runs detection on every event; its

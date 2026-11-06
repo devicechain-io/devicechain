@@ -181,10 +181,9 @@
                       "type": "string",
                       "enum": [
                         "",
-                        "observe",
-                        "enforce"
+                        "observe"
                       ],
-                      "description": "What happens to a client_credentials request that names a resource but no scope. observe counts and logs it and serves it as before; enforce refuses it. Unset means observe."
+                      "description": "What happens to a client_credentials request that names a resource but no scope. observe counts and logs it and serves it as before. Refusing it arrives in the next major release, so enforce is not accepted yet. Unset means observe."
                     },
                     "externalResources": {
                       "type": "array",
@@ -287,6 +286,10 @@
         }
       },
       "description": "The Service exposed for each functional area."
+    },
+    "eventEnvelopesEnabled": {
+      "type": "boolean",
+      "description": "Restates whether either event-envelope switch is on, for the event-processing memory floor. Under instance.existingSecret the chart cannot read instance.config.infrastructure.messaging.envelopes, so dcctl sets this from the document it wrote."
     },
     "metrics": {
       "type": "object",
@@ -889,7 +892,8 @@
             "additionalProperties": false
           },
           "goMemLimitPercent": { "type": "integer", "minimum": 0, "maximum": 99, "description": "GOMEMLIMIT as a percentage of this area's own memory LIMIT, overriding the top-level goMemLimitPercent (0 turns it off for this area). The five event-path areas ship 75." },
-          "memoryLimitFloor": { "type": ["string", "number"], "description": "The chart's default memory limit for a service that needs more than the top-level one: used only when the merged limit is lower and the area sets no memory limit of its own. Shipped on event-processing (384Mi)." },
+          "memoryLimitFloor": { "type": ["string", "number"], "description": "The chart's default memory limit for a service that needs more than the top-level one: used only when the merged limit is lower and the area sets no memory limit of its own. Shipped on device-management (512Mi) and event-processing (384Mi)." },
+          "memoryLimitFloorWithEnvelopes": { "type": ["string", "number"], "description": "A higher memory-limit floor that replaces memoryLimitFloor while either instance.config.infrastructure.messaging.envelopes switch (resolved, inbound) is on. Same rules as memoryLimitFloor. Shipped on event-processing (768Mi)." },
           "gogc": { "type": "integer", "minimum": 0, "maximum": 10000, "description": "GOGC for this area only, overriding the top-level gogc (0 leaves Go's default of 100). The five event-path areas ship 400." },
           "goMemLimit": {
             "type": "string",

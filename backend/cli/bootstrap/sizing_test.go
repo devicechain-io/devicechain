@@ -613,6 +613,10 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			if area == "event-processing" {
 				wantMem = "384Mi"
 			}
+			// device-management raises it too: its heap grows with the fleet it caches.
+			if area == "device-management" {
+				wantMem = "512Mi"
+			}
 			want := map[string]string{
 				"limits.cpu": wantCPU, "limits.memory": wantMem,
 				"requests.cpu": wantReq, "requests.memory": "128Mi",
@@ -668,7 +672,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 		got := byArea(t, renderContainers(t, map[string]interface{}{
 			"resources": map[string]interface{}{
 				"requests": map[string]interface{}{"cpu": "200m", "memory": "128Mi"},
-				"limits":   map[string]interface{}{"cpu": "750m", "memory": "384Mi"},
+				"limits":   map[string]interface{}{"cpu": "750m", "memory": "1Gi"},
 			},
 		}))
 		for area, want := range map[string]string{
@@ -678,8 +682,8 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			if have := got[area].limits["cpu"]; have != want {
 				t.Errorf("%s: limits.cpu = %q, want %q", area, have, want)
 			}
-			if have := got[area].limits["memory"]; have != "384Mi" {
-				t.Errorf("%s: limits.memory = %q, want the top-level 384Mi", area, have)
+			if have := got[area].limits["memory"]; have != "1Gi" {
+				t.Errorf("%s: limits.memory = %q, want the top-level 1Gi", area, have)
 			}
 		}
 		// A measured request is an area's own for this purpose: the top-level request

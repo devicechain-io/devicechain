@@ -243,7 +243,10 @@ func (m *Manager) SaveAuthorizationCode(code string, rec AuthorizationCode) erro
 // which check failed) — including a client mismatch, which stays invalid_grant so a
 // leaked code gives an attacker no distinguishable "that code is live" signal (the
 // inline comment below explains why it is not invalid_client).
-func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, redirectURI, codeVerifier string) (*OAuthTokens, error) {
+//
+// resources are the `resource` values of the token request (RFC 8707 section 2.2). They are
+// only ever CHECKED against the audience the code is bound to, never added to it.
+func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, redirectURI, codeVerifier string, resources []string) (*OAuthTokens, error) {
 	if m.codesKV == nil {
 		return nil, errServer("authorization-code store not configured")
 	}
@@ -281,10 +284,31 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 		return nil, errInvalidGrant("PKCE verification failed")
 	}
 
+	// The holder has now proved itself (client, redirect URI, PKCE), so what follows may be
+	// counted. The code is already claimed, so a refusal here cannot be retried.
+	rp := m.resourcePolicy()
+	// The audience is re-checked against the CURRENT allowlist: a code issued by a replica that
+	// was observing and redeemed by one that enforces, or one whose resource was de-listed in
+	// its 60-second life, must not mint. Only a refusal is recorded; the entry request already
+	// counted this flow.
+	if bound := rp.checkBound(rec.Audience); bound.Refused() {
+		rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, bound)
+		return nil, errInvalidGrant("the resource this code was issued for is no longer served")
+	}
+	// A refusal is recorded where it happens. An observe-mode mismatch is only COLLECTED here and
+	// recorded beside the mint below, so a request that fails afterwards (a denied tenant, an
+	// ended session) is not counted.
+	reqCheck := rp.checkRequested(resources, rec.Audience)
+	if reqCheck.Refused() {
+		rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, reqCheck)
+		return nil, errInvalidTarget(reqCheck.Desc)
+	}
+
 	tokens, err := m.mintScopedGrant(ctx, rec.Email, rec.SessionEpoch, rec.SessionID, rec.Tenant, rec.Scope, rec.Scope, rec.Audience, rec.ClientId)
 	if err != nil {
 		return nil, err
 	}
+	rp.record(GrantAuthorizationCode, rec.ClientId, rec.Tenant, reqCheck)
 	m.recordAuth(ctx, rdb.AuditOpLogin, rec.Email, rec.Tenant)
 	return tokens, nil
 }
@@ -302,7 +326,11 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 // CONFIDENTIAL client may only be refreshed by that same client (RFC 6749 §6/§10.4),
 // so a stolen refresh token is useless without the client secret — enforced by
 // checkRefreshClientBinding BEFORE the single-use rotation consumes the token.
-func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope, requestClientID string) (*OAuthTokens, error) {
+//
+// resources are the `resource` values of the token request: checked against the audience the
+// token is bound to, never added to it. The BOUND audience is also re-checked against the
+// current allowlist, before the token is claimed (see below).
+func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope, requestClientID string, resources []string) (*OAuthTokens, error) {
 	claims, err := m.validator.ValidateRefresh(refreshToken)
 	if err != nil {
 		return nil, errInvalidGrant("refresh token is invalid or expired")
@@ -336,6 +364,18 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 		scope = requestedScope
 	}
 
+	// A `resource` on the request can only restate the grant's binding. The token is NOT burned
+	// for a mismatch: the grant is intact, it is this request that is wrong.
+	rp := m.resourcePolicy()
+	// Only a refusal is recorded here; an observe-mode mismatch is collected and recorded beside
+	// the post-rotation record below, so a refresh that fails afterwards (already rotated, tenant
+	// denied) counts nothing.
+	reqCheck := rp.checkRequested(resources, []string(claims.Audience))
+	if reqCheck.Refused() {
+		rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, reqCheck)
+		return nil, errInvalidTarget(reqCheck.Desc)
+	}
+
 	entry, err := m.refreshKV.Get(claims.ID)
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
@@ -359,9 +399,20 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	// A token issued before the tenant it names was created is refused first, the same
 	// check Refresh makes (admitRefreshTenant): a token that outlived its tenant must not
 	// carry a client's consent over to a later tenant created with the same token.
+	//
+	// The BOUND audience is re-checked against the CURRENT allowlist in the same place, as one
+	// more cause of gerr, so it runs BEFORE the token is claimed below and a refusal burns it.
+	// That catches a refresh token minted before the allowlist existed (it carries whatever
+	// audience its client asked for, for up to its whole lifetime) and an audience de-listed
+	// since. It is invalid_grant, not invalid_target: the client named no resource here, the
+	// grant is what is no longer valid.
 	var grant scopedGrant
 	var gerr *oauthError
-	if err := m.admitRefreshTenant(ctx, claims); err != nil {
+	bound := rp.checkBound([]string(claims.Audience))
+	if bound.Refused() {
+		rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, bound)
+		gerr = errInvalidGrant("the resource this refresh token was issued for is no longer served")
+	} else if err := m.admitRefreshTenant(ctx, claims); err != nil {
 		if errors.Is(err, errTenantAccessDenied) {
 			gerr = errInvalidGrant("tenant access denied")
 		} else {
@@ -392,6 +443,10 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	if err != nil {
 		return nil, err
 	}
+	// Counted once the refresh really rotated (accepted, or would_reject in observe mode), so a
+	// retried server_error does not count twice.
+	rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, bound)
+	rp.record(GrantRefreshToken, claims.ClientId, claims.Tenant, reqCheck)
 	m.recordAuth(ctx, rdb.AuditOpRefresh, claims.Username, claims.Tenant)
 	return tokens, nil
 }

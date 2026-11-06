@@ -187,12 +187,21 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 	if len(req.Resources) > 1 {
 		return nil, errInvalidTarget("at most one resource may be requested")
 	}
+	rp := m.resourcePolicy()
 	var audience []string
+	// With no resource there is nothing to judge: class none, accepted.
+	rc := rp.check("", 0)
 	if len(req.Resources) == 1 {
 		if err := ValidateResource(req.Resources[0]); err != nil {
 			return nil, err
 		}
 		audience = []string{req.Resources[0]}
+		// The allowlist (rule 1), judged here and ACTED ON below, after the secret check: a
+		// sender that has not authenticated cannot move the counter, put a client_id of its
+		// choosing into the log, or learn anything but the one invalid_client every
+		// authentication failure gets. The syntax and multiplicity refusals above are shipped
+		// behaviour and stay unconditional.
+		rc = rp.check(req.Resources[0], 1)
 	}
 	var allow []string
 	if scope := strings.TrimSpace(req.Scope); scope != "" {
@@ -214,6 +223,11 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 	secret, err := m.checkServiceAccountSecret(ctx, acct, req.ClientID, req.Secret, now)
 	if err != nil {
 		return nil, err
+	}
+	// The sender has authenticated: from here the request may be counted, and refused.
+	if rc.Refused() {
+		rp.record(GrantClientCredentials, acct.ClientId, acct.TenantId, rc)
+		return nil, errInvalidTarget(rc.Desc)
 	}
 	if !m.saMints.Allow(acct.ClientId) {
 		return nil, errSlowDown(serviceAccountMintLimits.Every)
@@ -256,6 +270,12 @@ func (m *Manager) ClientCredentials(ctx context.Context, req ClientCredentialsRe
 		log.Warn().Err(err).Msg("Could not record a service account secret's last use.")
 	}
 	m.saTrusted.mark(source, now)
+	// Counted once the token is really minted. Rule 3 is deprecated, not enforced: a resource
+	// with no scope is counted and warned about per client, and served as before in EVERY mode.
+	rp.record(GrantClientCredentials, acct.ClientId, acct.TenantId, rc)
+	if unscopedRequest(req.Resources, req.Scope) {
+		rp.recordUnscoped(acct.ClientId, acct.TenantId)
+	}
 	m.recordAuth(ctx, rdb.AuditOpServiceAccountToken, subject, acct.TenantId)
 	return &OAuthTokens{
 		AccessToken: access.Token,

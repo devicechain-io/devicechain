@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Send } from 'lucide-react';
-import { isCancellableCommandStatus, type CommandParameter } from '@devicechain/dashboards';
+import { isCancellableCommandStatus, isTerminalCommandStatus, type CommandParameter } from '@devicechain/dashboards';
 import {
   parseParameterSchema,
   defaultValues,
@@ -52,6 +52,12 @@ import {
 import { getDeviceCommandVocabulary, type PublishedCommand } from '@/lib/api/device-management';
 
 const pageSize = 25;
+
+// How often the history re-reads while at least one command is still in flight. There is no
+// command-status subscription on the platform, so this is the console's usual live-data
+// shape for a record that changes server-side (see RolloutDetailPage): poll while something
+// is outstanding, stop once everything has settled.
+export const COMMAND_POLL_MS = 3000;
 
 // Four states are still in flight — QUEUED / HELD / SENT / PARKED — but only THREE of
 // them can still be cancelled. SENT is the exception: the command is already at the
@@ -103,10 +109,37 @@ export function DeviceCommandsPanel({
   const [submitting, setSubmitting] = useState(false);
   const [version, reload] = useReload();
 
+  // Bumped by the poll below. A separate counter from `version` on purpose: `version` also
+  // keys the held-while-disabled notice, which must not re-read every few seconds.
+  const [pollTick, setPollTick] = useState(0);
+
   const { data, loading, error } = useQuery(
     () => listCommands({ deviceToken, pageNumber: 1, pageSize }),
-    [deviceToken, version],
+    [deviceToken, version, pollTick],
   );
+
+  // 🔴 `data` is STICKY (see useQuery): it is the previous answer while a re-read is in
+  // flight or has failed. That is what lets a poll repaint rows in place instead of
+  // flashing a spinner every few seconds, but it may also be ANOTHER device's history while
+  // this device's loads. Rows carry their device, so only this device's rows are shown.
+  const history = data && data.results.every((c) => c.deviceToken === deviceToken) ? data : null;
+  const commands = history?.results ?? [];
+
+  // Re-read while something can still change, or while the last read FAILED over a history
+  // we are showing. The second arm is not decoration: `data` is sticky, so after a command
+  // is issued and its refresh fails, the stale history (possibly all-terminal, possibly
+  // empty) looks settled and would never poll again, hiding the new command indefinitely.
+  // An unrecognised status reads as in flight (isTerminalCommandStatus), so it keeps polling.
+  //
+  // The next read is scheduled when the previous one has FINISHED, not on a fixed interval:
+  // useQuery discards the answer of a read whose deps changed, so a ticker that fires faster
+  // than the reads complete would cancel every one of them and the table would never update.
+  const refreshing = history != null && (commands.some((c) => !isTerminalCommandStatus(c.status)) || error != null);
+  useEffect(() => {
+    if (!refreshing || loading) return;
+    const id = setTimeout(() => setPollTick((n) => n + 1), COMMAND_POLL_MS);
+    return () => clearTimeout(id);
+  }, [refreshing, loading, pollTick]);
 
   // The device's PUBLISHED vocabulary — what the enqueue gate will actually accept.
   // Loaded separately from the history so a vocabulary failure degrades the form
@@ -266,8 +299,6 @@ export function DeviceCommandsPanel({
     }
   };
 
-  const commands = data?.results ?? [];
-
   return (
     <div className="space-y-6">
       {/* Commands queued for a DISABLED device are held, not sent and not cancelled. */}
@@ -374,9 +405,9 @@ export function DeviceCommandsPanel({
       </div>}
 
       {/* History / audit trail. */}
-      {loading ? (
+      {loading && !history ? (
         <LoadingState description={t('loadingCommands')} />
-      ) : error ? (
+      ) : error && !history ? (
         <ErrorState description={error} />
       ) : commands.length === 0 ? (
         <EmptyState description={t('noCommandsIssued')} />

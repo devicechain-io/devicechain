@@ -197,7 +197,11 @@ type Manager struct {
 	// Both nil leaves single sign-on off.
 	ssoStateKV, ssoCodesKV nats.KeyValue
 	ssoMetrics             SsoMetrics
-	ssoLimiter             beginLimiter
+	// resources is the authorization server's resource allowlist (rule 1), installed by
+	// SetTokenAudience. Nil means the release default over an empty allowlist
+	// (defaultResourcePolicy), never "unchecked".
+	resources  *resourcePolicy
+	ssoLimiter beginLimiter
 	// mfaKV holds the sign-ins waiting for their second factor (dc_mfa_challenges), apart from
 	// every other bucket. Nil means the instance cannot complete an enrolled person's sign-in,
 	// and it FAILS CLOSED: no token is minted without the factor.

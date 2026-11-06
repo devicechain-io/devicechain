@@ -281,4 +281,5 @@ func (l *Lifecycle) Close() {
 	if fe != nil {
 		fe.Close()
 	}
+	l.closeUpdateFleet()
 }

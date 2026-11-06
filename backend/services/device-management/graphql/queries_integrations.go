@@ -63,6 +63,32 @@ func (r *SchemaResolver) IntegrationAuth(ctx context.Context, args struct {
 	}
 }
 
+// Whether a device type has a payload decoder (service plane). Null for every failure to
+// authenticate, as integrationAuth; an out-of-scope or unknown device type is present: false.
+func (r *SchemaResolver) IntegrationDecoder(ctx context.Context, args struct {
+	Integration     string
+	Secret          string
+	DeviceTypeToken string
+}) (*IntegrationDecoderPlanResolver, error) {
+	// Service plane, like integrationAuth: a tenant user's access token must not be able to
+	// probe integrations with guessed secrets.
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	// Through the cached decorator when the service injected one: it is the resolver's own read, so
+	// the answer is what the resolver will run, and a warm question costs a memory hit and no
+	// decoder compile.
+	var api model.DeviceManagementApi = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		api = capi
+	}
+	answer, err := model.IntegrationDecoder(ctx, api, args.Integration, args.Secret, args.DeviceTypeToken)
+	if err != nil || answer == nil {
+		return nil, err
+	}
+	return &IntegrationDecoderPlanResolver{M: answer}, nil
+}
+
 // The sender-named devices an integration has seen that the tenant has no device in scope for.
 func (r *SchemaResolver) UnregisteredIntegrationDevices(ctx context.Context, args struct {
 	Criteria model.UnregisteredDeviceSearchCriteria

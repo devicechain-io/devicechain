@@ -5,6 +5,7 @@ package model
 
 import (
 	"database/sql"
+	"encoding/json"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
@@ -97,4 +98,14 @@ type ProfileSnapshot struct {
 	// reading of every snapshot published before the declaration existed (the key is simply
 	// absent), so no backfill is needed and none is wanted.
 	Configuration []ConfigurationKey `json:"configuration,omitempty"`
+	// Decoder is the payload decoder document (a payloaddecode.Document) frozen into this
+	// version. Absent means no decoder, which is also the correct reading of every snapshot
+	// published before decoders existed: such a profile's integration uplinks are flattened, as
+	// they always were. It is carried verbatim, not as a typed struct: the core library owns the
+	// document's shape and its json tags, and TestProfileSnapshotStoredKeysArePinned pins them
+	// here so a rename there cannot silently empty a stored decoder.
+	//
+	// An older pod ignores the key (parsing is lenient), so it flattens; that is the rollout
+	// behaviour the carrier subject exists to make safe.
+	Decoder json.RawMessage `json:"decoder,omitempty"`
 }

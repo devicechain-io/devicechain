@@ -457,7 +457,7 @@ MQTT 故障关闭确认也以同样方式保留：`dcctl bootstrap` 或 `dcctl u
 
 - **何时可以安全开启。** 实例的每个 Pod 都运行 `v1.1.0` 或更高版本之后，而不是之前。较早版本的 Pod 无法读取信封，会将其作为失败消息搁置，其中的事件对该 Pod 而言即告丢失。请先升级，等所有 Pod 都完成滚动，再设置该值。
 - **检测引擎如何处理重复。** 在少数情况下（例如重试期间确认丢失），同一个事件会两次进入流。事件存储和设备状态本来就能吸收这种情况。该值开启时，检测引擎还会记住约过去十分钟代理时间（平台自身的重新投递跨度）内它已应用的每个事件的标识，跳过第二份副本，并在 `detect_duplicate_events_skipped_total` 上计数。该计数持续不为零，说明上游有东西在重复存储事件。该值关闭时，检测引擎不保存这份记忆，其开销和行为不变。标识与事件存储使用的相同，因此同一设备在同一纳秒的两次完全相同的读数，在两处都只计一次。
-- **开销。** 在约每秒 20,000 个事件时，内存保存约 1,200 万个标识，约 180 MB，仅在检测主节点上（备节点接任时才构建）；在每秒 5,000 个事件时约 45 MB。超过约每秒 25,000 个事件时会触发上限，保存的时间不足十分钟（每秒 100,000 个事件时约 2.7 分钟）。重启或更换主节点后，检测引擎会先重新读取流中最近十分钟的内容再继续，因此在繁忙的流上这一步耗时更长；它记录在 `detect_guard_prime_seconds` 和 `detect_guard_prime_events_total` 上，而 `detect_guard_prime_partial_total` 统计流已无法回溯那么远的次数。
+- **开销。** 在约每秒 20,000 个事件时，内存保存约 1,200 万个标识，约 540 MB（外推值），仅在检测主节点上（备节点接任时才构建）。实测在每秒 6,000 个事件时增加约 190 MB，在每秒 12,000 个事件时增加约 300 MB，每个标识约 45 至 55 字节；在每秒 5,000 个事件时预计约 150 MB。开关开启时，请按[服务规格](./bootstrap.md#service-sizing)中的说明为 `event-processing` 配置内存。超过约每秒 25,000 个事件时会触发上限，保存的时间不足十分钟（每秒 100,000 个事件时约 2.7 分钟）。重启或更换主节点后，检测引擎会先重新读取流中最近十分钟的内容再继续，因此在繁忙的流上这一步耗时更长；它记录在 `detect_guard_prime_seconds` 和 `detect_guard_prime_events_total` 上，而 `detect_guard_prime_partial_total` 统计流已无法回溯那么远的次数。
 - **不覆盖什么。** 如果副本在第一份之后超过十分钟才到达（例如入站消费者被重建并从头重新投递），检测引擎会第二次应用它，在计数类或窗口类规则中可能被计两次。
 - **关闭。** 将该值设为 `false`。流中已有的信封会保留到过期或被消费，并仍会被读取。
 - **迁移到低于 `v1.1.0` 的版本。** `dcctl upgrade` 会记录该值何时开启，并在关闭时记录入站流和已解析流中最新消息的位置。迁移到低于 `v1.1.0` 的版本会在以下情况被拒绝：该值仍处于开启状态；任一流仍保留关闭之前的消息；缺少关闭时间的记录（请在当前版本再运行一次 `dcctl upgrade` 来生成）；以及在流的抽样中发现信封（每个流的最旧保留消息和最新的 256 条，这也能发现在 `dcctl` 之外被更改的设置）。当它无法检查，或目标不是发布版本标签时，同样会拒绝。不改变版本的运行永远不会被拒绝。`--allow-envelope-downgrade` 会在给出警告的前提下跳过拒绝：较早版本上的服务会将信封作为失败消息搁置，其中的事件对该服务而言即告丢失。
@@ -504,10 +504,21 @@ dcctl bootstrap local devicechain
 
 最近三个次版本的说明完整保留，按从新到旧排列。
 
-### v1.2.0：检测引擎可以使用多个核心 {#v120-upgrade}
+### v1.2.0 {#v120-upgrade}
 
+`v1.2.0` 是原地升级，方式见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。本版本更改的 Helm 值不在兼容性策略的覆盖范围内，次版本在本节中说明这一点。
+
+需要处理的事项：
+
+- **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
+- **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
+- **`dcctl bootstrap` 现在会拒绝属于另一个集群的本地状态。** 包括 `--dry-run`。如果您在 `dcctl` 之外重建了集群并复用实例名，请先移开 `~/.devicechain/instances/<名称>`；详见[说明](#v120-stale-state)。
+- **检查是否有客户端为本实例不提供的资源申请令牌。** 默认情况下，本版本会统计这类请求以及使用这些令牌的 API 调用，但一律不拒绝。`v1.3` 默认拒绝它们。`infrastructure.tokenAudience.enforcement: observe` 可以在那一个次版本内保留本版本的行为，`v1.4` 会在启动时以及在 chart 的 values schema 中拒绝 `observe`。参见[令牌按其资源进行检查](#v120-token-audience)。
+- **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
+- **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
+- **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
+- **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
-- **如果把 `detectShards` 设为大于 1，请检查检测引擎的设置。** 见[检测分片并行运行](#v120-detect-shards)。
 
 #### 检测分片并行运行 {#v120-detect-shards}
 
@@ -518,6 +529,57 @@ event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键
 - **新增两条告警**：`DetectShardSaturated`（某个分片是检测速度的上限）和 `DetectShardInvariantViolated`（各分片在检查点上意见不一致，检查点被拒绝）。无论取何值都会安装，但只有 `detectShards` 大于 1 时才可能触发。请把它们加入告警路由。同时新增一组 `detect_shard_*` 指标和 `detect_barrier_wait_seconds`；其中两个不带标签的在取 1 时以 0 导出。
 - **内存随 `detectShards` 增长。** 每个分片最多持有 1024 条排队消息，因此已在大于 1 的取值下运行的 Pod，在循环领先于最慢分片时，内存中最多可能积压 `detectShards` 倍于此数量的消息。依赖新设置之前请检查 Pod 的内存限制。
 - **回退**只需用旧值重启。检查点完全相同，没有需要撤销的内容。
+
+#### 内存上限 {#v120-memory}
+
+在 Google Kubernetes Engine 上最高每秒 16,000 个事件的测试中，这两个上限都与服务实测占用量只差一档：
+
+- **`device-management`** 在每个副本中都把整个设备群保存在内存里。其 Go 堆在 6,000 台设备时为 154 MiB，在 12,000 至 16,000 台时为 193 至 218 MiB，而原上限为 256Mi，其软上限（`GOMEMLIMIT`）为 192 MiB。因此约 12,000 台设备的设备群就会触及软上限，更大的设备群则有 Pod 因超出上限而被终止的风险。chart 现在把下限设为 512Mi（软上限 384 MiB）。
+- **开启事件信封的 `event-processing`** 会保存[事件信封](#event-envelopes)中描述的重复防护。在每秒 4,500 至 6,000 个事件时占用 265 至 269 MiB，在每秒 12,000 个事件时占用 388 MiB（Go 堆 353 MiB），而上限为 384Mi，软上限为 288 MiB。在每秒约 8,000 个事件以上，Pod 会被软上限卡住、持续回收垃圾，或被终止。只要 `resolved` 或 `inbound` 之一开启，chart 现在就把下限设为 768Mi（软上限 576 MiB），否则为 384Mi。此前对该防护的估计（每秒 20,000 个事件时约 180 MB）低了三到四倍；更正后的数字见[事件信封](#event-envelopes)。
+
+两者都是下限，仅在本来适用的上限更低时才生效。你在服务上设置的上限，或更大的顶层上限，按原值使用，软上限随实际生效的上限而定。新值 `functionalAreas.<服务>.memoryLimitFloorWithEnvelopes` 保存开启信封时的下限。`dcctl` 会根据它写入的实例配置设置 `eventEnvelopesEnabled`。如果你自己用 `instance.existingSecret` 安装 chart，chart 读不到该配置：开启任一信封设置时，请设置 `eventEnvelopesEnabled: true`。
+
+#### `dcctl bootstrap` 会拒绝属于另一个集群的本地状态 {#v120-stale-state}
+
+当某个实例名在 `~/.devicechain/instances/<名称>` 下的本地状态记录的是与命令所指向的集群不同的集群时，`dcctl bootstrap`（以及 `dcctl bootstrap --dry-run`）现在会拒绝执行。以前这份记录会被新集群的标识悄悄改写，随后基于旧集群的 OpenTofu 状态和 broker 凭据做规划，之后以无关的信息失败（例如拒绝缩减一个并不存在的 broker 集群）。拒绝信息会列出两个集群并打印修复命令。如果记录的集群已经不在了，请把该目录移到一边；其中有凭据，请保留而不要删除：
+
+```bash
+mv ~/.devicechain/instances/<名称> ~/.devicechain/<名称>.stale-state
+```
+
+如果记录的集群仍在运行，请换一个实例名。由不含集群标识的旧版 `dcctl` 写下的记录不会被拒绝。没有 `dcctl` 命令或标志发生变化。
+#### 令牌按其资源进行检查 {#v120-token-audience}
+
+OAuth 客户端可以在授权请求和令牌请求中用 `resource` 参数申请绑定到某个资源的令牌。此前授权服务器接受任意值，也没有任何 API 检查这种绑定，因此绑定到一个资源的令牌会被所有 API 接受。本版本新增两项检查，**在本版本中，两者默认都只统计和记录日志，不拒绝任何请求**，除非你自己设置了 `enforcement: enforce`。 规则见[令牌受众](../concepts/security-model.md#token-audience)。
+
+- **授权服务器检查所申请的资源。** 允许的资源包括本实例的 MCP 服务器、各区域位于 `<origin>/api/<区域>` 的 API，以及 `infrastructure.tokenAudience.externalResources` 中列出的资源。检查在授权端点、`client_credentials` 授权和每次刷新时进行。不在列表中的值会计入 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}`；仅在授权端点，不是绝对 `https` URL 的值（仅回环主机允许 `http`）和带有多个 `resource` 的请求也会计入。`client_credentials` 授权本来就拒绝这两种情况。
+- **各 API 检查令牌的受众。** 一个区域的 API 接受未绑定的令牌、绑定到该区域的令牌或绑定到 MCP 服务器的令牌。其他令牌计入 `devicechain_<区域>_token_audience_checks_total{verdict="would_reject"}`。通过登录控制台、仪表盘应用、C# SDK 或 `dcctl` 获得的令牌没有绑定，因此不受影响。MCP 服务器对各 API 的调用带有 MCP 绑定，会被接受。
+
+两个计数器都附带一个 `info` 级告警（`TokenAudienceWouldReject` 和 `OAuthResourceWouldReject`），服务日志中还会有限频的警告，写明 OAuth 客户端和租户。读取方法见[令牌受众检查](./observability.md#token-audience-checks)。
+
+**`v1.3` 默认拒绝这些请求。** 授权请求会带着 `invalid_target` 被送回客户端的重定向地址，`client_credentials` 请求返回 `invalid_target`，绑定到已不再提供的资源的刷新或授权码返回 `invalid_grant`，`resource` 与其授权码或刷新令牌签发时不同的请求返回 `invalid_target`，API 返回 `401`。因资源已不再提供而被拒绝的刷新令牌会被作废：切回 `observe` 或回退版本可以恢复配置，但恢复不了那个会话，客户端必须重新授权。如果任一计数器有变化，请根据日志行找到该客户端，并修改它发送的 `resource`：省略它，或改用上面列出的值之一。如果你自己的服务用公开的密钥集验证平台令牌，并申请绑定到自身的令牌，请把它的标识符加入 `externalResources`。平台 API 永远不接受绑定到外部资源的令牌，授权服务器的 `userinfo` 端点也不接受。
+
+- **若要再保留本版本的行为一个次版本**，请在升级到 `v1.3` 之前设置 `infrastructure.tokenAudience.enforcement: observe`。本版本已经接受它，先行设置可以保证滚动期间没有 Pod 执行强制检查。`v1.4` 会拒绝该值：服务在启动时停止并给出指引，chart 的 values schema 也会拒绝它，使 `helm upgrade` 在任何 Pod 滚动之前就停下。
+- **若要提前开启强制执行**，请在本版本中设置 `enforcement: enforce`，这会让 Pod 滚动一次。`v1.3` 自己切换默认值时，滚动期间新旧 Pod 并存，同一个令牌可能在几分钟内被一个副本接受而被另一个副本拒绝。先行设置可以避免这种情况。
+
+chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入 `infrastructure.tokenAudience`。不要在 `instance.config` 下设置 `areaBaseUrl` 或 `mcpResources`：渲染会拒绝。在非 `localhost` 主机上未启用 TLS 的 ingress 没有区域资源，正如它也没有授权服务器。你可以设置的键是 `enforcement`、`unscopedClientCredentials` 和 `externalResources`，参见[配置](../concepts/security-model.md#token-audience-config)。
+
+**MCP 服务器的注册。** `mcp` 在启动时检查它的 `resourceUrl` 是否列在 `infrastructure.tokenAudience.mcpResources` 中。如果没有，`mcp` 每次启动都会记录一条 Error，并把仪表 `devicechain_mcp_token_audience_registered` 报告为 0，它转发的调用会被计为本应拒绝的请求。在 `enforcement: enforce` 下它会拒绝启动。
+
+- **由 chart 写入配置的实例**：chart 总会把它列入，所以该仪表为 1。例外有两种：显式设置的 `functionalAreas.mcp.config.resourceUrl` 的 scheme 或主机含有大写字母，或者它等于某个平台区域自己的标识符，例如 `<origin>/api/device-management`。列表只接受小写的 scheme 和主机，并且逐字节比较。在 observe 下 chart 会省略这样的值，症状同上；在 `enforce` 下渲染会失败。`mcp` 自身仍接受该值，所以请在 `v1.3` 之前把它改成小写且不是区域标识符的地址。
+- **如果你自己编写实例配置**（`instance.existingSecret`），chart 不会写入该配置块。如果你的文档没有 `tokenAudience` 配置块，或者其 `mcpResources` 没有列出 MCP 服务器的 `resourceUrl`，仪表就停留在 0，只要缺少这一项，每次启动都会重复这条 Error。这会一直持续，直到你添加它。在 MCP 区域已部署时，`dcctl upgrade` 会打印警告并给出需要添加的配置块，在 `enforce` 下则拒绝继续。请添加该配置块，其中 `areaBaseUrl: <origin>/api`，`mcpResources: [<MCP 服务器的 resourceUrl>]`，并更新 `instance.existingSecretChecksum`。
+
+**已弃用：指定了 `resource` 却未指定 `scope` 的 `client_credentials` 请求。** 这样的令牌带有服务账号各角色的全部权限。请随资源一起发送 `scope`（`read-only`，可同时加上 `location`）。带 scope 的令牌只带有该 scope 的读取权限，因此需要写入的集成应改为省略 `resource`。本版本中缺少 scope 本身从不构成拒绝的理由，所以该请求仍然成功。每次都会计入 `devicechain_usermanagement_oauth_unscoped_client_credentials_total`，并连同其客户端记录到日志，它将在下一个主版本中以 `invalid_scope` 被拒绝。在此之前，`infrastructure.tokenAudience.unscopedClientCredentials: enforce` 在启动时会被拒绝。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
+
+**回退。** `v1.1` 的服务在启动时会拒绝 `tokenAudience` 配置块。`dcctl` 渲染的 `v1.1` 配置不含它。如果你自己编写配置，请在回退前删除该配置块并更新 `instance.existingSecretChecksum`。
+
+#### 滚动升级期间的配置文件变更 {#v120-profile-cache}
+
+`device-management` 现在用一个新的键缓存每个设备类型的配置文件解析结果，因此运行本版本的副本不会读取旧副本写入的条目（旧条目不含载荷解码器）。在本版本副本上所做的每次变更都会同时清除两个键下的条目。在**旧**副本上所做的变更只清除旧键，因此已升级的副本会继续提供其持有的内容，直到条目过期。
+
+- **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
+- **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
+- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户只会驱逐自己的条目，而不会驱逐其他租户的。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
 #### X.509 吊销列表 {#v120-x509-crl}
 
@@ -703,7 +765,7 @@ dcctl upgrade   <provider> <instance> --broker-max-connections N          # 可�
 
 - **何时安全。** 实例的每个 Pod 都运行 `v1.1.0` 或更高版本之后，而不是之前：较早版本的 Pod 会把信封当作失败消息搁置。请先升级，等所有 Pod 都已滚动完成，再设置开关。
 - **入站信封。** `event-sources` 以简短的预测性等待对同一租户的事件分组：安静的租户立即以单事件形式发布，繁忙的租户最多等待 `inboundLingerMillis`（默认 5 ms，最大 10）等下一个事件。`HTTP /events` 只有在代理确认了包含该事件的消息之后才返回 202。随后 `device-management` 为每个入站信封写入一个已解析信封。
-- **检测引擎跳过重复。** 开关开启后，检测引擎会在平台自身的重投递跨度（约十分钟的代理时间）内记住它已应用的每个事件的标识，并跳过第二份副本，计入 `detect_duplicate_events_skipped_total`。在 20,000 事件/秒时内存约 180 MB，仅在检测领导者上。晚于该跨度到达的副本会被应用两次；[事件信封](#event-envelopes)说明了这一残余情形。
+- **检测引擎跳过重复。** 开关开启后，检测引擎会在平台自身的重投递跨度（约十分钟的代理时间）内记住它已应用的每个事件的标识，并跳过第二份副本，计入 `detect_duplicate_events_skipped_total`。在 6,000 事件/秒时内存约 190 MB，12,000 事件/秒时约 300 MB，20,000 事件/秒时约 540 MB（外推值），仅在检测领导者上；开关开启期间，chart 会提高 `event-processing` 的内存上限（参见[服务规格](./bootstrap.md#service-sizing)）。晚于该跨度到达的副本会被应用两次；[事件信封](#event-envelopes)说明了这一残余情形。
 - **新指标：** `inbound_envelope_members{hop}`（每个信封中的事件数）和 `inbound_envelope_linger_seconds{hop}`、结算计数器，以及 `detect_guard_*` 系列。
 - **在本地集群上测得，尚未在云集群上测量。** 在有三个 worker 的本地 `kind` 集群上，以 1,500 事件/秒（1,000 经 MQTT，500 经 HTTP）、两个开关都开启、每个信封约八个事件的条件下，每个事件的代理消息数下降约 41%（116.5 降到 68.2），每个事件的代理字节数下降约 37% 到 40%，每个事件的平台总 CPU 下降约 12%（每 1,000 个事件从 7.48 降到 6.60 CPU 秒）。`device-management` 每个事件的 CPU 减少 31%，`device-state` 减少 24%，检测引擎减少 47%，代理减少 14%。事件存储做的工作更多而不是更少：它每个事件的 CPU 上升约 23%，每条 `INSERT` 的行数从 16.1 降到 12.9，因为它从信封消息收到的批次更小、更多。持久化和确认延迟在测试环境的噪声范围内没有明显变化。请把这些数字看作在一种负载形态下效果的方向和大致幅度，并在依赖它们之前测量你自己的负载。
 - **关闭与回退。** 把两个值都设为 `false`。已在流中的信封会保留到过期或被消费。`dcctl upgrade` 会记录开关何时被开启，并在两者都关闭且滚动完成后记录每个流最新消息的位置。此后，只要有开关处于开启状态，或某个流中仍有开关关闭之前的消息，它就会拒绝降级到 `v1.1.0` 以下，并指出每个处于开启状态的开关。要回退，请关闭两个开关，让流越过记录的位置，然后再回退。`--allow-envelope-downgrade` 会带着警告跳过该拒绝，之后较早版本的服务会丢失它遇到的任何信封中的事件。代理管理器对这两个流拥有读取权限，用于这项检查。

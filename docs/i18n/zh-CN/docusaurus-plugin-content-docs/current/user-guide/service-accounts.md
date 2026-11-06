@@ -73,12 +73,32 @@ curl -s -X POST https://dc.example.com/api/device-management/graphql \
 
 - **它有效 5 分钟，并且没有刷新令牌。** 过期时请求新令牌即可；每次请求都会重新读取账号，因此你所做的修改会在集成获取下一个令牌时生效。
 - **它只指向账号所属的租户**，不会是其他租户。请求无法要求其他租户。
-- 两个可选的表单字段可以收窄它。`scope` 把令牌限制在某个 OAuth 作用域的上限之内（例如 `read-only`）。`resource` 按地址（一个绝对 `https` URI）把它绑定到一个资源服务器：例如 MCP 服务器只接受绑定到其自身地址的令牌。
+- 两个可选的表单字段可以收窄它。`scope` 把令牌限制在某个 OAuth 作用域的上限之内（例如 `read-only`）。`resource` 按地址（一个绝对 `https` URI）把它绑定到一个资源服务器：例如 MCP 服务器只接受绑定到其自身地址的令牌。发送 `resource` 时请始终同时发送 `scope`，参见[把令牌绑定到资源](#binding-a-token-to-a-resource)。
 - 令牌端点有速率限制。每个账号在突发 10 次之后，大约每 30 秒可以获取一个令牌；每个来源地址在突发 20 次之后，大约每 3 秒可以尝试一次。请求过于频繁的客户端会收到 `429`（`slow_down`）和以秒为单位的 `Retry-After` 响应头；请在令牌即将过期前一直复用它，而不是每次调用都请求一个新令牌。
 
 每一次失败的尝试（未知的客户端 ID、错误或已过期的密钥、已禁用的账号）都会得到相同的响应 `401 invalid_client`，因此调用方无法分辨是哪一种情况。属于已禁用或正在删除的租户的账号会收到 `400 invalid_grant`。
 
 租户自身的单点登录要求只适用于人员，不适用于服务账号。
+
+## 把令牌绑定到资源 {#binding-a-token-to-a-resource}
+
+不带 `resource` 时，令牌不绑定任何资源，平台的各 API 都接受它，并带有该账号各角色的全部权限，或你所发送 `scope` 的上限。对于调用平台 API 的集成，这就是合适的令牌。MCP 服务器不接受它，因为 MCP 服务器要求令牌绑定到它自己。
+
+带 `resource` 时，令牌会把该资源写为受众。启用强制执行后，授权服务器只会把令牌绑定到它所提供的资源：MCP 服务器、位于 `<origin>/api/<区域>` 的某个区域的 API，或运维人员列为外部资源的地址。参见[令牌受众](../concepts/security-model.md#token-audience)。API 接受未绑定的令牌、绑定到该 API 自身区域的令牌或绑定到 MCP 服务器的令牌，拒绝绑定到其他任何资源的令牌；在启用强制执行之前，只会统计并记录日志。
+
+只有当平台之外的某个对象会检查受众时才申请资源，例如你自己的服务用该实例公开的密钥集验证令牌；并且**申请资源时始终同时发送 `scope`**：
+
+```bash
+curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials \
+  -d scope=read-only \
+  --data-urlencode "resource=https://my-service.example.com/api" \
+  https://dc.example.com/api/user-management/oauth/token
+```
+
+指定了 `resource` 却没有 `scope` 的请求已被**弃用**。它仍然成功，令牌带有该账号各角色的全部权限。平台会把它计入 `devicechain_usermanagement_oauth_unscoped_client_credentials_total`，并写一条指明你的客户端的警告，下一个主版本将以 `invalid_scope` 拒绝它。带 scope 的令牌只带有该 scope 的读取权限。需要写入的集成应省略 `resource`，改用未绑定的令牌。
+
+`resource` 为实例不提供的资源的请求，在本版本中会被统计并记录日志，从 `v1.3` 起以 `invalid_target` 拒绝。在令牌端点，带有多个 `resource` 或其中之一不是绝对 `https` URL 的请求（仅 `localhost`、`127.0.0.1` 和 `::1` 允许 `http`），现在就会被拒绝。
 
 ## 轮换密钥 {#rotating-a-secret}
 

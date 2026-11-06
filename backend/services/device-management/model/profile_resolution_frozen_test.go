@@ -104,7 +104,14 @@ func TestAResolutionHandsOutNothingWritable(t *testing.T) {
 			t.Errorf("Calculation.%s is exported: a holder could reach the shared plan", f.Name)
 		}
 	}
-	readOnly := map[reflect.Type]bool{resolution: true, metric: true, calculation: true,
+	// A PayloadDecoder is the same shape: one unexported pointer to an immutable compiled plan.
+	decoder := reflect.TypeOf(PayloadDecoder{})
+	for i := 0; i < decoder.NumField(); i++ {
+		if f := decoder.Field(i); f.IsExported() {
+			t.Errorf("PayloadDecoder.%s is exported: a holder could reach the shared plan", f.Name)
+		}
+	}
+	readOnly := map[reflect.Type]bool{resolution: true, metric: true, calculation: true, decoder: true,
 		reflect.TypeOf((*error)(nil)).Elem(): true}
 	for _, typ := range []reflect.Type{resolution, reflect.PointerTo(resolution), reflect.PointerTo(metric)} {
 		for i := 0; i < typ.NumMethod(); i++ {

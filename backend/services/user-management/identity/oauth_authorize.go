@@ -30,6 +30,19 @@ type AuthorizeParams struct {
 	CodeChallenge       string
 	CodeChallengeMethod string
 	Resource            string // RFC 8707 resource indicator (optional) → aud
+	// ResourceCount is how many NON-empty `resource` values the request carried. Resource keeps
+	// the first one only, so without the count a second one would be dropped silently. An empty
+	// `resource=` is an absent one: the form posts it back even when there is none.
+	ResourceCount int
+}
+
+// resourceCount is ResourceCount, tolerating a record parked before the field existed (a
+// resource with no count is one resource).
+func (p AuthorizeParams) resourceCount() int {
+	if p.ResourceCount == 0 && p.Resource != "" {
+		return 1
+	}
+	return p.ResourceCount
 }
 
 // ParseAuthorizeParams reads the authorize parameters from a query/form value set.
@@ -43,6 +56,7 @@ func ParseAuthorizeParams(v url.Values) AuthorizeParams {
 		CodeChallenge:       v.Get("code_challenge"),
 		CodeChallengeMethod: v.Get("code_challenge_method"),
 		Resource:            v.Get("resource"),
+		ResourceCount:       nonEmptyCount(v["resource"]),
 	}
 }
 
@@ -96,31 +110,77 @@ func (m *Manager) ResolveAuthorizeClient(ctx context.Context, clientID, redirect
 // response_type=code, a PKCE S256 challenge (PKCE is mandatory — public clients),
 // and that every requested scope is both a scope the AS grants and one the client
 // is registered for.
-func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams) error {
+func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams, rp *resourcePolicy) (ResourceCheck, error) {
 	if p.ResponseType != "code" {
-		return &authorizeRedirectError{"unsupported_response_type", "only response_type=code is supported"}
+		return ResourceCheck{}, &authorizeRedirectError{"unsupported_response_type", "only response_type=code is supported"}
 	}
 	if p.CodeChallenge == "" {
-		return &authorizeRedirectError{"invalid_request", "code_challenge is required (PKCE is mandatory)"}
+		return ResourceCheck{}, &authorizeRedirectError{"invalid_request", "code_challenge is required (PKCE is mandatory)"}
 	}
 	// An absent method defaults to "plain" in RFC 7636, which we do not support, so
 	// require S256 explicitly.
 	if p.CodeChallengeMethod != "S256" {
-		return &authorizeRedirectError{"invalid_request", "code_challenge_method must be S256"}
+		return ResourceCheck{}, &authorizeRedirectError{"invalid_request", "code_challenge_method must be S256"}
 	}
 	// Guard on the parsed token count, not the raw string, so a whitespace-only
 	// scope ("   ") is rejected here rather than passing to a code that can't be
 	// redeemed (its scope resolves to empty at the token endpoint).
 	if len(auth.ParseScope(p.Scope)) == 0 {
-		return &authorizeRedirectError{"invalid_scope", "scope is required"}
+		return ResourceCheck{}, &authorizeRedirectError{"invalid_scope", "scope is required"}
 	}
 	if !auth.ScopeSupported(p.Scope) {
-		return &authorizeRedirectError{"invalid_scope", "requested scope is not supported"}
+		return ResourceCheck{}, &authorizeRedirectError{"invalid_scope", "requested scope is not supported"}
 	}
 	if !scopesRegistered(client.Scopes, p.Scope) {
-		return &authorizeRedirectError{"invalid_scope", "requested scope is not registered for this client"}
+		return ResourceCheck{}, &authorizeRedirectError{"invalid_scope", "requested scope is not registered for this client"}
 	}
-	return nil
+	// The resource rule (RFC 8707), last: the other checks are about the request being
+	// well-formed for this client, this one is about what the instance will bind a token to.
+	rc := checkAuthorizeResource(p, rp)
+	if err := rc.authorizeError(); err != nil {
+		return rc, err
+	}
+	return rc, nil
+}
+
+// checkAuthorizeResource is the ONE resource check of the authorization endpoint. The request
+// validation (every step, and the SSO resume) and the mint-time re-assert in
+// IssueAuthorizationCode both run it, so the mint covers multiplicity and syntax as well as
+// membership: a caller that reordered the steps cannot get a code for a resource the request
+// check would have refused.
+func checkAuthorizeResource(p AuthorizeParams, rp *resourcePolicy) ResourceCheck {
+	if p.Resource == "" && p.ResourceCount == 1 {
+		// `resource=&resource=X`: Resource keeps the first value only, which is empty, so the
+		// hidden field would drop X and a token would be minted with no audience while the request
+		// plainly asked for one. An ambiguous shape is not "absent": it is judged malformed
+		// (refused in enforce, counted and served as before in observe, where the token is
+		// audience-less exactly as it was).
+		rc := ResourceCheck{Checked: true, Class: auth.ResMalformed, Desc: "an empty resource must not precede another"}
+		rc.Verdict = rp.verdictFor(rc.Class)
+		return rc
+	}
+	return rp.check(p.Resource, p.resourceCount())
+}
+
+// authorizeError is the redirectable invalid_target (RFC 8707 section 2) for a refusal, or nil.
+func (c ResourceCheck) authorizeError() error {
+	if !c.Refused() {
+		return nil
+	}
+	return &authorizeRedirectError{"invalid_target", c.Desc}
+}
+
+// ValidateAuthorize is ValidateAuthorizeRequest over this instance's resource allowlist.
+func (m *Manager) ValidateAuthorize(client *iam.OAuthClient, p AuthorizeParams) (ResourceCheck, error) {
+	return ValidateAuthorizeRequest(client, p, m.resourcePolicy())
+}
+
+// RecordAuthorizeResource counts one authorization request's resource decision. The caller
+// has resolved the client and its redirect URI, so client is a registered one; the SENDER is not
+// authenticated (the entry request is pre-login and those values are public), so this is a
+// request-volume signal and its warning says sender_authenticated=false. No tenant is known yet.
+func (m *Manager) RecordAuthorizeResource(client *iam.OAuthClient, rc ResourceCheck) {
+	m.resourcePolicy().recordAs(GrantAuthorizationCode, client.ClientId, "", false, rc)
 }
 
 // IssueAuthorizationCode mints a one-time authorization code for an authenticated,
@@ -142,6 +202,12 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthC
 	// the (separate) resolve step.
 	if client == nil || !redirectURIRegistered(client.RedirectURIs, p.RedirectURI) {
 		return "", ErrAuthorizeRedirectUnregistered
+	}
+	// Likewise the resource: the same check the request went through, run again at the mint so
+	// no code is stored for a resource the authorization endpoint would have refused. It
+	// records nothing; the entry request counted this flow once.
+	if err := checkAuthorizeResource(p, m.resourcePolicy()).authorizeError(); err != nil {
+		return "", err
 	}
 	id, err := m.assertTenantAccess(ctx, subject, tenant)
 	if err != nil {

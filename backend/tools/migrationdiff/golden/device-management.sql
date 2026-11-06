@@ -41,6 +41,8 @@ ALTER SEQUENCE "device-management".integration_unregistered_devices_id_seq OWNED
 ALTER SEQUENCE "device-management".integrations_id_seq OWNED BY "device-management".integrations.id;
 ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
+ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "device-management".profile_decoder_healths.id;
+ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
 ALTER TABLE ONLY "device-management".alarms
  ADD CONSTRAINT alarms_pkey PRIMARY KEY (id);
@@ -229,6 +231,16 @@ ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
 ALTER TABLE ONLY "device-management".pending_session_kicks
  ADD CONSTRAINT pending_session_kicks_pkey PRIMARY KEY (tenant_id, device_token, origin);
+ALTER TABLE ONLY "device-management".profile_decoder_healths
+ ADD CONSTRAINT fk_profile_decoder_healths_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".profile_decoder_healths
+ ADD CONSTRAINT profile_decoder_healths_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".profile_decoder_healths ALTER COLUMN id SET DEFAULT nextval('"device-management".profile_decoder_healths_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".profile_decoder_samples
+ ADD CONSTRAINT fk_profile_decoder_samples_profile FOREIGN KEY (device_profile_id) REFERENCES "device-management".device_profiles(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "device-management".profile_decoder_samples
+ ADD CONSTRAINT profile_decoder_samples_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".profile_decoder_samples ALTER COLUMN id SET DEFAULT nextval('"device-management".profile_decoder_samples_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".provisioning_profiles
  ADD CONSTRAINT fk_provisioning_profiles_trust_anchor FOREIGN KEY (trust_anchor_id) REFERENCES "device-management".device_trust_anchors(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY "device-management".provisioning_profiles
@@ -345,6 +357,8 @@ CREATE INDEX "idx_device-management_maintenance_windows_token" ON "device-manage
 CREATE INDEX "idx_device-management_metric_definitions_deleted_at" ON "device-management".metric_definitions USING btree (deleted_at);
 CREATE INDEX "idx_device-management_metric_definitions_tenant_id" ON "device-management".metric_definitions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_metric_definitions_token" ON "device-management".metric_definitions USING btree (token);
+CREATE INDEX "idx_device-management_profile_decoder_healths_tenant_id" ON "device-management".profile_decoder_healths USING btree (tenant_id);
+CREATE INDEX "idx_device-management_profile_decoder_samples_tenant_id" ON "device-management".profile_decoder_samples USING btree (tenant_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_deleted_at" ON "device-management".provisioning_profiles USING btree (deleted_at);
 CREATE INDEX "idx_device-management_provisioning_profiles_device_type_id" ON "device-management".provisioning_profiles USING btree (device_type_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-management".provisioning_profiles USING btree (tenant_id);
@@ -368,6 +382,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX idx_profile_decoder_samples_profile_created ON "device-management".profile_decoder_samples USING btree (tenant_id, device_profile_id, created_at DESC);
 CREATE INDEX idx_provisioning_profiles_trust_anchor ON "device-management".provisioning_profiles USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
 CREATE INDEX ix_device_credential_chain_links_fingerprint ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, fingerprint);
 CREATE INDEX ix_device_credential_chain_links_issuer_serial ON "device-management".device_credential_chain_links USING btree (tenant_id, trust_anchor_id, issuer_name, serial);
@@ -636,6 +651,18 @@ CREATE SEQUENCE "device-management".maintenance_windows_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".metric_definitions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".profile_decoder_healths_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".profile_decoder_samples_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -941,7 +968,8 @@ CREATE TABLE "device-management".device_profiles (
  active_version integer,
  location_declaration jsonb,
  active_since timestamp with time zone,
- configuration_declaration jsonb
+ configuration_declaration jsonb,
+ decoder_declaration jsonb
 );
 CREATE TABLE "device-management".device_replacements (
  id bigint NOT NULL,
@@ -1302,6 +1330,32 @@ CREATE TABLE "device-management".pending_session_kicks (
  requested_at timestamp with time zone NOT NULL,
  not_before timestamp with time zone
 );
+CREATE TABLE "device-management".profile_decoder_healths (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ profile_version integer NOT NULL,
+ window_start timestamp with time zone NOT NULL,
+ replica character varying(128) NOT NULL,
+ decoded bigint DEFAULT 0 NOT NULL,
+ ignored bigint DEFAULT 0 NOT NULL,
+ failed bigint DEFAULT 0 NOT NULL,
+ suppressed bigint DEFAULT 0 NOT NULL,
+ charge_skew bigint DEFAULT 0 NOT NULL,
+ last_failure_at timestamp with time zone,
+ last_error character varying(512)
+);
+CREATE TABLE "device-management".profile_decoder_samples (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ profile_version integer NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ device_token character varying(128) NOT NULL,
+ reason character varying(32) NOT NULL,
+ error character varying(512),
+ input bytea NOT NULL
+);
 CREATE TABLE "device-management".provisioning_profiles (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -1376,5 +1430,6 @@ CREATE UNIQUE INDEX uix_integration_unregistered_devices_key ON "device-manageme
 CREATE UNIQUE INDEX uix_integrations_tenant_token ON "device-management".integrations USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_maintenance_windows_tenant_token ON "device-management".maintenance_windows USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_metric_definitions_tenant_token ON "device-management".metric_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_profile_decoder_healths_window ON "device-management".profile_decoder_healths USING btree (tenant_id, device_profile_id, profile_version, window_start, replica);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

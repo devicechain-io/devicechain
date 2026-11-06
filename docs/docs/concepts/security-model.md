@@ -93,6 +93,81 @@ See [Multi-Tenancy](./multi-tenancy.md).
   limits each caller, GraphQL requests have bounded execution and body size, and failed sign-in attempts are rate limited.
   There is no per-tenant request-rate limit on the GraphQL API itself.
 
+## Token audience {#token-audience}
+
+An OAuth client can ask for an access token bound to one resource, by sending the `resource` parameter (RFC 8707) with its authorization or token request. The token then names that resource in its `aud` (audience) claim. A token from signing in to the console, the dashboard app, the C# SDK or `dcctl` names none.
+
+Two checks use the audience. They are defence in depth: a token's authorities are fixed when it is issued, so accepting a token where it was not meant to go never gives it more than it already carried.
+
+- **The authorization server checks the requested resource.** It binds a token only to a resource on the instance's allowlist. It checks at the authorization endpoint, in the `client_credentials` grant and at each refresh.
+- **Each API checks the token's audience.** An area's API accepts a token whose audience is empty, is that area, or is a registered MCP resource. The [MCP server](./mcp.md) forwards the caller's own token, so its calls carry the MCP binding and are accepted.
+
+### The allowlist {#token-audience-allowlist}
+
+These are the resources the authorization server binds a token to, and the audiences an API accepts, once enforcement is on. Under `observe`, anything else is counted and logged but served:
+
+- **The MCP server**, when it is deployed: its resource URL, `<origin>/api/mcp`.
+- **Each area's API**, at `<origin>/api/<area>` for every area except `mcp`, for example `https://iot.example.com/api/device-management`.
+- **External resources**, which are the entries you list under `externalResources`. Use one for a service of your own, outside DeviceChain, that validates DeviceChain tokens with the published key set (`/oauth/jwks`) and asks for tokens bound to itself. The authorization server issues such a token, but **no DeviceChain API accepts it once enforcement is on**, and neither does the authorization server's `userinfo` endpoint.
+
+Matching is byte for byte. There is no case folding and no trailing-slash handling, so `https://IoT.example.com/api/mcp` is not `https://iot.example.com/api/mcp`. The configuration therefore accepts only one spelling of each identifier, and a client has to send exactly that spelling.
+
+### Observe and enforce {#token-audience-modes}
+
+`enforcement` decides what happens to a request that breaks either check:
+
+| Where | `observe` | `enforce` |
+| --- | --- | --- |
+| Authorization endpoint | Counted and logged; the sign-in page is served as before | The client is sent back to its redirect address with `invalid_target` |
+| `client_credentials` grant | Counted and logged; the token is issued | `invalid_target`. An unlisted resource is judged after the client's secret has been checked, so an unauthenticated sender is not told what the list holds |
+| Authorization code bound to a resource that is no longer served | Served, and not counted | `invalid_grant` |
+| Refresh token bound to a resource that is no longer served | Counted and logged; served | `invalid_grant`; the refresh token is spent |
+| A `resource` on a code or refresh request that differs from the one the grant is bound to | Counted and logged; served | `invalid_target`; a refresh token is not spent |
+| An API | Counted as `would_reject` and logged; served | `401`, the same answer as for an invalid token |
+
+`observe` is the default in `v1.2`. `v1.3` makes `enforce` the default and keeps `observe` as an opt-out for that one minor. `v1.4` removes the opt-out: a service refuses to start with `observe` in the document, and the chart rejects it. See the [upgrade notes](../deployment/releases-and-upgrades.md#v120-token-audience).
+
+A token that names no resource is accepted by every area's API, in both modes. A client that never sends `resource` is not affected by either check.
+
+### Reading the counters {#token-audience-reading}
+
+Run `observe` first and watch the counters: a `would_reject` series that never moves means switching to `enforce` changes nothing for your clients. The series, the two alerts and how to find the client behind a count are in [Token audience checks](../deployment/observability.md#token-audience-checks).
+
+### Configuration {#token-audience-config}
+
+The policy is instance configuration under `infrastructure.tokenAudience`, in the document every service reads, so the list the authorization server issues against and the set an API accepts cannot differ. Every key is optional.
+
+| Key | Written by | Value |
+| --- | --- | --- |
+| `enforcement` | You | `observe`, `enforce`, or unset. Unset is the release default, `observe` in `v1.2`. It governs both checks together. |
+| `unscopedClientCredentials` | You | Unset or `observe`. `enforce` is refused at startup in this release, because the rule it would switch on does not refuse anything yet. See [Service accounts](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
+| `externalResources` | You | A list of at most 8 resource identifiers outside the platform. |
+| `areaBaseUrl` | The chart | `<origin>/api`, from the ingress host. Set only when the origin is https, or a plain-http loopback host such as `localhost`. An ingress without TLS on any other host has no area resources, just as it has no authorization server. |
+| `mcpResources` | The chart | The MCP server's resolved `resourceUrl`, when the `mcp` area is deployed. |
+
+A service stops at startup, naming the key, when the block breaks any of these rules:
+
+- `enforcement` and `unscopedClientCredentials` must be `observe` or `enforce`, or unset. Unset `unscopedClientCredentials` and `observe` are the same, and `enforce` is refused as above.
+- `areaBaseUrl` and each list entry must be an absolute URL with an `https` scheme (`http` only for `localhost`, `127.0.0.1` or `::1`), with a lowercase scheme and host, no query, fragment or user information, and no trailing slash.
+- Each list holds at most 8 entries. No entry may appear twice, in either list, and none may equal an area's own identifier.
+- An `externalResources` entry may not sit under `areaBaseUrl`: with an `areaBaseUrl` of `https://iot.example.com/api`, both `https://iot.example.com/api` and `https://iot.example.com/api/x` are refused, and `https://iot.example.com/apiary` is not. This stops a platform area being re-labelled as external.
+- A key that is not in the table is refused, as everywhere in the instance configuration.
+
+The chart adds its own checks, so a mistake stops `helm upgrade` before any pod rolls. Setting `areaBaseUrl` or `mcpResources` under `instance.config` fails the render, and so does a misspelt key or an `externalResources` entry that breaks the rules above. `dcctl` accepts `enforcement`, `unscopedClientCredentials` and `externalResources` in a [values overlay](../deployment/tuning-an-instance.md#tunable) and refuses the two derived keys.
+
+On an instance whose configuration you write yourself (`instance.existingSecret`), the chart does not write the block. Add it to the document, listing the MCP server's `resourceUrl` exactly as the `mcp` area is configured, and update `instance.existingSecretChecksum`:
+
+```json
+"infrastructure": {
+  "tokenAudience": {
+    "areaBaseUrl": "https://iot.example.com/api",
+    "mcpResources": ["https://iot.example.com/api/mcp"]
+  }
+}
+```
+
+Without it the area resources are unknown and `mcp` is not registered, so every call the MCP server forwards is counted as a would-be refusal. `dcctl upgrade` warns about the missing MCP entry, and refuses under `enforce`.
+
 ## Two-factor authentication {#two-factor}
 
 An account can require a code from an authenticator app after its password. [How to use it](../guides/two-factor-authentication.md); this is what it guarantees and where it stops.

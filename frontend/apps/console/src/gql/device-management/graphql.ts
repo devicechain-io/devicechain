@@ -981,6 +981,14 @@ export type GeoFenceUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/** One header of a pasted webhook request. */
+export type HeaderInput = {
+  /** The header name. */
+  name: string;
+  /** The header value. */
+  value: string;
+};
+
 /** Data required to create an integration. */
 export type IntegrationCreateRequest = {
   /** Free-text description. */
@@ -1205,6 +1213,67 @@ export type PaginationInput = {
   pageSize: number;
 };
 
+/** Which input of an uplink a decoder reads. An uplink without it fails to decode with missing_input. */
+export type PayloadDecoderInput =
+  /** The object a network server already decoded. */
+  | 'DECODED'
+  /** The raw frame: a LoRaWAN payload, or a binary webhook body. */
+  | 'FRAME'
+  /** A JSON item from a generic webhook. */
+  | 'JSON';
+
+/**
+ * The engine a payload decoder runs on. Only CEL is executable; a WASM document is refused with
+ * UNSUPPORTED_DECODER_KIND.
+ */
+export type PayloadDecoderKind =
+  /** Expressions in a bounded, loop-free expression language over a library of byte and bit readers. */
+  | 'CEL'
+  /** Reserved. Refused wherever a decoder is saved or published. */
+  | 'WASM';
+
+/**
+ * A decoder and one input to run it over. Name at most one of frameHex, frameBase64, json,
+ * webhookBody and sampleId; naming none runs only the saved vectors.
+ */
+export type PayloadDecoderTestInput = {
+  /** With webhookBody: the request's content type. A network server integration refuses a non-JSON one. */
+  contentType?: string | null | undefined;
+  /** The decoder document as JSON text. Omit to test the profile's saved draft decoder. */
+  document?: string | null | undefined;
+  /** The LoRaWAN uplink frame counter, for a frame given as hex or base64. */
+  fCnt?: number | null | undefined;
+  /** The LoRaWAN application port, for a frame given as hex or base64. */
+  fPort?: number | null | undefined;
+  /** The frame as base64. At most 4096 bytes once decoded. */
+  frameBase64?: string | null | undefined;
+  /** The frame as hex; whitespace is ignored. At most 4096 bytes once decoded. */
+  frameHex?: string | null | undefined;
+  /** With webhookBody: the request headers, which a generic integration may read its device id from. */
+  headers?: Array<HeaderInput> | null | undefined;
+  /** Token of the stored integration whose type and settings parse webhookBody. */
+  integrationToken?: string | null | undefined;
+  /** A JSON object, given to the decoder's JSON or DECODED input, whichever it declares. */
+  json?: string | null | undefined;
+  /** With webhookBody: the message-type path segment some network servers post each message type to. */
+  messageType?: string | null | undefined;
+  /** Token of the profile whose draft metrics the decoder is checked against. */
+  profileToken: string;
+  /** With webhookBody: the query parameters, such as the event type of a network server. */
+  query?: Array<QueryParamInput> | null | undefined;
+  /**
+   * Load the input from a stored failure sample of this profile instead. Running a decoder
+   * over a sample reveals its bytes, so this needs device:write, not device:read. A sample of
+   * another tenant or profile is NOT_FOUND.
+   */
+  sampleId?: string | number | null | undefined;
+  /**
+   * A whole network-server or generic webhook body, up to 256 KiB, parsed by the same code
+   * that parses it at ingest. Needs integrationToken.
+   */
+  webhookBody?: string | null | undefined;
+};
+
 export type ProvisioningProfileCreateRequest = {
   credentialType?: string | null | undefined;
   description?: string | null | undefined;
@@ -1255,6 +1324,14 @@ export type ProvisioningProfileUpdateRequest = {
    * an anchor on a profile that authenticates by secret.
    */
   trustAnchorToken?: string | null | undefined;
+};
+
+/** One query parameter of a pasted webhook request. */
+export type QueryParamInput = {
+  /** The parameter name. */
+  name: string;
+  /** The parameter value. */
+  value: string;
 };
 
 /** Which integration's unregistered devices to return, and the page. Most recently seen first. */
@@ -2320,6 +2397,40 @@ export type MaintenanceWindowOpeningQueryVariables = Exact<{
 
 
 export type MaintenanceWindowOpeningQuery = { maintenanceWindowOpening: { found: boolean, openNow: boolean, dispatchAfter: string, closes: string } };
+
+export type ProfileDecoderQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type ProfileDecoderQuery = { deviceProfilesByToken: Array<{ token: string, decoder: { kind: PayloadDecoderKind, envVersion: number, input: PayloadDecoderInput, document: string, maxReadings: number, estimatedCost: number } | null, activeProfileVersion: { version: number, decoder: { kind: PayloadDecoderKind, envVersion: number, input: PayloadDecoderInput, document: string, maxReadings: number, estimatedCost: number } | null } | null }> };
+
+export type SetDeviceProfileDecoderMutationVariables = Exact<{
+  profileToken: string;
+  document: string;
+}>;
+
+
+export type SetDeviceProfileDecoderMutation = { setDeviceProfileDecoder: { token: string, decoder: { kind: PayloadDecoderKind, envVersion: number, input: PayloadDecoderInput, document: string, maxReadings: number, estimatedCost: number } | null } };
+
+export type ClearDeviceProfileDecoderMutationVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type ClearDeviceProfileDecoderMutation = { clearDeviceProfileDecoder: { token: string } };
+
+export type TestPayloadDecoderQueryVariables = Exact<{
+  input: PayloadDecoderTestInput;
+}>;
+
+
+export type TestPayloadDecoderQuery = { testPayloadDecoder: { ok: boolean, ignored: boolean, section: string | null, cost: number, uplinks: number, readings: Array<{ key: string, value: string }>, skipped: Array<{ key: string, reason: string }>, error: { reason: string, path: string, message: string, offset: number | null } | null, vectors: Array<{ name: string, ok: boolean, error: string | null, cost: number }> } };
+
+export type PayloadDecoderFunctionsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type PayloadDecoderFunctionsQuery = { payloadDecoderFunctions: Array<{ name: string, signature: string, description: string }> };
 
 export type ProvisioningProfilesQueryVariables = Exact<{
   criteria: ProvisioningProfileSearchCriteria;
@@ -4742,6 +4853,94 @@ export const MaintenanceWindowOpeningDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<MaintenanceWindowOpeningQuery, MaintenanceWindowOpeningQueryVariables>;
+export const ProfileDecoderDocument = new TypedDocumentString(`
+    query ProfileDecoder($tokens: [String!]!) {
+  deviceProfilesByToken(tokens: $tokens) {
+    token
+    decoder {
+      kind
+      envVersion
+      input
+      document
+      maxReadings
+      estimatedCost
+    }
+    activeProfileVersion {
+      version
+      decoder {
+        kind
+        envVersion
+        input
+        document
+        maxReadings
+        estimatedCost
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ProfileDecoderQuery, ProfileDecoderQueryVariables>;
+export const SetDeviceProfileDecoderDocument = new TypedDocumentString(`
+    mutation SetDeviceProfileDecoder($profileToken: String!, $document: String!) {
+  setDeviceProfileDecoder(profileToken: $profileToken, document: $document) {
+    token
+    decoder {
+      kind
+      envVersion
+      input
+      document
+      maxReadings
+      estimatedCost
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<SetDeviceProfileDecoderMutation, SetDeviceProfileDecoderMutationVariables>;
+export const ClearDeviceProfileDecoderDocument = new TypedDocumentString(`
+    mutation ClearDeviceProfileDecoder($profileToken: String!) {
+  clearDeviceProfileDecoder(profileToken: $profileToken) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<ClearDeviceProfileDecoderMutation, ClearDeviceProfileDecoderMutationVariables>;
+export const TestPayloadDecoderDocument = new TypedDocumentString(`
+    query TestPayloadDecoder($input: PayloadDecoderTestInput!) {
+  testPayloadDecoder(input: $input) {
+    ok
+    ignored
+    section
+    readings {
+      key
+      value
+    }
+    skipped {
+      key
+      reason
+    }
+    error {
+      reason
+      path
+      message
+      offset
+    }
+    cost
+    vectors {
+      name
+      ok
+      error
+      cost
+    }
+    uplinks
+  }
+}
+    `) as unknown as TypedDocumentString<TestPayloadDecoderQuery, TestPayloadDecoderQueryVariables>;
+export const PayloadDecoderFunctionsDocument = new TypedDocumentString(`
+    query PayloadDecoderFunctions {
+  payloadDecoderFunctions {
+    name
+    signature
+    description
+  }
+}
+    `) as unknown as TypedDocumentString<PayloadDecoderFunctionsQuery, PayloadDecoderFunctionsQueryVariables>;
 export const ProvisioningProfilesDocument = new TypedDocumentString(`
     query ProvisioningProfiles($criteria: ProvisioningProfileSearchCriteria!) {
   provisioningProfiles(criteria: $criteria) {

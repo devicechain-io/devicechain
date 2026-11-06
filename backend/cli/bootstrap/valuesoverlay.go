@@ -140,6 +140,7 @@ var tunableValues = []string{
 	"functionalAreas.*.measuredRequests",
 	"functionalAreas.*.goMemLimitPercent",
 	"functionalAreas.*.memoryLimitFloor",
+	"functionalAreas.*.memoryLimitFloorWithEnvelopes",
 	"functionalAreas.*.gogc",
 	"functionalAreas.*.goMemLimit",
 	"functionalAreas.*.avoidEventStorePrimary",

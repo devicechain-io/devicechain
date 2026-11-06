@@ -554,6 +554,10 @@ var sweepExemptions = map[string]string{
 	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
 		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
 		"entity reads the stored row back through integration",
+	"device-management.integrationDecoder": "it answers the ingest path's question about a device type's " +
+		"decoder for an integration, authenticated with the bearer token the platform showed once and " +
+		"stores only a digest of, so the sweep has no value to supply; the decoder itself is read back " +
+		"through the device profile and its versions",
 	"device-management.unregisteredIntegrationDevices": "it lists the sightings of ONE integration, named " +
 		"inside its criteria, which are written only by the ingest path's service-plane lookup " +
 		"(resolveIntegrationDevice, which needs the integration's bearer token), so the drill has no " +
@@ -569,6 +573,11 @@ var sweepExemptions = map[string]string{
 	"device-management.testMetricFormula": "an authoring preview: it evaluates a formula and a sample " +
 		"the CALLER writes against a profile's draft, and stores nothing, so there is no stored row for " +
 		"the drill to reach through it",
+	"device-management.testPayloadDecoder": "an authoring preview: it runs a decoder document and an " +
+		"input (a frame, a body or a stored sample) the CALLER writes against a profile's draft metrics, " +
+		"and stores nothing, so there is no stored row for the drill to reach through it. Its sampleId " +
+		"path has nothing to read until the decode accounting slice (B3b) writes samples. " +
+		"TODO(B3b): seed a failing decode and exercise sampleId from the drill.",
 	"device-management.validateCommandEnqueue": "a pre-flight gate over a command the CALLER is about " +
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +

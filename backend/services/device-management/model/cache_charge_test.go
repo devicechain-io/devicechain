@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -138,12 +140,15 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 		heap   float64
 		enc    int
 		charge decodedCharge
+		// override is the charge the cache makes when it is not the factor's: the programs of a
+		// payload decoder (resolutionChargeOf).
+		override float64
 	}
 	var cases []measured
 	var current decodedCharge
 	add := func(name string, heap float64, v any) {
 		raw, _ := json.Marshal(v)
-		cases = append(cases, measured{name, heap, len(raw), current})
+		cases = append(cases, measured{name: name, heap: heap, enc: len(raw), charge: current})
 	}
 	marshal := func(v any) []byte { raw, _ := json.Marshal(v); return raw }
 
@@ -167,6 +172,33 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	s62, s484 := shortKeyMetrics(62), shortKeyMetrics(484)
 	add("resolution 62 distinct short keys", resolution(marshal(s62), 1000), s62)
 	add("resolution 484 distinct short keys", resolution(marshal(s484), 100), s484)
+	// A version with a payload decoder: the encoding holds the document, and the entry holds the
+	// compiled programs of every expression in it. The document is a maximal one (the size
+	// ceiling, every let and section the limits allow), because that is what the factor must
+	// cover; it is what a tenant at the ceiling can put in every device type's entry.
+	scope := ProfileScope{DeviceTypeToken: "thermostat", ProfileVersionToken: "thermostat-profile@12", FenceSetVersion: 3}
+	_, metricDefs := maximalDecoder(t)
+	for _, f := range []struct {
+		name string
+		doc  json.RawMessage
+	}{
+		{"resolution + maximal decoder", mustDoc(maximalDecoder(t))},
+		{"resolution + 520 one-token expressions", tinyExpressionDecoder(t)},
+		{"resolution + 17 dense expressions", denseDecoder(t)},
+	} {
+		built := NewProfileResolutionWithDecoder(scope, metricDefs, f.doc)
+		require.NotNil(t, built.Decoder().Plan(), "%s does not compile: %v", f.name, built.Decoder().Unusable())
+		add(f.name, resolution(marshal(built), 40), built)
+		decoded, err := decodeProfileResolution(marshal(built))
+		require.NoError(t, err)
+		charged, ok := resolutionChargeOf(decoded, len(marshal(built)))
+		require.True(t, ok)
+		cases[len(cases)-1].override = float64(charged)
+		// The counterweight: a decoder is charged for memory it holds, within 2x of it.
+		if heap := cases[len(cases)-1].heap; float64(charged) > 2*heap {
+			t.Errorf("%s: charged %d B for %.0f B held", f.name, charged, heap)
+		}
+	}
 	current = relationshipsCharge
 	add("relationships 5", heapPerDecoded[EntityRelationshipSearchResults](t, marshal(rels), 2000), rels)
 	current = membershipsCharge
@@ -177,7 +209,7 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 
 	worstResolution := 0.0
 	for _, c := range cases {
-		if c.charge == resolutionCharge {
+		if c.charge == resolutionCharge && c.override == 0 {
 			worstResolution = max(worstResolution, (c.heap-float64(c.charge.base))/float64(c.enc))
 		}
 	}
@@ -187,6 +219,9 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	}
 	for _, c := range cases {
 		charge := float64(c.charge.bytes(c.enc))
+		if c.override > 0 {
+			charge = c.override
+		}
 		t.Logf("%-28s encoded %5d B  heap %7.0f B  charge %6.0f B  (%.2fx encoded)", c.name, c.enc, c.heap, charge, c.heap/float64(c.enc))
 		// Tolerance: the heap read includes allocator size-class rounding and runs
 		// concurrently with the test runtime, so allow 5% under.
@@ -194,4 +229,79 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 			t.Errorf("%s: charge %.0f B is below the measured heap %.0f B", c.name, charge, c.heap)
 		}
 	}
+}
+
+// maximalDecoder is a decoder near the document ceiling with the declared metrics it writes:
+// MaxLets bindings and MaxSections sections of 34 rows each, over 64 DOUBLE metrics.
+func maximalDecoder(t *testing.T) (json.RawMessage, []*MetricDefinition) {
+	t.Helper()
+	var defs []*MetricDefinition
+	for i := 0; i < 64; i++ {
+		d := &MetricDefinition{MetricKey: fmt.Sprintf("measurement_%02d", i), DataType: "DOUBLE"}
+		d.ID = uint(i + 1)
+		defs = append(defs, d)
+	}
+	doc := payloaddecode.Document{Kind: payloaddecode.KindCEL, EnvVersion: payloaddecode.EnvVersion, Input: payloaddecode.InputFrame}
+	for i := 0; i < payloaddecode.MaxLets; i++ {
+		doc.Let = append(doc.Let, payloaddecode.Let{Name: fmt.Sprintf("header_%02d", i), Expr: fmt.Sprintf("u8(frame, %d) + u8(frame, %d) * 256", i, i+1)})
+	}
+	for s := 0; s < payloaddecode.MaxSections; s++ {
+		sec := payloaddecode.Section{Name: fmt.Sprintf("section_%d", s), When: fmt.Sprintf("fPort == %d && header_00 >= 0", s+1)}
+		for r := 0; r < 34; r++ {
+			sec.Outputs = append(sec.Outputs, payloaddecode.Output{Key: fmt.Sprintf("measurement_%02d", r),
+				Expr: fmt.Sprintf("double(i16be(frame, %d)) / 10.0 + double(header_%02d)", 2+r, r%payloaddecode.MaxLets),
+				When: fmt.Sprintf("header_%02d != %d", r%payloaddecode.MaxLets, r)})
+		}
+		doc.Sections = append(doc.Sections, sec)
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(raw), payloaddecode.MaxDocumentBytes)
+	require.Greater(t, len(raw), payloaddecode.MaxDocumentBytes*3/4, "the fixture is no longer near the ceiling")
+	return raw, defs
+}
+
+func mustDoc(raw json.RawMessage, _ []*MetricDefinition) json.RawMessage { return raw }
+
+// tinyExpressionDecoder is the other shape that matters: as many expressions as the limits allow,
+// each as short as one can be (8 sections of 64 rows of `1.0`).
+func tinyExpressionDecoder(t *testing.T) json.RawMessage {
+	t.Helper()
+	doc := payloaddecode.Document{Kind: payloaddecode.KindCEL, EnvVersion: payloaddecode.EnvVersion, Input: payloaddecode.InputFrame}
+	for s := 0; s < payloaddecode.MaxSections; s++ {
+		sec := payloaddecode.Section{Name: fmt.Sprintf("s%d", s)}
+		if s > 0 {
+			sec.When = fmt.Sprintf("fPort == %d", s)
+		}
+		for r := 0; r < 64; r++ {
+			sec.Outputs = append(sec.Outputs, payloaddecode.Output{Key: fmt.Sprintf("measurement_%02d", r), Expr: "1.0"})
+		}
+		doc.Sections = append(doc.Sections, sec)
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	return raw
+}
+
+// denseDecoder is few, long expressions: 14 lets of a hundred u8 reads summed in a balanced tree
+// (the parser's recursion limit forbids a chain), which is the shape with the most program per
+// expression.
+func denseDecoder(t *testing.T) json.RawMessage {
+	t.Helper()
+	var tree func(lo, hi int) string
+	tree = func(lo, hi int) string {
+		if hi-lo == 1 {
+			return fmt.Sprintf("u8(frame, %d)", lo%100)
+		}
+		mid := (lo + hi) / 2
+		return "(" + tree(lo, mid) + " + " + tree(mid, hi) + ")"
+	}
+	doc := payloaddecode.Document{Kind: payloaddecode.KindCEL, EnvVersion: payloaddecode.EnvVersion, Input: payloaddecode.InputFrame}
+	for i := 0; i < 14; i++ {
+		doc.Let = append(doc.Let, payloaddecode.Let{Name: fmt.Sprintf("v%02d", i), Expr: tree(0, 100)})
+	}
+	doc.Sections = []payloaddecode.Section{{Name: "s", Outputs: []payloaddecode.Output{{Key: "measurement_00", Expr: "double(v00)"}}}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	return raw
 }

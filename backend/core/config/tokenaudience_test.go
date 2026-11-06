@@ -116,7 +116,7 @@ func TestTokenAudienceEffectiveEnforcement(t *testing.T) {
 	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{Enforcement: "observe"}.EffectiveEnforcement())
 	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{Enforcement: "enforce"}.EffectiveEnforcement())
 	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{}.EffectiveUnscopedClientCredentials())
-	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{UnscopedClientCredentials: "enforce"}.EffectiveUnscopedClientCredentials())
+	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{UnscopedClientCredentials: "observe"}.EffectiveUnscopedClientCredentials())
 }
 
 // The shared validator keeps mcp's rule when lowercase is off: an upper-case host that loads
@@ -145,4 +145,18 @@ func TestTokenAudienceIsValidatedThroughTheInstanceDocument(t *testing.T) {
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "tokenAudience"), err.Error())
+}
+
+// An accepted value that does nothing would let an operator believe the rule is on. Rule 3
+// is counted and warned in this release, never refused, so "enforce" is refused at load.
+func TestUnscopedClientCredentialsEnforceIsRefusedInThisRelease(t *testing.T) {
+	err := TokenAudienceConfiguration{UnscopedClientCredentials: "enforce"}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unscopedClientCredentials")
+	assert.Contains(t, err.Error(), "next major release")
+	// The counterweights: unset and observe load.
+	assert.NoError(t, TokenAudienceConfiguration{}.Validate())
+	assert.NoError(t, TokenAudienceConfiguration{UnscopedClientCredentials: "observe"}.Validate())
+	// And it is independent of the other mode key.
+	assert.NoError(t, TokenAudienceConfiguration{Enforcement: "enforce"}.Validate())
 }

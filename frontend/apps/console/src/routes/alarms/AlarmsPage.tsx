@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
+import { formatValue } from '@devicechain/widget-sdk';
 import { useAuth } from '@/auth/AuthProvider';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -317,7 +318,10 @@ export default function AlarmsPage() {
                     <div className="font-mono text-xs text-muted-foreground">{a.metricKey}</div>
                   </DataTableCell>
                   <DataTableCell className="text-right tabular-nums text-foreground">
-                    {a.lastValue ?? '—'}
+                    {/* The dashboard formatter, so an alarm reads like the metric does on a card:
+                        a metric definition declares a unit but no precision, so the default
+                        rounding applies (the CSV export above keeps the exact value). */}
+                    {formatValue(a.lastValue)}
                   </DataTableCell>
                   <DataTableCell className="whitespace-nowrap text-muted-foreground">
                     {formatTime(a.raisedTime)}

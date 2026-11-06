@@ -257,6 +257,14 @@ var tableSweepExemptions = map[string]string{
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
 
+	// ---- written only by a decode that runs --------------------------------------
+	"device-management.profile_decoder_healths": "per-replica decode tallies, written by the resolver's " +
+		"accounting flusher when an integration uplink is decoded by a profile's published decoder. The " +
+		"seed ingests no uplink through an integration, so no decode runs and no tally exists.",
+	"device-management.profile_decoder_samples": "stored failing uplinks. Nothing writes a row until the " +
+		"decode accounting slice (B3b) lands the sample writer. TODO(B3b): seed one failing decode through " +
+		"an integration and drop this exemption.",
+
 	// ---- per-area journals, correctly empty ----------------------------------
 	//
 	// 🔑 Confirmed rather than assumed: device-management.audit_events is NOT among the

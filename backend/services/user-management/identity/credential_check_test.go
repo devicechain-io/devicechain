@@ -285,10 +285,10 @@ func postToken(t *testing.T, f *credFixture, clientID, secret string) *httptest.
 	}
 	rec := httptest.NewRecorder()
 	h := TokenHandler(f.mgr.AuthenticateClient,
-		func(context.Context, string, string, string, string) (*OAuthTokens, error) {
+		func(context.Context, string, string, string, string, []string) (*OAuthTokens, error) {
 			return nil, errors.New("unused")
 		},
-		func(context.Context, string, string, string) (*OAuthTokens, error) {
+		func(context.Context, string, string, string, []string) (*OAuthTokens, error) {
 			return &OAuthTokens{AccessToken: "at", ExpiresIn: 60}, nil
 		}, nil)
 	h.ServeHTTP(rec, req)

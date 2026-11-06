@@ -375,5 +375,6 @@
   "notificationPolicyConflict": "Otra persona guardó esta política después de que la abrieras. Recarga la página y vuelve a hacer tu cambio.",
   "notificationPolicyRulesHelp": "Las reglas se muestran aquí en solo lectura y no se modifican al guardar. Una política creada aquí empieza sin reglas.",
   "notificationPolicyNoChannel": "(canal eliminado)",
-  "notificationPolicyAnySeverity": "Cualquier severidad"
+  "notificationPolicyAnySeverity": "Cualquier severidad",
+  "deviceProfileDecoderTab": "Decodificador"
 }

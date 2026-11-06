@@ -28,7 +28,7 @@ identity and drives the same tenant-facing surfaces a real integration would.
    population default to the scenario's own demo sizing (~5s) and are
    overridable — see [Driving load](#driving-load).
 5. **Receives** commands, for a scenario whose manifest declares a **command far
-   end** (widgetlab; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
+   end** (widgetlab, towerpulse and fleetpulse; sitepulse declares one too, `external`, and attaches no receiver). Telemetry over HTTP ingress is one-way, so a scenario whose
    dashboard offers a command-button otherwise enqueues real commands nothing
    answers: they reach `SENT` and expire days later, with every layer reporting
    success. Such a scenario subscribes every device to its own command topic on
@@ -273,6 +273,16 @@ off:
 - **one entry per event** — the per-entry time is discarded at persistence and
   identical positions in one batch collide, so batching loses data.
 
+Fleet Pulse also answers one typed command, `set-speed-limit`, with a required `limit_mps`
+parameter (a number from 5 to 30). The vehicle applies the limit, then answers `SUCCESSFUL`,
+and from its next reading on never reports a speed above it (the location fix and the
+`speed_mps` metric stay one value). The 5 to 30 range is enforced by the platform when the
+command is queued, against the published profile; the vehicle does not range-check, it only
+answers `FAILED` to a command it cannot act on. The limit lives in the process, so a restart
+clears it. A run that never sends the command behaves exactly as before. Because the scenario
+now declares a command far end, its handshake must carry `endpoints.mqttBroker` (a current
+`dcctl sim create` writes it), or the sim is started with `--no-command-far-end`.
+
 The emitter's tests run the exact bytes it produces through event-sources' own JSON
 decoder, so a change to that contract fails here rather than against a live cluster.
 
@@ -511,7 +521,7 @@ on its manifest, which has three settings:
 | `internal` | this process, per device | yes | allowed |
 | `external` | a presentation client in another process — a Unity player that IS the device | no | allowed |
 
-widgetlab and towerpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
+widgetlab, towerpulse and fleetpulse are `internal`; sitepulse is `external`; devicepulse and buildingpulse are `none`. Both far-end modes
 must still declare a command vocabulary on a profile: for `external` that vocabulary
 is the whole contract with the other process, since it is what that client subscribes
 for and what the board's widget enqueues against.
@@ -703,6 +713,99 @@ The unit tests prove the minted chain passes `x509trust.VerifyClientChain` and t
 over a TLS handshake (certificate, username, client id) is what the callout expects. They do not
 run a real broker and callout; the rig does.
 
+### Over-the-air update devices (`--ota`)
+
+`--ota` gives **every device of the scenario** an update client that runs the real device-side update
+protocol against the instance. It is additive: a sim started without it is exactly what it was.
+
+Each device holds its own MQTT session (the device's client id plus the `:ota` discriminator, so the
+command far end keeps the plain one), subscribes to its `device-desired` topic, and on every connect
+sends `sync` and `update.inventory`. When the platform assigns an update it:
+
+1. receives `update.assignment` and reports `RECEIVED`;
+2. asks for a grant (`download.request`) and fetches the image from the capability URL in `Range`
+   windows (`--ota-chunk` bytes each), resuming from the bytes it holds after any failure;
+3. checks the SHA-256 of what it holds against `artifact.digest`, then the detached signature over the
+   raw digest against its trust set (`--ota-trusted-key`), and only then reports `VERIFIED`;
+4. "installs" (swaps its version string; nothing is executed), reboots (new boot id) and reports
+   `RUNNING` with the new version.
+
+A device that cannot verify reports `FAILED` with `VERIFICATION_FAILED`, `SIGNATURE_INVALID` or
+`UNKNOWN_SIGNER`, keeps its old version, and never reports `RUNNING`. The protocol logic is the
+`updater` package, which speaks the wire from its own structs and is held to the core contract's
+golden fixtures; `otafleet` is the broker wiring and the fault injection around it.
+
+| Flag | Environment | Meaning |
+| --- | --- | --- |
+| `--ota` | `DC_SIM_OTA` | Turn the update devices on. |
+| `--ota-trusted-key` | `DC_SIM_OTA_TRUSTED_KEY` | Comma-separated PEM public key files (ECDSA P-256 or Ed25519) the devices trust. Required unless `--ota-allow-unsigned`. |
+| `--ota-allow-unsigned` | `DC_SIM_OTA_ALLOW_UNSIGNED` | Install an `UNVERIFIED` update. Off by default, as on the reference device. |
+| `--ota-version` | `DC_SIM_OTA_VERSION` | Version a fresh device runs (default `1.0.0`). |
+| `--ota-component` | `DC_SIM_OTA_COMPONENT` | Component each device manages (default `firmware`). |
+| `--ota-state-dir` | `DC_SIM_OTA_STATE_DIR` | Keep per-device update state so a restarted simulator continues the same attempts (default: a temp dir, removed on exit). |
+| `--ota-chunk` | `DC_SIM_OTA_CHUNK` | Bytes per ranged request (default 32768). |
+| `--ota-step-delay` | `DC_SIM_OTA_STEP_DELAY` | Pause between a device's steps, to make a rollout watchable. |
+| `--ota-bad-hash` | `DC_SIM_OTA_BAD_HASH` | N devices are served an image with one flipped byte: `FAILED VERIFICATION_FAILED`. |
+| `--ota-interrupted` | `DC_SIM_OTA_INTERRUPTED` | N devices lose the download part-way once, then resume from the bytes they hold and finish. |
+| `--ota-bad-signature` | `DC_SIM_OTA_BAD_SIGNATURE` | N devices see a corrupted signature: `FAILED SIGNATURE_INVALID`. |
+| `--ota-offline` | `DC_SIM_OTA_OFFLINE` | N devices never connect to the broker. |
+| `--ota-offline-for` | `DC_SIM_OTA_OFFLINE_FOR` | Bring the offline devices online after this long; they sync and the platform resends what they missed. |
+
+Faulty devices are taken in the order the scenario provisioned them: the first `--ota-bad-hash`, then
+`--ota-interrupted`, `--ota-bad-signature`, `--ota-offline`; every device after those is healthy. A
+fault flag without `--ota`, or more faults than devices, is an error and not a quietly smaller demo.
+
+`GET /status` gains an `updates` object: devices, how many are on the broker, counts by injected mode,
+by running version and by latest stage, the fault tallies (`corruptedDownloads`, `interruptions`,
+`resumes`) and the first failed devices with their last report.
+
+**A demo fleet**, against an instance that runs the update service (`default` or `full` profile). The
+`dcctl sim run` child inherits the environment, so the flags can be set either way:
+
+```sh
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ota-signer.pem
+openssl pkey -in ota-signer.pem -pubout -out ota-signer.pub.pem
+
+dcctl sim create fleet --manifest devicepulse          # your usual create flags
+export DC_SIM_OTA=1 DC_SIM_DEVICES=8 DC_SIM_OTA_TRUSTED_KEY=ota-signer.pub.pem \
+       DC_SIM_OTA_BAD_HASH=1 DC_SIM_OTA_INTERRUPTED=2 DC_SIM_OTA_OFFLINE=1 \
+       DC_SIM_OTA_STEP_DELAY=300ms DC_SIM_OTA_CHUNK=8192
+dcctl sim run fleet
+```
+
+or directly: `dc-simulator --handshake <handshake.json> --devices 8 --ota --ota-trusted-key ota-signer.pub.pem
+--ota-bad-hash 1 --ota-interrupted 2 --ota-offline 1`.
+
+On the platform side (the tenant GraphQL of the update service; `hack/ota-rig.sh` has the same calls
+as shell): `registerArtifactSigner` with `ota-signer.pub.pem`; `createArtifact` (`kind: FIRMWARE`,
+`component: "firmware"`, size and `sha256:` digest of any file of a few hundred KB, since the
+simulator never runs the image); `PUT /updates/artifacts/<token>/content` with the bytes;
+`addArtifactSignature` with `openssl dgst -sha256 -sign ota-signer.pem -binary <file> | base64`;
+put the sim's devices in an entity group; `createUpdateRollout(request: {token, name, artifactToken,
+groupToken, maxInFlight: 2})` and `startUpdateRollout`. Watch `/status` on the sim and the rollout's
+progress in the console: the healthy devices go `UPDATED`, the bad-hash and offline ones fail or
+time out, the interrupted ones finish after a resume, and `maxInFlight` is never exceeded.
+
+What a live run needs:
+
+- The scenario must have at least as many devices as faults (`devicepulse` has one unless you pass
+  `--devices` / `DC_SIM_DEVICES`); the sim refuses to start otherwise.
+- An instance whose update service has an object store and a `downloadBaseUrl` (the update service
+  reports `downloadsConfigured`); without them there is nowhere to download from.
+- On a kind cluster whose ports are remapped, create the sim with `--server 127.0.0.1:<port>
+  --host-header localhost`. The simulator downloads through the address the sim was created with:
+  with a host header it dials that address and presents the instance host; without one, a capability
+  URL naming the same host on another port is redirected to the address's port.
+- Leave `failureThreshold` out of the rollout (or set it above the number of faulty devices): a
+  bad-hash failure can otherwise pause it, which is correct platform behaviour but not the demo.
+- `--ota-offline-for` is measured from the simulator's bootstrap, not from the rollout's start.
+  Start the rollout first if the offline devices should miss the assignment and catch up on sync.
+
+The tests run the real devices over a real socket against an in-process broker (`internal/fakemqtt`)
+with the real update reducer as the platform, including a group rollout with `maxInFlight`, each
+fault mode, and a forged signature that must be refused. They cannot prove the real broker's ACLs or
+the real download endpoint; `hack/ota-rig.sh` and a live instance do.
+
 ### `GET /config.json`
 
 The presentation page — and, for an `external` far end, the out-of-process client
@@ -781,6 +884,7 @@ a snapshot taken at page load would not.
 - `sim/emit.go` also holds `EventWire`, the seam that carries a scenario's events over a transport
   other than the HTTP ingress (`Runtime.Wire`), and the MQTT event body (which carries no
   credential); `sim/wire.go` has the payload builder both transports share.
+- `otafleet/` — the `--ota` mode: the broker wiring and fault injection around the `updater` package (a fake device-side firmware updater), one update session per device.
 - `x509sim/` — the `--x509` mode: test CA and device certificate minting, trust-anchor and credential registration, and the certificate-presenting MQTT connect.
 - `mqttload/` — the MQTT fleet behind `dc-loadtest-mqtt`: one session per device, PUBACK-true
   accounting, jittered reconnect, observed TLS. `loadtest/mqtt.go` is its storage verdict.
