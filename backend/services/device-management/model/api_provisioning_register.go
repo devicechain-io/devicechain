@@ -421,7 +421,7 @@ func (api *Api) provisionOnce(ctx context.Context, tenant string, request *Provi
 		// What was authenticated must still be what is here: a profile disabled, expired or
 		// rotated since is refused exactly as an unknown key is.
 		if request.Certificate != nil {
-			if err := lockCertificateProfile(tx, &profile, request); err != nil {
+			if err := lockCertificateProfile(tx, &profile, request, api.revocationLimits().DefaultStaleGrace); err != nil {
 				return err
 			}
 		} else if !profileCanRegister(&profile, time.Now()) ||

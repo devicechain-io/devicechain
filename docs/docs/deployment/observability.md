@@ -562,7 +562,7 @@ streams at the default 15 minutes, with [fail-closed MQTT](#mqtt-fail-closed) of
 | 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi | 36Gi |
 
 "Volume that fits" is the smallest volume whose `max_file_store` holds the reservation, with the
-other streams, the MQTT gateway's stores and the key-value buckets (about 8.6 GiB together at the
+other streams, the MQTT gateway's stores and the key-value buckets (about 8.7 GiB together at the
 defaults); the 20,000 row clears it by under 100 MiB. Use the larger figure, which leaves room for
 the streams and buckets later releases add. `dcctl` has no flag for the JetStream volume. A
 StatefulSet's volume claim cannot be changed in place, so growing it is a manual step:
@@ -907,7 +907,7 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 | `inMemoryCache.ttlSeconds` | `300` | How long a replica keeps a value in its own memory, from 1 to 3600 seconds. A change drops the value on every replica at once, so this only bounds an eviction message that was lost. The key-value cache's own time to live caps it (see below). See [Caches that stop answering](#kv-caches). |
 | `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` | `300` | The time to live of each key-value cache in the broker, from 1 to 3600 seconds. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | The most entries each replica keeps in memory of each of the three caches kept per device: a device by its token, its tracked relationships, its group memberships. See [Caches that stop answering](#kv-caches). |
-| `inMemoryCache.perDeviceCacheMiB` | `24` | The most memory, in MiB, each of those three caches takes in each replica. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
+| `inMemoryCache.perDeviceCacheMiB` | `80` | The most memory, in MiB, each of those three caches takes in each replica: about 4 for each 1,000 devices that resolve on their token. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
 | `inMemoryCache.credentialCacheMiB` | `32` | The most memory, in MiB, the device credential cache takes in each replica, from 1 to 256. About 29,000 credentialed devices fit in the default; 60,000 need about 70. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
 
 Raise it when `resolve_inflight` stays at `resolve_workers` while the pod has CPU to spare. If the
@@ -963,7 +963,7 @@ Known limitations of the setting:
 - Overload does not push back yet, and the setting is not a guarantee across a broker running out of memory. On the setup under [quality of service](../guides/connecting-a-device.md#quality-of-service), one of three runs at 9,000 QoS 1 events per second ran a broker server out of memory and lost 294,740 of 2.64 million acknowledged events, and at 12,000 per second all three servers did and 621,280 of 3.36 million (18.5%) were lost. The store's size bound and the connection back-off at 80% did not engage: the store was under 30% full when the servers died, because what grew was the broker's queue of publishes waiting to be stored, ahead of the store. The loss started before the memory ran out, no counter moved, and where the events are lost has not been established. Stay below the measured ceiling there (about 8,000 per second), and do not count on the setting across a broker crash.
 - The store costs the broker more per publish than the capture stream does, and the platform keeps up with less traffic with the setting on. On the setup under [quality of service](../guides/connecting-a-device.md#quality-of-service), PUBACKs at the 99th percentile took 45 ms at 6,000 events per second, 485 ms at 7,500 and 1.12 s at 8,250, against 55 ms at 6,000 with the setting off; the measured clean ceiling with it on is about 8,000 per second.
 - The back-off measures the store's size in bytes, and only refuses new connections: devices already connected keep publishing. A backlog well below 80% of the bound can still be large.
-- A backlog in the store itself takes little broker memory, tens of MiB per server for a full store. Each NATS server's memory goes mostly on the duplicate-detection windows, about 89 KiB of live heap per sustained event per second on each server, and a server's resident memory runs at about twice its live heap, so at a sustained 8,000 events per second a server already sits near 3 GiB of its 4 GiB limit, with the setting on or off. A server that is short of CPU also queues work in memory, so if a server is ever OOM-killed, raise `nats_memory_limit`. No alert watches the broker's memory: because a healthy server rides near its limit, a threshold on it would stay quiet until the kill. `InstanceContainerRestarted` reports the kill (a broker container whose last state is `OOMKilled`), and that is the signal to act on.
+- A backlog in the store itself takes little broker memory, tens of MiB per server for a full store. Each NATS server's memory goes mostly on the duplicate-detection windows, about 89 KiB of live heap per sustained event per second on each server, and a server's resident memory runs at about twice its live heap, so a server's resident memory is already near 3 GiB of its 4 GiB limit at a sustained 8,000 events per second, with the setting on or off. A server that is short of CPU also queues work in memory. Raise `nats_memory_limit` when a server's working set sits at its soft limit, not only after it is OOM-killed: a server at the soft limit collects continuously and slows without restarting. [The broker's memory](./bootstrap.md#broker-sizing) has the working set measured at 8,000 to 20,000 events per second and a rule for the limit. No alert watches the broker's memory, because a healthy server rides near its limit. `InstanceContainerRestarted` reports a kill (a broker container whose last state is `OOMKilled`).
 
 ## Event persistence {#event-persistence}
 
@@ -1313,9 +1313,34 @@ for up to five minutes (`inMemoryCache.ttlSeconds`, and never longer than the ca
 live), and answers from there without asking NATS, including while the bucket is being skipped.
 The time counts from when the value was read, not from when it was last used. The three caches
 kept per device (a device by its token, its tracked relationships, its group memberships) each
-hold up to 131,072 entries or 24 MiB per replica, set by `inMemoryCache.perDeviceCacheEntries`
-and `inMemoryCache.perDeviceCacheMiB`. That is about 87,000 devices with no tracked relationship,
-or about 26,000 with one. The profile and group-scope caches, kept per device type and per
+hold up to 131,072 entries or 80 MiB per replica, set by `inMemoryCache.perDeviceCacheEntries`
+and `inMemoryCache.perDeviceCacheMiB`. A device costs 2.5 to 3.1 KB in the by-token cache (the
+device and its device type, kept encoded and decoded), so 80 MiB holds about 27,000 devices there;
+the tracked-relationships cache holds about 34,000 devices with one tracked relationship, or
+all 131,072 entries for devices with none. The by-token cache fills first. The bound was 24 MiB before `v1.2.0`,
+which held only 8,000 to 10,000 devices: at 16,000 devices the by-token cache pushed an entry out
+on 73% of lookups, the CPU each event cost in `device-management` rose from 0.048 to 0.105
+CPU-seconds per 1,000 events between 8,000 and 16,000 devices, and at 20,000 the reads fell
+through to the key-value bucket and timed out.
+
+**Sizing the per-device caches for a fleet.** Every replica keeps the whole active fleet, not its
+share of it, because the `inbound-events` consumer is shared and a replica resolves whichever
+batch it fetched next. For N devices that report within `inMemoryCache.ttlSeconds`:
+
+- `inMemoryCache.perDeviceCacheMiB`: 4 for each 1,000 devices that resolve on their token (N × 3.1
+  KB, plus a quarter; 3 for each 1,000 devices that present a credential and have one tracked
+  relationship). The default of 80 covers 20,000 devices with a quarter over. A fleet over
+  about 131,000 devices also raises `perDeviceCacheEntries`.
+- `inMemoryCache.credentialCacheMiB`: 1.4 for each 1,000 devices that present a credential. An event
+  takes one path or the other, so the two fill from different devices.
+- The service's memory limit: 2 × (3 × `perDeviceCacheMiB` + `credentialCacheMiB` + 36 + 60) MiB. The
+  36 is the two small caches and the 60 is the rest of the service. The default of 768Mi is that
+  rule for the default bounds. The rule counts all three per-device caches as full, which only the
+  by-token cache is at these sizes, so it is the cautious side.
+
+For 60,000 devices that resolve on their token, set `perDeviceCacheMiB` to 240 and the memory limit
+to 1.7Gi. `DeviceLookupCacheTooSmall` fires when a replica's cache is full and evicting on more than
+5% of lookups for 15 minutes; it is the signal that the fleet has outgrown the setting. The profile and group-scope caches, kept per device type and per
 tenant, hold 4,096 entries or 4 MiB. Each drops the least recently used entry when it is full. As
 it stores a new entry it also drops expired ones from its least recently used end, stopping at
 the first that has not expired. A lookup NATS reported as absent is never kept.
@@ -1350,11 +1375,12 @@ stream is one durable shared by every replica, so events are not divided between
 device, and when the number of replicas times a device's reporting interval is under the time,
 every replica sees nearly every device. A cache smaller than the fleet cycles through it and
 answers almost nothing. For example, 60,000 devices reporting every 10 s, each with one tracked
-relationship, need `inMemoryCache.credentialCacheMiB` of about 80 (an entry is about 1.1 KB) and
-`inMemoryCache.perDeviceCacheMiB` of about 64 (a relationship set is about 950 bytes) on every
-replica, and a memory limit of 768Mi to hold them. The sign is
-`kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` close to the event
-rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_local_max_entries`.
+relationship and presenting a credential, need `inMemoryCache.credentialCacheMiB` of about 80 (an
+entry is about 1.1 KB) and `inMemoryCache.perDeviceCacheMiB` of about 180 (a relationship set
+costs about 2.4 KB as counted) on every replica, and a memory limit of 1.4Gi to hold them; the same
+fleet resolving on its token needs `perDeviceCacheMiB` of 240 and 1.7Gi (see the rule above). The sign
+is `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` (or
+`cache="device-by-token"`) close to the event rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_local_max_entries`.
 A fleet too large for the cache instead shows `kv_cache_local_evictions_total{reason="capacity"}`
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
 or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`; for credentials, the same signs are in
@@ -1362,7 +1388,7 @@ or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`; for credentials, the sa
 `DeviceCredentialCacheTooSmall` and `DeviceLookupCacheTooSmall` (warning): a replica whose capacity
 evictions have been more than 5% of its lookups for 15 minutes. When one fires, raise the bound
 (`inMemoryCache.credentialCacheMiB` or `inMemoryCache.perDeviceCacheMiB`), and the memory limit
-with it: at the defaults the six in-memory caches hold at most 112 MiB. `device-management` runs
+with it: at the defaults the six in-memory caches hold at most 308 MiB. `device-management` runs
 with `GOGC=400` and a soft memory limit (`GOMEMLIMIT`) at 75% of its memory limit, so the collector
 lets the heap grow to about five times what it holds, and works harder once it nears that soft
 limit; where no `GOMEMLIMIT` is set the heap can instead grow to about twice what it holds before

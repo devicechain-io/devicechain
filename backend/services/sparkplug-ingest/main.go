@@ -36,6 +36,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -216,13 +217,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// by tenant and by the source's own qualified id, both bounded by the configured sources.
 	Microservice.NewScrapedGaugeVec("command_breaker_state",
 		"Each source's command circuit breaker: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). It opens when the broker drops the Host session right after a command publish, which usually means the source's credential may not publish on the NCMD/DCMD topics.",
-		[]string{"tenant", "source"}, func() []core.GaugeSample {
-			out := make([]core.GaugeSample, 0, len(clients))
-			for _, c := range clients {
-				tenant, source, state := c.BreakerSample()
-				out = append(out, core.GaugeSample{Labels: []string{tenant, source}, Value: float64(state)})
+		breakerGaugeLabels, func() []core.GaugeSample {
+			samplers := make([]breakerSampler, len(clients))
+			for i, c := range clients {
+				samplers[i] = c
 			}
-			return out
+			return breakerGaugeSamples(Microservice.InstanceId, samplers)
 		})
 
 	if Configuration.AnyCommandsEnabled() {
@@ -234,6 +234,38 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// breakerGaugeLabels are the command_breaker_state label names. vpartition was added beside
+// tenant and source (core/partition); a query grouping by tenant and source is unaffected.
+var breakerGaugeLabels = []string{"tenant", "vpartition", "source"}
+
+// breakerSampler is what the breaker gauge reads from a source's client.
+type breakerSampler interface {
+	BreakerSample() (tenant, source string, state host.BreakerState)
+}
+
+// breakerGaugeSamples is one sample per source, labelled in breakerGaugeLabels order.
+func breakerGaugeSamples(instanceID string, sources []breakerSampler) []core.GaugeSample {
+	out := make([]core.GaugeSample, 0, len(sources))
+	for _, c := range sources {
+		tenant, source, state := c.BreakerSample()
+		out = append(out, core.GaugeSample{
+			Labels: []string{tenant, vpartitionLabel(instanceID, tenant), source},
+			Value:  float64(state),
+		})
+	}
+	return out
+}
+
+// vpartitionLabel is the vpartition a tenant hashes to, as a metric label (core/partition).
+//
+// It adds no series: a tenant's vpartition is a function of the tenant, so a series already keyed
+// by tenant gains a label, not a dimension, and the label has at most P (64) values. It is the
+// HASHED vpartition: nothing pins a tenant elsewhere yet, and when placement overrides are read
+// by services this is the call that moves to the mirrored table.
+func vpartitionLabel(instanceID, tenant string) string {
+	return partition.Label(partition.HashedVPartition(instanceID, tenant, partition.DefaultP))
 }
 
 // newCommandReader builds the durable device-commands consumer the dispatcher reads.

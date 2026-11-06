@@ -226,6 +226,16 @@ func TestKvReservationCoversEveryDeclaredBucket(t *testing.T) {
 	n := cfg.Infrastructure.Nats
 
 	want := int64(kv.Count(kv.Cache))*n.KvCacheMaxBytes + int64(kv.Count(kv.State))*n.KvStateMaxBytes
+	// A bucket that declares its own smaller ceiling (kv.Bucket.MaxBytes) reserves that instead.
+	for _, b := range kv.All {
+		tier := n.KvStateMaxBytes
+		if b.Tier == kv.Cache {
+			tier = n.KvCacheMaxBytes
+		}
+		if b.MaxBytes > 0 && b.MaxBytes < tier {
+			want -= tier - b.MaxBytes
+		}
+	}
 	if got := n.KvReservation(); got != want {
 		t.Errorf("KvReservation() = %d, want %d: the reservation has drifted from the "+
 			"declared bucket set, so some bucket reserves disk nothing budgets for", got, want)

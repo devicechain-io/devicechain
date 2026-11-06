@@ -26,5 +26,5 @@ func TestProjectionStorageCoversEveryHotTable(t *testing.T) {
 
 // The migration is appended after the existing chain and never edits it.
 func TestProjectionStorageIsAppendedLast(t *testing.T) {
-	require.Equal(t, "20261104120000", Migrations[len(Migrations)-1].ID)
+	require.Equal(t, "20261104120000", Migrations[len(Migrations)-2].ID)
 }

@@ -63,7 +63,7 @@ func newWirePki(t *testing.T, parent *wirePki, cn string, ca bool) wirePki {
 	}
 	if ca {
 		tmpl.IsCA, tmpl.BasicConstraintsValid, tmpl.MaxPathLen = true, true, -1
-		tmpl.KeyUsage = x509.KeyUsageCertSign
+		tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
 	} else {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
 		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}

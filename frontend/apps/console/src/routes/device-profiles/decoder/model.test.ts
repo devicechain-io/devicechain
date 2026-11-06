@@ -12,6 +12,7 @@ import {
   blankSection,
   buildDocument,
   canonical,
+  compactHex,
   compileField,
   compileSectionWhen,
   emptyState,
@@ -385,5 +386,62 @@ describe('error paths', () => {
     expect(expressionAt(doc, 'sections[0].outputs[0].expr')).toBe('u16be(frame, 2)');
     expect(expressionAt(doc, 'sections[0].outputs[7].expr')).toBeNull();
     expect(expressionAt(doc, 'nonsense')).toBeNull();
+  });
+});
+
+// The server reads a stored vector with hex.DecodeString / base64.StdEncoding: no spaces, no `0x`.
+// What the form accepts (it strips whitespace to validate) must be what it stores.
+describe('vector frames are stored in the form the server decodes', () => {
+  const vec = (kind: 'frameHex' | 'frameBase64', text: string) => {
+    const st = stateWith([fieldRow(field({}))]);
+    st.vectors = [{ id: newId(), name: 'v', kind, text, fPort: '', fCnt: '', inputExtra: {}, expect: [] }];
+    const built = buildDocument(st);
+    const input = (built.document?.vectors as { input: Record<string, unknown> }[] | undefined)?.[0]?.input;
+    return { built, input };
+  };
+
+  it('stores spaced, mixed-case and 0x-prefixed hex compactly', () => {
+    for (const text of ['01 00 D7', '  01\t00\nd7 ', '0x01 0x00 0xD7', '0X01 0x00 0xd7', '0100D7']) {
+      const { built, input } = vec('frameHex', text);
+      expect(built.issues, text).toEqual([]);
+      expect((input?.frameHex as string).toLowerCase(), text).toBe('0100d7');
+      expect(input?.frameHex, text).toMatch(/^[0-9a-fA-F]*$/);
+    }
+    expect(compactHex('0x01 0x00 0xD7')).toBe('0100D7');
+  });
+
+  it('stores spaced base64 compactly', () => {
+    expect(vec('frameBase64', 'AQDX\nAQ==').input?.frameBase64).toBe('AQDXAQ==');
+  });
+
+  it('still refuses what the server could not read', () => {
+    expect(vec('frameHex', '01 0').built.issues.map((i) => i.code)).toEqual(['vectorHexInvalid']);
+    expect(vec('frameHex', '0x0x01').built.issues.map((i) => i.code)).toEqual(['vectorHexInvalid']);
+  });
+
+  // Negative control: the pre-fix store (`text.trim()`) keeps the spaces the server refuses.
+  it('negative control: the old trim-only form is not server-readable', () => {
+    const oldForm = '01 00 D7'.trim();
+    expect(oldForm).toMatch(/\s/);
+    expect(vec('frameHex', '01 00 D7').input?.frameHex).not.toBe(oldForm);
+  });
+});
+
+describe('ignored sections and API-written tables', () => {
+  it('does not validate the rows of an ignored section', () => {
+    const st = stateWith([fieldRow(field({ key: '' }))]);
+    expect(buildDocument(st).issues.length).toBeGreaterThan(0);
+    st.sections[0].ignore = true;
+    expect(buildDocument(st).issues).toEqual([]);
+  });
+
+  it('drops a stored table field with a wrongly typed property instead of throwing', () => {
+    const st = stateWith([fieldRow(field({ key: 'temperature', offset: '1' }))]);
+    const text = buildDocument(st).text as string;
+    const doc = JSON.parse(text);
+    doc.table.sections[0].rows[0].field.offset = null;
+    const parsed = parseDocument(JSON.stringify(doc));
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.state.sections[0].rows[0].kind).toBe('cel');
   });
 });

@@ -48,7 +48,8 @@ func newPurgeTestServiceDB(t *testing.T) (*Service, *gorm.DB) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(
 		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{},
-		&iam.TenantPurge{}, &iam.TenantPurgeStore{}))
+		&iam.TenantPurge{}, &iam.TenantPurgeStore{},
+		&iam.PartitionConfig{}, &iam.VPartitionAssignment{}, &iam.TenantVPartitionOverride{}))
 	s := NewService(iam.NewStore(&rdb.RdbManager{Database: db}), testSettle, testTokenHold, nil)
 	seedTiers(t, s)
 	return s, db

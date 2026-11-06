@@ -85,12 +85,12 @@ type DeviceState implements Model {
     """
     lastActivityTime: String
     """
-    When the device was marked inactive for going silent, as an RFC 3339 timestamp. Deprecated:
-    this is now derived, and is lossy. It returns lastDisconnectTime for an INFERRED device that
-    is currently inactive and null otherwise, so it no longer reports a past inactivity episode
-    once the device is active again.
+    When the inactivity sweep marked the device inactive for going silent, as an RFC 3339
+    timestamp. Cleared when the device becomes active again; null otherwise, including for a
+    device that went offline by a disconnect report rather than by silence. Deprecated: it
+    keeps working as before until the next major release.
     """
-    inactivityAlarmTime: String @deprecated(reason: "Use lastDisconnectTime, which is the same instant for an INFERRED device that is inactive. This field returns that value while such a device is inactive and null otherwise, so it no longer retains a past inactivity episode.")
+    inactivityAlarmTime: String @deprecated(reason: "Use lastDisconnectTime, which holds the same instant when the sweep marked the device inactive, unless a disconnect report followed, and also covers a disconnect report. This field keeps its behaviour until the next major release.")
     """
     Seconds without activity after which an INFERRED device is marked inactive. One value for
     the whole platform (600); it is not configurable per device. It does not apply to an

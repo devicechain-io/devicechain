@@ -514,12 +514,18 @@ dcctl bootstrap local devicechain
 
 - **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
 - **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
+- **请了解：`device-management` 在内存中保存更多设备群，其内存上限为 768Mi，而不是上面的 512Mi。** 逐设备缓存（`inMemoryCache.perDeviceCacheMiB`）现在每个为 80 MiB，原为 24，因为 24 MiB 只容纳 8,000 至 10,000 台设备。设备群达到该规模或更大时，每个副本现在使用更多内存。如果你自己设置了 `device-management` 的内存上限，请对照[服务规模](./bootstrap.md#service-sizing)中的规则检查。如果你自己设置了 `perDeviceCacheMiB`，则按你的值使用。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
+- **开启事件信封且每秒 16,000 个事件或更高时，请把 `event-processing` 设为约 1Gi。** 768Mi 下限不随速率增长。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
+- **如果代理服务器的工作集处于其软上限，请调高 `nats_memory_limit`。** 默认的 4Gi 从约每秒 12,000 个事件起就会到达该点；处于该点的服务器是变慢，而不是重启。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
 - **`dcctl bootstrap` 现在会拒绝属于另一个集群的本地状态。** 包括 `--dry-run`。如果您在 `dcctl` 之外重建了集群并复用实例名，请先移开 `~/.devicechain/instances/<名称>`；详见[说明](#v120-stale-state)。
 - **检查是否有客户端为本实例不提供的资源申请令牌。** 默认情况下，本版本会统计这类请求以及使用这些令牌的 API 调用，但一律不拒绝。`v1.3` 默认拒绝它们。`infrastructure.tokenAudience.enforcement: observe` 可以在那一个次版本内保留本版本的行为，`v1.4` 会在启动时以及在 chart 的 values schema 中拒绝 `observe`。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
+- **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，在其再次活跃并再次沉默之前，该字段返回 null。
+- **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
+- **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
 - **升级前检查事件库的剩余空间。** 对已有实例，`dcctl upgrade` 会把事件库的 `max_wal_size` 提高到其卷容量的五分之一（默认 32Gi 时为 6.4 GiB，原为 1 GiB），预写日志现在可以在数据卷上增长到这么大。该值升高时，升级会打印一条提示；卷的剩余空间小于新值时，会给出警告。要保留原来的额度，请运行 `dcctl upgrade --event-store-max-wal-mib 1024`。参见[事件库的预写日志额度](#v120-event-store-wal)。
 
 
@@ -541,6 +547,15 @@ event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键
 - **开启事件信封的 `event-processing`** 会保存[事件信封](#event-envelopes)中描述的重复防护。在每秒 4,500 至 6,000 个事件时占用 265 至 269 MiB，在每秒 12,000 个事件时占用 388 MiB（Go 堆 353 MiB），而上限为 384Mi，软上限为 288 MiB。在每秒约 8,000 个事件以上，Pod 会被软上限卡住、持续回收垃圾，或被终止。只要 `resolved` 或 `inbound` 之一开启，chart 现在就把下限设为 768Mi（软上限 576 MiB），否则为 384Mi。此前对该防护的估计（每秒 20,000 个事件时约 180 MB）低了三到四倍；更正后的数字见[事件信封](#event-envelopes)。
 
 两者都是下限，仅在本来适用的上限更低时才生效。你在服务上设置的上限，或更大的顶层上限，按原值使用，软上限随实际生效的上限而定。新值 `functionalAreas.<服务>.memoryLimitFloorWithEnvelopes` 保存开启信封时的下限。`dcctl` 会根据它写入的实例配置设置 `eventEnvelopesEnabled`。如果你自己用 `instance.existingSecret` 安装 chart，chart 读不到该配置：开启任一信封设置时，请设置 `eventEnvelopesEnabled: true`。
+
+#### 缓存与代理的规模设定 {#v120-sizing-defaults}
+
+第 30 轮在 Google Kubernetes Engine 上（每秒 8,000 至 20,000 个事件，一台代理服务器）发现，三项随产品发布的大小低于其文档所称的负载。
+
+- **`device-management` 的逐设备缓存是 80 MiB，而不是 24。** 按令牌缓存中一台设备占 2.5 至 3.1 KB，所以 24 MiB 只容纳 8,000 至 10,000 台设备。16,000 台设备时，缓存在 73% 的查找中淘汰了条目，每事件 CPU 在 8,000 至 16,000 台设备之间从每 1,000 个事件 0.048 CPU 秒升到 0.105，20,000 台时读取落到键值桶并超时。`DeviceLookupCacheTooSmall` 从 12,000 台设备起就已触发；它不变。80 MiB 按令牌容纳 27,000 台设备，即规模表所针对的 20,000 台设备再加四分之一余量。其他设备群请把 `inMemoryCache.perDeviceCacheMiB` 设为每 1,000 台按令牌解析的设备 4。规则及其所需的内存上限见[服务规模](./bootstrap.md#service-sizing)和[键值缓存](./observability.md#kv-caches)。
+- **`device-management` 的内存下限是 768Mi（软上限 576 MiB），取代[内存上限](#v120-memory)中的 512Mi。** 上限变大后，所有缓存写满时连同服务约占 370 MiB，512Mi 的软上限（384 MiB）只有其 1.04 倍，768Mi 则是 1.5 倍。下限规则不变：你在服务上设置的上限，或更高的顶层上限，按原值使用。
+- **开启信封时 `event-processing` 的下限仍是 768Mi，并且不随速率增长。** 每秒 8,000、12,000、16,000 和 20,000 个事件时，其 Go 堆为 441、488、511 和 516 MiB（常驻 500 至 571 MiB），软上限为 576 MiB，所以从约每秒 16,000 个事件持续起，它会在上限处回收。请在那里设为约 1Gi（`functionalAreas.event-processing.resources.limits.memory`）。
+- **4Gi 代理内存上限的软上限在约每秒 12,000 个事件时到达。** 一台服务器的工作集在每秒 8,000、12,000、16,000 和 20,000 个事件时为 1.9、3.0、3.8 和 4.8 GiB，而软上限为 3.2 GiB。超过软上限也不会被终止：服务器持续回收，每秒 12,000 个事件时第 99 百分位确认时间在 4Gi 下为 101 ms，在 20Gi 下为 25 ms。当工作集与上限的 80% 相差不到 10% 时就应调高 `nats_memory_limit`，而不只是在 `OOMKilled` 之后；按设计速率每每秒 1,000 个事件取 0.35 GiB。参见[消息代理](./bootstrap.md#broker-sizing)。
 
 #### `dcctl bootstrap` 会拒绝属于另一个集群的本地状态 {#v120-stale-state}
 
@@ -584,6 +599,27 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
 - **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户只会驱逐自己的条目，而不会驱逐其他租户的。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
+#### 载荷解码器 {#v120-payload-decoders}
+
+设备配置文件现在可以携带**载荷解码器**：用表达式写成的规则，把二进制帧、通用 JSON 正文或网络服务器解码出的对象转换成测量。新的[载荷解码器](../guides/payload-decoders.md)指南对它们做了说明，[函数参考](../reference/decoder-functions.md)列出了函数库中的函数和各项限制。升级本身无需做任何事，没有解码器的配置文件行为与以前完全一致。
+
+- **编写和测试包含在本版本中。**控制台的配置文件页面有一个 **Decoder** 选项卡。在 `device-management` 的 GraphQL API 上，`setDeviceProfileDecoder` 和 `clearDeviceProfileDecoder` 写入配置文件的草稿解码器，`testPayloadDecoder` 在不存储任何内容的情况下对一个输入运行解码器，`payloadDecoderFunctions` 列出函数库。`DeviceProfile.decoder` 和 `DeviceProfileVersion.decoder` 是新增的可空字段。以上全部是增量变化。
+- **对实时上行的解码将在 v1.2 中提供。**本构建中的集成端点不运行解码器，因此已保存或已发布的解码器不会改变[入站集成](../guides/inbound-integrations.md)所存储的内容。
+- **发布取决于解码器。**带有解码器的配置文件，只有在解码器能针对该版本的指标编译、且所有已保存的测试向量都通过时，才能发布或回滚到该版本。没有解码器的配置文件不受影响。
+- **迁移是增量的。**它为设备配置文件增加一个可空列，以及两张目前还没有任何内容写入的表。旧副本不会读取它们。
+- **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
+- **滚动升级期间，只有当每个 `device-management` 副本都运行本版本之后，才发布解码器。**由旧副本处理请求时发布的版本，会在没有解码器的情况下被冻结，因为该副本不认识这个字段。升级完成后，请检查你发布的版本上是否存在 `DeviceProfileVersion.decoder`，如果没有，请重新发布。
+
+#### X.509 吊销列表 {#v120-x509-crl}
+
+租户现在可以把证书颁发机构的吊销列表（CRL）存放到信任锚上，每个信任锚也有了吊销模式。没有列表、也没有手动吊销的信任锚，行为与以前完全一致。
+
+- **CRL 通过 GraphQL 或流式 `PUT` 上传**，平台会用信任锚校验其签名。可接受的大小由固定设置 `deviceManagement.callout.revocation.maxCrlBytes` 决定（默认 2 MiB，最大 32 MiB）。**请按 Pod 的内存上限来设定它。** 校验 CRL 需要整体解析，一次上传的堆内存峰值约为 CRL 大小的 20 到 30 倍：2 MiB 的列表需要 40 到 65 MiB，包含 300,000 条记录的 7 MB 列表约需 190 MiB。`maxConcurrentWrites`（默认 1）是单个副本同时处理的上传数。
+- **较旧的 CRL 永远不能替换较新的 CRL**，即使列表已被删除也一样：平台会保留每个颁发者已接受的最高 CRL 编号。**删除信任锚会连同这些编号、它的列表和列表中的条目一并丢弃**，因此用同一个 CA 重新创建的信任锚会从头开始，并会接受此前被拒绝的 CRL。只有在没有任何凭据和配置档案依赖某个信任锚时，才能删除它。
+- **只要信任锚上还有手动吊销，删除它就会被拒绝。** 请先取消吊销（`unrevokeDeviceCertificate`）；这些是您自己的决定，不会被静默丢弃。
+- **`REQUIRE_CURRENT` 按信任锚自行选择启用。** 如果信任锚没有任何有效列表，或者某个已注册证书的颁发 CA 没有有效列表，平台会拒绝切换到该模式，因为切换后所有此类设备都会被拒绝。
+- **滚动升级期间**，尚未替换的副本在回答代理的授权回调时不检查吊销，因此吊销只有在滚动完成后才会在各处生效。回退到 `v1.1.0` 时这些表保留但不再被读取：吊销将不再生效。
+
 #### 事件库的预写日志额度 {#v120-event-store-wal}
 
 事件库的 `max_wal_size` 现在是其卷容量的五分之一，且不低于 Postgres 自带的 1 GiB；升级会按已有卷的大小把它应用到已有的事件库。默认 32Gi 时为 6.4 GiB，而升级后的实例原来是 1 GiB。`max_wal_size` 是上限，不是预留：只有检查点落后或 WAL 归档停滞时，日志才会涨到这个值。但日志位于数据卷上，所以已经接近写满的事件库能让出的空间不到这么多。
@@ -594,11 +630,13 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 #### 架构变更与回退 {#v120-going-back}
 
-三个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
+五个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
 
 - **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
 - **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
 - **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
+- **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。不写入任何行。
+- **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 行，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
 
 所有新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
 

@@ -93,6 +93,18 @@ var rawSQLAllowList = []siteEntry{
 			"(ColumnTable.write)",
 	},
 
+	{
+		Path: "backend/services/device-management/model/api_x509_crl_stage.go", Func: "applyStagedEntries", Count: 4,
+		Why: "the set-based write of one CRL's entries from the transaction's own staging table: two counts, a " +
+			"DELETE and an INSERT...SELECT over device_revoked_certificates. Each statement is a constant text " +
+			"whose WHERE names tenant_id, trust_anchor_id, revocation_list_id, kind, issuer_key and " +
+			"issuer_name, all bound from the caller (the tenant from the request context, the rest from the " +
+			"locked anchor and the list row just written), and the INSERT writes only the bound tenant. The " +
+			"staging table is a TEMP table private to the transaction. Nothing is formatted into the text " +
+			"but package constants. A gorm bulk Create of hundreds of thousands of rows is the cost this " +
+			"replaces (see the memory and lock-hold test)",
+	},
+
 	// --- erasure ---
 	{
 		Path: "backend/core/tenantpurge/fence.go", Func: "PlantFence", Count: 1,

@@ -77,3 +77,50 @@ func (r *SchemaResolver) UnrevokeDeviceCertificate(ctx context.Context, args str
 	}
 	return r.GetApi(ctx).UnrevokeDeviceCertificate(ctx, args.AnchorToken, args.FingerprintSha256)
 }
+
+// Store a CRL as the current list of its issuer under a trust anchor.
+func (r *SchemaResolver) PutDeviceRevocationList(ctx context.Context, args struct {
+	AnchorToken    string
+	CrlPem         string
+	IssuerChainPem *string
+}) (*DeviceRevocationListResultResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	api := r.GetApi(ctx)
+	// The text bound is checked here as well as in the model: the argument is already in memory,
+	// but nothing past this point should copy, parse or hold an oversized one.
+	if bound := api.GraphqlCrlTextBound(); len(args.CrlPem) > bound {
+		return nil, model.CrlTooLargeRefusal(bound)
+	}
+	chain := ""
+	if args.IssuerChainPem != nil {
+		chain = *args.IssuerChainPem
+	}
+	res, err := api.PutDeviceRevocationList(ctx, &model.RevocationListPutRequest{
+		AnchorToken: args.AnchorToken, Crl: []byte(args.CrlPem), IssuerChainPem: chain,
+		MaxBytes: api.GraphqlCrlTextBound(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	grace := api.RevocationLimits().DefaultStaleGrace
+	if anchor, aerr := api.DeviceTrustAnchorsByToken(ctx, []string{args.AnchorToken}); aerr == nil && len(anchor) == 1 {
+		if g, gerr := anchor[0].RevocationStaleGraceOf(grace); gerr == nil {
+			grace = g
+		}
+	}
+	return &DeviceRevocationListResultResolver{M: *res, Grace: grace}, nil
+}
+
+// Delete the current list of an issuer under a trust anchor.
+func (r *SchemaResolver) DeleteDeviceRevocationList(ctx context.Context, args struct {
+	AnchorToken string
+	IssuerKey   string
+	IssuerName  string
+}) (bool, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return false, err
+	}
+	return r.GetApi(ctx).DeleteDeviceRevocationList(ctx, args.AnchorToken, args.IssuerKey, args.IssuerName)
+}

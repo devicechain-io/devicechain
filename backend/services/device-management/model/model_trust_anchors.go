@@ -98,6 +98,13 @@ type DeviceTrustAnchorUpdateRequest struct {
 	// of the devices that rely on the anchor.
 	Enabled  dcgraphql.OptionalBool
 	Metadata dcgraphql.OptionalString
+	// RevocationMode is ENTRIES or REQUIRE_CURRENT. A null is refused (ENTRIES is a value, not
+	// an absence). Switching to REQUIRE_CURRENT is refused while the anchor holds no current list
+	// or a registered certificate's issuer has none.
+	RevocationMode OptionalRevocationMode
+	// RevocationStaleGrace is a Go duration (whole seconds, 0s to 168h). A null clears it, so the
+	// instance's default applies.
+	RevocationStaleGrace dcgraphql.OptionalString
 }
 
 // Search criteria for trust anchors.

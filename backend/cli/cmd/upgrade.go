@@ -270,7 +270,7 @@ store), says so when it rises, and warns when the volume has less free space tha
 		upgradeBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
 		upgradeEventStoreMaxWALGiven = cmd.Flags().Changed("event-store-max-wal-mib")
 		upgradeEventStoreCheckpointGiven = cmd.Flags().Changed("event-store-checkpoint-timeout")
-		if err := bootstrap.CheckMQTTExposureFlags(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
+		if err := bootstrap.CheckMQTTExposureFlagsForUpgrade(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
 			return err
 		}
 		if upgradeResetValues && len(upgradeValues) > 0 {

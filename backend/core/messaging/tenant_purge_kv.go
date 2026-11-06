@@ -301,6 +301,10 @@ func KvPurgeExemptions() []string {
 			"into command-delivery's own record, which this purge does erase; and a deleted " +
 			"tenant's commands are refused before they are published, so no entry is written for it " +
 			"once the delete is seen. The residue is bounded by that lifetime, not by the purge",
+		kv.BucketPartitionPlacement + ": the instance's placement table, one entry holding the " +
+			"vpartition-to-shard-group assignment and the tenant tokens pinned to a vpartition by " +
+			"hand. It holds no tenant data, only where a tenant's data lives, and it must SURVIVE " +
+			"the purge, because the sweep reaches the tenant's stores through that placement",
 		kv.BucketLocks + " and " + kv.BucketLeases + ": coordination state keyed by functional area " +
 			"and partition. No tenant is expressible in either today — the partitions in use are " +
 			"fixed names, or name an operator-configured event source, never a tenant — and both " +

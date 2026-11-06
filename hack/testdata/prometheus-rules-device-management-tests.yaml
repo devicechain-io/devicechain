@@ -109,6 +109,39 @@ tests:
               description: "On dc-device-management-aaaaa, more than 5% of lookups in the relationships-by-source cache have pushed another entry out of a full cache for 15m (now 20%). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
 
   # ------------------------------------------------------------------
+  # Round 30 on GKE, replayed: device-by-token evicted on 73% of lookups at 16,000 devices
+  # (the 24 MiB bound held 8,000 to 10,000). Fires on the token cache and nowhere else, and not
+  # before its 15 minutes: a MUST-FIRE case for the shape that was the defect, and a
+  # MUST-NOT-FIRE one for the same pod once the bound is sized (the 80 MiB default holds the
+  # fleet, so capacity evictions are 0.5% of lookups).
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="device-by-token", result="miss"}'
+        values: '0+1000x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="device-by-token", reason="capacity"}'
+        values: '0+730x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-bbbbb", cache="device-by-token", result="hit"}'
+        values: '0+1000x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-bbbbb", cache="device-by-token", reason="capacity"}'
+        values: '0+5x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeviceLookupCacheTooSmall
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceLookupCacheTooSmall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: dc-device-management-aaaaa
+              cache: device-by-token
+            exp_annotations:
+              summary: "A device-management per-device cache is too small for the fleet"
+              description: "On dc-device-management-aaaaa, more than 5% of lookups in the device-by-token cache have pushed another entry out of a full cache for 15m (now 73%). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
+
+  # ------------------------------------------------------------------
   # Idle pod: every series exists (created at zero) and none moves, so both ratios are
   # 0/0 = NaN. Quiet for both.
   # ------------------------------------------------------------------

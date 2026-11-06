@@ -168,6 +168,26 @@ var exemptions = []Exemption{
 			"erased rather than merely that something was.",
 	},
 	{
+		Schema: "user-management", Name: "iam_partition_config", Class: ClassExempt,
+		Reason: "the instance's one vpartition count P and the generation of its placement. No tenant " +
+			"dimension at all: one row per instance.",
+	},
+	{
+		Schema: "user-management", Name: "iam_vpartition_assignments", Class: ClassExempt,
+		Reason: "which shard group owns each of the instance's P vpartitions. Keyed by vpartition, not " +
+			"by tenant, so it holds no tenant's data and names no tenant.",
+	},
+	{
+		Schema: "user-management", Name: "iam_tenant_vpartition_overrides", Class: ClassExempt,
+		Reason: "a tenant token pinned to a vpartition by the operator: the token and a number, no name, " +
+			"no contact, no configuration. It is retained THROUGH the purge, because the purge reaches " +
+			"the tenant's stores through that placement and so needs it until the very end, and " +
+			"cleared at token release: the completion step deletes the pin in the same transaction " +
+			"as the tenant row, so a successor taking the token is not placed by its predecessor's " +
+			"pin. The column is tenant_token, not tenant, so the sweep does not classify it as tenant " +
+			"data. What it retains is stated: the token of a pinned tenant, until the token is released.",
+	},
+	{
 		Schema: "user-management", Name: "iam_tenants", Class: ClassExempt,
 		Reason: "the tenant's OWN row, and the one table the sweep must not touch. It holds the token " +
 			"reservation that stops a successor being created mid-purge, so it is removed by the " +

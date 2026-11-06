@@ -560,10 +560,24 @@ variable "memory_limit" {
     (830 MiB), and that total has to stay 15% under the 80% soft limit.
     TestDuplicateWindowsFitTheBrokerMemoryLimit (backend/core/messaging) holds the
     instance root's default to that. Those were steady-ingest runs: a server rejoining
-    its cluster or catching up a large backlog after a node loss was not measured, so
-    raise this if a server is ever OOM-killed. A limit reserves nothing on the node:
-    the request is what places a server. Binary units only: GOMEMLIMIT is derived from
-    the number, and a decimal unit would make it off by the factor between G and Gi.
+    its cluster or catching up a large backlog after a node loss was not measured.
+    RAISE THIS WHEN A SERVER'S WORKING SET SITS AT ITS SOFT LIMIT, NOT ONLY AFTER AN
+    OOM KILL. A server at GOMEMLIMIT is never killed: it collects continuously, which
+    shows as higher broker CPU per event and slower acknowledgements (PUBACK p99
+    101 ms at 12,000 events/s at 4Gi, 25 ms at 20Gi, and 9% less broker CPU per event)
+    with no restart to point at. Compare the server's working set
+    (container_memory_working_set_bytes) with 80% of this limit: within 10% of it, raise
+    the limit. Sizing rule, measured on GKE round 30 on one server with the stream
+    deduplication windows on (non-HA; a clustered server was not re-measured): the
+    working set was 1.9, 3.0, 3.8 and 4.8 GiB at a sustained 8,000, 12,000, 16,000 and
+    20,000 events/s, about 0.24 GiB per 1,000 events/s, so the 3.2 GiB soft limit of the
+    default 4Gi is reached at about 12,000 events/s (3.0 GiB) and exceeded above it. Size the limit at the rate you
+    design for, at 0.35 GiB per 1,000 events/s (the working set, 15% headroom, over the
+    80% soft limit), rounded up: 3Gi at 8,000, 5Gi at 12,000, 6Gi at 16,000, 7Gi at
+    20,000. A limit reserves nothing on the node: the request is what places a server,
+    so the node must still have the room when the working set grows into it. Binary
+    units only: GOMEMLIMIT is derived from the number, and a decimal unit would make it
+    off by the factor between G and Gi.
   EOT
   type        = string
   default     = "4Gi"
@@ -680,7 +694,7 @@ locals {
   # The shared login exists only while its hash is supplied. Fresh installs and retired instances
   # supply none, so the user, its auth_users entry and its permissions entry are all absent together.
   shared_login_enabled = var.service_password_bcrypt != ""
-  shared_users         = local.shared_login_enabled ? [{ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null), allowed_connection_types = local.connection_types[local.service_user] }] : []
+  shared_users         = local.shared_login_enabled ? [merge({ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null) }, local.connection_types[local.service_user])] : []
 
   # 🔴 THIS MODULE HOLDS NO SUBJECT. Every static login's permissions block comes from
   # var.service_users, which dcctl generates from the stream and bucket declarations the services
@@ -709,11 +723,13 @@ locals {
     [for u in local.static_app_users : u if !contains(keys(local.service_app_permissions), u)],
     [for u in local.static_sys_users : u if !contains(keys(local.service_sys_permissions), u)],
   )
-  # The connection types each static login may use (var.mqtt_capable_users). null per user when the
-  # variable is unset, so the key renders as absent and the login is unrestricted as before.
+  # The connection types each static login may use (var.mqtt_capable_users), as the attribute to merge
+  # into the user object. EMPTY when the variable is unset, so the key is genuinely absent and the login
+  # is unrestricted as before: a null value is NOT absent, the chart emits it as JSON null and
+  # `nats-server -t` refuses it (invalid connection types ["NULL"]).
   connection_types = {
     for u in concat([local.service_user, local.sys_user, local.identity_user], nonsensitive(keys(var.login_password_bcrypts))) :
-    u => var.mqtt_capable_users == null ? null : (contains(var.mqtt_capable_users, u) ? ["STANDARD", "MQTT"] : ["STANDARD"])
+    u => var.mqtt_capable_users == null ? {} : { allowed_connection_types = contains(var.mqtt_capable_users, u) ? ["STANDARD", "MQTT"] : ["STANDARD"] }
   }
 
   # The IDENTITY account (see var.identity_password_bcrypt): its login, and the one account block
@@ -728,20 +744,19 @@ locals {
   identity_accounts = local.identity_enabled ? {
     (local.identity_account) = {
       jetstream = "enabled"
-      users     = [{ user = local.identity_user, password = var.identity_password_bcrypt, allowed_connection_types = local.connection_types[local.identity_user] }]
+      users     = [merge({ user = local.identity_user, password = var.identity_password_bcrypt }, local.connection_types[local.identity_user])]
     }
   } : {}
 
   # The per-area logins (see var.login_password_bcrypts), each with its own generated block.
   # Terraform iterates a map in key order, so the rendered users are stable across runs.
-  login_users = [for u, h in var.login_password_bcrypts : { user = u, password = h, permissions = try(local.service_app_permissions[u], null), allowed_connection_types = local.connection_types[u] }]
+  login_users = [for u, h in var.login_password_bcrypts : merge({ user = u, password = h, permissions = try(local.service_app_permissions[u], null) }, local.connection_types[u])]
 
-  sys_users = var.sys_password_bcrypt == "" ? [] : [{
-    user                     = local.sys_user
-    password                 = var.sys_password_bcrypt
-    permissions              = try(local.service_sys_permissions[local.sys_user], null)
-    allowed_connection_types = local.connection_types[local.sys_user]
-  }]
+  sys_users = var.sys_password_bcrypt == "" ? [] : [merge({
+    user        = local.sys_user
+    password    = var.sys_password_bcrypt
+    permissions = try(local.service_sys_permissions[local.sys_user], null)
+  }, local.connection_types[local.sys_user])]
 
   # js_max_file_store resolves the server-level max_file_store (see the
   # jetstream_max_file_store variable and the fileStore.maxSize wiring below). When

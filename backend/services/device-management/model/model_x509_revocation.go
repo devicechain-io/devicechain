@@ -149,10 +149,11 @@ func (a *DeviceTrustAnchor) RevocationModeOf() (x509trust.Mode, error) {
 	}
 }
 
-// RevocationStaleGraceOf is the anchor's grace: the default when none is stored.
-func (a *DeviceTrustAnchor) RevocationStaleGraceOf() (time.Duration, error) {
+// RevocationStaleGraceOf is the anchor's grace: defaultGrace (the instance's fixed setting,
+// DefaultRevocationStaleGrace unless configured) when none is stored.
+func (a *DeviceTrustAnchor) RevocationStaleGraceOf(defaultGrace time.Duration) (time.Duration, error) {
 	if !a.RevocationStaleGrace.Valid {
-		return DefaultRevocationStaleGrace, nil
+		return defaultGrace, nil
 	}
 	secs := a.RevocationStaleGrace.Int64
 	if secs < 0 || time.Duration(secs) > MaxRevocationStaleGrace/time.Second {

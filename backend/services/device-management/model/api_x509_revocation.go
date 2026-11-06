@@ -18,9 +18,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// MaxManualRevocationsPerTenant bounds the manual revocation entries one tenant holds. A code
-// constant until the fixed-config key that replaces it lands: a tenant that needs more is a
-// conversation, not a setting.
+// MaxManualRevocationsPerTenant is the default bound on the manual revocation entries one tenant
+// holds (RevocationLimits.MaxManualEntriesPerTenant, fixed configuration
+// callout.revocation.maxManualEntriesPerTenant).
 const MaxManualRevocationsPerTenant = 100_000
 
 // maxRevocationLookupKeys bounds the identities one connect asks about. A verified path holds at
@@ -57,13 +57,13 @@ func (api *Api) ResolveX509Revocation(ctx context.Context, anchor *DeviceTrustAn
 	if err != nil {
 		return x509trust.RevocationState{}, err
 	}
-	return readRevocationState(api.RDB.DB(ctx), tenant, anchor, keys, now)
+	return readRevocationState(api.RDB.DB(ctx), tenant, anchor, keys, now, api.revocationLimits().DefaultStaleGrace)
 }
 
 // readRevocationState is ResolveX509Revocation over a given handle, so the in-transaction recheck
 // of a registration reads through the transaction that holds the anchor lock.
 func readRevocationState(db *gorm.DB, tenant string, anchor *DeviceTrustAnchor, keys x509trust.RevocationQuery,
-	now time.Time) (x509trust.RevocationState, error) {
+	now time.Time, defaultGrace time.Duration) (x509trust.RevocationState, error) {
 	if anchor == nil || anchor.ID == 0 {
 		return x509trust.RevocationState{}, errors.New("a revocation lookup needs the connect's trust anchor")
 	}
@@ -74,7 +74,7 @@ func readRevocationState(db *gorm.DB, tenant string, anchor *DeviceTrustAnchor, 
 	if err != nil {
 		return x509trust.RevocationState{}, err
 	}
-	grace, err := anchor.RevocationStaleGraceOf()
+	grace, err := anchor.RevocationStaleGraceOf(defaultGrace)
 	if err != nil {
 		return x509trust.RevocationState{}, err
 	}
@@ -176,11 +176,12 @@ func readRevocationState(db *gorm.DB, tenant string, anchor *DeviceTrustAnchor, 
 // anchor row passed is the one read under the lock, so a mode changed meanwhile is the mode used.
 // It returns the *x509trust.ChainError of a refusal (ReasonOf revoked or revocation_unknown), or
 // any other error, and every non-nil result refuses.
-func recheckRevocationLocked(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, verified *x509trust.Verified) error {
+func recheckRevocationLocked(tx *gorm.DB, tenant string, anchor *DeviceTrustAnchor, verified *x509trust.Verified,
+	defaultGrace time.Duration) error {
 	if verified == nil {
 		return errors.New("a certificate registration needs the verified chain to re-check its revocation")
 	}
-	state, err := readRevocationState(tx, tenant, anchor, verified.RevocationKeys(), time.Now())
+	state, err := readRevocationState(tx, tenant, anchor, verified.RevocationKeys(), time.Now(), defaultGrace)
 	if err != nil {
 		return err
 	}
@@ -367,8 +368,8 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 			Count(&n).Error; err != nil {
 			return err
 		}
-		if n >= MaxManualRevocationsPerTenant {
-			return limit.Exceeded("manual certificate revocations", int(n)+1, MaxManualRevocationsPerTenant)
+		if maxManual := api.revocationLimits().MaxManualEntriesPerTenant; n >= int64(maxManual) {
+			return limit.Exceeded("manual certificate revocations", int(n)+1, maxManual)
 		}
 		now := time.Now().UTC()
 		entry := &DeviceRevokedCertificate{
@@ -474,18 +475,26 @@ func (api *Api) DeviceRevokedCertificates(ctx context.Context, anchorToken strin
 	return &DeviceRevokedCertificateSearchResults{Results: results, Pagination: pag}, nil
 }
 
-// revocationRowsOf counts every row of the anchor's revocation store (entries, lists, issuers),
-// soft-deleted lists included: what a delete of the anchor would have to discard.
-func revocationRowsOf(tx *gorm.DB, anchorId uint) (int64, error) {
-	var total int64
-	for _, m := range []any{&DeviceRevokedCertificate{}, &DeviceRevocationList{}, &DeviceRevocationIssuer{}} {
-		var n int64
-		if err := tx.Unscoped().Model(m).Where("trust_anchor_id = ?", anchorId).Count(&n).Error; err != nil {
-			return 0, err
-		}
-		total += n
+// manualRevocationRows counts the manual revocation entries of the anchor.
+func manualRevocationRows(tx *gorm.DB, anchorId uint) (int64, error) {
+	var n int64
+	err := tx.Model(&DeviceRevokedCertificate{}).Where("trust_anchor_id = ? AND kind = ?", anchorId, RevokedKindManual).Count(&n).Error
+	return n, err
+}
+
+// discardCrlRevocations deletes everything the anchor holds from CRLs, for good: the entries, the
+// lists (soft-deleted ones included) and the issuer rows. Children first, because the foreign keys
+// are RESTRICT. The caller holds the anchor FOR UPDATE and is deleting the anchor.
+func discardCrlRevocations(tx *gorm.DB, tenant string, anchorId uint) error {
+	if err := tx.Where("tenant_id = ? AND trust_anchor_id = ? AND kind = ?", tenant, anchorId, RevokedKindCRL).
+		Delete(&crlEntryRow{}).Error; err != nil {
+		return err
 	}
-	return total, nil
+	if err := tx.Unscoped().Where("tenant_id = ? AND trust_anchor_id = ?", tenant, anchorId).
+		Delete(&DeviceRevocationList{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("tenant_id = ? AND trust_anchor_id = ?", tenant, anchorId).Delete(&DeviceRevocationIssuer{}).Error
 }
 
 // refuseIfEnforcedUnderOtherAnchors is the revoke-time guard for the per-anchor store: a revocation

@@ -190,9 +190,9 @@
                       "maxItems": 8,
                       "items": {
                         "type": "string",
-                        "pattern": "^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://(localhost|127[.]0[.]0[.]1))(:[0-9]+)?(/[^?#@\\s]*[^/?#@\\s])?$"
+                        "pattern": "^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://(localhost|127[.]0[.]0[.]1))(:[0-9]+)?(/[^?#@%\\s]*[^/?#@%\\s])?$"
                       },
-                      "description": "Resource servers outside the platform that validate DeviceChain tokens through the authorization server's JWKS endpoint. The authorization server may issue tokens bound to them; no DeviceChain plane accepts those tokens. Each entry is an https URL (http only for a loopback host) with a lowercase scheme and host, no query, fragment or trailing slash, that does not sit under the platform's own API address."
+                      "description": "Resource servers outside the platform that validate DeviceChain tokens through the authorization server's JWKS endpoint. The authorization server may issue tokens bound to them; no DeviceChain plane accepts those tokens. Each entry is an https URL (http only for a loopback host) with a lowercase scheme and host, no query, fragment, percent-escape or trailing slash, that does not sit under the platform's own API address."
                     },
                     "areaBaseUrl": {
                       "type": "string",
@@ -892,7 +892,7 @@
             "additionalProperties": false
           },
           "goMemLimitPercent": { "type": "integer", "minimum": 0, "maximum": 99, "description": "GOMEMLIMIT as a percentage of this area's own memory LIMIT, overriding the top-level goMemLimitPercent (0 turns it off for this area). The five event-path areas ship 75." },
-          "memoryLimitFloor": { "type": ["string", "number"], "description": "The chart's default memory limit for a service that needs more than the top-level one: used only when the merged limit is lower and the area sets no memory limit of its own. Shipped on device-management (512Mi) and event-processing (384Mi)." },
+          "memoryLimitFloor": { "type": ["string", "number"], "description": "The chart's default memory limit for a service that needs more than the top-level one: used only when the merged limit is lower and the area sets no memory limit of its own. Shipped on device-management (768Mi) and event-processing (384Mi)." },
           "memoryLimitFloorWithEnvelopes": { "type": ["string", "number"], "description": "A higher memory-limit floor that replaces memoryLimitFloor while either instance.config.infrastructure.messaging.envelopes switch (resolved, inbound) is on. Same rules as memoryLimitFloor. Shipped on event-processing (768Mi)." },
           "gogc": { "type": "integer", "minimum": 0, "maximum": 10000, "description": "GOGC for this area only, overriding the top-level gogc (0 leaves Go's default of 100). The five event-path areas ship 400." },
           "goMemLimit": {

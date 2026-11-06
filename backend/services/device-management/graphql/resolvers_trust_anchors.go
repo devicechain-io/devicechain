@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -102,3 +103,81 @@ func (r *DeviceRevokedCertificateSearchResultsResolver) Results() []*DeviceRevok
 func (r *DeviceRevokedCertificateSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
 	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
 }
+
+// RevocationMode is the anchor's mode; a stored value this build does not know is an error, not ENTRIES.
+func (r *DeviceTrustAnchorResolver) RevocationMode() (string, error) {
+	m, err := r.M.RevocationModeOf()
+	return string(m), err
+}
+
+// RevocationStaleGrace is the grace in force for the anchor.
+func (r *DeviceTrustAnchorResolver) RevocationStaleGrace(ctx context.Context) (string, error) {
+	g, err := r.M.RevocationStaleGraceOf(r.S.GetApi(ctx).RevocationLimits().DefaultStaleGrace)
+	if err != nil {
+		return "", err
+	}
+	return g.String(), nil
+}
+
+// RevocationLists are the anchor's current lists.
+func (r *DeviceTrustAnchorResolver) RevocationLists(ctx context.Context) ([]*DeviceRevocationListResolver, error) {
+	api := r.S.GetApi(ctx)
+	lists, err := api.DeviceRevocationListsOf(ctx, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+	grace, err := r.M.RevocationStaleGraceOf(api.RevocationLimits().DefaultStaleGrace)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*DeviceRevocationListResolver, 0, len(lists))
+	for _, l := range lists {
+		out = append(out, &DeviceRevocationListResolver{M: l, Grace: grace})
+	}
+	return out, nil
+}
+
+// RevocationStatus is the worst freshness over the anchor's lists.
+func (r *DeviceTrustAnchorResolver) RevocationStatus(ctx context.Context) (string, error) {
+	api := r.S.GetApi(ctx)
+	lists, err := api.DeviceRevocationListsOf(ctx, r.M.ID)
+	if err != nil {
+		return "", err
+	}
+	grace, err := r.M.RevocationStaleGraceOf(api.RevocationLimits().DefaultStaleGrace)
+	if err != nil {
+		return "", err
+	}
+	return model.RevocationAnchorStatus(lists, grace, time.Now()), nil
+}
+
+// DeviceRevocationListResolver resolves DeviceRevocationList.
+type DeviceRevocationListResolver struct {
+	M     model.DeviceRevocationList
+	Grace time.Duration
+}
+
+func (r *DeviceRevocationListResolver) IssuerSubject() string { return r.M.IssuerSubject }
+func (r *DeviceRevocationListResolver) IssuerKey() string     { return r.M.IssuerKey }
+func (r *DeviceRevocationListResolver) IssuerName() string    { return r.M.IssuerName }
+func (r *DeviceRevocationListResolver) CrlNumber() string     { return r.M.CrlNumber }
+func (r *DeviceRevocationListResolver) ThisUpdate() string    { return *util.FormatTime(r.M.ThisUpdate) }
+func (r *DeviceRevocationListResolver) NextUpdate() string    { return *util.FormatTime(r.M.NextUpdate) }
+func (r *DeviceRevocationListResolver) EntryCount() int32     { return r.M.EntryCount }
+func (r *DeviceRevocationListResolver) CrlSha256() string     { return r.M.CrlSha256 }
+func (r *DeviceRevocationListResolver) Source() string        { return r.M.Source }
+func (r *DeviceRevocationListResolver) Status() string {
+	return model.RevocationListStatus(&r.M, r.Grace, time.Now())
+}
+
+// DeviceRevocationListResultResolver resolves DeviceRevocationListResult.
+type DeviceRevocationListResultResolver struct {
+	M     model.RevocationListPutResult
+	Grace time.Duration
+}
+
+func (r *DeviceRevocationListResultResolver) List() *DeviceRevocationListResolver {
+	return &DeviceRevocationListResolver{M: r.M.List, Grace: r.Grace}
+}
+func (r *DeviceRevocationListResultResolver) NewlyRevoked() int32 { return int32(r.M.NewlyRevoked) }
+func (r *DeviceRevocationListResultResolver) Unchanged() bool     { return r.M.Unchanged }

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -105,7 +106,7 @@ func TestEnsureTierLeavesAMeetingTierAlone(t *testing.T) {
 
 // A tier below a floor is raised on that key only; every other key, and any key above its floor, is kept.
 func TestEnsureTierRaisesOnlyWhatIsBelowItsFloor(t *testing.T) {
-	s := &tierStub{existing: `[{"token":"tp-showcase","config":"{\"calculatedMetricsPerProfile\":0,\"ingestReadingsPerSecond\":5000,\"shedPriority\":10}"}]`}
+	s := &tierStub{existing: `[{"token":"tp-showcase","config":"{\"calculatedMetricsPerProfile\":0,\"ingestReadingsPerSecond\":5000,\"ingestBurst\":1000,\"shedPriority\":10}"}]`}
 	if err := s.ensure(t); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +121,50 @@ func TestEnsureTierRaisesOnlyWhatIsBelowItsFloor(t *testing.T) {
 		t.Errorf("an operator's higher or unrelated key was lost: %v", got)
 	}
 	if got["ingestBurst"] != 2000 {
-		t.Errorf("a missing floor key was not added: %v", got)
+		t.Errorf("a stated key below its floor was not raised: %v", got)
+	}
+}
+
+// 🔴 A KEY THE TIER OMITS IS INHERITED, AND DCCTL CANNOT SEE THE VALUE. Writing the floor could
+// LOWER the limit for every tenant on the tier; leaving it could leave it BELOW the floor (a missing
+// calculatedMetricsPerProfile inherits 0). So the tier is refused, naming the key, and nothing is
+// written. A key that is null counts as unstated.
+//
+// Negative control: with the earlier rule (an unstated key is skipped silently) err is nil for every
+// case; with the rule before that (an unstated key is written) the tier is also rewritten.
+func TestEnsureTierRefusesAnExistingTierThatDoesNotStateAFloorKey(t *testing.T) {
+	for name, c := range map[string]struct{ existing, want string }{
+		"config omits every floor key": {`[{"token":"tp-showcase","config":"{\"shedPriority\":10}"}]`, `"calculatedMetricsPerProfile"`},
+		"config is empty":              {`[{"token":"tp-showcase","config":null}]`, `"ingestBurst"`},
+		"floor key is null":            {`[{"token":"tp-showcase","config":"{\"calculatedMetricsPerProfile\":8,\"ingestReadingsPerSecond\":5000,\"ingestBurst\":null}"}]`, `"ingestBurst"`},
+		"one of three omitted":         {`[{"token":"tp-showcase","config":"{\"calculatedMetricsPerProfile\":8,\"ingestReadingsPerSecond\":5000}"}]`, `"ingestBurst"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &tierStub{existing: c.existing}
+			err := s.ensure(t)
+			var refused *TierRefusedError
+			if !errors.As(err, &refused) {
+				t.Fatalf("want a TierRefusedError, got %v", err)
+			}
+			if !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "does not state") {
+				t.Fatalf("the refusal does not name the key %s: %v", c.want, err)
+			}
+			if len(s.mutations) != 0 {
+				t.Fatalf("a tier with an unstated key was written: %v %v", s.mutations, s.vars)
+			}
+		})
+	}
+}
+
+// Counterweight: a tier that states every key is never refused, and one that states them all at or
+// above the floors is left alone (TestEnsureTierLeavesAMeetingTierAlone).
+func TestRaiseToFloorsReportsExactlyTheUnstatedKeys(t *testing.T) {
+	_, changed, unstated := raiseToFloors(map[string]any{"a": float64(5), "b": float64(1)}, map[string]int{"a": 3, "b": 4, "c": 9, "d": 1})
+	if !changed {
+		t.Error("b (1 < 4) was not raised")
+	}
+	if !reflect.DeepEqual(unstated, []string{"c", "d"}) {
+		t.Errorf("unstated = %v", unstated)
 	}
 }
 
