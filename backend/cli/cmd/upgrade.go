@@ -16,6 +16,7 @@ var (
 	upgradeRegistry    string
 	upgradeVersion     string
 	upgradeDryRun      bool
+	upgradeAssumeYes   bool
 	upgradeEscrowFile  string
 	upgradeEscrowPass  string
 	upgradeSkipInfra   bool
@@ -87,6 +88,7 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			Instance:      instance,
 			KubeContext:   upgradeKubeContext,
 			DryRun:        upgradeDryRun,
+			AssumeYes:     upgradeAssumeYes,
 			ImageRegistry: upgradeRegistry,
 			ImageVersion:  upgradeVersion,
 
@@ -305,6 +307,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeRegistry, "registry", "", "image registry to pull from (default: "+bootstrap.DefaultImageRegistry+")")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to (default: this dcctl's pinned version)")
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
+	upgradeCmd.Flags().BoolVarP(&upgradeAssumeYes, "yes", "y", false, "assume yes for prompts (an upgrade asks none, so this changes nothing; it is accepted so a script can pass the same flag to install, bootstrap and upgrade)")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().BoolVar(&upgradeAllowEnvelopeDowngrade, "allow-envelope-downgrade", false, "move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service")

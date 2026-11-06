@@ -168,3 +168,113 @@ func TestAnInstanceWithNoRootKeyIsToldItHasNone(t *testing.T) {
 		t.Error("an escrow was written for an instance that has no root key to protect")
 	}
 }
+
+// escrowAt writes a real artifact for key at path, the way bootstrap does.
+func escrowAt(t *testing.T, path, key string) {
+	t.Helper()
+	if err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "a-passphrase"}, key, testInstance, time.Now().UTC()); err != nil {
+		t.Fatalf("writing the escrow: %v", err)
+	}
+}
+
+// 🔴 THE FALSE ALARM THIS PINS. An instance bootstrapped with --escrow-file <elsewhere>
+// has its artifact there, and an upgrade given no flag used to look only at the default
+// path and tell the operator who did the right thing that the key had no escrow. The path
+// recorded at bootstrap is the one checked now.
+func TestAnUpgradeFindsAnEscrowAtTheRecordedCustomPath(t *testing.T) {
+	fakeHome(t)
+	custom := filepath.Join(t.TempDir(), "kept-elsewhere.escrow")
+	key := aRootKey(t)
+	escrowAt(t, custom, key)
+	writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local", EscrowPath: custom})
+
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowVerified {
+		t.Fatalf("the upgrade reported %q for an escrow sitting at the recorded path", got)
+	}
+}
+
+// The warning must survive where it is true: nothing at the default path and nothing at the
+// recorded one, or no record at all.
+func TestAnUpgradeStillWarnsWhenThereReallyIsNoEscrow(t *testing.T) {
+	t.Setenv(EscrowPassphraseEnv, "")
+	os.Unsetenv(EscrowPassphraseEnv)
+
+	t.Run("a recorded path with nothing at it", func(t *testing.T) {
+		fakeHome(t)
+		writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local",
+			EscrowPath: filepath.Join(t.TempDir(), "gone.escrow")})
+		if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), aRootKey(t), UpgradeOptions{}); got != escrowAbsent {
+			t.Errorf("reported %q; want %q", got, escrowAbsent)
+		}
+	})
+	t.Run("no record and nothing at the default path", func(t *testing.T) {
+		fakeHome(t)
+		if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), aRootKey(t), UpgradeOptions{}); got != escrowAbsent {
+			t.Errorf("reported %q; want %q", got, escrowAbsent)
+		}
+	})
+}
+
+// An artifact at the default path is still found when the record names none.
+func TestAnUpgradeStillFindsTheDefaultEscrow(t *testing.T) {
+	fakeHome(t)
+	def, err := DefaultEscrowPath(testInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := aRootKey(t)
+	escrowAt(t, def, key)
+	writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local"})
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowVerified {
+		t.Fatalf("the upgrade reported %q for an escrow at the default path", got)
+	}
+}
+
+// An explicit --escrow-file wins over the record, and is remembered for the next upgrade
+// (the way an instance bootstrapped before the path was recorded gets it). With no record
+// to extend, none is invented.
+func TestAnExplicitEscrowFileWinsAndIsRemembered(t *testing.T) {
+	fakeHome(t)
+	custom := filepath.Join(t.TempDir(), "explicit.escrow")
+	key := aRootKey(t)
+	escrowAt(t, custom, key)
+	writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local",
+		EscrowPath: filepath.Join(t.TempDir(), "stale.escrow")})
+
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{EscrowFile: custom}); got != escrowVerified {
+		t.Fatalf("reported %q", got)
+	}
+	rec, err := ReadInstanceRecord(testInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.EscrowPath != custom {
+		t.Errorf("recorded escrow path %q; want %q", rec.EscrowPath, custom)
+	}
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowVerified {
+		t.Errorf("the next upgrade, given no flag, reported %q", got)
+	}
+
+	other := "other"
+	escrowAt(t, filepath.Join(t.TempDir(), "o.escrow"), key)
+	st := aBootstrapOf(other)
+	reconcileUpgradeEscrow(st, key, UpgradeOptions{EscrowFile: filepath.Join(t.TempDir(), "o.escrow")})
+	if _, err := ReadInstanceRecord(other); err != ErrNoInstanceRecord {
+		t.Errorf("a record was invented for an instance that had none: %v", err)
+	}
+}
+
+func TestEscrowPathToRecordOmitsTheDefault(t *testing.T) {
+	fakeHome(t)
+	def, _ := DefaultEscrowPath(testInstance)
+	if got := EscrowPathToRecord(testInstance, def); got != "" {
+		t.Errorf("the default path was recorded: %q", got)
+	}
+	if got := EscrowPathToRecord(testInstance, ""); got != "" {
+		t.Errorf("an empty plan path was recorded: %q", got)
+	}
+	custom := filepath.Join(t.TempDir(), "k.escrow")
+	if got := EscrowPathToRecord(testInstance, custom); got != custom {
+		t.Errorf("a custom path recorded as %q; want %q", got, custom)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -75,7 +76,7 @@ func reconcileUpgradeEscrow(st *State, rootKeyBase64 string, opts UpgradeOptions
 		return escrowNoRootKey
 	}
 
-	path, err := resolveEscrowPath(st.Instance, opts.EscrowFile)
+	path, err := resolveEscrowPath(st.Instance, escrowPathToCheck(st.Instance, opts.EscrowFile))
 	if err != nil {
 		fmt.Println(color.YellowString("  Could not work out where this instance's escrow lives (%v)", err))
 		return escrowUnreadable
@@ -124,7 +125,62 @@ func reconcileUpgradeEscrow(st *State, rootKeyBase64 string, opts UpgradeOptions
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
 		color.GreenString("verified against the running key"))
+	rememberEscrowPath(st.Instance, path, opts.EscrowFile)
 	return escrowVerified
+}
+
+// escrowPathToCheck is where an upgrade looks for the instance's escrow: the path given
+// with --escrow-file, else the one recorded when the instance was bootstrapped with a
+// custom --escrow-file, else (returned empty) the default.
+//
+// 🔴 WITHOUT THE RECORD THE CHECK WAS BLIND TO A CUSTOM PATH, and said the instance had no
+// escrow, which tells an operator who did the right thing that they did not. A record that
+// cannot be read is the same as none: the default is checked, as before.
+func escrowPathToCheck(instance, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if rec, err := ReadInstanceRecord(instance); err == nil {
+		return rec.EscrowPath
+	}
+	return ""
+}
+
+// EscrowPathToRecord is what InstanceRecord.EscrowPath should hold for an artifact at path:
+// empty when that is the default location, which needs no record.
+func EscrowPathToRecord(instance, path string) string {
+	if path == "" {
+		return ""
+	}
+	def, err := DefaultEscrowPath(instance)
+	if err != nil {
+		return path
+	}
+	abs, aerr := filepath.Abs(path)
+	defAbs, derr := filepath.Abs(def)
+	if aerr == nil && derr == nil && abs == defAbs {
+		return ""
+	}
+	return path
+}
+
+// rememberEscrowPath records, on an instance that has a record, the custom location an
+// upgrade was told its escrow lives at, so the next upgrade finds it without the flag. It
+// only runs for an explicit --escrow-file, never fabricates a record, and a failure is a
+// note rather than a stop: the escrow itself is already settled.
+func rememberEscrowPath(instance, path, explicit string) {
+	if explicit == "" {
+		return
+	}
+	want := EscrowPathToRecord(instance, path)
+	rec, err := ReadInstanceRecord(instance)
+	if err != nil || rec.EscrowPath == want {
+		return
+	}
+	rec.EscrowPath = want
+	if err := WriteInstanceRecord(rec); err != nil {
+		fmt.Println(color.YellowString("  Could not record the escrow location for later upgrades (%v).", err))
+	}
 }
 
 // writeMissingEscrow writes the second copy an instance does not have, when there is
@@ -153,6 +209,7 @@ func writeMissingEscrow(st *State, rootKeyBase64, path string, opts UpgradeOptio
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
 		color.GreenString("written to "+path+" (this instance had none)"))
+	rememberEscrowPath(st.Instance, path, opts.EscrowFile)
 	return escrowWritten
 }
 
