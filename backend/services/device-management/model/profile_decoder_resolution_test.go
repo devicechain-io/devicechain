@@ -724,3 +724,16 @@ func TestCompileCounterHasNoTenantLabel(t *testing.T) {
 	assert.Equal(t, 1.0, testutil.ToFloat64(vec.WithLabelValues("ok")))
 	assert.Equal(t, 1.0, testutil.ToFloat64(vec.WithLabelValues("env_unsupported")))
 }
+
+// A published version whose stored decoder is over the document cap (a row jsonb re-rendered
+// larger than the save gate allowed) is an invalid plan with a compile reason, never an
+// "unsupported environment" and never a scan of the oversized document.
+func TestAnOverCapStoredDecoderIsACompileFailureNotAnEnvMismatch(t *testing.T) {
+	raw := json.RawMessage(`{"kind":"CEL","envVersion":1,"input":"FRAME","sections":[{"name":"s","ignore":true}],"table":{"x":"` +
+		strings.Repeat("a", payloaddecode.MaxDocumentBytes) + `"}}`)
+	p := buildDecodePlan(ProfileScope{}, nil, raw)
+	require.NotNil(t, p)
+	require.NotNil(t, p.err)
+	assert.Equal(t, payloaddecode.ReasonCompileFailed, p.err.Reason)
+	assert.Nil(t, p.plan)
+}

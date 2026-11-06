@@ -105,8 +105,10 @@ type Vector struct {
 
 // VectorInput is a vector's uplink, in the forms a person pastes.
 type VectorInput struct {
-	FrameHex    string             `json:"frameHex,omitempty"`
-	FrameBase64 string             `json:"frameBase64,omitempty"`
+	// FrameHex and FrameBase64 are pointers because a present empty string is an empty frame
+	// (an empty-payload uplink), which Decode tells apart from an absent one.
+	FrameHex    *string            `json:"frameHex,omitempty"`
+	FrameBase64 *string            `json:"frameBase64,omitempty"`
 	JSON        json.RawMessage    `json:"json,omitempty"`
 	Decoded     json.RawMessage    `json:"decoded,omitempty"`
 	FPort       *int               `json:"fPort,omitempty"`
@@ -130,28 +132,42 @@ func ParseDocument(raw []byte) (*Document, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, &CompileError{Issues: []Issue{{Message: "the decoder document has trailing data"}}}
 	}
+	// The length checks above are on the bytes sent. The store re-renders the document, so the
+	// cap is also checked on the rendering's upper bound (see CanonicalSize).
+	size, err := CanonicalSize(raw)
+	if err != nil {
+		return nil, &CompileError{Issues: []Issue{{Message: "the decoder document cannot be stored: " + err.Error()}}}
+	}
+	if size > MaxDocumentBytes {
+		return nil, &CompileError{Issues: []Issue{{Message: fmt.Sprintf("the decoder document is %d bytes once stored (numbers are written out in full, separators gain a space), above the maximum of %d", size, MaxDocumentBytes)}}}
+	}
+	// table is the console's field table: advisory, never compiled, but stored and returned on
+	// every read, so it is held to a shape: one object.
+	if len(d.Table) > 0 && !bytes.HasPrefix(bytes.TrimSpace(d.Table), []byte("{")) {
+		return nil, &CompileError{Issues: []Issue{{Path: "table", Message: "table must be an object"}}}
+	}
 	return &d, nil
 }
 
 // toInput builds the uplink a vector describes.
 func (v VectorInput) toInput() (Input, error) {
 	var in Input
-	if v.FrameHex != "" && v.FrameBase64 != "" {
+	if v.FrameHex != nil && v.FrameBase64 != nil {
 		return in, errors.New("a vector names both frameHex and frameBase64")
 	}
 	switch {
-	case v.FrameHex != "":
-		b, err := hex.DecodeString(v.FrameHex)
+	case v.FrameHex != nil:
+		b, err := hex.DecodeString(*v.FrameHex)
 		if err != nil {
 			return in, fmt.Errorf("frameHex: %w", err)
 		}
-		in.Frame = b
-	case v.FrameBase64 != "":
-		b, err := base64.StdEncoding.DecodeString(v.FrameBase64)
+		in.Frame = append([]byte{}, b...)
+	case v.FrameBase64 != nil:
+		b, err := base64.StdEncoding.DecodeString(*v.FrameBase64)
 		if err != nil {
 			return in, fmt.Errorf("frameBase64: %w", err)
 		}
-		in.Frame = b
+		in.Frame = append([]byte{}, b...)
 	}
 	if len(v.JSON) > 0 {
 		in.JSON = []byte(v.JSON)
