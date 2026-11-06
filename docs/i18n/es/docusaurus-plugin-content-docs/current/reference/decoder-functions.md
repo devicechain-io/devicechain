@@ -5,7 +5,7 @@ title: Referencia de funciones del decodificador
 
 # Referencia de funciones del decodificador {#decoder-functions}
 
-Todas las funciones que puede llamar un [decodificador de payload](../guides/payload-decoders.md) y los límites a los que está sujeto un decodificador. Esta página se genera a partir de la biblioteca de funciones de la plataforma, así que no puede quedarse atrás.
+Las funciones de la biblioteca de los [decodificadores de payload](../guides/payload-decoders.md) y los límites a los que está sujeto un decodificador. Esta página se genera a partir de la biblioteca de funciones de la plataforma, así que no puede quedarse atrás. No se enumeran las funciones incorporadas del propio lenguaje: `size`, `has` y las conversiones `int`, `uint`, `double` y `bool`.
 
 ## Funciones {#decoder-functions-library}
 
@@ -63,8 +63,8 @@ Un decodificador indica en `envVersion` la versión de la biblioteca para la que
 
 | Función | Firma | Qué hace | Coste |
 | --- | --- | --- | --- |
-| `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 characters. | 1 per character of the text, at least 1 |
-| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 characters into at most 4096 bytes. | 1 per character of the text, at least 1 |
+| `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 bytes. | 1 per byte of the text, at least 1 |
+| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 bytes into at most 4096 bytes. | 1 per byte of the text, at least 1 |
 
 ### Códecs {#decoder-functions-codecs}
 
@@ -101,7 +101,7 @@ Un decodificador que supera un límite se rechaza al guardarlo o publicarlo. Una
 | Secciones | 8 |
 | Lecturas que puede emitir una sección (filas escalares más el `maxKeys` de las filas de mapa) | 64 |
 | Vectores guardados | 20 |
-| Texto que recibe `hex.decode` o `base64.decode`, en caracteres | 8,192 |
+| Texto que recibe `hex.decode` o `base64.decode`, en bytes | 8,192 |
 | Literales en una lista `in` | 16 |
 | Nombre de un `let`, sección o vector, en bytes | 64 |
 | Una clave de salida o un prefijo, en bytes | 128 |

@@ -26,8 +26,9 @@ var texts = map[string]pageText{
 	"en": {
 		position: "6",
 		title:    "Decoder Function Reference",
-		intro: "Every function a [payload decoder](../guides/payload-decoders.md) can call, and the limits a decoder is held to. " +
-			"This page is generated from the function library in the platform, so it cannot fall behind it.",
+		intro: "The functions of the [payload decoder](../guides/payload-decoders.md) library, and the limits a decoder is held to. " +
+			"This page is generated from the function library in the platform, so it cannot fall behind it. " +
+			"The language's own built-ins are not listed: `size`, `has` and the conversions `int`, `uint`, `double` and `bool`.",
 		libraryHeading: "Functions",
 		libraryIntro: "A decoder names the library version it was written for in `envVersion`; this page describes version %d. " +
 			"What a function does never changes once it has shipped: a fix or a variant arrives under a new name in a new version, " +
@@ -53,7 +54,7 @@ var texts = map[string]pageText{
 			"sections":    "Sections",
 			"readings":    "Readings one section can emit (scalar rows plus the `maxKeys` of map rows)",
 			"vectors":     "Saved vectors",
-			"text":        "Text given to `hex.decode` or `base64.decode`, in characters",
+			"text":        "Text given to `hex.decode` or `base64.decode`, in bytes",
 			"inlist":      "Literals in one `in` list",
 			"name":        "A `let`, section or vector name, in bytes",
 			"key":         "An output key or prefix, in bytes",
@@ -64,8 +65,9 @@ var texts = map[string]pageText{
 	"es": {
 		position: "6",
 		title:    "Referencia de funciones del decodificador",
-		intro: "Todas las funciones que puede llamar un [decodificador de payload](../guides/payload-decoders.md) y los límites a los que está sujeto un decodificador. " +
-			"Esta página se genera a partir de la biblioteca de funciones de la plataforma, así que no puede quedarse atrás.",
+		intro: "Las funciones de la biblioteca de los [decodificadores de payload](../guides/payload-decoders.md) y los límites a los que está sujeto un decodificador. " +
+			"Esta página se genera a partir de la biblioteca de funciones de la plataforma, así que no puede quedarse atrás. " +
+			"No se enumeran las funciones incorporadas del propio lenguaje: `size`, `has` y las conversiones `int`, `uint`, `double` y `bool`.",
 		libraryHeading: "Funciones",
 		libraryIntro: "Un decodificador indica en `envVersion` la versión de la biblioteca para la que se escribió; esta página describe la versión %d. " +
 			"Lo que hace una función no cambia nunca una vez publicada: una corrección o una variante llega con un nombre nuevo en una versión nueva, " +
@@ -91,7 +93,7 @@ var texts = map[string]pageText{
 			"sections":    "Secciones",
 			"readings":    "Lecturas que puede emitir una sección (filas escalares más el `maxKeys` de las filas de mapa)",
 			"vectors":     "Vectores guardados",
-			"text":        "Texto que recibe `hex.decode` o `base64.decode`, en caracteres",
+			"text":        "Texto que recibe `hex.decode` o `base64.decode`, en bytes",
 			"inlist":      "Literales en una lista `in`",
 			"name":        "Nombre de un `let`, sección o vector, en bytes",
 			"key":         "Una clave de salida o un prefijo, en bytes",
@@ -102,8 +104,9 @@ var texts = map[string]pageText{
 	"zh-CN": {
 		position: "6",
 		title:    "解码器函数参考",
-		intro: "[载荷解码器](../guides/payload-decoders.md)可以调用的所有函数，以及解码器所受的限制。" +
-			"本页由平台中的函数库自动生成，因此不会落后于实现。",
+		intro: "[载荷解码器](../guides/payload-decoders.md)函数库中的函数，以及解码器所受的限制。" +
+			"本页由平台中的函数库自动生成，因此不会落后于实现。" +
+			"语言自身的内置函数不在此列：`size`、`has`，以及转换函数 `int`、`uint`、`double` 和 `bool`。",
 		libraryHeading: "函数",
 		libraryIntro: "解码器在 `envVersion` 中写明它所针对的函数库版本；本页描述的是版本 %d。" +
 			"函数一旦发布，其行为就不会再改变：修复或变体会以新名称出现在新版本中，因此已保存的解码器始终给出相同的结果。" +
@@ -128,7 +131,7 @@ var texts = map[string]pageText{
 			"sections":    "分段",
 			"readings":    "单个分段可输出的读数（标量行加上映射行的 `maxKeys`）",
 			"vectors":     "已保存的测试向量",
-			"text":        "传给 `hex.decode` 或 `base64.decode` 的文本，单位为字符",
+			"text":        "传给 `hex.decode` 或 `base64.decode` 的文本，单位为字节",
 			"inlist":      "单个 `in` 列表中的字面量",
 			"name":        "`let`、分段或测试向量的名称，单位为字节",
 			"key":         "输出键或前缀，单位为字节",

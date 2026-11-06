@@ -235,7 +235,7 @@ func textActual(a []ref.Val, _ ref.Val) uint64 {
 
 const (
 	costOne     = "1"
-	costPerChar = "1 per character of the text, at least 1"
+	costPerByte = "1 per byte of the text, at least 1"
 )
 
 // ownedFuncs is the function library, env version 1. A function's semantics NEVER change
@@ -350,8 +350,8 @@ func buildOwned() []fnSpec {
 			},
 		},
 		fnSpec{
-			sizeDependent: true, costDoc: costPerChar, name: "hex.decode", overload: "payloaddecode_hex_decode", sig: "hex.decode(string) -> bytes",
-			doc:  "Decodes hexadecimal text (even length, no separators) of at most 8192 characters.",
+			sizeDependent: true, costDoc: costPerByte, name: "hex.decode", overload: "payloaddecode_hex_decode", sig: "hex.decode(string) -> bytes",
+			doc:  "Decodes hexadecimal text (even length, no separators) of at most 8192 bytes.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
 				s, ok := asString(v)
@@ -374,8 +374,8 @@ func buildOwned() []fnSpec {
 			actual: textActual,
 		},
 		fnSpec{
-			sizeDependent: true, costDoc: costPerChar, name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
-			doc:  "Decodes standard padded base64 text of at most 8192 characters into at most 4096 bytes.",
+			sizeDependent: true, costDoc: costPerByte, name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
+			doc:  "Decodes standard padded base64 text of at most 8192 bytes into at most 4096 bytes.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
 				s, ok := asString(v)

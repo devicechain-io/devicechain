@@ -27,7 +27,7 @@ func TestFunctionCostDocsMatchTheCharges(t *testing.T) {
 		"1 per byte copied, at least 1": func(f *fnSpec) uint64 {
 			return f.actual(nil, types.Bytes(make([]byte, 10))) - 10 + 1
 		},
-		costPerChar: func(f *fnSpec) uint64 {
+		costPerByte: func(f *fnSpec) uint64 {
 			return f.actual([]ref.Val{types.String("abcd")}, types.Bytes(nil)) - 4 + 1
 		},
 		"1 per byte of the frame, at least 1": func(f *fnSpec) uint64 {

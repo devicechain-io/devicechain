@@ -5,7 +5,7 @@ title: 解码器函数参考
 
 # 解码器函数参考 {#decoder-functions}
 
-[载荷解码器](../guides/payload-decoders.md)可以调用的所有函数，以及解码器所受的限制。本页由平台中的函数库自动生成，因此不会落后于实现。
+[载荷解码器](../guides/payload-decoders.md)函数库中的函数，以及解码器所受的限制。本页由平台中的函数库自动生成，因此不会落后于实现。语言自身的内置函数不在此列：`size`、`has`，以及转换函数 `int`、`uint`、`double` 和 `bool`。
 
 ## 函数 {#decoder-functions-library}
 
@@ -63,8 +63,8 @@ title: 解码器函数参考
 
 | 函数 | 签名 | 作用 | 成本 |
 | --- | --- | --- | --- |
-| `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 characters. | 1 per character of the text, at least 1 |
-| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 characters into at most 4096 bytes. | 1 per character of the text, at least 1 |
+| `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 bytes. | 1 per byte of the text, at least 1 |
+| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 bytes into at most 4096 bytes. | 1 per byte of the text, at least 1 |
 
 ### 编解码器 {#decoder-functions-codecs}
 
@@ -101,7 +101,7 @@ title: 解码器函数参考
 | 分段 | 8 |
 | 单个分段可输出的读数（标量行加上映射行的 `maxKeys`） | 64 |
 | 已保存的测试向量 | 20 |
-| 传给 `hex.decode` 或 `base64.decode` 的文本，单位为字符 | 8,192 |
+| 传给 `hex.decode` 或 `base64.decode` 的文本，单位为字节 | 8,192 |
 | 单个 `in` 列表中的字面量 | 16 |
 | `let`、分段或测试向量的名称，单位为字节 | 64 |
 | 输出键或前缀，单位为字节 | 128 |

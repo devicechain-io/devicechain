@@ -30,7 +30,7 @@ Un decodificador pertenece a un perfil de dispositivo y viaja con él:
 
 El decodificador es un documento de expresiones en un lenguaje pequeño y sin bucles (CEL). Tiene un tipo de **entrada** que lee, **valores compartidos** opcionales y una o más **secciones**; cada sección tiene **filas**, y cada fila indica qué métrica escribe y cómo calcular el valor. El lenguaje no tiene reloj, ni aleatoriedad, ni efectos secundarios, así que la misma entrada da siempre las mismas lecturas.
 
-Un decodificador puede tener como máximo 8 secciones, 16 valores compartidos y 20 vectores guardados, y el documento completo ocupa como máximo 32 KiB. La [referencia de funciones](../reference/decoder-functions.md#decoder-functions-limits) enumera todos los límites.
+Un decodificador puede tener como máximo 8 secciones, 16 valores compartidos y 20 vectores guardados, y el documento completo ocupa como máximo 32 KiB. La [referencia de funciones](../reference/decoder-functions.md#decoder-functions-limits) enumera los límites.
 
 ## Entradas {#inputs}
 
@@ -102,7 +102,7 @@ Una fila de tipo **Mapa** toma un grupo entero de claves de una sola expresión,
 
 - Cada clave del mapa se guarda como el prefijo más la clave. Una clave que no es una métrica declarada se omite, no es un error, porque un sensor puede añadir un canal; el panel de prueba la muestra como no almacenada.
 - Un mapa con más de `maxKeys` claves hace fallar la decodificación con `map_overflow`. Nunca se recorta.
-- Si una fila de campo y un mapa escriben la misma clave, gana la fila de campo y se omite la entrada del mapa.
+- Si más de una fila escribe la misma clave en un uplink, se conserva una entrada y las demás se omiten, y el panel de prueba las muestra como `collision`. Una fila de campo gana a un mapa; entre dos mapas, gana la fila anterior.
 - Una clave que empieza por `lorawan.` se omite: ese prefijo pertenece a las métricas del enlace que añade la plataforma.
 
 ### Valores compartidos {#shared-values}
@@ -137,13 +137,13 @@ Una clave se puede escribir una sola vez en una sección. Las claves `lorawan.*`
 
 Un **vector** es una entrada guardada con las lecturas que debe producir: un nombre, una trama (hexadecimal o base64), un objeto JSON o un objeto decodificado, opcionalmente un `fPort` y un `fCnt`, y los pares de clave y valor esperados. Un vector solo pasa cuando el decodificador produce **exactamente** esas claves, con valores numéricamente iguales: una clave que falta lo hace fallar, y una de más también. Un vector para una sección que ignora no espera ninguna lectura.
 
-Puedes guardar un decodificador con vectores que fallan, así que el trabajo en curso nunca se pierde. **No puedes publicarlo.** Al publicar un perfil se compila el decodificador con las métricas que se publican y se ejecuta cada vector guardado, y se rechaza la publicación nombrando la primera expresión o el primer vector que falla. Volver a una versión anterior ejecuta la misma comprobación sobre esa versión, y la rechaza cuando su decodificador ya no compila o falla alguno de sus vectores. Un decodificador puede tener hasta 20 vectores.
+Puedes guardar un decodificador con vectores que fallan, así que el trabajo en curso nunca se pierde. **No puedes publicar un perfil mientras falle alguno de sus vectores.** Al publicar un perfil se compila el decodificador con las métricas que se publican y se ejecuta cada vector guardado, y se rechaza la publicación nombrando la primera expresión o el primer vector que falla. Volver a una versión anterior ejecuta la misma comprobación sobre esa versión, y la rechaza cuando su decodificador ya no compila o falla alguno de sus vectores. Un decodificador puede tener hasta 20 vectores.
 
 Conserva un vector para cada disposición de mensaje que envía el dispositivo y otro para cada caso que alguna vez falló. Así sabes que cambiar un decodificador no cambió lo que da un mensaje antiguo.
 
 ## El panel de prueba {#test-panel}
 
-El panel **Prueba** de la pestaña Decodificador ejecuta el decodificador **tal como está en el editor, guardado o no**, con el mismo código que se ejecuta en la ingesta, contra las métricas del borrador del perfil. No se guarda nada. Eliges qué probar con:
+El panel **Prueba** de la pestaña Decodificador ejecuta el decodificador **tal como está en el editor, guardado o no**, con el compilador y el evaluador de la propia plataforma, contra las métricas del borrador del perfil. No se guarda nada. Eliges qué probar con:
 
 - **Trama**: pega hexadecimal o base64 (se ignoran los espacios en blanco, como máximo 4.096 bytes) y, opcionalmente, un `fPort` y un `fCnt`.
 - **JSON**: un objeto JSON, entregado a `json` o a `decoded`, el que lea el decodificador.
@@ -153,10 +153,10 @@ El resultado muestra:
 
 - **Decodificado**, **Ignorado** o **Falló**, y el nombre de la sección que coincidió;
 - las **lecturas**, tal como se guardarían;
-- las claves **no almacenadas**, cada una con su motivo: `undeclared` (no hay una métrica declarada con ese nombre), `collision` (una fila de campo ya escribe la clave) o `reserved`;
+- las claves **no almacenadas**, cada una con su motivo: `undeclared` (no hay una métrica declarada con ese nombre), `collision` (otra fila ya escribe la clave) o `reserved`;
 - si falla, el **motivo**, la **expresión** que falló (como `sections[0].outputs[1].expr`), el mensaje y el desplazamiento en bytes que rechazó un lector;
 - el **coste** que gastó la decodificación;
-- cada vector guardado, tanto si pasa como si falla. **Guardar como vector** convierte en un vector la entrada y el resultado que estás viendo.
+- cada vector guardado, tanto si pasa como si falla. **Guardar como vector** convierte en un vector una prueba correcta de Trama o de JSON; requiere permiso para editar dispositivos, y una prueba de cuerpo de webhook no se puede guardar directamente.
 
 Un documento que no compila se informa en el mismo lugar, como un error junto al editor, no como un fallo de la petición.
 
@@ -292,7 +292,7 @@ Declara las métricas en el perfil de dispositivo: `temperature` (double), `humi
 
 En el panel de prueba, elige **Trama**, pega `00D75A0CE401`, pon `fPort` en 2 y ejecuta: las lecturas son `temperature` 21.5, `humidity` 45, `battery` 3300 y `door` 1. Ejecuta la misma trama con `fPort` 9 y el resultado es **Ignorado**. Envía solo los tres primeros bytes, `00D75A`, y el resultado es `eval_error` en `sections[0].outputs[2].expr`: `u16be: reads 2 byte(s) at offset 3 of a 3-byte frame (offset 3)`.
 
-Para ensayar la petición completa y no solo los bytes, elige **Cuerpo de webhook**, selecciona la integración de ChirpStack y pega el cuerpo que envía ChirpStack. El panel muestra la trama y el puerto que tomó del cuerpo.
+Para ensayar la petición completa y no solo los bytes, elige **Cuerpo de webhook**, selecciona la integración de ChirpStack y pega el cuerpo que envía ChirpStack.
 
 ### The Things Stack: remodelar un objeto decodificado {#example-tts}
 
@@ -377,7 +377,7 @@ El comportamiento de una función no cambia nunca una vez publicada. Una correcc
 
 ## Relacionado {#related}
 
-- [Referencia de funciones del decodificador](../reference/decoder-functions.md): cada función, su coste y cada límite.
+- [Referencia de funciones del decodificador](../reference/decoder-functions.md): las funciones de la biblioteca con su coste, y los límites.
 - [Integraciones de entrada](./inbound-integrations.md): los remitentes de los que lee un decodificador.
 - [Tipos y perfiles de dispositivo](../user-guide/device-types-and-profiles.md): métricas, borradores y publicación.
 - [Matriz de capacidades por transporte](../reference/transport-matrix.md#inbound-integrations): qué admite cada vía de entrada.

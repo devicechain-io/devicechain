@@ -30,7 +30,7 @@ A decoder belongs to a device profile and travels with it:
 
 The decoder is a document of expressions in a small, loop-free language (CEL). It has one **input** kind it reads, optional **shared values**, and one or more **sections**; each section has **rows**, and each row says which metric it writes and how to compute the value. The language has no clock, no randomness and no side effects, so the same input always gives the same readings.
 
-A decoder can have at most 8 sections, 16 shared values and 20 saved vectors, and the whole document is at most 32 KiB. The [function reference](../reference/decoder-functions.md#decoder-functions-limits) lists every limit.
+A decoder can have at most 8 sections, 16 shared values and 20 saved vectors, and the whole document is at most 32 KiB. The [function reference](../reference/decoder-functions.md#decoder-functions-limits) lists the limits.
 
 ## Inputs {#inputs}
 
@@ -102,7 +102,7 @@ A row of kind **Map** takes a whole group of keys from one expression, such as `
 
 - Each key of the map is stored as the prefix plus the key. A key that is not a declared metric is skipped, not an error, because a sensor may add a channel; the test panel lists it as not stored.
 - A map with more than `maxKeys` keys fails the decode with `map_overflow`. It is never cut short.
-- If a field row and a map both write the same key, the field row wins and the map's entry is skipped.
+- If more than one row writes the same key in one uplink, one entry is kept and the others are skipped, listed as `collision` in the test panel. A field row wins over a map; between two maps, the earlier row wins.
 - A key that starts with `lorawan.` is skipped: that prefix belongs to the link metrics the platform appends.
 
 ### Shared values {#shared-values}
@@ -137,13 +137,13 @@ A key may be written once in a section. `lorawan.*` keys are reserved for link m
 
 A **vector** is a saved input with the readings it must produce: a name, a frame (hex or base64), a JSON object or a decoded object, optionally an `fPort` and `fCnt`, and the expected key and value pairs. A vector passes only when the decoder produces **exactly** those keys, with numerically equal values: a missing key fails it and so does an extra one. A vector for an ignore section expects no readings.
 
-You can save a decoder with failing vectors, so work in progress is never lost. **You cannot publish one.** Publishing a profile compiles the decoder against the metrics being published and runs every saved vector, and refuses the publish naming the first expression or vector that fails. Rolling back to an earlier version runs the same check on that version, and refuses when its decoder no longer compiles or one of its vectors fails. A decoder can hold up to 20 vectors.
+You can save a decoder with failing vectors, so work in progress is never lost. **You cannot publish a profile while one of its vectors fails.** Publishing a profile compiles the decoder against the metrics being published and runs every saved vector, and refuses the publish naming the first expression or vector that fails. Rolling back to an earlier version runs the same check on that version, and refuses when its decoder no longer compiles or one of its vectors fails. A decoder can hold up to 20 vectors.
 
 Keep a vector for every message layout the device sends, and one for each case that once failed. They are how you know that changing a decoder did not change what an old message gives.
 
 ## The test panel {#test-panel}
 
-The **Test** panel of the Decoder tab runs the decoder **as it is in the editor, saved or not**, through the same code that runs at ingest, against the profile's draft metrics. Nothing is stored. Choose what to test with:
+The **Test** panel of the Decoder tab runs the decoder **as it is in the editor, saved or not**, with the platform's own compiler and evaluator, against the profile's draft metrics. Nothing is stored. Choose what to test with:
 
 - **Frame**: paste hex or base64 (whitespace is ignored, at most 4,096 bytes), and optionally an `fPort` and `fCnt`.
 - **JSON**: a JSON object, given to whichever of `json` or `decoded` the decoder reads.
@@ -153,10 +153,10 @@ The result shows:
 
 - **Decoded**, **Ignored** or **Failed**, and the name of the section that matched;
 - the **readings**, as they would be stored;
-- the keys **not stored**, each with its reason: `undeclared` (no such metric is declared), `collision` (a field row already writes the key) or `reserved`;
+- the keys **not stored**, each with its reason: `undeclared` (no such metric is declared), `collision` (another row already writes the key) or `reserved`;
 - on failure, the **reason**, the **expression** that failed (such as `sections[0].outputs[1].expr`), the message and the byte offset a reader refused;
 - the **cost** the decode spent;
-- every saved vector, passing or failing. **Save as vector** turns the input and result you are looking at into a vector.
+- every saved vector, passing or failing. **Save as vector** turns a successful Frame or JSON test into a vector; it needs permission to edit devices, and a webhook-body test cannot be saved directly.
 
 A document that does not compile is reported in the same place as an error, beside the editor, not as a request failure.
 
@@ -292,7 +292,7 @@ Declare the metrics on the device profile: `temperature` (double), `humidity` (d
 
 In the test panel, choose **Frame**, paste `00D75A0CE401`, set `fPort` to 2 and run: the readings are `temperature` 21.5, `humidity` 45, `battery` 3300 and `door` 1. Run the same frame with `fPort` 9 and the result is **Ignored**. Send only the first three bytes, `00D75A`, and the result is `eval_error` at `sections[0].outputs[2].expr`: `u16be: reads 2 byte(s) at offset 3 of a 3-byte frame (offset 3)`.
 
-To rehearse the whole request rather than the bytes, choose **Webhook body**, pick the ChirpStack integration and paste the body ChirpStack sends. The panel shows the frame and port it took from the body.
+To rehearse the whole request rather than the bytes, choose **Webhook body**, pick the ChirpStack integration and paste the body ChirpStack sends.
 
 ### The Things Stack: reshaping a decoded object {#example-tts}
 
@@ -377,7 +377,7 @@ A function's behaviour never changes once it has shipped. A fix arrives under a 
 
 ## Related {#related}
 
-- [Decoder function reference](../reference/decoder-functions.md): every function, its cost, and every limit.
+- [Decoder function reference](../reference/decoder-functions.md): the library's functions with their costs, and the limits.
 - [Inbound integrations](./inbound-integrations.md): the senders a decoder reads from.
 - [Device types and profiles](../user-guide/device-types-and-profiles.md): metrics, drafts and publishing.
 - [Transport capability matrix](../reference/transport-matrix.md#inbound-integrations): what each way in supports.

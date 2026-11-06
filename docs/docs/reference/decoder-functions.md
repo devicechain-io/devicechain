@@ -5,7 +5,7 @@ title: Decoder Function Reference
 
 # Decoder Function Reference {#decoder-functions}
 
-Every function a [payload decoder](../guides/payload-decoders.md) can call, and the limits a decoder is held to. This page is generated from the function library in the platform, so it cannot fall behind it.
+The functions of the [payload decoder](../guides/payload-decoders.md) library, and the limits a decoder is held to. This page is generated from the function library in the platform, so it cannot fall behind it. The language's own built-ins are not listed: `size`, `has` and the conversions `int`, `uint`, `double` and `bool`.
 
 ## Functions {#decoder-functions-library}
 
@@ -63,8 +63,8 @@ A decoder names the library version it was written for in `envVersion`; this pag
 
 | Function | Signature | What it does | Cost |
 | --- | --- | --- | --- |
-| `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 characters. | 1 per character of the text, at least 1 |
-| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 characters into at most 4096 bytes. | 1 per character of the text, at least 1 |
+| `hex.decode` | `hex.decode(string) -> bytes` | Decodes hexadecimal text (even length, no separators) of at most 8192 bytes. | 1 per byte of the text, at least 1 |
+| `base64.decode` | `base64.decode(string) -> bytes` | Decodes standard padded base64 text of at most 8192 bytes into at most 4096 bytes. | 1 per byte of the text, at least 1 |
 
 ### Codecs {#decoder-functions-codecs}
 
@@ -101,7 +101,7 @@ A decoder that is over a limit is refused when you save or publish it. An input 
 | Sections | 8 |
 | Readings one section can emit (scalar rows plus the `maxKeys` of map rows) | 64 |
 | Saved vectors | 20 |
-| Text given to `hex.decode` or `base64.decode`, in characters | 8,192 |
+| Text given to `hex.decode` or `base64.decode`, in bytes | 8,192 |
 | Literals in one `in` list | 16 |
 | A `let`, section or vector name, in bytes | 64 |
 | An output key or prefix, in bytes | 128 |
