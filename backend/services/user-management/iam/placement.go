@@ -98,8 +98,13 @@ func (s *Store) EnsurePlacement(ctx context.Context, p int) (partition.Table, er
 func (s *Store) Placement(ctx context.Context) (partition.Table, error) {
 	var table partition.Table
 	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		// 🔴 THE CONFIG ROW IS THE PLACEMENT'S LOCK. Under Postgres' default isolation the three
+		// reads below are three snapshots, so a change committing between them would hand back a
+		// table that never existed (new assignments under the old generation). Every change takes
+		// this row FOR UPDATE first (changePlacement), so reading it FOR SHARE waits out a change
+		// in flight and keeps one from starting until this read is done.
 		var cfg PartitionConfig
-		if err := tx.First(&cfg, partitionConfigID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&cfg, partitionConfigID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrPlacementNotInitialized
 			}
@@ -195,10 +200,14 @@ func (s *Store) ClearTenantOverride(ctx context.Context, tenantToken string) err
 
 // changePlacement runs one change and bumps the generation in the same transaction, so a reader
 // never sees a changed table under the old generation.
+//
+// It takes the config row FOR UPDATE before anything else, which serializes every change and every
+// read of the placement: two overrides cannot both pass the count check at the limit and
+// together exceed it, and a reader never straddles a change.
 func (s *Store) changePlacement(ctx context.Context, change func(tx *gorm.DB, cfg PartitionConfig) error) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		var cfg PartitionConfig
-		if err := tx.First(&cfg, partitionConfigID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cfg, partitionConfigID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrPlacementNotInitialized
 			}

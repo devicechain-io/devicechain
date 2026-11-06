@@ -12,28 +12,65 @@ import (
 
 type mapBucket struct {
 	m      map[string][]byte
+	rev    map[string]uint64
+	next   uint64
 	putErr error
 	getErr error
 	puts   int
+	// beforeWrite runs at the start of every Create/Update, to let a test slip a concurrent
+	// writer in between Publish's read and its write.
+	beforeWrite func()
 }
 
-func newMapBucket() *mapBucket { return &mapBucket{m: map[string][]byte{}} }
+func newMapBucket() *mapBucket {
+	return &mapBucket{m: map[string][]byte{}, rev: map[string]uint64{}}
+}
 
-func (b *mapBucket) Put(k string, v []byte) error {
+func (b *mapBucket) store(k string, v []byte) {
+	b.next++
+	b.puts++
+	b.m[k] = append([]byte(nil), v...)
+	b.rev[k] = b.next
+}
+
+func (b *mapBucket) Get(k string) ([]byte, uint64, bool, error) {
+	if b.getErr != nil {
+		return nil, 0, false, b.getErr
+	}
+	v, ok := b.m[k]
+	return v, b.rev[k], ok, nil
+}
+
+func (b *mapBucket) Create(k string, v []byte) error {
+	if b.beforeWrite != nil {
+		hook := b.beforeWrite
+		b.beforeWrite = nil
+		hook()
+	}
 	if b.putErr != nil {
 		return b.putErr
 	}
-	b.puts++
-	b.m[k] = append([]byte(nil), v...)
+	if _, ok := b.m[k]; ok {
+		return ErrConflict
+	}
+	b.store(k, v)
 	return nil
 }
 
-func (b *mapBucket) Get(k string) ([]byte, bool, error) {
-	if b.getErr != nil {
-		return nil, false, b.getErr
+func (b *mapBucket) Update(k string, v []byte, rev uint64) error {
+	if b.beforeWrite != nil {
+		hook := b.beforeWrite
+		b.beforeWrite = nil
+		hook()
 	}
-	v, ok := b.m[k]
-	return v, ok, nil
+	if b.putErr != nil {
+		return b.putErr
+	}
+	if b.rev[k] != rev {
+		return ErrConflict
+	}
+	b.store(k, v)
+	return nil
 }
 
 func sampleTable() Table {
@@ -144,4 +181,77 @@ func TestDecodeRefusesWhatItWouldHalfUnderstand(t *testing.T) {
 	require.NoError(t, err)
 	_, err = Decode([]byte(`{"p":64,"groups":[0]}`))
 	require.Error(t, err, "a short group list must not decode into a routable table")
+}
+
+// 🔑 TWO PUBLISHERS MUST NOT DECIDE P TWICE: a rival that creates the entry with another P
+// between this publisher's read (nothing there) and its write makes the write a conflict, and the
+// retry then sees the rival's P and refuses.
+func TestARacingPublisherWithAnotherPLosesAtTheWrite(t *testing.T) {
+	b := newMapBucket()
+	b.beforeWrite = func() {
+		raw, err := Encode(NewTable(DefaultP * 2))
+		require.NoError(t, err)
+		b.store(TableKey, raw)
+	}
+	err := Publish(b, sampleTable())
+	require.True(t, errors.Is(err, ErrPChanged), "%v", err)
+	got, err := Load(b)
+	require.NoError(t, err)
+	require.Equal(t, DefaultP*2, got.P, "the rival's entry must stand")
+}
+
+// A replica holding an old read must not move the mirror backwards.
+func TestAStaleReplicaCannotRegressTheMirror(t *testing.T) {
+	b := newMapBucket()
+	newer := sampleTable()
+	newer.Generation = 9
+	older := sampleTable()
+	older.Generation = 8
+
+	require.NoError(t, Publish(b, newer))
+	err := Publish(b, older)
+	require.True(t, errors.Is(err, ErrStale), "%v", err)
+	require.NoError(t, Verify(b, newer))
+}
+
+// The same race, lost at the write rather than seen at the read: a newer table lands between the
+// stale publisher's read and its write.
+func TestAStaleWriteThatLosesTheRaceIsRefusedOnRetry(t *testing.T) {
+	b := newMapBucket()
+	older := sampleTable()
+	older.Generation = 3
+	require.NoError(t, Publish(b, older))
+
+	newer := sampleTable()
+	newer.Generation = 4
+	b.beforeWrite = func() {
+		raw, err := Encode(newer)
+		require.NoError(t, err)
+		b.store(TableKey, raw)
+	}
+	stale := sampleTable()
+	stale.Generation = 3
+	err := Publish(b, stale)
+	require.True(t, errors.Is(err, ErrStale), "%v", err)
+	require.NoError(t, Verify(b, newer))
+}
+
+func TestTwoAuthoritiesAtOneGenerationAreDivergent(t *testing.T) {
+	b := newMapBucket()
+	require.NoError(t, Publish(b, sampleTable()))
+	other := sampleTable()
+	other.Groups[40] = 5
+	err := Publish(b, other)
+	require.True(t, errors.Is(err, ErrDivergent), "%v", err)
+	require.NoError(t, Verify(b, sampleTable()))
+}
+
+func TestANewerGenerationReplacesTheMirror(t *testing.T) {
+	b := newMapBucket()
+	require.NoError(t, Publish(b, sampleTable()))
+	next := sampleTable()
+	next.Generation++
+	next.Groups[40] = 5
+	require.NoError(t, Publish(b, next))
+	require.NoError(t, Verify(b, next))
 }

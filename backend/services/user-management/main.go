@@ -482,11 +482,15 @@ func initPlacement(ctx context.Context) error {
 	if _, err := store.EnsurePlacement(ctx, partition.DefaultP); err != nil {
 		return fmt.Errorf("recording the instance placement: %w", err)
 	}
-	placementKV, err := NatsManager.PartitionPlacementStore()
-	if err != nil {
-		return err
-	}
-	bucket := partition.FromKeyValue(placementKV)
+	// The bucket is opened on first use and retried, never eagerly: a broker that cannot open it
+	// must not stop a service that nothing yet routes through the mirror of.
+	bucket := placement.NewLazyBucket(func() (partition.Bucket, error) {
+		placementKV, err := NatsManager.PartitionPlacementStore()
+		if err != nil {
+			return nil, err
+		}
+		return partition.FromKeyValue(placementKV), nil
+	})
 	if err := placement.Sync(ctx, store, bucket); err != nil {
 		if placement.IsFatal(err) {
 			return fmt.Errorf("mirroring the instance placement: %w", err)
