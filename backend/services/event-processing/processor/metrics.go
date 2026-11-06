@@ -266,7 +266,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		// is flat in the samples a long window holds — a 30-day window on one series is one key. This
 		// pair is what a long-window memory overrun actually moves.
 		retainedSamples:                 ms.NewGauge("detect_retained_samples", "Total per-sample records retained by window-shaped rules across all tenants (repeating/sliding-aggregate windows and correlation members)."),
-		pendingTimers:                   ms.NewGauge("detect_pending_timers", "Entries in the timer wheel's pending-deadline heap. Grows per EVENT for absence/session rules (a deadline reset pushes a new entry and the superseded one lingers until its deadline), so neither of the two gauges above can see it."),
+		pendingTimers:                   ms.NewGauge("detect_pending_timers", "Entries in the timer wheel's pending-deadline heap: one per key with an armed absence, session, duration or held-resolve timer (a deadline reset moves the key's entry)."),
 		tenantsOverRetainedSampleBudget: ms.NewGauge("detect_tenants_over_retained_sample_budget", "Tenants currently exceeding the per-tenant retained-sample budget (ADR-023)."),
 
 		factRepairs: ms.NewCounterVec("detect_fact_reconcile_repairs_total",

@@ -533,6 +533,7 @@ dcctl bootstrap local devicechain
 - **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
+- **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}

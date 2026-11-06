@@ -51,7 +51,7 @@ El techo predeterminado de 24 horas se aplica a todo lapso de tiempo que declara
 
 El techo existe porque una regla con ventana guarda **un registro por lectura** durante toda la ventana, por dispositivo, en un motor compartido por todos los inquilinos. Una ventana de varios días sobre una flota que reporta cada pocos segundos es una gran cantidad de memoria retenida indefinidamente. Ese costo lo paga todo el mundo en la instancia, no solo el inquilino que autoró la regla.
 
-Los tiempos de espera de silencio y los huecos de sesión también están limitados, aunque no retengan lecturas. Esas reglas rearman un temporizador cada vez que un dispositivo reporta, y los temporizadores sustituidos no se liberan hasta que vence su plazo. Por eso un tiempo de espera largo con reportes frecuentes se acumula de la misma manera.
+Los tiempos de espera de silencio y los huecos de sesión también están limitados, aunque no retengan lecturas. Esas reglas guardan un temporizador por dispositivo y lo mueven cada vez que el dispositivo reporta, de modo que su memoria sigue el número de dispositivos y no la frecuencia de los reportes.
 
 Si necesitas un lapso mayor, un operador puede subir el límite de la instancia ([`maxRuleDurationSeconds`](../deployment/detection-engine.md#configuration)) tras dimensionar la memoria. Antes de pedirlo, considera si la pregunta trata en realidad de *retención* más que de *detección*. Una pregunta del tipo «comparar contra el mes pasado» suele responderse mejor consultando el historial almacenado que reteniendo un mes de lecturas en memoria.
 

@@ -1636,7 +1636,7 @@
    "id": 44,
    "type": "timeseries",
    "title": "Retained samples and pending timers",
-   "description": "The other two memory axes. Retained samples are the per-sample records held by window-shaped rules across all tenants; a long-window rule on one busy device moves this and not live keys. Pending timers are the entries waiting in the timer heap; a long absence or session timeout under frequent reporting moves this and not the other two. Pending timers are instance-wide and have no per-tenant budget.",
+   "description": "The other two memory axes. Retained samples are the per-sample records held by window-shaped rules across all tenants; a long-window rule on one busy device moves this and not live keys. Pending timers are the entries waiting in the timer heap, one per armed absence, session or hold timer; this follows armed keys, not how often they report. Pending timers are instance-wide and have no per-tenant budget.",
    "gridPos": {
     "h": 8,
     "w": 12,

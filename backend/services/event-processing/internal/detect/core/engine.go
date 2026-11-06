@@ -634,9 +634,8 @@ func (e *Engine) SeriesKeys() []SeriesKey {
 // for the set rather than trusting a count in prose — one written here went stale the moment the
 // presence cursor was added); the pane map + close heap are swept ONLY for Aggregate (the sole
 // kind that opens them), so every other kind skips the O(all-panes)/O(heap) walk; and the timer
-// is cancelled LAZILY (an O(1) generation bump)
-// only when the key actually has a live timer — the snapshot persists only live timers, so the
-// invalidated entry never reaches durability and popDue discards it when its deadline passes.
+// is cancelled (an O(log n) heap.Remove, plus a generation bump that keeps the snapshot's
+// generation table what it always was) only when the key actually has a live timer.
 func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n := 0
 	n += dropOneKey(e.runs, key)
@@ -760,15 +759,13 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 // already fully described by its key count and adding it here would double-count the same memory
 // under a second name.
 //
-// 🔴 It is NOT the whole of the engine's per-event retention, and must not be described as such.
-// The timer wheel's pending-deadline HEAP also grows per event (Absence/Session push a fresh
-// timer on every reset and the superseded entry lingers until its deadline passes), and this
-// gauge reads 0 for it. PendingTimerCount is that axis; the state budget reads all three.
+// The timer wheel's pending-deadline heap holds one entry per armed key (a reset moves the entry),
+// so it needs no gauge of its own for retention; PendingTimerCount reads it directly.
 //
-// One known under-count within what it does cover: slidingState keeps minDq/maxDq alongside buf,
-// so a min/max sliding aggregate over monotone data holds up to ~3× the counted records. Those
-// grow in the same class as buf, so the gauge still MOVES on the overrun — it is a constant
-// factor, not a blind spot, and buf is the honest unit to count.
+// One known under-count within what it does cover: a min/max sliding window keeps minDq/maxDq
+// alongside buf (sum/avg/count windows build none), so over monotone data it holds up to ~3x the
+// counted records. Those grow in the same class as buf, so the gauge still MOVES on the overrun —
+// it is a constant factor, not a blind spot, and buf is the honest unit to count.
 //
 // This is what makes a long-window overrun visible: a 30-day window on one busy series is a single
 // live key but hundreds of thousands of retained samples, so the number that should alarm is this
@@ -799,29 +796,15 @@ func (e *Engine) RetainedSampleCounts() map[string]int {
 	return counts
 }
 
-// PendingTimerCount returns the total number of entries in the timer wheel's pending-deadline
-// heap — the THIRD memory axis, and the one neither map-based gauge above can see.
+// PendingTimerCount returns the number of entries in the timer wheel's pending-deadline heap: one
+// per key with an armed Absence, Session, Duration or held-resolve timer. It tracks armed keys, not
+// events, because a deadline reset moves the key's entry instead of pushing another; before that
+// change superseded entries lingered until their deadline and the heap grew with timeout x rate
+// (an Absence rule at a 24h timeout on a device reporting every 10s carried ~8,640 per series).
+// The number is still worth its own gauge: Absence arms a wheel entry per reporting device with no
+// state-map entry beside it, and the rules.MaxRuleDuration ceiling bounds how long each stays.
 //
-// It is separate because the heap grows with EVENTS, not with keys or with retained samples.
-// Absence and Session reset their deadline on every qualifying event via scheduleForward, and a
-// reset PUSHES a new timer while the superseded one stays in the heap until popDue reaches its
-// deadline (it is invalidated by a generation bump, not removed — see timers.go). So a series
-// holds roughly timeout/reporting-interval stale entries in steady state: an Absence rule at a
-// 24h timeout on a device reporting every 10s carries ~8,640 of them, while LiveKeyCounts reads
-// 1 for that series and RetainedSampleCounts reads 0 (it retains no samples).
-//
-// That is the same shape as the defect the retained-sample gauge was added for, one structure
-// over, which is why it gets its own number rather than a comment. It is also the real reason
-// the rules.MaxRuleDuration ceiling applies to the TIMER-shaped kinds and not only the
-// window-shaped ones: a longer absence timeout costs heap in direct proportion to its length.
-//
-// It is an AGGREGATE only — no per-rule or per-tenant breakdown. Attributing heap entries would
-// mean walking the whole heap on every checkpoint (O(pq), the very thing that is large when this
-// matters); Len() is O(1). An operator who sees this climb finds the offender through the rule
-// inventory, not through a label.
-//
-// A Duration kept break does NOT grow it per event: its expiry re-arms lazily when it fires
-// (fireDuration), so a device reporting non-matching values pushes at most one timer per hold.
+// It is an AGGREGATE only — no per-rule or per-tenant breakdown; Len() is O(1).
 func (e *Engine) PendingTimerCount() int { return e.wheel.pq.Len() }
 
 // SetExpected arms (or refreshes) the dead-man absence timer for a series the runtime resolved
