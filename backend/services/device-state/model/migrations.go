@@ -34,5 +34,6 @@ var (
 		NewDroppedMeasurementsSchema(),
 		NewProjectionStorageSchema(),
 		NewInactivityAlarmTimeRestoreSchema(),
+		NewInactivityAlarmTimeRestoreFinalPassSchema(),
 	}
 )
