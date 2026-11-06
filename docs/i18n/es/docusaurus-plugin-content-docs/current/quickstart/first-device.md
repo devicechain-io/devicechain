@@ -35,7 +35,7 @@ segundos y no diez minutos.
   publica para la consola, HTTPS y MQTT, y crearlo falla si otro programa (a menudo otro clúster
   local de Kubernetes) ya ocupa alguno. `dcctl preflight local` nombra quién lo ocupa antes de
   empezar.
-- **En Linux, un límite de inotify más alto.** Los contenedores de nodo de kind necesitan `fs.inotify.max_user_instances` de al menos 256, y Ubuntu 24.04 de serie trae 128, por lo que la creación del clúster falla a medias. `dcctl preflight local` falla e imprime el comando que hay que ejecutar. La primera línea sube el límite (la segunda, `max_user_watches`, es solo un aviso) y `/etc/sysctl.d` lo conserva tras los reinicios:
+- **En Linux, un límite de inotify más alto.** `dcctl preflight local` exige `fs.inotify.max_user_instances` de al menos 256 para un clúster local de kind, y Ubuntu 24.04 de serie trae 128, por lo que falla e imprime el comando que hay que ejecutar. La primera línea sube el límite (la segunda, `max_user_watches`, es solo un aviso) y `/etc/sysctl.d` lo conserva tras los reinicios:
 
   ```bash
   echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf

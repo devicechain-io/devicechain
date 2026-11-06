@@ -33,7 +33,7 @@ tools is missing. A gap costs you the first ten seconds rather than ten minutes.
 - Ports **80**, **443** and **1883** on your machine must be free. The kind cluster publishes them
   for the console, HTTPS and MQTT, and creating it fails if another program (often another local
   Kubernetes cluster) already holds one. `dcctl preflight local` names the holder before you start.
-- **On Linux, a raised inotify limit.** The kind node containers need `fs.inotify.max_user_instances` of at least 256, and a stock Ubuntu 24.04 ships 128, so `dcctl preflight local` fails
+- **On Linux, a raised inotify limit.** `dcctl preflight local` requires `fs.inotify.max_user_instances` of at least 256 for a local kind cluster, and a stock Ubuntu 24.04 ships 128, so it fails
   on it and prints the command to run. The first line raises
   the limit (the second, `max_user_watches`, is only a warning) and `/etc/sysctl.d` keeps it
   across reboots:
