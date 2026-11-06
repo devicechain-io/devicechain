@@ -175,6 +175,24 @@ func TestTheSweepAndABatchCannotDeadlock(t *testing.T) {
 	if d := deadlocksOf(t, api) - before; d != 0 {
 		t.Errorf("the server counted %d deadlocks; want 0 (swept %d)", d, swept)
 	}
+	// The positive control: "no deadlock" is trivially true of a sweep that did nothing. The
+	// sweep skipped the row the batch held (x) and flipped the one it did not (y).
+	if swept != 1 {
+		t.Errorf("the sweep flipped %d rows; want exactly 1 (y, with x held by the batch)", swept)
+	}
+	if activeOf(t, api, "dl", "dl-y") {
+		t.Error("the unheld stale device (y) was not flipped")
+	}
+	if !activeOf(t, api, "dl", "dl-x") {
+		t.Error("the device the batch held (x) was flipped under it")
+	}
+	// And x was left for the next pass, not lost.
+	if n, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt()); err != nil || n != 1 {
+		t.Errorf("the next sweep = %d, %v; want 1, nil (x, left behind)", n, err)
+	}
+	if activeOf(t, api, "dl", "dl-x") {
+		t.Error("the left-behind device (x) was not flipped by the next pass")
+	}
 }
 
 // Two sweeps and several batches over one set of stale rows, for a few seconds: nothing
@@ -192,7 +210,7 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	var sweepErrs, batchErrs atomic.Int64
+	var sweepErrs, batchErrs, swept atomic.Int64
 	var firstErr atomic.Value
 	for s := 0; s < 2; s++ {
 		wg.Add(1)
@@ -204,10 +222,12 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 					return
 				default:
 				}
-				if _, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt()); err != nil {
+				n, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt())
+				if err != nil {
 					sweepErrs.Add(1)
 					firstErr.CompareAndSwap(nil, err.Error())
 				}
+				swept.Add(n)
 			}
 		}()
 	}
@@ -244,6 +264,24 @@ func TestTwoSweepsAndBatchesDoNotDeadlock(t *testing.T) {
 	}
 	if d := deadlocksOf(t, api) - before; d != 0 {
 		t.Errorf("the server counted %d deadlocks; want 0", d)
+	}
+	// The positive control: "no deadlock" is trivially true if no work happened. The sweeps
+	// must have flipped rows while the batches ran, and once the contention stops one more pass
+	// must leave no stale device active (the batches reactivate devices, with an old activity
+	// time, so all of them are stale again).
+	if swept.Load() == 0 {
+		t.Error("the sweeps flipped no row in four seconds over stale devices: they did no work")
+	}
+	if _, err := api.SweepInactive(core.WithSystemContext(context.Background()), sweepAt()); err != nil {
+		t.Fatalf("final sweep: %v", err)
+	}
+	var stillActive int64
+	if err := api.RDB.DB(core.WithTenant(context.Background(), "tw")).Model(&DeviceState{}).
+		Where("active = ?", true).Count(&stillActive).Error; err != nil {
+		t.Fatalf("count active: %v", err)
+	}
+	if stillActive != 0 {
+		t.Errorf("%d stale devices are still active after an uncontended sweep", stillActive)
 	}
 }
 
