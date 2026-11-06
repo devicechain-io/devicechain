@@ -62,6 +62,7 @@ var useMethods = map[string]useCall{
 	"NewDistributedLock":             {role: useBucket, arg: -1, bucket: "dc_locks"},
 	"CredentialAttemptStore":         {role: useBucket, arg: -1, bucket: "dc_credential_attempts"},
 	"DeviceCredentialAttemptStore":   {role: useBucket, arg: -1, bucket: "dc_device_credential_attempts"},
+	"PartitionPlacementStore":        {role: useBucket, arg: -1, bucket: "dc_partition_placement"},
 	"SparkplugCommandsAwaitingStore": {role: useBucket, arg: -1, bucket: "dc_sparkplug_commands_awaiting"},
 }
 

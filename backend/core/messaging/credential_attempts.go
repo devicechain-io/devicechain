@@ -45,3 +45,12 @@ func (nmgr *NatsManager) SparkplugCommandsAwaitingStore() (nats.KeyValue, error)
 	return nmgr.KeyValueStore(kv.BucketSparkplugCommandsAwaiting,
 		SparkplugCommandsAwaitingBucketName(nmgr.Microservice.InstanceId), b.TTL)
 }
+
+// PartitionPlacementStore returns the instance's bucket holding the mirrored placement table
+// (core/partition), creating it if it does not exist. user-management writes it; nothing routes
+// by it yet.
+func (nmgr *NatsManager) PartitionPlacementStore() (nats.KeyValue, error) {
+	b, _ := kv.Lookup(kv.BucketPartitionPlacement)
+	return nmgr.KeyValueStore(kv.BucketPartitionPlacement,
+		PartitionPlacementBucketName(nmgr.Microservice.InstanceId), b.TTL)
+}

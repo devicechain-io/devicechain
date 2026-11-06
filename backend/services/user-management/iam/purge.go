@@ -468,6 +468,22 @@ func (s *Store) CompleteTenantPurge(ctx context.Context, t *Tenant, rec *TenantP
 			return fmt.Errorf("refusing to complete: removing tenant %q at id %d affected %d rows, "+
 				"expected 1 — the row is not in %s", t.Token, t.ID, out.RowsAffected, PurgePurging)
 		}
-		return nil
+		// The placement pin is retained through the purge (the sweep finds the tenant's stores
+		// through it) and cleared here, with the token. A pin that outlived the release would be
+		// inherited by whoever next takes the token. Lock order is tenant row (deleted above),
+		// then the placement config row, as in SetTenantOverride.
+		pins := tx.Where("tenant_token = ?", t.Token).Delete(&TenantVPartitionOverride{})
+		if pins.Error != nil {
+			return pins.Error
+		}
+		if pins.RowsAffected == 0 {
+			return nil
+		}
+		var cfg PartitionConfig
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cfg, partitionConfigID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&PartitionConfig{}).Where("id = ?", partitionConfigID).
+			UpdateColumn("generation", gorm.Expr("generation + 1")).Error
 	})
 }

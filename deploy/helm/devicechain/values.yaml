@@ -290,7 +290,7 @@ instance:
         # that scale with fleet size, so they are the ones that must carry the smaller
         # bound. See kv.All in backend/core/kv for the per-bucket classification.
         kvCacheMaxBytes: 67108864 # 64 MiB per cache bucket (5 buckets)
-        kvStateMaxBytes: 134217728 # 128 MiB per state bucket (6 buckets)
+        kvStateMaxBytes: 134217728 # 128 MiB per state bucket (11 buckets; the placement mirror declares its own 4 MiB)
         # How the plain durable readers pull from the broker (defaults shown). Optional;
         # omitted, a reader asks for 256 messages and asks for the next batch while it hands
         # out the current one. This is a fixed setting read when a reader is built, so

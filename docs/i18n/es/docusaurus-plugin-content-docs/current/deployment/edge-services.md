@@ -896,8 +896,8 @@ escribas la regla tú mismo. El agente de borde no tiene ninguna alerta distribu
 
 Todas las métricas llevan el prefijo `devicechain_` y el segmento de su propio servicio:
 `devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. Ninguna está
-etiquetada por dispositivo. Solo `command_breaker_state` lleva las etiquetas `tenant` y `source`, acotadas
-por las fuentes que configuras, así que ninguna supone un riesgo de cardinalidad al recogerla.
+etiquetada por dispositivo. Solo `command_breaker_state` lleva las etiquetas `tenant`, `vpartition` y `source`, acotadas
+por las fuentes que configuras (`vpartition` es función del tenant y tiene como máximo 64 valores, así que no añade series), así que ninguna supone un riesgo de cardinalidad al recogerla.
 
 ### Alertas que se distribuyen {#edge-alerts}
 
@@ -971,7 +971,7 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `commands_total` | Comandos que gestionó el canal descendente, por `result`. Resultados: `published`, `confirmed`, `confirmed_unchanged`, `unconfirmed`, `superseded`, `rearmed`, `parked`, `drained`; rechazos: `refused_disabled`, `refused_breaker`, `refused_expired`, `refused_payload`, `refused_not_allowed`, `refused_metric`, `refused_datatype`, `refused_reboot_gate`; que no son de este servicio: `not_served`, `poison`, `claim_lost`, `tenant_gone`; fallos: `claim_failed`, `park_failed`, `publish_failed`, `kv_failed`, `response_failed`. Es cero hasta que una fuente habilita los comandos. Alimenta `SparkplugCommandsUnconfirmed` (sin confirmar sobre publicados) y `SparkplugCommandResponsesFailing` (los cinco fallos). |
 | `commands_awaiting` | Comandos publicados a la espera de que el nodo informe del valor solicitado. |
 | `command_confirm_seconds` | Cuánto tardaron los comandos confirmados desde la publicación hasta el informe del nodo. Los comandos sin confirmar no se observan aquí. |
-| `command_breaker_state` | Por `tenant` y `source`: 0 cerrado, 1 abierto (los comandos fallan al instante), 2 semiabierto (se deja pasar un comando). Alimenta `SparkplugCommandBreakerOpen`. |
+| `command_breaker_state` | Por `tenant`, `vpartition` (el carril de colocación del tenant, 0-63) y `source`: 0 cerrado, 1 abierto (los comandos fallan al instante), 2 semiabierto (se deja pasar un comando). Alimenta `SparkplugCommandBreakerOpen`. |
 | `command_breaker_trips_total` | Veces que se ha abierto un cortacircuitos. Una tasa aquí con `SparkplugCommandBreakerOpen` en silencio indica un broker que cerró la sesión una vez. |
 
 ### Métricas de la ingesta LwM2M {#lwm2m-ingestion-metrics}

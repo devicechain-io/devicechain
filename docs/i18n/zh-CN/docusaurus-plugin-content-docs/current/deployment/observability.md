@@ -288,7 +288,7 @@ dcctl upgrade local my-instance --values runway.yaml
 | 10,000 | 3.2 GiB | 3.2 GiB | 3.8 GiB | 22Gi | 24Gi |
 | 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi | 36Gi |
 
-“刚好放得下的卷”是其 `max_file_store` 能容纳该预留的最小卷，已计入其他流、MQTT 网关的存储和键值桶（默认合计约 8.6 GiB）；20,000 一行的余量不足 100 MiB。请使用较大的数值，它为后续版本新增的流和桶留出空间。`dcctl` 没有设置 JetStream 卷大小的选项。StatefulSet 的卷声明无法原地修改，因此扩容是手动步骤：
+“刚好放得下的卷”是其 `max_file_store` 能容纳该预留的最小卷，已计入其他流、MQTT 网关的存储和键值桶（默认合计约 8.7 GiB）；20,000 一行的余量不足 100 MiB。请使用较大的数值，它为后续版本新增的流和桶留出空间。`dcctl` 没有设置 JetStream 卷大小的选项。StatefulSet 的卷声明无法原地修改，因此扩容是手动步骤：
 
 ```bash
 kubectl -n dci-my-instance delete statefulset dc-nats --cascade=orphan

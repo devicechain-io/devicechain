@@ -1282,6 +1282,15 @@ const DefaultGraphQLMaxSubscriptionMessageBytes int64 = 4 << 20
 // tier (kv.All). An unregistered bucket takes the state ceiling — see kv.TierFor
 // for why the unknown case takes the larger one.
 func (c *NatsConfiguration) KvMaxBytesFor(bucket string) int64 {
+	ceiling := c.tierKvMaxBytes(bucket)
+	// A bucket may declare a smaller ceiling of its own (kv.Bucket.MaxBytes); never a larger one.
+	if b, ok := kv.Lookup(bucket); ok && b.MaxBytes > 0 && b.MaxBytes < ceiling {
+		return b.MaxBytes
+	}
+	return ceiling
+}
+
+func (c *NatsConfiguration) tierKvMaxBytes(bucket string) int64 {
 	if kv.TierFor(bucket) == kv.Cache {
 		if c.KvCacheMaxBytes > 0 {
 			return c.KvCacheMaxBytes

@@ -848,8 +848,9 @@ the rule yourself. The edge agent has no shipped alert at all.
 
 All metrics carry the `devicechain_` prefix and their service's own segment:
 `devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. None of them is
-labelled per device. Only `command_breaker_state` carries `tenant` and `source` labels, and those are
-bounded by the sources you configure, so none of them is a cardinality risk to scrape.
+labelled per device. Only `command_breaker_state` carries `tenant`, `vpartition` and `source` labels, and those are
+bounded by the sources you configure (`vpartition` is a function of the tenant with at most 64 values, so it
+adds no series), so none of them is a cardinality risk to scrape.
 
 ### Alerts that ship {#edge-alerts}
 
@@ -921,7 +922,7 @@ Prefix: `devicechain_sparkplugingest_`.
 | `commands_total` | Commands the downlink handled, by `result`. Outcomes: `published`, `confirmed`, `confirmed_unchanged`, `unconfirmed`, `superseded`, `rearmed`, `parked`, `drained`; refusals: `refused_disabled`, `refused_breaker`, `refused_expired`, `refused_payload`, `refused_not_allowed`, `refused_metric`, `refused_datatype`, `refused_reboot_gate`; not this service's: `not_served`, `poison`, `claim_lost`, `tenant_gone`; faults: `claim_failed`, `park_failed`, `publish_failed`, `kv_failed`, `response_failed`. Zero until a source enables commands. Feeds `SparkplugCommandsUnconfirmed` (unconfirmed over published) and `SparkplugCommandResponsesFailing` (the five faults). |
 | `commands_awaiting` | Published commands waiting for the node to report the requested value. |
 | `command_confirm_seconds` | How long confirmed commands took from publish to the node's report. Unconfirmed commands are not observed here. |
-| `command_breaker_state` | Per `tenant` and `source`: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). Feeds `SparkplugCommandBreakerOpen`. |
+| `command_breaker_state` | Per `tenant`, `vpartition` (the tenant's placement lane, 0-63) and `source`: 0 closed, 1 open (commands fail fast), 2 half-open (one command is let through). Feeds `SparkplugCommandBreakerOpen`. |
 | `command_breaker_trips_total` | Times a breaker has opened. A rate here with `SparkplugCommandBreakerOpen` quiet is a broker that dropped the session once. |
 
 ### LwM2M ingestion metrics {#lwm2m-ingestion-metrics}
