@@ -60,7 +60,7 @@ const (
 
 const (
 	eventStoreMaxWALUsage     = "set the event store's max_wal_size, in MiB (at least 64). An upgrade derives it as a fifth of the event store volume, never below 1024, so a store close to full can keep the previous allowance with 1024. 0 returns to the derived value. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
-	eventStoreCheckpointUsage = "set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
+	eventStoreCheckpointUsage = "set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). An empty value returns to the default. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
 )
 
 // eventStoreIntFlag and eventStoreStringFlag turn a flag's (given, value) pair into the pointer

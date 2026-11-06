@@ -14,16 +14,19 @@ package bootstrap
 //
 //   - the flags --event-store-max-wal-mib and --event-store-checkpoint-timeout on
 //     `dcctl upgrade`, which reach the root variables of the same names. They are passed to
-//     the plan (so --dry-run shows their effect) and, once the apply succeeds, written to a
-//     variable file beside the instance's state so that every LATER upgrade keeps them. A
+//     the plan (so --dry-run shows their effect) and, just before the apply starts, written to
+//     a variable file beside the instance's state so that every LATER upgrade keeps them. A
 //     value passed only with -var would be reverted by the next flagless run, which is the
-//     silent revert the tuning overlay exists to prevent;
+//     silent revert the tuning overlay exists to prevent. They are written BEFORE the apply,
+//     not after it and the outputs read: the apply can reload the store and then fail, and a
+//     flagless retry would then re-derive the value the operator had just replaced;
 //   - a one-line notice, printed with the plan, when the effective max_wal_size rises;
 //   - a WARNING, not a refusal, when the volume's free space is below the new allowance.
 //
-// 🔴 WHY A WARNING AND NOT A REFUSAL. max_wal_size is a soft limit: pg_wal reaches it only
-// when checkpoints are requested faster than they complete or archiving falls behind, and
-// a store with little free space may be perfectly healthy at its current rate. Refusing
+// 🔴 WHY A WARNING AND NOT A REFUSAL. max_wal_size is a soft target for checkpoints, not a bound
+// on pg_wal: the log grows past it whenever checkpoints cannot keep up or archiving falls
+// behind, and a store with little free space may still be perfectly healthy at its current
+// rate. Refusing
 // would block an upgrade that has a one-flag remedy and that is safe for most such stores,
 // and the free-space reading is itself best effort (it execs df in the primary pod, which
 // can fail). The other preflights that refuse are refusals of things that cost data
@@ -54,6 +57,13 @@ const (
 
 	varMaxWALMiB         = "timescale_max_wal_size_mib"
 	varCheckpointTimeout = "timescale_checkpoint_timeout"
+
+	// defaultCheckpointTimeout is the root's own default for timescale_checkpoint_timeout, what
+	// --event-store-checkpoint-timeout="" returns to. It is passed and recorded as a value, as 0 is
+	// for the allowance: the variable has no "derive it" form (its validation rejects an empty
+	// string), and removing a recorded entry would not change THIS run's plan, which already read
+	// the file. A test pins it to the root's default.
+	defaultCheckpointTimeout = "15min"
 
 	// stockMaxWALMiB is Postgres's own max_wal_size, what an event store that was never given
 	// one runs with.
@@ -96,18 +106,35 @@ func eventStoreTuningVars(st *State) []string {
 	if st.EventStoreMaxWALMiB != nil {
 		out = append(out, fmt.Sprintf("%s=%d", varMaxWALMiB, *st.EventStoreMaxWALMiB))
 	}
-	if st.EventStoreCheckpointTimeout != nil && *st.EventStoreCheckpointTimeout != "" {
-		out = append(out, varCheckpointTimeout+"="+*st.EventStoreCheckpointTimeout)
+	if v := checkpointTimeoutValue(st); v != "" {
+		out = append(out, varCheckpointTimeout+"="+v)
 	}
 	return out
+}
+
+// checkpointTimeoutValue is the value this run's flag sets: "" when it was not given, the root's
+// default when it was given empty (the documented reset), otherwise what was given.
+func checkpointTimeoutValue(st *State) string {
+	switch {
+	case st.EventStoreCheckpointTimeout == nil:
+		return ""
+	case *st.EventStoreCheckpointTimeout == "":
+		return defaultCheckpointTimeout
+	default:
+		return *st.EventStoreCheckpointTimeout
+	}
 }
 
 // writeEventStoreVarFile records the flags this run was given beside the instance's state, so
 // later upgrades keep them. A zero allowance is recorded as zero, not removed: the root reads 0 as
 // "derive it again", and removing the entry would let a value the operator declared in another
-// file come back on the next upgrade. Called only after the apply succeeded: a rehearsal or a refused plan persists nothing.
+// file come back on the next upgrade. An empty checkpoint timeout is the reset and is recorded as the
+// root's default, for the same reason.
+//
+// Called once the plan has been judged and just before it is applied: a rehearsal or a refused plan
+// persists nothing, and an apply that fails part-way has still recorded what the operator asked for.
 func writeEventStoreVarFile(rootdir string, st *State) error {
-	if st.EventStoreMaxWALMiB == nil && (st.EventStoreCheckpointTimeout == nil || *st.EventStoreCheckpointTimeout == "") {
+	if st.EventStoreMaxWALMiB == nil && st.EventStoreCheckpointTimeout == nil {
 		return nil
 	}
 	path := filepath.Join(rootdir, eventStoreVarFile)
@@ -122,8 +149,8 @@ func writeEventStoreVarFile(rootdir string, st *State) error {
 	if v := st.EventStoreMaxWALMiB; v != nil {
 		doc[varMaxWALMiB] = *v
 	}
-	if v := st.EventStoreCheckpointTimeout; v != nil && *v != "" {
-		doc[varCheckpointTimeout] = *v
+	if v := checkpointTimeoutValue(st); v != "" {
+		doc[varCheckpointTimeout] = v
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {
