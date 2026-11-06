@@ -408,6 +408,11 @@ type modelGate struct {
 	// per-source queues of unread messages in send order, and how many of each have been read
 	queues [][]replayMsg
 	heads  []int
+	// the reading stage: a lag-credited ceiling over the reading ceiling for fresh traffic, and one
+	// backlog bucket per stream for the rest, following the route the message stage chose
+	readCeiling *core.LagCreditLimiter
+	readBacklog []*core.TenantRateLimiter
+	routes      map[[2]int]core.IngestRoute
 }
 
 func newModelGate(sc *replayScenario, clk *replayClock) replayGate {
@@ -432,6 +437,13 @@ func (g *modelGate) restart() {
 		Streams: len(g.sc.sources), Ceiling: core.StaticCeiling(g.sc.rate, g.sc.burst), Clock: g.clk.now,
 		PhaseThreshold: g.sc.cover(),
 	})
+	base := governance.ReadingCeiling(core.StaticCeiling(g.sc.rate, g.sc.burst))
+	g.readCeiling = core.NewLagCreditLimiter(base, len(g.sc.sources), core.WithLagCreditClock(g.clk.now))
+	g.readBacklog = nil
+	for range g.sc.sources {
+		g.readBacklog = append(g.readBacklog, core.NewTenantRateLimiter(base, core.WithClock(g.clk.now)))
+	}
+	g.routes = map[[2]int]core.IngestRoute{}
 }
 
 // sourcesAt is the exact corrected view of every source now: the lag is the true age of its next
@@ -462,11 +474,23 @@ func (g *modelGate) message(m replayMsg) replayOutcome {
 	if m.src >= 0 {
 		g.heads[m.src]++
 	}
+	g.routes[[2]int{m.tenant, m.index}] = d.Route
 	return replayOutcome{admitted: d.Admitted, cause: d.Cause, route: d.Route}
 }
 
-// The model judges the message stage; the reading stage is wired with the gateway (S3).
-func (g *modelGate) reading(replayMsg, time.Duration) bool { return true }
+// reading judges the decoded message after the decode delay, on the route the message stage chose (the
+// route is decided once and carried). The fresh route lends the delay as extra credit, capped at the
+// cover plus the delay; the backlog route is charged at the corrected stamp. Contention is judged at the
+// message stage only.
+func (g *modelGate) reading(m replayMsg, delay time.Duration) bool {
+	tenant := g.sc.tenantName(m.tenant)
+	if g.routes[[2]int{m.tenant, m.index}] == core.RouteBacklog {
+		return g.readBacklog[m.src].AllowNAt(tenant, m.stamp.Add(m.send.Sub(m.stamp)), 1)
+	}
+	srcs := g.sourcesAt()
+	return g.readCeiling.Admit(core.LagCreditRequest{Tenant: tenant, N: 1, Scale: 1, Source: m.src, Stamp: m.stamp,
+		Sources: srcs, Delay: delay, CreditCap: g.sc.cover() + delay}).Admitted
+}
 
 // ---- control arms ----
 

@@ -367,6 +367,7 @@ func TestLagCreditExitGrantIsSuppressed(t *testing.T) {
 		cur := make([]LagCreditSource, 1)
 		for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
 		}
+		l.NoteBacklog("t", 0)
 		// two minutes of backlog phase with no fresh charge, then the phase exits.
 		clk.t = simEpoch.Add(2 * time.Minute)
 		srcs := []LagCreditSource{{}}
@@ -390,6 +391,7 @@ func TestLagCreditExitGrantIsSuppressed(t *testing.T) {
 	cur := make([]LagCreditSource, 1)
 	for l.Admit(LagCreditRequest{Tenant: "t", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
 	}
+	l.NoteBacklog("t", 0)
 	clk.t = simEpoch.Add(8 * time.Minute) // under the idle TTL, or the bucket is swept and starts full
 	srcs := []LagCreditSource{{ExitEpoch: 1, ExitAt: clk.t}}
 	n := 0
@@ -483,4 +485,22 @@ func TestLagCreditDelayLendsCreditUpToTheCap(t *testing.T) {
 	require.Equal(t, 3000, admitted(time.Second, 4*time.Second), "a second of delay lends a second of rate")
 	require.Equal(t, 4000, admitted(10*time.Second, 2*time.Second), "capped by the credit cap")
 	require.Equal(t, 2000, admitted(-time.Second, 0), "a negative delay lends nothing")
+}
+
+// A tenant that sent nothing on the backlog route spent no second allowance, so another tenant's stall
+// and its stream's exit do not touch the accrual it earned while idle.
+func TestLagCreditExitDoesNotPenaliseATenantThatNeverUsedTheBacklog(t *testing.T) {
+	clk := &lagClock{t: simEpoch}
+	l := NewLagCreditLimiter(StaticCeiling(10, 100), 1, WithLagCreditClock(clk.now))
+	cur := make([]LagCreditSource, 1)
+	for l.Admit(LagCreditRequest{Tenant: "idle", N: 1, Scale: 1, Source: 0, Stamp: simEpoch, Sources: cur}).Admitted {
+	}
+	clk.t = simEpoch.Add(8 * time.Minute)
+	srcs := []LagCreditSource{{ExitEpoch: 1, ExitAt: clk.t}}
+	n := 0
+	for l.Admit(LagCreditRequest{Tenant: "idle", N: 1, Scale: 1, Source: 0, Stamp: clk.t, Sources: srcs}).Admitted {
+		n++
+	}
+	require.Equal(t, 100, n, "an idle tenant earned its whole burst back; the exit must not take half of it")
+	require.Panics(t, func() { l.NoteBacklog("idle", 1) })
 }

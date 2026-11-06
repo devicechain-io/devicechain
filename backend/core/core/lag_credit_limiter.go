@@ -63,9 +63,11 @@ import (
 //
 // # Exit-grant suppression
 //
-// When a source leaves its backlog phase, the bucket must not hand the tenant the whole phase's
-// accrual as a fresh burst on top of the burst it already spent on the backlog route. The first
-// admission after an exit therefore accrues only from exitAt − creditCap.
+// When a source leaves its backlog phase, the bucket must not hand a tenant that SPENT the backlog
+// route's allowance the whole phase's accrual as a fresh burst on top of it. For such a tenant (one
+// the caller reported with NoteBacklog) the first admission after an exit accrues only from
+// exitAt − creditCap. A tenant that sent nothing during the phase spent no second allowance and is
+// accrued normally: an idle tenant is not penalised for another tenant's stall.
 //
 // # What it is not
 //
@@ -105,7 +107,10 @@ type lagCreditBucket struct {
 	last      time.Time // pod time tokens was last brought up to
 	lastStamp []time.Time
 	seenEpoch []uint64
-	lastSeen  time.Time
+	// backlogUsed[k] is set when the tenant was charged on source k's backlog route since the last
+	// exit this bucket accounted for.
+	backlogUsed []bool
+	lastSeen    time.Time
 }
 
 // LagCreditOption configures a LagCreditLimiter at construction.
@@ -271,9 +276,10 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 	fresh := b == nil
 	if fresh {
 		b = &lagCreditBucket{
-			last:      now,
-			lastStamp: make([]time.Time, l.sources),
-			seenEpoch: make([]uint64, l.sources),
+			last:        now,
+			lastStamp:   make([]time.Time, l.sources),
+			seenEpoch:   make([]uint64, l.sources),
+			backlogUsed: make([]bool, l.sources),
 		}
 		for k, s := range req.Sources {
 			b.seenEpoch[k] = s.ExitEpoch
@@ -303,8 +309,11 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 	// from exitAt − creditCap, not across the whole phase.
 	for k, s := range req.Sources {
 		if b.seenEpoch[k] < s.ExitEpoch {
-			if from := s.ExitAt.Add(-creditCap); from.After(b.last) {
-				b.last = from
+			if b.backlogUsed[k] {
+				if from := s.ExitAt.Add(-creditCap); from.After(b.last) {
+					b.last = from
+				}
+				b.backlogUsed[k] = false
 			}
 			b.seenEpoch[k] = s.ExitEpoch
 		}
@@ -324,6 +333,22 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 	}
 	b.tokens -= float64(req.N)
 	return LagCreditDecision{Admitted: true, Credit: credit}
+}
+
+// NoteBacklog records that the tenant was charged on source's backlog route, so that the exit of that
+// source's backlog phase suppresses the tenant's accrual across the phase (see the type comment). A
+// tenant with no bucket has nothing to suppress: its bucket will be born full. An out-of-range source
+// is a programming error and panics.
+func (l *LagCreditLimiter) NoteBacklog(tenant string, source int) {
+	if source < 0 || source >= l.sources {
+		panic(fmt.Sprintf("core.LagCreditLimiter.NoteBacklog: source %d out of range", source))
+	}
+	sh := l.shardFor(tenant)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if b := sh.buckets[tenant]; b != nil {
+		b.backlogUsed[source] = true
+	}
 }
 
 // creditLocked is the credit bound for a bucket now, before any caller delay: the largest, over all

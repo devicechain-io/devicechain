@@ -339,10 +339,12 @@ func TestMeterPassesExitMarksToTheCeiling(t *testing.T) {
 	for one("t", clk.t, 0).Admitted { // spend the fresh bucket
 	}
 	require.False(t, one("t", clk.t, 0).Admitted)
+	for one("idle", clk.t, 0).Admitted { // a bystander spends its bucket too, then sits out the phase
+	}
 
-	// Another tenant's message 6 s late takes the stream into backlog; a minute and a half of calm
-	// traffic brings it out again.
-	require.Equal(t, RouteBacklog, one("other", clk.t.Add(-6*time.Second), 6*time.Second).Route)
+	// The tenant sends one message 6 s late on the backlog route (and so spends that allowance) and takes
+	// the stream into backlog; a minute and a half of calm traffic brings it out again.
+	require.Equal(t, RouteBacklog, one("t", clk.t.Add(-6*time.Second), 6*time.Second).Route)
 	clk.t = clk.t.Add(time.Minute)
 	one("other", clk.t, 0)
 	clk.t = clk.t.Add(31 * time.Second)
@@ -354,4 +356,10 @@ func TestMeterPassesExitMarksToTheCeiling(t *testing.T) {
 		n++
 	}
 	require.Equal(t, 50, n, "after the exit the tenant earned only the last cover (5 s at 10/s), not the whole phase")
+	// The bystander used no backlog allowance, so the exit takes nothing from what it earned while idle.
+	n = 0
+	for one("idle", clk.t, 0).Admitted {
+		n++
+	}
+	require.Equal(t, 100, n, "a tenant that never used the backlog route is not penalised for another tenant's stall")
 }

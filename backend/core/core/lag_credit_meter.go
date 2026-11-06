@@ -146,6 +146,10 @@ func (c IngestCause) String() string {
 //     ceiling budget or a drained backlog. A factor of 0 is a boolean refusal of fresh traffic, not a price.
 //   - Each stream has its own backlog bucket (a TenantRateLimiter on the BASE ceiling), so two independently
 //     drained timelines never share a mark. It is charged at the stamp corrected for the stream's skew.
+//   - The ceiling is held ONCE across the fresh sources, but not across the backlog route: each stream's
+//     backlog bucket is a full allowance of its own, and a tenant draining two backlogs while also sending
+//     live spends all of them. That is bounded (it needs a platform lag beyond the cover, which a tenant
+//     cannot steer) and it matches the 2x a tenant already has on the gate it replaces while draining.
 //   - A stream in its backlog phase meters ALL of its messages on the backlog route, young ones included,
 //     until the hysteresis lets it out. That keeps a reader hovering at the cover from flipping messages
 //     between routes, and it means that for the tail of a stall (the drain plus the calm period) the
@@ -270,6 +274,7 @@ func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
 			// whose clock runs ahead would otherwise stamp the stream's own near-future, which the limiter
 			// clamps to now, charging a whole drain at one instant.
 			sent := req.Stamp.Add(srcs[req.Source].Skew)
+			m.ceiling.NoteBacklog(req.Tenant, req.Source)
 			ok := m.backlog[req.Source].AllowNAt(req.Tenant, sent, req.N)
 			d := MeterDecision{Admitted: ok, Route: RouteBacklog}
 			if !ok {
