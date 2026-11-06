@@ -374,40 +374,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// certificate_pem are the certificate credential's, fixed at create, so an update has no
 	// reason to write them either.
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		x509 := CredentialType(updated.CredentialType) == CredentialX509Certificate
 		// A certificate credential moved onto another device counts against THAT device's limit,
 		// counted under its row lock so two moves (or a move and a create) cannot both fit the
 		// last slot. Any other credential type moves freely.
-		// 🔴 A certificate credential LEAVING a device under a pending revocation. Lock order: the
-		// credential row, then the anchor FOR SHARE (the order DeleteDeviceCredential takes), then the
-		// target device (registration's order is anchor, then device). The outgoing owner is read here,
-		// under the credential row lock, not from the unlocked read above: a concurrent move or delete
-		// cannot change it between this read and the save.
-		var movedFrom string
-		var movedAnchor uint
-		certMove := repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate && updated.TrustAnchorId != nil
-		if certMove {
-			var cur DeviceCredential
-			if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
-				return err
-			}
-			if cur.TrustAnchorId == nil {
-				certMove = false
-			} else {
-				movedAnchor = *cur.TrustAnchorId
-				if err := lockTrustAnchorShareByID(tx, movedAnchor); err != nil {
-					return err
-				}
-				var tokens []string
-				if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
-					Pluck("token", &tokens).Error; err != nil {
-					return err
-				}
-				if len(tokens) == 1 {
-					movedFrom = tokens[0]
-				}
-			}
-		}
-		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
+		//
+		// 🔴 LOCK ORDER of a credential write: the target device row, then the credential row, then (a
+		// certificate leaving a device) the anchor FOR SHARE. Device before credential is the order a
+		// provisioning reset takes; the anchor comes last because nothing that holds it waits for either.
+		if repoint && x509 {
 			if err := lockDeviceRow(tx, device.ID); err != nil {
 				return err
 			}
@@ -418,6 +393,41 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 			if n >= MaxX509CredentialsPerDevice {
 				return invalidAnchor("device %q already holds %d certificate credentials, the most it may hold; remove one first",
 					device.Token, n)
+			}
+		}
+		// The credential is read again under its row lock, and what the save writes is reconciled with
+		// it: the owner in force is the one acted on, so a concurrent move or delete cannot be undone by
+		// this save writing the owner of the earlier, unlocked read.
+		var cur DeviceCredential
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
+			return err
+		}
+		if !repoint && cur.DeviceId != updated.DeviceId {
+			updated.DeviceId = cur.DeviceId
+			updated.Device = nil
+			var owner Device
+			if err := tx.Unscoped().Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).Take(&owner).Error; err != nil {
+				return err
+			}
+			updated.Device = &owner
+		}
+		// A certificate credential LEAVING a device under a pending revocation: the outgoing owner is
+		// the one read here, under the lock.
+		var movedFrom string
+		var movedAnchor uint
+		certMove := repoint && x509 && cur.TrustAnchorId != nil
+		if certMove {
+			movedAnchor = *cur.TrustAnchorId
+			if err := lockTrustAnchorShareByID(tx, movedAnchor); err != nil {
+				return err
+			}
+			var tokens []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+				Pluck("token", &tokens).Error; err != nil {
+				return err
+			}
+			if len(tokens) == 1 {
+				movedFrom = tokens[0]
 			}
 		}
 		if err := tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error; err != nil {

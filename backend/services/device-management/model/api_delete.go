@@ -4,11 +4,13 @@
 package model
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -433,10 +435,10 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 	var credentials []DeviceCredential
 	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		credentials = nil
-		// 🔴 LOCK ORDER OF A CREDENTIAL WRITE UNDER A TRUST ANCHOR: credential row, then anchor FOR SHARE,
-		// then (a move only) the target device row, then the queue rows. The rows are read FOR UPDATE
-		// first so the owner and the anchor that are acted on are the ones in force at the delete (a
-		// concurrent move cannot change them underneath), whatever tenants a system caller's token matches.
+		// 🔴 LOCK ORDER OF A CREDENTIAL WRITE UNDER A TRUST ANCHOR: (a move: the target device row), the
+		// credential row, the anchor FOR SHARE, then the queue rows. The rows are read FOR UPDATE first
+		// so the owner and the anchor that are acted on are the ones in force at the delete (a concurrent
+		// move cannot change them underneath), whatever tenants a system caller's token matches.
 		var locked []DeviceCredential
 		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("token = ?", token).Order("id ASC").Find(&locked).Error; err != nil {
@@ -459,6 +461,13 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 		if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("token = ?", token), &credentials); err != nil {
 			return err
 		}
+		// The kick rows are written in ONE order across everything this call owes (tenant, device token,
+		// anchor), so two system deletes that share devices take them in the same order.
+		type owed struct {
+			tenant, device string
+			anchor         uint
+		}
+		var all []owed
 		for _, c := range locked {
 			if c.TrustAnchorId == nil || CredentialType(c.CredentialType) != CredentialX509Certificate {
 				continue
@@ -468,7 +477,15 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 				Pluck("token", &tokens).Error; err != nil {
 				return err
 			}
-			if err := api.queueOwedRevocationKicksOnTx(tx, c.TenantId, *c.TrustAnchorId, tokens); err != nil {
+			for _, t := range tokens {
+				all = append(all, owed{c.TenantId, t, *c.TrustAnchorId})
+			}
+		}
+		slices.SortFunc(all, func(a, b owed) int {
+			return cmp.Or(strings.Compare(a.tenant, b.tenant), strings.Compare(a.device, b.device), cmp.Compare(a.anchor, b.anchor))
+		})
+		for _, o := range slices.Compact(all) {
+			if err := api.queueOwedRevocationKicksOnTx(tx, o.tenant, o.anchor, []string{o.device}); err != nil {
 				return err
 			}
 		}

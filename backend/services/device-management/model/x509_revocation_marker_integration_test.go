@@ -539,3 +539,39 @@ func TestRevocationMarkerSecondMoveQueuesTheOwnerTheFirstLeftItWith(t *testing.T
 	assert.True(t, owed[tokens[0]], "the device the first move left")
 	assert.True(t, owed["first-dev"], "the device the second move left")
 }
+
+// A metadata edit that read the credential before a move committed must not write the old owner back:
+// the save reconciles with the owner in force under the credential row lock.
+func TestRevocationMarkerStaleMetadataEditDoesNotUndoAMove(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	_, tokens := pgIntermediateFleet(t, f, 1)
+	f.device("moved-to")
+	var creds []DeviceCredential
+	require.NoError(t, f.api.RDB.DB(f.ctx).Joins("JOIN devices ON devices.id = device_credentials.device_id").
+		Where("devices.token = ? AND device_credentials.credential_type = ?", tokens[0], string(CredentialX509Certificate)).Find(&creds).Error)
+	require.Len(t, creds, 1)
+	cred := creds[0].Token
+
+	reached, release := f.holdAfterCredentialSave(cred)
+	moved := make(chan error, 1)
+	go func() {
+		_, err := f.api.UpdateDeviceCredential(f.ctx, cred, &DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf("moved-to")})
+		moved <- err
+	}()
+	awaitSignal(t, reached, "the move to save the credential")
+	edited := make(chan error, 1)
+	go func() {
+		_, err := f.api.UpdateDeviceCredential(f.ctx, cred, &DeviceCredentialUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(true)})
+		edited <- err
+	}()
+	waitForBlockedBackend(t, f.mgr.Database)
+	release()
+	require.NoError(t, <-moved)
+	require.NoError(t, <-edited)
+
+	var after DeviceCredential
+	require.NoError(t, f.api.RDB.DB(f.ctx).Preload("Device").Where("token = ?", cred).Take(&after).Error)
+	require.NotNil(t, after.Device)
+	assert.Equal(t, "moved-to", after.Device.Token, "the edit left the credential on the device the move gave it")
+}
