@@ -5,7 +5,7 @@
 // subscription, so the panel polls while any row is non-terminal and stops once every row
 // has settled. Only the GraphQL transport is faked; the real panel, hook and catalogs run.
 import '@/i18n/config';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
@@ -123,5 +123,63 @@ describe('DeviceCommandsPanel live status', () => {
     await settle();
     await tick();
     expect(reads()).toBeGreaterThan(1);
+  });
+
+  // Reads that take longer than the poll interval must still land. A fixed-rate ticker would
+  // bump the query key every interval and useQuery would discard each answer as stale, so the
+  // table would never move; the next read is scheduled only after the previous one finishes.
+  it('lands reads that are slower than the poll interval', async () => {
+    let reads = 0;
+    gqlMock.mockImplementation((service: string) => {
+      if (service !== 'command-delivery') {
+        return Promise.resolve({ deviceCommandVocabulary: { constrained: false, commands: [] } });
+      }
+      reads += 1;
+      const status = reads === 1 ? 'QUEUED' : 'SUCCESSFUL';
+      const answer = {
+        commands: { results: [row(status)], pagination: { pageStart: 0, pageEnd: 1, totalRecords: 1 } },
+      };
+      if (reads === 1) return Promise.resolve(answer);
+      return new Promise((resolve) => setTimeout(() => resolve(answer), COMMAND_POLL_MS + 1000));
+    });
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue={false} canCancel={false} />);
+    await settle();
+    expect(rowText()).toContain('Queued');
+    // One interval per act: React flushes a timer-queued update when the act scope exits.
+    for (let i = 0; i < 5; i++) await tick();
+    expect(rowText()).toContain('Successful');
+  });
+
+  // After a command is issued the history is re-read; if THAT read fails, the sticky history
+  // (here empty) looks settled. The panel must keep retrying rather than hide the new command.
+  it('retries a failed refresh after issuing a command', async () => {
+    let historyReads = 0;
+    gqlMock.mockImplementation((service: string, document: unknown) => {
+      if (String(document).includes('mutation CreateCommand')) {
+        return Promise.resolve({
+          createCommand: { command: { id: 'id-1', token: 'tok-1', status: 'QUEUED' }, rejection: null },
+        });
+      }
+      if (service === 'command-delivery') {
+        historyReads += 1;
+        if (historyReads === 1) {
+          return Promise.resolve({ commands: { results: [], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 0 } } });
+        }
+        if (historyReads === 2) return Promise.reject(new Error('blip'));
+        return Promise.resolve({
+          commands: { results: [row('QUEUED')], pagination: { pageStart: 0, pageEnd: 1, totalRecords: 1 } },
+        });
+      }
+      return Promise.resolve({ deviceCommandVocabulary: { constrained: false, commands: [] } });
+    });
+    render(<DeviceCommandsPanel deviceToken="therm-1" canIssue canCancel={false} />);
+    await settle();
+    fireEvent.change(screen.getByPlaceholderText('e.g. reboot'), { target: { value: 'reboot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Issue command' }));
+    await settle();
+    expect(historyReads).toBe(2);
+    expect(screen.queryByText('reboot', { selector: 'td' })).toBeNull();
+    await tick();
+    expect(rowText()).toContain('Queued');
   });
 });

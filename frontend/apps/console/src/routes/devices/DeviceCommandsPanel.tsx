@@ -125,15 +125,21 @@ export function DeviceCommandsPanel({
   const history = data && data.results.every((c) => c.deviceToken === deviceToken) ? data : null;
   const commands = history?.results ?? [];
 
-  // Poll only while something can still change. An unrecognised status reads as in flight
-  // (isTerminalCommandStatus), so a status this build has never heard of keeps polling
-  // rather than freezing the row.
-  const outstanding = commands.some((c) => !isTerminalCommandStatus(c.status));
+  // Re-read while something can still change, or while the last read FAILED over a history
+  // we are showing. The second arm is not decoration: `data` is sticky, so after a command
+  // is issued and its refresh fails, the stale history (possibly all-terminal, possibly
+  // empty) looks settled and would never poll again, hiding the new command indefinitely.
+  // An unrecognised status reads as in flight (isTerminalCommandStatus), so it keeps polling.
+  //
+  // The next read is scheduled when the previous one has FINISHED, not on a fixed interval:
+  // useQuery discards the answer of a read whose deps changed, so a ticker that fires faster
+  // than the reads complete would cancel every one of them and the table would never update.
+  const refreshing = history != null && (commands.some((c) => !isTerminalCommandStatus(c.status)) || error != null);
   useEffect(() => {
-    if (!outstanding) return;
-    const id = setInterval(() => setPollTick((n) => n + 1), COMMAND_POLL_MS);
-    return () => clearInterval(id);
-  }, [outstanding]);
+    if (!refreshing || loading) return;
+    const id = setTimeout(() => setPollTick((n) => n + 1), COMMAND_POLL_MS);
+    return () => clearTimeout(id);
+  }, [refreshing, loading, pollTick]);
 
   // The device's PUBLISHED vocabulary — what the enqueue gate will actually accept.
   // Loaded separately from the history so a vocabulary failure degrades the form
