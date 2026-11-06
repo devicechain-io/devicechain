@@ -8,7 +8,7 @@ title: Payload Decoders
 A **payload decoder** turns what a device or a network server sent into measurements. You write it once, on a [device profile](../user-guide/device-types-and-profiles.md), as a short list of rules: read two bytes at offset 1 as a signed number, divide by ten, store it as `temperature`. It reads a binary frame, a JSON body or the object a network server already decoded, and it produces the same measurements as any other source, with the units and validation of the metrics you declared.
 
 :::note Live decoding is in v1.2
-A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders).
 :::
 
 ## When you need one {#when}
@@ -117,7 +117,7 @@ A name is letters, digits and `_`, does not start with a digit, and may not be o
 
 ### How many readings {#max-readings}
 
-The decoder's **maximum readings** is the most one uplink can produce: for the largest section, its field and expression rows plus the `maxKeys` of its map rows. It is at most 64 for a section, and it is shown beside the decoder in the Decoder tab as "Up to N readings per uplink". An uplink for a device type with a decoder is counted against the tenant's ingest allowance as this many readings when it is accepted, whatever it ends up producing.
+The decoder's **maximum readings** is the most one uplink can produce: for the largest section, its field and expression rows plus the `maxKeys` of its map rows. It is at most 64 for a section, and it is shown beside the decoder in the Decoder tab as "Up to N readings per uplink". An uplink for a device type with a decoder is counted against the tenant's ingest allowance when it is accepted: at least this many readings (plus three when the integration stores link metrics), more for a decoder that is costly to run, and never more than 256, whatever the uplink ends up producing.
 
 ### What gets stored {#output-values}
 

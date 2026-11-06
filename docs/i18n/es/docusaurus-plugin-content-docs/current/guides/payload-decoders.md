@@ -8,7 +8,7 @@ title: Decodificadores de payload
 Un **decodificador de payload** convierte lo que envió un dispositivo o un servidor de red en mediciones. Lo escribes una vez, en un [perfil de dispositivo](../user-guide/device-types-and-profiles.md), como una lista corta de reglas: lee dos bytes en el desplazamiento 1 como un número con signo, divídelo entre diez y guárdalo como `temperature`. Lee una trama binaria, un cuerpo JSON o el objeto que un servidor de red ya decodificó, y produce las mismas mediciones que cualquier otro origen, con las unidades y la validación de las métricas que declaraste.
 
 :::note La decodificación en vivo está en la v1.2
-Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un decodificador recién publicado puede tardar hasta un minuto en aplicarse. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders).
 :::
 
 ## Cuándo necesitas uno {#when}
@@ -117,7 +117,7 @@ Un nombre se compone de letras, dígitos y `_`, no empieza por un dígito y no p
 
 ### Cuántas lecturas {#max-readings}
 
-El **máximo de lecturas** del decodificador es lo más que puede producir un uplink: para la sección más grande, sus filas de campo y de expresión más el `maxKeys` de sus filas de mapa. Es como máximo 64 por sección, y se muestra junto al decodificador en la pestaña Decodificador como "Hasta N lecturas por mensaje". Un uplink de un tipo de dispositivo con decodificador se cuenta, al aceptarse, contra la asignación de ingesta del inquilino como este número de lecturas, sea cual sea lo que acabe produciendo.
+El **máximo de lecturas** del decodificador es lo más que puede producir un uplink: para la sección más grande, sus filas de campo y de expresión más el `maxKeys` de sus filas de mapa. Es como máximo 64 por sección, y se muestra junto al decodificador en la pestaña Decodificador como "Hasta N lecturas por mensaje". Un uplink de un tipo de dispositivo con decodificador se cuenta contra la asignación de ingesta del inquilino al aceptarse: como mínimo este número de lecturas (más tres si la integración guarda métricas de enlace), más para un decodificador costoso de ejecutar, y nunca más de 256, sea cual sea lo que acabe produciendo.
 
 ### Qué se guarda {#output-values}
 
