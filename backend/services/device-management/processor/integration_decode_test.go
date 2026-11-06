@@ -210,13 +210,21 @@ func TestAFailingDecodeIsRecordedOnTheFirstDeliveryNotRetried(t *testing.T) {
 				close(done)
 			}, nil, nil)
 		rez.SecretTransit = testSecretTransit(t)
-		go rez.Process(context.Background())
+		processed := make(chan struct{})
+		go func() { rez.Process(context.Background()); close(processed) }()
 		msgs <- messaging.NewConsumedMessage(messaging.ScopedSubject("t", "acme", streams.IntegrationUplinks), wire, 1, nil, ack)
 		select {
 		case <-done:
 		case <-time.After(300 * time.Millisecond):
 		}
 		close(msgs)
+		// Join the resolver: the buffered message may still be in flight, and sampling before it
+		// settles would let an ack-and-drop regression read as 'not acked'.
+		select {
+		case <-processed:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the resolver did not finish")
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		return failed, ack.acked()
@@ -232,7 +240,7 @@ func TestAFailingDecodeIsRecordedOnTheFirstDeliveryNotRetried(t *testing.T) {
 	bad.SealedIntegrationToken, _ = testSecretTransit(t).SealToken("acme", credential.IntegrationSealKind("chirp-1"), "not-the-token")
 	failed, acked = run(bad)
 	assert.NotContains(t, failed, uint(resolvedevent.FailureReason_DecodeFailed))
-	_ = acked
+	assert.False(t, acked, "a transient failure on a non-final delivery must wait for its redelivery, not be acked and dropped")
 }
 
 type flagAck struct {
