@@ -123,6 +123,10 @@ type Bucket struct {
 	// area is the only one that can open it; the lists name that area, not "every pod".
 	Writers []string
 	Readers []string
+	// MaxBytes, when positive, is this bucket's own ceiling, used where it is LOWER than its
+	// tier's. A bucket that holds a handful of small entries should not reserve a tier's worth
+	// of disk up front: KV buckets are streams and reserve their ceiling at creation.
+	MaxBytes int64
 	// Why records what drives this bucket's growth and what a full bucket breaks.
 	// It sits next to the tier so a reclassification has to confront it.
 	Why string
@@ -275,11 +279,13 @@ var All = []Bucket{
 			"rebooted inside the last two hours.",
 	},
 	{
-		Name:    BucketPartitionPlacement,
-		Tier:    State,
-		TTL:     24 * time.Hour, // user-management rewrites it every few minutes; this only bounds a table nobody keeps alive
-		Writers: []string{"user-management"},
-		Readers: []string{"user-management"},
+		Name: BucketPartitionPlacement,
+		Tier: State,
+		// One entry of at most ~600 KB (64 assignments, 4096 pins of 128-byte tokens).
+		MaxBytes: 4 << 20,
+		TTL:      24 * time.Hour, // user-management rewrites it every few minutes; this only bounds a table nobody keeps alive
+		Writers:  []string{"user-management"},
+		Readers:  []string{"user-management"},
 		Why: "ONE entry (key \"table\"): the instance's placement table, tenant -> vpartition -> shard " +
 			"group, mirrored from user-management's database so that no hot path ever queries a " +
 			"database to route. It holds 64 group numbers and the tenants pinned by hand, " +

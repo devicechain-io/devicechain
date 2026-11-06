@@ -559,10 +559,10 @@ streams at the default 15 minutes, with [fail-closed MQTT](#mqtt-fail-closed) of
 | 1,000 or less | 1 GiB | 1 GiB | 1 GiB | 16Gi (the default) | 16Gi |
 | 5,000 | 1.6 GiB | 1.6 GiB | 1.9 GiB | 16Gi | 16Gi |
 | 10,000 | 3.2 GiB | 3.2 GiB | 3.8 GiB | 22Gi | 24Gi |
-| 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 34Gi | 36Gi |
+| 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi | 36Gi |
 
 "Volume that fits" is the smallest volume whose `max_file_store` holds the reservation, with the
-other streams, the MQTT gateway's stores and the key-value buckets (about 8.8 GiB together at the
+other streams, the MQTT gateway's stores and the key-value buckets (about 8.7 GiB together at the
 defaults); the 20,000 row clears it by under 100 MiB. Use the larger figure, which leaves room for
 the streams and buckets later releases add. `dcctl` has no flag for the JetStream volume. A
 StatefulSet's volume claim cannot be changed in place, so growing it is a manual step:

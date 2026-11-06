@@ -6,7 +6,9 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -20,7 +22,8 @@ func newPlacementStore(t *testing.T) (*Store, *gorm.DB) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&PartitionConfig{}, &VPartitionAssignment{}, &TenantVPartitionOverride{}))
+	require.NoError(t, db.AutoMigrate(&Tenant{}, &TenantPurge{}, &TenantPurgeStore{},
+		&PartitionConfig{}, &VPartitionAssignment{}, &TenantVPartitionOverride{}))
 	return NewStore(&rdb.RdbManager{Database: db}), db
 }
 
@@ -126,6 +129,7 @@ func TestTenantOverridesRoundTripThroughThePlacement(t *testing.T) {
 	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
 	require.NoError(t, err)
 
+	liveTenants(t, s, "big-tenant", "other")
 	require.NoError(t, s.SetTenantOverride(ctx, "big-tenant", 7))
 	require.NoError(t, s.SetTenantOverride(ctx, "big-tenant", 9), "a pin is replaced, not duplicated")
 	require.NoError(t, s.SetTenantOverride(ctx, "other", 7))
@@ -146,6 +150,7 @@ func TestTenantOverrideRefusesWhatIsNotAPlacement(t *testing.T) {
 	ctx := context.Background()
 	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
 	require.NoError(t, err)
+	liveTenants(t, s, "acme")
 	require.Error(t, s.SetTenantOverride(ctx, "", 1))
 	require.Error(t, s.SetTenantOverride(ctx, "has.dot", 1))
 	require.Error(t, s.SetTenantOverride(ctx, "acme", partition.DefaultP))
@@ -160,4 +165,112 @@ func TestPlacementRefusesAnIncompleteAssignment(t *testing.T) {
 	require.NoError(t, db.Delete(&VPartitionAssignment{}, "vpartition = ?", 5).Error)
 	_, err = s.Placement(ctx)
 	require.Error(t, err, "a table with a hole must not be handed out to route by")
+}
+
+func liveTenants(t *testing.T, s *Store, tokens ...string) {
+	t.Helper()
+	for _, tok := range tokens {
+		require.NoError(t, s.CreateTenant(context.Background(), &Tenant{Token: tok}))
+	}
+}
+
+func TestAPinIsRefusedForATokenThatIsNotALiveTenant(t *testing.T) {
+	s, _ := newPlacementStore(t)
+	ctx := context.Background()
+	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+
+	require.Error(t, s.SetTenantOverride(ctx, "ghost", 3), "no such tenant")
+
+	liveTenants(t, s, "going")
+	tn, err := s.TenantByToken(ctx, "going")
+	require.NoError(t, err)
+	require.NoError(t, s.BeginTenantPurge(ctx, tn, time.Now().UTC().Truncate(time.Second)))
+	require.Error(t, s.SetTenantOverride(ctx, "going", 3), "a tenant being deleted is not live")
+
+	table, err := s.Placement(ctx)
+	require.NoError(t, err)
+	require.Empty(t, table.Overrides)
+	require.Equal(t, uint64(0), table.Generation, "a refused pin must not bump the generation")
+}
+
+// 🔑 F1: a pin is retained through the purge and cleared at token release, so a successor that
+// takes the token is placed by the hash, not by its predecessor's pin.
+func TestACompletedPurgeClearsThePinAndTheSuccessorIsHashed(t *testing.T) {
+	s := newPurgeTestStore(t)
+	ctx := context.Background()
+	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+
+	tenant, epoch := beginPurge(t, s, "acme")
+	// A pin set before the cut survives it...
+	require.NoError(t, s.sys(ctx).Create(&TenantVPartitionOverride{
+		TenantToken: "acme", VPartition: (partition.HashedVPartition("dc", "acme", partition.DefaultP) + 1) % partition.DefaultP,
+	}).Error)
+	before, err := s.Placement(ctx)
+	require.NoError(t, err)
+	require.Contains(t, before.Overrides, "acme", "the pin is retained through the purge")
+
+	rec, err := s.EnsurePurgeRecord(ctx, "acme", epoch)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteTenantPurge(ctx, tenant, rec, 1, time.Now().UTC()))
+
+	// ...and is gone with the token: the successor is hashed, and the generation moved.
+	require.NoError(t, s.CreateTenant(ctx, &Tenant{Token: "acme"}))
+	after, err := s.Placement(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, after.Overrides, "acme")
+	require.Equal(t, partition.HashedVPartition("dc", "acme", partition.DefaultP), after.VPartition("dc", "acme"))
+	require.Equal(t, before.Generation+1, after.Generation)
+}
+
+func TestACompletedPurgeWithNoPinLeavesTheGenerationAlone(t *testing.T) {
+	s := newPurgeTestStore(t)
+	ctx := context.Background()
+	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+	tenant, epoch := beginPurge(t, s, "plain")
+	rec, err := s.EnsurePurgeRecord(ctx, "plain", epoch)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteTenantPurge(ctx, tenant, rec, 1, time.Now().UTC()))
+	after, err := s.Placement(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), after.Generation)
+}
+
+// F4b: the pin limit is exact. 4095 others leave room for one more; 4096 do not; re-pinning a
+// tenant that already holds one is allowed at the limit.
+func TestThePinLimitIsExact(t *testing.T) {
+	s, db := newPlacementStore(t)
+	ctx := context.Background()
+	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+
+	rows := make([]TenantVPartitionOverride, 0, partition.MaxOverrides)
+	for i := 0; i < partition.MaxOverrides-1; i++ {
+		rows = append(rows, TenantVPartitionOverride{TenantToken: fmt.Sprintf("p%d", i), VPartition: 1})
+	}
+	require.NoError(t, db.CreateInBatches(&rows, 500).Error)
+
+	liveTenants(t, s, "last", "over")
+	require.NoError(t, s.SetTenantOverride(ctx, "last", 2), "the 4096th pin fits")
+	require.Error(t, s.SetTenantOverride(ctx, "over", 2), "the 4097th does not")
+	require.NoError(t, s.SetTenantOverride(ctx, "last", 3), "re-pinning at the limit is not a new pin")
+	table, err := s.Placement(ctx)
+	require.NoError(t, err)
+	require.Len(t, table.Overrides, partition.MaxOverrides)
+}
+
+// F4c: a stored placement that does not validate is ErrPlacementInvalid, which the service
+// treats as non-fatal (only a changed P stops it).
+func TestAnUnusableStoredPlacementIsNamedAsSuchAndIsNotAChangedP(t *testing.T) {
+	s, db := newPlacementStore(t)
+	ctx := context.Background()
+	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&TenantVPartitionOverride{TenantToken: "bad", VPartition: partition.DefaultP + 5}).Error)
+
+	_, err = s.EnsurePlacement(ctx, partition.DefaultP)
+	require.ErrorIs(t, err, ErrPlacementInvalid)
+	require.False(t, errors.Is(err, partition.ErrPChanged))
 }

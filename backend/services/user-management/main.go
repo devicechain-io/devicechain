@@ -480,7 +480,17 @@ const placementMirrorInterval = 5 * time.Minute
 func initPlacement(ctx context.Context) error {
 	store := iam.NewStore(RdbManager)
 	if _, err := store.EnsurePlacement(ctx, partition.DefaultP); err != nil {
-		return fmt.Errorf("recording the instance placement: %w", err)
+		switch {
+		case errors.Is(err, partition.ErrPChanged):
+			return fmt.Errorf("recording the instance placement: %w", err)
+		case errors.Is(err, iam.ErrPlacementInvalid):
+			// Only a changed P is fatal. A table that does not validate is an operator's repair,
+			// nothing routes by it yet, and the mirror's passes fail (and alert) until it is fixed.
+			log.Error().Err(err).Msg("The stored placement table is not usable; the placement mirror will fail " +
+				"until it is repaired. Nothing routes by it yet, so the service starts.")
+		default:
+			return fmt.Errorf("recording the instance placement: %w", err)
+		}
 	}
 	// The bucket is opened on first use and retried, never eagerly: a broker that cannot open it
 	// must not stop a service that nothing yet routes through the mirror of.

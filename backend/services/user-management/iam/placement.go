@@ -53,6 +53,12 @@ func (TenantVPartitionOverride) TableName() string { return "iam_tenant_vpartiti
 
 const partitionConfigID = 1
 
+// ErrPlacementInvalid wraps every refusal of a stored placement that is not a usable table (an
+// assignment outside P, a hole, a pin out of range, too many pins). It is distinct from
+// partition.ErrPChanged on purpose: a broken table is an operator's repair, and since nothing
+// routes by it yet it must not stop the service; a changed P does.
+var ErrPlacementInvalid = errors.New("iam: the stored placement is not a usable table")
+
 // ErrPlacementNotInitialized is returned by reads of a placement nobody has set up. A reader
 // never gets an empty table in its place: an empty table routes every tenant to nowhere.
 var ErrPlacementNotInitialized = errors.New("iam: the placement table has not been initialized (EnsurePlacement has not run)")
@@ -123,13 +129,13 @@ func (s *Store) Placement(ctx context.Context) (partition.Table, error) {
 		seen := make(map[int]bool, len(assignments))
 		for _, a := range assignments {
 			if a.VPartition < 0 || a.VPartition >= cfg.P {
-				return fmt.Errorf("iam: the placement holds an assignment for vpartition %d, outside P = %d", a.VPartition, cfg.P)
+				return fmt.Errorf("%w: an assignment for vpartition %d, outside P = %d", ErrPlacementInvalid, a.VPartition, cfg.P)
 			}
 			table.Groups[a.VPartition] = a.ShardGroup
 			seen[a.VPartition] = true
 		}
 		if len(seen) != cfg.P {
-			return fmt.Errorf("iam: the placement assigns %d of its %d vpartitions; EnsurePlacement completes it", len(seen), cfg.P)
+			return fmt.Errorf("%w: %d of its %d vpartitions are assigned", ErrPlacementInvalid, len(seen), cfg.P)
 		}
 		if len(overrides) > 0 {
 			table.Overrides = make(map[string]int, len(overrides))
@@ -137,7 +143,10 @@ func (s *Store) Placement(ctx context.Context) (partition.Table, error) {
 		for _, o := range overrides {
 			table.Overrides[o.TenantToken] = o.VPartition
 		}
-		return table.Validate()
+		if err := table.Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrPlacementInvalid, err)
+		}
+		return nil
 	})
 	if err != nil {
 		return partition.Table{}, err
@@ -172,7 +181,24 @@ func (s *Store) SetTenantOverride(ctx context.Context, tenantToken string, vpart
 	if err := core.ValidateToken(tenantToken); err != nil {
 		return err
 	}
-	return s.changePlacement(ctx, func(tx *gorm.DB, cfg PartitionConfig) error {
+	// 🔴 A PIN IS FOR A LIVE TENANT ONLY, AND THE TENANT ROW IS LOCKED BEFORE THE CONFIG ROW. The
+	// purge's completion deletes the tenant row, then the pin, then bumps the config row (tenant
+	// first, config second); taking the locks here in the same order is what keeps the two from
+	// deadlocking, and holding the tenant row FOR SHARE is what stops a purge from completing
+	// between the check and the insert and leaving a pin on a token that was just released.
+	live := func(tx *gorm.DB) error {
+		// Pluck, not Count: Postgres refuses FOR SHARE with an aggregate.
+		var ids []uint
+		if err := tx.Model(&Tenant{}).Clauses(clause.Locking{Strength: "SHARE"}).
+			Where("token = ? AND purge_state = ?", tenantToken, PurgeActive).Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) != 1 {
+			return fmt.Errorf("iam: %q is not a live tenant; a pin is for a tenant that exists and is not being deleted", tenantToken)
+		}
+		return nil
+	}
+	return s.changePlacementAfter(ctx, live, func(tx *gorm.DB, cfg PartitionConfig) error {
 		if vpartition < 0 || vpartition >= cfg.P {
 			return fmt.Errorf("iam: vpartition %d is outside [0, %d)", vpartition, cfg.P)
 		}
@@ -205,7 +231,19 @@ func (s *Store) ClearTenantOverride(ctx context.Context, tenantToken string) err
 // read of the placement: two overrides cannot both pass the count check at the limit and
 // together exceed it, and a reader never straddles a change.
 func (s *Store) changePlacement(ctx context.Context, change func(tx *gorm.DB, cfg PartitionConfig) error) error {
+	return s.changePlacementAfter(ctx, nil, change)
+}
+
+// changePlacementAfter is changePlacement with a step that runs first, before the config row is
+// locked, for the locks that must be taken earlier in the lock order.
+func (s *Store) changePlacementAfter(ctx context.Context, first func(tx *gorm.DB) error,
+	change func(tx *gorm.DB, cfg PartitionConfig) error) error {
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		if first != nil {
+			if err := first(tx); err != nil {
+				return err
+			}
+		}
 		var cfg PartitionConfig
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cfg, partitionConfigID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

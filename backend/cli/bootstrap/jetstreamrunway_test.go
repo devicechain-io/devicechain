@@ -31,10 +31,20 @@ func TestTheRunwayIsRefusedWhenTheVolumeCannotHoldIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 20,000 events/s, 15-minute runway fit a 14Gi store: the check cannot refuse")
 	}
-	for _, want := range []string{"outage runway", "20000 events a second", "15 minutes", "streamDesignRate", "dcctl upgrade <provider> <instance> --values", "at least 34Gi"} {
+	for _, want := range []string{"outage runway", "20000 events a second", "15 minutes", "streamDesignRate", "dcctl upgrade <provider> <instance> --values", "at least 33Gi"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
+	}
+	// The 33Gi the published sizing table names still holds the 20,000/s, 15-minute runway: a KV
+	// bucket that declares its own small ceiling must not push the sum past it.
+	have, derr := derivedMaxFileStore("33Gi")
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	t.Logf("reservation %d MiB, 33Gi derives %d MiB", jetStreamReservation(n)>>20, have>>20)
+	if err := checkJetStreamReservation(n, have, "33Gi", true); err != nil {
+		t.Errorf("the documented 33Gi no longer holds the 20,000/s runway: %v", err)
 	}
 	if err := checkJetStreamReservation(n, 40<<30, "a grown store", true); err != nil {
 		t.Errorf("a store grown to hold the runway was refused: %v", err)

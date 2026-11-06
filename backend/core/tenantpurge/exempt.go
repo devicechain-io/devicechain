@@ -180,11 +180,12 @@ var exemptions = []Exemption{
 	{
 		Schema: "user-management", Name: "iam_tenant_vpartition_overrides", Class: ClassExempt,
 		Reason: "a tenant token pinned to a vpartition by the operator: the token and a number, no name, " +
-			"no contact, no configuration. It is deliberately NOT swept with the tenant, because the " +
-			"purge reaches the tenant's stores through that placement and so needs it until the very " +
-			"end; the column is tenant_token, not tenant, so nothing classifies it as tenant data. " +
-			"What it retains is stated: the token of a tenant the operator pinned, until the operator " +
-			"clears the pin.",
+			"no contact, no configuration. It is retained THROUGH the purge, because the purge reaches " +
+			"the tenant's stores through that placement and so needs it until the very end, and " +
+			"cleared at token release: the completion step deletes the pin in the same transaction " +
+			"as the tenant row, so a successor taking the token is not placed by its predecessor's " +
+			"pin. The column is tenant_token, not tenant, so the sweep does not classify it as tenant " +
+			"data. What it retains is stated: the token of a pinned tenant, until the token is released.",
 	},
 	{
 		Schema: "user-management", Name: "iam_tenants", Class: ClassExempt,
