@@ -286,6 +286,7 @@ QoS 1 完全受支持。如果设备链路中丢失传输中的发布比存储�
 - 事件入队后，`POST` 返回 **202 Accepted**。
 - 租户超过 HTTP 摄取上限时返回 **429 Too Many Requests**。上限按读数计数，因此包含多个读数的消息比单个读数消息成本更高。MQTT 路径会丢弃超限消息，而不返回响应。
 - 正文无法读取或解码，或路径中的租户不是有效令牌时，返回 **400 Bad Request**。重新发送相同请求仍会得到相同结果。
+- 事件在入队之前被丢弃时返回 **500 Internal Server Error**，原因是无法构建其消息（它携带的凭据无法密封，或事件无法编码）。事件未被存储，重新发送同一请求会得到相同的响应，因此不要重试；原因记录在 `event-sources` 日志中，`total_msg_build_dropped` 按原因对其计数。
 - 事件未被接受时返回 **503 Service Unavailable**。带 `Retry-After` 响应头时，平台正在拒绝新事件（[背压](../deployment/observability.md#ingest-backpressure)），事件未被存储：等待指定秒数后重新发送。不带该响应头时，发布失败，但事件仍可能已经存储，因此除非带 `altId` 和 `occurredTime`，重发就可能存储两次（参见[服务质量](#quality-of-service)）。两种情况都应重试。租户自身上限先被检查，因此超出租户上限会返回 `429`，而不是这里的 `503`。[传输矩阵](../reference/transport-matrix.md#http)列出完整结果。
 
 HTTP 摄取有独立的逐租户额度，与租户 MQTT 流量消耗的额度分开，因此指定租户名称的 HTTP 请求无法耗尽该租户的 MQTT 遥测额度（参见[未确认的租户名称](../concepts/governance.md#unconfirmed-tenants)）。

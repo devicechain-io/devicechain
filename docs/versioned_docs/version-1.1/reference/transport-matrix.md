@@ -133,6 +133,7 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   - **`503` with a `Retry-After` header when the platform is applying backpressure**: it is
     refusing new events so that they cannot push out events a consumer has not processed yet (see
     [backpressure on the ingest path](../deployment/observability.md#ingest-backpressure));
+  - **`500` when the event was dropped because its message could not be built** (a credential it presented could not be sealed, or the event could not be encoded). It was not stored and a retry fails the same way, so it is terminal; `total_msg_build_dropped` counts it by cause;
   - **`503` without a `Retry-After` when the event could not be handed to the stream.**
 
   Retry on `503`: it is the platform telling you, on the only transport that can, that your data

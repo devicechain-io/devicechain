@@ -287,6 +287,7 @@ Publica con QoS 0, o con QoS 1 con `altId` y `occurredTime`. Un operador que rea
 - Devuelve **429 Too Many Requests** si el inquilino supera su techo de ingesta HTTP, contado en lecturas, así que un mensaje que lleva muchas lecturas cuesta más que uno que lleva una sola. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
 - Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o decodificarse, o el inquilino de la
   ruta no es un token válido. Enviar de nuevo la misma petición recibe la misma respuesta.
+- Devuelve **500 Internal Server Error** cuando el evento se descartó antes de poder ponerlo en cola porque no se pudo construir su mensaje (una credencial que presentó no se pudo sellar, o el evento no se pudo codificar). No se almacenó nada y reenviar la misma petición da la misma respuesta, así que no la reintente; la causa está en el registro de `event-sources`, y `total_msg_build_dropped` lo cuenta por causa.
 - Devuelve **503 Service Unavailable** cuando el evento no se aceptó. Con una cabecera
   `Retry-After`, la plataforma está rechazando eventos nuevos
   ([contrapresión](../deployment/observability.md#ingest-backpressure)) y el evento no se

@@ -336,6 +336,7 @@ POST /api/device-management/provisioning/{tenant}/register
 | 正文中的 `device` 不是主题中的设备 | — | 转入 `failed-decode` | `total_msg_failed_decode` |
 | 正文携带 `credentialType`、`credentialId` 或 `credentialSecret`，且在平台 MQTT 消息代理上 | — | 转入 `failed-decode`（已脱敏） | `total_msg_failed_decode`、`total_msg_credential_in_mqtt_body` |
 | 平台正在施加[背压](../deployment/observability.md#ingest-backpressure) | `503`，**带** `Retry-After`：未存储，请重新发送 | 不会被拒绝：它在捕获流中等待；只有该流写满时，最早捕获的消息才会被丢弃 | |
+| 无法构建事件的消息：它携带的凭据无法密封，或事件无法编码 | `500`：未存储，重新发送会以同样方式失败 | 被丢弃 | `total_msg_build_dropped`，按 `cause` |
 | 事件无法交给处理链路 | `503`，**不带** `Retry-After`：可能已被存储，因此重发会存储两次，除非携带 [`altId`](#altid) | — | |
 | 已接受 | `202` | `PUBACK`（QoS 1） | |
 

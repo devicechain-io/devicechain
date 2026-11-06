@@ -532,6 +532,7 @@ dcctl bootstrap local devicechain
 - **升级前检查事件库的剩余空间。** 对已有实例，`dcctl upgrade` 会把事件库的 `max_wal_size` 提高到其卷容量的五分之一（默认 32Gi 时为 6.4 GiB，原为 1 GiB），预写日志现在可以在数据卷上增长到这么大。该值升高时，升级会打印一条提示；卷的剩余空间小于新值时，会给出警告。要保留原来的额度，请运行 `dcctl upgrade --event-store-max-wal-mib 1024`。参见[事件库的预写日志额度](#v120-event-store-wal)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
+- **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}
@@ -640,6 +641,15 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **该值升高时，`dcctl upgrade` 会告知。** 计划中会打印一行，写明旧值和新值。它还会读取事件库卷的剩余空间，在剩余空间小于新值或无法读取时打印警告。它不会拒绝执行：日志只有在压力下才会涨到上限，而补救办法只需一个标志。
 - **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`）。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
 - **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
+
+#### HTTP 接入不再对被丢弃的事件返回 202 {#v120-http-build-dropped}
+
+HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建入站消息时被丢弃的事件返回 `202 Accepted`：这类事件包括所携带的凭据无法密封，或事件无法编码。调用方被告知数据已安全，实际上它没有存储在任何地方。从本版本起，端点对这些事件返回 `500 Internal Server Error`，不带 `Retry-After`，响应中也不包含原因。
+
+- **如果没有客户端看到 `500`，则无需任何操作。** 这些情况是服务上的实例密钥缺失或失败，或事件无法编码，正常运行中都不会出现。
+- **对所有非 `202` 响应都重试的客户端，不应重试该端点的 `500`：** 同一请求会以同样方式失败。`503`（无论是否带 `Retry-After`）和 `429` 的含义不变。
+- **新增计数器 `total_msg_build_dropped{source,cause}`**，在所有传输上统计这些丢弃，`cause` 取 `no_tenant`、`no_transit_key`、`seal_failed` 或 `marshal_failed`。它为每个已配置的来源导出初值 0。任何大于 0 的值都表示有事件未被存储。
+- 集成端点在消息被丢弃时仍保留文档中说明的 `202`。
 
 #### 本版本的其他变更 {#v120-other-changes}
 

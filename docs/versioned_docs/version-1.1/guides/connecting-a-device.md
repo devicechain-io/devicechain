@@ -292,6 +292,7 @@ Publish at QoS 0, or QoS 1 with `altId` and `occurredTime`. An operator who genu
 - It returns **429 Too Many Requests** if the tenant is over its HTTP ingest ceiling, counted in readings, so a message carrying many readings costs more than one carrying a single reading. The MQTT path drops over-limit messages instead of answering.
 - It returns **400 Bad Request** when the body cannot be read or decoded, or the tenant in the path
   is not a valid token. Sending the same request again gets the same answer.
+- It returns **500 Internal Server Error** when the event was dropped before it could be queued, because its message could not be built (a credential it presented could not be sealed, or the event could not be encoded). Nothing was stored and sending the same request again gets the same answer, so do not retry it; the cause is in the `event-sources` log, and `total_msg_build_dropped` counts it by cause.
 - It returns **503 Service Unavailable** when the event was not accepted. With a `Retry-After`
   header, the platform is refusing new events
   ([backpressure](../deployment/observability.md#ingest-backpressure)) and the event was not
