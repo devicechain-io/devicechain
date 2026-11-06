@@ -64,10 +64,30 @@ func writeChainLinks(tx *gorm.DB, credentialId, anchorId uint, chain []*x509.Cer
 // legacyLinkBatch is how many credentials one reconciler statement handles.
 const legacyLinkBatch = 500
 
+// legacyReconcileBudget bounds the credentials one revocation write reconciles. A revocation
+// must not pay O(credentials) of a large tenant before it can commit; what the budget leaves
+// unlinked is covered by widening that write's kick to the whole anchor (a conservative
+// over-kick, never a missed one), and the NEXT revocation carries the reconciliation on from
+// where this one stopped, since each call links the credentials it reaches for good. A variable
+// so a test can shrink it.
+var legacyReconcileBudget = 20_000
+
+// unlinkableSerial and unlinkableIssuerName are the MARK a legacy credential gets when its stored
+// leaf cannot be linked (not PEM, does not parse, or a serial no CRL can name). The mark is a
+// depth-0 link that no CRL entry can match (no CRL serial is empty) and that still carries the
+// pin as its fingerprint, so a manual revocation finds the credential. Its job is to stop the
+// reconciler reading the same unreadable leaf at every revocation for ever.
+const (
+	unlinkableSerial     = ""
+	unlinkableIssuerName = "0000000000000000000000000000000000000000000000000000000000000000"
+)
+
 // ReconcileLegacyChainLinks writes the depth-0 link of the tenant's certificate credentials that
 // have none, from the leaf each stores: its fingerprint, its serial, the hash of its issuer's
 // name, and NO issuer key (a leaf does not carry it). That is enough to match a CRL entry on
-// (issuer name, serial) when ending sessions; a name-only match can over-kick, never admit.
+// (issuer name, serial) when ending sessions; a name-only match can over-kick, never admit. A
+// credential whose leaf cannot be linked gets an unlinkable MARK instead (see above), so it is
+// not read again.
 //
 // It is the app-level reconciler the spec asks for in place of a backfill in the DDL migration. It
 // runs in the CALLING TENANT'S context (an instance-wide pass would need a system context, and
@@ -79,53 +99,52 @@ func (api *Api) ReconcileLegacyChainLinks(ctx context.Context, max int) (int, er
 	if err != nil {
 		return 0, err
 	}
-	done, after := 0, uint(0)
+	done, _, err := api.reconcileLegacyLinks(ctx, tenant, 0, max)
+	return done, err
+}
+
+// reconcileLegacyLinks is ReconcileLegacyChainLinks for one anchor (anchorId 0: every anchor of
+// the tenant). complete reports whether the pass ran out of unlinked credentials; a pass stopped
+// by max, or by an error, is not complete, and the caller must not assume the links are whole.
+func (api *Api) reconcileLegacyLinks(ctx context.Context, tenant string, anchorId uint, max int) (done int, complete bool, err error) {
+	after := uint(0)
 	for max == 0 || done < max {
-		n, last, err := api.reconcileLegacyBatch(ctx, tenant, after)
+		n, last, err := api.reconcileLegacyBatch(ctx, tenant, anchorId, after)
 		done += n
 		after = last
 		if err != nil {
-			return done, err
+			return done, false, err
 		}
 		if n < legacyLinkBatch {
-			break
+			return done, true, nil
 		}
 	}
-	return done, nil
+	return done, false, nil
 }
 
 // reconcileLegacyBatch handles the next page of unlinked credentials after the id `after`, and
-// returns how many it looked at and the last id. Paging by id means a credential that cannot be
-// linked (an unreadable leaf) is passed over, not retried for ever within one call.
-func (api *Api) reconcileLegacyBatch(ctx context.Context, tenant string, after uint) (int, uint, error) {
+// returns how many it looked at and the last id. Paging by id means a credential is looked at
+// once per call, and one that cannot be linked is marked, not retried.
+func (api *Api) reconcileLegacyBatch(ctx context.Context, tenant string, anchorId, after uint) (int, uint, error) {
 	db := api.RDB.DB(ctx)
+	q := db.Select("id", "tenant_id", "trust_anchor_id", "credential_id", "certificate_pem").
+		Where("tenant_id = ? AND credential_type = ? AND trust_anchor_id IS NOT NULL", tenant, string(CredentialX509Certificate))
+	if anchorId != 0 {
+		q = q.Where("trust_anchor_id = ?", anchorId)
+	}
 	var creds []DeviceCredential
-	if err := db.Select("id", "tenant_id", "trust_anchor_id", "certificate_pem").
-		Where("tenant_id = ? AND credential_type = ? AND trust_anchor_id IS NOT NULL AND certificate_pem IS NOT NULL", tenant, string(CredentialX509Certificate)).
-		Where("NOT EXISTS (SELECT 1 FROM device_credential_chain_links l WHERE l.credential_id = device_credentials.id AND l.depth = 0)").
+	if err := q.Where("NOT EXISTS (SELECT 1 FROM device_credential_chain_links l WHERE l.credential_id = device_credentials.id AND l.depth = 0 AND l.tenant_id = device_credentials.tenant_id AND l.trust_anchor_id = device_credentials.trust_anchor_id)").
 		Where("id > ?", after).Order("id ASC").Limit(legacyLinkBatch).Find(&creds).Error; err != nil {
 		return 0, after, err
 	}
 	var links []DeviceCredentialChainLink
 	for _, c := range creds {
-		block, _ := pem.Decode([]byte(c.CertificatePem.String))
-		if block == nil {
-			log.Warn().Uint("credential", c.ID).Msg("A certificate credential's stored leaf is not PEM; it gets no chain link.")
-			continue
-		}
-		leaf, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			log.Warn().Err(err).Uint("credential", c.ID).Msg("A certificate credential's stored leaf does not parse; it gets no chain link.")
-			continue
-		}
-		serial, ok := x509trust.SerialHex(leaf.SerialNumber)
+		link, ok := legacyLinkOf(c)
 		if !ok {
-			continue
+			log.Warn().Uint("credential", c.ID).Msg("A certificate credential's stored leaf cannot be linked to a CRL entry; it is marked, and a revocation by fingerprint still finds it.")
+			link = unlinkableLink(c)
 		}
-		links = append(links, DeviceCredentialChainLink{
-			CredentialId: c.ID, Depth: 0, TrustAnchorId: *c.TrustAnchorId,
-			Fingerprint: x509trust.Fingerprint(leaf), IssuerName: x509trust.IssuerNameHash(leaf), Serial: serial,
-		})
+		links = append(links, link)
 	}
 	if len(links) > 0 {
 		if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&links).Error; err != nil {
@@ -139,10 +158,54 @@ func (api *Api) reconcileLegacyBatch(ctx context.Context, tenant string, after u
 	return len(creds), last, nil
 }
 
-// reconcileLegacyChainLinksBestEffort runs the reconciler for the context's tenant and logs a
-// failure: a revocation is enforced at connect whatever the links say, so the links never gate it.
-func (api *Api) reconcileLegacyChainLinksBestEffort(ctx context.Context) {
-	if _, err := api.ReconcileLegacyChainLinks(ctx, 0); err != nil {
-		log.Warn().Err(err).Msg("Could not reconcile the chain links of legacy certificate credentials; a revocation is enforced at connect regardless.")
+// legacyLinkOf is the depth-0 link of a legacy credential, from the leaf it stores.
+func legacyLinkOf(c DeviceCredential) (DeviceCredentialChainLink, bool) {
+	if !c.CertificatePem.Valid {
+		return DeviceCredentialChainLink{}, false
 	}
+	block, _ := pem.Decode([]byte(c.CertificatePem.String))
+	if block == nil {
+		return DeviceCredentialChainLink{}, false
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return DeviceCredentialChainLink{}, false
+	}
+	serial, ok := x509trust.SerialHex(leaf.SerialNumber)
+	if !ok {
+		return DeviceCredentialChainLink{}, false
+	}
+	return DeviceCredentialChainLink{
+		CredentialId: c.ID, Depth: 0, TrustAnchorId: *c.TrustAnchorId,
+		Fingerprint: x509trust.Fingerprint(leaf), IssuerName: x509trust.IssuerNameHash(leaf), Serial: serial,
+	}, true
+}
+
+// unlinkableLink is the mark of a credential that cannot be linked: the pin as its fingerprint (a
+// certificate credential's id IS the leaf's fingerprint), and an issuer and serial nothing matches.
+func unlinkableLink(c DeviceCredential) DeviceCredentialChainLink {
+	fp := c.CredentialId
+	if !validFingerprint(fp) {
+		fp = unlinkableIssuerName
+	}
+	return DeviceCredentialChainLink{
+		CredentialId: c.ID, Depth: 0, TrustAnchorId: *c.TrustAnchorId,
+		Fingerprint: fp, IssuerName: unlinkableIssuerName, Serial: unlinkableSerial,
+	}
+}
+
+// reconcileLegacyChainLinksBounded runs the reconciler for one anchor of the context's tenant, to
+// legacyReconcileBudget credentials, and reports whether the anchor's links are now whole. A
+// failure is logged and reported as not whole: a revocation is enforced at connect whatever the
+// links say, so the links never gate it, but a kick built on incomplete links must widen.
+func (api *Api) reconcileLegacyChainLinksBounded(ctx context.Context, tenant string, anchorId uint) bool {
+	_, complete, err := api.reconcileLegacyLinks(ctx, tenant, anchorId, legacyReconcileBudget)
+	if err != nil {
+		log.Warn().Err(err).Msg("Could not reconcile the chain links of legacy certificate credentials; the live-session kick will cover the whole anchor.")
+		return false
+	}
+	if !complete {
+		log.Info().Int("budget", legacyReconcileBudget).Msg("Reconciled a bounded share of the legacy certificate credentials' chain links; the live-session kick covers the whole anchor, and the next revocation continues.")
+	}
+	return complete
 }

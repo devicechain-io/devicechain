@@ -103,6 +103,11 @@ type Api struct {
 	// SessionKicker. Nil on an instance that runs no MQTT auth callout, and in tests.
 	SessionKicker SessionKicker
 
+	// RevocationResweepAfter is how long after its first sweep a certificate revocation's kick is
+	// repeated, to end a session admitted in the race with the revocation. Zero means
+	// DefaultRevocationResweepAfter; wiring validates it (ValidateRevocationResweepAfter).
+	RevocationResweepAfter time.Duration
+
 	// DeviceSecretKey digests every device credential secret a create or update carries,
 	// and verifies a presented one against its stored digest on the per-event path. It is
 	// derived from the instance root key at wiring time. NIL FAILS CLOSED: a secret

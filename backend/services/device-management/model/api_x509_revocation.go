@@ -308,7 +308,10 @@ func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
 // else, and a certificate registration holds it FOR SHARE to its commit), then the tenant's
 // manual-revocation advisory lock, then the entry. Nothing here takes a lock in the other order.
 //
-// It does not end live sessions: that is the live-session slice's.
+// LIVE SESSIONS: the devices whose sessions the entry affects are queued for a kick in the same
+// transaction, and the call asks the broker before it returns (see revocationKickTargets). A kick
+// that cannot be confirmed returns the entry AND ErrSessionsNotEnded: the revocation stands and
+// new connects are refused; repeating the call asks again.
 func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertificateRevokeRequest) (*DeviceRevokedCertificate, error) {
 	tenant, err := ctxTenant(ctx)
 	if err != nil {
@@ -330,12 +333,12 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 	if token == "" {
 		return nil, invalidAnchor("anchorToken is required")
 	}
-	// The credentials recorded before chain links existed get their depth-0 link now, so a later
-	// slice's session targeting finds them. A failure here must not stop a revocation, which is
-	// enforced at connect whatever the links say.
-	api.reconcileLegacyChainLinksBestEffort(ctx)
+	// The credentials recorded before chain links existed get their depth-0 link now, so the
+	// session targeting below finds them (see prepareRevocationKicks).
+	linksWhole := api.prepareRevocationKicks(ctx, tenant, token)
 
 	var out *DeviceRevokedCertificate
+	var anchorId uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		out = nil
 		anchor, err := lockTrustAnchorByToken(tx, token)
@@ -345,6 +348,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 			}
 			return err
 		}
+		anchorId = anchor.ID
 		if fp == anchor.FingerprintSha256 {
 			return invalidAnchor("that is the trust anchor's own certificate; disable the anchor instead")
 		}
@@ -386,13 +390,22 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		if err := bumpRevocationRows(tx, anchor.ID, 1); err != nil {
 			return err
 		}
+		// The sessions this entry ends are queued in the same transaction (lock order: anchor,
+		// then the entry, then the kick rows).
+		if _, err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+			RevocationDelta{Fingerprints: []string{fp}}, linksWhole); err != nil {
+			return err
+		}
 		out = entry
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	// Asked whether or not this call wrote the entry: a repeat after an unconfirmed kick finds the
+	// entry already there and still owes the broker its question. The entry is returned with the
+	// error, which is ErrSessionsNotEnded when the sessions could not be confirmed ended.
+	return out, api.endRevokedSessions(ctx, tenant, anchorId)
 }
 
 // UnrevokeDeviceCertificate removes a manual revocation, reporting whether one existed. The

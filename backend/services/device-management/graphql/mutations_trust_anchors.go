@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -61,10 +62,17 @@ func (r *SchemaResolver) RevokeDeviceCertificate(ctx context.Context, args struc
 		AnchorToken: args.AnchorToken, CertificatePem: args.CertificatePem,
 		FingerprintSha256: args.FingerprintSha256, Reason: args.Reason,
 	})
+	// The revocation is saved even when its sessions could not be confirmed ended; that is the
+	// result's sessionsEnded, not a failed mutation (an error would null the result and hide that
+	// the revocation stands).
+	ended, err := model.SessionsEndedOf(err)
 	if err != nil {
 		return nil, err
 	}
-	return &DeviceRevokedCertificateResolver{M: *revoked, S: r, C: ctx}, nil
+	if revoked == nil {
+		return nil, errors.New("the revocation returned no entry")
+	}
+	return &DeviceRevokedCertificateResolver{M: *revoked, S: r, C: ctx, Ended: &ended}, nil
 }
 
 // Remove a manual revocation.
