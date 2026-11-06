@@ -19,6 +19,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/partition"
+	"github.com/rs/zerolog/log"
 )
 
 // Source is where the authoritative table is read from (iam.Store).
@@ -106,16 +107,40 @@ func (l *LazyBucket) Update(key string, value []byte, revision uint64) error {
 	return b.Update(key, value, revision)
 }
 
-// IsFatal reports whether a Sync error means the service must not carry on: the P the database
-// records is not the P the mirror records. Everything else (the broker is away, a bucket is
-// full) is transient or harmless today and is retried by the periodic pass.
+// IsFatal reports whether a Sync error is the one that stops the service AT START: the P the
+// database records is not the P the mirror records. Everything else (the broker is away, a bucket
+// is full) is transient or harmless today and is retried by the periodic pass.
+//
+// 🔴 ONLY THE START ACTS ON IT, ON PURPOSE. Past start the same error fails the periodic pass
+// loudly (the pass is counted failed, so the placement_mirror alert fires, and each failure is
+// logged at error with the cause) but does not take the process down: this service is the
+// instance's identity provider, nothing reads the mirror yet, and a mirror that disagrees with
+// the database mid-run is a hand edit of the bucket, not a database that has moved. Exiting every
+// replica at once over it would turn that into a login outage for a value no request depends on.
+// The day something routes by the mirror, this is the place to revisit.
 func IsFatal(err error) bool { return errors.Is(err, partition.ErrPChanged) }
+
+// mirrorPass is one scheduled pass. A changed P is reported as itself, wrapped, and logged at
+// error with an explicit statement of what it means: it is the one failure here that is not
+// transient and will not clear on retry.
+func mirrorPass(src Source, bucket partition.Bucket) func(ctx context.Context) error {
+	return func(ctx context.Context) error {
+		err := Sync(ctx, src, bucket)
+		if IsFatal(err) {
+			log.Error().Err(err).Msg("The placement mirror records a different P from the database. This will not " +
+				"clear on retry: the vpartition count is fixed for the life of the instance. Every pass fails until " +
+				"the mirror or the database is repaired. The service keeps running because nothing routes by the " +
+				"mirror yet; a restart refuses to start.")
+		}
+		return err
+	}
+}
 
 // NewMirrorTask schedules Sync. The first pass is the caller's, at start; this one keeps an
 // unchanged mirror alive (its entries expire) and picks up a changed placement.
 func NewMirrorTask(ms *core.Microservice, src Source, bucket partition.Bucket, interval time.Duration,
 	callbacks core.LifecycleCallbacks) *core.PeriodicTask {
 	return core.NewPeriodicTask(ms.FunctionalArea, "placement-mirror", interval,
-		func(ctx context.Context) error { return Sync(ctx, src, bucket) },
+		mirrorPass(src, bucket),
 		callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("placement_mirror")))
 }

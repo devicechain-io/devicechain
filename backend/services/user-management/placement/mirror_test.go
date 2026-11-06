@@ -4,11 +4,14 @@
 package placement
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/partition"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -181,4 +184,28 @@ func TestALazyBucketRetriesItsOpenUntilItWorks(t *testing.T) {
 	opens = 0
 	require.NoError(t, Sync(context.Background(), src, lazy))
 	require.Equal(t, 0, opens, "an opened bucket is kept")
+}
+
+// A changed P found on a PERIODIC pass fails the pass (so the pass metric and its alert see it),
+// keeps the sentinel, and says plainly in the log that it will not clear on retry. It does not
+// stop the process: see IsFatal for why only the start does.
+func TestPeriodicPassReportsAChangedPLoudly(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = prev })
+
+	b := newBucket()
+	require.NoError(t, partition.Publish(b, partition.NewTable(partition.DefaultP*2)))
+	err := mirrorPass(&source{table: newTable()}, b)(context.Background())
+	require.Error(t, err)
+	require.True(t, IsFatal(err))
+	require.Contains(t, buf.String(), `"level":"error"`)
+	require.Contains(t, buf.String(), "will not clear on retry")
+
+	// A transient failure is retried quietly: no such line.
+	buf.Reset()
+	err = mirrorPass(&source{err: errors.New("db away")}, newBucket())(context.Background())
+	require.Error(t, err)
+	require.NotContains(t, buf.String(), "will not clear on retry")
 }
