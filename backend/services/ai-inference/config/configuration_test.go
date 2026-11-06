@@ -41,6 +41,10 @@ func TestValidateRejectsOutOfRange(t *testing.T) {
 		{"negative timeout", "inferenceTimeoutMs", func(c *AiInferenceConfiguration) { c.InferenceTimeoutMs = -1 }},
 		{"zero prompt cap", "maxPromptBytes", func(c *AiInferenceConfiguration) { c.MaxPromptBytes = 0 }},
 		{"zero output cap", "maxOutputTokens", func(c *AiInferenceConfiguration) { c.MaxOutputTokens = 0 }},
+		{"negative prompt cap", "maxPromptBytes", func(c *AiInferenceConfiguration) { c.MaxPromptBytes = -1 }},
+		{"negative output cap", "maxOutputTokens", func(c *AiInferenceConfiguration) { c.MaxOutputTokens = -1 }},
+		{"negative rate", "inferenceRequestsPerMinute", func(c *AiInferenceConfiguration) { c.InferenceRequestsPerMinute = -1 }},
+		{"negative burst", "inferenceBurst", func(c *AiInferenceConfiguration) { c.InferenceBurst = -1 }},
 		{"zero rate", "inferenceRequestsPerMinute", func(c *AiInferenceConfiguration) { c.InferenceRequestsPerMinute = 0 }},
 		{"zero burst", "inferenceBurst", func(c *AiInferenceConfiguration) { c.InferenceBurst = 0 }},
 	}

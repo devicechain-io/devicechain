@@ -53,6 +53,10 @@ func TestDefaultCommandTTLValidation(t *testing.T) {
 	assert.Equal(t, 3600, kept.DefaultCommandTTLSeconds)
 	assert.NoError(t, kept.Validate())
 
+	atFloor := validBase(t)
+	atFloor.DefaultCommandTTLSeconds = MinCommandTTLSeconds
+	assert.NoError(t, atFloor.Validate(), "the floor itself is a legal value")
+
 	tooSmall := validBase(t)
 	tooSmall.DefaultCommandTTLSeconds = MinCommandTTLSeconds - 1
 	err := tooSmall.Validate()
@@ -86,6 +90,10 @@ func TestHeldCommandCeilingValidation(t *testing.T) {
 	kept.ApplyDefaults()
 	assert.Equal(t, 250, kept.HeldCommandCeiling)
 	assert.NoError(t, kept.Validate())
+
+	atFloor := validBase(t)
+	atFloor.HeldCommandCeiling = MinHeldCommandCeiling
+	assert.NoError(t, atFloor.Validate(), "the floor itself is a legal value")
 
 	tooSmall := validBase(t)
 	tooSmall.HeldCommandCeiling = MinHeldCommandCeiling - 1
@@ -246,6 +254,12 @@ func TestMaxDispatchFailuresValidation(t *testing.T) {
 	kept.ApplyDefaults()
 	assert.Equal(t, 50, kept.MaxDispatchFailures)
 	assert.NoError(t, kept.Validate())
+
+	for _, edge := range []int{MinMaxDispatchFailures, MaxMaxDispatchFailures} {
+		atEdge := validBase(t)
+		atEdge.MaxDispatchFailures = edge
+		assert.NoError(t, atEdge.Validate(), "both ends of the range are legal values (%d)", edge)
+	}
 
 	tooSmall := validBase(t)
 	tooSmall.MaxDispatchFailures = MinMaxDispatchFailures - 1
