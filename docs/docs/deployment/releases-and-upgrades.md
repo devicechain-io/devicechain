@@ -762,7 +762,9 @@ What needs action:
 - **If you write the instance configuration yourself** (`instance.existingSecret`), add `infrastructure.tokenAudience`. When the MCP area is deployed and the document does not list its resource, `dcctl upgrade` prints a warning with the block to add, and refuses once `enforcement` is `enforce`. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you set the MCP server's `resourceUrl` yourself, write its scheme and host in lowercase** before enforcement. See [Tokens are checked against their resource](#v120-token-audience).
 - **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
+- **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published while an older replica is still serving can be missing its decoder; see [Payload decoders](#v120-payload-decoders).
 - **Know that X.509 certificate revocation lists are new and optional.** Nothing needs doing to upgrade; read [Revocation lists](#v120-x509-crl) before you upload one.
+
 
 #### Detection shards run in parallel {#v120-detect-shards}
 
@@ -824,6 +826,17 @@ The chart and `dcctl` write `infrastructure.tokenAudience` for you, from the ing
 - **Profile and device-type changes made while a rolling upgrade is in progress can take up to about twice the cache time to live to reach upgraded replicas** (about 10 minutes at the default 300 seconds of `metricDefCacheTtlSeconds` and `inMemoryCache.ttlSeconds`). That covers a publish, a rollback, a re-profile of a device type and a geofence change. Once every replica runs this release, changes take effect at once as before.
 - **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published from an older replica does not contain the decoder.
 - **The in-process copy of this cache is larger.** It is bounded at 32 MiB per replica (it was 4 MiB), because an entry that carries a payload decoder holds its compiled programs. Entries without a decoder are unchanged in size. The bound is `inMemoryCache.profileResolutionCacheMiB`, and `inMemoryCache.profileResolutionTenantSharePercent` (default 25) caps how much of it one tenant may hold, so a tenant with many large decoders evicts its own entries and never another tenant's. Replicas also export `payload_decoder_compiles_total`. If you set a memory limit yourself, count the extra 28 MiB.
+
+#### Payload decoders {#v120-payload-decoders}
+
+A device profile can now carry a **payload decoder**: rules, written as expressions, that turn a binary frame, a generic JSON body or a network server's decoded object into measurements. The new [Payload decoders](../guides/payload-decoders.md) guide describes them, and the [function reference](../reference/decoder-functions.md) lists the library's functions and the limits. Nothing needs doing to upgrade, and a profile with no decoder behaves exactly as before.
+
+- **Authoring and testing are in this release.** The console's profile page has a **Decoder** tab. On the `device-management` GraphQL API, `setDeviceProfileDecoder` and `clearDeviceProfileDecoder` write the profile's draft decoder, `testPayloadDecoder` runs a decoder over one input without storing anything, and `payloadDecoderFunctions` lists the function library. `DeviceProfile.decoder` and `DeviceProfileVersion.decoder` are new nullable fields. All of it is additive.
+- **Live decoding of uplinks is coming in v1.2.** The integration endpoints do not run decoders in this build, so a saved or published decoder does not change what an [inbound integration](../guides/inbound-integrations.md) stores.
+- **Publishing is gated on the decoder.** A profile with a decoder is published, or rolled back to, only if the decoder compiles against the metrics of that version and every saved test vector passes. A profile with no decoder is unaffected.
+- **The migration is additive.** It adds one nullable column to device profiles and two tables that nothing writes yet. An older replica does not read them.
+- **The test door is rate-limited per replica.** `testPayloadDecoder` allows 10 requests a second for each tenant, with a burst of 20, on each `device-management` replica, so a tenant's total rate rises with the replica count. A request over the limit is refused with `RATE_LIMITED`.
+- **During a rolling upgrade, publish a decoder only after every `device-management` replica runs this release.** A version published while an older replica handles the request is frozen without its decoder, because that replica does not know the field. After the rollout, check that `DeviceProfileVersion.decoder` is present on the version you published and, if it is not, publish again.
 
 #### X.509 revocation lists {#v120-x509-crl}
 

@@ -78,6 +78,32 @@ class Validate(unittest.TestCase):
         self.assertEqual(bad(lambda d: d.update(login={"mode": "superuser-secret", "instance": "g", "email": "a@b"})), [])
         self.assertTrue(bad(lambda d: d.update(login={"mode": "carrier-pigeon"})))
 
+    def test_login_mode_none_reads_nothing(self):
+        self.assertEqual(bad(lambda d: d.update(login={"mode": "none"})), [])
+        self.assertTrue(bad(lambda d: d.update(login={"mode": "none", "sim": "x"})), "a mode-none login carries nothing")
+        self.assertTrue(bad(lambda d: d.update(login={"mode": "None"})))
+        self.assertEqual(v.load_credentials({"mode": "none"}), ("", ""))
+
+    def test_signin_step(self):
+        def with_steps(*steps, login=None):
+            def m(d):
+                d["shots"][0]["steps"] = list(steps)
+                if login:
+                    d["login"] = login
+            return bad(m)
+
+        hidden, shown, wait = {"signin": "dash"}, {"signin": "dash", "on_camera": True}, {"wait": 1}
+        self.assertEqual(with_steps(hidden, wait), [])
+        self.assertEqual(with_steps(wait, shown, wait), [])
+        self.assertTrue(with_steps({"signin": "console"}, wait), "an unknown sign-in target is refused")
+        self.assertTrue(with_steps({"signin": True}, wait))
+        self.assertTrue(with_steps(wait, hidden, wait), "a trimmed sign-in runs before recording, so it is first")
+        self.assertTrue(with_steps(hidden), "a trimmed sign-in alone leaves nothing to record")
+        self.assertTrue(with_steps(shown, shown, wait), "at most one")
+        self.assertTrue(with_steps({"signin": "dash", "on_camera": "yes"}, wait))
+        self.assertTrue(with_steps({"wait": 1, "on_camera": True}), "on_camera belongs to signin")
+        self.assertTrue(with_steps(hidden, wait, login={"mode": "none"}), "no credential source, nothing to sign in with")
+
     def test_the_fixtures_are_valid(self):
         import yaml
 

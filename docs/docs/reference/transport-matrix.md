@@ -361,6 +361,8 @@ never connects to DeviceChain.
   servers suspend a webhook that is refused. The sender is therefore not told. An uplink with nothing
   decoded in it is acknowledged and stores nothing, and is counted. `IntegrationShedAccepted` and
   `IntegrationUndecodedHigh` report both.
+  A [payload decoder](../guides/payload-decoders.md) written on the device profile can decode the raw
+  frame in the platform instead; it decodes live uplinks from v1.2.
 - **Write ○ / Read ○** — there is no downlink. A command issued to a device that last reported
   through an integration **is accepted, and then fails** at the next delivery sweep with
   `COMMAND_TRANSPORT_UNSUPPORTED`, instead of waiting until it expires. The failure is final. A

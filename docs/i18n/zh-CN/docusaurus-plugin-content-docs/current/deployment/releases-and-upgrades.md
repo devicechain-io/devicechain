@@ -518,7 +518,9 @@ dcctl bootstrap local devicechain
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
+- **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
+
 
 #### 检测分片并行运行 {#v120-detect-shards}
 
@@ -580,6 +582,17 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
 - **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
 - **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户只会驱逐自己的条目，而不会驱逐其他租户的。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
+
+#### 载荷解码器 {#v120-payload-decoders}
+
+设备配置文件现在可以携带**载荷解码器**：用表达式写成的规则，把二进制帧、通用 JSON 正文或网络服务器解码出的对象转换成测量。新的[载荷解码器](../guides/payload-decoders.md)指南对它们做了说明，[函数参考](../reference/decoder-functions.md)列出了函数库中的函数和各项限制。升级本身无需做任何事，没有解码器的配置文件行为与以前完全一致。
+
+- **编写和测试包含在本版本中。**控制台的配置文件页面有一个 **Decoder** 选项卡。在 `device-management` 的 GraphQL API 上，`setDeviceProfileDecoder` 和 `clearDeviceProfileDecoder` 写入配置文件的草稿解码器，`testPayloadDecoder` 在不存储任何内容的情况下对一个输入运行解码器，`payloadDecoderFunctions` 列出函数库。`DeviceProfile.decoder` 和 `DeviceProfileVersion.decoder` 是新增的可空字段。以上全部是增量变化。
+- **对实时上行的解码将在 v1.2 中提供。**本构建中的集成端点不运行解码器，因此已保存或已发布的解码器不会改变[入站集成](../guides/inbound-integrations.md)所存储的内容。
+- **发布取决于解码器。**带有解码器的配置文件，只有在解码器能针对该版本的指标编译、且所有已保存的测试向量都通过时，才能发布或回滚到该版本。没有解码器的配置文件不受影响。
+- **迁移是增量的。**它为设备配置文件增加一个可空列，以及两张目前还没有任何内容写入的表。旧副本不会读取它们。
+- **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
+- **滚动升级期间，只有当每个 `device-management` 副本都运行本版本之后，才发布解码器。**由旧副本处理请求时发布的版本，会在没有解码器的情况下被冻结，因为该副本不认识这个字段。升级完成后，请检查你发布的版本上是否存在 `DeviceProfileVersion.decoder`，如果没有，请重新发布。
 
 #### X.509 吊销列表 {#v120-x509-crl}
 
