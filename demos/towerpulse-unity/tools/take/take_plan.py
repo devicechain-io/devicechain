@@ -13,7 +13,7 @@ take and the beats follow it. The wait between two beats is CUT, not faked, and 
 
 With --control (the rule-disabled run, TP-B3) the plan gains one more shot, `control`, filmed from that recording with run A's camera move and cards:
 the same seed gives the same day, so it covers the span from just before run A's alarm to just after its room was back at setpoint, and the shot shows the room overheating with no alarm card and
-no command card. A recording that holds an alarm or a command fact, or whose rule was enabled, is not a control run and is refused.
+no command card. A recording that holds an alarm, command, received or answered fact, or that does not record the rule as disabled, is not a control run and is refused.
 
 The camera moves are the storyboard's (Assets/Towerpulse/Data/shots.json), split across the sub-shots of a beat so the move is continuous.
 The owner's view (beat 4) is filmed from the console, not from the scene; its slot is the gap in the show clock between the chiller and the pull-back.
@@ -68,14 +68,15 @@ CONTROL_LEAD_S = 60.0  # the control shot opens this long before run A's alarm (
 def check_control(rundir, fs):
     """Refuse a recording that is not the rule-disabled control: it must hold no alarm or command fact, and must not say the rule was enabled."""
     for f in fs:
-        if f.get("k") in ("alarm", "command"):
+        if f.get("k") in ("alarm", "command", "received", "answered"):
             raise PlanError("the control recording holds a %s fact (%s): the rule was not disabled, so it is not a control run" % (f.get("k"), f.get("key")))
     path = os.path.join(rundir, "towerpulse.json")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            enabled = json.load(f).get("ruleEnabled", {})
-        if enabled.get(CONTROL_RULE) is True:
-            raise PlanError("the control recording says %s was enabled: it is not a control run" % CONTROL_RULE)
+    if not os.path.exists(path):
+        raise PlanError("the control recording has no towerpulse.json: nothing says %s was disabled (acceptance_check.py annotate writes it)" % CONTROL_RULE)
+    with open(path, encoding="utf-8") as f:
+        enabled = json.load(f).get("ruleEnabled", {})
+    if enabled.get(CONTROL_RULE) is not False:
+        raise PlanError("the control recording does not say %s was disabled (ruleEnabled: %r): it is not a proven control run" % (CONTROL_RULE, enabled.get(CONTROL_RULE)))
 
 
 def smooth(t):

@@ -171,6 +171,22 @@ class CheckControlTests(unittest.TestCase):
         with self.assertRaises(take_plan.PlanError):
             self.check(self.write([{"sim": 100, "k": "command", "dev": "X", "key": "boost-cooling", "status": "SENT"}]))
 
+    def test_device_command_facts_are_refused_too(self):
+        for kind in ("received", "answered"):
+            with self.assertRaises(take_plan.PlanError):
+                self.check(self.write([{"sim": 100, "k": kind, "dev": "X", "key": "boost-cooling"}], enabled=False))
+
+    def test_a_recording_with_no_rule_metadata_is_refused(self):
+        with self.assertRaises(take_plan.PlanError):
+            self.check(self.write([]))
+
+    def test_a_recording_with_no_entry_for_the_rule_is_refused(self):
+        d = self.write([], enabled=False)
+        with open(os.path.join(d, "towerpulse.json"), "w", encoding="utf-8") as f:
+            json.dump({"ruleEnabled": {}}, f)
+        with self.assertRaises(take_plan.PlanError):
+            self.check(d)
+
     def test_a_recording_whose_rule_was_enabled_is_refused(self):
         with self.assertRaises(take_plan.PlanError):
             self.check(self.write([], enabled=True))
