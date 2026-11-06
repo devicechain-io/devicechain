@@ -577,10 +577,10 @@ desactivado:
 | 1000 o menos | 1 GiB | 1 GiB | 1 GiB | 16Gi (el valor por defecto) | 16Gi |
 | 5000 | 1,6 GiB | 1,6 GiB | 1,9 GiB | 16Gi | 16Gi |
 | 10 000 | 3,2 GiB | 3,2 GiB | 3,8 GiB | 22Gi | 24Gi |
-| 20 000 | 6,4 GiB | 6,4 GiB | 7,5 GiB | 33Gi | 36Gi |
+| 20 000 | 6,4 GiB | 6,4 GiB | 7,5 GiB | 34Gi | 36Gi |
 
 «Volumen que cabe» es el menor volumen cuyo `max_file_store` aloja la reserva, junto con los demás
-flujos, los almacenes de la pasarela MQTT y los cubos clave-valor (unos 8,6 GiB en conjunto con los
+flujos, los almacenes de la pasarela MQTT y los cubos clave-valor (unos 8,8 GiB en conjunto con los
 valores por defecto); la fila de 20 000 lo supera por menos de 100 MiB. Use la cifra mayor, que deja
 espacio para los flujos y cubos que añadan versiones posteriores. `dcctl` no tiene ninguna opción para
 el volumen de JetStream. La reclamación de volumen de un StatefulSet no se puede cambiar en el sitio,

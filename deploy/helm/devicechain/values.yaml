@@ -239,7 +239,7 @@ instance:
         # tenants. It is not a rate limit; it is the rate the disk is sized for. For a busier
         # instance raise it AND the JetStream volume (nats_jetstream_storage): at 20,000 a second
         # for 15 minutes the three streams reserve about 8.1 + 6.9 + 6.9 GB (20 GiB) on every
-        # broker server, up from 3 GiB, so the volume needs 33Gi against the default 16Gi.
+        # broker server, up from 3 GiB, so the volume needs 34Gi against the default 16Gi.
         # `dcctl bootstrap` and `dcctl upgrade` check the sum against the volume before they
         # change anything and say which of the two is short; dcctl sets 1000 for the standard
         # profile and 50 for --compact, and `--values` moves it.
