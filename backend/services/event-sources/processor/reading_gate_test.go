@@ -360,7 +360,10 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 	require.True(t, ack.settled(t), "message never settled")
 
 	fresh := &recordingAck{}
-	m = capturedMsg("inst-1.acme.devices.d1.events", wideEntryBody(5), 1, 8, fresh)
+	// Another tenant: acme, having just drained a backlog, stays on the send timeline while it
+	// keeps sending (see recoveryTracker), so a live first delivery is shown by a tenant that
+	// has not been behind.
+	m = capturedMsg("inst-1.globex.devices.d1.events", wideEntryBody(5), 1, 8, fresh)
 	m.AppendTime = time.Now()
 	h.source.handle(m)
 	require.True(t, fresh.settled(t), "message never settled")
@@ -371,7 +374,7 @@ func TestDecodeWorkerPassesSendTimeRedeliveryAndOrigin(t *testing.T) {
 	require.Len(t, calls, 2)
 	assert.Equal(t, readingCall{"acme", appended, true, OriginAuthenticated, 3}, calls[0],
 		"a backlog redelivery: metered at its append time, flagged, authenticated, 3 readings")
-	assert.Equal(t, readingCall{"acme", time.Time{}, false, OriginAuthenticated, 5}, calls[1],
+	assert.Equal(t, readingCall{"globex", time.Time{}, false, OriginAuthenticated, 5}, calls[1],
 		"a live first delivery is metered at now")
 }
 
