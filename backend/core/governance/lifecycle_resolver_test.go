@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -194,33 +195,75 @@ func TestNewTenantLifecycleGateIsOffWhenUnconfigured(t *testing.T) {
 		"a freshly built gate has fetched nothing yet and must fail open, not refuse")
 }
 
+// manualClock is a clock the test advances by hand; the resolver reads it for every freshness
+// decision, so no assertion below depends on elapsed real time.
+type manualClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *manualClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+func (c *manualClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+// quiesce returns once no refresh is in flight, i.e. once every fetch started so far has landed
+// in the cache. It waits on the resolver's own bookkeeping rather than on a delay, so what is
+// asserted afterwards is the settled state, whatever the machine's speed.
+func quiesce(t *testing.T, r *TenantLifecycleResolver) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		r.mu.Lock()
+		n := len(r.inflight)
+		r.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a refresh never finished")
+		}
+		runtime.Gosched()
+	}
+}
+
+// lifecycleOnClock is lifecycleWith on a manual clock, with refreshes not rate-bound.
+func lifecycleOnClock(fetch func(context.Context, string) (string, error)) (*TenantLifecycleResolver, *manualClock) {
+	clock := &manualClock{now: time.Unix(1_700_000_000, 0)}
+	r := lifecycleWith(fetch)
+	r.Configure(ResolverOptions{TTL: time.Minute, NegativeTTL: time.Minute, Clock: clock.Now,
+		RefreshesPerSecond: 1000, RefreshBurst: 1000})
+	return r, clock
+}
+
 // GoneOrUnverified is the fail-CLOSED reading: gone unless a fresh, successful answer says active.
-// A cold cache, an unresolvable tenant, a failed refresh of a known tenant and a stale entry all
-// read gone, where Deleted (fail-open) reads each of them active.
+// A cold cache, an unresolvable tenant and an unrecognised or empty state all read gone, where
+// Deleted (fail-open) reads the first two active.
 func TestGoneOrUnverifiedFailsClosedWhereDeletedFailsOpen(t *testing.T) {
 	// Cold and failing: nothing has ever answered.
 	down := &fixedLifecycle{err: errors.New("user-management unreachable")}
-	r := lifecycleWith(down.fetch)
-	assert.False(t, r.Deleted("acme"), "premise: the fail-open gate reads a cold tenant active")
-	assert.True(t, r.GoneOrUnverified("acme"), "a cold, unresolvable tenant must read gone")
-	require.Eventually(t, func() bool { return down.callCount() > 0 }, time.Second, 5*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
+	r, _ := lifecycleOnClock(down.fetch)
+	assert.True(t, r.GoneOrUnverified("acme"), "a cold tenant must read gone")
+	quiesce(t, r)
+	assert.Equal(t, 1, down.callCount())
 	assert.True(t, r.GoneOrUnverified("acme"), "a tenant whose lookups fail must read gone")
+	assert.False(t, r.Deleted("acme"), "premise: the fail-open gate reads that same tenant active")
 
 	// A fresh active answer is the only thing that reads active.
 	up := &fixedLifecycle{state: LifecycleActive}
-	r = lifecycleWith(up.fetch)
+	r, _ = lifecycleOnClock(up.fetch)
 	assert.True(t, r.GoneOrUnverified("acme"), "before the first answer lands: gone")
-	require.Eventually(t, func() bool { return !r.GoneOrUnverified("acme") }, time.Second, 5*time.Millisecond,
-		"a fresh active answer reads active")
+	quiesce(t, r)
+	assert.False(t, r.GoneOrUnverified("acme"), "a fresh active answer reads active")
 
-	// A deleted tenant, and one in a state this reader cannot name, read gone.
+	// A deleted tenant, and one in a state this reader cannot name, or an empty answer, read gone.
 	for _, state := range []string{"purging", "some-future-state", ""} {
 		f := &fixedLifecycle{state: state}
-		r = lifecycleWith(f.fetch)
+		r, _ = lifecycleOnClock(f.fetch)
 		r.GoneOrUnverified("acme")
-		require.Eventually(t, func() bool { return f.callCount() > 0 }, time.Second, 5*time.Millisecond)
-		time.Sleep(20 * time.Millisecond)
+		quiesce(t, r)
 		assert.Truef(t, r.GoneOrUnverified("acme"), "state %q reads gone", state)
 	}
 }
@@ -228,25 +271,38 @@ func TestGoneOrUnverifiedFailsClosedWhereDeletedFailsOpen(t *testing.T) {
 // A stale entry (past its TTL) and an entry whose latest refresh failed are not authoritative
 // even though they hold a value that says active.
 func TestGoneOrUnverifiedDistrustsAStaleOrFailedEntry(t *testing.T) {
-	var mu sync.Mutex
-	now := time.Now()
-	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	f := &fixedLifecycle{state: LifecycleActive}
-	r := lifecycleWith(f.fetch)
-	r.Configure(ResolverOptions{TTL: time.Minute, NegativeTTL: time.Minute, Clock: clock})
+	r, clock := lifecycleOnClock(f.fetch)
 
 	r.GoneOrUnverified("acme")
-	require.Eventually(t, func() bool { return !r.GoneOrUnverified("acme") }, time.Second, 5*time.Millisecond)
+	quiesce(t, r)
+	require.False(t, r.GoneOrUnverified("acme"), "premise: a fresh active answer reads active")
 
-	mu.Lock()
-	now = now.Add(2 * time.Minute) // past the TTL
-	mu.Unlock()
+	// Just inside the TTL: still authoritative, and no refresh was needed.
+	clock.Advance(59 * time.Second)
+	assert.False(t, r.GoneOrUnverified("acme"), "inside the TTL it is still fresh")
+	quiesce(t, r)
+	assert.Equal(t, 1, f.callCount())
+
+	// Past the TTL the entry is stale: gone at once, whatever the refresh it triggers returns.
 	f.mu.Lock()
-	f.err = errors.New("down") // and the refresh it triggers fails
+	f.err = errors.New("down")
 	f.mu.Unlock()
+	clock.Advance(2 * time.Second)
 	assert.True(t, r.GoneOrUnverified("acme"), "a stale entry must read gone")
-	require.Eventually(t, func() bool { return f.callCount() >= 2 }, time.Second, 5*time.Millisecond)
-	time.Sleep(20 * time.Millisecond)
+	quiesce(t, r)
+	assert.Equal(t, 2, f.callCount(), "the stale read triggered one refresh")
+
+	// That refresh failed: the old value is kept, but it is no longer authoritative.
 	assert.True(t, r.GoneOrUnverified("acme"), "an entry whose refresh failed must read gone")
 	assert.False(t, r.Deleted("acme"), "premise: the fail-open gate still serves the last-known active")
+
+	// Once the negative TTL passes and the authority answers again, it reads active again.
+	f.mu.Lock()
+	f.err = nil
+	f.mu.Unlock()
+	clock.Advance(2 * time.Minute)
+	assert.True(t, r.GoneOrUnverified("acme"), "stale again: gone while the refresh is in flight")
+	quiesce(t, r)
+	assert.False(t, r.GoneOrUnverified("acme"), "a fresh active answer after the outage reads active")
 }
