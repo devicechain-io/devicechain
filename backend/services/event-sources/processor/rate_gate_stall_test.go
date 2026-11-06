@@ -96,3 +96,37 @@ func TestAPlatformStallStillShedsATenantAboveItsCeiling(t *testing.T) {
 	require.LessOrEqual(t, admitted, bound, "an over-ceiling tenant must not be admitted wholesale")
 	require.Greater(t, *shed, count/5, "an over-ceiling tenant was barely shed")
 }
+
+// THE YOUNG TAIL OF A STALL IS STILL THE STALL. A tenant sends its ceiling (1000/s) for 3 s and,
+// 2.5 s into the stall, a 1000-message burst. On the send timeline that is compliant (the burst
+// spends 1000 of the 2000 tokens). The messages younger than burst/rate (2 s) used to be metered
+// at NOW on the live bucket: 2000 sustained + 1000 burst arriving together against 2000 tokens
+// shed about 900 messages the broker had already PUBACKed. Once a tenant's reader is behind, the
+// whole recovery is metered on the send timeline, not only the part older than the threshold.
+func TestAStallTailWithAPermittedBurstIsNotShed(t *testing.T) {
+	h, shed := stallHarness(t)
+
+	const stall = 3 * time.Second
+	first := time.Now().Add(-stall)
+	seq := uint64(0)
+	send := func(at time.Time) {
+		seq++
+		h.source.handle(capturedMsgAt(captureSubject, validEvent, seq, at, &recordingAck{}))
+	}
+	count := 0
+	for i := 0; i < 3000; i++ {
+		at := first.Add(time.Duration(i) * time.Millisecond)
+		send(at)
+		count++
+		if i == 2500 { // the permitted burst, stamped at one instant
+			for j := 0; j < 1000; j++ {
+				send(at)
+				count++
+			}
+		}
+	}
+
+	_, _, admitted, _ := h.counts()
+	require.Zero(t, *shed, "a compliant burst inside a stall's young tail lost PUBACKed messages")
+	require.Equal(t, count, admitted)
+}

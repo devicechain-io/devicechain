@@ -87,7 +87,7 @@ func newEnvelopeEngine(ctx context.Context, iproc *InboundEventsProcessor, w mes
 		MaxRounds: bucketSize * fanSlots,
 		ChunkMax:  func() int { return iproc.envelopeChunkMax },
 		Metrics: messaging.NewEnvelopeCounters(iproc.metrics.envDuplicates, iproc.metrics.envRecoverySteps,
-			iproc.metrics.envProbeFailures, iproc.metrics.envRetries).WithProbeDenied(iproc.metrics.envProbeDenied),
+			iproc.metrics.envProbeFailures, iproc.metrics.envRetries).WithProbeDenied(iproc.metrics.envProbeDenied).WithRoundsEvicted(iproc.metrics.envRoundsEvicted),
 	})
 	if err != nil {
 		// The kinds above are constants and the writer and publisher were checked by the caller.

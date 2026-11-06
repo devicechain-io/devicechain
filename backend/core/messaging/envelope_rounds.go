@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
+	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -208,6 +209,7 @@ type RoundEngine struct {
 	Singles    atomic.Int64 // groups of one, published legacy-shaped under the envelope id
 	Duplicates atomic.Int64 // PubAcks answered as duplicates
 	Recovered  atomic.Int64 // members published by a later round
+	Evicted    atomic.Int64 // rounds stepped past because retention had evicted their message
 	Probes     atomic.Int64 // requests a walk made: publishes and read-backs
 	Retries    atomic.Int64 // rejected rounds published again under the same id
 
@@ -627,6 +629,22 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 		}
 		// The round is stored: read what it carries.
 		held, err := e.heldOf(ctx, k, round, ack.Sequence)
+		if err != nil && errors.Is(err, nats.ErrMsgNotFound) {
+			// The broker remembers this round's id (the duplicate window) but retention has since
+			// discarded the message, so what it carried can never be read. That is not a fault a
+			// retry cures: every redelivery would meet the same answer until the window lapsed.
+			// It is terminal for THIS round only, so the walk steps to the next one, which is
+			// published under a fresh id. A member that was in the evicted round is then stored
+			// again, a duplicate the consumers already tolerate (events carry content-derived
+			// identity); the alternative, failing the sources, loses nothing but stalls the
+			// bucket. Counted apart, because it means the stream holds less than the duplicate
+			// window and its retention wants raising.
+			e.Evicted.Add(1)
+			e.cfg.Metrics.countRoundEvicted()
+			log.Warn().Err(err).Str("tenant", k.Tenant).Uint64("bucket", k.Bucket).Uint32("round", round).
+				Msg("A duplicate publish named an envelope retention has already evicted; stepping to the next round. The stream holds less than one duplicate window of messages: raise its retention")
+			held, err = nil, nil
+		}
 		if err != nil && probeDenied(err) {
 			// A refused read is a missing grant, not a flaky broker: no retry cures it, so it is
 			// counted apart and logged as an error. Sources stay unacknowledged (never settled as

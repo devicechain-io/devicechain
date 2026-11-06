@@ -5,6 +5,7 @@ package processor
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -250,7 +251,8 @@ func NewRateGate(live, backlog, untrusted, integration *core.TenantRateLimiter,
 }
 
 // MeterAt decides, for one authenticated message, the send time it is metered at: sentAt itself
-// when the message is BACKLOG, and the zero time, meaning now, when it is live. Build it with
+// when the message is BACKLOG (older than the tenant's threshold, or part of the drain that follows
+// one until the reader is caught up), and the zero time, meaning now, when it is live. Build it with
 // NewMeterAt over the same live limiter the gates use.
 //
 // It is the ONE routing decision between the live and backlog limiters, and the gates do not
@@ -268,10 +270,41 @@ func NewMeterAt(live *core.TenantRateLimiter) MeterAt {
 	if live == nil {
 		panic("processor.NewMeterAt: the live limiter is required")
 	}
+	var mu sync.Mutex
+	recovering := make(map[string]struct{})
 	return func(tenant string, sentAt time.Time) time.Time {
-		return meterTime(sentAt, backlogAfter(live.Ceiling(tenant)))
+		after := backlogAfter(live.Ceiling(tenant))
+		if sentAt.IsZero() || time.Since(sentAt) <= 0 {
+			return time.Time{} // an absent or future send time is live
+		}
+		age := time.Since(sentAt)
+		mu.Lock()
+		defer mu.Unlock()
+		if age > after {
+			recovering[tenant] = struct{}{}
+			return sentAt
+		}
+		// 🔴 YOUNGER THAN THE THRESHOLD IS NOT THE SAME AS CAUGHT UP. The reader of a stalled
+		// stream drains the queue at fetch speed, so the tail of the queue is younger than
+		// burst/rate while it is still queue: a compliant sender's sustained traffic over that
+		// span plus a burst it was permitted can exceed what the live bucket holds at now, and
+		// shedding it discards messages already PUBACKed. Once a tenant has been judged backlog
+		// the drain stays on the send timeline until the reader is demonstrably caught up.
+		if _, behind := recovering[tenant]; behind {
+			if age > after/caughtUpFraction {
+				return sentAt
+			}
+			delete(recovering, tenant)
+		}
+		return time.Time{}
 	}
 }
+
+// caughtUpFraction sets when a tenant's recovery ends: the drain is back on the live bucket once
+// a message is younger than backlogAfter/caughtUpFraction (200 ms at the platform default),
+// close enough to now that metering it at now cannot differ from metering it when it was sent
+// by more than the live bucket's own slack.
+const caughtUpFraction = 10
 
 // backlogAfter is how old a tenant's message must be before it is backlog: the lesser of
 // BacklogThreshold and the time the tenant's live burst covers (burst / rate).
@@ -293,15 +326,6 @@ func backlogAfter(c core.TenantCeiling) time.Duration {
 		return cover
 	}
 	return BacklogThreshold
-}
-
-// meterTime is the decision itself: sentAt when the message is older than after, otherwise the
-// zero time. An absent or future send time is live, never backlog.
-func meterTime(sentAt time.Time, after time.Duration) time.Time {
-	if !sentAt.IsZero() && time.Since(sentAt) > after {
-		return sentAt
-	}
-	return time.Time{}
 }
 
 // admitN routes a charge of n units to the limiter that meters it, and is the one routing

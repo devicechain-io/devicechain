@@ -39,7 +39,7 @@ type rawMessage struct {
 	// of an event that reports none, and it is identical on every redelivery. Zero for
 	// a transport with none (the external-broker MQTT source), read as now.
 	receivedAt time.Time
-	// meterAt is the send time the message stage metered this message at (see meterTime):
+	// meterAt is the send time the message stage metered this message at (see MeterAt):
 	// the capture append time when the message was BACKLOG, zero (now) when it was live.
 	// The reading stage is charged at the same time, so both stages route one message to
 	// the same limiter. Zero on HTTP and external MQTT, which have no backlog.

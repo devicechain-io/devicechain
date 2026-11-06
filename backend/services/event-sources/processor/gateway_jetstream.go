@@ -434,6 +434,14 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	// backoff, so the loop's last hand-off does not wait out one first. Nothing more is
 	// fetched once the loop sees the cancel.
 	es.writer.Draining()
+	// 🔴 End the settlement walks BEFORE waiting for the read loop. A full walk pool blocks the
+	// writer's settle callback in startWalk, which backs up the submitter, the decode workers and
+	// finally this loop's hand-off, so waiting first would sit out the whole deadline on a loop
+	// only the walks' cancellation can free. What a cancelled walk leaves unsettled stays
+	// unacked for the next pod, the same outcome stopPipeline's cancel always had.
+	if ce := es.ce; ce != nil {
+		ce.cancel()
+	}
 	if !es.await(ctx, es.drained, "read loop") {
 		return nil
 	}

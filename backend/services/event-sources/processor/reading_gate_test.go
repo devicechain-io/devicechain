@@ -145,8 +145,23 @@ func TestMeterAtDecidesLiveOrBacklog(t *testing.T) {
 	// but inside the fixed 5 s, and must already be backlog.
 	mid := time.Now().Add(-3 * time.Second)
 	assert.Equal(t, mid, meter("acme", mid), "a delay the live burst cannot absorb is metered at its send time")
+	// A tenant never judged backlog: a delay the live burst can absorb is live.
 	young := time.Now().Add(-time.Second)
-	assert.True(t, meter("acme", young).IsZero(), "a delay the live burst can absorb is live")
+	assert.True(t, meter("fresh", young).IsZero(), "a delay the live burst can absorb is live")
+}
+
+// Once a tenant has been judged backlog, its drain stays on the send timeline until the reader is
+// caught up: a message younger than the threshold is still queue. Caught up (younger than a tenth
+// of the threshold) ends the recovery, and the tenant is live again.
+func TestMeterAtKeepsADrainOnTheSendTimelineUntilCaughtUp(t *testing.T) {
+	meter := NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)))
+	old := time.Now().Add(-3 * time.Second)
+	assert.Equal(t, old, meter("acme", old))
+	young := time.Now().Add(-time.Second)
+	assert.Equal(t, young, meter("acme", young), "the young tail of a stall is still backlog")
+	assert.True(t, meter("other", time.Now().Add(-time.Second)).IsZero(), "recovery is per tenant")
+	assert.True(t, meter("acme", time.Now().Add(-10*time.Millisecond)).IsZero(), "caught up is live")
+	assert.True(t, meter("acme", time.Now().Add(-time.Second)).IsZero(), "and recovery has ended")
 }
 
 func TestBacklogAfterIsTheLesserOfTheThresholdAndTheBurstCover(t *testing.T) {

@@ -287,6 +287,7 @@ type EnvelopeMetrics struct {
 	recoverySteps prometheus.Counter
 	probeFailures prometheus.Counter
 	probeDenied   prometheus.Counter
+	roundsEvicted prometheus.Counter
 	retries       prometheus.Counter
 }
 
@@ -307,6 +308,8 @@ func NewEnvelopeMetrics(ms *core.Microservice, prefix string) *EnvelopeMetrics {
 			"Stored envelopes a duplicate answer named that could not be read back or understood; each leaves its sources unacknowledged"),
 		probeDenied: ms.NewCounter(prefix+"_envelope_probe_denied_total",
 			"Read-backs of a stored envelope the broker REFUSED: this writer lacks the read-back grant, which no retry cures; each leaves its sources unacknowledged"),
+		roundsEvicted: ms.NewCounter(prefix+"_envelope_rounds_evicted_total",
+			"Envelope rounds a duplicate answer named whose message retention had already evicted, so the walk stepped past them: the stream holds less than one duplicate window of messages"),
 		retries: ms.NewCounter(prefix+"_envelope_round_retries_total",
 			"Envelope rounds the broker rejected, published again under the same id until their outcome was known"),
 	}
@@ -352,6 +355,18 @@ func (m *EnvelopeMetrics) WithProbeDenied(c prometheus.Counter) *EnvelopeMetrics
 func (m *EnvelopeMetrics) countProbeDenied() {
 	if m != nil {
 		incCounter(m.probeDenied)
+	}
+}
+
+// WithRoundsEvicted attaches the counter of rounds found evicted from the stream.
+func (m *EnvelopeMetrics) WithRoundsEvicted(c prometheus.Counter) *EnvelopeMetrics {
+	m.roundsEvicted = c
+	return m
+}
+
+func (m *EnvelopeMetrics) countRoundEvicted() {
+	if m != nil {
+		incCounter(m.roundsEvicted)
 	}
 }
 
