@@ -238,17 +238,23 @@ curl -s -X POST http://localhost/api/device-management/graphql \
 Ahora dale una credencial al dispositivo. La credencial es lo que el dispositivo presenta para
 demostrar que es él mismo, y la plataforma espera una por defecto.
 
+Primero genera el identificador de la credencial y guárdalo en una variable del shell, para que este paso y el paso 6 usen el mismo:
+
+```bash
+export DC_CRED_ID="$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
+```
+
 ```bash
 curl -s -X POST http://localhost/api/device-management/graphql \
   -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"mutation($r:DeviceCredentialCreateRequest!){createDeviceCredential(request:$r){token}}",
        "variables":{"r":{"token":"sensor-001-cred","deviceToken":"sensor-001",
                          "credentialType":"ACCESS_TOKEN",
-                         "credentialId":"5f989616-2a0d-4160-8ae1-da5fad2898b2",
+                         "credentialId":"'"$DC_CRED_ID"'",
                          "enabled":true}}}'
 ```
 
-Elige tu propio `credentialId`: cualquier cadena no adivinable. En una credencial `ACCESS_TOKEN`, el
+El `credentialId` es cualquier cadena no adivinable; el comando anterior generó una para ti, así que cada lector obtiene un secreto distinto. En una credencial `ACCESS_TOKEN`, el
 `credentialId` **es** el secreto que presenta el dispositivo, así que trátalo como una contraseña y
 no como un nombre. La plataforma conserva solo un resumen irreversible de él, así que guarda tu propia
 copia: la respuesta a esta solicitud es la última vez que puede leerse.
@@ -284,7 +290,7 @@ curl -i -X POST http://localhost:8081/devicechain/sim-demo/events \
   -d '{"device":"sensor-001",
        "eventType":"Measurement",
        "credentialType":"ACCESS_TOKEN",
-       "credentialId":"5f989616-2a0d-4160-8ae1-da5fad2898b2",
+       "credentialId":"'"$DC_CRED_ID"'",
        "payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
@@ -312,7 +318,7 @@ for t in 21.9 22.4 22.1 23.0; do
     -H 'Content-Type: application/json' \
     -d "{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",
          \"credentialType\":\"ACCESS_TOKEN\",
-         \"credentialId\":\"5f989616-2a0d-4160-8ae1-da5fad2898b2\",
+         \"credentialId\":\"$DC_CRED_ID\",
          \"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$t\"}}]}}"
   sleep 1
 done

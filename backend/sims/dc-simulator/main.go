@@ -102,6 +102,11 @@ func main() {
 	uplinks := flag.Int("uplinks", envIntOr("DC_SIM_UPLINKS", 5), "integration mode: uplinks per device")
 	resend := flag.Bool("resend", envBoolOr("DC_SIM_RESEND", false),
 		"integration mode: post every uplink twice, byte for byte, as a network server retrying does")
+	lorawanBinary := flag.Bool("lorawan-binary", envBoolOr("DC_SIM_LORAWAN_BINARY", false),
+		"integration mode: send only the raw application frame (port 2, no decoded object), as a network server with no codec "+
+			"does; what is stored is what the device profile's payload decoder makes of it (see --lorawan-print-decoder)")
+	lorawanPrintDecoder := flag.Bool("lorawan-print-decoder", false,
+		"print the payload decoder document that reads the --lorawan-binary frame, then exit. Needs no other flag")
 	x509Mode := flag.Bool("x509", envBoolOr("DC_SIM_X509", false),
 		"X.509 (mTLS) device mode: mint a throwaway test CA and device certificates into --x509-dir, "+
 			"optionally register them (--x509-register), connect to the handshake's MQTT gateway "+
@@ -136,6 +141,14 @@ func main() {
 		log.Fatal().Msg("--ota runs update devices inside a scenario sim; it cannot be combined with --x509 or --lorawan-ns, which are modes of their own")
 	}
 
+	if *lorawanPrintDecoder {
+		fmt.Println(lorawan.BinaryDecoder)
+		return
+	}
+	if *lorawanBinary && *lorawanNS == "" {
+		log.Fatal().Msg("--lorawan-binary shapes the uplinks of integration mode; name the network server with --lorawan-ns")
+	}
+
 	if *x509Mode {
 		if *handshakePath == "" {
 			log.Fatal().Msg("--x509 needs --handshake (tenant, instance and endpoints)")
@@ -153,7 +166,7 @@ func main() {
 		}
 		if err := runLoRaWAN(lorawan.Config{
 			NS: *lorawanNS, URL: *integrationURL, Token: token, HostHeader: *integrationHost, DevEUIs: lorawan.ParseDevEUIs(*devEUIs),
-			Uplinks: *uplinks, Interval: *emitInterval, Resend: *resend,
+			Uplinks: *uplinks, Interval: *emitInterval, Resend: *resend, Binary: *lorawanBinary,
 		}); err != nil {
 			log.Fatal().Err(err).Msg("dc-simulator integration mode failed")
 		}
