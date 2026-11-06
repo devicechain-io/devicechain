@@ -967,7 +967,8 @@ variable "timescale_max_wal_size_mib" {
     🔴 UPGRADING an existing instance applies the derived value to the volume it already has:
     on the default 32Gi the allowance goes from the stock 1 GiB to 6.4 GiB, and pg_wal may
     now grow that far between checkpoints. An event store that is already close to full has
-    less room than that to give. To keep the stock allowance, set this to 1024.
+    less room than that to give. To keep the stock allowance, set this to 1024; under dcctl,
+    `dcctl upgrade --event-store-max-wal-mib 1024` does it and records the value beside the state.
   EOT
   type        = number
   default     = 0

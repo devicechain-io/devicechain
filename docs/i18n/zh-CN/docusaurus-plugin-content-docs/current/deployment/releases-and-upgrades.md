@@ -193,6 +193,8 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
+运行 `dcctl install` 时，请使用安装该集群时的同样设置，例如 `--ha` 或 `--compact`。集群上有实例运行时，它会拒绝改变这些设置；参见[重新运行安装](./bootstrap.md#re-running-install)。
+
 :::note 已测量的内容
 升级曾在本地集群上手动演练：一个以 `--ha` 安装的实例在 MQTT 流量持续运行时被原地升级（四台设备以 QoS 1 发布，合计每秒 20 条消息，`infrastructure.nats.mqttFailClosed` 保持默认的关闭状态），其代理滚动两次，设备在每次滚动后重新连接。在一次演练中，代理已确认的每条消息之后仍被保存（11,009 条中的 11,009 条）。在另一次演练中，11,262 条已确认消息中丢失了 11 条，全部发生在某台代理服务器重启、MQTT 捕获流更换主节点期间。`mqttFailClosed` 关闭时，无论流量大小，每次代理滚动都应预期出现一个类似的短暂丢失窗口；见 [MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)。这些演练是手动进行的。作为发布关卡的自动升级检查在没有流量的情况下运行。
 
@@ -525,6 +527,7 @@ dcctl bootstrap local devicechain
 - **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，在其再次活跃并再次沉默之前，该字段返回 null。
 - **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
+- **升级前检查事件库的剩余空间。** 对已有实例，`dcctl upgrade` 会把事件库的 `max_wal_size` 提高到其卷容量的五分之一（默认 32Gi 时为 6.4 GiB，原为 1 GiB），预写日志现在可以在数据卷上增长到这么大。该值升高时，升级会打印一条提示；卷的剩余空间小于新值时，会给出警告。要保留原来的额度，请运行 `dcctl upgrade --event-store-max-wal-mib 1024`。参见[事件库的预写日志额度](#v120-event-store-wal)。
 
 
 #### 检测分片并行运行 {#v120-detect-shards}
@@ -621,6 +624,26 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **只要信任锚上还有手动吊销，删除它就会被拒绝。** 请先取消吊销（`unrevokeDeviceCertificate`）；这些是您自己的决定，不会被静默丢弃。
 - **`REQUIRE_CURRENT` 按信任锚自行选择启用。** 如果信任锚没有任何有效列表，或者某个已注册证书的颁发 CA 没有有效列表，平台会拒绝切换到该模式，因为切换后所有此类设备都会被拒绝。
 - **滚动升级期间**，尚未替换的副本在回答代理的授权回调时不检查吊销，因此吊销只有在滚动完成后才会在各处生效。回退到 `v1.1.0` 时这些表保留但不再被读取：吊销将不再生效。
+
+#### 事件库的预写日志额度 {#v120-event-store-wal}
+
+事件库的 `max_wal_size` 现在是其卷容量的五分之一，且不低于 Postgres 自带的 1 GiB；升级会按已有卷的大小把它应用到已有的事件库。默认 32Gi 时为 6.4 GiB，而升级后的实例原来是 1 GiB。`max_wal_size` 是上限，不是预留：只有检查点落后或 WAL 归档停滞时，日志才会涨到这个值。但日志位于数据卷上，所以已经接近写满的事件库能让出的空间不到这么多。
+
+- **该值升高时，`dcctl upgrade` 会告知。** 计划中会打印一行，写明旧值和新值。它还会读取事件库卷的剩余空间，在剩余空间小于新值或无法读取时打印警告。它不会拒绝执行：日志只有在压力下才会涨到上限，而补救办法只需一个标志。
+- **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`）。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
+- **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
+
+#### 架构变更与回退 {#v120-going-back}
+
+五个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
+
+- **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
+- **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
+- **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
+- **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。不写入任何行。
+- **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
+
+所有新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 

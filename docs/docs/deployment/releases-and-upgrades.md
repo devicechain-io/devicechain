@@ -233,6 +233,8 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
+Give `dcctl install` the same settings the cluster was installed with, such as `--ha` or `--compact`. It refuses to change them while an instance runs on the cluster; see [Re-running install](./bootstrap.md#re-running-install).
+
 :::note What has been measured
 The upgrade has been rehearsed by hand on a local cluster: an instance installed with `--ha` was upgraded
 in place with MQTT traffic running (four devices publishing at QoS 1, 20 messages a second between them,
@@ -769,6 +771,7 @@ What needs action:
 - **Know that `DeviceState.inactivityAlarmTime` is back to what it was before `v1.1.0`.** `v1.1.0` derived it from `lastDisconnectTime`, so it reported a time for a device that went offline by a disconnect report and never went quiet. It is again the instant the inactivity sweep marked the device inactive, and null for a device the sweep has not marked or that is active again. The field stays deprecated, is removed in the next major release, and `lastDisconnectTime` is still the field to use. The first start of `v1.2.0` repairs the rows `v1.1.0` left: it clears a leftover value on a device that is active, and fills the value from `lastDisconnectTime` for an inferred device that is inactive and has none. A device that a `v1.1.0` pod marks inactive while the rollout is still running answers null until it next goes active and quiet again.
 - **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published while an older replica is still serving can be missing its decoder; see [Payload decoders](#v120-payload-decoders).
 - **Know that X.509 certificate revocation lists are new and optional.** Nothing needs doing to upgrade; read [Revocation lists](#v120-x509-crl) before you upload one.
+- **Check the event store's free space before you upgrade.** On an existing instance, `dcctl upgrade` raises the event store's `max_wal_size` to a fifth of its volume (6.4 GiB on the default 32Gi, up from 1 GiB), and the write-ahead log may now grow that far on the data volume. The upgrade prints a notice when the value rises and warns when the volume has less free space than the new size. To keep the previous allowance, run `dcctl upgrade --event-store-max-wal-mib 1024`. See [Event store write-ahead log allowance](#v120-event-store-wal).
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -865,6 +868,26 @@ A tenant can now store a certificate authority's revocation list (CRL) against a
 - **Deleting a trust anchor is refused while it holds manual revocations.** Un-revoke them first (`unrevokeDeviceCertificate`); they are your own decisions and are never discarded silently.
 - **`REQUIRE_CURRENT` is opt-in per anchor.** The platform refuses to switch an anchor to it while the anchor holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused.
 - **During a rolling upgrade**, replicas that have not been replaced answer the broker's authorization callout without revocation checks, so a revocation is enforced everywhere only once the rollout completes. Going back to `v1.1.0` leaves the tables in place and unread: revocations stop being enforced.
+
+#### Event store write-ahead log allowance {#v120-event-store-wal}
+
+The event store's `max_wal_size` is now a fifth of its volume, never below Postgres's own 1 GiB, and an upgrade applies it to an existing store at the volume it has. On the default 32Gi that is 6.4 GiB where an upgraded instance had 1 GiB. `max_wal_size` is a ceiling, not a reservation: the log reaches it only when checkpoints fall behind or WAL archiving stalls. It sits on the data volume, though, so a store that is already close to full has less room than that to give.
+
+- **`dcctl upgrade` says when the value rises.** The plan prints one line with the old and new size. It also reads the free space on the event store's volume and prints a warning when that is below the new size, or when it could not read it. It does not refuse: the log reaches the ceiling only under stress, and the remedy is one flag.
+- **To keep a smaller allowance**, give the upgrade `--event-store-max-wal-mib`, for example `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` for the previous 1 GiB. `--dry-run` shows the effect first. The value is kept by later upgrades when you leave the flag out, and `--event-store-max-wal-mib 0` returns to the derived value. `--event-store-checkpoint-timeout` sets the checkpoint interval the same way (default `15min`). Both are applied by reload, with no restart of the event store. `dcctl` records them in `zz-dcctl-event-store.auto.tfvars.json` beside the instance's OpenTofu state, on the machine that runs the upgrade; see [Event store tuning](./tuning-an-instance.md).
+- **If you manage the instance's OpenTofu yourself**, set `timescale_max_wal_size_mib` and `timescale_checkpoint_timeout` as before.
+
+#### Schema changes and going back {#v120-going-back}
+
+Five migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
+
+- **X.509 revocation** (`device-management`, migration `20261105100000`). Four new tables: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` and `device_credential_chain_links`. Four new columns: `revocation_mode`, `revocation_stale_grace` and `revocation_rows` on `device_trust_anchors`, and `not_before` on `pending_session_kicks`. Existing trust anchors keep `revocation_mode` empty, which is read as `ENTRIES`: a certificate is refused only when it is listed.
+- **Payload decoders** (`device-management`, migration `20261110120000`). Two new tables, `profile_decoder_healths` and `profile_decoder_samples`, and one new column, `decoder_declaration` on `device_profiles`.
+- **Projection storage** (`device-state`, migration `20261104120000`). No table or column is added. It sets storage parameters (a fill factor of 75 and autovacuum thresholds) on `device_states`, `latest_measurements` and `latest_locations`. Rows that already exist gain the fill-factor headroom only as their pages are rewritten, so an upgraded instance feels the change slowly.
+- **Placement tables** (`user-management`, migration `20261105120000`). Three new tables: `iam_partition_config`, `iam_vpartition_assignments` and `iam_tenant_vpartition_overrides`. It seeds no rows.
+- **Inactivity alarm time repair** (`device-state`, migration `20261106120000`). Adds nothing to the schema. It is a data-only repair of `inactivity_alarm_time` in `device_states`, run in batches of 5,000, restoring what the column held before `v1.1.0`. There is nothing to undo when going back to `v1.1.0`.
+
+All the new tables start empty. **Nothing in a database needs undoing to go back to `v1.1.0`:** the new tables, columns and storage parameters stay in place and the `v1.1.0` services ignore them. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again. For the configuration change that going back needs, see [Tokens are checked against their resource](#v120-token-audience).
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 

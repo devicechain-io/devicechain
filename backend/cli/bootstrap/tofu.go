@@ -741,6 +741,10 @@ func infraVars(st *State) []string {
 			vars = append(vars, fmt.Sprintf("nats_max_connections=%d", st.BrokerMaxConnections))
 		}
 	}
+	// The event store's WAL allowance and checkpoint cadence, only when this run was given them.
+	// Unset, the root derives the allowance from the volume and the file written by an earlier run
+	// (eventstorewal.go) is what tofu reads on its own.
+	vars = append(vars, eventStoreTuningVars(st)...)
 	return vars
 }
 

@@ -29,6 +29,10 @@ var (
 
 	upgradeBrokerMaxConnections      int
 	upgradeBrokerMaxConnectionsGiven bool
+	upgradeEventStoreMaxWAL          int
+	upgradeEventStoreMaxWALGiven     bool
+	upgradeEventStoreCheckpoint      string
+	upgradeEventStoreCheckpointGiven bool
 
 	upgradeLwm2mIdentities   string
 	upgradeWithdrawLwm2m     bool
@@ -54,6 +58,27 @@ const (
 		"and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class"
 )
 
+const (
+	eventStoreMaxWALUsage     = "set the event store's max_wal_size, in MiB (at least 64). An upgrade derives it as a fifth of the event store volume, never below 1024, so a store close to full can keep the previous allowance with 1024. 0 returns to the derived value. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
+	eventStoreCheckpointUsage = "set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
+)
+
+// eventStoreIntFlag and eventStoreStringFlag turn a flag's (given, value) pair into the pointer
+// the options carry: nil is "keep what the instance has".
+func eventStoreIntFlag(given bool, v int) *int {
+	if !given {
+		return nil
+	}
+	return &v
+}
+
+func eventStoreStringFlag(given bool, v string) *string {
+	if !given {
+		return nil
+	}
+	return &v
+}
+
 // upgradeOptions is the UpgradeOptions the upgrade flags describe, split out of RunE so
 // the copy of each flag into its field can be tested.
 func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[string]interface{}) bootstrap.UpgradeOptions {
@@ -72,6 +97,9 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 
 			BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(upgradeBrokerMaxConnectionsGiven, upgradeBrokerMaxConnections),
 			ValuesOverlay:        valuesOverlay,
+
+			EventStoreMaxWALMiB:         eventStoreIntFlag(upgradeEventStoreMaxWALGiven, upgradeEventStoreMaxWAL),
+			EventStoreCheckpointTimeout: eventStoreStringFlag(upgradeEventStoreCheckpointGiven, upgradeEventStoreCheckpoint),
 
 			IngressController: upgradeIngressController,
 			DropLegacyIngress: upgradeDropLegacyIngress,
@@ -189,6 +217,11 @@ unavailable meanwhile. The upgrade waits for both to be healthy before it moves
 the services. Values you set on the instance's OpenTofu configuration are kept
 when they are in a terraform.tfvars beside its state
 (~/.devicechain/instances/<instance>/infra/instance/), and not otherwise.
+The event store's WAL allowance is the one setting with flags of its own: an upgrade derives
+max_wal_size as a fifth of the event store volume (up from Postgres's 1 GiB on an existing
+store), says so when it rises, and warns when the volume has less free space than that.
+'--event-store-max-wal-mib 1024' keeps the previous allowance, and
+'--event-store-checkpoint-timeout' sets the checkpoint cadence; later upgrades keep both.
 --skip-infrastructure moves only the services, and says what it left.
 
   # Move an instance onto a published release
@@ -205,6 +238,9 @@ when they are in a terraform.tfvars beside its state
 
   # Tune the instance; later upgrades keep applying it without --values
   dcctl upgrade local devicechain --values tuning.yaml
+
+  # Keep the event store's previous 1 GiB WAL allowance (a nearly full volume)
+  dcctl upgrade local devicechain --event-store-max-wal-mib 1024
 
   # Once DNS points at the new controller, stop serving the host from ingress-nginx too
   dcctl upgrade local devicechain --drop-legacy-ingress
@@ -232,6 +268,8 @@ when they are in a terraform.tfvars beside its state
 		}
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		upgradeBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
+		upgradeEventStoreMaxWALGiven = cmd.Flags().Changed("event-store-max-wal-mib")
+		upgradeEventStoreCheckpointGiven = cmd.Flags().Changed("event-store-checkpoint-timeout")
 		if err := bootstrap.CheckMQTTExposureFlagsForUpgrade(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
 			return err
 		}
@@ -278,6 +316,8 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeMqttFailClosed, "mqtt-fail-closed", false, mqttFailClosedUsage)
 	upgradeCmd.Flags().StringSliceVar(&upgradeTrustedProxies, "trusted-proxies", nil, trustedProxiesUsage)
 	upgradeCmd.Flags().IntVar(&upgradeBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
+	upgradeCmd.Flags().IntVar(&upgradeEventStoreMaxWAL, "event-store-max-wal-mib", 0, eventStoreMaxWALUsage)
+	upgradeCmd.Flags().StringVar(&upgradeEventStoreCheckpoint, "event-store-checkpoint-timeout", "", eventStoreCheckpointUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTHost, "mqtt-host", "", mqttHostUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)

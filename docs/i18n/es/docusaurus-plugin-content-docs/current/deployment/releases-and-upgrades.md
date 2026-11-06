@@ -241,6 +241,8 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
+Dé a `dcctl install` los mismos ajustes con los que se instaló el clúster, como `--ha` o `--compact`. Se niega a cambiarlos mientras una instancia se ejecuta en el clúster; consulte [Volver a ejecutar install](./bootstrap.md#re-running-install).
+
 :::note Qué se ha medido
 La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
 actualizó in situ con tráfico MQTT en marcha (cuatro dispositivos publicando con QoS 1, 20 mensajes por
@@ -814,6 +816,7 @@ Qué requiere acción:
 - **Sepa que `DeviceState.inactivityAlarmTime` vuelve a ser lo que era antes de `v1.1.0`.** `v1.1.0` lo derivaba de `lastDisconnectTime`, de modo que informaba una hora para un dispositivo que pasó a desconectado por un informe de desconexión y nunca quedó en silencio. Vuelve a ser el instante en que el barrido de inactividad marcó el dispositivo como inactivo, y es nulo para un dispositivo que el barrido no ha marcado o que vuelve a estar activo. El campo sigue obsoleto, se elimina en la próxima versión mayor, y `lastDisconnectTime` sigue siendo el campo que hay que usar. El primer arranque de `v1.2.0` repara las filas que dejó `v1.1.0`: borra un valor residual en un dispositivo activo y rellena el valor desde `lastDisconnectTime` en un dispositivo inferido que está inactivo y no lo tiene. Un dispositivo que un pod de `v1.1.0` marque como inactivo mientras el despliegue sigue en curso responde nulo hasta que vuelva a estar activo y quede de nuevo en silencio.
 - **Publique el decodificador de payload de un perfil solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada mientras una réplica anterior sigue atendiendo puede quedarse sin su decodificador; consulte [Decodificadores de payload](#v120-payload-decoders).
 - **Tenga en cuenta que las listas de revocación de certificados X.509 son nuevas y opcionales.** No hay que hacer nada para actualizar; lea [Listas de revocación](#v120-x509-crl) antes de subir una.
+- **Compruebe el espacio libre del almacén de eventos antes de actualizar.** En una instancia existente, `dcctl upgrade` sube el `max_wal_size` del almacén de eventos a una quinta parte de su volumen (6,4 GiB con los 32Gi predeterminados, frente a 1 GiB), y el registro de escritura anticipada puede crecer ahora hasta ese tamaño en el volumen de datos. La actualización imprime un aviso cuando el valor sube y advierte si el volumen tiene menos espacio libre que el nuevo tamaño. Para conservar la asignación anterior, ejecute `dcctl upgrade --event-store-max-wal-mib 1024`. Consulte [Asignación del registro de escritura anticipada del almacén de eventos](#v120-event-store-wal).
 
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
@@ -910,6 +913,26 @@ Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad cer
 - **Borrar un ancla de confianza se rechaza mientras tenga revocaciones manuales.** Anúlelas primero (`unrevokeDeviceCertificate`); son decisiones suyas y nunca se descartan en silencio.
 - **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
 - **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
+
+#### Asignación del registro de escritura anticipada del almacén de eventos {#v120-event-store-wal}
+
+El `max_wal_size` del almacén de eventos es ahora una quinta parte de su volumen, nunca por debajo del 1 GiB propio de Postgres, y una actualización lo aplica a un almacén existente con el volumen que ya tiene. Con los 32Gi predeterminados son 6,4 GiB, donde una instancia actualizada tenía 1 GiB. `max_wal_size` es un techo, no una reserva: el registro solo lo alcanza cuando los puntos de control se retrasan o el archivado de WAL se detiene. Sin embargo, reside en el volumen de datos, así que un almacén que ya está casi lleno tiene menos margen que ese.
+
+- **`dcctl upgrade` avisa cuando el valor sube.** El plan imprime una línea con el tamaño anterior y el nuevo. También lee el espacio libre del volumen del almacén de eventos e imprime una advertencia si es menor que el nuevo tamaño, o si no pudo leerlo. No se niega a continuar: el registro solo alcanza el techo bajo estrés, y el remedio es una opción.
+- **Para conservar una asignación menor**, pase `--event-store-max-wal-mib` a la actualización, por ejemplo `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` para el 1 GiB anterior. `--dry-run` muestra antes el efecto. Las actualizaciones posteriores conservan el valor cuando se omite la opción, y `--event-store-max-wal-mib 0` vuelve al valor derivado. `--event-store-checkpoint-timeout` fija del mismo modo el intervalo entre puntos de control (`15min` por defecto). Ambos se aplican por recarga, sin reiniciar el almacén de eventos. `dcctl` los registra en `zz-dcctl-event-store.auto.tfvars.json`, junto al estado de OpenTofu de la instancia, en la máquina que ejecuta la actualización; consulte [Ajuste del almacén de eventos](./tuning-an-instance.md).
+- **Si gestiona usted mismo el OpenTofu de la instancia**, fije `timescale_max_wal_size_mib` y `timescale_checkpoint_timeout` como antes.
+
+#### Cambios de esquema y cómo volver atrás {#v120-going-back}
+
+Cinco migraciones añaden lo siguiente. Toda columna nueva admite nulos, así que un servicio de `v1.1.0` que se ejecute con el esquema nuevo escribe filas que sigue pudiendo almacenar.
+
+- **Revocación X.509** (`device-management`, migración `20261105100000`). Cuatro tablas nuevas: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` y `device_credential_chain_links`. Cuatro columnas nuevas: `revocation_mode`, `revocation_stale_grace` y `revocation_rows` en `device_trust_anchors`, y `not_before` en `pending_session_kicks`. Las anclas de confianza existentes dejan `revocation_mode` vacío, lo que se lee como `ENTRIES`: un certificado se rechaza solo cuando figura en la lista.
+- **Decodificadores de carga útil** (`device-management`, migración `20261110120000`). Dos tablas nuevas, `profile_decoder_healths` y `profile_decoder_samples`, y una columna nueva, `decoder_declaration` en `device_profiles`.
+- **Almacenamiento de proyecciones** (`device-state`, migración `20261104120000`). No añade tablas ni columnas. Fija parámetros de almacenamiento (un factor de relleno de 75 y umbrales de autovacuum) en `device_states`, `latest_measurements` y `latest_locations`. Las filas que ya existen ganan el margen del factor de relleno solo a medida que se reescriben sus páginas, así que una instancia actualizada nota el cambio lentamente.
+- **Tablas de ubicación** (`user-management`, migración `20261105120000`). Tres tablas nuevas: `iam_partition_config`, `iam_vpartition_assignments` y `iam_tenant_vpartition_overrides`. No inserta filas.
+- **Reparación de la hora de alarma de inactividad** (`device-state`, migración `20261106120000`). No añade nada al esquema. Es una reparación solo de datos de `inactivity_alarm_time` en `device_states`, en lotes de 5.000, que restaura lo que la columna contenía antes de `v1.1.0`. No hay nada que deshacer al volver a `v1.1.0`.
+
+Todas las tablas nuevas empiezan vacías. **No hay que deshacer nada en una base de datos para volver a `v1.1.0`:** las tablas, columnas y parámetros de almacenamiento nuevos se quedan donde están y los servicios de `v1.1.0` los ignoran. Avance cuando pueda: una actualización fallida se arregla ejecutando `dcctl upgrade` de nuevo. Para el cambio de configuración que exige volver atrás, consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 
