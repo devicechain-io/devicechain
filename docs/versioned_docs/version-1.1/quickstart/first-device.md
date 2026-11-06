@@ -2,6 +2,8 @@
 title: Your First Device
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
 # Your First Device {#your-first-device-end-to-end}
 
 By the end of this page, a device you created has sent a reading and you are looking at that
@@ -9,6 +11,10 @@ reading in the console. You need no hardware and no firmware. The "device" is a 
 which is all a device is from the platform's side.
 
 Budget about half an hour, most of it waiting for the bootstrap.
+
+**Prefer to watch?** The video follows this page: it installs DeviceChain on a laptop and sends the first device reading. It has English audio, with English and Spanish captions and chapters.
+
+<YouTubeLite id="fWnVhI7icOk" title="Install DeviceChain on a laptop and send your first device reading" />
 
 :::note What this page assumes
 You need `dcctl` plus five tools on your `PATH`: `docker`, `kubectl`, `helm`,

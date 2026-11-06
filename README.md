@@ -19,6 +19,25 @@
   <sub>Towerpulse, a second simulated site: 31 devices on a real DeviceChain instance. A hot meeting room triggers a rule that raises an alarm and sends a boost-cooling command, and an annex chiller that stops reporting is restarted by command. Rendered from a recorded run, with time jumps labelled.</sub>
 </p>
 
+## Watch
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<a href="https://youtu.be/fWnVhI7icOk"><img src="https://i.ytimg.com/vi/fWnVhI7icOk/hqdefault.jpg" alt="Video: Install DeviceChain on a laptop and send your first device reading" width="100%"></a>
+<br>
+<b>Getting started.</b> <a href="https://youtu.be/fWnVhI7icOk">Install DeviceChain on a laptop and send your first device reading</a>. English audio, with English and Spanish captions.
+</td>
+<td width="50%" valign="top">
+<a href="https://youtu.be/VMoWwXf4IAI"><img src="https://i.ytimg.com/vi/VMoWwXf4IAI/hqdefault.jpg" alt="Video: DeviceChain in a simulated quarry: reading, rule, alarm, command" width="100%"></a>
+<br>
+<b>End to end.</b> <a href="https://youtu.be/VMoWwXf4IAI">DeviceChain in a simulated quarry: reading, rule, alarm, command</a>. The tour from a reading to a rule, an alarm and a command.
+</td>
+</tr>
+</table>
+
+More on the [DeviceChain YouTube channel](https://www.youtube.com/@devicechain-iot).
+
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/devicechain-io/devicechain/actions/workflows/ci.yml/badge.svg)](https://github.com/devicechain-io/devicechain/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/devicechain-io/devicechain)](https://github.com/devicechain-io/devicechain/releases/latest)

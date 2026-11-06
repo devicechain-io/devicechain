@@ -38,5 +38,13 @@
   "guideShot.toggleSize": {
     "message": "在适应窗口与完整尺寸之间切换",
     "description": "Accessible hint on the enlarged guide screenshot"
+  },
+  "youtubeLite.play": {
+    "message": "播放视频:{title}",
+    "description": "Label of the button that loads an embedded video"
+  },
+  "youtubeLite.watchOnYouTube": {
+    "message": "在 YouTube 上观看",
+    "description": "Fallback link to the video on YouTube"
   }
 }

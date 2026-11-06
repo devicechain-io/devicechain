@@ -2,11 +2,17 @@
 title: 你的第一台设备
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
 # 你的第一台设备 {#your-first-device-end-to-end}
 
 完成本页后，你创建的设备将发送一条读数，而你能在控制台中看到它。无需硬件，也无需固件。“设备”就是一个 `curl` 命令；从平台的角度看，这已经足够。
 
 请预留大约半小时，其中大部分时间用于等待初始化完成。
+
+**想看视频?** 视频与本页内容一致:在笔记本电脑上安装 DeviceChain,并发送第一条设备读数。视频为英文配音,带有英文和西班牙文字幕及章节。
+
+<YouTubeLite id="fWnVhI7icOk" title="在笔记本电脑上安装 DeviceChain 并发送第一条设备读数" />
 
 :::note 本页的前提条件
 你需要 `dcctl`，以及 `PATH` 中的五个工具：`docker`、`kubectl`、`helm`、

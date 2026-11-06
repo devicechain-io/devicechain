@@ -38,5 +38,13 @@
   "guideShot.toggleSize": {
     "message": "Alternar entre tamaño ajustado y tamaño completo",
     "description": "Accessible hint on the enlarged guide screenshot"
+  },
+  "youtubeLite.play": {
+    "message": "Reproducir video: {title}",
+    "description": "Label of the button that loads an embedded video"
+  },
+  "youtubeLite.watchOnYouTube": {
+    "message": "Ver en YouTube",
+    "description": "Fallback link to the video on YouTube"
   }
 }
