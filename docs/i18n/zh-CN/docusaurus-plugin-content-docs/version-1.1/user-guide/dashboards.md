@@ -3,6 +3,7 @@ title: 仪表板
 sidebar_position: 8
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
 import GuideShot from '@site/src/components/GuideShot';
 
 # 仪表板
@@ -10,6 +11,10 @@ import GuideShot from '@site/src/components/GuideShot';
 仪表板把实时组件（图表、仪表、卡片、告警表、命令按钮、地图）排布在同一个页面上。仪表板属于租户，并且每个都带有版本：你编辑草稿，然后将其发布为其他人看到的版本。
 
 本章面向创建和维护仪表板的人员，涵盖仪表板列表、从零开始、从模板或从导出的文件创建仪表板、查看仪表板、在画布上编辑、配置组件、用合成数据预览、导出，以及发布和回滚版本。截图使用一个测试租户，其 *Widget Lab* 仪表板包含每种内置组件各一个。仪表板底层的工作方式，参见[仪表板](/concepts/dashboards)。
+
+**想看视频?** 视频与本页内容一致:在画布上构建仪表板,将小部件绑定到槽位,并在只读查看应用 /dash 中打开结果。视频基于 v1.1 录制,为英文配音,带有英文和西班牙文字幕及章节。
+
+<YouTubeLite id="nCxsli5rwzI" title="在 DeviceChain 中构建 IoT 仪表板:画布、槽位、小部件和 /dash" />
 
 :::note 谁能做什么
 租户的每位成员都可以打开仪表板。创建、编辑、发布和删除仪表板需要仪表板写入权限。没有该权限的成员看到的是已发布版本，而不是草稿。如果仪表板从未发布过，系统会告诉他们请作者发布。

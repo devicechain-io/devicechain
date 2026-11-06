@@ -34,6 +34,13 @@
 <b>End to end.</b> <a href="https://youtu.be/VMoWwXf4IAI">DeviceChain in a simulated quarry: reading, rule, alarm, command</a>. The tour from a reading to a rule, an alarm and a command.
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+<a href="https://youtu.be/nCxsli5rwzI"><img src="https://i.ytimg.com/vi/nCxsli5rwzI/hqdefault.jpg" alt="Video: Build IoT dashboards in DeviceChain: canvas, slots, widgets, /dash" width="100%"></a>
+<br>
+<b>Dashboards.</b> <a href="https://youtu.be/nCxsli5rwzI">Build IoT dashboards in DeviceChain: canvas, slots, widgets, /dash</a>. English audio, with English and Spanish captions.
+</td>
+</tr>
 </table>
 
 More on the [DeviceChain YouTube channel](https://www.youtube.com/@devicechain-iot).
