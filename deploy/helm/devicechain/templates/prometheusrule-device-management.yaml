@@ -130,6 +130,29 @@ spec:
           annotations:
             summary: "A device-management per-device cache is too small for the fleet"
             description: "On {{ "{{ $labels.pod }}" }}, more than 5% of lookups in the {{ "{{ $labels.cache }}" }} cache have pushed another entry out of a full cache for 15m (now {{ "{{ $value | humanizePercentage }}" }}). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
+        # A sustained compile rate is a payload decoder being compiled again and again. A compile
+        # happens once per cache fill of a device type's resolution, so a healthy replica compiles
+        # when a decoder is published and after an entry's time to live, a few per minute at most.
+        # A steady rate of a compile a second or more is entries let go for room (decoders of one
+        # tenant that do not fit in its share together, or an undersized resolution cache), each
+        # read paying tens of milliseconds. The rate alone is not enough: many small decoders expiring
+        # on their time to live compile at a steady rate that no cache size changes, so the alert also
+        # needs the resolution cache to be evicting for room (capacity or tenant_share, never expired).
+        # THE THRESHOLD IS ARGUED, NOT MEASURED: at one a second
+        # it takes 300 decoder-bearing device types all expiring in the same five minutes to be
+        # healthy, and the 15m hold rides out a publish of many profiles at once.
+        - alert: PayloadDecoderRecompileSustained
+          expr: |
+            sum by (pod) (rate(devicechain_devicemanagement_payload_decoder_compiles_total{namespace="{{ $ns }}"}[10m])) > 1
+            and on (pod)
+            sum by (pod) (rate(devicechain_devicemanagement_kv_cache_local_evictions_total{cache="profile-resolution-by-type",reason=~"capacity|tenant_share",namespace="{{ $ns }}"}[10m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A device-management replica is compiling payload decoders over and over"
+            description: "On {{ "{{ $labels.pod }}" }}, payload decoders have been compiled more than once a second for 15m (now {{ "{{ $value | humanize }}" }}/s). A compile happens when a device type's resolution is read and its decoded copy is not held in memory, and a large decoder takes tens of milliseconds, so this is paid on the events themselves. The usual cause is decoders let go for room: the decoders one tenant keeps in use do not fit together in its share of the resolution cache, or the cache is too small. Raise inMemoryCache.profileResolutionCacheMiB, or profileResolutionTenantSharePercent for the tenant with the most decoders, and raise the device-management memory limit with it. Compare kv_cache_local_evictions_total{cache=\"profile-resolution-by-type\"} by reason: tenant_share points at the share, capacity at the cache."
         - alert: MqttStoreBackoffEngaged
           expr: max(devicechain_devicemanagement_mqtt_store_backoff_engaged{namespace="{{ $ns }}"}) == 1
           for: 2m

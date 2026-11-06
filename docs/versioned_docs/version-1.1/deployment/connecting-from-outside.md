@@ -145,9 +145,9 @@ You should see the host name in the subject (or among the alternative names) and
 # 2. A device can connect and publish
 mosquitto_pub --cafile instance-ca.crt \
   -h mqtt.acme.example.com -p 8883 \
-  -i 'devicechain:acme:sensor-001' \
+  -i 'acme:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
-  -t 'devicechain/acme/devices/sensor-001/events' \
+  -t 'acme/acme/devices/sensor-001/events' \
   -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 

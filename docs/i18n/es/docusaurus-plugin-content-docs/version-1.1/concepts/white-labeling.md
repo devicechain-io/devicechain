@@ -47,7 +47,7 @@ La inyección de CSS arbitrario no se ofrece de forma deliberada. Sería un ries
 Un logotipo es una referencia opaca, que se resuelve de una de tres maneras:
 
 - **Subido**: almacenado en el [almacén de objetos](./object-storage.md) y servido de vuelta a través de una ruta proxy por inquilino que autoriza cada acceso, nunca una URL pública.
-- **En línea (inline)**: un URI `data:` acotado (≤ 256 KB) guardado directamente en el registro de identidad de marca, para instalaciones sin infraestructura adicional.
+- **En línea (inline)**: un URI `data:` acotado (≤ 256 KiB de bytes de imagen decodificados; el URI codificado es mayor) guardado directamente en el registro de identidad de marca, para instalaciones sin infraestructura adicional.
 - **URL externa**: un recurso `https://` que el inquilino aloja por su cuenta.
 
 El servidor valida las subidas y las imágenes en línea antes de almacenarlas: solo tipos de imagen ráster, con límites de tamaño aplicados.

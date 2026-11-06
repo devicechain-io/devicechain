@@ -435,7 +435,7 @@ ventana de cuatro horas son cuatro horas reales en un día de cambio de horario.
 Los comandos que ya esperan una ventana siguen su nuevo calendario en aproximadamente un minuto. Un
 pase con bloqueo de líder en la entrega de comandos consulta periódicamente al propietario de la
 ventana. Es un sondeo, no un evento, así que el límite es de unos 60 segundos, y converge incluso si
-una notificación se hubiera perdido. El contador `command_delivery_window_restamps_total` cuenta los
+una notificación se hubiera perdido. El contador `devicechain_commanddelivery_command_delivery_window_restamps_total` cuenta los
 comandos cuya retención se movió porque la ventana se editó o se eliminó, se cerró de nuevo antes
 de que volviera el dispositivo, o porque su tipo de dispositivo pasó a otra ventana o se quedó sin
 ventana.
@@ -457,7 +457,7 @@ ventana.
   encolados después del cambio siguen la nueva versión del perfil y no se retienen. Si la nueva
   versión del perfil ya no define el comando, los comandos en espera no se envían nunca: terminan en
   `FAILED` con resultado `NOT_DELIVERED`, y su `error` dice "Command no longer defined by this
-  device's profile". El contador `command_delivery_window_commands_undefined_total` los cuenta.
+  device's profile". El contador `devicechain_commanddelivery_command_delivery_window_commands_undefined_total` los cuenta.
 - Liberar no es pausar. Los comandos liberados se envían en cuanto la entrega los alcanza, fuera de
   cualquier ventana, así que desvincular la ventana de un tipo con muchos comandos disruptivos en
   espera los envía todos en aproximadamente un minuto. Para detener los comandos en espera,

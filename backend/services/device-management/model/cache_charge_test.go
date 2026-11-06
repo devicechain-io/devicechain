@@ -11,10 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -307,3 +309,31 @@ func denseDecoder(t *testing.T) json.RawMessage {
 	require.NoError(t, err)
 	return raw
 }
+
+// The configuration refuses a per-tenant share of the resolution cache that cannot hold one
+// maximal decoder (config.MaxDecoderResolutionChargeBytes). That number is only worth something
+// while it is at least what the largest decoder shapes are really charged, so it is measured here
+// against the three the limits allow.
+func TestTheConfiguredMaximalChargeCoversEveryDecoderShape(t *testing.T) {
+	scope := ProfileScope{DeviceTypeToken: "thermostat", ProfileVersionToken: "thermostat-profile@12", FenceSetVersion: 3}
+	_, metricDefs := maximalDecoder(t)
+	for name, doc := range map[string]json.RawMessage{
+		"maximal": mustDoc(maximalDecoder(t)),
+		"tiny":    tinyExpressionDecoder(t),
+		"dense":   denseDecoder(t),
+	} {
+		built := NewProfileResolutionWithDecoder(scope, metricDefs, doc)
+		require.NotNil(t, built.Decoder().Plan(), "%s does not compile", name)
+		enc, err := json.Marshal(built)
+		require.NoError(t, err)
+		charged, ok := resolutionChargeOf(&built, len(enc))
+		require.True(t, ok)
+		t.Logf("%s: charged %d B (limit %d B)", name, charged, config.MaxDecoderResolutionChargeBytes)
+		assert.LessOrEqual(t, charged+len(enc)+localEntryOverheadAllowance, config.MaxDecoderResolutionChargeBytes,
+			"%s decoder is charged more than the configuration assumes a maximal one is", name)
+	}
+}
+
+// localEntryOverheadAllowance covers the entry's key and the per-entry bookkeeping the cache
+// charges beside its encoded bytes and the decoded value.
+const localEntryOverheadAllowance = 1 << 10
