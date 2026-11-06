@@ -145,7 +145,7 @@ func (api *Api) prepareCertificateRegistration(request *ProvisionRequest) error 
 // still the one that was verified and is still enabled. The anchor is read FOR SHARE and held to
 // the commit, so a disable queues behind the registration and then finds (and kicks) the
 // credential it wrote, instead of racing it. LOCK ORDER: profile, anchor, device.
-func lockCertificateProfile(tx *gorm.DB, profile *ProvisioningProfile, request *ProvisionRequest) error {
+func lockCertificateProfile(tx *gorm.DB, profile *ProvisioningProfile, request *ProvisionRequest, defaultGrace time.Duration) error {
 	reg := request.Certificate
 	if !certificateProfileCanRegister(profile, time.Now()) || profile.TrustAnchorId == nil ||
 		*profile.TrustAnchorId != reg.AnchorId {
@@ -174,7 +174,7 @@ func lockCertificateProfile(tx *gorm.DB, profile *ProvisioningProfile, request *
 	// read here: the registration is refused with nothing written. Without it a revocation that
 	// lands between the callout's gate and this insert would leave a registered, revoked device.
 	// The anchor passed is the row read under the lock, so a mode changed meanwhile is the one used.
-	return recheckRevocationLocked(tx, anchor.TenantId, &anchor, reg.Verified)
+	return recheckRevocationLocked(tx, anchor.TenantId, &anchor, reg.Verified, defaultGrace)
 }
 
 // decideKnownDeviceByCertificate is decideKnownDevice's steps 5 to 8 for a certificate. The

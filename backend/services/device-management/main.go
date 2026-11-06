@@ -935,6 +935,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = wireProvisioningEndpoint(); err != nil {
 				return err
 			}
+			if err = wireRevocation(Api, Configuration, Microservice, Microservice.InstanceConfiguration.Infrastructure); err != nil {
+				return err
+			}
 			Api.GeoFenceCapRefusals = processor.NewGeoFenceCapRefusalCounter(
 				Microservice.NewCounterVec(
 					"geofence_cap_refusals_total",

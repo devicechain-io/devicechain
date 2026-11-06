@@ -763,6 +763,7 @@ What needs action:
 - **If you set the MCP server's `resourceUrl` yourself, write its scheme and host in lowercase** before enforcement. See [Tokens are checked against their resource](#v120-token-audience).
 - **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
 - **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published while an older replica is still serving can be missing its decoder; see [Payload decoders](#v120-payload-decoders).
+- **Know that X.509 certificate revocation lists are new and optional.** Nothing needs doing to upgrade; read [Revocation lists](#v120-x509-crl) before you upload one.
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -836,6 +837,16 @@ A device profile can now carry a **payload decoder**: rules, written as expressi
 - **The migration is additive.** It adds one nullable column to device profiles and two tables that nothing writes yet. An older replica does not read them.
 - **The test door is rate-limited per replica.** `testPayloadDecoder` allows 10 requests a second for each tenant, with a burst of 20, on each `device-management` replica, so a tenant's total rate rises with the replica count. A request over the limit is refused with `RATE_LIMITED`.
 - **During a rolling upgrade, publish a decoder only after every `device-management` replica runs this release.** A version published while an older replica handles the request is frozen without its decoder, because that replica does not know the field. After the rollout, check that `DeviceProfileVersion.decoder` is present on the version you published and, if it is not, publish again.
+
+#### X.509 revocation lists {#v120-x509-crl}
+
+A tenant can now store a certificate authority's revocation list (CRL) against a trust anchor, and an anchor has a revocation mode. An anchor with no list and no manual revocation behaves exactly as it did.
+
+- **A CRL is uploaded over GraphQL or a streaming `PUT`**, and the platform checks its signature against the anchor. The size it will take is the fixed setting `deviceManagement.callout.revocation.maxCrlBytes` (default 2 MiB, up to 32 MiB). **Size it against the pod's memory limit.** Verifying a CRL parses all of it, and an upload peaks at roughly 20 to 30 times the CRL's size in heap: a 2 MiB list costs 40 to 65 MiB, and a 7 MB list of 300,000 entries about 190 MiB. `maxConcurrentWrites` (default 1) is how many uploads one replica works on at once.
+- **An older CRL can never replace a newer one**, including after the list was deleted: the highest CRL number accepted for each issuer is kept. **Deleting a trust anchor discards those numbers with it**, together with its lists and their entries, so an anchor re-created from the same CA starts again and accepts a CRL that was refused before. An anchor can only be deleted once no credential and no provisioning profile relies on it.
+- **Deleting a trust anchor is refused while it holds manual revocations.** Un-revoke them first (`unrevokeDeviceCertificate`); they are your own decisions and are never discarded silently.
+- **`REQUIRE_CURRENT` is opt-in per anchor.** The platform refuses to switch an anchor to it while the anchor holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused.
+- **During a rolling upgrade**, replicas that have not been replaced answer the broker's authorization callout without revocation checks, so a revocation is enforced everywhere only once the rollout completes. Going back to `v1.1.0` leaves the tables in place and unread: revocations stop being enforced.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 

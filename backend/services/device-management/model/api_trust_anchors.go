@@ -269,6 +269,9 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 		if err != nil {
 			return err
 		}
+		if err := api.applyRevocationSettings(tx, locked, request); err != nil {
+			return err
+		}
 		locked.Name = request.Name.ApplyToNullString(locked.Name)
 		locked.Description = request.Description.ApplyToNullString(locked.Description)
 		locked.Metadata = metadataJSON
@@ -325,12 +328,29 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool, error) {
 	deleted := false
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// CRL writers of this anchor are serialised before the anchor row is locked (lockCrlWriters),
+		// and this delete discards their lists, so it queues behind them the same way.
+		var named DeviceTrustAnchor
+		if err := tx.Select("id", "tenant_id").Where("token = ?", token).First(&named).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		if err := lockCrlWriters(tx, named.TenantId, named.ID); err != nil {
+			return err
+		}
 		locked, err := lockTrustAnchorByToken(tx, token)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
+		}
+		if locked.ID != named.ID {
+			// The token was re-created while this waited for the lock of the anchor it named: the
+			// CRL-writer lock held is not the new anchor's, so touch nothing.
+			return invalidAnchor("trust anchor %q was replaced while the delete was waiting; repeat it", token)
 		}
 		var creds, profiles int64
 		if err := tx.Unscoped().Model(&DeviceCredential{}).Where("trust_anchor_id = ?", locked.ID).Count(&creds).Error; err != nil {
@@ -343,16 +363,22 @@ func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool
 			return fmt.Errorf("%w: %d credential(s) and %d provisioning profile(s) rely on trust anchor %q; remove them first",
 				ErrEntityInUse, creds, profiles, token)
 		}
-		// Its revocation store goes nowhere silently: the entries are the tenant's record of what it
-		// refused, and an issuer row carries the CRL numbers that stop an older list being replayed.
-		// The foreign keys refuse the delete as well; this says why.
-		revocations, err := revocationRowsOf(tx, locked.ID)
+		// MANUAL revocations are the tenant's own decisions about its certificates and go nowhere
+		// silently: un-revoke them first. Everything that came from a CRL (the lists, their
+		// entries and the issuer rows that carry the CRL-number marks) is derived from the CA's
+		// publication, and an anchor with no credential and no profile left has nothing to
+		// enforce it on, so it is discarded with the anchor. Without that, an anchor that ever held
+		// a CRL could never be deleted: the issuer rows are never deleted by any other path.
+		manual, err := manualRevocationRows(tx, locked.ID)
 		if err != nil {
 			return err
 		}
-		if revocations > 0 {
-			return fmt.Errorf("%w: trust anchor %q holds %d revocation record(s); remove them first",
-				ErrEntityInUse, token, revocations)
+		if manual > 0 {
+			return fmt.Errorf("%w: trust anchor %q holds %d manual revocation(s); un-revoke them first",
+				ErrEntityInUse, token, manual)
+		}
+		if err := discardCrlRevocations(tx, locked.TenantId, locked.ID); err != nil {
+			return err
 		}
 		result := tx.Unscoped().Delete(locked)
 		if result.Error != nil {

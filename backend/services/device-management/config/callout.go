@@ -67,6 +67,10 @@ type CalloutConfiguration struct {
 	// IssuerPinGatherWindow is how long one ping waits for servers to answer. It ends early once
 	// every server the cluster claims has answered. 100ms to 2s, default 750ms.
 	IssuerPinGatherWindow string
+
+	// Revocation bounds the X.509 revocation store: the CRLs an operator may upload and how many
+	// are written at once.
+	Revocation RevocationConfiguration
 }
 
 // ApplyDefaults fills what the document left out.
@@ -83,6 +87,7 @@ func (c *CalloutConfiguration) ApplyDefaults() {
 	if c.IssuerPinGatherWindow == "" {
 		c.IssuerPinGatherWindow = DefaultCalloutIssuerPinGatherWindow.String()
 	}
+	c.Revocation.ApplyDefaults()
 }
 
 // IssuerPinRefreshDuration, IssuerPinMinRefreshDuration and IssuerPinGatherWindowDuration are the
@@ -120,5 +125,5 @@ func (c CalloutConfiguration) Validate() error {
 		return fmt.Errorf("callout.issuerPinGatherWindow must be a duration between %s and %s, got %q",
 			MinCalloutIssuerPinGatherWindow, MaxCalloutIssuerPinGatherWindow, c.IssuerPinGatherWindow)
 	}
-	return nil
+	return c.Revocation.Validate()
 }

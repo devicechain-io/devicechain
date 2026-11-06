@@ -3342,6 +3342,24 @@ type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & Metadat
     credentialCount: Int!
     """How many provisioning profiles authenticate against the anchor."""
     profileCount: Int!
+    """
+    How the anchor treats the completeness of its revocation lists. ENTRIES (the default) refuses
+    every certificate a stored list or manual entry names and admits the rest, however old the lists
+    are; REQUIRE_CURRENT also refuses a certificate whose issuer has no current list.
+    """
+    revocationMode: CertificateRevocationMode!
+    """
+    How long past a list's nextUpdate it still counts as current under REQUIRE_CURRENT, as a Go
+    duration (for example "24h0m0s"). The instance default when the anchor sets none.
+    """
+    revocationStaleGrace: String!
+    """The current CRL of each issuer the anchor holds one for."""
+    revocationLists: [DeviceRevocationList!]!
+    """
+    The worst freshness over the anchor's lists: NONE when it holds no list, otherwise the most
+    stale of them.
+    """
+    revocationStatus: RevocationStatus!
 }
 
 """Data required to create a trust anchor."""
@@ -3382,6 +3400,75 @@ input DeviceTrustAnchorUpdateRequest {
     enabled: Boolean
     """Free-form JSON the platform stores and does not interpret. Null clears it."""
     metadata: String
+    """
+    Required and unclearable. Switching to REQUIRE_CURRENT is refused while the anchor holds no
+    current revocation list, or a registered certificate under it was issued by a CA that has none:
+    the switch would refuse every such device.
+    """
+    revocationMode: CertificateRevocationMode
+    """
+    A Go duration of whole seconds, 0s to 168h. Null restores the instance default. While the
+    anchor is in REQUIRE_CURRENT, a change is refused if it would leave an issuer without a current
+    list.
+    """
+    revocationStaleGrace: String
+}
+
+"""How an anchor treats the completeness of its revocation lists."""
+enum CertificateRevocationMode {
+    """A listed certificate is refused; an issuer with no list, or a stale one, is allowed."""
+    ENTRIES
+    """A listed certificate is refused, and so is one whose issuer has no current list."""
+    REQUIRE_CURRENT
+}
+
+"""How fresh a stored revocation list is."""
+enum RevocationStatus {
+    """No list is stored."""
+    NONE
+    """Less than three quarters of the list's validity has passed."""
+    FRESH
+    """Three quarters of its validity have passed, or nextUpdate has passed within the grace: push the next list."""
+    EXPIRING
+    """nextUpdate and the grace have both passed: REQUIRE_CURRENT no longer counts the list as current."""
+    STALE
+}
+
+"""
+The current CRL of one issuer under a trust anchor. Its entries are listed through
+deviceRevokedCertificates.
+"""
+type DeviceRevocationList {
+    """The CRL signer's subject, for display."""
+    issuerSubject: String!
+    """SHA-256 of the signer's public key, hex. With issuerName, identifies the issuer."""
+    issuerKey: String!
+    """SHA-256 of the signer's subject, hex."""
+    issuerName: String!
+    """The CRL number, as a decimal string (up to 20 octets)."""
+    crlNumber: String!
+    """The CRL's thisUpdate, as an RFC 3339 timestamp."""
+    thisUpdate: String!
+    """The CRL's nextUpdate, as an RFC 3339 timestamp."""
+    nextUpdate: String!
+    """How many certificates the list revokes."""
+    entryCount: Int!
+    """SHA-256 of the CRL's DER, hex."""
+    crlSha256: String!
+    """UPLOAD."""
+    source: String!
+    """The list's freshness now."""
+    status: RevocationStatus!
+}
+
+"""The outcome of storing a revocation list."""
+type DeviceRevocationListResult {
+    """The list now in force for the issuer."""
+    list: DeviceRevocationList!
+    """How many certificates the list revokes that the issuer's previous list did not."""
+    newlyRevoked: Int!
+    """True when this very CRL was already the current list and nothing was written."""
+    unchanged: Boolean!
 }
 
 """
@@ -5523,7 +5610,10 @@ type Mutation {
     ): DeviceTrustAnchor!
     """
     Delete a trust anchor nothing relies on. Refused with extensions.code REFERENCE_VIOLATION while a
-    credential or a provisioning profile still names it.
+    credential or a provisioning profile still names it, and while it holds manual revocations
+    (un-revoke them first). Revocation lists uploaded for it, their entries and the highest CRL number
+    accepted for each issuer are discarded with it: an anchor re-created from the same CA starts
+    again, and accepts a CRL whose number the deleted anchor had already passed.
     """
     deleteDeviceTrustAnchor(
         """Token of the anchor."""
@@ -5557,6 +5647,41 @@ type Mutation {
         anchorToken: String!
         """SHA-256 of the certificate, hex."""
         fingerprintSha256: String!
+    ): Boolean!
+    """
+    Store a CRL as the current list of its issuer under a trust anchor, replacing the issuer's
+    previous list. Its signature is verified against the anchor (or the issuer chain that links the
+    signer to it) and it is refused unless its CRL number is above every number accepted before
+    for that issuer, including after the list was deleted. The certificates it names are refused
+    from the next connect on every replica. Uploading the very CRL already in force changes
+    nothing. The text is limited (the instance's callout.revocation.maxGraphqlCrlBytes, 2 MiB of
+    DER at most); larger lists go over the streaming REST upload,
+    PUT /trust-anchors/{token}/crl on this service. This does not end sessions already open.
+    """
+    putDeviceRevocationList(
+        """Token of the trust anchor."""
+        anchorToken: String!
+        """The CRL, PEM (exactly one X509 CRL block)."""
+        crlPem: String!
+        """
+        The CRL signer's certificate first, then the CAs that link it to the anchor, PEM. Omit it
+        when the anchor itself signed the CRL.
+        """
+        issuerChainPem: String
+    ): DeviceRevocationListResult!
+    """
+    Delete the current list of an issuer and every entry it carried; those certificates are no
+    longer refused for it. The issuer's highest CRL number is kept, so an older list still cannot
+    be uploaded afterwards. True if there was a list. Under REQUIRE_CURRENT the anchor's certificates
+    from that issuer are then refused until a new list is uploaded.
+    """
+    deleteDeviceRevocationList(
+        """Token of the trust anchor."""
+        anchorToken: String!
+        """SHA-256 of the signer's public key, hex."""
+        issuerKey: String!
+        """SHA-256 of the signer's subject, hex."""
+        issuerName: String!
     ): Boolean!
     """
     Create an inbound integration. The response carries the bearer token the server

@@ -7,6 +7,7 @@ import (
 	"context"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/credential"
@@ -222,6 +223,10 @@ type Api struct {
 	// GeoFenceCapRefusals, when set, counts refusals by which cap refused. Nil disables
 	// counting only; it never changes a verdict.
 	GeoFenceCapRefusals GeoFenceCapRefusalCounter
+
+	// revocation holds the X.509 revocation store's fixed bounds and the slots that bound the
+	// CRL uploads one replica works on at once (SetRevocationLimits). Unset means the defaults.
+	revocation atomic.Pointer[revocationConfig]
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.

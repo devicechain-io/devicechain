@@ -808,6 +808,7 @@ Qué requiere acción:
 - **Si fija usted mismo la `resourceUrl` del servidor MCP, escriba su esquema y su host en minúsculas** antes de la aplicación obligatoria. Consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 - **Espere que los cambios de perfil y de tipo de dispositivo lleguen tarde a las réplicas actualizadas mientras dura el despliegue.** Consulte [Cambios de perfil durante una actualización progresiva](#v120-profile-cache).
 - **Publique el decodificador de payload de un perfil solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada mientras una réplica anterior sigue atendiendo puede quedarse sin su decodificador; consulte [Decodificadores de payload](#v120-payload-decoders).
+- **Tenga en cuenta que las listas de revocación de certificados X.509 son nuevas y opcionales.** No hay que hacer nada para actualizar; lea [Listas de revocación](#v120-x509-crl) antes de subir una.
 
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
@@ -881,6 +882,16 @@ Un perfil de dispositivo puede llevar ahora un **decodificador de payload**: reg
 - **La migración es aditiva.** Añade una columna que admite nulos a los perfiles de dispositivo y dos tablas en las que todavía no escribe nada. Una réplica anterior no las lee.
 - **La puerta de prueba tiene un límite de frecuencia por réplica.** `testPayloadDecoder` permite 10 peticiones por segundo por inquilino, con una ráfaga de 20, en cada réplica de `device-management`, así que el total de un inquilino crece con el número de réplicas. Una petición por encima del límite se rechaza con `RATE_LIMITED`.
 - **Durante una actualización progresiva, publique un decodificador solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada mientras la petición la atiende una réplica anterior se congela sin su decodificador, porque esa réplica no conoce el campo. Terminada la actualización, compruebe que `DeviceProfileVersion.decoder` está presente en la versión que publicó y, si no lo está, publique de nuevo.
+
+#### Listas de revocación X.509 {#v120-x509-crl}
+
+Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad certificadora en un ancla de confianza, y cada ancla tiene un modo de revocación. Un ancla sin lista y sin revocación manual se comporta exactamente como antes.
+
+- **Una CRL se sube por GraphQL o con un `PUT` en streaming**, y la plataforma comprueba su firma contra el ancla. El tamaño admitido es el ajuste fijo `deviceManagement.callout.revocation.maxCrlBytes` (2 MiB por defecto, hasta 32 MiB). **Dimensiónelo según el límite de memoria del pod.** Verificar una CRL la analiza entera, y una subida alcanza un pico de entre 20 y 30 veces el tamaño de la CRL en heap: una lista de 2 MiB cuesta de 40 a 65 MiB, y una de 7 MB con 300 000 entradas unos 190 MiB. `maxConcurrentWrites` (1 por defecto) es cuántas subidas procesa a la vez una réplica.
+- **Una CRL más antigua nunca puede sustituir a una más nueva**, ni siquiera después de borrar la lista: se conserva el número de CRL más alto aceptado para cada emisor. **Borrar un ancla de confianza descarta esos números con ella**, junto con sus listas y sus entradas, de modo que un ancla recreada a partir de la misma CA empieza de nuevo y acepta una CRL que antes se rechazó. Un ancla solo puede borrarse cuando ninguna credencial ni perfil de aprovisionamiento depende de ella.
+- **Borrar un ancla de confianza se rechaza mientras tenga revocaciones manuales.** Anúlelas primero (`unrevokeDeviceCertificate`); son decisiones suyas y nunca se descartan en silencio.
+- **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
+- **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 

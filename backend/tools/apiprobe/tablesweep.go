@@ -178,9 +178,15 @@ var tableSweepExemptions = map[string]string{
 		"revoke and to prove the refusal on. Correctly empty until then; the purge coverage gate proves the " +
 		"table's tenant column.",
 	"device-management.device_revocation_lists": "the current CA revocation list per issuer under a trust " +
-		"anchor, written by the list upload that a later slice adds. Nothing writes it yet.",
+		"anchor, written by putDeviceRevocationList. The door exists, but a list is accepted only if it is " +
+		"SIGNED by the anchor's CA (or a CA below it), and the drill's trust anchor is a fixed certificate " +
+		"whose private key is not, and must not be, in this tool. Seeding a list means seeding a second " +
+		"anchor from a CA the tool mints and signs for; that belongs with the rig's simulator, which gains " +
+		"CRL and intermediate minting for exactly this (the x509 rig's revocation steps). The upload itself " +
+		"is proved end to end by device-management's own wire, REST and Postgres tests.",
 	"device-management.device_revocation_issuers": "one row per issuer a list was ever stored for, carrying " +
-		"its CRL-number high-water mark. Written with the first list upload (a later slice); nothing writes it yet.",
+		"its CRL-number high-water mark. Written with the first list upload, so it is empty for the same " +
+		"reason as device_revocation_lists: the drill cannot sign a list for its keyless anchor.",
 	"device-management.device_credential_chain_links": "the path a certificate credential was created " +
 		"through, written alongside the credential. The drill's seed pins no X.509 credential (it registers " +
 		"no CA), so there is no credential to hang a link off.",
