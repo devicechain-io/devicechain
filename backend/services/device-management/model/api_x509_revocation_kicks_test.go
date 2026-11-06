@@ -171,7 +171,7 @@ func TestAnUnmatchedRevocationKicksNobody(t *testing.T) {
 // 🔴 A DISABLED CREDENTIAL IS STILL A LEAF TARGET. Its own disable commits before its kick, and a
 // kick that failed there is not durably owed, so the revocation of its certificate is the next
 // chance to end a session it may still hold. The anchor-wide kick (a CA-level entry) is the policy
-// "every device with a live credential" and leaves it out, as an anchor disable does.
+// "every device with a certificate credential" and includes it for the same reason.
 func TestARevokedLeafOfADisabledCredentialIsStillKicked(t *testing.T) {
 	f := newRevKickFixture(t)
 	ca := newRootCA(t, "Maker Root")
@@ -193,7 +193,8 @@ func TestARevokedLeafOfADisabledCredentialIsStillKicked(t *testing.T) {
 	f.resetCalls()
 	_, err = f.revokeFp("maker", x509trust.Fingerprint(inter.cert))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"dev-live"}, f.kicked(), "the anchor-wide kick is for devices with a live credential")
+	assert.Equal(t, []string{"dev-disabled", "dev-live"}, f.kicked(),
+		"the anchor-wide kick includes the disabled credential too: its own kick is not durably owed, and including it can only over-kick")
 }
 
 // 🔑 THE RE-SWEEP. The first kick is confirmed and the row is NOT deleted: it waits NotBefore, and is
@@ -677,4 +678,38 @@ func BenchmarkSortedUniqueTokens(b *testing.B) {
 			}
 		})
 	}
+}
+
+// 🔴 A CA REVOKED BY ITS PEM IS ANCHOR-WIDE WHATEVER THE LINKS SAY. An instance upgraded from before
+// the links existed holds only depth-0 links, so the intermediate's fingerprint matches no link. When
+// the operator gives the certificate itself and it is a CA, the whole anchor is asked. A bare
+// fingerprint cannot say what it fingerprints and keeps the link-based rule.
+func TestRevokingACaByPemIsAnchorWideEvenWhenNoLinkNamesIt(t *testing.T) {
+	f := newRevKickFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	a := f.anchor("maker", ca)
+	inter := newPki(t, ca, pkiOpts{cn: "Line", ca: true})
+	f.pin("maker", "dev-1", inter.leaf(t, "SN-1"), inter)
+	f.pin("maker", "dev-2", ca.leaf(t, "SN-2"))
+	// The state an upgrade leaves: depth-0 links only.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("trust_anchor_id = ? AND depth >= 1", a.ID).Delete(&DeviceCredentialChainLink{}).Error)
+	f.resetCalls()
+
+	// The control, on a CA of the same kind: by fingerprint alone nothing says it is a CA and no
+	// link names it, so nobody is asked.
+	other := newPki(t, ca, pkiOpts{cn: "Line 2", ca: true})
+	_, err := f.revokeFp("maker", x509trust.Fingerprint(other.cert))
+	require.NoError(t, err)
+	assert.Empty(t, f.kicked())
+
+	pemText := inter.pem()
+	_, err = f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: "maker", CertificatePem: &pemText})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dev-1", "dev-2"}, f.kicked(), "by PEM a CA ends the whole anchor")
+
+	f.resetCalls()
+	leafPem := ca.leaf(t, "SN-3").pem()
+	_, err = f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: "maker", CertificatePem: &leafPem})
+	require.NoError(t, err)
+	assert.Empty(t, f.kicked(), "a leaf PEM is not a CA")
 }

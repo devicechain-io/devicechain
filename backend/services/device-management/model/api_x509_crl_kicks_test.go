@@ -4,6 +4,7 @@
 package model
 
 import (
+	"fmt"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"gorm.io/gorm"
 	"math/big"
@@ -172,4 +173,30 @@ func TestCrlKickJoinComparesTheIssuerKeyOfAKeyedLink(t *testing.T) {
 	}
 	assert.Equal(t, 0, queue("ff"+real.Key[2:]), "another issuer key")
 	assert.Equal(t, 1, queue(real.Key), "the control")
+}
+
+// 🔑 THE CRL TWIN OF THE BOUNDED RECONCILER. With more unlinked legacy credentials than the budget,
+// an upload that names ONE leaf asks about the WHOLE anchor (links not whole: an over-kick, never a
+// miss); the next upload finishes the reconciliation and is narrow again.
+func TestCrlUploadWithIncompleteLinksWidensTheKickToTheAnchor(t *testing.T) {
+	f := newCrlKickFixture(t)
+	old := legacyReconcileBudget
+	legacyReconcileBudget = legacyLinkBatch
+	t.Cleanup(func() { legacyReconcileBudget = old })
+	n := legacyLinkBatch + 3
+	leaves := make([]*pkiNode, n)
+	for i := 0; i < n; i++ {
+		leaves[i] = f.ca.leaf(t, fmt.Sprintf("SN-%d", i))
+		f.pin(fmt.Sprintf("dev-%03d", i), leaves[i])
+	}
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("trust_anchor_id = ?", f.anchor.ID).Delete(&DeviceCredentialChainLink{}).Error)
+	f.reset()
+
+	res := f.mustPut(f.ca.crl(t, crlSpec{number: big.NewInt(1), revoked: revokedSerials(serialOf(leaves[0].cert))}))
+	assert.True(t, res.SessionsEnded)
+	assert.Len(t, f.kicked(), n, "links not whole: every device under the anchor is asked about")
+
+	f.reset()
+	f.mustPut(f.ca.crl(t, crlSpec{number: big.NewInt(2), revoked: revokedSerials(serialOf(leaves[0].cert), serialOf(leaves[1].cert))}))
+	assert.Equal(t, []string{"dev-001"}, f.kicked(), "the second upload completes the links and is narrow again")
 }
