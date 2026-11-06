@@ -3514,6 +3514,14 @@ type DeviceRevokedCertificate {
     reason: CertificateRevocationReason!
     """When it was revoked, as an RFC 3339 timestamp."""
     revokedAt: String!
+    """
+    Set only on the result of revokeDeviceCertificate, null everywhere else. True when the live
+    broker sessions of the devices the revocation affects were confirmed ended. False when the
+    revocation is saved and new connects are refused, but a session already open could not be
+    confirmed ended: it may still be publishing until the retry (automatic, and on repeating the
+    mutation, which is idempotent) ends it, or its token expires.
+    """
+    sessionsEnded: Boolean
 }
 
 """Criteria used when listing the revoked certificates of a trust anchor."""
@@ -5635,7 +5643,10 @@ type Mutation {
     its credential or its device does not let it register again. It applies to any certificate on a
     verified path, a leaf or an intermediate. Name it with exactly one of certificatePem and
     fingerprintSha256. Revoking one already revoked returns the existing entry. The anchor's own
-    certificate is refused (disable the anchor instead). This does not end sessions already open.
+    certificate is refused (disable the anchor instead). The live broker sessions of the devices the
+    certificate affects are ended: those whose credential is this leaf, or every device under the
+    anchor when the certificate is a CA that a registered credential's chain was seen to use. The
+    result's sessionsEnded says whether that was confirmed.
     """
     revokeDeviceCertificate(
         """Token of the trust anchor."""

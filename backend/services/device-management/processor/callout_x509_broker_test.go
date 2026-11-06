@@ -166,6 +166,9 @@ type fixtureOpts struct {
 	// configure runs on the responder BEFORE it starts, so a test can turn registration on
 	// without racing a request.
 	configure func(t *testing.T, resp *CalloutResponder, api *model.Api)
+	// wrap puts a decorator between the responder and the Api, so a test can pause or observe a
+	// call the responder makes. The fixture itself keeps the plain Api.
+	wrap func(api *model.Api) model.DeviceManagementApi
 }
 
 const x509Tenant = "acme-corp"
@@ -301,7 +304,11 @@ func newX509FixtureWith(t *testing.T, o fixtureOpts) *x509Fixture {
 	ms := &core.Microservice{InstanceId: "inst-1", FunctionalArea: "device-management"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	metrics := NewCalloutMetrics(ms)
-	resp := mustResponder(t, nc, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, nil)
+	var respApi model.DeviceManagementApi = api
+	if o.wrap != nil {
+		respApi = o.wrap(api)
+	}
+	resp := mustResponder(t, nc, respApi, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, nil)
 	resp.Configure(0, 0, 0, metrics)
 	if o.configure != nil {
 		o.configure(t, resp, api)
