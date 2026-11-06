@@ -36,7 +36,7 @@ import (
 // the remaining work only after a FAILED run, because a failed run is not recorded. A run that
 // finishes is recorded, and a batch that finds nothing ends a statement even when locked rows still
 // match. NewInactivityAlarmTimeRestoreFinalPassSchema (20261107120000) finishes those rows and
-// fails when any remain. Rows that v1.1 pods sweep after either has run are answered by the
+// logs any that remain. Rows that v1.1 pods sweep after either has run are answered by the
 // resolver (graphql.sweptByV11), not by a write.
 func NewInactivityAlarmTimeRestoreSchema() *gormigrate.Migration {
 	const states = `"device-state".device_states`

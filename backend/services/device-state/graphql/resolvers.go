@@ -108,6 +108,13 @@ func (r *DeviceStateResolver) InactivityAlarmTime() *string {
 // sweptByV11 reports whether an inactive row with no stored inactivity alarm time is the one a
 // v1.1 sweep leaves. It states the same predicate as the repair migration's third statement
 // (model.NewInactivityAlarmTimeRestoreSchema), and the two move together.
+//
+// It is a fingerprint, not a record: no column says a sweep wrote the disconnect, so the order of
+// two timestamps stands in for it. A device whose reports arrive with a higher session and an
+// EARLIER time than its last disconnect (a late echo over a clock step back) can match without
+// ever having been swept, and then answers that disconnect time where v1.0 answered null. The
+// field is deprecated, the case needs out-of-order presence reports, and the answer is a real
+// disconnect instant of an inactive device.
 func sweptByV11(m model.DeviceState) bool {
 	return !m.Active && m.PresenceSource != model.PresenceSourceAsserted && !m.InactivityAlarmTime.Valid &&
 		m.LastDisconnectTime.Valid && (!m.PresenceTime.Valid || m.LastDisconnectTime.Time.After(m.PresenceTime.Time))

@@ -4,23 +4,30 @@
 package model
 
 import (
-	"fmt"
 	"time"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
 // NewInactivityAlarmTimeRestoreFinalPassSchema finishes the repair that
-// NewInactivityAlarmTimeRestoreSchema (20261106120000) starts, and proves it finished.
+// NewInactivityAlarmTimeRestoreSchema (20261106120000) starts, and says so when it could not.
 //
 // That migration batches with FOR UPDATE SKIP LOCKED so it never waits on a row lock a v1.1 writer
 // holds, and stops at the first batch that touches nothing. A row a v1.1 writer held while the
 // migration ran is therefore skipped, and the migration is recorded as applied, so it never runs
 // again: the rows it skipped stayed wrong for good. This one runs the same three statements in the
 // same order, then counts what still matches and tries again after a pause, up to
-// restoreFinalPasses times, and returns an error naming the count when rows remain. An error leaves
-// the migration unrecorded, so it replays from the top at the next start.
+// restoreFinalPasses times. A writer's locks last one batch, so a second pass almost always finds
+// the row free.
+//
+// 🔴 IT DOES NOT FAIL WHEN ROWS REMAIN, and that is deliberate. Failing would stop the new pod from
+// starting for as long as an old pod keeps writing matching rows (a v1.1 pod reconnecting a device
+// leaves a stale value, a v1.1 sweep leaves none), which during a rolling upgrade is the whole
+// rollout. The rows left are still answered correctly: the resolver ignores a value on an active
+// row or one that predates the last connect, and reads last_disconnect_time for the row a v1.1
+// sweep leaves (graphql.sweptByV11). What remains is logged with its count.
 //
 // IT DOES NOT WAIT FOR A LOCK EITHER. Waiting for a row a v1.1 batch writer holds is the cycle
 // documented at SweepInactive (the writer locks its rows in token order, the waiter in heap order,
@@ -96,8 +103,10 @@ func newInactivityAlarmTimeRestoreFinalPass(passes int, pause time.Duration) *go
 					return nil
 				}
 			}
-			return fmt.Errorf("inactivity alarm time restore: %d device_states rows were still held by writers after %d passes; "+
-				"the migration is not recorded and runs again at the next start", remaining, passes)
+			log.Warn().Int("rows", remaining).Int("passes", passes).
+				Msg("inactivity alarm time restore: rows were still held by writers or rewritten by older replicas; " +
+					"the deprecated inactivityAlarmTime field is answered correctly for them on read")
+			return nil
 		},
 		Rollback: func(tx *gorm.DB) error { return nil },
 	}

@@ -8,7 +8,6 @@ package model
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"testing"
 	"time"
 
@@ -63,9 +62,10 @@ func holdRowLock(t *testing.T, api *Api, token string) (release func()) {
 }
 
 // The first restore skips a row a writer holds and is recorded as applied; the final pass does not
-// finish while a writer still holds it, and finishes the row once the writer lets go. Negative
+// finish the row while a writer still holds it (and does not fail the start for it), and finishes
+// the row once the writer lets go. Negative
 // controls: the first migration really does leave the held row (so the test shows the defect it
-// fixes), and the final pass really does error while the row is held (so a pass is not a no-op).
+// fixes), and the final pass really leaves the row while it is held, and returns rather than failing the start.
 func TestTheFinalPassRestoresARowAWriterHeldDuringTheFirstOne(t *testing.T) {
 	api := newPostgresProjectionApi(t, "alarmfinal")
 	seedRestoreRows(t, api, "held", "free")
@@ -82,10 +82,9 @@ func TestTheFinalPassRestoresARowAWriterHeldDuringTheFirstOne(t *testing.T) {
 		t.Fatal("the control: the first restore filled a row a writer holds, so the blind spot this test covers did not occur")
 	}
 
-	// Still held: the final pass fills what it can, then fails and names the count.
-	err := newInactivityAlarmTimeRestoreFinalPass(2, 50*time.Millisecond).Migrate(db)
-	if err == nil || !strings.Contains(err.Error(), "1 device_states rows were still held") {
-		t.Fatalf("final pass with the row held: err %v, want one naming the single held row", err)
+	// Still held: the final pass leaves the row and returns.
+	if err := newInactivityAlarmTimeRestoreFinalPass(2, 50*time.Millisecond).Migrate(db); err != nil {
+		t.Fatalf("final pass with the row held: %v", err)
 	}
 	if alarmTimeOf(t, api, "held").Valid {
 		t.Fatal("the held row was written while its lock was held")
