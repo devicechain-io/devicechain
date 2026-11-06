@@ -69,22 +69,39 @@ func (suite *EventPersistenceProcessorTestSuite) TestLifecycle() {
 	assert.Nil(suite.T(), err)
 }
 
-// Test processing loop termination on EOF.
+// runReadLoop drives the REAL read loop (readLoop, through messaging.RunConsumer) and reports
+// whether it returned within the deadline.
+func (suite *EventPersistenceProcessorTestSuite) runReadLoop() bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		suite.EP.readLoop(context.Background())
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+// The processing loop ends when the reader reports EOF, having asked the reader exactly once.
 func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopEof() {
 	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 
-	eof := readAndHandleOne(suite.EP, context.Background())
-
-	assert.Equal(suite.T(), eof, true)
+	assert.True(suite.T(), suite.runReadLoop(), "the read loop did not end on EOF")
+	suite.Inbound.AssertNumberOfCalls(suite.T(), "ReadMessage", 1)
 }
 
-// Test processing loop without EOF.
+// The processing loop keeps reading while reads succeed: it asks again after every message and
+// ends only at the EOF that follows them.
 func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
-	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, nil)
+	const n = 3
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, nil).Times(n)
+	suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(messaging.Message{}, io.EOF)
 
-	eof := readAndHandleOne(suite.EP, context.Background())
-
-	assert.Equal(suite.T(), eof, false)
+	assert.True(suite.T(), suite.runReadLoop(), "the read loop did not end at the EOF after its messages")
+	suite.Inbound.AssertNumberOfCalls(suite.T(), "ReadMessage", n+1)
 }
 
 // Build resolved event with the given payload.

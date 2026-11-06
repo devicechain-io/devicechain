@@ -1670,6 +1670,14 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 	if st.DryRun {
 		return errRehearsalApplies
 	}
+	// 🔴 THE EVENT STORE TUNING IS RECORDED BEFORE THE APPLY, NOT AFTER IT. The flags reach the
+	// apply as -var on the plan, so nothing else holds them: an apply that reloads the store and
+	// then fails, or an output read that fails after it, would leave the next (flagless) run
+	// deriving the value the operator had just replaced. The plan has been judged by now, so a
+	// refused one never gets here.
+	if err := writeEventStoreVarFile(p.rootdir, st); err != nil {
+		return err
+	}
 	if err := p.tf.Apply(ctx, tfexec.DirOrPlan(p.planPath)); err != nil {
 		if !isCNPGWebhookUnavailable(err.Error()) {
 			return fmt.Errorf("applying instance %q's infrastructure: %w", st.Instance, err)
@@ -1698,9 +1706,6 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		return err
 	}
 	st.InfraApplied = true
-	if err := writeEventStoreVarFile(p.rootdir, st); err != nil {
-		return err
-	}
 	if err := waits.broker(ctx); err != nil {
 		return err
 	}

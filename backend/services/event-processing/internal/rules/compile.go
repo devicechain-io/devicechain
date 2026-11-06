@@ -38,15 +38,10 @@ type Limits struct {
 	// the only knob that bounds it before the memory is allocated.
 	//
 	// The timer-shaped kinds (Duration's hold, Absence's timeout, Session's gap) retain no
-	// samples — but the ceiling is NOT a courtesy extension to them. Absence and Session reset
-	// their deadline on every qualifying event, and a reset PUSHES a new entry onto the timer
-	// wheel's heap while the superseded one lingers there until its deadline passes (it is
-	// invalidated by a generation bump, not removed). So a series holds about
-	// timeout/reporting-interval stale heap entries in steady state: a 3-day absence timeout on
-	// a device reporting every 10s is ~26k of them, per device. A timer-shaped duration costs
-	// heap in DIRECT PROPORTION to its length, exactly like a window — the allocation just lives
-	// in the wheel instead of a sample buffer, which is why neither map-based gauge sees it and
-	// core.PendingTimerCount exists.
+	// samples, and since the timer wheel holds one entry per armed key (a deadline reset moves
+	// it) a longer timeout no longer costs heap. The ceiling still applies to them: a timeout
+	// is a promise about how long a silent device's state is held, and the same bound keeps one
+	// vocabulary for every duration a rule carries.
 	MaxRuleDuration time.Duration
 }
 

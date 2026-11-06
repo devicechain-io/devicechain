@@ -1,0 +1,24 @@
+{
+  "kind": "CEL",
+  "envVersion": 1,
+  "input": "FRAME",
+  "sections": [
+    {
+      "name": "telemetry",
+      "when": "fPort == 2 && u8(frame, 0) == 1",
+      "outputs": [
+        {"key": "temperature", "expr": "double(i16be(frame, 1)) / 10.0"},
+        {"key": "humidity", "expr": "double(u8(frame, 3))"},
+        {"key": "battery.voltage", "expr": "double(u8(frame, 4)) / 10.0"},
+        {"key": "door", "expr": "bit(frame, 5, 0)"}
+      ]
+    }
+  ],
+  "vectors": [
+    {
+      "name": "door open",
+      "input": {"frameHex": "0100fa2d1f01", "fPort": 2},
+      "expect": {"temperature": 25, "humidity": 45, "battery.voltage": 3.1, "door": 1}
+    }
+  ]
+}

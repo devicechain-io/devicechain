@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"encoding/binary"
+	"math/bits"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventidentity/eventid"
@@ -81,9 +82,11 @@ func (d Digest) Fingerprint() uint64 {
 // retention are dropped whole, and if the total passes MaxEntries the oldest generation goes too
 // (identically live and on replay while the cap binds the same way; under cap pressure priming
 // starts at the cap boundary, so exactness there is approximate and the cap is sized so it does not
-// bind at the rates the platform targets). Each generation is a flat open-addressing table of
-// 8-byte fingerprints at <= 70% load: ~12-24 bytes per remembered event. At the default 10
-// minutes, at 20,000 events/s that is about 12 million events and ~180 MB; at 5,000/s ~45 MB. The
+// bind at the rates the platform targets). Each generation is a bucketed open-addressing table of
+// 8-byte fingerprints at <= 90% load, sized from the previous generation's count and rehashed
+// to its real count when it is sealed: ~9-10 bytes per remembered event at any rate (no
+// power-of-two steps). At the default 10 minutes, at 20,000 events/s that is about 12 million
+// events and ~115 MB; at 5,000/s ~30 MB. The
 // 16,000,000 cap is reached near 25,000 events/s, past which coverage falls below the redelivery
 // span (at 100,000/s it is ~2.7 minutes). The memory is held by the DETECT LEADER only; a standby
 // builds it when it takes over.
@@ -151,9 +154,9 @@ func (g *AppliedGuard) Retention() time.Duration {
 func (g *AppliedGuard) Admit(t time.Time, id Digest) bool {
 	gn := t.Unix() / genSeconds
 	if n := len(g.gens); n == 0 || gn > g.gens[n-1].gen {
-		g.gens = append(g.gens, &generation{gen: gn})
+		g.open(gn)
 	} else if g.gens[n-1].count >= g.headLimit {
-		g.gens = append(g.gens, &generation{gen: g.gens[n-1].gen + 1})
+		g.open(g.gens[n-1].gen + 1)
 	}
 	head := g.gens[len(g.gens)-1]
 	// Expire: everything not within retentionGens of the newest generation.
@@ -186,52 +189,138 @@ func (g *AppliedGuard) Admit(t time.Time, id Digest) bool {
 	return true
 }
 
-func (s *generation) has(f uint64) bool {
-	if len(s.slots) == 0 {
-		return false
+// The generation table is an open-addressing set of 8-byte fingerprints with ROBIN HOOD linear
+// probing and a multiply-shift reduction of the mixed bits to the home slot (Lemire's fastrange),
+// so the capacity need NOT be a power of two. Every resident sits at probe distance d (slots past
+// its home, wrapping); an insert carries its own distance along and swaps places with any
+// resident that is closer to home than it is, so the residents of a run are ordered by distance
+// along the probe path. That ordering is what makes a MISS cheap at a high load: a lookup for f
+// stops at the first empty slot OR the first resident nearer home than f's current distance (f
+// would have displaced it, so f is not further on), where plain linear probing must run to the
+// next empty slot (~50 slots at 90% load). Nothing is ever deleted from a generation, so no
+// tombstones exist. A table is never full: it grows before passing maxLoadPercent, so every probe
+// ends at an empty slot at the latest.
+const (
+	minSlots = 1024
+	// maxLoadPercent is the fill a table may reach before it grows.
+	maxLoadPercent = 90
+	// sizeLoadPercent is the fill a head table is SIZED for when it is opened from the previous
+	// generation's count: headroom of 12% for a rate that rises a little within the generation.
+	sizeLoadPercent = 80
+	// growNum/growDen is the growth factor of a head table that outruns its sizing.
+	growNum, growDen = 3, 2
+)
+
+// slotsFor is the slot count that holds n entries at no more than pct percent load.
+func slotsFor(n, pct int) int {
+	return max(minSlots, (n*100+pct-1)/pct)
+}
+
+// home is f's home slot among n: the high 64 bits of mix(f)*n, uniform over [0,n) for any n.
+func home(f uint64, n int) int {
+	hi, _ := bits.Mul64(mix(f), uint64(n))
+	return int(hi)
+}
+
+// dist is how far slot i is past f's home slot, wrapping.
+func dist(f uint64, i, n int) int {
+	d := i - home(f, n)
+	if d < 0 {
+		d += n
 	}
-	mask := uint64(len(s.slots) - 1)
-	for i := mix(f) & mask; ; i = (i + 1) & mask {
-		switch s.slots[i] {
-		case 0:
-			return false
-		case f:
-			return true
+	return d
+}
+
+func (s *generation) has(f uint64) bool {
+	found, _ := s.probe(f)
+	return found
+}
+
+// probe reports whether f is present and how many slots the lookup read (tests bound the latter).
+func (s *generation) probe(f uint64) (found bool, read int) {
+	n := len(s.slots)
+	if n == 0 {
+		return false, 0
+	}
+	i := home(f, n)
+	for d := 0; ; d++ {
+		switch v := s.slots[i]; {
+		case v == 0:
+			return false, d + 1
+		case v == f:
+			return true, d + 1
+		case dist(v, i, n) < d:
+			return false, d + 1
+		}
+		if i++; i == n {
+			i = 0
 		}
 	}
 }
 
+// add inserts f, which the caller knows is absent from this generation.
 func (s *generation) add(f uint64) {
-	if len(s.slots) == 0 || (s.count+1)*10 > len(s.slots)*7 {
-		s.grow()
+	if len(s.slots) == 0 {
+		s.slots = make([]uint64, minSlots)
+	} else if (s.count+1)*100 > len(s.slots)*maxLoadPercent {
+		s.resize(len(s.slots) * growNum / growDen)
 	}
-	mask := uint64(len(s.slots) - 1)
-	i := mix(f) & mask
-	for s.slots[i] != 0 {
-		i = (i + 1) & mask
-	}
-	s.slots[i] = f
+	s.insert(f)
 	s.count++
 }
 
-func (s *generation) grow() {
+func (s *generation) insert(f uint64) {
+	n := len(s.slots)
+	i := home(f, n)
+	for d := 0; ; d++ {
+		v := s.slots[i]
+		if v == 0 {
+			s.slots[i] = f
+			return
+		}
+		if vd := dist(v, i, n); vd < d {
+			// The resident is nearer home than f is: f takes the slot and the resident
+			// carries on from its own distance.
+			s.slots[i], f, d = f, v, vd
+		}
+		if i++; i == n {
+			i = 0
+		}
+	}
+}
+
+// resize rehashes into n slots (n must exceed the count at the maximum load).
+func (s *generation) resize(n int) {
 	old := s.slots
-	n := 1024
-	if len(old) > 0 {
-		n = len(old) * 2
-	}
 	s.slots = make([]uint64, n)
-	mask := uint64(n - 1)
 	for _, f := range old {
-		if f == 0 {
-			continue
+		if f != 0 {
+			s.insert(f)
 		}
-		i := mix(f) & mask
-		for s.slots[i] != 0 {
-			i = (i + 1) & mask
-		}
-		s.slots[i] = f
 	}
+}
+
+// seal is called when the generation stops being the head: it will take no more entries, so its
+// table is rehashed down to the size its actual count needs at the maximum load. This is what
+// keeps the remembered set near 8/0.9 bytes per event whatever the rate did while it was filling.
+func (s *generation) seal() {
+	if want := slotsFor(s.count, maxLoadPercent); want < len(s.slots)*95/100 {
+		s.resize(want)
+	}
+}
+
+// open starts a new head generation numbered gen, sealing the old head and sizing the new table
+// from the count the old one reached.
+func (g *AppliedGuard) open(gen int64) {
+	var sized []uint64
+	if n := len(g.gens); n > 0 {
+		prev := g.gens[n-1]
+		prev.seal()
+		if prev.count > 0 {
+			sized = make([]uint64, slotsFor(prev.count, sizeLoadPercent))
+		}
+	}
+	g.gens = append(g.gens, &generation{gen: gen, slots: sized})
 }
 
 // mix spreads the fingerprint's bits (it is already a hash, but its low bits index the table).
