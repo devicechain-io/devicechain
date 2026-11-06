@@ -72,6 +72,14 @@ func (r *IntegrationDecoderPlanResolver) EstimatedCost() int32 {
 	return clampInt32(int64(min(r.M.EstimatedCost, math.MaxInt32)))
 }
 
+func (r *IntegrationDecoderPlanResolver) ComposedCost() int32 {
+	return clampInt32(int64(min(r.M.Cost.Composed, math.MaxInt32)))
+}
+
+func (r *IntegrationDecoderPlanResolver) ParsesJson() bool { return r.M.Cost.ParsesJSON }
+
+func (r *IntegrationDecoderPlanResolver) ParsesDecoded() bool { return r.M.Cost.ParsesDecoded }
+
 func (r *IntegrationDecoderPlanResolver) ProfileVersionToken() string { return r.M.ProfileVersionToken }
 
 func clampInt32(v int64) int32 {

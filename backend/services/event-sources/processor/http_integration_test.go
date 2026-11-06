@@ -103,11 +103,13 @@ type routeHarness struct {
 
 	allowCalls    atomic.Int64
 	readingsCalls atomic.Int64
-	allowOK       atomic.Bool
-	readingsOK    atomic.Bool
-	admitErr      error
-	publishErr    error
-	now           time.Time
+	// charged is every reading count the reading gate was charged, in order.
+	charged    []int
+	allowOK    atomic.Bool
+	readingsOK atomic.Bool
+	admitErr   error
+	publishErr error
+	now        time.Time
 }
 
 func (h *routeHarness) count(key string) int {
@@ -134,6 +136,9 @@ func newRouteHarness(t *testing.T) *routeHarness {
 	}
 	readings := func(_ string, _ string, _ time.Time, redelivery bool, origin Origin, n int) bool {
 		h.readingsCalls.Add(1)
+		h.mu.Lock()
+		h.charged = append(h.charged, n)
+		h.mu.Unlock()
 		if origin != OriginIntegration || redelivery || n < 1 {
 			t.Errorf("the reading gate was charged %d with origin %d, want OriginIntegration", n, origin)
 		}

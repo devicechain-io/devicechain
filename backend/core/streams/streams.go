@@ -481,6 +481,29 @@ const (
 	CommandResponses  = "command-responses"
 	ConnectorDispatch = "connector-dispatch"
 
+	// IntegrationUplinks carries an inbound integration's raw input (an IntegrationUplink event)
+	// to the decoder on the device's profile.
+	//
+	// 🔴 IT IS ITS OWN SUBJECT, NOT A NEW EVENT TYPE ON InboundEvents, AND THE REASON IS A
+	// MEASURED ONE. A device-management replica built before payload decoders unmarshals every
+	// message it fetches from inbound-events before any resolver guard runs, and an event type it
+	// does not know fails there: the message is written to failed-events as Invalid and ACKED on
+	// delivery 1, so it is neither stored nor redelivered to a newer replica. Publishing the
+	// carrier there would lose every decoder uplink for as long as any old replica held a slice
+	// of the consumer, with nothing to say so but a failed-events row per message.
+	//
+	// A stream and a durable that only builds with payload decoders create cannot be seen by an
+	// old replica at all: it never subscribes, the message waits in the stream until a newer
+	// consumer pulls it, and nothing is dead-lettered. Event-sources only publishes here once a
+	// device-management that can decode has answered that the device type has a decoder, so such
+	// a consumer exists by the time a message does.
+	//
+	// Append-only like every declaration: an older event-sources never writes it, and an older
+	// device-management never reads it, so the rolling upgrade needs no ordering. Hot, because
+	// its volume is the decoder integrations' uplink rate; it carries no runway sizing, which
+	// would reserve a per-event ceiling for a stream that holds only the decoder subset.
+	IntegrationUplinks = "integration-uplinks"
+
 	// DeviceEventsCapture is the durable capture of raw inbound device telemetry
 	// (ADR-030 amendment). It backs the ShapeDeviceEvents subject, so its suffix
 	// names the stream but never appears in a subject.
@@ -721,6 +744,12 @@ var All = []Stream{
 		ReadBackWriters:       []string{"event-sources"},
 		Forwards:              map[string]string{"device-management": ResolvedEvents},
 		Why:                   "raw device telemetry — the primary ingest path"},
+	// The carrier of an integration's raw input to a profile's payload decoder. See
+	// IntegrationUplinks for why it is a stream of its own. Written by event-sources only, and read
+	// by the device-management resolver in builds that decode.
+	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+		DeadLetterKind: kindEvent,
+		Why:            "an integration sender's raw frame or JSON, held for the profile's payload decoder"},
 	//
 	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
 	// snapshot checkpoint covers it, applies every delivery on first sight (true while the

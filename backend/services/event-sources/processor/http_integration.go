@@ -98,12 +98,31 @@ const (
 	UplinkTooManyReadings   = "too_many_readings"
 	UplinkDuplicateSuppress = "duplicate_suppressed"
 	UplinkShed              = "shed"
+	// The results of an uplink for a device type with a payload decoder. None is reachable for a
+	// type without one: Cut A accepts what it always has.
+	UplinkTooLargeInput = "too_large_input"
+	UplinkTooDeep       = "too_deep"
+	UplinkBadFrame      = "bad_frame"
+	UplinkBadMeta       = "bad_meta"
 )
 
 // IntegrationUplinkResults lists every uplink result.
 var IntegrationUplinkResults = []string{
 	UplinkPublished, UplinkUnknownDevice, UplinkUndecoded, UplinkTooManyReadings, UplinkDuplicateSuppress, UplinkShed,
+	UplinkTooLargeInput, UplinkTooDeep, UplinkBadFrame, UplinkBadMeta,
 }
+
+// Results of a decoder-plan lookup (the result label of integration_decoder_lookups_total).
+const (
+	LookupPresent = "present"
+	LookupAbsent  = "absent"
+	// LookupUnsupported is a device-management that predates payload decoders: Cut A.
+	LookupUnsupported = "unsupported"
+	LookupError       = "error"
+)
+
+// IntegrationDecoderLookupResults lists every lookup result.
+var IntegrationDecoderLookupResults = []string{LookupPresent, LookupAbsent, LookupUnsupported, LookupError}
 
 // IntegrationTypes are the type label values of integration_requests_total: the four registered
 // types, and "unknown" for a request refused before its integration was known.
@@ -120,6 +139,22 @@ type IntegrationMetrics struct {
 	Uplink               func(result string)
 	FlattenSkipped       func(reason string, n int)
 	UnregisteredOverflow func()
+	// DecoderLookup counts a decoder-plan lookup by result. DecoderCharge adds the readings an
+	// uplink for a type with a decoder was charged.
+	DecoderLookup func(result string)
+	DecoderCharge func(readings int)
+}
+
+func (m IntegrationMetrics) decoderLookup(result string) {
+	if m.DecoderLookup != nil {
+		m.DecoderLookup(result)
+	}
+}
+
+func (m IntegrationMetrics) decoderCharge(n int) {
+	if m.DecoderCharge != nil {
+		m.DecoderCharge(n)
+	}
 }
 
 func (m IntegrationMetrics) request(t, result string) {
@@ -144,11 +179,15 @@ type IntegrationRoute struct {
 	TrustedProxies []netip.Prefix
 	Devices        *integration.Devices
 	Undecoded      *integration.Undecoded
+	// Decoders tells the route which device types have a payload decoder. Nil means none does
+	// (Cut A for every uplink), which is also what a route built before decoders existed does.
+	Decoders *integration.Decoders
 	// Seal seals the bearer token the sender presented for the hop to device-management, bound to
 	// the tenant and the integration (credential.IntegrationSealKind).
 	Seal func(tenant, integrationToken, bearer string) ([]byte, error)
 	// Publish writes one marked event to inbound-events and returns whether it was durably
 	// published. It must keep the event's Source: the route has stamped it.
+	// An event of type IntegrationUplink goes to its own stream, never to inbound-events.
 	Publish func(source, tenant string, event *model.UnresolvedEvent, payload interface{}, dedupID string) error
 	Metrics IntegrationMetrics
 	// Now is the receipt clock, replaced in tests.
@@ -356,10 +395,12 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	source := transport.Qualify(transport.Integration, slug)
 	type outgoing struct {
 		event    *model.UnresolvedEvent
-		payload  *model.UnresolvedMeasurementsPayload
+		payload  interface{}
 		readings int
 		// identifier is the sender's name the device was resolved from; the resolver re-checks it.
 		identifier string
+		// decoder says the uplink is carried raw to a payload decoder.
+		decoder bool
 	}
 	var out []outgoing
 	seen := make(map[string]struct{}, len(result.Uplinks))
@@ -399,6 +440,74 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 			m.request(typ, ResultResolveUnavailable)
 			http.Error(w, "device lookup is unavailable; retry later", http.StatusServiceUnavailable)
 			return
+		}
+
+		// 5.3. Whether the device's type has a payload decoder. Asked only for a device that
+		// resolved, with the type token that lookup returned.
+		var plan integration.DecoderPlan
+		if rt.Decoders != nil && looked.DeviceTypeToken != "" {
+			dl, err := rt.Decoders.Lookup(r.Context(), tenant, slug, bearer, looked.DeviceTypeToken)
+			switch {
+			case err == nil:
+			case errors.Is(err, integration.ErrDecoderUnauthenticated):
+				m.decoderLookup(LookupError)
+				rt.Auth.Forget(tenant, slug, bearer)
+				rt.Devices.Forget(tenant, slug)
+				rt.Decoders.Forget(tenant)
+				m.request(typ, ResultUnauthorized)
+				w.Header().Set("WWW-Authenticate", "Bearer")
+				http.Error(w, "integration authentication failed", http.StatusUnauthorized)
+				return
+			default:
+				// Anything but a device-management that predates the query: not knowing whether
+				// a decoder exists must not become flattening, which would store readings a
+				// decoder was meant to produce.
+				log.Warn().Err(err).Str("integration", slug).Msg("Integration decoder lookup failed; refusing the request")
+				m.decoderLookup(LookupError)
+				m.request(typ, ResultResolveUnavailable)
+				http.Error(w, "device lookup is unavailable; retry later", http.StatusServiceUnavailable)
+				return
+			}
+			switch {
+			case dl.Unsupported:
+				m.decoderLookup(LookupUnsupported)
+			case dl.Plan.Present:
+				m.decoderLookup(LookupPresent)
+				plan = dl.Plan
+			default:
+				m.decoderLookup(LookupAbsent)
+			}
+		}
+		if plan.Present {
+			dedup := integrationDedupKey(looked.DeviceToken, up.AltId)
+			if _, dup := seen[dedup]; dup {
+				m.uplink(UplinkDuplicateSuppress)
+				continue
+			}
+			carried, charge, refusal := buildUplinkCarrier(desc, up, plan)
+			if refusal != nil {
+				m.uplink(refusal.uplink)
+				m.request(typ, ResultBadEnvelope)
+				es.failed(es.Id, tenant, body, fmt.Errorf("%s: %w", refusal.uplink, refusal.err))
+				http.Error(w, refusal.err.Error(), http.StatusBadRequest)
+				return
+			}
+			seen[dedup] = struct{}{}
+			altId := up.AltId
+			out = append(out, outgoing{
+				payload: carried, readings: charge,
+				event: &model.UnresolvedEvent{
+					AltId:         &altId,
+					Device:        looked.DeviceToken,
+					OccurredTime:  up.Time,
+					ProcessedTime: receivedAt,
+					EventType:     eventtype.IntegrationUplink,
+					Source:        source,
+				},
+				identifier: up.Identifier,
+				decoder:    true,
+			})
+			continue
 		}
 
 		var link *integrationcodec.Link
@@ -474,6 +583,9 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 				// Over the tenant's reading ceiling: accepted and counted, never a 429.
 				m.uplink(UplinkShed)
 				continue
+			}
+			if o.decoder {
+				m.decoderCharge(o.readings)
 			}
 			// Marked as the integration's, and only here: the resolver opens the sealed token.
 			o.event.Integration = slug

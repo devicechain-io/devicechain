@@ -134,6 +134,9 @@ var (
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
+	// IntegrationUplinksWriter writes the integration route's IntegrationUplink events, which go to
+	// their own stream and never to InboundEventsWriter's (streams.IntegrationUplinks says why).
+	IntegrationUplinksWriter messaging.MessageWriter
 	// InboundEnvelopeMetrics are the instruments of inbound envelopes (realised k, linger paid,
 	// settlement counters). Built once with the other instruments; nil-safe, so it exists whether
 	// or not the setting is on.
@@ -256,6 +259,10 @@ var (
 	IntegrationUplinksCounter              *prometheus.CounterVec
 	IntegrationFlattenSkippedCounter       *prometheus.CounterVec
 	IntegrationUnregisteredOverflowCounter prometheus.Counter
+	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
+	IntegrationDecoderLookupsCounter          *prometheus.CounterVec
+	IntegrationDecoderProbeUnsupportedCounter prometheus.Counter
+	IntegrationDecoderChargedCounter          prometheus.Counter
 	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
 	integrationUndecoded               []*integration.Undecoded
 	IntegrationUndecodedDroppedCounter prometheus.Counter
@@ -432,6 +439,23 @@ func initializeIntegrationMetrics() {
 	IntegrationUnregisteredOverflowCounter = Microservice.NewCounter(
 		"integration_unregistered_overflow_total",
 		"Count of unregistered-device sightings not recorded because an integration already records the most it may")
+	IntegrationDecoderLookupsCounter = Microservice.NewCounterVec(
+		"integration_decoder_lookups_total",
+		"Count of payload-decoder plan lookups made for resolved integration uplinks, by result. unsupported "+
+			"is a device-management that predates payload decoders (a rolling upgrade): those uplinks are "+
+			"flattened as before, and are counted here and not as an error",
+		[]string{"result"})
+	IntegrationDecoderProbeUnsupportedCounter = Microservice.NewCounter(
+		"integration_decoder_probe_unsupported_total",
+		"Count of calls to device-management's integrationDecoder query that a device-management without "+
+			"the query answered with a validation error. Non-zero outside a rolling upgrade means "+
+			"device-management is older than event-sources")
+	IntegrationDecoderChargedCounter = Microservice.NewCounter(
+		"integration_decoder_charged_readings_total",
+		"Count of readings charged at the reading gate for integration uplinks carried to a payload decoder")
+	for _, r := range processor.IntegrationDecoderLookupResults {
+		IntegrationDecoderLookupsCounter.WithLabelValues(r)
+	}
 	for _, t := range processor.IntegrationTypes {
 		for _, r := range processor.IntegrationRequestResults {
 			IntegrationRequestsCounter.WithLabelValues(t, r)
@@ -467,6 +491,16 @@ func integrationMetrics() processor.IntegrationMetrics {
 		UnregisteredOverflow: func() {
 			if IntegrationUnregisteredOverflowCounter != nil {
 				IntegrationUnregisteredOverflowCounter.Inc()
+			}
+		},
+		DecoderLookup: func(result string) {
+			if IntegrationDecoderLookupsCounter != nil {
+				IntegrationDecoderLookupsCounter.WithLabelValues(result).Inc()
+			}
+		},
+		DecoderCharge: func(n int) {
+			if IntegrationDecoderChargedCounter != nil {
+				IntegrationDecoderChargedCounter.Add(float64(n))
 			}
 		},
 	}
@@ -525,7 +559,12 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Sources:        sources,
 		TrustedProxies: trusted,
 		Devices:        integration.NewDevices(backend, integration.DeviceConfig{}),
-		Undecoded:      undecoded,
+		Decoders: integration.NewDecoders(backend, integration.DecoderConfig{OnUnsupported: func() {
+			if IntegrationDecoderProbeUnsupportedCounter != nil {
+				IntegrationDecoderProbeUnsupportedCounter.Inc()
+			}
+		}}),
+		Undecoded: undecoded,
 		Seal: func(tenant, integrationToken, bearer string) ([]byte, error) {
 			if SecretTransit == nil {
 				return nil, errors.New("no transit key to seal the integration token with")
@@ -1196,7 +1235,26 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 	if !ok {
 		return nil
 	}
+	if event.EventType == eventtype.IntegrationUplink {
+		return writeIntegrationUplink(ctx, source, msg)
+	}
 	return writeInbound(ctx, source, msg)
+}
+
+// writeIntegrationUplink writes an IntegrationUplink to ITS OWN stream. It is never written to
+// inbound-events: a device-management built before payload decoders reads that stream, fails to
+// unmarshal a type it does not know and dead-letters the message on delivery 1, so every
+// uplink a rolling upgrade routed to such a replica would be lost (streams.IntegrationUplinks).
+func writeIntegrationUplink(ctx context.Context, source string, msg messaging.Message) error {
+	if IntegrationUplinksWriter == nil {
+		return errors.New("no writer for the integration uplink stream")
+	}
+	err := IntegrationUplinksWriter.WriteMessages(ctx, msg)
+	IntegrationUplinksWriter.HandleResponse(err)
+	if errors.Is(err, messaging.ErrStreamBackpressure) {
+		countBackpressured(source)
+	}
+	return err
 }
 
 // writeInbound writes one message to inbound-events and accounts for a backpressure refusal.
@@ -1308,6 +1366,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	InboundEventsWriter = ievents
+
+	iuplinks, err := nmgr.NewWriter(streams.IntegrationUplinks)
+	if err != nil {
+		return err
+	}
+	IntegrationUplinksWriter = iuplinks
 
 	// The presence tap's asynchronous writer (see newPresenceWriter). Built here, once for
 	// the life of the process, and closed by stopBrokerPresence.

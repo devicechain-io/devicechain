@@ -1,0 +1,259 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package integration
+
+import (
+	"context"
+	"errors"
+	"regexp"
+	"sync"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
+	"github.com/devicechain-io/dc-microservice/svcclient"
+	"golang.org/x/sync/singleflight"
+)
+
+// DecoderPlan is what ingest needs to know about the payload decoder of a device type: whether
+// there is one, what it reads, and what an uplink for it is charged. The zero value is "no
+// decoder", which is Cut A: the sender's decoded object is flattened here.
+type DecoderPlan struct {
+	// Present is true when the type's active profile version declares a decoder, usable or not. An
+	// unusable one still reaches the resolver, which records the failure instead of flattening.
+	Present bool
+	// Input is the input kind the decoder needs ("FRAME", "JSON", "DECODED"), empty when unknown.
+	Input string
+	// MaxReadings is the most readings one decode produces.
+	MaxReadings int
+	// Cost prices an uplink's decode by its actual size.
+	Cost plancost.Shape
+	// ProfileVersionToken is the version the answer is for, "{profile}@{version}".
+	ProfileVersionToken string
+}
+
+// ErrDecoderUnauthenticated is device-management's answer when it no longer accepts the token
+// the request was authenticated with (a rotation between the pre-check and now).
+var ErrDecoderUnauthenticated = errors.New("integration: device-management does not accept the integration's token")
+
+// ErrDecoderUnsupported is a device-management that does not serve integrationDecoder: a replica
+// of the release before payload decoders, during a rolling upgrade. It is the one error that
+// means "there is no decoder" rather than "could not ask".
+var ErrDecoderUnsupported = errors.New("integration: device-management does not serve integrationDecoder")
+
+// DecoderBackend asks device-management whether a device type has a decoder.
+type DecoderBackend interface {
+	// Decoder returns the plan. A nil plan with a nil error is an authentication failure. An error
+	// is a failure to ask or to understand the answer, EXCEPT ErrDecoderUnsupported.
+	Decoder(ctx context.Context, tenant, integration, bearer, deviceTypeToken string) (*DecoderPlan, error)
+}
+
+// The query. Every field is named so that a device-management that serves the query but not one
+// of them is told apart from one that serves none: both are "no decoder", neither is a 503.
+const decoderQuery = `query($integration: String!, $secret: String!, $deviceTypeToken: String!) {
+  integrationDecoder(integration: $integration, secret: $secret, deviceTypeToken: $deviceTypeToken) {
+    present input maxReadings composedCost parsesJson parsesDecoded profileVersionToken
+  }
+}`
+
+// unsupportedField matches the validation error a device-management without the query (or without
+// one of the plan's fields) answers: graphql-go's FieldsOnCorrectTypeRule. It is deliberately
+// narrow. Any other error, including a validation error about some other field, is a failure to
+// ask, because the 503 it becomes is the safe answer to something this build does not understand.
+var unsupportedField = regexp.MustCompile(
+	`Cannot query field "(integrationDecoder|composedCost|parsesJson|parsesDecoded)" on type "(Query|IntegrationDecoderPlan)"`)
+
+// IsDecoderUnsupported reports whether err is exactly the validation error of a device-management
+// that predates the decoder query, and nothing else: every message must be one.
+func IsDecoderUnsupported(err error) bool {
+	var gqlErr *svcclient.GraphQLError
+	if !errors.As(err, &gqlErr) || len(gqlErr.Messages) == 0 {
+		return false
+	}
+	for _, m := range gqlErr.Messages {
+		if !unsupportedField.MatchString(m) {
+			return false
+		}
+	}
+	return true
+}
+
+// Decoder is DecoderBackend over device-management's GraphQL endpoint.
+func (d *DM) Decoder(ctx context.Context, tenant, integration, bearer, deviceTypeToken string) (*DecoderPlan, error) {
+	var out struct {
+		Plan *struct {
+			Present             bool    `json:"present"`
+			Input               *string `json:"input"`
+			MaxReadings         int     `json:"maxReadings"`
+			ComposedCost        int64   `json:"composedCost"`
+			ParsesJSON          bool    `json:"parsesJson"`
+			ParsesDecoded       bool    `json:"parsesDecoded"`
+			ProfileVersionToken string  `json:"profileVersionToken"`
+		} `json:"integrationDecoder"`
+	}
+	vars := map[string]any{"integration": integration, "secret": bearer, "deviceTypeToken": deviceTypeToken}
+	if err := d.client.Query(ctx, d.url, tenant, decoderQuery, vars, &out); err != nil {
+		if IsDecoderUnsupported(err) {
+			return nil, ErrDecoderUnsupported
+		}
+		return nil, err
+	}
+	if out.Plan == nil {
+		return nil, nil
+	}
+	p := &DecoderPlan{
+		Present:     out.Plan.Present,
+		MaxReadings: max(out.Plan.MaxReadings, 0),
+		Cost: plancost.Shape{
+			Composed: uint64(max(out.Plan.ComposedCost, 0)), ParsesJSON: out.Plan.ParsesJSON, ParsesDecoded: out.Plan.ParsesDecoded,
+		},
+		ProfileVersionToken: out.Plan.ProfileVersionToken,
+	}
+	if out.Plan.Input != nil {
+		p.Input = *out.Plan.Input
+	}
+	return p, nil
+}
+
+// DecoderConfig tunes the decoder-plan cache. A zero field takes its default.
+type DecoderConfig struct {
+	// TTL is how long an answer is remembered, a present decoder and an absent one alike. It is
+	// the bound on how long this replica charges and selects on a plan that has since been
+	// published over.
+	TTL     time.Duration
+	Entries int
+	Now     func() time.Time
+	// OnUnsupported, when set, is called each time device-management answers that it predates the
+	// query (once per fill, not per cached read).
+	OnUnsupported func()
+}
+
+// DefaultDecoderTTL is the lifetime of a remembered plan.
+const DefaultDecoderTTL = time.Minute
+
+func (c DecoderConfig) withDefaults() DecoderConfig {
+	if c.TTL <= 0 {
+		c.TTL = DefaultDecoderTTL
+	}
+	if c.Entries <= 0 {
+		c.Entries = 10_000
+	}
+	if c.Now == nil {
+		c.Now = time.Now
+	}
+	return c
+}
+
+// DecoderLookup is the answer to a plan lookup.
+type DecoderLookup struct {
+	Plan DecoderPlan
+	// Cached says no call was made.
+	Cached bool
+	// Unsupported says device-management predates payload decoders and Plan is the empty plan.
+	Unsupported bool
+}
+
+// Decoders remembers, per (tenant, device type), whether the type has a payload decoder and how
+// an uplink for it is charged.
+//
+// 🔴 EVERY ANSWER IS ADVISORY, NOT AN AUTHORITY. The resolver decides what runs at the event from
+// the profile version it resolves then; this decides only whether the uplink is flattened here or
+// carried raw, and what the tenant is charged. A plan up to TTL stale therefore costs at worst the
+// skew device-management counts (a charge made for another version), never a wrong reading.
+//
+// 🔴 AN OLD DEVICE-MANAGEMENT IS "NO DECODER", NOT AN OUTAGE. During a rolling upgrade this
+// replica can be asking a device-management that has never heard of the query, and failing every
+// integration request until it is replaced would turn a rollout into an outage for senders that
+// have no decoder at all. That one validation error is remembered as an absent decoder; every
+// other failure is returned, remembered as nothing, and becomes a 503.
+type Decoders struct {
+	cfg     DecoderConfig
+	backend DecoderBackend
+	sf      singleflight.Group
+
+	mu      sync.Mutex
+	entries map[string]decoderEntry
+}
+
+type decoderEntry struct {
+	plan        DecoderPlan
+	unsupported bool
+	at          time.Time
+}
+
+// NewDecoders builds the cache over a backend.
+func NewDecoders(backend DecoderBackend, cfg DecoderConfig) *Decoders {
+	return &Decoders{cfg: cfg.withDefaults(), backend: backend, entries: make(map[string]decoderEntry)}
+}
+
+// Lookup returns the plan for a device type. An error is a failure to ask or to understand the
+// answer, and must be answered 503, except ErrDecoderUnauthenticated, which the route answers as
+// it answers a token that stopped matching.
+func (d *Decoders) Lookup(ctx context.Context, tenant, integration, bearer, deviceTypeToken string) (DecoderLookup, error) {
+	key := tenant + "\x00" + deviceTypeToken
+	if e, ok := d.get(key, d.cfg.Now()); ok {
+		return DecoderLookup{Plan: e.plan, Cached: true, Unsupported: e.unsupported}, nil
+	}
+	v, err, _ := d.sf.Do(key, func() (any, error) {
+		// A flight is shared by callers whose contexts differ: run it detached, as the device
+		// lookup does.
+		plan, err := d.backend.Decoder(context.WithoutCancel(ctx), tenant, integration, bearer, deviceTypeToken)
+		switch {
+		case errors.Is(err, ErrDecoderUnsupported):
+			if d.cfg.OnUnsupported != nil {
+				d.cfg.OnUnsupported()
+			}
+			e := decoderEntry{unsupported: true, at: d.cfg.Now()}
+			d.put(key, e)
+			return e, nil
+		case err != nil:
+			return nil, err
+		case plan == nil:
+			return nil, ErrDecoderUnauthenticated
+		}
+		e := decoderEntry{plan: *plan, at: d.cfg.Now()}
+		d.put(key, e)
+		return e, nil
+	})
+	if err != nil {
+		return DecoderLookup{}, err
+	}
+	e := v.(decoderEntry)
+	return DecoderLookup{Plan: e.plan, Unsupported: e.unsupported}, nil
+}
+
+func (d *Decoders) get(key string, now time.Time) (decoderEntry, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	e, ok := d.entries[key]
+	if !ok {
+		return decoderEntry{}, false
+	}
+	if now.Sub(e.at) >= d.cfg.TTL {
+		delete(d.entries, key)
+		return decoderEntry{}, false
+	}
+	return e, true
+}
+
+func (d *Decoders) put(key string, e decoderEntry) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.entries[key]; !ok && len(d.entries) >= d.cfg.Entries {
+		evictSome(d.entries, d.cfg.Entries/16+1, func(old decoderEntry) bool { return e.at.Sub(old.at) >= d.cfg.TTL })
+	}
+	d.entries[key] = e
+}
+
+// Forget drops every remembered plan of a tenant, for a caller that has learned its credential no
+// longer holds.
+func (d *Decoders) Forget(tenant string) {
+	prefix := tenant + "\x00"
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for k := range d.entries {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(d.entries, k)
+		}
+	}
+}
