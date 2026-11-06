@@ -361,3 +361,28 @@ func TestAFullTierNeverEvictsTheEntryJustStored(t *testing.T) {
 		t.Fatal("the entry just stored was evicted to make room for itself")
 	}
 }
+
+// TestTheEntryCountBoundIsLeastRecentlyUsed: when only the entry count is exceeded, the oldest
+// entry goes, not the one belonging to the tenant holding the most bytes.
+func TestTheEntryCountBoundIsLeastRecentlyUsed(t *testing.T) {
+	ctx := context.Background()
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(3, 1<<20), WithLocalTenantShare(100),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 100000, true }))
+	if err := c.Set(ctx, "heavy|1", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := GetCloned(ctx, c, "heavy|1", cloneTypedValue); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"light|1", "light|2", "light|3"} {
+		if err := c.Set(ctx, k, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := c.local.getHit("heavy|1", c.now()); ok {
+		t.Fatal("the oldest entry survived the entry-count bound")
+	}
+	if _, ok := c.local.getHit("light|1", c.now()); !ok {
+		t.Fatal("a newer entry was evicted ahead of the oldest")
+	}
+}

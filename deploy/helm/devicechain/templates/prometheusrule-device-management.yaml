@@ -135,11 +135,17 @@ spec:
         # when a decoder is published and after an entry's time to live, a few per minute at most.
         # A steady rate of a compile a second or more is entries let go for room (decoders of one
         # tenant that do not fit in its share together, or an undersized resolution cache), each
-        # read paying tens of milliseconds. THE THRESHOLD IS ARGUED, NOT MEASURED: at one a second
+        # read paying tens of milliseconds. The rate alone is not enough: many small decoders expiring
+        # on their time to live compile at a steady rate that no cache size changes, so the alert also
+        # needs the resolution cache to be evicting for room (capacity or tenant_share, never expired).
+        # THE THRESHOLD IS ARGUED, NOT MEASURED: at one a second
         # it takes 300 decoder-bearing device types all expiring in the same five minutes to be
         # healthy, and the 15m hold rides out a publish of many profiles at once.
         - alert: PayloadDecoderRecompileSustained
-          expr: sum by (pod) (rate(devicechain_devicemanagement_payload_decoder_compiles_total{namespace="{{ $ns }}"}[10m])) > 1
+          expr: |
+            sum by (pod) (rate(devicechain_devicemanagement_payload_decoder_compiles_total{namespace="{{ $ns }}"}[10m])) > 1
+            and on (pod)
+            sum by (pod) (rate(devicechain_devicemanagement_kv_cache_local_evictions_total{cache="profile-resolution-by-type",reason=~"capacity|tenant_share",namespace="{{ $ns }}"}[10m])) > 0
           for: 15m
           labels:
             severity: warning

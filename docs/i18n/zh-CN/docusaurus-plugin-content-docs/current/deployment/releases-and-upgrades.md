@@ -607,7 +607,7 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 - **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
 - **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
-- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户会先驱逐自己的条目。当某副本的整个缓存已满时，占用最多的租户先让出条目，所以份额以内的租户在更大的占用者还有条目可让时保留自己的条目。租户的份额就是其大型解码器必须共同容纳的空间：一个最大的解码器计约 6 MiB，因此默认的 8 MiB 份额只容纳一个，同一租户同时使用两个时会轮流占用，每次读取都要重新编译解码器。请按租户同时使用的大型解码器数量来设定缓存和份额。当租户的份额（`profileResolutionCacheMiB` x `profileResolutionTenantSharePercent`）低于 7 MiB 时，`device-management` 现在会拒绝启动，因为这样没有任何解码器能保持解码状态。副本会导出 `payload_decoder_compiles_total`，当某副本连续 15 分钟每秒编译超过一次时，chart 会以 `PayloadDecoderRecompileSustained` 告警。如果你自行设置了内存上限，请计入额外的 28 MiB。
+- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户会先驱逐自己的条目。当某副本的整个缓存已满时，占用最多的租户先让出条目，所以份额以内的租户在更大的占用者还有条目可让时保留自己的条目。租户的份额就是其大型解码器必须共同容纳的空间：一个最大的解码器计约 6 MiB，因此默认的 8 MiB 份额只容纳一个，同一租户同时使用两个时会轮流占用，每次读取都要重新编译解码器。请按租户同时使用的大型解码器数量来设定缓存和份额。当租户的份额（`profileResolutionCacheMiB` x `profileResolutionTenantSharePercent`）低于 7 MiB 时，`device-management` 现在会拒绝启动，7 MiB 是限制所允许的最大解码器的计费大小：更小的份额无法让它保持解码状态，其设备类型的每个事件都会重新编译它。较小的解码器需要的更少。副本会导出 `payload_decoder_compiles_total`，当某副本连续 15 分钟每秒编译超过一次时，chart 会以 `PayloadDecoderRecompileSustained` 告警。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
 #### 载荷解码器 {#v120-payload-decoders}
 

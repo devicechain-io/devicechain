@@ -769,9 +769,10 @@ tests:
   # ------------------------------------------------------------------
   # PayloadDecoderRecompileSustained: a replica compiling decoders over and over.
   #
-  # Four cases, both sides of each knob:
-  #   - 2 compiles a second for the whole hour (a decoder let go on every read): fires after the
-  #     15m hold, and only for the pod doing it;
+  # Five cases, both sides of each knob:
+  #   - 2 compiles a second for the whole hour with entries evicted for room (a decoder let go on
+  #     every read): fires after the 15m hold, and only for the pod doing it;
+  #   - the same compile rate with only `expired` evictions (many decoders on their time to live): quiet;
   #   - a publish burst (20 compiles a second for 5 minutes, then nothing) rides out the 10m rate
   #     window and the hold: quiet;
   #   - a steady 0.2 a second (many decoder types expiring on their time to live): quiet;
@@ -783,6 +784,8 @@ tests:
         values: '0+120x60'
       - series: 'devicechain_devicemanagement_payload_decoder_compiles_total{namespace="dci-devicechain", pod="dc-device-management-bbbbb", result="ok"}'
         values: '0+12x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="profile-resolution-by-type", reason="tenant_share"}'
+        values: '0+120x60'
     alert_rule_test:
       - eval_time: 10m
         alertname: PayloadDecoderRecompileSustained
@@ -798,9 +801,24 @@ tests:
               summary: "A device-management replica is compiling payload decoders over and over"
               description: "On dc-device-management-aaaaa, payload decoders have been compiled more than once a second for 15m (now 2/s). A compile happens when a device type's resolution is read and its decoded copy is not held in memory, and a large decoder takes tens of milliseconds, so this is paid on the events themselves. The usual cause is decoders let go for room: the decoders one tenant keeps in use do not fit together in its share of the resolution cache, or the cache is too small. Raise inMemoryCache.profileResolutionCacheMiB, or profileResolutionTenantSharePercent for the tenant with the most decoders, and raise the device-management memory limit with it. Compare kv_cache_local_evictions_total{cache=\"profile-resolution-by-type\"} by reason: tenant_share points at the share, capacity at the cache."
 
+  # Many small decoders expiring on their time to live compile at 2 a second with no entry let go
+  # for room (only `expired` evictions): quiet, because no cache size would change it.
   - interval: 1m
     input_series:
       - series: 'devicechain_devicemanagement_payload_decoder_compiles_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="ok"}'
+        values: '0+120x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="profile-resolution-by-type", reason="expired"}'
+        values: '0+120x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderRecompileSustained
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_payload_decoder_compiles_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="ok"}'
+        values: '0+1200x5 6000x55'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="profile-resolution-by-type", reason="capacity"}'
         values: '0+1200x5 6000x55'
     alert_rule_test:
       - eval_time: 40m

@@ -509,7 +509,18 @@ func (l *localCache) insert(key string, data []byte, now time.Time) {
 	l.tenantBytes[tenantOfKey(key)] += size
 	l.trimTenant(tenantOfKey(key), el)
 	for l.order.Len() > l.maxEntries || l.bytes > l.maxBytes {
-		l.removeForCapacity(el)
+		if l.bytes > l.maxBytes {
+			l.removeForCapacity(el)
+			continue
+		}
+		// Over the entry count only: bytes are not what is short, so the holder of the most BYTES
+		// is the wrong one to ask. The count is a backstop (4,096 entries against a handful of
+		// device types), and plain least recently used is its policy.
+		victim := l.order.Back()
+		if victim == el {
+			victim = victim.Prev()
+		}
+		l.remove(victim, "capacity")
 	}
 	for back := l.order.Back(); !now.Before(back.Value.(*localEntry).expires); back = l.order.Back() {
 		l.remove(back, "expired")
