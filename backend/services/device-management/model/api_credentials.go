@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // buildDeviceCredential validates a credential create request against an ALREADY
@@ -376,13 +377,34 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		// A certificate credential moved onto another device counts against THAT device's limit,
 		// counted under its row lock so two moves (or a move and a create) cannot both fit the
 		// last slot. Any other credential type moves freely.
-		// 🔴 A certificate credential LEAVING a device under a pending revocation: the anchor is locked
-		// FOR SHARE first (the order a registration takes: anchor, then device), so a revocation either
-		// committed before this (its marker is visible below) or waits for this commit.
+		// 🔴 A certificate credential LEAVING a device under a pending revocation. Lock order: the
+		// credential row, then the anchor FOR SHARE (the order DeleteDeviceCredential takes), then the
+		// target device (registration's order is anchor, then device). The outgoing owner is read here,
+		// under the credential row lock, not from the unlocked read above: a concurrent move or delete
+		// cannot change it between this read and the save.
+		var movedFrom string
+		var movedAnchor uint
 		certMove := repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate && updated.TrustAnchorId != nil
 		if certMove {
-			if err := lockTrustAnchorShareByID(tx, *updated.TrustAnchorId); err != nil {
+			var cur DeviceCredential
+			if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
 				return err
+			}
+			if cur.TrustAnchorId == nil {
+				certMove = false
+			} else {
+				movedAnchor = *cur.TrustAnchorId
+				if err := lockTrustAnchorShareByID(tx, movedAnchor); err != nil {
+					return err
+				}
+				var tokens []string
+				if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+					Pluck("token", &tokens).Error; err != nil {
+					return err
+				}
+				if len(tokens) == 1 {
+					movedFrom = tokens[0]
+				}
 			}
 		}
 		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
@@ -401,10 +423,10 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		if err := tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error; err != nil {
 			return err
 		}
-		if certMove && currentDeviceToken != "" {
+		if certMove && movedFrom != "" {
 			// The device it left is no longer found by the marker's expansion; see
 			// queueOwedRevocationKicksOnTx.
-			return api.queueOwedRevocationKicksOnTx(tx, updated.TenantId, *updated.TrustAnchorId, []string{currentDeviceToken})
+			return api.queueOwedRevocationKicksOnTx(tx, updated.TenantId, movedAnchor, []string{movedFrom})
 		}
 		return nil
 	})

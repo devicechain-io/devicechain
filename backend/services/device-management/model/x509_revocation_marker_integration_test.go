@@ -21,9 +21,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/x509trust"
@@ -374,4 +376,119 @@ func TestRevocationMarkerConcurrentExpandersConverge(t *testing.T) {
 	}
 	assert.EqualValues(t, 0, f.markers())
 	assert.Equal(t, len(tokens), f.revocationRows())
+}
+
+// holdAfterCredentialSave pauses the save of the credential with this token right after its UPDATE
+// statement, inside the writer's transaction, until release.
+func (f *pgFixture) holdAfterCredentialSave(token string) (reached <-chan struct{}, release func()) {
+	f.t.Helper()
+	reachedCh, releaseCh := make(chan struct{}), make(chan struct{})
+	var once, releaseOnce sync.Once
+	name := fmt.Sprintf("test:hold-credential-save-%s-%d", token, time.Now().UnixNano())
+	require.NoError(f.t, f.mgr.Database.Callback().Update().After("gorm:update").Register(name, func(db *gorm.DB) {
+		c, ok := db.Statement.Dest.(*DeviceCredential)
+		if !ok || db.Error != nil || c.TenantId != f.tenant || c.Token != token {
+			return
+		}
+		once.Do(func() {
+			close(reachedCh)
+			<-releaseCh
+		})
+	}))
+	rel := func() { releaseOnce.Do(func() { close(releaseCh) }) }
+	f.t.Cleanup(func() {
+		rel()
+		_ = f.mgr.Database.Callback().Update().Remove(name)
+	})
+	return reachedCh, rel
+}
+
+// A delete that races a MOVE of the same credential acts on the owner in force when it runs, not on the
+// one it saw earlier: the move (A to a device with no certificate of its own) is held after its UPDATE,
+// the delete waits on the credential row, and once the move commits the delete queues the NEW owner.
+// Both devices are then owed a kick although the credential is gone and the expansion finds neither.
+func TestRevocationMarkerDeleteRacingAMoveQueuesTheOwnerInForce(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, tokens := pgIntermediateFleet(t, f, 2)
+	f.device("target-dev")
+	var creds []DeviceCredential
+	require.NoError(t, f.api.RDB.DB(f.ctx).Joins("JOIN devices ON devices.id = device_credentials.device_id").
+		Where("devices.token = ? AND device_credentials.credential_type = ?", tokens[0], string(CredentialX509Certificate)).Find(&creds).Error)
+	require.Len(t, creds, 1)
+	cred := creds[0].Token
+
+	// The marker is on record and not expanded.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+		return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+			RevocationDelta{Fingerprints: []string{x509trust.Fingerprint(inter.cert)}, CA: true}, true)
+	}))
+
+	reached, release := f.holdAfterCredentialSave(cred)
+	moved := make(chan error, 1)
+	go func() {
+		_, err := f.api.UpdateDeviceCredential(f.ctx, cred, &DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf("target-dev")})
+		moved <- err
+	}()
+	awaitSignal(t, reached, "the move to save the credential")
+	deleted := make(chan error, 1)
+	go func() { _, err := f.api.DeleteDeviceCredential(f.ctx, cred); deleted <- err }()
+	waitForBlockedBackend(t, f.mgr.Database)
+	release()
+	// The sessions-not-ended error of an inline kick is not what this test is about.
+	for _, ch := range []chan error{moved, deleted} {
+		if err := <-ch; err != nil {
+			require.ErrorIs(t, err, ErrSessionsNotEnded)
+		}
+	}
+
+	require.NoError(t, f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID))
+	owed := map[string]bool{}
+	for _, r := range f.revocationKickRows() {
+		owed[r.DeviceToken] = true
+	}
+	assert.True(t, owed[tokens[0]], "the device the move left")
+	assert.True(t, owed["target-dev"], "the device that owned the credential when the delete ran")
+}
+
+// A system caller's token can match credentials of several tenants; each one's device is owed its kick
+// under its own tenant and anchor.
+func TestRevocationMarkerSystemDeleteOfATokenInTwoTenantsQueuesBoth(t *testing.T) {
+	f1, f2 := newPgCertFixture(t), newPgCertFixture(t)
+	for _, f := range []*pgCertFixture{f1, f2} {
+		f.api.RevocationResweepAfter = time.Hour
+	}
+	var devices [2]string
+	for i, f := range []*pgCertFixture{f1, f2} {
+		res, err := f.registerLeaf(f.ca.leaf(t, "SN-sys"))
+		require.NoError(t, err)
+		devices[i] = res.DeviceToken
+	}
+	var creds [2][]DeviceCredential
+	for i, f := range []*pgCertFixture{f1, f2} {
+		require.NoError(t, f.api.RDB.DB(f.ctx).Where("credential_type = ?", string(CredentialX509Certificate)).Find(&creds[i]).Error)
+		require.Len(t, creds[i], 1)
+	}
+	shared := creds[0][0].Token
+	require.NoError(t, f2.api.RDB.DB(f2.ctx).Exec("UPDATE device_credentials SET token = ? WHERE tenant_id = ? AND token = ?",
+		shared, f2.tenant, creds[1][0].Token).Error)
+	for _, f := range []*pgCertFixture{f1, f2} {
+		f := f
+		require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+			return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+				RevocationDelta{Fingerprints: []string{strings.Repeat("ab", 32)}, CA: true}, true)
+		}))
+	}
+
+	_, err := f1.api.DeleteDeviceCredential(core.WithSystemContext(f1.ctx), shared)
+	if err != nil {
+		require.ErrorIs(t, err, ErrSessionsNotEnded)
+	}
+	for i, f := range []*pgCertFixture{f1, f2} {
+		var rows []PendingSessionKick
+		require.NoError(t, f.api.RDB.DB(core.WithSystemContext(f.ctx)).
+			Where("tenant_id = ? AND origin = ?", f.tenant, revocationKickOrigin(f.anchor.ID)).Find(&rows).Error)
+		require.Len(t, rows, 1, "tenant %d", i+1)
+		assert.Equal(t, devices[i], rows[0].DeviceToken)
+	}
 }
