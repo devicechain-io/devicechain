@@ -642,3 +642,36 @@ func TestMeterPhaseTableIsBoundedUnderTenantChurn(t *testing.T) {
 	}
 	require.Zero(t, m2.PhaseCount())
 }
+
+// An expired phase is dead whatever the amortised sweep has done: a neighbour in the same shard that
+// advances the sweep just before the entry's TTL must not keep it alive (the verdicts of one tenant would
+// then depend on another's traffic).
+func TestMeterExpiredPhaseIsNotRevivedByANeighbourSweep(t *testing.T) {
+	clk := &lagClock{t: simEpoch}
+	m := NewLagCreditMeter(LagCreditMeterConfig{Streams: 1, Ceiling: StaticCeiling(1, 2), Clock: clk.now})
+	idle := idleSources(1)
+	stamped := func(tenant string, age time.Duration) MeterDecision {
+		return m.Admit(MeterRequest{Tenant: tenant, N: 1, Source: 0, Stamp: clk.t.Add(-age), Sources: idle, Factor: 1})
+	}
+	live := func(tenant string) bool {
+		return m.Admit(MeterRequest{Tenant: tenant, N: 1, Source: -1, Sources: idle, Factor: 1}).Admitted
+	}
+	// a neighbour that lands in the same shard as "a"
+	neighbour := ""
+	for i := 0; neighbour == ""; i++ {
+		if n := fmt.Sprintf("neighbour-%d", i); m.phases.shardFor(n) == m.phases.shardFor("a") {
+			neighbour = n
+		}
+	}
+	require.Equal(t, RouteBacklog, stamped("a", 3*time.Second).Route)
+	clk.t = simEpoch.Add(599 * time.Second)
+	stamped(neighbour, 0) // sweeps the shard before "a" reaches its TTL
+	clk.t = simEpoch.Add(600*time.Second + 100*time.Millisecond)
+	require.True(t, live("a"))
+	require.True(t, live("a")) // the fresh allowance (burst 2) is spent
+	for i := 0; i < 2; i++ {
+		d := stamped("a", 0)
+		require.Equal(t, RouteFresh, d.Route, "the expired phase must not come back")
+		require.False(t, d.Admitted, "and so the exhausted fresh bucket refuses, as it does with no neighbour")
+	}
+}

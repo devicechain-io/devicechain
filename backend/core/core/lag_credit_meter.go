@@ -389,6 +389,12 @@ func (t *phaseTable) observe(stream int, tenant string, alpha, ownCover time.Dur
 	}
 	key := phaseKey{stream, tenant}
 	e := sh.entries[key]
+	// The sweep is amortised, so it may not have run yet: an entry past its TTL is dead whatever the
+	// sweep has done, or a neighbour that happened to advance the sweep could keep it alive.
+	if e != nil && now.Sub(e.lastSeen) >= defaultRateLimiterIdleTTL {
+		delete(sh.entries, key)
+		e = nil
+	}
 	if e == nil {
 		if alpha <= ownCover {
 			return false // calm and not in backlog: nothing to remember
