@@ -30,7 +30,7 @@ func TestInMemoryCacheSettingsLoadAndDefault(t *testing.T) {
 	}
 	// The defaults the documentation and the chart comment state.
 	assert.Equal(t, 131072, DefaultPerDeviceCacheEntries)
-	assert.Equal(t, 24, DefaultPerDeviceCacheMiB)
+	assert.Equal(t, 80, DefaultPerDeviceCacheMiB)
 }
 
 // A bound outside its range fails the load, naming the key. A negative value is refused,

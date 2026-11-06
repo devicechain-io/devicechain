@@ -512,6 +512,9 @@ dcctl bootstrap local devicechain
 
 - **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
 - **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
+- **请了解：`device-management` 在内存中保存更多设备群，其内存上限为 768Mi，而不是上面的 512Mi。** 逐设备缓存（`inMemoryCache.perDeviceCacheMiB`）现在每个为 80 MiB，原为 24，因为 24 MiB 只容纳 8,000 至 10,000 台设备。设备群达到该规模或更大时，每个副本现在使用更多内存。如果你自己设置了 `device-management` 的内存上限，请对照[服务规模](./bootstrap.md#service-sizing)中的规则检查。如果你自己设置了 `perDeviceCacheMiB`，则按你的值使用。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
+- **开启事件信封且每秒 16,000 个事件或更高时，请把 `event-processing` 设为约 1Gi。** 768Mi 下限不随速率增长。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
+- **如果代理服务器的工作集处于其软上限，请调高 `nats_memory_limit`。** 默认的 4Gi 从约每秒 12,000 个事件起就会到达该点；处于该点的服务器是变慢，而不是重启。参见[缓存与代理的规模设定](#v120-sizing-defaults)。
 - **`dcctl bootstrap` 现在会拒绝属于另一个集群的本地状态。** 包括 `--dry-run`。如果您在 `dcctl` 之外重建了集群并复用实例名，请先移开 `~/.devicechain/instances/<名称>`；详见[说明](#v120-stale-state)。
 - **检查是否有客户端为本实例不提供的资源申请令牌。** 默认情况下，本版本会统计这类请求以及使用这些令牌的 API 调用，但一律不拒绝。`v1.3` 默认拒绝它们。`infrastructure.tokenAudience.enforcement: observe` 可以在那一个次版本内保留本版本的行为，`v1.4` 会在启动时以及在 chart 的 values schema 中拒绝 `observe`。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
@@ -540,6 +543,15 @@ event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键
 - **开启事件信封的 `event-processing`** 会保存[事件信封](#event-envelopes)中描述的重复防护。在每秒 4,500 至 6,000 个事件时占用 265 至 269 MiB，在每秒 12,000 个事件时占用 388 MiB（Go 堆 353 MiB），而上限为 384Mi，软上限为 288 MiB。在每秒约 8,000 个事件以上，Pod 会被软上限卡住、持续回收垃圾，或被终止。只要 `resolved` 或 `inbound` 之一开启，chart 现在就把下限设为 768Mi（软上限 576 MiB），否则为 384Mi。此前对该防护的估计（每秒 20,000 个事件时约 180 MB）低了三到四倍；更正后的数字见[事件信封](#event-envelopes)。
 
 两者都是下限，仅在本来适用的上限更低时才生效。你在服务上设置的上限，或更大的顶层上限，按原值使用，软上限随实际生效的上限而定。新值 `functionalAreas.<服务>.memoryLimitFloorWithEnvelopes` 保存开启信封时的下限。`dcctl` 会根据它写入的实例配置设置 `eventEnvelopesEnabled`。如果你自己用 `instance.existingSecret` 安装 chart，chart 读不到该配置：开启任一信封设置时，请设置 `eventEnvelopesEnabled: true`。
+
+#### 缓存与代理的规模设定 {#v120-sizing-defaults}
+
+第 30 轮在 Google Kubernetes Engine 上（每秒 8,000 至 20,000 个事件，一台代理服务器）发现，三项随产品发布的大小低于其文档所称的负载。
+
+- **`device-management` 的逐设备缓存是 80 MiB，而不是 24。** 按令牌缓存中一台设备占 2.5 至 3.1 KB，所以 24 MiB 只容纳 8,000 至 10,000 台设备。16,000 台设备时，缓存在 73% 的查找中淘汰了条目，每事件 CPU 在 8,000 至 16,000 台设备之间从每 1,000 个事件 0.048 CPU 秒升到 0.105，20,000 台时读取落到键值桶并超时。`DeviceLookupCacheTooSmall` 从 12,000 台设备起就已触发；它不变。80 MiB 按令牌容纳 27,000 台设备，即规模表所针对的 20,000 台设备再加四分之一余量。其他设备群请把 `inMemoryCache.perDeviceCacheMiB` 设为每 1,000 台按令牌解析的设备 4。规则及其所需的内存上限见[服务规模](./bootstrap.md#service-sizing)和[键值缓存](./observability.md#kv-caches)。
+- **`device-management` 的内存下限是 768Mi（软上限 576 MiB），取代[内存上限](#v120-memory)中的 512Mi。** 上限变大后，所有缓存写满时连同服务约占 370 MiB，512Mi 的软上限（384 MiB）只有其 1.04 倍，768Mi 则是 1.5 倍。下限规则不变：你在服务上设置的上限，或更高的顶层上限，按原值使用。
+- **开启信封时 `event-processing` 的下限仍是 768Mi，并且不随速率增长。** 每秒 8,000、12,000、16,000 和 20,000 个事件时，其 Go 堆为 441、488、511 和 516 MiB（常驻 500 至 571 MiB），软上限为 576 MiB，所以从约每秒 16,000 个事件持续起，它会在上限处回收。请在那里设为约 1Gi（`functionalAreas.event-processing.resources.limits.memory`）。
+- **4Gi 代理内存上限的软上限在约每秒 12,000 个事件时到达。** 一台服务器的工作集在每秒 8,000、12,000、16,000 和 20,000 个事件时为 1.9、3.0、3.8 和 4.8 GiB，而软上限为 3.2 GiB。超过软上限也不会被终止：服务器持续回收，每秒 12,000 个事件时第 99 百分位确认时间在 4Gi 下为 101 ms，在 20Gi 下为 25 ms。当工作集与上限的 80% 相差不到 10% 时就应调高 `nats_memory_limit`，而不只是在 `OOMKilled` 之后；按设计速率每每秒 1,000 个事件取 0.35 GiB。参见[消息代理](./bootstrap.md#broker-sizing)。
 
 #### `dcctl bootstrap` 会拒绝属于另一个集群的本地状态 {#v120-stale-state}
 

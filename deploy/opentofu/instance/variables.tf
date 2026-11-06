@@ -363,7 +363,7 @@ variable "nats_memory_request" {
 }
 
 variable "nats_memory_limit" {
-  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 4Gi by default, from the duplicate-detection budget at 10,000 events/s. See modules/nats var.memory_limit, including what was not measured."
+  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 4Gi by default, from the duplicate-detection budget at 10,000 events/s; raise it when a server's working set sits at its soft limit (not only after an OOM kill), about 0.35 GiB per 1,000 events/s of design rate. See modules/nats var.memory_limit, including what was not measured."
   type        = string
   default     = "4Gi"
 

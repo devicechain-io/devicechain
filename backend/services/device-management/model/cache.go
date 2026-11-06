@@ -134,7 +134,7 @@ type Caches struct {
 // 🔑 THE THREE CACHES KEYED BY DEVICE ARE SIZED FOR THE FLEET; THE OTHER TWO ARE NOT.
 // DeviceByToken, RelationshipsBySource and MembershipsByEntity hold an entry per device
 // (MembershipsByEntity also one per area or asset a device is tracked to), so each keeps
-// cfg.InMemoryCache's bound (131,072 entries and 24 MiB by default), where messaging's
+// cfg.InMemoryCache's bound (131,072 entries and 80 MiB by default), where messaging's
 // default of 4,096 entries evicted an entry for every event once a replica saw more than
 // 4,096 devices within the time to live. ProfileResolutionByType and ScopedGroupsExist are keyed by
 // device type and by tenant, of which there are few, and keep that default on purpose: a
