@@ -43,6 +43,9 @@ func TestCheckEventAgeWalksEveryEntryAndTheEnvelope(t *testing.T) {
 	// The kinds with no entry times are judged by the envelope alone.
 	refusedAs(t, CheckEventAge(ancient, processed, &UnresolvedNewRelationshipPayload{}), "envelope occurredTime")
 	refusedAs(t, CheckEventAge(ancient, processed, &UnresolvedStateChangePayload{}), "envelope occurredTime")
+	// An integration uplink is raw input with no entry times: only its envelope is judged.
+	refusedAs(t, CheckEventAge(ancient, processed, &UnresolvedIntegrationUplinkPayload{}), "envelope occurredTime")
+	assert.NoError(t, CheckEventAge(fresh, processed, &UnresolvedIntegrationUplinkPayload{}))
 
 	// Accepted: every time fresh, and an entry with no time under a fresh envelope.
 	assert.NoError(t, CheckEventAge(fresh, processed, &UnresolvedMeasurementsPayload{Entries: []UnresolvedMeasurementsEntry{

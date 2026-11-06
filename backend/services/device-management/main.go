@@ -63,10 +63,13 @@ var (
 	// the same root key, in the same step, as DeviceSecretKey.
 	SecretTransit *credential.SecretTransit
 
-	InboundEventsReaders   []messaging.MessageReader
-	InboundEventsProcessor *processor.InboundEventsProcessor
-	ResolvedEventsWriter   messaging.OrderedWriter
-	FailedEventsWriter     messaging.OrderedWriter
+	InboundEventsReaders []messaging.MessageReader
+	// IntegrationUplinkReaders are the pull readers on the integration-uplinks durable, built
+	// beside the inbound readers and read by the same processor (createInboundReaders).
+	IntegrationUplinkReaders []messaging.MessageReader
+	InboundEventsProcessor   *processor.InboundEventsProcessor
+	ResolvedEventsWriter     messaging.OrderedWriter
+	FailedEventsWriter       messaging.OrderedWriter
 	// InboundSplitWriter republishes an event-envelope member that cannot be resolved yet to
 	// inbound-events on its own, in the legacy shape (processor.WithSplitWriter).
 	InboundSplitWriter messaging.MessageWriter
@@ -334,6 +337,7 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
 		processor.WithSplitWriter(InboundSplitWriter),
+		processor.WithIntegrationUplinkReaders(IntegrationUplinkReaders),
 		processor.WithResolvedEnvelopes(resolvedEnvelopesOn(), ResolvedRoundPublisher),
 		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
 		processor.WithSecretTransit(SecretTransit),
@@ -478,6 +482,24 @@ func createInboundReaders(nmgr *messaging.NatsManager) error {
 		readers = append(readers, r)
 	}
 	InboundEventsReaders = readers
+
+	// The integration-uplinks durable, the carrier of an integration's raw input to the payload
+	// decoder. It is created by this build and no earlier one, so a replica that predates decoders
+	// never subscribes to it and cannot be handed an uplink it would refuse; messages wait in the
+	// stream until a replica built with it pulls them. It is read with the same pool of resolvers,
+	// and with as many pulls in flight as the inbound durable gets (the uplinks of a decoder tenant
+	// are the same traffic the inbound readers would otherwise carry), and its gate is the one
+	// the catalogue declares (streams.IntegrationUplinks: device-management's own backlog, and
+	// resolved-events downstream).
+	uplinks := make([]messaging.MessageReader, 0, n)
+	for i := 0; i < n; i++ {
+		r, err := nmgr.NewReader(streams.IntegrationUplinks)
+		if err != nil {
+			return err
+		}
+		uplinks = append(uplinks, r)
+	}
+	IntegrationUplinkReaders = uplinks
 	return nil
 }
 

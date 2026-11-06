@@ -32,7 +32,7 @@ type Client interface {
 // the schema file so a reason added there cannot be rejected here as unknown.
 var Reasons = []string{
 	"INVALID", "API_CALL_FAILED", "DEVICE_NOT_FOUND", "UNAUTHENTICATED", "DEVICE_DISABLED",
-	"NOT_GATEWAY_CHILD", "INTEGRATION_ALIAS_MISMATCH", "UNKNOWN",
+	"NOT_GATEWAY_CHILD", "INTEGRATION_ALIAS_MISMATCH", "DECODE_FAILED", "UNKNOWN",
 }
 
 // maxServerPage is the server's page-size cap; it clamps larger requests.

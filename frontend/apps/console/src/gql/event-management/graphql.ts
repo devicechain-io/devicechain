@@ -121,6 +121,8 @@ export type FailedEventPayloadStatus =
 export type FailedEventReason =
   /** A platform service the event needed could not be reached, or storing the event failed. */
   | 'API_CALL_FAILED'
+  /** A payload decoder refused an integration's uplink; the start of the error text names why (for example no_section or invalid_output). */
+  | 'DECODE_FAILED'
   /** The device exists and an operator has disabled it. */
   | 'DEVICE_DISABLED'
   /** No device has the token the sender named. */

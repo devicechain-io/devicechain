@@ -173,9 +173,12 @@ func TestAnIntegrationEventCarriesNoOtherAuthority(t *testing.T) {
 		"a sealed device secret": func(e *esmodel.UnresolvedEvent) { e.SealedCredentialSecret = []byte{1} },
 		"a state change":         func(e *esmodel.UnresolvedEvent) { e.EventType = eventtype.StateChange },
 		"a location":             func(e *esmodel.UnresolvedEvent) { e.EventType = eventtype.Location },
-		// Until a resolver learns to decode it, an integration uplink is refused rather than stored:
-		// the trust an integration earns is for readings only.
-		"an integration uplink": func(e *esmodel.UnresolvedEvent) { e.EventType = eventtype.IntegrationUplink },
+		// An integration uplink is accepted from an integration (integration_decode_test.go), but it
+		// earns no more trust than a measurement does: it still carries no other authority.
+		"an uplink with a broker assertion": func(e *esmodel.UnresolvedEvent) {
+			e.EventType = eventtype.IntegrationUplink
+			e.BrokerAsserted = true
+		},
 	} {
 		e := rig.event("dev", "chirp-1", rig.token)
 		mutate(e)
