@@ -521,6 +521,7 @@ dcctl bootstrap local devicechain
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
+- **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
 - **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，在其再次活跃并再次沉默之前，该字段返回 null。
 - **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
@@ -587,6 +588,10 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 **已弃用：指定了 `resource` 却未指定 `scope` 的 `client_credentials` 请求。** 这样的令牌带有服务账号各角色的全部权限。请随资源一起发送 `scope`（`read-only`，可同时加上 `location`）。带 scope 的令牌只带有该 scope 的读取权限，因此需要写入的集成应改为省略 `resource`。本版本中缺少 scope 本身从不构成拒绝的理由，所以该请求仍然成功。每次都会计入 `devicechain_usermanagement_oauth_unscoped_client_credentials_total`，并连同其客户端记录到日志，它将在下一个主版本中以 `invalid_scope` 被拒绝。在此之前，`infrastructure.tokenAudience.unscopedClientCredentials: enforce` 在启动时会被拒绝。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
 
 **回退。** `v1.1` 的服务在启动时会拒绝 `tokenAudience` 配置块。`dcctl` 渲染的 `v1.1` 配置不含它。如果你自己编写配置，请在回退前删除该配置块并更新 `instance.existingSecretChecksum`。
+
+#### 解码器上行消息与 device-management 中断 {#v120-decoder-stream}
+
+带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503，由网络服务器重试；已被接受的数据不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行足够多的 device-management 副本，使重启其中一个不会中断读取。
 
 #### 滚动升级期间的配置文件变更 {#v120-profile-cache}
 
