@@ -70,9 +70,10 @@ The same cascade governs AI model entitlement: a per-tenant model assignment, th
 
 Each running copy of a service enforces every rate ceiling on this page on its own, with no coordination between copies. If you run two replicas of `event-sources`, `outbound-connectors` or `ai-inference` and they share a tenant's traffic, that tenant can be admitted at up to twice its ceiling, and N replicas allow up to N times. The default install runs one replica of each, so there each ceiling applies once, except briefly during a rolling update, while the old and new pods both run.
 
-Two ceilings are not multiplied:
+Three limits are not multiplied:
 
 - the undelivered-command ceiling is a count kept in the database;
+- the inbound-integration count is also taken from the database, under a per-tenant lock, so it holds across every replica;
 - the detection engine's outbound ceiling is charged only on the replica that detects.
 
 If you scale a service out, set tier ceilings for the number of replicas you run.

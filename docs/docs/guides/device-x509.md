@@ -175,7 +175,7 @@ If you create a device ahead of time for a certificate profile, leave its token 
 
 ## When a connect is refused {#refused}
 
-Like every device refusal, the device sees only CONNACK return code 5. The reason is on the operator's side, as the `result` label of the `callout_x509_total` counter. Check in this order:
+Like every device refusal, the device sees only CONNACK return code 5. The reason is on the operator's side, as the `result` label of the `devicechain_devicemanagement_callout_x509_total` counter. Check in this order:
 
 1. **`no_cert`.** The client sent no certificate. Check `--cert`, and that the key matches the certificate.
 2. **`chain_invalid`.** The chain does not build to the anchor, a certificate has expired, the extended key usage lacks client authentication, a signature uses SHA-1, or a key is outside the allowed set. Reproduce with `openssl verify -CAfile ca.crt -purpose sslclient device.crt`, and check that the device sends its intermediates.

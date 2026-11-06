@@ -697,7 +697,7 @@ starts, so a change is a restart, and they touch no consumer on the broker.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `batch` | 256 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
+| `batch` | 256 | How many messages one pull asks for, from 1 to 256 (0 or absent means 256; anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
 | `ahead` | on | Ask for the next batch while the current one is still being handed out, so the pull overlaps the work. Set `ahead: false` to pull one batch at a time. Messages are still handled in the order they arrive. |
 | `aheadHoldBudgetMillis` | 1000 | A batch asked for ahead waits while the one before it is handled, and its acknowledgement window is already running. If recent batches take longer than this to hand out, the service stops asking ahead and goes back to one pull at a time. At most a tenth of the acknowledgement window, or the service refuses to start. |
 
