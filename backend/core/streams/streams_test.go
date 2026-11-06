@@ -134,6 +134,15 @@ func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
 		if s.Suffix == MaxDeliveries {
 			continue
 		}
+		// The carrier stream is the one other cap, and it is allowed only because a backpressure
+		// reader gates it (so a full stream refuses its writer instead of evicting): see its
+		// declaration. It is checked to still be gated, so the cap cannot outlive the gate.
+		if s.Suffix == IntegrationUplinks {
+			if got := MaxBytesCapFor(s.Suffix); got != integrationUplinksMaxBytesCap {
+				t.Errorf("MaxBytesCapFor(%q) = %d, want %d", s.Suffix, got, int64(integrationUplinksMaxBytesCap))
+			}
+			continue
+		}
 		if got := MaxBytesCapFor(s.Suffix); got != 0 {
 			t.Errorf("stream %q declares a ceiling cap of %d; only the max-delivery capture should, "+
 				"since every other stream is meant to track its tier's ceiling", s.Suffix, got)

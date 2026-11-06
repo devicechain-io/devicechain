@@ -303,3 +303,76 @@ func TestAnIntegrationsOutOfScopeAnswerIsNotServedToAnother(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.Plan.Present, "integration A's negative answer was served to integration B")
 }
+
+// The last real answer is served stale when asking fails, up to StaleMax, and an error never
+// creates or refreshes an entry.
+func TestTheLastRealAnswerIsServedStaleWhenAskingFails(t *testing.T) {
+	clk := newClock()
+	f := &decoderFake{plan: &DecoderPlan{Present: true, ProfileVersionToken: "m@1"}}
+	d := NewDecoders(f, DecoderConfig{Now: clk.now})
+	_, err := d.Lookup(context.Background(), "acme", "cs", "tok", "meter")
+	require.NoError(t, err)
+
+	f.plan, f.err = nil, errors.New("down")
+	clk.advance(2 * time.Minute)
+	got, err := d.Lookup(context.Background(), "acme", "cs", "tok", "meter")
+	require.NoError(t, err)
+	require.True(t, got.Stale)
+	require.True(t, got.Plan.Present)
+
+	// The failed refresh did not renew it: past the bound it is an error.
+	clk.advance(14 * time.Minute)
+	_, err = d.Lookup(context.Background(), "acme", "cs", "tok", "meter")
+	require.Error(t, err)
+
+	// A rejected token is never answered from memory.
+	f.plan, f.err = &DecoderPlan{}, nil
+	_, err = d.Lookup(context.Background(), "acme", "cs", "tok", "meter")
+	require.NoError(t, err)
+	f.plan, f.err = nil, nil
+	clk.advance(2 * time.Minute)
+	_, err = d.Lookup(context.Background(), "acme", "cs", "tok", "meter")
+	require.ErrorIs(t, err, ErrDecoderUnauthenticated)
+}
+
+// One caller's rejected token is not the answer of a waiter holding a good one.
+func TestAFlightIsNotSharedAcrossBearers(t *testing.T) {
+	gate := make(chan struct{})
+	b := &bearerFake{gate: gate}
+	d := NewDecoders(b, DecoderConfig{})
+	var wg sync.WaitGroup
+	res := make([]error, 2)
+	for i, tok := range []string{"bad", "good"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, res[i] = d.Lookup(context.Background(), "acme", "cs", tok, "meter")
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	require.ErrorIs(t, res[0], ErrDecoderUnauthenticated)
+	require.NoError(t, res[1])
+}
+
+type bearerFake struct{ gate chan struct{} }
+
+func (b *bearerFake) Decoder(_ context.Context, _, _, bearer, _ string) (*DecoderPlan, error) {
+	<-b.gate
+	if bearer == "bad" {
+		return nil, nil
+	}
+	return &DecoderPlan{}, nil
+}
+
+// The literal error the release that predates the decoder query (v1.1.0) answers, as served. The
+// generated check above builds the same error from a schema; this pins the bytes, so a change to
+// the matcher cannot drift from what is actually deployed. A schema-introspection probe was
+// weighed and not taken: it is a second request per fill, and keying on the one error the old
+// release is known to give keeps the tolerance exactly as wide as that release.
+func TestTheV110ErrorStringIsTolerated(t *testing.T) {
+	err := &svcclient.GraphQLError{Messages: []string{
+		`Cannot query field "integrationDecoder" on type "Query". Did you mean "integration", "integrations", or "integrationAuth"?`}}
+	require.True(t, IsDecoderUnsupported(err))
+}

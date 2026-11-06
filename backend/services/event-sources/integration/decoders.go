@@ -122,9 +122,13 @@ type DecoderConfig struct {
 	// TTL is how long an answer is remembered, a present decoder and an absent one alike. It is
 	// the bound on how long this replica charges and selects on a plan that has since been
 	// published over.
-	TTL     time.Duration
-	Entries int
-	Now     func() time.Time
+	TTL time.Duration
+	// StaleMax is the longest an answer is served when device-management cannot be asked, counted
+	// from when it was learned. It matches the integration's token cache (15 minutes by default),
+	// so an outage that leaves Cut A serving leaves a decoder-less type serving too.
+	StaleMax time.Duration
+	Entries  int
+	Now      func() time.Time
 	// OnUnsupported, when set, is called each time device-management answers that it predates the
 	// query (once per fill, not per cached read).
 	OnUnsupported func()
@@ -136,6 +140,12 @@ const DefaultDecoderTTL = time.Minute
 func (c DecoderConfig) withDefaults() DecoderConfig {
 	if c.TTL <= 0 {
 		c.TTL = DefaultDecoderTTL
+	}
+	if c.StaleMax <= 0 {
+		c.StaleMax = 15 * time.Minute
+	}
+	if c.StaleMax < c.TTL {
+		c.StaleMax = c.TTL
 	}
 	if c.Entries <= 0 {
 		c.Entries = 10_000
@@ -151,6 +161,9 @@ type DecoderLookup struct {
 	Plan DecoderPlan
 	// Cached says no call was made.
 	Cached bool
+	// Stale says the answer is older than the TTL and was served because device-management could
+	// not be asked.
+	Stale bool
 	// Unsupported says device-management predates payload decoders and Plan is the empty plan.
 	Unsupported bool
 }
@@ -168,6 +181,13 @@ type DecoderLookup struct {
 // integration request until it is replaced would turn a rollout into an outage for senders that
 // have no decoder at all. That one validation error is remembered as an absent decoder; every
 // other failure is returned, remembered as nothing, and becomes a 503.
+//
+// 🔴 A REAL ANSWER OUTLIVES ITS FRESHNESS. The lookup runs for every resolved uplink, so an entry
+// that simply expired would turn a device-management outage into a 503 for every integration a
+// minute in, while Cut A keeps serving from its token and device caches for minutes. The last real
+// answer (a decoder present or absent) is therefore served stale, up to StaleMax, when asking
+// fails. An error never creates or refreshes an entry, and a stale "no decoder" can only be wrong
+// the way a fresh one can be: by the skew the resolver counts.
 type Decoders struct {
 	cfg     DecoderConfig
 	backend DecoderBackend
@@ -193,10 +213,14 @@ func NewDecoders(backend DecoderBackend, cfg DecoderConfig) *Decoders {
 // it answers a token that stopped matching.
 func (d *Decoders) Lookup(ctx context.Context, tenant, integration, bearer, deviceTypeToken string) (DecoderLookup, error) {
 	key := tenant + "\x00" + integration + "\x00" + deviceTypeToken
-	if e, ok := d.get(key, d.cfg.Now()); ok {
-		return DecoderLookup{Plan: e.plan, Cached: true, Unsupported: e.unsupported}, nil
+	stale, fresh, have := d.get(key, d.cfg.Now())
+	if have && fresh {
+		return DecoderLookup{Plan: stale.plan, Cached: true, Unsupported: stale.unsupported}, nil
 	}
-	v, err, _ := d.sf.Do(key, func() (any, error) {
+	// The flight is keyed on the bearer too: a flight runs with its first caller's token, and a
+	// token that device-management rejects must not become the answer of waiters that hold a
+	// good one.
+	v, err, _ := d.sf.Do(key+sep+bearer, func() (any, error) {
 		// A flight is shared by callers whose contexts differ: run it detached, as the device
 		// lookup does.
 		plan, err := d.backend.Decoder(context.WithoutCancel(ctx), tenant, integration, bearer, deviceTypeToken)
@@ -218,31 +242,37 @@ func (d *Decoders) Lookup(ctx context.Context, tenant, integration, bearer, devi
 		return e, nil
 	})
 	if err != nil {
+		if have && !errors.Is(err, ErrDecoderUnauthenticated) {
+			return DecoderLookup{Plan: stale.plan, Cached: true, Stale: true, Unsupported: stale.unsupported}, nil
+		}
 		return DecoderLookup{}, err
 	}
 	e := v.(decoderEntry)
 	return DecoderLookup{Plan: e.plan, Unsupported: e.unsupported}, nil
 }
 
-func (d *Decoders) get(key string, now time.Time) (decoderEntry, bool) {
+// get returns the entry for key, whether it is still fresh, and whether there is one to serve at
+// all (fresh, or stale within StaleMax).
+func (d *Decoders) get(key string, now time.Time) (e decoderEntry, fresh, ok bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	e, ok := d.entries[key]
+	e, ok = d.entries[key]
 	if !ok {
-		return decoderEntry{}, false
+		return decoderEntry{}, false, false
 	}
-	if now.Sub(e.at) >= d.cfg.TTL {
+	age := now.Sub(e.at)
+	if age >= d.cfg.StaleMax {
 		delete(d.entries, key)
-		return decoderEntry{}, false
+		return decoderEntry{}, false, false
 	}
-	return e, true
+	return e, age < d.cfg.TTL, true
 }
 
 func (d *Decoders) put(key string, e decoderEntry) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if _, ok := d.entries[key]; !ok && len(d.entries) >= d.cfg.Entries {
-		evictSome(d.entries, d.cfg.Entries/16+1, func(old decoderEntry) bool { return e.at.Sub(old.at) >= d.cfg.TTL })
+		evictSome(d.entries, d.cfg.Entries/16+1, func(old decoderEntry) bool { return e.at.Sub(old.at) >= d.cfg.StaleMax })
 	}
 	d.entries[key] = e
 }
@@ -259,3 +289,6 @@ func (d *Decoders) Forget(tenant string) {
 		}
 	}
 }
+
+// sep separates the parts of a flight key.
+const sep = ""

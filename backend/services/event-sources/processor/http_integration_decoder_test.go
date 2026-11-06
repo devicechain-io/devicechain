@@ -536,3 +536,26 @@ func TestTheSameDecoderUplinkTwiceInOneRequestIsCarriedOnce(t *testing.T) {
 	h.published1()
 	require.Equal(t, 1, h.count("uplink/duplicate_suppressed"))
 }
+
+// A device-management outage must not take Cut A down a minute in. The decoder lookup runs for
+// every resolved uplink, and its answers are fresh for 60 s; Cut A itself keeps serving from its
+// token cache (15 minutes) and device cache (5), so the lookup serves its last real answer stale
+// rather than turning every integration request into a 503.
+func TestAnOutageDoesNotStopCutAOnceTheDecoderAnswerIsStale(t *testing.T) {
+	h := newRouteHarness(t)
+	f := h.withDecoder(&integration.DecoderPlan{}, nil)
+	require.Equal(t, http.StatusAccepted, h.up().Code, "warm: a type with no decoder")
+
+	f.set(nil, errors.New("connection refused"))
+	h.now = h.now.Add(2 * time.Minute)
+	body := strings.ReplaceAll(fixtureBody(t, "chirpstack/up_decoded.json"), "3ac7e3c4-4401-4b8d-9386-a5c902f9202d", "4c8b1a2e-0000-4000-8000-00000000aaa2")
+	rec := h.post(csPath+upQuery, goodBearer, body)
+	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	require.Zero(t, h.count("request/CHIRPSTACK_V4/resolve_unavailable"))
+
+	// The counterweight: an answer that was never learned is still a 503, and so is one older than
+	// the stale bound.
+	h2 := newRouteHarness(t)
+	h2.withDecoder(nil, errors.New("connection refused"))
+	require.Equal(t, http.StatusServiceUnavailable, h2.up().Code, "cold cache, outage")
+}

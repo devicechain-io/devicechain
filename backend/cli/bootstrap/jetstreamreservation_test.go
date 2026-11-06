@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/config"
 )
 
 // reservationState is a State on the volume it names, with fail-closed as given.
@@ -49,11 +51,11 @@ func TestShippedAndCompactVolumesPassTheReservationCheck(t *testing.T) {
 // raise the reservation past what it holds, naming the numbers and the way back.
 func TestAShrunkLiveVolumeIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	t.Parallel()
-	err := precheckJetStreamReservation(t.Context(), reservationState(false, "15Gi", "", boolPtr(true)))
+	err := precheckJetStreamReservation(t.Context(), reservationState(false, "14Gi", "", boolPtr(true)))
 	if err == nil {
-		t.Fatal("a 15Gi JetStream volume (a 13Gi ceiling) was let through with fail-closed on")
+		t.Fatal("a 14Gi JetStream volume (a 12Gi ceiling) was let through with fail-closed on")
 	}
-	for _, want := range []string{"MiB of JetStream storage", "90% of its 15Gi", "--mqtt-fail-closed=false", "Nothing has been changed"} {
+	for _, want := range []string{"MiB of JetStream storage", "90% of its 14Gi", "--mqtt-fail-closed=false", "Nothing has been changed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
@@ -61,8 +63,8 @@ func TestAShrunkLiveVolumeIsRefusedBeforeAnythingIsWritten(t *testing.T) {
 	// The same volume holds everything it held before the setting: the refusal is the
 	// setting's own doing, not the volume's.
 	for _, off := range []*bool{nil, boolPtr(false)} {
-		if err := precheckJetStreamReservation(t.Context(), reservationState(false, "15Gi", "", off)); err != nil {
-			t.Errorf("a 15Gi volume was refused with the setting %v: %v", off, err)
+		if err := precheckJetStreamReservation(t.Context(), reservationState(false, "14Gi", "", off)); err != nil {
+			t.Errorf("a 14Gi volume was refused with the setting %v: %v", off, err)
 		}
 	}
 }
@@ -91,5 +93,33 @@ func TestTheReservationIsCheckedBeforeTheDeclarationIsWritten(t *testing.T) {
 	write := strings.Index(src, "recordUpgradedVersion(ctx, dyn, opts.Instance, st)")
 	if check < 0 || write < 0 || check > write {
 		t.Fatalf("Upgrade must call precheckJetStreamReservation (at %d) before recordUpgradedVersion (at %d)", check, write)
+	}
+}
+
+// The published sizing table (observability: JetStream sizing) names the volume that fits each
+// design rate. A stream added to the catalogue must not move a row: the 20,000 events/s row clears
+// its volume by under 50 MiB, so a Hot stream at its default ceiling (a gibibyte) would silently
+// make the documented volume too small. Holds with fail-closed MQTT off (the table) and on.
+func TestThePublishedSizingTableRowsHold(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		rate    int64
+		off, on int64
+	}{
+		{1_000, 14, 15},
+		{5_000, 16, 18},
+		{10_000, 22, 25},
+		{20_000, 33, 40},
+	} {
+		for failClosed, want := range map[bool]int64{false: tc.off, true: tc.on} {
+			cfg := config.NewDefaultInstanceConfiguration()
+			cfg.ApplyDefaults()
+			n := &cfg.Infrastructure.Nats
+			n.StreamDesignRate, n.StreamRunwayMinutes = tc.rate, 15
+			n.MqttFailClosed = failClosed
+			if got := requiredVolumeGi(jetStreamReservation(n)); got != want {
+				t.Errorf("%d events/s, fail-closed %v: the reservation needs a %dGi volume, the published table says %dGi", tc.rate, failClosed, got, want)
+			}
+		}
 	}
 }

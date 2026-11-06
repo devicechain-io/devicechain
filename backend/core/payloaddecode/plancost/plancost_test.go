@@ -52,3 +52,15 @@ func TestIngestCapsAreTheDecodersCaps(t *testing.T) {
 		t.Fatal("the codec's limits differ from the decoder's")
 	}
 }
+
+// ParseCost is one unit a byte, and that rate is a wire contract: event-sources prices an uplink
+// with it before the 202, and device-management's plan prices the same parse with the same
+// function. A change to the rate must carry the old rate with it (an environment version, or a
+// field on the plan), or a mixed-version rollout charges and meters differently.
+func TestParseCostIsOneUnitAByte(t *testing.T) {
+	for _, n := range []int{0, 1, 100, plancost.MaxJSONBytes} {
+		if got := plancost.ParseCost(n); got != uint64(n) {
+			t.Fatalf("ParseCost(%d) = %d, want %d", n, got, n)
+		}
+	}
+}
