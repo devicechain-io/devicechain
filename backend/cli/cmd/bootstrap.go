@@ -567,6 +567,7 @@ var bootstrapCmd = &cobra.Command{
 				KubeContext:  binding.KubeContext,
 				Managed:      binding.Managed,
 				ClusterUID:   clusterUID,
+				EscrowPath:   bootstrap.EscrowPlanPathToRecord(opts.Instance, escrowPlan),
 				CreatedAt:    time.Now().UTC(),
 				DcctlVersion: Version,
 			}

@@ -664,6 +664,7 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **控制台**在设备有未完成命令时会轮询其命令状态，告警值的格式与仪表盘一致，自动化画布的缩放控件会应用主题，设备配置文件列表以名称为首。
 - **严格 CSP 宿主中的仪表盘。**`configureStrictCsp`（默认关闭，因此不会有变化）让看板回放包可以在 `style-src 'self'` 下运行；参见[编写自定义小组件](../guides/writing-a-custom-widget.md)。
 - **基础设施。**未设置 `nats_mqtt_capable_users` 时，OpenTofu 的 broker 模块不再写出会被 broker 拒绝的空 `allowed_connection_types`；事件库备份的证书修复器会监视运营商配置的命名空间。
+- **`dcctl upgrade` 现在接受 `--yes`（`-y`），与 `dcctl install` 和 `dcctl bootstrap` 一致，并能找到用 `--escrow-file` 写出的托管文件。**`--yes` 表示对提示一律回答是；升级不会提问，所以它不改变任何行为，脚本现在可以把它同时传给这三个命令。`dcctl bootstrap --escrow-file` 会记录托管文件的写入位置，升级的根密钥托管检查会到那里查找，因此对于托管文件位于自定义路径的实例，不再报告“没有托管”。对于更早创建的实例，请给升级传一次 `--escrow-file`，它会记录该路径。
 
 #### 架构变更与回退 {#v120-going-back}
 
@@ -672,10 +673,10 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
 - **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
 - **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
-- **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。不写入任何行。
+- **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。迁移本身不写入任何行；`user-management` 首次启动时会写入默认放置（`iam_partition_config` 一行和 `iam_vpartition_assignments` 64 行），并在消息 broker 中创建 `dc_partition_placement` 存储桶。
 - **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
 
-所有新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们，只有一个例外：见下文的租户删除。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
+除这份默认放置外，新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们，只有一个例外：见下文的租户删除。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
 
 **当运行租户删除的是 `v1.1.0` 的 `user-management` 副本时，删除会被卡住。** `v1.1.0` 的副本不认识这三张放置表，它的关系型清除在遇到无法归类的表时会拒绝运行。只要由它执行清除，关系型存储就会为该删除报告错误，日志和账本失败记录中会点出 `iam_partition_config`、`iam_vpartition_assignments` 或 `iam_tenant_vpartition_overrides`，同时 `tenant_purge_store_blocked{store="rdb",reason="error"}` 大于零。被拒绝的这一步不会从数据库删除任何内容，也不会丢失任何数据；其他存储在同一轮中照常被清除。删除无法完成：租户保持在 `purging` 状态。运行本版本的副本会在下一轮接手，并在其通常的检查满足后完成。滚动升级期间，最后一个 `v1.1.0` 副本消失后会自行完成；回退到 `v1.1.0` 后则一直被卡住，直到你再次向前升级。条件允许时，请在升级完成后再发起删除。
 

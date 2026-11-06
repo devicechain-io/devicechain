@@ -2078,6 +2078,7 @@ dcctl upgrade <provider> <instance> [flags]
       --version string                          release version to upgrade to (default: this dcctl's pinned version)
       --withdraw-lwm2m-identities               remove the instance's LwM2M identities and the Secret holding their pre-shared keys. Not combinable with --lwm2m-identities
       --withdraw-sparkplug-sources              remove the instance's Sparkplug sources and the Secret holding their broker passwords. Not combinable with --sparkplug-source
+  -y, --yes                                     assume yes for prompts (an upgrade asks none, so this changes nothing; it is accepted so a script can pass the same flag to install, bootstrap and upgrade)
 ```
 
 ### SEE ALSO
