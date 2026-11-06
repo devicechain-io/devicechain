@@ -246,17 +246,23 @@ curl -s -X POST http://localhost/api/device-management/graphql \
 Now give the device a credential. The credential is what the device presents to prove it is
 itself, and the platform expects one by default.
 
+First generate the credential id and keep it in a shell variable, so this step and step 6 use the same one:
+
+```bash
+export DC_CRED_ID="$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
+```
+
 ```bash
 curl -s -X POST http://localhost/api/device-management/graphql \
   -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"mutation($r:DeviceCredentialCreateRequest!){createDeviceCredential(request:$r){token}}",
        "variables":{"r":{"token":"sensor-001-cred","deviceToken":"sensor-001",
                          "credentialType":"ACCESS_TOKEN",
-                         "credentialId":"5f989616-2a0d-4160-8ae1-da5fad2898b2",
+                         "credentialId":"'"$DC_CRED_ID"'",
                          "enabled":true}}}'
 ```
 
-Pick your own `credentialId`: any unguessable string. For an `ACCESS_TOKEN` credential, the
+The `credentialId` is any unguessable string; the command above generated one for you, so every reader gets a different secret. For an `ACCESS_TOKEN` credential, the
 `credentialId` **is** the secret the device presents, so treat it like a password rather than a
 name. The platform stores only a one-way digest of it, so keep your own copy: the response to this
 request is the last time it can be read.
@@ -292,7 +298,7 @@ curl -i -X POST http://localhost:8081/devicechain/sim-demo/events \
   -d '{"device":"sensor-001",
        "eventType":"Measurement",
        "credentialType":"ACCESS_TOKEN",
-       "credentialId":"5f989616-2a0d-4160-8ae1-da5fad2898b2",
+       "credentialId":"'"$DC_CRED_ID"'",
        "payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
@@ -318,7 +324,7 @@ for t in 21.9 22.4 22.1 23.0; do
     -H 'Content-Type: application/json' \
     -d "{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",
          \"credentialType\":\"ACCESS_TOKEN\",
-         \"credentialId\":\"5f989616-2a0d-4160-8ae1-da5fad2898b2\",
+         \"credentialId\":\"$DC_CRED_ID\",
          \"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$t\"}}]}}"
   sleep 1
 done

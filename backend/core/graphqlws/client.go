@@ -43,9 +43,12 @@ package graphqlws
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -151,6 +154,7 @@ type config struct {
 	buffer           int
 	readLimit        int64
 	dialer           *websocket.Dialer
+	host             string
 }
 
 // Option customises a Dial.
@@ -180,6 +184,12 @@ func WithReadLimit(n int64) Option { return func(c *config) { c.readLimit = n } 
 // WithDialer supplies a preconfigured gorilla dialer (TLS config, proxy). Its
 // Subprotocols and HandshakeTimeout are overridden to the protocol's needs.
 func WithDialer(d *websocket.Dialer) Option { return func(c *config) { c.dialer = d } }
+
+// WithHost presents host (a host or host:port) as the upgrade request's Host header and, for
+// wss://, as the TLS server name, while the connection still goes to the address in the endpoint.
+// It is for a caller that reaches an instance through an address (a load balancer, a
+// port-forward) whose Gateway routes on a hostname. Empty is ignored.
+func WithHost(host string) Option { return func(c *config) { c.host = host } }
 
 // Client is a live graphql-transport-ws connection multiplexing many
 // subscriptions. It is safe for concurrent use.
@@ -236,7 +246,18 @@ func Dial(ctx context.Context, endpoint string, token TokenProvider, opts ...Opt
 	d.Subprotocols = []string{wsSubprotocol}
 	d.HandshakeTimeout = cfg.handshakeTimeout
 
-	conn, resp, err := d.DialContext(ctx, endpoint, nil)
+	var header http.Header
+	if cfg.host != "" {
+		header = http.Header{"Host": []string{cfg.host}}
+		tc := &tls.Config{MinVersion: tls.VersionTLS12}
+		if d.TLSClientConfig != nil {
+			tc = d.TLSClientConfig.Clone()
+		}
+		tc.ServerName = hostName(cfg.host)
+		d.TLSClientConfig = tc
+	}
+
+	conn, resp, err := d.DialContext(ctx, endpoint, header)
 	if err != nil {
 		if resp != nil {
 			return nil, fmt.Errorf("graphqlws: dial %s: %w (http %d)", endpoint, err, resp.StatusCode)
@@ -593,4 +614,12 @@ func joinGQLErrors(errs []gqlError) error {
 		msgs = append(msgs, e.Message)
 	}
 	return fmt.Errorf("graphqlws: subscription error: %s", strings.Join(msgs, "; "))
+}
+
+// hostName is the host part of a host or host:port string.
+func hostName(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
 }

@@ -6,6 +6,7 @@ package replication
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -405,16 +406,41 @@ func TestApplyMovesDoesNotStartTheNextMoveUntilTheHandoffIsSeen(t *testing.T) {
 	if res[0].Err == nil || res[1].Err == nil {
 		t.Errorf("neither move should read as done: %+v", res)
 	}
-	// Control: when the handoff lands, the second move goes out.
-	h := &fakeGroup{readings: [][]Peer{ok}}
-	h.sent = 0
+	// Control: when the handoff lands, the second move goes out. Each group stays on "a" until its own
+	// step-down, so an executor that stopped after the first handoff would send one request, not two.
+	stepped := map[string]bool{}
+	sent := 0
 	r2 := applyMoves(context.Background(), moveIO{state: func(m Move) (string, []Peer, error) {
-		if m.Stream == "s2" || h.sent > 0 {
+		if stepped[m.Stream] {
 			return "b", ok, nil
 		}
 		return "a", ok, nil
-	}, stepDown: func(context.Context, Move) error { h.sent++; return nil }}, moves, fastApply)
-	if r2[0].Err != nil {
-		t.Errorf("control: %+v", r2)
+	}, stepDown: func(_ context.Context, m Move) error { stepped[m.Stream] = true; sent++; return nil }}, moves, fastApply)
+	if sent != 2 || r2[0].Err != nil || r2[1].Err != nil || r2[1].Skipped {
+		t.Errorf("control: both moves should be sent and done: sent=%d %+v", sent, r2)
+	}
+}
+
+// The step-down names a preferred placement, which the broker may not honour. A group that settled on
+// a third server is steady, so the next move still goes out, but the move is reported as not to plan
+// rather than as the separated placement it was meant to produce.
+func TestApplyMovesReportsALeaderThatSettledOnAThirdServer(t *testing.T) {
+	ok := []Peer{{Name: "b", Current: true}, {Name: "c", Current: true}}
+	stepped := map[string]bool{}
+	moves := []Move{{Stream: "s1", From: "a", To: "b"}, {Stream: "s2", From: "a", To: "b"}}
+	res := applyMoves(context.Background(), moveIO{state: func(m Move) (string, []Peer, error) {
+		switch {
+		case !stepped[m.Stream]:
+			return "a", ok, nil
+		case m.Stream == "s1":
+			return "c", ok, nil // elected elsewhere
+		}
+		return "b", ok, nil
+	}, stepDown: func(_ context.Context, m Move) error { stepped[m.Stream] = true; return nil }}, moves, fastApply)
+	if res[0].Err == nil || !strings.Contains(res[0].Err.Error(), "not to plan") || !strings.Contains(res[0].Err.Error(), `"c"`) {
+		t.Errorf("a third-server election must not read as the planned move: %+v", res[0])
+	}
+	if res[1].Err != nil || res[1].Skipped || !stepped["s2"] {
+		t.Errorf("a settled group must not stop the run: %+v", res[1])
 	}
 }

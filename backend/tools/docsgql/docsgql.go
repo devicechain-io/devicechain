@@ -190,13 +190,12 @@ func ExtractPayloads(file string, data []byte) []Payload {
 				continue
 			}
 			open := pos + d + len("-d '")
-			end := strings.Index(body[open:], "'")
+			end, raw := payloadEnd(body[open:])
 			line := f.Line + 1 + strings.Count(body[:pos+d], "\n")
 			if end < 0 {
 				out = append(out, Payload{File: file, Line: line, Endpoint: url, Err: "unterminated -d '...' payload"})
 				break
 			}
-			raw := body[open : open+end]
 			pos = open + end + 1
 			if !strings.Contains(raw, `"query"`) {
 				continue
@@ -222,6 +221,31 @@ func ExtractPayloads(file string, data []byte) []Payload {
 		}
 	}
 	return out
+}
+
+// spliceRe is a shell variable spliced into a single-quoted body: the quote closes, the
+// variable is expanded inside double quotes, the quote reopens ('"$DC_CRED_ID"').
+var spliceRe = regexp.MustCompile(`^'"\$[A-Za-z_][A-Za-z0-9_]*"'`)
+
+// payloadEnd finds the closing single quote of a -d '...' body, stepping over spliced
+// shell variables, and returns its offset along with the body those splices replaced by a
+// placeholder, so the JSON can still be checked. It returns -1 when the quote never closes.
+func payloadEnd(s string) (int, string) {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '\'' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		if m := spliceRe.FindString(s[i:]); m != "" {
+			b.WriteString("spliced")
+			i += len(m)
+			continue
+		}
+		return i, b.String()
+	}
+	return -1, ""
 }
 
 var pinRe = regexp.MustCompile(`^#\s*schema:\s*(\S+)\s*$`)
