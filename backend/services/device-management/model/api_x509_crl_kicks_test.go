@@ -29,7 +29,7 @@ func newCrlKickFixture(t *testing.T) *crlKickFixture {
 	f := newRevFixture(t)
 	k := &togglingKicker{up: true}
 	f.api.SessionKicker = k
-	f.api.RevocationResweepAfter = 40 * time.Millisecond
+	f.api.RevocationResweepAfter = time.Hour // the re-sweep tests set their own; a short default makes a later call re-ask
 	return &crlKickFixture{revFixture: f, kicker: k}
 }
 
