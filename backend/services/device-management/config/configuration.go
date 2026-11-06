@@ -299,14 +299,29 @@ const (
 // copy (inMemoryCache.profileResolutionCacheMiB). It was 4 MiB while an entry held only metric
 // definitions (about 1 KiB). An entry that carries a payload decoder holds its compiled programs,
 // measured at 1 to 5 MB for a decoder of any realistic size and about 6 MB charged for a maximal
-// one, so 32 MiB keeps about five maximal decoders decoded; beyond that the oldest are let go and
-// compiled again when next read. DefaultProfileResolutionTenantSharePercent keeps one tenant from
-// taking all of it: at 25% a tenant holds at most 8 MiB of it, and a tenant past that evicts its
-// own entries and never another tenant's.
+// one, so 32 MiB keeps about five maximal decoders decoded. DefaultProfileResolutionTenantSharePercent
+// keeps one tenant from taking all of it: at 25% a tenant holds at most 8 MiB of it, and a tenant
+// past that evicts its own entries first. When the replica as a whole is full, the tenant holding
+// the most gives up an entry first, so a tenant within its share keeps its entries while a larger
+// holder has some to give.
+//
+// 🔴 A TENANT'S SHARE IS WHAT ITS LARGE DECODERS HAVE TO FIT IN TOGETHER. Decoders that do not fit
+// in the share at once take turns, and each turn compiles (tens of milliseconds) on the event
+// that asked for it: two maximal decoders in one tenant need about 12 MiB, so the default 8 MiB
+// share holds one of them. Size profileResolutionCacheMiB x profileResolutionTenantSharePercent for
+// the number of large decoders a tenant keeps in use at once (watch the compile rate), and Validate
+// refuses a share too small for even one.
 const (
 	DefaultProfileResolutionCacheMiB           = 32
 	MaxProfileResolutionCacheMiB               = 256
 	DefaultProfileResolutionTenantSharePercent = 25
+
+	// MaxDecoderResolutionChargeBytes is the most one resolution entry is charged against the cache
+	// when it carries the largest payload decoder the document limits allow, entry bookkeeping
+	// included, rounded up. The model package measures the largest shapes against it
+	// (TestTheConfiguredMaximalChargeCoversEveryDecoderShape), so it cannot drift below what is
+	// charged. A tenant's share smaller than this holds no maximal decoder decoded at all.
+	MaxDecoderResolutionChargeBytes = 7 << 20
 )
 
 // DefaultCredentialCacheMiB bounds the credential cache. An entry is about 1.1 KB, so 32 MiB
@@ -466,6 +481,15 @@ func (c InMemoryCacheConfiguration) Validate() error {
 	if c.ProfileResolutionTenantSharePercent < 1 || c.ProfileResolutionTenantSharePercent > 100 {
 		return fmt.Errorf("inMemoryCache.profileResolutionTenantSharePercent must be between 1 and 100 (got %d)",
 			c.ProfileResolutionTenantSharePercent)
+	}
+	// A share too small for one maximal decoder is not a smaller cache but a broken one: the entry
+	// is never kept decoded, so every event of the type compiles its decoder again.
+	if tenantBytes := c.ProfileResolutionCacheMiB << 20 / 100 * c.ProfileResolutionTenantSharePercent; tenantBytes < MaxDecoderResolutionChargeBytes {
+		return fmt.Errorf("inMemoryCache.profileResolutionCacheMiB (%d) x profileResolutionTenantSharePercent (%d%%) leaves a tenant %d bytes, "+
+			"below the %d a payload decoder at the size limit is charged, so every event of a device type with one would compile it again; "+
+			"raise either (the defaults are %d MiB and %d%%)",
+			c.ProfileResolutionCacheMiB, c.ProfileResolutionTenantSharePercent, tenantBytes, MaxDecoderResolutionChargeBytes,
+			DefaultProfileResolutionCacheMiB, DefaultProfileResolutionTenantSharePercent)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ title: Dashboards
 sidebar_position: 8
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
 import GuideShot from '@site/src/components/GuideShot';
 
 # Dashboards
@@ -16,6 +17,10 @@ creating a dashboard from scratch, from a template or from an exported file, vie
 on the canvas, configuring widgets, previewing with synthetic data, exporting, and publishing and
 rolling back versions. The screenshots use a test tenant whose *Widget Lab* dashboard holds one of
 every built-in widget. For how dashboards work underneath, see [Dashboards](/concepts/dashboards).
+
+**Prefer to watch?** The video follows this page: it builds a dashboard on the canvas, binds widgets to slots, and opens the result in the viewer-only /dash app. It was recorded against v1.1, has English audio, with English and Spanish captions, and has chapters.
+
+<YouTubeLite id="nCxsli5rwzI" title="Build IoT dashboards in DeviceChain: canvas, slots, widgets, /dash" />
 
 :::note Who can do what
 Every member of the tenant can open a dashboard. Creating, editing, publishing and deleting one

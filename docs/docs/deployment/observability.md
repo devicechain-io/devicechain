@@ -706,7 +706,7 @@ starts, so a change is a restart, and they touch no consumer on the broker.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `batch` | 256 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
+| `batch` | 256 | How many messages one pull asks for, from 1 to 256 (0 or absent means 256; anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
 | `ahead` | on | Ask for the next batch while the current one is still being handed out, so the pull overlaps the work. Set `ahead: false` to pull one batch at a time. Messages are still handled in the order they arrive. |
 | `aheadHoldBudgetMillis` | 1000 | A batch asked for ahead waits while the one before it is handled, and its acknowledgement window is already running. If recent batches take longer than this to hand out, the service stops asking ahead and goes back to one pull at a time. At most a tenth of the acknowledgement window, or the service refuses to start. |
 
@@ -1395,6 +1395,8 @@ limit; where no `GOMEMLIMIT` is set the heap can instead grow to about twice wha
 it is collected. To resolve a fleet
 faster you can also add resolvers (`resolution.workers`, within the connection pool) or
 `device-management` replicas.
+
+A payload decoder is compiled when a device type's resolution is read and its decoded copy is not held, and a large decoder takes tens of milliseconds, so decoders that are let go and compiled again slow the events themselves. `payload_decoder_compiles_total` counts the compiles, and `PayloadDecoderRecompileSustained` (warning) fires when a replica compiles more than once a second for 15 minutes while its resolution cache is also evicting entries for room (`reason` `capacity` or `tenant_share`), which separates it from many small decoders simply expiring. The cause is the decoders a tenant keeps in use not fitting in its share of the resolution cache (about 6 MiB each for a maximal one, against 8 MiB at the defaults): compare `kv_cache_local_evictions_total{cache="profile-resolution-by-type"}` by `reason`, where `tenant_share` points at the share and `capacity` at the whole cache. Raise `inMemoryCache.profileResolutionCacheMiB` or `inMemoryCache.profileResolutionTenantSharePercent`, and the memory limit with them.
 
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the

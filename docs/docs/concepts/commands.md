@@ -417,7 +417,7 @@ daylight-saving change day.
 Commands already waiting on a window follow its new schedule within about a minute. A leader-locked
 pass in command delivery polls the window's owner for the current schedule. It is a poll, not an
 event, so the bound is about 60 seconds, and it still converges when a notification would have been
-lost. The counter `command_delivery_window_restamps_total` counts commands whose hold was moved
+lost. The counter `devicechain_commanddelivery_command_delivery_window_restamps_total` counts commands whose hold was moved
 because the window was edited or deleted, closed again before the device returned, or because their
 device type moved to another window or lost its window.
 
@@ -437,7 +437,7 @@ device type moved to another window or lost its window.
   change follow the new profile version and are not held. If the new profile version no longer
   defines the command at all, the waiting commands are never sent: they end `FAILED` with outcome
   `NOT_DELIVERED`, and their `error` reads "Command no longer defined by this device's profile".
-  The counter `command_delivery_window_commands_undefined_total` counts them.
+  The counter `devicechain_commanddelivery_command_delivery_window_commands_undefined_total` counts them.
 - A release is not a pause. Released commands are sent as soon as delivery reaches them, outside
   any window, so detaching the window from a type with many waiting disruptive commands sends them
   all within about a minute. To stop waiting commands instead, cancel them (or their batch) before

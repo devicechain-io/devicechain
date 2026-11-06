@@ -526,10 +526,11 @@ dcctl bootstrap local devicechain
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 - **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
 - **处理新的失败事件原因 `DECODE_FAILED`。** 对 `FailedEventReason` 做穷举 `switch` 的客户端会多看到一个值。参见[新的失败事件原因](#v120-decode-failed)。
-- **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，在其再次活跃并再次沉默之前，该字段返回 null。
+- **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，该字段返回该 Pod 标记它的时刻（从 `lastDisconnectTime` 读取），与 `v1.0.0` 一致。随后第二个迁移会处理第一个迁移运行期间被 `v1.1.0` 写入方持有锁的行，并重试约半分钟。之后仍被持有的行会被记录并保留，读取该字段时仍会得到正确的结果。
 - **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
 - **升级前检查事件库的剩余空间。** 对已有实例，`dcctl upgrade` 会把事件库的 `max_wal_size` 提高到其卷容量的五分之一（默认 32Gi 时为 6.4 GiB，原为 1 GiB），预写日志现在可以在数据卷上增长到这么大。该值升高时，升级会打印一条提示；卷的剩余空间小于新值时，会给出警告。要保留原来的额度，请运行 `dcctl upgrade --event-store-max-wal-mib 1024`。参见[事件库的预写日志额度](#v120-event-store-wal)。
+- **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
 
@@ -610,7 +611,7 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 - **滚动升级进行期间所做的配置文件和设备类型变更，可能需要大约两倍的缓存存活时间才能到达已升级的副本**（按 `metricDefCacheTtlSeconds` 和 `inMemoryCache.ttlSeconds` 默认的 300 秒计，约 10 分钟）。这包括发布、回滚、设备类型更换配置文件以及地理围栏变更。所有副本都运行本版本后，变更会像以前一样立即生效。
 - **只有在每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。** 从旧副本发布的版本不包含该解码器。
-- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户会被限制在自己的份额内，并先驱逐自己的条目。该份额并不保证其他租户安全：整个缓存占满时，驱逐不看租户，因此其他租户的条目也可能被驱逐。副本还会导出 `payload_decoder_compiles_total`。如果你自行设置了内存上限，请计入额外的 28 MiB。
+- **此缓存的进程内副本变大了。** 每个副本上限为 32 MiB（原为 4 MiB），因为带有载荷解码器的条目持有其编译后的程序。不带解码器的条目大小不变。该上限由 `inMemoryCache.profileResolutionCacheMiB` 设置，`inMemoryCache.profileResolutionTenantSharePercent`（默认 25）限制单个租户可占用的比例，因此拥有许多大型解码器的租户会被限制在自己的份额内，并先驱逐自己的条目。当某副本的整个缓存已满时，占用最多的租户先让出条目，所以份额以内的租户在更大的占用者还有条目可让时保留自己的条目。租户的份额就是其大型解码器必须共同容纳的空间：一个最大的解码器计约 6 MiB，因此默认的 8 MiB 份额只容纳一个，同一租户同时使用两个时会轮流占用，每次读取都要重新编译解码器。请按租户同时使用的大型解码器数量来设定缓存和份额。当租户的份额（`profileResolutionCacheMiB` x `profileResolutionTenantSharePercent`）低于 7 MiB 时，`device-management` 现在会拒绝启动，7 MiB 是限制所允许的最大解码器的计费大小：更小的份额无法让它保持解码状态，其设备类型的每个事件都会重新编译它。较小的解码器需要的更少。副本会导出 `payload_decoder_compiles_total`，当某副本连续 15 分钟每秒编译超过一次时，chart 会以 `PayloadDecoderRecompileSustained` 告警。如果你自行设置了内存上限，请计入额外的 28 MiB。
 
 #### 载荷解码器 {#v120-payload-decoders}
 
@@ -641,6 +642,10 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`）。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
 - **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
 
+#### 边缘代理看板与抓取作业 {#v120-edge-board-job}
+
+边缘代理看板的进程面板除选择代理外，还选择 `job="dc-edge-agent"`。`agent` 是机器上采集器的全局外部标签，因此如果采集器还抓取了机器上的其他进程（例如 node exporter），那个进程的内存、CPU、goroutine 和打开的文件就会被加进每个代理的面板。文档中的抓取配置已使用 `job_name: dc-edge-agent`，按它导入的看板无需改动。如果您给作业起了别的名字，请在采集器中改名，或把看板上五个进程与运行时查询（`process_*` 和 `go_goroutines`）改成您的作业名。请从 `backend/edge/dc-edge-agent/dashboards/edge-agent.json` 重新导入看板以应用此变更。
+
 #### 本版本的其他变更 {#v120-other-changes}
 
 除上面列表中的两项 `dcctl` 变更外，这里的内容都不需要你采取行动。每一项都是对已发布功能的修复或补充。
@@ -670,7 +675,9 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。不写入任何行。
 - **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
 
-所有新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
+所有新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们，只有一个例外：见下文的租户删除。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
+
+**当运行租户删除的是 `v1.1.0` 的 `user-management` 副本时，删除会被卡住。** `v1.1.0` 的副本不认识这三张放置表，它的关系型清除在遇到无法归类的表时会拒绝运行。只要由它执行清除，关系型存储就会为该删除报告错误，日志和账本失败记录中会点出 `iam_partition_config`、`iam_vpartition_assignments` 或 `iam_tenant_vpartition_overrides`，同时 `tenant_purge_store_blocked{store="rdb",reason="error"}` 大于零。被拒绝的这一步不会从数据库删除任何内容，也不会丢失任何数据；其他存储在同一轮中照常被清除。删除无法完成：租户保持在 `purging` 状态。运行本版本的副本会在下一轮接手，并在其通常的检查满足后完成。滚动升级期间，最后一个 `v1.1.0` 副本消失后会自行完成；回退到 `v1.1.0` 后则一直被卡住，直到你再次向前升级。条件允许时，请在升级完成后再发起删除。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 

@@ -106,7 +106,7 @@ Las secciones siguientes cubren propiedades específicas de la presencia MQTT af
 
 ### Confirmar que la toma del broker está en marcha {#confirming-the-tap}
 
-Leer conexiones del propio broker de DeviceChain necesita cuatro cosas. Si falta alguna, la toma **se niega a arrancar**. Registra el motivo y pone `presence_tap_off{reason}` para indicar cuál es. Los dispositivos MQTT que nunca fueron afirmados siguen siendo inferidos, lo que se ve exactamente igual que una instancia que nunca tuvo presencia afirmada, porque funcionalmente lo es. Los cuatro requisitos:
+Leer conexiones del propio broker de DeviceChain necesita cuatro cosas. Si falta alguna, la toma **se niega a arrancar**. Registra el motivo y pone `devicechain_eventsources_presence_tap_off{reason}` para indicar cuál es. Los dispositivos MQTT que nunca fueron afirmados siguen siendo inferidos, lo que se ve exactamente igual que una instancia que nunca tuvo presencia afirmada, porque funcionalmente lo es. Los cuatro requisitos:
 
 - `brokerPresence.enabled` no está puesto a `false`.
 - Hay una credencial de cuenta de sistema de NATS configurada. `dcctl bootstrap` acuña una; que falte es la razón habitual de que una instancia montada a mano no tenga toma.
@@ -137,13 +137,13 @@ En los tres casos restantes no se libera nada automáticamente:
 
 Dos señales te indican que la toma no está en marcha, y cubren fallos distintos.
 
-`presence_tap_off{reason}` es la directa. Se pone a 1 en cada vía por la que la toma se niega a arrancar, con la etiqueta nombrando cuál. Responde a una pregunta que una flota en silencio deja sin respuesta de otro modo: una flota MQTT de larga vida legítimamente no emite avisos de conexión ni desconexión durante días, así que nada en el flujo ordinario de eventos de presencia distingue una instancia que está afirmando presencia de otra que en silencio nunca llegó a arrancar.
+`devicechain_eventsources_presence_tap_off{reason}` es la directa. Se pone a 1 en cada vía por la que la toma se niega a arrancar, con la etiqueta nombrando cuál. Responde a una pregunta que una flota en silencio deja sin respuesta de otro modo: una flota MQTT de larga vida legítimamente no emite avisos de conexión ni desconexión durante días, así que nada en el flujo ordinario de eventos de presencia distingue una instancia que está afirmando presencia de otra que en silencio nunca llegó a arrancar.
 
-No cubre una toma que arrancó y luego dejó de funcionar, porque en ese caso nada se niega a arrancar. **`presence_canary_missed_total` cubre ese caso, y es el contador sobre el que alarmar.** El servicio abre su propia conexión MQTT una vez por minuto exclusivamente para que una toma que funciona tenga algo que observar. `presence_canary_observed_total` sube con una toma sana, y `presence_canary_missed_total` sube cuando la cadena está rota.
+No cubre una toma que arrancó y luego dejó de funcionar, porque en ese caso nada se niega a arrancar. **`devicechain_eventsources_presence_canary_missed_total` cubre ese caso, y es el contador sobre el que alarmar.** El servicio abre su propia conexión MQTT una vez por minuto exclusivamente para que una toma que funciona tenga algo que observar. `devicechain_eventsources_presence_canary_observed_total` sube con una toma sana, y `devicechain_eventsources_presence_canary_missed_total` sube cuando la cadena está rota.
 
 El canario funciona con su propio calendario, independiente de la pasada de reparación descrita más abajo. Esa separación es lo que hace fiable al contador: un instrumento que solo pudiera informar mientras aquello que vigila estuviera sano se quedaría callado justo en el momento en que importa.
 
-Lee los demás contadores de presencia como tráfico, no como salud. `presence_events_total` está legítimamente plano en una flota en silencio. También está legítimamente *no* plano en una toma que se acaba de apagar, porque liberar los dispositivos que esa toma tenía afirmados emite un evento por dispositivo bajo `presence_events_total{state="demoted"}`. Ninguna de las dos formas dice nada sobre si la presencia se está leyendo.
+Lee los demás contadores de presencia como tráfico, no como salud. `devicechain_eventsources_presence_events_total` está legítimamente plano en una flota en silencio. También está legítimamente *no* plano en una toma que se acaba de apagar, porque liberar los dispositivos que esa toma tenía afirmados emite un evento por dispositivo bajo `devicechain_eventsources_presence_events_total{state="demoted"}`. Ninguna de las dos formas dice nada sobre si la presencia se está leyendo.
 
 ### Cómo ajustar la toma {#broker-presence-settings}
 
@@ -153,7 +153,7 @@ La toma se distribuye con valores predeterminados que funcionan, y la mayoría d
 |---|---|---|
 | `enabled` | activada si no se define | Ejecuta la toma. Ponlo en `false` para desactivar deliberadamente la presencia MQTT afirmada por el broker, por ejemplo en una instancia cuyo broker se comparte con algo que no admite un suscriptor de cuenta de sistema. Los dispositivos MQTT pasan entonces a presencia inferida, y los que la toma ya hubiera afirmado se liberan de vuelta a ella, a ritmo pausado, en los minutos siguientes. |
 | `reconcileSeconds` | `300` | Cada cuánto se compara la lista de conexiones vivas del broker con la de la plataforma, en ambos sentidos. **Esto no es una red de seguridad.** Un reinicio ordenado del broker no anuncia desconexión alguna, así que esta pasada es lo único que llega a corregir esos dispositivos, y un dispositivo afirmado no tiene detrás ningún barrido de inactividad. Bájalo para reparar antes, a cambio de un inventario de todo el clúster más una lectura por inquilino en cada pasada. |
-| `canarySeconds` | `60` | Cada cuánto el servicio abre su propia conexión MQTT para demostrar que la toma sigue viva. Es el calendario contra el que cuenta `presence_canary_missed_total`. |
+| `canarySeconds` | `60` | Cada cuánto el servicio abre su propia conexión MQTT para demostrar que la toma sigue viva. Es el calendario contra el que cuenta `devicechain_eventsources_presence_canary_missed_total`. |
 | `canaryDeadlineSeconds` | `15` | Acota una sola sonda. Si es demasiado ajustado, informa de fallos que la toma no tiene. |
 | `inventoryGatherSeconds` | `5` | Cuánto tiempo recoge una pasada las respuestas del clúster del broker. Si es demasiado corto, un nodo que solo va lento se lee como ausente, lo que retiene todas las desconexiones de esa pasada. |
 
@@ -161,14 +161,14 @@ Un valor no positivo en cualquiera de los cuatro intervalos recae en el predeter
 
 ### Una pasada de reparación que se queda sin tiempo lo dice {#reconcile-pass-timeout}
 
-Cada pasada de reparación recorre todos los inquilinos de la instancia y lee los dispositivos afirmados de cada uno, así que en una instancia grande la pasada es larga. Está acotada: una pasada que no puede terminar dentro de su presupuesto se detiene, informa `presence_reconcile_runs_total{outcome="timeout"}` y registra cuántos inquilinos cubrió.
+Cada pasada de reparación recorre todos los inquilinos de la instancia y lee los dispositivos afirmados de cada uno, así que en una instancia grande la pasada es larga. Está acotada: una pasada que no puede terminar dentro de su presupuesto se detiene, informa `devicechain_eventsources_presence_reconcile_runs_total{outcome="timeout"}` y registra cuántos inquilinos cubrió.
 
 La siguiente pasada continúa entonces en el primer inquilino al que no llegó, en lugar de empezar otra vez desde el principio. Sin eso, una flota cuya pasada nunca cupiera en el presupuesto repararía los mismos primeros inquilinos en cada intento y nunca alcanzaría al resto: no tarde, nunca.
 
 - Resultados `timeout` ocasionales significan que las reparaciones van con retraso, y cada inquilino sigue teniendo su turno.
 - Una racha sostenida de ellos significa que la instancia necesita más margen. Los dispositivos al final de la rotación son aquellos cuyas desconexiones perdidas quedan sin corregir durante más tiempo.
 
-`presence_reconcile_runs_total` lleva un resultado por pasada:
+`devicechain_eventsources_presence_reconcile_runs_total` lleva un resultado por pasada:
 
 | Resultado | Qué significa |
 | --- | --- |
@@ -182,7 +182,7 @@ Alarma sobre `failed` junto con el canario. Que falle la lectura del estado de u
 
 ### Las transiciones de presencia se contabilizan contra el techo de ingesta del inquilino {#presence-and-the-ingest-ceiling}
 
-Las transiciones de conexión y desconexión pasan por el mismo [límite de ingesta](./governance.md) por inquilino que la telemetría. **Se rechazan cuando un inquilino está en su techo**, y se cuentan en `presence_events_refused_total`.
+Las transiciones de conexión y desconexión pasan por el mismo [límite de ingesta](./governance.md) por inquilino que la telemetría. **Se rechazan cuando un inquilino está en su techo**, y se cuentan en `devicechain_eventsources_presence_events_refused_total`.
 
 Es deliberado. La rotación de conexiones la controla por completo el dispositivo y, por lo demás, es gratuita: un dispositivo reconectándose en bucle sería un amplificador de escrituras no medido que el limitador de ingesta nunca ve.
 
@@ -207,6 +207,6 @@ La comparación de reparación se niega a marcar nada como fuera de línea si no
 
 El coste es un caso que el diseño no puede distinguir: **reducir el clúster del broker a propósito**. Responden menos nodos que el máximo recordado, así que toda pasada posterior se trata como incompleta y nunca se hace ninguna reparación de desconexión, no solo hasta la pasada siguiente sino durante toda la vida del proceso. Los dispositivos huérfanos del nodo retirado aparecen en línea indefinidamente y, como un dispositivo afirmado no tiene red de seguridad por inactividad, ningún tiempo de espera los corrige.
 
-**Tras reducir el clúster de NATS, reinicia `event-sources`.** Si hacía falta y no lo hiciste, `presence_reconcile_withheld_disconnects_total` sube sin estabilizarse. Ampliar el clúster no requiere nada.
+**Tras reducir el clúster de NATS, reinicia `event-sources`.** Si hacía falta y no lo hiciste, `devicechain_eventsources_presence_reconcile_withheld_disconnects_total` sube sin estabilizarse. Ampliar el clúster no requiere nada.
 
 Si el reinicio tiene que esperar, los dispositivos huérfanos no tienen por qué hacerlo. Ejecuta `dcctl presence demote` sobre esa fuente para devolverlos a presencia inferida, donde el barrido de inactividad de diez minutos puede marcarlos fuera de línea con su propia evidencia. Consulta [devolver un dispositivo a presencia inferida](../deployment/edge-services.md#demoting-a-device). La degradación repara los dispositivos que ya están mal; el reinicio sigue siendo lo que impide que los siguientes se estropeen.

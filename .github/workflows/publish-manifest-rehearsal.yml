@@ -61,6 +61,12 @@ jobs:
         run: |
           RELEASED_AT="$(gh release view "$TAG" --json publishedAt -q .publishedAt)"
           export RELEASED_AT
+          # The highlights belong to the release being rehearsed, not to the branch this was
+          # dispatched from: the builder requires the file's version to equal the tag, so a
+          # rehearsal of any tag but the one main names would otherwise fail.
+          HIGHLIGHTS_FILE="$RUNNER_TEMP/release-highlights.json"
+          git show "refs/tags/$TAG:.github/release-highlights.json" > "$HIGHLIGHTS_FILE"
+          export HIGHLIGHTS_FILE
           hack/build-release-manifest.sh "$TAG" releases.json
           jq . releases.json
       - name: Publish to the staging branch and confirm it is served
