@@ -304,7 +304,8 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 				// source — and the ordering stamp advances so a late echo from the released
 				// session cannot re-assert it.
 				//
-				// SessionId, Active, LastConnectTime, LastDisconnectTime and LastActivityTime
+				// SessionId, Active, LastConnectTime, LastDisconnectTime, LastActivityTime
+				// and InactivityAlarmTime
 				// are deliberately untouched. A demotion is a
 				// statement about who has custody, never about what the device is doing;
 				// rewriting Active here would fabricate a connectivity edge out of an
@@ -328,6 +329,7 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 					// producers — Sparkplug SP4a, LwM2M L1 — mint a fresh epoch per connect.)
 					if d.Flipped || d.NewSession || neverAsserted {
 						found.LastConnectTime = sql.NullTime{Time: pt.OccurredAt, Valid: true}
+						found.InactivityAlarmTime = sql.NullTime{}
 					}
 				} else if d.Flipped || neverAsserted {
 					// A true CONNECTED→dead flip, or the first authoritative word over an
@@ -378,6 +380,7 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 	if fresh && found.PresenceSource != PresenceSourceAsserted && !found.Active {
 		found.Active = true
 		found.LastConnectTime = sql.NullTime{Time: occurredAt, Valid: true}
+		found.InactivityAlarmTime = sql.NullTime{}
 	}
 	if fresh {
 		found.LastActivityTime = sql.NullTime{Time: occurredAt, Valid: true}
@@ -673,8 +676,9 @@ func (api *Api) SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	res := db.Model(&DeviceState{}).
 		Where(idMatch, candidates).
 		Updates(map[string]any{
-			"active":               false,
-			"last_disconnect_time": sql.NullTime{Time: now, Valid: true},
+			"active":                false,
+			"last_disconnect_time":  sql.NullTime{Time: now, Valid: true},
+			"inactivity_alarm_time": sql.NullTime{Time: now, Valid: true},
 		})
 	if res.Error != nil {
 		return 0, res.Error

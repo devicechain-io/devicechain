@@ -324,8 +324,10 @@ Four items used to read as features and were not. Each has since been decided on
   `DeviceState` now reports that constant. The presence page already told
   operators the window is not adjustable, so removal matched what was promised.
 - **`InactivityAlarmTime`** was written by the sweep to the same instant as `lastDisconnectTime` and
-  read by nothing. Nothing reads or writes the column any more; the GraphQL field is deprecated and
-  derived from `lastDisconnectTime`, and both go in the next major release.
+  read by nothing. The GraphQL field is deprecated, and it and the column go in the next major
+  release. It keeps serving the stored column exactly as before (the sweep sets it, an active device
+  clears it): a v1.1 attempt to derive it from `lastDisconnectTime` changed what a served field
+  returns in a minor and was reverted.
 - **`state_change_events`** now has a read surface: the `stateChangeEvents` query on the event store
   (event:read, customer-scope aware), shown as the presence timeline on the device page.
 - **`presenceTime` and `sessionId`** are now selected by the console and shown on the Connectivity

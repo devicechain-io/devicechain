@@ -37,12 +37,11 @@ const MaxAssertedPageSize = 1000
 // connectivity + activity timestamps, distinct from the
 // append-only event history. One row per device.
 //
-// TODO(next MAJOR release): the device_states columns inactivity_timeout (NOT NULL DEFAULT
-// 600) and inactivity_alarm_time (nullable) are no longer read or written by anything and
-// stay in the table only because dropping them would break a rolling upgrade (old pods
-// still write them) and the versioning policy forbids a minor release removing a served
-// field. Drop both columns in a migration in the next MAJOR release (expand/contract), when
-// the deprecated inactivityAlarmTime GraphQL field goes too.
+// TODO(next MAJOR release): the device_states column inactivity_timeout (NOT NULL DEFAULT 600)
+// is no longer read or written by anything and stays in the table only because dropping it
+// would break a rolling upgrade (old pods still write it). Drop it in a migration in the next
+// MAJOR release (expand/contract). inactivity_alarm_time is NOT in that list: the deprecated
+// inactivityAlarmTime GraphQL field is served from it until that same major release.
 type DeviceState struct {
 	gorm.Model
 	// TenantId is spelled out rather than embedded from rdb.TenantScoped (the tenant-scope
@@ -68,6 +67,11 @@ type DeviceState struct {
 	LastConnectTime    sql.NullTime
 	LastDisconnectTime sql.NullTime
 	LastActivityTime   sql.NullTime
+	// InactivityAlarmTime is when the inactivity sweep marked the device inactive for going
+	// silent. Set by the sweep alone, cleared when the device becomes active again, and
+	// served as the deprecated GraphQL inactivityAlarmTime. A DISCONNECTED transition, a
+	// demotion or any other change of lastDisconnectTime never touches it.
+	InactivityAlarmTime sql.NullTime
 	// PresenceSource discriminates authoritative from inferred presence (ADR-067
 	// decision 3): INFERRED (default) derives Active from activity + the inactivity
 	// sweep, unchanged; ASSERTED takes Active ONLY from a StateChange — a data event

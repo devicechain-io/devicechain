@@ -130,19 +130,38 @@ func TestPreviewThresholdRaiseResolve(t *testing.T) {
 }
 
 // TestPreviewAppliesAnEventDeliveredTwiceOnce: the stream holds one event under two sequences (a
-// residual of envelope settlement); the preview counts and applies it once, as live does.
+// residual of envelope settlement); with envelopes on (live runs its guard) the preview counts and
+// applies it once, as live does. With them off live has no guard and counts both copies, so the
+// preview does too (TestPreviewKeepsADuplicateWhenEnvelopesAreOff).
 func TestPreviewAppliesAnEventDeliveredTwiceOnce(t *testing.T) {
 	op := &fakeOpener{msgs: []messaging.Message{
 		msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base),
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base), // the same event, again
 		msg(t, 3, "acme", "d1", "p@1", "temperature", "91", base), // a different reading at the same instant
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil, WithAppliedGuard(true))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if res.Stats.EventsScanned != 2 {
 		t.Fatalf("scanned = %d, want 2 (the repeated event counted once)", res.Stats.EventsScanned)
+	}
+}
+
+// TestPreviewKeepsADuplicateWhenEnvelopesAreOff: the default instance runs no duplicate guard in
+// live DETECT, so the preview must not drop the repeated event either.
+func TestPreviewKeepsADuplicateWhenEnvelopesAreOff(t *testing.T) {
+	op := &fakeOpener{msgs: []messaging.Message{
+		msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base),
+		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base),
+		msg(t, 3, "acme", "d1", "p@1", "temperature", "91", base),
+	}}
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Stats.EventsScanned != 3 {
+		t.Fatalf("scanned = %d, want 3 (no guard, as live)", res.Stats.EventsScanned)
 	}
 }
 

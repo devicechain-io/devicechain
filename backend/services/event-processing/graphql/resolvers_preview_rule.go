@@ -314,7 +314,7 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	// A draft whose formulas read per-device constants (`device.name`) is replayed with each
 	// device's CURRENT constants, read now from device-management: a stored event does not carry
 	// them. Whatever cannot be read is said, never silently defaulted.
-	var runOpts []preview.Option
+	runOpts := []preview.Option{preview.WithAppliedGuard(r.AppliedGuard)}
 	var constantsNote string
 	if draft != nil {
 		if keys := draft.ConstantKeys(); len(keys) > 0 {
