@@ -207,12 +207,16 @@
       "translationSha256": "b28c294ce81a9f06068e5c874869dabdb9b512c30cfbf8a2658d00135f0813f8"
     },
     "guides/inbound-integrations.md": {
-      "sourceSha256": "c1902b23bfccac9ae50e224a0554d7a2f34c3edc63c749c1d018ae0de0757b02",
-      "translationSha256": "7dac65e29c504df77669724e74333cb2dbb76afc7a7b8f2d1c72f8a8e229d97b"
+      "sourceSha256": "cc293ea79355f4bfc9f8c22db2a1c09819b3ad76ce6084b64ce4736b767d01d8",
+      "translationSha256": "73e45ff45c4f3ba4e9a3e830469a86f43341c12196171f396f060b26568d5de8"
     },
     "guides/local-development.md": {
       "sourceSha256": "4dd334e1d7524eaedf541eb6234b1255a63fa4908789e38ce57b448089b49e7e",
       "translationSha256": "52e59a3beccf58d131edaac5cd874237a32e96a88a427f8dadd0a01ce5df575b"
+    },
+    "guides/lorawan-uplink-to-alarm.md": {
+      "sourceSha256": "7d01dff408a0329859e202d66e3cf1b1389a2d1c78d9b9554fdea26fc5e7ef34",
+      "translationSha256": "f4c9e59e1f080094eb6bcc02d97eb0d772cbcba5d0b8b56aa93d573636108d19"
     },
     "guides/maintenance-windows.md": {
       "sourceSha256": "602450fea6b1d4ae0ea4392c2d2f0608bc2482e7d5fd5bc2240114d30747012d",
@@ -231,8 +235,8 @@
       "translationSha256": "14444fec2a032586709f95fae456f2b5d06fe96a668ded4faa27b19579e78655"
     },
     "guides/payload-decoders.md": {
-      "sourceSha256": "664bc6f6110c764f03d0444cf45ca30d59ab2a652d319b89eebd3182e2a308d3",
-      "translationSha256": "7982cc61d00b8308f61203cc098f37109cd91ea05a4e8bdb747e838451a2977a"
+      "sourceSha256": "6572229e5761edda8bbee7509be99dbe5d5246611d138eeec3aa0138b63d8434",
+      "translationSha256": "fa8d2767ea71bc28d383ce8ef059666dbbbe42855bcb371835e8d169c7bdb2d9"
     },
     "guides/sending-commands.md": {
       "sourceSha256": "9fd2c6a2d2b2662aca38a72ba1ac65224cc2e67c541b24338e7c089e26e99f4e",

@@ -311,6 +311,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 相关内容 {#related}
 
+- [从 LoRaWAN 上行到告警](./lorawan-uplink-to-alarm.md)：从二进制上行出发，经过集成和解码器，直到检测规则和告警的完整演练。
 - [载荷解码器](./payload-decoders.md)：把原始帧或网络服务器解码出的对象转换成测量。
 - [设备](../user-guide/devices.md)：设备表单及其 **Aliases** 字段。
 - [连接设备](./connecting-a-device.md)：设备自行使用的 MQTT 和 HTTP 路径。

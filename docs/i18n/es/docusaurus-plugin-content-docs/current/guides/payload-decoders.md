@@ -377,6 +377,7 @@ El comportamiento de una función no cambia nunca una vez publicada. Una correcc
 
 ## Relacionado {#related}
 
+- [De un uplink LoRaWAN a una alarma](./lorawan-uplink-to-alarm.md): un decodificador, una integración, una regla y una alarma, de principio a fin, con el simulador como servidor de red.
 - [Referencia de funciones del decodificador](../reference/decoder-functions.md): las funciones de la biblioteca con su coste, y los límites.
 - [Integraciones de entrada](./inbound-integrations.md): los remitentes de los que lee un decodificador.
 - [Tipos y perfiles de dispositivo](../user-guide/device-types-and-profiles.md): métricas, borradores y publicación.
