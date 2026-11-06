@@ -130,3 +130,46 @@ func TestAStallTailWithAPermittedBurstIsNotShed(t *testing.T) {
 	require.Zero(t, *shed, "a compliant burst inside a stall's young tail lost PUBACKed messages")
 	require.Equal(t, count, admitted)
 }
+
+// The same, with the WHOLE burst (2000) landing in the last 100 ms before the reader catches up:
+// no age cutoff can hand that to the idle live bucket without shedding, so the drain must stay on
+// the send timeline while the tenant keeps sending.
+func TestAStallTailWithAFullBurstJustBeforeCatchUpIsNotShed(t *testing.T) {
+	h, shed := stallHarness(t)
+
+	const stall = 3 * time.Second
+	first := time.Now().Add(-stall)
+	seq := uint64(0)
+	send := func(at time.Time) {
+		seq++
+		h.source.handle(capturedMsgAt(captureSubject, validEvent, seq, at, &recordingAck{}))
+	}
+	count := 0
+	for i := 0; i < 3000; i++ {
+		at := first.Add(time.Duration(i) * time.Millisecond)
+		send(at)
+		count++
+		if i == 2900 { // 100 ms before the end of the stall: a full permitted burst
+			for j := 0; j < platformBurst-100; j++ { // the sustained traffic has spent 100 of it
+				send(at)
+				count++
+			}
+		}
+	}
+
+	_, _, admitted, _ := h.counts()
+	require.Zero(t, *shed, "a compliant full burst at the end of a stall lost PUBACKed messages")
+	require.Equal(t, count, admitted)
+}
+
+// Two readers share one MeterAt (the capture and the store source). A fresh message from one must
+// not end the other's drain of the same tenant.
+func TestAFreshMessageFromAnotherReaderDoesNotEndATenantsDrain(t *testing.T) {
+	limits := core.StaticCeiling(platformRate, platformBurst)
+	meter := NewMeterAt(core.NewTenantRateLimiter(limits))
+	stalled := time.Now().Add(-3 * time.Second)
+	require.Equal(t, stalled, meter("acme", stalled))
+	_ = meter("acme", time.Now().Add(-time.Millisecond)) // the other reader, caught up
+	young := time.Now().Add(-time.Second)
+	require.Equal(t, young, meter("acme", young), "the drain was ended by another reader's fresh message")
+}

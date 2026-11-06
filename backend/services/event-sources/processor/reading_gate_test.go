@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -150,18 +151,40 @@ func TestMeterAtDecidesLiveOrBacklog(t *testing.T) {
 	assert.True(t, meter("fresh", young).IsZero(), "a delay the live burst can absorb is live")
 }
 
-// Once a tenant has been judged backlog, its drain stays on the send timeline until the reader is
-// caught up: a message younger than the threshold is still queue. Caught up (younger than a tenth
-// of the threshold) ends the recovery, and the tenant is live again.
-func TestMeterAtKeepsADrainOnTheSendTimelineUntilCaughtUp(t *testing.T) {
-	meter := NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)))
+// Once a tenant has been judged backlog it stays on the send timeline for as long as it keeps
+// sending, however fresh a message is: a handoff to the live bucket while traffic flows would
+// grant (or take away) a burst, because the live bucket sat idle through the stall. It returns
+// live only after a quiet period of the time its burst covers (100 ms here), when both buckets
+// are full. Recovery is per tenant.
+func TestMeterAtKeepsARecoveringTenantOnTheSendTimelineUntilItGoesQuiet(t *testing.T) {
+	// rate 1000, burst 100: the burst covers 100 ms.
+	meter := NewMeterAt(core.NewTenantRateLimiter(core.StaticCeiling(1000, 100)))
 	old := time.Now().Add(-3 * time.Second)
 	assert.Equal(t, old, meter("acme", old))
-	young := time.Now().Add(-time.Second)
+	young := time.Now().Add(-50 * time.Millisecond) // younger than the threshold
 	assert.Equal(t, young, meter("acme", young), "the young tail of a stall is still backlog")
-	assert.True(t, meter("other", time.Now().Add(-time.Second)).IsZero(), "recovery is per tenant")
-	assert.True(t, meter("acme", time.Now().Add(-10*time.Millisecond)).IsZero(), "caught up is live")
-	assert.True(t, meter("acme", time.Now().Add(-time.Second)).IsZero(), "and recovery has ended")
+	fresh := time.Now().Add(-time.Millisecond)
+	assert.Equal(t, fresh, meter("acme", fresh), "a caught-up reader's message does not end the drain")
+	assert.True(t, meter("other", time.Now().Add(-50*time.Millisecond)).IsZero(), "recovery is per tenant")
+	assert.True(t, meter("acme", time.Time{}).IsZero(), "an absent send time is live")
+
+	time.Sleep(150 * time.Millisecond) // quiet for longer than the burst covers
+	assert.True(t, meter("acme", time.Now().Add(-time.Millisecond)).IsZero(), "quiet ends the recovery")
+	assert.True(t, meter("acme", time.Now().Add(-50*time.Millisecond)).IsZero(), "and the tenant is live again")
+}
+
+// Idle recovery entries are collected, so tenants that churn or are deleted do not accumulate.
+func TestMeterAtForgetsTenantsThatWentQuiet(t *testing.T) {
+	clock := time.Now()
+	tr := newRecoveryTracker(core.NewTenantRateLimiter(core.StaticCeiling(platformRate, platformBurst)),
+		func() time.Time { return clock })
+	for i := 0; i < 100; i++ {
+		tr.meterAt(fmt.Sprintf("t%d", i), clock.Add(-10*time.Second))
+	}
+	require.Len(t, tr.last, 100)
+	clock = clock.Add(2 * recoverySweepEvery)
+	tr.meterAt("still", clock.Add(-10*time.Second)) // any call after the sweep interval collects
+	assert.Len(t, tr.last, 1, "only the tenant still recovering is kept")
 }
 
 func TestBacklogAfterIsTheLesserOfTheThresholdAndTheBurstCover(t *testing.T) {
