@@ -106,6 +106,14 @@ func memberIndex(item resolvedItem, size int) (k bucketKey, index uint32, ok boo
 	if src.StreamSeq == 0 {
 		return k, 0, false
 	}
+	// 🔴 AN UPLINK IS NEVER GROUPED. A group is named by the source's sequence and append time, and
+	// those are unique within ONE stream: an inbound event and an integration uplink of the same
+	// tenant at the same sequence would name the same member and be merged, publishing one and
+	// acknowledging both. An ungrouped event is published alone under its own dedup id, which leads
+	// with a kind of its own for the same reason (sourceDedupID).
+	if fromUplinkStream(src) {
+		return k, 0, false
+	}
 	// A member of an inbound envelope, or a copy split out of one, is named by the coordinate it
 	// came from: the origin envelope's sequence and the member's place in it.
 	if seq, member, named := src.SourceCoordinate(); named {

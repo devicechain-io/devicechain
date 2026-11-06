@@ -416,3 +416,18 @@ func TestADecodeFailureNamesItsReasonAndNothingInternal(t *testing.T) {
 	assert.True(t, errors.Is(f, ErrDecodeFailed))
 	assert.Equal(t, "decode_failed: no_section: no section matched this uplink", f.Error())
 }
+
+// An uplink is never grouped into a resolved envelope: a group is named by (tenant, sequence,
+// append time), unique within one stream only, so an inbound event and an uplink at the same
+// sequence would merge and one would be acknowledged without being published.
+func TestAnUplinkIsNeverGroupedIntoAResolvedEnvelope(t *testing.T) {
+	mk := func(suffix string) resolvedItem {
+		src := messaging.NewConsumedMessage(messaging.ScopedSubject("t", "acme", suffix), nil, 1, nil, nil)
+		src.StreamSeq, src.AppendTime = 100, time.Unix(1_000_000, 0)
+		return resolvedItem{tenant: "acme", coord: &ackCoord{src: src}}
+	}
+	_, _, ok := memberIndex(mk(streams.InboundEvents), 10)
+	assert.True(t, ok, "control: an inbound event is grouped")
+	_, _, ok = memberIndex(mk(streams.IntegrationUplinks), 10)
+	assert.False(t, ok)
+}
