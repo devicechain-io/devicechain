@@ -104,14 +104,30 @@ func (api *Api) WriteDecoderHealth(ctx context.Context, rows []DecoderHealthWrit
 	return written, skipped, nil
 }
 
-// TrimDecoderHealth deletes the tenant's health rows whose window started before the cutoff.
+// TrimDecoderHealth deletes every tenant's health rows whose window started before the cutoff.
+//
+// 🔴 THE CROSS-TENANT READ IS THE LIST OF TENANTS WITH EXPIRED ROWS, AND NOTHING ELSE (the pattern
+// of the ownership drain): each delete runs under its own tenant, so the tenant predicate is on
+// every statement that touches a row. Finding tenants this way, and not from this process's recent
+// traffic, is what expires the rows of a tenant that stopped decoding or of a process that
+// restarted. A failed tenant does not stop the others; the first error is returned.
 func (api *Api) TrimDecoderHealth(ctx context.Context, before time.Time) error {
-	tenant, ok := core.TenantFromContext(ctx)
-	if !ok || tenant == "" {
-		return errors.New("no tenant in the request context")
+	var tenants []string
+	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&ProfileDecoderHealth{}).
+		Where("window_start < ?", before.UTC()).Distinct().Order("tenant_id").
+		Pluck("tenant_id", &tenants).Error; err != nil {
+		return err
 	}
-	return api.RDB.DB(ctx).Where("tenant_id = ? AND window_start < ?", tenant, before.UTC()).
-		Delete(&ProfileDecoderHealth{}).Error
+	var first error
+	for _, tenant := range tenants {
+		err := api.RDB.DB(core.WithTenant(ctx, tenant)).
+			Where("tenant_id = ? AND window_start < ?", tenant, before.UTC()).
+			Delete(&ProfileDecoderHealth{}).Error
+		if err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // DecoderSampleWrite is one failing uplink to keep.
@@ -148,6 +164,14 @@ func (api *Api) StoreDecoderSample(ctx context.Context, s DecoderSampleWrite, no
 	}
 	row.TenantId = tenant
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Serialize the writers of one profile's samples. Without it two replicas at the cap can each
+		// insert, each miss the other's uncommitted row when trimming, and each delete the same oldest
+		// one, leaving one over the cap. The lock is held only for this insert and trim.
+		var locked DeviceProfile
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").
+			Where("id = ? AND tenant_id = ?", p.ID, tenant).First(&locked).Error; err != nil {
+			return err
+		}
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}

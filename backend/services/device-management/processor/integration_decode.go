@@ -98,6 +98,9 @@ type DecodeObservation struct {
 	Section string
 	// Cost is the cost the decode spent.
 	Cost uint64
+	// Redelivered is set when this message was delivered before. A failed decode is recorded before its
+	// source is acked, so a redelivery means the earlier record may not have reached the stream.
+	Redelivered bool
 	// Error is the tenant-facing text of a failed outcome (`decode_failed: <reason>: ...`).
 	Error string
 	// ChargeSkew is how many readings a decoded outcome stored beyond what the route charged for.
@@ -132,6 +135,18 @@ type integrationAuth struct {
 }
 
 type integrationAuthKey struct{}
+
+type redeliveredKey struct{}
+
+// withRedelivered marks a resolve as the redelivery of a message that already failed once.
+func withRedelivered(ctx context.Context) context.Context {
+	return context.WithValue(ctx, redeliveredKey{}, true)
+}
+
+func redeliveredFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(redeliveredKey{}).(bool)
+	return v
+}
 
 func withIntegration(ctx context.Context, a integrationAuth) context.Context {
 	return context.WithValue(ctx, integrationAuthKey{}, a)
@@ -294,6 +309,7 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 	obs := DecodeObservation{DeviceTypeId: device.DeviceTypeId, Device: device.Token,
 		ProfileVersionToken: res.Scope().ProfileVersionToken, Uplink: up}
 	obs.Tenant, _ = core.TenantFromContext(ctx)
+	obs.Redelivered = redeliveredFrom(ctx)
 
 	// 🔴 A DECODER THIS BUILD CANNOT RUN FAILS THE UPLINK AND NOTHING ELSE, and it never falls back
 	// to flattening: a snapshot from a newer release (env_unsupported, a downgrade) or a document
@@ -417,7 +433,7 @@ const (
 func (rez *EventResolver) flattenUplink(ctx context.Context, device *model.Device, auth integrationAuth,
 	profileVersion string, up *esmodel.UnresolvedIntegrationUplinkPayload) (readings map[string]string, done bool, reason uint, err error) {
 	obs := DecodeObservation{DeviceTypeId: device.DeviceTypeId, Device: device.Token, Uplink: up,
-		ProfileVersionToken: profileVersion}
+		ProfileVersionToken: profileVersion, Redelivered: redeliveredFrom(ctx)}
 	obs.Tenant, _ = core.TenantFromContext(ctx)
 
 	// A generic sender's item is carried as `json`, a network server's decoded object as `decoded`;

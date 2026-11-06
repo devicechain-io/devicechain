@@ -725,6 +725,10 @@ func initDecodeAccounting() error {
 		// A replica name that collided with another's would have two replicas SET the same row.
 		replica = fmt.Sprintf("%s-%d", Microservice.InstanceId, os.Getpid())
 	}
+	// The process start is part of the identity: a restarted container keeps its hostname but not its
+	// tallies, and an absolute upsert from the new process under the old name would overwrite the
+	// counts the old one had already written for the same minute.
+	replica = fmt.Sprintf("%s@%d", replica, time.Now().Unix())
 	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
 	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
 		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },

@@ -1516,6 +1516,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			)
 			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
 				var rerr error
+				if unresolved.NumDelivered > 1 {
+					c = withRedelivered(c)
+				}
 				resolved, reason, rerr = rez.ResolveEvent(c, event)
 				return rerr
 			})

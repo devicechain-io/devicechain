@@ -24,7 +24,7 @@ type fakeStore struct {
 	failing bool
 	writes  []storedWrite
 	samples []storedSample
-	trims   []string
+	trims   int
 	// during runs inside a health write, to model a tally that changes while it is being written.
 	during func()
 }
@@ -53,10 +53,9 @@ func (f *fakeStore) WriteDecoderHealth(ctx context.Context, rows []model.Decoder
 }
 
 func (f *fakeStore) TrimDecoderHealth(ctx context.Context, before time.Time) error {
-	tenant, _ := core.TenantFromContext(ctx)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.trims = append(f.trims, tenant)
+	f.trims++
 	return nil
 }
 
@@ -270,21 +269,40 @@ func TestAnUnattributableOutcomeStillGetsAVerdict(t *testing.T) {
 	require.Empty(t, st.writes)
 }
 
-func TestHealthRowsAreTrimmedPastRetentionOncePerHourForWrittenTenants(t *testing.T) {
+func TestHealthRowsAreTrimmedPastRetentionOncePerHour(t *testing.T) {
 	c := newFakeClock()
 	st := &fakeStore{}
 	a := newDecodeAccountant(st, "pod-a", nil, c.now)
 	a.ObserveDecode(success("acme", "meter@1", DecodeDecoded))
 	require.NoError(t, a.Flush(context.Background()))
-	require.Empty(t, st.trims, "not due yet")
+	require.Zero(t, st.trims, "not due yet")
 
+	// Due, even though nothing was written this pass: a quiet process still expires old rows.
 	c.add(61 * time.Minute)
-	a.ObserveDecode(success("globex", "meter@1", DecodeDecoded))
 	require.NoError(t, a.Flush(context.Background()))
-	require.ElementsMatch(t, []string{"acme", "globex"}, st.trims)
+	require.Equal(t, 1, st.trims)
+	require.NoError(t, a.Flush(context.Background()))
+	require.Equal(t, 1, st.trims, "once an hour")
+}
 
+// A failure delivered before is always recorded and not tallied again: the record is published
+// before the source is acked, so a redelivery means that publish did not finish.
+func TestARedeliveredFailureIsRecordedEvenWithTheBudgetSpent(t *testing.T) {
+	c := newFakeClock()
+	st := &fakeStore{}
+	a := newDecodeAccountant(st, "pod-a", nil, c.now)
+	for i := 0; i < DecodeRecordBurst; i++ {
+		require.True(t, a.ObserveDecode(failure("acme", 7, "meter@1")))
+	}
+	require.False(t, a.ObserveDecode(failure("acme", 7, "meter@1")), "a first delivery past the budget is suppressed")
+
+	again := failure("acme", 7, "meter@1")
+	again.Redelivered = true
+	require.True(t, a.ObserveDecode(again), "its redelivery is recorded")
 	require.NoError(t, a.Flush(context.Background()))
-	require.Len(t, st.trims, 2, "once an hour")
+	r, _ := st.last("acme", "meter", 1)
+	require.EqualValues(t, DecodeRecordBurst, r.Failed, "and the earlier attempt's count stands")
+	require.EqualValues(t, 1, r.Suppressed)
 }
 
 func TestTheStoredErrorIsBoundedOnARuneBoundary(t *testing.T) {

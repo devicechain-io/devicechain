@@ -59,6 +59,7 @@ const (
 // DecodeAccountingStore is the service's own schema as the accountant writes it. *model.Api is one.
 type DecodeAccountingStore interface {
 	WriteDecoderHealth(ctx context.Context, rows []model.DecoderHealthWrite) (written, skipped int, err error)
+	// TrimDecoderHealth deletes every tenant's expired health rows.
 	TrimDecoderHealth(ctx context.Context, before time.Time) error
 	StoreDecoderSample(ctx context.Context, s model.DecoderSampleWrite, now time.Time) (bool, error)
 }
@@ -121,11 +122,10 @@ type DecodeAccountant struct {
 	now     func() time.Time
 	metrics *AccountingMetrics // nil counts nothing
 
-	mu       sync.Mutex
-	tallies  map[tallyKey]*tally
-	samples  []queuedSample
-	trimmed  time.Time
-	trimSeen map[string]struct{}
+	mu      sync.Mutex
+	tallies map[tallyKey]*tally
+	samples []queuedSample
+	trimmed time.Time
 }
 
 // NewDecodeAccountant builds the accountant for one replica. replica names the pod in the rows it
@@ -136,7 +136,7 @@ func NewDecodeAccountant(store DecodeAccountingStore, replica string, m *Account
 
 func newDecodeAccountant(store DecodeAccountingStore, replica string, m *AccountingMetrics, now func() time.Time) *DecodeAccountant {
 	return &DecodeAccountant{store: store, replica: replica, budget: newDecodeBudget(now), now: now, metrics: m,
-		tallies: map[tallyKey]*tally{}, trimSeen: map[string]struct{}{}, trimmed: now()}
+		tallies: map[tallyKey]*tally{}, trimmed: now()}
 }
 
 // splitProfileVersion splits the resolution's "<profile token>@<version>".
@@ -168,6 +168,14 @@ func boundText(s string, n int) string {
 // budget is spent: the one verdict the resolver acts on.
 func (a *DecodeAccountant) ObserveDecode(o DecodeObservation) bool {
 	record := true
+	// 🔴 A REDELIVERED FAILURE IS ALWAYS RECORDED, AND NOT TALLIED AGAIN. The record is published
+	// before the source is acked, so a redelivery means that publish did not complete (or the
+	// process died first). Spending a second token on it could suppress a failure whose first record
+	// never landed, and the earlier attempt has already counted it. The extra records this allows
+	// are bounded by the redelivery cap and by the failed-events stream being unavailable.
+	if o.Outcome == DecodeFailed && o.Redelivered {
+		return true
+	}
 	if o.Outcome == DecodeFailed {
 		record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
 		if !record && a.metrics != nil {
@@ -252,8 +260,8 @@ func (a *DecodeAccountant) sampleLost() {
 	}
 }
 
-// Flush writes the pending samples and every dirty tally, and once an hour trims the health rows of
-// the tenants it has written for past their retention. A failure is counted and logged; a tally that
+// Flush writes the pending samples and every dirty tally, and once an hour trims health rows
+// past their retention. A failure is counted and logged; a tally that
 // did not land stays dirty and is written again by the next call, a sample is dropped and counted
 // (samples are best-effort). It returns the first error so a caller can log it.
 func (a *DecodeAccountant) Flush(ctx context.Context) error {
@@ -322,7 +330,6 @@ func (a *DecodeAccountant) Flush(ctx context.Context) error {
 			continue
 		}
 		a.mu.Lock()
-		a.trimSeen[tenant] = struct{}{}
 		for _, p := range ps {
 			t := a.tallies[p.key]
 			if t == nil || t.gen != p.gen {
@@ -358,34 +365,23 @@ func (a *DecodeAccountant) boundTallies(cur time.Time) {
 	}
 }
 
-// trim deletes health rows past their retention for the tenants written for since the last trim,
-// at most once an hour.
+// trim deletes every tenant's health rows past their retention, at most once an hour. Which tenants
+// have such rows is the store's to find (see Api.TrimDecoderHealth), not this process's traffic.
 func (a *DecodeAccountant) trim(ctx context.Context) error {
 	now := a.now()
 	a.mu.Lock()
-	if now.Sub(a.trimmed) < time.Hour || len(a.trimSeen) == 0 {
+	if now.Sub(a.trimmed) < time.Hour {
 		a.mu.Unlock()
 		return nil
 	}
 	a.trimmed = now
-	tenants := make([]string, 0, len(a.trimSeen))
-	for t := range a.trimSeen {
-		tenants = append(tenants, t)
-	}
-	a.trimSeen = map[string]struct{}{}
 	a.mu.Unlock()
-	var first error
-	for _, t := range tenants {
-		if err := a.store.TrimDecoderHealth(core.WithTenant(ctx, t), now.Add(-model.DecoderHealthRetention)); err != nil {
-			log.Warn().Err(err).Str("tenant", t).Msg("Could not trim decoder health past its retention.")
-			if first == nil {
-				first = err
-			}
-			a.mu.Lock()
-			a.trimSeen[t] = struct{}{} // retried on the next pass
-			a.trimmed = time.Time{}
-			a.mu.Unlock()
-		}
+	if err := a.store.TrimDecoderHealth(ctx, now.Add(-model.DecoderHealthRetention)); err != nil {
+		log.Warn().Err(err).Msg("Could not trim decoder health past its retention.")
+		a.mu.Lock()
+		a.trimmed = time.Time{} // due again on the next pass
+		a.mu.Unlock()
+		return err
 	}
-	return first
+	return nil
 }

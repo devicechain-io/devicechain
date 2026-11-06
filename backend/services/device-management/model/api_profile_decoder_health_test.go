@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
-	"github.com/devicechain-io/dc-microservice/core"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,12 +82,17 @@ func TestHealthAndSamplesOfOneTenantAreInvisibleToAnother(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	other := writerCtx(putest.TenantContext("globex")())
-	// globex has no profile "meter": not found, indistinguishable from one that never existed.
-	_, err = f.api.PayloadDecoderHealth(other, "meter", 60)
-	require.Error(t, err)
-	_, err = f.api.PayloadDecoderSamples(other, "meter", 10)
-	require.Error(t, err)
+	// globex has a profile of the same token, so the read reaches the queries themselves and the
+	// tenant predicate is what keeps acme's rows out.
+	globex := putest.TenantContext("globex")()
+	seedDeviceProfile(t, f.api, globex, "meter")
+	other := writerCtx(globex)
+	h, err := f.api.PayloadDecoderHealth(other, "meter", 60)
+	require.NoError(t, err)
+	assert.Zero(t, h.Decoded+h.Failed+h.Suppressed+int64(h.Windows), "acme's tally is not globex's")
+	none, err := f.api.PayloadDecoderSamples(other, "meter", 10)
+	require.NoError(t, err)
+	assert.Empty(t, none, "acme's samples are not globex's")
 
 	// And acme's own rows are there.
 	s, err := f.api.PayloadDecoderSamples(writerCtx(f.ctx), "meter", 10)
@@ -103,7 +107,6 @@ func TestWritesRefuseAContextWithNoTenant(t *testing.T) {
 	require.Error(t, err)
 	_, err = f.api.StoreDecoderSample(context.Background(), DecoderSampleWrite{ProfileToken: "meter"}, time.Now())
 	require.Error(t, err)
-	require.Error(t, f.api.TrimDecoderHealth(context.Background(), time.Now()))
 }
 
 func TestAProfileKeepsItsNewest20Samples(t *testing.T) {
@@ -152,18 +155,25 @@ func TestSamplesAndHealthNeedDeviceWriteAndSamplesNeverListTheirBytes(t *testing
 	assert.NotZero(t, s[0].ID)
 }
 
-func TestTrimDeletesOnlyTheTenantsRowsPastTheCutoff(t *testing.T) {
+func TestTrimExpiresEveryTenantsOldRowsAndOnlyThose(t *testing.T) {
 	f := newHealthFixture(t)
+	globex := putest.TenantContext("globex")()
+	seedDeviceProfile(t, f.api, globex, "meter")
 	old := time.Now().UTC().Add(-10 * 24 * time.Hour).Truncate(time.Minute)
 	fresh := time.Now().UTC().Truncate(time.Minute)
-	_, _, err := f.api.WriteDecoderHealth(f.ctx, []DecoderHealthWrite{
-		{ProfileToken: "meter", Version: 1, WindowStart: old, Replica: "pod-a", Decoded: 1},
-		{ProfileToken: "meter", Version: 1, WindowStart: fresh, Replica: "pod-a", Decoded: 2},
-	})
-	require.NoError(t, err)
-	require.NoError(t, f.api.TrimDecoderHealth(core.WithTenant(context.Background(), partialUpdateTenant),
-		time.Now().Add(-DecoderHealthRetention)))
-	var n int64
-	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&ProfileDecoderHealth{}).Count(&n).Error)
-	assert.EqualValues(t, 1, n)
+	for _, ctx := range []context.Context{f.ctx, globex} {
+		_, _, err := f.api.WriteDecoderHealth(ctx, []DecoderHealthWrite{
+			{ProfileToken: "meter", Version: 1, WindowStart: old, Replica: "pod-a", Decoded: 1},
+			{ProfileToken: "meter", Version: 1, WindowStart: fresh, Replica: "pod-a", Decoded: 2},
+		})
+		require.NoError(t, err)
+	}
+	// No tenant in the context: the trim finds the tenants with expired rows itself.
+	require.NoError(t, f.api.TrimDecoderHealth(context.Background(), time.Now().Add(-DecoderHealthRetention)))
+	for _, ctx := range []context.Context{f.ctx, globex} {
+		var rows []ProfileDecoderHealth
+		require.NoError(t, f.api.RDB.DB(ctx).Find(&rows).Error)
+		require.Len(t, rows, 1)
+		assert.EqualValues(t, 2, rows[0].Decoded, "the fresh row survives")
+	}
 }
