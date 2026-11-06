@@ -376,6 +376,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		// A certificate credential moved onto another device counts against THAT device's limit,
 		// counted under its row lock so two moves (or a move and a create) cannot both fit the
 		// last slot. Any other credential type moves freely.
+		// 🔴 A certificate credential LEAVING a device under a pending revocation: the anchor is locked
+		// FOR SHARE first (the order a registration takes: anchor, then device), so a revocation either
+		// committed before this (its marker is visible below) or waits for this commit.
+		certMove := repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate && updated.TrustAnchorId != nil
+		if certMove {
+			if err := lockTrustAnchorShareByID(tx, *updated.TrustAnchorId); err != nil {
+				return err
+			}
+		}
 		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
 			if err := lockDeviceRow(tx, device.ID); err != nil {
 				return err
@@ -389,7 +398,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 					device.Token, n)
 			}
 		}
-		return tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error
+		if err := tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error; err != nil {
+			return err
+		}
+		if certMove && currentDeviceToken != "" {
+			// The device it left is no longer found by the marker's expansion; see
+			// queueOwedRevocationKicksOnTx.
+			return api.queueOwedRevocationKicksOnTx(tx, updated.TenantId, *updated.TrustAnchorId, []string{currentDeviceToken})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

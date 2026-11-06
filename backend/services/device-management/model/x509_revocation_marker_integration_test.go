@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/assert"
@@ -300,4 +301,77 @@ func TestRevocationMarkerLockHoldMeasurement(t *testing.T) {
 				n, before, after, expand)
 		})
 	}
+}
+
+// 🔑 A CREDENTIAL THAT LEAVES THE SET WHILE THE MARKER WAITS STILL OWES ITS DEVICE A KICK. With the
+// expansion paused after the revocation committed, one device's only certificate credential is deleted
+// and another's is moved to a third device, each with a responder that is down so the write's own inline
+// kick fails. The expansion then no longer finds the first two devices through their credentials; the
+// kicks queued by the delete and the move are all that name them. (Found by the second review.)
+func TestRevocationMarkerCredentialDeletedOrMovedBeforeTheExpansionIsStillKicked(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, tokens := pgIntermediateFleet(t, f, 4)
+	credTokenOf := func(device string) string {
+		var creds []DeviceCredential
+		require.NoError(t, f.api.RDB.DB(f.ctx).Joins("JOIN devices ON devices.id = device_credentials.device_id").
+			Where("devices.token = ? AND device_credentials.credential_type = ?", device, string(CredentialX509Certificate)).
+			Find(&creds).Error)
+		require.Len(t, creds, 1)
+		return creds[0].Token
+	}
+	deleted, moved, target := tokens[0], tokens[1], tokens[2]
+	deletedCred, movedCred := credTokenOf(deleted), credTokenOf(moved)
+
+	var hookErr error
+	revocationExpandHook = func() error {
+		revocationExpandHook = nil
+		f.kicker.set(false) // the writes' own inline kicks fail
+		defer f.kicker.set(true)
+		if _, err := f.api.DeleteDeviceCredential(f.ctx, deletedCred); err != nil && !errors.Is(err, ErrSessionsNotEnded) {
+			hookErr = err
+		}
+		if _, err := f.api.UpdateDeviceCredential(f.ctx, movedCred,
+			&DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf(target)}); err != nil && !errors.Is(err, ErrSessionsNotEnded) {
+			hookErr = err
+		}
+		return nil
+	}
+	t.Cleanup(func() { revocationExpandHook = nil })
+
+	_, err := f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{
+		AnchorToken: "maker", FingerprintSha256: strp(x509trust.Fingerprint(inter.cert))})
+	require.NoError(t, hookErr)
+	require.NoError(t, err)
+	kicked := f.kickedRevoked()
+	assert.True(t, kicked[deleted], "the device whose credential was deleted in the window")
+	assert.True(t, kicked[moved], "the device whose credential was moved away in the window")
+	assert.True(t, kicked[target], "the device it moved to")
+}
+
+// Concurrent expanders of one marker (the writer's call and the background drain, here eight at once)
+// converge: no error, no deadlock, every device queued once, the marker gone.
+func TestRevocationMarkerConcurrentExpandersConverge(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, tokens := pgIntermediateFleet(t, f, 40)
+	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+		return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+			RevocationDelta{Fingerprints: []string{x509trust.Fingerprint(inter.cert)}, CA: true}, true)
+	}))
+	require.EqualValues(t, 1, f.markers())
+	errs := make(chan error, 8)
+	start := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		go func() {
+			<-start
+			errs <- f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID)
+		}()
+	}
+	close(start)
+	for i := 0; i < 8; i++ {
+		require.NoError(t, <-errs)
+	}
+	assert.EqualValues(t, 0, f.markers())
+	assert.Equal(t, len(tokens), f.revocationRows())
 }

@@ -428,8 +428,37 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 // the commit evicts it from the credential cache under the device and tenant the deleted
 // row names. The delete returns those columns itself, so nothing is read first.
 func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool, error) {
+	// A certificate credential under a trust anchor may be the only thing that would have named its
+	// device to a revocation whose marker is not expanded yet. Read it first, to know the anchor.
+	found, err := api.DeviceCredentialsByToken(ctx, []string{token})
+	if err != nil {
+		return false, err
+	}
+	var anchorId uint
+	var tenant, deviceToken string
+	if len(found) == 1 && found[0].TrustAnchorId != nil && CredentialType(found[0].CredentialType) == CredentialX509Certificate &&
+		found[0].Device != nil {
+		anchorId, tenant, deviceToken = *found[0].TrustAnchorId, found[0].TenantId, found[0].Device.Token
+	}
 	var credentials []DeviceCredential
-	if err := deleteCredentialsReturningOwners(api.RDB.DB(ctx).Unscoped().Where("token = ?", token), &credentials); err != nil {
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		credentials = nil
+		if anchorId != 0 {
+			// FOR SHARE, as a registration takes it: a revocation either committed before this (its
+			// marker is visible below) or waits for this commit and then finds the credential gone, as
+			// it would have before the marker existed.
+			if err := lockTrustAnchorShareByID(tx, anchorId); err != nil {
+				return err
+			}
+		}
+		if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("token = ?", token), &credentials); err != nil {
+			return err
+		}
+		if anchorId != 0 && len(credentials) > 0 {
+			return api.queueOwedRevocationKicksOnTx(tx, tenant, anchorId, []string{deviceToken})
+		}
+		return nil
+	}); err != nil {
 		return false, err
 	}
 	api.evictCredentialOwners(ctx, credentials)

@@ -48,15 +48,19 @@ import (
 // so a tx2 that ran twice, or two expanders, converge on the same rows; the re-sweep already
 // covers an admission that was in flight at the commit.
 //
-// KNOWN RESIDUAL (found in review, deliberately not closed here). The argument covers credentials
-// that ENTER the set after tx1. It does not cover a credential that LEAVES or MOVES between tx1's
-// commit and tx2's read: delete the sole certificate credential of device A, or re-point it, in that
-// window and A is no longer a target, whereas the previous design had queued A durably under the
-// lock. The window is the gap between two statements of one call (milliseconds), or the time until the
-// background drain if the process died in between, and a loss needs the deleting call's OWN inline
-// kick to fail too (a credential delete queues no durable kick of its own). Closing it means every
-// credential delete or move under an anchor with a pending marker must queue the device's kick in
-// its own transaction; that touches several write paths and is left to a follow-up.
+// A CREDENTIAL THAT LEAVES THE SET BETWEEN tx1 AND tx2 (found in review). The argument above covers
+// credentials that ENTER the set. One that is deleted, or moved to another device, after tx1
+// committed and before tx2 read would no longer name its device, and a credential delete queues no
+// durable kick of its own, so the previous design's guarantee (the device was queued under the
+// lock) would be lost. The two write paths that remove a certificate credential from a device
+// (DeleteDeviceCredential and a re-point in UpdateDeviceCredential; a device delete and a reset
+// queue their own durable kicks) therefore lock the credential's anchor FOR SHARE, like a
+// registration, and in the same transaction queue the device's revocation-origin kick row when a
+// marker of that anchor is on record (queueOwedRevocationKicksOnTx). With the anchor locked, such a
+// write either committed before the revocation's tx1 (the credential was already gone then, which is
+// the old design's outcome too) or after it, when the committed marker is visible and the row is
+// written. Marker commit, expansion and these writes all converge on the same idempotent
+// (tenant, device, origin) row.
 //
 // The lock order is unchanged: crl-writers advisory, anchor row, then queue rows. tx2 takes the
 // marker row and then queue rows, and neither of the former.
@@ -230,4 +234,33 @@ func (api *Api) tenantsOwingMarkers(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return tenants, nil
+}
+
+// lockTrustAnchorShareByID locks the anchor row FOR SHARE to the commit. An anchor already deleted
+// is not an error: there is no revocation of it to race.
+func lockTrustAnchorShareByID(tx *gorm.DB, id uint) error {
+	var a DeviceTrustAnchor
+	err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ?", id).Take(&a).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	return err
+}
+
+// queueOwedRevocationKicksOnTx queues, in tx, the revocation-origin kick of the given devices of the
+// anchor when an unexpanded revocation marker of that anchor is on record. The caller holds the
+// anchor FOR SHARE (see the comment on the marker protocol), and the rows are written after it in the
+// lock order, taking only the queue rows the expansion also takes (in sorted order).
+func (api *Api) queueOwedRevocationKicksOnTx(tx *gorm.DB, tenant string, anchorId uint, deviceTokens []string) error {
+	if api.SessionKicker == nil {
+		return nil
+	}
+	var one []PendingRevocationKick
+	if err := tx.Where("tenant_id = ? AND trust_anchor_id = ?", tenant, anchorId).Limit(1).Find(&one).Error; err != nil {
+		return err
+	}
+	if len(one) == 0 {
+		return nil
+	}
+	return api.queueSessionKicksOnTx(tx, tenant, revocationKickOrigin(anchorId), deviceTokens)
 }
