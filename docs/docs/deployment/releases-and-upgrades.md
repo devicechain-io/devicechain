@@ -916,10 +916,11 @@ Nothing here needs action beyond the two `dcctl` items in the list above. Each i
 
 #### Schema changes and going back {#v120-going-back}
 
-Five migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
+Six migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
 
 - **X.509 revocation** (`device-management`, migration `20261105100000`). Four new tables: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` and `device_credential_chain_links`. Four new columns: `revocation_mode`, `revocation_stale_grace` and `revocation_rows` on `device_trust_anchors`, and `not_before` on `pending_session_kicks`. Existing trust anchors keep `revocation_mode` empty, which is read as `ENTRIES`: a certificate is refused only when it is listed.
 - **Payload decoders** (`device-management`, migration `20261110120000`). Two new tables, `profile_decoder_healths` and `profile_decoder_samples`, and one new column, `decoder_declaration` on `device_profiles`.
+- **Revocation kick queue** (`device-management`, migration `20261111120000`). One new table, `pending_revocation_kicks`, and one new nullable column, `kick_queued_at` on `device_revoked_certificates`. The table is separate from the existing session-kick queue so that a replica from `v1.1.0` never reads or removes its rows.
 - **Projection storage** (`device-state`, migration `20261104120000`). No table or column is added. It sets storage parameters (a fill factor of 75 and autovacuum thresholds) on `device_states`, `latest_measurements` and `latest_locations`. Rows that already exist gain the fill-factor headroom only as their pages are rewritten, so an upgraded instance feels the change slowly.
 - **Placement tables** (`user-management`, migration `20261105120000`). Three new tables: `iam_partition_config`, `iam_vpartition_assignments` and `iam_tenant_vpartition_overrides`. It seeds no rows.
 - **Inactivity alarm time repair** (`device-state`, migration `20261106120000`). Adds nothing to the schema. It is a data-only repair of `inactivity_alarm_time` in `device_states`, run in batches of 5,000, restoring what the column held before `v1.1.0`. There is nothing to undo when going back to `v1.1.0`.
