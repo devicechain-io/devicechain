@@ -75,7 +75,7 @@ MQTT 在线状态无需设备配合。设备不必发布上线消息、设置遗
 
 - **控制台。** 连接状态选项卡显示来源：*由传输上报*或*根据活动推断*，并显示传输最近一次上报该设备的时间，以及传输提供的会话（若有）。它还区分传输明确报告的**已断开（Disconnected）**，与仅仅**离线（Offline）**。离线只说明近期没有数据，健康但上报间隔较长的设备也可能如此。卡片下方的**在线状态时间线**按从新到旧列出该设备最近的状态转换：已连接、已断开，或已释放回推断状态。仅靠推断的设备没有时间线，因为没有任何转换被上报。
 - **[MCP](./mcp.md)。** `get_device_state` 在状态旁返回 `presenceSource`，并提醒助手不要将推断为不活跃的设备报告为故障。
-- **API。** `presenceSource` 是 `device-state` 的 `DeviceState` 类型字段，返回 `ASSERTED` 或 `INFERRED`；同一类型上的 `presenceTime` 和 `sessionId` 给出最近一次转换的标记。同一类型上的 `inactivityAlarmTime` 已弃用：推断设备处于不活跃时它返回 `lastDisconnectTime`，其他情况返回 null，请改用 `lastDisconnectTime`。其背后的历史是事件存储的 `stateChangeEvents` 查询：它接受与其他事件查询相同的条件（设备令牌、时间范围和分页），返回每次转换的 `state`（`CONNECTED`、`DISCONNECTED` 或 `DEMOTED`），并要求 `event:read`。访问范围限定于某些客户的成员，只能看到设备属于其客户期间记录的转换。
+- **API。** `presenceSource` 是 `device-state` 的 `DeviceState` 类型字段，返回 `ASSERTED` 或 `INFERRED`；同一类型上的 `presenceTime` 和 `sessionId` 给出最近一次转换的标记。同一类型上的 `inactivityAlarmTime` 已弃用：它是不活跃扫描因设备沉默而将其标记为离线的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。请改用 `lastDisconnectTime`，它同时涵盖传输层报告的断开。其背后的历史是事件存储的 `stateChangeEvents` 查询：它接受与其他事件查询相同的条件（设备令牌、时间范围和分页），返回每次转换的 `state`（`CONNECTED`、`DISCONNECTED` 或 `DEMOTED`），并要求 `event:read`。访问范围限定于某些客户的成员，只能看到设备属于其客户期间记录的转换。
 
 ## 为什么这种区别重要 {#why-the-distinction-matters}
 

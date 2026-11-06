@@ -259,8 +259,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	cfg := detectProcessorConfig(Configuration)
 	// The duplicate-event guard exists for event envelopes and for nothing else: with them off,
 	// DETECT builds, primes and consults none.
-	env := Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes
-	cfg.AppliedGuard = env.Resolved || env.Inbound
+	cfg.AppliedGuard = appliedGuardEnabled()
 	// Its instruments were built once in afterMicroserviceInitialized and are handed in,
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.
@@ -725,6 +724,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					// A preview of a draft calculated metric that reads `device.name` recalculates
 					// history with each device's CURRENT constants, read through this seam.
 					Constants: DeviceConstants,
+					// The preview applies live's duplicate rule, so it is told the envelope mode.
+					AppliedGuard: appliedGuardEnabled(),
 				}
 			},
 			// The NATS manager is injected as a provider so the slice-7c detectionStream
@@ -851,6 +852,15 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which the processor above still precedes.
 	return Svc.Terminate(ctx)
+}
+
+// appliedGuardEnabled is whether live DETECT runs its duplicate-event guard: it exists for event
+// envelopes and for nothing else, so with them off DETECT builds, primes and consults none. The
+// replay preview asks the same function, so the two cannot disagree. The preview follows the
+// CURRENT envelope mode, not the mode live ran under when the replayed history was processed.
+func appliedGuardEnabled() bool {
+	env := Microservice.InstanceConfiguration.Infrastructure.Messaging.Envelopes
+	return env.Resolved || env.Inbound
 }
 
 // detectProcessorConfig maps the service's typed configuration onto the DETECT processor's. It is
