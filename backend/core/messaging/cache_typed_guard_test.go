@@ -343,22 +343,31 @@ func TestAFullTierMakesRoomFromTheLargestHolder(t *testing.T) {
 	}
 }
 
-// TestAFullTierNeverEvictsTheEntryJustStored: the tenant that is storing is never made to
-// evict the entry it just stored, even when it is the largest holder.
+// TestAFullTierNeverEvictsTheEntryJustStored: the tenant that is storing is never made to evict the
+// entry it just stored, even when it is the largest holder and that entry is its only one; the next
+// largest holder gives one up instead.
 func TestAFullTierNeverEvictsTheEntryJustStored(t *testing.T) {
 	ctx := context.Background()
+	charge := 0
 	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 20000), WithLocalTenantShare(100),
-		WithDecodedChargeOf(func(any, int) (int, bool) { return 9000, true }))
-	for _, k := range []string{"a|1", "b|1", "b|2"} {
-		if err := c.Set(ctx, k, typedFixture()); err != nil {
+		WithDecodedChargeOf(func(any, int) (int, bool) { return charge, true }))
+	for _, e := range []struct {
+		key    string
+		charge int
+	}{{"b|1", 4000}, {"b|2", 4000}, {"c|1", 4000}, {"a|1", 9000}} {
+		charge = e.charge
+		if err := c.Set(ctx, e.key, typedFixture()); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := GetCloned(ctx, c, k, cloneTypedValue); err != nil {
+		if _, _, err := GetCloned(ctx, c, e.key, cloneTypedValue); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if h, ok := c.local.getHit("b|2", c.now()); !ok || h.val == nil {
+	if h, ok := c.local.getHit("a|1", c.now()); !ok || h.val == nil {
 		t.Fatal("the entry just stored was evicted to make room for itself")
+	}
+	if h, ok := c.local.getHit("b|1", c.now()); ok && h.val != nil {
+		t.Fatal("the next largest holder kept its oldest decoded entry")
 	}
 }
 
@@ -368,21 +377,51 @@ func TestTheEntryCountBoundIsLeastRecentlyUsed(t *testing.T) {
 	ctx := context.Background()
 	c := NewCacheOver(newCountingStore(), WithLocalBounds(3, 1<<20), WithLocalTenantShare(100),
 		WithDecodedChargeOf(func(any, int) (int, bool) { return 100000, true }))
+	if err := c.Set(ctx, "light|1", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.Set(ctx, "heavy|1", typedFixture()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := GetCloned(ctx, c, "heavy|1", cloneTypedValue); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"light|1", "light|2", "light|3"} {
+	for _, k := range []string{"light|2", "light|3"} {
 		if err := c.Set(ctx, k, typedFixture()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, ok := c.local.getHit("heavy|1", c.now()); ok {
+	if _, ok := c.local.getHit("light|1", c.now()); ok {
 		t.Fatal("the oldest entry survived the entry-count bound")
 	}
-	if _, ok := c.local.getHit("light|1", c.now()); !ok {
-		t.Fatal("a newer entry was evicted ahead of the oldest")
+	if _, ok := c.local.getHit("heavy|1", c.now()); !ok {
+		t.Fatal("the biggest holder lost an entry to the entry-count bound, which is not about bytes")
+	}
+}
+
+// TestACacheWithoutAShareEvictsLeastRecentlyUsed: with no tenant share set, a full tier makes room
+// from the least recently used end whoever holds it, as it always did.
+func TestACacheWithoutAShareEvictsLeastRecentlyUsed(t *testing.T) {
+	ctx := context.Background()
+	charge := 0
+	c := NewCacheOver(newCountingStore(), WithLocalBounds(100, 20000),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return charge, true }))
+	for _, e := range []struct {
+		key    string
+		charge int
+	}{{"small|1", 2000}, {"big|1", 9000}, {"big|2", 9000}} {
+		charge = e.charge
+		if err := c.Set(ctx, e.key, typedFixture()); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := GetCloned(ctx, c, e.key, cloneTypedValue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h, ok := c.local.getHit("small|1", c.now()); ok && h.val != nil {
+		t.Fatal("the least recently used entry kept its decoded value while a bigger holder's was dropped")
+	}
+	if h, ok := c.local.getHit("big|1", c.now()); !ok || h.val == nil {
+		t.Fatal("a more recent entry was evicted ahead of the least recently used one")
 	}
 }
