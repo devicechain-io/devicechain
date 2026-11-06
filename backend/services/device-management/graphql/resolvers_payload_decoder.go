@@ -93,16 +93,6 @@ func newFigureLRU(max int) *figureLRU {
 	return &figureLRU{max: max, order: list.New(), items: make(map[[32]byte]*list.Element, max), inflight: map[[32]byte]chan struct{}{}}
 }
 
-func (c *figureLRU) get(key [32]byte) (decoderFigures, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.items[key]; ok {
-		c.order.MoveToFront(e)
-		return e.Value.(*figureEntry).val, true
-	}
-	return decoderFigures{}, false
-}
-
 func (c *figureLRU) put(key [32]byte, val decoderFigures) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -134,10 +124,16 @@ func (r *PayloadDecoderResolver) figures() (decoderFigures, error) {
 // the same time.
 func (c *figureLRU) figures(key [32]byte, compute func() decoderFigures) decoderFigures {
 	for {
-		if f, ok := c.get(key); ok {
+		// The cache check and the in-flight check share one critical section. Checking the cache
+		// first and the marker afterwards lets a caller miss the cache, then find the leader's
+		// marker already cleared (its result is stored by then) and compile the document again.
+		c.mu.Lock()
+		if e, ok := c.items[key]; ok {
+			c.order.MoveToFront(e)
+			f := e.Value.(*figureEntry).val
+			c.mu.Unlock()
 			return f
 		}
-		c.mu.Lock()
 		if wait, busy := c.inflight[key]; busy {
 			c.mu.Unlock()
 			<-wait
