@@ -30,6 +30,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
+	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/stretchr/testify/require"
 )
 
@@ -208,24 +209,52 @@ func TestPutWithAnIssuerChainInHeaders(t *testing.T) {
 	require.EqualValues(t, 1, lists)
 	require.EqualValues(t, 1, entries)
 
-	for name, headers := range map[string][]string{
-		"not base64": {IssuerCertificateHeader, "***"},
-		"empty":      {IssuerCertificateHeader, ""},
-		"oversized":  {IssuerCertificateHeader, strings.Repeat("A", maxIssuerCertHeaderBytes+4)},
-		"too many":   manyHeaders(maxIssuerCertHeaders + 1),
-		"not a cert": {IssuerCertificateHeader, base64.StdEncoding.EncodeToString([]byte("hello"))},
-	} {
-		t.Run(name, func(t *testing.T) {
-			resp := e.put(e.writer("acme"), "maker", bytes.NewReader(e.ca.crl(t, 9)), headers...)
-			require.Contains(t, []int{400, 422}, resp.StatusCode)
-		})
-	}
+	t.Run("a certificate header that is not a certificate is the store's refusal", func(t *testing.T) {
+		resp := e.put(e.writer("acme"), "maker", bytes.NewReader(e.ca.crl(t, 9)),
+			IssuerCertificateHeader, base64.StdEncoding.EncodeToString([]byte("hello")))
+		requireStatus(t, resp, 422)
+	})
 }
 
-func manyHeaders(n int) []string {
-	out := make([]string, 0, 2*n)
-	for i := 0; i < n; i++ {
-		out = append(out, IssuerCertificateHeader, "AAAA")
+// 🔑 THE CHAIN HEADERS ARE JUDGED BEFORE THE BODY IS READ, and each cap is exactly a 400 (a mutant
+// that widens one reaches the body and the panicking reader says so).
+func TestIssuerChainHeaderCapsAreRefusedBeforeTheBodyIsRead(t *testing.T) {
+	e := newEnv(t)
+	for name, headers := range map[string][]string{
+		"not base64":       {"***"},
+		"empty":            {""},
+		"whitespace":       {"   "},
+		"oversized":        {strings.Repeat("A", 8<<10+4)}, // a literal: the cap under test must not size its own probe
+		"one over the cap": manyHeaderValues(x509trust.MaxPresentedCerts),
+		"too many":         manyHeaderValues(x509trust.MaxPresentedCerts + 20), // well past the cap, and under any widened one
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/trust-anchors/x/crl", panicBody{t})
+			req.SetPathValue("token", "maker")
+			req.ContentLength = 100
+			req.Header.Set("Authorization", "Bearer "+e.writer("acme"))
+			for _, h := range headers {
+				req.Header.Add(IssuerCertificateHeader, h)
+			}
+			rec := httptest.NewRecorder()
+			e.h.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			lists, entries := e.counts("acme")
+			require.Zero(t, lists+entries)
+		})
+	}
+	t.Run("the control: exactly the cap is not refused for its count", func(t *testing.T) {
+		_, status, _ := issuerChainPem(manyHeaderValues(maxIssuerCertHeaders))
+		require.Zero(t, status)
+		_, status, _ = issuerChainPem([]string{strings.Repeat("A", 8<<10)})
+		require.Zero(t, status)
+	})
+}
+
+func manyHeaderValues(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "AAAA"
 	}
 	return out
 }
@@ -492,4 +521,78 @@ func TestATokenForAnotherAudienceIsRefusedBeforeTheBodyIsRead(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	lists, entries := e.counts("acme")
 	require.Zero(t, lists+entries)
+}
+
+// ─── the throughput floor ───────────────────────────────────────────────────
+
+// trickle yields one byte every gap, for ever.
+type trickle struct{ gap time.Duration }
+
+func (tr trickle) Read(p []byte) (int, error) {
+	time.Sleep(tr.gap)
+	p[0] = 'a'
+	return 1, nil
+}
+
+// 🔑 A SENDER THAT KEEPS THE CONNECTION ALIVE BUT SLOW is abandoned once a whole window after the
+// warm-up averages under the floor, with a 408, so it cannot hold the write slot for the whole-upload
+// deadline. The idle timeout never fires: a byte arrives every few milliseconds.
+func TestASlowSenderIsAbandonedAndFreesItsSlot(t *testing.T) {
+	e := newEnv(t)
+	e.h.minRate, e.h.rateWindow = 10<<10, 150*time.Millisecond
+	e.h.idle = 5 * time.Second
+	req := httptest.NewRequest(http.MethodPut, "/trust-anchors/x/crl", trickle{gap: 10 * time.Millisecond})
+	req.SetPathValue("token", "maker")
+	req.ContentLength = -1
+	req.Header.Set("Authorization", "Bearer "+e.writer("acme"))
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	e.h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusRequestTimeout, rec.Code, rec.Body.String())
+	require.Less(t, time.Since(started), 3*time.Second, "abandoned after about two windows, not at the whole-upload deadline")
+	require.Zero(t, len(e.h.slots), "the slot is free again")
+	lists, entries := e.counts("acme")
+	require.Zero(t, lists+entries)
+}
+
+func TestTheThroughputFloorSparesAFastSenderAndTheWarmUpWindow(t *testing.T) {
+	newReader := func(src io.Reader) *capReader {
+		return &capReader{src: src, max: 1 << 30, ctx: context.Background(), rc: http.NewResponseController(httptest.NewRecorder()),
+			idle: time.Minute, deadline: time.Now().Add(time.Minute), minRate: 1 << 10, window: 100 * time.Millisecond, winStart: time.Now()}
+	}
+	t.Run("a fast sender passes every window", func(t *testing.T) {
+		cr := newReader(io.LimitReader(&endless{}, 8<<20))
+		for i := 0; i < 20; i++ {
+			_, err := io.CopyN(io.Discard, cr, 256<<10)
+			require.NoError(t, err)
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	t.Run("a slow first window is the warm-up", func(t *testing.T) {
+		cr := newReader(trickle{gap: 5 * time.Millisecond})
+		deadline := time.Now().Add(120 * time.Millisecond) // inside the first window plus a little
+		var err error
+		buf := make([]byte, 1)
+		for time.Now().Before(deadline) && err == nil {
+			_, err = cr.Read(buf)
+		}
+		require.NoError(t, err, "the first window is not judged")
+	})
+	t.Run("a slow second window is judged", func(t *testing.T) {
+		cr := newReader(trickle{gap: 5 * time.Millisecond})
+		var err error
+		buf := make([]byte, 1)
+		for i := 0; i < 200 && err == nil; i++ {
+			_, err = cr.Read(buf)
+		}
+		require.ErrorIs(t, err, errTooSlow)
+	})
+	t.Run("a disabled window never judges", func(t *testing.T) {
+		cr := newReader(trickle{gap: 5 * time.Millisecond})
+		cr.window = 0
+		for i := 0; i < 60; i++ {
+			_, err := cr.Read(make([]byte, 1))
+			require.NoError(t, err)
+		}
+	})
 }

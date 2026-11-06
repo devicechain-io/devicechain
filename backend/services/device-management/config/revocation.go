@@ -12,10 +12,10 @@ import (
 // fixed-configuration key: read from the mounted file when the pod starts, never from the
 // database, and refused outside its range rather than clamped.
 const (
-	DefaultRevocationMaxCrlBytes   = 8 << 20
+	DefaultRevocationMaxCrlBytes   = 2 << 20
 	MinRevocationMaxCrlBytes       = 64 << 10
 	MaxRevocationMaxCrlBytes       = 32 << 20
-	DefaultRevocationMaxCrlEntries = 500_000
+	DefaultRevocationMaxCrlEntries = 100_000
 	MaxRevocationMaxCrlEntries     = 2_000_000
 
 	DefaultRevocationMaxListsPerAnchor = 16
@@ -34,7 +34,7 @@ const (
 	MinRevocationMaxGraphqlCrlBytes     = 64 << 10
 	MaxRevocationMaxGraphqlCrlBytes     = 2 << 20
 
-	DefaultRevocationMaxConcurrentWrites = 2
+	DefaultRevocationMaxConcurrentWrites = 1
 	MaxRevocationMaxConcurrentWrites     = 8
 )
 
@@ -42,9 +42,14 @@ const (
 // writes at once. Unknown keys are refused when the document loads, like every other key.
 type RevocationConfiguration struct {
 	// MaxCrlBytes bounds one CRL as submitted (PEM or DER), checked before parsing and, on the REST
-	// upload, before and during the stream. 64 KiB to 32 MiB, default 8 MiB.
+	// upload, before and during the stream. 64 KiB to 32 MiB, default 2 MiB.
+	//
+	// 🔴 SIZE IT AGAINST THE POD'S MEMORY LIMIT. Verifying a CRL parses all of it: measured on this
+	// build, an upload peaks at roughly 20 to 30 times the CRL's size in heap (a 6.9 MB CRL of
+	// 300,000 entries: +190 MiB). The default keeps one upload at 40 to 65 MiB; the limit is per replica and
+	// maxConcurrentWrites uploads can overlap. A larger CRL needs a larger limit on the pod.
 	MaxCrlBytes int
-	// MaxCrlEntries bounds the revoked certificates one CRL lists. 1 to 2,000,000, default 500,000.
+	// MaxCrlEntries bounds the revoked certificates one CRL lists. 1 to 2,000,000, default 100,000.
 	MaxCrlEntries int
 	// MaxListsPerAnchor bounds the issuers one trust anchor holds a current list for. 1 to 64,
 	// default 16.
@@ -61,7 +66,7 @@ type RevocationConfiguration struct {
 	MaxGraphqlCrlBytes int
 	// MaxConcurrentWrites bounds the CRL uploads (parse, verify, store) one replica works on at
 	// once; the REST upload refuses the next with 503 and Retry-After, a GraphQL mutation waits
-	// its turn. 1 to 8, default 2.
+	// its turn. 1 to 8, default 1.
 	MaxConcurrentWrites int
 }
 

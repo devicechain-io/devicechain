@@ -963,3 +963,33 @@ func TestAnchorStatusIsTheWorstWhateverTheOrder(t *testing.T) {
 		assert.Equal(t, want, RevocationAnchorStatus(order, grace, now))
 	}
 }
+
+// ACCEPTED, AND PINNED: deleting an anchor discards its CRL-number high-water marks, so an anchor
+// re-created from the same CA accepts a list the deleted anchor had already passed. (Deleting needs
+// that no credential or profile relies on the anchor, and un-revoking its manual entries.)
+func TestRecreatingADeletedAnchorForgetsItsHighWaterMark(t *testing.T) {
+	f := newRevFixture(t)
+	f.mustPut(f.ca.crl(t, crlSpec{number: big.NewInt(9)}))
+	_, err := f.put(f.ca.crl(t, crlSpec{number: big.NewInt(4)}))
+	requireRule(t, err, RuleCrlNumberNotNewer)
+
+	deleted, err := f.api.DeleteDeviceTrustAnchor(f.ctx, f.anchor.Token)
+	require.NoError(t, err)
+	require.True(t, deleted)
+	_, err = f.api.CreateDeviceTrustAnchor(f.ctx, &DeviceTrustAnchorCreateRequest{Token: f.anchor.Token, CertificatePem: f.ca.pem()})
+	require.NoError(t, err)
+
+	res, err := f.put(f.ca.crl(t, crlSpec{number: big.NewInt(4)}))
+	require.NoError(t, err, "the re-created anchor starts with no mark")
+	assert.Equal(t, "4", res.List.CrlNumber)
+}
+
+// The defaults are sized against the pod: one upload at a time, a 2 MiB CRL (an upload peaks at roughly
+// 20 to 30 times it in heap), 100 000 entries.
+func TestTheDefaultLimitsAreTheOnesTheMemoryMeasurementWasMadeAt(t *testing.T) {
+	d := DefaultRevocationLimits()
+	assert.Equal(t, 1, d.MaxConcurrentWrites)
+	assert.Equal(t, 2<<20, d.MaxCrlBytes)
+	assert.Equal(t, 100_000, d.MaxCrlEntries)
+	assert.Equal(t, 2<<20, d.MaxGraphqlCrlBytes)
+}

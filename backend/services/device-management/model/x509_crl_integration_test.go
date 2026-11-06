@@ -18,7 +18,8 @@ package model
 import (
 	"fmt"
 	"math/big"
-	"reflect"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,53 +68,32 @@ func (f *pgCertFixture) crlSerials() map[string]bool {
 
 func hexSerial(n *big.Int) string { s, _ := x509trust.SerialHex(n); return s }
 
-// holdEntries pauses the upload whose entries include serial, right after its entries are
-// inserted: the anchor and the issuer rows are held FOR UPDATE and the entries are uncommitted.
-func (f *pgCertFixture) holdEntries(serial *big.Int) (reached <-chan struct{}, release func()) {
+// holdList pauses the upload whose CRL number is number, right after its list row is written: the
+// anchor and the issuer rows are held FOR UPDATE and nothing is committed.
+func (f *pgCertFixture) holdList(number string) (reached <-chan struct{}, release func()) {
 	f.t.Helper()
 	reachedCh, releaseCh := make(chan struct{}), make(chan struct{})
 	var once, releaseOnce sync.Once
-	want := hexSerial(serial)
 	name := fmt.Sprintf("test:hold-crl-%d", time.Now().UnixNano())
-	require.NoError(f.t, f.mgr.Database.Callback().Create().After("gorm:create").Register(name, func(db *gorm.DB) {
-		rows := insertedEntries(db)
-		if db.Error != nil {
+	hook := func(db *gorm.DB) {
+		l, ok := db.Statement.Dest.(*DeviceRevocationList)
+		if !ok || db.Error != nil || l.CrlNumber != number {
 			return
 		}
-		for _, r := range rows {
-			if r.Serial != nil && *r.Serial == want {
-				once.Do(func() {
-					close(reachedCh)
-					<-releaseCh
-				})
-				return
-			}
-		}
-	}))
+		once.Do(func() {
+			close(reachedCh)
+			<-releaseCh
+		})
+	}
+	require.NoError(f.t, f.mgr.Database.Callback().Create().After("gorm:create").Register(name, hook))
+	require.NoError(f.t, f.mgr.Database.Callback().Update().After("gorm:update").Register(name, hook))
 	rel := func() { releaseOnce.Do(func() { close(releaseCh) }) }
 	f.t.Cleanup(func() {
 		rel()
 		_ = f.mgr.Database.Callback().Create().Remove(name)
+		_ = f.mgr.Database.Callback().Update().Remove(name)
 	})
 	return reachedCh, rel
-}
-
-// insertedEntries is the CRL entry rows the statement just created, whatever shape gorm handed them in.
-func insertedEntries(db *gorm.DB) []crlEntryRow {
-	rv := db.Statement.ReflectValue
-	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
-		return nil
-	}
-	var out []crlEntryRow
-	for i := 0; i < rv.Len(); i++ {
-		switch r := rv.Index(i).Interface().(type) {
-		case crlEntryRow:
-			out = append(out, r)
-		case *crlEntryRow:
-			out = append(out, *r)
-		}
-	}
-	return out
 }
 
 func nextSerial(f *pgCertFixture, t *testing.T, cn string) *big.Int {
@@ -134,12 +114,14 @@ func TestCrlPostgresConcurrentUploadsEndWithTheHigherNumber(t *testing.T) {
 			crlOne := f.ca.crl(t, crlSpec{number: big.NewInt(11), revoked: revokedSerials(base, one)})
 			crlTwo := f.ca.crl(t, crlSpec{number: big.NewInt(12), revoked: revokedSerials(base, two)})
 			held, other, heldCrl, otherCrl := two, one, crlTwo, crlOne
+			heldNumber := "12"
 			heldApi, otherApi := a, b
 			if order == "N+1 commits first" {
 				held, other, heldCrl, otherCrl = one, two, crlOne, crlTwo
+				heldNumber = "11"
 			}
-			_ = other
-			reached, release := f.holdEntries(held)
+			_, _ = held, other
+			reached, release := f.holdList(heldNumber)
 
 			type outcome struct {
 				res *RevocationListPutResult
@@ -326,17 +308,17 @@ func TestCrlPostgresALargeListIsMaterialisedAndDiffed(t *testing.T) {
 	for i := 0; i < 5_000; i++ {
 		next = append(next, big.NewInt(int64(9_000_000+i)))
 	}
-	var inserts atomic.Int64
-	name := fmt.Sprintf("test:count-inserts-%d", time.Now().UnixNano())
-	require.NoError(t, f.mgr.Database.Callback().Create().After("gorm:create").Register(name, func(db *gorm.DB) {
-		inserts.Add(int64(len(insertedEntries(db))))
-	}))
-	defer func() { _ = f.mgr.Database.Callback().Create().Remove(name) }()
+	// A kept entry is not rewritten: its row id survives the replacement.
+	keptSerial := hexSerial(serials[10_000])
+	var keptId uint
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceRevokedCertificate{}).Select("id").Where("serial = ?", keptSerial).Scan(&keptId).Error)
 	res, err = f.putVia(f.api, f.ca.crl(t, crlSpec{number: big.NewInt(2), revoked: revokedSerials(next...)}))
 	require.NoError(t, err)
 	assert.Equal(t, 5_000, res.NewlyRevoked)
 	assert.Equal(t, 10_000, res.Removed)
-	assert.EqualValues(t, 5_000, inserts.Load(), "only the new entries were inserted")
+	var keptAfter uint
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceRevokedCertificate{}).Select("id").Where("serial = ?", keptSerial).Scan(&keptAfter).Error)
+	assert.Equal(t, keptId, keptAfter, "a kept entry is not rewritten")
 	assert.Len(t, f.crlSerials(), 25_000)
 	assert.EqualValues(t, 25_000, f.activeLists()[0].EntryCount)
 }
@@ -417,3 +399,130 @@ func TestCrlPostgresMixedWritesNeitherDeadlockNorDriftTheCounter(t *testing.T) {
 		Count(&orphans).Error)
 	assert.Zero(t, orphans, "no entry outlives its list")
 }
+
+// ─── memory and lock hold at the DEFAULT bounds ─────────────────────────────
+
+// lockProbe watches the anchor row from another connection: it tries FOR SHARE NOWAIT (what a
+// certificate registration takes) every few milliseconds and records the longest stretch during
+// which it was refused, i.e. how long a CRL write held the anchor FOR UPDATE.
+type lockProbe struct {
+	stop    chan struct{}
+	done    chan struct{}
+	longest atomic.Int64 // nanoseconds
+}
+
+func (f *pgCertFixture) probeAnchorLock() *lockProbe {
+	p := &lockProbe{stop: make(chan struct{}), done: make(chan struct{})}
+	db := f.mgr.Database.WithContext(f.ctx)
+	go func() {
+		defer close(p.done)
+		var since time.Time
+		for {
+			select {
+			case <-p.stop:
+				return
+			default:
+			}
+			err := db.Transaction(func(tx *gorm.DB) error {
+				return tx.Exec(`SELECT id FROM device_trust_anchors WHERE id = ? FOR SHARE NOWAIT`, f.anchor.ID).Error
+			})
+			now := time.Now()
+			switch {
+			case err != nil && since.IsZero():
+				since = now
+			case err == nil && !since.IsZero():
+				if d := now.Sub(since); int64(d) > p.longest.Load() {
+					p.longest.Store(int64(d))
+				}
+				since = time.Time{}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	return p
+}
+
+func (p *lockProbe) finish() time.Duration {
+	close(p.stop)
+	<-p.done
+	return time.Duration(p.longest.Load())
+}
+
+// peakHeap runs fn and reports the highest live heap it reached above where it started.
+//
+// The collector runs at GOGC=50 while it measures, which is how the pod runs near its soft memory limit
+// (GOMEMLIMIT): at the default 100 the number also counts garbage the collector had not yet been asked
+// to take, and drifts by tens of MiB with whatever else the host is doing.
+func peakHeap(fn func()) (extra uint64) {
+	defer debug.SetGCPercent(debug.SetGCPercent(50))
+	runtime.GC()
+	var base runtime.MemStats
+	runtime.ReadMemStats(&base)
+	stop, done := make(chan struct{}), make(chan struct{})
+	var peak atomic.Uint64
+	go func() {
+		defer close(done)
+		var m runtime.MemStats
+		for {
+			runtime.ReadMemStats(&m)
+			if m.HeapAlloc > peak.Load() {
+				peak.Store(m.HeapAlloc)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}()
+	fn()
+	close(stop)
+	<-done
+	if p := peak.Load(); p > base.HeapAlloc {
+		return p - base.HeapAlloc
+	}
+	return 0
+}
+
+// 🔑 AT THE DEFAULT BOUNDS (an 8 MiB CRL, as many entries as fit) an upload neither costs heap in
+// proportion to the entries nor holds the anchor lock while they are written: device-management
+// serves the auth callout in the same process, and a registration waits on that lock.
+func TestCrlPostgresDefaultBoundUploadStaysUnderTheMemoryAndLockCeilings(t *testing.T) {
+	const (
+		heapCeiling = 64 << 20
+		lockCeiling = 2 * time.Second
+	)
+	f := newPgCertFixture(t)
+	const n = 80_000
+	serials := make([]*big.Int, n)
+	for i := range serials {
+		serials[i] = big.NewInt(int64(1_000_000_000 + i))
+	}
+	first := f.ca.crl(t, crlSpec{number: big.NewInt(1), revoked: revokedSerials(serials...)})
+	// Half of the first list stays, the other half goes, and 50 000 are new.
+	next := append([]*big.Int{}, serials[n/2:]...)
+	for i := 0; i < 20_000; i++ {
+		next = append(next, big.NewInt(int64(2_000_000_000+i)))
+	}
+	second := f.ca.crl(t, crlSpec{number: big.NewInt(2), revoked: revokedSerials(next...)})
+	require.LessOrEqual(t, len(first), defaultCrlBytesForTest, "the test list must fit the default byte bound")
+	require.LessOrEqual(t, len(second), defaultCrlBytesForTest)
+	t.Logf("CRL sizes: first %d bytes (%d entries), second %d bytes (%d entries)", len(first), n, len(second), len(next))
+
+	for _, step := range []struct {
+		name string
+		crl  []byte
+	}{{"first upload", first}, {"replacement", second}} {
+		probe := f.probeAnchorLock()
+		var err error
+		extra := peakHeap(func() { _, err = f.putVia(f.api, step.crl) })
+		held := probe.finish()
+		require.NoError(t, err, step.name)
+		t.Logf("%s: +%.1f MiB heap, anchor lock held %s", step.name, float64(extra)/(1<<20), held)
+		assert.Less(t, extra, uint64(heapCeiling), "%s: heap grew with the entries", step.name)
+		assert.Less(t, held, lockCeiling, "%s: the anchor was held for the entries' sake", step.name)
+	}
+	assert.Len(t, f.crlSerials(), len(next))
+}
+
+const defaultCrlBytesForTest = 2 << 20

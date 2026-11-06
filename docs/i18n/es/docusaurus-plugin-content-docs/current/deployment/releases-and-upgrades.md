@@ -792,6 +792,9 @@ Las tres versiones menores más recientes se documentan por completo, de la más
 
 ### v1.2.0 — el motor de detección puede usar más de un núcleo {#v120-upgrade}
 
+- **Tenga en cuenta que las listas de revocación de certificados X.509 son nuevas y opcionales.** No hay que hacer nada para actualizar; lea [Listas de revocación](#v120-x509-crl) antes de subir una.
+- **Revise los ajustes del motor de detección** si fijó `detectShards` por encima de 1. Consulte [Las partes de la detección se ejecutan en paralelo](#v120-detect-shards).
+
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
 
 El ajuste `detectShards` de event-processing (1 por defecto, de 1 a 64) divide por clave el estado del motor de detección. En `v1.1.0` las partes se aplicaban una tras otra, de modo que un valor superior a 1 daba los mismos resultados y ninguna aceleración. A partir de esta versión cada parte se ejecuta en su propia goroutine, así que el trabajo propio del motor puede usar varios núcleos. Las detecciones, el reloj del tiempo del evento y el punto de control guardado son los mismos con cualquier valor, por lo que no hay nada que migrar y el ajuste puede cambiarse o revertirse en cualquier reinicio.
@@ -801,6 +804,16 @@ El ajuste `detectShards` de event-processing (1 por defecto, de 1 a 64) divide p
 - **Hay dos alertas nuevas**: `DetectShardSaturated` (una parte es el límite de la velocidad de detección) y `DetectShardInvariantViolated` (las partes discreparon en un punto de control y este se rechazó). Se instalan con cualquier valor, pero solo pueden dispararse con `detectShards` superior a 1. Añádalas a su enrutado de alertas. Las acompaña un conjunto nuevo de métricas `detect_shard_*` y `detect_barrier_wait_seconds`; las dos sin etiqueta se exportan a 0 con 1.
 - **La memoria crece con `detectShards`.** Cada parte retiene hasta 1024 mensajes en cola, así que un pod que ya funciona con un valor superior a 1 puede retener en memoria hasta `detectShards` veces esa cantidad mientras el bucle va por delante de la parte más lenta. Compruebe el límite de memoria del pod antes de contar con el nuevo ajuste.
 - **Volver atrás** es un reinicio con el ajuste en el valor anterior. El punto de control es idéntico, así que no hay nada que deshacer.
+
+#### Listas de revocación X.509 {#v120-x509-crl}
+
+Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad certificadora en un ancla de confianza, y cada ancla tiene un modo de revocación. Un ancla sin lista y sin revocación manual se comporta exactamente como antes.
+
+- **Una CRL se sube por GraphQL o con un `PUT` en streaming**, y la plataforma comprueba su firma contra el ancla. El tamaño admitido es el ajuste fijo `deviceManagement.callout.revocation.maxCrlBytes` (2 MiB por defecto, hasta 32 MiB). **Dimensiónelo según el límite de memoria del pod.** Verificar una CRL la analiza entera, y una subida alcanza un pico de entre 20 y 30 veces el tamaño de la CRL en heap: una lista de 2 MiB cuesta de 40 a 65 MiB, y una de 7 MB con 300 000 entradas unos 190 MiB. `maxConcurrentWrites` (1 por defecto) es cuántas subidas procesa a la vez una réplica.
+- **Una CRL más antigua nunca puede sustituir a una más nueva**, ni siquiera después de borrar la lista: se conserva el número de CRL más alto aceptado para cada emisor. **Borrar un ancla de confianza descarta esos números con ella**, junto con sus listas y sus entradas, de modo que un ancla recreada a partir de la misma CA empieza de nuevo y acepta una CRL que antes se rechazó. Un ancla solo puede borrarse cuando ninguna credencial ni perfil de aprovisionamiento depende de ella.
+- **Borrar un ancla de confianza se rechaza mientras tenga revocaciones manuales.** Anúlelas primero (`unrevokeDeviceCertificate`); son decisiones suyas y nunca se descartan en silencio.
+- **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
+- **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 

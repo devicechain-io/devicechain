@@ -1639,16 +1639,17 @@ functionalAreas:
       #     issuerPinMinRefresh: 2s # least time between two server pings, 100ms up to issuerPinRefresh.
       #     issuerPinGatherWindow: 750ms # how long one ping waits for answers, 100ms to 2s.
       #     revocation:             # bounds of the CA revocation lists an operator uploads (CRLs).
-      #       maxCrlBytes: 8388608  # one CRL as submitted, 64 KiB to 32 MiB. Checked before parsing and
+      #       maxCrlBytes: 2097152  # one CRL as submitted, 64 KiB to 32 MiB. An upload peaks at ~20-30x this in heap:
+      #                             # size it against the pod's memory limit. Checked before parsing and
       #                             # during the streaming upload (PUT /trust-anchors/{token}/crl).
-      #       maxCrlEntries: 500000 # certificates one CRL may list, 1 to 2000000.
+      #       maxCrlEntries: 100000 # certificates one CRL may list, 1 to 2000000.
       #       maxListsPerAnchor: 16 # issuers one trust anchor holds a current list for, 1 to 64.
       #       maxManualEntriesPerTenant: 100000 # manual revocations a tenant holds, 1 to 1000000.
       #       defaultStaleGrace: 24h # past a list's nextUpdate it still counts as current under
       #                             # REQUIRE_CURRENT when an anchor sets no grace, 0s to 168h.
       #       maxGraphqlCrlBytes: 2097152 # the CRL the GraphQL mutation takes (DER bytes), 64 KiB to
       #                             # 2 MiB; larger lists use the streaming upload.
-      #       maxConcurrentWrites: 2 # CRL uploads one replica works on at once, 1 to 8.
+      #       maxConcurrentWrites: 1 # CRL uploads one replica works on at once, 1 to 8.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

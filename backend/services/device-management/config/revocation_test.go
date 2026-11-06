@@ -16,20 +16,20 @@ func TestRevocationDefaults(t *testing.T) {
 	cfg := &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
 	r := cfg.Callout.Revocation
-	assert.Equal(t, 8<<20, r.MaxCrlBytes)
-	assert.Equal(t, 500_000, r.MaxCrlEntries)
+	assert.Equal(t, 2<<20, r.MaxCrlBytes)
+	assert.Equal(t, 100_000, r.MaxCrlEntries)
 	assert.Equal(t, 16, r.MaxListsPerAnchor)
 	assert.Equal(t, 100_000, r.MaxManualEntriesPerTenant)
 	assert.Equal(t, 24*time.Hour, r.DefaultStaleGraceDuration())
 	assert.Equal(t, 2<<20, r.MaxGraphqlCrlBytes)
-	assert.Equal(t, 2, r.MaxConcurrentWrites)
+	assert.Equal(t, 1, r.MaxConcurrentWrites)
 	assert.Equal(t, cfg.Callout, NewDeviceManagementConfiguration().Callout)
 
 	cfg = &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"callout":{"revocation":{"maxCrlBytes":4194304,"defaultStaleGrace":"0s"}}}`), cfg))
 	assert.Equal(t, 4<<20, cfg.Callout.Revocation.MaxCrlBytes)
 	assert.Equal(t, time.Duration(0), cfg.Callout.Revocation.DefaultStaleGraceDuration(), "0s is a grace, not an absence")
-	assert.Equal(t, 500_000, cfg.Callout.Revocation.MaxCrlEntries, "the rest keep their defaults")
+	assert.Equal(t, 100_000, cfg.Callout.Revocation.MaxCrlEntries, "the rest keep their defaults")
 }
 
 // Each bound is held at both ends, and nothing is clamped.

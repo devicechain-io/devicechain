@@ -328,12 +328,29 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 func (api *Api) DeleteDeviceTrustAnchor(ctx context.Context, token string) (bool, error) {
 	deleted := false
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// CRL writers of this anchor are serialised before the anchor row is locked (lockCrlWriters),
+		// and this delete discards their lists, so it queues behind them the same way.
+		var named DeviceTrustAnchor
+		if err := tx.Select("id", "tenant_id").Where("token = ?", token).First(&named).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		if err := lockCrlWriters(tx, named.TenantId, named.ID); err != nil {
+			return err
+		}
 		locked, err := lockTrustAnchorByToken(tx, token)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		if err != nil {
 			return err
+		}
+		if locked.ID != named.ID {
+			// The token was re-created while this waited for the lock of the anchor it named: the
+			// CRL-writer lock held is not the new anchor's, so touch nothing.
+			return invalidAnchor("trust anchor %q was replaced while the delete was waiting; repeat it", token)
 		}
 		var creds, profiles int64
 		if err := tx.Unscoped().Model(&DeviceCredential{}).Where("trust_anchor_id = ?", locked.ID).Count(&creds).Error; err != nil {

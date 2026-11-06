@@ -5343,7 +5343,10 @@ type Mutation {
     ): DeviceTrustAnchor!
     """
     Delete a trust anchor nothing relies on. Refused with extensions.code REFERENCE_VIOLATION while a
-    credential or a provisioning profile still names it.
+    credential or a provisioning profile still names it, and while it holds manual revocations
+    (un-revoke them first). Revocation lists uploaded for it, their entries and the highest CRL number
+    accepted for each issuer are discarded with it: an anchor re-created from the same CA starts
+    again, and accepts a CRL whose number the deleted anchor had already passed.
     """
     deleteDeviceTrustAnchor(
         """Token of the anchor."""

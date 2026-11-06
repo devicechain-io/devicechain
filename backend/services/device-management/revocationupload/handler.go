@@ -66,6 +66,12 @@ const (
 	idleTimeout = 30 * time.Second
 	// totalTimeout bounds the whole read of the body.
 	totalTimeout = 5 * time.Minute
+	// minRate is the throughput floor of a body that has been streaming for a while: a sender that
+	// averages less than this over a whole rateWindow (after the first window, which is the warm-up)
+	// is abandoned, so one slow sender cannot hold a write slot for the whole-upload deadline.
+	// 16 KiB/s moves the largest default CRL in about two minutes.
+	minRate    = 16 << 10
+	rateWindow = 30 * time.Second
 	// maxIssuerCertHeaders and maxIssuerCertHeaderBytes bound the chain headers: a signer and the
 	// CAs up to the anchor, each a certificate.
 	maxIssuerCertHeaders     = x509trust.MaxPresentedCerts - 1
@@ -91,6 +97,9 @@ type Handler struct {
 	// can shorten them.
 	idle  time.Duration
 	total time.Duration
+	// minRate and rateWindow are the throughput floor; fields so a test can shorten them.
+	minRate    int64
+	rateWindow time.Duration
 	// slots bounds the uploads this process works on at once.
 	slots chan struct{}
 }
@@ -99,7 +108,7 @@ type Handler struct {
 // never waits for the model's own slot behind another REST upload.
 func New(api *model.Api, validator ValidatorSource, policy PolicySource, tenantDeleted func(string) bool) *Handler {
 	return &Handler{api: api, validator: validator, policy: policy, tenantDeleted: tenantDeleted,
-		idle: idleTimeout, total: totalTimeout, slots: make(chan struct{}, api.RevocationLimits().MaxConcurrentWrites)}
+		idle: idleTimeout, total: totalTimeout, minRate: minRate, rateWindow: rateWindow, slots: make(chan struct{}, api.RevocationLimits().MaxConcurrentWrites)}
 }
 
 // Register mounts the handler on mux.
@@ -172,12 +181,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		buf.Grow(int(r.ContentLength))
 	}
 	cr := &capReader{src: r.Body, max: maxBytes, ctx: r.Context(), rc: http.NewResponseController(w),
-		idle: h.idle, deadline: time.Now().Add(h.total)}
+		idle: h.idle, deadline: time.Now().Add(h.total),
+		minRate: h.minRate, window: h.rateWindow, winStart: time.Now()}
 	if _, err := io.Copy(buf, cr); err != nil {
 		switch {
 		case errors.Is(err, errBodyTooLong):
 			refuse(w, r, http.StatusRequestEntityTooLarge, "the CRL is larger than the "+strconv.FormatInt(maxBytes, 10)+" byte limit")
-		case errors.Is(err, errDeadline), isTimeout(err):
+		case errors.Is(err, errDeadline), errors.Is(err, errTooSlow), isTimeout(err):
 			refuse(w, r, http.StatusRequestTimeout, "the upload stalled or ran too slowly")
 		default:
 			refuse(w, r, http.StatusBadRequest, "the body could not be read")
@@ -299,6 +309,7 @@ func refuse(w http.ResponseWriter, r *http.Request, status int, msg string) {
 var (
 	errBodyTooLong = errors.New("revocationupload: body is longer than the limit")
 	errDeadline    = errors.New("revocationupload: whole-upload deadline passed")
+	errTooSlow     = errors.New("revocationupload: the body arrives below the minimum rate")
 )
 
 func isTimeout(err error) bool {
@@ -317,6 +328,13 @@ type capReader struct {
 	rc       *http.ResponseController
 	idle     time.Duration
 	deadline time.Time
+	// The throughput floor: every window, the bytes that arrived in it must average at least minRate
+	// a second, except in the first (warm-up) window. A zero window disables it.
+	minRate  int64
+	window   time.Duration
+	winStart time.Time
+	winBase  int64
+	winsDone int
 }
 
 func (c *capReader) Read(p []byte) (int, error) {
@@ -326,6 +344,14 @@ func (c *capReader) Read(p []byte) (int, error) {
 	now := time.Now()
 	if now.After(c.deadline) {
 		return 0, errDeadline
+	}
+	if c.window > 0 && now.Sub(c.winStart) >= c.window {
+		elapsed := now.Sub(c.winStart).Seconds()
+		if c.winsDone > 0 && float64(c.n-c.winBase) < float64(c.minRate)*elapsed {
+			return 0, errTooSlow
+		}
+		c.winStart, c.winBase = now, c.n
+		c.winsDone++
 	}
 	d := now.Add(c.idle)
 	if d.After(c.deadline) {
