@@ -232,7 +232,7 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 }
 
 // maximalDecoder is a decoder near the document ceiling with the declared metrics it writes:
-// MaxLets bindings and MaxSections sections of 34 rows each, over 64 DOUBLE metrics.
+// MaxLets bindings and MaxSections sections of 33 rows each, over 64 DOUBLE metrics.
 func maximalDecoder(t *testing.T) (json.RawMessage, []*MetricDefinition) {
 	t.Helper()
 	var defs []*MetricDefinition
@@ -247,7 +247,7 @@ func maximalDecoder(t *testing.T) (json.RawMessage, []*MetricDefinition) {
 	}
 	for s := 0; s < payloaddecode.MaxSections; s++ {
 		sec := payloaddecode.Section{Name: fmt.Sprintf("section_%d", s), When: fmt.Sprintf("fPort == %d && header_00 >= 0", s+1)}
-		for r := 0; r < 34; r++ {
+		for r := 0; r < 33; r++ {
 			sec.Outputs = append(sec.Outputs, payloaddecode.Output{Key: fmt.Sprintf("measurement_%02d", r),
 				Expr: fmt.Sprintf("double(i16be(frame, %d)) / 10.0 + double(header_%02d)", 2+r, r%payloaddecode.MaxLets),
 				When: fmt.Sprintf("header_%02d != %d", r%payloaddecode.MaxLets, r)})
@@ -256,7 +256,9 @@ func maximalDecoder(t *testing.T) (json.RawMessage, []*MetricDefinition) {
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(raw), payloaddecode.MaxDocumentBytes)
+	size, err := payloaddecode.CanonicalSize(raw)
+	require.NoError(t, err)
+	require.LessOrEqual(t, size, payloaddecode.MaxDocumentBytes, "measured as the store renders it")
 	require.Greater(t, len(raw), payloaddecode.MaxDocumentBytes*3/4, "the fixture is no longer near the ceiling")
 	return raw, defs
 }

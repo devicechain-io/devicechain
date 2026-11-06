@@ -9,6 +9,7 @@
 #   acceptance.sh rule-disabled           only the rule-disabled run
 #   acceptance.sh hot                     only segment A (the hot room) on a fresh sim; a take whose first run missed a platform fact is re-recorded with this
 #   acceptance.sh chiller                 only segment B (the annex chiller beat) on a fresh sim, with the calculated-metric check
+#   acceptance.sh --restart console       the restart is NOT sent by this script: run B waits for an operator to issue it from the console (the recorded video's path)
 #   acceptance.sh --build editor          build the Windows player first through the open Editor (needs $UNITY_EVAL, see below)
 #
 # What a run does. It provisions a brand-new sim (`dcctl sim create --manifest towerpulse`, so a fresh tenant: stale alarms and commands from an earlier
@@ -17,7 +18,7 @@
 #
 #   segment A  13:54 on the model clock: the 14:00 meeting heats F4-East; the platform's rule R1 raises the alarm and sends boost-cooling; the room cools;
 #              the command is SUCCESSFUL only when the zone is at setpoint; the alarm clears.
-#   segment B  16:25: the annex chiller trips; rule R4 raises the absence alarm; the operator's `restart` goes through the API; it is SUCCESSFUL; it reports again.
+#   segment B  16:25: the annex chiller trips; rule R4 raises the absence alarm; the operator's `restart` goes through the API (or, with --restart console, is issued by a person in the console while run B waits); it is SUCCESSFUL; it reports again.
 #
 # The rule-disabled run is the SAME seed and the same day with R1 disabled (draft + publish) before the player starts. It must give NO alarm and NO
 # boost while the zone still overheats: the platform, not the script, closed the loop in the control run. Only segment A runs (R4 is untouched).
@@ -43,6 +44,8 @@
 #                      used only if binary_fresh.py finds it newer than every source it is built from; a stale one is refused, because a take
 #                      recorded by a simulator older than the tree shows a platform the tree no longer is.
 #   TP_START_A, TP_START_B   model start hours (default 13.9 and 16.43)
+#   TP_RESTART      api (default: the script sends the restart through the API) or console (same as --restart)
+#   TP_RESTART_WAIT seconds run B waits for the console's restart before failing (default 900; console mode only)
 #   TP_LOOP         1: start the player with -tp-loop, so the 90-second storyboard repeats and the alarm and command cards show whenever the platform raises them
 #                   (a live run only reaches them minutes in, after one pass has ended on a card-less pull-back)
 #   TP_HOOK         optional: an executable called as `$TP_HOOK <sim> <evidence-dir> <since>` in the control run, after the owner check, while the player is still up
@@ -73,6 +76,8 @@ BIN_DIR="$PROJECT/Build/bin"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT_ROOT="$PROJECT/Build/acceptance"
 BUILD=none
+RESTART="${TP_RESTART:-api}"
+RESTART_WAIT="${TP_RESTART_WAIT:-900}"
 MODES=()
 
 log() { printf '[acceptance] %s\n' "$*" >&2; }
@@ -84,6 +89,7 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	control | rule-disabled | chiller | hot) MODES+=("$1") ;;
 	--build) BUILD="${2:?--build needs none or editor}"; shift ;;
+	--restart) RESTART="${2:?--restart needs api or console}"; shift ;;
 	--out) OUT_ROOT="${2:?--out needs a directory}"; shift ;;
 	-h | --help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
 	*) die "unknown argument $1 (see --help)" ;;
@@ -91,6 +97,8 @@ while [ $# -gt 0 ]; do
 	shift
 done
 [ ${#MODES[@]} -gt 0 ] || MODES=(control rule-disabled)
+case "$RESTART" in api | console) ;; *) die "--restart (TP_RESTART) is api or console, not $RESTART" ;; esac
+[[ "$RESTART_WAIT" =~ ^[0-9]+$ ]] || die "TP_RESTART_WAIT is a number of seconds, not $RESTART_WAIT"
 
 # ---------------------------------------------------------------------------
 # the binaries: built from this tree, or proven newer than it
@@ -263,7 +271,8 @@ run_mode() {
 		local since_b rec_b q2="$ev/quit-b"
 		since_b="$(now_iso)"
 		launch_player "$START_B" "$mode-B" "$ev/recordings" "$q2" "$ev/logs/player-b.log" "$ca"
-		"$PY" -I "$CHECK" segment-b --runner "$RUNNER" --out "$ev" --since "$since_b" || true
+		[ "$RESTART" != console ] || log "WAITING for the operator: issue restart to TP-CH-A from the console once its chiller-silent alarm is up (up to ${RESTART_WAIT}s)"
+		"$PY" -I "$CHECK" segment-b --runner "$RUNNER" --out "$ev" --since "$since_b" --restart "$RESTART" --restart-wait "$RESTART_WAIT" || true
 		[ "$mode" != control ] || "$PY" -I "$CHECK" owner --runner "$RUNNER" --sim "$SIM_NAME" --out "$ev" --since "$since_a" || true
 		# an optional extra check run while the player is still up and the sim is live: TP_HOOK <sim> <evidence-dir> <since>. It never decides the verdict.
 		[ "$mode" != control ] || [ -z "${TP_HOOK:-}" ] || "$TP_HOOK" "$SIM_NAME" "$ev" "$since_a" || log "WARNING: TP_HOOK failed"
@@ -288,6 +297,8 @@ EOF
 	else
 		need="rule-disabled-effective,c-no-alarm,c-no-boost,c-zone-overheated,c-rule-was-off"
 	fi
+	# in console mode the operator's restart is itself a judged fact: no restart from the console, no pass
+	if [ "$RESTART" = console ] && { [ "$mode" = control ] || [ "$mode" = chiller ]; }; then need="$need,b-restart-issued"; fi
 	"$PY" -I "$CHECK" summary --out "$ev" --title "Towerpulse acceptance: $mode" --require "$need" || verdict=$?
 	leak_scan "$ev" || verdict=2
 	teardown

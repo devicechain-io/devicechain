@@ -129,7 +129,7 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`。ChirpStack 会自行追加 `?event=up`。 |
    | Headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
 
-3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。
+3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。可在 DeviceChain 中读取原始帧的[载荷解码器](./payload-decoders.md)将在 v1.2 提供。
 4. 在 DeviceChain 中添加设备，并把它的 DevEUI 设为 `lorawan.deveui` 别名。
 
 只读取上行。ChirpStack 会用不同的 `event` 值把其他事件（join、status、确认）发送到同一个 URL，这些事件会返回 `204` 并被忽略。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
@@ -147,7 +147,7 @@ The Things Stack 通过应用上的 **webhook** 发送上行。
    | Additional headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
    | Enabled event types | Uplink message，启用，路径为 `/uplink-message`。平台也会读取路径 `/up`、`/uplink` 和 `/uplinks`。 |
 
-3. **在应用或设备上设置载荷格式化器（payload formatter）**（LoRaWAN Device Repository 为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。
+3. **在应用或设备上设置载荷格式化器（payload formatter）**（LoRaWAN Device Repository 为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。可在 DeviceChain 中读取原始帧的[载荷解码器](./payload-decoders.md)将在 v1.2 提供。
 4. 在 DeviceChain 中添加设备，把 DevEUI 设为 `lorawan.deveui` 别名；如果选择了 **Device id**，则把设备 ID 设为 `tts.device-id` 别名。
 
 发送到其他任何路径的消息（join accept、下行确认）会返回 `204` 并被忽略，因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
@@ -183,7 +183,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 通用二进制 {#generic-binary}
 
-通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。第 1 版没有这些字节的解码器，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。用它来了解发送方发来了什么，而不是用来存储读数。
+通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。第 1 版没有这些字节的解码器，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。用它来了解发送方发来了什么，而不是用来存储读数。读取这些字节的[载荷解码器](./payload-decoders.md)将在 v1.2 提供。
 
 ## 存储的内容 {#what-is-stored}
 
@@ -289,12 +289,12 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 第 1 版不包含 {#not-supported}
 
-- **你自己编写的解码器。**平台存储的是网络服务器解码后的内容。DeviceChain 目前还没有可以编写自有解码器的地方，因此编解码器必须运行在 ChirpStack、The Things Stack 或你的通用发送方中。
+- **你自己编写、并在实时上行上运行的解码器。**平台存储的是网络服务器解码后的内容。你现在已经可以在设备配置文件上编写和测试[载荷解码器](./payload-decoders.md)，但它要到 v1.2 才会解码实时上行，因此在此之前，编解码器必须运行在 ChirpStack、The Things Stack 或你的通用发送方中。
 - **下行。**无法通过网络服务器向设备下发命令。参见[发给集成设备的命令](#commands)。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。
-- **解码通用二进制正文。**它会被接受并计数，但不会被解码。
+- **解码通用二进制正文。**它会被接受并计数，但不会被解码，直到[载荷解码器](./payload-decoders.md)在 v1.2 中开始解码实时上行。
 
 ## 故障排查 {#troubleshooting}
 
@@ -312,6 +312,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 相关内容 {#related}
 
+- [载荷解码器](./payload-decoders.md)：把原始帧或网络服务器解码出的对象转换成测量。
 - [设备](../user-guide/devices.md)：设备表单及其 **Aliases** 字段。
 - [连接设备](./connecting-a-device.md)：设备自行使用的 MQTT 和 HTTP 路径。
 - [传输能力矩阵](../reference/transport-matrix.md)：每种接入方式支持和不支持什么。

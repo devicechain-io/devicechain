@@ -7,6 +7,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -93,16 +94,6 @@ func newFigureLRU(max int) *figureLRU {
 	return &figureLRU{max: max, order: list.New(), items: make(map[[32]byte]*list.Element, max), inflight: map[[32]byte]chan struct{}{}}
 }
 
-func (c *figureLRU) get(key [32]byte) (decoderFigures, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.items[key]; ok {
-		c.order.MoveToFront(e)
-		return e.Value.(*figureEntry).val, true
-	}
-	return decoderFigures{}, false
-}
-
 func (c *figureLRU) put(key [32]byte, val decoderFigures) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -134,10 +125,16 @@ func (r *PayloadDecoderResolver) figures() (decoderFigures, error) {
 // the same time.
 func (c *figureLRU) figures(key [32]byte, compute func() decoderFigures) decoderFigures {
 	for {
-		if f, ok := c.get(key); ok {
+		// The cache check and the in-flight check share one critical section. Checking the cache
+		// first and the marker afterwards lets a caller miss the cache, then find the leader's
+		// marker already cleared (its result is stored by then) and compile the document again.
+		c.mu.Lock()
+		if e, ok := c.items[key]; ok {
+			c.order.MoveToFront(e)
+			f := e.Value.(*figureEntry).val
+			c.mu.Unlock()
 			return f
 		}
-		c.mu.Lock()
 		if wait, busy := c.inflight[key]; busy {
 			c.mu.Unlock()
 			<-wait
@@ -181,7 +178,14 @@ func (r *PayloadDecoderResolver) Input() (string, error) {
 	return string(d.Input), nil
 }
 
-func (r *PayloadDecoderResolver) Document() string { return string(r.raw) }
+// Document is the stored document. One over the cap (a row written before the save gate measured
+// the stored rendering) is an error, never streamed: it can be hundreds of megabytes.
+func (r *PayloadDecoderResolver) Document() (string, error) {
+	if len(r.raw) > payloaddecode.MaxDocumentBytes {
+		return "", fmt.Errorf("the stored decoder is %d bytes, above the maximum of %d: save it again", len(r.raw), payloaddecode.MaxDocumentBytes)
+	}
+	return string(r.raw), nil
+}
 
 func (r *PayloadDecoderResolver) MaxReadings() (int32, error) {
 	f, err := r.figures()

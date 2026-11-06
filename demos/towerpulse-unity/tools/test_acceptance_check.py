@@ -205,5 +205,82 @@ class Safety(unittest.TestCase):
         self.assertIn(a.ANNEX_CHILLER, a.ANNEX_DEVICES)
 
 
+class RestartFromConsole(unittest.TestCase):
+    """TP-B2: in console mode the script must WAIT for an operator's restart and must never send one itself."""
+
+    class FakePlatform:
+        def __init__(self, polls):
+            self.polls, self.created, self.asked = list(polls), [], 0
+
+        def create_command(self, device_token, name, token):
+            self.created.append((device_token, name, token))
+            return {"command": {"token": token}}
+
+        def commands(self, device_token):
+            self.asked += 1
+            return self.polls.pop(0) if self.polls else []
+
+    SINCE = "2026-10-29T16:25:00Z"
+    OPERATOR = {"token": "op-1", "name": "restart", "queuedTime": "2026-10-29T16:31:00Z"}
+
+    def wait(self, platform, wait_s=30):
+        now = [0.0]
+
+        def clock():
+            return now[0]
+
+        def sleep(s):
+            now[0] += s
+
+        return a.obtain_restart(platform, "dev", self.SINCE, "console", wait_s, sleep=sleep, clock=clock)
+
+    def test_console_mode_picks_up_the_operators_restart_and_sends_nothing(self):
+        p = self.FakePlatform([[], [], [self.OPERATOR]])
+        token, items = self.wait(p)
+        self.assertEqual(token, "op-1")
+        self.assertTrue(items[0].ok)
+        self.assertEqual(p.created, [])
+
+    def test_console_mode_times_out_loudly_and_still_sends_nothing(self):
+        p = self.FakePlatform([])
+        token, items = self.wait(p, wait_s=20)
+        self.assertIsNone(token)
+        self.assertIs(items[0].ok, False)
+        self.assertIn("none was sent by the script", items[0].detail)
+        self.assertEqual(p.created, [])
+        self.assertGreater(p.asked, 1)
+
+    def test_a_restart_from_before_the_run_or_another_command_does_not_count(self):
+        old = dict(self.OPERATOR, queuedTime="2026-10-29T16:00:00Z")
+        other = dict(self.OPERATOR, name="boost-cooling")
+        token, items = self.wait(self.FakePlatform([[old, other]] * 10), wait_s=10)
+        self.assertIsNone(token)
+        self.assertIs(items[0].ok, False)
+
+    def test_api_mode_still_sends_the_restart_itself(self):
+        p = self.FakePlatform([])
+        token, items = a.obtain_restart(p, "dev", self.SINCE, "api", 0)
+        self.assertEqual([c[1] for c in p.created], ["restart"])
+        self.assertEqual(token, p.created[0][2])
+        self.assertEqual(items[0].id, "b-restart-created")
+        self.assertEqual(p.asked, 0)
+
+    def test_the_default_is_the_api_path(self):
+        import io, contextlib
+        captured = {}
+        orig = a.cmd_segment_b
+        try:
+            def spy(args):
+                captured["restart"] = args.restart
+                return 0
+            # the subparser holds a reference to the function at build time, so rebuild through main()
+            a.cmd_segment_b = spy
+            with contextlib.redirect_stderr(io.StringIO()):
+                a.main(["segment-b", "--out", "x", "--since", self.SINCE])
+        finally:
+            a.cmd_segment_b = orig
+        self.assertEqual(captured["restart"], "api")
+
+
 if __name__ == "__main__":
     unittest.main()

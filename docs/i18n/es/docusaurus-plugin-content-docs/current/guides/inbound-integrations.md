@@ -129,7 +129,7 @@ ChirpStack envía los uplinks mediante una **integración HTTP** en una aplicaci
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack añade `?event=up` por sí mismo. |
    | Headers | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
 
-3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). La plataforma guarda los valores que decodifica el servidor de red; no decodifica la trama cruda. Sin códec, ChirpStack envía la trama cruda y ningún objeto decodificado, y el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse.
+3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). La plataforma guarda los valores que decodifica el servidor de red; no decodifica la trama cruda. Sin códec, ChirpStack envía la trama cruda y ningún objeto decodificado, y el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse. Un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain, llega en la v1.2.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`.
 
 Solo se leen los uplinks. ChirpStack envía otros eventos (join, status, confirmaciones) a la misma URL con otro valor de `event`, y se responden con `204` y se ignoran. El `deduplicationId` del uplink debe ser un UUID, como siempre envía ChirpStack; cualquier otra cosa se rechaza con `400`. La hora del mensaje es el `time` que informa ChirpStack, o la hora a la que lo recibió la plataforma cuando el campo falta.
@@ -147,7 +147,7 @@ The Things Stack envía los uplinks mediante un **webhook** en una aplicación.
    | Additional headers | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
    | Enabled event types | Uplink message, activado, con la ruta `/uplink-message`. La plataforma también lee las rutas `/up`, `/uplink` y `/uplinks`. |
 
-3. **Configura un payload formatter** en la aplicación o en el dispositivo (el LoRaWAN Device Repository ofrece uno para muchos sensores). La plataforma guarda lo que produce el formatter; no decodifica la trama cruda. Sin uno, el uplink se [cuenta como no decodificado](#undecoded).
+3. **Configura un payload formatter** en la aplicación o en el dispositivo (el LoRaWAN Device Repository ofrece uno para muchos sensores). La plataforma guarda lo que produce el formatter; no decodifica la trama cruda. Sin uno, el uplink se [cuenta como no decodificado](#undecoded). Un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain, llega en la v1.2.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`, o con su id de dispositivo como alias `tts.device-id` si elegiste **Id de dispositivo**.
 
 Un mensaje enviado a cualquier otra ruta (un join accept, una confirmación de downlink) se responde con `204` y se ignora, de modo que puedes activar otros tipos de mensaje sin cambiar nada en DeviceChain, aunque no hay motivo para hacerlo. La hora del mensaje es el `received_at` del uplink, que debe estar presente y no tener más de 366 días. La clave de deduplicación es el dispositivo, el contador de tramas y esa hora juntos, porque el contador se reinicia cuando un dispositivo vuelve a unirse.
@@ -183,7 +183,7 @@ Sin `timePointer`, la plataforma marca un elemento con la hora a la que lo recib
 
 ## Binario genérico {#generic-binary}
 
-Una integración binaria genérica acepta un cuerpo de bytes crudos, con el identificador en una cabecera o en un parámetro de consulta (`idFrom` es `header:` o `query:`; un cuerpo binario no tiene campos a los que apuntar). En la versión 1 la plataforma no tiene decodificador para esos bytes, así que cada uplink de este tipo se acepta, se [cuenta como no decodificado](#undecoded) y sus primeros 512 bytes se guardan como muestra en la integración. Úsala para ver qué envía un remitente antes de que exista un decodificador, no para guardar lecturas.
+Una integración binaria genérica acepta un cuerpo de bytes crudos, con el identificador en una cabecera o en un parámetro de consulta (`idFrom` es `header:` o `query:`; un cuerpo binario no tiene campos a los que apuntar). En la versión 1 la plataforma no tiene decodificador para esos bytes, así que cada uplink de este tipo se acepta, se [cuenta como no decodificado](#undecoded) y sus primeros 512 bytes se guardan como muestra en la integración. Úsala para ver qué envía un remitente antes de que exista un decodificador, no para guardar lecturas. Un [decodificador de payload](./payload-decoders.md) que lee estos bytes llega en la v1.2.
 
 ## Qué se guarda {#what-is-stored}
 
@@ -289,12 +289,12 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Decodificadores escritos por ti.** La plataforma guarda lo que decodificó el servidor de red. Aún no hay un lugar en DeviceChain donde escribir tu propio decodificador, así que el códec tiene que ejecutarse en ChirpStack o The Things Stack, o en tu remitente genérico.
+- **Decodificadores escritos por ti, ejecutándose sobre uplinks en vivo.** La plataforma guarda lo que decodificó el servidor de red. Ya puedes escribir y probar un [decodificador de payload](./payload-decoders.md) en un perfil de dispositivo, pero solo decodifica uplinks en vivo a partir de la v1.2, así que hasta entonces el códec tiene que ejecutarse en ChirpStack o The Things Stack, o en tu remitente genérico.
 - **Downlink.** No se pueden enviar comandos a un dispositivo a través de un servidor de red. Consulta [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.
-- **Decodificar un cuerpo binario genérico.** Se acepta y se cuenta, no se decodifica.
+- **Decodificar un cuerpo binario genérico.** Se acepta y se cuenta, no se decodifica, hasta que los [decodificadores de payload](./payload-decoders.md) decodifiquen uplinks en vivo en la v1.2.
 
 ## Solución de problemas {#troubleshooting}
 
@@ -312,6 +312,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## Relacionado {#related}
 
+- [Decodificadores de payload](./payload-decoders.md): convierten una trama cruda o el objeto decodificado de un servidor de red en mediciones.
 - [Dispositivos](../user-guide/devices.md): el formulario del dispositivo, con su campo **Alias**.
 - [Conexión de un dispositivo](./connecting-a-device.md): las vías MQTT y HTTP que usa un dispositivo por sí mismo.
 - [Matriz de capacidades por transporte](../reference/transport-matrix.md): qué admite y qué no admite cada vía de entrada.

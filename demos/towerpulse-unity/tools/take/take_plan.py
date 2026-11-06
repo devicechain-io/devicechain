@@ -4,12 +4,16 @@
 """
 take_plan.py -- the 90-second cut's shot plan, cut from two RECORDED runs.
 
-    take_plan.py --run-a RUNDIR_A --run-b RUNDIR_B [--shots shots.json] [--out take-plan.json]
+    take_plan.py --run-a RUNDIR_A --run-b RUNDIR_B [--control RUNDIR_C] [--shots shots.json] [--out take-plan.json]
 
 Run A is the afternoon with the 14:00 meeting (the hot room, the platform's rule, the boost command); run B is the annex chiller going silent and its
 restart. Each shot says which run it is filmed from and which span of that run's model clock it covers, and the spans are anchored on what the
 recording says happened (the alarm, the command being sent, the room back at setpoint, the restart done), never on a wall-clock guess: re-cut a new
 take and the beats follow it. The wait between two beats is CUT, not faked, and TakeRenderer labels every shot whose clock jumps on screen.
+
+With --control (the rule-disabled run, TP-B3) the plan gains one more shot, `control`, filmed from that recording with run A's camera move and cards:
+the same seed gives the same day, so it covers the span from just before run A's alarm to just after its room was back at setpoint, and the shot shows the room overheating with no alarm card and
+no command card. A recording that holds an alarm, command, received or answered fact, or that does not record the rule as disabled, is not a control run and is refused.
 
 The camera moves are the storyboard's (Assets/Towerpulse/Data/shots.json), split across the sub-shots of a beat so the move is continuous.
 The owner's view (beat 4) is filmed from the console, not from the scene; its slot is the gap in the show clock between the chiller and the pull-back.
@@ -57,6 +61,24 @@ def anchors(fs, dev, alarm_key, command_key):
     }
 
 
+CONTROL_RULE = "tp-rule-zone-hot"
+CONTROL_LEAD_S = 60.0  # the control shot opens this long before run A's alarm (same seed, same day)
+
+
+def check_control(rundir, fs):
+    """Refuse a recording that is not the rule-disabled control: it must hold no alarm or command fact, and must not say the rule was enabled."""
+    for f in fs:
+        if f.get("k") in ("alarm", "command", "received", "answered"):
+            raise PlanError("the control recording holds a %s fact (%s): the rule was not disabled, so it is not a control run" % (f.get("k"), f.get("key")))
+    path = os.path.join(rundir, "towerpulse.json")
+    if not os.path.exists(path):
+        raise PlanError("the control recording has no towerpulse.json: nothing says %s was disabled (acceptance_check.py annotate writes it)" % CONTROL_RULE)
+    with open(path, encoding="utf-8") as f:
+        enabled = json.load(f).get("ruleEnabled", {})
+    if enabled.get(CONTROL_RULE) is not False:
+        raise PlanError("the control recording does not say %s was disabled (ruleEnabled: %r): it is not a proven control run" % (CONTROL_RULE, enabled.get(CONTROL_RULE)))
+
+
 def smooth(t):
     return t * t * (3 - 2 * t)
 
@@ -89,7 +111,7 @@ def hours(sim_s):
     return round(sim_s / 3600.0, 6)
 
 
-def build(a, b, sb):
+def build(a, b, sb, control=False):
     """The shots, in show order. a and b are the anchors of the two runs, sb the storyboard by id."""
     for need in ("dusk-establishing", "f4-east-push-in", "chiller-close-up", "pull-back"):
         if need not in sb:
@@ -117,6 +139,11 @@ def build(a, b, sb):
     add("A", "hot-room-alarm", "2 A hot room", caption, d_hot[1], a["alarm"] - 20, a["sent"] + 30, cards, *p2)
     add("A", "hot-room-cools", "2 A hot room", "SENT means delivered; done means back at setpoint", d_hot[2], a["sent"] + 30, a["done"] + 20, cards, *p3)
 
+    if control:
+        # the rule-disabled run, from run A's camera move (whole, in one shot) and the span of the day run A's alarm fell in
+        add("control", "control", "2 A hot room", "The same room, the rule disabled: it overheats and nothing happens", 10.0, a["alarm"] - CONTROL_LEAD_S,
+            a["done"] + 20, cards, f4["from"], f4["to"])
+
     ch = sb["chiller-close-up"]
     d_ch = [6.0, 10.0, 8.0]
     c1, c2, c3 = split_move(ch, d_ch)
@@ -136,16 +163,19 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--run-a", required=True)
     ap.add_argument("--run-b", required=True)
+    ap.add_argument("--control", default=None, help="the rule-disabled run's recording: adds the control shot")
     ap.add_argument("--shots", default=DEFAULT_SHOTS)
     ap.add_argument("--out", default=os.path.join(HERE, "take-plan.json"))
     a = ap.parse_args(argv)
     try:
+        if a.control:
+            check_control(a.control, facts(a.control))
         shots = build(anchors(facts(a.run_a), "TP-VAV-T-F4-E", "zone-hot", "boost-cooling"),
-                      anchors(facts(a.run_b), "TP-CH-A", "chiller-silent", "restart"), storyboard(a.shots))
+                      anchors(facts(a.run_b), "TP-CH-A", "chiller-silent", "restart"), storyboard(a.shots), control=bool(a.control))
     except (PlanError, OSError, KeyError, ValueError) as e:
         print("take_plan: " + str(e), file=sys.stderr)
         return 1
-    plan = {"version": 1, "note": "Cut from two recorded runs by tools/take/take_plan.py; regenerate it for a new take. Show seconds; the console's part fills the gap before pull-back.", "shots": shots}
+    plan = {"version": 1, "note": "Cut from the recorded runs by tools/take/take_plan.py; regenerate it for a new take. Show seconds; the console's part fills the gap before pull-back.", "shots": shots}
     with open(a.out, "w", encoding="utf-8", newline="\n") as f:
         json.dump(plan, f, indent=2)
         f.write("\n")

@@ -109,6 +109,89 @@ class FactTests(unittest.TestCase):
             take_plan.anchors(take_plan.facts(d), "X", "hot", "go")
 
 
+class ControlTests(unittest.TestCase):
+    """TP-B3: the rule-disabled run gets its own shot, only when asked for, and only from a recording that really is a control."""
+
+    def setUp(self):
+        self.shots = take_plan.build(A, B, storyboard(), control=True)
+        self.by = {s["id"]: s for s in self.shots}
+
+    def test_without_the_control_the_plan_is_unchanged(self):
+        plain = take_plan.build(A, B, storyboard())
+        self.assertNotIn("control", [s["id"] for s in plain])
+        strip = lambda shots: [{k: v for k, v in s.items() if k != "startS"} for s in shots]
+        self.assertEqual(strip(s for s in self.shots if s["id"] != "control"), strip(plain))
+
+    def test_the_control_shot_is_its_own_run_with_the_hot_rooms_camera_and_cards(self):
+        c = self.by["control"]
+        self.assertEqual(c["run"], "control")
+        self.assertEqual(c["cards"], self.by["hot-room-heats"]["cards"])
+        self.assertEqual(c["from"], take_plan.lerp_pose(POSE, POSE2, 0.0))
+        self.assertEqual(c["to"], take_plan.lerp_pose(POSE, POSE2, 1.0))
+
+    def test_the_control_shot_covers_the_span_run_a_alarmed_in(self):
+        c = self.by["control"]
+        self.assertLess(c["modelFromHour"], A["alarm"] / 3600.0)
+        self.assertGreater(c["modelToHour"], A["done"] / 3600.0)
+
+    def test_the_control_shot_follows_the_hot_room_and_nothing_overlaps(self):
+        order = [s["id"] for s in self.shots]
+        self.assertEqual(order.index("control"), order.index("hot-room-cools") + 1)
+        for prev, nxt in zip(self.shots, self.shots[1:]):
+            self.assertGreaterEqual(nxt["startS"] + 1e-9, prev["startS"] + prev["durationS"])
+
+    def test_the_plan_the_player_reads_has_a_control_shot_with_a_model_clock(self):
+        c = self.by["control"]
+        self.assertGreater(c["modelToHour"], c["modelFromHour"])
+        self.assertGreater(c["durationS"], 0)
+
+
+class CheckControlTests(unittest.TestCase):
+    def write(self, lines, enabled=None):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "story.ndjson"), "w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(json.dumps(line) + "\n")
+        if enabled is not None:
+            with open(os.path.join(d, "towerpulse.json"), "w", encoding="utf-8") as f:
+                json.dump({"ruleEnabled": {take_plan.CONTROL_RULE: enabled}}, f)
+        return d
+
+    def check(self, d):
+        take_plan.check_control(d, take_plan.facts(d))
+
+    def test_a_quiet_recording_with_the_rule_off_is_a_control(self):
+        self.check(self.write([{"sim": 100, "k": "zone", "dev": "X"}], enabled=False))
+
+    def test_a_recording_with_an_alarm_is_refused(self):
+        with self.assertRaises(take_plan.PlanError):
+            self.check(self.write([{"sim": 100, "k": "alarm", "dev": "X", "key": "zone-hot", "active": True}]))
+
+    def test_a_recording_with_a_command_is_refused(self):
+        with self.assertRaises(take_plan.PlanError):
+            self.check(self.write([{"sim": 100, "k": "command", "dev": "X", "key": "boost-cooling", "status": "SENT"}]))
+
+    def test_device_command_facts_are_refused_too(self):
+        for kind in ("received", "answered"):
+            with self.assertRaises(take_plan.PlanError):
+                self.check(self.write([{"sim": 100, "k": kind, "dev": "X", "key": "boost-cooling"}], enabled=False))
+
+    def test_a_recording_with_no_rule_metadata_is_refused(self):
+        with self.assertRaises(take_plan.PlanError):
+            self.check(self.write([]))
+
+    def test_a_recording_with_no_entry_for_the_rule_is_refused(self):
+        d = self.write([], enabled=False)
+        with open(os.path.join(d, "towerpulse.json"), "w", encoding="utf-8") as f:
+            json.dump({"ruleEnabled": {}}, f)
+        with self.assertRaises(take_plan.PlanError):
+            self.check(d)
+
+    def test_a_recording_whose_rule_was_enabled_is_refused(self):
+        with self.assertRaises(take_plan.PlanError):
+            self.check(self.write([], enabled=True))
+
+
 class ChipTests(unittest.TestCase):
     def test_orange_is_the_chip_and_the_strip_is_not(self):
         self.assertTrue(frame_check.is_orange((245, 120, 70)))

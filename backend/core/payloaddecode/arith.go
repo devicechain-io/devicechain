@@ -74,16 +74,20 @@ var mathFunctionNames = map[string]struct{}{
 	"math.pow": {}, "math.min": {}, "math.max": {}, "math.clamp": {},
 }
 
+// mathCost is what a math function's own call costs: it has no estimator of its own, so the
+// standard charge of one unit per call applies and nothing more.
+const mathCost = costOne
+
 var mathDocs = []FunctionDoc{
-	{"math.abs", "math.abs(double|int) -> double|int", "Absolute value."},
-	{"math.floor", "math.floor(double) -> double", "Largest integral value not above the argument."},
-	{"math.ceil", "math.ceil(double) -> double", "Smallest integral value not below the argument."},
-	{"math.round", "math.round(double) -> double", "Rounds half away from zero."},
-	{"math.sqrt", "math.sqrt(double|int) -> double", "Square root; a negative argument is an error."},
-	{"math.pow", "math.pow(double|int, int) -> double", "Integer power by repeated multiplication."},
-	{"math.min", "math.min(a, b) -> double|int", "The smaller of two numbers."},
-	{"math.max", "math.max(a, b) -> double|int", "The larger of two numbers."},
-	{"math.clamp", "math.clamp(x, lo, hi) -> double|int", "x limited to [lo, hi]; lo above hi is an error."},
+	{"math.abs", "math.abs(double|int) -> double|int", "Absolute value.", mathCost},
+	{"math.floor", "math.floor(double) -> double", "Largest integral value not above the argument.", mathCost},
+	{"math.ceil", "math.ceil(double) -> double", "Smallest integral value not below the argument.", mathCost},
+	{"math.round", "math.round(double) -> double", "Rounds half away from zero.", mathCost},
+	{"math.sqrt", "math.sqrt(double|int) -> double", "Square root; a negative argument is an error.", mathCost},
+	{"math.pow", "math.pow(double|int, int) -> double", "Integer power by repeated multiplication.", mathCost},
+	{"math.min", "math.min(a, b) -> double|int", "The smaller of two numbers.", mathCost},
+	{"math.max", "math.max(a, b) -> double|int", "The larger of two numbers.", mathCost},
+	{"math.clamp", "math.clamp(x, lo, hi) -> double|int", "x limited to [lo, hi]; lo above hi is an error.", mathCost},
 }
 
 func toFloat(v ref.Val) float64 {

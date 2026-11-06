@@ -399,3 +399,37 @@ func TestUpdatingTheProfileNeverWritesTheDecoderColumn(t *testing.T) {
 		assert.NotContains(t, sql, "decoder_declaration")
 	}
 }
+
+// 🔴 The cap is on the STORED rendering, not the bytes sent: jsonb writes 1e100000 out in full, so
+// this 18 KB document would make every read of the profile return about 200 MB. (The Postgres
+// round trip itself is profile_decoder_jsonb_integration_test.go.)
+func TestSetDecoderRefusesANumberThatRendersHuge(t *testing.T) {
+	f := newDecoderFixture(t)
+	hostile := `{"kind":"CEL","envVersion":1,"input":"FRAME","sections":[{"name":"s","ignore":true}],"table":{"v":1,"x":[` +
+		strings.TrimSuffix(strings.Repeat("1e100000,", 2000), ",") + `]}}`
+	require.Less(t, len(hostile), 32<<10, "under the cap as sent")
+	refusal(t, f.set(hostile), CodeInvalidDecoder, "once stored")
+	assert.Nil(t, f.profile().DecoderDeclaration, "nothing was written")
+}
+
+func TestSetDecoderRefusesANonObjectTable(t *testing.T) {
+	f := newDecoderFixture(t)
+	refusal(t, f.set(withDoc(t, `"vectors"`, `"table": [1,2], "vectors"`)), CodeInvalidDecoder, "table must be an object")
+}
+
+// A draft already stored over the cap (written before the gate measured the stored form) is never
+// frozen into a snapshot, and the preview reports it instead of compiling it.
+func TestAStoredDecoderOverTheCapIsRefusedOnPublishAndPreview(t *testing.T) {
+	f := newDecoderFixture(t)
+	big := datatypes.JSON(`{"kind":"CEL","envVersion":1,"input":"FRAME","sections":[{"name":"s","ignore":true}],"table":{"x":"` +
+		strings.Repeat("a", 40<<10) + `"}}`)
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceProfile{}).Where("token = ?", "meter").
+		Update("decoder_declaration", big).Error)
+
+	_, err := f.publish()
+	refusal(t, err, CodeInvalidDecoder, "save it again")
+
+	res, err := f.api.TestPayloadDecoder(f.ctx, &PayloadDecoderTestRequest{ProfileToken: "meter"})
+	require.NoError(t, err)
+	require.NotNil(t, res.Failure)
+}
