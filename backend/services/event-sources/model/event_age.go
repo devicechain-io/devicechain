@@ -62,9 +62,11 @@ func CheckEventAge(occurred, processed time.Time, payload interface{}) error {
 			}
 		}
 		return nil
-	case *UnresolvedNewRelationshipPayload, *UnresolvedStateChangePayload:
+	case *UnresolvedNewRelationshipPayload, *UnresolvedStateChangePayload, *UnresolvedIntegrationUplinkPayload:
 		// No entry times: a relationship is one unit, and a state change's OccurredTime field
-		// is a descriptive copy of the envelope's, which was checked above.
+		// is a descriptive copy of the envelope's, which was checked above. An integration uplink is
+		// raw input: the decoder that reads it emits readings at the envelope's instant (a decoder
+		// has no way to set one), which was checked above.
 		return nil
 	}
 	return fmt.Errorf("payload of type %T has no event-time rule, so its age cannot be checked; "+

@@ -67,56 +67,69 @@ func errIntegrationEvent(integration, why string) error {
 // resolveIntegrationEvent resolves an event an inbound integration delivered to its device,
 // or refuses it. See the block comment above for the rules.
 func (rez *EventResolver) resolveIntegrationEvent(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.Device, uint, error) {
+	device, _, reason, err := rez.resolveIntegration(ctx, unrez)
+	return device, reason, err
+}
+
+// resolveIntegration is resolveIntegrationEvent, and also answers the integration the event
+// authenticated as, with the bearer token that proved it, for the steps that act on the
+// integration's behalf once the device is known: a decode appends the integration's link
+// metrics, and an uplink flattened to nothing is recorded on the integration.
+func (rez *EventResolver) resolveIntegration(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.Device, integrationAuth, uint, error) {
 	unauthenticated := uint(resolvedevent.FailureReason_Unauthenticated)
+	none := integrationAuth{}
 	if unrez.Integration == "" || unrez.SealedIntegrationToken == nil {
-		return nil, unauthenticated, errors.New("an integration event must carry the integration and its sealed token")
+		return nil, none, unauthenticated, errors.New("an integration event must carry the integration and its sealed token")
 	}
 	if unrez.BrokerAsserted || unrez.AuthenticatedTransport || unrez.Gateway != "" ||
 		unrez.CredentialType != nil || unrez.CredentialId != nil || unrez.CredentialSecret != nil ||
 		unrez.SealedCredentialId != nil || unrez.SealedCredentialSecret != nil {
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "an integration event carries no other authority")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "an integration event carries no other authority")
 	}
 	// The source stamp is the one command delivery classifies a device's transport by, so an
 	// integration event that is stamped as anything else would be commandable (or would corrupt
 	// another transport's presence rows). It must be exactly "integration:{token}".
 	if want := transport.Qualify(transport.Integration, unrez.Integration); unrez.Source != want {
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the event's source is not the integration's")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "the event's source is not the integration's")
 	}
-	// What an integration delivers is readings. A marked event of any other type does not
-	// inherit the trust, so a future emit path for a more dangerous type cannot silently get it.
-	if unrez.EventType != eventtype.Measurement {
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "an integration may deliver measurements only")
+	// What an integration delivers is readings, or the raw input a decoder turns into readings.
+	// A marked event of any other type does not inherit the trust, so a future emit path for a
+	// more dangerous type cannot silently get it. The uplink is accepted ONLY here, behind every
+	// check below, and only for an integration: it is the one type whose content a tenant's
+	// decoder interprets.
+	if unrez.EventType != eventtype.Measurement && unrez.EventType != eventtype.IntegrationUplink {
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "an integration may deliver measurements and uplinks only")
 	}
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" || rez.SecretTransit == nil {
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the sealed token cannot be opened")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "the sealed token cannot be opened")
 	}
 	token, err := rez.SecretTransit.OpenToken(tenant, credential.IntegrationSealKind(unrez.Integration), unrez.SealedIntegrationToken)
 	if err != nil || token == "" {
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the sealed token was not sealed for this tenant and integration")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "the sealed token was not sealed for this tenant and integration")
 	}
 	integration, err := rez.Api.AuthenticateIntegration(ctx, unrez.Integration, token)
 	switch {
 	case err == nil:
 	case errors.Is(err, model.ErrIntegrationAuthFailed):
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "authentication failed")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "authentication failed")
 	case errors.Is(err, model.ErrIntegrationDisabled):
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the integration is disabled")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "the integration is disabled")
 	default:
 		// The database, or no integration key wired: says nothing about the token, so it is
 		// the retryable kind of failure, never read as a rejection.
-		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
+		return nil, none, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 	matches, err := rez.Api.DevicesByToken(ctx, []string{unrez.Device})
 	if err != nil {
-		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
+		return nil, none, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 	if len(matches) == 0 {
-		return nil, uint(resolvedevent.FailureReason_DeviceNotFound),
+		return nil, none, uint(resolvedevent.FailureReason_DeviceNotFound),
 			fmt.Errorf("event device token %q is not registered", unrez.Device)
 	}
 	if !integration.ScopeHas(matches[0].DeviceTypeId) {
-		return nil, unauthenticated, errIntegrationEvent(unrez.Integration, "the device's type is not in the integration's scope")
+		return nil, none, unauthenticated, errIntegrationEvent(unrez.Integration, "the device's type is not in the integration's scope")
 	}
 	// 🔴 THE DEVICE MUST STILL HOLD THE ALIAS THE ROUTE RESOLVED IT FROM. The route remembers a
 	// resolved device for minutes, so an alias an operator has since removed, or moved to another
@@ -127,18 +140,18 @@ func (rez *EventResolver) resolveIntegrationEvent(ctx context.Context, unrez *es
 	scheme := integration.AliasScheme()
 	if scheme == "" || unrez.IntegrationIdentifier == "" {
 		rez.countAliasMismatch()
-		return nil, uint(resolvedevent.FailureReason_IntegrationAliasMismatch),
+		return nil, none, uint(resolvedevent.FailureReason_IntegrationAliasMismatch),
 			fmt.Errorf("%w: integration %q: the event does not say which identifier it was resolved from", ErrIntegrationAliasMismatch, unrez.Integration)
 	}
 	held, err := rez.Api.DeviceHoldsAlias(ctx, matches[0].ID, scheme, unrez.IntegrationIdentifier)
 	if err != nil {
-		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
+		return nil, none, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 	if !held {
 		rez.countAliasMismatch()
-		return nil, uint(resolvedevent.FailureReason_IntegrationAliasMismatch),
+		return nil, none, uint(resolvedevent.FailureReason_IntegrationAliasMismatch),
 			fmt.Errorf("%w: integration %q: device %q no longer holds the %s alias the event was resolved from",
 				ErrIntegrationAliasMismatch, unrez.Integration, matches[0].Token, scheme)
 	}
-	return matches[0], 0, nil
+	return matches[0], integrationAuth{integration: integration, token: token}, 0, nil
 }

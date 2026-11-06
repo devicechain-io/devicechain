@@ -559,3 +559,19 @@ func TestAnOutageDoesNotStopCutAOnceTheDecoderAnswerIsStale(t *testing.T) {
 	h2.withDecoder(nil, errors.New("connection refused"))
 	require.Equal(t, http.StatusServiceUnavailable, h2.up().Code, "cold cache, outage")
 }
+
+// A plan served past its TTL because device-management could not be asked is counted as stale, in
+// addition to the result the plan gave, so an operator can see a replica running on old answers.
+func TestAStaleDecoderLookupIsCounted(t *testing.T) {
+	h := newRouteHarness(t)
+	f := h.withDecoder(framePlan(), nil)
+	require.Equal(t, http.StatusAccepted, h.up().Code)
+	require.Zero(t, h.count("lookup/stale"), "a fresh answer is not stale")
+
+	f.set(nil, errors.New("device-management is down"))
+	h.now = h.now.Add(2 * integration.DefaultDecoderTTL)
+	body := strings.ReplaceAll(fixtureBody(t, "chirpstack/up_decoded.json"), "3ac7e3c4-4401-4b8d-9386-a5c902f9202d", "4c8b1a2e-0000-4000-8000-00000000aaa3")
+	require.Equal(t, http.StatusAccepted, h.post(csPath+upQuery, goodBearer, body).Code)
+	require.Equal(t, 1, h.count("lookup/stale"))
+	require.Equal(t, 2, h.count("lookup/present"), "the stale answer still counts as the result it gave")
+}

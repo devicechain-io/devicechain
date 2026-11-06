@@ -751,14 +751,13 @@ var All = []Stream{
 	// The carrier of an integration's raw input to a profile's payload decoder. See
 	// IntegrationUplinks for why it is a stream of its own.
 	//
-	// 🔴 IT DECLARES NO READER YET, ON PURPOSE, AND THE CHANGE THAT DECLARES ONE MERGES DIRECTLY AFTER
-	// THIS ONE, WITH NO RELEASE BETWEEN. The device-management resolver that consumes it, its
-	// durable, its backpressure gate (BackpressureReaders) and its forward into resolved-events
-	// (Forwards) are declared in the change that builds that consumer, together: a declared
-	// reader nothing builds is a grant to nothing (core/test's catalog-usage check says so), and a
-	// backpressure reader that is not running closes no gate. Until then the stream only holds what
-	// event-sources writes, and event-sources only writes it for a device type whose decoder a
-	// device-management answered for.
+	// device-management reads it on a durable that only a build with payload decoders creates,
+	// decodes in the resolver pool it already runs, and forwards into resolved-events, so the
+	// stream takes the same backpressure the inbound stream does: its writer refuses while
+	// device-management's unread backlog fills the stream, and the reader parks while the
+	// downstream gate is closed instead of spending deliveries on publishes that would fail.
+	// Resolution that loses an unread message is data loss on this stream exactly as on
+	// inbound-events, which is why the reader is named in BackpressureReaders.
 	//
 	// 🔴 IT HAS A SMALL FIXED CEILING (MaxBytesCap), AND THE REASON IS THE GATE, NOT THE SIZE. A
 	// Hot stream reserves its whole ceiling up front, and a default-sized one (a gibibyte) would
@@ -766,18 +765,22 @@ var All = []Stream{
 	// 50 MiB. The rule that a stream holding promised data is never capped exists because
 	// DeviceEventsCapture had no gate, so a full stream silently evicted PUBACKed events. This
 	// stream has one: device-management is its backpressure reader, so the gate closes before
-	// eviction and overflow is a 503 to the sender (who retries), never a loss.
+	// eviction and overflow is a 503 to the sender, never a loss of anything already accepted.
 	//
 	// 32 MiB is a ceiling that moves no row of that table (the 20,000 row has 42 MiB to spare), fail-closed MQTT on or off
 	// (TestThePublishedSizingTableRowsHold), with the key-value buckets' reservation as it is. It
 	// is a runway of seconds at the top decoder-integration rates, not the 15-minute outage
 	// runway the event streams are sized for: during a longer device-management outage decoder
-	// uplinks are refused with a 503 and retried by the sender, while uplinks for types with no
+	// uplinks are refused with a 503, which a sender that retries will redeliver and one that does not
+	// (a ChirpStack v4 HTTP integration documents no retry) will not; uplinks already accepted are
+	// never lost, and uplinks for types with no
 	// decoder (Cut A) are unaffected. Raising it is a sizing-table change, not a tuning knob.
-	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
-		MaxBytesCap:    integrationUplinksMaxBytesCap,
-		DeadLetterKind: kindEvent,
-		Why:            "an integration sender's raw frame or JSON, held for the profile's payload decoder"},
+	{Suffix: IntegrationUplinks, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+		MaxBytesCap:         integrationUplinksMaxBytesCap,
+		DeadLetterKind:      kindEvent,
+		BackpressureReaders: []string{"device-management"},
+		Forwards:            map[string]string{"device-management": ResolvedEvents},
+		Why:                 "an integration sender's raw frame or JSON, held for the profile's payload decoder"},
 	//
 	// event-processing is REPLAY-COVERED: DETECT acks a resolved event only after a
 	// snapshot checkpoint covers it, applies every delivery on first sight (true while the

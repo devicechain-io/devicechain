@@ -524,6 +524,7 @@ dcctl bootstrap local devicechain
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 - **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
+- **处理新的失败事件原因 `DECODE_FAILED`。** 对 `FailedEventReason` 做穷举 `switch` 的客户端会多看到一个值。参见[新的失败事件原因](#v120-decode-failed)。
 - **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，在其再次活跃并再次沉默之前，该字段返回 null。
 - **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
@@ -592,9 +593,13 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 **回退。** `v1.1` 的服务在启动时会拒绝 `tokenAudience` 配置块。`dcctl` 渲染的 `v1.1` 配置不含它。如果你自己编写配置，请在回退前删除该配置块并更新 `instance.existingSecretChecksum`。
 
+#### 新的失败事件原因 {#v120-decode-failed}
+
+`FailedEventReason` 新增 `DECODE_FAILED`：载荷解码器拒绝了某个集成的上行消息。错误文本的开头说明了原因（例如 `no_section`、`eval_error` 或 `invalid_output`）。它在第一次投递时即被记录，不会重试，因为相同的上行消息和解码器会给出相同的结果。版本策略允许在次要版本中新增枚举值；对原因做穷举 `switch` 的客户端应处理该值，较旧的 event-management 会把该编号显示为 `UNKNOWN`，并附带 `reasonCode`。`dcctl` 的 `--reason` 接受 `DECODE_FAILED`。
+
 #### 解码器上行消息与 device-management 中断 {#v120-decoder-stream}
 
-带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503，由网络服务器重试；已被接受的数据不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行足够多的 device-management 副本，使重启其中一个不会中断读取。
+带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503。会重试失败投递的发送方会在该流排空后送达上行消息；不重试的发送方则不会。The Things Stack 的 webhook 仅在启用其可选的 webhook 重试功能（Cloud Plus 功能，任何非 2xx 响应都算一次失败尝试）时才会重试失败的投递，而 ChirpStack v4 的 HTTP 集成没有文档说明任何重试，因此应将其在中断期间发送的上行消息视为不会被重新投递。已被接受（返回 202）的上行消息不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行多个 device-management 副本（至少足以让重启其中一个不会中断读取），使中断保持短暂。
 
 #### 滚动升级期间的配置文件变更 {#v120-profile-cache}
 

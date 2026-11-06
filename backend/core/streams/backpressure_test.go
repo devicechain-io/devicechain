@@ -28,7 +28,7 @@ func TestBackpressureIsDeclaredOnlyWhereUnreadLossIsDataLoss(t *testing.T) {
 			t.Errorf("stream %q applies backpressure but is not a Hot tenant-shaped stream a writer can be refused on", s.Suffix)
 		}
 	}
-	want := []pair{{InboundEvents, "device-management"}, {ResolvedEvents, "event-management"}}
+	want := []pair{{InboundEvents, "device-management"}, {IntegrationUplinks, "device-management"}, {ResolvedEvents, "event-management"}}
 	if len(got) != len(want) {
 		t.Fatalf("backpressure declarations = %v, want %v", got, want)
 	}
@@ -37,7 +37,7 @@ func TestBackpressureIsDeclaredOnlyWhereUnreadLossIsDataLoss(t *testing.T) {
 			t.Fatalf("backpressure declarations = %v, want %v", got, want)
 		}
 	}
-	for _, s := range []string{InboundEvents, ResolvedEvents} {
+	for _, s := range []string{InboundEvents, IntegrationUplinks, ResolvedEvents} {
 		if !AppliesBackpressure(s) {
 			t.Errorf("AppliesBackpressure(%q) = false; it does not read the declaration", s)
 		}
@@ -75,8 +75,9 @@ func TestForwardsIsTheIngestChain(t *testing.T) {
 		}
 	}
 	want := map[hop]bool{
-		{InboundEvents, "device-management", ResolvedEvents}:  true,
-		{DeviceEventsCapture, "event-sources", InboundEvents}: true,
+		{InboundEvents, "device-management", ResolvedEvents}:      true,
+		{IntegrationUplinks, "device-management", ResolvedEvents}: true,
+		{DeviceEventsCapture, "event-sources", InboundEvents}:     true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("forwards = %v, want %v", got, want)
@@ -88,6 +89,9 @@ func TestForwardsIsTheIngestChain(t *testing.T) {
 	}
 	if into := ForwardsInto(InboundEvents, "device-management"); into != ResolvedEvents {
 		t.Errorf("ForwardsInto(inbound-events, device-management) = %q, want %q", into, ResolvedEvents)
+	}
+	if into := ForwardsInto(IntegrationUplinks, "device-management"); into != ResolvedEvents {
+		t.Errorf("ForwardsInto(integration-uplinks, device-management) = %q, want %q", into, ResolvedEvents)
 	}
 	if into := ForwardsInto(DeviceEventsCapture, "event-sources"); into != InboundEvents {
 		t.Errorf("ForwardsInto(capture, event-sources) = %q, want %q", into, InboundEvents)

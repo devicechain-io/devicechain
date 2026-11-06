@@ -837,7 +837,7 @@ dcctl events failed [flags]
   -h, --help            help for failed
       --limit int       most records to fetch (default 100)
   -o, --output string   output format: table or json (default "table")
-      --reason string   only this reason: INVALID, API_CALL_FAILED, DEVICE_NOT_FOUND, UNAUTHENTICATED, DEVICE_DISABLED, NOT_GATEWAY_CHILD, INTEGRATION_ALIAS_MISMATCH, UNKNOWN (any case; '-' for '_')
+      --reason string   only this reason: INVALID, API_CALL_FAILED, DEVICE_NOT_FOUND, UNAUTHENTICATED, DEVICE_DISABLED, NOT_GATEWAY_CHILD, INTEGRATION_ALIAS_MISMATCH, DECODE_FAILED, UNKNOWN (any case; '-' for '_')
       --since string    only records from this RFC3339 time onward, or this long ago (e.g. 2026-09-04T00:00:00Z or 6h); the server reads at most 31 days back
       --summary         count failures per reason instead of listing them (default window 24h)
       --until string    only records up to this RFC3339 time, or up to this long ago
