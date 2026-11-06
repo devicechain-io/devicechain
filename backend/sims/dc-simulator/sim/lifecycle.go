@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-simulator/otafleet"
 	"github.com/rs/zerolog/log"
 )
 
@@ -77,6 +78,10 @@ type Lifecycle struct {
 	// process entirely), and for a FarEndInternal scenario started with the explicit
 	// opt-out. It outlives Stop deliberately — see Close.
 	farEnd CommandFarEnd
+	// updateFleet is the simulated OTA-updatable devices once Bootstrap attached them (only when
+	// the operator asked for them, Runtime.UpdateFleet). Like farEnd it outlives Stop and ends at
+	// Close: a real device keeps listening for updates while it is not reporting.
+	updateFleet UpdateFleet
 	// tickDone is closed by runTickLoop as it exits, so Stop can WAIT for the
 	// loop rather than merely signalling it. Without the join, a Stop/Start
 	// pair resets the counters while the previous run's workers are still
@@ -121,6 +126,12 @@ func (l *Lifecycle) Bootstrap(ctx context.Context) error {
 	// authenticates each subscription with; before BOOTSTRAPPED, so a scenario whose
 	// command channel has no far end never reports itself as ready to run.
 	if err := l.attachCommandFarEnd(ctx); err != nil {
+		l.mu.Lock()
+		l.lastError = err.Error()
+		l.mu.Unlock()
+		return err
+	}
+	if err := l.attachUpdateFleet(ctx); err != nil {
 		l.mu.Lock()
 		l.lastError = err.Error()
 		l.mu.Unlock()
@@ -298,6 +309,11 @@ type statusResponse struct {
 	// ExternalDevicePlane reports --external-device-plane: this process provisions and converges only,
 	// and an outside client is every device. Omitted when off, so an ordinary sim's /status is unchanged.
 	ExternalDevicePlane bool `json:"externalDevicePlane,omitempty"`
+
+	// Updates reports the simulated OTA-updatable devices (--ota): how many are on the broker, what
+	// version each runs, which stage they are in, and the injected faults that fired. Omitted when
+	// the sim runs no update devices, so an ordinary sim's /status is unchanged.
+	Updates *otafleet.Report `json:"updates,omitempty"`
 }
 
 // ControlServer exposes the ADR-035 control-API seam (bootstrap/start/stop/
@@ -332,6 +348,7 @@ func (c *ControlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// Outside the lock: commandFarEndStatus takes the same mutex.
 	resp.CommandFarEnd = c.lc.commandFarEndStatus()
 	resp.ExternalDevicePlane = c.rt.ExternalDevicePlane
+	resp.Updates = c.lc.updateFleetStatus()
 	resp.Tenant = c.rt.Tenant
 	resp.InstanceId = c.rt.InstanceId
 	resp.DeviceCount = len(c.rt.Devices)

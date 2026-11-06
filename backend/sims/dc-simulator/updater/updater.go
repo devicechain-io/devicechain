@@ -5,8 +5,9 @@
 // the update contract, with the faults a real device has built in so the platform half can be
 // proven against them.
 //
-// It is a test instrument for upcoming OTA support. Nothing here is wired to a broker or to any
-// service; the transport is an interface the caller supplies.
+// It is a test instrument for OTA support. This package is wired to no broker and no service: the
+// transport is an interface the caller supplies. The otafleet package is the caller that supplies
+// the real one (MQTT, with an HTTP download source) and runs it for a simulated fleet.
 //
 // # What it does
 //

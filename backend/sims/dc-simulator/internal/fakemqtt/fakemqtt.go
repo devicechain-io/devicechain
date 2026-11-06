@@ -52,6 +52,10 @@ type Broker struct {
 	Duplicate func(n int64) bool
 	// Authorize, when set, decides whether a CONNECT is admitted (username, password, client id).
 	Authorize func(username, password, clientID string) bool
+	// OnPublish, when set, sees every PUBLISH the broker reads, before it is acknowledged. It runs
+	// on the publishing connection's goroutine and may call Deliver. It is how a test plays the
+	// platform: read a device's report, answer on the device's desired topic.
+	OnPublish func(clientID, topic string, payload []byte)
 
 	addr string
 	ln   net.Listener
@@ -59,6 +63,7 @@ type Broker struct {
 
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
+	sessions map[*session]struct{}
 	stored   []Stored
 	connects atomic.Int64
 	received atomic.Int64
@@ -79,7 +84,7 @@ func start(t testing.TB, withTLS bool) *Broker {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := &Broker{ln: ln, tls: withTLS, conns: map[net.Conn]struct{}{}}
+	b := &Broker{ln: ln, tls: withTLS, conns: map[net.Conn]struct{}{}, sessions: map[*session]struct{}{}}
 	if withTLS {
 		cert := selfSigned(t)
 		b.ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
@@ -137,6 +142,65 @@ func (b *Broker) Stored() []Stored {
 	return append([]Stored(nil), b.stored...)
 }
 
+// session is one admitted connection: writes to it are serialised, because the serving goroutine
+// (acknowledgements) and Deliver (messages for its subscriptions) both write to the same socket.
+type session struct {
+	conn net.Conn
+	wmu  sync.Mutex
+	smu  sync.Mutex
+	subs map[string]struct{}
+}
+
+func (s *session) write(p packets.ControlPacket) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	return p.Write(s.conn)
+}
+
+func (s *session) subscribed(topic string) bool {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	_, ok := s.subs[topic]
+	return ok
+}
+
+// Deliver publishes payload to every connection subscribed to exactly topic (no wildcards) and
+// returns how many it reached. Delivery is QoS 0, the live path the platform uses for
+// device-desired messages, so a message for a device that is not subscribed is lost, as it is on
+// the real broker.
+func (b *Broker) Deliver(topic string, payload []byte) int {
+	b.mu.Lock()
+	targets := make([]*session, 0, len(b.sessions))
+	for s := range b.sessions {
+		if s.subscribed(topic) {
+			targets = append(targets, s)
+		}
+	}
+	b.mu.Unlock()
+	n := 0
+	for _, s := range targets {
+		pub := packets.NewControlPacket(packets.Publish).(*packets.PublishPacket)
+		pub.TopicName, pub.Payload = topic, payload
+		if s.write(pub) == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// Subscribers is the number of connections subscribed to exactly topic.
+func (b *Broker) Subscribers(topic string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for s := range b.sessions {
+		if s.subscribed(topic) {
+			n++
+		}
+	}
+	return n
+}
+
 func (b *Broker) accept() {
 	for {
 		conn, err := b.ln.Accept()
@@ -170,15 +234,24 @@ func (b *Broker) serve(conn net.Conn) {
 	if !ok {
 		return
 	}
+	sess := &session{conn: conn, subs: map[string]struct{}{}}
 	ack := packets.NewControlPacket(packets.Connack).(*packets.ConnackPacket)
 	if b.Authorize != nil && !b.Authorize(connect.Username, string(connect.Password), connect.ClientIdentifier) {
 		ack.ReturnCode = packets.ErrRefusedNotAuthorised
-		_ = ack.Write(conn)
+		_ = sess.write(ack)
 		return
 	}
-	if err := ack.Write(conn); err != nil {
+	if err := sess.write(ack); err != nil {
 		return
 	}
+	b.mu.Lock()
+	b.sessions[sess] = struct{}{}
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		delete(b.sessions, sess)
+		b.mu.Unlock()
+	}()
 	b.connects.Add(1)
 	if _, isTLS := conn.(*tls.Conn); isTLS {
 		b.tlsSeen.Add(1)
@@ -191,6 +264,9 @@ func (b *Broker) serve(conn net.Conn) {
 		switch p := cp.(type) {
 		case *packets.PublishPacket:
 			n := b.received.Add(1)
+			if b.OnPublish != nil {
+				b.OnPublish(connect.ClientIdentifier, p.TopicName, p.Payload)
+			}
 			if b.Silent != nil && b.Silent(n) {
 				continue
 			}
@@ -207,12 +283,24 @@ func (b *Broker) serve(conn net.Conn) {
 			if p.Qos == 1 {
 				pa := packets.NewControlPacket(packets.Puback).(*packets.PubackPacket)
 				pa.MessageID = p.MessageID
-				if pa.Write(conn) != nil {
+				if sess.write(pa) != nil {
 					return
 				}
 			}
+		case *packets.SubscribePacket:
+			sa := packets.NewControlPacket(packets.Suback).(*packets.SubackPacket)
+			sa.MessageID = p.MessageID
+			sess.smu.Lock()
+			for i, t := range p.Topics {
+				sess.subs[t] = struct{}{}
+				sa.ReturnCodes = append(sa.ReturnCodes, p.Qoss[i])
+			}
+			sess.smu.Unlock()
+			if sess.write(sa) != nil {
+				return
+			}
 		case *packets.PingreqPacket:
-			if packets.NewControlPacket(packets.Pingresp).Write(conn) != nil {
+			if sess.write(packets.NewControlPacket(packets.Pingresp)) != nil {
 				return
 			}
 		case *packets.DisconnectPacket:
