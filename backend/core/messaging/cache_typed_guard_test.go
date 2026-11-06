@@ -211,3 +211,46 @@ func TestDecodedChargeIsAppliedToTheByteCap(t *testing.T) {
 		t.Fatalf("attach charged %d B, want %d", after-before, want)
 	}
 }
+
+// TestDecodedChargeOfChargesByTheValue: a value the charger recognizes is charged what it says, not
+// by the factor; one it does not recognize falls back; the byte cap still decides whether a value
+// that is too large to hold at that charge is attached at all.
+func TestDecodedChargeOfChargesByTheValue(t *testing.T) {
+	ctx := context.Background()
+	var seen []int
+	c := NewCacheOver(newCountingStore(), WithDecodedCharge(4, 10), WithLocalBounds(100, 1<<20),
+		WithDecodedChargeOf(func(v any, encodedLen int) (int, bool) {
+			seen = append(seen, encodedLen)
+			if _, ok := v.(*typedValue); ok {
+				return 5000, true
+			}
+			return 0, false
+		}))
+	if err := c.Set(ctx, "t|k", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	_, before := c.local.len()
+	if _, _, err := GetCloned(ctx, c, "t|k", cloneTypedValue); err != nil {
+		t.Fatal(err)
+	}
+	_, after := c.local.len()
+	if after-before != 5000 {
+		t.Fatalf("attach charged %d B, want the 5000 the charger gave", after-before)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("the charger ran %d times for one attach", len(seen))
+	}
+
+	// Too large at the charged size: the entry is held undecoded rather than attached.
+	small := NewCacheOver(newCountingStore(), WithLocalBounds(100, 3000),
+		WithDecodedChargeOf(func(any, int) (int, bool) { return 5000, true }))
+	if err := small.Set(ctx, "t|k", typedFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := GetCloned(ctx, small, "t|k", cloneTypedValue); err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := small.local.getHit("t|k", small.now()); !ok || h.val != nil {
+		t.Fatalf("a value charged past the cap was attached (hit %v, decoded %v)", ok, h.val != nil)
+	}
+}

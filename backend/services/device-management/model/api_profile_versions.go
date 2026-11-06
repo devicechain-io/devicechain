@@ -689,7 +689,7 @@ func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId 
 		return ProfileResolution{}, err
 	}
 	scope.ProfileVersionToken = fmt.Sprintf("%s@%d", profiles[0].Token, version)
-	return NewProfileResolution(scope, snap.Metrics), nil
+	return NewProfileResolutionWithDecoder(scope, snap.Metrics, snap.Decoder), nil
 }
 
 // ParseProfileSnapshot decodes a stored version snapshot for readers outside the model

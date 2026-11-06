@@ -83,7 +83,7 @@ func TestConfiguredPerDeviceCacheBoundsReachTheCaches(t *testing.T) {
 		model.CACHE_NAME_DEVICE_BY_TOKEN:            {5000, 7 << 20},
 		model.CACHE_NAME_RELATIONSHIPS_BY_SOURCE:    {5000, 7 << 20},
 		model.CACHE_NAME_MEMBERSHIPS_BY_ENTITY:      {5000, 7 << 20},
-		model.CACHE_NAME_PROFILE_RESOLUTION_BY_TYPE: {4096, 4 << 20},
+		model.CACHE_NAME_PROFILE_RESOLUTION_BY_TYPE: {4096, 32 << 20}, // holds compiled decoders
 		model.CACHE_NAME_SCOPED_GROUPS_EXIST:        {4096, 4 << 20},
 	} {
 		if got, ok := maxEntries[name]; !ok || got != want[0] {

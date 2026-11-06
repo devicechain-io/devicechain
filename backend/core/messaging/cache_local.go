@@ -57,6 +57,9 @@ type cacheOptions struct {
 	// value kept by GetCloned: factor times the encoded length, plus base. See
 	// WithDecodedCharge.
 	decodedFactor, decodedBase int
+	// decodedChargeOf, when set, replaces the factor and base for a value it recognizes.
+	// See WithDecodedChargeOf.
+	decodedChargeOf func(v any, encodedLen int) (int, bool)
 	// crossReplica makes a Delete tell every other replica to drop its in-process copy.
 	// See WithCrossReplicaEviction.
 	crossReplica bool
@@ -90,6 +93,20 @@ func WithDecodedCharge(factor, base int) CacheOption {
 		o.decodedFactor = factor
 		o.decodedBase = base
 	}
+}
+
+// WithDecodedChargeOf lets the owner of a cache charge a decoded value by what it IS rather than
+// by the length of its encoding, for a value whose size is not proportional to its encoding. A
+// payload decoder is the case: a few hundred bytes of expression text compile to a program of
+// hundreds of kilobytes, so no factor is right for both the entries that hold one and the ones
+// that do not.
+//
+// charge is given the decoded value (the *T a GetShared decode returned) and the length of its
+// encoding, and returns what to charge and true, or false to fall back on WithDecodedCharge's
+// factor and base. It runs under the cache's lock, once per attached entry, so it must be cheap
+// and must not call the cache. A negative answer is treated as zero.
+func WithDecodedChargeOf(charge func(v any, encodedLen int) (int, bool)) CacheOption {
+	return func(o *cacheOptions) { o.decodedChargeOf = charge }
 }
 
 // WithLocalTTL sets how long this Cache keeps a value in process memory. It is still capped
@@ -162,6 +179,7 @@ type localCache struct {
 	bytes      int
 
 	decodedFactor, decodedBase int
+	decodedChargeOf            func(v any, encodedLen int) (int, bool)
 	// gen is bumped by every write to this tier made on behalf of the bucket changing (a
 	// Set, a Delete). A Get records it before asking the bucket and fills only if it has
 	// not moved, so a read that was in flight across a change on this replica cannot put
@@ -210,11 +228,12 @@ func newLocalCache(o cacheOptions, obs *cacheObserver) *localCache {
 		maxEntries: o.maxEntries,
 		maxBytes:   o.maxBytes,
 
-		decodedFactor: o.decodedFactor,
-		decodedBase:   o.decodedBase,
-		order:         list.New(),
-		byKey:         map[string]*list.Element{},
-		obs:           obs,
+		decodedFactor:   o.decodedFactor,
+		decodedBase:     o.decodedBase,
+		decodedChargeOf: o.decodedChargeOf,
+		order:           list.New(),
+		byKey:           map[string]*list.Element{},
+		obs:             obs,
 	}
 }
 
@@ -301,6 +320,11 @@ func (l *localCache) attach(key string, e *localEntry, val any) {
 		return
 	}
 	extra := len(e.data)*l.decodedFactor + l.decodedBase
+	if l.decodedChargeOf != nil {
+		if c, ok := l.decodedChargeOf(val, len(e.data)); ok {
+			extra = max(c, 0)
+		}
+	}
 	if e.size+extra > l.maxBytes {
 		return
 	}

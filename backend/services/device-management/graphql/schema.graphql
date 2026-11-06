@@ -3645,6 +3645,23 @@ enum IntegrationDeviceOutcome {
     UNAUTHENTICATED
 }
 
+"""What the ingest path needs to know about the payload decoder of a device type."""
+type IntegrationDecoderPlan {
+    """
+    Whether the active published version declares a decoder. True also when this build cannot run
+    it: such an uplink must still reach the resolver, which records the failure.
+    """
+    present: Boolean!
+    """The input an uplink must carry for the decoder to run; null when there is no decoder."""
+    input: PayloadDecoderInput
+    """The most readings one decode produces; 0 when there is no decoder this build can run."""
+    maxReadings: Int!
+    """The decoder's static worst-case cost; 0 when there is no decoder this build can run."""
+    estimatedCost: Int!
+    """The profile version the answer is for, as "{profile}@{version}"; empty when there is no decoder."""
+    profileVersionToken: String!
+}
+
 """The answer to resolveIntegrationDevice."""
 type IntegrationDeviceResolution {
     """What happened."""
@@ -4840,6 +4857,23 @@ type Query {
         """Paging and filters."""
         criteria: IntegrationSearchCriteria!
     ): IntegrationSearchResults!
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. What the ingest path needs to know about the payload decoder of a device
+    type, as seen by one integration: whether the active published version of the type's profile
+    declares one, which input an uplink must carry for it, and the figures the ingest charge is
+    built from. Returns null for every failure to authenticate (no such integration, a wrong
+    token and a switched-off integration are indistinguishable), and present: false for a device
+    type that does not exist or lies outside the integration's scope.
+    """
+    integrationDecoder(
+        """Token of the integration, as it appears in the sender's URL."""
+        integration: String!
+        """The bearer token the sender presented."""
+        secret: String!
+        """Token of the device type the uplink's device belongs to."""
+        deviceTypeToken: String!
+    ): IntegrationDecoderPlan
     """
     Service-only: callable with a service token that holds device:read, and refused for any
     user's access token. Proves a bearer token belongs to the integration with this token.

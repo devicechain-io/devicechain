@@ -41,6 +41,41 @@ func (r *IntegrationDeviceResolutionResolver) DeviceTypeToken() *string {
 func (r *IntegrationDeviceResolutionResolver) Overflow() bool { return r.M.Overflow }
 
 // ---------------------------------------------------
+// The answer to integrationDecoder
+// ---------------------------------------------------
+
+// IntegrationDecoderPlanResolver serves what the ingest path needs to know about a type's decoder.
+type IntegrationDecoderPlanResolver struct {
+	M *model.IntegrationDecoderAnswer
+}
+
+func (r *IntegrationDecoderPlanResolver) Present() bool { return r.M.Present }
+
+func (r *IntegrationDecoderPlanResolver) Input() *string {
+	if !r.M.Present || r.M.Input == "" {
+		return nil
+	}
+	return &r.M.Input
+}
+
+func (r *IntegrationDecoderPlanResolver) MaxReadings() int32 {
+	return clampInt32(int64(r.M.MaxReadings))
+}
+
+func (r *IntegrationDecoderPlanResolver) EstimatedCost() int32 {
+	return clampInt32(int64(min(r.M.EstimatedCost, math.MaxInt32)))
+}
+
+func (r *IntegrationDecoderPlanResolver) ProfileVersionToken() string { return r.M.ProfileVersionToken }
+
+func clampInt32(v int64) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(v)
+}
+
+// ---------------------------------------------------
 // Unregistered integration devices
 // ---------------------------------------------------
 

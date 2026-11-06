@@ -4,6 +4,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -48,6 +49,12 @@ type ProfileResolution struct {
 	// from the expressions in metrics — so a decoded resolution compiles its own and the
 	// cache never carries a program; nil when the version declares none.
 	calc *calcPlan
+	// decoderDoc is the version's payload decoder document as published (nil when it has none),
+	// kept so the resolution encodes as it was built; decode is that document compiled, or the
+	// typed reason this build could not. Both are built by freeze: the cache carries the
+	// document and each replica compiles its own, so it never carries a program.
+	decoderDoc json.RawMessage
+	decode     *decodePlan
 }
 
 // NewProfileResolution builds a resolution from a scope and the definitions of the
@@ -57,13 +64,29 @@ func NewProfileResolution(scope ProfileScope, defs []*MetricDefinition) ProfileR
 	for _, def := range defs {
 		metrics = append(metrics, def.Resolved())
 	}
-	return *freeze(scope, metrics)
+	return *freeze(scope, metrics, nil)
+}
+
+// NewProfileResolutionWithDecoder is NewProfileResolution for a version that may carry a payload
+// decoder (the snapshot's decoder document; empty for none). The decoder is compiled here, against
+// these metrics, and a document that does not compile is a typed invalid plan on the result, never
+// an error (see decodePlan).
+func NewProfileResolutionWithDecoder(scope ProfileScope, defs []*MetricDefinition, decoder json.RawMessage) ProfileResolution {
+	metrics := make([]ResolvedMetric, 0, len(defs))
+	for _, def := range defs {
+		metrics = append(metrics, def.Resolved())
+	}
+	return *freeze(scope, metrics, decoder)
 }
 
 // freeze builds the resolution around metrics, which it takes ownership of: nothing else
-// may hold the slice afterwards.
-func freeze(scope ProfileScope, metrics []ResolvedMetric) *ProfileResolution {
+// may hold the slice afterwards. decoder is the version's payload decoder document, or empty.
+func freeze(scope ProfileScope, metrics []ResolvedMetric, decoder json.RawMessage) *ProfileResolution {
 	r := &ProfileResolution{scope: scope, metrics: metrics}
+	if len(decoder) > 0 {
+		r.decoderDoc = bytes.Clone(decoder)
+		r.decode = buildDecodePlan(scope, metrics, r.decoderDoc)
+	}
 	// Before the index: it marks the metrics formulas read, and the index points at them.
 	r.calc = buildCalcPlan(scope, metrics)
 	if len(metrics) > 0 {
@@ -130,12 +153,20 @@ func (r ProfileResolution) ValidateMeasurement(name string, value string) error 
 type profileResolutionWire struct {
 	Scope   ProfileScope
 	Metrics []resolvedMetricWire
+	// Decoder is the version's payload decoder document, absent (and so encoded exactly as
+	// before) when it has none. An older build reads past it: its decode is not strict, so
+	// it ignores a key it does not know. A newer build compiles it on fill.
+	//
+	// 🔴 AN ENTRY WITHOUT IT IS "NO DECODER" TO A NEW BUILD, WHICH IS ONLY TRUE OF AN ENTRY IT
+	// WROTE. An older build writes entries without it for versions that have one, so the two
+	// builds never share a key (profileResolutionByTypeKey).
+	Decoder json.RawMessage `json:",omitempty"`
 }
 
 // MarshalJSON encodes the resolution as the cache stores it. A value receiver, so a
 // ProfileResolution encodes the same whether or not it is behind a pointer.
 func (r ProfileResolution) MarshalJSON() ([]byte, error) {
-	w := profileResolutionWire{Scope: r.scope}
+	w := profileResolutionWire{Scope: r.scope, Decoder: r.decoderDoc}
 	if r.metrics != nil {
 		w.Metrics = make([]resolvedMetricWire, len(r.metrics))
 		for i := range r.metrics {
@@ -172,5 +203,5 @@ func decodeProfileResolution(raw []byte) (*ProfileResolution, error) {
 			metrics[i] = ResolvedMetric{m: w.Metrics[i]}
 		}
 	}
-	return freeze(w.Scope, metrics), nil
+	return freeze(w.Scope, metrics, w.Decoder), nil
 }

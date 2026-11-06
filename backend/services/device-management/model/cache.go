@@ -104,10 +104,13 @@ type Caches struct {
 //     device claim), relationship remove (single, bulk, a claim reopened), an entity delete
 //     (the deleted device's own set, and the set of every device tracking it), and an update
 //     of a relationship type (its tracked flag decides which edges a set holds).
-//   - ProfileResolutionByType (tenant|device type id): UpdateDeviceType, a profile publish
+//   - ProfileResolutionByType (tenant|v2|device type id): UpdateDeviceType, a profile publish
 //     and a rollback (fanned out over the adopting types), and a geofence mutation that
 //     minted a fence-set version (fanned out over the tenant's types). A device type that
-//     devices reference cannot be deleted, so no entry outlives its type.
+//     devices reference cannot be deleted, so no entry outlives its type. Each eviction
+//     drops the entry under BOTH the v2 key and the key builds before the payload decoder
+//     used (tenant|device type id), which this build never reads: see
+//     profileResolutionByTypeKey.
 //   - MembershipsByEntity (tenant|family|id) and ScopedGroupsExist (tenant): every
 //     membership mutation (attribute recompute, group register, deregister and delete,
 //     entity delete).
@@ -171,7 +174,7 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	// worth the break.
 	profileResolutionByType, err := nmgr.NewCache(CACHE_NAME_PROFILE_RESOLUTION_BY_TYPE,
 		time.Duration(cfg.MetricDefCacheTtlSeconds)*time.Second,
-		append(common, resolutionCharge.option())...)
+		append(common, profileResolutionCacheOptions()...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -231,6 +234,39 @@ var (
 
 func (c decodedCharge) option() messaging.CacheOption {
 	return messaging.WithDecodedCharge(c.factor, c.base)
+}
+
+// ProfileResolutionLocalEntries and ProfileResolutionLocalMiB bound the in-process copy of the
+// per-type resolution cache. The entry count is messaging's default, kept on purpose (there are
+// few device types). The bytes are NOT: a resolution that carries a payload decoder holds its
+// compiled programs, megabytes for a large one (see decodeHeapCharge), so the default 4 MiB would
+// not hold even one maximal decoder, and an entry that cannot be attached is decoded, which means
+// compiled, again on every read. 32 MiB holds several; entries without a decoder (about 1 KiB)
+// are unaffected, and a replica's memory is bounded by this number however many decoders there are.
+const (
+	ProfileResolutionLocalEntries = 4096
+	ProfileResolutionLocalMiB     = 32
+)
+
+// profileResolutionCacheOptions are the per-type resolution cache's own options: how it charges
+// what it decodes, and how much of it a replica keeps.
+func profileResolutionCacheOptions() []messaging.CacheOption {
+	return []messaging.CacheOption{
+		resolutionCharge.option(),
+		messaging.WithDecodedChargeOf(resolutionChargeOf),
+		messaging.WithLocalBounds(ProfileResolutionLocalEntries, ProfileResolutionLocalMiB<<20),
+	}
+}
+
+// resolutionChargeOf charges a resolution by what it holds: its encoding at resolutionCharge's
+// factor, plus the compiled programs of its payload decoder, which no factor on the encoding
+// could state. Any other value falls back on the factor.
+func resolutionChargeOf(v any, encodedLen int) (int, bool) {
+	r, ok := v.(*ProfileResolution)
+	if !ok {
+		return 0, false
+	}
+	return resolutionCharge.bytes(encodedLen) + r.heapCharge(), true
 }
 
 // bytes is what the cache charges for a decoded value of encoded length n.

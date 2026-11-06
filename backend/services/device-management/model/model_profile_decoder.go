@@ -129,6 +129,16 @@ func newDecoderMetrics(defs []*MetricDefinition) decoderMetrics {
 	return m
 }
 
+// decoderMetricsOf is the same view over a resolution's projected metrics, which is what freeze
+// has: the plan a resolution compiles must see exactly the metrics it validates with.
+func decoderMetricsOf(metrics []ResolvedMetric) decoderMetrics {
+	m := decoderMetrics{byKey: make(map[string]ResolvedMetric, len(metrics))}
+	for _, r := range metrics {
+		m.byKey[r.m.MetricKey] = r
+	}
+	return m
+}
+
 // MetricType is the type of a declared, measured metric; a calculated, STRING or undeclared key
 // reports false.
 func (m decoderMetrics) MetricType(key string) (calcfield.Type, bool) {
