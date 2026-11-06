@@ -11,6 +11,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// validBase returns a configuration that passes Validate. A negative fixture must start
+// here and break exactly ONE field: a fixture built from a zero-value struct is rejected by
+// whichever guard runs first, so the test passes whether or not the guard it names exists.
+func validBase(t *testing.T) *CommandDeliveryConfiguration {
+	t.Helper()
+	cfg := &CommandDeliveryConfiguration{}
+	cfg.ApplyDefaults()
+	assert.NoError(t, cfg.Validate(), "the base fixture must itself be valid")
+	return cfg
+}
+
 // Loading an empty document succeeds and floors the command TTL to the platform
 // default through the ADR-022 decision-1 defaulting hook — the fail-safe that keeps
 // an unset value from disabling expiry (which would resurrect the stuck-in-SENT
@@ -42,8 +53,12 @@ func TestDefaultCommandTTLValidation(t *testing.T) {
 	assert.Equal(t, 3600, kept.DefaultCommandTTLSeconds)
 	assert.NoError(t, kept.Validate())
 
-	tooSmall := &CommandDeliveryConfiguration{DefaultCommandTTLSeconds: MinCommandTTLSeconds - 1}
-	assert.Error(t, tooSmall.Validate())
+	tooSmall := validBase(t)
+	tooSmall.DefaultCommandTTLSeconds = MinCommandTTLSeconds - 1
+	err := tooSmall.Validate()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "defaultCommandTtlSeconds")
+	}
 }
 
 // The held-command ceiling gets the same fail-safe treatment as the TTL, and for the
@@ -72,10 +87,12 @@ func TestHeldCommandCeilingValidation(t *testing.T) {
 	assert.Equal(t, 250, kept.HeldCommandCeiling)
 	assert.NoError(t, kept.Validate())
 
-	tooSmall := &CommandDeliveryConfiguration{
-		DefaultCommandTTLSeconds: 3600, HeldCommandCeiling: MinHeldCommandCeiling - 1,
+	tooSmall := validBase(t)
+	tooSmall.HeldCommandCeiling = MinHeldCommandCeiling - 1
+	err := tooSmall.Validate()
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "heldCommandCeiling")
 	}
-	assert.Error(t, tooSmall.Validate())
 }
 
 // The delivery machinery reserve gets the same fail-safe treatment as the ceiling above,
@@ -230,13 +247,19 @@ func TestMaxDispatchFailuresValidation(t *testing.T) {
 	assert.Equal(t, 50, kept.MaxDispatchFailures)
 	assert.NoError(t, kept.Validate())
 
-	tooSmall := &CommandDeliveryConfiguration{MaxDispatchFailures: MinMaxDispatchFailures - 1}
-	assert.Error(t, tooSmall.Validate(),
-		"a bound this small makes the first transient publish error terminal")
+	tooSmall := validBase(t)
+	tooSmall.MaxDispatchFailures = MinMaxDispatchFailures - 1
+	err := tooSmall.Validate()
+	if assert.Error(t, err, "a bound this small makes the first transient publish error terminal") {
+		assert.Contains(t, err.Error(), "maxDispatchFailures")
+	}
 
-	tooLarge := &CommandDeliveryConfiguration{MaxDispatchFailures: MaxMaxDispatchFailures + 1}
-	assert.Error(t, tooLarge.Validate(),
-		"a bound this large is the unbounded retry it replaced, with a longer fuse")
+	tooLarge := validBase(t)
+	tooLarge.MaxDispatchFailures = MaxMaxDispatchFailures + 1
+	err = tooLarge.Validate()
+	if assert.Error(t, err, "a bound this large is the unbounded retry it replaced, with a longer fuse") {
+		assert.Contains(t, err.Error(), "maxDispatchFailures")
+	}
 }
 
 // 🔴 THE FLOOR HAS TO BE ABOVE 1 OR Validate's LOWER CHECK GUARDS NOTHING. ApplyDefaults

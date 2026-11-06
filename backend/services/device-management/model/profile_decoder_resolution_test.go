@@ -471,17 +471,52 @@ func TestAFillBeforeAPublishIsNotHandedToAnEventAfterIt(t *testing.T) {
 	assert.Equal(t, "p@3", again.Scope().ProfileVersionToken)
 }
 
-// A caller cancelled while it led a fill does not fail the callers that joined it.
+// A caller cancelled while it led a fill does not fail the callers that joined it. The leader is
+// held inside the flight, a second caller with a live context joins that flight, and only then is
+// the leader cancelled: the joiner receives the leader's cancellation from the shared flight and
+// must ask again under its own context.
 func TestACancelledLeaderDoesNotFailTheCallersThatJoinedIt(t *testing.T) {
 	r := decoderRig(t)
 	r.capi.dropProfileResolution(r.ctx, partialUpdateTenant, r.typeId)
-	cancelled, cancel := context.WithCancel(r.ctx)
+	leaderCtx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+
+	entered := make(chan struct{})
+	var claimed atomic.Bool
+	profileResolutionLoadHook = func() {
+		if claimed.CompareAndSwap(false, true) { // only the leader is held, until it is cancelled
+			close(entered)
+			<-leaderCtx.Done()
+		}
+	}
+	defer func() { profileResolutionLoadHook = nil }()
+
+	var wg sync.WaitGroup
+	var leaderErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, leaderErr = r.capi.ProfileResolutionByDeviceType(leaderCtx, r.typeId)
+	}()
+	<-entered
+	joined := make(chan error, 1)
+	go func() {
+		res, err := r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId) // joins the held fill
+		if err == nil && !res.HasDecoder() {
+			err = errors.New("joiner answered without the decoder")
+		}
+		joined <- err
+	}()
+	time.Sleep(200 * time.Millisecond) // let the joiner reach the flight before its leader goes
 	cancel()
-	_, err := r.capi.ProfileResolutionByDeviceType(cancelled, r.typeId)
-	_ = err // whatever the leader's own outcome, the next caller succeeds
-	res, err := r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId)
-	require.NoError(t, err)
-	assert.True(t, res.HasDecoder())
+	select {
+	case err := <-joined:
+		assert.NoError(t, err, "a joiner failed with its leader's cancellation")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the joiner never answered")
+	}
+	wg.Wait()
+	assert.ErrorIs(t, leaderErr, context.Canceled, "the control: the cancelled leader did fail")
 }
 
 // The tenant is part of every key and of the context a fill runs in: a read in one tenant's
