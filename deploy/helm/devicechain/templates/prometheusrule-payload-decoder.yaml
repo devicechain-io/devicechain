@@ -1,0 +1,60 @@
+{{/*
+Alerting rules for payload decoders.
+
+WHY THIS GROUP EXISTS. A tenant-authored decoder turns a device's raw uplink into readings, and a
+decoder that is wrong fails on every uplink it sees. Each failure is a failed-events record, so a
+broken decoder at a busy tenant would write them without end; device-management therefore holds each
+device type to a budget of records (a burst of 20, refilled 10 a minute, per replica) and counts every
+failure past it as SUPPRESSED instead. Both alerts read counters device-management exports.
+
+PayloadDecoderFailuresHigh says decoders are failing more than a stray frame would explain: over 5%
+of the uplinks decoded in 15 minutes, with enough of them to mean something. It is a warning for the
+platform operator; the tenant sees the same thing in the profile's decoder health and in
+failed-events (DECODE_FAILED).
+
+PayloadDecoderSuppressing says the budget has started to cut records off, so failed-events no longer
+shows every failure: some are only counted. That is the budget doing its job, and it also means the
+records the tenant can see are a sample of the failures, not all of them.
+
+Neither carries a tenant label, because the counters have none (a tenant could grow it without
+bound). To find the tenant, look at the failed-events index, or at the profile's decoder health.
+
+Every expression is scoped to THIS instance's namespace, so one rule object alerts only on its own
+instance. NO `or vector(0)`: see the dead-letter rules for why.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: payload-decoder
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.payload-decoder
+      rules:
+        - alert: PayloadDecoderFailuresHigh
+          expr: >-
+            (sum(increase(devicechain_devicemanagement_resolve_decode_total{result!~"decoded|ignored",namespace="{{ $ns }}"}[15m]))
+            / sum(increase(devicechain_devicemanagement_resolve_decode_total{namespace="{{ $ns }}"}[15m]))) > 0.05
+            and sum(increase(devicechain_devicemanagement_resolve_decode_total{namespace="{{ $ns }}"}[15m])) > 100
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "payload decoders are failing more than 5% of the uplinks they decode"
+            description: "Over the last 15 minutes more than one in twenty uplinks run through a payload decoder failed to decode. A decoder that is wrong for a device fails on every uplink from it, so this usually means a decoder was published with a mistake, or a device type started sending frames its decoder does not expect. The failures are failed-events records with the reason DECODE_FAILED, and the profile's decoder health shows the last error and keeps recent failing uplinks to replay in the test panel. The result label of devicechain_devicemanagement_resolve_decode_total says which kind of failure it is."
+        - alert: PayloadDecoderSuppressing
+          expr: sum(increase(devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "decode failures are being counted but no longer recorded in failed-events"
+            description: "A payload decoder is failing so often that device-management has spent the budget of failed-events records for its device type (a burst of 20, refilled 10 a minute, on each replica), and it now only counts the rest. Nothing is lost silently: the count is in the profile's decoder health as suppressed, and the first failures of the window are recorded with the uplink. Fix or unpublish the decoder; the budget refills by itself once it stops failing."
+{{- end }}

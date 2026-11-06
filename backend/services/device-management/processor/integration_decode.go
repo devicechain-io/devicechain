@@ -66,6 +66,9 @@ type DecodeFailure struct {
 	Text   string
 	// Cost is what the decode had spent when it failed.
 	Cost uint64
+	// Suppressed is set when the observer refused the failure its failed-events record (the record
+	// budget is spent). The uplink is then settled without one, and counted as suppressed.
+	Suppressed bool
 }
 
 func (e *DecodeFailure) Error() string { return "decode_failed: " + e.Text }
@@ -95,6 +98,10 @@ type DecodeObservation struct {
 	Section string
 	// Cost is the cost the decode spent.
 	Cost uint64
+	// Error is the tenant-facing text of a failed outcome (`decode_failed: <reason>: ...`).
+	Error string
+	// ChargeSkew is how many readings a decoded outcome stored beyond what the route charged for.
+	ChargeSkew int
 	// Uplink is the input the attempt ran over.
 	Uplink *esmodel.UnresolvedIntegrationUplinkPayload
 }
@@ -103,8 +110,12 @@ type DecodeObservation struct {
 // before the event is settled. It is the seam the decoder's accounting hangs on (health counts, the
 // per-(tenant, device type) record budget and failed-input samples); the resolver does none of that
 // itself. It is called from the resolver pool's goroutines concurrently and must not block.
+//
+// The result matters only for a failed outcome: false refuses the failure its failed-events record
+// (the budget is spent), and the resolver settles the uplink without one. It is true for every other
+// outcome and whenever there is no observer, so an unbudgeted build records every failure.
 type DecodeObserver interface {
-	ObserveDecode(DecodeObservation)
+	ObserveDecode(DecodeObservation) (record bool)
 }
 
 // WithDecodeObserver sets the observer every resolver of the pool tells its decode outcomes to.
@@ -246,7 +257,7 @@ func (rez *EventResolver) HandleIntegrationUplink(ctx context.Context, device *m
 	case !dec.Declared():
 		rez.decode.kindSkew(kindSkewDecoderGone)
 		var done bool
-		readings, done, reason, err = rez.flattenUplink(ctx, device, auth, up)
+		readings, done, reason, err = rez.flattenUplink(ctx, device, auth, res.Scope().ProfileVersionToken, up)
 		if err != nil {
 			return nil, reason, err
 		}
@@ -326,6 +337,7 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 	// the route's window is visible rather than silent.
 	if excess := len(readings) - int(up.MaxReadings); excess > 0 && up.MaxReadings > 0 {
 		rez.decode.skew(excess)
+		obs.ChargeSkew = excess
 	}
 	obs.Outcome = DecodeDecoded
 	rez.decode.result(string(DecodeDecoded))
@@ -335,16 +347,18 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 
 // decodeFailed counts, reports and builds the error of one refused decode.
 func (rez *EventResolver) decodeFailed(obs *DecodeObservation, f *DecodeFailure) error {
-	obs.Outcome, obs.Reason, obs.Cost = DecodeFailed, f.Reason, f.Cost
+	obs.Outcome, obs.Reason, obs.Cost, obs.Error = DecodeFailed, f.Reason, f.Cost, f.Error()
 	rez.decode.result(string(f.Reason))
-	rez.observeDecode(*obs)
+	f.Suppressed = !rez.observeDecode(*obs)
 	return f
 }
 
-func (rez *EventResolver) observeDecode(o DecodeObservation) {
-	if rez.decodeObserver != nil {
-		rez.decodeObserver.ObserveDecode(o)
+// observeDecode tells the observer and returns whether the outcome may be recorded.
+func (rez *EventResolver) observeDecode(o DecodeObservation) bool {
+	if rez.decodeObserver == nil {
+		return true
 	}
+	return rez.decodeObserver.ObserveDecode(o)
 }
 
 // planFailureText is the tenant-facing text of a decoder this build cannot run. The compile error
@@ -401,8 +415,9 @@ const (
 // the uplink held nothing to read: it is recorded on the integration (the Cut A undecoded marker)
 // and accepted, as the route would have done.
 func (rez *EventResolver) flattenUplink(ctx context.Context, device *model.Device, auth integrationAuth,
-	up *esmodel.UnresolvedIntegrationUplinkPayload) (readings map[string]string, done bool, reason uint, err error) {
-	obs := DecodeObservation{DeviceTypeId: device.DeviceTypeId, Device: device.Token, Uplink: up}
+	profileVersion string, up *esmodel.UnresolvedIntegrationUplinkPayload) (readings map[string]string, done bool, reason uint, err error) {
+	obs := DecodeObservation{DeviceTypeId: device.DeviceTypeId, Device: device.Token, Uplink: up,
+		ProfileVersionToken: profileVersion}
 	obs.Tenant, _ = core.TenantFromContext(ctx)
 
 	// A generic sender's item is carried as `json`, a network server's decoded object as `decoded`;

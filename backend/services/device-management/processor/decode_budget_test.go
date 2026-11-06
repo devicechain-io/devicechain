@@ -1,0 +1,107 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package processor
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/stretchr/testify/require"
+)
+
+type fakeClock struct{ t time.Time }
+
+func newFakeClock() *fakeClock           { return &fakeClock{t: time.Date(2026, 11, 6, 12, 0, 30, 0, time.UTC)} }
+func (c *fakeClock) now() time.Time      { return c.t }
+func (c *fakeClock) add(d time.Duration) { c.t = c.t.Add(d) }
+
+func TestTheRecordBudgetAdmitsABurstOf20ThenRefuses(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	admitted := 0
+	for i := 0; i < 100; i++ {
+		if b.AllowRecord("acme", 7) {
+			admitted++
+		}
+	}
+	require.Equal(t, DecodeRecordBurst, admitted, "a broken decoder's flood is cut to the burst")
+}
+
+func TestTheRecordBudgetRefillsTenAMinute(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	for i := 0; i < DecodeRecordBurst; i++ {
+		require.True(t, b.AllowRecord("acme", 7))
+	}
+	require.False(t, b.AllowRecord("acme", 7))
+
+	c.add(5 * time.Second) // 0.83 of a token
+	require.False(t, b.AllowRecord("acme", 7))
+	c.add(time.Second + 100*time.Millisecond) // past 6 s: one token
+	require.True(t, b.AllowRecord("acme", 7))
+	require.False(t, b.AllowRecord("acme", 7))
+
+	c.add(time.Minute) // ten more
+	n := 0
+	for b.AllowRecord("acme", 7) {
+		n++
+	}
+	require.Equal(t, DecodeRecordRefillPerMinute, n)
+
+	c.add(time.Hour) // never above the burst
+	n = 0
+	for b.AllowRecord("acme", 7) {
+		n++
+	}
+	require.Equal(t, DecodeRecordBurst, n)
+}
+
+func TestTheRecordBudgetIsPerTenantAndDeviceType(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	for i := 0; i < DecodeRecordBurst; i++ {
+		require.True(t, b.AllowRecord("acme", 7))
+	}
+	require.False(t, b.AllowRecord("acme", 7))
+	require.True(t, b.AllowRecord("acme", 8), "another device type has its own bucket")
+	require.True(t, b.AllowRecord("globex", 7), "another tenant's same device-type id has its own bucket")
+}
+
+func TestTheSampleBudgetIsOnePerProfilePerTenInSeconds(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	require.True(t, b.AllowSample("acme", "meter"))
+	require.False(t, b.AllowSample("acme", "meter"))
+	c.add(DecodeSampleInterval - time.Second)
+	require.False(t, b.AllowSample("acme", "meter"))
+	require.True(t, b.AllowSample("acme", "other"), "another profile")
+	require.True(t, b.AllowSample("globex", "meter"), "another tenant's profile of the same token")
+	c.add(time.Second)
+	require.True(t, b.AllowSample("acme", "meter"))
+}
+
+func TestAKeyPastTheBoundIsDeniedNotAdmitted(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	for i := 0; i < maxBudgetKeys; i++ {
+		require.True(t, b.AllowRecord("acme", uint(i)), fmt.Sprint(i))
+	}
+	require.False(t, b.AllowRecord("acme", uint(maxBudgetKeys)), "past the bound a new key is suppressed, never unbudgeted")
+
+	// What has recovered is forgotten, which makes room.
+	c.add(10 * time.Minute)
+	require.True(t, b.AllowRecord("acme", uint(maxBudgetKeys)))
+}
+
+// The figures are the contract the documentation and the alert text state, so they are pinned as
+// literals here: a test written in terms of the constants would pass for any value of them.
+func TestTheBudgetFiguresAreThePublishedOnes(t *testing.T) {
+	require.Equal(t, 20, DecodeRecordBurst)
+	require.Equal(t, 10, DecodeRecordRefillPerMinute)
+	require.Equal(t, 10*time.Second, DecodeSampleInterval)
+	require.Equal(t, 20, model.MaxDecoderSamplesPerProfile)
+	require.Equal(t, 7*24*time.Hour, model.DecoderHealthRetention)
+}

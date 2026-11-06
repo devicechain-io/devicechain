@@ -120,3 +120,46 @@ func (r *SchemaResolver) PayloadDecoderFunctions(ctx context.Context) ([]*Payloa
 	}
 	return out, nil
 }
+
+// PayloadDecoderHealth serves a profile's decode tally. DeviceWrite, enforced again by the model.
+func (r *SchemaResolver) PayloadDecoderHealth(ctx context.Context, args struct {
+	ProfileToken string
+	Minutes      *int32
+}) (*PayloadDecoderHealthResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	minutes := 0
+	if args.Minutes != nil {
+		minutes = int(*args.Minutes)
+	}
+	h, err := r.GetApi(ctx).PayloadDecoderHealth(ctx, args.ProfileToken, minutes)
+	if err != nil {
+		return nil, err
+	}
+	return &PayloadDecoderHealthResolver{M: *h}, nil
+}
+
+// PayloadDecoderSamples lists a profile's stored failing uplinks, without their bytes. DeviceWrite,
+// enforced again by the model.
+func (r *SchemaResolver) PayloadDecoderSamples(ctx context.Context, args struct {
+	ProfileToken string
+	Limit        *int32
+}) ([]*PayloadDecoderSampleResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	limit := 0
+	if args.Limit != nil {
+		limit = int(*args.Limit)
+	}
+	rows, err := r.GetApi(ctx).PayloadDecoderSamples(ctx, args.ProfileToken, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*PayloadDecoderSampleResolver, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, &PayloadDecoderSampleResolver{M: s})
+	}
+	return out, nil
+}

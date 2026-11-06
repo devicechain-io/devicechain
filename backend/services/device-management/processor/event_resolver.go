@@ -1559,6 +1559,14 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					log.Debug().Str("correlation", correlation).Err(err).Msg("Discarding an event from a disabled device.")
 					_ = unresolved.Ack()
 					done(core.ResultDropped)
+				} else if df := (*DecodeFailure)(nil); errors.As(err, &df) && df.Suppressed {
+					// A failed decode past its device type's record budget: counted as suppressed by the
+					// accountant and settled here WITHOUT a failed-events record, so a broken decoder at
+					// a large tenant cannot flood the platform-wide stream. It is terminal on the first
+					// delivery like any failed decode, and never silent: the first records of the
+					// window are already out and the tally says how many were not written.
+					_ = unresolved.Ack()
+					done(core.ResultDropped)
 				} else if errors.Is(err, ErrNotGatewayChild) {
 					// A gateway named a device that is not its own. Terminal on the FIRST
 					// delivery (redelivery cannot change an assignment's answer, and a device

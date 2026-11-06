@@ -1,0 +1,208 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the payload decoder alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# PayloadDecoderFailuresHigh is a RATIO (failed over all decoded in 15m, above 5%) with a floor
+# on volume. The quiet cases carry as much weight as the firing ones:
+#
+#   - a healthy decoder (decoded and ignored rising, no failure) must not page;
+#   - a few stray failures in a large volume (under 5%) must not page;
+#   - a handful of uplinks that all failed (under the volume floor) must not page;
+#   - a decoder failing most uplinks, with volume, must page after the 15m `for`;
+#   - another instance's namespace must not page; no series must not page.
+#
+# PayloadDecoderSuppressing fires on any suppressed failure that lasts 5m: the budget cutting
+# records off. It must stay quiet while suppressed is flat at zero and while failures are
+# recorded inside the budget.
+#
+# THE SERIES (both seeded at 0 by device-management when it builds them):
+#
+#   - devicechain_devicemanagement_resolve_decode_total{result}
+#   - devicechain_devicemanagement_resolve_decode_suppressed_total
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # Healthy: decoded and ignored climb, nothing fails. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+500x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="ignored"}'
+        values: '0+50x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A few strays: 1 failure in 100 uplinks is 1%. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+99x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0+1x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Under the volume floor: 10 uplinks in 15m, all failed. Quiet (a handful proves nothing).
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0+0.5x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A decoder failing most uplinks, with volume: 30 of every 100. Pending, then fires after 15m.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+70x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0+30x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "payload decoders are failing more than 5% of the uplinks they decode"
+              description: "Over the last 15 minutes more than one in twenty uplinks run through a payload decoder failed to decode. A decoder that is wrong for a device fails on every uplink from it, so this usually means a decoder was published with a mistake, or a device type started sending frames its decoder does not expect. The failures are failed-events records with the reason DECODE_FAILED, and the profile's decoder health shows the last error and keeps recent failing uplinks to replay in the test panel. The result label of devicechain_devicemanagement_resolve_decode_total says which kind of failure it is."
+
+  # ------------------------------------------------------------------
+  # Failures stop: the alert clears once the 15m window has passed them.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+100x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0+30x25 750x35'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 24m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "payload decoders are failing more than 5% of the uplinks they decode"
+              description: "Over the last 15 minutes more than one in twenty uplinks run through a payload decoder failed to decode. A decoder that is wrong for a device fails on every uplink from it, so this usually means a decoder was published with a mistake, or a device type started sending frames its decoder does not expect. The failures are failed-events records with the reason DECODE_FAILED, and the profile's decoder health shows the last error and keeps recent failing uplinks to replay in the test panel. The result label of devicechain_devicemanagement_resolve_decode_total says which kind of failure it is."
+      - eval_time: 59m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The budget cuts records off: suppressed climbs from 10m. Fires after the 5m `for`; not before; clears after the window.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+100x80'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x9 0+10x20 190x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "decode failures are being counted but no longer recorded in failed-events"
+              description: "A payload decoder is failing so often that device-management has spent the budget of failed-events records for its device type (a burst of 20, refilled 10 a minute, on each replica), and it now only counts the rest. Nothing is lost silently: the count is in the profile's decoder health as suppressed, and the first failures of the window are recorded with the uplink. Fix or unpublish the decoder; the budget refills by itself once it stops failing."
+      - eval_time: 70m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Failures inside the budget: recorded, none suppressed. PayloadDecoderSuppressing stays quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0+1x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Another instance's namespace is failing and suppressing. Quiet: each rule object alerts on its own instance.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-other", pod="dc-device-management-aaaaa", result="eval_error"}'
+        values: '0+30x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-other", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+70x60'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-other", pod="dc-device-management-aaaaa"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # No series at all. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: PayloadDecoderFailuresHigh
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+
