@@ -311,6 +311,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Related {#related}
 
+- [LoRaWAN Uplink to Alarm](./lorawan-uplink-to-alarm.md): a walkthrough from a binary uplink through an integration and a decoder to a detection rule and an alarm.
 - [Payload decoders](./payload-decoders.md): turn a raw frame or a network server's decoded object into measurements.
 - [Devices](../user-guide/devices.md): the device form, with its **Aliases** field.
 - [Connecting a Device](./connecting-a-device.md): the MQTT and HTTP paths a device uses itself.

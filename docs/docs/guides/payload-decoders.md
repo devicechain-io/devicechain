@@ -378,6 +378,7 @@ A function's behaviour never changes once it has shipped. A fix arrives under a 
 
 ## Related {#related}
 
+- [LoRaWAN Uplink to Alarm](./lorawan-uplink-to-alarm.md): a decoder, an integration, a rule and an alarm, end to end, with the simulator as the network server.
 - [Decoder function reference](../reference/decoder-functions.md): the library's functions with their costs, and the limits.
 - [Inbound integrations](./inbound-integrations.md): the senders a decoder reads from.
 - [Device types and profiles](../user-guide/device-types-and-profiles.md): metrics, drafts and publishing.

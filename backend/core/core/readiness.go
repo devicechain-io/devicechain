@@ -269,6 +269,10 @@ func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Co
 	// panic the caller sees, can recover, and a test can assert.
 	ms.readinessGate()
 
+	// Read here, on the caller's stack, so the goroutine never touches the package variable:
+	// a test that restores it after the loop has stopped would otherwise race the loop's last read.
+	retryInterval := authGateRetryInterval
+
 	go func() {
 		for {
 			if ms.authAttempts != nil {
@@ -291,7 +295,7 @@ func (ms *Microservice) StartAuthGate(ctx context.Context, fetch func(context.Co
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(authGateRetryInterval):
+			case <-time.After(retryInterval):
 			}
 		}
 	}()

@@ -98,10 +98,22 @@ type slidingState struct {
 
 	minDq []sample
 	maxDq []sample
-	// dirty is set only by restoreSlides: a restore hands over a whole buffer at once, so
-	// there is no incremental splice to make, and rebuilding every restored series up front
-	// is work a sum/avg/count rule never reads.
+	// dirty says the deques do not describe buf. It is set by restoreSlides (a restore hands over
+	// a whole buffer at once, so there is no incremental splice to make, and rebuilding every
+	// restored series up front is work a sum/avg/count rule never reads) and held by a lean window
+	// for as long as it stays lean.
 	dirty bool
+	// lean says no rule reading THIS series asks for min or max, so the deques are not built
+	// at all: the window is buf and nothing else. A sum, avg or count rule never reads a deque,
+	// and carrying one costs ~32 B per surviving sample per deque on top of the 32 B sample —
+	// roughly a third of the window's memory. A lean window stays dirty (its deques describe
+	// nothing) which is exactly the state restoreSlides already hands over, so the one function
+	// that trusts a deque, value(AggMin/AggMax) via ensureDeques, repairs it on first read and
+	// clears lean. A live rule change cannot reach this (UpsertRule drops the rule's state), so
+	// the case it covers is a restore under a changed rule: the snapshot says nothing of the rule
+	// it was taken under, and the window is answered correctly and then maintained incrementally
+	// like any other.
+	lean bool
 }
 
 // count is the window's size — the thing len(buf) used to be, and the reason every
@@ -140,12 +152,20 @@ const minOverlayMerge = 32
 // EVERYTHING held, so the deques can simply be extended. Nothing else needs checking.
 func (s *slidingState) insert(x sample) {
 	s.sum += x.v
+	if s.lean {
+		s.dirty = true // nothing maintains the deques; a min/max read rebuilds them (ensureDeques)
+	}
 	if n := len(s.buf); n == 0 || !x.t.Before(s.buf[n-1].t) {
 		s.buf = append(s.buf, x)
-		s.pushDeques(x)
+		if !s.lean {
+			s.pushDeques(x)
+		}
 		return
 	}
 	s.insertLate(x)
+	if s.lean {
+		return
+	}
 	s.minDq = spliceDeque(s.minDq, x, func(a, b float64) bool { return a <= b })
 	s.maxDq = spliceDeque(s.maxDq, x, func(a, b float64) bool { return a >= b })
 }
@@ -264,6 +284,7 @@ func (s *slidingState) rebuildDeques() {
 		s.pushDeques(x)
 	}
 	s.dirty = false
+	s.lean = false // the deques exist now, so they are maintained from here on
 }
 
 // ensureDeques makes minDq/maxDq describe buf. Every read of a deque goes through it.
@@ -288,6 +309,9 @@ func (s *slidingState) ensureDeques() {
 func (s *slidingState) evict(cutoff time.Time) {
 	s.buf = s.evictRun(s.buf, cutoff)
 	s.late = s.evictRun(s.late, cutoff)
+	if s.lean {
+		return // no deques to trim
+	}
 	for len(s.minDq) > 0 && !s.minDq[0].t.After(cutoff) {
 		s.minDq = s.minDq[1:]
 	}
@@ -369,7 +393,7 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 			// already passed the frontier, so an entry made from it would be evicted unread.
 			return
 		}
-		st = &slidingState{}
+		st = &slidingState{lean: r.Agg != AggMin && r.Agg != AggMax}
 		e.slides[ev.Key] = st
 	}
 	st.evict(cutoff)
@@ -494,7 +518,7 @@ func (e *Engine) restoreSlides(in []snapSlide) {
 		// per series across every restored series, and a sum/avg/count rule never reads a deque,
 		// so the answer is to owe the work rather than to do it. dirty is the same flag insert
 		// honours, and ensureDeques pays the debt on the first min/max read.
-		st := &slidingState{sum: s.Sum, dirty: true}
+		st := &slidingState{sum: s.Sum, dirty: true, lean: true}
 		for i := range s.Times {
 			st.buf = append(st.buf, sample{t: s.Times[i], v: s.Values[i]})
 		}

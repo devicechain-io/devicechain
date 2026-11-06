@@ -5,6 +5,7 @@ package core
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,16 +122,25 @@ func TestStartAuthGate_OpensAfterRetries(t *testing.T) {
 	assert.Same(t, v, ms.Readiness.Validator())
 }
 
-// StartAuthGate stops retrying when its context is cancelled and never opens.
+// StartAuthGate stops retrying when its context is cancelled and never opens. "Stopped" is
+// told apart from "still spinning" by counting fetches: with a 1ms retry interval a loop that
+// kept going would fetch dozens of times in the window, while one that honours the cancellation
+// fetches exactly once (the attempt it was already making) and never again.
 func TestStartAuthGate_StopsOnCancel(t *testing.T) {
+	defer func(d time.Duration) { authGateRetryInterval = d }(authGateRetryInterval)
+	authGateRetryInterval = time.Millisecond
+
 	ms := &Microservice{Readiness: NewReadinessGate()}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	var fetches atomic.Int32
 	ms.StartAuthGate(ctx, func(context.Context) (*auth.Validator, error) {
+		fetches.Add(1)
 		return nil, context.Canceled
 	})
 
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	assert.False(t, ms.Readiness.Ready())
+	assert.Equal(t, int32(1), fetches.Load(), "the auth loop kept fetching after its context was cancelled")
 }

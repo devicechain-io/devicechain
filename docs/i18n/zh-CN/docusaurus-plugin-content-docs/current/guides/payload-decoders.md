@@ -378,6 +378,7 @@ The Things Stack 中的载荷格式化器已经解码了帧，但得到的是 `{
 
 ## 相关内容 {#related}
 
+- [从 LoRaWAN 上行到告警](./lorawan-uplink-to-alarm.md)：解码器、集成、规则和告警的完整过程，以模拟器充当网络服务器。
 - [解码器函数参考](../reference/decoder-functions.md)：函数库中的函数及其成本，以及各项限制。
 - [入站集成](./inbound-integrations.md)：解码器读取的发送方。
 - [设备类型与配置文件](../user-guide/device-types-and-profiles.md)：指标、草稿与发布。
