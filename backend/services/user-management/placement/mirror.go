@@ -120,17 +120,23 @@ func (l *LazyBucket) Update(key string, value []byte, revision uint64) error {
 // The day something routes by the mirror, this is the place to revisit.
 func IsFatal(err error) bool { return errors.Is(err, partition.ErrPChanged) }
 
-// mirrorPass is one scheduled pass. A changed P is reported as itself, wrapped, and logged at
-// error with an explicit statement of what it means: it is the one failure here that is not
-// transient and will not clear on retry.
-func mirrorPass(src Source, bucket partition.Bucket) func(ctx context.Context) error {
+// logChangedP is how a periodic pass says a changed P out loud: at error, with what it means. It
+// is the one failure here that is not transient and will not clear on retry.
+func logChangedP(err error) {
+	log.Error().Err(err).Msg("The placement mirror records a different P from the database. This will not " +
+		"clear on retry: the vpartition count is fixed for the life of the instance. Every pass fails until " +
+		"the mirror or the database is repaired. The service keeps running because nothing routes by the " +
+		"mirror yet; a restart refuses to start.")
+}
+
+// mirrorPass is one scheduled pass. A changed P is returned as itself (wrapped), so the pass is
+// counted failed, and is reported through onFatal. onFatal is a parameter so a test can observe it
+// without swapping the global logger, which no test in the repository may do.
+func mirrorPass(src Source, bucket partition.Bucket, onFatal func(error)) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		err := Sync(ctx, src, bucket)
 		if IsFatal(err) {
-			log.Error().Err(err).Msg("The placement mirror records a different P from the database. This will not " +
-				"clear on retry: the vpartition count is fixed for the life of the instance. Every pass fails until " +
-				"the mirror or the database is repaired. The service keeps running because nothing routes by the " +
-				"mirror yet; a restart refuses to start.")
+			onFatal(err)
 		}
 		return err
 	}
@@ -141,6 +147,6 @@ func mirrorPass(src Source, bucket partition.Bucket) func(ctx context.Context) e
 func NewMirrorTask(ms *core.Microservice, src Source, bucket partition.Bucket, interval time.Duration,
 	callbacks core.LifecycleCallbacks) *core.PeriodicTask {
 	return core.NewPeriodicTask(ms.FunctionalArea, "placement-mirror", interval,
-		mirrorPass(src, bucket),
+		mirrorPass(src, bucket, logChangedP),
 		callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("placement_mirror")))
 }

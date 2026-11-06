@@ -4,14 +4,11 @@
 package placement
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/partition"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -187,25 +184,22 @@ func TestALazyBucketRetriesItsOpenUntilItWorks(t *testing.T) {
 }
 
 // A changed P found on a PERIODIC pass fails the pass (so the pass metric and its alert see it),
-// keeps the sentinel, and says plainly in the log that it will not clear on retry. It does not
-// stop the process: see IsFatal for why only the start does.
+// keeps the sentinel, and is reported through the fatal hook. It does not stop the process: see
+// IsFatal for why only the start does. A transient failure is not reported that way.
 func TestPeriodicPassReportsAChangedPLoudly(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
+	var reported []error
+	onFatal := func(err error) { reported = append(reported, err) }
 
 	b := newBucket()
 	require.NoError(t, partition.Publish(b, partition.NewTable(partition.DefaultP*2)))
-	err := mirrorPass(&source{table: newTable()}, b)(context.Background())
+	err := mirrorPass(&source{table: newTable()}, b, onFatal)(context.Background())
 	require.Error(t, err)
 	require.True(t, IsFatal(err))
-	require.Contains(t, buf.String(), `"level":"error"`)
-	require.Contains(t, buf.String(), "will not clear on retry")
+	require.Len(t, reported, 1)
+	require.True(t, IsFatal(reported[0]))
 
-	// A transient failure is retried quietly: no such line.
-	buf.Reset()
-	err = mirrorPass(&source{err: errors.New("db away")}, newBucket())(context.Background())
+	reported = nil
+	err = mirrorPass(&source{err: errors.New("db away")}, newBucket(), onFatal)(context.Background())
 	require.Error(t, err)
-	require.NotContains(t, buf.String(), "will not clear on retry")
+	require.Empty(t, reported)
 }
