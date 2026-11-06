@@ -666,6 +666,25 @@ On startup the process bootstraps its manifest, starts emitting immediately,
 and serves the control API + presentation page on `--port` (default `8090`).
 Open `http://localhost:8090/` to watch measurements arrive live.
 
+### Binary uplinks for a payload decoder (`--lorawan-binary`)
+
+Integration mode (`--lorawan-ns chirpstack|tts`) normally plays a network server with a codec: each
+uplink carries the decoded object. `--lorawan-binary` plays one **without** a codec: the uplink
+carries only the raw six-byte application frame, on port 2, and no decoded object, so what the
+platform stores is whatever the device profile's payload decoder makes of the frame. Without a
+published decoder nothing is stored from such an uplink.
+
+```sh
+dc-simulator --lorawan-print-decoder          # the decoder document that reads the frame
+dc-simulator --lorawan-ns chirpstack --lorawan-binary   --integration-url https://<host>/api/integrations/<tenant>/<integration>   --deveui 70b3d57ed0012345 --uplinks 5       # token in DC_SIM_INTEGRATION_TOKEN
+```
+
+The frame is a version byte (1), the temperature as a signed 16-bit number in tenths of a degree, the
+humidity in percent, the battery voltage in tenths of a volt, and the door as the low bit of the last
+byte. The printed decoder declares one saved vector; set it on a profile that declares `temperature`,
+`humidity` and `battery.voltage` as doubles and `door` as a boolean (the same metrics default mode
+stores), publish, and the stored values are the ones default mode would have stored.
+
 ### X.509 (mTLS) device mode (`--x509`)
 
 `--x509` plays devices that authenticate with a client certificate instead of a token. It is a
