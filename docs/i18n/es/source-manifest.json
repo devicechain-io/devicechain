@@ -147,8 +147,8 @@
       "translationSha256": "959a249b42cb24be723a1910693db5e4953cc72f9752d34985b30c62ea9446bc"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "828588bb6cd1068249d8428c42e1a2f545ce0608cdf9ecfc55995d0d09d1d4fa",
-      "translationSha256": "a9506193c88ba22d3f328625a32c951ea4ad71840d3d246c51faa1a29984c6d3"
+      "sourceSha256": "86a60cf1f47555835dc1bd541a2f43231f7b00a5332632e619f3c42cbb4d2585",
+      "translationSha256": "aef2cf4534c543875f802da4313bc0cab82cc864c6678c37872920bf0b5f3cdb"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",
@@ -207,8 +207,8 @@
       "translationSha256": "b28c294ce81a9f06068e5c874869dabdb9b512c30cfbf8a2658d00135f0813f8"
     },
     "guides/inbound-integrations.md": {
-      "sourceSha256": "d3554127501d7045a1515c63f7952f83c9af0dad34c0717f46e2abd208783e4c",
-      "translationSha256": "a279d0fc77f787bf5dae689816c9f4d9b245787b40ae4cc25d210c706016b1f9"
+      "sourceSha256": "c1902b23bfccac9ae50e224a0554d7a2f34c3edc63c749c1d018ae0de0757b02",
+      "translationSha256": "7dac65e29c504df77669724e74333cb2dbb76afc7a7b8f2d1c72f8a8e229d97b"
     },
     "guides/local-development.md": {
       "sourceSha256": "4dd334e1d7524eaedf541eb6234b1255a63fa4908789e38ce57b448089b49e7e",
@@ -231,8 +231,8 @@
       "translationSha256": "14444fec2a032586709f95fae456f2b5d06fe96a668ded4faa27b19579e78655"
     },
     "guides/payload-decoders.md": {
-      "sourceSha256": "2cfc72004e4ccc9f82b913bc41a28b17d30392fe751b6668e180581c6578867c",
-      "translationSha256": "99dbadbc788f172d82339ace40f6e1635b6823ef5b2280dcee4247f318305f4d"
+      "sourceSha256": "9371cd65125bacd7e3195be08398187283acfa99d5203b686e3014dd39559ce4",
+      "translationSha256": "7618c99795a8106f07d8a93f7895f12ff4370fd24764757dc7bc3cbf2bf16aba"
     },
     "guides/sending-commands.md": {
       "sourceSha256": "9fd2c6a2d2b2662aca38a72ba1ac65224cc2e67c541b24338e7c089e26e99f4e",
@@ -275,8 +275,8 @@
       "translationSha256": "fbd25bb396952c68b33bbbb11354857c203f9a7afcb94a43b68b14b7ef944d93"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "00a283c50ec0346e71c45b41c63ff1df3c1162cea772a95cbf3e4000cd7a8ccd",
-      "translationSha256": "99bd395385c64560d1715517582040dde11a0a39406748f4efb891bfcce2c387"
+      "sourceSha256": "f9f1ef8793084e7c620a4fd968ba0f3d5e54dca8e39a8b226b299d4a9d3c0f6b",
+      "translationSha256": "4130458eba5607d6db1f06589f270ab25ade77f9a59fb5498233391fa6f28a29"
     },
     "reference/decoder-functions.md": {
       "sourceSha256": "3acdfb58bde5a90df71a4a1b2162e36b7c43247c4fc2dac3c6bd18d30d9470b0",

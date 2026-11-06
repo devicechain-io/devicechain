@@ -7,8 +7,8 @@ title: Decodificadores de payload
 
 Un **decodificador de payload** convierte lo que envió un dispositivo o un servidor de red en mediciones. Lo escribes una vez, en un [perfil de dispositivo](../user-guide/device-types-and-profiles.md), como una lista corta de reglas: lee dos bytes en el desplazamiento 1 como un número con signo, divídelo entre diez y guárdalo como `temperature`. Lee una trama binaria, un cuerpo JSON o el objeto que un servidor de red ya decodificó, y produce las mismas mediciones que cualquier otro origen, con las unidades y la validación de las métricas que declaraste.
 
-:::note La decodificación en vivo llega en la v1.2
-Hoy puedes escribir, probar y publicar decodificadores: la pestaña **Decodificador** del perfil de dispositivo y las operaciones GraphQL de [Creación mediante GraphQL](#graphql) están en esta compilación. **La decodificación de uplinks en vivo llega con la v1.2.** Hasta entonces, una [integración de entrada](./inbound-integrations.md) sigue guardando solo lo que decodificó el servidor de red, y un decodificador publicado no cambia lo que se guarda.
+:::note La decodificación en vivo está en la v1.2
+Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders).
 :::
 
 ## Cuándo necesitas uno {#when}
@@ -26,7 +26,7 @@ Un decodificador pertenece a un perfil de dispositivo y viaja con él:
 
 - Lo editas en el **borrador** del perfil, en la pestaña **Decodificador**. Guardar escribe solo el borrador.
 - **Publicar** el perfil congela el decodificador en esa versión. El decodificador de una versión publicada no cambia nunca, y volver a una versión anterior recupera su decodificador con ella.
-- Cuando llegue la decodificación en vivo, un uplink se decodifica con el decodificador de la versión por la que se resuelve su dispositivo.
+- Un uplink se decodifica con el decodificador de la versión por la que se resuelve su dispositivo.
 
 El decodificador es un documento de expresiones en un lenguaje pequeño y sin bucles (CEL). Tiene un tipo de **entrada** que lee, **valores compartidos** opcionales y una o más **secciones**; cada sección tiene **filas**, y cada fila indica qué métrica escribe y cómo calcular el valor. El lenguaje no tiene reloj, ni aleatoriedad, ni efectos secundarios, así que la misma entrada da siempre las mismas lecturas.
 
@@ -117,7 +117,7 @@ Un nombre se compone de letras, dígitos y `_`, no empieza por un dígito y no p
 
 ### Cuántas lecturas {#max-readings}
 
-El **máximo de lecturas** del decodificador es lo más que puede producir un uplink: para la sección más grande, sus filas de campo y de expresión más el `maxKeys` de sus filas de mapa. Es como máximo 64 por sección, y se muestra junto al decodificador en la pestaña Decodificador como "Hasta N lecturas por mensaje". Cuando llegue la decodificación en vivo, lo que un uplink consume de la asignación de ingesta del inquilino se contará a partir de este número.
+El **máximo de lecturas** del decodificador es lo más que puede producir un uplink: para la sección más grande, sus filas de campo y de expresión más el `maxKeys` de sus filas de mapa. Es como máximo 64 por sección, y se muestra junto al decodificador en la pestaña Decodificador como "Hasta N lecturas por mensaje". Un uplink de un tipo de dispositivo con decodificador se cuenta, al aceptarse, contra la asignación de ingesta del inquilino como este número de lecturas, sea cual sea lo que acabe produciendo.
 
 ### Qué se guarda {#output-values}
 
@@ -210,7 +210,7 @@ Una decodificación que falla informa de uno de estos motivos. No se guarda nada
 | `unsupported_encoding` | Un fallo del panel de prueba: el cuerpo pegado usa una codificación que la integración no acepta, como la codificación Protobuf de ChirpStack. |
 | `ignored_message` | Un fallo del panel de prueba: la integración ignora este tipo de mensaje, como un join, así que no hay nada que decodificar. |
 
-Cuando llegue la decodificación en vivo, un uplink cuya decodificación falla no se guarda y se registra como un evento fallido que lleva el mismo motivo.
+Un uplink cuya decodificación falla no se guarda y se registra como un evento fallido con el motivo `DECODE_FAILED`; el comienzo de su texto de error es el motivo de esta tabla. Se registra en la primera entrega y no se reintenta.
 
 ## Creación mediante GraphQL {#graphql}
 
