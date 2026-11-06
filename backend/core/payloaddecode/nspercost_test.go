@@ -169,9 +169,7 @@ func nsCases() []nsCase {
 // runtime limit cannot catch it; this test does. JSON parsing is charged too (ParseCost), so
 // the same ratio validates its calibration.
 func TestNativeCostsMatchMeasuredTime(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("timing: skipped under -short and -race")
-	}
+	skipUnlessPerfGate(t)
 	var worst float64
 	var rows []string
 	for _, c := range nsCases() {
@@ -227,9 +225,7 @@ const noiseFloorNS = 300
 // plus the noise floor. Natives whose declared cost already scales with the frame (slice,
 // the decoders) are covered by TestNativeCostsMatchMeasuredTime.
 func TestFixedCostNativesDoNotScaleWithTheFrame(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("timing: skipped under -short and -race")
-	}
+	skipUnlessPerfGate(t)
 	for _, c := range []struct {
 		call     string
 		declared float64 // declared cost of one call
@@ -252,9 +248,7 @@ func TestFixedCostNativesDoNotScaleWithTheFrame(t *testing.T) {
 // and walks the 4 KiB frame ONCE must be flagged by the scaling check, and so must the
 // 200-pass walker by the ns-per-cost check.
 func TestNativeCostChecksFlagUnderDeclaration(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("timing: skipped under -short and -race")
-	}
+	skipUnlessPerfGate(t)
 	grow := scalingNS(t, "test.walk1(frame)", 32)
 	t.Logf("test.walk1 (one pass over the frame, declares 1): grows %.0f ns/call (allowed %d)", grow, noiseFloorNS+maxNSPerCost)
 	if grow <= noiseFloorNS+maxNSPerCost {

@@ -331,9 +331,7 @@ func skipUnlessPerfGate(t *testing.T) {
 // Tracker overhead: the same programs with and without cost tracking, run over the same
 // activation. Reported, and bounded: the spec accepts any overhead but wants it budgeted.
 func TestCostTrackerOverhead(t *testing.T) {
-	if testing.Short() || raceEnabled {
-		t.Skip("timing: skipped under -short and -race")
-	}
+	skipUnlessPerfGate(t)
 	env, err := baseEnv()
 	if err != nil {
 		t.Fatal(err)
