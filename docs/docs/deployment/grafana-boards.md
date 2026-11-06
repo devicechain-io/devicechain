@@ -373,6 +373,8 @@ remote_write:
   - url: https://prometheus.example.com/api/v1/write
 ```
 
+The board's process panels (memory, CPU, goroutines, open files) select the job `dc-edge-agent`, so keep that `job_name`: with another name those panels are empty.
+
 The agent's default port, 9090, is also Prometheus's default listen port, so give one of them another:
 start the collector on a different one, as below, or set `local.metricsPort` in the agent's
 configuration and scrape that port.

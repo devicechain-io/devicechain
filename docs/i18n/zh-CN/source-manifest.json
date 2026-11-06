@@ -127,8 +127,8 @@
       "translationSha256": "27ff2c73a3750131d6f25c843200b62945026109b86ed4da0a4692ed3fb563ef"
     },
     "deployment/grafana-boards.md": {
-      "sourceSha256": "796e4bd01334626c983bc616f077ab21bda9dfcc96da758fba951dcf9a3130a5",
-      "translationSha256": "326efb27b1bd7939154fd0ce7437bc7c12cd800103758fe674e591d3f62709be"
+      "sourceSha256": "bfa7aa18888aecb4d5975a786b45170a144f5cdd2a4ac2824c1aca3bf7f58388",
+      "translationSha256": "e7ff90dd5f18b9cef37b3847bf72400d4238e11ae1fffeaf6aff71aaf898a08e"
     },
     "deployment/ingress-cutover.md": {
       "sourceSha256": "11f7ba29969ace2fe2a0b03b8badf1191e767fcbb042c8238a543ff927d3cfec",
@@ -147,8 +147,8 @@
       "translationSha256": "e6a4fa17b357487c922d071c1f85d8fd6ae3973776ec563cd15896949aeadf70"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "828588bb6cd1068249d8428c42e1a2f545ce0608cdf9ecfc55995d0d09d1d4fa",
-      "translationSha256": "e8807ba85bb0aca4f3418f23d53dc4da4970efafeb9d54afb7f1d23030e50a82"
+      "sourceSha256": "3903b1fa4ed68b6e801bc578476b80664289ea81ccda45aa91cbfd0d6da7a4cc",
+      "translationSha256": "2fda124f6db4157a88712b81d71e3ceb6eacd6bfd5d17791aa254b4f512b9113"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",

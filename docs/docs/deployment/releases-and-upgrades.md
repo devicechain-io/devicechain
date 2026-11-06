@@ -773,6 +773,7 @@ What needs action:
 - **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published while an older replica is still serving can be missing its decoder; see [Payload decoders](#v120-payload-decoders).
 - **Know that X.509 certificate revocation lists are new and optional.** Nothing needs doing to upgrade; read [Revocation lists](#v120-x509-crl) before you upload one.
 - **Check the event store's free space before you upgrade.** On an existing instance, `dcctl upgrade` raises the event store's `max_wal_size` to a fifth of its volume (6.4 GiB on the default 32Gi, up from 1 GiB), and the write-ahead log may now grow that far on the data volume. The upgrade prints a notice when the value rises and warns when the volume has less free space than the new size. To keep the previous allowance, run `dcctl upgrade --event-store-max-wal-mib 1024`. See [Event store write-ahead log allowance](#v120-event-store-wal).
+- **If you chart the edge agents with the shipped board, scrape them under the job name `dc-edge-agent`.** The board's process panels (memory, CPU, goroutines, open files) now select that job, so another job on the same box no longer adds its own process series to an agent's panels. A different job name shows those panels empty. See [Edge agent board and the scrape job](#v120-edge-board-job).
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -881,6 +882,10 @@ The event store's `max_wal_size` is now a fifth of its volume, never below Postg
 - **`dcctl upgrade` says when the value rises.** The plan prints one line with the old and new size. It also reads the free space on the event store's volume and prints a warning when that is below the new size, or when it could not read it. It does not refuse: the log reaches the ceiling only under stress, and the remedy is one flag.
 - **To keep a smaller allowance**, give the upgrade `--event-store-max-wal-mib`, for example `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` for the previous 1 GiB. `--dry-run` shows the effect first. The value is kept by later upgrades when you leave the flag out, and `--event-store-max-wal-mib 0` returns to the derived value. `--event-store-checkpoint-timeout` sets the checkpoint interval the same way (default `15min`). Both are applied by reload, with no restart of the event store. `dcctl` records them in `zz-dcctl-event-store.auto.tfvars.json` beside the instance's OpenTofu state, on the machine that runs the upgrade; see [Event store tuning](./tuning-an-instance.md).
 - **If you manage the instance's OpenTofu yourself**, set `timescale_max_wal_size_mib` and `timescale_checkpoint_timeout` as before.
+
+#### Edge agent board and the scrape job {#v120-edge-board-job}
+
+The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
 
 #### Schema changes and going back {#v120-going-back}
 

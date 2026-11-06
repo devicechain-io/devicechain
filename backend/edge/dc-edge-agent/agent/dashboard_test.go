@@ -331,6 +331,39 @@ func TestEdgeDashboardPanelConventions(t *testing.T) {
 	}
 }
 
+// The process and runtime series (process_*, go_*) come from the Go and process collectors, which
+// every other exporter on the box also has under the same names. The documented setup makes `agent`
+// a global external label, so selecting on it alone would sum node_exporter's process_* series
+// into the agent's panels. They are selected by the documented scrape job as well.
+func TestEdgeDashboardProcessSeriesAreScopedToTheAgentsJob(t *testing.T) {
+	var doc struct {
+		Panels []struct {
+			Title   string `json:"title"`
+			Targets []struct {
+				Expr string `json:"expr"`
+			} `json:"targets"`
+		} `json:"panels"`
+	}
+	if err := json.Unmarshal(readDashboard(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	shared := regexp.MustCompile(`(process_[a-z_]+|go_[a-z_]+)\{([^}]*)\}`)
+	checked := 0
+	for _, p := range doc.Panels {
+		for _, tg := range p.Targets {
+			for _, m := range shared.FindAllStringSubmatch(tg.Expr, -1) {
+				checked++
+				if !strings.Contains(m[2], `job="dc-edge-agent"`) {
+					t.Errorf("panel %q: %s is selected without job=\"dc-edge-agent\", so another job's series on the box are summed in (in %q)", p.Title, m[1], tg.Expr)
+				}
+			}
+		}
+	}
+	if checked < 5 {
+		t.Fatalf("only %d process/runtime selectors found; the check would pass over nothing", checked)
+	}
+}
+
 // The checker has to be shown to fail: each defect below is planted ALONE in a copy of the
 // real dashboard and must be reported. Without this, a checker that found nothing wrong with
 // anything would read as a clean dashboard.
