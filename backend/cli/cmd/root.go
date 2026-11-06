@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -108,6 +109,7 @@ Command line interface for interacting with DeviceChain components`),
 // expects. Someone who has decided they want out now must not be made to argue
 // with a cleanup path.
 func Execute() {
+	bootstrap.SilenceBenignFormatWarnings()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

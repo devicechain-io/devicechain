@@ -10,16 +10,17 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Some API servers warn "unrecognized format "int32"" on every CRD create or update
-// whose schema carries a plain controller-gen integer (`type: integer`, `format: int32`).
-// The warning is wrong, not informative: int32 and int64 are exactly the formats a CRD
-// integer may declare, the server ignores nothing, and there is nothing for an operator
-// to do about it. It reached the terminal of every `dcctl install` as a stream of
-// log-shaped lines, which reads like a problem with the install.
+// An API server reports `unrecognized format "int32"` (or "int64") when it writes a CRD
+// whose schema declares one of those formats on a type it does not accept them for. For
+// a plain controller-gen integer (`type: integer`, `format: int32`) the warning is noise:
+// those are exactly the formats an integer may declare, and there is nothing for an
+// operator to do about it. Reaching the terminal of `dcctl install` as log-shaped lines,
+// it reads like a problem with the install.
 //
-// Only that one warning, for only those two formats, is dropped. Every other warning the
-// server sends (a deprecated API, a genuinely unrecognized format such as a typo'd
-// string format) still goes where it went before.
+// Only that one warning, for only those two formats, is dropped, and it is matched by its
+// text. The same text from a schema that really does misuse the format (an int32 on a
+// boolean) is therefore dropped too; nothing here tells the two apart. Every other warning
+// (a deprecated API, any other unrecognized format) goes where it went before.
 var benignFormatWarning = regexp.MustCompile(`^(?:.*: )?unrecognized format "(?:int32|int64)"$`)
 
 // formatWarningFilter wraps the handler client-go would otherwise use.
@@ -41,4 +42,10 @@ func installWarningFilter(next rest.WarningHandlerWithContext) {
 	rest.SetDefaultWarningHandlerWithContext(formatWarningFilter{next: next})
 }
 
-func init() { installWarningFilter(rest.WarningLogger{}) }
+// SilenceBenignFormatWarnings registers the filter for this process. It is called once, by
+// the dcctl entry point, rather than from an init(): importing this package (a test, another
+// binary) must not change how an unrelated client's warnings are delivered.
+//
+// It covers what dcctl and the Helm library do in-process. It does NOT reach the
+// OpenTofu subprocess, whose providers print the server's warnings themselves.
+func SilenceBenignFormatWarnings() { installWarningFilter(rest.WarningLogger{}) }
