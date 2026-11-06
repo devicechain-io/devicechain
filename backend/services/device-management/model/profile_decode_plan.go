@@ -6,6 +6,7 @@ package model
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
@@ -123,12 +124,22 @@ func buildDecodePlan(scope ProfileScope, metrics []ResolvedMetric, raw json.RawM
 		EnvVersion int    `json:"envVersion"`
 		Input      string `json:"input"`
 	}
-	headErr := json.Unmarshal(raw, &head)
+	// An over-cap document (a legacy row whose jsonb rendering outgrew the cap) is not scanned
+	// even for its head: it is an invalid plan, decided on its length alone.
+	var headErr error
+	overCap := len(raw) > payloaddecode.MaxDocumentBytes
+	if !overCap {
+		headErr = json.Unmarshal(raw, &head)
+	}
 	invalid := func(reason payloaddecode.Reason, err error) *decodePlan {
 		countCompile(string(reason))
 		log.Error().Err(err).Str("profileVersion", scope.ProfileVersionToken).Str("reason", string(reason)).
 			Msg("A published version's payload decoder cannot be compiled by this build; integration uplinks for its device types fail with a decode error until it is replaced")
 		return &decodePlan{err: &DecodePlanError{Reason: reason, Err: err}, input: head.Input}
+	}
+	if overCap {
+		return invalid(payloaddecode.ReasonCompileFailed, fmt.Errorf("the stored decoder is %d bytes, above the maximum of %d",
+			len(raw), payloaddecode.MaxDocumentBytes))
 	}
 	// The version is read before the document is parsed strictly: a newer library may add
 	// document keys, and a strict parse would call that a malformed document rather than the

@@ -367,33 +367,36 @@ export function buildDocument(st: EditorState): Built {
     const tableRows: TableRowDoc[] = [];
     const seenKeys = new Set<string>();
     const outputs: Output[] = [];
+    // An ignore section emits no outputs, so its rows are not validated: a hidden blank row must not
+    // keep Save disabled. Valid rows are still kept in the table so un-ignoring restores them.
+    const rowIssues: Issue[] = s.ignore ? [] : issues;
     s.rows.forEach((r, oi) => {
       const op = `${sp}.outputs[${oi}]`;
       let out: Output | null = null;
       if (r.kind === 'field') {
         const c = compileField(r.field, st.input, op);
-        issues.push(...c.issues);
+        rowIssues.push(...c.issues);
         out = c.out;
         if (out) tableRows.push({ at: oi, field: r.field });
       } else if (r.kind === 'cel') {
-        issues.push(...keyIssues(r.key, op + '.key'), ...exprIssues(r.expr, op + '.expr'));
-        if (r.when.trim() !== '' && !wrappable(r.when)) issues.push({ path: op + '.when', code: 'unbalanced' });
+        rowIssues.push(...keyIssues(r.key, op + '.key'), ...exprIssues(r.expr, op + '.expr'));
+        if (r.when.trim() !== '' && !wrappable(r.when)) rowIssues.push({ path: op + '.when', code: 'unbalanced' });
         out = { key: r.key, expr: r.expr };
         if (r.when.trim() !== '') out.when = r.when;
       } else {
-        issues.push(...exprIssues(r.map, op + '.map'));
+        rowIssues.push(...exprIssues(r.map, op + '.map'));
         const mk = nonNegInt(r.maxKeys, LIMITS.readings);
-        if (mk === null || mk < 1) issues.push({ path: op + '.maxKeys', code: 'maxKeysInvalid', params: { max: LIMITS.readings } });
-        if (r.prefix.startsWith(RESERVED_KEY_PREFIX)) issues.push({ path: op + '.prefix', code: 'keyReserved' });
-        if (byteLen(r.prefix) > LIMITS.key) issues.push({ path: op + '.prefix', code: 'keyTooLong', params: { max: LIMITS.key } });
-        if (r.when.trim() !== '' && !wrappable(r.when)) issues.push({ path: op + '.when', code: 'unbalanced' });
+        if (mk === null || mk < 1) rowIssues.push({ path: op + '.maxKeys', code: 'maxKeysInvalid', params: { max: LIMITS.readings } });
+        if (r.prefix.startsWith(RESERVED_KEY_PREFIX)) rowIssues.push({ path: op + '.prefix', code: 'keyReserved' });
+        if (byteLen(r.prefix) > LIMITS.key) rowIssues.push({ path: op + '.prefix', code: 'keyTooLong', params: { max: LIMITS.key } });
+        if (r.when.trim() !== '' && !wrappable(r.when)) rowIssues.push({ path: op + '.when', code: 'unbalanced' });
         out = { map: r.map, maxKeys: mk ?? 0 };
         if (r.prefix !== '') out.prefix = r.prefix;
         if (r.when.trim() !== '') out.when = r.when;
       }
       if (r.kind !== 'map') {
         const key = r.kind === 'field' ? r.field.key : r.key;
-        if (key.trim() !== '' && seenKeys.has(key)) issues.push({ path: op + '.key', code: 'keyDuplicate' });
+        if (key.trim() !== '' && seenKeys.has(key)) rowIssues.push({ path: op + '.key', code: 'keyDuplicate' });
         seenKeys.add(key);
       }
       outputs.push(out ?? {});
@@ -426,18 +429,32 @@ export function buildDocument(st: EditorState): Built {
   return { document, text, issues, maxReadings };
 }
 
+/**
+ * The text a person pastes as a hex frame, in the one form the server's vector reader accepts:
+ * whitespace removed and a leading `0x` dropped from each token ("01 00 D7", "0x01 0x00 0xD7" and
+ * "0100d7" all mean the same bytes). Case is kept; the server takes either.
+ */
+export function compactHex(text: string): string {
+  return text
+    .trim()
+    .split(/\s+/)
+    .map((t) => t.replace(/^0x/i, ''))
+    .join('');
+}
+
 function buildVector(v: VectorState, vi: number, issues: Issue[]): Record<string, unknown> {
   const p = `vectors[${vi}]`;
   issues.push(...nameIssues(v.name, p + '.name'));
   const input: Record<string, unknown> = { ...v.inputExtra };
   if (v.kind === 'frameHex') {
-    const compact = v.text.replace(/\s+/g, '');
+    // The server reads the stored text with hex.DecodeString: no spaces, no 0x. Store that form.
+    const compact = compactHex(v.text);
     if (!/^([0-9a-fA-F]{2})*$/.test(compact) || compact.length / 2 > LIMITS.frameBytes) issues.push({ path: p + '.input', code: 'vectorHexInvalid' });
-    input.frameHex = v.text.trim();
+    input.frameHex = compact;
   } else if (v.kind === 'frameBase64') {
     const compact = v.text.replace(/\s+/g, '');
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 !== 0) issues.push({ path: p + '.input', code: 'vectorBase64Invalid' });
-    input.frameBase64 = v.text.trim();
+    input.frameBase64 = compact;
   } else {
     try {
       const parsed: unknown = JSON.parse(v.text);
@@ -483,6 +500,27 @@ function sameOutput(a: Output, b: Record<string, unknown>): boolean {
   return a.key === b.key && a.expr === b.expr && (a.when ?? '') === str(b.when) && b.map === undefined;
 }
 
+const FIELD_ENUMS: Partial<Record<keyof Field, readonly unknown[]>> = {
+  source: ['frame', 'json'],
+  type: FRAME_TYPES,
+  endian: ['be', 'le'],
+  jsonType: ['number', 'boolean'],
+};
+
+/** A stored table field with every property the right type, or null. An API-written table may hold anything. */
+function readField(raw: Record<string, unknown>): Field | null {
+  const blank = blankField();
+  const out: Record<string, unknown> = { ...blank };
+  for (const k of Object.keys(blank) as (keyof Field)[]) {
+    if (raw[k] === undefined) continue;
+    if (typeof raw[k] !== typeof blank[k]) return null;
+    const allowed = FIELD_ENUMS[k];
+    if (allowed && !allowed.includes(raw[k])) return null;
+    out[k] = raw[k];
+  }
+  return out as unknown as Field;
+}
+
 function readTable(raw: unknown): TableSectionDoc[] | null {
   if (!isObj(raw) || raw.v !== TABLE_VERSION) return null;
   return arr(raw.sections).map((s) => {
@@ -492,7 +530,8 @@ function readTable(raw: unknown): TableSectionDoc[] | null {
       when: str(o.when),
       rows: arr(o.rows).flatMap((r) => {
         if (!isObj(r) || typeof r.at !== 'number' || !isObj(r.field)) return [];
-        return [{ at: r.at, field: { ...blankField(), ...(r.field as Partial<Field>) } as Field }];
+        const field = readField(r.field);
+        return field ? [{ at: r.at, field }] : [];
       }),
     };
   });

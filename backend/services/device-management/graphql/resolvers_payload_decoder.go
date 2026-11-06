@@ -7,6 +7,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -177,7 +178,14 @@ func (r *PayloadDecoderResolver) Input() (string, error) {
 	return string(d.Input), nil
 }
 
-func (r *PayloadDecoderResolver) Document() string { return string(r.raw) }
+// Document is the stored document. One over the cap (a row written before the save gate measured
+// the stored rendering) is an error, never streamed: it can be hundreds of megabytes.
+func (r *PayloadDecoderResolver) Document() (string, error) {
+	if len(r.raw) > payloaddecode.MaxDocumentBytes {
+		return "", fmt.Errorf("the stored decoder is %d bytes, above the maximum of %d: save it again", len(r.raw), payloaddecode.MaxDocumentBytes)
+	}
+	return string(r.raw), nil
+}
 
 func (r *PayloadDecoderResolver) MaxReadings() (int32, error) {
 	f, err := r.figures()

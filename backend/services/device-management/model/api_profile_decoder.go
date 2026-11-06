@@ -111,6 +111,13 @@ func (api *Api) decoderDeclarationForProfile(ctx context.Context, profileId uint
 	if d == nil || len(*d) == 0 {
 		return nil, nil
 	}
+	// 🔴 A stored draft over the cap is a row written before the save gate measured the stored
+	// rendering (jsonb writes numbers out in full). It is refused here, so it is never frozen into
+	// a snapshot, and the author is told to save it again.
+	if len(*d) > payloaddecode.MaxDocumentBytes {
+		return nil, refuseDecoder("cannot publish device profile: the saved payload decoder is invalid",
+			fmt.Errorf("the stored decoder is %d bytes, above the maximum of %d: save it again", len(*d), payloaddecode.MaxDocumentBytes))
+	}
 	return json.RawMessage(*d), nil
 }
 

@@ -270,7 +270,7 @@ func (l *linkReadings) readings() [][2]string {
 // request to fix or its authority.
 func (api *Api) testInput(ctx context.Context, req *PayloadDecoderTestRequest, kind payloaddecode.InputKind,
 	sample *payloaddecode.VectorInput) (*testUplink, *linkReadings, *PayloadDecoderFailure, error) {
-	out := &testUplink{uplinks: 1}
+	out := &testUplink{}
 	switch {
 	case sample != nil:
 		in, err := inputFromVector(*sample)
@@ -405,22 +405,23 @@ func deref(s *string) string {
 // vector share.
 func inputFromVector(v payloaddecode.VectorInput) (payloaddecode.Input, error) {
 	var in payloaddecode.Input
-	if v.FrameHex != "" && v.FrameBase64 != "" {
+	if v.FrameHex != nil && v.FrameBase64 != nil {
 		return in, errors.New("the sample names both frameHex and frameBase64")
 	}
+	// A present empty string is an empty frame, not a missing one.
 	switch {
-	case v.FrameHex != "":
-		b, err := hex.DecodeString(v.FrameHex)
+	case v.FrameHex != nil:
+		b, err := hex.DecodeString(*v.FrameHex)
 		if err != nil {
 			return in, errors.New("the sample's frameHex is not valid hex")
 		}
-		in.Frame = b
-	case v.FrameBase64 != "":
-		b, err := base64.StdEncoding.DecodeString(v.FrameBase64)
+		in.Frame = append([]byte{}, b...)
+	case v.FrameBase64 != nil:
+		b, err := base64.StdEncoding.DecodeString(*v.FrameBase64)
 		if err != nil {
 			return in, errors.New("the sample's frameBase64 is not valid base64")
 		}
-		in.Frame = b
+		in.Frame = append([]byte{}, b...)
 	}
 	if len(v.JSON) > 0 {
 		in.JSON = []byte(v.JSON)

@@ -422,3 +422,11 @@ func TestTestDecoderDoesNotFindAnotherTenantsIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.OK, "%+v", res.Failure)
 }
+
+// Uplinks counts the uplinks a webhook body held and is zero for every other input.
+func TestTestDecoderReportsZeroUplinksForANonWebhookInput(t *testing.T) {
+	f := newDecoderFixture(t)
+	res := f.test(&PayloadDecoderTestRequest{Document: str(decoderDoc), FrameHex: str("00D701"), FPort: i32(2)})
+	require.True(t, res.OK, "%+v", res.Failure)
+	assert.EqualValues(t, 0, res.Uplinks)
+}

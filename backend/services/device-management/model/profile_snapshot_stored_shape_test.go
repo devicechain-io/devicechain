@@ -225,7 +225,7 @@ func fullDecoderDocument(t *testing.T) json.RawMessage {
 		Sections: []payloaddecode.Section{{Name: "s", When: "fPort == 2", Ignore: true, Outputs: []payloaddecode.Output{{
 			Key: "k", Expr: "1", When: "true", Map: "m", Prefix: "p.", MaxKeys: 3}}}},
 		Vectors: []payloaddecode.Vector{{Name: "v", Expect: map[string]json.Number{"k": "1"},
-			Input: payloaddecode.VectorInput{FrameHex: "00", FrameBase64: "AA==", JSON: json.RawMessage(`{}`),
+			Input: payloaddecode.VectorInput{FrameHex: str("00"), FrameBase64: str("AA=="), JSON: json.RawMessage(`{}`),
 				Decoded: json.RawMessage(`{}`), FPort: &port, FCnt: &cnt, Link: map[string]float64{"rssi": 1}}}},
 		Table: json.RawMessage(`{}`),
 	})
