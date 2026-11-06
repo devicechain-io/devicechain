@@ -379,6 +379,8 @@ remote_write:
   - url: https://prometheus.example.com/api/v1/write
 ```
 
+Los paneles de proceso del tablero (memoria, CPU, goroutines, archivos abiertos) seleccionan el job `dc-edge-agent`, así que conserve ese `job_name`: con otro nombre esos paneles aparecen vacíos.
+
 El puerto por defecto del agente, 9090, es también el puerto de escucha por defecto de Prometheus, así
 que cambia uno de los dos: arranca el colector en otro, como abajo, o define `local.metricsPort` en la
 configuración del agente y recolecta ese puerto.

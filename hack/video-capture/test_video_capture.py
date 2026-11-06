@@ -198,6 +198,59 @@ class Pure(unittest.TestCase):
         self.assertFalse(v.posix_drive_path("C:/Users/x"))
 
 
+class AuditLows(unittest.TestCase):
+    """A planted failure for each: the test fails when the fix is removed."""
+
+    def recorder(self):
+        r = object.__new__(v.Recorder)
+        r.out, r.say, r.secrets, r.deadline = tempfile.mkdtemp(), (lambda m: None), (), None
+        r.guard = lambda *a, **k: None
+        return r
+
+    def test_non_finite_numbers_are_refused(self):
+        for x in (float("nan"), float("inf"), float("-inf")):
+            self.assertTrue(bad(lambda d, x=x: d["shots"][0].update(steps=[{"wait": x}])), repr(x))
+            self.assertTrue(bad(lambda d, x=x: d["shots"][0].update(max_s=x)), repr(x))
+        self.assertEqual(bad(lambda d: d["shots"][0].update(max_s=30)), [])
+        self.assertTrue(v._is_num(10 ** 400), "an int of any size is finite; it must not crash validation")
+        self.assertFalse(v._is_num(True))
+
+    def test_guard_stops_a_shot_that_runs_past_max_s(self):
+        r = self.recorder()
+        del r.guard
+        r.leaked, r.password, r.typed_secrets = False, "", []
+        r.deadline = v.time.time() - 1
+        with self.assertRaises(v.CaptureError) as cm:
+            r.guard(SimpleNamespace(url="http://x/devices"), False)
+        self.assertIn("max_s", str(cm.exception))
+        r.deadline = None
+        r.signed_out = True
+        r.drain = lambda: None
+        page = SimpleNamespace(url="http://x/devices", frames=[], wait_for_timeout=lambda ms: None)
+        r.guard(page, False)  # control: with no deadline the same page passes
+
+    def test_failure_screenshot_waits_for_every_required_mask(self):
+        r = self.recorder()
+        shots = []
+        page = SimpleNamespace(screenshot=lambda path: shots.append(path))
+        r.fail_shot(page, {"id": "s"}, "step 1", False, ["user-menu"])
+        self.assertEqual(shots, [], "a screenshot was taken while a required mask had matched nothing")
+        r.fail_shot(page, {"id": "s"}, "step 1", False, [])
+        self.assertEqual(len(shots), 1, "control: with every mask matched the screenshot is taken")
+
+    def test_startup_removes_only_dead_recorders_frames(self):
+        out = tempfile.mkdtemp()
+        for d in (".frames-111", ".frames-222", ".frames-junk", ".frames-%d" % os.getpid(), "keep"):
+            os.makedirs(os.path.join(out, d))
+        self.assertEqual(sorted(v.stale_frame_dirs(out, alive=lambda p: p == 111)), sorted([".frames-%d" % os.getpid(), ".frames-222", ".frames-junk"]))
+
+    def test_pid_alive(self):
+        self.assertTrue(v.pid_alive(os.getpid()))
+        p = subprocess.Popen([sys.executable, "-c", "pass"])
+        p.wait()
+        self.assertFalse(v.pid_alive(p.pid))
+
+
 class Credentials(unittest.TestCase):
     LOGIN = {"mode": "superuser-secret", "instance": "g", "email": "su@x"}
     SECRET = "s3cret-value"
