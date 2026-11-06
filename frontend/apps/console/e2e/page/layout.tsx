@@ -11,6 +11,9 @@
 //                                          toolbar (Grid, Relative, Duplicate, ...) is shown
 //   layout.html?surface=settings           the widget settings panel for an alarm table whose pinned
 //                                          device-type list holds a type the catalogue lacks
+//   layout.html?surface=decoder            the device-profile Decoder tab, over a decoder with a field row,
+//                                          a JSON-less raw row and a map row, a vector and a draft that
+//                                          differs from the active version
 //   &labels=none                           (versions) a history in which no version has a label
 //   &lang=es                               the locale (default en)
 //   &theme=light                           light; anything else is dark, the console default
@@ -37,6 +40,9 @@ import { ToastProvider } from '@/components/ui/toast';
 import { WidgetConfigPanel } from '@/routes/dashboards/editor/WidgetConfigPanel';
 import { DashboardCanvas } from '@/routes/dashboards/editor/DashboardCanvas';
 import { VersionHistorySheet } from '@/routes/dashboards/editor/VersionHistorySheet';
+import { DecoderPanelView } from '@/routes/device-profiles/decoder/DecoderPanel';
+import { blankField, buildDocument, emptyState, newId } from '@/routes/device-profiles/decoder/model';
+import '@/i18n/lazy/deviceProfiles';
 
 const LIVE_VERSION = 3;
 
@@ -52,6 +58,25 @@ const VERSIONS = [
   { version: 1, label: 'Initial', publishedBy: null },
 ].map((v) => ({ ...v, label: UNLABELLED ? null : v.label, description: null, publishedAt: '2026-12-28T22:58:58Z' }));
 
+// The Decoder tab's decoder: a table row, a raw row and a map row, with a vector, so every row
+// kind and the vectors list are on screen. The active version holds an older one, so the badge
+// shows the draft differing.
+function decoderDocument(older: boolean): string {
+  const st = emptyState();
+  st.sections[0].fPort = '2';
+  st.sections[0].rows = [
+    { id: newId(), kind: 'field', field: { ...blankField(), key: 'temperature', type: 'i16', offset: '1', div: '10', add: '-40' } },
+    { id: newId(), kind: 'cel', key: 'battery', expr: 'double(u8(frame, 5)) / 2.0', when: 'size(frame) > 5' },
+    { id: newId(), kind: 'map', map: 'lpp.decode(slice(frame, 6, size(frame) - 6))', prefix: 'lpp.', maxKeys: '16', when: '' },
+  ];
+  st.vectors = [
+    { id: newId(), name: 'room sensor', kind: 'frameHex', text: '0100D7000A', fPort: '2', fCnt: '', inputExtra: {}, expect: [{ id: newId(), key: 'temperature', value: '-18.5' }] },
+  ];
+  if (older) st.sections[0].name = 'uplink';
+  return buildDocument(st).text as string;
+}
+const storedDecoder = (document: string) => ({ kind: 'CEL', envVersion: 1, input: 'FRAME', document, maxReadings: 18, estimatedCost: 140 });
+
 // The canned answers, by GraphQL operation name. An operation not listed is an error, so a new
 // request the drawer starts making shows up here rather than rendering as an empty state.
 const ANSWERS: Record<string, unknown> = {
@@ -59,6 +84,37 @@ const ANSWERS: Record<string, unknown> = {
   DashboardPublishedVersion: { dashboard: { publishedVersion: LIVE_VERSION } },
   // The device-type catalogue the settings panel's pickers read: one type, so the other pinned
   // row's token is "unknown", and long enough to need more than a phone row's width.
+  ProfileDecoder: {
+    deviceProfilesByToken: [
+      {
+        token: 'thermostat',
+        decoder: storedDecoder(decoderDocument(false)),
+        activeProfileVersion: { version: 3, decoder: storedDecoder(decoderDocument(true)) },
+      },
+    ],
+  },
+  MetricDefinitions: {
+    metricDefinitions: {
+      results: [
+        { metricKey: 'temperature', dataType: 'DOUBLE', calculated: false },
+        { metricKey: 'battery', dataType: 'DOUBLE', calculated: false },
+      ],
+      pagination: { pageStart: 0, pageEnd: 0, totalRecords: 2 },
+    },
+  },
+  PayloadDecoderFunctions: {
+    payloadDecoderFunctions: [
+      { name: 'i16be', signature: 'i16be(b bytes, off int) int', description: 'Signed 16-bit big endian integer at a byte offset.' },
+      { name: 'lpp.decode', signature: 'lpp.decode(b bytes) map(string, double)', description: 'Cayenne LPP: channel-suffixed keys such as temperature_1.' },
+    ],
+  },
+  TestPayloadDecoder: {
+    testPayloadDecoder: {
+      ok: true, ignored: false, section: 'telemetry', readings: [{ key: 'temperature', value: '-18.5' }], skipped: [], error: null, cost: 21,
+      vectors: [{ name: 'room sensor', ok: true, error: null, cost: 21 }], uplinks: 0,
+    },
+  },
+  Integrations: { integrations: { results: [{ token: 'ttn', name: 'The Things Network', type: 'TTS_V3' }], pagination: { totalRecords: 1 } } },
   DeviceTypes: {
     deviceTypes: { results: [{ token: 'thermostat', name: 'Thermostat' }], pagination: { totalRecords: 1 } },
   },
@@ -165,8 +221,14 @@ async function main() {
         onClose={() => {}}
       />
     );
+  } else if (surface === 'decoder') {
+    page = (
+      <div className="mx-auto max-w-6xl p-4" data-testid="decoder-host">
+        <DecoderPanelView profileToken="thermostat" activeVersion={3} canWrite={params.get('readonly') !== '1'} />
+      </div>
+    );
   } else {
-    throw new Error(`surface must be versions, canvas or settings, got '${surface}'`);
+    throw new Error(`surface must be versions, canvas, settings or decoder, got '${surface}'`);
   }
   createRoot(document.getElementById('root')!).render(
     <ToastProvider>

@@ -16,6 +16,9 @@
 //                    or its content), and inside what the canvas can show: not cut off above
 //                    or to the left, where a scroll area cannot scroll, and not past its right
 //                    edge, where it would need a sideways scroll.
+//   Decoder tab      the device-profile Decoder tab draws without the page scrolling sideways, and
+//                    every control of its first section lies inside the viewport, at phone, tablet
+//                    and desktop widths in English and Spanish.
 //
 // Each run also saves a screenshot of every case under test-results/layout/ as an ADVISORY
 // artifact for a reviewer; nothing compares it with a baseline.
@@ -262,3 +265,39 @@ for (const width of [320, 390, 960] as const) {
     await expect(page.getByTestId('list-cell-deviceTypes-0-token')).toContainText('Thermostat');
   });
 }
+
+// The Decoder tab is a dense form (a row is a grid of labelled fields). On a phone it must wrap
+// rather than push the page sideways, and Spanish labels run longer than English ones.
+for (const lang of LANGS) {
+  for (const width of [320, 390, 768, 1280] as const) {
+    test(`the decoder tab fits at ${width} px (${lang})`, async ({ page }) => {
+      await open(page, `surface=decoder&lang=${lang}`, width, 1400);
+      const section = page.getByRole('region', { name: /1/ }).first();
+      await expect(section.getByTestId('cel-preview').first()).toContainText('double(i16be(frame, 1)) / 10.0 - 40.0');
+      // The draft was changed from the active version, and the tab says so.
+      await expect(page.locator('[data-status="differs"]')).toBeVisible();
+      const findings = await page.evaluate(() => {
+        const out: string[] = [];
+        const doc = document.documentElement;
+        if (doc.scrollWidth > window.innerWidth + 1) out.push(`the page scrolls sideways (${doc.scrollWidth} > ${window.innerWidth})`);
+        for (const el of Array.from(document.querySelectorAll('[data-testid="decoder-host"] input, [data-testid="decoder-host"] textarea, [data-testid="decoder-host"] button'))) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) continue;
+          if (r.left < -0.5 || r.right > window.innerWidth + 0.5) {
+            out.push(`${el.tagName.toLowerCase()} ${(el.getAttribute('aria-label') || el.textContent || el.id).trim().slice(0, 30)} is outside the viewport sideways`);
+          }
+        }
+        return out;
+      });
+      await shot(page, `decoder-${lang}-${width}`);
+      expect(findings).toEqual([]);
+    });
+  }
+}
+
+test('a read-only caller sees the decoder with nothing to edit', async ({ page }) => {
+  await open(page, 'surface=decoder&lang=en&readonly=1', 1280, 1400);
+  await expect(page.getByRole('button', { name: 'Save decoder' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add field' })).toBeDisabled();
+  await shot(page, 'decoder-readonly');
+});

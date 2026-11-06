@@ -35,6 +35,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-simulator/lorawan"
+	"github.com/devicechain-io/dc-simulator/otafleet"
 	"github.com/devicechain-io/dc-simulator/sim"
 )
 
@@ -118,12 +119,21 @@ func main() {
 		validity:   flag.Duration("x509-validity", envDurationOr("DC_SIM_X509_VALIDITY", 0), "x509 mode: device certificate lifetime (default 1 year)"),
 		holdFor:    flag.Duration("x509-hold", envDurationOr("DC_SIM_X509_HOLD", 0), "x509 mode: disconnect after this long (0 holds until interrupted)"),
 	}
+	ota := defineOTAFlags(flag.CommandLine)
 	showVersion := flag.Bool("version", false, "print the build version, commit and date, then exit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("dc-simulator %s (commit %s, built %s)\n", version, gitCommit, buildDate)
 		return
+	}
+
+	otaOpts, err := ota.options(flag.CommandLine)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid --ota configuration")
+	}
+	if otaOpts != nil && (*x509Mode || *lorawanNS != "") {
+		log.Fatal().Msg("--ota runs update devices inside a scenario sim; it cannot be combined with --x509 or --lorawan-ns, which are modes of their own")
 	}
 
 	if *x509Mode {
@@ -166,7 +176,7 @@ func main() {
 	if *publishLog != "" && !*playDevices {
 		log.Fatal().Msg("--publish-log logs what --play-devices publishes; without it this process publishes nothing")
 	}
-	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog, external: *externalPlane}); err != nil {
+	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog, external: *externalPlane}, otaOpts); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
 }
@@ -201,7 +211,7 @@ type devicePlane struct {
 	external bool
 }
 
-func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane devicePlane) error {
+func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane devicePlane, otaOpts *otafleet.Options) error {
 	hs, err := sim.LoadHandshake(handshakePath)
 	if err != nil {
 		return err
@@ -257,6 +267,7 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane d
 	rt.Minted = sim.NewFileLedger(hs, handshakePath)
 	rt.FarEndDisabled = noFarEnd
 	rt.ExternalDevicePlane = plane.external
+	rt.UpdateFleet = otaOpts
 	if noFarEnd {
 		log.Warn().Str("manifestId", manifestId).
 			Msg(farEndOptOutWarning(driver.Manifest().FarEndMode()))

@@ -64,6 +64,7 @@ dcctl upgrade local my-instance --version <new-version>
 | `mqttExposure.loadBalancer` | MQTT 负载均衡器的云相关设置，例如内部负载均衡器和允许的来源范围 |
 | `instance.config.infrastructure.nats.streamDesignRate`、`.streamRunwayMinutes`、`.streamMaxBytes`、`.streamMaxBytesCold`、`.streamMaxMsgs` | 事件流按其预留的中断缓冲时间，以及字节和消息数上限。写入任何内容之前，会用代理的卷检查预留量 |
 | `instance.config.infrastructure.messaging.envelopes.resolved`、`.inbound`、`.inboundLingerMillis` | 事件是否以信封形式写入，默认关闭 |
+| `instance.config.infrastructure.tokenAudience.enforcement`、`.unscopedClientCredentials`、`.externalResources` | 绑定到错误资源的令牌是否被拒绝，以及授权服务器可以为平台之外的哪些资源服务器签发令牌。参见[令牌受众](../concepts/security-model.md#token-audience-config)。`tokenAudience` 的另外两个键由 chart 派生，会被拒绝 |
 | `brokerAdmin.allowCeilingShrink` | 允许一次升级把某个流的上限降到其现有内容以下。仅在该次升级时设置，之后移除 |
 
 `functionalAreas.event-management.replicas` 虽然属于可调优区域，但它本身不可调：它由 `--ha` 设置，事件存储的连接预留量正是按它来确定的。
