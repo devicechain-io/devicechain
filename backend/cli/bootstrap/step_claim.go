@@ -52,6 +52,15 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		}
 		// 🔴 AND FOR THE FAIL-CLOSED CHOICE: a re-run that names no --mqtt-fail-closed keeps the
 		// one the declaration records, rather than writing "never chose" over a decision.
+		// 🔴 AND FOR THE SIZE: a re-run that names no --size keeps the one the declaration records,
+		// and one that names a different size is refused (an instance keeps the size it was
+		// bootstrapped with). A retry of an interrupted `bootstrap --size perf-12k` would otherwise
+		// write base over it and render the instance without its preset.
+		if existing != nil {
+			if err := adoptRecordedSize(st, existing.Spec); err != nil {
+				return err
+			}
+		}
 		if existing != nil && st.MqttFailClosed == nil {
 			st.MqttFailClosed = copyBoolPtr(existing.Spec.MQTTFailClosed)
 		}

@@ -290,10 +290,15 @@ func (p *sizePreset) dropOperatorStated(vars []string, stated func(string) bool)
 	for _, n := range p.tofuVarNames() {
 		mine[n] = true
 	}
+	// Only the FIRST assignment of a name goes: the preset's is emitted before any other of dcctl's
+	// for the same variable (an explicit --event-store-max-wal-mib is appended later), so a flag
+	// given on this very run survives, and OpenTofu takes the last -var.
+	dropped := map[string]bool{}
 	out := make([]string, 0, len(vars))
 	for _, v := range vars {
 		name, _, _ := strings.Cut(v, "=")
-		if mine[name] && stated(name) {
+		if mine[name] && !dropped[name] && stated(name) {
+			dropped[name] = true
 			continue
 		}
 		out = append(out, v)
@@ -344,6 +349,7 @@ func StateSizeFrom(flag string) string { return flag }
 // absence of a preset.
 func CheckSizeAgainstCluster(st *State) error {
 	given := st.Size
+	st.SizeGiven = given != ""
 	switch {
 	case given == "" || given == SizeBase:
 		st.Size = ""
@@ -420,4 +426,29 @@ func (p *sizePreset) docInfraRows() []string {
 // function for the bootstrap and the upgrade, so the two cannot disagree about who wins.
 func operatorWinsOverSize(st *State, vars []string, rootdir string) []string {
 	return sizeFor(st).dropOperatorStated(vars, func(name string) bool { return statedByOperator(rootdir, name) })
+}
+
+// adoptRecordedSize settles a re-run's size against the declaration already in the cluster.
+func adoptRecordedSize(st *State, recorded dcv1beta1.InstanceSpec) error {
+	if st.Compact {
+		return nil // the cluster's setting, followed from the install record
+	}
+	was := sizeFromSpec(recorded)
+	if !st.SizeGiven {
+		st.Size = was
+		return nil
+	}
+	if st.Size != was {
+		return fmt.Errorf("instance %q was bootstrapped with size %s and this run names %s: an instance "+
+			"keeps the size it was bootstrapped with. Re-run without --size, or state the settings you "+
+			"want in a --values overlay, which wins over any size", st.Instance, sizeNameOf(was), sizeNameOf(st.Size))
+	}
+	return nil
+}
+
+func sizeNameOf(s string) string {
+	if s == "" {
+		return SizeBase
+	}
+	return s
 }

@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // perfState is a State a real bootstrap would hand the Helm and infra steps, sized perf-12k.
@@ -562,5 +564,100 @@ func TestDcctlComputedValuesBeatAPresetThatDisagrees(t *testing.T) {
 	nats := helmValues(st)["instance"].(map[string]interface{})["config"].(map[string]interface{})["infrastructure"].(map[string]interface{})["nats"].(map[string]interface{})
 	if fmt.Sprint(nats["streamDesignRate"]) != "99" {
 		t.Errorf("streamDesignRate %v, want the preset's 99", nats["streamDesignRate"])
+	}
+}
+
+// An explicit --event-store-max-wal-mib on this run is the operator speaking now: it survives the
+// filter that removes the preset's own assignment, even when a file also states the variable.
+func TestExplicitWalFlagSurvivesTheSizeFilter(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "zz-dcctl-event-store.auto.tfvars.json"), []byte(`{"timescale_max_wal_size_mib": 4096}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := perfState(false)
+	wal := 1024
+	st.EventStoreMaxWALMiB = &wal
+	var got []string
+	for _, v := range operatorWinsOverSize(st, infraVars(st), dir) {
+		if strings.HasPrefix(v, "timescale_max_wal_size_mib=") {
+			got = append(got, v)
+		}
+	}
+	if len(got) != 1 || got[0] != "timescale_max_wal_size_mib=1024" {
+		t.Errorf("WAL assignments %v, want only the flag's 1024", got)
+	}
+	// Without the flag, the recorded file value is left to win: nothing is passed.
+	st.EventStoreMaxWALMiB = nil
+	for _, v := range operatorWinsOverSize(st, infraVars(st), dir) {
+		if strings.HasPrefix(v, "timescale_max_wal_size_mib=") {
+			t.Errorf("the preset's WAL allowance is still passed over a recorded one: %s", v)
+		}
+	}
+}
+
+// A retry of an interrupted bootstrap keeps the instance's size; naming another is refused.
+func TestARerunKeepsTheRecordedSize(t *testing.T) {
+	rec := dcv1beta1.InstanceSpec{Provider: "local", Profile: "default", Size: SizePerf12k}
+	cases := []struct {
+		name    string
+		given   string
+		compact bool
+		want    string
+		refused bool
+	}{
+		{"no flag keeps the size", "", false, SizePerf12k, false},
+		{"same size", SizePerf12k, false, SizePerf12k, false},
+		{"base over a perf instance", SizeBase, false, "", true},
+		{"compact cluster is not judged here", "", true, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &State{Instance: "i", Compact: tc.compact, Size: tc.given}
+			if tc.given != "" && !tc.compact {
+				if err := CheckSizeAgainstCluster(st); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := adoptRecordedSize(st, rec)
+			if (err != nil) != tc.refused {
+				t.Fatalf("err %v, refused want %v", err, tc.refused)
+			}
+			if !tc.refused && st.Size != tc.want {
+				t.Errorf("Size %q, want %q", st.Size, tc.want)
+			}
+		})
+	}
+	// An instance recorded with no size, re-run with no flag, stays base.
+	st := &State{Instance: "i"}
+	if err := adoptRecordedSize(st, dcv1beta1.InstanceSpec{Provider: "local", Profile: "default"}); err != nil || st.Size != "" {
+		t.Errorf("a base instance re-run: size %q err %v", st.Size, err)
+	}
+}
+
+// The CALLER of adoptRecordedSize: a bootstrap retry over a perf-12k declaration, through the real
+// declare step, writes perf-12k back and not base.
+func TestTheDeclareStepKeepsARecordedSize(t *testing.T) {
+	prev, prevWrite := readInstanceDeclaration, writeInstanceDeclaration
+	t.Cleanup(func() { readInstanceDeclaration, writeInstanceDeclaration = prev, prevWrite })
+	var written []dcv1beta1.InstanceSpec
+	writeInstanceDeclaration = func(_ context.Context, _, _ string, spec dcv1beta1.InstanceSpec, _ string, _ bool) error {
+		written = append(written, spec)
+		return nil
+	}
+	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+		return &dcv1beta1.Instance{
+			ObjectMeta: metav1.ObjectMeta{Name: "prod", UID: "7f0d4f2e-0000-4000-8000-000000000001"},
+			Spec:       dcv1beta1.InstanceSpec{Provider: "kind", Profile: "default", Size: SizePerf12k},
+		}, nil
+	}
+	st := &State{Instance: "prod", Provider: "kind", Profile: "default"}
+	if err := stepDeclareInstance(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	if len(written) == 0 || written[len(written)-1].Size != SizePerf12k {
+		t.Errorf("a retry wrote %+v over a perf-12k declaration", written)
+	}
+	if st.Size != SizePerf12k {
+		t.Errorf("the run's size is %q after the read-back", st.Size)
 	}
 }
