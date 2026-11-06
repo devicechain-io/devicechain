@@ -153,7 +153,7 @@ chart 随附两条告警，仅在启用指标告警时触发：
 | `MfaIdentityLocked` | critical | 某个账号的全局锁定生效：检查了二十个错误的验证器代码，每个都发生在**密码正确**之后。有人掌握了该账号的密码并在猜测代码。只要出现一次就会触发。 | 在审计日志中找到该账号（`mfa_locked`，其前有 `mfa_failed` 和 `mfa_challenged` 记录），并**重置它的密码**。不要先重置第二因素。来源地址见 ingress 日志。 |
 | `MfaVerificationFailuresSustained` | warning | 连续十五分钟，整个实例中错误、重放或被锁定的代码以高于每十秒一次的速度被拒绝。要么是大量用户输错（节点时钟问题，或应用不同步），要么是有人在使用获取到的密码。 | 检查各节点的时钟是否同步，然后查看按账号分组的 `mfa_failed` 记录以及 ingress 日志。锁定的账号会自行触发 `MfaIdentityLocked`。 |
 
-它们背后的计数器是 `devicechain_usermanagement_mfa_verifications_total{method,result}`（`method` 为 `totp` 或 `recovery`；`result` 为 `ok`、`invalid`、`replay`、`locked`、`expired`、`budget`、`rate_limited` 或 `unavailable`）、`mfa_challenges_total`、`mfa_enrollments_total{result}`（`begun`、`confirmed`、`disabled`、`reset`）和 `mfa_identity_locks_total`。参见[指标参考](../deployment/metrics-reference.md#user-management)。
+它们背后的计数器是 `devicechain_usermanagement_mfa_verifications_total{method,result}`（`method` 为 `totp` 或 `recovery`；`result` 为 `ok`、`invalid`、`replay`、`locked`、`expired`、`budget`、`rate_limited` 或 `unavailable`）、`devicechain_usermanagement_mfa_challenges_total`、`devicechain_usermanagement_mfa_enrollments_total{result}`（`begun`、`confirmed`、`disabled`、`reset`）和 `devicechain_usermanagement_mfa_identity_locks_total`。参见[指标参考](../deployment/metrics-reference.md#user-management)。
 
 ### 审计日志记录什么 {#audit}
 

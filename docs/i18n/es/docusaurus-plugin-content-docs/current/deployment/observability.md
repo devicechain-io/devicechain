@@ -732,7 +732,7 @@ servicio, así que un cambio requiere un reinicio, y no modifican ningún consum
 
 | Ajuste | Valor predeterminado | Qué hace |
 | --- | --- | --- |
-| `batch` | 256 | Cuántos mensajes pide cada petición, de 1 a 256 (cualquier otro valor se rechaza al arrancar). Un lote mayor reparte el tiempo de la petición entre más mensajes. Es también lo máximo que una conexión caída puede hacer perder de una sola petición, y el motor de detección vuelve a leer ese intervalo del flujo antes de continuar. |
+| `batch` | 256 | Cuántos mensajes pide cada petición, de 1 a 256 (0 o ausente significa 256; cualquier otro valor se rechaza al arrancar). Un lote mayor reparte el tiempo de la petición entre más mensajes. Es también lo máximo que una conexión caída puede hacer perder de una sola petición, y el motor de detección vuelve a leer ese intervalo del flujo antes de continuar. |
 | `ahead` | activado | Pide el lote siguiente mientras se entrega el actual, de modo que la petición se solapa con el trabajo. Con `ahead: false` se pide un lote cada vez. Los mensajes se siguen procesando en el orden en que llegan. |
 | `aheadHoldBudgetMillis` | 1000 | Un lote pedido por adelantado espera mientras se procesa el anterior, y su ventana de confirmación ya está corriendo. Si los últimos lotes tardan más que este valor en entregarse, el servicio deja de pedir por adelantado y vuelve a una petición cada vez. Como máximo una décima parte de la ventana de confirmación; de lo contrario el servicio se niega a arrancar. |
 
