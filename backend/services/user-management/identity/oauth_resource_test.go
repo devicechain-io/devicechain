@@ -1218,3 +1218,9 @@ func mustClaims(t *testing.T, e *ccEnv, rec *httptest.ResponseRecorder) *auth.Cl
 	require.NoError(t, err)
 	return c
 }
+
+// An allowlist entry the configuration accepts must be one a request can carry: the two length caps
+// are one number, so a configured identifier is never longer than ValidateResource admits.
+func TestAllowlistLengthCapMatchesTheRequestCap(t *testing.T) {
+	require.Equal(t, maxResourceLen, config.MaxTokenAudienceResourceLen)
+}

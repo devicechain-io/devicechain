@@ -67,7 +67,7 @@ usually faster than waiting on a reply.
     written as `true` or `false`: the `true` to 1 and `false` to 0 conversion applies only to a metric
     declared with the boolean data type. The device's other readings in the same message are stored
     and the device is acknowledged as normal, so the drop is not visible to the sender. Every dropped
-    entry is counted in `resolve_measurement_dropped_total`, by reason; the warning names the tenant,
+    entry is counted in `devicechain_devicemanagement_resolve_measurement_dropped_total`, by reason; the warning names the tenant,
     device and metric, once per device and metric.
 
     The same fact is on the device's page in the console: when a device is losing keys, a notice

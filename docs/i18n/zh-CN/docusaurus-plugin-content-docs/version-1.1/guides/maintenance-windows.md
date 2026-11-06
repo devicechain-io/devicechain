@@ -124,4 +124,4 @@ mutation {
 - 空中升级的控制尚未构建。
 - 入队时如果无法访问设备管理，命令会被拒绝，而不是不受控制地发送。
 
-计数器 `command_delivery_window_restamps_total` 统计其保留因编辑、删除、窗口在设备返回前再次关闭，或其设备类型改用另一个窗口或不再有窗口而被移动的命令数。计数器 `command_delivery_window_commands_undefined_total` 统计因设备的配置文件不再定义而失败的等待中命令数。
+计数器 `devicechain_commanddelivery_command_delivery_window_restamps_total` 统计其保留因编辑、删除、窗口在设备返回前再次关闭，或其设备类型改用另一个窗口或不再有窗口而被移动的命令数。计数器 `devicechain_commanddelivery_command_delivery_window_commands_undefined_total` 统计因设备的配置文件不再定义而失败的等待中命令数。

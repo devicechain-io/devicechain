@@ -63,7 +63,11 @@ An overlay may set only the values below. Anything else is refused.
 | `functionalAreas.<area>.profiler.enabled`, `.blockRate`, `.mutexFraction` | The diagnostic profiling listener, off by default (see [Observability](./observability.md)). Its `address` is not tunable |
 | `frontend.replicas`, `frontend.resources` | The console's pods |
 | `metrics.alerts`, `metrics.grafanaDashboards` | Alerting rules and dashboards |
-| `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
+| `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `ingress.gateway.className`, `ingress.gateway.annotations`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
+| `mqttExposure.loadBalancer` | The cloud settings of the MQTT load balancer, such as an internal balancer and allowed source ranges |
+| `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | The outage runway the event streams are sized for, and their byte and message ceilings. The reservation is checked against the broker's volume before anything is written |
+| `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Whether events are written as envelopes, off by default |
+| `brokerAdmin.allowCeilingShrink` | Lets one upgrade lower a stream ceiling below what the stream holds. Set it for that upgrade and remove it after |
 
 `functionalAreas.event-management.replicas` is not tunable even though the rest of that area is:
 `--ha` sets it, and the event store's connection reserve is sized to it.

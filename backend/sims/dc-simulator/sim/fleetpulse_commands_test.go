@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -145,6 +146,7 @@ func TestFleetpulseSetSpeedLimitCompletesSuccessfully(t *testing.T) {
 // platform's job (see device-management's TestFleetpulseSpeedLimitIsRefusedByThePlatform).
 func TestFleetpulseFailsWhatItCannotActOn(t *testing.T) {
 	r := newFleetpulseFarEndRig(t)
+	n := 0
 	for name, c := range map[string]struct {
 		key     string
 		payload any
@@ -154,7 +156,10 @@ func TestFleetpulseFailsWhatItCannotActOn(t *testing.T) {
 		"not a number":    {FleetpulseSpeedLimitKey, map[string]any{"limit_mps": "fast"}},
 		"non-positive":    {FleetpulseSpeedLimitKey, map[string]any{"limit_mps": 0}},
 	} {
-		if r.send(t, "dev-00003", c.key, c.payload) {
+		// A token of its own per case: the vehicle caches the first outcome per (device, token), so cases
+		// sharing one would read the first answer back instead of exercising their own check.
+		n++
+		if r.sendToken(t, fmt.Sprintf("cmd-refused-%d", n), "dev-00003", c.key, c.payload) {
 			t.Errorf("%s: answered SUCCESSFUL", name)
 		}
 	}

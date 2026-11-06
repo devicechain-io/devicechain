@@ -71,7 +71,7 @@ Estos valores también se rechazan al guardar en los niveles de inquilino e inst
 
 | Campo | Límite |
 | --- | --- |
-| `tileUrl` | 2048 caracteres |
+| `tileUrl` | 2048 bytes |
 | `attribution` | 512 caracteres, y ningún carácter de control |
 | `zoom` | de 0 a 24 |
 | `centerLat` | de −90 a 90 |
