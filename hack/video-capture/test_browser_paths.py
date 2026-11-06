@@ -49,6 +49,7 @@ PAGES = {
                   "(document.cookie.match(/pw=([^;]+)/)||[])[1]);setTimeout(()=>document.body.removeAttribute('data-x'),300)},300)</script>",
     # a signed-out password page, reached by a redirect, with the recorder's blur defeated by a more specific !important rule
     "/pw-nomask": "<h1>sign in</h1><style>html body input[type=password]{filter:none !important}</style><input type=\"password\" id=\"p\">",
+    "/typed": SHELL + "<h1>typed</h1><input id=\"t\"><input id=\"pp\" type=\"password\">",
     "/boom": SHELL + "<h1>boom</h1><script>setTimeout(()=>fetch('/api/boom'),200)</script>",
     "/gql": SHELL + "<h1>gql</h1><script>setTimeout(()=>fetch('/graphql',{method:'POST',body:'{}'}),200)</script>",
 }
@@ -65,7 +66,7 @@ DASH = ("%s<div data-shot=\"dash-signin\"><input data-shot=\"dash-email\" type=\
         # a controlled React input mirrors its value into the attribute; that is not a leak while the field is still a password input
         "document.getElementById('p').addEventListener('input',e=>e.target.setAttribute('value',e.target.value))</script>")
 REVEAL = "<script>document.getElementById('p').addEventListener('input',e=>{e.target.type='text'})</script>"
-OPEN = {"/login", "/signed-out", "/pw-nomask", "/to-pw-nomask", "/dash/", "/dash-nomask/", "/dash-deny/", "/dash-reveal/"}
+OPEN = {"/login", "/signed-out", "/pw-nomask", "/to-pw-nomask", "/dash/", "/dash-nomask/", "/dash-deny/", "/dash-reveal/", "/typed"}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -278,6 +279,15 @@ class BrowserPaths(unittest.TestCase):
             self.assertEqual(r.returncode, 3, r.stderr)
             self.assertNothingKept(out)
             self.assertSecretNowhere(r, out)
+
+    def test_a_secret_typed_into_a_plain_field_is_exit_3_and_into_a_password_field_is_fine(self):
+        steps = "      - type: {into: {selector: '%s'}, text: typed-secret-55}\n        secret: true\n      - wait: 0.5\n"
+        r, out = self.record(self.shot("/typed", steps=steps % "#t"), login=self.NONE)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertNothingKept(out)
+        r, out = self.record(self.shot("/typed", steps=steps % "#pp"), login=self.NONE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("typed-secret-55", r.stdout + r.stderr + open(os.path.join(out, "manifest.json"), encoding="utf-8").read())
 
     def test_dash_signin_with_a_refused_credential_is_exit_1_with_no_clip(self):
         r, out = self.record(self.dash("/dash-deny/", True))

@@ -949,6 +949,9 @@ class Recorder:
         elif verb == "type":
             if step.get("secret"):
                 self.add_typed_secret(body["text"])
+                # a secret may only be typed into a password input: any other field shows it, and its value is reported as a leak anyway
+                if not self.locator(page, body["into"]).evaluate("(e) => e.matches('input[type=password]')"):
+                    raise SecretLeak("a secret would be typed into a field that is not a password input; no clip is kept")
             self.point(page, self.locator(page, body["into"]), timeout, pause)
             page.mouse.down()
             page.wait_for_timeout(70)
@@ -1135,7 +1138,7 @@ class Recorder:
     PROBE = """(masking) => {
       const texts = [document.body ? document.body.innerText : ''];
       for (const e of document.querySelectorAll('input:not([type=password]),textarea,select')) texts.push(e.value || '');
-      const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { texts.push(el.shadowRoot.textContent || ''); walk(el.shadowRoot); } } };
+      const walk = (root) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { texts.push(el.shadowRoot.textContent || ''); for (const i of el.shadowRoot.querySelectorAll('input:not([type=password]),textarea,select')) texts.push(i.value || ''); walk(el.shadowRoot); } } };
       walk(document);
       const css = document.getElementById('__dc_mask_css');
       // a password field the viewer can see must carry a blur (the stylesheet puts one on every input[type=password]); a page that defeats

@@ -125,9 +125,9 @@ At most one `signin` per shot. Its password is protected the same way as every o
   character** of an on-camera sign-in.
 - A refused credential, a second factor or a tenant picker leaves the form on screen: the shot fails (exit 1) with fixed text and no clip.
   Only accounts with a single membership and no second factor can sign in unattended.
-- A `type` step marked `secret: true` also registers its text with the guard from the moment it is typed (it must be 4+ characters), so a
-  signed-out shot that types a one-time code or a new password is covered by the same per-change leak check. Typing is not the whole story:
-  mask what the page shows afterwards.
+- A `type` step marked `secret: true` registers its text with the guard from the moment it is typed (it must be 4+ characters) and may only
+  type into a `type=password` input (anything else is exit 3 before a character goes in), so a signed-out shot that sets a new password is
+  covered by the same per-change leak check. Typing is not the whole story: mask what the page shows afterwards.
 
 ### Masks (secret regions)
 
@@ -162,7 +162,8 @@ misses is a leak); so does a mask stylesheet that has gone missing from the page
 - Stale output from an earlier run (the clip and failure screenshot of a selected shot) is removed first; clips are encoded to a temporary
   name and renamed; frames live under `<out>/.frames-<pid>` and are swept at the next start if a run was killed.
 
-Known limits: a page that paints one frame from the compositor thread (a fast scroll) can show a moved text box one frame before its overlay
+Known limits: the guard compares the whole password, so a page echoing only a prefix is not seen; a page that reads the password and draws it
+onto a canvas is not seen (the page is the product under test, not an adversary); closed shadow roots are not inspected;a page that paints one frame from the compositor thread (a fast scroll) can show a moved text box one frame before its overlay
 moves; shadow-DOM text is not reported to the leak check; a GraphQL body that the browser has already discarded cannot be read.
 
 ## Secrets: what is guaranteed
