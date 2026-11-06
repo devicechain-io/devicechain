@@ -761,6 +761,13 @@ Las alertas de las instantáneas se describen en
 - **Puertos libres 80, 443 y 1883 del host** para un clúster local de kind, que los publica para
   la consola, HTTPS y MQTT. `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
   en lugar de dejar que la creación del clúster falle con el error de enlace de Docker.
+- **En Linux, un límite de inotify más alto.** Los contenedores de nodo de kind necesitan `fs.inotify.max_user_instances` de al menos 256, y Ubuntu 24.04 de serie trae 128, por lo que la creación del clúster falla a medias. `dcctl preflight local` falla e imprime el comando que hay que ejecutar. La primera línea sube el límite (la segunda, `max_user_watches`, es solo un aviso) y `/etc/sysctl.d` lo conserva tras los reinicios:
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
 - **`ko`**, solo para compilar imágenes desde el código fuente con `--build`. La comprobación
   previa avisa, en lugar de fallar, cuando falta.
 

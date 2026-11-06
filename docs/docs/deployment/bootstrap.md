@@ -698,6 +698,16 @@ The alerts for snapshots are described under
 - **Free host ports 80, 443 and 1883** for a local kind cluster, which publishes them for the
   console, HTTPS and MQTT. `dcctl preflight local` fails, naming the container that holds one,
   rather than letting the cluster create fail on Docker's bind error.
+- **On Linux, a raised inotify limit.** The kind node containers need `fs.inotify.max_user_instances` of at least 256, and a stock Ubuntu 24.04 ships 128, so `dcctl preflight local` fails
+  on it and prints the command to run. The first line raises
+  the limit (the second, `max_user_watches`, is only a warning) and `/etc/sysctl.d` keeps it
+  across reboots:
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
 - **`ko`**, only to build images from source with `--build`. The preflight check warns rather
   than fails when it is missing.
 

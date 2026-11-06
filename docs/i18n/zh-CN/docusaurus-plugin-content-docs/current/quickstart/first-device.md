@@ -22,6 +22,13 @@ title: 你的第一台设备
 - 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
 - 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
 - 本机的 **80**、**443** 和 **1883** 端口必须空闲。kind 集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT；如果其他程序（通常是另一个本地 Kubernetes 集群）已占用其中任何一个，创建集群就会失败。`dcctl preflight local` 会在开始之前指出占用者。
+- **在 Linux 上，需要调高 inotify 限制。** kind 节点容器要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，创建集群会中途失败。`dcctl preflight local` 会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
 - 无论采用哪种方式，都需要 Kubernetes **1.29 或更新版本**。旧版本会被拒绝，因为数据库 Chart 不支持它们。
 
 `dcctl preflight local` 会运行相同的检查，并检查 Docker 引擎、内核限制、磁盘和端口，但不初始化任何内容。[初始化指南](../deployment/bootstrap.md#prerequisites)提供了详细说明。
