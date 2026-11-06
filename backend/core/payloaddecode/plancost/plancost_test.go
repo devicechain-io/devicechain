@@ -41,15 +41,29 @@ func TestAShapePricesAnUplinkAsItsPlanDoes(t *testing.T) {
 	}
 }
 
-// The caps ingest enforces are the caps the decoder enforces, and the codec's nesting limit is the
-// one the decoder carries.
+// The caps are a contract between ingest (which refuses before it charges) and the decoder (which
+// enforces them again): a change to any of them moves what an accepted uplink may carry on one
+// side of a rolling upgrade and not the other. The decoder's constants are ALIASES of these, so
+// comparing the two proves nothing; the values are pinned as literals, in both packages and in the
+// codec, and a deliberate change edits them here with its release note.
 func TestIngestCapsAreTheDecodersCaps(t *testing.T) {
-	if plancost.MaxFrameBytes != payloaddecode.MaxFrameBytes || plancost.MaxJSONBytes != payloaddecode.MaxJSONBytes ||
-		plancost.MaxJSONDepth != payloaddecode.MaxJSONDepth {
-		t.Fatal("ingest and decoder caps differ")
-	}
-	if integrationcodec.MaxDepth != plancost.MaxJSONDepth || integrationcodec.MaxDecodedBytes != plancost.MaxJSONBytes {
-		t.Fatal("the codec's limits differ from the decoder's")
+	const frame, jsonBytes, depth = 4096, 64 << 10, 32
+	for _, c := range []struct {
+		name      string
+		got, want int
+	}{
+		{"plancost.MaxFrameBytes", plancost.MaxFrameBytes, frame},
+		{"plancost.MaxJSONBytes", plancost.MaxJSONBytes, jsonBytes},
+		{"plancost.MaxJSONDepth", plancost.MaxJSONDepth, depth},
+		{"payloaddecode.MaxFrameBytes", payloaddecode.MaxFrameBytes, frame},
+		{"payloaddecode.MaxJSONBytes", payloaddecode.MaxJSONBytes, jsonBytes},
+		{"payloaddecode.MaxJSONDepth", payloaddecode.MaxJSONDepth, depth},
+		{"integrationcodec.MaxDepth", integrationcodec.MaxDepth, depth},
+		{"integrationcodec.MaxDecodedBytes", integrationcodec.MaxDecodedBytes, jsonBytes},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d: the ingest and decoder caps are a wire contract", c.name, c.got, c.want)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/eventenvelope"
 )
@@ -405,5 +406,86 @@ func TestRoundEngineAnErasedTenantsMissingRoundIsNotSteppedPast(t *testing.T) {
 	e2.Wait()
 	if o2.errs[8] != nil || e2.Evicted.Load() != 1 {
 		t.Fatalf("a live tenant's evicted round must be stepped past: err %v evicted %d", o2.errs[8], e2.Evicted.Load())
+	}
+}
+
+// blockingRounds publishes through the inner publisher except for the rounds in block, whose
+// Publish waits for the context to end and returns its error, as a cancelled JetStream call does.
+type blockingRounds struct {
+	inner   fakeRoundPub
+	blockAt int
+	calls   atomic.Int32
+	entered chan struct{}
+	getErr  error
+	getHold chan struct{}
+}
+
+func (r *blockingRounds) Publish(ctx context.Context, msg Message) (PubAckInfo, error) {
+	if int(r.calls.Add(1)) == r.blockAt {
+		close(r.entered)
+		<-ctx.Done()
+		return PubAckInfo{}, ctx.Err()
+	}
+	return r.inner.Publish(ctx, msg)
+}
+
+func (r *blockingRounds) Get(ctx context.Context, tenant string, seq uint64) (StoredMessage, error) {
+	if r.getHold != nil {
+		close(r.entered)
+		<-ctx.Done()
+		return StoredMessage{}, ctx.Err()
+	}
+	return r.inner.Get(ctx, tenant, seq)
+}
+
+// 🔴 A shutdown that cancels a DUPLICATE-RECOVERY walk (which does not retry) settles its sources
+// with ErrRoundWalkStopped, not the raw context error. The sources' settler exempts only the
+// sentinel from the last-delivery poison route, so the raw error sent a valid message to
+// failed-decode and acknowledged it.
+func TestRoundEngineShutdownDuringDuplicateRecoveryIsErrRoundWalkStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rig  func(b *fakeBroker, entered chan struct{}) *blockingRounds
+	}{
+		{"publish of the next round", func(b *fakeBroker, entered chan struct{}) *blockingRounds {
+			return &blockingRounds{inner: fakeRoundPub{b}, blockAt: 1, entered: entered}
+		}},
+		{"read-back of the stored round", func(b *fakeBroker, entered chan struct{}) *blockingRounds {
+			return &blockingRounds{inner: fakeRoundPub{b}, entered: entered, getHold: make(chan struct{})}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newFakeBroker()
+			k, _, _ := RoundKeyOf("acme", 515, time.Time{})
+			// Round 0 is stored holding member 1 only.
+			newTestEngine(t, b).Publish(context.Background(), k, []RoundMember{newRoundOutcomes().member(1, false)})
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			entered := make(chan struct{})
+			rounds := tc.rig(b, entered)
+			e, err := NewRoundEngine(RoundEngineConfig{Kind: eventenvelope.KindUnresolved, DedupKind: "C",
+				Writer: fakeWriter{b}, Rounds: rounds, Ctx: ctx})
+			require.NoError(t, err)
+			o := newRoundOutcomes()
+			// A redelivery of {1, 2}: round 0 answers as a duplicate naming {1}; 2 goes on.
+			e.Publish(ctx, k, []RoundMember{o.member(1, true), o.member(2, true)})
+			<-entered
+			cancel()
+			e.Wait()
+
+			o.mu.Lock()
+			defer o.mu.Unlock()
+			for _, idx := range []uint32{1, 2} {
+				if o.n[idx] != 1 {
+					continue // member 1 may have been settled stored; only unsettled-with-error ones matter
+				}
+				if o.errs[idx] != nil && !errors.Is(o.errs[idx], ErrRoundWalkStopped) {
+					t.Fatalf("member %d settled with %v, want ErrRoundWalkStopped", idx, o.errs[idx])
+				}
+			}
+			require.Equal(t, 1, o.n[2], "member 2 was never settled")
+			require.ErrorIs(t, o.errs[2], ErrRoundWalkStopped)
+		})
 	}
 }

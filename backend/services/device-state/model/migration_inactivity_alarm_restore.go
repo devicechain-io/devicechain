@@ -30,7 +30,14 @@ import (
 // Data only, no DDL. Each statement runs in batches of migrationBatch rows chosen with
 // FOR UPDATE SKIP LOCKED, so it never waits for a row lock a v1.1 batch writer holds (the
 // deadlock cycle documented at SweepInactive), and every statement removes the rows it matched
-// from its own predicate, so the loop ends and a replay does the remaining work.
+// from its own predicate, so the loop ends.
+//
+// 🔴 A ROW A WRITER HOLDS IS SKIPPED, AND THIS MIGRATION DOES NOT COME BACK FOR IT. A replay does
+// the remaining work only after a FAILED run, because a failed run is not recorded. A run that
+// finishes is recorded, and a batch that finds nothing ends a statement even when locked rows still
+// match. NewInactivityAlarmTimeRestoreFinalPassSchema (20261107120000) finishes those rows and
+// logs any that remain. Rows that v1.1 pods sweep after either has run are answered by the
+// resolver (graphql.sweptByV11), not by a write.
 func NewInactivityAlarmTimeRestoreSchema() *gormigrate.Migration {
 	const states = `"device-state".device_states`
 

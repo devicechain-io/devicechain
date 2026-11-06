@@ -70,9 +70,10 @@ La misma cascada gobierna el derecho de uso de modelos de IA: una asignación de
 
 Cada copia en ejecución de un servicio aplica por su cuenta todos los techos de tasa de esta página, sin coordinación entre copias. Si ejecutas dos réplicas de `event-sources`, `outbound-connectors` o `ai-inference` y se reparten el tráfico de un inquilino, ese inquilino puede ser admitido hasta al doble de su techo, y N réplicas permiten hasta N veces. La instalación por defecto ejecuta una réplica de cada uno, así que ahí cada techo se aplica una vez, salvo brevemente durante una actualización progresiva, mientras corren a la vez el pod antiguo y el nuevo.
 
-Hay dos techos que no se multiplican:
+Hay tres límites que no se multiplican:
 
 - el techo de comandos no entregados es un recuento que se lleva en la base de datos;
+- el recuento de integraciones de entrada también sale de la base de datos, bajo un bloqueo por inquilino, de modo que se respeta en todas las réplicas;
 - el techo de salida del motor de detección se cobra solo en la réplica que detecta.
 
 Si escalas un servicio horizontalmente, fija los techos del nivel según el número de réplicas que ejecutas.

@@ -937,7 +937,8 @@ The error for too many attempts carries no code, like the sign-in [backoff](#sig
 ## Request limits {#request-limits}
 
 Every GraphQL endpoint refuses a request that is too large or does too much, before any of it runs.
-The one exception is the limit on credential checks, which applies while the request runs (see
+The exceptions are the execution-time limit, which cancels work already running when the deadline passes, and
+the limit on credential checks, which applies while the request runs (see
 [Credential checks per request](#credential-checks-per-request)).
 
 The limits are the same for every service, and you can change each one per service with the
@@ -954,8 +955,8 @@ default: none of them can be switched off.
 | Root fields per mutation | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | A mutation operation selecting more top-level fields than this. |
 | Credential checks per request | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Password checks in one request beyond this number (see [below](#credential-checks-per-request)). |
 
-Apart from the body limit and the credential-check limit, a refused request gets HTTP 200 with a
-single entry in `errors`, no `data`, and nothing executed. The credential-check limit refuses only
+Apart from the body limit, the execution-time limit and the credential-check limit, a refused request gets HTTP 200 with a
+single entry in `errors`, no `data`, and nothing executed. A request cancelled at the execution-time deadline had already started, so the response carries an error for the work that was cut off. The credential-check limit refuses only
 the checks over it, each with its own error, and the rest of the request still runs. A root-field
 refusal carries `extensions.code` set to `TOO_MANY_ROOT_FIELDS`:
 

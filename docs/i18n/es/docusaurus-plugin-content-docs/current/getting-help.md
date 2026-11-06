@@ -71,7 +71,7 @@ suele ser más rápido que esperar una respuesta.
     un booleano escrito como `true` o `false`: la conversión de `true` a 1 y de `false` a 0 se aplica
     solo a una métrica declarada con el tipo de dato booleano. Las demás lecturas del mismo mensaje se
     almacenan y el dispositivo recibe la confirmación habitual, de modo que quien envía no ve el
-    descarte. Cada entrada descartada se cuenta en `resolve_measurement_dropped_total`, por motivo; la
+    descarte. Cada entrada descartada se cuenta en `devicechain_devicemanagement_resolve_measurement_dropped_total`, por motivo; la
     advertencia indica el tenant, el dispositivo y la métrica, una vez por dispositivo y métrica.
 
     El mismo dato aparece en la página del dispositivo en la consola: cuando un dispositivo pierde
