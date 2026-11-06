@@ -47,8 +47,10 @@ import (
 
 const (
 	// eventStoreVarFile carries the operator's event store tuning between upgrades. OpenTofu
-	// loads a *.auto.tfvars.json in the root's directory on every plan and apply.
-	eventStoreVarFile = "dcctl-event-store.auto.tfvars.json"
+	// loads *.auto.tfvars and *.auto.tfvars.json files in the root's directory on every plan and
+	// apply, in lexical order, the later file winning. The name starts with "zz-" so that it sorts
+	// after an operator's own files and a flag given once keeps beating a declaration made earlier.
+	eventStoreVarFile = "zz-dcctl-event-store.auto.tfvars.json"
 
 	varMaxWALMiB         = "timescale_max_wal_size_mib"
 	varCheckpointTimeout = "timescale_checkpoint_timeout"
@@ -62,7 +64,7 @@ const (
 
 var (
 	checkpointTimeoutRe = regexp.MustCompile(`^([0-9]+)(ms|s|min|h|d)?$`)
-	pgSizeRe            = regexp.MustCompile(`^\s*([0-9]+)\s*(kB|MB|GB|TB)?\s*$`)
+	pgSizeRe            = regexp.MustCompile(`^\s*([0-9]+(?:\.[0-9]+)?)\s*(kB|MB|GB|TB)?\s*$`)
 )
 
 // checkEventStoreTuning judges the two flags against the same bounds the root enforces, so
@@ -101,8 +103,9 @@ func eventStoreTuningVars(st *State) []string {
 }
 
 // writeEventStoreVarFile records the flags this run was given beside the instance's state, so
-// later upgrades keep them. A zero allowance removes the entry (the root derives it again).
-// Called only after the apply succeeded: a rehearsal or a refused plan persists nothing.
+// later upgrades keep them. A zero allowance is recorded as zero, not removed: the root reads 0 as
+// "derive it again", and removing the entry would let a value the operator declared in another
+// file come back on the next upgrade. Called only after the apply succeeded: a rehearsal or a refused plan persists nothing.
 func writeEventStoreVarFile(rootdir string, st *State) error {
 	if st.EventStoreMaxWALMiB == nil && (st.EventStoreCheckpointTimeout == nil || *st.EventStoreCheckpointTimeout == "") {
 		return nil
@@ -117,20 +120,10 @@ func writeEventStoreVarFile(rootdir string, st *State) error {
 		return err
 	}
 	if v := st.EventStoreMaxWALMiB; v != nil {
-		if *v == 0 {
-			delete(doc, varMaxWALMiB)
-		} else {
-			doc[varMaxWALMiB] = *v
-		}
+		doc[varMaxWALMiB] = *v
 	}
 	if v := st.EventStoreCheckpointTimeout; v != nil && *v != "" {
 		doc[varCheckpointTimeout] = *v
-	}
-	if len(doc) == 0 {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {
@@ -145,25 +138,27 @@ func writeEventStoreVarFile(rootdir string, st *State) error {
 // walRise is an increase in the event store's max_wal_size, in MiB.
 type walRise struct{ OldMiB, NewMiB int }
 
-// parseMiB reads a Postgres size parameter ("6553MB", "1GB", "16384kB"); a bare number is MB.
+// parseMiB reads a Postgres size parameter ("6553MB", "1GB", "0.5GB", "16384kB"); a bare number is MB.
 func parseMiB(s string) (int, bool) {
 	m := pgSizeRe.FindStringSubmatch(s)
 	if m == nil {
 		return 0, false
 	}
-	n, err := strconv.Atoi(m[1])
+	n, err := strconv.ParseFloat(m[1], 64)
 	if err != nil {
 		return 0, false
 	}
+	// Postgres accepts a fractional value with a unit ("0.5GB"); it rounds to a whole unit of the
+	// parameter, which for a size read in MiB is a rounding of well under one MiB.
 	switch m[2] {
 	case "kB":
-		return n / 1024, true
+		n /= 1024
 	case "GB":
-		return n * 1024, true
+		n *= 1024
 	case "TB":
-		return n * 1024 * 1024, true
+		n *= 1024 * 1024
 	}
-	return n, true
+	return int(n), true
 }
 
 // walRiseOf reads the event store release's before and after values and reports a rise in

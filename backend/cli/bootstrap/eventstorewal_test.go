@@ -63,12 +63,12 @@ func TestPlanReviewSaysNothingWithoutAMaxWALRise(t *testing.T) {
 }
 
 func TestParseMiB(t *testing.T) {
-	for in, want := range map[string]int{"6553MB": 6553, "1GB": 1024, "16384kB": 16, "2TB": 2 * 1024 * 1024, "512": 512} {
+	for in, want := range map[string]int{"6553MB": 6553, "1GB": 1024, "0.5GB": 512, "16384kB": 16, "2TB": 2 * 1024 * 1024, "512": 512} {
 		if got, ok := parseMiB(in); !ok || got != want {
 			t.Errorf("parseMiB(%q) = %d, %v; want %d", in, got, ok, want)
 		}
 	}
-	for _, in := range []string{"", "lots", "1.5GB", "-1MB"} {
+	for _, in := range []string{"", "lots", "-1MB", "1.GB"} {
 		if _, ok := parseMiB(in); ok {
 			t.Errorf("parseMiB(%q) accepted", in)
 		}
@@ -140,25 +140,20 @@ func TestEventStoreVarFileIsKeptMergedAndCleared(t *testing.T) {
 	if got := read(); got != `{"timescale_checkpoint_timeout":"10min","timescale_max_wal_size_mib":1024}` {
 		t.Fatalf("file = %q", got)
 	}
-	// 0 returns the allowance to derived; the timeout stays.
+	// 0 is recorded as 0, not dropped: the root reads it as "derive it again", and dropping it would
+	// let a value declared in another file come back on the next upgrade.
 	if err := writeEventStoreVarFile(dir, &State{Instance: "i", EventStoreMaxWALMiB: intp(0)}); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(); got != `{"timescale_checkpoint_timeout":"10min"}` {
+	if got := read(); got != `{"timescale_checkpoint_timeout":"10min","timescale_max_wal_size_mib":0}` {
 		t.Fatalf("file = %q", got)
 	}
-	// And the file is statedByOperator's evidence for the plan review.
-	if !statedByOperator(dir, "timescale_checkpoint_timeout") || statedByOperator(dir, "timescale_max_wal_size_mib") {
+	if !statedByOperator(dir, "timescale_checkpoint_timeout") {
 		t.Fatal("statedByOperator does not read the recorded file")
 	}
-	if err := os.WriteFile(path, []byte(`{"timescale_max_wal_size_mib":1024}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeEventStoreVarFile(dir, &State{Instance: "i", EventStoreMaxWALMiB: intp(0)}); err != nil {
-		t.Fatal(err)
-	}
-	if read() != "" {
-		t.Fatalf("an emptied file should be removed, got %q", read())
+	// It must sort after an operator's own files, which OpenTofu loads in lexical order.
+	if !(eventStoreVarFile > "production.auto.tfvars.json" && eventStoreVarFile > "terraform.auto.tfvars") {
+		t.Fatalf("%s sorts before an operator's file", eventStoreVarFile)
 	}
 }
 
