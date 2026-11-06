@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/userclient"
+	"github.com/devicechain-io/dc-simulator/sim"
 )
 
 // MeasurementEventType is the base-event enum value for a Measurement
@@ -111,14 +112,37 @@ func httpGraphQLFromWS(wsURL string) (string, error) {
 	return u.String(), nil
 }
 
+// windowPad is the margin on each side of a reconciliation window.
+const windowPad = 5 * time.Second
+
 // deriveWindow builds the reconciliation window from the drive's start/end,
 // padded so neither the second granularity of the RFC3339 bound strings the query
 // sends nor modest clock skew between the driver host and the DB can drop a
 // boundary event. A fresh sim tenant has no prior events, so the pad is only a
 // safety margin, never a source of contamination.
 func deriveWindow(start, end time.Time) Window {
-	const pad = 5 * time.Second
-	return Window{Start: start.Add(-pad), End: end.Add(pad)}
+	return Window{Start: start.Add(-windowPad), End: end.Add(windowPad)}
+}
+
+// ledgerWindow is deriveWindow widened to cover what the ledger says was accepted. Under
+// overload a broker can PUBACK an event long after the drive ended (r30 saw rows stamped up to
+// ~3.5 minutes past it), and an event stamped after a fixed end-of-drive pad is outside the
+// window the store is read in, so a stored, PUBACKed event reads as missing. The window end is
+// therefore the later of the padded drive end and the padded latest accepted instant: bounded
+// by what was actually acknowledged, never by an arbitrary extra margin. Loss is still seen:
+// an accepted event the store lacks is inside the window and absent from it.
+func ledgerWindow(start, end time.Time, led *sim.IdentityLedger) Window {
+	w := deriveWindow(start, end)
+	if led == nil {
+		return w
+	}
+	latest, _ := led.LatestAccepted()
+	for _, at := range latest {
+		if e := at.Add(windowPad); e.After(w.End) {
+			w.End = e
+		}
+	}
+	return w
 }
 
 // Oracle owns the aggregate-reconciliation strategy: poll the windowed persisted

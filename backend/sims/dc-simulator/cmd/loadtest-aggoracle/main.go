@@ -89,6 +89,7 @@ func verify(args []string) int {
 	fs.Var(&ledgers, "ledger", "an aggregate ledger file a harness wrote (repeatable: one per harness)")
 	dsn := fs.String("dsn", "", "event-store Postgres DSN (prefer DC_EVENTSTORE_DSN: a flag shows in the process list)")
 	settle := fs.Duration("settle", 10*time.Second, "read the aggregates twice this far apart and refuse to decide if they moved (0 reads once)")
+	drillMax := fs.Int("drill-max", loadtest.DefaultAggregateDrillMax, "most mismatching devices to read exactly; past it the verdict is inconclusive and says so")
 	noExact := fs.Bool("no-exact", false, "do not read mismatching devices exactly; judge them by counts alone (lower bounds)")
 	report := fs.String("report", "", "write the JSON report to this path")
 	_ = fs.Parse(args)
@@ -122,7 +123,7 @@ func verify(args []string) int {
 			fmt.Fprintln(os.Stderr, "verify:", err)
 			return exitError
 		}
-		opt := loadtest.AggregateOptions{Settle: *settle}
+		opt := loadtest.AggregateOptions{Settle: *settle, DrillMax: *drillMax}
 		if !*noExact {
 			opt.Exact = o
 		}
