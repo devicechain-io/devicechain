@@ -54,7 +54,7 @@ MCP is becoming a standard way to give AI assistants real capabilities. The risk
 
 - **It carries the user's token, never a service token.** The MCP server holds no privileged platform credential. Every tool call forwards the *caller's* validated, tenant-scoped JWT to the underlying GraphQL service, so the agent reaches exactly what the user reaches. Giving an AI a service identity of its own would let it act across tenants on anyone's request, and that is the one thing this design refuses.
 - **The tenant is pinned at grant time, not passed as a parameter.** Authorization decides which tenant the token can act in, and the token carries that tenant. No tool takes a "tenant" argument an agent could change.
-- **Tokens are audience-bound.** An access token issued for the MCP server names that server as its intended audience (RFC 8707). The MCP server rejects any token that does not name it as its audience, so a token minted for another resource can't be replayed against the MCP server.
+- **Tokens are audience-bound.** An access token issued for the MCP server names that server as its intended audience (RFC 8707). The MCP server rejects any token that does not name it as its audience, so a token minted for another resource can't be replayed against the MCP server. The platform's own APIs check audiences too, and accept the MCP binding because this server forwards the caller's token; see [Token audience](#token-audience).
 - **Read-only, and curated.** Every tool is a query. There is no write path, no generic query escape hatch, and no exposure of sensitive objects.
 - **Every call is authenticated and re-checked.** On each request the server validates the bearer token against `user-management`'s public keys and enforces a read-only scope. The underlying GraphQL service then independently re-applies the same tenant and role checks the console gets.
 
@@ -137,6 +137,15 @@ The MCP server keeps each client's protocol session in memory, on the pod that c
 :::warning Run exactly one replica
 Installing the `mcp` area with more than one replica is refused outright, rather than left to fail intermittently at runtime.
 :::
+
+## Token audience {#token-audience}
+
+The address in [Where to point a client](#where-to-point-a-client) is the server's **resource identifier**. A token the client requests for it names that address as its audience, and once enforcement is on the authorization server binds a token only to an address on the instance's allowlist. The same address must be registered for the platform's APIs to accept the calls this server forwards, because those calls carry the MCP binding. [Token audience](./security-model.md#token-audience) explains the allowlist and the observe and enforce modes.
+
+- **The chart registers it.** It writes the server's `resourceUrl` into `infrastructure.tokenAudience.mcpResources`. You do nothing.
+- **The server checks at startup.** If its `resourceUrl` is not in that list, it logs one Error on every start and reports `devicechain_mcp_token_audience_registered` as 0 while it keeps running, and every call it forwards is counted as a would-be refusal. When enforcement is on it refuses to start, naming the key. On an instance whose configuration you write yourself (`instance.existingSecret`) and that has no `tokenAudience` block, the gauge stays at 0 until you add one.
+- **Write the address with a lowercase scheme and host.** Matching is byte for byte. A `resourceUrl` you set by hand with an uppercase letter in the scheme or host is not accepted into the list, so change it to lowercase before enforcement.
+- **A client must send the same address** as its `resource`. A client that sends nothing, or a different value, either gets a token that is not bound to this server or, once enforcement is on, is refused.
 
 ## Limits and boundaries {#limits-and-boundaries}
 

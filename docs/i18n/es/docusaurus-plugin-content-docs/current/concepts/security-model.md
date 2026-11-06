@@ -94,6 +94,81 @@ Consulte [Multitenencia](./multi-tenancy.md).
   limita a cada llamador, las solicitudes GraphQL tienen ejecución y tamaño de cuerpo acotados, y los intentos fallidos de inicio de sesión tienen límite de tasa.
   No hay un límite de tasa de solicitudes por inquilino en la propia API GraphQL.
 
+## Audiencia del token {#token-audience}
+
+Un cliente OAuth puede pedir un token de acceso vinculado a un recurso enviando el parámetro `resource` (RFC 8707) con su solicitud de autorización o de token. El token nombra entonces ese recurso en su claim `aud` (audiencia). Un token obtenido al iniciar sesión en la consola, la aplicación de paneles, el SDK de C# o `dcctl` no nombra ninguno.
+
+Dos comprobaciones usan la audiencia. Son defensa en profundidad: las autoridades de un token quedan fijadas cuando se emite, así que aceptarlo donde no estaba previsto nunca le da más de lo que ya llevaba.
+
+- **El servidor de autorización comprueba el recurso solicitado.** Solo vincula un token a un recurso que figure en la lista de permitidos de la instancia. Lo comprueba en el endpoint de autorización, en la concesión `client_credentials` y en cada renovación.
+- **Cada API comprueba la audiencia del token.** La API de un área acepta un token cuya audiencia está vacía, es esa área o es un recurso MCP registrado. El [servidor MCP](./mcp.md) reenvía el token del propio usuario, así que sus llamadas llevan el vínculo MCP y se aceptan.
+
+### La lista de permitidos {#token-audience-allowlist}
+
+Estos son los recursos a los que el servidor de autorización vincula un token, y las audiencias que acepta una API, cuando la aplicación obligatoria está activada. Con `observe`, cualquier otro se cuenta y se registra, pero se atiende:
+
+- **El servidor MCP**, cuando está desplegado: su URL de recurso, `<origin>/api/mcp`.
+- **La API de cada área**, en `<origin>/api/<área>` para todas las áreas salvo `mcp`, por ejemplo `https://iot.example.com/api/device-management`.
+- **Recursos externos**, que son las entradas que enumera en `externalResources`. Úselos para un servicio suyo, fuera de DeviceChain, que valida los tokens de DeviceChain con el conjunto de claves publicado (`/oauth/jwks`) y pide tokens vinculados a sí mismo. El servidor de autorización emite ese token, pero **ninguna API de DeviceChain lo acepta cuando la aplicación obligatoria está activada**, ni tampoco el endpoint `userinfo` del servidor de autorización.
+
+La comparación es byte a byte. No hay conversión de mayúsculas ni tratamiento de la barra final, así que `https://IoT.example.com/api/mcp` no es `https://iot.example.com/api/mcp`. Por eso la configuración solo admite una grafía de cada identificador, y el cliente tiene que enviar exactamente esa grafía.
+
+### Observar y aplicar {#token-audience-modes}
+
+`enforcement` decide qué ocurre con una solicitud que incumple alguna de las comprobaciones:
+
+| Dónde | `observe` | `enforce` |
+| --- | --- | --- |
+| Endpoint de autorización | Se cuenta y se registra; la página de inicio de sesión se sirve como antes | El cliente vuelve a su dirección de redirección con `invalid_target` |
+| Concesión `client_credentials` | Se cuenta y se registra; se emite el token | `invalid_target`. Un recurso que no figura en la lista se juzga después de comprobar el secreto del cliente, de modo que un remitente no autenticado no averigua qué contiene la lista |
+| Código de autorización vinculado a un recurso que ya no se sirve | Se atiende, y no se cuenta | `invalid_grant` |
+| Token de renovación vinculado a un recurso que ya no se sirve | Se cuenta y se registra; se atiende | `invalid_grant`; el token de renovación queda gastado |
+| Un `resource` en una solicitud de código o de renovación que difiere de aquel al que está vinculada la concesión | Se cuenta y se registra; se atiende | `invalid_target`; un token de renovación no queda gastado |
+| Una API | Se cuenta como `would_reject` y se registra; se atiende | `401`, la misma respuesta que para un token no válido |
+
+`observe` es el valor por defecto en `v1.2`. `v1.3` hace de `enforce` el valor por defecto y mantiene `observe` como salida para esa versión menor. `v1.4` retira la salida: un servicio se niega a arrancar si el documento contiene `observe`, y el chart lo rechaza. Consulte las [notas de actualización](../deployment/releases-and-upgrades.md#v120-token-audience).
+
+Un token que no nombra ningún recurso es aceptado por la API de cualquier área, en ambos modos. Un cliente que nunca envía `resource` no se ve afectado por ninguna de las dos comprobaciones.
+
+### Cómo leer los contadores {#token-audience-reading}
+
+Ejecute primero `observe` y vigile los contadores: una serie `would_reject` que nunca se mueve significa que pasar a `enforce` no cambia nada para sus clientes. Las series, las dos alertas y cómo encontrar el cliente que está detrás de una cuenta están en [Comprobaciones de la audiencia del token](../deployment/observability.md#token-audience-checks).
+
+### Configuración {#token-audience-config}
+
+La política es configuración de la instancia en `infrastructure.tokenAudience`, en el documento que lee cada servicio, así que la lista con la que emite el servidor de autorización y el conjunto que acepta una API no pueden diferir. Todas las claves son opcionales.
+
+| Clave | La escribe | Valor |
+| --- | --- | --- |
+| `enforcement` | Usted | `observe`, `enforce` o sin definir. Sin definir es el valor por defecto de la versión, `observe` en `v1.2`. Rige ambas comprobaciones a la vez. |
+| `unscopedClientCredentials` | Usted | Sin definir u `observe`. `enforce` se rechaza al arrancar en esta versión, porque la regla que activaría todavía no rechaza nada. Consulte [Cuentas de servicio](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
+| `externalResources` | Usted | Una lista de como máximo 8 identificadores de recursos fuera de la plataforma. |
+| `areaBaseUrl` | El chart | `<origin>/api`, a partir del host del ingress. Solo se fija cuando el origen es https, o un host de loopback con http sin cifrar como `localhost`. Un ingress sin TLS en cualquier otro host no tiene recursos de área, igual que no tiene servidor de autorización. |
+| `mcpResources` | El chart | La `resourceUrl` resuelta del servidor MCP, cuando el área `mcp` está desplegada. |
+
+Un servicio se detiene al arrancar, nombrando la clave, cuando el bloque incumple alguna de estas reglas:
+
+- `enforcement` y `unscopedClientCredentials` deben ser `observe` o `enforce`, o estar sin definir. `unscopedClientCredentials` sin definir y `observe` son lo mismo, y `enforce` se rechaza como se ha dicho.
+- `areaBaseUrl` y cada entrada de lista deben ser una URL absoluta con esquema `https` (`http` solo para `localhost`, `127.0.0.1` o `::1`), con esquema y host en minúsculas, sin consulta, fragmento ni información de usuario, y sin barra final.
+- Cada lista contiene como máximo 8 entradas. Ninguna entrada puede aparecer dos veces, en ninguna de las dos listas, ni coincidir con el identificador propio de un área.
+- Una entrada de `externalResources` no puede estar bajo `areaBaseUrl`: con un `areaBaseUrl` de `https://iot.example.com/api`, tanto `https://iot.example.com/api` como `https://iot.example.com/api/x` se rechazan, y `https://iot.example.com/apiary` no. Así se evita que un área de la plataforma se reetiquete como externa.
+- Una clave que no figura en la tabla se rechaza, como en el resto de la configuración de la instancia.
+
+El chart añade sus propias comprobaciones, de modo que un error detiene `helm upgrade` antes de reiniciar ningún pod. Establecer `areaBaseUrl` o `mcpResources` en `instance.config` hace fallar el renderizado, igual que una clave mal escrita o una entrada de `externalResources` que incumpla las reglas anteriores. `dcctl` acepta `enforcement`, `unscopedClientCredentials` y `externalResources` en una [superposición de valores](../deployment/tuning-an-instance.md#tunable) y rechaza las dos claves derivadas.
+
+En una instancia cuya configuración escribe usted mismo (`instance.existingSecret`), el chart no escribe el bloque. Añádalo al documento, con la `resourceUrl` del servidor MCP tal como esté configurada el área `mcp`, y actualice `instance.existingSecretChecksum`:
+
+```json
+"infrastructure": {
+  "tokenAudience": {
+    "areaBaseUrl": "https://iot.example.com/api",
+    "mcpResources": ["https://iot.example.com/api/mcp"]
+  }
+}
+```
+
+Sin él se desconocen los recursos de área y `mcp` no está registrado, así que cada llamada que reenvía el servidor MCP se cuenta como un rechazo que se habría producido. `dcctl upgrade` avisa de que falta la entrada de MCP y, con `enforce`, se niega a continuar.
+
 ## Autenticación en dos pasos {#two-factor}
 
 Una cuenta puede exigir un código de una aplicación de autenticación después de su contraseña. [Cómo usarla](../guides/two-factor-authentication.md); aquí se explica qué garantiza y dónde termina.
