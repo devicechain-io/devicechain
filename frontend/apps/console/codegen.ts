@@ -35,6 +35,7 @@ const config: CodegenConfig = {
         'src/lib/api/maintenance-windows.ts',
         'src/lib/api/provisioning.ts',
         'src/lib/api/integrations.ts',
+        'src/lib/api/payload-decoder.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
