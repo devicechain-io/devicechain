@@ -1393,11 +1393,13 @@ func statedByOperator(rootdir, name string) bool {
 	decl := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=`)
 	for _, e := range entries {
 		n := e.Name()
+		// The two fixed names are found case-insensitively where the file system is (Windows finds
+		// Terraform.tfvars for tofu); the auto-file suffixes are matched exactly, as tofu does.
+		fixed := n
 		if runtime.GOOS == "windows" {
-			// The file system finds Terraform.tfvars for tofu; match it the same way.
-			n = strings.ToLower(n)
+			fixed = strings.ToLower(n)
 		}
-		if e.IsDir() || !(n == "terraform.tfvars" || n == "terraform.tfvars.json" ||
+		if e.IsDir() || !(fixed == "terraform.tfvars" || fixed == "terraform.tfvars.json" ||
 			strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json")) {
 			continue
 		}

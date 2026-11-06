@@ -161,6 +161,11 @@ func TestStatedByOperatorMatchesTofu(t *testing.T) {
 	if got := statedByOperator(dir, "nats_cpu_request"); got != want {
 		t.Errorf("Terraform.tfvars stated=%v on %s, want %v", got, runtime.GOOS, want)
 	}
+	// Auto-file suffixes are matched exactly, on every host: tofu ignores custom.AUTO.TFVARS.
+	dir = writeStated(t, map[string]string{"custom.AUTO.TFVARS": "nats_cpu_request = \"9\"\n"})
+	if statedByOperator(dir, "nats_cpu_request") {
+		t.Error("a file tofu ignores counts as stated")
+	}
 }
 
 // A pruned spec.size must stop the declare step, not build base after printing perf-12k.
