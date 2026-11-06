@@ -288,6 +288,16 @@ func revokeFingerprint(req *DeviceCertificateRevokeRequest) (string, error) {
 	return x509trust.Fingerprint(certs[0]), nil
 }
 
+// revokesACA is whether the revoke names a certificate (PEM) that is a CA. A bare fingerprint says
+// nothing about what it fingerprints, so it is not.
+func revokesACA(req *DeviceCertificateRevokeRequest) bool {
+	if req.CertificatePem == nil || strings.TrimSpace(*req.CertificatePem) == "" {
+		return false
+	}
+	_, certs, err := x509trust.ParseCertificates(*req.CertificatePem)
+	return err == nil && len(certs) == 1 && certs[0].BasicConstraintsValid && certs[0].IsCA
+}
+
 // bumpRevocationRows adds delta to the anchor's revocation_rows counter. The caller holds the
 // anchor FOR UPDATE.
 func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
@@ -322,6 +332,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 	if err != nil {
 		return nil, err
 	}
+	isCA := revokesACA(req)
 	reason := x509trust.RevocationUnspecified
 	if req.Reason != nil {
 		r, ok := RevocationReasonFromEnum(*req.Reason)
@@ -394,7 +405,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		// The sessions this entry ends are queued in the same transaction (lock order: anchor,
 		// then the entry, then the kick rows).
 		if _, err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
-			RevocationDelta{Fingerprints: []string{fp}}, linksWhole); err != nil {
+			RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
 			return err
 		}
 		out = entry

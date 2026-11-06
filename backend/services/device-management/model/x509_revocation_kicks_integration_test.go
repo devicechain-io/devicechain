@@ -167,3 +167,84 @@ func TestRevocationKickCrlUploadPostgres(t *testing.T) {
 	assert.Equal(t, 1, res.NewlyRevoked)
 	assert.Equal(t, []string{"cdev-0", "cdev-2"}, asked(), "the replacement asks only about what it adds")
 }
+
+// kickedByRevocation is every device token the kicker was asked about for a certificate revocation.
+func (f *pgCertFixture) kickedByRevocation() []string {
+	f.kicker.mu.Lock()
+	defer f.kicker.mu.Unlock()
+	var out []string
+	for _, c := range f.kicker.calls {
+		if c.reason == messaging.SessionKickCertificateRevoked {
+			out = append(out, c.tokens...)
+		}
+	}
+	return out
+}
+
+// 🔴 THE LOCK ORDER OF THE KICK, PROVED BY AN INTERLEAVING. A JIT registration holds the anchor FOR
+// SHARE with its credential written and uncommitted. A revocation of its certificate starts; it
+// writes its entry and then waits for the anchor row FOR UPDATE. The registration commits, and ONLY
+// THEN may the kick find its credential's links: a kick built before the anchor lock was won reads
+// the links as they were (none) and misses a session that is about to exist. Either the
+// registration is refused (the revocation committed first) or its device is asked about.
+func TestRevocationKickManualRevokeAfterAnInFlightRegistrationFindsItsDevice(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	leaf := f.ca.leaf(t, "SN-1")
+	reached, release := f.holdRegistration("SN-1")
+	regDone := make(chan regResult, 1)
+	go func() { res, err := f.registerLeaf(leaf); regDone <- regResult{res, err} }()
+	awaitSignal(t, reached, "the registration to write its credential")
+
+	revoked := make(chan error, 1)
+	go func() { revoked <- f.revokeFingerprint(f.api, x509trust.Fingerprint(leaf.cert)) }()
+	waitForBlockedBackend(t, f.mgr.Database)
+	select {
+	case err := <-revoked:
+		t.Fatalf("the revocation finished while a registration held the anchor share lock (%v)", err)
+	case <-time.After(750 * time.Millisecond):
+	}
+	release()
+	reg := <-regDone
+	require.NoError(t, <-revoked)
+	if reg.err != nil {
+		assert.Equal(t, x509trust.ReasonRevoked, x509trust.ReasonOf(reg.err), "refused only as revoked: %v", reg.err)
+		return
+	}
+	assert.Contains(t, f.kickedByRevocation(), reg.res.DeviceToken,
+		"the registration committed before the revocation did, so its session must be asked about")
+}
+
+// The same interleaving for a CRL upload: it stages and writes its entries (compatible with the
+// registration's FOR SHARE), then waits for the anchor FOR UPDATE; the kick is queued only after
+// that, against the committed links.
+func TestRevocationKickCrlUploadAfterAnInFlightRegistrationFindsItsDevice(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	leaf := f.ca.leaf(t, "SN-1")
+	reached, release := f.holdRegistration("SN-1")
+	regDone := make(chan regResult, 1)
+	go func() { res, err := f.registerLeaf(leaf); regDone <- regResult{res, err} }()
+	awaitSignal(t, reached, "the registration to write its credential")
+
+	uploaded := make(chan error, 1)
+	go func() {
+		_, err := f.putVia(f.api, f.ca.crl(t, crlSpec{number: big.NewInt(1), revoked: revokedSerials(serialOf(leaf.cert))}))
+		uploaded <- err
+	}()
+	waitForBlockedBackend(t, f.mgr.Database)
+	select {
+	case err := <-uploaded:
+		t.Fatalf("the upload finished while a registration held the anchor share lock (%v)", err)
+	case <-time.After(750 * time.Millisecond):
+	}
+	release()
+	reg := <-regDone
+	require.NoError(t, <-uploaded)
+	if reg.err != nil {
+		assert.Equal(t, x509trust.ReasonRevoked, x509trust.ReasonOf(reg.err), "refused only as revoked: %v", reg.err)
+		return
+	}
+	assert.Contains(t, f.kickedByRevocation(), reg.res.DeviceToken,
+		"the registration committed before the upload did, so its session must be asked about")
+}

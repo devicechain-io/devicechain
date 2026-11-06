@@ -764,6 +764,7 @@ What needs action:
 - **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
 - **Publish a profile's payload decoder only after every `device-management` replica runs this release.** A version published while an older replica is still serving can be missing its decoder; see [Payload decoders](#v120-payload-decoders).
 - **Know that X.509 certificate revocation lists are new and optional.** Nothing needs doing to upgrade; read [Revocation lists](#v120-x509-crl) before you upload one.
+- **Know that a certificate revocation now ends the open sessions it affects.** A revocation of a certificate authority can reconnect a whole fleet at once. See [Revoking a certificate ends open sessions](#v120-x509-sessions).
 
 
 #### Detection shards run in parallel {#v120-detect-shards}
@@ -847,6 +848,15 @@ A tenant can now store a certificate authority's revocation list (CRL) against a
 - **Deleting a trust anchor is refused while it holds manual revocations.** Un-revoke them first (`unrevokeDeviceCertificate`); they are your own decisions and are never discarded silently.
 - **`REQUIRE_CURRENT` is opt-in per anchor.** The platform refuses to switch an anchor to it while the anchor holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused.
 - **During a rolling upgrade**, replicas that have not been replaced answer the broker's authorization callout without revocation checks, so a revocation is enforced everywhere only once the rollout completes. Going back to `v1.1.0` leaves the tables in place and unread: revocations stop being enforced.
+
+#### Revoking a certificate ends open sessions {#v120-x509-sessions}
+
+Revoking a certificate, by hand or by uploading a CRL that names it, now also ends the open sessions of the devices it affects. Before, a session already open stayed up until its token expired (up to 12 hours by default). Nothing changes for an instance that revokes nothing.
+
+- **A leaf certificate ends the sessions of the devices that hold it.** A revocation of a certificate authority is wider: when you revoke a CA by giving its certificate, or a CRL names an intermediate that a registered credential was seen to use, the sessions of **every device with a certificate credential under that trust anchor** are ended. Those devices reconnect on their own; the ones whose chain is still trusted are admitted at once. A call ends the sessions of up to about 5,000 devices itself, so a CA-level revocation can reconnect about that many at the same moment; the rest are ended in the background.
+- **Sessions are ended twice.** Once when the revocation commits, and again about 10 seconds later. The second pass catches a device that was being admitted at the instant of the revocation. A CA-level revocation therefore asks about the whole anchor twice.
+- **Revoking can take a while against a slow responder.** The call waits for the service that ends sessions (`event-sources`) for up to about 90 seconds. If it cannot confirm, the revocation still stands and new connections are refused; the result says `sessionsEnded: false`, the platform keeps retrying, and repeating the revoke or the upload asks again.
+- **During a rolling upgrade**, the new kicks carry a new reason that `event-sources` must understand. Until `event-sources` has been replaced, these kicks stay pending and are retried, so a revocation made in the middle of the upgrade ends the open sessions once `event-sources` has rolled.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 

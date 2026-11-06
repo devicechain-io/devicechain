@@ -809,6 +809,7 @@ Qué requiere acción:
 - **Espere que los cambios de perfil y de tipo de dispositivo lleguen tarde a las réplicas actualizadas mientras dura el despliegue.** Consulte [Cambios de perfil durante una actualización progresiva](#v120-profile-cache).
 - **Publique el decodificador de payload de un perfil solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada mientras una réplica anterior sigue atendiendo puede quedarse sin su decodificador; consulte [Decodificadores de payload](#v120-payload-decoders).
 - **Tenga en cuenta que las listas de revocación de certificados X.509 son nuevas y opcionales.** No hay que hacer nada para actualizar; lea [Listas de revocación](#v120-x509-crl) antes de subir una.
+- **Tenga en cuenta que revocar un certificado ahora termina las sesiones abiertas a las que afecta.** Revocar una autoridad certificadora puede reconectar de golpe toda una flota. Vea [Revocar un certificado termina las sesiones abiertas](#v120-x509-sessions).
 
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
@@ -892,6 +893,15 @@ Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad cer
 - **Borrar un ancla de confianza se rechaza mientras tenga revocaciones manuales.** Anúlelas primero (`unrevokeDeviceCertificate`); son decisiones suyas y nunca se descartan en silencio.
 - **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
 - **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
+
+#### Revocar un certificado termina las sesiones abiertas {#v120-x509-sessions}
+
+Revocar un certificado, a mano o subiendo una CRL que lo nombra, ahora también termina las sesiones abiertas de los dispositivos a los que afecta. Antes, una sesión ya abierta seguía hasta que caducaba su token (hasta 12 horas por defecto). No cambia nada en una instancia que no revoca nada.
+
+- **Un certificado de dispositivo termina las sesiones de los dispositivos que lo tienen.** La revocación de una autoridad certificadora es más amplia: cuando revoca una CA entregando su certificado, o una CRL nombra un intermedio que se vio usar a una credencial registrada, se terminan las sesiones de **todos los dispositivos con una credencial de certificado bajo esa ancla de confianza**. Esos dispositivos se reconectan solos; aquellos cuya cadena sigue siendo de confianza se admiten de inmediato. Una llamada termina por sí misma las sesiones de hasta unos 5 000 dispositivos, así que una revocación a nivel de CA puede reconectar a ese número a la vez; el resto se termina en segundo plano.
+- **Las sesiones se terminan dos veces.** Una al confirmarse la revocación y otra unos 10 segundos después. La segunda pasada alcanza a un dispositivo que se estaba admitiendo en el instante de la revocación. Por eso una revocación a nivel de CA consulta dos veces a toda el ancla.
+- **Revocar puede tardar contra un respondedor lento.** La llamada espera al servicio que termina las sesiones (`event-sources`) hasta unos 90 segundos. Si no puede confirmarlo, la revocación sigue en pie y las conexiones nuevas se rechazan; el resultado indica `sessionsEnded: false`, la plataforma sigue reintentando y repetir la revocación o la subida vuelve a preguntar.
+- **Durante una actualización gradual**, los nuevos cierres de sesión llevan un motivo nuevo que `event-sources` debe entender. Hasta que `event-sources` se haya reemplazado, estos cierres quedan pendientes y se reintentan, de modo que una revocación hecha a mitad de la actualización termina las sesiones abiertas cuando `event-sources` se haya actualizado.
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 

@@ -109,9 +109,16 @@ type RevocationDelta struct {
 	Fingerprints []string
 	// Serials of certificates a CRL names that the issuer's previous list did not.
 	Serials []x509trust.IssuerSerial
+	// CA is set when a revoked certificate is KNOWN to be a CA (the operator gave its PEM and it is
+	// one). Such an entry ends the whole anchor's sessions whatever the links say: an instance
+	// upgraded from before the links existed holds only depth-0 links, so a CA's fingerprint would
+	// match none.
+	CA bool
 }
 
-func (d RevocationDelta) empty() bool { return len(d.Fingerprints) == 0 && len(d.Serials) == 0 }
+func (d RevocationDelta) empty() bool {
+	return len(d.Fingerprints) == 0 && len(d.Serials) == 0 && !d.CA
+}
 
 // NewlyRevokedSerials is the diff a CRL upload owes the kick: the serials of next that previous
 // does not hold. A serial present in both (its reason may have changed) is not a new revocation.
@@ -140,8 +147,8 @@ func NewlyRevokedSerials(issuer x509trust.IssuerID, previous, next []string) []x
 //     credential is matched too: its own disable commits before its kick, and a kick that could
 //     not be confirmed there is not durably owed, so this revocation is the next chance to end
 //     that session (one extra request when there is none);
-//   - an entry that matches a link at depth >= 1 is a CA-level revocation: EVERY device with an
-//     enabled certificate credential under the anchor is ended, since a session's path is not the
+//   - an entry that matches a link at depth >= 1, or that is KNOWN to be a CA (delta.CA), is a
+//     CA-level revocation: EVERY device with a certificate credential under the anchor is ended, since a session's path is not the
 //     path its credential was created through;
 //   - linksWhole false (the reconciler stopped or failed) is not trusted either: the kick covers
 //     the whole anchor.
@@ -152,7 +159,7 @@ func revocationKickTargets(tx *gorm.DB, tenant string, anchorId uint, d Revocati
 	if d.empty() {
 		return nil, false, nil
 	}
-	if !linksWhole {
+	if !linksWhole || d.CA {
 		tokens, err = anchorDeviceTokens(tx, tenant, anchorId)
 		return tokens, true, err
 	}
@@ -282,13 +289,15 @@ func (api *Api) queueCrlRevocationKicksOnTx(tx *gorm.DB, tenant string, anchorId
 	return len(tokens), nil
 }
 
-// anchorDeviceTokens is the token of every device with an enabled certificate credential under the
-// anchor: one statement, the credentials as a subquery, so a fleet-sized answer needs no
+// anchorDeviceTokens is the token of every device with a certificate credential under the anchor,
+// a disabled one included: a credential's own disable ends its sessions inline only (nothing durable
+// is owed if that kick fails), so a revocation is the next chance, and including it can only
+// over-kick. One statement, the credentials as a subquery, so a fleet-sized answer needs no
 // parameter list.
 func anchorDeviceTokens(tx *gorm.DB, tenant string, anchorId uint) ([]string, error) {
 	sub := tx.Session(&gorm.Session{NewDB: true}).Model(&DeviceCredential{}).Select("device_id").
-		Where("tenant_id = ? AND trust_anchor_id = ? AND credential_type = ? AND enabled = ?",
-			tenant, anchorId, string(CredentialX509Certificate), true)
+		Where("tenant_id = ? AND trust_anchor_id = ? AND credential_type = ?",
+			tenant, anchorId, string(CredentialX509Certificate))
 	var tokens []string
 	if err := tx.Session(&gorm.Session{NewDB: true}).Unscoped().Model(&Device{}).
 		Where("tenant_id = ? AND id IN (?)", tenant, sub).Pluck("token", &tokens).Error; err != nil {
