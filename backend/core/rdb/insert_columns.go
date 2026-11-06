@@ -487,6 +487,13 @@ func (t *ColumnTable[R]) write(db *gorm.DB, rows []*R) (int64, error) {
 	if _, scoped := auth.ScopeFromContext(ctx); scoped {
 		return 0, fmt.Errorf("%w (the column-array insert)", auth.ErrScopeUnsupported)
 	}
+	// The placement guard (shard.go) is a create callback this path bypasses, so it is asked
+	// here, for the context's tenant, when the handle carries it.
+	if db.Callback().Create().Get(shardGuardCreate) != nil {
+		if err := checkPlacement(db, []string{tenant}); err != nil {
+			return 0, err
+		}
+	}
 	plan, err := t.plan(db)
 	if err != nil {
 		return 0, err

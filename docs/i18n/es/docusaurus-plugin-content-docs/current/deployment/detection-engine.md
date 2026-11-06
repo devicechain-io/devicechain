@@ -692,12 +692,11 @@ exposición para toda la instancia, así que dimensiónelo antes de cambiarlo: a
 *frecuencia de reporte × ventana × dispositivos × 32 bytes*, sumado sobre las reglas que usan
 ventanas largas.
 
-Los tiempos de espera de silencio y los huecos de sesión están acotados por la misma razón, aunque
-no retengan lecturas. Esas reglas insertan una entrada nueva en el montículo de temporizadores del
-motor cada vez que un dispositivo reporta, y la entrada sustituida no se descarta hasta que vence su
-plazo: un tiempo de espera de tres días sobre un dispositivo que reporta cada diez segundos acumula
-unas 26.000 entradas pendientes *para ese único dispositivo*. Un tiempo de espera largo cuesta
-memoria en proporción directa a su longitud, igual que una ventana larga.
+Los tiempos de espera de silencio y los huecos de sesión también están acotados, aunque no
+retengan lecturas. El motor guarda una entrada de temporizador por dispositivo para cada una de esas
+reglas y la mueve cuando el dispositivo reporta, de modo que su memoria sigue el número de
+dispositivos, no la frecuencia de los reportes ni la longitud del tiempo de espera. El techo se
+aplica igualmente, para que una duración signifique lo mismo que cualquier otra que lleve una regla.
 
 :::danger Una regla por encima del techo NO se ejecuta: se rechaza al arrancar, no se preserva
 El techo se aplica cuando el motor **carga** una regla, no solo cuando se publica una. Una regla
@@ -749,10 +748,10 @@ otras, así que cualquiera de ellas leída por separado puede parecer sana mient
 |---|---|---|
 | `devicechain_eventprocessing_detect_live_keys` | ventanas y temporizadores abiertos | muchos dispositivos repartidos sobre muchas reglas |
 | `devicechain_eventprocessing_detect_retained_samples` | lecturas retenidas dentro de las ventanas abiertas | una regla de ventana larga sobre un dispositivo con mucho tráfico: **una** clave viva y cientos de miles de lecturas |
-| `devicechain_eventprocessing_detect_pending_timers` | entradas en el montículo de temporizadores | un tiempo de espera de silencio o un hueco de sesión largos con reportes frecuentes: de nuevo una sola clave viva, y ninguna lectura retenida |
+| `devicechain_eventprocessing_detect_pending_timers` | entradas en el montículo de temporizadores, una por cada temporizador de silencio, sesión o espera armado | muchos dispositivos bajo una regla de ausencia o de sesión: sigue a las claves armadas, no la frecuencia de los reportes |
 
-La segunda y la tercera existen porque la primera queda plana precisamente en los casos que agotan
-la memoria más rápido. Solo las dos primeras tienen techos por inquilino; el montículo de
+La segunda existe porque la primera queda plana precisamente en el caso que agota la memoria más
+rápido: una regla de ventana larga sobre un solo dispositivo con mucho tráfico. Solo las dos primeras tienen techos por inquilino; el montículo de
 temporizadores se reporta como un total de toda la instancia, porque atribuirlo a un inquilino
 exigiría recorrerlo entero en cada punto de control.
 :::

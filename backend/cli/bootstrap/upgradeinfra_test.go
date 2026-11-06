@@ -787,6 +787,7 @@ type fakeUpgradeTofu struct {
 	applyErrs  []error
 	applyCalls int
 	outputs    map[string]tfexec.OutputMeta
+	outputErr  error
 }
 
 func (f *fakeUpgradeTofu) Show(context.Context, ...tfexec.ShowOption) (*tfjson.State, error) {
@@ -811,6 +812,9 @@ func (f *fakeUpgradeTofu) Apply(context.Context, ...tfexec.ApplyOption) error {
 	return nil
 }
 func (f *fakeUpgradeTofu) Output(context.Context, ...tfexec.OutputOption) (map[string]tfexec.OutputMeta, error) {
+	if f.outputErr != nil {
+		return nil, f.outputErr
+	}
 	return f.outputs, nil
 }
 

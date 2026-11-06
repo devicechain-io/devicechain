@@ -630,11 +630,11 @@ time the metric moves, the memory is already allocated. Raising this limit raise
 the whole instance, so size it before you change it: roughly *reporting rate × window × devices ×
 32 bytes*, summed over the rules that use long windows.
 
-Silence timeouts and session gaps are bounded for the same reason, even though they hold no
-readings. Those rules push a new entry onto the engine's timer heap every time a device reports and
-the superseded entry is not discarded until its deadline passes — so a three-day silence timeout on
-a device reporting every ten seconds carries roughly 26,000 pending entries *for that one device*.
-A long timeout costs memory in direct proportion to its length, just as a long window does.
+Silence timeouts and session gaps are bounded too, even though they hold no readings. The engine
+keeps one timer entry per device for each of those rules and moves it when the device reports, so
+their memory follows the number of devices, not how often they report or how long the timeout is.
+The ceiling still applies to them, so a timeout means the same thing as every other duration a rule
+carries.
 
 :::danger A rule over the ceiling does not run — it is refused at startup, not grandfathered
 The ceiling is applied when the engine **loads** a rule, not only when one is published. A rule
@@ -683,10 +683,10 @@ others, so any one of them read alone can look healthy while the engine fills up
 |---|---|---|
 | `devicechain_eventprocessing_detect_live_keys` | open windows and timers | many devices across many rules |
 | `devicechain_eventprocessing_detect_retained_samples` | readings held inside open windows | one long-window rule on a busy device — **one** live key, hundreds of thousands of readings |
-| `devicechain_eventprocessing_detect_pending_timers` | entries in the timer heap | a long silence timeout or session gap under frequent reporting — again one live key, and no retained readings at all |
+| `devicechain_eventprocessing_detect_pending_timers` | entries in the timer heap, one per armed silence, session or hold timer | many devices under an absence or session rule — it moves with armed keys, not with how often they report |
 
-The second and third exist because the first is flat in exactly the cases that exhaust memory
-fastest. Only the first two have per-tenant ceilings; the timer heap is reported as an instance-wide
+The second exists because the first is flat in exactly the case that exhausts memory fastest: one
+long-window rule on one busy device. Only the first two have per-tenant ceilings; the timer heap is reported as an instance-wide
 total, because attributing it to a tenant would mean walking the whole heap on every checkpoint.
 :::
 

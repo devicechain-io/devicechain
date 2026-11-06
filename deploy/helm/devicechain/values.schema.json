@@ -287,6 +287,21 @@
       },
       "description": "The Service exposed for each functional area."
     },
+    "eventSources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ingestMetering": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "lagCredit"
+          ],
+          "description": "How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling; it is not available yet, and event-sources refuses to start with it rather than falling back to legacy. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key."
+        }
+      },
+      "description": "Settings that belong to the event-sources area alone."
+    },
     "eventEnvelopesEnabled": {
       "type": "boolean",
       "description": "Restates whether either event-envelope switch is on, for the event-processing memory floor. Under instance.existingSecret the chart cannot read instance.config.infrastructure.messaging.envelopes, so dcctl sets this from the document it wrote."

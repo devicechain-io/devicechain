@@ -3,6 +3,7 @@ title: Paneles
 sidebar_position: 8
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
 import GuideShot from '@site/src/components/GuideShot';
 
 # Paneles
@@ -16,6 +17,10 @@ cero, desde una plantilla o desde un archivo exportado, verlo, editarlo en el li
 widgets, hacer una vista previa con datos sintéticos, exportarlo y publicar y revertir versiones. Las
 capturas usan un inquilino de prueba cuyo panel *Widget Lab* contiene un ejemplar de cada widget
 integrado. Para saber cómo funcionan los paneles por dentro, consulta [Paneles](../concepts/dashboards.md).
+
+**¿Prefieres verlo?** El video sigue esta página: construye un panel en el lienzo, enlaza widgets a ranuras y abre el resultado en la aplicación /dash, solo de visualización. Se grabó con la v1.1, tiene audio en inglés, con subtítulos en inglés y subtítulos en español, y capítulos.
+
+<YouTubeLite id="nCxsli5rwzI" title="Crea paneles de IoT en DeviceChain: lienzo, ranuras, widgets y /dash" />
 
 :::note Quién puede hacer qué
 Cualquier miembro del inquilino puede abrir un panel. Crear, editar, publicar y eliminar uno requiere
