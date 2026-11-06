@@ -75,7 +75,14 @@ func (r *SchemaResolver) IntegrationDecoder(ctx context.Context, args struct {
 	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
-	answer, err := model.IntegrationDecoder(ctx, r.GetApi(ctx), args.Integration, args.Secret, args.DeviceTypeToken)
+	// Through the cached decorator when the service injected one: it is the resolver's own read, so
+	// the answer is what the resolver will run, and a warm question costs a memory hit and no
+	// decoder compile.
+	var api model.DeviceManagementApi = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		api = capi
+	}
+	answer, err := model.IntegrationDecoder(ctx, api, args.Integration, args.Secret, args.DeviceTypeToken)
 	if err != nil || answer == nil {
 		return nil, err
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -200,4 +201,26 @@ func TestIntegrationDecoderIsServiceOnly(t *testing.T) {
 			t.Errorf("integrationDecoder was admitted for %s: %v %v", who, res.data, res.errs)
 		}
 	}
+}
+
+// When the service offers its cached decorator the question is answered by the resolver's own
+// read: a version published behind its back (no eviction) is not seen until the entry expires,
+// which is how the resolver itself behaves, and what makes a warm question a memory hit.
+func TestIntegrationDecoderReadsThroughTheResolversCache(t *testing.T) {
+	f, issued := newIntegrationDecoderFixture(t)
+	f.publishDecoder(t, wireFrameDecoder)
+	capi := model.NewCachedApi(f.api, &model.Caches{ProfileResolutionByType: msgtest.NewMemoryKV().NewCache()})
+	ctx := context.WithValue(service(f), ContextCachedApiKey, capi)
+	ask := func() map[string]any {
+		return decoderPlanOf(t, serve(t, ctx, wireIntegrationDecoder, map[string]any{"i": "chirp-1", "s": issued, "t": "pump"}))
+	}
+	require.Equal(t, true, ask()["present"], "the first question fills the resolver's cache")
+
+	f.publishDecoder(t, "") // behind the cache's back: nothing evicts
+	assert.Equal(t, true, ask()["present"], "the question did not go through the resolver's cache")
+
+	// A publish through the service drops the entry:
+	_, err := capi.PublishDeviceProfile(f.operator(), "meter", nil, nil, "t")
+	require.NoError(t, err)
+	assert.Equal(t, false, ask()["present"])
 }

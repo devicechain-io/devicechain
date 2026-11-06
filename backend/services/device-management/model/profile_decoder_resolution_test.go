@@ -395,12 +395,13 @@ func TestAColdBurstOverABucketHitDecodesTheEntryOnce(t *testing.T) {
 	r := decoderRig(t)
 	r.read(t) // this replica fills the bucket
 	other := r.replica()
-	before := decodePlanBuilds.Load()
+	before, gets := decodePlanBuilds.Load(), r.kv.Gets
 	release := hold(n, 400*time.Millisecond)
 	defer release()
 
 	got := burst(t, n, func() (ProfileResolution, error) { return other.ProfileResolutionByDeviceType(r.ctx, r.typeId) })
 	assert.Equal(t, int64(1), decodePlanBuilds.Load()-before, "a burst of %d events over a bucket hit decoded the entry more than once", n)
+	assert.Equal(t, 1, r.kv.Gets-gets, "a burst of %d events over a bucket hit read the bucket once each", n)
 	for _, res := range got {
 		assert.Equal(t, "21.5", decodeTemp(t, res))
 	}
@@ -536,4 +537,89 @@ func TestAReplicaHoldsAtMostItsBoundOfDecoders(t *testing.T) {
 	}
 	assert.Greater(t, decodePlanBuilds.Load()-before, int64(0),
 		"%d maximal decoders are all held decoded: the cache charged them by their encoding, not by the programs they hold", n)
+}
+
+// The wave AFTER the fill: a database fill stores the encoded entry, not the decoded value, so the
+// first reads from memory each find bytes and decode them, which compiles. They share one decode.
+func TestAWaveOfMemoryHitsAfterAFillDecodesTheEntryOnce(t *testing.T) {
+	const n = 24
+	r := decoderRig(t)
+	r.capi.dropProfileResolution(r.ctx, partialUpdateTenant, r.typeId)
+	r.read(t) // the database fill: one compile, and the entry is in memory as bytes
+	before := decodePlanBuilds.Load()
+	release := hold(n, 400*time.Millisecond)
+	defer release()
+
+	got := burst(t, n, func() (ProfileResolution, error) { return r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId) })
+	assert.Equal(t, int64(1), decodePlanBuilds.Load()-before, "a wave of %d memory hits after a fill decoded the entry more than once", n)
+	for _, res := range got {
+		assert.Equal(t, "21.5", decodeTemp(t, res))
+	}
+}
+
+// A caller that saw a miss and reached the load after the fill that answered it had finished must
+// find that fill, not read the database again. Shown by moving the database underneath: a late
+// caller that loaded again would see the new value, one that found the fill sees the old.
+func TestALateMissAfterTheFillDoesNotLoadAgain(t *testing.T) {
+	r := decoderRig(t)
+	r.capi.dropProfileResolution(r.ctx, partialUpdateTenant, r.typeId)
+	key := profileResolutionByTypeKey(partialUpdateTenant, r.typeId)
+	filled := r.read(t)
+	require.Equal(t, "Cel", unitOf(t, filled))
+
+	var row DeviceProfileVersion
+	require.NoError(t, r.api.RDB.DB(r.ctx).Where("version = ?", 2).First(&row).Error)
+	changed := strings.Replace(string(row.Snapshot), `"Cel"`, `"ZZ"`, -1)
+	require.NotEqual(t, string(row.Snapshot), changed, "the control: the snapshot holds the unit")
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&DeviceProfileVersion{}).Where("id = ?", row.ID).
+		Update("snapshot", []byte(changed)).Error)
+
+	late, err := r.capi.loadProfileResolution(r.ctx, key, r.typeId)
+	require.NoError(t, err)
+	assert.Equal(t, "Cel", unitOf(t, late), "a late miss read the database again instead of finding the fill")
+}
+
+// A leader whose deadline passes while it holds the fill does not fail the callers that joined it:
+// the database read runs under the leader's context, so they all receive its error, and each
+// asks again under its own.
+func TestAnExpiredLeaderDoesNotFailItsJoiners(t *testing.T) {
+	r := decoderRig(t)
+	r.capi.dropProfileResolution(r.ctx, partialUpdateTenant, r.typeId)
+	leaderCtx, cancel := context.WithTimeout(r.ctx, 150*time.Millisecond)
+	defer cancel()
+
+	entered := make(chan struct{})
+	var claimed atomic.Bool
+	profileResolutionLoadHook = func() {
+		if claimed.CompareAndSwap(false, true) { // only the leader is held, until its deadline has passed
+			close(entered)
+			<-leaderCtx.Done()
+		}
+	}
+	defer func() { profileResolutionLoadHook = nil }()
+
+	var wg sync.WaitGroup
+	var leaderErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, leaderErr = r.capi.ProfileResolutionByDeviceType(leaderCtx, r.typeId)
+	}()
+	<-entered
+	joined := make(chan error, 1)
+	go func() {
+		res, err := r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId) // joins the held fill
+		if err == nil && !res.HasDecoder() {
+			err = errors.New("joiner answered without the decoder")
+		}
+		joined <- err
+	}()
+	select {
+	case err := <-joined:
+		assert.NoError(t, err, "a joiner failed with its leader's deadline")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the joiner never answered")
+	}
+	wg.Wait()
+	assert.Error(t, leaderErr, "the control: the leader, whose deadline passed, did fail")
 }

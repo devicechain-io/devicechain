@@ -529,6 +529,12 @@ func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
 // profileResolutionByTypeKey builds the tenant-scoped cache key for a device type's
 // ProfileResolution, keyed by the device type row id.
 //
+// 🔴 A RESIDUAL OF THE NAMESPACE, ACCEPTED: an older replica that publishes, rolls back, re-profiles
+// a type or mints a fence version evicts only the key it knows, so this build's copy under the v2
+// key is served until the cache's time to live. Publishing a decoder is therefore documented as
+// something to do only after every replica runs this build (the release notes say so), and an
+// older replica's publish drops the decoder from its snapshot in any case.
+//
 // 🔴 THE "v2" SEGMENT IS WHAT KEEPS THIS BUILD AND AN OLDER ONE FROM READING EACH OTHER'S
 // ENTRIES. The bucket is shared by every replica, and a rolling upgrade runs both builds at once.
 // An older build writes "tenant|id" for a version that HAS a payload decoder, holding the metrics
@@ -586,7 +592,7 @@ func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
 	memoryOnly bool) (*ProfileResolution, bool, bool) {
 	read := func(memoryOnly bool) (*ProfileResolution, bool, bool) {
 		return readSharedCache(ctx, capi.caches.ProfileResolutionByType, key,
-			decodeProfileResolution, memoryOnly)
+			capi.decodeOnce(key), memoryOnly)
 	}
 	if memoryOnly {
 		return read(true)
@@ -609,6 +615,26 @@ func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
 	return r.v, r.answered, r.settled
 }
 
+// decodeOnce is decodeProfileResolution with concurrent decodes of one key joined into one.
+//
+// 🔴 A MEMORY HIT CAN STILL DECODE. A fill from the database stores the encoded entry and not the
+// decoded value, so the first reads after it find bytes with nothing attached and each decodes
+// them, which compiles the decoder. The cache keeps one of those decodes; the others were the
+// stampede. The decode of a hit that already has its value never runs, so the hot path pays
+// nothing for this.
+func (capi *CachedApi) decodeOnce(key string) func([]byte) (*ProfileResolution, error) {
+	return func(raw []byte) (*ProfileResolution, error) {
+		gen := capi.caches.ProfileResolutionByType.Generation()
+		out, err, _ := capi.fills.Do("decode|"+key+"|"+strconv.FormatUint(gen, 10), func() (any, error) {
+			return decodeProfileResolution(raw)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return out.(*ProfileResolution), nil
+	}
+}
+
 // resolutionRead is what one read of the cache answered, carried through a flight.
 type resolutionRead struct {
 	v                 *ProfileResolution
@@ -624,16 +650,34 @@ type resolutionRead struct {
 // cancellation does not fail the callers that joined it.
 func (capi *CachedApi) loadProfileResolution(ctx context.Context, key string, deviceTypeId uint) (ProfileResolution, error) {
 	res, err := capi.loadProfileResolutionOnce(ctx, key, deviceTypeId)
-	if err != nil && ctx.Err() == nil && errors.Is(err, context.Canceled) {
-		// The leader of the flight this call joined was cancelled; this caller was not.
-		return capi.loadProfileResolutionOnce(ctx, key, deviceTypeId)
+	// The leader of the flight this call joined ran under ITS context: if that was cancelled, or
+	// its deadline passed, this caller (whose own is live) asks again, as a leader of its own or
+	// a joiner of the next flight. Bounded, so a run of dying leaders cannot spin it.
+	for attempt := 0; attempt < 3 && err != nil && ctx.Err() == nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)); attempt++ {
+		res, err = capi.loadProfileResolutionOnce(ctx, key, deviceTypeId)
 	}
 	return res, err
 }
 
+// profileResolutionLoadHook, when set by a test before it starts goroutines, runs inside a load
+// flight before it reads the database, so a test can hold a leader while others join it.
+var profileResolutionLoadHook func()
+
 func (capi *CachedApi) loadProfileResolutionOnce(ctx context.Context, key string, deviceTypeId uint) (ProfileResolution, error) {
 	gen := capi.caches.ProfileResolutionByType.Generation()
 	out, err, _ := capi.fills.Do("load|"+key+"|"+strconv.FormatUint(gen, 10), func() (any, error) {
+		// A caller that saw a miss and arrived after the fill that answered it has finished is
+		// not a joiner of that flight: it would load and compile again. The fill moved the
+		// generation, so it is a leader of its own, and asks this replica's memory first (the
+		// bucket was asked a moment ago, and a second read of it would be a second round trip
+		// on every genuine miss).
+		if cached, answered, _ := capi.cachedProfileResolution(ctx, key, true); answered {
+			return *cached, nil
+		}
+		if hook := profileResolutionLoadHook; hook != nil {
+			hook()
+		}
 		res, err := capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 		if err != nil {
 			return nil, err
