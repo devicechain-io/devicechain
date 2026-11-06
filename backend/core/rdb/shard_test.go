@@ -156,4 +156,4 @@ func TestEnableShardingValidation(t *testing.T) {
 type sortableWidget struct{ widget }
 
 func (sortableWidget) TableName() string    { return "widgets" }
-func (sortableWidget) DefaultOrder() string { return "id" }
+func (sortableWidget) DefaultOrder() string { return "widgets.id" }
