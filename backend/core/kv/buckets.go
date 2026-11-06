@@ -275,6 +275,20 @@ var All = []Bucket{
 			"rebooted inside the last two hours.",
 	},
 	{
+		Name:    BucketPartitionPlacement,
+		Tier:    State,
+		TTL:     24 * time.Hour, // user-management rewrites it every few minutes; this only bounds a table nobody keeps alive
+		Writers: []string{"user-management"},
+		Readers: []string{"user-management"},
+		Why: "ONE entry (key \"table\"): the instance's placement table, tenant -> vpartition -> shard " +
+			"group, mirrored from user-management's database so that no hot path ever queries a " +
+			"database to route. It holds 64 group numbers and the tenants pinned by hand, " +
+			"capped at 4096, so it does not scale with fleet size or with tenants. " +
+			"Nothing reads it yet: Readers widens to every area that routes by tenant " +
+			"when one does. A full bucket refuses the write and the mirror goes stale, " +
+			"which with S = 1 changes nothing, since there is one shard group.",
+	},
+	{
 		Name:    BucketLeases,
 		Tier:    State,
 		TTL:     30 * time.Second, // messaging.DefaultLeaseTTL
@@ -361,11 +375,13 @@ const (
 	// and is still waiting to hear an outcome for. See its entry in All.
 	BucketSparkplugCommandsAwaiting = "dc_sparkplug_commands_awaiting"
 	BucketLeases                    = "dc_leases"
-	BucketDeviceByToken             = "device-by-token"
-	BucketRelationshipsBySource     = "relationships-by-source"
-	BucketMembershipsByEntity       = "memberships-by-entity"
-	BucketProfileResolutionByType   = "profile-resolution-by-type"
-	BucketScopedGroupsExist         = "scoped-groups-exist"
+	// BucketPartitionPlacement holds the mirrored placement table (core/partition).
+	BucketPartitionPlacement      = "dc_partition_placement"
+	BucketDeviceByToken           = "device-by-token"
+	BucketRelationshipsBySource   = "relationships-by-source"
+	BucketMembershipsByEntity     = "memberships-by-entity"
+	BucketProfileResolutionByType = "profile-resolution-by-type"
+	BucketScopedGroupsExist       = "scoped-groups-exist"
 )
 
 // TierFor returns the tier of the named bucket.

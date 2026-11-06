@@ -532,7 +532,7 @@ topic write spBv1.0/plant-a/DCMD/+/+
 Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随附告警](#edge-alerts)：每种传输是否在被读取、卡住的 LwM2M 主实例，两个服务丢弃数据的几种情形，以及 Sparkplug 命令下行通道。**下表中其余所有指标都没有告警。** 指标都会发出并显示在[仪表盘](./grafana-boards.md)上，但编写自己的规则前，不会通知你。边缘代理没有任何随附告警。
 :::
 
-所有指标带 `devicechain_` 和服务段前缀：`devicechain_sparkplugingest_`、`devicechain_lwm2mingest_`、`devicechain_edge_`。没有逐设备标签。只有 `command_breaker_state` 带有 `tenant` 和 `source` 标签，其数量受你配置的来源限制，因此抓取不存在高基数风险。
+所有指标带 `devicechain_` 和服务段前缀：`devicechain_sparkplugingest_`、`devicechain_lwm2mingest_`、`devicechain_edge_`。没有逐设备标签。只有 `command_breaker_state` 带有 `tenant`、`vpartition` 和 `source` 标签，其数量受你配置的来源限制（`vpartition` 由租户决定，最多 64 个取值，不会增加序列），因此抓取不存在高基数风险。
 
 ### 随附告警 {#edge-alerts}
 
@@ -587,7 +587,7 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随�
 | `commands_total` | 下行通道处理的命令，按 `result` 区分。结果：`published`、`confirmed`、`confirmed_unchanged`、`unconfirmed`、`superseded`、`rearmed`、`parked`、`drained`；拒绝：`refused_disabled`、`refused_breaker`、`refused_expired`、`refused_payload`、`refused_not_allowed`、`refused_metric`、`refused_datatype`、`refused_reboot_gate`；不属于本服务：`not_served`、`poison`、`claim_lost`、`tenant_gone`；故障：`claim_failed`、`park_failed`、`publish_failed`、`kv_failed`、`response_failed`。在有来源启用命令之前为零。供给 `SparkplugCommandsUnconfirmed`（未确认除以已发布）和 `SparkplugCommandResponsesFailing`（五种故障）。 |
 | `commands_awaiting` | 已发布、正等待节点上报所请求值的命令。 |
 | `command_confirm_seconds` | 已确认命令从发布到节点上报所用的时间。未确认的命令不在此处观测。 |
-| `command_breaker_state` | 按 `tenant` 和 `source`：0 关闭，1 打开（命令立即失败），2 半开（放行一条命令）。供给 `SparkplugCommandBreakerOpen`。 |
+| `command_breaker_state` | 按 `tenant`、`vpartition`（租户的放置通道，0-63）和 `source`：0 关闭，1 打开（命令立即失败），2 半开（放行一条命令）。供给 `SparkplugCommandBreakerOpen`。 |
 | `command_breaker_trips_total` | 断路器打开的次数。此处有速率而 `SparkplugCommandBreakerOpen` 保持安静，说明代理曾断开过一次会话。 |
 
 ### LwM2M 接入指标 {#lwm2m-ingestion-metrics}

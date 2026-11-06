@@ -53,6 +53,8 @@ func KvBucketNames(instanceId string, b kv.Bucket, area string) []string {
 		return []string{CredentialAttemptsBucketName(instanceId)}
 	case kv.BucketDeviceCredentialAttempts:
 		return []string{DeviceCredentialAttemptsBucketName(instanceId)}
+	case kv.BucketPartitionPlacement:
+		return []string{PartitionPlacementBucketName(instanceId)}
 	case kv.BucketSparkplugCommandsAwaiting:
 		return []string{SparkplugCommandsAwaitingBucketName(instanceId)}
 	}

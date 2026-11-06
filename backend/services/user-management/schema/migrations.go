@@ -135,5 +135,9 @@ var (
 		// The deletion record's erased_at: the standing claim that every store is clean and has
 		// stayed clean for the settle window, earlier than completed_at (the token release).
 		NewTenantPurgeErasedAtMigration(),
+		// The placement table (core/partition): the one P, which shard group owns each
+		// vpartition, and the tenants pinned to a vpartition by hand. Three new tables, no seed;
+		// nothing routes by them yet.
+		NewPartitionPlacementMigration(),
 	}
 )

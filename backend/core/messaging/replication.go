@@ -133,6 +133,13 @@ func SparkplugCommandsAwaitingBucketName(instanceId string) string {
 	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketSparkplugCommandsAwaiting))
 }
 
+// PartitionPlacementBucketName is the concrete KV bucket holding an instance's mirrored placement
+// table (core/partition). Instance-prefixed: two instances sharing a broker place their tenants
+// independently, and the vpartition hash itself is keyed by the instance id.
+func PartitionPlacementBucketName(instanceId string) string {
+	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketPartitionPlacement))
+}
+
 // deviceCredentialStoreArea is the functional area that creates the device
 // credential-attempt bucket: device-management, when it serves the MQTT auth callout.
 const deviceCredentialStoreArea = "device-management"
