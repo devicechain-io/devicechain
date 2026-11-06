@@ -428,9 +428,11 @@ func TestUntrustedSignerIsRefused(t *testing.T) {
 	assert.Equal(t, "1.0.0", p.version(f, "dev-0"))
 }
 
-// A group rollout with maxInFlight: the platform assigns the next device only while fewer than
-// maxInFlight attempts are open. The fleet has healthy devices and one of each fault; the rollout
-// never exceeds its limit, every attempt ends, and the tallies are what the injected faults say.
+// A group rollout staggered by maxInFlight: this test's own loop (standing in for the platform's
+// rollout, which is not under test here) assigns the next device only while fewer than maxInFlight
+// attempts are open. The fleet has healthy devices and one of each fault; what this proves is that
+// the fleet finishes every attempt when assignments arrive in waves, and that the tallies are what
+// the injected faults say. The limit itself is the loop's, so it is not asserted.
 func TestRolloutWithMaxInFlight(t *testing.T) {
 	const maxInFlight = 2
 	p := newPlatform(t)
@@ -443,7 +445,7 @@ func TestRolloutWithMaxInFlight(t *testing.T) {
 	for i := range devs {
 		devs[i] = fmt.Sprintf("dev-%d", i)
 	}
-	next, peak := 0, 0
+	next := 0
 	require.Eventually(t, func() bool {
 		open, ended := 0, 0
 		for _, d := range devs[:next] {
@@ -453,17 +455,14 @@ func TestRolloutWithMaxInFlight(t *testing.T) {
 				open++
 			}
 		}
-		peak = max(peak, open)
 		for open < maxInFlight && next < len(devs) {
 			p.assign(devs[next], "att-"+devs[next], "2.0.0", p.img, sig)
 			next++
 			open++
 		}
-		peak = max(peak, open)
 		return ended == len(devs)
 	}, 30*time.Second, 10*time.Millisecond)
 
-	assert.LessOrEqual(t, peak, maxInFlight)
 	var updated, failed int
 	codes := map[string]int{}
 	for _, d := range devs {
