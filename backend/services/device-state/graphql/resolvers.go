@@ -77,17 +77,40 @@ func (r *DeviceStateResolver) LastActivityTime() *string {
 // an active device has it cleared, so a device that went offline by a DISCONNECTED transition
 // (or was demoted to INFERRED afterwards) answers null, as it always did.
 //
-// It is not derived from lastDisconnectTime. That was tried in v1.1 and answered a time for
-// a device no sweep ever marked inactive (CONNECTED, DISCONNECTED, then demoted to INFERRED).
+// It is not derived from lastDisconnectTime in general. That was tried in v1.1 and answered a time
+// for a device no sweep ever marked inactive (CONNECTED, DISCONNECTED, then demoted to INFERRED).
 // The !Active guard, and the requirement that the value not predate the last connect, cover a row
 // a v1.1 pod resurrected or reconnected without clearing the column. v1.0 stamps the value after
 // the last activity, so for a v1.0 row neither changes the answer.
+//
+// ONE SHAPE IS READ FROM lastDisconnectTime: the row a v1.1 pod's sweep leaves. That sweep stamped
+// last_disconnect_time and not the column, and v1.1 pods keep sweeping for as long as a rolling
+// upgrade lasts, so such rows appear after any one-time repair has run. The sweep stamps both
+// columns with one instant, so the row is recognized as the repair recognizes it (sweptByV11): an
+// inactive INFERRED row with no stored value whose last_disconnect_time is later than its
+// presence_time, because a disconnect REPORT, the shape v1.0 answered null for, leaves
+// presence_time at or after it. The answer is then the instant v1.0 would have stored.
 func (r *DeviceStateResolver) InactivityAlarmTime() *string {
-	if r.M.InactivityAlarmTime.Valid && !r.M.Active &&
-		!(r.M.LastConnectTime.Valid && r.M.InactivityAlarmTime.Time.Before(r.M.LastConnectTime.Time)) {
-		return util.FormatTime(r.M.InactivityAlarmTime.Time)
+	m := r.M
+	if m.Active {
+		return nil
+	}
+	at := m.InactivityAlarmTime
+	if !at.Valid && sweptByV11(m) {
+		at = m.LastDisconnectTime
+	}
+	if at.Valid && !(m.LastConnectTime.Valid && at.Time.Before(m.LastConnectTime.Time)) {
+		return util.FormatTime(at.Time)
 	}
 	return nil
+}
+
+// sweptByV11 reports whether an inactive row with no stored inactivity alarm time is the one a
+// v1.1 sweep leaves. It states the same predicate as the repair migration's third statement
+// (model.NewInactivityAlarmTimeRestoreSchema), and the two move together.
+func sweptByV11(m model.DeviceState) bool {
+	return !m.Active && m.PresenceSource != model.PresenceSourceAsserted && !m.InactivityAlarmTime.Valid &&
+		m.LastDisconnectTime.Valid && (!m.PresenceTime.Valid || m.LastDisconnectTime.Time.After(m.PresenceTime.Time))
 }
 
 // InactivityTimeout is the platform-wide window the inactivity sweep applies to every
