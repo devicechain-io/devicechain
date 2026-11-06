@@ -590,7 +590,7 @@ func (r mqttRun) driveAndReconcile(ctx context.Context) (*MQTTReport, error) {
 	lat := r.Fleet.Lat.Percentiles()
 	held := res.End.Sub(res.Start)
 
-	w := deriveWindow(res.Start, res.End)
+	w := ledgerWindow(res.Start, res.End, r.Ledger)
 	promised := snap.Acked
 	if p.MQTT.QoS == 0 {
 		promised = snap.Written

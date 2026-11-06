@@ -76,9 +76,10 @@ const aggregateMethod = "per device, the event store computes (count, sum of sha
 const (
 	// aggregateMismatchSamples bounds the per-device mismatches a report lists.
 	aggregateMismatchSamples = 50
-	// aggregateDrillMax bounds how many mismatching devices are read exactly; beyond it the
-	// verdict stands (it is already a failure) but the report names only the first of them.
-	aggregateDrillMax = 200
+	// DefaultAggregateDrillMax bounds how many mismatching devices are read exactly when
+	// AggregateOptions.DrillMax is unset. It is sized so a run that is overloaded and leaves a
+	// large part of a fleet partly stored (r30: 300-550 devices at 20k) still decides.
+	DefaultAggregateDrillMax = 20000
 )
 
 // MicrosHash is the order-independent row hash: the first 8 bytes of SHA-256 over the 8-byte
@@ -342,6 +343,10 @@ type AggregateOptions struct {
 	// Settle, when positive, reads the aggregates twice that far apart and refuses to decide
 	// if they differ: rows still arriving would otherwise read as loss.
 	Settle time.Duration
+	// DrillMax bounds how many mismatching devices are read exactly. 0 means
+	// DefaultAggregateDrillMax. Past it the remaining devices are judged by counts alone, and
+	// the report is inconclusive with a message naming the limit and how to raise it.
+	DrillMax int
 }
 
 // CheckAggregate runs the aggregate oracle: read the store's per-device aggregates, compare
@@ -425,6 +430,11 @@ func reconcileAggregate(ctx context.Context, exp *AggregateLedger, stored map[st
 	}
 	sort.Strings(names)
 
+	drillMax := opt.DrillMax
+	if drillMax <= 0 {
+		drillMax = DefaultAggregateDrillMax
+	}
+	drillSkipped := 0
 	var drill []string
 	record := func(m DeviceMismatch) {
 		rep.DevicesMismatched++
@@ -446,9 +456,12 @@ func reconcileAggregate(ctx context.Context, exp *AggregateLedger, stored map[st
 			rep.DevicesSound++
 			continue
 		}
-		if opt.Exact != nil && len(drill) < aggregateDrillMax && (e.Detail != nil) {
-			drill = append(drill, dev)
-			continue
+		if opt.Exact != nil && e.Detail != nil {
+			if len(drill) < drillMax {
+				drill = append(drill, dev)
+				continue
+			}
+			drillSkipped++
 		}
 		rep.arithmetic(dev, e, s, record)
 	}
@@ -506,6 +519,9 @@ func reconcileAggregate(ctx context.Context, exp *AggregateLedger, stored map[st
 			}
 			record(DeviceMismatch{Device: dev, Kind: kind, AcceptedCount: e.Accepted.Count, AmbiguousCount: e.Ambiguous.Count, StoredCount: s.Count})
 		}
+	}
+	if drillSkipped > 0 {
+		inconclusive("the exact drill-down limit of %d device(s) was reached: %d more mismatching device(s) were judged from their counts alone, so the missing/extra figures are lower bounds; raise the limit (--drill-max, AggregateOptions.DrillMax) to decide", drillMax, drillSkipped)
 	}
 	if rep.DevicesMismatched > 0 && opt.Exact == nil {
 		inconclusive("%d mismatching device(s) were judged from their counts alone; the missing/extra figures are lower bounds, run with the exact read for the identities", rep.DevicesMismatched)

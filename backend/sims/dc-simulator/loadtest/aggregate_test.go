@@ -381,3 +381,141 @@ func TestAggregateLedgerCollisionIsInconclusive(t *testing.T) {
 		t.Fatalf("a clean ledger reported %d collisions", got)
 	}
 }
+
+// windowedFake is a store that, like the real one, only returns rows inside the window it is
+// asked for. It is what makes the ledger-window tests meaningful: a window too short drops rows.
+type windowedFake struct{ rows map[string][]int64 }
+
+func (f windowedFake) DeviceAggregates(_ context.Context, w Window) (map[string]DeviceAggregate, error) {
+	out := map[string]DeviceAggregate{}
+	for d, ts := range f.rows {
+		var in []int64
+		for _, us := range ts {
+			if t := time.UnixMicro(us); !t.Before(w.Start) && !t.After(w.End) {
+				in = append(in, us)
+			}
+		}
+		if len(in) > 0 {
+			out[d] = AggregateOf(in)
+		}
+	}
+	return out, nil
+}
+
+// lateLedger records n accepted events for one device, the last stamped lateBy after the drive end.
+func lateLedger(start, end time.Time, lateBy time.Duration) (*sim.IdentityLedger, []int64) {
+	led := sim.NewIdentityLedger()
+	var us []int64
+	for i, at := range []time.Time{start.Add(time.Second), end.Add(-time.Second), end.Add(lateBy)} {
+		led.Record(sim.OutcomeAccepted, "dev-1", "Measurement", at.UTC().Format(time.RFC3339Nano))
+		_ = i
+		us = append(us, at.UnixMicro())
+	}
+	return led, us
+}
+
+func TestLedgerWindowCoversAnAckedEventStampedAfterTheDrive(t *testing.T) {
+	start := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
+	end := start.Add(60 * time.Second)
+	led, us := lateLedger(start, end, 3*time.Minute) // PUBACKed 3 minutes after the drive ended
+	snap := led.Snapshot()
+	drive := sim.Snapshot{Emitted: snap.All.Accepted}
+
+	// The old fixed pad drops the late event: the store has it, but outside the window it is
+	// read in, so the oracle calls it missing. This is the defect.
+	old := deriveWindow(start, end)
+	bad := NewAggregateLedger("t1", "m", 1, old, snap, drive, true)
+	rep := check(t, bad, mustAgg(t, windowedFake{map[string][]int64{"dev-1": us}}, old), AggregateOptions{})
+	if rep.Reconciled {
+		t.Fatalf("control: the fixed pad is expected to misjudge the late event: %+v", rep)
+	}
+
+	w := ledgerWindow(start, end, led)
+	if got, want := w.End, time.UnixMicro(us[2]).Add(windowPad); !got.Equal(want) {
+		t.Fatalf("window end %s, want the latest accepted instant plus the pad %s", got, want)
+	}
+	good := NewAggregateLedger("t1", "m", 1, w, snap, drive, true)
+	rep = check(t, good, mustAgg(t, windowedFake{map[string][]int64{"dev-1": us}}, w), AggregateOptions{})
+	if !rep.Reconciled || rep.Missing != 0 || rep.DevicesSound != 1 {
+		t.Fatalf("a PUBACKed event stamped after the drive window must be counted, not missing: %+v", rep)
+	}
+}
+
+// Negative control: widening the window must not hide real loss. The late event was PUBACKed and
+// is never stored; it is inside the widened window and absent from it, so the oracle must fail.
+func TestLedgerWindowStillReportsAnAckedEventThatWasNeverStored(t *testing.T) {
+	start := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
+	end := start.Add(60 * time.Second)
+	led, us := lateLedger(start, end, 3*time.Minute)
+	snap := led.Snapshot()
+	w := ledgerWindow(start, end, led)
+	exp := NewAggregateLedger("t1", "m", 1, w, snap, sim.Snapshot{Emitted: snap.All.Accepted}, true)
+	stored := windowedFake{map[string][]int64{"dev-1": us[:2]}} // the late one never reached the store
+	rep := check(t, exp, mustAgg(t, stored, w), AggregateOptions{Exact: &fakeExact{times: map[string][]int64{"dev-1": us[:2]}}})
+	if rep.Reconciled || rep.Missing != 1 {
+		t.Fatalf("an acked-and-never-stored event must be reported missing: %+v", rep)
+	}
+}
+
+func TestLedgerWindowWithNoLateEventIsTheDriveWindow(t *testing.T) {
+	start := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
+	end := start.Add(time.Minute)
+	led, _ := lateLedger(start, end, -time.Second)
+	if got, want := ledgerWindow(start, end, led), deriveWindow(start, end); got != want {
+		t.Fatalf("window %v, want the drive window %v", got, want)
+	}
+	if got, want := ledgerWindow(start, end, nil), deriveWindow(start, end); got != want {
+		t.Fatalf("nil ledger: window %v, want %v", got, want)
+	}
+}
+
+func mustAgg(t *testing.T, r AggregateReader, w Window) map[string]DeviceAggregate {
+	t.Helper()
+	m, err := r.DeviceAggregates(context.Background(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestAggregateDrillLimitIsHonouredAndLoud(t *testing.T) {
+	led, drive, stored := fleet(10, 5)
+	exp := NewAggregateLedger("t1", "m", 1, testWindow, led, drive, true)
+	// Delete one row from each of 6 devices.
+	for _, d := range []string{"dev-aa", "dev-ba", "dev-ca", "dev-da", "dev-ea", "dev-fa"} {
+		stored[d] = stored[d][1:]
+	}
+	ex := &fakeExact{times: stored}
+	rep := check(t, exp, storedOf(stored), AggregateOptions{Exact: ex, DrillMax: 4})
+	if len(ex.readDevices()) != 4 || rep.DevicesDrilled != 4 {
+		t.Fatalf("the limit must cap the exact reads at 4, read %v drilled %d", ex.readDevices(), rep.DevicesDrilled)
+	}
+	if rep.Reconciled || len(rep.Inconclusive) != 1 {
+		t.Fatalf("hitting the limit must be inconclusive with one message: %+v", rep)
+	}
+	for _, want := range []string{"limit of 4", "2 more mismatching", "--drill-max"} {
+		if !strings.Contains(rep.Inconclusive[0], want) {
+			t.Errorf("message %q lacks %q", rep.Inconclusive[0], want)
+		}
+	}
+	// Under the limit there is no limit message, and the default is big enough for overload runs.
+	ex = &fakeExact{times: stored}
+	rep = check(t, exp, storedOf(stored), AggregateOptions{Exact: ex})
+	if len(rep.Inconclusive) != 0 || rep.DevicesDrilled != 6 || rep.Missing != 6 {
+		t.Fatalf("default limit must drill all 6: %+v", rep)
+	}
+	if DefaultAggregateDrillMax < 20000 {
+		t.Fatalf("default drill limit %d is too small for an overload run", DefaultAggregateDrillMax)
+	}
+}
+
+func TestLedgerWindowCoversAQoS0WriteStampedAfterTheDrive(t *testing.T) {
+	start := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
+	end := start.Add(time.Minute)
+	led := sim.NewIdentityLedger()
+	late := end.Add(2 * time.Minute)
+	led.Record(sim.OutcomeAmbiguous, "dev-1", "Measurement", late.Format(time.RFC3339Nano))
+	if got, want := ledgerWindow(start, end, led).End, late.Add(windowPad); !got.Equal(want) {
+		t.Fatalf("window end %s, want %s", got, want)
+	}
+}
