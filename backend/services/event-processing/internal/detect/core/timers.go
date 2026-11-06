@@ -86,11 +86,13 @@ func newTimerWheel() *timerWheel {
 	return &timerWheel{gens: map[SeriesKey]uint64{}, live: map[SeriesKey]*timer{}}
 }
 
-// hasTimers reports whether any timer is armed. It is exact: the push-per-event wheel also
-// answered true while only superseded or cancelled entries remained, which let the idle-advance
-// gate (HasPendingWork) take one extra bare watermark move after a cancel. That move is driven by
-// the wall clock, is never replayed from the log, and was already absent after any restore (a
-// snapshot keeps live timers only), so nothing replay-correct depended on it.
+// hasTimers reports whether any timer is armed. It is exact. The push-per-event wheel also
+// answered true while only superseded or cancelled entries remained, so after a cancel the
+// idle-advance gate (HasPendingWork) kept admitting bare watermark moves, and a checkpoint for
+// each, one per CheckpointInterval, until the stale entry's deadline passed (up to
+// MaxRuleDuration). Those moves are driven by the wall clock and are never replayed from the log,
+// and they were already absent after any restore (a snapshot keeps live timers only), so nothing
+// replay-correct depended on them.
 func (w *timerWheel) hasTimers() bool { return w.pq.Len() > 0 }
 
 // schedule sets (or resets) the deadline for key unconditionally: the key's existing entry is

@@ -98,9 +98,10 @@ type slidingState struct {
 
 	minDq []sample
 	maxDq []sample
-	// dirty is set only by restoreSlides: a restore hands over a whole buffer at once, so
-	// there is no incremental splice to make, and rebuilding every restored series up front
-	// is work a sum/avg/count rule never reads.
+	// dirty says the deques do not describe buf. It is set by restoreSlides (a restore hands over
+	// a whole buffer at once, so there is no incremental splice to make, and rebuilding every
+	// restored series up front is work a sum/avg/count rule never reads) and held by a lean window
+	// for as long as it stays lean.
 	dirty bool
 	// lean says no rule reading THIS series asks for min or max, so the deques are not built
 	// at all: the window is buf and nothing else. A sum, avg or count rule never reads a deque,
@@ -108,8 +109,10 @@ type slidingState struct {
 	// roughly a third of the window's memory. A lean window stays dirty (its deques describe
 	// nothing) which is exactly the state restoreSlides already hands over, so the one function
 	// that trusts a deque, value(AggMin/AggMax) via ensureDeques, repairs it on first read and
-	// clears lean — a series whose rule later turns to min/max is therefore still answered
-	// correctly, and thereafter maintained incrementally like any other.
+	// clears lean. A live rule change cannot reach this (UpsertRule drops the rule's state), so
+	// the case it covers is a restore under a changed rule: the snapshot says nothing of the rule
+	// it was taken under, and the window is answered correctly and then maintained incrementally
+	// like any other.
 	lean bool
 }
 

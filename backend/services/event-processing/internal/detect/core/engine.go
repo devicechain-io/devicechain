@@ -634,9 +634,8 @@ func (e *Engine) SeriesKeys() []SeriesKey {
 // for the set rather than trusting a count in prose — one written here went stale the moment the
 // presence cursor was added); the pane map + close heap are swept ONLY for Aggregate (the sole
 // kind that opens them), so every other kind skips the O(all-panes)/O(heap) walk; and the timer
-// is cancelled LAZILY (an O(1) generation bump)
-// only when the key actually has a live timer — the snapshot persists only live timers, so the
-// invalidated entry never reaches durability and popDue discards it when its deadline passes.
+// is cancelled (an O(log n) heap.Remove, plus a generation bump that keeps the snapshot's
+// generation table what it always was) only when the key actually has a live timer.
 func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n := 0
 	n += dropOneKey(e.runs, key)

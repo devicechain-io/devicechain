@@ -977,7 +977,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "A tenant is over its DETECT state budget"
-              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
+              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check the memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the shape that fills the heap fastest: a long-window rule on one busy device moves detect_retained_samples only. devicechain_eventprocessing_detect_pending_timers counts armed absence/session keys (instance-wide, not per-tenant, and has no budget arm here)."
   - name: a tenant over its live-key budget alone fires DetectTenantOverStateBudget
     interval: 1m
     input_series:
@@ -996,7 +996,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "A tenant is over its DETECT state budget"
-              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
+              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check the memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the shape that fills the heap fastest: a long-window rule on one busy device moves detect_retained_samples only. devicechain_eventprocessing_detect_pending_timers counts armed absence/session keys (instance-wide, not per-tenant, and has no budget arm here)."
   - name: a tenant over its retained-sample budget alone fires DetectTenantOverStateBudget
     interval: 1m
     input_series:
@@ -1015,7 +1015,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "A tenant is over its DETECT state budget"
-              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check all three memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the two shapes that fill the heap fastest: a long-window rule on one busy device moves detect_retained_samples only, and a long absence/session timeout under frequent reporting moves detect_pending_timers only (that one is instance-wide, not per-tenant, and has no budget arm here)."
+              description: "One or more tenants exceed the per-tenant rule-count, live-key or retained-sample budget for 30m. Find the offender in the event-processing warn log. Check the memory gauges before concluding memory is fine — devicechain_eventprocessing_detect_live_keys stays FLAT for the shape that fills the heap fastest: a long-window rule on one busy device moves detect_retained_samples only. devicechain_eventprocessing_detect_pending_timers counts armed absence/session keys (instance-wide, not per-tenant, and has no budget arm here)."
 
   # ------------------------------------------------------------------
   # Over a budget for twenty minutes and then back under it: a tenant that bursts and
