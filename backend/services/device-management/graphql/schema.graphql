@@ -3469,6 +3469,13 @@ type DeviceRevocationListResult {
     newlyRevoked: Int!
     """True when this very CRL was already the current list and nothing was written."""
     unchanged: Boolean!
+    """
+    True when the live broker sessions of the devices the list newly revokes were confirmed ended.
+    False when the list is stored and new connects are refused, but a session already open could not
+    be confirmed ended: the retry (automatic, and on repeating the upload, which is idempotent) ends
+    it, or its token expires.
+    """
+    sessionsEnded: Boolean!
 }
 
 """
@@ -5667,7 +5674,8 @@ type Mutation {
     from the next connect on every replica. Uploading the very CRL already in force changes
     nothing. The text is limited (the instance's callout.revocation.maxGraphqlCrlBytes, 2 MiB of
     DER at most); larger lists go over the streaming REST upload,
-    PUT /trust-anchors/{token}/crl on this service. This does not end sessions already open.
+    PUT /trust-anchors/{token}/crl on this service. The live sessions of the devices the list newly
+    revokes are ended; sessionsEnded on the result says whether that was confirmed.
     """
     putDeviceRevocationList(
         """Token of the trust anchor."""

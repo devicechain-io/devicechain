@@ -23,7 +23,7 @@ import (
 const (
 	wirePutList = `mutation ($a: String!, $c: String!, $i: String) {
   putDeviceRevocationList(anchorToken: $a, crlPem: $c, issuerChainPem: $i) {
-    newlyRevoked unchanged list { issuerSubject issuerKey issuerName crlNumber thisUpdate nextUpdate entryCount crlSha256 source status } } }`
+    newlyRevoked unchanged sessionsEnded list { issuerSubject issuerKey issuerName crlNumber thisUpdate nextUpdate entryCount crlSha256 source status } } }`
 	wireDeleteList = `mutation ($a: String!, $k: String!, $n: String!) { deleteDeviceRevocationList(anchorToken: $a, issuerKey: $k, issuerName: $n) }`
 	wireAnchorRev  = `query ($t: [String!]!) { deviceTrustAnchorsByToken(tokens: $t) {
   token revocationMode revocationStaleGrace revocationStatus revocationLists { issuerKey crlNumber entryCount status } } }`
@@ -71,7 +71,7 @@ func TestRevocationListOverTheWire(t *testing.T) {
 	res := got.data["putDeviceRevocationList"].(map[string]any)
 	list := res["list"].(map[string]any)
 	is := x509trust.IssuerIDOfCA(ca.cert)
-	if res["newlyRevoked"] != float64(1) || res["unchanged"] != false || list["crlNumber"] != "3" || list["entryCount"] != float64(1) ||
+	if res["newlyRevoked"] != float64(1) || res["unchanged"] != false || res["sessionsEnded"] != true || list["crlNumber"] != "3" || list["entryCount"] != float64(1) ||
 		list["issuerKey"] != is.Key || list["issuerName"] != is.Name || list["source"] != "UPLOAD" || list["status"] != "FRESH" ||
 		list["issuerSubject"] != "CN=Maker Root" {
 		t.Fatalf("put result = %v", res)

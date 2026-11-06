@@ -185,3 +185,4 @@ func (r *DeviceRevocationListResultResolver) List() *DeviceRevocationListResolve
 }
 func (r *DeviceRevocationListResultResolver) NewlyRevoked() int32 { return int32(r.M.NewlyRevoked) }
 func (r *DeviceRevocationListResultResolver) Unchanged() bool     { return r.M.Unchanged }
+func (r *DeviceRevocationListResultResolver) SessionsEnded() bool { return r.M.SessionsEnded }

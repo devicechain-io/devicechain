@@ -33,6 +33,21 @@ import (
 // A manual revoke makes the three calls (RevokeDeviceCertificate); a CRL upload makes them with the
 // serials its list names that the issuer's previous list did not (see NewlyRevokedSerials).
 
+// 🔴 THE GLOBAL LOCK ORDER of every revocation write, stated once (api_x509_crl.go, the manual
+// revoke, the live-session kicks, and the integration tests all refer to it):
+//
+//	crl-writers advisory lock  ->  anchor row (any mode)  ->  issuer rows / entries  ->  kick queue rows
+//
+// and the invariant that makes it a total order: NOTHING TAKES THE CRL-WRITERS ADVISORY LOCK WHILE IT
+// HOLDS THE ANCHOR ROW IN ANY MODE, including the implicit FOR KEY SHARE that inserting an issuer, a
+// list or an entry takes through its foreign key to the anchor. The kick code (queueRevocationKicksOnTx,
+// queueCrlRevocationKicksOnTx) takes no advisory lock and writes the queue rows only after the anchor
+// row is locked, so it respects both. A manual revoke takes the anchor row first and never the
+// writers' lock; an upload takes the writers' lock first and the anchor row last.
+//
+// revocationLockOrder names this comment for the others to point at.
+const revocationLockOrder = "crl-writers advisory -> anchor row -> issuer rows/entries -> kick queue rows"
+
 // kickOriginRevocationBase separates the Origin of a certificate-revocation kick from a
 // provisioning profile's id, a device reset's 0, and a trust-anchor disable's kickOriginAnchorBase
 // plus id. Adding the anchor's id to a base no other namespace reaches keeps the debts apart;
@@ -187,10 +202,17 @@ func revocationKickTargets(tx *gorm.DB, tenant string, anchorId uint, d Revocati
 		}
 		note(matched)
 	}
+	tokens, err = kickTokensFor(tx, tenant, anchorId, credentials, anchorWide)
+	return tokens, anchorWide, err
+}
+
+// kickTokensFor turns the matched credentials into the devices to end: the whole anchor's when the
+// match was CA-level, else the devices of the matched credentials (a disabled one included).
+func kickTokensFor(tx *gorm.DB, tenant string, anchorId uint, credentials map[uint]struct{}, anchorWide bool) ([]string, error) {
 	if anchorWide {
-		tokens, err = anchorDeviceTokens(tx, tenant, anchorId)
-		return tokens, true, err
+		return anchorDeviceTokens(tx, tenant, anchorId)
 	}
+	var tokens []string
 	ids := make([]uint, 0, len(credentials))
 	for id := range credentials {
 		ids = append(ids, id)
@@ -202,18 +224,62 @@ func revocationKickTargets(tx *gorm.DB, tenant string, anchorId uint, d Revocati
 			Where("tenant_id = ? AND trust_anchor_id = ? AND credential_type = ? AND id IN ?",
 				tenant, anchorId, string(CredentialX509Certificate), chunk).
 			Distinct().Pluck("device_id", &deviceIds).Error; err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		for dchunk := range slices.Chunk(deviceIds, rdb.MaxLookupKeys) {
 			var got []string
 			if err := tx.Session(&gorm.Session{NewDB: true}).Unscoped().Model(&Device{}).
 				Where("tenant_id = ? AND id IN ?", tenant, dchunk).Pluck("token", &got).Error; err != nil {
-				return nil, false, err
+				return nil, err
 			}
 			tokens = append(tokens, got...)
 		}
 	}
-	return sortedUniqueTokens(tokens), false, nil
+	return sortedUniqueTokens(tokens), nil
+}
+
+// queueCrlRevocationKicksOnTx is the CRL upload's step 2: in the upload's transaction, after the
+// anchor row is locked, queue the kicks for the serials the upload newly revoked (crlNewTable, built
+// before the entries were written). The match is a join of that table to the credentials' links on
+// (issuer name, serial), the issuer key equal or absent, so no serial passes through Go. With the
+// links not whole the kick covers the anchor, as for a manual revoke.
+func (api *Api) queueCrlRevocationKicksOnTx(tx *gorm.DB, tenant string, anchorId uint, issuer x509trust.IssuerID, linksWhole bool) (int, error) {
+	if api.SessionKicker == nil {
+		return 0, nil
+	}
+	var tokens []string
+	var err error
+	if !linksWhole {
+		tokens, err = anchorDeviceTokens(tx, tenant, anchorId)
+	} else {
+		var rows []struct {
+			CredentialId uint
+			Depth        int16
+		}
+		if err = tx.Raw("SELECT l.credential_id AS credential_id, l.depth AS depth FROM device_credential_chain_links l "+
+			"JOIN "+crlNewTable+" n ON n.serial = l.serial "+
+			"WHERE l.tenant_id = ? AND l.trust_anchor_id = ? AND l.issuer_name = ? AND (l.issuer_key IS NULL OR l.issuer_key = ?)",
+			tenant, anchorId, issuer.Name, issuer.Key).Scan(&rows).Error; err != nil {
+			return 0, fmt.Errorf("finding the devices whose sessions a CRL ends: %w", err)
+		}
+		credentials := map[uint]struct{}{}
+		wide := false
+		for _, r := range rows {
+			if r.Depth >= 1 {
+				wide = true
+			} else {
+				credentials[r.CredentialId] = struct{}{}
+			}
+		}
+		tokens, err = kickTokensFor(tx, tenant, anchorId, credentials, wide)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("finding the devices whose sessions a CRL ends: %w", err)
+	}
+	if err := api.queueSessionKicksOnTx(tx, tenant, revocationKickOrigin(anchorId), tokens); err != nil {
+		return 0, err
+	}
+	return len(tokens), nil
 }
 
 // anchorDeviceTokens is the token of every device with an enabled certificate credential under the

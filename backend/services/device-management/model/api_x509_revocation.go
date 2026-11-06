@@ -304,9 +304,10 @@ func bumpRevocationRows(tx *gorm.DB, anchorId uint, delta int64) error {
 //
 // The anchor's own certificate is refused: that is "disable the anchor".
 //
-// LOCK ORDER: the anchor row FOR UPDATE first (every revocation write takes it before anything
-// else, and a certificate registration holds it FOR SHARE to its commit), then the tenant's
-// manual-revocation advisory lock, then the entry. Nothing here takes a lock in the other order.
+// LOCK ORDER: the anchor row FOR UPDATE first, then the tenant's manual-revocation advisory lock,
+// then the entry, then the kick queue rows. It never takes the CRL-writers advisory lock, which must
+// not be taken while the anchor row is held (see revocationLockOrder in
+// api_x509_revocation_kicks.go). A certificate registration holds the anchor FOR SHARE to its commit.
 //
 // LIVE SESSIONS: the devices whose sessions the entry affects are queued for a kick in the same
 // transaction, and the call asks the broker before it returns (see revocationKickTargets). A kick
