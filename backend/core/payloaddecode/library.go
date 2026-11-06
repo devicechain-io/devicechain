@@ -56,9 +56,12 @@ func finiteDouble(f float64) ref.Val {
 // place so the static estimate and the runtime charge cannot drift apart silently.
 type fnSpec struct {
 	name, overload, doc, sig string
-	args                     []*cel.Type
-	ret                      *cel.Type
-	bind                     cel.OverloadOpt
+	// costDoc is the call's own charge in words, for the generated reference; it is checked
+	// against static and actual by TestFunctionCostDocsMatchTheCharges.
+	costDoc string
+	args    []*cel.Type
+	ret     *cel.Type
+	bind    cel.OverloadOpt
 	// static is the worst-case call cost and, for a function returning bytes or a map, the
 	// worst-case result size. It receives the argument nodes, whose computed sizes the
 	// estimator has propagated.
@@ -140,7 +143,7 @@ func readerSpec(name string, width int, signed, bigEndian, float bool) fnSpec {
 			width*8, map[bool]string{true: "big", false: "little"}[bigEndian])
 	}
 	return fnSpec{
-		name: name, overload: "payloaddecode_" + name, sig: name + "(bytes, int) -> " + retName, doc: doc,
+		name: name, overload: "payloaddecode_" + name, sig: name + "(bytes, int) -> " + retName, doc: doc, costDoc: costOne,
 		args: []*cel.Type{cel.BytesType, cel.IntType}, ret: ret,
 		bind: cel.BinaryBinding(func(bv, ov ref.Val) ref.Val {
 			b, ok1 := asBytes(bv)
@@ -230,6 +233,11 @@ func textActual(a []ref.Val, _ ref.Val) uint64 {
 	return 1
 }
 
+const (
+	costOne     = "1"
+	costPerChar = "1 per character of the text, at least 1"
+)
+
 // ownedFuncs is the function library, env version 1. A function's semantics NEVER change
 // once shipped: a fix or variant is a new name in a new env version.
 var ownedFuncs = buildOwned()
@@ -249,28 +257,28 @@ func buildOwned() []fnSpec {
 	}
 	fs = append(fs,
 		fnSpec{
-			name: "bit", overload: "payloaddecode_bit", sig: "bit(bytes, int, int) -> int",
+			costDoc: costOne, name: "bit", overload: "payloaddecode_bit", sig: "bit(bytes, int, int) -> int",
 			doc:  "Reads one bit (0 or 1): bit 0 is the least significant bit of the byte at byteOff.",
 			args: []*cel.Type{cel.BytesType, cel.IntType, cel.IntType}, ret: cel.IntType,
 			bind:   cel.FunctionBinding(func(a ...ref.Val) ref.Val { return bitField("bit", a, false, false) }),
 			static: constCost(1), actual: constActual(1),
 		},
 		fnSpec{
-			name: "bits", overload: "payloaddecode_bits", sig: "bits(bytes, int, int, int) -> int",
+			costDoc: costOne, name: "bits", overload: "payloaddecode_bits", sig: "bits(bytes, int, int, int) -> int",
 			doc:  "Reads an unsigned bit field of width 1..32 starting at bitOff, counted from the least significant bit of the byte at byteOff and continuing into the following bytes.",
 			args: []*cel.Type{cel.BytesType, cel.IntType, cel.IntType, cel.IntType}, ret: cel.IntType,
 			bind:   cel.FunctionBinding(func(a ...ref.Val) ref.Val { return bitField("bits", a, false, true) }),
 			static: constCost(1), actual: constActual(1),
 		},
 		fnSpec{
-			name: "sbits", overload: "payloaddecode_sbits", sig: "sbits(bytes, int, int, int) -> int",
+			costDoc: costOne, name: "sbits", overload: "payloaddecode_sbits", sig: "sbits(bytes, int, int, int) -> int",
 			doc:  "Like bits, sign-extended from the top bit of the field.",
 			args: []*cel.Type{cel.BytesType, cel.IntType, cel.IntType, cel.IntType}, ret: cel.IntType,
 			bind:   cel.FunctionBinding(func(a ...ref.Val) ref.Val { return bitField("sbits", a, true, true) }),
 			static: constCost(1), actual: constActual(1),
 		},
 		fnSpec{
-			name: "bcd", overload: "payloaddecode_bcd", sig: "bcd(bytes, int, int) -> int",
+			costDoc: "1 per byte read (the len argument)", name: "bcd", overload: "payloaddecode_bcd", sig: "bcd(bytes, int, int) -> int",
 			doc:  "Reads len (1 to 8) bytes of packed binary-coded decimal, most significant digit first; a nibble above 9 is an error.",
 			args: []*cel.Type{cel.BytesType, cel.IntType, cel.IntType}, ret: cel.IntType,
 			bind: cel.FunctionBinding(func(a ...ref.Val) ref.Val {
@@ -310,7 +318,7 @@ func buildOwned() []fnSpec {
 			},
 		},
 		fnSpec{
-			sizeDependent: true, name: "slice", overload: "payloaddecode_slice", sig: "slice(bytes, int, int) -> bytes",
+			sizeDependent: true, costDoc: "1 per byte copied, at least 1", name: "slice", overload: "payloaddecode_slice", sig: "slice(bytes, int, int) -> bytes",
 			doc:  "Copies len bytes starting at off; a range outside the value is an error.",
 			args: []*cel.Type{cel.BytesType, cel.IntType, cel.IntType}, ret: cel.BytesType,
 			bind: cel.FunctionBinding(func(a ...ref.Val) ref.Val {
@@ -342,7 +350,7 @@ func buildOwned() []fnSpec {
 			},
 		},
 		fnSpec{
-			sizeDependent: true, name: "hex.decode", overload: "payloaddecode_hex_decode", sig: "hex.decode(string) -> bytes",
+			sizeDependent: true, costDoc: costPerChar, name: "hex.decode", overload: "payloaddecode_hex_decode", sig: "hex.decode(string) -> bytes",
 			doc:  "Decodes hexadecimal text (even length, no separators) of at most 8192 characters.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
@@ -366,7 +374,7 @@ func buildOwned() []fnSpec {
 			actual: textActual,
 		},
 		fnSpec{
-			sizeDependent: true, name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
+			sizeDependent: true, costDoc: costPerChar, name: "base64.decode", overload: "payloaddecode_base64_decode", sig: "base64.decode(string) -> bytes",
 			doc:  "Decodes standard padded base64 text of at most 8192 characters into at most 4096 bytes.",
 			args: []*cel.Type{cel.StringType}, ret: cel.BytesType,
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
@@ -393,7 +401,7 @@ func buildOwned() []fnSpec {
 			actual: textActual,
 		},
 		fnSpec{
-			sizeDependent: true, name: "lpp.decode", overload: "payloaddecode_lpp_decode", sig: "lpp.decode(bytes) -> map(string, double)",
+			sizeDependent: true, costDoc: "1 per byte of the frame, at least 1", name: "lpp.decode", overload: "payloaddecode_lpp_decode", sig: "lpp.decode(bytes) -> map(string, double)",
 			doc:  "Decodes a Cayenne LPP frame into channel-suffixed keys such as temperature_1; a truncated or unknown record is an error.",
 			args: []*cel.Type{cel.BytesType}, ret: cel.MapType(cel.StringType, cel.DoubleType),
 			bind: cel.UnaryBinding(func(v ref.Val) ref.Val {
@@ -439,6 +447,9 @@ type FunctionDoc struct {
 	Name      string
 	Signature string
 	Doc       string
+	// Cost is the function's own charge in words ("1", "1 per byte copied"). Every evaluated
+	// node also has the standard charge of the expression language.
+	Cost string
 }
 
 // Functions lists the function library of env version 1 in a stable order: the owned
@@ -446,7 +457,7 @@ type FunctionDoc struct {
 func Functions() []FunctionDoc {
 	out := make([]FunctionDoc, 0, len(ownedFuncs)+len(mathDocs))
 	for _, f := range ownedFuncs {
-		out = append(out, FunctionDoc{Name: f.name, Signature: f.sig, Doc: f.doc})
+		out = append(out, FunctionDoc{Name: f.name, Signature: f.sig, Doc: f.doc, Cost: f.costDoc})
 	}
 	return append(out, mathDocs...)
 }
