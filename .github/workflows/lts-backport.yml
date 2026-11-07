@@ -81,23 +81,25 @@ jobs:
             { echo "::notice::pull request $PR_NUMBER did not merge into the default branch; nothing to backport"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
           {
             echo "sha=$(jq -r .mergeCommit.oid <<<"$json")"
-            echo "labels=$(jq -r '[.labels[].name] | join(",")' <<<"$json")"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
           # The title is attacker-influenced text: it goes to a file, not into a command line.
           jq -r .title <<<"$json" > "$RUNNER_TEMP/pr-title.txt"
+          # One label per line, because a label name may contain a comma; and the pull request's own file list, so
+          # the script can tell a squash/merge commit (the whole change) from the last commit of a rebase merge.
+          jq -r '.labels[].name' <<<"$json" > "$RUNNER_TEMP/labels.txt"
+          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$RUNNER_TEMP/files.txt"
 
       - name: Cherry-pick onto the LTS branch
         id: pick
         if: steps.pr.outputs.skip != 'true'
         env:
           SHA: ${{ steps.pr.outputs.sha }}
-          LABELS: ${{ steps.pr.outputs.labels }}
         run: |
           set -euo pipefail
           git config user.name "devicechain-lts-backport"
           git config user.email "lts-backport@users.noreply.github.com"
-          hack/lts-backport.sh prepare "$PR_NUMBER" "$SHA" "$LABELS" | tee "$RUNNER_TEMP/prepare.out" >> "$GITHUB_OUTPUT"
+          hack/lts-backport.sh prepare "$PR_NUMBER" "$SHA" "$(cat "$RUNNER_TEMP/labels.txt")" "$RUNNER_TEMP/files.txt" | tee "$RUNNER_TEMP/prepare.out" >> "$GITHUB_OUTPUT"
 
       - name: Push and open the backport pull request
         if: steps.pick.outputs.status == 'ready'
@@ -119,9 +121,9 @@ jobs:
             --title "[${LTS_BRANCH}] ${title}" --body "$body"
 
       - name: Say so on the original pull request when it does not apply
-        if: steps.pick.outputs.status == 'conflict'
+        if: steps.pick.outputs.status == 'conflict' || steps.pick.outputs.status == 'partial'
         run: |
-          gh pr comment "$PR_NUMBER" --body "This fix is labelled for backport to the LTS branch, but the cherry-pick does not apply cleanly. It needs a manual backport onto the LTS branch (\`git cherry-pick -x\` the merge commit and resolve)."
+          gh pr comment "$PR_NUMBER" --body "This fix is labelled for backport to the LTS branch, but it could not be cherry-picked automatically (it conflicts with the LTS branch, or the merged commit does not carry the whole change). It needs a manual backport onto the LTS branch (\`git cherry-pick -x\` the merge commit and resolve)."
 
       - name: What happened
         if: always() && steps.pr.outputs.skip != 'true'

@@ -137,7 +137,13 @@ judge_planted() {
     echo "CONTROL INCONCLUSIVE: the read-back failed with code $got, not the 'a field CHANGED' code $legend the planted defect should produce."
     return 2
   fi
-  echo "CONTROL HELD: the read-back failed with code $got -- a field CHANGED -- on the tree with the planted migration."
+  # The failure must be the PLANTED rewrite, not any corruption: apiprobe prints the row it read back, and the
+  # planted migration is the only thing that appends this suffix to a device name.
+  if ! grep -Eq '^[[:space:]]*read:.*[(]planted[)]' <<<"$text"; then
+    echo "CONTROL INCONCLUSIVE: a field CHANGED, but the read-back does not show the planted rewrite, so it cannot be credited to the planted migration."
+    return 2
+  fi
+  echo "CONTROL HELD: the read-back failed with code $got -- a field CHANGED, and it is the planted rewrite -- on the tree with the planted migration."
   return 0
 }
 
@@ -193,8 +199,11 @@ self_test() {
   }
 
   # --- judge_planted: the verdict is read from the rig's words, not from "it failed"
-  local held="$tmp/held" setup="$tmp/setup" other="$tmp/other" wrongcode="$tmp/wrong" nolegend="$tmp/nolegend"
+  local held="$tmp/held" setup="$tmp/setup" other="$tmp/other" wrongcode="$tmp/wrong" nolegend="$tmp/nolegend" noplant="$tmp/noplant"
   cat >"$held" <<'EOF'
+device "apiprobe-token" CHANGED across the upgrade:
+   written: {"name":"apiprobe device"}
+   read:    {"name":"apiprobe device (planted)"}
 FAIL: rows written on v1.2.4 did NOT survive the upgrade (apiprobe exit 3).
 Read apiprobe's output above, and note that the code says which KIND of defect:
   2  a row is GONE — a migration dropped data, and a schema-only diff cannot see it
@@ -202,7 +211,8 @@ Read apiprobe's output above, and note that the code says which KIND of defect:
   4  the QUERY was rejected — the schema moved; the row may be perfectly intact
 EOF
   sed 's/exit 3/exit 2/' "$held" >"$wrongcode"
-  head -1 "$held" >"$nolegend"
+  grep -v '(planted)' "$held" >"$noplant"
+  grep '^FAIL' "$held" >"$nolegend"
   printf 'FAIL: THE DRILL COULD NOT RUN, and this says NOTHING about the upgrade either way\n' >"$setup"
   printf 'kind: could not create cluster\n' >"$other"
   expect "judge: failed on a changed field -> held" 0 judge_planted 1 "$held"
@@ -212,6 +222,7 @@ EOF
   expect "judge: unrelated failure -> inconclusive" 2 judge_planted 1 "$other"
   expect "judge: a row GONE is not the planted defect -> inconclusive" 2 judge_planted 1 "$wrongcode"
   expect "judge: headline without the legend -> inconclusive" 2 judge_planted 1 "$nolegend"
+  expect "judge: a changed field that is not the planted rewrite -> inconclusive" 2 judge_planted 1 "$noplant"
 
   # --- the planted file still fits the tree it will be copied into
   expect "planted source is present" 0 test -f "$planted_src"

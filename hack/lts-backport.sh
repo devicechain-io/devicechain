@@ -5,7 +5,8 @@
 # The git half of the LTS backport bot (.github/workflows/lts-backport.yml): decide whether a merged
 # fix is to be proposed for the LTS branch and, if so, build the cherry-pick branch locally.
 #
-#   hack/lts-backport.sh prepare PR SHA LABELS   LABELS is comma-separated; prints key=value lines
+#   hack/lts-backport.sh prepare PR SHA LABELS [FILES]   LABELS is one label per line; FILES is a file listing the PR's paths
+#                                                          (optional); prints key=value lines
 #   hack/lts-backport.sh --self-test
 #
 # It never pushes and never opens a pull request -- the workflow does that with the result -- and it
@@ -16,6 +17,8 @@
 #   no-lts      hack/lts-policy designates no line; nothing to propose
 #   ineligible  the fix carries neither the `security` nor the `critical` label
 #   already     the commit is already on the LTS branch
+#   partial     the merged commit does not carry the whole pull request (FILES differs from the commit's own paths,
+#               as after a rebase merge of several commits); a human backports it
 #   exists      a backport branch for this PR already exists on origin (a re-run, or a re-label)
 #   conflict    the cherry-pick does not apply; a human backports it (the workflow says so on the PR)
 #   ready       branch=<name> holds the cherry-picked commit, ready to push
@@ -32,7 +35,7 @@ repo_root="${DC_LTS_REPO:-$(cd "$this_dir/.." && pwd)}"
 g() { git -C "$repo_root" "$@"; }
 
 cmd_prepare() {
-  local pr="${1:-}" sha="${2:-}" labels="${3:-}" lts branch ref target parents
+  local pr="${1:-}" sha="${2:-}" labels="${3:-}" files_file="${4:-}" lts branch ref target parents
   [[ "$pr" =~ ^[0-9]+$ ]] || die "PR '$pr' is not a pull request number"
   [[ "$sha" =~ ^[0-9a-f]{7,64}$ ]] || die "SHA '$sha' is not a commit id"
   lts="$(cmd_policy)" || return 1
@@ -41,7 +44,8 @@ cmd_prepare() {
     return 0
   fi
   local -a lbl
-  IFS=',' read -r -a lbl <<<"$labels"
+  # One label per line: a label name may itself contain a comma (`bug,security` is ONE label, not two).
+  mapfile -t lbl <<<"$labels"
   if ! cmd_eligible "${lbl[@]}"; then
     echo "status=ineligible"
     return 0
@@ -64,6 +68,15 @@ cmd_prepare() {
   if g rev-parse --verify -q "refs/remotes/origin/$target^{commit}" >/dev/null; then
     echo "status=exists"
     return 0
+  fi
+  # The merged commit must carry the WHOLE change. A rebase merge reports only the last of several commits as the
+  # merge commit, and cherry-picking that alone would propose an incomplete fix, so when the caller supplies the
+  # pull request's file list the commit's own file list must equal it, else a human backports it.
+  if [[ -n "$files_file" ]]; then
+    if [[ "$(g diff --name-only "$sha^1" "$sha" | sort)" != "$(sort "$files_file")" ]]; then
+      echo "status=partial"
+      return 0
+    fi
   fi
   parents="$(g rev-list --parents -n1 "$sha" | wc -w)"
   g checkout -q -B "$target" "$ref"
@@ -130,11 +143,13 @@ self_test() {
   local out
   out="$(prep "$lts_none" 7 "$clean" security || true)"
   want "no LTS designated -> no-lts" "status=no-lts" "$out"
-  out="$(prep "$lts_on" 7 "$clean" bug,enhancement || true)"
+  out="$(prep "$lts_on" 7 "$clean" $'bug
+enhancement' || true)"
   want "an unlabelled fix is ineligible" "status=ineligible" "$out"
   out="$(prep "$lts_on" 7 "$clean" "" || true)"
   want "no labels at all is ineligible" "status=ineligible" "$out"
-  out="$(prep "$lts_on" 7 "$clean" security-review,not-critical || true)"
+  out="$(prep "$lts_on" 7 "$clean" $'security-review
+not-critical' || true)"
   want "a near-miss label is ineligible" "status=ineligible" "$out"
   out="$(prep "$lts_missing" 7 "$clean" security || true)"
   want "a designated line with no branch is an error" "does not exist" "$out"
@@ -146,6 +161,18 @@ self_test() {
   want "...with the cherry-pick provenance trailer" "(cherry picked from commit $clean)" "$(gc log -1 --format=%B backport/pr-7-to-release-1.2-lts)"
   want "...based on the LTS branch, not main" "lts diverges on g" "$(gc log --format=%s backport/pr-7-to-release-1.2-lts)"
   wantnot "...and carrying none of main's other commits" "fix: conflicting" "$(gc log --format=%s backport/pr-7-to-release-1.2-lts)"
+  out="$(prep "$lts_on" 7 "$clean" "bug,security" || true)"
+  want "a label that merely contains a comma is one label, not two" "status=ineligible" "$out"
+  printf "f
+other
+" >"$tmp/files-wrong"
+  printf "f
+" >"$tmp/files-right"
+  out="$(prep "$lts_on" 12 "$clean" security "$tmp/files-wrong" || true)"
+  want "a commit carrying only part of the PR is partial" "status=partial" "$out"
+  out="$(prep "$lts_on" 13 "$clean" $'bug
+security' "$tmp/files-right" || true)"
+  want "labels are one per line, and a complete file list passes" "status=ready" "$out"
   out="$(prep "$lts_on" 8 "$conflicting" critical || true)"
   want "a conflicting cherry-pick is reported, not forced" "status=conflict" "$out"
   wantnot "...and no stray branch listing" "backport/pr-8" "$(gc branch --list 'backport/pr-8*')"
