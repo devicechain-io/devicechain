@@ -72,7 +72,7 @@ runs:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
       if: inputs.binary == ''
       with:
-        go-version-file: ${{ github.action_path }}/../../../go.work
+        go-version-file: go.work
         cache: false
     - name: Build dc-loadtest-mqtt
       if: inputs.binary == ''
