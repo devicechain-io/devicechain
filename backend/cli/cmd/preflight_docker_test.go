@@ -303,3 +303,27 @@ func TestATakenHostPortFailsOnlyWhenTheClusterIsNotYetThere(t *testing.T) {
 		t.Errorf("failures = %d, want 0: the ports are held by the existing cluster lab itself", d.fails)
 	}
 }
+
+// dcctl installs the chart through Helm's Go library and runs no helm command, so a host
+// with every other tool and no helm binary must pass the tooling check.
+func TestAHostWithoutTheHelmBinaryPassesTheToolingCheck(t *testing.T) {
+	for _, opts := range []doctorOpts{{}, {KubeContext: "prod"}} {
+		fakeHost(t, func(name string) bool { return name != "helm" })
+		d := &doctor{}
+		d.checkTools("local", opts)
+		if d.fails != 0 {
+			t.Errorf("opts %+v: a host with no helm binary failed %d preflight check(s)", opts, d.fails)
+		}
+	}
+}
+
+// The counterweight: relaxing helm must not have relaxed the tool that IS driven as a
+// binary. Removing tofu (and terraform) has to remain a failure.
+func TestAHostWithoutTofuStillFailsTheToolingCheck(t *testing.T) {
+	fakeHost(t, func(name string) bool { return name != "tofu" && name != "terraform" })
+	d := &doctor{}
+	d.checkTools("local", doctorOpts{KubeContext: "prod"})
+	if d.fails != 1 {
+		t.Fatalf("a host with no tofu or terraform failed %d check(s), want exactly 1", d.fails)
+	}
+}

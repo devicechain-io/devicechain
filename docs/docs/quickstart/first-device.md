@@ -17,18 +17,18 @@ Budget about half an hour, most of it waiting for the bootstrap.
 <YouTubeLite id="fWnVhI7icOk" title="Install DeviceChain on a laptop and send your first device reading" />
 
 :::note What this page assumes
-You need `dcctl` plus five tools on your `PATH`: `docker`, `kubectl`, `helm`,
-[`kind`](https://kind.sigs.k8s.io/) and [OpenTofu](https://opentofu.org/) (the `tofu` binary;
-`terraform` also works). You do not need a cluster in advance. The details, and why `helm` is on
-the list, are under [Prerequisites](#prerequisites) below.
+You need `dcctl` plus four tools on your `PATH`: `docker`, `kubectl`,
+`terraform` also works). You do not need a cluster in advance. The details are under
+`terraform` also works). You do not need a cluster in advance. The details are under
+[Prerequisites](#prerequisites) below.
 :::
 
 ## Prerequisites {#prerequisites}
 
-`dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the five
+`dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
 tools is missing. A gap costs you the first ten seconds rather than ten minutes.
-
-- `helm` is required. `dcctl` carries the chart inside itself and installs it through Helm's
+- You do not need the `helm` command. `dcctl` carries the chart inside itself and installs it
+  through Helm's Go library, and the preflight does not check for the binary.
   Go library rather than the command, but the preflight checks for the binary regardless.
 - `ko` and `cloud-provider-kind` are only warnings. You need `ko` solely to build images from
   source (`--build`).

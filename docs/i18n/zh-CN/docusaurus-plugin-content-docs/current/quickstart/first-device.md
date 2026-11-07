@@ -15,16 +15,16 @@ import YouTubeLite from '@site/src/components/YouTubeLite';
 <YouTubeLite id="fWnVhI7icOk" title="在笔记本电脑上安装 DeviceChain 并发送第一条设备读数" />
 
 :::note 本页的前提条件
-你需要 `dcctl`，以及 `PATH` 中的五个工具：`docker`、`kubectl`、`helm`、
+你需要 `dcctl`，以及 `PATH` 中的四个工具：`docker`、`kubectl`、
 [`kind`](https://kind.sigs.k8s.io/) 和 [OpenTofu](https://opentofu.org/)（即 `tofu` 二进制文件；
-也可以使用 `terraform`）。无需事先准备集群。具体要求及为什么需要 `helm`，见下文的[前提条件](#prerequisites)。
+也可以使用 `terraform`）。无需事先准备集群。具体要求见下文的[前提条件](#prerequisites)。
 :::
 
 ## 前提条件 {#prerequisites}
 
-`dcctl install` 和 `dcctl bootstrap` 都会先运行预检。如果这五个工具中有任何一个缺失，命令就会**停止**。这样你只会花十秒发现缺失，而不是等上十分钟。
+`dcctl install` 和 `dcctl bootstrap` 都会先运行预检。如果这四个工具中有任何一个缺失，命令就会**停止**。这样你只会花十秒发现缺失，而不是等上十分钟。
 
-- 必须安装 `helm`。`dcctl` 自带 Chart，并通过 Helm 的 Go 库而不是命令安装，但预检仍会检查这个二进制文件。
+- 不需要 `helm` 命令。`dcctl` 自带 Chart，并通过 Helm 的 Go 库安装，预检不会检查这个二进制文件。
 - 缺少 `ko` 和 `cloud-provider-kind` 只会产生警告。只有从源码构建镜像（`--build`）时才需要 `ko`。
 - 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
 - 本机的 **80**、**443** 和 **1883** 端口必须空闲。kind 集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT；如果其他程序（通常是另一个本地 Kubernetes 集群）已占用其中任何一个，创建集群就会失败。`dcctl preflight local` 会在开始之前指出占用者。
