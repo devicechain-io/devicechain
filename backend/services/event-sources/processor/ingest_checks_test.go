@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -330,4 +331,27 @@ func TestHttpEvents_RefusalIsCountedEveryTimeEvenWhenTheLogIsSampled(t *testing.
 		post(es, "typo", canonicalMeasurementBody)
 	}
 	assert.Equal(t, 5, n["http-test/"+RefusedUnknownTenant])
+}
+
+// encoding/json names a field by the path of struct fields and leaves array indices out, so a
+// path through the entries array cannot become a pointer that resolves: it is cut at the array.
+func TestProblemOf_CutsATypeErrorPathAtTheEntriesArray(t *testing.T) {
+	typeErr := func(field string) error {
+		return &json.UnmarshalTypeError{Field: field, Value: "string", Type: reflect.TypeOf(0)}
+	}
+	cases := map[string]string{
+		"payload.entries.level":        "/payload/entries",
+		"payload.entries.measurements": "/payload/entries",
+		"device":                       "/device",
+		"payload":                      "/payload",
+		"a.b":                          "/a/b",
+	}
+	for field, want := range cases {
+		assert.Equal(t, want, ProblemOf(typeErr(field)).Pointer, field)
+	}
+	// A field name that holds a slash or a tilde is escaped as RFC 6901 requires.
+	assert.Equal(t, "/a~1b", ProblemOf(typeErr("a/b")).Pointer)
+	assert.Equal(t, "/payload", payloadErrorPointer(typeErr("")), "a type error with no path is the payload itself")
+	assert.Equal(t, "/payload/entries", payloadErrorPointer(typeErr("entries.level")))
+	assert.Equal(t, "/payload", payloadErrorPointer(errors.New("anything else")))
 }
