@@ -94,6 +94,65 @@ func TestASlotThatFailedToDestroyIsRefusedWhenItComesRound(t *testing.T) {
 	}
 }
 
+// Codex's second round: refusing and telling the maintainer to destroy it by hand left the
+// ledger entry behind, so the slot stayed refused after the destroy. The driver now destroys
+// the stale tenant itself, forgets it, and the slot is usable, and fresh, once the platform
+// releases the token.
+func TestAStaleSlotIsDestroyedAndComesBackFreshAfterTheHold(t *testing.T) {
+	p, d := ledgerPlatform(t)
+	ctx := context.Background()
+	stale := SimName("sitepulse", Slot(at(0, 3).Add(5*time.Minute), cfg3()))
+	p.failOn["sim destroy "+stale] = true
+	for day := 0; day < 3; day++ {
+		p.now = at(day, 3).Add(5 * time.Minute)
+		if _, err := d.Rotate(ctx, p.now); err != nil {
+			t.Fatalf("day %d: %v", day, err)
+		}
+		if day == 0 {
+			p.tenants[stale]["visitor-edit"] = true
+		}
+	}
+	delete(p.failOn, "sim destroy "+stale) // whatever blocked the delete is gone
+
+	p.now = at(3, 3).Add(5 * time.Minute)
+	if _, err := d.Rotate(ctx, p.now); err == nil || !strings.Contains(err.Error(), "has been destroyed now") {
+		t.Fatalf("the stale slot was not destroyed and reported: %v", err)
+	}
+	if _, still := p.tenants[stale]; still {
+		t.Fatal("the stale tenant survived the driver's own destroy")
+	}
+	if _, ok, _ := d.Days.Get(stale); ok {
+		t.Fatal("the ledger still names the destroyed sim, so the slot would stay refused")
+	}
+
+	p.now = at(3, 4) // inside the token hold: the create is refused, loudly
+	if _, err := d.Rotate(ctx, p.now); err == nil {
+		t.Fatal("a create inside the token hold was accepted")
+	}
+	p.now = at(3, 16) // hold over, same playground day
+	if _, err := d.Rotate(ctx, p.now); err != nil {
+		t.Fatalf("the slot did not heal after the hold: %v", err)
+	}
+	if got := p.tenants[stale]; len(got) != 1 || !got["seed"] {
+		t.Fatalf("the healed slot is not the seed: %v", got)
+	}
+}
+
+// Codex's second round: the day was written after the create, so a driver stopped between
+// the two left a tenant the ledger could not see.
+func TestTheDayIsRecordedBeforeTheCreate(t *testing.T) {
+	p, d := ledgerPlatform(t)
+	p.failOn["sim create "] = true
+	p.now = at(1, 12)
+	if _, err := d.Rotate(context.Background(), p.now); err == nil {
+		t.Fatal("expected the create to fail")
+	}
+	name := SimName("sitepulse", Slot(p.now, d.Cfg))
+	if day, ok, _ := d.Days.Get(name); !ok || day != Day(p.now, d.Cfg.ResetHour) {
+		t.Fatalf("the day was not recorded ahead of the create: %v %v", day, ok)
+	}
+}
+
 // The control for the test above: with no ledger, the same nights end in a "successful"
 // rotation that keeps the visitor's edit. That is the defect, and it is why the test above
 // is not vacuous.

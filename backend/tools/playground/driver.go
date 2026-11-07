@@ -127,39 +127,36 @@ func (d *Driver) Rotate(ctx context.Context, now time.Time) (Plan, error) {
 		// create` is idempotent: against a tenant that survived (its destroy failed on each
 		// of the nights since, because a member was added to it, say) it succeeds and keeps
 		// whatever a visitor left there, and the reset would report success. Refusing is
-		// loud and is the only honest answer; the 12-hour hold on a token means destroying
-		// it now and creating it again is not available either.
+		// loud. The tenant is destroyed here, so the slot heals by itself: the platform
+		// then holds its token for twelve hours, `create` is refused (loudly, in the pod's
+		// log) until the hold ends, and the first create after it makes a fresh tenant.
 		if was, ok, err := d.Days.Get(name); err != nil {
 			return p, err
 		} else if ok && was != day {
-			return p, fmt.Errorf("%s still holds the tenant of playground day %d (today is day %d): an earlier destroy "+
-				"of it failed and nothing since has removed it, so today's slot would not be fresh. Destroy it by hand "+
-				"(dcctl sim destroy %s), then wait out the token hold before this slot can be used again", name, was, day, name)
+			if err := d.destroy(ctx, name); err != nil {
+				return p, fmt.Errorf("%s still holds the tenant of playground day %d (today is day %d) and destroying it failed: %w",
+					name, was, day, err)
+			}
+			return p, fmt.Errorf("%s still held the tenant of playground day %d (today is day %d), left by a destroy that "+
+				"failed; it has been destroyed now, and the slot is unavailable until the platform releases the token "+
+				"(about twelve hours), after which this driver creates it fresh", name, was, day)
+		}
+		// Recorded BEFORE the create, not after: a driver stopped between a successful create
+		// and the record would leave a tenant the ledger cannot see, and a visit by the same
+		// slot a cycle later would reuse it unnoticed. A create that then fails leaves the
+		// entry, which only costs a destroy-and-wait at the next day's visit.
+		if err := d.Days.Set(name, day); err != nil {
+			return p, err
 		}
 		if out, err := d.Runner.Run(ctx, d.Dcctl, d.createArgs(sc, name, i)...); err != nil {
 			return p, fmt.Errorf("create %s: %w\n%s", name, err, out)
-		}
-		if err := d.Days.Set(name, day); err != nil {
-			return p, err
 		}
 		d.logf("created %s", name)
 	}
 	var failed []string
 	for _, name := range p.Destroy {
-		out, err := d.Runner.Run(ctx, d.Dcctl, append([]string{"sim", "destroy", name}, d.ReachArgs...)...)
-		switch {
-		case err == nil:
-			d.logf("destroyed %s", name)
-			if err := d.Days.Forget(name); err != nil {
-				return p, err
-			}
-		case strings.Contains(out, noSuchSim):
-			// Never created, or already gone: nothing to tear down.
-			if err := d.Days.Forget(name); err != nil {
-				return p, err
-			}
-		default:
-			d.logf("destroy %s failed, will retry at the next start: %v\n%s", name, err, out)
+		if err := d.destroy(ctx, name); err != nil {
+			d.logf("destroy %s failed, will retry at the next start: %v", name, err)
 			failed = append(failed, name)
 		}
 	}
@@ -167,6 +164,20 @@ func (d *Driver) Rotate(ctx context.Context, now time.Time) (Plan, error) {
 		d.logf("%d stale sim(s) could not be destroyed: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return p, nil
+}
+
+// destroy tears a sim down and drops it from the ledger. A sim dcctl has no record of was
+// never created or is already gone, which is nothing to tear down and not a failure.
+func (d *Driver) destroy(ctx context.Context, name string) error {
+	out, err := d.Runner.Run(ctx, d.Dcctl, append([]string{"sim", "destroy", name}, d.ReachArgs...)...)
+	switch {
+	case err == nil:
+		d.logf("destroyed %s", name)
+	case strings.Contains(out, noSuchSim):
+	default:
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return d.Days.Forget(name)
 }
 
 // Run rotates and then supervises one `dcctl sim run` per scenario of the current slot.

@@ -52,9 +52,12 @@ its token has been free for at least a day.
   pod crash-loops where the maintainer will see it.
 - A slot whose destroy keeps failing (a member added to its tenant blocks the delete) would
   be reused, with a visitor's changes, when it came round again. The driver keeps a ledger
-  of the day each sim was created on, and refuses such a slot with a message naming it
-  instead of reporting a reset that did not happen. Fixing it is yours: destroy it by hand,
-  then wait out the token hold.
+  of the day each sim was created on (written before the create). When a slot comes round
+  holding an earlier day's tenant, the driver destroys that tenant and stops with a message
+  naming the slot instead of reporting a reset that did not happen. The platform then holds
+  the token for twelve hours, so the pod's log shows the create being refused until the hold
+  ends; after that the driver creates the slot fresh by itself. If the destroy itself keeps
+  failing, the message says so and what to look at (a member added to the tenant).
 - The ledger and the sim records share the driver's volume. If that volume is lost, tenants
   the driver can no longer name are left behind on the instance (their destroy reports no
   such sim): remove them with the instance's admin API.
