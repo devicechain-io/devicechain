@@ -93,3 +93,6 @@ frontend/.api-selftest/
 
 # hack/ttft-rig.sh: the rig's kubeconfig, logs and result documents (never committed)
 /.ttft-rig/
+
+# hack/decoder-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
+/.decoder-rig/
