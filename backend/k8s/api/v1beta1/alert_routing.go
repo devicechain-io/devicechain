@@ -45,6 +45,10 @@ const (
 )
 
 // AlertRouting is the parsed AnnotationAlertRouting.
+//
+// It is not an API type (nothing serves it), so no deepcopy is generated for it.
+//
+// +kubebuilder:object:generate=false
 type AlertRouting struct {
 	// Receivers is the kinds of receiver that reach a human: some of
 	// AlertReceiverWebhook, AlertReceiverEmail and AlertReceiverConfig. Empty means

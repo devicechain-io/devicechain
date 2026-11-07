@@ -225,6 +225,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokerleadershipimbalanced"
               summary: "one broker server leads far fewer streams than the others"
               description: "At least one broker server leads fewer than half the streams an even share would give it, so the others carry the replication and acknowledgement work for it. Only the streams that dcctl is allowed to move are counted: this instance's replicated streams other than the device-ingest ones (the broker's MQTT streams, the device capture stream and every stream an ingest area writes), which are never rebalanced because a leader change on them can lose messages already acknowledged to a device. After a rolling restart of the broker the server restarted last leads nothing, and at the load this was measured under that doubled publish acknowledgement latency and cost a few percent of HTTP ingest. dcctl upgrade evens leadership out after it rolls the broker, so this fires after a restart done any other way (a node drain, a pod loss, a manual rollout), or when that step was skipped or warned. Run dcctl broker rebalance <instance> to even it out; each move is a brief election for one stream. If it keeps returning, check the broker pods for repeated restarts."
       - eval_time: 100m
