@@ -96,6 +96,7 @@ jobs:
           tar -xzf work/rig-results.tar.gz -C work/rigs
 
       - name: CycloneDX SBOM per image
+        shell: bash
         env:
           SYFT: ${{ steps.syft.outputs.cmd }}
         run: |
@@ -121,9 +122,12 @@ jobs:
           mkdir -p work/vuln
           export GOVULNCHECK_JSON_DIR="$PWD/work/vuln"
           args=()
-          for d in backend/cli backend/core backend/k8s backend/edge/*/ backend/services/*/ backend/sims/*/ backend/tools/*/; do
-            m="${d%/}"
-            [ -f "$m/go.mod" ] || continue
+          # The module list is go.work's own, so the broker, its administrator, deploy and the OTA
+          # reference device are scanned with the rest; a hardcoded glob left all four out.
+          mapfile -t modules < <(hack/workspace-modules.sh)
+          [ "${#modules[@]}" -gt 0 ] || { echo "::error::go.work lists no modules"; exit 1; }
+          for m in "${modules[@]}"; do
+            [ -f "$m/go.mod" ] || { echo "::error::$m is in go.work but has no go.mod"; exit 1; }
             # A reachable, unreviewed vulnerability fails here as it does in CI: the pack is for a
             # release that passed its gates, and a VEX that hides a failing scan would be worse than none.
             hack/govulncheck.sh "$m"
@@ -132,6 +136,11 @@ jobs:
           hack/vex-from-govulncheck.sh --commit "$(git rev-parse HEAD)" --out work/devicechain.openvex.json "${args[@]}"
 
       - name: Collect signature, CodeQL and Scorecard state
+        # An explicit shell: GitHub runs a step with none as `bash -e {0}`, with no pipefail, so
+        # `verifier | tee` reports tee's status and a failed verification (or a failed API call
+        # feeding jq) yields a signed pack. `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`.
+        # hack/check-evidence-pack-workflow.sh holds this in place.
+        shell: bash
         run: |
           mkdir -p work/attach
           # Fail-open here would turn a verification failure into a pack without the evidence of it.

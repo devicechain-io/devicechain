@@ -83,6 +83,8 @@ jobs:
         run: |
           hack/evidence-pack.sh --self-test
           hack/vex-from-govulncheck.sh --self-test
+          hack/check-evidence-pack-workflow.sh --self-test
+          hack/check-evidence-pack-workflow.sh
 
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
