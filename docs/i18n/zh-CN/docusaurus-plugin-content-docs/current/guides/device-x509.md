@@ -7,7 +7,7 @@ title: 使用证书连接设备
 
 设备可以用 X.509 客户端证书而不是令牌或密码向平台消息代理认证。本指南带你从证书颁发机构（CA）一直走到设备发布第一个事件，并展示证书成为设备的两种方式：为已存在的设备创建的**固定凭据**，以及在设备首次连接时为其注册的**证书配置**。
 
-平台如何决定信任一张证书，以及这种信任到哪里为止，见[证书身份](../concepts/device-certificates.md)。在围绕它规划设备群之前，请先阅读其中的[限制](../concepts/device-certificates.md#not-supported)：没有 CRL 或 OCSP，带名称约束的 CA 会被拒绝，续期尚未提供。
+平台如何决定信任一张证书，以及这种信任到哪里为止，见[证书身份](../concepts/device-certificates.md)。在围绕它规划设备群之前，请先阅读其中的[限制](../concepts/device-certificates.md#not-supported)：没有 OCSP、也不获取 CRL（吊销列表是上传的），带名称约束的 CA 会被拒绝，续期尚未提供。
 
 :::note 状态
 在平台消息代理上的 MQTT 中可用。HTTP 和 LwM2M 不接受客户端证书。
@@ -179,7 +179,7 @@ echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08
 
 1. **`no_cert`。** 客户端没有发送证书。检查 `--cert`，以及密钥是否与证书匹配。
 2. **`chain_invalid`。** 证书链无法构建到信任锚、某张证书已过期、扩展密钥用途缺少客户端认证、签名使用了 SHA-1，或密钥不在允许范围内。可以用 `openssl verify -CAfile ca.crt -purpose sslclient device.crt` 重现，并检查设备是否发送了中间证书。
-3. **`anchor_disabled`、`revoked`。** 信任锚或凭据被有意禁用。
+3. **`anchor_disabled`、`revoked`、`cert_revoked`、`revocation_unknown`。** 信任锚或凭据被有意禁用（`anchor_disabled`、`revoked`），证书被已上传的吊销列表或手动撤销所列（`cert_revoked`），或信任锚要求其签发者有当前列表而实际没有（`revocation_unknown`）。
 4. **`client_id_mismatch`。** 客户端 ID 不是该设备的 `{instanceId}:{tenant}:{deviceToken}`；对于首次连接，则不是派生的那个。
 5. **`unknown_pin`。** 该证书未被固定，也未链到任何可用的证书配置。
 6. **`jit_*`。** 首次连接时的注册被拒绝：`jit_rate_limited` 和 `jit_busy` 表示设备应退避后重试，`jit_ambiguous` 表示两个配置并列，其余的带有注册错误码。
@@ -229,7 +229,7 @@ await session.StartAsync(handler, cancellationToken);
 
 ## 它不做什么 {#limits}
 
-- **没有 CRL，没有 OCSP。** 要停用一张证书，请禁用它的凭据（或该设备，或信任锚），并签发短期证书。
+- **没有 OCSP，也不获取 CRL。** 把 CA 的吊销列表上传到信任锚，或按指纹撤销某张证书；两者都会从其下一次连接起拒绝它，并结束它所影响的打开的会话（请查看结果中的 `sessionsEnded`）。撤销 CA 会让该信任锚下的所有设备重新连接。要在不撤销证书的情况下停用一台设备，请禁用它的凭据（或该设备，或信任锚）。见[撤销](../concepts/device-certificates.md#revocation)。
 - **带名称约束的 CA 会被拒绝。** 信任锚是身份的边界。
 - **已注册设备不能通过出示新证书续期，被重置的设备也不能重新采用。** 目前尚未提供。
 - **HTTP 或 LwM2M 上没有证书认证。**
