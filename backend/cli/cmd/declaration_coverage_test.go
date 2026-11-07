@@ -89,6 +89,10 @@ var dispositions = map[string]disposition{
 	// from there, which is what makes it survive a version bump from any machine.
 	"values": declared,
 
+	// --size is the instance's size preset, recorded as spec.size (a name, never a number) and
+	// applied again by every upgrade.
+	"size": declared,
+
 	// --- properties of the run ---
 	"dry-run":                 runScoped,
 	"yes":                     runScoped,

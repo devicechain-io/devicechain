@@ -221,7 +221,7 @@ POST /api/device-management/provisioning/{tenant}/register
 
 | 字段 | 必填 | 规则 |
 | --- | :---: | --- |
-| `provisionKey`、`provisionSecret` | 是 | 各 1 到 256 个字符。密文是服务器为该配置生成的那一个。 |
+| `provisionKey`、`provisionSecret` | 是 | 各 1 到 256 字节。密文是服务器为该配置生成的那一个。 |
 | `externalId` | 是 | 设备的序列号或其他 ID，1 到 256 个字符。平台依靠它找到设备。 |
 | `credentialSecret` | 是 | 设备自己的凭据内容，会成为它的访问令牌。**base64url**（字母、数字、`-` 和 `_`，无填充），**22 到 256 个字符**。生成 32 个随机字节并编码（43 个字符）。 |
 | `name` | 否 | 最多 128 个字符。仅在本次请求创建设备时使用。 |

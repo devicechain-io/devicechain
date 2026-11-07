@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -26,6 +27,9 @@ type RdbManager struct {
 	MicroserviceConfig config.MicroserviceDatastoreConfiguration
 
 	lifecycle core.LifecycleManager
+
+	// shards is nil unless EnableSharding was called (see shard.go).
+	shards atomic.Pointer[shardSet]
 }
 
 // Create a new rdb manager.
@@ -48,7 +52,7 @@ func NewRdbManager(ms *core.Microservice, callbacks core.LifecycleCallbacks,
 // callbacks (see tenant_scope.go) can read the per-request/per-message tenant
 // from context. All tenant-scoped data access must go through this.
 func (rdb *RdbManager) DB(ctx context.Context) *gorm.DB {
-	return rdb.Database.WithContext(ctx)
+	return rdb.routed(ctx).WithContext(ctx)
 }
 
 // countAndOrder builds the COUNT and the ordered data query that ListOf and ListAllOf
@@ -62,7 +66,7 @@ func (rdb *RdbManager) countAndOrder(ctx context.Context, mdl Sortable,
 	filters func(db *gorm.DB) *gorm.DB) (*gorm.DB, int32) {
 	// Bind the context once (so the tenant-scope callbacks see it) and reuse it
 	// for both the count and data queries; each Model(...) clones a fresh stmt.
-	base := rdb.Database.WithContext(ctx)
+	base := rdb.DB(ctx)
 
 	// Execute count query.
 	count := int64(0)

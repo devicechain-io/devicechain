@@ -1056,6 +1056,19 @@ goMemLimit: ""
 # instance.config.
 eventEnvelopesEnabled: false
 
+# eventSources groups settings that belong to the event-sources area alone.
+eventSources:
+  # ingestMetering selects how event-sources meters a message against its tenant's ingest ceiling.
+  #   legacy     the gate as it has always run (the default).
+  #   lagCredit  meter fresh traffic at pod time in a bucket whose capacity carries a measured
+  #              reader-lag credit, so a short platform stall cannot shed a tenant that stayed
+  #              within its ceiling. NOT AVAILABLE YET: event-sources refuses to start with it,
+  #              rather than falling back to legacy.
+  # It is rendered into the event-sources pods as the EVENT_SOURCES_INGEST_METERING environment
+  # variable and is deliberately not a key of the instance configuration, so a pod from an earlier
+  # release that restarts mid-upgrade never sees it.
+  ingestMetering: legacy
+
 # Replica count per area (override per area under functionalAreas.<area>.replicas).
 # Recommend >= 2 in production for true zero-downtime rollouts (a single replica
 # still has a brief gap while its one pod is replaced) and node-failure survival.

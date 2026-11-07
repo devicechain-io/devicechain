@@ -573,7 +573,14 @@ var ErrTenantGone = errors.New("envelope: the tenant is deleted or being erased;
 
 // ErrRoundWalkStopped is the outcome of a walk that was cancelled (a shutdown) before it knew
 // whether its round was stored. It says nothing about the message: a source settled with it is
-// left unacknowledged for the next pod and is NOT poison, however many times it was delivered.
+// left unacknowledged for the next pod and is NOT poison. (On its LAST delivery the broker will
+// not hand it out again, so there the next pod has nothing to take; what keeps the message is the
+// stream, which still holds it, not a redelivery. Mapping a cancelled walk to this error is what
+// stops a shutdown from routing a valid message to failed-decode and acknowledging it away.)
+//
+// EVERY cancelled outcome of a walk is this error, whichever mode it ran in: a duplicate-recovery
+// walk (which does not retry) would otherwise surface the raw context error from a publish or a
+// read-back, which is not the sentinel the sources' settler exempts.
 var ErrRoundWalkStopped = errors.New("envelope: stopped before the round's outcome was known")
 
 // walk settles ms starting at round: publish it (or, with dup set, take the answer already in
@@ -626,7 +633,7 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 			}
 			next, err := e.publishRound(ctx, k, msg, giveUp, beatIfDue)
 			if err != nil {
-				e.settle(ms, err)
+				e.settle(ms, e.stopped(ctx, err))
 				return
 			}
 			if !next.Duplicate {
@@ -643,6 +650,7 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 		}
 		// The round is stored: read what it carries.
 		held, err := e.heldOf(ctx, k, round, ack.Sequence)
+		err = e.stopped(ctx, err)
 		if err != nil && errors.Is(err, nats.ErrMsgNotFound) && e.cfg.TenantGone != nil && e.cfg.TenantGone(k.Tenant) {
 			// Not evicted by retention but quite possibly purged by this tenant's erasure: storing
 			// its member again in the next round would resurrect erased data. Leave it unsettled.
@@ -697,6 +705,15 @@ func (e *RoundEngine) walk(ctx context.Context, k RoundKey, round uint32, ms []R
 		round++
 		e.cfg.Metrics.countRecoveryStep()
 	}
+}
+
+// stopped maps any failure seen after the walk's context was cancelled to ErrRoundWalkStopped: a
+// shutdown is not a verdict on the message, whatever raw error the cancelled call returned.
+func (e *RoundEngine) stopped(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ErrRoundWalkStopped) {
+		return ErrRoundWalkStopped
+	}
+	return err
 }
 
 // publishRound publishes msg synchronously, again under the same id while it fails, until the

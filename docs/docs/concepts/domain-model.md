@@ -18,6 +18,8 @@ DeviceChain models the physical world with a small set of composable concepts. T
 
 Devices, assets, areas, customers, and groups are all addressed the same way: by an entity type plus a stable per-tenant token. That uniform address is what lets relationships, groups, and event indexing work generically across them. Device types and device profiles are not addressable entities in this sense; they are configuration a device resolves through.
 
+A token is at most 128 characters, may contain only letters, digits, hyphens (`-`) and underscores (`_`), and must start with a letter or digit. A dot, a space, a slash or any other character is refused, and the case you type is kept. When a name you already have contains a dot, such as the metric key `battery.voltage`, map it to a hyphen in the token (`battery-voltage`): the dot stays in the key a device sends and never goes in the token.
+
 ## Relationships {#relationships}
 
 DeviceChain does not bind a device to a single fixed `(customer, area, asset)` assignment. Instead, it connects entities with typed, directed relationships:

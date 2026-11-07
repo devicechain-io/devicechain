@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -1468,6 +1469,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {
+		return err
+	}
+
+	// The metering mode is read from the environment (see IngestMeteringEnv), and a mode this build
+	// cannot run stops the service here rather than running a different gate than the one asked for.
+	if _, err = resolveIngestMetering(os.Getenv); err != nil {
 		return err
 	}
 

@@ -159,6 +159,8 @@ curl -s -X POST http://localhost/api/user-management/graphql \
 export DC_TOKEN='<accessToken>'
 ```
 
+访问令牌的有效期为 **15 分钟**。当调用开始返回认证错误时，重复上面的两个请求（先 `login`，再 `selectTenant`），然后导出新的 `accessToken`。
+
 ## 4. 创建设备 {#4-create-the-device}
 
 设备都有类型，因此先创建设备类型。所有对象都通过你选择的 **令牌**寻址：它是稳定、可读的标识，而不是自动生成的 ID。

@@ -27,6 +27,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func newPlacementPostgres(t *testing.T) *Store {
@@ -136,4 +138,69 @@ func TestPlacementPinLimitHoldsUnderConcurrentWriters(t *testing.T) {
 	table, err := s.Placement(ctx)
 	require.NoError(t, err)
 	require.Len(t, table.Overrides, partition.MaxOverrides)
+}
+
+// 🔴 Purge completion and ClearTenantOverride take their locks in ONE order: config row, then the
+// pin. Completion used to delete the pin first and lock the config row after, the inverse, so a
+// clear running against a completing purge deadlocked (40P01) and one of the two failed.
+//
+// The interleaving is forced rather than raced. A second connection plays ClearTenantOverride's
+// first step by taking the config row, completion starts, and only then does that connection
+// perform the step that comes second (the pin delete). Under the old order completion already
+// holds the pin row, so the two wait on each other and Postgres aborts one; under the right
+// order completion is still waiting for the config row, holds nothing the other needs, and both
+// finish.
+func TestCompleteTenantPurgeAndClearOverrideDoNotDeadlock(t *testing.T) {
+	s := newPlacementPostgres(t)
+	ctx := context.Background()
+	_, err := s.EnsurePlacement(ctx, partition.DefaultP)
+	require.NoError(t, err)
+	tier := seedTier(t, s, "dl-tier")
+	require.NoError(t, s.CreateTenant(ctx, &Tenant{Token: "dl", TierID: tier.ID}))
+	require.NoError(t, s.SetTenantOverride(ctx, "dl", 3))
+
+	tenant, err := s.TenantByToken(ctx, "dl")
+	require.NoError(t, err)
+	epoch := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, s.BeginTenantPurge(ctx, tenant, epoch))
+	tenant, err = s.TenantByToken(ctx, "dl")
+	require.NoError(t, err)
+	rec, err := s.EnsurePurgeRecord(ctx, "dl", epoch)
+	require.NoError(t, err)
+
+	// ClearTenantOverride's first step, on its own connection.
+	other := s.sys(ctx).Begin()
+	require.NoError(t, other.Error)
+	defer other.Rollback()
+	var cfg PartitionConfig
+	require.NoError(t, other.Clauses(clause.Locking{Strength: "UPDATE"}).First(&cfg, partitionConfigID).Error)
+
+	completed := make(chan error, 1)
+	go func() { completed <- s.CompleteTenantPurge(ctx, tenant, rec, 1, time.Now().UTC()) }()
+	// Wait until completion is observably BLOCKED on the config row. Under the old order the pin
+	// delete has already run by then (it precedes the lock), so the interleaving is the one that
+	// deadlocks; a fixed sleep could let the other side win the race and pass for the wrong reason.
+	require.Eventually(t, func() bool {
+		var waiting int64
+		err := s.sys(ctx).Raw(`SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid() AND query ILIKE '%iam_partition_config%'`).
+			Scan(&waiting).Error
+		return err == nil && waiting > 0
+	}, 15*time.Second, 25*time.Millisecond, "purge completion never blocked on the config row")
+
+	// ... and its second step: the pin delete, then commit.
+	del := other.Where("tenant_token = ?", "dl").Delete(&TenantVPartitionOverride{})
+	require.NoError(t, del.Error, "ClearTenantOverride's pin delete was aborted: lock order inversion")
+	require.NoError(t, other.Model(&PartitionConfig{}).Where("id = ?", partitionConfigID).UpdateColumn("generation", gorm.Expr("generation + 1")).Error)
+	require.NoError(t, other.Commit().Error)
+
+	select {
+	case err := <-completed:
+		require.NoError(t, err, "purge completion was aborted: lock order inversion")
+	case <-time.After(15 * time.Second):
+		t.Fatal("purge completion never finished")
+	}
+	var pins int64
+	require.NoError(t, s.sys(ctx).Model(&TenantVPartitionOverride{}).Where("tenant_token = ?", "dl").Count(&pins).Error)
+	require.Zero(t, pins)
 }

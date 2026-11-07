@@ -73,6 +73,7 @@ Each row writes one measurement. A row is one of three kinds.
 The Decoder tab starts you with a **field table**, and every row of it becomes an expression. You choose:
 
 - **Metric**: the key the value is stored under. Only metrics declared on the profile as measured, not calculated, are offered.
+- A metric key may contain dots (`battery.voltage`), but the metric's token may not: tokens take only letters, digits, `-` and `_`. Declare the metric with a token such as `battery-voltage` and keep `battery.voltage` as its key; the decoder row names the key.
 - For a frame: the **type** (unsigned or signed 8, 16, 24 or 32 bits, 32 or 64-bit float, a single bit, a bit field, a signed bit field, or BCD digits), the **byte order** where it matters, and the **byte offset**. A bit field also takes a bit offset and a width of 1 to 32; BCD takes a length of 1 to 8 bytes.
 - For JSON: the **path** in the message, such as `bat.mv`, whether it is a number or a true/false value, and whether to skip the row silently when the path is absent.
 - Optionally **multiply by**, **divide by** and **add**, applied in that order.
@@ -377,6 +378,7 @@ A function's behaviour never changes once it has shipped. A fix arrives under a 
 
 ## Related {#related}
 
+- [LoRaWAN Uplink to Alarm](./lorawan-uplink-to-alarm.md): a decoder, an integration, a rule and an alarm, end to end, with the simulator as the network server.
 - [Decoder function reference](../reference/decoder-functions.md): the library's functions with their costs, and the limits.
 - [Inbound integrations](./inbound-integrations.md): the senders a decoder reads from.
 - [Device types and profiles](../user-guide/device-types-and-profiles.md): metrics, drafts and publishing.

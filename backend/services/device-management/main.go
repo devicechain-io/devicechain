@@ -129,6 +129,13 @@ var (
 	// repeat the operation. SessionKicksPending and SessionKickOldestAge are what an alert reads.
 	SessionKickDrain        *core.PeriodicTask
 	SessionKickDrainMetrics *core.PeriodicTaskMetrics
+
+	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
+	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
+	// resolver pool's DecodeObserver; DecodeAccounting flushes it once a minute.
+	DecodeAccountant        *processor.DecodeAccountant
+	DecodeAccounting        *core.PeriodicTask
+	DecodeAccountingMetrics *processor.AccountingMetrics
 	SessionKicksPending     prometheus.Gauge
 	SessionKickOldestAge    prometheus.Gauge
 
@@ -209,6 +216,7 @@ func parseConfiguration() error {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
+	DecodeAccountingMetrics = processor.NewAccountingMetrics(Microservice)
 	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
 	DeviceReportsMetrics = processor.NewDeviceReportsMetrics(Microservice)
 	AlarmEventMetrics = processor.NewAlarmEventMetrics(Microservice)
@@ -331,9 +339,7 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 // would run the default while every other test stayed green. Its loss counter is the service's
 // dead-letter producer, for the same reason.
 func newInboundEventsProcessor() *processor.InboundEventsProcessor {
-	return processor.NewInboundEventsProcessor(Microservice, InboundEventsReaders, ResolvedEventsWriter, FailedEventsWriter,
-		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
-		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
+	opts := []processor.InboundOption{
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
 		processor.WithSplitWriter(InboundSplitWriter),
@@ -343,7 +349,19 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		processor.WithStoreHold(newStoreHold("inbound-event-resolution")),
 		processor.WithSecretTransit(SecretTransit),
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
-			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)))
+			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)),
+	}
+	// 🔴 WITHOUT THE ACCOUNTANT A FAILING DECODER IS UNBUDGETED: every failed uplink would be a
+	// failed-events record, which is the flood the budgets exist to stop. It is built with the Api,
+	// before the processor in every real start, so a nil here is a wiring defect and the service
+	// refuses to run rather than quietly run without it.
+	if DecodeAccountant == nil {
+		panic("device-management: the decode accountant was not built before the inbound processor; refusing to run decoders unbudgeted")
+	}
+	opts = append(opts, processor.WithDecodeObserver(DecodeAccountant))
+	return processor.NewInboundEventsProcessor(Microservice, InboundEventsReaders, ResolvedEventsWriter, FailedEventsWriter,
+		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
+		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics, opts...)
 }
 
 // erasureFenced reports whether a tenant's data is being erased here, from this service's own
@@ -702,6 +720,31 @@ func initSessionKickDrain() error {
 	return SessionKickDrain.Initialize(context.Background())
 }
 
+// decodeAccountingInterval is how often the decoders' health tallies and failure samples are
+// written. A tally is held in memory between passes, so this is also the most a crash can lose of
+// the counts (never of the failed-events records, which are written before the source is acked).
+const decodeAccountingInterval = time.Minute
+
+// initDecodeAccounting builds the payload decoders' accountant and the task that flushes it. Once,
+// in the initialize path, after the Api exists; the accountant outlives a broker restart so its
+// record budgets are not refilled by one.
+func initDecodeAccounting() error {
+	replica, err := os.Hostname()
+	if err != nil || replica == "" {
+		// A replica name that collided with another's would have two replicas SET the same row.
+		replica = fmt.Sprintf("%s-%d", Microservice.InstanceId, os.Getpid())
+	}
+	// The process start is part of the identity: a restarted container keeps its hostname but not its
+	// tallies, and an absolute upsert from the new process under the old name would overwrite the
+	// counts the old one had already written for the same minute.
+	replica = fmt.Sprintf("%s@%d", replica, time.Now().Unix())
+	DecodeAccountant = processor.NewDecodeAccountant(Api, replica, DecodeAccountingMetrics)
+	DecodeAccounting = core.NewPeriodicTask(Microservice.FunctionalArea, "decode-accounting", decodeAccountingInterval,
+		func(ctx context.Context) error { return DecodeAccountant.Flush(ctx) },
+		core.NewNoOpLifecycleCallbacks())
+	return DecodeAccounting.Initialize(context.Background())
+}
+
 // initOwnershipDrain builds and initializes the ownership drain. Once, in the initialize
 // phase: the task belongs to the process, and the publisher it drains through is re-wired by
 // createNatsComponents on every broker start.
@@ -946,6 +989,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initSessionKickDrain(); err != nil {
 				return err
 			}
+			if err = initDecodeAccounting(); err != nil {
+				return err
+			}
 
 			// Report the size of this schema's append-only history tables (ADR-023). Every one of
 			// them only grows — nothing prunes a version history short of purging the whole tenant —
@@ -1057,6 +1103,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start flushing the payload decoders' health and failure samples.
+	if DecodeAccounting != nil {
+		if err = DecodeAccounting.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Start the device auth-callout responder once the broker is configured for it
 	// (ADR-025): it authenticates every device connect at the broker against the
 	// device credential store. Absent an issuer seed the broker isn't running callout,
@@ -1155,6 +1208,18 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
+	// Stop the decoder accounting AFTER the resolvers, so what they tallied while draining is
+	// written, and before the database goes. A failed last flush costs counts only (see
+	// processor.DecodeAccountant), so it is logged and does not hold the shutdown.
+	if DecodeAccounting != nil {
+		if err := DecodeAccounting.Stop(ctx); err != nil {
+			return err
+		}
+		if err := DecodeAccountant.Flush(ctx); err != nil {
+			log.Warn().Err(err).Msg("The last decoder health flush failed; up to a minute of counts is lost.")
+		}
+	}
+
 	// Stop the REACT raise-alarm consumer before the NATS connection drains.
 	err = RaiseAlarmConsumer.Stop(ctx)
 	if err != nil {
@@ -1181,6 +1246,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if err := SessionKickDrain.Terminate(ctx); err != nil {
 		return err
+	}
+	if DecodeAccounting != nil {
+		if err := DecodeAccounting.Terminate(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Terminate inbound events processor.

@@ -6,8 +6,11 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	assets "github.com/devicechain-io/dc-deploy"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -202,5 +205,89 @@ func TestPlanSaysTheWALNotice(t *testing.T) {
 	}
 	if out := captureStdout(t, (&upgradeInfraPlan{}).say); strings.Contains(out, "max_wal_size") {
 		t.Fatalf("unprompted notice: %q", out)
+	}
+}
+
+// 🔴 The flags are recorded BEFORE the apply, so an apply that fails part-way (after the store has
+// reloaded) or an output read that fails after it still leaves what the operator asked for, and a
+// flagless retry keeps it instead of deriving the old value.
+func TestTheEventStoreTuningIsRecordedEvenWhenTheApplyOrTheOutputReadFails(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tf   *fakeUpgradeTofu
+	}{
+		{"the apply fails", &fakeUpgradeTofu{plans: []*tfjson.Plan{{}}, applyErrs: []error{errors.New("helm: timed out waiting for the condition")}}},
+		{"the output read fails", &fakeUpgradeTofu{plans: []*tfjson.Plan{{}}, outputErr: errors.New("state locked")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p, err := planGated(context.Background(), tc.tf, dir, nil, "prod")
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := &State{Instance: "prod", Values: map[string]string{},
+				EventStoreMaxWALMiB: intp(1024), EventStoreCheckpointTimeout: strp("10min")}
+			var b, s int
+			if err := applyUpgradeInfra(context.Background(), st, p, noopWaits(&b, &s)); err == nil {
+				t.Fatal("the failure was swallowed")
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, eventStoreVarFile))
+			if err != nil {
+				t.Fatalf("nothing was recorded before the failure: %v", err)
+			}
+			if got := string(raw); got != `{"timescale_checkpoint_timeout":"10min","timescale_max_wal_size_mib":1024}` {
+				t.Fatalf("file = %q", got)
+			}
+		})
+	}
+
+	// A rehearsal still persists nothing.
+	dir := t.TempDir()
+	p, _ := planGated(context.Background(), &fakeUpgradeTofu{plans: []*tfjson.Plan{{}}}, dir, nil, "prod")
+	var b, s int
+	_ = applyUpgradeInfra(context.Background(), &State{DryRun: true, Instance: "prod", Values: map[string]string{},
+		EventStoreMaxWALMiB: intp(1024)}, p, noopWaits(&b, &s))
+	if _, err := os.Stat(filepath.Join(dir, eventStoreVarFile)); err == nil {
+		t.Fatal("a rehearsal recorded the tuning")
+	}
+}
+
+// `--event-store-checkpoint-timeout=""` is the documented reset: it reaches the apply as the root's
+// default and is recorded as that default, replacing an earlier recorded value.
+func TestAnEmptyCheckpointTimeoutResetsARecordedOne(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventStoreVarFile)
+	if err := writeEventStoreVarFile(dir, &State{Instance: "i", EventStoreCheckpointTimeout: strp("10min")}); err != nil {
+		t.Fatal(err)
+	}
+	reset := &State{Instance: "i", EventStoreCheckpointTimeout: strp("")}
+	if got := eventStoreTuningVars(reset); len(got) != 1 || got[0] != "timescale_checkpoint_timeout=15min" {
+		t.Fatalf("vars = %v, want the default passed explicitly (the plan has already read the recorded value)", got)
+	}
+	if err := writeEventStoreVarFile(dir, reset); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw); got != `{"timescale_checkpoint_timeout":"15min"}` {
+		t.Fatalf("file = %q, want the reset recorded", got)
+	}
+	// The flag's validation accepts the empty value.
+	if err := checkEventStoreTuning(nil, strp("")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The reset value is the root's own default, not a copy that can drift from it.
+func TestTheCheckpointResetValueIsTheRootsDefault(t *testing.T) {
+	tf, err := fs.ReadFile(assets.OpenTofuInstance(), "variables.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?s)variable "timescale_checkpoint_timeout" \{.*?\n  default\s*=\s*"([^"]+)"`).FindSubmatch(tf)
+	if m == nil || string(m[1]) != defaultCheckpointTimeout {
+		t.Fatalf("the root's default is %q, the reset value is %q", m, defaultCheckpointTimeout)
 	}
 }

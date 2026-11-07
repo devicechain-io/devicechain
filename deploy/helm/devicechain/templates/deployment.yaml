@@ -284,6 +284,14 @@ spec:
               value: {{ .mutexFraction | int | quote }}
             {{- end }}
             {{- end }}
+            {{- /* event-sources' metering mode (eventSources.ingestMetering) rides in the environment
+            and NOT in the instance configuration document, which is decoded strictly: a pod of an
+            earlier release restarted mid-upgrade would crash on a key it does not know. Rendered
+            for event-sources and no other area. */}}
+            {{- if eq $area "event-sources" }}
+            - name: EVENT_SOURCES_INGEST_METERING
+              value: {{ (($root.Values.eventSources).ingestMetering) | default "legacy" | quote }}
+            {{- end }}
             {{- /* user-management's superuser SEED password, from the instance's own
             Secret (devicechain.superuserSecret) — never from a config document, and
             never a default. It is OPTIONAL on purpose: the value is needed only to seed

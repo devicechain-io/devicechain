@@ -55,6 +55,11 @@ func TestCaptureStopsWithItsTest(t *testing.T) {
 	t.Run("inner", func(t *testing.T) {
 		logs = sink.Capture(t)
 		logger.Info().Msg("inside")
+		// The control: the capture was live while its test ran, so "after" being absent
+		// below means it stopped, not that it never collected anything.
+		if got := logs.String(); !strings.Contains(got, "inside") {
+			t.Errorf("the capture missed a line logged while its test was running: %q", got)
+		}
 	})
 	logger.Info().Msg("after")
 

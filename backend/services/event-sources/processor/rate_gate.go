@@ -265,11 +265,18 @@ type MeterAt func(tenant string, sentAt time.Time) time.Time
 // NewMeterAt builds the routing decision over the live message limiter, whose ceiling for the
 // tenant sets the threshold (backlogAfter). A nil limiter panics, as the gates do.
 func NewMeterAt(live *core.TenantRateLimiter) MeterAt {
+	return newMeterAtClock(live, time.Now)
+}
+
+// newMeterAtClock is NewMeterAt with the clock that ages a message injected, so the stall-replay
+// harness can drive the routing decision on a virtual clock. NewMeterAt passes time.Now, which is
+// all production ever does.
+func newMeterAtClock(live *core.TenantRateLimiter, now func() time.Time) MeterAt {
 	if live == nil {
 		panic("processor.NewMeterAt: the live limiter is required")
 	}
 	return func(tenant string, sentAt time.Time) time.Time {
-		return meterTime(sentAt, backlogAfter(live.Ceiling(tenant)))
+		return meterTimeAt(now(), sentAt, backlogAfter(live.Ceiling(tenant)))
 	}
 }
 
@@ -295,10 +302,10 @@ func backlogAfter(c core.TenantCeiling) time.Duration {
 	return BacklogThreshold
 }
 
-// meterTime is the decision itself: sentAt when the message is older than after, otherwise the
-// zero time. An absent or future send time is live, never backlog.
-func meterTime(sentAt time.Time, after time.Duration) time.Time {
-	if !sentAt.IsZero() && time.Since(sentAt) > after {
+// meterTimeAt is the decision itself: sentAt when the message is older than after at now, otherwise
+// the zero time. An absent or future send time is live, never backlog.
+func meterTimeAt(now, sentAt time.Time, after time.Duration) time.Time {
+	if !sentAt.IsZero() && now.Sub(sentAt) > after {
 		return sentAt
 	}
 	return time.Time{}

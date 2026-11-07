@@ -471,17 +471,52 @@ func TestAFillBeforeAPublishIsNotHandedToAnEventAfterIt(t *testing.T) {
 	assert.Equal(t, "p@3", again.Scope().ProfileVersionToken)
 }
 
-// A caller cancelled while it led a fill does not fail the callers that joined it.
+// A caller cancelled while it led a fill does not fail the callers that joined it. The leader is
+// held inside the flight, a second caller with a live context joins that flight, and only then is
+// the leader cancelled: the joiner receives the leader's cancellation from the shared flight and
+// must ask again under its own context.
 func TestACancelledLeaderDoesNotFailTheCallersThatJoinedIt(t *testing.T) {
 	r := decoderRig(t)
 	r.capi.dropProfileResolution(r.ctx, partialUpdateTenant, r.typeId)
-	cancelled, cancel := context.WithCancel(r.ctx)
+	leaderCtx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+
+	entered := make(chan struct{})
+	var claimed atomic.Bool
+	profileResolutionLoadHook = func() {
+		if claimed.CompareAndSwap(false, true) { // only the leader is held, until it is cancelled
+			close(entered)
+			<-leaderCtx.Done()
+		}
+	}
+	defer func() { profileResolutionLoadHook = nil }()
+
+	var wg sync.WaitGroup
+	var leaderErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, leaderErr = r.capi.ProfileResolutionByDeviceType(leaderCtx, r.typeId)
+	}()
+	<-entered
+	joined := make(chan error, 1)
+	go func() {
+		res, err := r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId) // joins the held fill
+		if err == nil && !res.HasDecoder() {
+			err = errors.New("joiner answered without the decoder")
+		}
+		joined <- err
+	}()
+	time.Sleep(200 * time.Millisecond) // let the joiner reach the flight before its leader goes
 	cancel()
-	_, err := r.capi.ProfileResolutionByDeviceType(cancelled, r.typeId)
-	_ = err // whatever the leader's own outcome, the next caller succeeds
-	res, err := r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId)
-	require.NoError(t, err)
-	assert.True(t, res.HasDecoder())
+	select {
+	case err := <-joined:
+		assert.NoError(t, err, "a joiner failed with its leader's cancellation")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the joiner never answered")
+	}
+	wg.Wait()
+	assert.ErrorIs(t, leaderErr, context.Canceled, "the control: the cancelled leader did fail")
 }
 
 // The tenant is part of every key and of the context a fill runs in: a read in one tenant's
@@ -736,4 +771,58 @@ func TestAnOverCapStoredDecoderIsACompileFailureNotAnEnvMismatch(t *testing.T) {
 	require.NotNil(t, p.err)
 	assert.Equal(t, payloaddecode.ReasonCompileFailed, p.err.Reason)
 	assert.Nil(t, p.plan)
+}
+
+// Two maximal decoders of one tenant, read in turn, compile twice in all when the tenant's share
+// holds both, which is what sizing the share for the decoders a tenant keeps in use means. The
+// control is the same reads against a share that holds only one: they compile on almost every
+// read, so the count above is the share's doing and not an artifact of the fixture.
+func TestTwoMaximalDecodersOfOneTenantAreCompiledOnceEachWhenTheShareHoldsBoth(t *testing.T) {
+	doc, defs := maximalDecoder(t)
+	built := NewProfileResolutionWithDecoder(ProfileScope{ProfileVersionToken: "p@1"}, defs, doc)
+	ctx := context.Background()
+	const rounds = 10
+	run := func(miB, share int) int64 {
+		c := newMemoryCache(profileResolutionCacheOptions(miB, share)...)
+		for _, k := range []string{"acme|v2|1", "acme|v2|2"} {
+			require.NoError(t, c.Set(ctx, k, built))
+		}
+		before := decodePlanBuilds.Load()
+		for i := 0; i < rounds; i++ {
+			for _, k := range []string{"acme|v2|1", "acme|v2|2"} {
+				_, found, err := messaging.GetShared(ctx, c, k, decodeProfileResolution)
+				require.NoError(t, err)
+				require.True(t, found)
+			}
+		}
+		return decodePlanBuilds.Load() - before
+	}
+	assert.Equal(t, int64(2), run(32, 50), "a share that holds both decoders compiled more than once each")
+	assert.Greater(t, run(32, 25), int64(2), "the control: a share that holds one decoder should have thrashed")
+}
+
+// One tenant's decoders do not push another tenant's out of the replica's memory, even when the
+// replica as a whole is full: the tenant holding the most gives up an entry, not the one that holds
+// a decoder of its own and is within its share.
+func TestATenantWithinItsShareKeepsItsDecoderWhileALargerTenantFillsTheReplica(t *testing.T) {
+	doc, defs := maximalDecoder(t)
+	built := NewProfileResolutionWithDecoder(ProfileScope{ProfileVersionToken: "p@1"}, defs, doc)
+	ctx := context.Background()
+	// 32 MiB with a 40% share (12.8 MiB): two maximal decoders per tenant, five in all.
+	c := newMemoryCache(profileResolutionCacheOptions(32, 40)...)
+	read := func(k string) {
+		require.NoError(t, c.Set(ctx, k, built))
+		_, found, err := messaging.GetShared(ctx, c, k, decodeProfileResolution)
+		require.NoError(t, err)
+		require.True(t, found)
+	}
+	read("quiet|v2|1") // the oldest entry of the replica
+	for _, k := range []string{"busy1|v2|1", "busy1|v2|2", "busy2|v2|1", "busy2|v2|2", "busy3|v2|1"} {
+		read(k)
+	}
+	before := decodePlanBuilds.Load()
+	_, found, err := messaging.GetShared(ctx, c, "quiet|v2|1", decodeProfileResolution)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(0), decodePlanBuilds.Load()-before, "the quiet tenant's decoder was let go for other tenants' stores")
 }

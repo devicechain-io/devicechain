@@ -163,8 +163,8 @@ enviarse cuando el dispositivo vuelva.
 - Si no se puede alcanzar la gestión de dispositivos al encolar, el comando se rechaza en lugar de
   enviarse sin control.
 
-El contador `command_delivery_window_restamps_total` cuenta los comandos cuya retención se movió por
+El contador `devicechain_commanddelivery_command_delivery_window_restamps_total` cuenta los comandos cuya retención se movió por
 una edición, una eliminación, una ventana que se cerró de nuevo antes de que volviera el
 dispositivo, o porque su tipo de dispositivo pasó a otra ventana o se quedó sin ventana. El
-contador `command_delivery_window_commands_undefined_total` cuenta los comandos en espera que
+contador `devicechain_commanddelivery_command_delivery_window_commands_undefined_total` cuenta los comandos en espera que
 fallaron porque el perfil de su dispositivo ya no los define.

@@ -516,7 +516,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, duration, count-window and rate rules place it by its own time, and a threshold rule in alarm discards a reading older than the device's newest, while one not in alarm discards a matching reading that arrives later than this margin only when it was retried or held up on its way. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. Count-window and rate rules likewise decide the last reading before a quiet spell only when a later event arrives. |
-| `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. Above 1, each shard runs on its own goroutine, so the engine can use more than one core; the loop that reads and plans messages stays single, so the gain is bounded by that loop and by how many cores the pod is given (see [Running the engine on more cores](#detect-shards)). Leave it at 1 unless you have measured that the engine, not the loop or the database, is the limit. The value in force is the `detect_shards` metric. |
+| `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (0 or unset means 1; anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. Above 1, each shard runs on its own goroutine, so the engine can use more than one core; the loop that reads and plans messages stays single, so the gain is bounded by that loop and by how many cores the pod is given (see [Running the engine on more cores](#detect-shards)). Leave it at 1 unless you have measured that the engine, not the loop or the database, is the limit. The value in force is the `devicechain_eventprocessing_detect_shards` metric. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. **At most 30**: a checkpoint is what acknowledges the stream, so an interval near or past the broker's 60-second acknowledgement window makes messages on a quiet stream redeliver. 30 leaves room for the checkpoint itself, and the service refuses anything longer at startup. |
 | `checkpointTimeoutSeconds` | 10 | How long one checkpoint call (publishing detections, saving the snapshot) may take before it is abandoned and the checkpoint counts as failed, instead of hanging detection on a database or broker that has stopped answering. At most 120. The snapshot save's limit grows by itself, to four times the last save that completed (up to two minutes), so a large engine on a slow database is not stuck failing; raise this only when the very first save is slower than the value. |
@@ -630,11 +630,11 @@ time the metric moves, the memory is already allocated. Raising this limit raise
 the whole instance, so size it before you change it: roughly *reporting rate × window × devices ×
 32 bytes*, summed over the rules that use long windows.
 
-Silence timeouts and session gaps are bounded for the same reason, even though they hold no
-readings. Those rules push a new entry onto the engine's timer heap every time a device reports and
-the superseded entry is not discarded until its deadline passes — so a three-day silence timeout on
-a device reporting every ten seconds carries roughly 26,000 pending entries *for that one device*.
-A long timeout costs memory in direct proportion to its length, just as a long window does.
+Silence timeouts and session gaps are bounded too, even though they hold no readings. The engine
+keeps one timer entry per device for each of those rules and moves it when the device reports, so
+their memory follows the number of devices, not how often they report or how long the timeout is.
+The ceiling still applies to them, so a timeout means the same thing as every other duration a rule
+carries.
 
 :::danger A rule over the ceiling does not run — it is refused at startup, not grandfathered
 The ceiling is applied when the engine **loads** a rule, not only when one is published. A rule
@@ -683,10 +683,10 @@ others, so any one of them read alone can look healthy while the engine fills up
 |---|---|---|
 | `devicechain_eventprocessing_detect_live_keys` | open windows and timers | many devices across many rules |
 | `devicechain_eventprocessing_detect_retained_samples` | readings held inside open windows | one long-window rule on a busy device — **one** live key, hundreds of thousands of readings |
-| `devicechain_eventprocessing_detect_pending_timers` | entries in the timer heap | a long silence timeout or session gap under frequent reporting — again one live key, and no retained readings at all |
+| `devicechain_eventprocessing_detect_pending_timers` | entries in the timer heap, one per armed silence, session or hold timer | many devices under an absence or session rule — it moves with armed keys, not with how often they report |
 
-The second and third exist because the first is flat in exactly the cases that exhaust memory
-fastest. Only the first two have per-tenant ceilings; the timer heap is reported as an instance-wide
+The second exists because the first is flat in exactly the case that exhausts memory fastest: one
+long-window rule on one busy device. Only the first two have per-tenant ceilings; the timer heap is reported as an instance-wide
 total, because attributing it to a tenant would mean walking the whole heap on every checkpoint.
 :::
 

@@ -3,7 +3,10 @@
 
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestApplyDefaultsFillsUnset checks that unset (0) tunables take the platform
 // defaults and a defaulted config validates.
@@ -24,44 +27,41 @@ func TestApplyDefaultsFillsUnset(t *testing.T) {
 	}
 }
 
-// TestValidateRejectsOutOfRange pins the fail-closed bounds.
+// TestValidateRejectsOutOfRange pins the fail-closed bounds. Each case starts from a
+// defaulted, valid configuration and breaks exactly ONE field, and the error must name
+// that field, so a case can only pass through the guard it is named for.
 func TestValidateRejectsOutOfRange(t *testing.T) {
 	cases := []struct {
 		name   string
+		field  string
 		mutate func(*AiInferenceConfiguration)
 	}{
-		{"zero timeout", func(c *AiInferenceConfiguration) {
-			c.InferenceTimeoutMs = 0
-			c.MaxPromptBytes = 1
-			c.MaxOutputTokens = 1
-		}},
-		{"timeout over ceiling", func(c *AiInferenceConfiguration) {
-			c.InferenceTimeoutMs = MaxInferenceTimeoutMs + 1
-			c.MaxPromptBytes = 1
-			c.MaxOutputTokens = 1
-		}},
-		{"negative timeout", func(c *AiInferenceConfiguration) {
-			c.InferenceTimeoutMs = -1
-			c.MaxPromptBytes = 1
-			c.MaxOutputTokens = 1
-		}},
-		{"zero prompt cap", func(c *AiInferenceConfiguration) {
-			c.InferenceTimeoutMs = 1
-			c.MaxPromptBytes = 0
-			c.MaxOutputTokens = 1
-		}},
-		{"zero output cap", func(c *AiInferenceConfiguration) {
-			c.InferenceTimeoutMs = 1
-			c.MaxPromptBytes = 1
-			c.MaxOutputTokens = 0
-		}},
+		{"zero timeout", "inferenceTimeoutMs", func(c *AiInferenceConfiguration) { c.InferenceTimeoutMs = 0 }},
+		{"timeout over ceiling", "inferenceTimeoutMs", func(c *AiInferenceConfiguration) { c.InferenceTimeoutMs = MaxInferenceTimeoutMs + 1 }},
+		{"negative timeout", "inferenceTimeoutMs", func(c *AiInferenceConfiguration) { c.InferenceTimeoutMs = -1 }},
+		{"zero prompt cap", "maxPromptBytes", func(c *AiInferenceConfiguration) { c.MaxPromptBytes = 0 }},
+		{"zero output cap", "maxOutputTokens", func(c *AiInferenceConfiguration) { c.MaxOutputTokens = 0 }},
+		{"negative prompt cap", "maxPromptBytes", func(c *AiInferenceConfiguration) { c.MaxPromptBytes = -1 }},
+		{"negative output cap", "maxOutputTokens", func(c *AiInferenceConfiguration) { c.MaxOutputTokens = -1 }},
+		{"negative rate", "inferenceRequestsPerMinute", func(c *AiInferenceConfiguration) { c.InferenceRequestsPerMinute = -1 }},
+		{"negative burst", "inferenceBurst", func(c *AiInferenceConfiguration) { c.InferenceBurst = -1 }},
+		{"zero rate", "inferenceRequestsPerMinute", func(c *AiInferenceConfiguration) { c.InferenceRequestsPerMinute = 0 }},
+		{"zero burst", "inferenceBurst", func(c *AiInferenceConfiguration) { c.InferenceBurst = 0 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &AiInferenceConfiguration{}
+			c.ApplyDefaults()
+			if err := c.Validate(); err != nil {
+				t.Fatalf("the base fixture must itself be valid: %v", err)
+			}
 			tc.mutate(c)
-			if err := c.Validate(); err == nil {
+			err := c.Validate()
+			if err == nil {
 				t.Fatal("expected Validate to reject an out-of-range value")
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("rejected by the wrong guard: %v (want one naming %s)", err, tc.field)
 			}
 		})
 	}

@@ -175,7 +175,7 @@ echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08
 
 ## 连接被拒绝时 {#refused}
 
-与所有设备拒绝一样，设备只会看到 CONNACK 返回码 5。原因在运维方一侧，体现为计数器 `callout_x509_total` 的 `result` 标签。请按以下顺序检查：
+与所有设备拒绝一样，设备只会看到 CONNACK 返回码 5。原因在运维方一侧，体现为计数器 `devicechain_devicemanagement_callout_x509_total` 的 `result` 标签。请按以下顺序检查：
 
 1. **`no_cert`。** 客户端没有发送证书。检查 `--cert`，以及密钥是否与证书匹配。
 2. **`chain_invalid`。** 证书链无法构建到信任锚、某张证书已过期、扩展密钥用途缺少客户端认证、签名使用了 SHA-1，或密钥不在允许范围内。可以用 `openssl verify -CAfile ca.crt -purpose sslclient device.crt` 重现，并检查设备是否发送了中间证书。

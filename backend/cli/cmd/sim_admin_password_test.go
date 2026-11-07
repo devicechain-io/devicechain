@@ -8,6 +8,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/devicechain-io/dcctl/bootstrap"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -91,4 +94,43 @@ func TestTheSimAdminPasswordIsResolvedInOrderAndHasNoDefault(t *testing.T) {
 			}
 		}
 	})
+}
+
+// With a non-default instance name, the failure to read the default instance's Secret names
+// the instances that exist and the flag that picks one, and still targets nothing new.
+func TestTheSimAdminPasswordErrorNamesTheRecordedInstances(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv(adminPasswordEnv, "")
+	if err := bootstrap.WriteInstanceRecord(bootstrap.InstanceRecord{
+		Instance: "guide", Provider: "local", Cluster: "guide", KubeContext: "kind-guide",
+		CreatedAt: time.Now().UTC(), DcctlVersion: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	orig := readSuperuserPassword
+	t.Cleanup(func() { readSuperuserPassword = orig })
+	var asked string
+	readSuperuserPassword = func(_ context.Context, _, instance string) (string, error) {
+		asked = instance
+		return "", errors.New(`context "kind-devicechain" does not exist`)
+	}
+	c := &cobra.Command{Use: "probe"}
+	c.Flags().String("admin-password", "", "")
+	c.Flags().String("kube-context", "", "")
+	c.SetContext(context.Background())
+
+	_, err := resolveAdminPassword(c, "devicechain")
+	if err == nil || !strings.Contains(err.Error(), "instances that are: guide") ||
+		!strings.Contains(err.Error(), "--instance <name>") {
+		t.Fatalf("error does not point at the recorded instance: %v", err)
+	}
+	if asked != "devicechain" {
+		t.Errorf("the hint retargeted the command: asked %q", asked)
+	}
+	// An instance that IS recorded gets no hint.
+	if _, err = resolveAdminPassword(c, "guide"); err == nil || strings.Contains(err.Error(), "instances that are") {
+		t.Errorf("a recorded instance got the hint: %v", err)
+	}
 }

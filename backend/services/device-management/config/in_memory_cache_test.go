@@ -79,3 +79,38 @@ func TestProfileResolutionCacheSettings(t *testing.T) {
 		assert.Contains(t, err.Error(), tc.key)
 	}
 }
+
+// A tenant's share of the resolution cache must hold at least one maximal payload decoder, or
+// every event of a device type with one compiles it again. The boundary is tested on both sides.
+func TestProfileResolutionTenantShareMustHoldAMaximalDecoder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+		ok   bool
+	}{
+		{"the footgun: 16 MiB at 25%", `{"inMemoryCache":{"profileResolutionCacheMiB":16,"profileResolutionTenantSharePercent":25}}`, false},
+		{"1 MiB at 100%", `{"inMemoryCache":{"profileResolutionCacheMiB":1,"profileResolutionTenantSharePercent":100}}`, false},
+		{"256 MiB at 1%", `{"inMemoryCache":{"profileResolutionCacheMiB":256,"profileResolutionTenantSharePercent":1}}`, false},
+		{"16 MiB at 50%", `{"inMemoryCache":{"profileResolutionCacheMiB":16,"profileResolutionTenantSharePercent":50}}`, true},
+		{"7 MiB at 100%, 32 bytes short (the cache takes bytes/100 x percent)", `{"inMemoryCache":{"profileResolutionCacheMiB":7,"profileResolutionTenantSharePercent":100}}`, false},
+		{"6 MiB at 100%", `{"inMemoryCache":{"profileResolutionCacheMiB":6,"profileResolutionTenantSharePercent":100}}`, false},
+		{"8 MiB at 100%", `{"inMemoryCache":{"profileResolutionCacheMiB":8,"profileResolutionTenantSharePercent":100}}`, true},
+		{"the defaults", `{}`, true},
+	} {
+		err := core.LoadConfiguration([]byte(tc.doc), &DeviceManagementConfiguration{})
+		if tc.ok {
+			require.NoError(t, err, tc.name)
+			continue
+		}
+		require.Error(t, err, tc.name)
+		assert.Contains(t, err.Error(), "profileResolutionTenantSharePercent", tc.name)
+		assert.Contains(t, err.Error(), "compile it again", tc.name)
+	}
+}
+
+// The defaults are on the accepted side of the rule with room to spare, so a change to either
+// default that breaks the rule fails here rather than at an operator's start.
+func TestDefaultResolutionShareHoldsAMaximalDecoder(t *testing.T) {
+	share := DefaultProfileResolutionCacheMiB << 20 / 100 * DefaultProfileResolutionTenantSharePercent
+	assert.GreaterOrEqual(t, share, MaxDecoderResolutionChargeBytes)
+}

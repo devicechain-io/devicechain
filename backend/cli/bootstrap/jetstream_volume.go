@@ -103,6 +103,9 @@ func jetStreamStorageFor(st *State) string {
 	if st.Compact {
 		return compact.JetStreamStorage
 	}
+	if p := sizeFor(st); p != nil {
+		return p.JetStreamStorage
+	}
 	if size := embeddedJetStreamStorageDefault(); size != "" {
 		return size
 	}

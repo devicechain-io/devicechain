@@ -1,0 +1,430 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package core
+
+import (
+	"fmt"
+	"hash/fnv"
+	"sync"
+	"time"
+)
+
+// IngestPhase is the routing phase of ONE tenant on ONE reader stream: fresh while that tenant's
+// messages are read within their cover of being sent, backlog while it is draining something older.
+//
+// The phase is driven only by the broker's own stamps of first deliveries, so a tenant cannot steer
+// it, and it is the tenant's alone (see phaseTable). It has hysteresis, entered at an age above the
+// observed message's OWN cover and left after the calm period below half of it, so a reader hovering at the threshold does not flip
+// every message between the two routes (each flip would otherwise hand the tenant a second allowance).
+type IngestPhase struct {
+	mu sync.Mutex
+	// calm is how long the corrected age must stay below half the threshold before the phase leaves
+	// backlog.
+	calm time.Duration
+
+	backlog   bool
+	calmSince time.Time // zero while not calm
+	exitEpoch uint64
+	exitAt    time.Time
+}
+
+// DefaultIngestPhaseCalm is how long a stream must stay well below its threshold before it is fresh again.
+const DefaultIngestPhaseCalm = 30 * time.Second
+
+// NewIngestPhase builds a phase tracker; a calm that is not positive uses DefaultIngestPhaseCalm.
+func NewIngestPhase(calm time.Duration) *IngestPhase {
+	if calm <= 0 {
+		calm = DefaultIngestPhaseCalm
+	}
+	return &IngestPhase{calm: calm}
+}
+
+// Observe feeds the corrected age (alpha) of one first-delivery message read from the stream and
+// returns whether the stream is in its backlog phase AFTER the observation.
+//
+// It enters backlog the moment alpha exceeds threshold. It leaves only once alpha has stayed below
+// threshold/2 continuously for the calm period, observed on both ends (a gap with no traffic between
+// two calm observations counts as calm). Leaving advances the exit epoch.
+func (p *IngestPhase) Observe(alpha, threshold time.Duration, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case alpha > threshold:
+		p.backlog = true
+		p.calmSince = time.Time{}
+	case !p.backlog:
+	case alpha < threshold/2:
+		if p.calmSince.IsZero() {
+			p.calmSince = now
+		}
+		if now.Sub(p.calmSince) >= p.calm {
+			p.backlog = false
+			p.calmSince = time.Time{}
+			p.exitEpoch++
+			p.exitAt = now
+		}
+	default:
+		p.calmSince = time.Time{}
+	}
+	return p.backlog
+}
+
+// Backlog reports the current phase without observing anything.
+func (p *IngestPhase) Backlog() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.backlog
+}
+
+// Exit returns the exit epoch and the pod time of the latest exit.
+func (p *IngestPhase) Exit() (uint64, time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exitEpoch, p.exitAt
+}
+
+// IngestRoute says which bucket metered a message.
+type IngestRoute uint8
+
+const (
+	// RouteFresh: a stamped first delivery within reach of its stream's head, metered at pod time with a lag credit.
+	RouteFresh IngestRoute = iota + 1
+	// RouteBacklog: stamped older than the tenant's cover or read in a stream's backlog phase, metered
+	// on the send timeline in that stream's own backlog bucket. Never contention-scaled.
+	RouteBacklog
+	// RouteLive: no stamp (external MQTT, or metadata unavailable), metered at pod time like fresh traffic.
+	RouteLive
+)
+
+func (r IngestRoute) String() string {
+	switch r {
+	case RouteFresh:
+		return "fresh"
+	case RouteBacklog:
+		return "backlog"
+	case RouteLive:
+		return "live"
+	}
+	return fmt.Sprintf("IngestRoute(%d)", uint8(r))
+}
+
+// IngestCause says why a message was shed.
+type IngestCause uint8
+
+const (
+	// CauseNone: the message was admitted.
+	CauseNone IngestCause = iota
+	// CauseCeiling: the tenant exceeded its base ceiling.
+	CauseCeiling
+	// CauseContention: shed by the overload factor on the fresh route.
+	CauseContention
+	// CauseHardDrop: factor 0, a boolean refusal of fresh traffic.
+	CauseHardDrop
+)
+
+func (c IngestCause) String() string {
+	switch c {
+	case CauseNone:
+		return "none"
+	case CauseCeiling:
+		return "ceiling"
+	case CauseContention:
+		return "contention"
+	case CauseHardDrop:
+		return "hard_drop"
+	}
+	return fmt.Sprintf("IngestCause(%d)", uint8(c))
+}
+
+// LagCreditMeter is the decision core of the lag-credited ingest gate: it routes each first delivery
+// to the fresh route (a LagCreditLimiter ceiling bucket plus a separate contention bucket) or to its
+// stream's backlog bucket, and holds the per-stream phase hysteresis. Like LagCreditLimiter it is a
+// pure library; the gateway adopts it behind a switch.
+//
+//   - The ceiling bucket is ONE per tenant, shared by every source, so a tenant that spreads a send rate
+//     over capture, the message store and external MQTT is held to its ceiling once, not once per source.
+//   - The contention bucket is separate and is charged only on the fresh route. It never touches the
+//     ceiling budget or a drained backlog. A factor of 0 is a boolean refusal of fresh traffic, not a price.
+//   - Each stream has its own backlog bucket (a TenantRateLimiter on the BASE ceiling), so two independently
+//     drained timelines never share a mark. It is charged at the stamp corrected for the stream's skew.
+//   - The ceiling is held ONCE across the fresh sources, but not across the backlog route: each stream's
+//     backlog bucket is a full allowance of its own, and a tenant draining two backlogs while also sending
+//     live spends all of them. That is bounded (it needs a platform lag beyond the cover, which a tenant
+//     cannot steer) and it matches the 2x a tenant already has on the gate it replaces while draining.
+//   - A tenant in its backlog phase on a stream meters ALL of its messages' CEILING on the backlog route, young ones
+//     included, until the hysteresis lets it out. That keeps a reader hovering at the cover from flipping
+//     messages between the two ceiling allowances. CONTENTION is a filter and is not phase-bound: it is
+//     applied to every message read within its own cover, in or out of the phase, so the overload bands
+//     and the hard drop reach a recovering stream's current traffic. Only a message older than its cover
+//     (a true backlog) is exempt from contention.
+//
+// Redeliveries are not the meter's business: a redelivery already paid on delivery 1, and must not be
+// presented here (it would feed the last-stamp the credit is measured from).
+type LagCreditMeter struct {
+	now        func() time.Time
+	ceiling    *LagCreditLimiter
+	contention *LagCreditLimiter
+	backlog    []*TenantRateLimiter
+	streams    int
+	phases     *phaseTable
+	base       TenantCeilingResolver
+}
+
+// LagCreditMeterConfig builds a LagCreditMeter.
+type LagCreditMeterConfig struct {
+	// Streams is the number of reader sources (streams); each gets its own backlog bucket and phase.
+	Streams int
+	// Ceiling is the base per-tenant ceiling. The backlog buckets and the fresh route's cover use it;
+	// a contention factor never reaches it.
+	Ceiling TenantCeilingResolver
+	// PhaseCalm is how long a stream stays calm before leaving backlog. Zero uses DefaultIngestPhaseCalm.
+	PhaseCalm time.Duration
+	// Clock replaces time.Now (tests). Nil is time.Now.
+	Clock func() time.Time
+}
+
+// NewLagCreditMeter builds the meter. A missing resolver or stream count is a construction error and panics.
+func NewLagCreditMeter(cfg LagCreditMeterConfig) *LagCreditMeter {
+	if cfg.Ceiling == nil || cfg.Streams <= 0 {
+		panic("core.NewLagCreditMeter: a ceiling resolver and at least one stream are required")
+	}
+	now := cfg.Clock
+	if now == nil {
+		now = time.Now
+	}
+	m := &LagCreditMeter{
+		streams:    cfg.Streams,
+		phases:     newPhaseTable(cfg.PhaseCalm, now),
+		now:        now,
+		ceiling:    NewLagCreditLimiter(cfg.Ceiling, cfg.Streams, WithLagCreditClock(now)),
+		contention: NewLagCreditLimiter(cfg.Ceiling, cfg.Streams, WithLagCreditClock(now)),
+		base:       cfg.Ceiling,
+	}
+	for i := 0; i < cfg.Streams; i++ {
+		m.backlog = append(m.backlog, NewTenantRateLimiter(cfg.Ceiling, WithClock(now)))
+	}
+	return m
+}
+
+// Phase reports one tenant's phase on one stream (for metrics and tests).
+func (m *LagCreditMeter) Phase(stream int, tenant string) (backlog bool, exitEpoch uint64) {
+	return m.phases.state(stream, tenant)
+}
+
+// PhaseCount is the number of per-(stream, tenant) phase entries currently held.
+func (m *LagCreditMeter) PhaseCount() int { return m.phases.count() }
+
+// MeterRequest is one first-delivery message presented to the meter.
+type MeterRequest struct {
+	Tenant string
+	N      int
+	// Source is the stream index the message was read from, or negative for a message with no stream
+	// (external MQTT). Stamp is the broker append time; zero means none, and the message is RouteLive.
+	Source int
+	Stamp  time.Time
+	// Sources describes every stream's lag and skew (see LagCreditSource).
+	Sources []LagCreditSource
+	// Factor is the contention factor for this message's tenant class: 1 means none (gold, or no
+	// overload), a value in (0,1) scales the tenant's allowance, and 0 refuses fresh traffic outright.
+	// The caller maps the tenant class to the factor; gold always passes 1.
+	Factor float64
+	// Delay and CreditCap are the reading stage's extras; see LagCreditRequest.
+	Delay     time.Duration
+	CreditCap time.Duration
+}
+
+// MeterDecision is the outcome for one message.
+type MeterDecision struct {
+	Admitted bool
+	Route    IngestRoute
+	Cause    IngestCause
+	// Credit is the lag credit the fresh route was judged against (zero on the backlog route).
+	Credit time.Duration
+}
+
+// Admit routes and charges one first-delivery message.
+func (m *LagCreditMeter) Admit(req MeterRequest) MeterDecision {
+	if len(req.Sources) != m.streams {
+		panic(fmt.Sprintf("core.LagCreditMeter.Admit: %d sources described, meter has %d streams", len(req.Sources), m.streams))
+	}
+	if req.Factor < 0 || req.Factor > 1 {
+		panic(fmt.Sprintf("core.LagCreditMeter.Admit: factor %v is outside [0,1]", req.Factor))
+	}
+	if req.N <= 0 {
+		return MeterDecision{Admitted: true, Route: RouteFresh}
+	}
+	now := m.now()
+	stamped := req.Source >= 0 && !req.Stamp.IsZero()
+	if req.Source >= m.streams {
+		panic(fmt.Sprintf("core.LagCreditMeter.Admit: source %d out of range", req.Source))
+	}
+
+	srcs := req.Sources
+
+	if stamped {
+		alpha := max(now.Sub(req.Stamp)-srcs[req.Source].Skew, 0)
+		cover := LagCreditMax(m.base(req.Tenant))
+		// Entry at age > the tenant's own cover and the hysteresis around it decide the route; there is no
+		// separate per-message cutoff, so the two cannot disagree.
+		if m.phases.observe(req.Source, req.Tenant, alpha, cover, now) {
+			if alpha <= cover {
+				if d, refused := m.contend(req, srcs, req.Source, req.Stamp, RouteBacklog); refused {
+					return d
+				}
+			}
+			// Metered on the send timeline, with the broker's skew taken back out of the stamp: a leader
+			// whose clock runs ahead would otherwise stamp the stream's own near-future, which the limiter
+			// clamps to now, charging a whole drain at one instant.
+			sent := req.Stamp.Add(srcs[req.Source].Skew)
+			ok := m.backlog[req.Source].AllowNAt(req.Tenant, sent, req.N)
+			d := MeterDecision{Admitted: ok, Route: RouteBacklog}
+			if !ok {
+				d.Cause = CauseCeiling
+			}
+			return d
+		}
+	}
+
+	route := RouteFresh
+	if !stamped {
+		route = RouteLive
+	}
+	source, stamp := req.Source, req.Stamp
+	if !stamped {
+		source, stamp = -1, time.Time{}
+	}
+
+	if d, refused := m.contend(req, srcs, source, stamp, route); refused {
+		return d
+	}
+	d := m.ceiling.Admit(LagCreditRequest{Tenant: req.Tenant, N: req.N, Scale: 1,
+		Source: source, Stamp: stamp, Sources: srcs, Delay: req.Delay, CreditCap: req.CreditCap})
+	if !d.Admitted {
+		return MeterDecision{Route: route, Cause: CauseCeiling, Credit: d.Credit}
+	}
+	return MeterDecision{Admitted: true, Route: route, Credit: d.Credit}
+}
+
+// contend applies the overload bands to one message: factor 0 is a boolean refusal, a factor below 1
+// charges the contention bucket (never the ceiling), and a denial there is final. It reports refused
+// true with the decision to return; false means the message passed (or was not contended).
+func (m *LagCreditMeter) contend(req MeterRequest, srcs []LagCreditSource, source int, stamp time.Time, route IngestRoute) (MeterDecision, bool) {
+	if req.Factor == 0 {
+		return MeterDecision{Route: route, Cause: CauseHardDrop}, true
+	}
+	if req.Factor < 1 {
+		d := m.contention.Admit(LagCreditRequest{Tenant: req.Tenant, N: req.N, Scale: req.Factor,
+			Source: source, Stamp: stamp, Sources: srcs, Delay: req.Delay, CreditCap: req.CreditCap})
+		if !d.Admitted {
+			return MeterDecision{Route: route, Cause: CauseContention, Credit: d.Credit}, true
+		}
+	}
+	return MeterDecision{}, false
+}
+
+// phaseTable holds the phase of every (stream, tenant) that has one.
+//
+// 🔴 THE PHASE IS KEYED BY TENANT, NOT BY STREAM ALONE. A tenant's cover is its own (burst/rate), so a
+// phase shared by a stream was entered and held by whichever tenant had the shortest cover: a 10/s
+// burst-1 neighbour (100 ms cover) at a constant 200 ms lag kept the whole stream in backlog, and a
+// 1000/2000 tenant within its 2 s cover was pushed onto the backlog route as well, gaining a second
+// allowance beside its fresh one. One tenant's ceiling must never change another's allowance, so each
+// tenant's phase is driven by that tenant's own broker-stamped ages and nothing else. A tenant cannot
+// steer it: the ages are the broker's stamps against the pod clock.
+//
+// An entry exists only once a tenant has been in backlog; a message that is calm and has no entry
+// allocates nothing. Entries are evicted after the same idle TTL the limiters use, swept at most once a
+// sweep interval per shard, so the table is bounded by the tenants active in the last TTL.
+type phaseTable struct {
+	calm time.Duration
+	now  func() time.Time
+
+	shards [lagCreditShards]phaseShard
+}
+
+type phaseKey struct {
+	stream int
+	tenant string
+}
+
+type phaseEntry struct {
+	phase    *IngestPhase
+	lastSeen time.Time
+}
+
+type phaseShard struct {
+	mu        sync.Mutex
+	entries   map[phaseKey]*phaseEntry
+	lastSweep time.Time
+}
+
+func newPhaseTable(calm time.Duration, now func() time.Time) *phaseTable {
+	t := &phaseTable{calm: calm, now: now}
+	for i := range t.shards {
+		t.shards[i].entries = make(map[phaseKey]*phaseEntry)
+	}
+	return t
+}
+
+func (t *phaseTable) shardFor(tenant string) *phaseShard {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tenant))
+	return &t.shards[h.Sum32()&(lagCreditShards-1)]
+}
+
+// observe feeds one first delivery's corrected age to the tenant's phase on the stream and returns
+// whether that phase is backlog afterwards.
+func (t *phaseTable) observe(stream int, tenant string, alpha, ownCover time.Duration, now time.Time) bool {
+	sh := t.shardFor(tenant)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if now.Sub(sh.lastSweep) >= defaultRateLimiterSweepInterval {
+		sh.lastSweep = now
+		for k, e := range sh.entries {
+			if now.Sub(e.lastSeen) >= defaultRateLimiterIdleTTL {
+				delete(sh.entries, k)
+			}
+		}
+	}
+	key := phaseKey{stream, tenant}
+	e := sh.entries[key]
+	// The sweep is amortised, so it may not have run yet: an entry past its TTL is dead whatever the
+	// sweep has done, or a neighbour that happened to advance the sweep could keep it alive.
+	if e != nil && now.Sub(e.lastSeen) >= defaultRateLimiterIdleTTL {
+		delete(sh.entries, key)
+		e = nil
+	}
+	if e == nil {
+		if alpha <= ownCover {
+			return false // calm and not in backlog: nothing to remember
+		}
+		e = &phaseEntry{phase: NewIngestPhase(t.calm)}
+		sh.entries[key] = e
+	}
+	e.lastSeen = now
+	return e.phase.Observe(alpha, ownCover, now)
+}
+
+func (t *phaseTable) state(stream int, tenant string) (bool, uint64) {
+	sh := t.shardFor(tenant)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	e := sh.entries[phaseKey{stream, tenant}]
+	if e == nil {
+		return false, 0
+	}
+	epoch, _ := e.phase.Exit()
+	return e.phase.Backlog(), epoch
+}
+
+func (t *phaseTable) count() int {
+	n := 0
+	for i := range t.shards {
+		sh := &t.shards[i]
+		sh.mu.Lock()
+		n += len(sh.entries)
+		sh.mu.Unlock()
+	}
+	return n
+}
