@@ -971,3 +971,148 @@ func TestAChildCannotAnswerACommandItWasNeverGiven(t *testing.T) {
 	waitUntil(t, 10*time.Second, func() bool { return r.refusedReason("command_responses_refused_total", "not_dispatched") >= 1 })
 	r.noResponse(time.Second)
 }
+
+// TestAStaleDuplicateNeverRollsTheNonceBack: n1 is delivered, the cloud re-dispatches as n2, and
+// a delayed copy of the n1 dispatch then arrives. The ledger must keep n2, so the child's answer
+// (which quotes n1, the dispatch it was given) is restamped for n2, the dispatch the platform
+// is waiting on. A later genuine dispatch (n3) is still accepted afterwards.
+func TestAStaleDuplicateNeverRollsTheNonceBack(t *testing.T) {
+	r := newCmdRig(t, nil, nil)
+	child := r.child("dev1")
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	<-r.childGot
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n2", ""))
+	waitUntil(t, 10*time.Second, func() bool { return r.ledger("cmd-1").Nonce == "n2" })
+
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", "")) // the late duplicate
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.staleDispatches.Load() == 1 })
+	if got := r.ledger("cmd-1").Nonce; got != "n2" {
+		t.Fatalf("ledger nonce = %q after a stale duplicate, want n2", got)
+	}
+
+	respond(child, t, "dev1", `{"commandToken":"cmd-1","success":true,"dispatchNonce":"n1"}`)
+	if cr, _ := r.nextResponse(15 * time.Second); cr.DispatchNonce != "n2" {
+		t.Errorf("answer nonce = %q, want n2", cr.DispatchNonce)
+	}
+	waitUntil(t, 5*time.Second, func() bool { return r.ledger("cmd-1").State == stAnswered })
+
+	// The stale copy after the answer must not queue a replay for the old nonce either.
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.staleDispatches.Load() == 2 })
+	r.noResponse(time.Second)
+	if le := r.ledger("cmd-1"); le.Nonce != "n2" || le.ReplayPending {
+		t.Errorf("ledger = %+v, want nonce n2 and no replay owed", le)
+	}
+
+	// A genuinely new dispatch is still taken, and the stored answer is replayed for it.
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n3", ""))
+	if cr, _ := r.nextResponse(15 * time.Second); cr.DispatchNonce != "n3" || !cr.Success {
+		t.Errorf("replayed answer = %+v, want one addressed to n3", cr)
+	}
+}
+
+// TestSupersededNonceMemoryIsBounded: the replaced-nonce list cannot grow without limit.
+func TestSupersededNonceMemoryIsBounded(t *testing.T) {
+	r := newCmdRig(t, &fakeAdapter{}, nil)
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n0", ""))
+	waitUntil(t, 10*time.Second, func() bool {
+		le, _, err := r.a.cmd.get("cmd-1")
+		return err == nil && le.State == stDelivered
+	})
+	for i := 1; i <= maxSupersededNonces+5; i++ {
+		want := fmt.Sprintf("n%d", i)
+		r.send("dev1", cmdEnvelope("cmd-1", "dev1", want, ""))
+		waitUntil(t, 10*time.Second, func() bool { return r.ledger("cmd-1").Nonce == want })
+	}
+	if n := len(r.ledger("cmd-1").Superseded); n != maxSupersededNonces {
+		t.Errorf("superseded = %d entries, want %d", n, maxSupersededNonces)
+	}
+}
+
+// TestRestartReconcilesACommandWhoseInboxMessageIsGone: the agent was stopped past the inbox
+// MaxAge, so JetStream removed the message without telling anyone. The ledger still holds the
+// command as accepted and past its deadline; the start-up sweep says UNSENT for it, and leaves a
+// command that is still within its deadline alone.
+func TestRestartReconcilesACommandWhoseInboxMessageIsGone(t *testing.T) {
+	fa := &fakeAdapter{}
+	r := newCmdRig(t, fa, nil)
+	cp := r.a.cmd
+	for tok, deadline := range map[string]time.Time{
+		"cmd-old":  time.Now().Add(-2 * time.Hour),
+		"cmd-live": time.Now().Add(time.Hour),
+	} {
+		if err := cp.create(tok, &ledgerEntry{Device: "dev1", Nonce: "n-" + tok, State: stAccepted, Deadline: deadline}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.restart(fa, nil)
+
+	cr, _ := r.nextResponse(20 * time.Second)
+	if cr.CommandToken != "cmd-old" || cr.Reach != "UNSENT" || cr.Success || cr.DispatchNonce != "n-cmd-old" {
+		t.Errorf("answer = %+v, want a failed UNSENT answer for cmd-old quoting its nonce", cr)
+	}
+	r.noResponse(2 * time.Second)
+	// Expired, then answered once the drain forwarded the UNSENT.
+	waitUntil(t, 10*time.Second, func() bool { return r.ledger("cmd-old").State == stAnswered })
+	if st := r.ledger("cmd-live").State; st != stAccepted {
+		t.Errorf("cmd-live state = %s, want accepted (untouched)", st)
+	}
+	if fa.count() != 0 {
+		t.Errorf("the adapter was called %d times for commands that were never in the inbox", fa.count())
+	}
+	if n := r.a.cmd.reconciled.Load(); n != 1 {
+		t.Errorf("reconciled = %d, want 1", n)
+	}
+}
+
+// TestWithheldAckOnCleanSessionIsNotRedelivered pins the documented limit of the uplink: a
+// command whose acknowledgement was still withheld when the connection dropped is discarded by
+// the broker (the session is clean), and the platform's re-dispatch, a fresh message, is the
+// only recovery. The assertion that matters is the second half: a fresh dispatch is received.
+func TestWithheldAckOnCleanSessionIsNotRedelivered(t *testing.T) {
+	cloudAddr := fmt.Sprintf("127.0.0.1:%d", startCloudBroker(t))
+	pub := mqttConnect(t, cloudAddr, "cloud-pub")
+	const topic = "test/tenant1/gateways/gw1/devices/dev1/commands"
+
+	got := make(chan string, 8)
+	connect := func() mqtt.Client {
+		opts := mqtt.NewClientOptions().AddBroker("tcp://" + cloudAddr).SetClientID("gw1-session").
+			SetCleanSession(true).SetAutoAckDisabled(true).SetConnectTimeout(5 * time.Second)
+		c := mqtt.NewClient(opts)
+		if tok := c.Connect(); !tok.WaitTimeout(10*time.Second) || tok.Error() != nil {
+			t.Fatalf("connect: %v", tok.Error())
+		}
+		if err := messaging.SubscribeMqttConfirmed(c, topic, 1,
+			func(_ mqtt.Client, m mqtt.Message) { got <- string(m.Payload()) }, 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	c := connect()
+	if tok := pub.Publish(topic, 1, false, []byte("first")); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if v := <-got; v != "first" {
+		t.Fatalf("got %q", v)
+	}
+	c.Disconnect(0) // the "crash": delivered, never acknowledged
+
+	c = connect()
+	defer c.Disconnect(100)
+	select {
+	case v := <-got:
+		t.Fatalf("an unacknowledged command was redelivered on a clean session: %q (the documented limit no longer holds; revisit the uplink comment)", v)
+	case <-time.After(2 * time.Second):
+	}
+	if tok := pub.Publish(topic, 1, false, []byte("second")); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	select {
+	case v := <-got:
+		if v != "second" {
+			t.Errorf("got %q, want the fresh dispatch", v)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a fresh dispatch was not received after the reconnect")
+	}
+}

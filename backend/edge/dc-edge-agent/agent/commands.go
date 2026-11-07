@@ -81,6 +81,12 @@ const (
 	// (which tells the cloud) rather than the server (which says nothing) observes it.
 	cmdStreamMargin        = time.Hour
 	cmdLocalPublishTimeout = 10 * time.Second
+
+	// maxSupersededNonces bounds the replaced-nonce memory of one ledger entry. KNOWN LIMIT: a
+	// duplicate delayed behind more than this many newer dispatches of the same token is no longer
+	// recognised and would be taken as the latest. Each dispatch needs a full cloud sweep cycle,
+	// so that is not a delay a broker redelivery produces.
+	maxSupersededNonces = 32
 )
 
 // Ledger states. Forward-only except the claim release (delivering → accepted).
@@ -153,7 +159,13 @@ type ledgerEntry struct {
 	Device string `json:"device"`
 	// Nonce is the LATEST dispatch the cloud made for this token: the one any answer must quote.
 	Nonce string `json:"nonce"`
-	State string `json:"state"`
+	// Superseded is the nonces this token has had before Nonce, oldest first, bounded by
+	// maxSupersededNonces. A nonce is a UUID the platform mints per dispatch and never reuses, so
+	// one found here is a late duplicate of a dispatch already replaced: it must not become the
+	// latest again (that would restamp the child's answer with a nonce the platform no longer
+	// waits on). Nothing orders nonces; remembering which were seen is the only ordering there is.
+	Superseded []string `json:"superseded,omitempty"`
+	State      string   `json:"state"`
 	// Delivered is the nonce of the envelope actually handed to the adapter. A child answer
 	// must quote exactly it before the agent will restamp and forward the answer.
 	Delivered string `json:"delivered,omitempty"`
@@ -179,6 +191,7 @@ type commandPlane struct {
 	retryDelay time.Duration
 
 	received, delivered, expired, duplicates atomic.Int64
+	staleDispatches, reconciled              atomic.Int64
 	refused                                  atomic.Int64
 	respForwarded, respRefused, respDropped  atomic.Int64
 	respAcked, respAckInFlight               atomic.Int64
@@ -312,9 +325,50 @@ func (a *Agent) startCommandPlane(ctx context.Context) error {
 		cp.respAcked.Store(int64(info.State.FirstSeq - 1))
 	}
 
+	a.reconcileCommands()
 	go a.runCommandInbox(ctx)
 	go a.runCommandResponses(ctx)
 	return nil
+}
+
+// reconcileCommands runs once at start, before the delivery loops. JetStream drops an inbox
+// message at MaxAge on its own clock and tells nobody, so a command that sat accepted while the
+// agent was stopped past that age has a ledger entry and no message for deliverCommand to find:
+// the UNSENT the cloud was promised would never be said. This finds every accepted entry already
+// past its deadline and says it. The answer carries the same message id as the one
+// deliverCommand sends, so an inbox message that does still exist collapses into it; the cloud
+// settles a command once either way. The entry moves to expired only after the answer is queued,
+// so a failure here is retried by the next start.
+func (a *Agent) reconcileCommands() {
+	cp := a.cmd
+	keys, err := cp.kv.Keys()
+	if err != nil {
+		if !errors.Is(err, nats.ErrNoKeysFound) {
+			a.log.Warn("could not list the command ledger to reconcile it", "err", err)
+		}
+		return
+	}
+	for _, token := range keys {
+		le, _, err := cp.get(token)
+		if err != nil || le.State != stAccepted || time.Now().Before(le.Deadline) {
+			continue
+		}
+		if !a.emitSynthetic(le.Device, token, le.Nonce, reachUnsent,
+			"the command expired at the edge agent before it could be delivered to the device", "expired:"+token) {
+			continue
+		}
+		if _, err := cp.mutate(token, func(e *ledgerEntry) bool {
+			if e.State != stAccepted {
+				return false
+			}
+			e.State = stExpired
+			return true
+		}); err != nil {
+			a.log.Warn("could not mark an expired command in the ledger", "command", token, "err", err)
+			continue
+		}
+		cp.reconciled.Add(1)
+	}
 }
 
 func (a *Agent) cmdAckWait() time.Duration {
@@ -492,6 +546,15 @@ func (a *Agent) repeatCommand(child string, env *commandEnvelope, le *ledgerEntr
 		if e.Nonce == env.DispatchNonce {
 			return false
 		}
+		for _, old := range e.Superseded {
+			if old == env.DispatchNonce {
+				return false // a late duplicate of a dispatch already replaced: never roll back
+			}
+		}
+		e.Superseded = append(e.Superseded, e.Nonce)
+		if n := len(e.Superseded); n > maxSupersededNonces {
+			e.Superseded = append([]string(nil), e.Superseded[n-maxSupersededNonces:]...)
+		}
 		e.Nonce = env.DispatchNonce
 		if e.State == stAnswered && len(e.Response) > 0 {
 			e.ReplayPending = true // durable with the nonce change itself
@@ -501,6 +564,12 @@ func (a *Agent) repeatCommand(child string, env *commandEnvelope, le *ledgerEntr
 	if err != nil {
 		a.log.Warn("could not record a re-dispatch's nonce; leaving the command unacknowledged", "err", err)
 		return false
+	}
+	if cur.Nonce != env.DispatchNonce {
+		// The ledger refused to go back to this nonce: the newer dispatch stays the one any
+		// answer is addressed to. Nothing more is owed for the stale copy.
+		cp.staleDispatches.Add(1)
+		return true
 	}
 	if cur.State == stExpired {
 		// Refused or expired earlier and never delivered: the new dispatch is refused too.

@@ -186,6 +186,15 @@ func (up *Uplink) clientOptions() *mqtt.ClientOptions {
 	opts.SetConnectRetry(false)
 	opts.SetConnectTimeout(up.connectTimeout)
 	opts.SetCleanSession(true)
+	// KNOWN LIMIT. The session is clean on purpose: the client id is the gateway device's
+	// presence identity, and a persistent session would change what the broker means by that
+	// device being online. The cost is on commands: a QoS 1 delivery whose acknowledgement is
+	// still withheld when the connection drops (the agent crashed between receiving it and
+	// storing it) is discarded by the broker and is not redelivered. The agent then holds
+	// neither the command nor a ledger entry, so nothing is actuated and nothing is said; the
+	// platform sees a dispatched command that no one answered and ends it as timed out, and a
+	// re-dispatch arrives as a fresh message that is accepted normally.
+	// (TestWithheldAckOnCleanSessionIsNotRedelivered pins this.)
 	if up.onCommand != nil {
 		// A command is acknowledged to the broker only once it is durable here, so paho must
 		// not acknowledge it when the handler returns.
