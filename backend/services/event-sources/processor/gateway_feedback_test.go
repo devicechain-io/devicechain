@@ -112,7 +112,9 @@ func TestNoAnswerIsOwedForADeviceOrAKeylessEvent(t *testing.T) {
 	fb := &recordedFeedback{}
 	h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) { s.UseGatewayFeedback(fb) })
 	own := &recordingAck{}
-	h.source.handle(capturedMsg(captureSubject, validEvent, 1, 5, own))
+	// A device's own message with a key in it: the key alone must not earn an answer, the
+	// gateway namespace is what does.
+	h.source.handle(capturedMsg(captureSubject, gatewayEvent("edge:i:e:own"), 1, 5, own))
 	keyless := &recordingAck{}
 	h.source.handle(capturedMsg(gatewaySubject, validEvent, 1, 6, keyless))
 	require.True(t, own.settled(t))

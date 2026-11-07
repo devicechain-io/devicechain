@@ -210,6 +210,10 @@ type Agent struct {
 	// counts the buffered events shed from the spool, by class.
 	classes     *classifier
 	shedByClass [numClasses]atomic.Int64
+	// shedMu serialises shed passes and guards shedCursor: the next sequence each class's
+	// scan resumes at (see shedOnce).
+	shedMu     sync.Mutex
+	shedCursor [numClasses]uint64
 }
 
 // New builds an Agent from validated config (the uplink credential is resolved

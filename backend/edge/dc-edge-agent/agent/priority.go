@@ -43,12 +43,14 @@ var classNames = [numClasses]string{config.ClassBulk, config.ClassStandard, conf
 const (
 	// shedEvery is how often the shedder looks at the spool.
 	shedEvery = 2 * time.Second
-	// shedScanLimit bounds the messages one pass reads, so a very deep spool cannot hold the
-	// shedder in one pass; the next pass continues.
-	shedScanLimit = 50000
 	// shedMsgOverhead approximates the per-message storage cost on top of subject and body.
 	shedMsgOverhead = 32
 )
+
+// shedScanLimit bounds the messages one pass reads per class, so a very deep spool cannot hold
+// the shedder in one pass; the next pass continues from where this one stopped. A variable only
+// so a test can make the window smaller than the prefix it must get past.
+var shedScanLimit = 50000
 
 type classifier struct{ rules []config.PriorityRule }
 
@@ -89,6 +91,8 @@ func (a *Agent) shedLoop(ctx context.Context) {
 // shedOnce brings the spool back under shedToFraction when it is over shedAtFraction, and
 // returns the events shed per class.
 func (a *Agent) shedOnce() [numClasses]int {
+	a.shedMu.Lock()
+	defer a.shedMu.Unlock()
 	var shed [numClasses]int
 	p := a.cfg.Local.Priority
 	limit := a.cfg.Local.SpoolMaxBytes
@@ -104,8 +108,14 @@ func (a *Agent) shedOnce() [numClasses]int {
 	var freed int64
 	// Lowest class first; safety is not in the list, which is what "never" means here.
 	for _, cls := range []int{classBulk, classStandard} {
+		// Each class resumes where its last pass stopped. A message at a lower sequence than
+		// the cursor is either of another class or already gone, and new messages only ever
+		// arrive above it, so nothing eligible is skipped. Restarting at the first sequence
+		// each pass would, behind a retained safety event, spend every pass's scan budget on
+		// the same prefix and never reach the events it is there to shed.
+		seq := max(a.shedCursor[cls], info.State.FirstSeq)
 		scanned := 0
-		for seq := info.State.FirstSeq; seq <= info.State.LastSeq && freed < need && scanned < shedScanLimit; seq++ {
+		for ; seq <= info.State.LastSeq && freed < need && scanned < shedScanLimit; seq++ {
 			scanned++
 			raw, err := a.js.GetMsg(captureStream, seq)
 			if err != nil {
@@ -120,7 +130,14 @@ func (a *Agent) shedOnce() [numClasses]int {
 			freed += int64(len(raw.Data) + len(raw.Subject) + shedMsgOverhead)
 			shed[cls]++
 		}
+		a.shedCursor[cls] = seq
 		if freed >= need {
+			break
+		}
+		// A higher class is shed only once this one is exhausted: if the scan budget ran out
+		// first, the next pass continues here rather than deleting standard events while bulk
+		// events remain beyond the window.
+		if seq <= info.State.LastSeq {
 			break
 		}
 	}

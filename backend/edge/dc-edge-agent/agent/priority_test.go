@@ -42,7 +42,7 @@ func priorityAgent(t *testing.T) *Agent {
 					{Match: "estop-*", Class: config.ClassSafety},
 					{Match: "cam-*", Class: config.ClassBulk},
 				},
-				ShedAtFraction: 0.05, ShedToFraction: 0.02,
+				ShedAtFraction: 0.05, ShedToFraction: 0.04,
 			},
 		},
 		Uplink: config.UplinkConfiguration{Tenant: "tenant1", GatewayToken: "gw1", BrokerURL: "tcp://127.0.0.1:1", ConnectTimeoutSeconds: 1},
@@ -84,10 +84,12 @@ func countDevice(t *testing.T, a *Agent, device string) int {
 // room from the lowest class first, and the safety class survives however much it must shed.
 func TestShedsBulkBeforeStandardAndNeverSafety(t *testing.T) {
 	a := priorityAgent(t)
-	// ~60 KiB each: 6 safety, 6 standard, 6 bulk is ~2 MiB against a 0.8 MiB threshold.
-	fill(t, a, "estop-1", 6)
-	fill(t, a, "t-1", 6)
-	fill(t, a, "cam-1", 6)
+	// ~60 KiB each: 16 events are ~1 MiB against a 0.84 MiB threshold, and the bulk events
+	// alone are enough to bring it back under. They are published FIRST, so shedding them
+	// advances the spool's first sequence, which is what the drop metric reads.
+	fill(t, a, "cam-1", 8)
+	fill(t, a, "estop-1", 4)
+	fill(t, a, "t-1", 4)
 
 	shed := a.shedOnce()
 	if shed[classBulk] == 0 {
@@ -96,12 +98,12 @@ func TestShedsBulkBeforeStandardAndNeverSafety(t *testing.T) {
 	if shed[classSafety] != 0 {
 		t.Fatalf("safety events were shed: %v", shed)
 	}
-	if got := countDevice(t, a, "estop-1"); got != 6 {
-		t.Fatalf("safety events remaining = %d, want 6", got)
+	if got := countDevice(t, a, "estop-1"); got != 4 {
+		t.Fatalf("safety events remaining = %d, want 4", got)
 	}
-	// Bulk is exhausted before standard is touched.
-	if shed[classStandard] > 0 && countDevice(t, a, "cam-1") != 0 {
-		t.Fatalf("standard events shed while bulk events remained: %v", shed)
+	// Enough bulk was shed to clear the threshold, so nothing of a higher class may have gone.
+	if shed[classStandard] != 0 || countDevice(t, a, "t-1") != 4 {
+		t.Fatalf("standard events shed while bulk events could cover it: %v", shed)
 	}
 	// A shed is not a ring eviction: the drop metric must not read it as one.
 	a.sampleMetrics()
@@ -117,9 +119,9 @@ func TestShedsBulkBeforeStandardAndNeverSafety(t *testing.T) {
 // bulk class can free.
 func TestShedsStandardOnlyWhenBulkIsNotEnoughAndStillNeverSafety(t *testing.T) {
 	a := priorityAgent(t)
+	fill(t, a, "cam-1", 1)
 	fill(t, a, "estop-1", 8)
 	fill(t, a, "t-1", 8)
-	fill(t, a, "cam-1", 1)
 
 	shed := a.shedOnce()
 	if shed[classStandard] == 0 {
@@ -138,5 +140,36 @@ func TestNoShedBelowTheThreshold(t *testing.T) {
 	fill(t, a, "cam-1", 1)
 	if shed := a.shedOnce(); shed != [numClasses]int{} {
 		t.Fatalf("shed %v below the threshold", shed)
+	}
+}
+
+// TestShedReachesPastARetainedSafetyPrefix: a safety event anchors the head of the spool, and the
+// scan window is smaller than the prefix. Restarting every pass at the first sequence would spend
+// each pass's whole window on the same retained events and never reach the bulk events behind
+// them; the cursor carries the scan forward, and standard events are not shed while bulk remain.
+func TestShedReachesPastARetainedSafetyPrefix(t *testing.T) {
+	old := shedScanLimit
+	shedScanLimit = 3
+	t.Cleanup(func() { shedScanLimit = old })
+	a := priorityAgent(t)
+	fill(t, a, "estop-1", 6) // the retained prefix, twice the window
+	fill(t, a, "cam-1", 8)
+	fill(t, a, "t-1", 2)
+
+	total := [numClasses]int{}
+	for pass := 0; pass < 20; pass++ {
+		shed := a.shedOnce()
+		for c := range total {
+			total[c] += shed[c]
+		}
+	}
+	if total[classBulk] == 0 {
+		t.Fatalf("no bulk event was ever shed: the scan never got past the safety prefix (%v)", total)
+	}
+	if total[classSafety] != 0 || countDevice(t, a, "estop-1") != 6 {
+		t.Fatalf("safety events were lost: %v", total)
+	}
+	if total[classStandard] != 0 || countDevice(t, a, "t-1") != 2 {
+		t.Fatalf("standard events were shed while bulk events could still be: %v", total)
 	}
 }
