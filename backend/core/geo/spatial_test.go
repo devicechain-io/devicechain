@@ -700,3 +700,21 @@ func TestBoundaryBandIsCoveredAtCellEdges(t *testing.T) {
 		t.Fatalf("checked %d probes", checked)
 	}
 }
+
+// TestDuplicateWithACorruptCoordinateIsStillADuplicate: the same candidate yielded twice, one
+// coordinate NaN, is a duplicate and not a conflict, and its valid installed position still answers.
+func TestDuplicateWithACorruptCoordinateIsStillADuplicate(t *testing.T) {
+	c := geo.Candidate{
+		Token:     "x",
+		Installed: &geo.Position{Lat: 0, Lon: 0},
+		Reported:  &geo.Fix{Position: geo.Position{Lat: math.NaN(), Lon: 1}, At: t0},
+		Freshness: time.Hour,
+	}
+	region := within(t, mustPolygon(t, square(0, 0, 1)))
+	for _, mode := range []geo.Mode{geo.ModeInstalled, geo.ModeEffective} {
+		got, err := geo.Query(seq([]geo.Candidate{c, c}), region, mode, t0)
+		if err != nil || len(got) != 1 || got[0].Source != geo.SourceInstalled {
+			t.Fatalf("%v: got %+v, %v", mode, got, err)
+		}
+	}
+}
