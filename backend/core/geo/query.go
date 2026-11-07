@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"math"
 	"sort"
 	"time"
 )
@@ -160,15 +161,25 @@ func Query(candidates iter.Seq[Candidate], region Region, mode Mode, at time.Tim
 	return out, nil
 }
 
+// sameCandidate compares two candidates by VALUE, bitwise on the coordinates. Struct equality is not
+// enough: NaN != NaN, so an identical duplicate carrying a corrupt coordinate would read as a
+// conflict even though Effective treats that coordinate as absent.
 func sameCandidate(a, b Candidate) bool {
 	if a.Token != b.Token || a.Freshness != b.Freshness {
 		return false
 	}
-	if (a.Installed == nil) != (b.Installed == nil) || (a.Installed != nil && *a.Installed != *b.Installed) {
+	if (a.Installed == nil) != (b.Installed == nil) || (a.Installed != nil && !samePosition(*a.Installed, *b.Installed)) {
 		return false
 	}
 	if (a.Reported == nil) != (b.Reported == nil) {
 		return false
 	}
-	return a.Reported == nil || (a.Reported.Position == b.Reported.Position && a.Reported.At.Equal(b.Reported.At))
+	return a.Reported == nil || (samePosition(a.Reported.Position, b.Reported.Position) && a.Reported.At.Equal(b.Reported.At))
+}
+
+func samePosition(a, b Position) bool {
+	return math.Float64bits(a.Lat) == math.Float64bits(b.Lat) &&
+		math.Float64bits(a.Lon) == math.Float64bits(b.Lon) &&
+		math.Float64bits(a.Elevation) == math.Float64bits(b.Elevation) &&
+		a.HasElevation == b.HasElevation
 }
