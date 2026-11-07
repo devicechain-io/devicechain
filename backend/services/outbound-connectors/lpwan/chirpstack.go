@@ -177,16 +177,24 @@ var grpcCodes = map[int]string{
 
 // ambiguousCode reports a gRPC status that does not prove the operation was rolled back: cancelled,
 // unknown, deadline exceeded, aborted, internal, unavailable, data loss. The REST proxy can answer
-// these with a 4xx after the queue insert completed.
+// these with a 4xx after the queue insert completed. A body that cannot be read or decoded is
+// ambiguous too; only an empty body or a decoded, unambiguous code is a clean refusal.
 func ambiguousCode(data []byte, readErr error) bool {
-	if readErr != nil || len(data) == 0 {
-		return false
+	if readErr != nil {
+		return true // the rejection's own words could not be read: nothing proves it rolled back
+	}
+	if len(data) == 0 {
+		return false // a bare status (a rate limiter, a proxy's refusal) names no gRPC outcome to doubt
 	}
 	var m struct {
 		Code int `json:"code"`
 	}
 	if json.Unmarshal(data, &m) != nil {
-		return false
+		// A body that does not decode is a truncated or foreign answer, and a truncated ABORTED is
+		// indistinguishable from a complete one. Reading it as a clean refusal would report the
+		// command UNSENT (safe to retry) while the downlink may already be queued, and a retried
+		// downlink actuates a physical device twice.
+		return true
 	}
 	switch m.Code {
 	case 1, 2, 4, 10, 13, 14, 15:

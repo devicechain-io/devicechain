@@ -1662,6 +1662,9 @@ type natsReader struct {
 	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
 	// instead of the default DeliverAll — see ReaderWithDeliverNew.
 	deliverNew bool
+	// deliverLookback, when positive, creates the durable at a start time that far in the past
+	// on first creation (DeliverByStartTimePolicy) — see ReaderWithDeliverLookback.
+	deliverLookback time.Duration
 	// ackFloorStart, when set, makes the durable an AckAll consumer created at the position
 	// it returns — see ReaderWithAckFloor.
 	ackFloorStart func(ctx context.Context) (uint64, error)
@@ -1789,6 +1792,22 @@ type ReaderOption func(*natsReader)
 // its ack cursor persists, so a restart still resumes from the last ack, not the tail.
 func ReaderWithDeliverNew() ReaderOption {
 	return func(r *natsReader) { r.deliverNew = true }
+}
+
+// ReaderWithDeliverLookback starts the durable, on first creation only, at the stream position
+// from d ago instead of at the tail (ReaderWithDeliverNew) or the beginning of the retained
+// history (the default). It is for a consumer that must not replay the whole retained stream the
+// first time it is enabled, yet must not lose what was published in the rollout window just
+// BEFORE its durable existed — the traffic of a producer that was switched on a moment before
+// this consumer was. The caller must make each message safe to see late (an idempotent or
+// predicated claim), because the window can hold messages that were already handled.
+//
+// Like every creation-time option the policy is frozen on the server: an existing durable is
+// kept exactly as it is (its start time is read back, not recomputed), so a restart resumes from
+// the last ack and a later pod's different "now" never makes AddConsumer refuse the durable.
+// It takes precedence over ReaderWithDeliverNew.
+func ReaderWithDeliverLookback(d time.Duration) ReaderOption {
+	return func(r *natsReader) { r.deliverLookback = d }
 }
 
 // termGatePoll is how often a term-gated reader re-evaluates its predicate while
@@ -2003,6 +2022,29 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 	return cfg
 }
 
+// pinLookback applies ReaderWithDeliverLookback to a consumer config. A durable that already
+// exists keeps the delivery policy it was created with (read back from the server); only a
+// first creation computes a start time from now.
+func (r *natsReader) pinLookback(cfg *nats.ConsumerConfig) error {
+	if r.deliverLookback <= 0 {
+		return nil
+	}
+	info, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable, nats.Context(r.nmgr.opContext()))
+	switch {
+	case err == nil:
+		cfg.DeliverPolicy = info.Config.DeliverPolicy
+		cfg.OptStartTime = info.Config.OptStartTime
+		cfg.OptStartSeq = info.Config.OptStartSeq
+	case errors.Is(err, nats.ErrConsumerNotFound):
+		start := time.Now().Add(-r.deliverLookback)
+		cfg.DeliverPolicy = nats.DeliverByStartTimePolicy
+		cfg.OptStartTime = &start
+	default:
+		return err
+	}
+	return nil
+}
+
 // bind (re)creates the durable consumer if needed and binds a pull subscription to
 // it WITHOUT owning its lifecycle. This is the fix for the rolling-update hazard: a
 // pull subscription that CREATED its consumer deletes it on Unsubscribe/Drain
@@ -2049,7 +2091,11 @@ func (r *natsReader) bindLocked() error {
 		// does (see opContext): a stop abandons a create or update still in flight rather than
 		// waiting out the client's request timeout on each call.
 		r.retireLegacyCaptureDurable()
-		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext())); err != nil {
+		cfg := r.consumerConfig()
+		if err := r.pinLookback(cfg); err != nil {
+			return err
+		}
+		if _, err := r.nmgr.js.AddConsumer(r.stream, cfg, nats.Context(r.nmgr.opContext())); err != nil {
 			return err
 		}
 		if err := r.reconcileFilterSubject(); err != nil {

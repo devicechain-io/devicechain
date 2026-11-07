@@ -93,6 +93,9 @@ func TestChirpStackOutcomeClassification(t *testing.T) {
 		{"500", 500, `{"code":13,"message":"boom"}`, cmddownlink.ReachUnanswered, false, "HTTP 500, INTERNAL"},
 		{"499 cancelled", 499, `{"code":1,"message":"x"}`, cmddownlink.ReachUnanswered, false, "CANCELLED"},
 		{"a 4xx carrying an ambiguous gRPC code", 400, `{"code":14,"message":"x"}`, cmddownlink.ReachUnanswered, false, "UNAVAILABLE"},
+		{"a 409 whose body is truncated may have queued the downlink", 409, `{"code":10,"mess`, cmddownlink.ReachUnanswered, false, "may have been queued"},
+		{"a 4xx with a body that is not JSON is not a clean refusal", 400, `<html>upstream</html>`, cmddownlink.ReachUnanswered, false, "may have been queued"},
+		{"a 409 ABORTED", 409, `{"code":10,"message":"x"}`, cmddownlink.ReachUnanswered, false, "ABORTED"},
 		{"408 is not proof of non-delivery", 408, ``, cmddownlink.ReachUnanswered, false, "may have been queued"},
 		{"502 html", 502, `<html>bad gateway</html>`, cmddownlink.ReachUnanswered, false, "HTTP 502"},
 		{"redirect is not followed and proves nothing", 302, ``, cmddownlink.ReachUnanswered, false, "HTTP 302"},
@@ -229,4 +232,23 @@ func TestChirpStackSendsTheExpiryWhenThereIsOne(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "2026-11-07T12:00:00Z", bodies[0]["queueItem"]["expiresAt"])
 	require.NotContains(t, bodies[1]["queueItem"], "expiresAt")
+}
+
+// A rejection whose body is cut off mid-stream (the connection drops after the headers) is not a
+// clean refusal: the queue insert may have completed, so it is unanswered, never safe to retry.
+func TestACutOffErrorBodyIsUnansweredNotUnsent(t *testing.T) {
+	for _, status := range []int{400, 409} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "500")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"code":3,"mess`))
+			w.(http.Flusher).Flush()
+			panic(http.ErrAbortHandler)
+		}))
+		_, err := NewChirpStackWithTransport(http.DefaultTransport).Enqueue(ctx5(t), target(t, srv.URL),
+			"0102030405060708", Params{FPort: 1, Data: []byte{1}}, time.Time{})
+		srv.Close()
+		se := sendErr(t, err)
+		require.Equal(t, cmddownlink.ReachUnanswered, se.Reach, "status %d", status)
+	}
 }

@@ -311,6 +311,8 @@ Any other parameter name is refused.
 
 Check the `lpwan_downlinks_total` metric by result to see where commands stop.
 
+**Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
+
 
 ## What an integration token can do {#trust}
 

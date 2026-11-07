@@ -37,7 +37,7 @@ const (
 	linkCacheTTL = 15 * time.Second
 	// linkCacheMax bounds the cache. At the bound it is dropped whole (it is an optimization only).
 	linkCacheMax = 1024
-	// maxLinkPages bounds the connector scan. A tenant with more lorawan_downlink connectors than
+	// maxLinkPages bounds the connector scan. A tenant with more connectors than
 	// this many pages is not a case to guess in: the lookup fails closed.
 	maxLinkPages = 10
 )
@@ -99,8 +99,12 @@ func (l *StoreLinks) resolve(ctx context.Context, tenant, integration string) (c
 	typ := string(model.ConnectorTypeLoRaWANDownlink)
 	var matches []candidate
 	for page := int32(1); ; page++ {
+		// 🔴 NO TYPE FILTER HERE. The list's type is the mutable DRAFT's; the link is the PUBLISHED
+		// snapshot's. Filtering on the draft would let an unpublished edit to another type hide a
+		// live link (and hide one of two links, bypassing the ambiguity refusal). The published
+		// type is checked below, on the snapshot dispatch actually uses.
 		res, err := l.store.Connectors(tctx, model.ConnectorSearchCriteria{
-			Type: &typ, Pagination: rdb.Pagination{PageNumber: page, PageSize: rdb.MaxPageSize},
+			Pagination: rdb.Pagination{PageNumber: page, PageSize: rdb.MaxPageSize},
 		})
 		if err != nil {
 			return connectorspec.LoRaWANDownlinkTarget{}, fmt.Errorf("list network-server links: %w", err)

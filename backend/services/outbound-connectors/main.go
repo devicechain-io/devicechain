@@ -196,6 +196,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
+// downlinkLookback is how far back the downlink adapter's durable starts when it is first created.
+const downlinkLookback = 30 * time.Minute
+
 // buildLpwan assembles the LoRaWAN downlink adapter. It fails closed at startup when anything the
 // path needs is not configured: an adapter that read commands it could not claim would send a
 // device a downlink twice, and one that could not answer would leave every command to time out.
@@ -218,7 +221,14 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 	if err != nil {
 		return nil, err
 	}
-	reader, err := nmgr.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew(),
+	// 🔴 A LOOKBACK, NOT THE TAIL. command-delivery starts dispatching integration commands the
+	// moment the downlink is switched on, which can be before this service's durable exists; a
+	// tail-only durable would skip those commands, already SENT and never re-published, and each
+	// would time out undelivered. The window covers the rollout. Replaying it is safe because
+	// every command is confirmed against its row by dispatch nonce before it actuates (a
+	// command already handled or re-armed loses that claim), and the durable's position is
+	// fixed at first creation, so a restart resumes from the last ack.
+	reader, err := nmgr.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverLookback(downlinkLookback),
 		messaging.ReaderWithCapacity(Configuration.MaxConcurrentSends))
 	if err != nil {
 		return nil, err

@@ -23,7 +23,8 @@ import (
 type connRow struct {
 	token     string
 	id        uint
-	typ       string
+	typ       string // the PUBLISHED type
+	draftTyp  string // the mutable draft's type, when it has been edited away from the published one
 	cfg       string
 	published bool
 	listErr   error
@@ -48,7 +49,11 @@ func (s *fakeStore) Connectors(ctx context.Context, c model.ConnectorSearchCrite
 		return out, nil
 	}
 	for _, r := range s.rows {
-		if c.Type != nil && r.typ != *c.Type {
+		dt := r.typ
+		if r.draftTyp != "" {
+			dt = r.draftTyp
+		}
+		if c.Type != nil && dt != *c.Type {
 			continue
 		}
 		var c model.Connector
@@ -145,6 +150,27 @@ func TestStoreLinksDefiniteAbsences(t *testing.T) {
 		}}
 		_, err := NewStoreLinks(st, sec).Resolve(context.Background(), "acme", "cs1")
 		require.NoError(t, err)
+	})
+	t.Run("a draft retyped away from the link does not hide the published link", func(t *testing.T) {
+		// Editing the draft of a published downlink connector to another type changes nothing live
+		// until it is published, so the live link must still resolve.
+		st := &fakeStore{rows: []connRow{{token: "a", id: 1, typ: lw, draftTyp: "mqtt", cfg: cfg("cs1"), published: true}}}
+		tg, err := NewStoreLinks(st, sec).Resolve(context.Background(), "acme", "cs1")
+		require.NoError(t, err)
+		require.Equal(t, "cs1", tg.Integration)
+	})
+	t.Run("hiding one of two published links by retyping its draft does not bypass the ambiguity refusal", func(t *testing.T) {
+		st := &fakeStore{rows: []connRow{
+			{token: "a", id: 1, typ: lw, cfg: cfg("cs1"), published: true},
+			{token: "b", id: 2, typ: lw, draftTyp: "mqtt", cfg: cfg("cs1"), published: true},
+		}}
+		_, err := NewStoreLinks(st, sec).Resolve(context.Background(), "acme", "cs1")
+		require.ErrorIs(t, err, ErrAmbiguous)
+	})
+	t.Run("a draft retyped TO the link type is not a link until published as one", func(t *testing.T) {
+		st := &fakeStore{rows: []connRow{{token: "a", id: 1, typ: "mqtt", draftTyp: lw, cfg: cfg("cs1"), published: true}}}
+		_, err := NewStoreLinks(st, sec).Resolve(context.Background(), "acme", "cs1")
+		require.ErrorIs(t, err, ErrNoLink)
 	})
 	t.Run("no credential: unusable", func(t *testing.T) {
 		st := &fakeStore{rows: []connRow{{token: "a", id: 9, typ: lw, cfg: cfg("cs1"), published: true}}}
