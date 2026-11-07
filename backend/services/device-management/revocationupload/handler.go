@@ -199,21 +199,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	res, err := h.api.PutDeviceRevocationList(ctx, &model.RevocationListPutRequest{
 		AnchorToken: token, Crl: buf.Bytes(), IssuerChainPem: chainPem,
 	})
-	if err != nil {
+	// The list is stored even when its sessions could not be confirmed ended; the answer says so.
+	if _, err = model.SessionsEndedOf(err); err != nil || res == nil {
 		h.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"issuerKey":    res.List.IssuerKey,
-		"issuerName":   res.List.IssuerName,
-		"crlNumber":    res.List.CrlNumber,
-		"thisUpdate":   res.List.ThisUpdate.UTC().Format(time.RFC3339),
-		"nextUpdate":   res.List.NextUpdate.UTC().Format(time.RFC3339),
-		"entryCount":   res.List.EntryCount,
-		"crlSha256":    res.List.CrlSha256,
-		"newlyRevoked": res.NewlyRevoked,
-		"unchanged":    res.Unchanged,
+		"issuerKey":     res.List.IssuerKey,
+		"issuerName":    res.List.IssuerName,
+		"crlNumber":     res.List.CrlNumber,
+		"thisUpdate":    res.List.ThisUpdate.UTC().Format(time.RFC3339),
+		"nextUpdate":    res.List.NextUpdate.UTC().Format(time.RFC3339),
+		"entryCount":    res.List.EntryCount,
+		"crlSha256":     res.List.CrlSha256,
+		"newlyRevoked":  res.NewlyRevoked,
+		"unchanged":     res.Unchanged,
+		"sessionsEnded": res.SessionsEnded,
 	})
 }
 

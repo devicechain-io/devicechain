@@ -88,11 +88,15 @@ const (
 	SessionKickDeviceDisabled    = "device-disabled"
 	SessionKickDeviceDeleted     = "device-deleted"
 	SessionKickDeviceReplaced    = "device-replaced"
+	// SessionKickCertificateRevoked: an X.509 certificate the device's session was admitted on has
+	// been revoked (a CA's list or the platform's own entry).
+	SessionKickCertificateRevoked = "certificate-revoked"
 )
 
 var sessionKickReasons = []string{
 	SessionKickCredentialChanged, SessionKickCredentialDeleted,
 	SessionKickDeviceDisabled, SessionKickDeviceDeleted, SessionKickDeviceReplaced,
+	SessionKickCertificateRevoked,
 }
 
 // SessionKickReply is the responder's answer. OK is true only when every server of the

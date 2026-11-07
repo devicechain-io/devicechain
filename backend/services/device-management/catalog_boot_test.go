@@ -93,7 +93,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, parseConfiguration())
 	safetyGates = governance.NewSafetyGates(Microservice)
 
-	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{})...)
+	db := putest.NewSQLiteDB(t, append(credentialTables(), &model.PendingOwnershipFact{}, &model.PendingSessionKick{}, &model.PendingRevocationKick{})...)
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
