@@ -26,6 +26,7 @@ type Documents = {
     "\n  query FailedEvents($criteria: FailedEventSearchCriteria!) {\n    failedEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        sourceArea\n        reason\n        reasonCode\n        deviceToken\n        eventType\n        error\n        correlation\n        suppressed\n        overflow\n        payloadStatus\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.FailedEventsDocument,
     "\n  query FailedEventSummary($since: String!) {\n    failedEventSummary(since: $since) {\n      reason\n      reasonCode\n      records\n      suppressed\n      devices {\n        deviceToken\n        records\n      }\n    }\n  }\n": typeof types.FailedEventSummaryDocument,
     "\n  query FailedEventCount($deviceToken: String!, $since: String!) {\n    failedEventCount(deviceToken: $deviceToken, since: $since)\n  }\n": typeof types.FailedEventCountDocument,
+    "\n  query EvaluateOutcome($definition: OutcomeDefinitionInput!) {\n    evaluateOutcome(definition: $definition) {\n      token\n      status\n      objectiveStatus\n      strayBuckets\n      span {\n        start\n        end\n        intervalSeconds\n        bucketCount\n      }\n      areas {\n        area\n        status\n        goodBuckets\n        badBuckets\n        emptyBuckets\n        totalBuckets\n        compliance\n        coverage\n        budgetRemaining\n      }\n      equity {\n        evaluatedAreas\n        excludedAreas\n        spreadUndefined\n        complete\n        worst\n        worstArea\n        median\n        spread\n        pooled\n        breached\n      }\n    }\n  }\n": typeof types.EvaluateOutcomeDocument,
 };
 const documents: Documents = {
     "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EventsDocument,
@@ -39,6 +40,7 @@ const documents: Documents = {
     "\n  query FailedEvents($criteria: FailedEventSearchCriteria!) {\n    failedEvents(criteria: $criteria) {\n      results {\n        id\n        occurredTime\n        sourceArea\n        reason\n        reasonCode\n        deviceToken\n        eventType\n        error\n        correlation\n        suppressed\n        overflow\n        payloadStatus\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.FailedEventsDocument,
     "\n  query FailedEventSummary($since: String!) {\n    failedEventSummary(since: $since) {\n      reason\n      reasonCode\n      records\n      suppressed\n      devices {\n        deviceToken\n        records\n      }\n    }\n  }\n": types.FailedEventSummaryDocument,
     "\n  query FailedEventCount($deviceToken: String!, $since: String!) {\n    failedEventCount(deviceToken: $deviceToken, since: $since)\n  }\n": types.FailedEventCountDocument,
+    "\n  query EvaluateOutcome($definition: OutcomeDefinitionInput!) {\n    evaluateOutcome(definition: $definition) {\n      token\n      status\n      objectiveStatus\n      strayBuckets\n      span {\n        start\n        end\n        intervalSeconds\n        bucketCount\n      }\n      areas {\n        area\n        status\n        goodBuckets\n        badBuckets\n        emptyBuckets\n        totalBuckets\n        compliance\n        coverage\n        budgetRemaining\n      }\n      equity {\n        evaluatedAreas\n        excludedAreas\n        spreadUndefined\n        complete\n        worst\n        worstArea\n        median\n        spread\n        pooled\n        breached\n      }\n    }\n  }\n": types.EvaluateOutcomeDocument,
 };
 
 /**
@@ -85,6 +87,10 @@ export function graphql(source: "\n  query FailedEventSummary($since: String!) {
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query FailedEventCount($deviceToken: String!, $since: String!) {\n    failedEventCount(deviceToken: $deviceToken, since: $since)\n  }\n"): typeof import('./graphql').FailedEventCountDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query EvaluateOutcome($definition: OutcomeDefinitionInput!) {\n    evaluateOutcome(definition: $definition) {\n      token\n      status\n      objectiveStatus\n      strayBuckets\n      span {\n        start\n        end\n        intervalSeconds\n        bucketCount\n      }\n      areas {\n        area\n        status\n        goodBuckets\n        badBuckets\n        emptyBuckets\n        totalBuckets\n        compliance\n        coverage\n        budgetRemaining\n      }\n      equity {\n        evaluatedAreas\n        excludedAreas\n        spreadUndefined\n        complete\n        worst\n        worstArea\n        median\n        spread\n        pooled\n        breached\n      }\n    }\n  }\n"): typeof import('./graphql').EvaluateOutcomeDocument;
 
 
 export function graphql(source: string) {

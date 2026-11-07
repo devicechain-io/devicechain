@@ -206,6 +206,32 @@ export type MeasurementAggregationCriteria = {
   startTime?: string | null | undefined;
 };
 
+/** EXPERIMENTAL. An outcome: a target over one measurement, per area, with a window and an error budget. */
+export type OutcomeDefinitionInput = {
+  /** Which aggregate of each bucket is judged: AVG, MIN or MAX. */
+  aggregation: string;
+  /** Tokens of the areas judged, each on its own. At most 25. */
+  areas: Array<string>;
+  /** How the aggregate is held against the threshold: LT, LTE, GT or GTE. */
+  comparator: string;
+  /** Bucket width, in seconds: a whole number of minutes that divides a day. */
+  intervalSeconds: number;
+  /** The largest allowed gap, as a fraction, between the median area's compliance and the worst area's; omit or 0 for no limit. */
+  maxEquitySpread?: number | null | undefined;
+  /** Measurement name to judge. */
+  metric: string;
+  /** Readings a bucket needs to be judged; omit for 1. */
+  minSamples?: number | null | undefined;
+  /** Share of buckets that must be good, from 0.001 to 0.999. */
+  objective: number;
+  /** The threshold the aggregate is compared to. */
+  threshold: number;
+  /** Stable token of the outcome, echoed back so a client can match the answer to the request. */
+  token: string;
+  /** Length of the trailing window, in seconds. At most 31 days. */
+  windowSeconds: number;
+};
+
 export type EventsQueryVariables = Exact<{
   criteria: EventSearchCriteria;
 }>;
@@ -290,6 +316,13 @@ export type FailedEventCountQueryVariables = Exact<{
 
 
 export type FailedEventCountQuery = { failedEventCount: number };
+
+export type EvaluateOutcomeQueryVariables = Exact<{
+  definition: OutcomeDefinitionInput;
+}>;
+
+
+export type EvaluateOutcomeQuery = { evaluateOutcome: { token: string, status: string, objectiveStatus: string, strayBuckets: number, span: { start: string, end: string, intervalSeconds: number, bucketCount: number }, areas: Array<{ area: string, status: string, goodBuckets: number, badBuckets: number, emptyBuckets: number, totalBuckets: number, compliance: number, coverage: number, budgetRemaining: number }>, equity: { evaluatedAreas: number, excludedAreas: number, spreadUndefined: boolean, complete: boolean, worst: number | null, worstArea: string | null, median: number | null, spread: number | null, pooled: number, breached: boolean } } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -489,3 +522,42 @@ export const FailedEventCountDocument = new TypedDocumentString(`
   failedEventCount(deviceToken: $deviceToken, since: $since)
 }
     `) as unknown as TypedDocumentString<FailedEventCountQuery, FailedEventCountQueryVariables>;
+export const EvaluateOutcomeDocument = new TypedDocumentString(`
+    query EvaluateOutcome($definition: OutcomeDefinitionInput!) {
+  evaluateOutcome(definition: $definition) {
+    token
+    status
+    objectiveStatus
+    strayBuckets
+    span {
+      start
+      end
+      intervalSeconds
+      bucketCount
+    }
+    areas {
+      area
+      status
+      goodBuckets
+      badBuckets
+      emptyBuckets
+      totalBuckets
+      compliance
+      coverage
+      budgetRemaining
+    }
+    equity {
+      evaluatedAreas
+      excludedAreas
+      spreadUndefined
+      complete
+      worst
+      worstArea
+      median
+      spread
+      pooled
+      breached
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<EvaluateOutcomeQuery, EvaluateOutcomeQueryVariables>;

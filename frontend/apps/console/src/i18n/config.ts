@@ -114,6 +114,7 @@ export const NAMESPACES = [
   'integrations',
   'commandBatches',
   'ingestFailures',
+  'outcomes',
   'updateSigners',
   'branding',
   'basemap',

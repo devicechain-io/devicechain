@@ -352,6 +352,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// unless an operator disables it.
 			Api = model.NewApi(RdbManager)
 			Api.RollupReadsDisabled = Configuration.Lifecycle.DisableRollupReads
+			Api.OutcomesEnabled = Configuration.Experimental.Outcomes
 
 			// Reconcile the TimescaleDB data-lifecycle policies (ADR-026) now that the
 			// hypertables exist — the migrations ran in the manager's initialize, which has

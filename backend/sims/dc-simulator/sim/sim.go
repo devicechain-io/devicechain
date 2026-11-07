@@ -441,6 +441,7 @@ var Registry = map[string]func(int64, Load) Sim{
 	"sitepulse":     NewSitepulse,
 	"fleetpulse":    NewFleetpulse,
 	"towerpulse":    NewTowerpulse,
+	"citypulse":     NewCitypulse,
 }
 
 // ManifestIds returns the Registry's known manifest ids, sorted — a single

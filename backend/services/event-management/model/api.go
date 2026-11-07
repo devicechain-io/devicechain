@@ -24,6 +24,10 @@ type Api struct {
 	// kill-switch, set from config in main). The zero value keeps the rollup path on.
 	RollupReadsDisabled bool
 
+	// OutcomesEnabled switches on the experimental outcome evaluation (set from config in main).
+	// Off by default; while off the evaluation is refused and reads nothing.
+	OutcomesEnabled bool
+
 	// Backfill is what the calculated-metric backfill API checks a request against (ADR-082).
 	// Nil until main builds it; every start is then UNAVAILABLE.
 	Backfill *BackfillRuntime

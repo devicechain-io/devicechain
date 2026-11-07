@@ -125,6 +125,7 @@ describe('the shipped registries carry every namespace', () => {
     identityProviders: () => import('@/i18n/lazy/identityProviders'),
     ingestFailures: () => import('@/i18n/lazy/ingestFailures'),
     integrations: () => import('@/i18n/lazy/integrations'),
+    outcomes: () => import('@/i18n/lazy/outcomes'),
     updates: () => import('@/i18n/lazy/updates'),
   };
 
