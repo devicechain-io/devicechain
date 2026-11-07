@@ -71,6 +71,7 @@ use (
 	./backend/tools/promqlguard
 	./backend/tools/rdbguard
 	./backend/tools/subconfirm
+	./backend/tools/transportmatrix
 	./deploy
 	./examples/ota-device
 )

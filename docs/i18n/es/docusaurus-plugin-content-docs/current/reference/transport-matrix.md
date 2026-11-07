@@ -8,7 +8,12 @@ title: Matriz de capacidades por transporte
 Esta página muestra qué hace hoy cada transporte, en cada dirección, y nombra las carencias.
 
 :::info El código es la fuente de verdad
-Esta página se mantiene a mano contra la implementación, no se genera, así que puede quedarse atrás.
+El texto de esta página se mantiene a mano contra la implementación, así que puede quedarse atrás. Los
+símbolos de la tabla de transportes de dispositivo y de la tabla de operaciones LwM2M son distintos: se
+generan a partir de una suite de conformidad que ejerce una instancia real con clientes escritos por
+terceros (Eclipse Paho, Eclipse Leshan, Eclipse Tahu y curl), y cada círculo lleno de ellas nombra
+comprobaciones que pasaron contra una compilación reciente, cada una de las cuales antes se demostró que
+falla ante un defecto introducido a propósito.
 Cuando ella y tu instancia discrepen, tu instancia tiene razón. Cada afirmación de más abajo se leyó
 del servicio que la implementa, no de un documento de diseño; todo lo que no pudo establecerse así
 aparece marcado como tal en lugar de rellenado. Una celda que exagera lo que hace la plataforma es un
@@ -47,6 +52,8 @@ pregunta real.
 ## Transportes de dispositivo
 
 Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vuelta.
+
+{/* conformance:table device-transports */}
 
 | Transporte | Lectura | Escritura | Suscripción |
 | --- | :---: | :---: | :---: |
@@ -352,6 +359,8 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
   [comandos para un dispositivo ausente](../concepts/commands.md#commands-to-a-device-that-is-away).
 
 #### Operaciones LwM2M en detalle
+
+{/* conformance:table lwm2m-operations */}
 
 | Operación | | Notas |
 | --- | :---: | --- |

@@ -8,7 +8,11 @@ title: Transport Capability Matrix
 This page shows what each transport does today, in each direction, and names the gaps.
 
 :::info The code is the source of truth
-This page is maintained by hand against the implementation, not generated, so it can fall behind.
+The prose on this page is maintained by hand against the implementation, so it can fall behind. The
+symbols in the device-transport table and in the LwM2M operations table are different: they are
+generated from a conformance suite that drives a real instance with clients somebody else wrote
+(Eclipse Paho, Eclipse Leshan, Eclipse Tahu and curl), and every filled circle in them names checks
+that passed against a recent build, each shown to fail on a planted defect first.
 Where it and your instance disagree, your instance is right. Every claim below was read from the
 service that implements it, not from a design document; anything that could not be established that
 way is marked as such rather than filled in. A cell that overstates what the platform does is a bug
@@ -45,6 +49,8 @@ device transport, so **None** there is always a real answer to a real question.
 ## Device transports
 
 How devices reach the platform, and how the platform reaches back.
+
+{/* conformance:table device-transports */}
 
 | Transport | Read | Write | Subscribe |
 | --- | :---: | :---: | :---: |
@@ -331,6 +337,8 @@ For constrained devices over CoAP/UDP with DTLS.
   [commands to a device that is away](../concepts/commands.md#commands-to-a-device-that-is-away).
 
 #### LwM2M operations in detail
+
+{/* conformance:table lwm2m-operations */}
 
 | Operation | | Notes |
 | --- | :---: | --- |

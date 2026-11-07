@@ -1532,6 +1532,24 @@ jobs:
       - name: Every shipped alert is documented, in every locale
         run: hack/check-docs-alert-coverage.sh
 
+      # The symbol cells of the transport matrix are generated from the conformance rig's results
+      # (hack/conformance-rig.sh): a filled circle names the third-party-client checks behind it, and
+      # the results say whether they passed. A hand-edited cell, in any of the three locales, is a
+      # claim nothing substantiates. The check re-renders the pages and fails on any difference.
+      # Self-test first: it proves the guard fails on a hand edit, on results from a dirty tree, on a
+      # negative control that never went red and on stale results, before it is trusted to pass.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: backend/tools/transportmatrix/go.mod
+
+      - name: Transport-matrix guard self-test
+        run: hack/check-transport-matrix.sh --self-test
+
+      - name: Transport-matrix cells match the conformance results, in every locale
+        run: hack/check-transport-matrix.sh
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 26

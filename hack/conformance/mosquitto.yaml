@@ -1,0 +1,58 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The operator-owned MQTT broker the Sparkplug scenarios use: a stand-in for the plant broker a
+# Sparkplug source reads from. Plain, anonymous, in a namespace of its own; the rig deletes the
+# namespace on `down`. The image is substituted by the rig (@IMAGE@) so one pin serves the script.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: conformance-broker
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto
+  namespace: conformance-broker
+data:
+  mosquitto.conf: |
+    listener 1883 0.0.0.0
+    allow_anonymous true
+    persistence false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto
+  namespace: conformance-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mosquitto}
+  template:
+    metadata:
+      labels: {app: mosquitto}
+    spec:
+      containers:
+        - name: mosquitto
+          image: @IMAGE@
+          ports:
+            - {name: mqtt, containerPort: 1883}
+          volumeMounts:
+            - {name: conf, mountPath: /mosquitto/config/mosquitto.conf, subPath: mosquitto.conf}
+          readinessProbe:
+            tcpSocket: {port: 1883}
+      volumes:
+        - name: conf
+          configMap: {name: mosquitto}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mosquitto
+  namespace: conformance-broker
+spec:
+  type: NodePort
+  selector: {app: mosquitto}
+  ports:
+    - {name: mqtt, port: 1883, targetPort: 1883, nodePort: 31884}
