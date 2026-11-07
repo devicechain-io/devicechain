@@ -217,7 +217,7 @@ const PullUnpullableReason = "DELIVERY_TOO_LARGE: the command's payload is too l
 // failUnpullable ends a command that no pull answer can carry: FAILED, outcome NOT_DELIVERED, with
 // attempts untouched, on the state the read saw (so a command another claimer took is left alone).
 func (api *Api) failUnpullable(ctx context.Context, c *Command, deviceToken string) error {
-	tx := api.RDB.DB(ctx).Model(&Command{}).
+	tx := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: c.ID}}).
 		Where("id = ? AND device_token = ? AND status = ? AND delivered_time IS NULL", c.ID, deviceToken, c.Status)
 	if c.Status == CommandSent.String() {
 		tx = tx.Where("dispatch_nonce = ?", c.DispatchNonce)
@@ -259,7 +259,7 @@ func (api *Api) claimForPull(ctx context.Context, c *Command, deviceToken string
 	now := time.Now()
 	liveSQL, liveArgs := liveWhere(now)
 	heldSQL, heldArgs := dispatchableNowWhere(now)
-	claim := api.RDB.DB(ctx).Model(&Command{}).
+	claim := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: c.ID}}).
 		Where("id = ? AND device_token = ?", c.ID, deviceToken).
 		Where("COALESCE(delivery_attempts, 0) < COALESCE(max_attempts, ?)", DefaultPullMaxAttempts).
 		Where(liveSQL, liveArgs...).

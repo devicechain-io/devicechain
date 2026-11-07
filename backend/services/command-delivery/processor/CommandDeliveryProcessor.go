@@ -1474,6 +1474,10 @@ func (cproc *CommandDeliveryProcessor) failUnacknowledgedPulls(ctx context.Conte
 	if !ok {
 		return
 	}
+	// System context on purpose, as the sweep around it: this ends exhausted, unacknowledged pull
+	// hand-outs for EVERY tenant in one statement, a device that stopped pulling having no request
+	// to carry its tenant. It only moves SENT rows whose attempts are spent to FAILED, and reads and
+	// writes nothing of any tenant's beyond that row's own state.
 	failed, err := failer.FailUnacknowledgedPulls(core.WithSystemContext(ctx), "", time.Now())
 	if err != nil {
 		log.Error().Err(err).Msg("unable to fail unacknowledged pull-channel commands")
