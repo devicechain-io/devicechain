@@ -101,6 +101,8 @@ const LEGACY_LABEL: Record<string, string> = {
   maxSeries: 'widgetLabelMaxSeries',
   // Appended with the history table.
   oldestFirst: 'widgetLabelOldestFirst',
+  // Appended with the status grid.
+  worstFirst: 'widgetLabelWorstFirst',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -152,6 +154,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   markCommands: 'widgetHintMarkCommands',
   maxSeries: 'widgetHintMaxSeries',
   oldestFirst: null,
+  worstFirst: 'widgetHintWorstFirst',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -372,7 +375,7 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
     // measurement name shows ONE device (a group would mix its devices' readings), so only the
     // fleet widgets -- the fleet table, the fleet count, the online doughnut, the bar chart and the time-series chart, whose
     // one-bar-or-line-per-device modes read a group -- are offered a group, beside the alarm and map widgets.
-    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count' || type === 'timeseries-chart' || type === 'online-doughnut';
+    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count' || type === 'timeseries-chart' || type === 'online-doughnut' || type === 'status-grid';
     const takesGroup = channel === 'alarm' || channel === 'location' || (channel === 'measurement' && fleet);
     expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(takesGroup);
   });

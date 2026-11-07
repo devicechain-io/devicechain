@@ -310,7 +310,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut, History table |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut, History table, Status grid, State timeline |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count, Alarm severity |
 | Control | Command button, Command slider, Command toggle |
@@ -486,6 +486,21 @@ The settings depend on the widget. Common ones:
   not be read is noted apart ("1 could not be read") and left out of the ring. It reads the first
   500 devices of a group and says "Showing 500 of N devices" when the group is larger. **Stale
   after** marks the ring stale once the group's status has not been read for that many seconds.
+- **Status grid**: one tile per device of a group, for one measurement, each coloured by the
+  threshold band of that device's own latest reading and printing its name and value. It answers
+  "which of my devices need me" at a glance where the fleet table answers "what are their numbers".
+  A device with no reading is drawn hollow and dashed, and is counted apart in the legend (*No
+  reading*); it is never drawn as OK. **Measurement** and **Thresholds** choose what is shown and
+  where the bands start, **Worst first** leads with the most severe devices, and **Unit** and
+  **Precision** format the value. It reads the first 400 devices of a group and says "Showing 400
+  of N devices" when the group is larger.
+- **State timeline**: discrete states over time. It has a lane per measurement of one device and
+  draws each lane as runs of a state across the dashboard's time range. The states are the
+  **Thresholds** rows: each starts a state at its value and lasts until the next row, and its
+  label (for example *Stopped*, *Running*, *Fault*) and level name and colour it. Below the first
+  row the lane reads *Normal*. Each stretch is the state of a time bucket's average, not an exact
+  moment of change, and the widget says so ("state of the average per 5m"); a bucket with no
+  readings is drawn hollow as *No readings* and is never merged into the state beside it.
 - **History table**: one device's stored history as a table. It has a row per time bucket, newest
   first, and a column per measurement, each cell the average of that measurement's readings in the
   bucket. It follows the dashboard's time range, or its own **Time span** when you set one, and the

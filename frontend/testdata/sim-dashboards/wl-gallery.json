@@ -1499,6 +1499,90 @@
         "title": "Sensor history"
       },
       "type": "history-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "zone"
+      },
+      "id": "wl-status-grid",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 6,
+          "mode": "grid",
+          "row": 66,
+          "rows": 4
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "thresholds": [
+          {
+            "label": "Nominal",
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "label": "Warm",
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "label": "Hot",
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Sensor temperatures",
+        "unit": "C",
+        "worstFirst": true
+      },
+      "type": "status-grid"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-state-timeline",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 66,
+          "rows": 4
+        }
+      },
+      "options": {
+        "thresholds": [
+          {
+            "label": "Nominal",
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "label": "Warm",
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "label": "Hot",
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Sensor state"
+      },
+      "type": "state-timeline"
     }
   ]
 }

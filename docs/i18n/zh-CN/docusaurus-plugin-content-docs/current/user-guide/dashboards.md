@@ -133,6 +133,10 @@ import GuideShot from '@site/src/components/GuideShot';
 
 另有两个组件回答关于设备群的第一个问题：是否在线。设备状态卡片把一台设备显示为 *Online*（在线）或 *Offline*（离线），并给出它上次被看到的时间；在线环形图则按设备组中在线、离线或尚无状态的设备数量划分一个圆环。它们读取的是平台记录的设备状态，而不是设备的读数。
 
+状态网格为设备组中的每台设备显示一个方块，针对一个测量值，方块按该设备自己最新读数所处的阈值区间着色，并显示设备名称和数值。车队表格回答“它们的数字是多少”，状态网格则让你一眼看出哪些设备需要处理。没有读数的设备以空心虚线方块显示，并在图例中单独计数（*No reading*），绝不会显示为正常。**Measurement**（测量值）和 **Thresholds**（阈值）决定显示内容和区间的起点，**Worst first**（最严重优先）把最严重的设备排在前面。它读取设备组的前 400 台设备，设备组更大时会注明“Showing 400 of N devices”。
+
+状态时间线显示随时间变化的离散状态：一台设备的每个测量值占一条泳道，按仪表板时间范围画出一段段状态。状态就是 **Thresholds** 的各行：每行从其数值开始一个状态，持续到下一行，行的标签（例如 *Stopped*、*Running*、*Fault*）和级别为它命名并着色；低于第一行时泳道显示 *Normal*。每一段是某个时间桶平均值所处的状态，而不是精确的变化时刻，组件会注明（*state of the average per 5m*）；没有读数的时间桶以空心显示为 *No readings*，绝不会并入相邻状态。
+
 历史表格把一台设备已存储的历史列成行：在仪表板时间范围内每个时间桶一行，每个测量一列。每个数字都是该桶内读数的**平均值**，而不是一次读数，表格会在行的下方注明（*avg per 5m*）；时间是该桶的起点。可用它查看图表背后的数字。它的设置见[配置组件](#configuring-a-widget)。
 
 ### 下载组件的数据 {#downloading-a-widgets-data}
@@ -184,7 +188,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 | 分组 | 组件 |
 |---|---|
-| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环）、Stat card（统计卡片）、Bar chart（柱状图）、Pie chart（饼图）、Fleet table（车队表格）、Fleet count（车队计数）、Device status（设备状态）、Online doughnut（在线环形图）、History table（历史表格） |
+| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环）、Stat card（统计卡片）、Bar chart（柱状图）、Pie chart（饼图）、Fleet table（车队表格）、Fleet count（车队计数）、Device status（设备状态）、Online doughnut（在线环形图）、History table（历史表格）、Status grid（状态网格）、State timeline（状态时间线） |
 | Static（静态） | Label（标签）、Image（图片） |
 | Alarms（告警） | Alarm table（告警表）、Alarm count（告警计数）、Alarm severity（告警严重级别） |
 | Control（控制） | Command button（命令按钮）、Command slider（命令滑块）、Command toggle（命令开关） |

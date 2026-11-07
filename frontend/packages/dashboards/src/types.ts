@@ -186,6 +186,8 @@ export const WIDGET_TYPES = [
   'device-status',
   'online-doughnut',
   'history-table',
+  'status-grid',
+  'state-timeline',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
