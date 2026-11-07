@@ -890,7 +890,7 @@ cmd_run() {
   # platform only if nothing that is built into the instance differs between the two. The tools, the
   # clients and the docs are not part of it; everything else under backend/ and deploy/ is.
   local built
-  built="$(sed -n 's/^cf-\([0-9a-f]*\)-.*//p' <<<"$want_tag")"
+  built="$(sed -n 's/^cf-\([0-9a-f]*\)-.*/\1/p' <<<"$want_tag")"
   git -C "$repo_root" diff --quiet "$built" HEAD -- backend deploy ':(exclude)backend/tools' ':(exclude)backend/services/lwm2m-ingest/interop' ||
     fail "the instance was built from $built, and HEAD differs from it in code the instance runs: run 'down' and 'up' again, so the results name a tree they tested"
   note "the instance was built from $built; HEAD differs from it only in tooling, clients and docs"
