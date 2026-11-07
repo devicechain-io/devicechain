@@ -462,3 +462,123 @@ func TestValidatorRejectsAMisnamedInputKey(t *testing.T) {
 		t.Errorf("want a rejection naming assetTypeTok, got %v", errs)
 	}
 }
+
+// realExport is a regenerated, anonymised export of a small fleet taken from a live instance of
+// another platform through its REST API: ids are rewritten, tokens regenerated, and nothing in it
+// is a secret. It is the first input this importer has seen that no one wrote by hand.
+const realExport = "testdata/real-export"
+
+func realPlan(t *testing.T, o Options) *Plan {
+	t.Helper()
+	ex, err := Load(realExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Build(ex, o)
+}
+
+func TestRealExportBuilds(t *testing.T) {
+	p := realPlan(t, Options{CarryAccessTokens: true})
+	if len(p.Profiles) != 3 || len(p.AssetTypes) != 3 || len(p.Assets) != 4 || len(p.Devices) != 20 {
+		t.Fatalf("counts: %d profiles, %d asset types, %d assets, %d devices",
+			len(p.Profiles), len(p.AssetTypes), len(p.Assets), len(p.Devices))
+	}
+	if carried(p.Devices) != 20 {
+		t.Errorf("every device has an access token, %d carried", carried(p.Devices))
+	}
+	if len(p.Parents) != 3 {
+		t.Errorf("three floors sit under the building: %+v", p.Parents)
+	}
+	// 20 devices x (serial, installed, calibration, location, targetTemp); the connectivity
+	// keys the source maintains itself are not copied.
+	if len(p.Attributes) != 100 {
+		t.Errorf("attributes: %d", len(p.Attributes))
+	}
+}
+
+func TestRealExportNullCustomerIsNoCustomer(t *testing.T) {
+	p := realPlan(t, Options{})
+	named := 0
+	for _, d := range p.Devices {
+		if strings.Contains(d.Metadata, "customerId") {
+			named++
+		}
+	}
+	// The source writes an all-sentinel customer id on every entity that has none; only the one
+	// device actually assigned to a customer may name one.
+	if named != 1 {
+		t.Errorf("%d devices carry a customer id, want 1", named)
+	}
+	for _, l := range p.Report {
+		if l.Kind == "CUSTOMER" && l.Class == Partial && l.Ref != "1" {
+			t.Errorf("customer reference count: %+v", l)
+		}
+	}
+}
+
+func TestRealExportAttributesAreTypedFromTheirJSONShape(t *testing.T) {
+	p := realPlan(t, Options{})
+	got := map[string]string{}
+	for _, a := range p.Attributes {
+		got[a.Key] = a.ValueType
+		if a.Key == "active" || a.Key == "inactivityAlarmTime" {
+			t.Errorf("platform-maintained key %q was copied", a.Key)
+		}
+	}
+	want := map[string]string{"serial": "STRING", "installed": "BOOLEAN", "calibration": "DOUBLE", "location": "JSON", "targetTemp": "LONG"}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("attribute %s typed %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestUntypedValue(t *testing.T) {
+	for _, c := range []struct{ in, vt, v string }{
+		{`"x"`, "STRING", "x"}, {`true`, "BOOLEAN", "true"}, {`false`, "BOOLEAN", "false"},
+		{`7`, "LONG", "7"}, {`-7`, "LONG", "-7"}, {`1.5`, "DOUBLE", "1.5"}, {`1e3`, "DOUBLE", "1e3"},
+		{`{"a":1}`, "JSON", `{"a":1}`}, {`[1]`, "JSON", `[1]`},
+	} {
+		vt, v, ok := untypedValue([]byte(c.in))
+		if !ok || vt != c.vt || v != c.v {
+			t.Errorf("%s -> %q %q %v", c.in, vt, v, ok)
+		}
+	}
+	for _, in := range []string{``, `null`, `nul`, `tru`} {
+		if _, _, ok := untypedValue([]byte(in)); ok {
+			t.Errorf("%q must carry no value", in)
+		}
+	}
+}
+
+func TestReportGroupsRepeatedMessages(t *testing.T) {
+	p := realPlan(t, Options{})
+	var out bytes.Buffer
+	PrintReport(&out, p)
+	text := out.String()
+	if n := strings.Count(text, "platform-maintained attribute(s)"); n != 1 {
+		t.Errorf("the per-device attribute note must print once, printed %d times:\n%s", n, text)
+	}
+	if !strings.Contains(text, "(and 19 more like it)") {
+		t.Errorf("a grouped line must say how many it stands for:\n%s", text)
+	}
+	if len(p.Report) < 40 {
+		t.Errorf("grouping is for the text only; the plan keeps every line, got %d", len(p.Report))
+	}
+}
+
+func TestRealExportValidatesAgainstTheServedSchema(t *testing.T) {
+	schema := servedSchema(t)
+	f := &fake{}
+	if _, err := Apply(context.Background(), f, "http://x", realPlan(t, Options{CarryAccessTokens: true})); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.calls) == 0 {
+		t.Fatal("nothing was sent")
+	}
+	for _, c := range f.calls {
+		if errs := schema.ValidateWithVariables(c.query, c.vars); len(errs) > 0 {
+			t.Errorf("%s: %v", c.query, errs)
+		}
+	}
+}

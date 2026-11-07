@@ -43,15 +43,19 @@ type Relation struct {
 	AdditionalInfo json.RawMessage `json:"additionalInfo,omitempty"`
 }
 
-// Attribute is one attribute row; exactly one of the value members is normally set.
+// Attribute is one attribute row. Two shapes occur in the wild and both are read: the typed
+// members (booleanValue, strValue, longValue, doubleValue, jsonValue), of which exactly one is
+// normally set, and the untyped "value" member a platform's REST API returns, where the JSON
+// type of the value carries the type.
 type Attribute struct {
-	Key          string   `json:"key"`
-	LastUpdateTs int64    `json:"lastUpdateTs"`
-	BooleanValue *bool    `json:"booleanValue,omitempty"`
-	StrValue     *string  `json:"strValue,omitempty"`
-	LongValue    *int64   `json:"longValue,omitempty"`
-	DoubleValue  *float64 `json:"doubleValue,omitempty"`
-	JSONValue    *string  `json:"jsonValue,omitempty"`
+	Key          string          `json:"key"`
+	LastUpdateTs int64           `json:"lastUpdateTs"`
+	Value        json.RawMessage `json:"value,omitempty"`
+	BooleanValue *bool           `json:"booleanValue,omitempty"`
+	StrValue     *string         `json:"strValue,omitempty"`
+	LongValue    *int64          `json:"longValue,omitempty"`
+	DoubleValue  *float64        `json:"doubleValue,omitempty"`
+	JSONValue    *string         `json:"jsonValue,omitempty"`
 }
 
 // Credentials is a device's credentials as the export carries them.
@@ -170,8 +174,15 @@ func Parse(raw []byte) ([]Record, error) {
 	return recs, nil
 }
 
+// nullUUID is what the source writes in an id member that points at nothing: every entity
+// carries a customerId, and "no customer" is this all-sentinel value, not an absent member.
+const nullUUID = "13814000-1dd2-11b2-8080-808080808080"
+
 func (r Record) entity() (Entity, error) {
 	var e Entity
 	err := json.Unmarshal(r.Entity, &e)
+	if e.Customer != nil && (e.Customer.ID == nullUUID || e.Customer.ID == "") {
+		e.Customer = nil
+	}
 	return e, err
 }

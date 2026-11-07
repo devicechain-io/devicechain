@@ -1,0 +1,154 @@
+{
+  "entityType": "DEVICE_PROFILE",
+  "entity": {
+    "id": {
+      "entityType": "DEVICE_PROFILE",
+      "id": "214f7c75-88b1-5cd9-94c0-86a6d99f2755"
+    },
+    "createdTime": 1794035289566,
+    "name": "Thermostat",
+    "description": "Sample Thermostat",
+    "image": null,
+    "type": "DEFAULT",
+    "transportType": "DEFAULT",
+    "provisionType": "DISABLED",
+    "defaultRuleChainId": null,
+    "defaultDashboardId": null,
+    "defaultQueueName": null,
+    "provisionDeviceKey": null,
+    "firmwareId": null,
+    "softwareId": null,
+    "defaultEdgeRuleChainId": null,
+    "externalId": null,
+    "version": 1,
+    "default": false,
+    "profileData": {
+      "configuration": {
+        "type": "DEFAULT"
+      },
+      "transportConfiguration": {
+        "type": "DEFAULT"
+      },
+      "provisionConfiguration": {
+        "type": "DISABLED",
+        "provisionDeviceSecret": null
+      },
+      "alarms": [
+        {
+          "id": "c37b8ca9-b743-5341-9902-5f1a10e823fd",
+          "alarmType": "High Temperature",
+          "createRules": {
+            "CRITICAL": {
+              "condition": {
+                "condition": [
+                  {
+                    "key": {
+                      "type": "TIME_SERIES",
+                      "key": "temperature"
+                    },
+                    "valueType": "NUMERIC",
+                    "value": null,
+                    "predicate": {
+                      "type": "NUMERIC",
+                      "operation": "GREATER",
+                      "value": {
+                        "defaultValue": 80.0,
+                        "userValue": null,
+                        "dynamicValue": null
+                      }
+                    }
+                  }
+                ],
+                "spec": {
+                  "type": "SIMPLE"
+                }
+              },
+              "schedule": null,
+              "alarmDetails": null,
+              "dashboardId": null
+            }
+          },
+          "clearRule": {
+            "condition": {
+              "condition": [
+                {
+                  "key": {
+                    "type": "TIME_SERIES",
+                    "key": "temperature"
+                  },
+                  "valueType": "NUMERIC",
+                  "value": null,
+                  "predicate": {
+                    "type": "NUMERIC",
+                    "operation": "LESS_OR_EQUAL",
+                    "value": {
+                      "defaultValue": 75.0,
+                      "userValue": null,
+                      "dynamicValue": null
+                    }
+                  }
+                }
+              ],
+              "spec": {
+                "type": "SIMPLE"
+              }
+            },
+            "schedule": null,
+            "alarmDetails": null,
+            "dashboardId": null
+          },
+          "propagate": false,
+          "propagateToOwner": false,
+          "propagateToTenant": false,
+          "propagateRelationTypes": null
+        },
+        {
+          "id": "2d7944e4-549b-503c-8c56-0f20b5054e60",
+          "alarmType": "Sustained Humidity",
+          "createRules": {
+            "MAJOR": {
+              "condition": {
+                "condition": [
+                  {
+                    "key": {
+                      "type": "TIME_SERIES",
+                      "key": "humidity"
+                    },
+                    "valueType": "NUMERIC",
+                    "value": null,
+                    "predicate": {
+                      "type": "NUMERIC",
+                      "operation": "GREATER",
+                      "value": {
+                        "defaultValue": 90.0,
+                        "userValue": null,
+                        "dynamicValue": null
+                      }
+                    }
+                  }
+                ],
+                "spec": {
+                  "type": "DURATION",
+                  "unit": "MINUTES",
+                  "predicate": {
+                    "defaultValue": 5,
+                    "userValue": null,
+                    "dynamicValue": null
+                  }
+                }
+              },
+              "schedule": null,
+              "alarmDetails": null,
+              "dashboardId": null
+            }
+          },
+          "clearRule": null,
+          "propagate": false,
+          "propagateToOwner": false,
+          "propagateToTenant": false,
+          "propagateRelationTypes": null
+        }
+      ]
+    }
+  }
+}

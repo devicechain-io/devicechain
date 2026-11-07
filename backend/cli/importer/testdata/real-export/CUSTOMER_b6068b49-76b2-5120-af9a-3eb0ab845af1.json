@@ -1,0 +1,23 @@
+{
+  "entityType": "CUSTOMER",
+  "entity": {
+    "id": {
+      "entityType": "CUSTOMER",
+      "id": "b6068b49-76b2-5120-af9a-3eb0ab845af1"
+    },
+    "createdTime": 1794037678832,
+    "country": null,
+    "state": null,
+    "city": null,
+    "address": null,
+    "address2": null,
+    "zip": null,
+    "phone": null,
+    "email": null,
+    "title": "Acme Corp",
+    "externalId": null,
+    "version": 1,
+    "name": "Acme Corp",
+    "additionalInfo": null
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "entityType": "DEVICE_PROFILE",
+  "entity": {
+    "id": {
+      "entityType": "DEVICE_PROFILE",
+      "id": "016493f8-fbf6-56c4-b307-cd1cea619a82"
+    },
+    "createdTime": 1794035311248,
+    "name": "Flow Meter",
+    "description": "Sample Flow Meter",
+    "image": null,
+    "type": "DEFAULT",
+    "transportType": "DEFAULT",
+    "provisionType": "DISABLED",
+    "defaultRuleChainId": null,
+    "defaultDashboardId": null,
+    "defaultQueueName": null,
+    "provisionDeviceKey": null,
+    "firmwareId": null,
+    "softwareId": null,
+    "defaultEdgeRuleChainId": null,
+    "externalId": null,
+    "version": 1,
+    "default": false,
+    "profileData": {
+      "configuration": {
+        "type": "DEFAULT"
+      },
+      "transportConfiguration": {
+        "type": "DEFAULT"
+      },
+      "provisionConfiguration": {
+        "type": "DISABLED",
+        "provisionDeviceSecret": null
+      },
+      "alarms": []
+    }
+  }
+}

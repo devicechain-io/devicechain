@@ -1,0 +1,97 @@
+{
+  "entityType": "DEVICE",
+  "entity": {
+    "id": {
+      "entityType": "DEVICE",
+      "id": "3ae86ab3-66da-548c-a87d-0ca5bfd98952"
+    },
+    "createdTime": 1794036897017,
+    "customerId": {
+      "entityType": "CUSTOMER",
+      "id": "13814000-1dd2-11b2-8080-808080808080"
+    },
+    "name": "Thermostat 14",
+    "type": "Thermostat",
+    "label": "Unit 14",
+    "deviceProfileId": {
+      "entityType": "DEVICE_PROFILE",
+      "id": "214f7c75-88b1-5cd9-94c0-86a6d99f2755"
+    },
+    "firmwareId": null,
+    "softwareId": null,
+    "externalId": null,
+    "version": 1,
+    "additionalInfo": {
+      "gateway": false,
+      "description": "Sample device 14"
+    },
+    "deviceData": {
+      "configuration": {
+        "type": "DEFAULT"
+      },
+      "transportConfiguration": {
+        "type": "DEFAULT"
+      }
+    }
+  },
+  "relations": [],
+  "attributes": {
+    "SERVER_SCOPE": [
+      {
+        "lastUpdateTs": 1794036938799,
+        "key": "serial",
+        "value": "SN-00014"
+      },
+      {
+        "lastUpdateTs": 1794036938799,
+        "key": "installed",
+        "value": true
+      },
+      {
+        "lastUpdateTs": 1794036938799,
+        "key": "calibration",
+        "value": 2.9
+      },
+      {
+        "lastUpdateTs": 1794037527386,
+        "key": "active",
+        "value": false
+      },
+      {
+        "lastUpdateTs": 1794036938799,
+        "key": "location",
+        "value": {
+          "lat": 40.14,
+          "lon": -74.0
+        }
+      },
+      {
+        "lastUpdateTs": 1794037527377,
+        "key": "inactivityAlarmTime",
+        "value": 1794037527377
+      }
+    ],
+    "SHARED_SCOPE": [
+      {
+        "lastUpdateTs": 1794036960237,
+        "key": "targetTemp",
+        "value": 23
+      }
+    ],
+    "CLIENT_SCOPE": []
+  },
+  "credentials": {
+    "id": {
+      "id": "c907b761-da71-561f-a917-ca6419e27f49"
+    },
+    "createdTime": 1794036897047,
+    "deviceId": {
+      "entityType": "DEVICE",
+      "id": "3ae86ab3-66da-548c-a87d-0ca5bfd98952"
+    },
+    "credentialsType": "ACCESS_TOKEN",
+    "credentialsId": "FIXTURE03F8AFDFA106D",
+    "credentialsValue": null,
+    "version": 1
+  }
+}

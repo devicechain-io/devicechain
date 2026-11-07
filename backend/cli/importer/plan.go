@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -428,7 +429,7 @@ func attrValue(a Attribute) (vt, v string, ok bool) {
 	case a.StrValue != nil:
 		return "STRING", *a.StrValue, true
 	}
-	return "", "", false
+	return untypedValue(a.Value)
 }
 
 // slug turns a source relation type into a token.
@@ -641,4 +642,33 @@ func Summary(lines []Line) map[Class]int {
 		m[l.Class]++
 	}
 	return m
+}
+
+// untypedValue types a REST-style attribute value by its JSON shape: true/false is a boolean, a
+// number with no fraction or exponent is a long, any other number is a double, a string is a
+// string, and an object or array is JSON. null and absent are no value.
+func untypedValue(raw json.RawMessage) (vt, v string, ok bool) {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return "", "", false
+	}
+	switch s[0] {
+	case '"':
+		var str string
+		if json.Unmarshal(raw, &str) != nil {
+			return "", "", false
+		}
+		return "STRING", str, true
+	case '{', '[':
+		return "JSON", s, true
+	case 't', 'f':
+		return "BOOLEAN", s, s == "true" || s == "false"
+	}
+	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return "LONG", s, true
+	}
+	if _, err := strconv.ParseFloat(s, 64); err == nil {
+		return "DOUBLE", s, true
+	}
+	return "", "", false
 }

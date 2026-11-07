@@ -265,12 +265,35 @@ func PrintReport(w io.Writer, p *Plan) {
 			continue
 		}
 		fmt.Fprintf(w, "\n%s\n", strings.ToUpper(string(c)))
+		// A fleet repeats one message per entity ("2 platform-maintained attributes not copied",
+		// once for each of 5,000 devices). Print each distinct message once with its count and
+		// a first reference; the JSON report keeps every line.
+		type group struct {
+			Line
+			n int
+		}
+		var groups []*group
+		index := map[string]*group{}
 		for _, l := range lines {
-			ref := ""
-			if l.Ref != "" {
-				ref = " " + l.Ref
+			k := l.Kind + "\x00" + l.Message
+			if g, ok := index[k]; ok {
+				g.n++
+				continue
 			}
-			fmt.Fprintf(w, "  [%s%s] %s\n", l.Kind, ref, l.Message)
+			g := &group{Line: l, n: 1}
+			index[k] = g
+			groups = append(groups, g)
+		}
+		for _, g := range groups {
+			ref := ""
+			if g.Ref != "" {
+				ref = " " + g.Ref
+			}
+			more := ""
+			if g.n > 1 {
+				more = fmt.Sprintf(" (and %d more like it)", g.n-1)
+			}
+			fmt.Fprintf(w, "  [%s%s] %s%s\n", g.Kind, ref, g.Message, more)
 		}
 	}
 }

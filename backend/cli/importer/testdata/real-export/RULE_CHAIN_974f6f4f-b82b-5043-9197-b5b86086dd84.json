@@ -1,0 +1,22 @@
+{
+  "entityType": "RULE_CHAIN",
+  "entity": {
+    "id": {
+      "entityType": "RULE_CHAIN",
+      "id": "974f6f4f-b82b-5043-9197-b5b86086dd84"
+    },
+    "createdTime": 1794035167996,
+    "name": "Root Rule Chain",
+    "type": "CORE",
+    "firstRuleNodeId": {
+      "entityType": "RULE_NODE",
+      "id": "add14ee4-34a7-5af7-a708-c7d4c1a225cc"
+    },
+    "root": true,
+    "debugMode": false,
+    "externalId": null,
+    "version": 2,
+    "configuration": null,
+    "additionalInfo": null
+  }
+}
