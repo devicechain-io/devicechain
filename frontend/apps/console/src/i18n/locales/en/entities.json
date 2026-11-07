@@ -405,6 +405,7 @@
   "notificationChannelSecretKeepHint": "A credential is stored. Leave this empty to keep it, or type a new one to replace it.",
   "notificationChannelSecretStoredPlaceholder": "•••••••• (stored)",
   "notificationChannelNeedsSecret": "This channel type needs a credential before it can be created.",
+  "notificationChannelClearSecret": "Remove the stored credential",
   "notificationChannelRegion": "Region",
   "notificationChannelRegionHelp": "The PagerDuty service region of the account: US or EU.",
   "notificationChannelSource": "Event source",

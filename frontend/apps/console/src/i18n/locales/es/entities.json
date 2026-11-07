@@ -405,6 +405,7 @@
   "notificationChannelSecretKeepHint": "Hay una credencial almacenada. Deje este campo vacío para conservarla, o escriba una nueva para sustituirla.",
   "notificationChannelSecretStoredPlaceholder": "•••••••• (almacenada)",
   "notificationChannelNeedsSecret": "Este tipo de canal necesita una credencial antes de poder crearse.",
+  "notificationChannelClearSecret": "Eliminar la credencial almacenada",
   "notificationChannelRegion": "Región",
   "notificationChannelRegionHelp": "La región del servicio PagerDuty de la cuenta: EE. UU. o UE.",
   "notificationChannelSource": "Origen del evento",

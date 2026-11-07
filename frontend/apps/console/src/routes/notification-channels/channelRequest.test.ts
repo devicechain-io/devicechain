@@ -97,6 +97,19 @@ describe('channelRequest', () => {
     expect(editRequest(c, { ...draftOf(c), enabled: false })).toEqual({ enabled: false });
   });
 
+  it('a rename-only edit of a channel whose config cannot be read leaves the config alone', () => {
+    const c = stored({ config: '{broken' });
+    expect(editRequest(c, { ...draftOf(c), name: 'New' })).toEqual({ name: 'New' });
+  });
+
+  it('clears the credential of an smtp or webhook channel only on request, never a native one', () => {
+    const w = stored({ channelType: 'webhook', config: '{"url":"https://x","auth":"none"}' });
+    expect(editRequest(w, { ...draftOf(w), clearSecret: true })).toEqual({ secret: null });
+    expect(editRequest(w, draftOf(w))).toEqual({});
+    const s = stored({});
+    expect(editRequest(s, { ...draftOf(s), clearSecret: true })).toEqual({});
+  });
+
   it('reads an unparseable stored config without throwing', () => {
     const c = stored({ config: '{broken' });
     expect(() => draftOf(c)).not.toThrow();

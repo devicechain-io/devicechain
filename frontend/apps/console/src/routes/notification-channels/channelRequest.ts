@@ -36,6 +36,8 @@ export interface ChannelDraft {
   source: string;
   /** The config JSON, for the types without a dedicated form (smtp, webhook). */
   rawConfig: string;
+  /** Remove the stored credential (smtp and webhook only; a native channel cannot lose its credential). */
+  clearSecret: boolean;
 }
 
 export function emptyDraft(channelType: string): ChannelDraft {
@@ -49,6 +51,7 @@ export function emptyDraft(channelType: string): ChannelDraft {
     region: 'us',
     source: '',
     rawConfig: '',
+    clearSecret: false,
   };
 }
 
@@ -127,6 +130,16 @@ export function createRequest(token: string, d: ChannelDraft): NotificationChann
   return req;
 }
 
+function parses(config: string | null | undefined): boolean {
+  if (!config) return true;
+  try {
+    JSON.parse(config);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** A normalised view of a config document, so key order and spacing do not read as a change. */
 function canonical(config: string | null | undefined): string {
   if (!config) return '';
@@ -150,7 +163,11 @@ export function editRequest(c: NotificationChannelRecord, d: ChannelDraft): Noti
   }
   if (d.enabled !== c.enabled) req.enabled = d.enabled;
   const config = configOf(d);
-  if (canonical(config) !== canonical(c.config)) req.config = config;
+  if (canonical(config) !== canonical(c.config) && !(isNative(c.channelType) && !parses(c.config) && config === null)) {
+    // A native config this form could not read opened as defaults; those defaults are not an edit.
+    req.config = config;
+  }
   if (d.secret !== '') req.secret = d.secret;
+  else if (d.clearSecret && !isNative(c.channelType)) req.secret = null;
   return req;
 }

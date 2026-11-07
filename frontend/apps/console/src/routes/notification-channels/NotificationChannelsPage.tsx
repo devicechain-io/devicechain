@@ -216,7 +216,9 @@ function ChannelForm({
   const set = (patch: Partial<ChannelDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
   const native = isNative(draft.channelType);
-  const problem = draftProblem(draft, entity?.hasSecret ?? false);
+  // Switching a channel OFF must always be possible, even one that lost its credential.
+  const found = draftProblem(draft, entity?.hasSecret ?? false);
+  const problem = found === 'secret' && entity && !draft.enabled ? null : found;
   const request = entity ? editRequest(entity, draft) : null;
   const dirty = request !== null && Object.keys(request).length > 0;
 
@@ -354,6 +356,15 @@ function ChannelForm({
               />
             </FormField>
           </>
+        )}
+        {!native && entity?.hasSecret && (
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox
+              checked={draft.clearSecret}
+              onCheckedChange={(c) => set({ clearSecret: c === true })}
+            />
+            <span>{t('entities:notificationChannelClearSecret')}</span>
+          </label>
         )}
         {native && (
           <FormField
