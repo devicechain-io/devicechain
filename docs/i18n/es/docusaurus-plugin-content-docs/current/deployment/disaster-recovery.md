@@ -587,6 +587,105 @@ así que guárdalos por separado.
 
 La rotación in situ está prevista para después de la primera versión estable.
 
+## Qué más se guarda fuera de las bases de datos {#other-state}
+
+Además de las dos bases de datos, una instancia guarda datos en tres lugares: los streams de
+mensajes, los buckets clave-valor y el almacén de objetos. Una restauración le debe a cada elemento
+una de tres cosas, y la tabla siguiente da la respuesta para cada stream y bucket que crea la
+plataforma:
+
+- **must-back-up.** Guarda la única copia de algo que la plataforma ya confirmó. Las bases de datos
+  no lo reflejan, así que una restauración que lo omite lo pierde para siempre.
+- **rebuildable.** La plataforma lo recalcula o lo vuelve a publicar desde las bases de datos, o el
+  dispositivo o la persona a quien pertenece lo envía de nuevo. Empieza vacío tras una restauración,
+  y eso es correcto.
+- **transient.** Está en tránsito o dura poco: una sesión, un bloqueo, un búfer del pipeline. Lo que
+  pierde una restauración queda acotado por lo que vive el elemento o por el retraso del pipeline.
+
+Solo tres elementos son must-back-up: el stream de captura sin procesar, el stream de mensajes
+fallidos de las entregas salientes de conectores que no se pudieron realizar, y el almacén de
+objetos. Todo lo demás se recupera por sí solo.
+
+<!-- durability:start -->
+| Item | Kind | Class | What a restore owes it |
+|---|---|---|---|
+| `inbound-events` | stream | transient | events accepted and not yet resolved; a pipeline buffer, so the most a restore loses is the lag |
+| `integration-uplinks` | stream | transient | raw decoder input already accepted from an integration and not yet decoded; an in-flight buffer |
+| `resolved-events` | stream | transient | events resolved and not yet stored; the event store is the landing, so only the in-flight lag is lost |
+| `derived-events` | stream | transient | events derived by detection and not yet consumed; an in-flight buffer |
+| `device-attribute` | stream | rebuildable | attribute changes are projected from the device store, which is restored from the database |
+| `device-commands` | stream | rebuildable | commands are re-dispatched from the command-delivery store by its sweep |
+| `device-desired` | stream | rebuildable | the current desired state is held in the database and sent to a device again on its next sync |
+| `device-reports` | stream | rebuildable | a device sends its reports again, and its state is held in the database |
+| `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
+| `command-responses` | stream | rebuildable | command outcomes are settled from the command-delivery store |
+| `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
+| `detection-rules-published` | stream | rebuildable | a rule publish is re-derived from the stored profile version |
+| `device-roster` | stream | rebuildable | roster changes are projected from the device store |
+| `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |
+| `entity-deleted` | stream | rebuildable | a deletion fan-out; the restored database already reflects each entity as of the restore point |
+| `device-ownership` | stream | rebuildable | ownership changes are projected from the stored relationships |
+| `alarm-events` | stream | rebuildable | alarm state is held in the database and notification re-derives from it |
+| `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
+| `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |
+| `failed-events` | stream | rebuildable | each record is stored in the event store by its consumer |
+| `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. No backup tool ships in this release. The records cannot be recovered once the stream is lost. |
+| `dead-letters` | stream | rebuildable | every letter is stored in the database by its consumer |
+| `max-deliveries` | stream | transient | broker advisories for deliveries that ran out; empty in steady state |
+| `dc_refresh_tokens` | bucket | transient | a live session token; people sign in again |
+| `dc_oauth_codes` | bucket | transient | an authorization code that lives sixty seconds |
+| `dc_sso_state` | bucket | transient | an in-flight single sign-on attempt that lives ten minutes |
+| `dc_sso_codes` | bucket | transient | a completed single sign-on awaiting redemption for sixty seconds |
+| `dc_mfa_challenges` | bucket | transient | a second-factor challenge that lives five minutes |
+| `dc_credential_attempts` | bucket | transient | sign-in backoff counters that expire after ten minutes |
+| `dc_device_credential_attempts` | bucket | transient | device connect backoff counters that expire after ten minutes |
+| `dc_locks` | bucket | transient | held locks that expire after thirty seconds |
+| `dc_sparkplug_commands_awaiting` | bucket | transient | commands in flight inside a confirm window of at most two hours |
+| `dc_partition_placement` | bucket | rebuildable | a mirror of the placement table in the user-management database, rewritten every few minutes |
+| `dc_leases` | bucket | transient | partition leases that expire after thirty seconds; a restore must also be treated as a fence invalidation, because the epoch is the bucket revision and a rebuilt bucket restarts it |
+| `device-by-token` | bucket | rebuildable | a cache of the device store |
+| `relationships-by-source` | bucket | rebuildable | a cache of the relationship store |
+| `memberships-by-entity` | bucket | rebuildable | a cache of the group membership store |
+| `profile-resolution-by-type` | bucket | rebuildable | a cache of the published profile versions |
+| `scoped-groups-exist` | bucket | rebuildable | a cache of the group store |
+| `$MQTT_msgs` | gateway stream | transient | a second copy of every QoS 1 and 2 message, held only until the platform stream has it |
+| `$MQTT_out` | gateway stream | transient | outgoing QoS 2 release records, in flight |
+| `$MQTT_qos2in` | gateway stream | transient | inbound QoS 2 handshake state, in flight |
+| `$MQTT_sess` | gateway stream | rebuildable | persistent MQTT sessions and their subscriptions; a device that subscribes on every connect recovers by itself, one that relies on the broker having remembered its subscriptions must be made to subscribe again |
+| `$MQTT_rmsgs` | gateway stream | rebuildable | retained messages; the platform publishes none itself, so each one is whatever a device or an integration retained and must publish again |
+| `object-store` | object store | must-back-up | update artifact content and tenant branding images; the database holds only each object's size and digest. Snapshot the volume, or turn on versioning and replication for the bucket, and take that copy after the database base backup it belongs with. |
+<!-- durability:end -->
+
+Esta tabla se genera a partir de las declaraciones de la propia plataforma, así que lista lo que
+crean los servicios en ejecución. No se puede añadir un stream o un bucket sin una clase.
+
+### El almacén de objetos {#object-store-backup}
+
+El almacén de objetos guarda el contenido de los artefactos de actualización y las imágenes de marca
+de los tenants. La base de datos guarda solo el tamaño y el resumen de cada objeto, así que una
+restauración de la base de datos por sí sola devuelve un catálogo cuyo contenido puede faltar.
+
+- **Un volumen (el valor por defecto).** Haz una instantánea del volumen con las instantáneas de
+  volumen de tu clúster, o con la política de copia de seguridad de tu clase de almacenamiento
+  (`blobStorage.persistence.annotations` del chart la lleva hasta el claim).
+- **Un bucket compatible con S3.** El bucket es tuyo, así que la plataforma no lo copia. Activa el
+  versionado y la replicación, o usa el servicio de copia de seguridad de tu proveedor.
+- **Haz la copia después de la copia base de la base de datos con la que va.** Los objetos se
+  escriben una sola vez, así que una copia más reciente que la base de datos contiene algunos
+  objetos que esta no conoce, lo cual no causa daño. Una copia más antigua que la base de datos deja
+  artefactos que la base de datos lista como disponibles sin contenido detrás. Un dispositivo al que
+  se le envíe uno no puede descargarlo. Retira el artefacto y vuelve a declararlo con el mismo
+  archivo; asigna de nuevo cualquier actualización que usara el retirado.
+
+### Arrendamientos de partición y áreas de un solo escritor {#restore-fence}
+
+El bucket de arrendamientos `dc_leases` guarda la reclamación que cada propietario de un solo
+escritor (detección, las áreas de ingesta Sparkplug y LwM2M, una fuente MQTT externa) tiene sobre su
+partición. No se respalda, y una restauración lo deja vacío. Su contador de época es la propia
+revisión del bucket, así que también vuelve a empezar. Detén esas áreas antes de restaurar las bases
+de datos e inícialas después, para que ningún propietario de la reclamación anterior siga en
+ejecución cuando se conceda la nueva.
+
 ## Después de `dcctl destroy` {#after-destroy}
 
 `dcctl destroy` elimina la instancia —su release de Helm, su broker NATS y su almacén de eventos,

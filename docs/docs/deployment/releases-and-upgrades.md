@@ -925,6 +925,10 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
 
+#### What an instance keeps outside its databases is classified {#v120-backup-classification}
+
+The [Disaster Recovery](./disaster-recovery.md#other-state) page now says what a restore owes every message stream, key-value bucket and the object store, in one table generated from the platform's own declarations. Three items need a backup of their own: the raw capture stream, the dead-letter stream of undeliverable outbound connector deliveries, and the object store that holds update artifacts and branding images. Everything else is rebuilt from the databases or is short-lived. This release changes no behaviour and ships no backup tool for the streams. It adds the page, a test that fails when a stream or bucket is added without a class, and the rule for the object store: take its copy after the database base backup it belongs with.
+
 #### Other changes in this release {#v120-other-changes}
 
 Nothing here needs action beyond the two `dcctl` items in the list above. Each is a fix or an addition to something that already shipped.

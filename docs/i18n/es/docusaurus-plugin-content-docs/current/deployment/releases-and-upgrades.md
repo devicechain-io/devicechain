@@ -970,6 +970,10 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 
 Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge-agent"` además del agente. `agent` es una etiqueta externa global del colector de la máquina, así que un colector que también rasca otra cosa en la máquina (node exporter, por ejemplo) sumaba la memoria, la CPU, las goroutines y los archivos abiertos de ese proceso a los paneles de todos los agentes. La configuración de rascado documentada ya usa `job_name: dc-edge-agent`, de modo que un tablero importado con ella no necesita cambios. Si dio otro nombre al job, cámbielo en el colector o edite las cinco consultas de proceso y de runtime del tablero (`process_*` y `go_goroutines`) con su nombre de job. Vuelva a importar el tablero desde `backend/edge/dc-edge-agent/dashboards/edge-agent.json` para aplicar el cambio.
 
+#### Lo que una instancia guarda fuera de sus bases de datos está clasificado {#v120-backup-classification}
+
+La página de [Recuperación ante desastres](./disaster-recovery.md#other-state) ahora indica qué le debe una restauración a cada stream de mensajes, a cada bucket clave-valor y al almacén de objetos, en una tabla generada a partir de las declaraciones de la propia plataforma. Tres elementos necesitan su propia copia de seguridad: el stream de captura sin procesar, el stream de mensajes fallidos de las entregas salientes de conectores que no se pudieron realizar, y el almacén de objetos que guarda los artefactos de actualización y las imágenes de marca. Todo lo demás se reconstruye desde las bases de datos o dura poco. Esta versión no cambia ningún comportamiento ni incluye una herramienta de copia de seguridad para los streams. Añade la página, una prueba que falla cuando se añade un stream o un bucket sin clase, y la regla para el almacén de objetos: haz su copia después de la copia base de la base de datos con la que va.
+
 #### Otros cambios en esta versión {#v120-other-changes}
 
 Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista anterior. Cada uno es una corrección o una adición a algo que ya se había publicado.
