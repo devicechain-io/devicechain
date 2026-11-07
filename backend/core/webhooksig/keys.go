@@ -85,11 +85,11 @@ func ResolveKeys(ctx context.Context, base string, resolve Resolve) ([]string, e
 // Keyring manages the write side of a base's two slots in one tenant's scope. The secrets it
 // generates are returned to the caller exactly once and are otherwise unreadable through any API.
 //
-// Rotations of one base are serialized within a process. Across replicas they are not: the secret
-// store offers no compare-and-swap, so two operators rotating the same base at the same instant
-// on different replicas can leave the first one's new key already replaced, and a receiver
-// configured with it would stop verifying. The key that is current after both calls is the one
-// the last writer returned, so rotating once more resolves it.
+// Rotate, EndRotation and Delete are read-modify-write sequences over the two slots, so each runs
+// under a lock on the base: a process-local mutex (which also covers a store with no cross-replica
+// lock) and, when the store is a secrets.Locker, a database lock held for one transaction, so
+// replicas sharing the database exclude each other and a failed sequence rolls back whole. The
+// production store is a Locker; only a test double is not.
 type Keyring struct {
 	Store secrets.SecretStore
 }
@@ -101,6 +101,17 @@ func lockRotation(tenant, base string) func() {
 	mu := m.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// locked runs fn holding the base's rotation lock. fn receives the store to use: the
+// transaction-bound view when the store can lock across replicas, the plain store otherwise.
+func (k Keyring) locked(ctx context.Context, tenant, base string, fn func(secrets.SecretStore) error) error {
+	defer lockRotation(tenant, base)()
+	ok, err := secrets.WithLock(ctx, k.Store, tenant, "webhooksig/"+base, fn)
+	if ok {
+		return err
+	}
+	return fn(k.Store)
 }
 
 func (k Keyring) ref(tenant, name string) secrets.SecretRef {
@@ -132,41 +143,53 @@ func (k Keyring) Create(ctx context.Context, tenant, base string) (string, error
 // the key a receiver still holds. Rotating again while a rotation is open replaces previous with
 // the then-current key, so a key two rotations old stops being signed with.
 func (k Keyring) Rotate(ctx context.Context, tenant, base string) (string, error) {
-	defer lockRotation(tenant, base)()
-	cur, prev := KeyNames(base)
-	old, err := k.Store.Resolve(ctx, k.ref(tenant, cur))
-	if errors.Is(err, secrets.ErrSecretNotFound) {
-		return "", ErrNoSigningSecret
-	}
+	var secret string
+	err := k.locked(ctx, tenant, base, func(st secrets.SecretStore) error {
+		cur, prev := KeyNames(base)
+		old, err := st.Resolve(ctx, k.ref(tenant, cur))
+		if errors.Is(err, secrets.ErrSecretNotFound) {
+			return ErrNoSigningSecret
+		}
+		if err != nil {
+			return err
+		}
+		secret, err = GenerateSecret()
+		if err != nil {
+			return err
+		}
+		if err := st.Put(ctx, k.ref(tenant, prev), old); err != nil {
+			return fmt.Errorf("webhooksig: keep previous key: %w", err)
+		}
+		if err := st.Put(ctx, k.ref(tenant, cur), []byte(secret)); err != nil {
+			return fmt.Errorf("webhooksig: install new key: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return "", err
-	}
-	secret, err := GenerateSecret()
-	if err != nil {
-		return "", err
-	}
-	if err := k.Store.Put(ctx, k.ref(tenant, prev), old); err != nil {
-		return "", fmt.Errorf("webhooksig: keep previous key: %w", err)
-	}
-	if err := k.Store.Put(ctx, k.ref(tenant, cur), []byte(secret)); err != nil {
-		return "", fmt.Errorf("webhooksig: install new key: %w", err)
 	}
 	return secret, nil
 }
 
-// EndRotation drops the previous key, so deliveries carry one signature again. Idempotent.
+// EndRotation drops the previous key, so deliveries carry one signature again. Idempotent. It
+// takes the same lock as Rotate, so it cannot land between a rotation's two writes.
 func (k Keyring) EndRotation(ctx context.Context, tenant, base string) error {
-	_, prev := KeyNames(base)
-	return k.Store.Delete(ctx, k.ref(tenant, prev))
+	return k.locked(ctx, tenant, base, func(st secrets.SecretStore) error {
+		_, prev := KeyNames(base)
+		return st.Delete(ctx, k.ref(tenant, prev))
+	})
 }
 
-// Delete removes both slots. Idempotent.
+// Delete removes both slots. Idempotent. It takes the same lock as Rotate, so a rotation cannot
+// recreate the key after Delete has reported success.
 func (k Keyring) Delete(ctx context.Context, tenant, base string) error {
-	cur, prev := KeyNames(base)
-	if err := k.Store.Delete(ctx, k.ref(tenant, prev)); err != nil {
-		return err
-	}
-	return k.Store.Delete(ctx, k.ref(tenant, cur))
+	return k.locked(ctx, tenant, base, func(st secrets.SecretStore) error {
+		cur, prev := KeyNames(base)
+		if err := st.Delete(ctx, k.ref(tenant, prev)); err != nil {
+			return err
+		}
+		return st.Delete(ctx, k.ref(tenant, cur))
+	})
 }
 
 // Status reports whether base has a current key and whether a rotation is open.

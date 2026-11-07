@@ -259,6 +259,10 @@ La especificación publica un vector de prueba. Un verificador correcto lo acept
 
 Debe rechazar la misma solicitud con un byte del cuerpo cambiado, y con el reloj una hora más tarde.
 
+## Activar la firma durante una actualización
+
+Despliega la actualización en todas las réplicas de `outbound-connectors` y `notification-management` antes de activar la firma. Una réplica anterior a la firma ignora `signingSecretRef` y `"signing": true`, así que mientras conviven réplicas antiguas y nuevas, una entrega que llegue a una antigua sale **sin firmar**, y una réplica antigua de `outbound-connectors` no sabe que los secretos de firma nunca deben usarse como credencial Bearer. Hasta que el despliegue termine, no pongas `"signing": true` en un canal, no añadas `signingSecretRef` a una regla y no publiques una regla cuyo `secretRef` Bearer empiece por `webhook-signing/`. Activa la firma después.
+
 ## Comportamiento ante fallos
 
 | Situación | Qué ocurre |
@@ -268,3 +272,4 @@ Debe rechazar la misma solicitud con un byte del cuerpo cambiado, y con el reloj
 | La firma está activada pero no hay secreto almacenado, o el valor almacenado no es un secreto válido | La entrega se rechaza y **no se reintenta**. No se envía nada. Un canal lo cuenta como `reason="signing"`; un `httpCall` va a la cola de mensajes fallidos como inválido. |
 | El almacén de secretos no está disponible por un momento | La entrega se reintenta, como cualquier fallo transitorio. |
 | Un encabezado que configuraste se llama `webhook-id`, `webhook-timestamp` o `webhook-signature` | En una entrega firmada, el valor de la plataforma lo sustituye. |
+| El `authHeader` de un canal firmado es `webhook-id`, `webhook-timestamp` o `webhook-signature` | El canal se rechaza al guardarlo, y una entrega se rechaza sin reintento, porque la firma sobrescribiría tu credencial. Usa otro nombre de encabezado para la credencial. |

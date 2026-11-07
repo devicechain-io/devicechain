@@ -89,6 +89,11 @@ func ParseWebhookConfig(token string, config *string) (*WebhookConfig, error) {
 	if err := cfg.HTTPAuth().Validate(); err != nil {
 		return nil, fmt.Errorf("webhook channel %q has an invalid auth configuration: %w", token, err)
 	}
+	if cfg.Signing {
+		if err := httpsink.CheckSigningAuth(cfg.HTTPAuth()); err != nil {
+			return nil, fmt.Errorf("webhook channel %q: %w", token, err)
+		}
+	}
 	return cfg, nil
 }
 
@@ -128,9 +133,12 @@ func validateWebhookHeaders(token string, headers map[string]string) error {
 
 // validateChannelCredential refuses a channel whose declared auth and secret presence
 // disagree. It parses the FULL webhook config, so a bad url or method is refused at save
-// time too. Non-webhook types pass: SMTP's credential rule (a username needs a secret) is
+// time too. Native chat/paging types are judged by validateNativeChannel. Other types pass: SMTP's credential rule (a username needs a secret) is
 // judged by its adapter, before it dials.
-func validateChannelCredential(token, channelType string, config *string, hasSecret bool) error {
+func validateChannelCredential(token, channelType string, config *string, secret *string, hasSecret bool) error {
+	if IsNativeChannelType(channelType) {
+		return validateNativeChannel(token, channelType, config, secret, hasSecret)
+	}
 	if channelType != ChannelTypeWebhook {
 		return nil
 	}

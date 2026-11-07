@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/webhooksig"
 	"github.com/stretchr/testify/assert"
@@ -136,4 +137,17 @@ func TestWebhookConfigSigningFlag(t *testing.T) {
 	unsigned, err := ParseWebhookConfig("c", strPtr(`{"url":"https://h.example/x","auth":"none"}`))
 	require.NoError(t, err)
 	assert.False(t, unsigned.Signing)
+}
+
+// A signed channel whose credential header is a signing header is refused when it is saved; the
+// same auth on an unsigned channel, and a different header on a signed one, are accepted.
+func TestWebhookConfigRefusesSigningOverItsOwnAuthHeader(t *testing.T) {
+	for _, h := range []string{"webhook-signature", "Webhook-Id", "webhook-timestamp"} {
+		_, err := ParseWebhookConfig("c", strPtr(`{"url":"https://h.example/x","auth":"header","authHeader":"`+h+`","signing":true}`))
+		assert.ErrorIs(t, err, httpsink.ErrSigningRefused, h)
+		_, err = ParseWebhookConfig("c", strPtr(`{"url":"https://h.example/x","auth":"header","authHeader":"`+h+`"}`))
+		assert.NoError(t, err, h+" unsigned")
+	}
+	_, err := ParseWebhookConfig("c", strPtr(`{"url":"https://h.example/x","auth":"header","authHeader":"X-Api-Key","signing":true}`))
+	assert.NoError(t, err)
 }

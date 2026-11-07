@@ -259,6 +259,10 @@ The specification publishes a test vector. A correct verifier accepts it at the 
 
 It must reject the same request with one byte of the body changed, and with the clock an hour later.
 
+## Turning signing on during an upgrade
+
+Roll the upgrade out to every `outbound-connectors` and `notification-management` replica before you turn signing on. A replica from before signing existed ignores `signingSecretRef` and `"signing": true`, so while old and new replicas overlap, a delivery that lands on an old one goes out **unsigned**, and an old `outbound-connectors` replica does not know that signing secrets must never be used as a Bearer credential. Until the rollout has finished, do not set `"signing": true` on a channel, do not add `signingSecretRef` to a rule, and do not publish a rule whose Bearer `secretRef` begins with `webhook-signing/`. Enable signing afterwards.
+
 ## Failure behaviour
 
 | Situation | What happens |
@@ -268,3 +272,4 @@ It must reject the same request with one byte of the body changed, and with the 
 | Signing is enabled but no secret is stored, or the stored value is not a valid secret | The delivery is refused and **not retried**. Nothing is sent. A channel counts it as `reason="signing"`; an `httpCall` is dead-lettered as invalid. |
 | The secret store is briefly unavailable | The delivery is retried, as for any transient failure. |
 | A header you configured is named `webhook-id`, `webhook-timestamp` or `webhook-signature` | On a signed delivery the platform's value replaces it. |
+| A signed channel's `authHeader` is `webhook-id`, `webhook-timestamp` or `webhook-signature` | The channel is refused when you save it, and a delivery is refused and not retried, because the signature would overwrite your credential. Use another header name for the credential. |

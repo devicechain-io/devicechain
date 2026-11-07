@@ -152,3 +152,27 @@ func TestUnsignedSendHeaderSetIsGolden(t *testing.T) {
 	}
 	assert.Equal(t, `{"a":1}`, string(got.body))
 }
+
+// A credential header that is also a signing header would be overwritten by the signature while
+// the request still went out. It is refused before a request exists, for every signing header and
+// any casing; an unsigned send with the same auth is untouched (the control).
+func TestSigningRefusesAnAuthHeaderItWouldOverwrite(t *testing.T) {
+	srv, got := capturingServer(t)
+	for _, h := range []string{"webhook-signature", "Webhook-Id", "WEBHOOK-TIMESTAMP"} {
+		err := Send(context.Background(), srv.Client(), Request{
+			URL: srv.URL, Body: []byte(`{}`), Auth: Auth{Mode: AuthHeader, Header: h}, Secret: "s3cret",
+			Signing: &Signing{ID: "m", Secrets: []string{signingSecretA}},
+		})
+		assert.ErrorIs(t, err, ErrSigningRefused, h)
+	}
+	assert.Zero(t, got.hits, "nothing reached the wire")
+
+	require.NoError(t, Send(context.Background(), srv.Client(), Request{
+		URL: srv.URL, Body: []byte(`{}`), Auth: Auth{Mode: AuthHeader, Header: "webhook-signature"}, Secret: "s3cret",
+	}))
+	require.NoError(t, Send(context.Background(), srv.Client(), Request{
+		URL: srv.URL, Body: []byte(`{}`), Auth: Auth{Mode: AuthHeader, Header: "X-Api-Key"}, Secret: "k",
+		Signing: &Signing{ID: "m", Secrets: []string{signingSecretA}},
+	}))
+	assert.Equal(t, 2, got.hits)
+}

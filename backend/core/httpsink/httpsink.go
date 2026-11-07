@@ -106,6 +106,26 @@ func IsReservedHeader(name string) bool {
 // classify it with errors.Is, as they do ErrAuthRefused.
 var ErrSigningRefused = errors.New("httpsink: signing refused")
 
+// CheckSigningAuth refuses an auth header that a signed delivery would overwrite. The signing
+// headers are written after the credential, so a channel with auth "header" naming webhook-id,
+// webhook-timestamp or webhook-signature would pass every credential check and then have its
+// credential replaced by the signature while the request still went out. It is a configuration
+// error, reported as ErrSigningRefused so it is terminal. Send applies it at the point of use and
+// config parsers apply it at save time.
+func CheckSigningAuth(a Auth) error {
+	if a.Mode != AuthHeader {
+		return nil
+	}
+	switch http.CanonicalHeaderKey(a.Header) {
+	case http.CanonicalHeaderKey(webhooksig.HeaderID),
+		http.CanonicalHeaderKey(webhooksig.HeaderTimestamp),
+		http.CanonicalHeaderKey(webhooksig.HeaderSignature):
+		return fmt.Errorf("%w: auth header %q is one of the signing headers; a signed delivery would overwrite the credential",
+			ErrSigningRefused, a.Header)
+	}
+	return nil
+}
+
 func (s *Signing) validate() error {
 	if s == nil {
 		return nil
@@ -404,6 +424,11 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 	}
 	if err := req.Signing.validate(); err != nil {
 		return err
+	}
+	if req.Signing != nil {
+		if err := CheckSigningAuth(req.Auth); err != nil {
+			return err
+		}
 	}
 	method := req.Method
 	if method == "" {

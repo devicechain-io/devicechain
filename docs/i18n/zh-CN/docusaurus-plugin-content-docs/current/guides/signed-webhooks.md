@@ -259,6 +259,10 @@ def verify(headers, raw_body, secrets, tolerance=300, now=None):
 
 同一请求若请求体改动一个字节，或时钟晚了一小时，验证器必须拒绝。
 
+## 在升级期间开启签名 {#turning-signing-on-during-an-upgrade}
+
+请先把升级推广到所有 `outbound-connectors` 和 `notification-management` 副本，再开启签名。签名功能出现之前的旧副本会忽略 `signingSecretRef` 和 `"signing": true`，因此在新旧副本并存期间，落到旧副本上的投递会**不带签名**发出，而且旧的 `outbound-connectors` 副本不知道签名密钥绝不能用作 Bearer 凭据。在推广完成之前，不要给通道设置 `"signing": true`，不要给规则添加 `signingSecretRef`，也不要发布 Bearer `secretRef` 以 `webhook-signing/` 开头的规则。推广完成后再开启签名。
+
 ## 失败时的行为 {#failure-behaviour}
 
 | 情形 | 结果 |
@@ -267,4 +271,4 @@ def verify(headers, raw_body, secrets, tolerance=300, now=None):
 | 已启用签名且密钥存在 | 投递携带三个请求头。 |
 | 已启用签名，但没有存储密钥，或存储的值不是有效密钥 | 投递被拒绝且**不重试**，不会发送任何内容。渠道将其计为 `reason="signing"`；`httpCall` 作为无效项进入死信。 |
 | 密钥存储暂时不可用 | 与任何瞬时故障一样，投递会重试。 |
-| 你配置的某个请求头名为 `webhook-id`、`webhook-timestamp` 或 `webhook-signature` | 在已签名的投递中，由平台的值替换它。 |
+| 已签名通道的 `authHeader` 为 `webhook-id`、`webhook-timestamp` 或 `webhook-signature` | 保存时通道会被拒绝，投递也会被拒绝且不重试，因为签名会覆盖你的凭据。请为凭据使用其他请求头名称。 |
