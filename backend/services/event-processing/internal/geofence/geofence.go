@@ -27,6 +27,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+
+	"github.com/devicechain-io/dc-microservice/geo"
 )
 
 // Geometry kind discriminators. They MUST equal device-management's GeoFenceKind* string
@@ -83,7 +85,7 @@ var ErrNoPosition = errors.New("the event carries no position")
 // positioning technology a device reports with, so the band is invisible in practice while
 // keeping the exactly-on-the-edge case from turning on the last bits of a float64 (an
 // on-edge point measures ~1e-16 rad from its edge, not 0).
-const BoundaryToleranceRadians = 1e-9
+const BoundaryToleranceRadians = geo.BoundaryToleranceRadians
 
 // Position is one reported position, in the platform-wide coordinate contract device-management's
 // ResolvedLocationEntry fixes: WGS84 / EPSG:4326 decimal degrees, elevation in metres above the
