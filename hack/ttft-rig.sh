@@ -139,39 +139,48 @@ phase_begin() { current_phase="$1"; phase_t0="$(now_ms)"; say "PHASE $1"; }
 phase_end() { local ms=$(($(now_ms) - phase_t0)); printf '%s\t%d\n' "$current_phase" "$ms" >>"$phases_file"; note "$current_phase: ${ms} ms"; current_phase=""; }
 phase_ms() { awk -F'\t' -v p="$1" '$1 == p { v = $2 } END { if (v == "") print "null"; else print v }' "$phases_file"; }
 
+# The phases a user waits through, in order. ttftMs is their sum; first_stored overlaps first_dashboard
+# (both run from the first publish) and is reported, not summed.
+summed_phases="cluster operators bootstrap_prep infra chart provision device_setup first_dashboard"
+
 # write_result <status> [failed phase]: one JSON document, written whole (never appended to).
+# The phase and step tables go through real files: a native jq cannot open a bash process substitution.
 write_result() {
   local status="$1" failed="${2:-}" head dirty dcctl_ver total
   head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)"
   dirty="$(git -C "$repo_root" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   dcctl_ver="$("$dcctl" version 2>/dev/null | head -n1 | tr -d '\r' || true)"
+  jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {key: .[0], value: (.[1]|tonumber)}) | from_entries' "$phases_file" >"$work/phases.json"
+  jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {name: .[0], ms: (.[1]|tonumber)})' "$steps_file" >"$work/steps.json"
   total=null
   ((t_start == 0)) || total=$(($(now_ms) - t_start))
   jq -n --arg status "$status" --arg failed "$failed" --arg head "$head" --argjson dirty "${dirty:-0}" \
     --arg dcctl "${dcctl_ver:-unknown}" --arg version "${version:-tree}" --arg started "$run_stamp" \
     --arg host_os "$(uname -s)" --arg ncpu "$(nproc 2>/dev/null || echo 0)" --arg script "$(git -C "$repo_root" hash-object hack/ttft-rig.sh 2>/dev/null || echo unknown)" \
-    --argjson total "$total" \
-    --slurpfile ph <(jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {key: .[0], value: (.[1]|tonumber)}) | from_entries' "$phases_file") \
-    --slurpfile st <(jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {name: .[0], ms: (.[1]|tonumber)})' "$steps_file") \
+    --argjson total "$total" --arg summed "$summed_phases" \
+    --slurpfile ph "$(winpath "$work/phases.json")" \
+    --slurpfile st "$(winpath "$work/steps.json")" \
     '{schema: 1, status: $status, failedPhase: (if $failed == "" then null else $failed end),
       startedAt: $started, gitHead: $head, dirtyPaths: $dirty, rigBlob: $script, dcctl: $dcctl, images: $version,
       host: {os: $host_os, cpus: ($ncpu|tonumber)},
       phasesMs: $ph[0],
-      ttftMs: (if $status == "ok" then ([$ph[0].cluster, $ph[0].operators, $ph[0].bootstrap_prep, $ph[0].infra, $ph[0].chart, $ph[0].provision, $ph[0].first_dashboard] | add) else null end),
+      ttftMs: (if $status == "ok" then ([($summed|split(" "))[] as $p | $ph[0][$p]] | add) else null end),
       wallMs: $total, bootstrapSteps: $st[0]}' >"$result_file"
 }
 
 # judge_result <file>: the verdict on a result document, a pure function of it. It goes RED (status 1,
-# one line per reason) unless the run is "ok" AND carries every phase as a number AND the phases add
-# up to no more than the total. A result that merely EXISTS proves nothing.
+# one line per reason) unless the run is "ok", every phase is a positive number, ttftMs is exactly the sum
+# of the phases a user waits through, and the wall clock is at least that long. A result that merely
+# EXISTS proves nothing.
 judge_result() {
   local f="$1" bad=0 p
   [[ "$(jq -r '.status' "$f")" == ok ]] || { echo "RED: status is '$(jq -r '.status' "$f")', failed phase '$(jq -r '.failedPhase // "-"' "$f")'"; bad=1; }
-  for p in cluster operators bootstrap_prep infra chart provision first_stored first_dashboard; do
+  for p in $summed_phases first_stored; do
     jq -e --arg p "$p" '.phasesMs[$p] | type == "number" and . > 0' "$f" >/dev/null 2>&1 || { echo "RED: phase $p is missing or not positive"; bad=1; }
   done
   jq -e '.ttftMs | type == "number"' "$f" >/dev/null 2>&1 || { echo "RED: ttftMs is not a number"; bad=1; }
-  jq -e '.ttftMs == ([.phasesMs.cluster, .phasesMs.operators, .phasesMs.bootstrap_prep, .phasesMs.infra, .phasesMs.chart, .phasesMs.provision, .phasesMs.first_dashboard] | add)' "$f" >/dev/null 2>&1 || { echo "RED: ttftMs is not the sum of the phases a user waits through"; bad=1; }
+  jq -e --arg summed "$summed_phases" '.ttftMs == ([($summed|split(" "))[] as $p | .phasesMs[$p]] | add)' "$f" >/dev/null 2>&1 || { echo "RED: ttftMs is not the sum of the phases a user waits through"; bad=1; }
+  jq -e '(.wallMs | type == "number") and .wallMs >= .ttftMs' "$f" >/dev/null 2>&1 || { echo "RED: the wall clock is missing or shorter than ttftMs"; bad=1; }
   ((bad == 0)) || return 1
   echo GREEN
 }
@@ -182,7 +191,7 @@ cmd_checks() {
   local saved_result="$result_file" saved_dcctl="$dcctl" good bad
   result_file="$work/judge.json"
   dcctl=/nonexistent
-  good='{"status":"ok","failedPhase":null,"ttftMs":743000,"phasesMs":{"cluster":30000,"operators":120000,"bootstrap_prep":20000,"infra":200000,"chart":300000,"provision":3000,"first_stored":2000,"first_dashboard":70000}}'
+  good='{"status":"ok","failedPhase":null,"ttftMs":748000,"wallMs":800000,"phasesMs":{"cluster":30000,"operators":120000,"bootstrap_prep":20000,"infra":200000,"chart":300000,"provision":3000,"device_setup":5000,"first_stored":2000,"first_dashboard":70000}}'
   printf '%s' "$good" >"$work/good.json"
   [[ "$(judge_result "$work/good.json")" == GREEN ]] || fail "the judge rejected a good record"
   pass "a complete record is GREEN"
@@ -192,6 +201,9 @@ cmd_checks() {
     "$(jq -c '.phasesMs.chart=0' <<<"$good")"
     "$(jq -c '.ttftMs=null' <<<"$good")"
     "$(jq -c '.ttftMs=1000' <<<"$good")"
+    "$(jq -c '.wallMs=1' <<<"$good")"
+    "$(jq -c 'del(.wallMs)' <<<"$good")"
+    "$(jq -c 'del(.phasesMs.device_setup)' <<<"$good")"
   )
   for bad in "${bads[@]}"; do
     printf '%s' "$bad" >"$work/bad.json"
@@ -199,6 +211,30 @@ cmd_checks() {
     red "$(head -n1 <<<"$out")"
   done
   pass "the judge went red on all ${#bads[@]} bad records"
+  # The writer itself, end to end: a fabricated run goes through write_result and must come out GREEN,
+  # and the same run marked failed must come out RED. A writer that could not produce a file the judge
+  # reads would otherwise be found only after the first real run.
+  printf 'cluster	30000
+operators	120000
+bootstrap_prep	20000
+infra	200000
+chart	300000
+provision	3000
+device_setup	5000
+first_stored	2000
+first_dashboard	70000
+' >"$phases_file"
+  printf 'Apply infrastructure	200000
+' >"$steps_file"
+  t_start=$(($(now_ms) - 900000))
+  write_result ok
+  [[ "$(judge_result "$result_file")" == GREEN ]] || fail "write_result's own output did not pass the judge: $(cat "$result_file")"
+  write_result failed first_stored
+  if judge_result "$result_file" >/dev/null; then fail "a failed run written by write_result passed the judge"; fi
+  pass "write_result's output passes the judge when ok and fails it when failed"
+  : >"$phases_file"
+  : >"$steps_file"
+  t_start=0
   result_file="$saved_result"
   dcctl="$saved_dcctl"
 }
@@ -302,8 +338,7 @@ run_bootstrap() {
   while IFS=$'\t' read -r name ms; do
     case "$name" in
       "Apply infrastructure") infra=$((infra + ms)) ;;
-      "Install instance (Helm)" | "Wait for readiness") chart=$((chart + ms)) ;;
-      "Report access info") ;;
+      "Install instance (Helm)" | "Wait for readiness" | "Report access info") chart=$((chart + ms)) ;;
       *) pre=$((pre + ms)) ;;
     esac
   done <"$steps_file"
@@ -357,7 +392,7 @@ login() {
 discover() {
   local secret d
   secret="$(k -n "$namespace" get gateway -o json 2>/dev/null |
-    jq -r --arg h "$host" '[.items[].spec.listeners[] | select(.hostname == $h and .tls) | .tls.certificateRefs[]?.name] | .[0] // empty')"
+    jq -r --arg h "$host" '[.items[].spec.listeners[] | select(.hostname == $h and .tls) | .tls.certificateRefs[]?.name] | .[0] // empty')" || true
   [[ -n "$secret" ]] || secret="$(k -n "$namespace" get ingress -o json | jq -r '[.items[].spec.tls[]?.secretName] | unique | .[0] // empty')"
   [[ -n "$secret" ]] || fail "nothing in $namespace serves TLS for $host"
   ingress_ca="$work/ingress-ca.pem"
@@ -418,10 +453,12 @@ start_container() {
 # publish <port> <value>: one measurement at QoS 1 as the token device. Returns mosquitto_pub's status:
 # 0 only if the broker accepted the connect AND acknowledged the publish.
 publish() {
-  dx timeout 25 mosquitto_pub -h "$node_ip" -p "$1" -V mqttv311 --cafile /work/broker-ca.pem --insecure \
-    -i "$instance:$tenant:$device_token" -u "$tenant:$device_token" -P "$(cat "$work/secret-token")" -q 1 \
-    -t "$instance/$tenant/devices/$device_token/events" \
-    -m "{\"device\":\"$device_token\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$2\"}}]}}" 2>&1
+  # The secret is read inside the container from the mounted work dir, so it never appears on the host
+  # docker command line.
+  local body
+  body="{\"device\":\"$device_token\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$2\"}}]}}"
+  dx sh -c 'exec timeout 25 mosquitto_pub -h "$1" -p "$2" -V mqttv311 --cafile /work/broker-ca.pem --insecure -i "$3" -u "$4" -P "$(cat /work/secret-token)" -q 1 -t "$5" -m "$6"' sh \
+    "$node_ip" "$1" "$instance:$tenant:$device_token" "$tenant:$device_token" "$instance/$tenant/devices/$device_token/events" "$body" 2>&1
 }
 
 # stored <value> prints 1 when the event store returns a measurement of the device with that value.
@@ -448,21 +485,35 @@ dashboard() {
 # 1. Sets T_STORED and T_DASH (ms from the first publish attempt).
 T_STORED=""
 T_DASH=""
+PUBLISH_REFUSALS=0
 first_reading() {
   local port="$1" val="$2" t0 deadline published=0 out
   t0="$(now_ms)"
   deadline=$((SECONDS + reading_timeout))
   T_STORED=""
   T_DASH=""
+  PUBLISH_REFUSALS=0
   while ((SECONDS < deadline)); do
     if ((published == 0)); then
-      if out="$(publish "$port" "$val")"; then published=1; note "published $val at port $port"; else note "publish refused: ${out//$'\n'/ }"; sleep 2; continue; fi
+      if out="$(publish "$port" "$val")"; then
+        published=1
+        note "published $val at port $port"
+      else
+        PUBLISH_REFUSALS=$((PUBLISH_REFUSALS + 1))
+        note "publish refused: ${out//$'\n'/ }"
+        sleep 2
+        continue
+      fi
     fi
     if [[ -z "$T_STORED" && "$(stored "$val")" == 1 ]]; then T_STORED=$(($(now_ms) - t0)); note "stored after ${T_STORED} ms"; fi
     if [[ -z "$T_DASH" && "$(dashboard "$val")" == 1 ]]; then T_DASH=$(($(now_ms) - t0)); note "dashboard query returned it after ${T_DASH} ms"; fi
     [[ -z "$T_STORED" || -z "$T_DASH" ]] || return 0
     sleep 1
   done
+  # A publish can reach the broker and still report failure (PUBACK lost), so the absence the negative
+  # control relies on is read from the store, not inferred from the refusal.
+  if [[ -z "$T_STORED" && "$(stored "$val")" == 1 ]]; then T_STORED=$(($(now_ms) - t0)); fi
+  if [[ -z "$T_DASH" && "$(dashboard "$val")" == 1 ]]; then T_DASH=$(($(now_ms) - t0)); fi
   return 1
 }
 
@@ -511,9 +562,16 @@ cmd_run() {
   phase_cluster
   phase_operators
   run_bootstrap
+  local ds_t ds_ms
+  ds_t="$(now_ms)"
   discover
+  ds_ms=$(($(now_ms) - ds_t))
   phase_provision
+  ds_t="$(now_ms)"
   start_container
+  ds_ms=$((ds_ms + $(now_ms) - ds_t))
+  printf 'device_setup	%d
+' "$ds_ms" >>"$phases_file"
 
   local val="1001.5" ok=0
   phase_begin first_reading
@@ -562,6 +620,7 @@ cmd_negative() {
   fi
   red "no reading reached the store or the dashboard with the device at port $wrong_mqtt_port (stored: ${T_STORED:-never}, dashboard: ${T_DASH:-never})"
   [[ -z "$T_STORED" && -z "$T_DASH" ]] || fail "a reading arrived although the device could not have reached the broker"
+  ((PUBLISH_REFUSALS > 0)) || fail "the phase failed, but not because the broker refused the device: the control failed for a reason it did not plant"
   say "COUNTERWEIGHT: the same phase at the real port $mqtt_node_port"
   reading_timeout=240
   first_reading "$mqtt_node_port" "2003.5" || fail "the first-reading phase failed at the right port too: the control above proves nothing"
