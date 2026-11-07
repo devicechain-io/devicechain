@@ -192,6 +192,28 @@ type Agent struct {
 	sent       *recentSent
 	dead       *deadLetters
 	refusalLog logLimiter
+
+	// Retire-on-accept state (see retire.go). pending holds the spool messages published and
+	// not yet accepted; accepted counts events the platform said it durably accepted;
+	// overCeiling counts events it said it shed at the tenant's ceiling (kept and offered
+	// again); unaccepted counts messages that outlived the accept timeout and were offered
+	// again. All are zero in puback mode.
+	pending     *pendingAccepts
+	accepted    atomic.Int64
+	overCeiling atomic.Int64
+	unaccepted  atomic.Int64
+
+	// overCeilingRetry overrides defaultOverCeilingRetry; tests only.
+	overCeilingRetry time.Duration
+
+	// Priority shedding (see priority.go): classes classifies a device token; shedByClass
+	// counts the buffered events shed from the spool, by class.
+	classes     *classifier
+	shedByClass [numClasses]atomic.Int64
+	// shedMu serialises shed passes and guards shedCursor: the next sequence each class's
+	// scan resumes at (see shedOnce).
+	shedMu     sync.Mutex
+	shedCursor [numClasses]uint64
 }
 
 // New builds an Agent from validated config (the uplink credential is resolved
@@ -227,8 +249,10 @@ func New(cfg config.Configuration, log *slog.Logger) (*Agent, error) {
 	a := &Agent{
 		cfg: cfg, log: log, uplink: up, localPassword: localPassword, ready: make(chan struct{}),
 		sent: newRecentSent(), dead: newDeadLetters(cfg.Local.StoreDir),
+		pending: newPendingAccepts(), classes: newClassifier(cfg.Local.Priority.Rules),
 	}
 	up.onNotice = a.handleNotice
+	up.onAccept = a.handleAccept
 	return a, nil
 }
 
@@ -335,6 +359,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.watchInstanceMismatch()
 
 	go a.sampleLoop(ctx)
+	go a.shedLoop(ctx)
 
 	// Announce the local-auth posture loudly so an unintentionally open listener is
 	// visible in the log at every boot (and continuously in metrics via
@@ -506,7 +531,15 @@ func (a *Agent) connect() error {
 // duration (the uplink's connect timeout doubles as its publish timeout), so a
 // slow-but-succeeding forward is acked before AckWait could redeliver it.
 func (a *Agent) ackWait() time.Duration {
-	return 2 * time.Duration(a.cfg.Uplink.ConnectTimeoutSeconds) * time.Second
+	w := 2 * time.Duration(a.cfg.Uplink.ConnectTimeoutSeconds) * time.Second
+	// An accept-mode agent holds a message un-acked until the platform's acceptance arrives, so
+	// redelivery must wait for it: the longer of the two is the timeout that is never early.
+	if a.retireOnAccept() {
+		if t := time.Duration(a.cfg.Uplink.AcceptTimeoutSeconds) * time.Second; t > w {
+			w = t
+		}
+	}
+	return w
 }
 
 // captureSubject is the one subject the local spool stores and the drain reads:
@@ -531,16 +564,22 @@ func (a *Agent) alignConsumerFilter(subject string) error {
 		}
 		return err
 	}
-	if ci.Config.FilterSubject == subject && len(ci.Config.FilterSubjects) == 0 {
+	// The ack wait follows the retire mode, so a box that switches modes keeps its backlog and
+	// its delivery bookkeeping instead of failing to bind.
+	filterOk := ci.Config.FilterSubject == subject && len(ci.Config.FilterSubjects) == 0
+	if filterOk && ci.Config.AckWait == a.ackWait() {
 		return nil
 	}
 	cfg := ci.Config
 	cfg.FilterSubject = subject
 	cfg.FilterSubjects = nil
+	cfg.AckWait = a.ackWait()
 	if _, err := a.js.UpdateConsumer(captureStream, &cfg); err != nil {
 		return err
 	}
-	a.log.Warn("moved the forwarder's filter to the configured tenant", "was", ci.Config.FilterSubject, "now", subject)
+	if !filterOk {
+		a.log.Warn("moved the forwarder's filter to the configured tenant", "was", ci.Config.FilterSubject, "now", subject)
+	}
 	return nil
 }
 
@@ -719,6 +758,12 @@ func (a *Agent) forwardBatch(ctx context.Context, msgs []*nats.Msg) {
 		// Held BEFORE the publish: a notice can arrive before this goroutine is scheduled
 		// again, and a refusal that finds nothing held is a refusal whose payload was lost.
 		a.sent.put(ev)
+		// Held BEFORE the publish for the same reason: the platform's acceptance can beat
+		// this goroutine's PUBACK, and an acceptance that finds nothing held would leave the
+		// message in the spool to be sent again.
+		if a.retireOnAccept() {
+			a.pending.put(ev.altId, msg)
+		}
 		wait, err := a.begin(ev.topic, ev.payload)
 		if err != nil {
 			a.forwardErrors.Add(1)
@@ -736,6 +781,11 @@ func (a *Agent) forwardBatch(ctx context.Context, msgs []*nats.Msg) {
 				return
 			}
 			a.forwarded.Add(1)
+			if a.retireOnAccept() {
+				// A PUBACK retires nothing here: the message leaves the spool when the platform
+				// says it durably accepted the event (handleAccept), or is offered again.
+				return
+			}
 			// ACK SITE: ack ONLY after the cloud PUBACK'd. This is what turns the spool into
 			// a real store-and-forward buffer — an event that did not reach the cloud stays
 			// in the stream for redelivery.
@@ -836,6 +886,10 @@ func (a *Agent) begin(topic string, payload []byte) (func() error, error) {
 // dead-letter file. See gateway.go for why the spool itself cannot be where it is kept.
 func (a *Agent) handleNotice(n messaging.GatewayNotice) {
 	reason := normaliseRefusalReason(n.Reason)
+	if reason == messaging.GatewayNoticeReasonOverCeiling && a.retireOnAccept() {
+		a.handleOverCeiling(n)
+		return
+	}
 	ev, held := a.sent.take(n.AltId)
 	if !held {
 		ev = &sentEvent{altId: n.AltId, child: n.Device}
@@ -851,6 +905,9 @@ func (a *Agent) handleNotice(n messaging.GatewayNotice) {
 		a.log.Warn("a refused event is no longer held on this box — the platform's failed-events record has its payload",
 			"device", n.Device, "alt_id", n.AltId, "reason", reason)
 	}
+	// A refusal is a terminal answer: the event is in the dead-letter file (or the platform's
+	// record), so an accept-mode spool entry for it retires now rather than being resent.
+	a.retirePending(n.AltId)
 }
 
 // refuse counts one refusal and logs it (rate limited per child and reason).
@@ -941,6 +998,7 @@ func (a *Agent) sampleMetrics() {
 	}
 	a.sampleFailures.Store(0)
 	a.healthy.Store(true)
+	a.expirePending()
 
 	usedBytes := int64(info.State.Bytes)
 	usedMsgs := int64(info.State.Msgs)

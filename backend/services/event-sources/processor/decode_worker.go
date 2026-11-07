@@ -66,6 +66,10 @@ type rawMessage struct {
 	// worker published anything — so everything buffered here at SIGKILL was
 	// silently lost.
 	done func(error)
+	// shed, when set, is called just before settle(nil) for a message the reading stage shed
+	// at the tenant's ceiling, so a transport that tells its sender about a shed can say so
+	// and does not report the message as accepted. nil for a transport that does not.
+	shed func()
 }
 
 // settle reports the handling outcome for a raw message, tolerating a transport
@@ -194,6 +198,9 @@ func (wrk *DecodeWorker) Process() {
 				// the same over-limit gate (the ACK TRAP). Workers can take a backlog slightly
 				// out of order; the limiter charges an older time at its mark, so that can
 				// over-shed by milliseconds and can never mint tokens.
+				if raw.shed != nil {
+					raw.shed()
+				}
 				raw.settle(nil)
 			} else {
 				wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.dedupID, raw.settle)

@@ -520,7 +520,8 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject,
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentCommands),
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentDesired),
-		messaging.GatewayNoticesSubject(instanceId, tenant, deviceToken))
+		messaging.GatewayNoticesSubject(instanceId, tenant, deviceToken),
+		messaging.GatewayAcceptsSubject(instanceId, tenant, deviceToken))
 	return p, nil
 }
 
