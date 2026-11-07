@@ -103,8 +103,10 @@ if [ "${1:-}" = "--self-test" ]; then
   echo "== control: unmodified tree must reproduce"
   compare 0 "${st[@]}" || { echo "SELF-TEST FAIL: the clean tree did not reproduce" >&2; exit 1; }
   echo "== negative control: planted nondeterminism must be caught"
-  if compare 1 "${st[@]}"; then
-    echo "SELF-TEST FAIL: a planted nondeterministic build was reported reproducible" >&2
+  # Exactly 1 (digests differ). A build failure is 2 and must not count as "caught".
+  prc=0; compare 1 "${st[@]}" || prc=$?
+  if [ "$prc" != 1 ]; then
+    echo "SELF-TEST FAIL: planted nondeterministic build gave status $prc, want 1 (digests differ)" >&2
     exit 1
   fi
   echo "self-test ok"
