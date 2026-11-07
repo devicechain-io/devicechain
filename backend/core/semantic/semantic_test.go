@@ -270,7 +270,8 @@ func TestCustomPrefixContextRules(t *testing.T) {
 	}
 	bad("shadows a pack prefix", map[string]string{"brick": "https://city.example/b#"}, semantic.ErrPrefixShadow)
 	bad("shadows the prefix of a pack that is not even enabled", map[string]string{"ngsi-ld": "https://city.example/n#"}, semantic.ErrPrefixShadow)
-	bad("namespace inside a pack namespace", map[string]string{"mine": brickNS + "Mine/"}, semantic.ErrPrefixShadow)
+	bad("namespace inside a pack namespace", map[string]string{"mine": sarefNS + "mine/"}, semantic.ErrPrefixShadow)
+	bad("namespace inside a fragment-style pack namespace", map[string]string{"mine": brickNS + "Mine/"}, semantic.ErrMalformed)
 	bad("namespace containing a pack namespace", map[string]string{"mine": "https://brickschema.org/"}, semantic.ErrPrefixShadow)
 	bad("two custom namespaces overlap", map[string]string{"a": "https://c.example/o/", "b": "https://c.example/o/sub/"}, semantic.ErrPrefixShadow)
 	bad("same namespace twice", map[string]string{"a": "https://c.example/o#", "b": "https://c.example/o#"}, semantic.ErrPrefixShadow)
@@ -487,7 +488,7 @@ func TestLicenceNoticesArePresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Brick", "SAREF", "Smart Data Models", "NGSI-LD", "QUDT", "UCUM", "BSD-3-Clause", "CC BY 4.0"} {
+	for _, want := range []string{"Brick", "SAREF", "Smart Data Models", "NGSI-LD", "QUDT", "UCUM", "BSD-3-Clause", "CC BY 4.0", "Redistributions in binary form must reproduce", "creativecommons.org/licenses/by/4.0", "UCUM License"} {
 		if !strings.Contains(string(notice), want) {
 			t.Errorf("NOTICE does not mention %q", want)
 		}

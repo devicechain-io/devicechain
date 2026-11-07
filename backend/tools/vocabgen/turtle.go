@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
@@ -188,7 +189,11 @@ func (p *turtleParser) baseDecl(needDot bool) error {
 	if err != nil {
 		return err
 	}
-	p.base = raw
+	resolved, err := p.resolve(raw)
+	if err != nil {
+		return err
+	}
+	p.base = resolved
 	if needDot {
 		p.skipWS()
 		if p.peek() != '.' {
@@ -232,21 +237,29 @@ func (p *turtleParser) iriRef() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return p.resolve(raw), nil
+	return p.resolve(raw)
 }
 
-func (p *turtleParser) resolve(raw string) string {
-	if strings.Contains(raw, ":") || p.base == "" {
-		return raw
+// resolve turns an IRI reference into an absolute IRI by RFC 3986 reference
+// resolution against the current @base. An absolute IRI is returned exactly as
+// written; a relative one with no base in force is an error, because guessing at
+// it would silently change a term's identity.
+func (p *turtleParser) resolve(raw string) (string, error) {
+	ref, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("bad IRI reference %q: %w", raw, err)
 	}
-	if strings.HasPrefix(raw, "#") {
-		b := p.base
-		if i := strings.IndexByte(b, '#'); i >= 0 {
-			b = b[:i]
-		}
-		return b + raw
+	if ref.IsAbs() {
+		return raw, nil
 	}
-	return p.base + raw
+	if p.base == "" {
+		return "", fmt.Errorf("relative IRI %q with no @base in force", raw)
+	}
+	base, err := url.Parse(p.base)
+	if err != nil {
+		return "", fmt.Errorf("bad @base %q: %w", p.base, err)
+	}
+	return base.ResolveReference(ref).String(), nil
 }
 
 // uchar reads \uXXXX or \UXXXXXXXX at p.pos.
@@ -269,6 +282,9 @@ func (p *turtleParser) uchar() (rune, error) {
 	v, err := strconv.ParseUint(p.src[p.pos+2:p.pos+2+n], 16, 32)
 	if err != nil {
 		return 0, fmt.Errorf("bad unicode escape: %w", err)
+	}
+	if !utf8.ValidRune(rune(v)) {
+		return 0, fmt.Errorf("\\%c%s is not a Unicode scalar value", p.src[p.pos+1], p.src[p.pos+2:p.pos+2+n])
 	}
 	p.pos += 2 + n
 	return rune(v), nil

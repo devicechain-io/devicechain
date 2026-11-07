@@ -131,8 +131,13 @@ type TenantContext struct {
 
 // Limits.
 const (
-	// MaxCURIEBytes bounds a CURIE or IRI handed to Expand and Validate.
+	// MaxCURIEBytes bounds a CURIE handed to Expand and Validate, and a
+	// namespace.
 	MaxCURIEBytes = 256
+	// MaxIRIBytes bounds a full IRI handed to Expand and Validate. It is a
+	// namespace plus a CURIE's local part, so every IRI Validate returns can be
+	// handed back to Validate unchanged.
+	MaxIRIBytes = 2 * MaxCURIEBytes
 	// MaxCustomPrefixes bounds a tenant's custom prefixes.
 	MaxCustomPrefixes = 32
 )
@@ -176,4 +181,25 @@ func (e *TermError) Unwrap() error { return e.Err }
 
 func refuse(err error, term, format string, args ...any) *TermError {
 	return &TermError{Err: err, Term: term, Detail: fmt.Sprintf(format, args...)}
+}
+
+// clone returns a copy that shares no slice or pointer with t.
+func (t Term) clone() Term {
+	c := t
+	c.Parents = append([]IRI(nil), t.Parents...)
+	if t.Inverse != nil {
+		v := *t.Inverse
+		c.Inverse = &v
+	}
+	return c
+}
+
+// clone returns a deep copy of p.
+func (p *Pack) clone() *Pack {
+	c := *p
+	c.Terms = make(map[IRI]Term, len(p.Terms))
+	for k, t := range p.Terms {
+		c.Terms[k] = t.clone()
+	}
+	return &c
 }
