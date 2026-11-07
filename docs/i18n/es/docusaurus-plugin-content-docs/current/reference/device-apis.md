@@ -54,7 +54,7 @@ HTTP es solo ascendente: un dispositivo HTTP no puede recibir comandos. El puert
 Un cliente LwM2M se registra por CoAP sobre DTLS, **UDP 5684**, presentando una identidad de clave precompartida que la plataforma resuelve a un tenant y un dispositivo. Sirve cualquier cliente LwM2M con soporte PSK; por ejemplo, con el cliente de demostración de Leshan:
 
 ```bash
-./leshan-client-demo -u <lwm2m-host>:5684 -n sensor-001 -i <pskIdentity> -p <pskKeyHex>
+./leshan-client-demo -u coaps://<lwm2m-host>:5684 -n sensor-001 -i <pskIdentity> -p <pskKeyHex>
 ```
 
 La plataforma observa entonces los objetos de sensor del dispositivo y almacena cada notificación como una medición. Consulta [LwM2M](../concepts/lwm2m.md) para la presencia, las escrituras y lo que no se admite.

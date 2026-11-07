@@ -5,7 +5,8 @@
 > reaction engine. Apache 2.0, self-hosted, multi-tenant. Generally available (v1.x):
 > the served interfaces follow a published versioning policy.
 
-Every external API is GraphQL, and **introspection is disabled by default**, so a
+Every management and query API is GraphQL (devices use MQTT, HTTP and the other
+transports on the device APIs page below), and **introspection is disabled by default**, so a
 running instance will not describe itself. The schemas below are the way to read the
 API without deploying one. They are generated on every build from the files the
 services parse at startup, so they cannot drift from the running API.

@@ -16,7 +16,7 @@ for usage.
 
 ## Rules that save time
 
-- **Introspection is disabled on a running instance.** Do not try to discover the API by
+- **Introspection is disabled by default on a running instance.** Do not try to discover the API by
   querying one. Read the published schemas (`/schema/index.json` on the documentation
   site, or `docs/static/llms.txt`) and generate typed documents from them.
 - **Token handling goes through the token seam.** Never read or write a token anywhere

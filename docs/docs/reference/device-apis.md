@@ -54,7 +54,7 @@ HTTP is upstream-only: an HTTP device cannot receive commands. Port 8081 has no 
 An LwM2M client registers over CoAP on DTLS, **UDP 5684**, presenting a pre-shared-key identity that the platform resolves to a tenant and a device. Use any LwM2M client that supports PSK; with the Leshan demo client, for instance:
 
 ```bash
-./leshan-client-demo -u <lwm2m-host>:5684 -n sensor-001 -i <pskIdentity> -p <pskKeyHex>
+./leshan-client-demo -u coaps://<lwm2m-host>:5684 -n sensor-001 -i <pskIdentity> -p <pskKeyHex>
 ```
 
 The platform then observes the device's sensor objects and stores each notification as a measurement. See [LwM2M](../concepts/lwm2m.md) for presence, writes and what is not supported.

@@ -54,7 +54,7 @@ HTTP 只能上行：HTTP 设备无法接收命令。8081 端口没有传输层�
 LwM2M 客户端通过 DTLS 上的 CoAP（**UDP 5684**）注册，并出示一个预共享密钥身份，平台会把它解析为租户和设备。任何支持 PSK 的 LwM2M 客户端都可以；例如使用 Leshan 的演示客户端：
 
 ```bash
-./leshan-client-demo -u <lwm2m-host>:5684 -n sensor-001 -i <pskIdentity> -p <pskKeyHex>
+./leshan-client-demo -u coaps://<lwm2m-host>:5684 -n sensor-001 -i <pskIdentity> -p <pskKeyHex>
 ```
 
 随后平台会观察设备的传感器对象，并把每次通知存为一条测量。在线状态、写入以及不支持的内容见 [LwM2M](../concepts/lwm2m.md)。
