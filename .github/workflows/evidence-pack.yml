@@ -89,17 +89,28 @@ jobs:
         run: |
           mkdir -p work/rigs
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern rig-results.tar.gz --dir work
+          # Plain files only, no absolute or parent paths: the archive comes from a release asset.
+          if tar -tvzf work/rig-results.tar.gz | grep -qvE '^[-d]' || tar -tzf work/rig-results.tar.gz | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+            echo "::error::rig-results.tar.gz holds links or unsafe paths"; exit 1
+          fi
           tar -xzf work/rig-results.tar.gz -C work/rigs
 
       - name: CycloneDX SBOM per image
         env:
           SYFT: ${{ steps.syft.outputs.cmd }}
         run: |
-          mkdir -p work/sbom
+          mkdir -p work/sbom work/attach
+          : > work/attach/image-digests.txt
           # The image list is the verifier's, which the release contract test pins to release.yml.
+          # Each SBOM is of a RESOLVED DIGEST, recorded below and re-resolved after the signature
+          # verification step: a tag that moved in between fails the run instead of pairing an SBOM
+          # with image bytes the verifier never saw.
           while IFS= read -r img; do
             ref="ghcr.io/devicechain-io/$img:$TAG"
-            "$SYFT" scan "registry:$ref" -o "cyclonedx-json=work/sbom/$img.cdx.json"
+            digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::could not resolve $ref to a digest"; exit 1; }
+            echo "$img $digest" >> work/attach/image-digests.txt
+            "$SYFT" scan "registry:ghcr.io/devicechain-io/$img@$digest" -o "cyclonedx-json=work/sbom/$img.cdx.json"
             n="$(jq '.components | length' "work/sbom/$img.cdx.json")"
             [ "${n:-0}" -gt 0 ] || { echo "::error::SBOM for $ref has no components"; exit 1; }
             echo "$img: $n components"
@@ -125,6 +136,11 @@ jobs:
           mkdir -p work/attach
           # Fail-open here would turn a verification failure into a pack without the evidence of it.
           hack/verify-release-signatures.sh "$TAG" 2>&1 | tee work/attach/release-signature-verification.txt
+          # The tags must still resolve to the digests the SBOMs were taken of.
+          while read -r img digest; do
+            now="$(docker buildx imagetools inspect "ghcr.io/devicechain-io/$img:$TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+            [ "$now" = "$digest" ] || { echo "::error::$img:$TAG moved from $digest to $now during the run"; exit 1; }
+          done < work/attach/image-digests.txt
           date -u +%Y-%m-%dT%H:%M:%SZ > work/attach/collected-at.txt
           gh api --paginate "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&per_page=100" \
             --jq '[.[] | {number, rule: .rule.id, severity: .rule.security_severity_level, created_at}]' \
@@ -143,7 +159,8 @@ jobs:
             --attach work/attach/release-signature-verification.txt \
             --attach work/attach/codeql-open-alerts.json \
             --attach work/attach/scorecard.json \
-            --attach work/attach/collected-at.txt
+            --attach work/attach/collected-at.txt \
+            --attach work/attach/image-digests.txt
           echo "tarball=$(ls work/out/*.tar.gz)" >> "$GITHUB_OUTPUT"
 
       - name: Sign and verify the pack

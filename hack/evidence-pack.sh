@@ -98,7 +98,7 @@ cmd_record() {
 }
 
 cmd_build() {
-  local rigs_dir="" commit="" out="" sbom="" vex="" now="" attach=() max_default="$DEFAULT_MAX_AGE_DAYS"
+  local rigs_dir="" commit="" out="" sbom="" vex="" now="" drift=0 attach=() max_default="$DEFAULT_MAX_AGE_DAYS"
   declare -A max_age=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -111,6 +111,7 @@ cmd_build() {
       --max-age-days) max_default="${2:?}"; shift 2 ;;
       --max-age) max_age["${2%%=*}"]="${2#*=}"; shift 2 ;;
       --now) now="${2:?}"; shift 2 ;;
+      --allow-rig-commit-drift) drift=1; shift ;;
       *) die "build: unknown argument $1" ;;
     esac
   done
@@ -119,7 +120,7 @@ cmd_build() {
   [ -n "$now" ] || now="$(now_ts)"
   is_ts "$now" || die "build: --now must be RFC3339 UTC"
   local now_e; now_e="$(epoch "$now")"
-  [[ "$max_default" =~ ^[0-9]+$ ]] || die "build: --max-age-days must be a whole number"
+  [[ "$max_default" =~ ^([1-9][0-9]{0,4}|0)$ ]] || die "build: --max-age-days must be a whole number of days (no leading zeros, at most 99999)"
 
   # --- rig results: validate ALL of them before writing anything ---------------------------------
   local rig meta finished verdict rcommit logsha age_days window f_e
@@ -136,15 +137,18 @@ cmd_build() {
     [ -n "${finished:-}" ] || refuse "$meta is not a result record for the $rig rig"
     is_ts "$finished" || refuse "$rig: finishedAt '$finished' is not RFC3339 UTC"
     is_sha "$rcommit" || refuse "$rig: commit '$rcommit' is not a full 40-hex commit"
+    if [ "$rcommit" != "$commit" ] && [ "$drift" -ne 1 ]; then
+      refuse "$rig ran at ${rcommit:0:12}, not at the pack commit ${commit:0:12}. Re-run the rig at this commit, or pass --allow-rig-commit-drift."
+    fi
     [ "$verdict" = "pass" ] || refuse "$rig rig verdict is '$verdict', not pass"
     [ -s "$rigs_dir/$rig.log" ] || refuse "$rig: the recorded log $rigs_dir/$rig.log is missing"
     [ "$(sha256_of "$rigs_dir/$rig.log")" = "$logsha" ] || refuse "$rig: the log no longer matches the hash recorded with the result (edited after the run?)"
     [ "$f_e" != "bad" ] || refuse "$rig: finishedAt '$finished' does not parse"
     [ "$f_e" -le "$now_e" ] || refuse "$rig: finishedAt $finished is in the future relative to $now"
-    age_days=$(((now_e - f_e) / 86400))
     window="${max_age[$rig]:-$max_default}"
-    [[ "$window" =~ ^[0-9]+$ ]] || die "build: --max-age $rig=$window is not a whole number"
-    [ "$age_days" -le "$window" ] || refuse "$rig rig result is STALE: finished $finished ($age_days days before $now), freshness window is $window days. Re-run the rig."
+    [[ "$window" =~ ^([1-9][0-9]{0,4}|0)$ ]] || die "build: --max-age $rig=$window must be a whole number of days (no leading zeros, at most 99999)"
+    age_days=$(((now_e - f_e) / 86400))
+    [ $((now_e - f_e)) -le $((window * 86400)) ] || refuse "$rig rig result is STALE: finished $finished ($age_days days before $now), freshness window is $window days. Re-run the rig."
   done
 
   # --- SBOMs, VEX, attachments -------------------------------------------------------------------
@@ -152,12 +156,17 @@ cmd_build() {
   while IFS= read -r s; do sboms+=("$s"); done < <(find "$sbom" -maxdepth 1 -type f -name '*.cdx.json' | sort)
   [ "${#sboms[@]}" -gt 0 ] || refuse "no *.cdx.json SBOMs in $sbom"
   for s in "${sboms[@]}"; do
-    jq -e '.bomFormat == "CycloneDX" and ((.components // []) | length) > 0' "$s" >/dev/null 2>&1 \
+    jq -e -s 'length == 1 and (.[0] | .bomFormat == "CycloneDX" and ((.components // []) | length) > 0 and all(.components[]; type == "object" and (.name|type == "string")))' "$s" >/dev/null 2>&1 \
       || refuse "$s is not a CycloneDX SBOM with at least one component (an empty SBOM reads like a complete one)"
   done
   [ -s "$vex" ] || refuse "VEX document '$vex' missing"
-  jq -e '."@context" | startswith("https://openvex.dev/ns/")' "$vex" >/dev/null 2>&1 || refuse "$vex is not an OpenVEX document"
-  jq -e '(.statements // []) | length > 0' "$vex" >/dev/null 2>&1 || refuse "$vex has no statements (an empty VEX document reads as a clean bill of health)"
+  # A scan that found nothing legitimately yields ZERO statements, so emptiness is not the test; PROVENANCE
+  # is: the document must come from the generator, which itself refuses an unfinished scan and an empty
+  # set of reports. Every statement present must be well-formed.
+  jq -e -s 'length == 1 and (.[0] | (."@context"|type == "string" and startswith("https://openvex.dev/ns/"))
+      and (.tooling|type == "string" and startswith("hack/vex-from-govulncheck.sh"))
+      and (.statements|type == "array")
+      and all(.statements[]; type == "object" and (.status|IN("affected","not_affected")) and (.vulnerability.name|type == "string") and (.products|length > 0)))' "$vex" >/dev/null 2>&1 || refuse "$vex is not an OpenVEX document produced by hack/vex-from-govulncheck.sh with well-formed statements"
   local a
   for a in "${attach[@]+"${attach[@]}"}"; do [ -s "$a" ] || refuse "attachment '$a' is missing or empty"; done
 
@@ -184,7 +193,7 @@ cmd_build() {
   for a in "${attach[@]+"${attach[@]}"}"; do cp "$a" "$stage/attachments/$(basename "$a")"; done
 
   ( cd "$stage"
-    find . -type f ! -name manifest.json | LC_ALL=C sort | sed 's#^\./##' | xargs -d '
+    find . -type f ! -path ./manifest.json | LC_ALL=C sort | sed 's#^\./##' | xargs -d '
 ' sha256sum       | jq -R -s --arg commit "$commit" --arg now "$now" --arg ptype "$PACK_PREDICATE_TYPE" '
           {schema:"devicechain-evidence-pack/v1", commit:$commit, builtAt:$now, predicateType:$ptype,
            files:(split("
@@ -206,7 +215,7 @@ cmd_check() {
   # shellcheck disable=SC2064
   trap "rm -rf '$work'" EXIT
   extract_safe "$tarball" "$work"
-  root="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  root="$PACK_ROOT"
   [ -s "$root/manifest.json" ] || refuse "no manifest.json in the tarball"
   local n listed
   n="$(jq '.files | length' "$root/manifest.json")"
@@ -216,23 +225,32 @@ cmd_check() {
 ' ' ')"
   # Nothing may ride along unlisted.
   listed="$(jq -r '.files[].path' "$root/manifest.json" | LC_ALL=C sort)"
-  [ "$(cd "$root" && find . -type f ! -name manifest.json | sed 's#^\./##' | LC_ALL=C sort)" = "$listed" ]     || refuse "the tarball holds files the manifest does not list"
+  [ "$(cd "$root" && find . -type f ! -path ./manifest.json | sed 's#^\./##' | LC_ALL=C sort)" = "$listed" ]     || refuse "the tarball holds files the manifest does not list"
   echo "$SELF: $n members match the manifest"
 }
 
-# A tarball naming a path outside itself is refused before extraction.
+# Extract a pack tarball into <dir>, leaving the single pack root in PACK_ROOT. A tarball is refused before
+# extraction when it names an absolute or ".." path, holds anything but regular files and directories (a
+# symlink or hard link would let a member hash something outside the pack), or has more than one top-level
+# entry.
 extract_safe() {
-  local bad
+  local bad tops
   bad="$(tar -tzf "$1" | grep -E '(^/|(^|/)\.\.(/|$))' || true)"
   [ -z "$bad" ] || refuse "tarball has unsafe member paths: $bad"
+  bad="$(tar -tvzf "$1" | grep -vE '^[-d]' || true)"
+  [ -z "$bad" ] || refuse "tarball holds members that are neither regular files nor directories: $bad"
+  tops="$(tar -tzf "$1" | sed -e 's#^\./##' -e 's#/.*$##' | sort -u | grep -v '^$' || true)"
+  [ "$(printf '%s\n' "$tops" | grep -c .)" -eq 1 ] || refuse "tarball must hold exactly one top-level directory, found: $(echo "$tops" | tr '\n' ' ')"
   tar -xzf "$1" -C "$2"
+  PACK_ROOT="$2/$tops"
+  [ -d "$PACK_ROOT" ] || refuse "the tarball's top-level entry is not a directory"
 }
 
 pack_manifest_to() { # <tarball> <dest-file>
   local work root
   work="$(mktemp -d)"
   extract_safe "$1" "$work"
-  root="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  root="$PACK_ROOT"
   cp "$root/manifest.json" "$2"
   rm -rf "$work"
 }
@@ -279,7 +297,7 @@ self_test() {
 
   mkdir -p "$tmp/sbom" "$tmp/rigs" "$tmp/out"
   printf '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"name":"x"}]}\n' > "$tmp/sbom/operator.cdx.json"
-  printf '{"@context":"https://openvex.dev/ns/v0.2.0","statements":[{"status":"not_affected"}]}\n' > "$tmp/vex.json"
+  printf '{"@context":"https://openvex.dev/ns/v0.2.0","tooling":"hack/vex-from-govulncheck.sh (test)","statements":[{"status":"not_affected","vulnerability":{"name":"GO-1"},"products":[{"@id":"pkg:x"}]}]}\n' > "$tmp/vex.json"
   echo "rig output" > "$tmp/log.txt"
   record_all() { # <finished>
     local r
@@ -348,10 +366,62 @@ self_test() {
   printf '{"bomFormat":"CycloneDX","components":[]}\n' > "$tmp/sbom/empty.cdx.json"
   must_fail "an SBOM with no components" "at least one component"
   rm "$tmp/sbom/empty.cdx.json"
-  printf '{"@context":"https://openvex.dev/ns/v0.2.0","statements":[]}\n' > "$tmp/vex-empty.json"
+  # A clean scan legitimately has NO statements: that must build. A document the generator did not
+  # produce (no tooling marker) or with a malformed statement must not.
+  printf '{"@context":"https://openvex.dev/ns/v0.2.0","tooling":"hack/vex-from-govulncheck.sh (test)","statements":[]}\n' > "$tmp/vex-clean.json"
   rm -rf "$tmp/out"; mkdir -p "$tmp/out"
-  if err="$("$me" build --rigs-dir "$tmp/rigs" --commit "$sha" --out "$tmp/out" --sbom "$tmp/sbom" --vex "$tmp/vex-empty.json" --now "$now" 2>&1 >/dev/null)"; then echo "FAIL: accepted an empty VEX"; bad=1
-  elif grep -q "has no statements" <<<"$err"; then echo "  ok: refuses an empty VEX document"; else echo "FAIL: empty VEX refused for the wrong reason: $err"; bad=1; fi
+  if "$me" build --rigs-dir "$tmp/rigs" --commit "$sha" --out "$tmp/out" --sbom "$tmp/sbom" --vex "$tmp/vex-clean.json" --now "$now" >/dev/null 2>&1; then echo "  ok: a clean scan (zero VEX statements) builds"; else echo "FAIL: a clean scan was refused"; bad=1; fi
+  vex_must_fail() { # <what> <file>
+    rm -rf "$tmp/out"; mkdir -p "$tmp/out"
+    if err="$("$me" build --rigs-dir "$tmp/rigs" --commit "$sha" --out "$tmp/out" --sbom "$tmp/sbom" --vex "$2" --now "$now" 2>&1 >/dev/null)"; then echo "FAIL: accepted $1"; bad=1
+    elif grep -q "not an OpenVEX document produced by" <<<"$err"; then echo "  ok: refuses $1"; else echo "FAIL: $1 refused for the wrong reason: $err"; bad=1; fi
+  }
+  printf '{"@context":"https://openvex.dev/ns/v0.2.0","statements":[]}\n' > "$tmp/vex-hand.json"
+  vex_must_fail "a VEX document the generator did not produce" "$tmp/vex-hand.json"
+  printf '{"@context":"https://openvex.dev/ns/v0.2.0","tooling":"hack/vex-from-govulncheck.sh","statements":[null]}\n' > "$tmp/vex-null.json"
+  vex_must_fail "a VEX document with a null statement" "$tmp/vex-null.json"
+  printf '{"@context":"https://openvex.dev/ns/v0.2.0","tooling":"hack/vex-from-govulncheck.sh","statements":[]}\n{"x":1}\n' > "$tmp/vex-two.json"
+  vex_must_fail "two concatenated VEX documents" "$tmp/vex-two.json"
+
+  # SBOM schema: a null component, and two concatenated documents (jq -e judges only the LAST output).
+  printf '{"bomFormat":"CycloneDX","components":[null]}\n' > "$tmp/sbom/null.cdx.json"
+  must_fail "an SBOM whose component is null" "at least one component"
+  printf '{"bomFormat":"CycloneDX","components":[]}\n{"bomFormat":"CycloneDX","components":[{"name":"x"}]}\n' > "$tmp/sbom/null.cdx.json"
+  must_fail "an empty SBOM followed by a valid one in the same file" "at least one component"
+  rm "$tmp/sbom/null.cdx.json"
+
+  # A rig that ran at a different commit than the pack is not evidence for this pack.
+  for r in ha dr x509 ota; do "$me" record --rigs-dir "$tmp/rigs" --rig "$r" --log "$tmp/log.txt" --verdict pass --commit fedcba9876543210fedcba9876543210fedcba98 --finished 2026-11-05T12:00:00Z >/dev/null; done
+  must_fail "rig results from a different commit" "not at the pack commit"
+  rm -rf "$tmp/out"; mkdir -p "$tmp/out"
+  if build --allow-rig-commit-drift >/dev/null 2>&1; then echo "  ok: --allow-rig-commit-drift is the explicit override"; else echo "FAIL: drift override not honoured"; bad=1; fi
+  record_all 2026-11-05T12:00:00Z
+
+  # Freshness is judged in seconds, not whole days: 30 days 23 hours old is NOT within a 30-day window.
+  record_all 2026-10-07T13:00:00Z
+  must_fail "a result 30 days 23 hours old under a 30-day window" "STALE"
+  must_fail "a leading-zero window" "whole number of days" --max-age-days 030
+  record_all 2026-11-05T12:00:00Z
+
+  # Archive structure: links, extra top-level entries and unlisted nested manifests are all refused.
+  local tbl; tbl="$(find "$tmp/out" -name '*.tar.gz' | head -1)"
+  rm -rf "$tmp/out"; mkdir -p "$tmp/out"; build >/dev/null 2>&1
+  tbl="$(find "$tmp/out" -name '*.tar.gz' | head -1)"
+  archive_must_fail() { # <what> <reason-regexp> <mutator-fn>
+    local wk; wk="$(mktemp -d)"; tar -xzf "$tbl" -C "$wk"
+    "$3" "$(echo "$wk"/*)" "$wk"
+    ( cd "$wk" && tar -czf "$tmp/mut.tar.gz" ./* )
+    if err="$("$me" check --tarball "$tmp/mut.tar.gz" 2>&1 >/dev/null)"; then echo "FAIL: check accepted $1"; bad=1
+    elif grep -qE "$2" <<<"$err"; then echo "  ok: check refuses $1"; else echo "FAIL: $1 refused for the wrong reason: $err"; bad=1; fi
+    rm -rf "$wk"
+  }
+  mut_symlink() { ln -sf /etc/hostname "$1/extra-link"; }
+  archive_must_fail "a symlink member" "neither regular files nor directories" mut_symlink
+  mut_second_top() { mkdir -p "$2/other"; echo x > "$2/other/f"; }
+  archive_must_fail "a second top-level directory" "exactly one top-level" mut_second_top
+  mut_nested_manifest() { echo '{}' > "$1/rigs/manifest.json"; }
+  archive_must_fail "an unlisted nested manifest.json" "does not list" mut_nested_manifest
+
   if "$me" record --rigs-dir "$tmp/rigs" --rig bogus --log "$tmp/log.txt" --verdict pass --commit "$sha" >/dev/null 2>&1; then echo "FAIL: recorded an unknown rig"; bad=1; else echo "  ok: refuses to record an unknown rig"; fi
 
   if [ "$bad" -eq 0 ]; then echo "$SELF self-test: ok"; else echo "$SELF self-test: FAILED"; return 1; fi
