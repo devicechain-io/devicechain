@@ -1,0 +1,111 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# THE LTS-TO-LTS UPGRADE DRILL -- does an instance on the long-term-support line keep its data when it
+# jumps straight to a newer line, skipping the minors in between? See hack/lts-upgrade-drill.sh.
+#
+# MANUAL, ON PURPOSE, AND SEPARATE FROM upgrade-gate.yml. That gate runs on every pull request and derives its
+# baseline as the highest stable tag below the target, so it can only ever drill ADJACENT releases; it is a
+# required check, and a second, differently-shaped drill inside it would put the two claims on one status.
+# This one is run by a maintainer on a candidate line before that line is recommended to LTS operators (and
+# before an LTS handoff), against the checked-out ref -- normally the release candidate's tag or the
+# next-line branch. It runs the drill AND its negative control: a pass that has never been seen to fail is
+# not evidence, so `both` is the default and the only form worth quoting.
+#
+# Tools beyond the runner defaults: kind and tofu always; ko on the build path. The bring-up is the same one
+# upgrade-gate.yml uses, because the drill IS hack/upgrade-rig.sh pointed at a different hop.
+
+name: lts-upgrade-drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'Release tag ON the designated LTS line to seed and upgrade FROM (e.g. v1.2.4)'
+        required: true
+        type: string
+      to:
+        description: 'The release this ref is the candidate for (e.g. v1.5.0-rc.1); it must skip at least one whole minor'
+        required: true
+        type: string
+      mode:
+        description: 'both = the drill then its planted-defect control; run or control = one half'
+        type: choice
+        options: [both, run, control]
+        default: both
+      pull:
+        description: 'Upgrade to the PUBLISHED `to` images instead of building this checkout (the control always builds)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lts-upgrade-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      # fetch-depth: 0 -- the rig `git archive`s the FROM tag out of this checkout to build that release's own dcctl.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/cli
+
+      - name: Install kind
+        run: |
+          curl -fsSL -o kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          sudo install -m 0755 kind /usr/local/bin/kind
+          rm -f kind
+          kind version
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2
+        with:
+          tofu_version: 1.9.1
+          tofu_wrapper: false
+
+      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
+        with:
+          version: v0.19.1
+
+      - name: The drill's own self-test
+        run: hack/lts-upgrade-drill.sh --self-test
+
+      - name: Is this a hop the drill is for?
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: hack/lts-upgrade-drill.sh plan "$FROM" "$TO"
+
+      - name: The LTS upgrade drill
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          MODE: ${{ inputs.mode }}
+          PULL: ${{ inputs.pull }}
+        run: |
+          set -euo pipefail
+          flag=()
+          if [ "$PULL" = true ]; then flag=(--pull); fi
+          hack/lts-upgrade-drill.sh "${flag[@]}" "$MODE" "$FROM" "$TO"
+
+      # Exit 3 from the control means the drill passed over the planted defect: it is blind to this class of
+      # defect and its green is worth nothing. Exit 4 means the control could not run for some other reason.
+      - name: Diagnostics
+        if: failure()
+        run: |
+          ctx=kind-devicechain-upgrade
+          kubectl --context "$ctx" get pods -A -o wide || true
+          kubectl --context "$ctx" get events -A --sort-by=.lastTimestamp | tail -60 || true
