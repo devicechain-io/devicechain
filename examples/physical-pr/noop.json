@@ -1,0 +1,10 @@
+{
+  "id": "hot-pump",
+  "name": "pump too hot",
+  "type": "threshold",
+  "when": {
+    "metric": "temperature",
+    "op": "gt",
+    "threshold": 80
+  }
+}

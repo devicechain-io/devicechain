@@ -1,0 +1,141 @@
+{
+  "profile": "pump",
+  "versions": [
+    {
+      "commit": "v1",
+      "author": "alice@example.com",
+      "authorKind": "human",
+      "message": "initial rule",
+      "publishedAt": "2026-10-20T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v1",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 80
+        }
+      }
+    },
+    {
+      "commit": "v2",
+      "author": "alice@example.com",
+      "authorKind": "human",
+      "message": "rename",
+      "publishedAt": "2026-10-21T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v2",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 80
+        }
+      }
+    },
+    {
+      "commit": "v3",
+      "author": "bob@example.com",
+      "authorKind": "human",
+      "message": "clarify the name",
+      "publishedAt": "2026-10-22T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v3",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 80
+        }
+      }
+    },
+    {
+      "commit": "v4",
+      "author": "carol@example.com",
+      "authorKind": "human",
+      "message": "docs pass",
+      "publishedAt": "2026-10-23T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v4",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 80
+        }
+      }
+    },
+    {
+      "commit": "v5",
+      "author": "agent:tuner",
+      "authorKind": "agent",
+      "message": "agent: tune sensitivity",
+      "publishedAt": "2026-10-24T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v5",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 76
+        }
+      }
+    },
+    {
+      "commit": "v6",
+      "author": "bob@example.com",
+      "authorKind": "human",
+      "message": "rename again",
+      "publishedAt": "2026-10-25T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v6",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 76
+        }
+      }
+    },
+    {
+      "commit": "v7",
+      "author": "alice@example.com",
+      "authorKind": "human",
+      "message": "tidy",
+      "publishedAt": "2026-10-26T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v7",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 76
+        }
+      }
+    },
+    {
+      "commit": "v8",
+      "author": "carol@example.com",
+      "authorKind": "human",
+      "message": "rename for the dashboard",
+      "publishedAt": "2026-10-27T09:00:00Z",
+      "ruleDefinition": {
+        "id": "hot-pump",
+        "name": "hot pump v8",
+        "type": "threshold",
+        "when": {
+          "metric": "temperature",
+          "op": "gt",
+          "threshold": 76
+        }
+      }
+    }
+  ]
+}

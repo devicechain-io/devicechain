@@ -55,6 +55,9 @@ type SchemaResolver struct {
 	// AppliedGuard is whether live DETECT runs its duplicate-event guard (event envelopes on). The
 	// preview applies the same rule, so it neither drops nor keeps a duplicate differently.
 	AppliedGuard bool
+	// PhysicalPR turns on the experimental physical-pull-request operations (diff and bisect of
+	// rule versions by replayed outcome). Off by default; set from ExperimentalPhysicalPREnv.
+	PhysicalPR bool
 }
 
 // EventProcessingInfo resolves the scaffold identity query.
