@@ -7,7 +7,7 @@ title: Connecting with a Certificate
 
 A device can authenticate to the platform broker with an X.509 client certificate instead of a token or a password. This guide takes you from a certificate authority (CA) to a device publishing its first event, and shows both ways a certificate can become a device: a **pinned credential** you create for a device that exists, and a **certificate profile** that registers devices the first time they connect.
 
-How the platform decides to trust a certificate, and where that trust stops, is in [Certificate identity](../concepts/device-certificates.md). Read its [limits](../concepts/device-certificates.md#not-supported) before you plan a fleet around this: there is no CRL or OCSP, name-constrained CAs are refused, and renewal and the C# SDK are not available yet.
+How the platform decides to trust a certificate, and where that trust stops, is in [Certificate identity](../concepts/device-certificates.md). Read its [limits](../concepts/device-certificates.md#not-supported) before you plan a fleet around this: there is no OCSP and no CRL fetching (lists are uploaded), name-constrained CAs are refused, and renewal and the C# SDK are not available yet.
 
 :::note Status
 Available over MQTT on the platform broker. HTTP ingest and LwM2M do not accept client certificates.
@@ -179,7 +179,7 @@ Like every device refusal, the device sees only CONNACK return code 5. The reaso
 
 1. **`no_cert`.** The client sent no certificate. Check `--cert`, and that the key matches the certificate.
 2. **`chain_invalid`.** The chain does not build to the anchor, a certificate has expired, the extended key usage lacks client authentication, a signature uses SHA-1, or a key is outside the allowed set. Reproduce with `openssl verify -CAfile ca.crt -purpose sslclient device.crt`, and check that the device sends its intermediates.
-3. **`anchor_disabled`, `revoked`.** The anchor or the credential was disabled on purpose.
+3. **`anchor_disabled`, `revoked`, `cert_revoked`, `revocation_unknown`.** The anchor or the credential was disabled on purpose (`anchor_disabled`, `revoked`), the certificate is named by an uploaded revocation list or a manual revocation (`cert_revoked`), or the anchor requires a current list for the issuer and has none (`revocation_unknown`).
 4. **`client_id_mismatch`.** The client id is not `{instanceId}:{tenant}:{deviceToken}` for this device, or for a first connect, the derived one.
 5. **`unknown_pin`.** The certificate is not pinned and chains to no usable certificate profile.
 6. **`jit_*`.** A first-connect registration was refused: `jit_rate_limited` and `jit_busy` mean the device should back off and retry, `jit_ambiguous` means two profiles tie, and the rest carry the registration error code.
@@ -198,7 +198,7 @@ The simulator plays certificate devices: `dc-simulator --x509` mints a throwaway
 
 ## What this does not do {#limits}
 
-- **No CRL, no OCSP.** To stop a certificate, disable its credential (or the device, or the anchor), and issue short-lived certificates.
+- **No OCSP, and no CRL fetching.** Upload a CA's revocation list to the trust anchor, or revoke a certificate by fingerprint; both refuse it from its next connect and neither ends an open session. To stop a connected device now, disable its credential (or the device, or the anchor). See [Revocation](../concepts/device-certificates.md#revocation).
 - **A name-constrained CA is refused.** The trust anchor is the identity boundary.
 - **No renewal of a registered device by presenting a new certificate, and no adoption of a reset device.** Not available yet.
 - **No client certificate in the C# SDK.** Not available yet.

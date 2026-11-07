@@ -7,7 +7,7 @@ title: Conectar con un certificado
 
 Un dispositivo puede autenticarse en el broker de la plataforma con un certificado de cliente X.509 en lugar de un token o una contraseña. Esta guía te lleva de una autoridad certificadora (CA) a un dispositivo que publica su primer evento, y muestra las dos formas en que un certificado puede convertirse en dispositivo: una **credencial fijada** que creas para un dispositivo que ya existe, y un **perfil de certificado** que registra dispositivos la primera vez que se conectan.
 
-Cómo decide la plataforma confiar en un certificado, y dónde se detiene esa confianza, está en [Identidad por certificado](../concepts/device-certificates.md). Lee sus [límites](../concepts/device-certificates.md#not-supported) antes de planificar una flota con esto: no hay CRL ni OCSP, las CA con restricciones de nombre se rechazan, y la renovación y el SDK de C# todavía no están disponibles.
+Cómo decide la plataforma confiar en un certificado, y dónde se detiene esa confianza, está en [Identidad por certificado](../concepts/device-certificates.md). Lee sus [límites](../concepts/device-certificates.md#not-supported) antes de planificar una flota con esto: no hay OCSP ni descarga de CRL (las listas se suben), las CA con restricciones de nombre se rechazan, y la renovación y el SDK de C# todavía no están disponibles.
 
 :::note Estado
 Disponible por MQTT en el broker de la plataforma. HTTP y LwM2M no aceptan certificados de cliente.
@@ -179,7 +179,7 @@ Como en todos los rechazos de dispositivos, el dispositivo solo ve el código de
 
 1. **`no_cert`.** El cliente no envió certificado. Revisa `--cert` y que la clave corresponda al certificado.
 2. **`chain_invalid`.** La cadena no llega al ancla, un certificado ha caducado, al uso extendido de clave le falta la autenticación de cliente, una firma usa SHA-1 o una clave está fuera del conjunto permitido. Reprodúcelo con `openssl verify -CAfile ca.crt -purpose sslclient device.crt` y comprueba que el dispositivo envía sus intermedios.
-3. **`anchor_disabled`, `revoked`.** El ancla o la credencial se deshabilitó a propósito.
+3. **`anchor_disabled`, `revoked`, `cert_revoked`, `revocation_unknown`.** El ancla o la credencial se deshabilitó a propósito (`anchor_disabled`, `revoked`), el certificado lo nombra una lista de revocación subida o una revocación manual (`cert_revoked`), o el ancla exige una lista vigente del emisor y no la tiene (`revocation_unknown`).
 4. **`client_id_mismatch`.** El client id no es `{instanceId}:{tenant}:{deviceToken}` de este dispositivo o, en una primera conexión, el derivado.
 5. **`unknown_pin`.** El certificado no está fijado y no encadena con ningún perfil de certificado utilizable.
 6. **`jit_*`.** Se rechazó un registro en la primera conexión: `jit_rate_limited` y `jit_busy` significan que el dispositivo debe esperar y reintentar, `jit_ambiguous` significa que dos perfiles empatan, y el resto lleva el código de error del registro.
@@ -198,7 +198,7 @@ El simulador representa dispositivos con certificado: `dc-simulator --x509` crea
 
 ## Lo que esto no hace {#limits}
 
-- **Sin CRL ni OCSP.** Para detener un certificado, deshabilita su credencial (o el dispositivo, o el ancla) y emite certificados de corta duración.
+- **Sin OCSP ni descarga de CRL.** Sube la lista de revocación de una CA al ancla de confianza, o revoca un certificado por huella; ambas cosas lo rechazan desde su siguiente conexión y ninguna termina una sesión abierta. Para detener ya a un dispositivo conectado, deshabilita su credencial (o el dispositivo, o el ancla). Consulta [Revocación](../concepts/device-certificates.md#revocation).
 - **Una CA con restricciones de nombre se rechaza.** El ancla de confianza es el límite de la identidad.
 - **Sin renovación de un dispositivo registrado presentando un certificado nuevo, ni adopción de un dispositivo restablecido.** Todavía no está disponible.
 - **Sin certificado de cliente en el SDK de C#.** Todavía no está disponible.

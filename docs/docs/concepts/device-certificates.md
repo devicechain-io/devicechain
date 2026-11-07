@@ -77,16 +77,25 @@ The session is granted until the earliest `notAfter` among the device certificat
 | --- | --- | --- |
 | Stop one device | Disable or delete its `X509_CERTIFICATE` credential, or disable the device | Immediately; the open session is ended |
 | Stop a whole CA | Disable the trust anchor | Immediately; every relying device's session is ended |
+| Stop one certificate, a leaf or an intermediate, registered or not | Revoke it by fingerprint with `revokeDeviceCertificate` | From the certificate's next connect, on every replica |
+| Stop the certificates a CA has revoked | Upload the CA's revocation list (CRL) to the trust anchor | From the next connect of each certificate the list names |
 | Stop a device that registered itself | `revokeProvisionedDevices` or `resetDeviceProvisioning`, as for any [self-registered device](../guides/device-self-registration.md#compromise) | Immediately |
 | Let a certificate lapse | Issue short-lived certificates | At the certificate's expiry, exactly |
-| Stop a stolen certificate that never connected | Pre-create devices and pin their certificates, or disable the anchor | Not before one of those happens |
 
-**There is no CRL and no OCSP.** The platform does not fetch or upload revocation lists and does not ask a responder whether a certificate is still good. A certificate you want to stop is stopped by disabling its credential or its anchor. Plan around that: issue short-lived certificates from your CA and rely on expiry, with credential and anchor disabling as the immediate tools.
+**Revocation lists and manual revocations refuse a certificate when it connects; they do not end a session that is already open.** To cut a connected device off now, also disable its credential or the device.
+
+**CRLs are uploaded, never fetched.** The platform does not follow a CRL distribution point and does not ask an OCSP responder whether a certificate is still good. You upload the CA's current list to the trust anchor with `putDeviceRevocationList` (a list of up to 2 MiB over GraphQL) or with a streaming `PUT /trust-anchors/{token}/crl` on the `device-management` API for larger ones, DER or PEM. The platform checks the list's signature against the anchor (or the issuer chain you send with it) and keeps one current list for each issuer. A list whose CRL number is not above every number accepted before for that issuer is refused, so an old list can never replace a newer one, even after the list was deleted. `deleteDeviceRevocationList` removes a list and the refusals it carried.
+
+**A manual revocation is the platform's own decision.** `revokeDeviceCertificate` names a certificate by its PEM or SHA-256 fingerprint and an optional reason. It applies wherever the certificate appears on a verified path, whatever later becomes of its credential or its device, so deleting the credential does not let the certificate register again. `unrevokeDeviceCertificate` removes it. A trust anchor that holds manual revocations cannot be deleted until they are removed.
+
+**How strict an anchor is.** An anchor has a revocation mode. `ENTRIES` (the default) refuses a certificate that a stored list or a manual revocation names and admits the rest, however old the lists are, so an anchor with no list behaves as it did before revocation existed. `REQUIRE_CURRENT` also refuses a certificate whose issuer has no current list; a list counts as current until its `nextUpdate` plus the anchor's stale grace (`revocationStaleGrace`, up to 168 hours) has passed. The platform refuses to switch an anchor to `REQUIRE_CURRENT` while it holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused. Watch each list's `status` (`FRESH`, `EXPIRING`, `STALE`) and upload the next list before it goes stale.
+
+A refusal by list or by manual revocation is counted as `cert_revoked`, and one by `REQUIRE_CURRENT` as `revocation_unknown`, in `callout_x509_total`. Short-lived certificates remain the cheapest revocation; use lists and manual revocation for the certificate you cannot wait out.
 
 ## What is not supported {#not-supported}
 
 - **Name constraints.** A name-constrained CA is refused, as above.
-- **Certificate revocation lists and OCSP.** See [Revocation](#revocation).
+- **OCSP, and fetching a CRL on its own.** Lists are uploaded to the trust anchor; the platform never fetches one and never asks a responder. See [Revocation](#revocation).
 - **Renewal on its own, and adopting a device after its provisioning is reset.** A device that holds a certificate and then presents a different one is refused (`ALREADY_PROVISIONED`) when it connects for registration. Until renewal ships, add the new certificate as a pinned credential (a device can hold three) before the old one expires.
 - **The C# SDK.** It cannot present a client certificate yet.
 - **HTTP ingest and LwM2M.** Neither authenticates with a client certificate. HTTP devices use a token or basic credential, and LwM2M devices use pre-shared keys. A certificate presented on MQTT with any username other than `{tenant}:@x509` is ignored, and the connect is judged on its token or password as before.
