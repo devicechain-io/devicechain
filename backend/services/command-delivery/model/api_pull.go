@@ -146,6 +146,14 @@ func (api *Api) PullCommands(ctx context.Context, deviceToken string, limit int)
 	if _, err := api.FailUnacknowledgedPulls(ctx, deviceToken, now); err != nil {
 		return nil, err
 	}
+	// 🔴 A CALLED-OFF BATCH'S UNACKNOWLEDGED HAND-OUTS END HERE. Cancellation leaves SENT rows
+	// alone, so one a pull handed out and never saw acknowledged would otherwise be offered again
+	// after PullAckWait. Only the pull's own, unacknowledged rows: an acknowledged command is one
+	// the device holds, and the same brake ConfirmDispatch applies is not this one's to pull back.
+	if _, err := api.stopCancelledBatchCommand(ctx,
+		"device_token = ? AND delivery_attempts IS NOT NULL AND delivered_time IS NULL", []any{deviceToken}); err != nil {
+		return nil, err
+	}
 	liveSQL, liveArgs := liveWhere(now)
 	heldSQL, heldArgs := dispatchableNowWhere(now)
 	pullSQL, pullArgs := pullableWhere(now)
@@ -156,6 +164,7 @@ func (api *Api) PullCommands(ctx context.Context, deviceToken string, limit int)
 		Where("COALESCE(delivery_attempts, 0) < COALESCE(max_attempts, ?)", DefaultPullMaxAttempts).
 		Where(liveSQL, liveArgs...).
 		Where(heldSQL, heldArgs...).
+		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Order("id ASC").
 		Limit(limit).
@@ -164,36 +173,32 @@ func (api *Api) PullCommands(ctx context.Context, deviceToken string, limit int)
 		return nil, res.Error
 	}
 	out := make([]*PulledCommand, 0, len(candidates))
+	budget := PullResponseBudget
 	for _, c := range candidates {
-		nonce := newDispatchNonce()
-		claim := api.RDB.DB(ctx).Model(&Command{}).
-			Where("id = ? AND device_token = ?", c.ID, deviceToken).
-			Where("COALESCE(delivery_attempts, 0) < COALESCE(max_attempts, ?)", DefaultPullMaxAttempts).
-			Where(heldSQL, heldArgs...).
-			Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx))
-		if c.Status == CommandSent.String() {
-			// A re-handed command: only the dispatch the read saw may be replaced.
-			claim = claim.Where("status = ? AND dispatch_nonce = ? AND delivered_time IS NULL",
-				CommandSent.String(), c.DispatchNonce)
-		} else {
-			claim = claim.Where("status = ?", c.Status)
-		}
-		upd := claim.Updates(map[string]any{
-			"status":            CommandSent.String(),
-			"sent_time":         sql.NullTime{Time: now, Valid: true},
-			"dispatch_nonce":    sql.NullString{String: nonce, Valid: true},
-			"delivery_attempts": gorm.Expr("COALESCE(delivery_attempts, 0) + 1"),
-		})
-		if upd.Error != nil {
-			return nil, upd.Error
-		}
-		if upd.RowsAffected == 0 {
+		// 🔴 THE SIZE CAP IS APPLIED BEFORE THE CLAIM, NOT AFTER. A command claimed and then
+		// dropped from the answer has spent an attempt and is SENT to a device that never saw it.
+		// A command that fits the budget on its own is always reachable: the first one of an
+		// answer always fits, so a pull makes progress.
+		cost := pullWireCost(c)
+		if cost > PullResponseBudget {
+			// No pull could carry it, whatever else is in the answer: end it rather than claim
+			// it, so its attempts are not spent on an answer the transport will refuse.
+			if err := api.failUnpullable(ctx, c, deviceToken); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		claimed, err := api.loadCommand(ctx, c.ID)
+		if cost > budget {
+			break
+		}
+		claimed, err := api.claimForPull(ctx, c, deviceToken)
 		if err != nil {
 			return nil, err
 		}
+		if claimed == nil {
+			continue
+		}
+		budget -= cost
 		attempt := 1
 		if claimed.DeliveryAttempts.Valid {
 			attempt = int(claimed.DeliveryAttempts.Int32)
@@ -201,6 +206,84 @@ func (api *Api) PullCommands(ctx context.Context, deviceToken string, limit int)
 		out = append(out, &PulledCommand{Command: claimed, Attempt: attempt})
 	}
 	return out, nil
+}
+
+// PullUnpullableReason is the fixed sentence written to a command too large for any pull to carry.
+const PullUnpullableReason = "DELIVERY_TOO_LARGE: the command's payload is too large to be carried in a pull " +
+	"response, so it was not handed out."
+
+// failUnpullable ends a command that no pull answer can carry: FAILED, outcome NOT_DELIVERED, with
+// attempts untouched, on the state the read saw (so a command another claimer took is left alone).
+func (api *Api) failUnpullable(ctx context.Context, c *Command, deviceToken string) error {
+	tx := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND device_token = ? AND status = ? AND delivered_time IS NULL", c.ID, deviceToken, c.Status)
+	if c.Status == CommandSent.String() {
+		tx = tx.Where("dispatch_nonce = ?", c.DispatchNonce)
+	}
+	return tx.Updates(terminalUpdate(CommandFailed, OutcomeNotDelivered, map[string]any{
+		"error": sql.NullString{String: PullUnpullableReason, Valid: true},
+	})).Error
+}
+
+// PullResponseBudget bounds the worst-case size, in bytes, of the answer one pull builds. The
+// service client that carries the answer to the device-facing listener refuses a body over 1 MiB
+// (svcclient.MaxResponseBytes), and a command's payload may be 64 KiB, so 16 of them do not fit.
+// The budget leaves a quarter of that for the envelope and for the escaping each layer adds.
+const PullResponseBudget = 768 << 10
+
+// pullWireCost is the most a command can add to the answer: its payload, as READ BACK from the
+// database, counted at the widest escape JSON gives a byte (six), plus a fixed allowance for the
+// name, token, timestamps and field names. It is measured on the read-back text because the
+// stored form can be larger than the 64 KiB accepted on input (a jsonb column writes 1e300 out in
+// full). A payload as accepted costs at most 64 KiB x 6 = 384 KiB, inside the budget on its own.
+func pullWireCost(c *Command) int {
+	cost := 1024 + len(c.Name) + len(c.Token)
+	if c.Payload != nil {
+		cost += 6 * len(*c.Payload)
+	}
+	return cost
+}
+
+// claimForPull is the conditional claim of one candidate the read saw. It returns the claimed row,
+// or nil when the claim was lost: to another claimer, or because the row stopped being claimable
+// between the read and now.
+//
+// 🔴 EVERY PREDICATE THE SELECTION APPLIES IS APPLIED AGAIN HERE, because the read and the write
+// are two statements. A command that expires, or whose batch is called off, in between must not be
+// handed to the device: the claim is the last point at which it can still be refused.
+func (api *Api) claimForPull(ctx context.Context, c *Command, deviceToken string) (*Command, error) {
+	// The time of THIS statement, not of the pull's start: the read and the claims before this one
+	// take time, and a command that expired during them must not be handed out.
+	now := time.Now()
+	liveSQL, liveArgs := liveWhere(now)
+	heldSQL, heldArgs := dispatchableNowWhere(now)
+	claim := api.RDB.DB(ctx).Model(&Command{}).
+		Where("id = ? AND device_token = ?", c.ID, deviceToken).
+		Where("COALESCE(delivery_attempts, 0) < COALESCE(max_attempts, ?)", DefaultPullMaxAttempts).
+		Where(liveSQL, liveArgs...).
+		Where(heldSQL, heldArgs...).
+		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
+		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx))
+	if c.Status == CommandSent.String() {
+		// A re-handed command: only the dispatch the read saw may be replaced.
+		claim = claim.Where("status = ? AND dispatch_nonce = ? AND delivered_time IS NULL",
+			CommandSent.String(), c.DispatchNonce)
+	} else {
+		claim = claim.Where("status = ?", c.Status)
+	}
+	upd := claim.Updates(map[string]any{
+		"status":            CommandSent.String(),
+		"sent_time":         sql.NullTime{Time: now, Valid: true},
+		"dispatch_nonce":    sql.NullString{String: newDispatchNonce(), Valid: true},
+		"delivery_attempts": gorm.Expr("COALESCE(delivery_attempts, 0) + 1"),
+	})
+	if upd.Error != nil {
+		return nil, upd.Error
+	}
+	if upd.RowsAffected == 0 {
+		return nil, nil
+	}
+	return api.loadCommand(ctx, c.ID)
 }
 
 // AcknowledgeDelivery records the device's acknowledgement of a command a pull handed it. It

@@ -296,29 +296,46 @@ func (es *HttpEventSource) pullAuth(w http.ResponseWriter, r *http.Request, op s
 		http.Error(w, "too many requests from this source; retry later", http.StatusTooManyRequests)
 		return nil, "", "", false
 	}
+	if !es.proveDevice(w, r, rt, op, tenant, device, bearer) {
+		return nil, "", "", false
+	}
+	return rt, tenant, device, true
+}
+
+// proveDevice proves the bearer token against device-management and checks that it belongs to the
+// device in the path and that the device's type is on the HTTP_PULL channel. It writes the refusal
+// and returns false when the request is not to proceed.
+//
+// 🔴 A HELD POLL CALLS THIS AGAIN ON EVERY WAKE, not only at the start: each wake can claim
+// commands, a claim is an actuation, and a token revoked, a device disabled or a type moved off
+// HTTP_PULL mid-poll must stop the very next one rather than the next request. The cost is one
+// authentication per PollInterval per held poll.
+func (es *HttpEventSource) proveDevice(w http.ResponseWriter, r *http.Request, rt *CommandPullRoute,
+	op, tenant, device, bearer string) bool {
+	m := rt.Metrics
 	dev, err := rt.Backend.Authenticate(r.Context(), tenant, bearer)
 	switch {
 	case err != nil:
 		log.Warn().Err(err).Msg("Command pull authentication unavailable; refusing the request")
 		m.request(op, PullResultUnavailable)
 		http.Error(w, "device authentication is unavailable; retry later", http.StatusServiceUnavailable)
-		return nil, "", "", false
+		return false
 	case dev == nil:
 		m.request(op, PullResultUnauthorized)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		http.Error(w, "device authentication failed", http.StatusUnauthorized)
-		return nil, "", "", false
+		return false
 	case dev.Token != device:
 		// Authenticated, but as a different device: it may not act for this one.
 		m.request(op, PullResultForbidden)
 		http.Error(w, "the access token does not belong to the device in the path", http.StatusForbidden)
-		return nil, "", "", false
+		return false
 	case !dev.OptedIn:
 		m.request(op, PullResultForbidden)
 		http.Error(w, "this device's type does not use the HTTP_PULL command channel", http.StatusForbidden)
-		return nil, "", "", false
+		return false
 	}
-	return rt, tenant, device, true
+	return true
 }
 
 // pullWire is the JSON a command is served as.
@@ -383,7 +400,11 @@ func (es *HttpEventSource) handleCommandPoll(w http.ResponseWriter, r *http.Requ
 	deadline := time.NewTimer(time.Duration(wait) * time.Second)
 	defer deadline.Stop()
 	stop := rt.stopped()
-	for {
+	bearer, _ := bearerOf(r)
+	for first := true; ; first = false {
+		if !first && !es.proveDevice(w, r, rt, "poll", tenant, device, bearer) {
+			return
+		}
 		cmds, err := rt.Backend.Pull(r.Context(), tenant, device, pullBatch)
 		if err != nil {
 			if r.Context().Err() != nil {

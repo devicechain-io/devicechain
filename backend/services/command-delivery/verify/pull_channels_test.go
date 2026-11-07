@@ -140,3 +140,42 @@ func TestPullChannelsChunksLargeQuestions(t *testing.T) {
 		}
 	}
 }
+
+// TestAnOlderDeviceManagementIsNamedAndNeverReadAsNoPullDevices: the unknown-field refusal comes
+// back as ErrPullChannelsUnsupported, an error, with no cached answer: it must not read as the
+// healthy "no device here takes its commands by pull".
+func TestAnOlderDeviceManagementIsNamedAndNeverReadAsNoPullDevices(t *testing.T) {
+	q := &fakeQuery{err: errors.New(`svcclient: graphql: Cannot query field "commandPullDevices" on type "Query".`)}
+	p := NewPullChannels(q, "http://dm")
+	got, err := p.PullDevices(tenantCtx(), []string{"d1"})
+	if !errors.Is(err, ErrPullChannelsUnsupported) || got != nil {
+		t.Fatalf("got %v, %v; want ErrPullChannelsUnsupported and no answer", got, err)
+	}
+	q.err = nil
+	q.answer = &[]string{"d1"}
+	got, err = p.PullDevices(tenantCtx(), []string{"d1"})
+	if err != nil || !got["d1"] {
+		t.Fatalf("after the upgrade: %v, %v; the failure must not have been cached", got, err)
+	}
+}
+
+// TestAnotherFailureIsNotMistakenForAnOlderVersion is the counterweight.
+func TestAnotherFailureIsNotMistakenForAnOlderVersion(t *testing.T) {
+	q := &fakeQuery{err: errors.New("connection refused")}
+	_, err := NewPullChannels(q, "http://dm").PullDevices(tenantCtx(), []string{"d1"})
+	if err == nil || errors.Is(err, ErrPullChannelsUnsupported) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOnlyTheUnknownCommandPullDevicesFieldIsClassified(t *testing.T) {
+	for _, msg := range []string{
+		`svcclient: graphql: Cannot query field "somethingElse" on type "Query".`,
+		`svcclient: call http://dm/commandPullDevices: context deadline exceeded`,
+	} {
+		_, err := NewPullChannels(&fakeQuery{err: errors.New(msg)}, "http://dm").PullDevices(tenantCtx(), []string{"d1"})
+		if err == nil || errors.Is(err, ErrPullChannelsUnsupported) {
+			t.Fatalf("%q classified as an older version: %v", msg, err)
+		}
+	}
+}

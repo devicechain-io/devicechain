@@ -473,3 +473,63 @@ func TestValidate(t *testing.T) {
 	var nilRoute *CommandPullRoute
 	assert.Error(t, nilRoute.Validate())
 }
+
+// A held poll proves the device on every wake, so a credential revoked, a device disabled or a type
+// moved off HTTP_PULL mid-poll stops the next claim rather than the next request.
+func TestAHeldPollStopsWhenTheCredentialIsRevokedMidPoll(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(f *fakePullBackend)
+		status int
+	}{
+		"revoked": {func(f *fakePullBackend) { delete(f.tokens, "tok-d1") }, http.StatusUnauthorized},
+		"opted out": {func(f *fakePullBackend) { f.tokens["tok-d1"] = &PullDevice{Token: "d1", OptedIn: false} },
+			http.StatusForbidden},
+		"auth down": {func(f *fakePullBackend) { f.authErr = errors.New("device-management down") },
+			http.StatusServiceUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newPullHarness(t, nil)
+			done := make(chan *http.Response, 1)
+			go func() { done <- h.do(t, http.MethodGet, pullPath+"?wait=10", "tok-d1", "") }()
+			require.Eventually(t, func() bool {
+				h.backend.mu.Lock()
+				defer h.backend.mu.Unlock()
+				return h.backend.pulls >= 1
+			}, 2*time.Second, 5*time.Millisecond)
+
+			h.backend.mu.Lock()
+			tc.change(h.backend)
+			h.backend.queue = []PulledCommand{{Token: "late", Name: "reboot", Attempt: 1}}
+			pullsAtChange := h.backend.pulls
+			h.backend.mu.Unlock()
+
+			select {
+			case resp := <-done:
+				assert.Equal(t, tc.status, resp.StatusCode)
+			case <-time.After(3 * time.Second):
+				t.Fatal("the held poll outlived the change")
+			}
+			h.backend.mu.Lock()
+			defer h.backend.mu.Unlock()
+			assert.LessOrEqual(t, h.backend.pulls, pullsAtChange+0, "no claim may follow the refusal")
+			assert.Len(t, h.backend.queue, 1, "the command must not have been claimed")
+		})
+	}
+}
+
+// The counterweight: re-proving on each wake does not disturb a poll that stays valid.
+func TestAHeldPollStillDeliversAfterSeveralReauthentications(t *testing.T) {
+	h := newPullHarness(t, nil)
+	done := make(chan *http.Response, 1)
+	go func() { done <- h.do(t, http.MethodGet, pullPath+"?wait=10", "tok-d1", "") }()
+	time.Sleep(150 * time.Millisecond)
+	h.backend.mu.Lock()
+	h.backend.queue = []PulledCommand{{Token: "c1", Name: "reboot", Attempt: 1}}
+	h.backend.mu.Unlock()
+	select {
+	case resp := <-done:
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	case <-time.After(3 * time.Second):
+		t.Fatal("poll never delivered")
+	}
+}

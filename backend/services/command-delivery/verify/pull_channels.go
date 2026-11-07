@@ -5,7 +5,9 @@ package verify
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -64,6 +66,31 @@ const commandPullDevices = `query($deviceTokens: [String!]!) {
   commandPullDevices(deviceTokens: $deviceTokens)
 }`
 
+// ErrPullChannelsUnsupported is the resolver's answer when device-management does not serve the
+// commandPullDevices question: it is an older version, which is what a rolling upgrade looks like
+// from a command-delivery replica that is already new.
+//
+// 🔴 IT IS STILL "NOTHING WAS DECIDED", NOT "NO DEVICE IS ON THE PULL CHANNEL". An older
+// device-management can neither say nor, once the new schema has been applied, be assumed to have
+// no pull types, so every device asked about is held (see presence.WithPullChannels) and the
+// hold reconciler releases them once an upgraded device-management answers. The cost is delay for
+// ordinary devices for as long as the two versions overlap, which is why device-management is
+// upgraded before command-delivery. The distinct error exists so the log can say that, instead of
+// reporting an opaque GraphQL failure.
+var ErrPullChannelsUnsupported = errors.New("verify: device-management does not serve commandPullDevices " +
+	"(an older version, mid-upgrade?); commands are held until it does")
+
+// classifyPullQueryError turns a refusal of the unknown field into ErrPullChannelsUnsupported and
+// leaves every other failure as it was.
+func classifyPullQueryError(err error) error {
+	msg := err.Error()
+	if strings.Contains(msg, "commandPullDevices") &&
+		(strings.Contains(msg, "Cannot query field") || strings.Contains(msg, "unknown field")) {
+		return fmt.Errorf("%w: %w", ErrPullChannelsUnsupported, err)
+	}
+	return err
+}
+
 var _ model.PullChannelResolver = (*PullChannels)(nil)
 
 // PullDevices implements model.PullChannelResolver.
@@ -98,7 +125,7 @@ func (p *PullChannels) PullDevices(ctx context.Context, deviceTokens []string) (
 		}
 		if err := p.client.Query(ctx, p.url, tenant, commandPullDevices,
 			map[string]any{"deviceTokens": chunk}, &resp); err != nil {
-			return nil, err
+			return nil, classifyPullQueryError(err)
 		}
 		if resp.CommandPullDevices == nil {
 			return nil, fmt.Errorf("verify: device-management returned no command channels")
