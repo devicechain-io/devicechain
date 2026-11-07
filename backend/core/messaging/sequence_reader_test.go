@@ -200,7 +200,7 @@ func TestTheReplayReturnsWhatTheEphemeralConsumerReturned(t *testing.T) {
 		msgs, err := sub.Fetch(64, nats.MaxWait(5*time.Second))
 		require.NoError(t, err)
 		for _, nm := range msgs {
-			seq, deliv, at := msgMeta(nm)
+			seq, deliv, at, _ := msgMeta(nm)
 			m := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), nil)
 			m.StreamSeq, m.AppendTime = seq, at
 			want = append(want, view(m))

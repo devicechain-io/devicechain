@@ -137,6 +137,16 @@ var (
 	// case every tenant resolves to the fail-safe bronze band.
 	ShedPriorityResolver *governance.ShedPriorityResolver
 
+	// IngestMeteringMode is how the ingest gate meters a message (see IngestMeteringEnv); legacy unless the
+	// operator chose otherwise. LagCredit is the lag-credited gate, built only in lagCredit mode.
+	IngestMeteringMode = IngestMeteringLegacy
+	LagCredit          *processor.LagCreditIngest
+	// ingestBaseCeiling and ingestShedPriority are the BASE (never shed-adjusted) ceiling resolver and the
+	// shed-priority lookup buildRateLimiter built, kept for the lag-credited gate, which applies the
+	// contention factor itself (a separate bucket) instead of tightening the ceiling.
+	ingestBaseCeiling  core.TenantCeilingResolver
+	ingestShedPriority func(string) (int, bool)
+
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	// IntegrationUplinksWriter writes the integration route's IntegrationUplink events, which go to
@@ -428,6 +438,7 @@ func initializeMetrics() {
 	for source := range acknowledgedShedSources {
 		ShedAcknowledgedCounter.WithLabelValues(source) // exported at 0, so the first shed is an increase
 	}
+	initializeLagCreditMetrics()
 	initializeIntegrationMetrics()
 	seedRefusalCounters(configuredSourceIDs())
 	initializePresenceMetrics()
@@ -672,6 +683,7 @@ func buildRateLimiter() {
 		// transiently down, so the default is the real answer here — unlike the
 		// UM-backed path, where an unfetched tenant is genuinely unresolved).
 		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
+		ingestBaseCeiling, ingestShedPriority = flat, shedPrio
 		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
@@ -683,6 +695,7 @@ func buildRateLimiter() {
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
 	ShedPriorityResolver = governance.NewShedPriorityResolver(client, umURL)
+	ingestBaseCeiling, ingestShedPriority = resolver.Ceiling, ShedPriorityResolver.Resolve
 	// Both limiters share the ceiling resolver, so a tenant's ADR-023 override applies
 	// to their live traffic and their backlog alike — the ceiling is the same, only the
 	// timeline each bucket measures against differs.
@@ -750,10 +763,7 @@ func buildEventSources() error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	tenantGate, tenantGoneStrict := ingestTenantGates(infra, safetyGates)
 	TenantGone = tenantGoneStrict
-	ingestGate = processor.RefuseDeletedTenants(
-		tenantGate,
-		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
-		onTenantGone)
+	legacyGate := processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed)
 	// The live/backlog routing decision the capture source makes once per message, sized to
 	// the tenant's live burst (see processor.NewMeterAt).
 	meterAt := processor.NewMeterAt(RateLimiter)
@@ -761,6 +771,16 @@ func buildEventSources() error {
 	// for the same reason as ingestGate.
 	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter, IntegrationReadingRateLimiter,
 		onReadingShed)
+	// In lagCredit mode the gateway sources meter themselves in the lag-credited gate, and so do the
+	// sources with no stream (external MQTT, presence); HTTP, integrations and untrusted names keep the
+	// existing limiters either way.
+	LagCredit = nil
+	if IngestMeteringMode == IngestMeteringLagCredit {
+		LagCredit = buildLagCreditIngest()
+		legacyGate = processor.NewLagCreditRateGate(LagCredit, legacyGate)
+		readingGate = processor.NewLagCreditReadingGate(LagCredit, readingGate)
+	}
+	ingestGate = processor.RefuseDeletedTenants(tenantGate, legacyGate, onTenantGone)
 
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
@@ -822,6 +842,9 @@ func buildEventSources() error {
 				// INITIALIZE phase and readers and writers are created in START, so there
 				// is nothing to wire here yet.
 				GatewaySource = gateway
+				if LagCredit != nil {
+					gateway.UseLagCredit(LagCredit, processor.StreamCapture)
+				}
 				created = append(created, gateway)
 				// The same source over the MQTT message store: the copy of a device's QoS 1
 				// publish the broker PUBACKs on, read with the fail-closed store (see
@@ -831,6 +854,9 @@ func buildEventSources() error {
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
 				StoreSource.UseMessageStore()
+				if LagCredit != nil {
+					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)
+				}
 				continue
 			}
 			// An external broker must NOT be forced to verify against the NATS CA (it
@@ -1509,7 +1535,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// The metering mode is read from the environment (see IngestMeteringEnv), and a mode this build
 	// cannot run stops the service here rather than running a different gate than the one asked for.
-	if _, err = resolveIngestMetering(os.Getenv); err != nil {
+	if IngestMeteringMode, err = resolveIngestMetering(os.Getenv); err != nil {
 		return err
 	}
 

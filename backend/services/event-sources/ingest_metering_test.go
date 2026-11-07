@@ -26,13 +26,12 @@ func TestIngestMeteringDefaultsToLegacy(t *testing.T) {
 	}
 }
 
-// lagCredit must refuse to start until the gateway runs it, and must never fall back to legacy.
-func TestIngestMeteringLagCreditRefusesToStart(t *testing.T) {
+// lagCredit is a mode this build runs: it resolves, and it is never quietly legacy.
+func TestIngestMeteringLagCreditResolves(t *testing.T) {
 	mode, err := resolveIngestMetering(envOf("lagCredit"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), IngestMeteringEnv)
-	require.Contains(t, err.Error(), "not available in this build")
-	require.Empty(t, mode, "an error must not come with a usable mode")
+	require.NoError(t, err)
+	require.Equal(t, IngestMeteringLagCredit, mode)
+	require.NotEqual(t, IngestMeteringLegacy, mode)
 }
 
 func TestIngestMeteringRejectsAnUnknownValue(t *testing.T) {

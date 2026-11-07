@@ -170,6 +170,15 @@ type GatewayJetStreamSource struct {
 	// Required whenever allow is set.
 	meter MeterAt
 
+	// lc, when set (UseLagCredit), meters this source with the lag-credited gate instead of the age
+	// cutoff: the message stage here and the reading stage in the decode worker, which follows the
+	// decision carried in rawMessage.metering. lcStream is the reader stream it is metered as.
+	lc       *LagCreditIngest
+	lcStream int
+	// inHandle is true while handle() is running: the idle probe must not read a loop that is blocked
+	// handing a message on as "caught up".
+	inHandle atomic.Bool
+
 	// fromStore makes this the source over the MQTT gateway's message store rather than the
 	// capture stream; see UseMessageStore.
 	fromStore bool
@@ -306,6 +315,9 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	es.cancel = cancel
 	// The loop is handed its OWN drained channel rather than reading the field, so
 	// a lingering loop from a previous start attempt cannot close the current one's.
+	if es.lc != nil {
+		es.startLagCredit(loopCtx)
+	}
 	go es.readLoop(loopCtx, drained)
 	if es.fromStore {
 		log.Info().Str("source", es.Id).Msg("Gateway event source consuming the MQTT message store's events durable.")
@@ -549,6 +561,8 @@ func (es *GatewayJetStreamSource) readLoop(ctx context.Context, drained chan str
 // This is the defect that reviews walk straight past, because every one of these
 // returns is individually, obviously correct.
 func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
+	es.inHandle.Store(true)
+	defer es.inHandle.Store(false)
 	// The tenant is the second subject segment. A message whose subject carries no
 	// parseable tenant cannot be published to a tenant-scoped subject, so it is
 	// dropped fail-closed rather than published unscoped.
@@ -627,13 +641,34 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// and with the same redelivery exemption. A message over its tenant's reading ceiling
 	// is ack-dropped there, as a message over the message ceiling is here.
 	var meterAt time.Time
-	if es.meter != nil {
-		meterAt = es.meter(tenant, msg.AppendTime)
-	}
+	var metering ingestMeter
 	redelivery := msg.NumDelivered > 1
-	if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
-		ackDrop(msg, "refused at the tenant ingest gate")
-		return
+	if es.lc != nil {
+		// The lag-credited gate (ingestMetering: lagCredit). The composed gate is asked only for the
+		// refusals in front of the metering (the tenant lifecycle, on every delivery); this source then
+		// meters a first delivery itself, because the decision (its route and the lag credit it was judged
+		// against) is carried to the reading stage. A redelivery paid on delivery 1.
+		if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, redelivery, OriginPreMetered) {
+			ackDrop(msg, "refused at the tenant ingest gate")
+			return
+		}
+		if redelivery {
+			metering = ingestMeter{lc: es.lc, stream: es.lcStream, redelivery: true}
+		} else {
+			var admitted bool
+			if metering, admitted = es.lc.admit(es.Id, tenant, es.lcStream, msg); !admitted {
+				ackDrop(msg, "refused at the tenant ingest gate")
+				return
+			}
+		}
+	} else {
+		if es.meter != nil {
+			meterAt = es.meter(tenant, msg.AppendTime)
+		}
+		if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
+			ackDrop(msg, "refused at the tenant ingest gate")
+			return
+		}
 	}
 
 	// A captured message with no stream sequence would publish with NO dedup id
@@ -673,6 +708,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		dedupID:    dedupID,
 		receivedAt: msg.AppendTime,
 		meterAt:    meterAt,
+		metering:   metering,
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		assertion:  assertedByCaptureBroker(msg),
