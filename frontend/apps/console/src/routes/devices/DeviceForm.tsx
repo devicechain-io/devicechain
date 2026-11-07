@@ -3,11 +3,11 @@
 
 import { useState } from 'react';
 import { RegistryInstanceForm } from '@/components/registry';
+import { resolveDeviceType, searchDeviceTypes } from '@/lib/api/pickers';
 import { ProvisioningProfilePicker } from '@/routes/provisioning/ProvisioningProfilePicker';
 import { DeviceAliasesField } from './DeviceAliasesField';
 import { aliasInputs, aliasesChanged, aliasesValid, rowsOf, type AliasRow } from './deviceAliases';
 import {
-  listDeviceTypes,
   createDevice,
   updateDevice,
   getDevice,
@@ -61,7 +61,8 @@ export function DeviceForm({
       entityType="device"
       checkAvailability={(token) => getDevice(token).then((d) => d === null)}
       defaultTypeToken={device?.deviceType.token ?? initialTypeToken}
-      loadTypes={() => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+      searchTypes={searchDeviceTypes}
+      resolveType={resolveDeviceType}
       create={(req) =>
         createDevice({
           token: req.token,
