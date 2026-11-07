@@ -127,9 +127,15 @@ func (r *SchemaResolver) CheckDeviceCredential(ctx context.Context, args struct 
 	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
 		authn = capi
 	}
-	var presented *model.PresentedCredential
-	if args.CredentialType != "" && args.CredentialId != "" {
-		presented = &model.PresentedCredential{CredentialType: args.CredentialType, CredentialId: args.CredentialId, Secret: args.Secret}
-	}
+	presented := presentedBy(args.CredentialType, args.CredentialId, args.Secret)
 	return model.CheckIngestCredential(ctx, authn, mode, args.Device, presented, time.Now())
+}
+
+// presentedBy is the credential an event presents, or nil when it presents none: the same rule the
+// event resolver applies, where a credential with no type or no id is no credential.
+func presentedBy(credentialType, credentialId string, secret *string) *model.PresentedCredential {
+	if credentialType == "" || credentialId == "" {
+		return nil
+	}
+	return &model.PresentedCredential{CredentialType: credentialType, CredentialId: credentialId, Secret: secret}
 }

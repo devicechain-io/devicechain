@@ -61,3 +61,19 @@ func TestCheckDeviceCredentialAppliesTheConfiguredPolicy(t *testing.T) {
 		}
 	}
 }
+
+// The credential handed to the policy is what the event presented, secret included, and a
+// credential missing its type or its id is no credential at all.
+func TestPresentedBy(t *testing.T) {
+	secret := "s3cret-value"
+	got := presentedBy("MQTT_BASIC", "user-1", &secret)
+	if got == nil || got.CredentialType != "MQTT_BASIC" || got.CredentialId != "user-1" || got.Secret == nil || *got.Secret != secret {
+		t.Fatalf("the presented credential was altered on the way: %+v", got)
+	}
+	if presentedBy("", "user-1", &secret) != nil || presentedBy("MQTT_BASIC", "", &secret) != nil {
+		t.Error("a credential with no type or no id must be treated as none")
+	}
+	if got := presentedBy("ACCESS_TOKEN", "tok", nil); got == nil || got.Secret != nil {
+		t.Errorf("a credential with no secret keeps none: %+v", got)
+	}
+}
