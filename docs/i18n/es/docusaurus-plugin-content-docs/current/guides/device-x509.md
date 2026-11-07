@@ -7,7 +7,7 @@ title: Conectar con un certificado
 
 Un dispositivo puede autenticarse en el broker de la plataforma con un certificado de cliente X.509 en lugar de un token o una contraseña. Esta guía te lleva de una autoridad certificadora (CA) a un dispositivo que publica su primer evento, y muestra las dos formas en que un certificado puede convertirse en dispositivo: una **credencial fijada** que creas para un dispositivo que ya existe, y un **perfil de certificado** que registra dispositivos la primera vez que se conectan.
 
-Cómo decide la plataforma confiar en un certificado, y dónde se detiene esa confianza, está en [Identidad por certificado](../concepts/device-certificates.md). Lee sus [límites](../concepts/device-certificates.md#not-supported) antes de planificar una flota con esto: no hay CRL ni OCSP, las CA con restricciones de nombre se rechazan, y la renovación y el SDK de C# todavía no están disponibles.
+Cómo decide la plataforma confiar en un certificado, y dónde se detiene esa confianza, está en [Identidad por certificado](../concepts/device-certificates.md). Lee sus [límites](../concepts/device-certificates.md#not-supported) antes de planificar una flota con esto: no hay OCSP ni descarga de CRL (las listas se suben), las CA con restricciones de nombre se rechazan, y la renovación todavía no está disponible.
 
 :::note Estado
 Disponible por MQTT en el broker de la plataforma. HTTP y LwM2M no aceptan certificados de cliente.
@@ -179,7 +179,7 @@ Como en todos los rechazos de dispositivos, el dispositivo solo ve el código de
 
 1. **`no_cert`.** El cliente no envió certificado. Revisa `--cert` y que la clave corresponda al certificado.
 2. **`chain_invalid`.** La cadena no llega al ancla, un certificado ha caducado, al uso extendido de clave le falta la autenticación de cliente, una firma usa SHA-1 o una clave está fuera del conjunto permitido. Reprodúcelo con `openssl verify -CAfile ca.crt -purpose sslclient device.crt` y comprueba que el dispositivo envía sus intermedios.
-3. **`anchor_disabled`, `revoked`.** El ancla o la credencial se deshabilitó a propósito.
+3. **`anchor_disabled`, `revoked`, `cert_revoked`, `revocation_unknown`.** El ancla o la credencial se deshabilitó a propósito (`anchor_disabled`, `revoked`), el certificado lo nombra una lista de revocación subida o una revocación manual (`cert_revoked`), o el ancla exige una lista vigente del emisor y no la tiene (`revocation_unknown`).
 4. **`client_id_mismatch`.** El client id no es `{instanceId}:{tenant}:{deviceToken}` de este dispositivo o, en una primera conexión, el derivado.
 5. **`unknown_pin`.** El certificado no está fijado y no encadena con ningún perfil de certificado utilizable.
 6. **`jit_*`.** Se rechazó un registro en la primera conexión: `jit_rate_limited` y `jit_busy` significan que el dispositivo debe esperar y reintentar, `jit_ambiguous` significa que dos perfiles empatan, y el resto lleva el código de error del registro.
@@ -192,16 +192,46 @@ Como en todos los rechazos de dispositivos, el dispositivo solo ve el código de
 - **La sesión termina en la primera caducidad.** La plataforma cierra la sesión cuando caduca el primer certificado de la cadena, sin margen. Renueva antes y reconéctate con el certificado nuevo. Hasta que haya renovación, un dispositivo necesita el certificado nuevo fijado como segunda credencial (opción A) antes de que caduque el anterior.
 - **Un margen de 5 minutos** cubre un certificado emitido hace un momento para un dispositivo cuyo reloj va algo atrasado.
 
+## Conectar desde el SDK de C# {#csharp-sdk}
+
+El SDK de C# (`DeviceChain.Sdk`, y el paquete de Unity que se apoya en él) presenta un certificado de cliente en el handshake TLS. Carga el certificado y su clave, asigna el certificado a la sesión y apunta la confianza a la CA de tu instancia:
+
+```csharp
+using DeviceChain.Sdk.Mqtt;
+using DeviceChain.Sdk.Transport;
+
+// Un certificado y una clave PEM: PKCS#8, PKCS#1 o SEC1, o una clave PKCS#8 cifrada (pasa su contraseña como tercer argumento)...
+using var cert = MqttClientCertificate.FromPemFiles("device.crt", "device.key");
+// ...o un PFX:  MqttClientCertificate.FromPfxFile("device.pfx", password)
+
+var options = new MqttSessionOptions(
+    new Uri("ssl://mqtt.example.com:8883"), "devicechain", "acme", "pv-SN-000123-06e08144e3e8", credentialId: "")
+{
+    ClientCertificate = cert,
+    Trust = MqttTrust.PinnedCaFromFile("instance-ca.crt"),   // omítelo si el certificado del broker encadena con una raíz pública
+};
+
+await using var session = new MqttDeviceSession(options);
+await session.StartAsync(handler, cancellationToken);
+```
+
+Con un certificado asignado, la sesión se conecta con el usuario `{tenant}:@x509`, sin contraseña y con el id de cliente habitual, así que el argumento del id de credencial no se usa. La confianza del dispositivo en el broker es independiente de su identidad: `Trust` decide si el dispositivo cree al broker.
+
+- **Los errores se producen antes de cualquier conexión.** Un certificado sin su clave privada, una clave que no corresponde, un certificado de CA, un certificado cuyo uso extendido de clave no incluye la autenticación de cliente, y una contraseña incorrecta del PFX o de la clave lanzan `MqttClientCertificateException` con el motivo. Una dirección de broker en texto plano (`tcp://`) lanza `ArgumentException` al construir la sesión. Una sesión cuyo certificado deja de ser utilizable deja de reintentar y queda en `Blind`.
+- **Solo claves RSA y ECDSA.** .NET no puede usar una clave Ed25519, así que un dispositivo con un certificado Ed25519 no puede presentarlo con este SDK.
+- **El reloj del dispositivo.** El SDK no rechaza por sí mismo un certificado caducado, porque el reloj de un dispositivo no siempre es correcto. `cert.NotAfter` y `cert.IsExpired(DateTimeOffset.UtcNow)` permiten comprobarlo, y un fallo de conexión con un certificado caducado según el reloj local lo indica.
+- **Envía solo el certificado del dispositivo.** Ancla el tenant en la CA que emite los certificados de los dispositivos, como en [Añadir la CA como ancla de confianza](#trust-anchor). Los intermedios que acompañan al certificado se ofrecen a la pila TLS, pero que los envíe depende de la plataforma.
+- **Unity.** El paquete usa las mismas clases. Los certificados requieren una compilación nativa o de escritorio; WebGL no tiene MQTT.
+
 ## Pruébalo sin firmware {#simulator}
 
 El simulador representa dispositivos con certificado: `dc-simulator --x509` crea una CA desechable y certificados (ECDSA P-256, autenticación de cliente, CN = id externo), los registra mediante la API con `--x509-register` y conecta cada uno. `--x509-jit N` crea certificados para dispositivos que nunca registra, para probar un perfil de certificado. Consulta el README del simulador para los indicadores.
 
 ## Lo que esto no hace {#limits}
 
-- **Sin CRL ni OCSP.** Para detener un certificado, deshabilita su credencial (o el dispositivo, o el ancla) y emite certificados de corta duración.
+- **Sin OCSP ni descarga de CRL.** Sube la lista de revocación de una CA al ancla de confianza, o revoca un certificado por huella; ambas cosas lo rechazan desde su siguiente conexión y además terminan las sesiones abiertas que afecta (comprueba `sessionsEnded` en el resultado). Una revocación de CA reconecta a todos los dispositivos del ancla. Para detener un dispositivo sin revocar un certificado, deshabilita su credencial (o el dispositivo, o el ancla). Consulta [Revocación](../concepts/device-certificates.md#revocation).
 - **Una CA con restricciones de nombre se rechaza.** El ancla de confianza es el límite de la identidad.
 - **Sin renovación de un dispositivo registrado presentando un certificado nuevo, ni adopción de un dispositivo restablecido.** Todavía no está disponible.
-- **Sin certificado de cliente en el SDK de C#.** Todavía no está disponible.
 - **Sin certificados por HTTP ni LwM2M.**
 
 La [página de conceptos](../concepts/device-certificates.md#not-supported) explica por qué. Para el lado del broker, incluido lo que cambia al actualizar una instancia existente, consulta [Autenticación por certificado](../deployment/device-certificates.md).

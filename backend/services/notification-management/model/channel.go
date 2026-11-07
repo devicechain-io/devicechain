@@ -28,6 +28,16 @@ const (
 	// incoming-webhook URL is one such endpoint, so Slack rides this adapter rather
 	// than bundling a vendor SDK (ADR-017 keeps SMS/push/vendor SDKs out of core).
 	ChannelTypeWebhook = "webhook"
+	// ChannelTypeSlack posts a Block Kit message to a Slack incoming-webhook URL, which is
+	// the channel's secret.
+	ChannelTypeSlack = "slack"
+	// ChannelTypeTeams posts an Adaptive Card to a Microsoft Teams Workflows (Power
+	// Automate) webhook URL, which is the channel's secret.
+	ChannelTypeTeams = "teams"
+	// ChannelTypePagerDuty sends PagerDuty Events API v2 events, mapping the alarm
+	// lifecycle onto trigger, acknowledge and resolve with dedup_key = the alarm token. The
+	// routing key is the channel's secret.
+	ChannelTypePagerDuty = "pagerduty"
 )
 
 // SupportedChannelTypes is the catalog of channel types this service defines, in
@@ -46,6 +56,24 @@ var SupportedChannelTypes = []ChannelType{
 		Id:          ChannelTypeWebhook,
 		Label:       "Webhook",
 		Description: "POST alarm notifications as JSON to an HTTP endpoint. A Slack incoming webhook can be targeted (the payload carries a text summary).",
+		Available:   true,
+	},
+	{
+		Id:          ChannelTypeSlack,
+		Label:       "Slack",
+		Description: "Post alarm notifications to Slack as Block Kit messages, coloured by severity, through an incoming-webhook URL.",
+		Available:   true,
+	},
+	{
+		Id:          ChannelTypeTeams,
+		Label:       "Microsoft Teams",
+		Description: "Post alarm notifications to Microsoft Teams as Adaptive Cards through a Workflows (Power Automate) webhook URL.",
+		Available:   true,
+	},
+	{
+		Id:          ChannelTypePagerDuty,
+		Label:       "PagerDuty",
+		Description: "Page through PagerDuty Events API v2: a raised alarm triggers an incident, an acknowledgement acknowledges it and a clear resolves it, all keyed on the alarm.",
 		Available:   true,
 	},
 }

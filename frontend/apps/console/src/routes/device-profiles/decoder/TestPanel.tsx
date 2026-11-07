@@ -73,6 +73,8 @@ interface Props {
   onSaveVector: (v: VectorState) => void;
   /** Set to load a stored failure sample into the panel (the recent-failures list). */
   initialSampleId?: string;
+  /** A failure picked from the recent-failures list after the panel mounted; `n` makes a repeat pick of the same sample count. */
+  sampleRequest?: { id: string; n: number } | null;
   /** The text of the expression the last error's path points at, shown beside the path. */
   errorExpression?: string | null;
 }
@@ -134,7 +136,7 @@ function WebhookInputs(props: {
   );
 }
 
-export function TestPanel({ profileToken, documentText, inputKind, canWriteSamples, maxReadings, run, onRun, onSaveVector, initialSampleId, errorExpression }: Props) {
+export function TestPanel({ profileToken, documentText, inputKind, canWriteSamples, maxReadings, run, onRun, onSaveVector, initialSampleId, sampleRequest, errorExpression }: Props) {
   const { t } = useTranslation('deviceProfiles');
   const [mode, setMode] = useState<TestMode>(initialSampleId && canWriteSamples ? 'sample' : inputKind === 'FRAME' ? 'frame' : 'json');
   const [enc, setEnc] = useState<'hex' | 'base64'>('hex');
@@ -149,6 +151,14 @@ export function TestPanel({ profileToken, documentText, inputKind, canWriteSampl
   const [messageType, setMessageType] = useState('');
   const [contentType, setContentType] = useState('application/json');
   const [sampleId, setSampleId] = useState(initialSampleId ?? '');
+  // Picking a failure from the list moves the panel to that sample. Keyed on the request, so it
+  // applies once per pick and never overrides what the user does afterwards.
+  const [appliedRequest, setAppliedRequest] = useState(sampleRequest?.n ?? 0);
+  if (sampleRequest && canWriteSamples && sampleRequest.n !== appliedRequest) {
+    setAppliedRequest(sampleRequest.n);
+    setMode('sample');
+    setSampleId(sampleRequest.id);
+  }
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   // What the last run was made from, so "save as vector" cannot save a different input than was tested.

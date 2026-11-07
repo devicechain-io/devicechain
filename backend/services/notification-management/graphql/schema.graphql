@@ -39,7 +39,7 @@ type when you create a channel.
 # ships (a channel may still be configured against a defined type, but nothing is
 # delivered through it until its adapter lands).
 type NotificationChannelType {
-    """The identifier to pass as channelType when creating a channel: smtp or webhook."""
+    """The identifier to pass as channelType when creating a channel: smtp, webhook, slack, teams or pagerduty."""
     id: String!
     """Short human-readable name for the type, for pickers."""
     label: String!
@@ -50,7 +50,7 @@ type NotificationChannelType {
 }
 
 """
-A delivery channel: a configured email (SMTP) server or webhook endpoint that
+A delivery channel: a configured email (SMTP) server, webhook endpoint, or Slack, Microsoft Teams or PagerDuty destination that
 notifications are sent through. Routing policies refer to channels by token.
 """
 # A tenant's configured delivery endpoint: a concrete instance of a channel type
@@ -73,7 +73,7 @@ type NotificationChannel {
     name: String
     """Free-text description of what the channel is for."""
     description: String
-    """The channel type: smtp or webhook, as listed by notificationChannelTypes."""
+    """The channel type: smtp, webhook, slack, teams or pagerduty, as listed by notificationChannelTypes."""
     channelType: String!
     """
     The channel's non-secret connection settings as a JSON object serialized to a string,
@@ -117,7 +117,7 @@ input NotificationChannelCreateRequest {
     name: String
     """Free-text description of what the channel is for."""
     description: String
-    """The channel type: smtp or webhook, as listed by notificationChannelTypes."""
+    """The channel type: smtp, webhook, slack, teams or pagerduty, as listed by notificationChannelTypes."""
     channelType: String!
     """
     The non-secret connection settings as a JSON object serialized to a string. For smtp:
@@ -127,12 +127,16 @@ input NotificationChannelCreateRequest {
     none when the URL itself carries the credential, bearer to send the secret as a bearer
     token, or header to send it in the header named by authHeader, optionally prefixed
     with authScheme). A webhook with auth bearer or header must have a secret, and one
-    with auth none must not. The platform restricts which destinations a channel may
-    reach.
+    with auth none must not. For slack and teams: optional linkBaseUrl (the console URL the
+    message's "open alarms" link is built from). For pagerduty: optional region (us, the
+    default, or eu), source and linkBaseUrl. Unknown keys are refused for these three. The
+    platform restricts which destinations a channel may reach.
     """
     config: String
     """
-    The delivery credential: the SMTP password or the webhook bearer or header value.
+    The delivery credential: the SMTP password, the webhook bearer or header value, the
+    Slack or Teams webhook URL (https), or the PagerDuty Events API v2 routing key. A slack,
+    teams or pagerduty channel requires one.
     Write-only; stored encrypted and never returned. Omit it, or send an empty string, for
     no secret.
     """
@@ -169,7 +173,7 @@ input NotificationChannelUpdateRequest {
     name: String
     """New description, or null to clear it."""
     description: String
-    """New channel type (smtp or webhook). Omit it to keep the stored type; an explicit null is refused."""
+    """New channel type (smtp, webhook, slack, teams or pagerduty). Omit it to keep the stored type; an explicit null is refused."""
     channelType: String
     """
     New connection settings as a JSON object serialized to a string, in the format
@@ -197,7 +201,7 @@ input NotificationChannelSearchCriteria {
     pageNumber: Int!
     """Channels per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
-    """Return only channels of this type (smtp or webhook). Omit it to return every type."""
+    """Return only channels of this type (smtp, webhook, slack, teams or pagerduty). Omit it to return every type."""
     channelType: String
     """Return only enabled (true) or only disabled (false) channels. Omit it to return both."""
     enabled: Boolean

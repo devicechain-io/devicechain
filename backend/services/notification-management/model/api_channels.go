@@ -31,7 +31,7 @@ func (api *Api) CreateNotificationChannel(ctx context.Context,
 	if err := validateJSONObject(request.Metadata, "metadata"); err != nil {
 		return nil, err
 	}
-	if err := validateChannelCredential(request.Token, request.ChannelType, request.Config,
+	if err := validateChannelCredential(request.Token, request.ChannelType, request.Config, request.Secret,
 		request.Secret != nil && *request.Secret != ""); err != nil {
 		return nil, err
 	}
@@ -156,13 +156,13 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 	// with no secret. Delivery re-checks the same rule (httpsink.Send) and refuses such a
 	// channel terminally; this check exists so the caller hears about the mistake now, from
 	// the request that made it, rather than from a page that never arrived.
-	if channelType == ChannelTypeWebhook && (request.ChannelType.Set || request.Config.Set ||
+	if (channelType == ChannelTypeWebhook || IsNativeChannelType(channelType)) && (request.ChannelType.Set || request.Config.Set ||
 		request.Secret.Set || (request.Enabled.Set && enabled)) {
 		hasSecret, err := api.channelHasSecretAfter(ctx, updated.ID, request.Secret)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateChannelCredential(token, channelType, config, hasSecret); err != nil {
+		if err := validateChannelCredential(token, channelType, config, request.Secret.Value, hasSecret); err != nil {
 			return nil, err
 		}
 	}

@@ -30,6 +30,29 @@ type RenderedNotification struct {
 	// Payload is the structured JSON body for a webhook. "text" mirrors Subject for
 	// Slack compatibility; the remaining keys are the alarm's structured fields.
 	Payload map[string]any
+	// Alarm is the same transition as typed facts, for the native adapters (Slack, Teams,
+	// PagerDuty) that build a vendor-shaped message and must not re-parse Payload. It is
+	// the zero value on a rendering that did not come from an alarm.
+	Alarm AlarmFacts
+}
+
+// AlarmFacts is the typed view of one alarm transition. EventType is the alarm event
+// stream's name for it (RAISED, ESCALATED, DEESCALATED, CLEARED, ACKNOWLEDGED) or
+// RENOTIFIED for a timed re-page of an unchanged alarm.
+type AlarmFacts struct {
+	EventType        string
+	AlarmToken       string
+	AlarmKey         string
+	Severity         string
+	PreviousSeverity string
+	State            string
+	Originator       string
+	MetricKey        string
+	Value            *float64
+	Acknowledged     bool
+	Escalation       int
+	RaisedTime       time.Time
+	OccurredTime     time.Time
 }
 
 // renderNotification builds the default rendering of an alarm state-change event.
@@ -79,7 +102,13 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 		payload["value"] = *event.LastValue
 	}
 
-	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload}
+	facts := AlarmFacts{
+		EventType: event.EventType.String(), AlarmToken: event.AlarmToken, AlarmKey: event.AlarmKey,
+		Severity: event.Severity, PreviousSeverity: event.PreviousSeverity, State: event.State,
+		Originator: originator, MetricKey: event.MetricKey, Value: event.LastValue,
+		Acknowledged: event.Acknowledged, RaisedTime: event.RaisedTime, OccurredTime: event.OccurredTime,
+	}
+	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload, Alarm: facts}
 }
 
 // renderEscalation builds the re-notification message for an open alarm that the
@@ -128,7 +157,17 @@ func renderEscalation(state *model.NotificationState, level int) *RenderedNotifi
 		payload["lastNotifiedTime"] = formatTime(state.LastNotifiedAt.Time)
 	}
 
-	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload}
+	facts := AlarmFacts{
+		EventType: "RENOTIFIED", AlarmToken: state.AlarmToken, AlarmKey: state.AlarmKey,
+		Severity: state.Severity, State: "ACTIVE", Escalation: level,
+	}
+	if state.FirstNotifiedAt.Valid {
+		facts.RaisedTime = state.FirstNotifiedAt.Time
+	}
+	if state.LastNotifiedAt.Valid {
+		facts.OccurredTime = state.LastNotifiedAt.Time
+	}
+	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload, Alarm: facts}
 }
 
 // verbForEvent renders an event type as a human past-tense verb for the summary.
