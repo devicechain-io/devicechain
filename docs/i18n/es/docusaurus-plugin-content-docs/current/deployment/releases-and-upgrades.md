@@ -984,6 +984,10 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 
 Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge-agent"` además del agente. `agent` es una etiqueta externa global del colector de la máquina, así que un colector que también rasca otra cosa en la máquina (node exporter, por ejemplo) sumaba la memoria, la CPU, las goroutines y los archivos abiertos de ese proceso a los paneles de todos los agentes. La configuración de rascado documentada ya usa `job_name: dc-edge-agent`, de modo que un tablero importado con ella no necesita cambios. Si dio otro nombre al job, cámbielo en el colector o edite las cinco consultas de proceso y de runtime del tablero (`process_*` y `go_goroutines`) con su nombre de job. Vuelva a importar el tablero desde `backend/edge/dc-edge-agent/dashboards/edge-agent.json` para aplicar el cambio.
 
+#### Documentación, hosts de ejemplo y notas para agentes {#v120-docs-hosts}
+
+No hay nada que hacer. La documentación de los SDK de .NET y Unity y el comentario de documentación de `DeviceChainClient.Origin` usaban `demo.devicechain.io` como host de ejemplo, que no se resuelve; ahora usan `devicechain.example.com`. El SDK no tiene un host por defecto, así que no cambia ningún comportamiento. Una página nueva, [API de dispositivos de un vistazo](../reference/device-apis.md), da un comando para cada forma en que un dispositivo llega a la plataforma, `docs/static/llms.txt` ya no llama al proyecto preliminar, y los paquetes `@devicechain/client` y `@devicechain/widget-sdk` y el SDK de .NET incluyen cada uno un `AGENTS.md` para agentes de programación.
+
 #### Otros cambios en esta versión {#v120-other-changes}
 
 Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista anterior. Cada uno es una corrección o una adición a algo que ya se había publicado.

@@ -939,6 +939,10 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
 
+#### Documentation, sample hosts and agent notes {#v120-docs-hosts}
+
+Nothing here needs action. The .NET and Unity SDK documentation and the `DeviceChainClient.Origin` doc comment used `demo.devicechain.io` as their example host, which does not resolve; they now use `devicechain.example.com`. The SDK has no default host, so no behaviour changes. A new [Device APIs at a glance](../reference/device-apis.md) page gives one command for each way a device reaches the platform, `docs/static/llms.txt` no longer calls the project pre-release, and the `@devicechain/client` and `@devicechain/widget-sdk` packages and the .NET SDK each carry an `AGENTS.md` for coding agents.
+
 #### Other changes in this release {#v120-other-changes}
 
 Nothing here needs action beyond the two `dcctl` items in the list above. Each is a fix or an addition to something that already shipped.

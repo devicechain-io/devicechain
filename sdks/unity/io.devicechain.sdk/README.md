@@ -50,7 +50,7 @@ Requires Unity **2021.3 LTS** or newer (for the .NET Standard 2.1 API profile).
 using DeviceChain.Sdk;
 using DeviceChain.Sdk.Unity;
 
-await using var client = DeviceChainRuntime.CreateClient("https://demo.devicechain.io");
+await using var client = DeviceChainRuntime.CreateClient("https://devicechain.example.com");
 await client.LoginAsync("me@example.com", "…");
 await client.SelectTenantAsync("acme");
 
