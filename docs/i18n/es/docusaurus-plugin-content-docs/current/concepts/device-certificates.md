@@ -9,7 +9,7 @@ Un dispositivo puede demostrar quién es con un **certificado de cliente** en lu
 Esta página explica cómo decide la plataforma confiar en un certificado y dónde se detiene esa confianza. Para configurarlo, sigue [Conectar con un certificado](../guides/device-x509.md); la parte de la consola está en [Aprovisionamiento y anclas de confianza](../user-guide/provisioning-and-trust-anchors.md). Para operar el broker y vigilarlo, consulta [Autenticación por certificado](../deployment/device-certificates.md).
 
 :::note Estado
-Disponible por **MQTT en el broker de la plataforma**. HTTP y LwM2M no aceptan certificados de cliente, el SDK de C# todavía no puede presentar uno, y la renovación de un certificado por sí sola aún no está disponible. [Lo que no se admite](#not-supported) enumera todo lo que queda fuera.
+Disponible por **MQTT en el broker de la plataforma**. HTTP y LwM2M no aceptan certificados de cliente, el SDK de C# solo puede presentarlo con claves RSA y ECDSA, y la renovación de un certificado por sí sola aún no está disponible. [Lo que no se admite](#not-supported) enumera todo lo que queda fuera.
 :::
 
 ## El ancla de confianza es el límite de la identidad {#trust-anchor}
@@ -97,7 +97,7 @@ Un rechazo por lista o por revocación manual se cuenta como `cert_revoked`, y u
 - **Restricciones de nombre.** Una CA con restricciones de nombre se rechaza, como se explicó arriba.
 - **OCSP, y descargar una CRL por cuenta propia.** Las listas se suben al ancla de confianza; la plataforma nunca descarga una ni consulta a un respondedor. Consulta [Revocación](#revocation).
 - **Renovación por sí sola, y adoptar un dispositivo después de restablecer su aprovisionamiento.** Un dispositivo que tiene un certificado y luego presenta otro distinto se rechaza (`ALREADY_PROVISIONED`) cuando se conecta para registrarse. Hasta que llegue la renovación, añade el certificado nuevo como credencial fijada (un dispositivo puede tener tres) antes de que caduque el anterior.
-- **El SDK de C#.** Todavía no puede presentar un certificado de cliente.
+- **Claves Ed25519 en el SDK de C#.** El SDK presenta un certificado de cliente, pero .NET no tiene Ed25519, así que no puede presentar uno con ese tipo de clave.
 - **Ingesta HTTP y LwM2M.** Ninguna se autentica con un certificado de cliente. Los dispositivos HTTP usan un token o una credencial básica, y los de LwM2M usan claves precompartidas. Un certificado presentado por MQTT con un usuario distinto de `{tenant}:@x509` se ignora, y la conexión se juzga por su token o contraseña como antes.
 - **Otros brokers.** Solo el broker propio de la plataforma autentica por certificado. Un dispositivo que se conecta a través de un broker externo del operador no está cubierto.
 - **Certificados emitidos por la plataforma.** Tú traes tu propia CA y tus propios certificados.

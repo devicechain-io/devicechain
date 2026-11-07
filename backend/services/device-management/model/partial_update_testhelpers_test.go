@@ -15,7 +15,7 @@ import (
 // preload, so migrating the profile alone leaves the fixture failing on a missing table
 // rather than on whatever it meant to assert.
 var deviceProfileTables = []any{&Device{}, &DeviceAlias{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
-	&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}, &PendingSessionKick{}, &PendingRevocationKick{}}
+	&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{}}
 
 // seedDeviceProfile creates the device profile the profile-scoped fixtures hang off.
 func seedDeviceProfile(t *testing.T, api *Api, ctx context.Context, token string) {

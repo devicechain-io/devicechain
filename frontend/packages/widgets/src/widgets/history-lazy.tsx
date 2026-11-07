@@ -17,3 +17,8 @@ export const historyTableWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['history-table'],
   implementation: { kind: 'trusted-react', component: chunk.component('HistoryTable') },
 });
+
+export const stateTimelineWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['state-timeline'],
+  implementation: { kind: 'trusted-react', component: chunk.component('StateTimeline') },
+});

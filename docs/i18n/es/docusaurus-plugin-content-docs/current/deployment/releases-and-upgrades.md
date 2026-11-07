@@ -944,6 +944,13 @@ Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad cer
 - **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
 - **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
 
+#### Un certificado de cliente en el SDK de C# {#v120-sdk-x509}
+
+El SDK de C# y el paquete de Unity ya pueden conectar un dispositivo con un certificado de cliente X.509. Es un cambio aditivo: nada cambia para una sesión que no lo configure, y no hace falta ninguna acción para actualizar.
+
+- **Asigne `MqttSessionOptions.ClientCertificate`** a un `MqttClientCertificate` cargado desde un PFX o desde archivos PEM. La sesión se conecta entonces con el usuario `{tenant}:@x509` y sin contraseña. Consulte [Conectar desde el SDK de C#](../guides/device-x509.md#csharp-sdk).
+- **Solo se pueden presentar claves RSA y ECDSA**, porque .NET no tiene Ed25519. La dirección del broker debe ser `ssl://`; una dirección en texto plano se rechaza al construir la sesión.
+
 #### Revocar un certificado termina las sesiones abiertas {#v120-x509-sessions}
 
 Revocar un certificado, a mano o subiendo una CRL que lo nombra, ahora también termina las sesiones abiertas de los dispositivos a los que afecta. Antes, una sesión ya abierta seguía hasta que caducaba su token (hasta 12 horas por defecto). No cambia nada en una instancia que no revoca nada.
@@ -984,6 +991,10 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 
 Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge-agent"` además del agente. `agent` es una etiqueta externa global del colector de la máquina, así que un colector que también rasca otra cosa en la máquina (node exporter, por ejemplo) sumaba la memoria, la CPU, las goroutines y los archivos abiertos de ese proceso a los paneles de todos los agentes. La configuración de rascado documentada ya usa `job_name: dc-edge-agent`, de modo que un tablero importado con ella no necesita cambios. Si dio otro nombre al job, cámbielo en el colector o edite las cinco consultas de proceso y de runtime del tablero (`process_*` y `go_goroutines`) con su nombre de job. Vuelva a importar el tablero desde `backend/edge/dc-edge-agent/dashboards/edge-agent.json` para aplicar el cambio.
 
+#### Lo que una instancia guarda fuera de sus bases de datos está clasificado {#v120-backup-classification}
+
+La página de [Recuperación ante desastres](./disaster-recovery.md#other-state) ahora indica qué le debe una restauración a cada stream de mensajes, a cada bucket clave-valor y al almacén de objetos, en una tabla generada a partir de las declaraciones de la propia plataforma. Tres elementos necesitan su propia copia de seguridad: el stream de captura sin procesar, el stream de mensajes fallidos de las entregas salientes de conectores que no se pudieron realizar, y el almacén de objetos que guarda los artefactos de actualización y las imágenes de marca. Todo lo demás se reconstruye desde las bases de datos o dura poco. Esta versión no cambia ningún comportamiento ni incluye una herramienta de copia de seguridad para los streams. Añade la página, una prueba que falla cuando se añade un stream o un bucket sin clase, y la regla para el almacén de objetos: haz su copia después de la copia base de la base de datos con la que va.
+
 #### Otros cambios en esta versión {#v120-other-changes}
 
 Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista anterior. Cada uno es una corrección o una adición a algo que ya se había publicado.
@@ -1005,13 +1016,24 @@ Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista an
 - **Infraestructura.** Con `nats_mqtt_capable_users` sin definir, el módulo OpenTofu del broker ya no escribe un `allowed_connection_types` nulo que el broker rechazaba; el reparador de certificados de las copias de seguridad del almacén de eventos vigila el espacio de nombres configurado del operador.
 - **`dcctl upgrade` acepta `--yes` (`-y`), igual que `dcctl install` y `dcctl bootstrap`, y encuentra un escrow escrito con `--escrow-file`.** `--yes` da por respondidas con sí las preguntas; una actualización no hace ninguna, así que no cambia nada, y un script ya puede pasarlo a los tres comandos. `dcctl bootstrap --escrow-file` registra dónde se escribió el artefacto y la comprobación del escrow de la clave raíz de la actualización mira allí, de modo que ya no informa de «sin escrow» para una instancia cuyo artefacto está en una ruta personalizada. Para una instancia creada antes, pase `--escrow-file` una vez a la actualización; ella registra la ruta.
 
+#### Tres widgets nuevos para tableros {#v120-widgets}
+
+Tres widgets son nuevos en el menú **Añadir widget**, todos en Telemetría. Se suman a los existentes sin cambiar ninguno, y un tablero que no los use no se ve afectado.
+
+- **Cuadrícula de estado** muestra un mosaico por dispositivo de un grupo para una medición, coloreado según la banda de umbral de la última lectura de cada dispositivo. Un dispositivo sin lectura se dibuja hueco y se cuenta aparte; nunca se muestra como correcto.
+- **Línea de estados** muestra las mediciones de un dispositivo como carriles de estados discretos en el intervalo de tiempo del tablero, con los umbrales como estados. Cada tramo es el estado del promedio de un intervalo, y el widget lo indica.
+- **Símbolo SCADA** dibuja una bomba, válvula, depósito, motor, ventilador, tramo de tubería, sensor, interruptor o luz en el estado que le da una medición: en marcha, detenido o con falla, con el sentido del flujo en una tubería, en modo claro y oscuro. Se queda quieto para quien pide movimiento reducido.
+
+No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md) para las opciones de cada uno.
+
 #### Cambios de esquema y cómo volver atrás {#v120-going-back}
 
-Seis migraciones añaden lo siguiente. Toda columna nueva admite nulos, así que un servicio de `v1.1.0` que se ejecute con el esquema nuevo escribe filas que sigue pudiendo almacenar.
+Siete migraciones añaden lo siguiente. Toda columna nueva admite nulos, así que un servicio de `v1.1.0` que se ejecute con el esquema nuevo escribe filas que sigue pudiendo almacenar.
 
 - **Revocación X.509** (`device-management`, migración `20261105100000`). Cuatro tablas nuevas: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` y `device_credential_chain_links`. Cuatro columnas nuevas: `revocation_mode`, `revocation_stale_grace` y `revocation_rows` en `device_trust_anchors`, y `not_before` en `pending_session_kicks`. Las anclas de confianza existentes dejan `revocation_mode` vacío, lo que se lee como `ENTRIES`: un certificado se rechaza solo cuando figura en la lista.
 - **Decodificadores de carga útil** (`device-management`, migración `20261110120000`). Dos tablas nuevas, `profile_decoder_healths` y `profile_decoder_samples`, y una columna nueva, `decoder_declaration` en `device_profiles`.
 - **Cola de cierres por revocación** (`device-management`, migración `20261111120000`). Una tabla nueva, `pending_revocation_kicks`, y una columna nueva que admite nulos, `kick_queued_at` en `device_revoked_certificates`. La tabla está separada de la cola de cierres de sesión existente para que una réplica de `v1.1.0` nunca lea ni elimine sus filas.
+- **Marcadores de cierres por revocación** (`device-management`, migración `20261112100000`). Dos tablas nuevas, `pending_revocation_expansions` y `pending_revocation_expansion_serials`. Guardan, hasta que se escriben las filas de cierre por dispositivo, las revocaciones que todavía las deben, de modo que una revocación ya no retiene el ancla de confianza mientras encola un cierre para cada dispositivo que depende de ella. Una réplica de `v1.1.0` nunca las lee.
 - **Almacenamiento de proyecciones** (`device-state`, migración `20261104120000`). No añade tablas ni columnas. Fija parámetros de almacenamiento (un factor de relleno de 75 y umbrales de autovacuum) en `device_states`, `latest_measurements` y `latest_locations`. Las filas que ya existen ganan el margen del factor de relleno solo a medida que se reescriben sus páginas, así que una instancia actualizada nota el cambio lentamente.
 - **Tablas de ubicación** (`user-management`, migración `20261105120000`). Tres tablas nuevas: `iam_partition_config`, `iam_vpartition_assignments` y `iam_tenant_vpartition_overrides`. La migración no inserta filas; el primer arranque de `user-management` escribe la ubicación predeterminada (una fila en `iam_partition_config` y 64 filas en `iam_vpartition_assignments`) y crea el bucket `dc_partition_placement` en el broker de mensajes.
 - **Reparación de la hora de alarma de inactividad** (`device-state`, migración `20261106120000`). No añade nada al esquema. Es una reparación solo de datos de `inactivity_alarm_time` en `device_states`, en lotes de 5.000, que restaura lo que la columna contenía antes de `v1.1.0`. No hay nada que deshacer al volver a `v1.1.0`.
@@ -1019,6 +1041,15 @@ Seis migraciones añaden lo siguiente. Toda columna nueva admite nulos, así que
 Salvo esa ubicación predeterminada, las tablas nuevas empiezan vacías. **No hay que deshacer nada en una base de datos para volver a `v1.1.0`:** las tablas, columnas y parámetros de almacenamiento nuevos se quedan donde están y los servicios de `v1.1.0` los ignoran, con una excepción: el borrado de inquilinos, más abajo. Avance cuando pueda: una actualización fallida se arregla ejecutando `dcctl upgrade` de nuevo. Para el cambio de configuración que exige volver atrás, consulte [Los tokens se comprueban contra su recurso](#v120-token-audience).
 
 **El borrado de un inquilino queda retenido mientras lo ejecuta una réplica de `user-management` de `v1.1.0`.** Una réplica de `v1.1.0` no conoce las tres tablas de colocación, y su purga relacional se niega a ejecutarse contra una tabla que no sabe clasificar. Mientras una de ellas ejecuta la purga, el almacén relacional informa de un error para el borrado, con una línea de registro y un fallo en el libro que nombran `iam_partition_config`, `iam_vpartition_assignments` o `iam_tenant_vpartition_overrides`, y `tenant_purge_store_blocked{store="rdb",reason="error"}` supera cero. El paso rechazado no borra nada de la base de datos y no se pierde nada; los demás almacenes sí se borran en la misma pasada. El borrado no puede terminar: el inquilino sigue en `purging`. Una réplica de esta versión lo retoma en su siguiente pasada y termina cuando se cumplen sus comprobaciones habituales. En una actualización progresiva ocurre solo cuando desaparece la última réplica de `v1.1.0`; tras volver a `v1.1.0` queda retenido hasta que vuelva a avanzar. Si puede, inicie los borrados cuando la actualización haya terminado.
+
+#### Canales de notificación nativos de Slack, Teams y PagerDuty {#v120-notification-channels}
+
+Los canales de notificación incorporan tres tipos: `slack`, `teams` y `pagerduty`. Son aditivos: no cambia nada para un canal `smtp` o `webhook` existente, y un webhook entrante de Slack al que llegas mediante un canal `webhook` sigue funcionando igual.
+
+- **No hace falta hacer nada para actualizar.** Un canal de un tipo nuevo necesita un secreto (la URL del webhook, o la clave de enrutamiento de PagerDuty) y se rechaza al guardarlo sin él. Consulta [Canales nativos de Slack, Teams y PagerDuty](../guides/notification-channels.md#native-channels).
+- **Ten en cuenta que los tipos nuevos salen por la misma protección que un webhook.** Un destino en una dirección privada, de bucle local o de metadatos de nube se rechaza y se cuenta con `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`.
+- **Ten en cuenta que la consulta `notificationChannelTypes` ahora lista tres tipos más,** y que el esquema GraphQL solo cambia en sus descripciones. Un cliente que recorra exhaustivamente los tipos de canal verá tres valores más.
+- **La consola tiene una nueva página de Canales de notificación** para configurar canales de todos los tipos.
 
 ### v1.1.0 — la ingesta cuesta menos por evento y los dispositivos fuera del clúster se conectan por MQTT {#v110-upgrade}
 

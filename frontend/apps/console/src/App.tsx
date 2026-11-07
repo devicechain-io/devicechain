@@ -42,6 +42,7 @@ const RolloutsPage = lazy(() => import('@/routes/updates/RolloutsPage'));
 const RolloutDetailPage = lazy(() => import('@/routes/updates/RolloutDetailPage'));
 const ConnectorsPage = lazy(() => import('@/routes/connectors/ConnectorsPage'));
 const ConnectorDetailPage = lazy(() => import('@/routes/connectors/ConnectorDetailPage'));
+const NotificationChannelsPage = lazy(() => import('@/routes/notification-channels/NotificationChannelsPage'));
 const AiProvidersPage = lazy(() => import('@/routes/admin/ai-providers/AiProvidersPage'));
 const AiProviderDetailPage = lazy(() => import('@/routes/admin/ai-providers/AiProviderDetailPage'));
 const AiPackagingPage = lazy(() => import('@/routes/admin/ai-packaging/AiPackagingPage'));
@@ -146,6 +147,7 @@ export default function App() {
           <Route path="updates/artifacts/:token" element={<AreaGate area={AREA.updateManagement}><ArtifactDetailPage /></AreaGate>} />
           <Route path="updates/rollouts" element={<AreaGate area={AREA.updateManagement}><RolloutsPage /></AreaGate>} />
           <Route path="updates/rollouts/:token" element={<AreaGate area={AREA.updateManagement}><RolloutDetailPage /></AreaGate>} />
+          <Route path="notification-channels" element={<AreaGate area={AREA.notificationManagement}><NotificationChannelsPage /></AreaGate>} />
           <Route path="connectors" element={<AreaGate area={AREA.outboundConnectors}><ConnectorsPage /></AreaGate>} />
           <Route path="connectors/:token" element={<AreaGate area={AREA.outboundConnectors}><ConnectorDetailPage /></AreaGate>} />
           <Route path="audit" element={<AuditPage />} />
