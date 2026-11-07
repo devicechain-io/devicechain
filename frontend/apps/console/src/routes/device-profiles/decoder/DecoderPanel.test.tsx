@@ -10,6 +10,7 @@
 // is right in all four states; and the test panel sends the input it was given.
 import '@/i18n/config';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { gqlMock, toastMock, authState } = vi.hoisted(() => ({
@@ -97,6 +98,10 @@ function install(fx: Fixture = {}, handlers: Record<string, (vars: any) => unkno
         return Promise.resolve({ clearDeviceProfileDecoder: { token: 'thermostat' } });
       case 'TestPayloadDecoder':
         return Promise.resolve({ testPayloadDecoder: okResult() });
+      case 'PayloadDecoderHealth':
+        return Promise.resolve({ payloadDecoderHealth: { decoded: 1234567, ignored: 8, failed: 3, suppressed: 0 } });
+      case 'PayloadDecoderSamples':
+        return Promise.resolve({ payloadDecoderSamples: SAMPLES });
       case 'Integrations':
         return Promise.resolve({
           integrations: { results: [{ token: 'ttn-1', name: 'TTN', type: 'TTS_V3' }], pagination: { pageStart: 0, pageEnd: 0, totalRecords: 1 } },
@@ -108,6 +113,11 @@ function install(fx: Fixture = {}, handlers: Record<string, (vars: any) => unkno
   return calls;
 }
 
+const SAMPLES = [
+  { id: '41', profileVersion: 3, createdAt: '2026-11-02T12:00:00Z', deviceToken: 'dev-a', reason: 'missing_input', error: 'decode_failed: missing_input: frame too short' },
+  { id: '40', profileVersion: 2, createdAt: '2026-11-02T11:00:00Z', deviceToken: 'dev-b', reason: 'invalid_output', error: 'decode_failed: invalid_output: temperature' },
+];
+
 function okResult(over: object = {}) {
   return {
     ok: true, ignored: false, section: 'telemetry', readings: [{ key: 'temperature', value: '21.5' }],
@@ -117,9 +127,11 @@ function okResult(over: object = {}) {
 
 function renderPanel(props: { profileToken?: string; activeVersion?: number | null } = {}) {
   const ui = (p: typeof props) => (
-    <ConfirmProvider>
-      <DecoderPanel profileToken={p.profileToken ?? 'thermostat'} activeVersion={p.activeVersion ?? 3} />
-    </ConfirmProvider>
+    <MemoryRouter>
+      <ConfirmProvider>
+        <DecoderPanel profileToken={p.profileToken ?? 'thermostat'} activeVersion={p.activeVersion ?? 3} />
+      </ConfirmProvider>
+    </MemoryRouter>
   );
   const r = render(ui(props));
   return { ...r, rerenderWith: (p: typeof props) => r.rerender(ui(p)) };
@@ -546,5 +558,83 @@ describe('DecoderPanel: function reference', () => {
     expect(await screen.findByText('i16be(b, off) -> int')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Filter functions'), { target: { value: 'nothing-matches' } });
     expect(screen.getByText('No function matches.')).toBeTruthy();
+  });
+});
+
+describe('DecoderPanel: health and recent failures', () => {
+  it('shows the last day of counts, whole, with the profile and span asked for', async () => {
+    const calls = install({ draft: docFor() });
+    renderPanel();
+    const strip = await screen.findByTestId('decoder-health');
+    expect(within(strip).getByText('1,234,567')).toBeTruthy();
+    expect(strip.querySelector('[data-figure="failed"]')?.textContent).toContain('3');
+    const ask = calls.find((c) => c.op === 'PayloadDecoderHealth')?.vars;
+    expect(ask).toEqual({ profileToken: 'thermostat', minutes: 1440 });
+    // Nothing was suppressed, so no warning.
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('says so when failures were counted but not recorded', async () => {
+    install({ draft: docFor() }, {
+      PayloadDecoderHealth: () => ({ payloadDecoderHealth: { decoded: 10, ignored: 0, failed: 20, suppressed: 5 } }),
+    });
+    renderPanel();
+    expect((await screen.findByRole('status')).textContent).toContain('not recorded');
+  });
+
+  it('lists the kept failures and links to the failed events filtered to decoder failures', async () => {
+    install({ draft: docFor() });
+    renderPanel();
+    const list = await screen.findByTestId('decoder-failures');
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(list).getByText(/frame too short/)).toBeTruthy();
+    const link = screen.getByRole('link', { name: /failed events/i }) as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('/ingest-failures?reason=DECODE_FAILED');
+  });
+
+  it('says so when no failure is kept', async () => {
+    install({ draft: docFor() }, { PayloadDecoderSamples: () => ({ payloadDecoderSamples: [] }) });
+    renderPanel();
+    expect(await screen.findByTestId('no-failures')).toBeTruthy();
+  });
+
+  it('"load into test panel" selects the stored-sample input with that id, and a second pick replaces it', async () => {
+    const calls = install({ draft: docFor() });
+    renderPanel();
+    const list = await screen.findByTestId('decoder-failures');
+    fireEvent.click(within(list).getByRole('button', { name: 'Load sample 40 into the test panel' }));
+    expect((await screen.findByLabelText('Sample id') as HTMLInputElement).value).toBe('40');
+    fireEvent.click(within(list).getByRole('button', { name: 'Load sample 41 into the test panel' }));
+    await waitFor(() => expect((screen.getByLabelText('Sample id') as HTMLInputElement).value).toBe('41'));
+    fireEvent.click(screen.getByRole('button', { name: 'Run test' }));
+    await screen.findByTestId('test-result');
+    expect(calls.filter((c) => c.op === 'TestPayloadDecoder').pop()?.vars.input.sampleId).toBe('41');
+  });
+
+  it('a hand edit after a pick is not overwritten by a re-render', async () => {
+    install({ draft: docFor() });
+    renderPanel();
+    const list = await screen.findByTestId('decoder-failures');
+    fireEvent.click(within(list).getByRole('button', { name: 'Load sample 40 into the test panel' }));
+    fireEvent.change(await screen.findByLabelText('Sample id'), { target: { value: '7' } });
+    fireEvent.change(screen.getByLabelText('Divide by'), { target: { value: '5' } });
+    expect((screen.getByLabelText('Sample id') as HTMLInputElement).value).toBe('7');
+  });
+
+  it('a read-only caller neither sees the health nor asks for it', async () => {
+    authState.authorities = ['device:read'];
+    const calls = install({ draft: docFor() });
+    renderPanel();
+    await screen.findByTestId('cel-preview');
+    expect(screen.queryByTestId('decoder-health')).toBeNull();
+    expect(calls.some((c) => c.op === 'PayloadDecoderHealth' || c.op === 'PayloadDecoderSamples')).toBe(false);
+  });
+
+  it('a failed read of the health leaves the editor usable', async () => {
+    install({ draft: docFor() }, { PayloadDecoderHealth: () => { throw new Error('boom'); } });
+    renderPanel();
+    await screen.findByTestId('cel-preview');
+    await waitFor(() => expect(screen.queryByTestId('decoder-health')).toBeNull());
+    expect(screen.getByRole('button', { name: 'Save decoder' })).toBeTruthy();
   });
 });

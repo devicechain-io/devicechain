@@ -5,7 +5,7 @@ title: Configuring Notification Channels
 
 # Configuring Notification Channels
 
-Notifications carry a raised **alarm** the last mile, to a person. When a detection rule's actions raise an alarm, a per-tenant **policy** routes it by severity to the **channels** you configure: email over SMTP, or a webhook. Policies add throttling and **escalation** of unacknowledged alarms.
+Notifications carry a raised **alarm** the last mile, to a person. When a detection rule's actions raise an alarm, a per-tenant **policy** routes it by severity to the **channels** you configure: email over SMTP, a webhook, or a native Slack, Microsoft Teams or PagerDuty channel. Policies add throttling and **escalation** of unacknowledged alarms.
 
 This machine-to-human path is deliberately separate from the machine-to-machine **[outbound connectors](../concepts/outbound-connectors.md)**. Connectors carry payloads to *systems*; notifications carry alerts to *people*, with recipients and per-severity routing. For how alarms are raised in the first place, see [Event Processing & Alarms](../concepts/event-processing.md).
 
@@ -17,7 +17,7 @@ Available. You manage channels and policies over the notification-management Gra
 
 ## Channels
 
-A **channel** is a delivery endpoint your tenant configures: an instance of a channel **type**, plus its connection config. Query `notificationChannelTypes` for the types the platform defines. Today `smtp` and `webhook` ship with working adapters; each type's `available` flag says whether its adapter has landed.
+A **channel** is a delivery endpoint your tenant configures: an instance of a channel **type**, plus its connection config. Query `notificationChannelTypes` for the types the platform defines. Today `smtp`, `webhook`, `slack`, `teams` and `pagerduty` ship with working adapters; each type's `available` flag says whether its adapter has landed.
 
 A channel splits its settings in two:
 
@@ -84,7 +84,81 @@ mutation {
 }
 ```
 
-For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out.
+For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
+
+### Native Slack, Teams and PagerDuty channels {#native-channels}
+
+The three native types speak each service's own format instead of a generic JSON body. They share three rules:
+
+- **The credential is the `secret`.** For Slack and Teams it is the webhook URL (which is itself a credential, so it is stored encrypted and never returned, not kept in `config`); for PagerDuty it is the Events API v2 routing key. There is no `auth` setting. A native channel with no secret is refused when you save it, and a delivery to one that has none is refused on its first attempt and not retried, counted with `reason="credential"`.
+- **`config` is optional and strict.** An unknown key is refused when you save the channel, so a misspelled setting cannot be silently ignored. `linkBaseUrl` is the address of your console; when set, the message carries an **Open alarms** button or link to `<linkBaseUrl>/alarms`.
+- **Delivery goes through the same outbound guard as a webhook.** A destination on a private, loopback or cloud-metadata address is refused and not retried (`reason="egress"`), and the instance's egress allowances apply exactly as for a webhook. A rule's `recipients` are ignored: the webhook or the routing key decides where the message goes.
+
+Each message names the alarm, its severity, its state, the device it came from, the metric and value that raised it, and when it was raised. While an alarm is open and unacknowledged, a hint says to acknowledge it in the console to stop further notifications; a cleared or acknowledged alarm omits the hint.
+
+### Create a Slack channel {#create-a-slack-channel}
+
+A Slack channel posts a Block Kit message to a Slack incoming-webhook URL: a header, a grid of the alarm's fields, the acknowledge hint and an optional **Open alarms** button. The message's colour bar follows the severity (red for `CRITICAL`, orange for `MAJOR`, amber for `MINOR` and `WARNING`, grey for `INDETERMINATE`), turning green when the alarm clears and blue when it is acknowledged. Text from the alarm is escaped so it cannot inject a Slack mention or link.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-slack",
+    name: "Operations Slack",
+    channelType: "slack",
+    config: "{\"linkBaseUrl\":\"https://console.example.com\"}",
+    secret: "https://hooks.slack.com/services/T000/B000/XXXXXXXX",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+The secret must be an `https` URL.
+
+### Create a Microsoft Teams channel {#create-a-microsoft-teams-channel}
+
+A Teams channel posts an Adaptive Card to the webhook URL of a Teams **Workflows** (Power Automate) flow that uses the *When a Teams webhook request is received* trigger and posts the card to a chat or channel. The retired Office 365 connector webhooks are not supported. The card carries the same facts as the Slack message, with the title coloured by severity, and an **Open alarms** action when `linkBaseUrl` is set.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-teams",
+    channelType: "teams",
+    secret: "https://prod-00.westus.logic.azure.com:443/workflows/...",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### Create a PagerDuty channel {#create-a-pagerduty-channel}
+
+A PagerDuty channel sends Events API v2 events, and maps the alarm's lifecycle onto the incident's. Every event carries `dedup_key` set to the alarm's token, so the whole life of one alarm is one incident:
+
+| Alarm event | PagerDuty action |
+| --- | --- |
+| raised, escalated, de-escalated, or re-notified by a policy's escalation | `trigger` (a repeat on an open incident updates it instead of opening another) |
+| acknowledged | `acknowledge` |
+| cleared | `resolve` |
+
+The alarm's severity maps to PagerDuty's: `CRITICAL` to `critical`, `MAJOR` to `error`, `MINOR` and `WARNING` to `warning`, anything else to `info`. For the policy to resolve incidents, route the cleared and acknowledged transitions through the same channel as the raise.
+
+`config` accepts `region` (`us`, the default, or `eu`, which selects `events.eu.pagerduty.com`), `source` (the event's source; `devicechain` by default) and `linkBaseUrl`.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-pagerduty",
+    channelType: "pagerduty",
+    config: "{\"region\":\"eu\",\"source\":\"plant-3\"}",
+    secret: "<routing key>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### In the console {#channels-in-the-console}
+
+**Notification Channels**, next to **Notification Policies** in the sidebar, lists, creates, edits and deletes channels of every type with a form for each. The credential box is write-only: on an existing channel it shows that a credential is stored, and leaving it empty keeps it.
 
 ## Policies
 

@@ -62,5 +62,6 @@ var (
 		NewProfileDecodersSchema(),
 		NewRevocationKickQueueSchema(),
 		NewDeviceTypeCommandChannelSchema(),
+		NewRevocationExpansionMarkersSchema(),
 	}
 )

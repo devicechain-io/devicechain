@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   FileWarning,
   BellRing,
+  Megaphone,
   Boxes,
   Building2,
   ChevronRight,
@@ -123,6 +124,7 @@ export const NAV: NavNode[] = [
       // Who gets paged for an alarm, and when they are left alone. notification-management has its
       // own authority pair, separate from alarm:read.
       { labelKey: 'notificationPolicies', href: '/notification-policies', icon: BellRing, requires: 'notification:read' },
+      { labelKey: 'notificationChannels', href: '/notification-channels', icon: Megaphone, requires: 'notification:read' },
     ],
   },
   {

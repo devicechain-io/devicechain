@@ -35,7 +35,7 @@ title: 从 LoRaWAN 上行到告警
 - `curl` 和 `jq`。
 - `dc-simulator`，自 v1.2 起随每个发布版本与 `dcctl` 一起提供。把它放到 `PATH` 中，并用 `dc-simulator --lorawan-print-decoder` 检查，它会打印一份 JSON 文档。
 
-这些命令通过 `http://localhost` 访问实例。如果你的控制台在其他端口上，请一次性设置好地址，并用 `--server` 把相同的主机和端口交给 `dcctl sim create`：
+这些命令通过 `http://localhost` 访问实例。如果你的控制台在其他端口上，请一次性设置好地址，并用 `--server` 把相同的主机和端口交给 `dcctl sim create`（例如 `--server localhost:8080`），如果实例不叫 `devicechain`，还要用 `--instance` 给出实例名：
 
 ```bash
 export DC_URL=http://localhost
@@ -376,7 +376,7 @@ curl -sS -i -X POST "$DC_URL/api/integrations/sim-lora/chirpstack?event=up" \
 HTTP/1.1 202 Accepted
 ```
 
-网络服务器得到的是 `202`，因为集成接受了这条消息。拒绝是你这一侧的一条记录。用 `dcctl events failed` 读取它，带上租户、身份及其密码。如果实例不在 `localhost` 上，请加上带有你的主机和端口的 `--server`：
+网络服务器得到的是 `202`，因为集成接受了这条消息。拒绝是你这一侧的一条记录。用 `dcctl events failed` 读取它，带上租户、身份及其密码。如果实例不在 `localhost` 上，请加上带有你的主机和端口的 `--server`（例如 `localhost:8080`），实例不在 `localhost` 的 80 端口时才需要；这个命令没有 `--instance`：
 
 ```bash
 dcctl events failed -t sim-lora --email lora@sim.devicechain.local --password "$PW"
@@ -390,6 +390,62 @@ WHEN                         REASON         DEVICE  SOURCE             FOLDED  P
 ```
 
 错误文本的开头就是[拒绝原因表](./payload-decoders.md#refusal-reasons)中的原因：这里是 `no_section`，因为端口 9 没有匹配任何段。帧太短（`eval_error`）和数值超出指标限制（`invalid_output`）各有各的原因。PAYLOAD 列表示平台是否仍保留原始消息。同样的记录也可以在控制台的 **Monitor → Ingest failures** 中看到。这条命令里的 `deduplicationId` 是固定的；要再发送另一条失败消息，请修改它的最后几位，因为十分钟内的重复消息会在处理之前被丢弃。
+
+## 11. 收到通知（可选） {#11-get-told}
+
+没人看到的告警用处不大。**通知渠道**是发送告警的去处，**策略**规定哪些告警发往哪个渠道。这一步把 room-too-warm 告警发到一个 webhook，这也是接入 Slack 或值班呼叫服务的方式。通过 SMTP 发邮件的做法相同，参见[渠道指南](./notification-channels.md)。
+
+你需要一个能接收 `POST`、且实例能通过公网访问的 URL：Slack 传入 webhook，或你自己的端点。笔记本上的接收端不行，因为实例发出的调用会拒绝私有地址和回环地址；需要时，运维人员可以[放行某个特定地址](../concepts/outbound-connectors.md#destinations)。把 URL 放进一个变量。Slack 传入 webhook 的凭据就在 URL 里，所以渠道不需要单独的密钥（`"auth":"none"`）：
+
+```bash
+export WEBHOOK_URL='https://hooks.example.com/alarms'
+
+gql notification-management "$DC_TOKEN" 'mutation($r:NotificationChannelCreateRequest!){createNotificationChannel(request:$r){token channelType enabled}}' \
+  "$(jq -nc --arg u "$WEBHOOK_URL" '{r:{token:"ops-hook",name:"Ops webhook",channelType:"webhook",config:({url:$u,auth:"none"}|tojson),enabled:true}}')"
+
+gql notification-management "$DC_TOKEN" 'mutation($r:NotificationPolicyCreateRequest!){createNotificationPolicy(request:$r){token enabled rules{severity channel{token}}}}' \
+  '{"r":{"token":"warm-rooms","name":"Warm rooms","enabled":true,"rules":[{"severity":"WARNING","channelToken":"ops-hook","recipients":"[]"}]}}'
+```
+
+```text
+{"data":{"createNotificationChannel":{"token":"ops-hook","channelType":"webhook","enabled":true}}}
+{"data":{"createNotificationPolicy":{"token":"warm-rooms","enabled":true,"rules":[{"severity":"WARNING","channel":{"token":"ops-hook"}}]}}}
+```
+
+规则的严重级别是小写的 `warning`，因为检测规则就是这样编写的。它产生的告警是大写的 `WARNING`，通知规则匹配的是告警的形式。策略对整个租户生效，`recipients` 为空，因为 webhook 没有需要指名的接收人。
+
+现在重复[第 7 步](#7-send-uplinks)。十二条上行再次越过 25 度，规则再次产生告警，策略把它发出去。告警产生时，接收端会收到一次 `POST`：
+
+```json
+{
+  "acknowledged": false,
+  "alarmKey": "room-too-warm",
+  "alarmToken": "e0a22e6d-08d9-4963-8124-5e672ccebdf3",
+  "eventType": "RAISED",
+  "metricKey": "temperature",
+  "occurredTime": "2026-11-07T06:38:37Z",
+  "originatorId": 1,
+  "originatorType": "device",
+  "raisedTime": "2026-11-07T06:38:37Z",
+  "severity": "WARNING",
+  "state": "ACTIVE",
+  "text": "[WARNING] Alarm raised: room-too-warm on device 1",
+  "value": 25.4
+}
+```
+
+四条上行之后告警恢复，此处不会发送任何内容：这条策略在告警产生时发出通知，如果告警一直未被确认且策略会升级，则再次通知。服务还会为每条告警保存一份它所做之事的记录。用告警的令牌查询它，该令牌在消息里是 `alarmToken`，在[第 8 步](#8-see-the-result)的告警上是 `token`：
+
+```bash
+gql notification-management "$DC_TOKEN" 'query($t:[String!]!){notificationStatesByAlarmToken(alarmTokens:$t){alarmToken firstNotifiedAt notifyCount}}' \
+  '{"t":["e0a22e6d-08d9-4963-8124-5e672ccebdf3"]}'
+```
+
+```text
+{"data":{"notificationStatesByAlarmToken":[{"alarmToken":"e0a22e6d-08d9-4963-8124-5e672ccebdf3","firstNotifiedAt":"2026-11-07T06:38:37.847456Z","notifyCount":1}]}}
+```
+
+如果什么都没收到，先看这份记录：没有记录，说明告警没有到达策略（检查严重级别）；有记录但接收端没有动静，说明投递被拒绝（检查 URL 是否为公网地址）。限流、对无人确认的告警升级以及静默时段，参见[配置通知渠道](./notification-channels.md#policies)。
 
 ## 真实的网络服务器 {#real-network-server}
 
@@ -416,5 +472,6 @@ dcctl sim destroy lora
 
 - [载荷解码器](./payload-decoders.md)：解码器的每个部分、函数库、测试面板和各种拒绝。
 - [入站集成](./inbound-integrations.md)：发送方、别名、存储的内容以及各项限制。
+- [配置通知渠道](./notification-channels.md)：电子邮件和 webhook 渠道、策略、升级与静默时段。
 - [检测规则](../user-guide/detection-rules.md)和[告警](../user-guide/alarms.md)：编写规则，以及处理它们产生的告警。
 - [为什么我的设备数据没有出现](./why-isnt-my-data-showing-up.md)：平台对其所拒绝内容的记录。

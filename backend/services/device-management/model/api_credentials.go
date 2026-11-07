@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // buildDeviceCredential validates a credential create request against an ALREADY
@@ -372,11 +373,17 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// profile of a credential that was removed and re-issued meanwhile). trust_anchor_id and
 	// certificate_pem are the certificate credential's, fixed at create, so an update has no
 	// reason to write them either.
+	var lockedOwnerId uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		x509 := CredentialType(updated.CredentialType) == CredentialX509Certificate
 		// A certificate credential moved onto another device counts against THAT device's limit,
 		// counted under its row lock so two moves (or a move and a create) cannot both fit the
 		// last slot. Any other credential type moves freely.
-		if repoint && CredentialType(updated.CredentialType) == CredentialX509Certificate {
+		//
+		// 🔴 LOCK ORDER of a credential write: the target device row, then the credential row, then (a
+		// certificate leaving a device) the anchor FOR SHARE. Device before credential is the order a
+		// provisioning reset takes; the anchor comes last because nothing that holds it waits for either.
+		if repoint && x509 {
 			if err := lockDeviceRow(tx, device.ID); err != nil {
 				return err
 			}
@@ -389,7 +396,62 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 					device.Token, n)
 			}
 		}
-		return tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error
+		// The credential is read again under its row lock, and what the save writes is reconciled with
+		// it: the owner in force is the one acted on, so a concurrent move or delete cannot be undone by
+		// this save writing the owner of the earlier, unlocked read.
+		var cur DeviceCredential
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
+			return err
+		}
+		// The inline kick after the commit names the owner in force too, not the one the unlocked read saw.
+		lockedOwnerId = cur.DeviceId
+		if cur.DeviceId != priorDeviceId {
+			var owners []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+				Pluck("token", &owners).Error; err != nil {
+				return err
+			}
+			if len(owners) == 1 {
+				currentDeviceToken = owners[0]
+			}
+		}
+		if !repoint && cur.DeviceId != updated.DeviceId {
+			updated.DeviceId = cur.DeviceId
+			updated.Device = nil
+			var owner Device
+			if err := tx.Unscoped().Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).Take(&owner).Error; err != nil {
+				return err
+			}
+			updated.Device = &owner
+		}
+		// A certificate credential LEAVING a device under a pending revocation: the outgoing owner is
+		// the one read here, under the lock.
+		var movedFrom string
+		var movedAnchor uint
+		certMove := repoint && x509 && cur.TrustAnchorId != nil
+		if certMove {
+			movedAnchor = *cur.TrustAnchorId
+			if err := lockTrustAnchorShareByID(tx, movedAnchor); err != nil {
+				return err
+			}
+			var tokens []string
+			if err := tx.Unscoped().Model(&Device{}).Where("tenant_id = ? AND id = ?", cur.TenantId, cur.DeviceId).
+				Pluck("token", &tokens).Error; err != nil {
+				return err
+			}
+			if len(tokens) == 1 {
+				movedFrom = tokens[0]
+			}
+		}
+		if err := tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error; err != nil {
+			return err
+		}
+		if certMove && movedFrom != "" {
+			// The device it left is no longer found by the marker's expansion; see
+			// queueOwedRevocationKicksOnTx.
+			return api.queueOwedRevocationKicksOnTx(tx, updated.TenantId, movedAnchor, []string{movedFrom})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -397,7 +459,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// EVERY committed update evicts, a metadata-only edit included: one database read on
 	// the device's next event, in place of a field-by-field judgement of which changes
 	// matter that would have to be kept right forever.
-	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId)
+	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId, lockedOwnerId)
 	// A change that withdraws or alters what a session authenticated with ends the device's
 	// open sessions; a rename or a metadata edit does not. A credential that is DISABLED
 	// re-asks on every update, so repeating the disable after a failed kick is the retry.

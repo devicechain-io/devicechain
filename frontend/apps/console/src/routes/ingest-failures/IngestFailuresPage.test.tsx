@@ -104,6 +104,21 @@ describe('IngestFailuresPage', () => {
     );
   });
 
+  it('offers decoder failures as a reason and seeds the filter from the link the Decoder tab offers', async () => {
+    renderAt('/ingest-failures?reason=DECODE_FAILED');
+    await waitFor(() =>
+      expect(listFailedEvents).toHaveBeenCalledWith(expect.objectContaining({ reason: 'DECODE_FAILED' })),
+    );
+    expect(screen.getByRole('button', { name: /Decoder failed/ }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText(/payload decoder could not turn an uplink into readings/)).toBeTruthy();
+  });
+
+  it('ignores a reason in the link that it does not know', async () => {
+    renderAt('/ingest-failures?reason=NOPE');
+    await waitFor(() => expect(listFailedEvents).toHaveBeenCalled());
+    expect(listFailedEvents).not.toHaveBeenCalledWith(expect.objectContaining({ reason: 'NOPE' }));
+  });
+
   it('never promises to retry or recover anything', async () => {
     renderAt('/ingest-failures');
     await screen.findAllByText('no such device');
