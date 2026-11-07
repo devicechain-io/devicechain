@@ -104,7 +104,7 @@ publish the profile. See [Publishing a version](#publishing-a-version).
 Choose **New metric** to add one, or **Edit** on a row to change it. A metric has:
 
 - a **Metric key**: the name the device's measurements carry, such as `temperature`;
-- a token and a **Data type**;
+- a token and a **Data type**. The token is a handle for the metric, separate from its key, and takes only letters, digits, `-` and `_`. For a key such as `battery.voltage`, use a token such as `battery-voltage`; the key keeps its dot;
 - a **Unit**, written in UCUM, such as `Cel`;
 - an optional **Min** and **Max**, shown in the **Range** column;
 - a name and a description.

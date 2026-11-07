@@ -47,6 +47,9 @@ type Options struct {
 	// MqttFailClosed is --mqtt-fail-closed: nil when the flag was not given, otherwise the
 	// operator's explicit choice, recorded on the instance declaration. See mqttfailclosed.go.
 	MqttFailClosed *bool
+	// Size is --size: "" when not given (base). Validated by ValidateSize; the instance's own
+	// preset, recorded on the declaration. See size.go.
+	Size string
 	// MQTTExposure and MQTTHost are --mqtt-exposure and --mqtt-host: empty when not given (keep
 	// what the declaration records). See mqttexposure.go.
 	MQTTExposure string

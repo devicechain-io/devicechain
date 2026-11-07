@@ -294,6 +294,7 @@ const sidebars: SidebarsConfig = {
             'deployment/grafana-boards',
             'deployment/metrics-reference',
             'deployment/tuning-an-instance',
+            'deployment/sizing',
             'deployment/detection-engine',
             'deployment/edge-services',
             'deployment/device-certificates',

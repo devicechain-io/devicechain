@@ -73,6 +73,7 @@ Cada fila escribe una medición. Una fila es de uno de tres tipos.
 La pestaña Decodificador empieza con una **tabla de campos**, y cada fila suya se convierte en una expresión. Eliges:
 
 - **Métrica**: la clave bajo la que se guarda el valor. Solo se ofrecen las métricas declaradas en el perfil como medidas, no calculadas.
+- Una clave de métrica puede contener puntos (`battery.voltage`), pero el token de la métrica no: los tokens solo admiten letras, dígitos, `-` y `_`. Declara la métrica con un token como `battery-voltage` y conserva `battery.voltage` como su clave; la fila del decodificador nombra la clave.
 - Para una trama: el **tipo** (entero sin signo o con signo de 8, 16, 24 o 32 bits, flotante de 32 o 64 bits, un solo bit, un campo de bits, un campo de bits con signo o dígitos BCD), el **orden de bytes** cuando importa y el **desplazamiento en bytes**. Un campo de bits también lleva un desplazamiento en bits y un ancho de 1 a 32; BCD lleva una longitud de 1 a 8 bytes.
 - Para JSON: la **ruta** en el mensaje, como `bat.mv`, si es un número o un valor verdadero/falso, y si se omite la fila en silencio cuando la ruta no existe.
 - Opcionalmente **multiplicar por**, **dividir entre** y **sumar**, aplicados en ese orden.

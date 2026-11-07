@@ -214,6 +214,9 @@ Keep that `accessToken`. Every call from here on carries it:
 export DC_TOKEN='<accessToken>'
 ```
 
+An access token lasts **15 minutes**. When calls start failing with an authentication error, repeat the two
+requests above (`login`, then `selectTenant`) and export the new `accessToken`.
+
 ## 4. Create the device {#4-create-the-device}
 
 Devices are typed, so you create a device type first. Everything is addressed by a **token** you

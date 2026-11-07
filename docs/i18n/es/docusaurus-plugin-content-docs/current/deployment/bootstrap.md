@@ -799,6 +799,7 @@ imágenes. La canalización, el chart y el operador son idénticos.
 |------|-----------|
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
+| `--size <size>` | El preajuste de tamaño de la instancia: `base` (el valor por defecto) o `perf-12k`, la configuración de alto rendimiento medida. Queda registrado en la instancia y cada actualización lo vuelve a aplicar. Una superposición `--values` y una variable de OpenTofu que indiques tú prevalecen sobre él. Consulta [Elegir un tamaño](./sizing.md). |
 | `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M; la gestión de actualizaciones over-the-air forma parte de `default`), `telemetry` o `ingest-only`. |
 | `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area outbound-connectors`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
@@ -966,6 +967,7 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que instalar (por defecto `devicechain`), que se crea si no existe. |
 | `--kube-context <name>` | Instala en el clúster existente al que apunta este kube-context. `dcctl` nunca lo crea ni lo elimina. |
 | `--compact` | Preajuste de huella pequeña; consulta más abajo. |
+| `--size compact` | Equivale a `--compact`, que se mantiene. `base` se acepta y significa sin preajuste. Los tamaños `perf` se eligen por instancia con `dcctl bootstrap`. Consulta [Elegir un tamaño](./sizing.md). |
 | `--ha` | Alta disponibilidad; consulta más abajo. Requiere al menos **3 nodos planificables**. |
 | `--no-tls` | Con `--compact`: no instala cert-manager y, por tanto, tampoco respaldos de base de datos. `--compact --no-tls=false` conserva ambos. Se rechaza sin `--compact`: usa `dcctl bootstrap --no-tls` para servir una instancia por HTTP simple. |
 | `--no-monitoring` | Omite la pila de monitorización (Prometheus y Grafana). |

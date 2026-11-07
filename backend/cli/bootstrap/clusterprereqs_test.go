@@ -159,13 +159,13 @@ func assertCallOrder(t *testing.T, fn string, fset *token.FileSet, positions map
 // silently wrong.
 func TestApplyInfraAppliesOnlyTheInstanceInOrder(t *testing.T) {
 	fset, positions := callPositions(t, "tofu.go", "applyInfra",
-		"instanceRootVars", "openInstanceRoot", "kubeClients", "ensureNamespaceForRelease", "writeMintedSecrets",
+		"instanceRootVarsIn", "openInstanceRoot", "kubeClients", "ensureNamespaceForRelease", "writeMintedSecrets",
 		"provisionInstanceDatabase", "applyInstanceInfra",
 		// The cluster half, which must NOT be here.
 		"applyClusterPrereqs", "markInstallApplying", "writeInstalled", "writeClusterSecrets")
 
 	for _, want := range []struct{ name, why string }{
-		{"instanceRootVars", "nothing would compose the instance root's -vars, so the apply would run on the roots' defaults"},
+		{"instanceRootVarsIn", "nothing would compose the instance root's -vars, so the apply would run on the roots' defaults"},
 		{"openInstanceRoot", "nothing would run the fences that refuse an instance this build would damage"},
 		{"kubeClients", "there would be no client to create the instance namespace or write its credentials with"},
 		{"ensureNamespaceForRelease", "the instance's credentials could not be written into its own namespace"},
@@ -216,17 +216,17 @@ func TestApplyInfraAppliesOnlyTheInstanceInOrder(t *testing.T) {
 // root, and it would refuse the cluster root's. And an upgrade must compose its inputs
 // through the SAME assembly, or the two verbs apply one root with different inputs.
 func TestInstanceRootVarsAreRoutedAndSharedByBothVerbs(t *testing.T) {
-	_, positions := callPositions(t, "tofu.go", "instanceRootVars", "splitVars", "infraVars")
-	for _, name := range []string{"splitVars", "infraVars"} {
+	_, positions := callPositions(t, "tofu.go", "instanceRootVarsIn", "splitVars", "infraVarsIn")
+	for _, name := range []string{"splitVars", "infraVarsIn"} {
 		if _, ok := positions[name]; !ok {
-			t.Errorf("instanceRootVars no longer calls %s", name)
+			t.Errorf("instanceRootVarsIn no longer calls %s", name)
 		}
 	}
-	_, up := callPositions(t, "upgradeinfra.go", "prepareUpgradePlan", "instanceRootVars", "infraVars")
-	if _, ok := up["instanceRootVars"]; !ok {
+	_, up := callPositions(t, "upgradeinfra.go", "prepareUpgradePlan", "instanceRootVarsIn", "infraVarsIn")
+	if _, ok := up["instanceRootVarsIn"]; !ok {
 		t.Error("an upgrade's plan does not take its -vars from instanceRootVars")
 	}
-	if _, ok := up["infraVars"]; ok {
+	if _, ok := up["infraVarsIn"]; ok {
 		t.Error("an upgrade's plan calls infraVars directly, around the routing and the archive contract")
 	}
 	for _, c := range []struct{ file, fn string }{{"tofu.go", "applyInstanceInfra"}, {"upgradeinfra.go", "applyUpgradeInfra"}} {

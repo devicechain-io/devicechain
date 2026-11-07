@@ -57,15 +57,16 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 			"archives. The bootstrap command reads it before the pipeline runs", st.Instance)
 	}
 
-	instanceVars, err := instanceRootVars(st)
-	if err != nil {
-		return err
-	}
-
 	// 🔴 THE INSTANCE ROOT IS OPENED, AND ITS FENCES RUN, BEFORE ANYTHING IS WRITTEN.
 	// The fences refuse an instance whose state this build would damage, and a refusal
 	// has to come before the first thing it refuses.
 	inst, err := openInstanceRoot(ctx, st)
+	if err != nil {
+		return err
+	}
+	// Precedence layer 5 (size.go): composed from the instance root's own directory, so a
+	// variable the operator states there is theirs and not the preset's.
+	instanceVars, err := instanceRootVarsIn(st, inst.rootdir)
 	if err != nil {
 		return err
 	}
@@ -120,12 +121,16 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 // built wins over anything derived from this run's flags. Last come the recovery
 // source an upgrade carries for a restored event store (CarriedRestoreVars, nil on a
 // bootstrap, which states its own restore through st.Restore).
-func instanceRootVars(st *State) ([]string, error) {
+func instanceRootVars(st *State) ([]string, error) { return instanceRootVarsIn(st, "") }
+
+// instanceRootVarsIn is instanceRootVars for an instance root at rootdir. Both applies call it with
+// the directory they run in.
+func instanceRootVarsIn(st *State, rootdir string) ([]string, error) {
 	if st.Install == nil {
 		return nil, fmt.Errorf("refusing to compose the infrastructure inputs for instance %q: the "+
 			"cluster's install record was never read, so nothing says where its archive is", st.Instance)
 	}
-	_, vars, err := splitVars(infraVars(st))
+	_, vars, err := splitVars(infraVarsIn(st, rootdir))
 	if err != nil {
 		return nil, err
 	}
@@ -439,7 +444,12 @@ func databaseNamespaceFor(st *State) string {
 // binary. The compact preset's volume sizing is checked against the ceilings the
 // Helm step states (TestCompactReservationFitsItsSmallerVolume), and that check
 // only means something if it reads the vars the apply actually passes.
-func infraVars(st *State) []string {
+func infraVars(st *State) []string { return infraVarsIn(st, "") }
+
+// infraVarsIn is infraVars with the operator's own variable files read from rootdir (the instance
+// root's directory; "" reads only TF_VAR_*). A size preset does not emit a variable the operator
+// states, because OpenTofu takes a -var over all of their sources.
+func infraVarsIn(st *State, rootdir string) []string {
 	vars := []string{
 		"kubeconfig_context=" + st.KubeContext,
 		// The event store's one database is named after the instance, and initdb
@@ -640,6 +650,13 @@ func infraVars(st *State) []string {
 		)
 		// cert-manager and database backups are dropped by --compact --no-tls; see
 		// certManagerEnabled and databaseBackupsEnabled, which the emission above reads.
+	} else if p := sizeFor(st); p != nil {
+		// A size preset's broker, volumes and WAL allowance (size.go). A volume the instance
+		// already has is kept by volumeSize, as on the path below. instanceRootVars' callers
+		// drop any of these the operator states themselves.
+		for _, v := range p.tofuVarsFor(st, func(name string) bool { return statedByOperator(rootdir, name) }) {
+			vars = append(vars, v.Name+"="+v.Value)
+		}
 	} else {
 		// The full-size volumes are the roots' own defaults, so nothing is emitted for
 		// them — unless this instance already HAS volumes of another size. See

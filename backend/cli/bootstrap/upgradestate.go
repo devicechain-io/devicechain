@@ -263,6 +263,11 @@ func hydrateUpgradeState(
 // chart's own schema judge them. The defect that prompted the split was a value this
 // path simply never set.
 func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOptions) error {
+	// A size this build does not know must stop the upgrade here: read back as no size, a no-op
+	// upgrade would render the instance as base.
+	if err := validateRecordedSize(inst.Spec); err != nil {
+		return err
+	}
 	applyDeclaration(st, inst.Spec)
 	// 🔴 THE BINDING'S FACTS COME FROM THE DECLARATION, which bootstrap wrote from the very
 	// binding it rendered with (InstanceSpecFrom) and which ValidateInstanceSpecChange

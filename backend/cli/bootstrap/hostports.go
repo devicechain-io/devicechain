@@ -66,12 +66,20 @@ func parseDockerPort(out string, containerPort int) (int, bool) {
 // port the kind cluster really publishes for ingress when it is not the scheme's
 // default. Falls back to scheme://host/ when it cannot be determined.
 func ConsoleURL(kubeContext, scheme, host string) string {
+	return IngressBase(kubeContext, scheme, host) + "/"
+}
+
+// IngressBase is scheme://host[:port] with no trailing slash: the origin every
+// ingress-served address (console, /api/<area>/graphql) hangs off. The port is
+// the one the kind cluster really publishes, so no printed address can disagree
+// with another about where the instance listens.
+func IngressBase(kubeContext, scheme, host string) string {
 	cp, def := KindIngressHTTPPort, 80
 	if scheme == "https" {
 		cp, def = KindIngressHTTPSPort, 443
 	}
 	if p, ok := KindPublishedHostPort(kubeContext, cp); ok && p != def && !strings.Contains(host, ":") {
-		return scheme + "://" + host + ":" + strconv.Itoa(p) + "/"
+		return scheme + "://" + host + ":" + strconv.Itoa(p)
 	}
-	return scheme + "://" + host + "/"
+	return scheme + "://" + host
 }
