@@ -83,7 +83,9 @@ func main() {
 			Cfg: cfg, Dcctl: *dcctl, Simulator: *simulator,
 			ReachArgs:       strings.Fields(os.Getenv("DC_PLAYGROUND_REACH_ARGS")),
 			CreateArgs:      strings.Fields(os.Getenv("DC_PLAYGROUND_CREATE_ARGS")),
-			BaseControlPort: *port, Runner: execRunner{WaitDelay: 30 * time.Second}, Log: os.Stderr,
+			ProbeArgs:       strings.Fields(os.Getenv("DC_PLAYGROUND_PROBE_ARGS")),
+			AdminPassword:   os.Getenv("DC_ADMIN_PASSWORD"),
+			BaseControlPort: *port, Runner: execRunner{WaitDelay: 30 * time.Second, Stream: os.Stderr}, Log: os.Stderr,
 			Days: NewDayLedger(*ledger),
 		}
 		if err := d.Run(ctx, time.Now); err != nil {

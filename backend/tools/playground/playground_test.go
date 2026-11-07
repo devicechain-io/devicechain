@@ -40,6 +40,10 @@ type fakePlatform struct {
 	failOn  map[string]bool // command line prefix -> fail
 	runs    map[string]int  // sim name -> times `sim run` was started
 	runDies bool            // `sim run` exits at once instead of running until cancelled
+	// lostRecord names sims whose tenant exists but whose local dcctl record is gone: dcctl
+	// created the tenant and died before saving the record, or the record volume was wiped.
+	lostRecord map[string]bool
+	probes     []string // tenant-deletion status command lines, as run
 }
 
 func newPlatform() *fakePlatform {
@@ -80,8 +84,24 @@ func (p *fakePlatform) Run(ctx context.Context, name string, args ...string) (st
 			p.tenants[sim] = map[string]bool{"seed": true}
 		}
 		return "", nil
+	case strings.HasPrefix(line, "tenant-deletion status "):
+		p.probes = append(p.probes, line)
+		sim := strings.TrimPrefix(args[2], "sim-")
+		if !strings.Contains(line, "--password ") {
+			return "Error: --email and --password are required", errors.New("exit 1")
+		}
+		if _, ok := p.tenants[sim]; ok {
+			return "Error: the tenant is active and is not being deleted: tenant \"" + args[2] + "\" is \"active\"", errors.New("exit 1")
+		}
+		if _, held := p.heldTil[sim]; held {
+			return "erased", nil
+		}
+		return "Error: no deletion record for tenant \"" + args[2] + "\": it was never deleted", errors.New("exit 1")
 	case strings.HasPrefix(line, "sim destroy "):
 		sim := args[2]
+		if p.lostRecord[sim] {
+			return "Error: no sim named " + sim + " (create it with dcctl sim create)", errors.New("exit 1")
+		}
 		// dcctl sim destroy has a smaller flag set than sim create, and cobra refuses the
 		// rest as unknown before it looks at the sim at all. The fake does the same.
 		for _, a := range args[3:] {
@@ -105,7 +125,8 @@ func (p *fakePlatform) Run(ctx context.Context, name string, args ...string) (st
 var destroyFlags = map[string]bool{"--server": true, "--instance": true, "--host-header": true, "--tls": true}
 
 func (p *fakePlatform) driver(c Config) *Driver {
-	return &Driver{Cfg: c, Dcctl: "dcctl", Simulator: "dc-simulator", BaseControlPort: 8090, Runner: p}
+	return &Driver{Cfg: c, Dcctl: "dcctl", Simulator: "dc-simulator", BaseControlPort: 8090, Runner: p,
+		ProbeArgs: []string{"--server", "dc.example", "--email", "su@example"}, AdminPassword: "pw"}
 }
 
 func TestSlotChangesExactlyAtTheResetHour(t *testing.T) {
@@ -486,6 +507,20 @@ func TestDcctlSourceStillMatchesWhatTheDriverAssumes(t *testing.T) {
 	rec, err := os.ReadFile(filepath.Join(root, "backend", "cli", "sim", "record.go"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	del, err := os.ReadFile(filepath.Join(root, "backend", "cli", "deletions", "deletions.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdSrc, err := os.ReadFile(filepath.Join(root, "backend", "cli", "cmd", "tenant_deletion.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(del), `"`+tenantActive+`"`) {
+		t.Errorf("dcctl no longer says %q of a live tenant; the driver would read a live tenant as gone or unknowable", tenantActive)
+	}
+	if !strings.Contains(string(cmdSrc), `"`+noDeletionRecord+` %q`) {
+		t.Errorf("dcctl no longer says %q; the driver would never confirm a tenant gone", noDeletionRecord)
 	}
 	if !strings.Contains(string(rec), `"`+noSuchSim+` %q`) {
 		t.Errorf("dcctl no longer answers a missing sim with %q; the driver would fail every first night", noSuchSim)

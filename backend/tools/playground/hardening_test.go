@@ -31,6 +31,13 @@ func TestMain(m *testing.M) {
 	case "child":
 		time.Sleep(10 * time.Second)
 		os.Exit(0)
+	case "spew":
+		line := strings.Repeat("x", 99) + "\n"
+		for i := 0; i < 20000; i++ {
+			os.Stdout.WriteString(line)
+		}
+		os.Stdout.WriteString("THE-END\n")
+		os.Exit(1)
 	}
 	os.Exit(m.Run())
 }

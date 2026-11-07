@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -89,6 +90,25 @@ func (l *DayLedger) Set(name string, day int64) error {
 	}
 	m[name] = day
 	return l.write(m)
+}
+
+// Names are the sims the ledger holds, sorted.
+func (l *DayLedger) Names() ([]string, error) {
+	if l == nil {
+		return nil, nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	m, err := l.read()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // Forget drops a sim that was destroyed or was never there.

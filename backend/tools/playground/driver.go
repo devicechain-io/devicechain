@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +40,43 @@ type Runner interface {
 // whatever is left.
 type execRunner struct {
 	WaitDelay time.Duration
+	// Stream, when set, receives the live output of `dcctl sim run` as it is written, so a
+	// running simulator is visible in the pod's logs. Other commands are not streamed:
+	// `sim create` prints what it minted.
+	Stream io.Writer
+}
+
+// maxOutput bounds what a command's output keeps in memory. Only the tail is ever used
+// (the exit log shows 400 bytes), and a simulator that fails the same way for a day must
+// not grow the driver without limit.
+const maxOutput = 16 << 10
+
+// tailBuffer is an io.Writer that keeps the last max bytes written to it.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := len(p)
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 func (r execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
@@ -52,8 +88,12 @@ func (r execRunner) Run(ctx context.Context, name string, args ...string) (strin
 		return nil
 	}
 	c.WaitDelay = r.WaitDelay
-	var buf bytes.Buffer
-	c.Stdout, c.Stderr = &buf, &buf
+	buf := &tailBuffer{max: maxOutput}
+	var w io.Writer = buf
+	if r.Stream != nil && len(args) >= 2 && args[0] == "sim" && args[1] == "run" {
+		w = io.MultiWriter(buf, r.Stream)
+	}
+	c.Stdout, c.Stderr = w, w
 	err := c.Run()
 	return buf.String(), err
 }
@@ -71,6 +111,11 @@ type Driver struct {
 	// policy, so they come from the environment of the pod.
 	ReachArgs  []string
 	CreateArgs []string
+	// ProbeArgs and AdminPassword let the driver ask the platform whether a tenant still
+	// exists when dcctl has lost the sim's record (`dcctl tenant-deletion status`: --server,
+	// --tls, --email). Without them a missing record is never taken as "the tenant is gone".
+	ProbeArgs     []string
+	AdminPassword string
 	// Days records, per sim, the playground day it was created on, so a slot that comes
 	// round again still holding an earlier day's tenant is noticed. Nil records nothing.
 	Days *DayLedger
@@ -153,8 +198,15 @@ func (d *Driver) Rotate(ctx context.Context, now time.Time) (Plan, error) {
 		}
 		d.logf("created %s", name)
 	}
+	// Sims this driver created that the configuration no longer names (a scenario taken off
+	// the list, or fewer slots) would otherwise survive every reset with their tenants and
+	// credentials. The ledger knows them.
+	orphans, err := d.orphans(p)
+	if err != nil {
+		return p, err
+	}
 	var failed []string
-	for _, name := range p.Destroy {
+	for _, name := range append(append([]string(nil), p.Destroy...), orphans...) {
 		if err := d.destroy(ctx, name); err != nil {
 			d.logf("destroy %s failed, will retry at the next start: %v", name, err)
 			failed = append(failed, name)
@@ -166,18 +218,87 @@ func (d *Driver) Rotate(ctx context.Context, now time.Time) (Plan, error) {
 	return p, nil
 }
 
+// orphans are the ledger's sims that the plan neither creates nor destroys.
+func (d *Driver) orphans(p Plan) ([]string, error) {
+	known := map[string]bool{}
+	for _, n := range p.Create {
+		known[n] = true
+	}
+	for _, n := range p.Destroy {
+		known[n] = true
+	}
+	names, err := d.Days.Names()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, n := range names {
+		if !known[n] && strings.HasPrefix(n, "pg-") && ValidSimName(n) {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
 // destroy tears a sim down and drops it from the ledger. A sim dcctl has no record of was
-// never created or is already gone, which is nothing to tear down and not a failure.
+// never created or is already gone, which is nothing to tear down and not a failure, but
+// only once the platform confirms its tenant is not there.
+//
+// 🔴 A MISSING LOCAL RECORD IS NOT EVIDENCE THE TENANT IS GONE. dcctl creates the tenant
+// before it saves the record, so a create that died between the two (or a record volume
+// that was wiped) leaves a live tenant dcctl can no longer destroy. Forgetting the ledger
+// entry then would let the slot's next visit adopt that tenant and report a clean reset
+// over a visitor's leftovers. When the ledger says this driver created the sim, the entry
+// is cleared only after the platform answers that the tenant does not exist; any other
+// answer keeps it and fails the destroy.
 func (d *Driver) destroy(ctx context.Context, name string) error {
 	out, err := d.Runner.Run(ctx, d.Dcctl, append([]string{"sim", "destroy", name}, d.ReachArgs...)...)
 	switch {
 	case err == nil:
 		d.logf("destroyed %s", name)
 	case strings.Contains(out, noSuchSim):
+		if _, recorded, err := d.Days.Get(name); err != nil {
+			return err
+		} else if recorded {
+			if err := d.confirmTenantGone(ctx, name); err != nil {
+				return err
+			}
+		}
 	default:
 		return fmt.Errorf("%w\n%s", err, out)
 	}
 	return d.Days.Forget(name)
+}
+
+// tenantActive is what `dcctl tenant-deletion status` says of a tenant that exists and is
+// not being deleted; noDeletionRecord is what it says of a token with no tenant and no
+// completed deletion. TestDcctlSourceStillMatchesWhatTheDriverAssumes pins both against
+// dcctl's source.
+const (
+	tenantActive     = "the tenant is active and is not being deleted"
+	noDeletionRecord = "no deletion record for tenant"
+)
+
+// confirmTenantGone asks the platform whether the sim's tenant still exists and returns nil
+// only when it does not. Anything it cannot tell is an error.
+func (d *Driver) confirmTenantGone(ctx context.Context, name string) error {
+	if len(d.ProbeArgs) == 0 || d.AdminPassword == "" {
+		return fmt.Errorf("%s has no sim record, and the driver cannot ask the platform whether its tenant still exists "+
+			"(no probe is configured); the ledger entry is kept", name)
+	}
+	token := "sim-" + name
+	args := append([]string{"tenant-deletion", "status", token}, d.ProbeArgs...)
+	out, err := d.Runner.Run(ctx, d.Dcctl, append(args, "--password", d.AdminPassword)...)
+	switch {
+	case strings.Contains(out, tenantActive):
+		return fmt.Errorf("%s has no sim record but its tenant %s is still live; dcctl cannot destroy it without the record, "+
+			"so a superuser must delete the tenant by hand. The ledger entry is kept", name, token)
+	case err == nil, strings.Contains(out, noDeletionRecord):
+		return nil
+	default:
+		return fmt.Errorf("%s has no sim record, and whether tenant %s still exists could not be confirmed (the ledger entry is kept): %w\n%s",
+			name, token, err, tail(out, 400))
+	}
 }
 
 // Run rotates and then supervises one `dcctl sim run` per scenario of the current slot.

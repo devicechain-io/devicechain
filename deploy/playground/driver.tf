@@ -32,6 +32,15 @@ locals {
     var.sim_tls ? ["--tls"] : [],
   ))
 
+  # What `dcctl tenant-deletion status` takes to ask whether a sim's tenant still exists
+  # (the driver does that when dcctl has lost a sim's record). It has no --host-header, so
+  # an instance reached by address with a Host override cannot be probed, and the driver
+  # then keeps the sim's ledger entry rather than guess.
+  probe_args = join(" ", concat(
+    ["--server", var.sim_server, "--email", "superuser@devicechain.local"],
+    var.sim_tls ? ["--tls"] : [],
+  ))
+
   # What `dcctl sim create` alone takes. destroy refuses these as unknown flags.
   create_args = join(" ", var.sim_create_args)
 
@@ -245,6 +254,10 @@ resource "kubernetes_deployment_v1" "driver" {
           env {
             name  = "DC_PLAYGROUND_CREATE_ARGS"
             value = local.create_args
+          }
+          env {
+            name  = "DC_PLAYGROUND_PROBE_ARGS"
+            value = local.probe_args
           }
           env {
             name = "DC_ADMIN_PASSWORD"

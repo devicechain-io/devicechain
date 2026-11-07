@@ -385,3 +385,24 @@ run "create_only_flags_are_kept_out_of_the_shared_ones" {
     error_message = "The create-only arguments should reach the driver apart from the shared ones."
   }
 }
+
+# When dcctl has lost a sim's record the driver asks the platform whether the tenant still
+# exists before it forgets the sim. The probe command has no --host-header and no --instance,
+# and takes the superuser's login; the password comes from the Secret, never from this value.
+run "the_tenant_probe_gets_its_own_arguments" {
+  command = plan
+
+  variables {
+    deploy_driver   = true
+    sim_host_header = "devicechain.local"
+    sim_tls         = true
+  }
+
+  assert {
+    condition = (
+      [for e in kubernetes_deployment_v1.driver[0].spec[0].template[0].spec[0].container[0].env : e.value if e.name == "DC_PLAYGROUND_PROBE_ARGS"][0]
+      == "--server ingress.example.svc --email superuser@devicechain.local --tls"
+    )
+    error_message = "The probe should name the server, the superuser and TLS, and not the flags tenant-deletion does not have."
+  }
+}
