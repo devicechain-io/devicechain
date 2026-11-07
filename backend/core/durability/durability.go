@@ -24,8 +24,10 @@ const (
 	// MustBackUp holds the only copy of something a promise was made about. The platform provides a
 	// backup procedure for it.
 	MustBackUp
-	// Rebuildable is re-published or recomputed from the database, or re-issued by a peer, by a
-	// mechanism that exists in the running system. Empty is correct after a restore.
+	// Rebuildable is re-published or recomputed from the database, or sent again by whatever owns
+	// it (a device, an integration, a person signing in), by a mechanism that exists in the running
+	// system. Empty is correct after a restore. Where the sender must act (a device that has to
+	// subscribe again), the item's reason says so.
 	Rebuildable
 	// Transient is in flight or short-lived. Losing it is bounded by pipeline lag or by its
 	// lifetime and is part of the published recovery point.

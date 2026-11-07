@@ -970,7 +970,7 @@ var All = []Stream{
 	// the two must move together is the point of deriving both from here.
 	// Window: devices and lwm2m-ingest publish it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: CommandResponses, Durability: durability.Rebuildable, DurabilityWhy: "command outcomes are settled from the command-delivery store", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
+	{Suffix: CommandResponses, Durability: durability.Transient, DurabilityWhy: "a device answer not yet consumed; the command it answers is settled from its stored state as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the
@@ -1040,7 +1040,7 @@ var All = []Stream{
 	// At-least-once and idempotent.
 	// Window: device-management publishes it with no Nats-Msg-Id; its consumers are idempotent.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: EntityDeleted, Durability: durability.Rebuildable, DurabilityWhy: "a deletion fan-out; the restored database already reflects each entity as of the restore point", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, Durability: durability.Transient, DurabilityWhy: "a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-081. Emitted post-commit by device-management whenever a device's tracked
 	// relationships may have changed (an edge created or removed, a claim redeemed or
@@ -1086,7 +1086,7 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.
-	{Suffix: FailedEvents, Durability: durability.Rebuildable, DurabilityWhy: "each record is stored in the event store by its consumer", PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Readers: []Reader{{"event-management", ReadDurable}}, Tier: Cold, DeadLetterKind: NotLettered,
+	{Suffix: FailedEvents, Durability: durability.Transient, DurabilityWhy: "records not yet stored by their consumer; the event store keeps each one once it is consumed", PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Readers: []Reader{{"event-management", ReadDurable}}, Tier: Cold, DeadLetterKind: NotLettered,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// The dedup window is what lets the connectors service's own arm and the platform's
 	// max-delivery recorder both write the verbatim copy of one give-up and store it
@@ -1112,7 +1112,7 @@ var All = []Stream{
 	//
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
 	// 540 s redelivery span = 1440 s. Cost: ~0 in steady state, one id per letter.
-	{Suffix: DeadLetters, Durability: durability.Rebuildable, DurabilityWhy: "every letter is stored in the database by its consumer",
+	{Suffix: DeadLetters, Durability: durability.Transient, DurabilityWhy: "letters not yet stored by their consumer; the database keeps each one once it is consumed",
 		RecorderWrites: true, Readers: []Reader{{"user-management", ReadDurable}, {"command-delivery", ReadDurable}},
 		Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds, DeadLetterKind: NotLettered,
 		Why: "ADR-024 dead-letter sink: every area that consumes a stream writes it, user-management " +

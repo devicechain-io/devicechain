@@ -4,11 +4,14 @@
 package backupset
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -124,11 +127,14 @@ func backendRoot(t *testing.T) string {
 	return root
 }
 
-// walkGo calls fn for every non-test Go source under backend/ with its slash path relative to it
-// and its text with line comments removed.
-func walkGo(t *testing.T, fn func(rel, text string)) {
+// parseGo calls fn for every non-test Go source under backend/ with its slash path relative to it
+// and its syntax tree. The scans below read the tree, not the text, so a comment, a string that
+// happens to contain a call, odd spacing or a line break before a parenthesis cannot hide a call
+// or invent one.
+func parseGo(t *testing.T, fn func(rel string, file *ast.File)) {
 	t.Helper()
 	root := backendRoot(t)
+	fset := token.NewFileSet()
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -142,19 +148,12 @@ func walkGo(t *testing.T, fn func(rel, text string)) {
 		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 			return nil
 		}
-		raw, err := os.ReadFile(p)
+		file, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
 		if err != nil {
 			return err
 		}
-		var kept []string
-		for _, line := range strings.Split(string(raw), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "//") {
-				continue
-			}
-			kept = append(kept, line)
-		}
 		rel, _ := filepath.Rel(root, p)
-		fn(filepath.ToSlash(rel), strings.Join(kept, "\n"))
+		fn(filepath.ToSlash(rel), file)
 		return nil
 	})
 	if err != nil {
@@ -162,9 +161,10 @@ func walkGo(t *testing.T, fn func(rel, text string)) {
 	}
 }
 
-// creator is a file that creates JetStream state, how many create calls it holds, and why that is
-// covered. The count is pinned as well as the file: a second creation path added to a file already
-// on the list would otherwise pass unseen.
+// creator is a file that creates JetStream state, how many create references it holds, and why that
+// is covered. The count is pinned as well as the file: a second creation path added to a file already
+// on the list would otherwise pass unseen. (It cannot tell whether an existing call still goes through
+// a registry; that is what review of a change to these files is for.)
 type creator struct {
 	calls int
 	why   string
@@ -182,17 +182,26 @@ var creators = map[string]creator{
 	"edge/dc-edge-agent/agent/agent.go":     {1, "the edge agent's local spool; an edge unit, never in the cluster"},
 }
 
-var createCall = regexp.MustCompile(`\.(AddStream|CreateStream|CreateOrUpdateStream|CreateKeyValue|CreateOrUpdateKeyValue|CreateObjectStore|CreateOrUpdateObjectStore)\(`)
+// createMethods are the client methods that create JetStream state. A reference counts whether it is
+// called or taken as a method value.
+var createMethods = map[string]bool{
+	"AddStream": true, "CreateStream": true, "CreateOrUpdateStream": true,
+	"CreateKeyValue": true, "CreateOrUpdateKeyValue": true,
+	"CreateObjectStore": true, "CreateOrUpdateObjectStore": true,
+}
 
 // A new path that creates JetStream state without going through a registry would hold data nobody
 // classified. The test names the file so the author has to either route it through the registries or
-// account for it here.
+// account for it here. (The object store is not JetStream's: it is core/blob, one declared item.)
 func TestOnlyKnownFilesCreateJetStreamState(t *testing.T) {
 	found := map[string]int{}
-	walkGo(t, func(rel, text string) {
-		if n := len(createCall.FindAllString(text, -1)); n > 0 {
-			found[rel] = n
-		}
+	parseGo(t, func(rel string, file *ast.File) {
+		ast.Inspect(file, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && createMethods[sel.Sel.Name] {
+				found[rel]++
+			}
+			return true
+		})
 	})
 	for rel, n := range found {
 		c, ok := creators[rel]
@@ -201,7 +210,7 @@ func TestOnlyKnownFilesCreateJetStreamState(t *testing.T) {
 			continue
 		}
 		if n != c.calls {
-			t.Errorf("%s holds %d create calls, creators says %d: a new creation path in an accounted-for file has to be accounted for too", rel, n, c.calls)
+			t.Errorf("%s holds %d create references, creators says %d: a new creation path in an accounted-for file has to be accounted for too", rel, n, c.calls)
 		}
 	}
 	for rel := range creators {
@@ -211,20 +220,25 @@ func TestOnlyKnownFilesCreateJetStreamState(t *testing.T) {
 	}
 }
 
-var gatewayLiteral = regexp.MustCompile(`"\$MQTT_[A-Za-z0-9]+"`)
-
-// A gateway stream the platform starts naming must be classified.
+// A gateway stream the platform starts naming must be classified. The scan decodes every string
+// literal, so a backtick string or an escaped one is read as the name it is.
 func TestEveryGatewayStreamNamedInSourceIsClassified(t *testing.T) {
 	known := map[string]bool{}
 	for _, it := range gateway {
-		known[`"`+it.Name+`"`] = true
+		known[it.Name] = true
 	}
-	walkGo(t, func(rel, text string) {
-		for _, m := range gatewayLiteral.FindAllString(text, -1) {
-			if !known[m] {
-				t.Errorf("%s names gateway stream %s, which backupset.gateway does not classify", rel, m)
+	parseGo(t, func(rel string, file *ast.File) {
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
 			}
-		}
+			v, err := strconv.Unquote(lit.Value)
+			if err == nil && strings.HasPrefix(v, "$MQTT_") && len(v) > len("$MQTT_") && !strings.ContainsAny(v, " .*>") && !known[v] {
+				t.Errorf("%s names gateway stream %q, which backupset.gateway does not classify", rel, v)
+			}
+			return true
+		})
 	})
 }
 

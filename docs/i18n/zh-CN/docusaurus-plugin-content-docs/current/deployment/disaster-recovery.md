@@ -347,19 +347,19 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 | `device-desired` | stream | rebuildable | the current desired state is held in the database and sent to a device again on its next sync |
 | `device-reports` | stream | rebuildable | a device sends its reports again, and its state is held in the database |
 | `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
-| `command-responses` | stream | rebuildable | command outcomes are settled from the command-delivery store |
+| `command-responses` | stream | transient | a device answer not yet consumed; the command it answers is settled from its stored state as unanswered |
 | `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
 | `detection-rules-published` | stream | rebuildable | a rule publish is re-derived from the stored profile version |
 | `device-roster` | stream | rebuildable | roster changes are projected from the device store |
 | `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |
-| `entity-deleted` | stream | rebuildable | a deletion fan-out; the restored database already reflects each entity as of the restore point |
+| `entity-deleted` | stream | transient | a deletion fan-out in flight; a deletion announced just before the restore point may not have reached every consumer |
 | `device-ownership` | stream | rebuildable | ownership changes are projected from the stored relationships |
 | `alarm-events` | stream | rebuildable | alarm state is held in the database and notification re-derives from it |
 | `raise-alarm` | stream | transient | an in-flight request from detection, which evaluates again on the next event |
 | `failed-decode` | stream | transient | a diagnostic record of an event that could not be decoded |
-| `failed-events` | stream | rebuildable | each record is stored in the event store by its consumer |
+| `failed-events` | stream | transient | records not yet stored by their consumer; the event store keeps each one once it is consumed |
 | `connector-dispatch.dead` | stream | must-back-up | the only record of an outbound delivery that could not be made, kept for the operator to inspect. No backup tool ships in this release. The records cannot be recovered once the stream is lost. |
-| `dead-letters` | stream | rebuildable | every letter is stored in the database by its consumer |
+| `dead-letters` | stream | transient | letters not yet stored by their consumer; the database keeps each one once it is consumed |
 | `max-deliveries` | stream | transient | broker advisories for deliveries that ran out; empty in steady state |
 | `dc_refresh_tokens` | bucket | transient | a live session token; people sign in again |
 | `dc_oauth_codes` | bucket | transient | an authorization code that lives sixty seconds |
