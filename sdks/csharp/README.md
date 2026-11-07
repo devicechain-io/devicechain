@@ -151,6 +151,13 @@ receives commands over MQTT, which is the only carrier commands travel on. One s
 device — MQTT 3.1.1 has no shared subscriptions and the broker grant confines a connection to a
 single device — so a scene with 18 machines holds 18 connections.
 
+A device can authenticate with an X.509 client certificate instead of its access-token credential:
+load it with `MqttClientCertificate.FromPemFiles` / `FromPfxFile` (RSA or ECDSA), set
+`MqttSessionOptions.ClientCertificate`, and use an `ssl://` broker address (pin a private broker CA
+with `MqttTrust.PinnedCaFromFile`). The session then connects as `{tenant}:@x509` with no password.
+A loader failure (no key, mismatched key, CA certificate, no client-auth usage, wrong password)
+throws `MqttClientCertificateException` before any connection is made.
+
 Three properties are worth knowing before you use it:
 
 - **A subscribe is not a subscription until the broker grants it.** `StartAsync` returns only after

@@ -85,6 +85,8 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'online-doughnut': 'widgets/online-doughnut.tsx',
   'history-table': 'widgets/history-table.tsx',
   'scada-symbol': 'widgets/scada-symbol.tsx',
+  'status-grid': 'widgets/status-grid.tsx',
+  'state-timeline': 'widgets/state-timeline.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -130,7 +132,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
   // The fleet feed reads it for the bar chart's one bar per device.
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'scada-symbol', 'stat-card', 'bar-chart', 'fleet-count', 'timeseries-chart'],
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'scada-symbol', 'stat-card', 'bar-chart', 'fleet-count', 'status-grid', 'timeseries-chart'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive, and editor-clipboard.ts to carry it
   // across a paste.
@@ -479,6 +481,22 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     thresholds: [{ value: 4500, level: 'critical', label: 'Overfull' }],
     staleAfterSeconds: 300,
     window: 300,
+  },
+  'status-grid': {
+    title: 'Pump temperatures',
+    measurement: 'temp_c',
+    unit: 'C',
+    precision: 1,
+    thresholds: [{ value: 80, level: 'major', label: 'Hot' }],
+    worstFirst: true,
+    staleAfterSeconds: 300,
+    windowSeconds: 3600,
+  },
+  'state-timeline': {
+    title: 'Pump state',
+    thresholds: [{ value: 0, level: 'critical', label: 'Stopped' }, { value: 1, level: 'normal', label: 'Running' }],
+    staleAfterSeconds: 900,
+    windowSeconds: 21600,
   },
 };
 

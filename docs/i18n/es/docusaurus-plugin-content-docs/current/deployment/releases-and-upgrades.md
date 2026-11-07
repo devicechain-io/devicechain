@@ -930,6 +930,10 @@ Un perfil de dispositivo puede llevar ahora un **decodificador de payload**: reg
 - **La puerta de prueba tiene un límite de frecuencia por réplica.** `testPayloadDecoder` permite 10 peticiones por segundo por inquilino, con una ráfaga de 20, en cada réplica de `device-management`, así que el total de un inquilino crece con el número de réplicas. Una petición por encima del límite se rechaza con `RATE_LIMITED`.
 - **Durante una actualización progresiva, publique un decodificador solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada mientras la petición la atiende una réplica anterior se congela sin su decodificador, porque esa réplica no conoce el campo. Terminada la actualización, compruebe que `DeviceProfileVersion.decoder` está presente en la versión que publicó y, si no lo está, publique de nuevo.
 
+#### La consola muestra el estado de un decodificador {#v120-decoder-console}
+
+La pestaña **Decodificador** de un perfil de dispositivo muestra ahora las últimas 24 horas del decodificador del perfil: cuántos uplinks se decodificaron, se ignoraron, fallaron y no se registraron (consulte [Un decodificador de carga útil que falla tiene un presupuesto](#v120-decoder-budget)), y los uplinks fallidos guardados como muestras, cada uno con un botón que lo carga en el panel de prueba. Un enlace abre la página **Eventos fallidos** filtrada por `DECODE_FAILED`; esa página ofrece ahora el motivo como filtro propio y lo acepta como `?reason=DECODE_FAILED`. Ambas partes de la pestaña requieren `device:write`, igual que las consultas en que se apoyan. No hay que hacer nada para actualizar: es solo la consola y usa las consultas `payloadDecoderHealth` y `payloadDecoderSamples` ya descritas.
+
 #### Listas de revocación X.509 {#v120-x509-crl}
 
 Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad certificadora en un ancla de confianza, y cada ancla tiene un modo de revocación. Un ancla sin lista y sin revocación manual se comporta exactamente como antes.
@@ -940,12 +944,19 @@ Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad cer
 - **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
 - **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
 
+#### Un certificado de cliente en el SDK de C# {#v120-sdk-x509}
+
+El SDK de C# y el paquete de Unity ya pueden conectar un dispositivo con un certificado de cliente X.509. Es un cambio aditivo: nada cambia para una sesión que no lo configure, y no hace falta ninguna acción para actualizar.
+
+- **Asigne `MqttSessionOptions.ClientCertificate`** a un `MqttClientCertificate` cargado desde un PFX o desde archivos PEM. La sesión se conecta entonces con el usuario `{tenant}:@x509` y sin contraseña. Consulte [Conectar desde el SDK de C#](../guides/device-x509.md#csharp-sdk).
+- **Solo se pueden presentar claves RSA y ECDSA**, porque .NET no tiene Ed25519. La dirección del broker debe ser `ssl://`; una dirección en texto plano se rechaza al construir la sesión.
+
 #### Revocar un certificado termina las sesiones abiertas {#v120-x509-sessions}
 
 Revocar un certificado, a mano o subiendo una CRL que lo nombra, ahora también termina las sesiones abiertas de los dispositivos a los que afecta. Antes, una sesión ya abierta seguía hasta que caducaba su token (hasta 12 horas por defecto). No cambia nada en una instancia que no revoca nada.
 
 - **Un certificado de dispositivo termina las sesiones de los dispositivos que lo tienen.** La revocación de una autoridad certificadora es más amplia: cuando revoca una CA entregando su certificado, o una CRL nombra un intermedio que se vio usar a una credencial registrada, se terminan las sesiones de **todos los dispositivos con una credencial de certificado bajo esa ancla de confianza**. Esos dispositivos se reconectan solos; aquellos cuya cadena sigue siendo de confianza se admiten de inmediato. Una llamada termina por sí misma las sesiones de hasta unos 5 000 dispositivos, así que una revocación a nivel de CA puede reconectar a ese número a la vez; el resto se termina en segundo plano. **En una instancia actualizada desde una versión anterior**, una credencial registrada antes de la actualización no tiene un intermedio registrado, así que una CRL que añade una entrada que no coincide con ninguna credencial almacenada también termina las sesiones de esas credenciales antiguas, por si la entrada es un intermedio que usan.
-- **Las sesiones se terminan dos veces.** Una al confirmarse la revocación y otra unos 10 segundos después. La segunda pasada alcanza a un dispositivo que se estaba admitiendo en el instante de la revocación. Por eso una revocación a nivel de CA consulta dos veces a toda el ancla.
+- **Las sesiones se terminan dos veces.** Una al confirmarse la revocación y otra unos 10 segundos después. La segunda pasada alcanza a un dispositivo que se estaba admitiendo en el instante de la revocación. El retraso es el ajuste fijo `deviceManagement.callout.revocation.resweepAfter` (10 segundos por defecto, hasta 5 minutos); debe superar el tiempo de espera de consulta del callout más los 5 segundos de autorización del broker, o `device-management` se niega a arrancar. Por eso una revocación a nivel de CA consulta dos veces a toda el ancla.
 - **Revocar puede tardar contra un respondedor lento.** La llamada espera al servicio que termina las sesiones (`event-sources`) hasta unos 90 segundos. Si no puede confirmarlo, la revocación sigue en pie y las conexiones nuevas se rechazan; el resultado indica `sessionsEnded: false`, la plataforma sigue reintentando y repetir la revocación o la subida vuelve a preguntar.
 - **Durante una actualización gradual**, los nuevos cierres de sesión llevan un motivo nuevo que `event-sources` debe entender. Hasta que `event-sources` se haya reemplazado, estos cierres quedan pendientes y se reintentan, de modo que una revocación hecha a mitad de la actualización termina las sesiones abiertas cuando `event-sources` se haya actualizado. Los pods de la versión anterior ni toman estos cierres pendientes ni los eliminan.
 
@@ -980,6 +991,10 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 
 Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge-agent"` además del agente. `agent` es una etiqueta externa global del colector de la máquina, así que un colector que también rasca otra cosa en la máquina (node exporter, por ejemplo) sumaba la memoria, la CPU, las goroutines y los archivos abiertos de ese proceso a los paneles de todos los agentes. La configuración de rascado documentada ya usa `job_name: dc-edge-agent`, de modo que un tablero importado con ella no necesita cambios. Si dio otro nombre al job, cámbielo en el colector o edite las cinco consultas de proceso y de runtime del tablero (`process_*` y `go_goroutines`) con su nombre de job. Vuelva a importar el tablero desde `backend/edge/dc-edge-agent/dashboards/edge-agent.json` para aplicar el cambio.
 
+#### Lo que una instancia guarda fuera de sus bases de datos está clasificado {#v120-backup-classification}
+
+La página de [Recuperación ante desastres](./disaster-recovery.md#other-state) ahora indica qué le debe una restauración a cada stream de mensajes, a cada bucket clave-valor y al almacén de objetos, en una tabla generada a partir de las declaraciones de la propia plataforma. Tres elementos necesitan su propia copia de seguridad: el stream de captura sin procesar, el stream de mensajes fallidos de las entregas salientes de conectores que no se pudieron realizar, y el almacén de objetos que guarda los artefactos de actualización y las imágenes de marca. Todo lo demás se reconstruye desde las bases de datos o dura poco. Esta versión no cambia ningún comportamiento ni incluye una herramienta de copia de seguridad para los streams. Añade la página, una prueba que falla cuando se añade un stream o un bucket sin clase, y la regla para el almacén de objetos: haz su copia después de la copia base de la base de datos con la que va.
+
 #### Otros cambios en esta versión {#v120-other-changes}
 
 Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista anterior. Cada uno es una corrección o una adición a algo que ya se había publicado.
@@ -1001,11 +1016,15 @@ Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista an
 - **Infraestructura.** Con `nats_mqtt_capable_users` sin definir, el módulo OpenTofu del broker ya no escribe un `allowed_connection_types` nulo que el broker rechazaba; el reparador de certificados de las copias de seguridad del almacén de eventos vigila el espacio de nombres configurado del operador.
 - **`dcctl upgrade` acepta `--yes` (`-y`), igual que `dcctl install` y `dcctl bootstrap`, y encuentra un escrow escrito con `--escrow-file`.** `--yes` da por respondidas con sí las preguntas; una actualización no hace ninguna, así que no cambia nada, y un script ya puede pasarlo a los tres comandos. `dcctl bootstrap --escrow-file` registra dónde se escribió el artefacto y la comprobación del escrow de la clave raíz de la actualización mira allí, de modo que ya no informa de «sin escrow» para una instancia cuyo artefacto está en una ruta personalizada. Para una instancia creada antes, pase `--escrow-file` una vez a la actualización; ella registra la ruta.
 
-#### Un widget de símbolo SCADA {#v120-widgets}
+#### Tres widgets nuevos para tableros {#v120-widgets}
 
-Un nuevo widget **Símbolo SCADA** está en el menú **Añadir widget**, en Telemetría. Dibuja una bomba, válvula, depósito, motor, ventilador, tramo de tubería, sensor, interruptor o luz en el estado que le da una medición: en marcha, detenido o con falla, con el sentido del flujo en una tubería, en modo claro y oscuro. Se suma a los widgets existentes sin cambiar ninguno, y un tablero que no lo use no se ve afectado.
+Tres widgets son nuevos en el menú **Añadir widget**, todos en Telemetría. Se suman a los existentes sin cambiar ninguno, y un tablero que no los use no se ve afectado.
 
-No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md) para sus opciones.
+- **Cuadrícula de estado** muestra un mosaico por dispositivo de un grupo para una medición, coloreado según la banda de umbral de la última lectura de cada dispositivo. Un dispositivo sin lectura se dibuja hueco y se cuenta aparte; nunca se muestra como correcto.
+- **Línea de estados** muestra las mediciones de un dispositivo como carriles de estados discretos en el intervalo de tiempo del tablero, con los umbrales como estados. Cada tramo es el estado del promedio de un intervalo, y el widget lo indica.
+- **Símbolo SCADA** dibuja una bomba, válvula, depósito, motor, ventilador, tramo de tubería, sensor, interruptor o luz en el estado que le da una medición: en marcha, detenido o con falla, con el sentido del flujo en una tubería, en modo claro y oscuro. Se queda quieto para quien pide movimiento reducido.
+
+No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md) para las opciones de cada uno.
 
 #### Cambios de esquema y cómo volver atrás {#v120-going-back}
 

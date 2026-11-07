@@ -2605,7 +2605,9 @@ export declare const WIDGET_TYPES: readonly [
     'device-status',
     'online-doughnut',
     'history-table',
-    'scada-symbol'
+    'scada-symbol',
+    'status-grid',
+    'state-timeline'
 ];
 ```
 

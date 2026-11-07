@@ -589,5 +589,10 @@
   "widgetScadaSensor": "Sensor",
   "widgetScadaBreaker": "Interruptor",
   "widgetScadaLight": "Luz",
-  "widgetHintScadaOnAt": "El valor a partir del cual el símbolo está activo: una bomba o un motor en marcha, una válvula abierta, un interruptor cerrado, una luz encendida. Por defecto 1, para una señal que vale 1 encendida y 0 apagada. En una tubería, el menor flujo que cuenta: un flujo negativo muestra el sentido inverso. No lo usan el depósito ni el sensor. Un valor en una banda de umbral mayor o crítica muestra el símbolo con falla."
+  "widgetHintScadaOnAt": "El valor a partir del cual el símbolo está activo: una bomba o un motor en marcha, una válvula abierta, un interruptor cerrado, una luz encendida. Por defecto 1, para una señal que vale 1 encendida y 0 apagada. En una tubería, el menor flujo que cuenta: un flujo negativo muestra el sentido inverso. No lo usan el depósito ni el sensor. Un valor en una banda de umbral mayor o crítica muestra el símbolo con falla.",
+  "widgetTypeStatusGrid": "Cuadrícula de estado",
+  "widgetTypeStateTimeline": "Línea de estados",
+  "widgetLabelWorstFirst": "Los peores primero",
+  "widgetHintWorstFirst": "Coloca los dispositivos de la banda más grave arriba a la izquierda de la cuadrícula. Desactivado conserva el orden de la flota.",
+  "widgetHintStateThresholds": "Los estados, de menor a mayor. Cada fila inicia un estado en su valor que dura hasta la fila siguiente; asígnele una etiqueta (por ejemplo Detenido, En marcha, Falla) y un nivel que lo colorea. Por debajo de la primera fila el carril muestra Normal. Cada tramo es el estado del promedio de un intervalo de tiempo."
 }

@@ -885,6 +885,10 @@ A device profile can now carry a **payload decoder**: rules, written as expressi
 - **The test door is rate-limited per replica.** `testPayloadDecoder` allows 10 requests a second for each tenant, with a burst of 20, on each `device-management` replica, so a tenant's total rate rises with the replica count. A request over the limit is refused with `RATE_LIMITED`.
 - **During a rolling upgrade, publish a decoder only after every `device-management` replica runs this release.** A version published while an older replica handles the request is frozen without its decoder, because that replica does not know the field. After the rollout, check that `DeviceProfileVersion.decoder` is present on the version you published and, if it is not, publish again.
 
+#### The console shows a decoder's health {#v120-decoder-console}
+
+The **Decoder** tab of a device profile now shows the last 24 hours of the profile's decoder: how many uplinks were decoded, ignored, failed and not recorded (see [A failing payload decoder is held to a budget](#v120-decoder-budget)), and the failing uplinks kept as samples, each with a button that loads it into the test panel. A link opens the **Failed events** page filtered to `DECODE_FAILED`, and that page now offers the reason as a filter of its own and accepts it as `?reason=DECODE_FAILED`. Both parts of the tab need `device:write`, as the queries behind them do. Nothing needs doing to upgrade: this is the console only, and it uses the `payloadDecoderHealth` and `payloadDecoderSamples` queries already described.
+
 #### X.509 revocation lists {#v120-x509-crl}
 
 A tenant can now store a certificate authority's revocation list (CRL) against a trust anchor, and an anchor has a revocation mode. An anchor with no list and no manual revocation behaves exactly as it did.
@@ -895,12 +899,19 @@ A tenant can now store a certificate authority's revocation list (CRL) against a
 - **`REQUIRE_CURRENT` is opt-in per anchor.** The platform refuses to switch an anchor to it while the anchor holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused.
 - **During a rolling upgrade**, replicas that have not been replaced answer the broker's authorization callout without revocation checks, so a revocation is enforced everywhere only once the rollout completes. Going back to `v1.1.0` leaves the tables in place and unread: revocations stop being enforced.
 
+#### A client certificate in the C# SDK {#v120-sdk-x509}
+
+The C# SDK and the Unity package can now connect a device with an X.509 client certificate. This is additive: nothing changes for a session that does not set one, and no action is needed to upgrade.
+
+- **Set `MqttSessionOptions.ClientCertificate`** to a `MqttClientCertificate` loaded from a PFX or from PEM files. The session then connects with the username `{tenant}:@x509` and no password. See [Connect from the C# SDK](../guides/device-x509.md#csharp-sdk).
+- **Only RSA and ECDSA keys can be presented**, because .NET has no Ed25519. The broker address must be `ssl://`; a plaintext address is refused when the session is constructed.
+
 #### Revoking a certificate ends open sessions {#v120-x509-sessions}
 
 Revoking a certificate, by hand or by uploading a CRL that names it, now also ends the open sessions of the devices it affects. Before, a session already open stayed up until its token expired (up to 12 hours by default). Nothing changes for an instance that revokes nothing.
 
 - **A leaf certificate ends the sessions of the devices that hold it.** A revocation of a certificate authority is wider: when you revoke a CA by giving its certificate, or a CRL names an intermediate that a registered credential was seen to use, the sessions of **every device with a certificate credential under that trust anchor** are ended. Those devices reconnect on their own; the ones whose chain is still trusted are admitted at once. A call ends the sessions of up to about 5,000 devices itself, so a CA-level revocation can reconnect about that many at the same moment; the rest are ended in the background. **On an instance upgraded from an earlier release**, a credential registered before the upgrade has no recorded intermediate, so a CRL that adds an entry matching no stored credential also ends the sessions of those older credentials, in case the entry is an intermediate they use.
-- **Sessions are ended twice.** Once when the revocation commits, and again about 10 seconds later. The second pass catches a device that was being admitted at the instant of the revocation. A CA-level revocation therefore asks about the whole anchor twice.
+- **Sessions are ended twice.** Once when the revocation commits, and again about 10 seconds later. The second pass catches a device that was being admitted at the instant of the revocation. The delay is the fixed setting `deviceManagement.callout.revocation.resweepAfter` (default 10 seconds, up to 5 minutes); it must exceed the callout lookup timeout plus the broker's 5 second authorization timeout, or `device-management` refuses to start. A CA-level revocation therefore asks about the whole anchor twice.
 - **Revoking can take a while against a slow responder.** The call waits for the service that ends sessions (`event-sources`) for up to about 90 seconds. If it cannot confirm, the revocation still stands and new connections are refused; the result says `sessionsEnded: false`, the platform keeps retrying, and repeating the revoke or the upload asks again.
 - **During a rolling upgrade**, the new kicks carry a new reason that `event-sources` must understand. Until `event-sources` has been replaced, these kicks stay pending and are retried, so a revocation made in the middle of the upgrade ends the open sessions once `event-sources` has rolled. Pods of the previous release neither take these pending kicks nor remove them.
 
@@ -935,6 +946,10 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
 
+#### What an instance keeps outside its databases is classified {#v120-backup-classification}
+
+The [Disaster Recovery](./disaster-recovery.md#other-state) page now says what a restore owes every message stream, key-value bucket and the object store, in one table generated from the platform's own declarations. Three items need a backup of their own: the raw capture stream, the dead-letter stream of undeliverable outbound connector deliveries, and the object store that holds update artifacts and branding images. Everything else is rebuilt from the databases or is short-lived. This release changes no behaviour and ships no backup tool for the streams. It adds the page, a test that fails when a stream or bucket is added without a class, and the rule for the object store: take its copy after the database base backup it belongs with.
+
 #### Other changes in this release {#v120-other-changes}
 
 Nothing here needs action beyond the two `dcctl` items in the list above. Each is a fix or an addition to something that already shipped.
@@ -956,11 +971,15 @@ Nothing here needs action beyond the two `dcctl` items in the list above. Each i
 - **Infrastructure.** With `nats_mqtt_capable_users` unset, the OpenTofu broker module no longer writes a null `allowed_connection_types` that the broker refused; the certificate healer for the event store's backups watches the operator's configured namespace.
 - **`dcctl upgrade` accepts `--yes` (`-y`), as `dcctl install` and `dcctl bootstrap` do, and finds an escrow written with `--escrow-file`.** `--yes` assumes yes for prompts; an upgrade asks none, so it changes nothing, and a script can now pass it to all three. `dcctl bootstrap --escrow-file` records where the artifact was written, and the upgrade's root-key escrow check looks there, so it no longer reports "no escrow" for an instance whose artifact is at a custom path. For an instance bootstrapped earlier, give the upgrade `--escrow-file` once; it records the path.
 
-#### A scada symbol widget {#v120-widgets}
+#### Three new dashboard widgets {#v120-widgets}
 
-A new **Scada symbol** widget is in the **Add widget** menu under Telemetry. It draws a pump, valve, tank, motor, fan, pipe segment, sensor, breaker or light in the state one measurement puts it in: running, stopped or faulted, with a pipe's flow direction, in light and dark. It adds to the existing widgets and changes none of them, and a dashboard that does not use it is unaffected.
+Three widgets are new in the **Add widget** menu, all under Telemetry. They add to the existing widgets and change none of them, and a dashboard that does not use them is unaffected.
 
-Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widget) for its options.
+- **Status grid** shows one tile per device of a group for one measurement, coloured by the threshold band of each device's latest reading. A device with no reading is drawn hollow and counted apart; it is never shown as OK.
+- **State timeline** shows one device's measurements as lanes of discrete states over the dashboard's time range, with the thresholds as the states. Each stretch is the state of a time bucket's average, and the widget says so.
+- **Scada symbol** draws a pump, valve, tank, motor, fan, pipe segment, sensor, breaker or light in the state one measurement puts it in: running, stopped or faulted, with a pipe's flow direction, in light and dark. It stands still for a viewer who asked for reduced motion.
+
+Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widget) for the options of each.
 
 #### Schema changes and going back {#v120-going-back}
 
