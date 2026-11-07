@@ -84,6 +84,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'device-status': 'widgets/device-status.tsx',
   'online-doughnut': 'widgets/online-doughnut.tsx',
   'history-table': 'widgets/history-table.tsx',
+  'scada-symbol': 'widgets/scada-symbol.tsx',
   'status-grid': 'widgets/status-grid.tsx',
   'state-timeline': 'widgets/state-timeline.tsx',
 };
@@ -131,7 +132,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
   // The fleet feed reads it for the bar chart's one bar per device.
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart', 'fleet-count', 'status-grid', 'timeseries-chart'],
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'scada-symbol', 'stat-card', 'bar-chart', 'fleet-count', 'status-grid', 'timeseries-chart'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive, and editor-clipboard.ts to carry it
   // across a paste.
@@ -466,6 +467,20 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     pageSize: 25,
     staleAfterSeconds: 900,
     windowSeconds: 21600,
+  },
+  'scada-symbol': {
+    title: 'Feed pump',
+    measurement: 'running',
+    symbol: 'tank',
+    onAt: 1,
+    orientation: 'vertical',
+    min: 0,
+    max: 5000,
+    unit: 'L',
+    precision: 0,
+    thresholds: [{ value: 4500, level: 'critical', label: 'Overfull' }],
+    staleAfterSeconds: 300,
+    window: 300,
   },
   'status-grid': {
     title: 'Pump temperatures',

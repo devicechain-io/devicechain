@@ -971,12 +971,13 @@ Nothing here needs action beyond the two `dcctl` items in the list above. Each i
 - **Infrastructure.** With `nats_mqtt_capable_users` unset, the OpenTofu broker module no longer writes a null `allowed_connection_types` that the broker refused; the certificate healer for the event store's backups watches the operator's configured namespace.
 - **`dcctl upgrade` accepts `--yes` (`-y`), as `dcctl install` and `dcctl bootstrap` do, and finds an escrow written with `--escrow-file`.** `--yes` assumes yes for prompts; an upgrade asks none, so it changes nothing, and a script can now pass it to all three. `dcctl bootstrap --escrow-file` records where the artifact was written, and the upgrade's root-key escrow check looks there, so it no longer reports "no escrow" for an instance whose artifact is at a custom path. For an instance bootstrapped earlier, give the upgrade `--escrow-file` once; it records the path.
 
-#### Two new dashboard widgets {#v120-widgets}
+#### Three new dashboard widgets {#v120-widgets}
 
-Two widgets are new in the **Add widget** menu, both under Telemetry. They add to the existing widgets and change none of them, and a dashboard that does not use them is unaffected.
+Three widgets are new in the **Add widget** menu, all under Telemetry. They add to the existing widgets and change none of them, and a dashboard that does not use them is unaffected.
 
 - **Status grid** shows one tile per device of a group for one measurement, coloured by the threshold band of each device's latest reading. A device with no reading is drawn hollow and counted apart; it is never shown as OK.
 - **State timeline** shows one device's measurements as lanes of discrete states over the dashboard's time range, with the thresholds as the states. Each stretch is the state of a time bucket's average, and the widget says so.
+- **Scada symbol** draws a pump, valve, tank, motor, fan, pipe segment, sensor, breaker or light in the state one measurement puts it in: running, stopped or faulted, with a pipe's flow direction, in light and dark. It stands still for a viewer who asked for reduced motion.
 
 Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widget) for the options of each.
 

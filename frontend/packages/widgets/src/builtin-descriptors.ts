@@ -1353,6 +1353,61 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 6, rows: 5 }, minSpan: { cols: 4, rows: 3 } },
   }),
 
+  // A process symbol (pump, valve, tank, motor, fan, pipe, sensor, breaker, light) in the state one
+  // measurement puts it in.
+  'scada-symbol': defineRuntimeDescriptor({
+    id: 'scada-symbol',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Scada symbol', category: 'Telemetry', titleId: 'widgetTypeScadaSymbol', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      symbol: {
+        kind: 'enum',
+        values: ['pump', 'valve', 'tank', 'motor', 'fan', 'pipe', 'sensor', 'breaker', 'light'],
+        labelId: 'widgetLabelScadaSymbol',
+        helpId: 'widgetHintScadaSymbol',
+        valueLabelIds: {
+          pump: 'widgetScadaPump',
+          valve: 'widgetScadaValve',
+          tank: 'widgetScadaTank',
+          motor: 'widgetScadaMotor',
+          fan: 'widgetScadaFan',
+          pipe: 'widgetScadaPipe',
+          sensor: 'widgetScadaSensor',
+          breaker: 'widgetScadaBreaker',
+          light: 'widgetScadaLight',
+        },
+        placeholderId: 'widgetPlaceholderDefault',
+      },
+      onAt: { kind: 'number', labelId: 'widgetLabelOnAt', helpId: 'widgetHintScadaOnAt' },
+      orientation: {
+        kind: 'enum',
+        values: ['horizontal', 'vertical'],
+        labelId: 'widgetLabelOrientation',
+        valueLabelIds: { horizontal: 'widgetOrientationHorizontal', vertical: 'widgetOrientationVertical' },
+        placeholderId: 'widgetPlaceholderDefault',
+      },
+      min: { kind: 'number', labelId: 'widgetLabelMin' },
+      max: { kind: 'number', labelId: 'widgetLabelMax' },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+    defaults: { title: 'Scada symbol' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 8, rows: 8 } },
+  }),
+
   // A tile per device of a fleet for one measurement, coloured by its threshold band.
   'status-grid': defineRuntimeDescriptor({
     id: 'status-grid',

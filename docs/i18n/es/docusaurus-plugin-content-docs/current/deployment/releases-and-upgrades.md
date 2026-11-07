@@ -1016,12 +1016,13 @@ Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista an
 - **Infraestructura.** Con `nats_mqtt_capable_users` sin definir, el módulo OpenTofu del broker ya no escribe un `allowed_connection_types` nulo que el broker rechazaba; el reparador de certificados de las copias de seguridad del almacén de eventos vigila el espacio de nombres configurado del operador.
 - **`dcctl upgrade` acepta `--yes` (`-y`), igual que `dcctl install` y `dcctl bootstrap`, y encuentra un escrow escrito con `--escrow-file`.** `--yes` da por respondidas con sí las preguntas; una actualización no hace ninguna, así que no cambia nada, y un script ya puede pasarlo a los tres comandos. `dcctl bootstrap --escrow-file` registra dónde se escribió el artefacto y la comprobación del escrow de la clave raíz de la actualización mira allí, de modo que ya no informa de «sin escrow» para una instancia cuyo artefacto está en una ruta personalizada. Para una instancia creada antes, pase `--escrow-file` una vez a la actualización; ella registra la ruta.
 
-#### Dos widgets nuevos para tableros {#v120-widgets}
+#### Tres widgets nuevos para tableros {#v120-widgets}
 
-Dos widgets son nuevos en el menú **Añadir widget**, ambos en Telemetría. Se suman a los existentes sin cambiar ninguno, y un tablero que no los use no se ve afectado.
+Tres widgets son nuevos en el menú **Añadir widget**, todos en Telemetría. Se suman a los existentes sin cambiar ninguno, y un tablero que no los use no se ve afectado.
 
 - **Cuadrícula de estado** muestra un mosaico por dispositivo de un grupo para una medición, coloreado según la banda de umbral de la última lectura de cada dispositivo. Un dispositivo sin lectura se dibuja hueco y se cuenta aparte; nunca se muestra como correcto.
 - **Línea de estados** muestra las mediciones de un dispositivo como carriles de estados discretos en el intervalo de tiempo del tablero, con los umbrales como estados. Cada tramo es el estado del promedio de un intervalo, y el widget lo indica.
+- **Símbolo SCADA** dibuja una bomba, válvula, depósito, motor, ventilador, tramo de tubería, sensor, interruptor o luz en el estado que le da una medición: en marcha, detenido o con falla, con el sentido del flujo en una tubería, en modo claro y oscuro. Se queda quieto para quien pide movimiento reducido.
 
 No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md) para las opciones de cada uno.
 

@@ -101,6 +101,8 @@ const LEGACY_LABEL: Record<string, string> = {
   maxSeries: 'widgetLabelMaxSeries',
   // Appended with the history table.
   oldestFirst: 'widgetLabelOldestFirst',
+  // Appended with the process symbol.
+  symbol: 'widgetLabelScadaSymbol',
   // Appended with the status grid.
   worstFirst: 'widgetLabelWorstFirst',
 };
@@ -154,6 +156,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   markCommands: 'widgetHintMarkCommands',
   maxSeries: 'widgetHintMaxSeries',
   oldestFirst: null,
+  symbol: 'widgetHintScadaSymbol',
   worstFirst: 'widgetHintWorstFirst',
 };
 
@@ -188,6 +191,15 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'style:thermometer': 'widgetLinearStyleThermometer',
   'orientation:horizontal': 'widgetOrientationHorizontal',
   'orientation:vertical': 'widgetOrientationVertical',
+  'symbol:pump': 'widgetScadaPump',
+  'symbol:valve': 'widgetScadaValve',
+  'symbol:tank': 'widgetScadaTank',
+  'symbol:motor': 'widgetScadaMotor',
+  'symbol:fan': 'widgetScadaFan',
+  'symbol:pipe': 'widgetScadaPipe',
+  'symbol:sensor': 'widgetScadaSensor',
+  'symbol:breaker': 'widgetScadaBreaker',
+  'symbol:light': 'widgetScadaLight',
   'readout:value': 'widgetReadoutValue',
   'readout:percent': 'widgetReadoutPercent',
   'stat:avg': 'widgetStatAvg',
@@ -217,6 +229,7 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   fit: 'widgetPlaceholderDefault',
   style: 'widgetPlaceholderDefault',
   orientation: 'widgetPlaceholderDefault',
+  symbol: 'widgetPlaceholderDefault',
   readout: 'widgetPlaceholderDefault',
   stat: 'widgetPlaceholderDefault',
   sort: 'widgetPlaceholderDefault',
@@ -241,6 +254,8 @@ const LABEL_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
 const HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { groupBy: 'widgetHintAlarmGroupBy' },
   'timeseries-chart': { groupBy: 'widgetHintSeriesBy' },
+  // The process symbol's "on" covers a pump, a valve, a breaker and a light, not only a light.
+  'scada-symbol': { onAt: 'widgetHintScadaOnAt' },
 };
 const ENUM_VALUE_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { 'groupBy:none': 'widgetAlarmGroupByNone', 'groupBy:deviceType': 'widgetAlarmGroupByDeviceType' },

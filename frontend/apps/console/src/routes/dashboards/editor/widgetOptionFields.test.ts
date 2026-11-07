@@ -47,7 +47,7 @@ function wordingKeys(): { where: string; key: string }[] {
 
 const KEYS = wordingKeys();
 
-const SAME_IN_EVERY_LOCALE: ReadonlySet<string> = new Set(['widgetMenuDetail', 'widgetCategoryControl']);
+const SAME_IN_EVERY_LOCALE: ReadonlySet<string> = new Set(['widgetMenuDetail', 'widgetCategoryControl', 'widgetScadaMotor', 'widgetScadaSensor']);
 
 describe('the config panel wording', () => {
   it('resolves to a real string in every locale the console ships', () => {
@@ -74,7 +74,7 @@ describe('the config panel wording', () => {
         const en = i18n.getResource('en', NS, key);
         const here = i18n.getResource(locale.code, NS, key);
         // The few strings that are legitimately identical in the two languages: the version
-        // detail line is a template of ids and numbers, and "Control" is the same word.
+        // detail line is a template of ids and numbers, and "Control", "Motor" and "Sensor" are the same word.
         if (SAME_IN_EVERY_LOCALE.has(key)) continue;
         expect(here, `${locale.code}: ${where} is the English string verbatim`).not.toBe(en);
       }
