@@ -1665,6 +1665,10 @@ type natsReader struct {
 	// deliverLookback, when positive, creates the durable at a start time that far in the past
 	// on first creation (DeliverByStartTimePolicy) — see ReaderWithDeliverLookback.
 	deliverLookback time.Duration
+	// pinned is the delivery policy the durable actually carries (read back, or chosen at its
+	// creation) once pinLookback has settled it; consumerConfig applies it so every later
+	// UpdateConsumer/AddConsumer of this reader repeats the immutable fields unchanged.
+	pinned *pinnedDelivery
 	// ackFloorStart, when set, makes the durable an AckAll consumer created at the position
 	// it returns — see ReaderWithAckFloor.
 	ackFloorStart func(ctx context.Context) (uint64, error)
@@ -2019,30 +2023,37 @@ func (r *natsReader) consumerConfig() *nats.ConsumerConfig {
 	if r.deliverNew {
 		cfg.DeliverPolicy = nats.DeliverNewPolicy
 	}
+	if p := r.pinned; p != nil {
+		cfg.DeliverPolicy, cfg.OptStartTime, cfg.OptStartSeq = p.policy, p.start, p.seq
+	}
 	return cfg
 }
 
-// pinLookback applies ReaderWithDeliverLookback to a consumer config. A durable that already
+// pinLookback settles ReaderWithDeliverLookback's delivery policy. A durable that already
 // exists keeps the delivery policy it was created with (read back from the server); only a
 // first creation computes a start time from now.
-func (r *natsReader) pinLookback(cfg *nats.ConsumerConfig) error {
+func (r *natsReader) pinLookback() error {
 	if r.deliverLookback <= 0 {
 		return nil
 	}
 	info, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable, nats.Context(r.nmgr.opContext()))
 	switch {
 	case err == nil:
-		cfg.DeliverPolicy = info.Config.DeliverPolicy
-		cfg.OptStartTime = info.Config.OptStartTime
-		cfg.OptStartSeq = info.Config.OptStartSeq
+		r.pinned = &pinnedDelivery{policy: info.Config.DeliverPolicy, start: info.Config.OptStartTime, seq: info.Config.OptStartSeq}
 	case errors.Is(err, nats.ErrConsumerNotFound):
 		start := time.Now().Add(-r.deliverLookback)
-		cfg.DeliverPolicy = nats.DeliverByStartTimePolicy
-		cfg.OptStartTime = &start
+		r.pinned = &pinnedDelivery{policy: nats.DeliverByStartTimePolicy, start: &start}
 	default:
 		return err
 	}
 	return nil
+}
+
+// pinnedDelivery is a durable's immutable delivery fields.
+type pinnedDelivery struct {
+	policy nats.DeliverPolicy
+	start  *time.Time
+	seq    uint64
 }
 
 // bind (re)creates the durable consumer if needed and binds a pull subscription to
@@ -2091,11 +2102,19 @@ func (r *natsReader) bindLocked() error {
 		// does (see opContext): a stop abandons a create or update still in flight rather than
 		// waiting out the client's request timeout on each call.
 		r.retireLegacyCaptureDurable()
-		cfg := r.consumerConfig()
-		if err := r.pinLookback(cfg); err != nil {
+		if err := r.pinLookback(); err != nil {
 			return err
 		}
-		if _, err := r.nmgr.js.AddConsumer(r.stream, cfg, nats.Context(r.nmgr.opContext())); err != nil {
+		_, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext()))
+		if err != nil && r.deliverLookback > 0 && errors.Is(err, nats.ErrConsumerNameAlreadyInUse) {
+			// Another replica created the durable between our lookup and our create, with its own
+			// start time. Adopt the winner's policy rather than fight over an immutable field.
+			r.pinned = nil
+			if err = r.pinLookback(); err == nil {
+				_, err = r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext()))
+			}
+		}
+		if err != nil {
 			return err
 		}
 		if err := r.reconcileFilterSubject(); err != nil {

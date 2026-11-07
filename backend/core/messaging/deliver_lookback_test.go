@@ -115,6 +115,18 @@ func TestDeliverLookbackStartsInsideTheWindowAndSurvivesARestart(t *testing.T) {
 		t.Fatalf("a restarted reader could not bind its existing durable: %v", err)
 	}
 	reader = r
+	// Later UpdateConsumer/AddConsumer calls (a filter reconcile, a recreate) build their config
+	// from the reader: they must repeat the durable's own immutable delivery fields, or the
+	// server refuses the change.
+	info, err := replacement.js.ConsumerInfo(streamName, durable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc := r.(*natsReader).consumerConfig()
+	if cc.DeliverPolicy != info.Config.DeliverPolicy || cc.OptStartTime == nil || !cc.OptStartTime.Equal(*info.Config.OptStartTime) {
+		t.Fatalf("the reader's config (%v, %v) does not carry the durable's pinned policy (%v, %v)",
+			cc.DeliverPolicy, cc.OptStartTime, info.Config.DeliverPolicy, info.Config.OptStartTime)
+	}
 	if got, _ := read(); got != "during-the-restart" {
 		t.Fatalf("replacement read %q, want %q", got, "during-the-restart")
 	}
