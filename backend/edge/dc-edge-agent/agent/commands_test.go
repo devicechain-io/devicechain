@@ -301,6 +301,9 @@ func TestChildMustQuoteTheNonceItWasGiven(t *testing.T) {
 	respond(child, t, "dev1", `{"commandToken":"cmd-1","success":false,"dispatchNonce":"n1"}`)
 	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.respRefused.Load() == 3 })
 	r.noResponse(time.Second)
+	if n := r.refusedReason("command_responses_refused_total", "duplicate"); n != 1 {
+		t.Errorf("duplicate refusals = %d, want 1", n)
+	}
 }
 
 // TestRedispatchAfterAnswerReplaysTheStoredAnswer: the child already answered; the cloud
@@ -905,4 +908,51 @@ func TestASyntheticAnswerForAWaitingCommandIsRefused(t *testing.T) {
 	if st := r.ledger("cmd-1").State; st == stAnswered {
 		t.Error("a stray synthetic answer settled a waiting command")
 	}
+}
+
+// refusedReason reads one labelled refusal counter from the metrics endpoint.
+func (r *cmdRig) refusedReason(metric, reason string) int {
+	r.t.Helper()
+	_, body := httpGet(r.t, "http://"+r.a.metrics.addr+"/metrics")
+	prefix := fmt.Sprintf("devicechain_edge_%s{reason=%q} ", metric, reason)
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			var n int
+			fmt.Sscanf(strings.TrimPrefix(line, prefix), "%d", &n)
+			return n
+		}
+	}
+	r.t.Fatalf("metric %s{reason=%q} not exported", metric, reason)
+	return -1
+}
+
+// TestLocalClientCannotForgeAnAnswer: a local MQTT client can publish to the agent's own
+// answer subject, so the seal is the only thing standing between it and an answer the agent
+// never made. The command here is genuinely delivered and waiting, with a correct nonce.
+func TestLocalClientCannotForgeAnAnswer(t *testing.T) {
+	r := newCmdRig(t, &fakeAdapter{}, nil)
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.delivered.Load() == 1 })
+
+	evil := mqttConnect(t, r.agentAddr, "evil")
+	evil.Publish("$EDGE/CMD/OUT/dev1", 1, false, []byte(`{"commandToken":"cmd-1","success":true,"dispatchNonce":"n1"}`)).WaitTimeout(3 * time.Second)
+	waitUntil(t, 10*time.Second, func() bool { return r.refusedReason("command_responses_refused_total", "forged") == 1 })
+	r.noResponse(time.Second)
+	if st := r.ledger("cmd-1").State; st == stAnswered {
+		t.Error("a forged answer settled the command")
+	}
+}
+
+// TestAChildCannotAnswerACommandItWasNeverGiven: the command is queued but has not been handed
+// to any adapter; an answer for it is a fabrication and is refused for that reason.
+func TestAChildCannotAnswerACommandItWasNeverGiven(t *testing.T) {
+	fa := &fakeAdapter{fn: func(int, string, []byte) error { return fmt.Errorf("%w: down", errNotSubmitted) }}
+	r := newCmdRig(t, fa, nil)
+	child := r.child("dev1")
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	waitUntil(t, 10*time.Second, func() bool { return fa.count() >= 1 })
+
+	respond(child, t, "dev1", `{"commandToken":"cmd-1","success":true,"dispatchNonce":"n1"}`)
+	waitUntil(t, 10*time.Second, func() bool { return r.refusedReason("command_responses_refused_total", "not_dispatched") >= 1 })
+	r.noResponse(time.Second)
 }
