@@ -1532,6 +1532,17 @@ jobs:
       - name: Every shipped alert is documented, in every locale
         run: hack/check-docs-alert-coverage.sh
 
+      # An alert that reaches a person at 3 a.m. has to say what to do. Every rule carries a
+      # runbook_url that lands on its entry in the published alert runbook, and the runbook (in
+      # every locale) is generated from the rules, so neither can drift from the other. The
+      # self-test plants each defect alone: a rule with no link, a link at the wrong anchor, a
+      # stale page, a missing translation, an alert with no entry, and no rules at all.
+      - name: Alert runbook guard self-test
+        run: hack/check-alert-runbooks.sh --self-test
+
+      - name: Every shipped alert links to its runbook entry
+        run: hack/check-alert-runbooks.sh
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 26

@@ -215,6 +215,74 @@ sesión de administrador de Grafana, su Service `ClusterIP` y las carpetas de pa
 cambian. Prometheus conserva sus métricas en un clúster con volumen persistente y arranca vacío en un
 clúster local, que las guarda solo en el disco del nodo.
 
+## Enrutar las alertas a una persona {#alert-routing}
+
+La plataforma incluye reglas de alerta que vigilan la pérdida de datos, los consumidores atascados,
+las copias de seguridad que fallan y los certificados a punto de caducar. Una regla solo sirve si
+alguien se entera cuando se dispara, y de fábrica nadie se entera: Alertmanager arranca con un
+receptor que descarta todas las alertas. Una instancia en ese estado lo indica.
+`dcctl instances list` muestra `ALERTS NOT ROUTED` junto a ella, y la condición `AlertsRouted` de la
+instancia es `False`. La condición no hace que la instancia deje de estar lista.
+
+Dé un receptor a Alertmanager al instalar, o más tarde en cualquier instancia:
+
+```bash
+# Un webhook: los relés compatibles con Slack, PagerDuty, Opsgenie y la mayoría de las herramientas de incidentes lo aceptan.
+dcctl install --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+
+# Correo electrónico. La contraseña se lee de un archivo para que no quede en el historial del shell.
+dcctl install \
+  --alert-email oncall@example.com --alert-email backup@example.com \
+  --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
+  --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
+
+# Cambiarlo más tarde sin tocar los requisitos previos del clúster.
+dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/services/T000/B000/YYYY
+```
+
+- **Se envían todas las alertas**: `critical`, `warning` e `info`. Una alerta `critical` silencia la
+  `warning` de la misma alerta y el mismo namespace.
+- **Las URL y la contraseña SMTP se guardan en un Secret** (`dc-alertmanager-config`, en el namespace
+  `monitoring`), no en el estado de la infraestructura de su máquina. La instancia solo registra qué
+  tipos de receptor existen.
+- **Indicar cualquier opción `--alert-*` vuelve a declarar todo el enrutamiento.** `--alert-email`
+  por sí sola elimina un webhook configurado antes. Una ejecución sin ninguna opción `--alert-*` deja
+  el enrutamiento como está, de modo que volver a ejecutar `dcctl install` para cambiar otra cosa no
+  lo deshace. `--clear-alert-routing` lo elimina.
+- **`dcctl upgrade` solo puede cambiar un clúster que `dcctl install` haya preparado.** Un clúster
+  instalado con una versión anterior debe ejecutar `dcctl install` una vez, con las mismas opciones
+  de antes más las de alertas. Aplica los requisitos previos del clúster en el sitio.
+- **Sin la pila de monitoreo no hay enrutamiento.** Con `--no-monitoring` la instancia no genera
+  reglas de alerta y se rechazan las opciones `--alert-*`.
+
+### Saber cuándo se ha detenido el propio sistema de alertas
+
+Si Alertmanager está caído o no alcanza su receptor, no llega ninguna alerta, y un clúster sin
+alertas se ve igual que uno sano. Para esto existe la alerta `Watchdog`, que se dispara siempre, por
+diseño. Envíela a un servicio de interruptor de hombre muerto (Healthchecks, Dead Man's Snitch,
+Cronitor) que le avise cuando los avisos dejen de llegar:
+
+```bash
+dcctl install --alert-webhook https://hooks.example.com/... \
+  --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
+```
+
+El Watchdog se envía a su propio receptor una vez por minuto y nunca al receptor que lee una persona.
+Sin `--alert-watchdog-webhook` se descarta, y la condición `AlertsRouted` indica que un sistema de
+alertas en silencio pasaría inadvertido.
+
+### Receptores más allá del webhook y el correo
+
+`--alert-config <archivo>` usa su propia configuración de Alertmanager tal cual. Úsela para receptores
+de Slack, PagerDuty, Opsgenie o Teams, o para enrutar por etiquetas. No se puede combinar con las
+demás opciones `--alert-*`. `dcctl` comprueba que el archivo se analiza, que cada ruta nombra un
+receptor definido en el archivo y si algún receptor entrega a alguna parte. No envía ningún mensaje
+de prueba. Enrute la alerta `Watchdog` dentro de su archivo: `dcctl` la cuenta como enrutada cuando
+una ruta selecciona `alertname = "Watchdog"` y su receptor entrega.
+
+Cada alerta incluye un `runbook_url` que abre su entrada en la [Guía de alertas](./alert-runbook.md),
+de modo que una notificación enlaza directamente con lo que significa y lo que hay que hacer.
+
 ## Iniciar sesión en Grafana
 
 Grafana usa su propio **inicio de sesión de administrador**. Grafana no está integrado con el

@@ -78,6 +78,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#externalmqttsourcenotreadbyonepod"
             summary: "An external MQTT source is not being read by exactly one pod"
             description: "External MQTT source {{ "{{ $labels.source }}" }} has been read by {{ "{{ $value }}" }} event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker."
         # One event per failed publish, lost: that transport is at-most-once and never retries.
@@ -92,6 +93,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#externalmqttsourcelosingevents"
             summary: "An external MQTT source is losing events it has already read"
             description: "For at least 10 minutes, external MQTT source {{ "{{ $labels.source }}" }} has been losing events: they were read from your broker and decoded, but publishing them to the platform's event stream failed. That source does not retry, and your broker was already told they arrived, so each one is gone. The cause is on the platform's side, not your broker's: its message broker is refusing or not answering publishes. Check the platform's message broker, and the event-sources log for 'is lost: this transport does not retry', which names the source and tenant of each."
         # NO `for`, unlike the sibling ingest-loss alerts, and that is the point of this one. A
@@ -107,6 +109,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttingestshedafteracknowledgement"
             summary: "MQTT messages were dropped at the ingest ceiling after the device was told they arrived"
             description: "In the last 10 minutes, {{ "{{ $value }}" }} messages from MQTT source {{ "{{ $labels.source }}" }} were dropped at their tenant's ingest ceiling. The broker had already acknowledged each one to its device (PUBACK), so the device will not resend it: these messages are lost, not deferred. Either a tenant is sending above its ceiling, or the platform stalled briefly and the messages queued behind it arrived together; the shed counters carry the shed class but not the tenant, so raise event-sources to debug logging to name the tenant. Compare devicechain_eventsources_total_msg_rate_limited and total_msg_reading_limited, check whether the tenant's ceiling (ingestReadingsPerSecond, ingestBurst) matches what its devices send, and look at the platform's message broker for a stall (a log line saying an internal subscription took too long) at the same time."
         # `for` equals the increase window, as for the sibling ingest-loss alerts: a failure
@@ -119,6 +122,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokerpresencelosingtransitions"
             summary: "Broker presence transitions are not reaching the event stream"
             description: "For at least 10 minutes, event-sources has been failing to write device connects and disconnects to the platform's event stream ({{ "{{ $value }}" }} in the last 10 minutes). The broker does not resend connection notices, so each one is lost until the next reconciliation pass (every 5 minutes by default) puts the device right; until then a device can read offline while it is connected, or the other way round, and a reconnecting device's held commands are not released early. The cause is the platform's message broker refusing or not answering publishes. Check it, and the event-sources log for 'Failed to emit a broker presence transition', which names each device."
         # Both arms by durable. The gauge is per pod; `min` because any pod that could not
@@ -129,6 +133,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttfailcloseddurablemissing"
             summary: "A platform durable on the MQTT message store is missing"
             description: "Durable {{ "{{ $labels.durable }}" }} on the MQTT gateway's message store has been missing within the last 10 minutes. While it is missing, the broker acknowledges device QoS 1 publishes of its kind without keeping them, so each one is lost although the device was told it arrived. event-sources creates it again within 30 seconds, and this alert clears 10 minutes after the last time it was found missing; while it cannot be created, the alert stays. A rolling update does not remove a durable, so it does not raise this alert. Find what deleted it (a command run against the broker's consumers, or a tool that manages them), and check the event-sources log for 'platform durable on the MQTT message store'."
         # Instance-wide: the store is one per broker account.
@@ -138,6 +143,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttfailclosedstorenotasdeclared"
             summary: "The MQTT message store is not as the platform declared it"
             description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."
         # Per stream, `max` across pods: any pod that cannot bound it leaves it unbounded.
@@ -148,6 +154,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mqttgatewaystreamunbounded"
             summary: "An MQTT gateway stream has no size limit"
             description: "For at least 10 minutes the broker's MQTT gateway stream {{ "{{ $labels.stream }}" }} has had no size limit and event-sources could not set one. The broker creates these streams without a limit when the first MQTT device connects, and an unbounded one can fill the broker's storage and take the whole instance down. Check that the broker has storage free to reserve the limit and look in the event-sources log for 'Could not bound the MQTT gateway'. It clears on its own once the limit is set."
         # Inbound integrations (a LoRaWAN network server or a webhook posting under a bearer token).
@@ -165,6 +172,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationauthfailuressustained"
             summary: "Requests to an integration are being refused for a bad token"
             description: "For at least 10 minutes, more than 30 requests in each 10 minutes to an inbound integration have been refused because the bearer token was wrong, the integration does not exist, or the integration's failure budget was spent. If a sender stopped delivering after you rotated an integration's token, update the token in the network server or webhook. If nothing of yours changed, someone who knows the URL is trying tokens: the integration's 'last authentication failure' time in the console shows which one, and the sprayed integration keeps serving senders that are already known."
         # A tenant over its ingest ceiling is answered 202 on these routes, because a refusal would
@@ -179,6 +187,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationshedaccepted"
             summary: "Integration uplinks are being accepted and discarded at a tenant's ingest ceiling"
             description: "In the last 10 minutes, uplinks from inbound integrations were discarded because a tenant is over its ingest ceiling. They were answered 202 so the network server would not suspend its webhook, which means the sender believes they arrived and they did not. Raise the tenant's ingest ceiling, or reduce what the integration sends."
         # An uplink the network server forwarded without decoding is accepted and stores nothing: the
@@ -191,6 +200,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationundecodedhigh"
             summary: "Most integration uplinks carry nothing to store"
             description: "For at least 30 minutes, more than half of the uplinks arriving over inbound integrations have had no decoded values to store. The network server forwards the raw frame but the device profile there has no payload codec configured (or the codec returns nothing), or a generic sender posts only text. Configure the codec in the network server; the integration's 'last undecoded' sample in the console shows a frame it could not read."
 {{- end }}
