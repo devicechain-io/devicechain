@@ -1,0 +1,25 @@
+# vocabgen pinned inputs: name  sha256  url
+#
+# Every line is a decision. An upstream file that changes under its URL fails vocabgen
+# on the digest; read the diff before changing one. Commit-pinned or tag-pinned URLs only.
+brick-ttl b65720b7b9b64c646745c689777e6138c0d59ce0088df0aeb78fbd444d04d8e7 https://github.com/BrickSchema/Brick/releases/download/v1.4.4/Brick.ttl
+brick-license 3f4d165cc1c2b234d4bca6462971cb318ef525961cc688b3280a96b2fde932af https://raw.githubusercontent.com/BrickSchema/Brick/v1.4.4/LICENSE
+saref-core-ttl 28189acd8cfb49bf6b7e5709275a1162d943576f643b2cffdccfe20cc00ad701 https://saref.etsi.org/core/v4.1.1/saref.ttl
+saref4city-ttl 5fe091ffb23f96b5cc6d6c660c3e175342c1e8e73079812b1cce2a1a356e6403 https://saref.etsi.org/saref4city/v2.1.1/saref4city.ttl
+saref4bldg-ttl 589fdf212e82886bac714a484495e0513156d5195e5108395c2d22b3bd404d53 https://saref.etsi.org/saref4bldg/v2.1.1/saref4bldg.ttl
+ngsi-ld-core-context d751b5db4509071dc11b26342cfa36c05d18f85ea15554a4bac71a0705697905 https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld
+qudt-units-ttl 5e84f3e10ae6a3c535e2e7616dc2affee09dd52bea5229822188730493fd4418 https://raw.githubusercontent.com/qudt/qudt-public-repo/v3.5.3/src/main/rdf/vocab/unit/VOCAB_QUDT-UNITS-ALL.ttl
+sdm-streetlighting-context d692af0d46f7ed056cc2d6b916646c72621e4dd882266ebe21c058e9f120ad84 https://raw.githubusercontent.com/smart-data-models/dataModel.Streetlighting/e272fafc786f9dd2ab882dd104b5a42a17c13037/context.jsonld
+sdm-parking-context d8ac9b0277865366f2dc755097033edd28d313f80dcd7bb27d99b38cb7baa1ee https://raw.githubusercontent.com/smart-data-models/dataModel.Parking/5601a5ac5583522dcf376aedb76b193fb0304662/context.jsonld
+sdm-environment-context 106d9904d83cbaf95e184a1624b3d126c19e23d69545e237409cf6de80bfbd8e https://raw.githubusercontent.com/smart-data-models/dataModel.Environment/2f048407ccc243df67aee7e1b1ca5470092d743e/context.jsonld
+sdm-schema-Streetlight 95dab9a3eab1314fe47fcab0c29ce14a8a02e900d38e95156732ffa0ea23e168 https://raw.githubusercontent.com/smart-data-models/dataModel.Streetlighting/e272fafc786f9dd2ab882dd104b5a42a17c13037/Streetlight/schema.json
+sdm-schema-StreetlightControlCabinet d3e116b23b38050ce1a3e59c02d5996e324b513a95c6361f633e1eed8c1ee92a https://raw.githubusercontent.com/smart-data-models/dataModel.Streetlighting/e272fafc786f9dd2ab882dd104b5a42a17c13037/StreetlightControlCabinet/schema.json
+sdm-schema-StreetlightFeeder 91ce67a1457f65874fda63bbecffd3ad9f7b0531040c183213955e937b525e7b https://raw.githubusercontent.com/smart-data-models/dataModel.Streetlighting/e272fafc786f9dd2ab882dd104b5a42a17c13037/StreetlightFeeder/schema.json
+sdm-schema-StreetlightGroup 4704bcadc7d67bf9ff0ef425fe76c99c098107b2653dc7634889a0528dde854a https://raw.githubusercontent.com/smart-data-models/dataModel.Streetlighting/e272fafc786f9dd2ab882dd104b5a42a17c13037/StreetlightGroup/schema.json
+sdm-schema-StreetlightModel ad048ef3cc6c7857393f8f98aae42815adcd12d64d1c52c72615e05e3fc55c63 https://raw.githubusercontent.com/smart-data-models/dataModel.Streetlighting/e272fafc786f9dd2ab882dd104b5a42a17c13037/StreetlightModel/schema.json
+sdm-schema-OnStreetParking c06c1c00417880ac22eac9ad60cdf3f47e3aa6f82afdd4ea430091e89012e58d https://raw.githubusercontent.com/smart-data-models/dataModel.Parking/5601a5ac5583522dcf376aedb76b193fb0304662/OnStreetParking/schema.json
+sdm-schema-OffStreetParking 3da267a75324c7d6857f11295fe321d0be21f5a39b12ee6fb2a85440037a84ac https://raw.githubusercontent.com/smart-data-models/dataModel.Parking/5601a5ac5583522dcf376aedb76b193fb0304662/OffStreetParking/schema.json
+sdm-schema-ParkingSpot c57d4ff1484aba1f0a92c63e39c189df056afa37e3f342454a0aace5ebe2620b https://raw.githubusercontent.com/smart-data-models/dataModel.Parking/5601a5ac5583522dcf376aedb76b193fb0304662/ParkingSpot/schema.json
+sdm-schema-ParkingGroup bf373ed8309ae571587eaf370f5b8f1d21aef1c327955ac6df054b29d5e76589 https://raw.githubusercontent.com/smart-data-models/dataModel.Parking/5601a5ac5583522dcf376aedb76b193fb0304662/ParkingGroup/schema.json
+sdm-schema-ParkingAccess 767736f6d027aca2c719ba0546338b5f21a94223f084d0ab3a0ad1d1c203bc39 https://raw.githubusercontent.com/smart-data-models/dataModel.Parking/5601a5ac5583522dcf376aedb76b193fb0304662/ParkingAccess/schema.json
+sdm-schema-AirQualityObserved fbe0f2551929b38397ec7d321e5e84d9ddd62e006b236e97bf751c952c130fbf https://raw.githubusercontent.com/smart-data-models/dataModel.Environment/2f048407ccc243df67aee7e1b1ca5470092d743e/AirQualityObserved/schema.json
