@@ -132,13 +132,18 @@ func (b *decodeBudget) sweep(now time.Time) {
 	for k, bk := range b.records {
 		if now.Sub(bk.at) >= full {
 			delete(b.records, k)
-			b.recordsBy[k.tenant]--
+			if b.recordsBy[k.tenant]--; b.recordsBy[k.tenant] <= 0 {
+				delete(b.recordsBy, k.tenant)
+			}
 		}
 	}
 	for k, t := range b.samples {
 		if now.Sub(t) >= DecodeSampleInterval {
 			delete(b.samples, k)
-			b.samplesBy[k[:strings.IndexByte(k, 0)]]--
+			tenant := k[:strings.IndexByte(k, 0)]
+			if b.samplesBy[tenant]--; b.samplesBy[tenant] <= 0 {
+				delete(b.samplesBy, tenant)
+			}
 		}
 	}
 }
@@ -153,6 +158,7 @@ func (b *decodeBudget) Charge(tenant string, deviceType uint) {
 	defer b.mu.Unlock()
 	bk, ok := b.records[k]
 	if !ok {
+		b.sweep(now) // as AllowRecord does: reclaim what has recovered before judging the bound
 		if len(b.records) >= maxBudgetKeys || b.recordsBy[tenant] >= maxBudgetKeysPerTenant {
 			return
 		}

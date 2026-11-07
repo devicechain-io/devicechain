@@ -124,3 +124,33 @@ func TestTheBudgetFiguresAreThePublishedOnes(t *testing.T) {
 	require.Equal(t, 20, model.MaxDecoderSamplesPerProfile)
 	require.Equal(t, 7*24*time.Hour, model.DecoderHealthRetention)
 }
+
+// Charging reclaims what has recovered before it judges the bound, as AllowRecord does.
+func TestChargingReclaimsExpiredKeysBeforeJudgingTheBound(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	for i := 0; i < maxBudgetKeysPerTenant; i++ {
+		require.True(t, b.AllowRecord("acme", uint(i)))
+	}
+	c.add(10 * time.Minute) // every bucket is full again
+	for i := 0; i < DecodeRecordBurst; i++ {
+		b.Charge("acme", 99999) // a NEW device type
+	}
+	require.False(t, b.AllowRecord("acme", 99999), "the charges drained the new key's bucket")
+}
+
+func TestATenantWithNoKeysLeftIsForgotten(t *testing.T) {
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	for i := 0; i < 2000; i++ { // enough to trigger a sweep
+		b.AllowRecord(fmt.Sprint("t", i), 1)
+		b.AllowSample(fmt.Sprint("t", i), "p")
+	}
+	c.add(10 * time.Minute)
+	b.AllowRecord("fresh", 1)
+	b.AllowSample("fresh", "p")
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	require.LessOrEqual(t, len(b.recordsBy), 2, "the per-tenant counters do not outlive their keys")
+	require.LessOrEqual(t, len(b.samplesBy), 2)
+}

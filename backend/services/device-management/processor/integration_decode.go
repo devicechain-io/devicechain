@@ -148,6 +148,7 @@ type deliveryState struct {
 	redelivered bool
 	mu          sync.Mutex
 	observed    bool
+	outcome     DecodeOutcome
 	verdict     bool
 }
 
@@ -402,11 +403,15 @@ func (rez *EventResolver) observeDecode(ctx context.Context, o DecodeObservation
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.observed {
+	// A re-run that reaches the SAME kind of outcome is the same delivery and gets the same verdict. One
+	// that reaches a different outcome (the decoder was republished between probes of an outage, so a
+	// decode that succeeded now fails) is a decode the observer has not heard about and is told, so
+	// a failure is never recorded without having been through the budget.
+	if d.observed && d.outcome == o.Outcome {
 		return d.verdict
 	}
 	d.verdict = rez.decodeObserver.ObserveDecode(o)
-	d.observed = true
+	d.observed, d.outcome = true, o.Outcome
 	return d.verdict
 }
 

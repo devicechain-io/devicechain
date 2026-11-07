@@ -153,3 +153,18 @@ func TestACarriedObjectThatIsNotJSONStoresNoSample(t *testing.T) {
 	r, _ := st.last("acme", "meter", 1)
 	assert.EqualValues(t, 1, r.Failed)
 }
+
+// A re-run that reaches a DIFFERENT outcome (the decoder was republished between probes of a store
+// outage) is told to the observer: a failure is never recorded without having been through the budget.
+func TestAReRunThatChangesOutcomeIsObservedAgain(t *testing.T) {
+	d := newDecodeRig(t)
+	ctx := withDelivery(d.ctx, &deliveryState{})
+	ok := DecodeObservation{Tenant: "acme", Outcome: DecodeDecoded}
+	bad := DecodeObservation{Tenant: "acme", Outcome: DecodeFailed}
+	require.True(t, d.rez.observeDecode(ctx, ok))
+	d.obs.refuse = true
+	require.False(t, d.rez.observeDecode(ctx, bad), "the failure got its own verdict, not the success's")
+	require.Len(t, d.obs.all(), 2)
+	require.False(t, d.rez.observeDecode(ctx, bad), "and a further identical re-run reuses it")
+	require.Len(t, d.obs.all(), 2)
+}
