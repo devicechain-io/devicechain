@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/config"
@@ -726,6 +727,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					Constants: DeviceConstants,
 					// The preview applies live's duplicate rule, so it is told the envelope mode.
 					AppliedGuard: appliedGuardEnabled(),
+					// Experimental: the counterfactual fork query; off unless configured.
+					ForkTimelineEnabled: os.Getenv(graphql.ExperimentalForkTimelineEnv) == "true",
 				}
 			},
 			// The NATS manager is injected as a provider so the slice-7c detectionStream

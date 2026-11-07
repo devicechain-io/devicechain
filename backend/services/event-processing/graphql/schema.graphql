@@ -110,6 +110,18 @@ type Query {
         """The draft rule, the profile and the time window to replay."""
         input: PreviewRuleInput!
     ): PreviewResult!
+    """
+    EXPERIMENTAL, off unless the deployment enables it. Forks a profile's recorded history: the
+    same live detection rules are replayed twice over the window, once over reality and once over
+    a copy edited by the given perturbations (drop a device, offset or scale a metric, freeze a
+    value, black out a window), and the two firing timelines are diffed. Nothing is saved,
+    published or fed to live detection. Requires device:read, and also location:read when a live
+    rule tests geofence containment. May change or be removed without notice.
+    """
+    experimentalForkTimeline(
+        """The profile, the window and the perturbations to fork under."""
+        input: ExperimentalForkTimelineInput!
+    ): ExperimentalForkTimelineResult!
 }
 
 type Mutation {
@@ -710,4 +722,80 @@ type DetectionRuleValidationError {
     """Why the rule was rejected, in English, suitable for showing to the rule's author."""
     # Human-readable, console-surfaceable reason the rule did not compile.
     message: String!
+}
+
+"""EXPERIMENTAL. Input to experimentalForkTimeline."""
+input ExperimentalForkTimelineInput {
+    """Token of the device profile whose live rules and published history are forked."""
+    profileToken: String!
+    """Start of the replay window by event occurred time, as an RFC 3339 timestamp."""
+    start: String!
+    """
+    End of the replay window, as an RFC 3339 timestamp. A window longer than 24 hours is
+    shortened to the 24 hours ending at end, and the result says so in degraded.
+    """
+    end: String!
+    """The perturbations, applied together, in order. At least one and at most 16."""
+    perturbations: [ExperimentalPerturbationInput!]!
+    """
+    How far apart, in seconds, the same edge may sit in the two timelines and still count as one
+    firing that moved instead of one that vanished and another that appeared. Default 300.
+    """
+    shiftToleranceSeconds: Int
+}
+
+"""EXPERIMENTAL. One edit applied to the recorded history of the fork."""
+input ExperimentalPerturbationInput {
+    """One of drop-device, metric-offset, metric-freeze, blackout."""
+    op: String!
+    """Limits the edit to one device token. Required by drop-device; optional elsewhere."""
+    device: String
+    """The measurement name an offset or freeze acts on. Required by those two."""
+    metric: String
+    """Added to the value after it is scaled (metric-offset). Default 0."""
+    offset: Float
+    """Multiplies the value before the offset is added (metric-offset). Default 1."""
+    scale: Float
+    """The value a metric-freeze holds. Default is the last value seen before from."""
+    value: Float
+    """Start of the edit's window as an RFC 3339 timestamp. Omit for the start of history."""
+    from: String
+    """End of the edit's window, exclusive. Omit for the end of history. Required by blackout."""
+    to: String
+}
+
+"""EXPERIMENTAL. Reality and the fork, replayed through the same live rules, and where they differ."""
+type ExperimentalForkTimelineResult {
+    """False when the request was refused; error says why."""
+    ok: Boolean!
+    """Why the request was refused. Null when ok."""
+    error: String
+    """Why a result is partial (history aged out, a limit was hit). Null when complete."""
+    degraded: String
+    """A one-line reading of each perturbation applied, in order."""
+    perturbations: [String!]!
+    """How many live rules were replayed."""
+    ruleCount: Int!
+    """The firings the live rules produce over the unedited history."""
+    baseline: [PreviewFiring!]!
+    """The firings the live rules produce over the edited history."""
+    fork: [PreviewFiring!]!
+    """Every firing that differs between the two, in time order."""
+    divergence: [ExperimentalDivergence!]!
+}
+
+"""EXPERIMENTAL. One place the fork differs from reality."""
+type ExperimentalDivergence {
+    """added (only the fork has it), removed (only reality has it) or shifted (both, at different times)."""
+    kind: String!
+    """The series (device token, or anchor token for a correlation rule) the edge is for."""
+    series: String!
+    """"raised" or "resolved"."""
+    signal: String!
+    """When it happens on the fork's timeline (added, shifted) or reality's (removed), RFC 3339."""
+    at: String!
+    """When it happened in reality, RFC 3339. Null for added."""
+    baselineAt: String
+    """For shifted, how many seconds later the fork's edge is than reality's (negative is earlier). Otherwise 0."""
+    deltaSeconds: Float!
 }
