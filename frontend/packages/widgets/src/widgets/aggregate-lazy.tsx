@@ -38,3 +38,8 @@ export const fleetTableWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['fleet-table'],
   implementation: { kind: 'trusted-react', component: chunk.component('FleetTable') },
 });
+
+export const statusGridWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['status-grid'],
+  implementation: { kind: 'trusted-react', component: chunk.component('StatusGrid') },
+});

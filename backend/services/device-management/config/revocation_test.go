@@ -23,6 +23,7 @@ func TestRevocationDefaults(t *testing.T) {
 	assert.Equal(t, 24*time.Hour, r.DefaultStaleGraceDuration())
 	assert.Equal(t, 2<<20, r.MaxGraphqlCrlBytes)
 	assert.Equal(t, 1, r.MaxConcurrentWrites)
+	assert.Equal(t, 10*time.Second, r.ResweepAfterDuration())
 	assert.Equal(t, cfg.Callout, NewDeviceManagementConfiguration().Callout)
 
 	cfg = &DeviceManagementConfiguration{}
@@ -57,6 +58,11 @@ func TestRevocationFailsClosed(t *testing.T) {
 		{"graphql bytes over the crl bound", `{"callout":{"revocation":{"maxCrlBytes":65536}}}`, "cannot exceed maxCrlBytes"},
 		{"writes over the ceiling", `{"callout":{"revocation":{"maxConcurrentWrites":9}}}`, "maxConcurrentWrites must be between"},
 		{"writes at the ceiling", `{"callout":{"revocation":{"maxConcurrentWrites":8}}}`, ""},
+		{"resweep not a duration", `{"callout":{"revocation":{"resweepAfter":"soon"}}}`, "resweepAfter must be a duration"},
+		{"resweep zero", `{"callout":{"revocation":{"resweepAfter":"0s"}}}`, "resweepAfter must be a duration"},
+		{"resweep negative", `{"callout":{"revocation":{"resweepAfter":"-10s"}}}`, "resweepAfter must be a duration"},
+		{"resweep over 5m", `{"callout":{"revocation":{"resweepAfter":"5m1s"}}}`, "resweepAfter must be a duration"},
+		{"resweep at 5m", `{"callout":{"revocation":{"resweepAfter":"5m"}}}`, ""},
 		{"negative writes", `{"callout":{"revocation":{"maxConcurrentWrites":-1}}}`, "maxConcurrentWrites must be between"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

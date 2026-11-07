@@ -43,6 +43,7 @@ import {
   testPayloadDecoder,
   type StoredDecoder,
 } from '@/lib/api/payload-decoder';
+import { HealthPanel } from './HealthPanel';
 import { FieldTable } from './FieldTable';
 import { FunctionReference } from './FunctionReference';
 import { TestPanel, type TestRun } from './TestPanel';
@@ -178,6 +179,8 @@ function DecoderEditor(props: {
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [run, setRun] = useState<TestRun | null>(null);
   const [vectorRun, setVectorRun] = useState<{ text: string; outcomes: VectorOutcome[]; compileError: string | null } | null>(null);
+  const [sampleRequest, setSampleRequest] = useState<{ id: string; n: number } | null>(null);
+  const testRef = useRef<HTMLDivElement>(null);
   const alertRef = useRef<HTMLDivElement>(null);
 
   const built = useMemo(() => buildDocument(st), [st]);
@@ -410,8 +413,23 @@ function DecoderEditor(props: {
           </SectionPanel>
         </fieldset>
 
+        {canWrite && (
+          <SectionPanel title={t('decHealthTitle')} description={t('decHealthDescription')}>
+            <HealthPanel
+              profileToken={profileToken}
+              refreshKey={activeVersion ?? 0}
+              onLoadSample={(id) => {
+                setSampleRequest((r) => ({ id, n: (r?.n ?? 0) + 1 }));
+                testRef.current?.scrollIntoView?.();
+              }}
+            />
+          </SectionPanel>
+        )}
+
+        <div ref={testRef}>
         <SectionPanel title={t('decTestTitle')} description={t('decTestDescription')}>
           <TestPanel
+            sampleRequest={sampleRequest}
             profileToken={profileToken}
             documentText={built.text}
             inputKind={st.input}
@@ -431,6 +449,7 @@ function DecoderEditor(props: {
             errorExpression={errorExpression}
           />
         </SectionPanel>
+        </div>
       </div>
       <div className="lg:sticky lg:top-4 lg:self-start">
         <FunctionReference />

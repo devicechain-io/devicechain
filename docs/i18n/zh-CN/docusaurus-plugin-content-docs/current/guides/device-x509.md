@@ -7,7 +7,7 @@ title: 使用证书连接设备
 
 设备可以用 X.509 客户端证书而不是令牌或密码向平台消息代理认证。本指南带你从证书颁发机构（CA）一直走到设备发布第一个事件，并展示证书成为设备的两种方式：为已存在的设备创建的**固定凭据**，以及在设备首次连接时为其注册的**证书配置**。
 
-平台如何决定信任一张证书，以及这种信任到哪里为止，见[证书身份](../concepts/device-certificates.md)。在围绕它规划设备群之前，请先阅读其中的[限制](../concepts/device-certificates.md#not-supported)：没有 CRL 或 OCSP，带名称约束的 CA 会被拒绝，续期和 C# SDK 尚未提供。
+平台如何决定信任一张证书，以及这种信任到哪里为止，见[证书身份](../concepts/device-certificates.md)。在围绕它规划设备群之前，请先阅读其中的[限制](../concepts/device-certificates.md#not-supported)：没有 OCSP、也不获取 CRL（吊销列表是上传的），带名称约束的 CA 会被拒绝，续期尚未提供。
 
 :::note 状态
 在平台消息代理上的 MQTT 中可用。HTTP 和 LwM2M 不接受客户端证书。
@@ -179,7 +179,7 @@ echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08
 
 1. **`no_cert`。** 客户端没有发送证书。检查 `--cert`，以及密钥是否与证书匹配。
 2. **`chain_invalid`。** 证书链无法构建到信任锚、某张证书已过期、扩展密钥用途缺少客户端认证、签名使用了 SHA-1，或密钥不在允许范围内。可以用 `openssl verify -CAfile ca.crt -purpose sslclient device.crt` 重现，并检查设备是否发送了中间证书。
-3. **`anchor_disabled`、`revoked`。** 信任锚或凭据被有意禁用。
+3. **`anchor_disabled`、`revoked`、`cert_revoked`、`revocation_unknown`。** 信任锚或凭据被有意禁用（`anchor_disabled`、`revoked`），证书被已上传的吊销列表或手动撤销所列（`cert_revoked`），或信任锚要求其签发者有当前列表而实际没有（`revocation_unknown`）。
 4. **`client_id_mismatch`。** 客户端 ID 不是该设备的 `{instanceId}:{tenant}:{deviceToken}`；对于首次连接，则不是派生的那个。
 5. **`unknown_pin`。** 该证书未被固定，也未链到任何可用的证书配置。
 6. **`jit_*`。** 首次连接时的注册被拒绝：`jit_rate_limited` 和 `jit_busy` 表示设备应退避后重试，`jit_ambiguous` 表示两个配置并列，其余的带有注册错误码。
@@ -192,16 +192,46 @@ echo "devicechain:acme:pv-$slug-$hash"     # devicechain:acme:pv-SN-000123-06e08
 - **会话在最早到期时结束。** 证书链中最早的证书到期时，平台会关闭会话，没有宽限期。请在此之前续期并用新证书重新连接。在续期功能推出之前，设备需要在旧证书到期前把新证书固定为第二个凭据（方案 A）。
 - **5 分钟的容差**用于刚刚签发的证书，以及时钟略慢的设备。
 
+## 从 C# SDK 连接 {#csharp-sdk}
+
+C# SDK（`DeviceChain.Sdk`，以及基于它的 Unity 包）会在 TLS 握手中出示客户端证书。加载证书及其密钥，把证书交给会话，并让信任指向你的实例 CA：
+
+```csharp
+using DeviceChain.Sdk.Mqtt;
+using DeviceChain.Sdk.Transport;
+
+// PEM 证书和密钥：PKCS#8、PKCS#1 或 SEC1，或加密的 PKCS#8 密钥（把密码作为第三个参数传入）...
+using var cert = MqttClientCertificate.FromPemFiles("device.crt", "device.key");
+// ...或者 PFX：MqttClientCertificate.FromPfxFile("device.pfx", password)
+
+var options = new MqttSessionOptions(
+    new Uri("ssl://mqtt.example.com:8883"), "devicechain", "acme", "pv-SN-000123-06e08144e3e8", credentialId: "")
+{
+    ClientCertificate = cert,
+    Trust = MqttTrust.PinnedCaFromFile("instance-ca.crt"),   // 如果代理的证书链到公共根，则省略
+};
+
+await using var session = new MqttDeviceSession(options);
+await session.StartAsync(handler, cancellationToken);
+```
+
+设置了证书后，会话用用户名 `{tenant}:@x509`、无密码和通常的客户端 ID 连接，因此凭据 ID 参数不会被使用。设备对代理的信任与设备自己的身份是分开的：由 `Trust` 决定设备是否信任代理。
+
+- **错误在任何连接之前就会抛出。** 证书缺少私钥、密钥与证书不匹配、CA 证书、扩展密钥用途不含客户端认证的证书，以及 PFX 或密钥密码错误，都会抛出带原因的 `MqttClientCertificateException`。明文（`tcp://`）代理地址会在构造会话时抛出 `ArgumentException`。证书变得不可用的会话会停止重试并报告 `Blind`。
+- **仅支持 RSA 和 ECDSA 密钥。** .NET 无法使用 Ed25519 密钥，因此持有 Ed25519 证书的设备无法用此 SDK 出示它。
+- **设备时钟。** SDK 自己不会拒绝已过期的证书，因为设备的时钟并不总是准确。可用 `cert.NotAfter` 和 `cert.IsExpired(DateTimeOffset.UtcNow)` 检查；证书按本地时钟已过期时，连接失败的信息会指出这一点。
+- **只发送设备证书。** 把租户锚定在签发设备证书的 CA 上，见[将 CA 添加为信任锚](#trust-anchor)。证书旁的中间证书会提供给 TLS 栈，但是否发送取决于平台。
+- **Unity。** 该包使用相同的类。证书需要原生或桌面构建；WebGL 没有 MQTT。
+
 ## 不写固件也能试用 {#simulator}
 
 模拟器可以扮演证书设备：`dc-simulator --x509` 生成一个一次性的 CA 和若干证书（ECDSA P-256、客户端认证、CN = 外部 ID），用 `--x509-register` 通过 API 注册它们，并让每台设备连接。`--x509-jit N` 为永不注册的设备生成证书，用于演练证书配置。参数见模拟器的 README。
 
 ## 它不做什么 {#limits}
 
-- **没有 CRL，没有 OCSP。** 要停用一张证书，请禁用它的凭据（或该设备，或信任锚），并签发短期证书。
+- **没有 OCSP，也不获取 CRL。** 把 CA 的吊销列表上传到信任锚，或按指纹撤销某张证书；两者都会从其下一次连接起拒绝它，并结束它所影响的打开的会话（请查看结果中的 `sessionsEnded`）。撤销 CA 会让该信任锚下的所有设备重新连接。要在不撤销证书的情况下停用一台设备，请禁用它的凭据（或该设备，或信任锚）。见[撤销](../concepts/device-certificates.md#revocation)。
 - **带名称约束的 CA 会被拒绝。** 信任锚是身份的边界。
 - **已注册设备不能通过出示新证书续期，被重置的设备也不能重新采用。** 目前尚未提供。
-- **C# SDK 中没有客户端证书。** 目前尚未提供。
 - **HTTP 或 LwM2M 上没有证书认证。**
 
 原因见[概念页](../concepts/device-certificates.md#not-supported)。消息代理一侧的内容，包括升级现有实例时会发生什么变化，见[证书认证](../deployment/device-certificates.md)。

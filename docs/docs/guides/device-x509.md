@@ -7,7 +7,7 @@ title: Connecting with a Certificate
 
 A device can authenticate to the platform broker with an X.509 client certificate instead of a token or a password. This guide takes you from a certificate authority (CA) to a device publishing its first event, and shows both ways a certificate can become a device: a **pinned credential** you create for a device that exists, and a **certificate profile** that registers devices the first time they connect.
 
-How the platform decides to trust a certificate, and where that trust stops, is in [Certificate identity](../concepts/device-certificates.md). Read its [limits](../concepts/device-certificates.md#not-supported) before you plan a fleet around this: there is no CRL or OCSP, name-constrained CAs are refused, and renewal and the C# SDK are not available yet.
+How the platform decides to trust a certificate, and where that trust stops, is in [Certificate identity](../concepts/device-certificates.md). Read its [limits](../concepts/device-certificates.md#not-supported) before you plan a fleet around this: there is no OCSP and no CRL fetching (lists are uploaded), name-constrained CAs are refused, and renewal is not available yet.
 
 :::note Status
 Available over MQTT on the platform broker. HTTP ingest and LwM2M do not accept client certificates.
@@ -179,7 +179,7 @@ Like every device refusal, the device sees only CONNACK return code 5. The reaso
 
 1. **`no_cert`.** The client sent no certificate. Check `--cert`, and that the key matches the certificate.
 2. **`chain_invalid`.** The chain does not build to the anchor, a certificate has expired, the extended key usage lacks client authentication, a signature uses SHA-1, or a key is outside the allowed set. Reproduce with `openssl verify -CAfile ca.crt -purpose sslclient device.crt`, and check that the device sends its intermediates.
-3. **`anchor_disabled`, `revoked`.** The anchor or the credential was disabled on purpose.
+3. **`anchor_disabled`, `revoked`, `cert_revoked`, `revocation_unknown`.** The anchor or the credential was disabled on purpose (`anchor_disabled`, `revoked`), the certificate is named by an uploaded revocation list or a manual revocation (`cert_revoked`), or the anchor requires a current list for the issuer and has none (`revocation_unknown`).
 4. **`client_id_mismatch`.** The client id is not `{instanceId}:{tenant}:{deviceToken}` for this device, or for a first connect, the derived one.
 5. **`unknown_pin`.** The certificate is not pinned and chains to no usable certificate profile.
 6. **`jit_*`.** A first-connect registration was refused: `jit_rate_limited` and `jit_busy` mean the device should back off and retry, `jit_ambiguous` means two profiles tie, and the rest carry the registration error code.
@@ -192,16 +192,46 @@ Like every device refusal, the device sees only CONNACK return code 5. The reaso
 - **The session ends at the earliest expiry.** The platform closes the session when the earliest certificate in the chain expires, with no grace. Renew before then and reconnect with the new certificate. Until renewal is available, a device needs the new certificate pinned as a second credential (option A) before the old one expires.
 - **A 5-minute allowance** covers a certificate that was issued moments ago for a device whose clock is slightly behind.
 
+## Connect from the C# SDK {#csharp-sdk}
+
+The C# SDK (`DeviceChain.Sdk`, and the Unity package built on it) presents a client certificate in the TLS handshake. Load the certificate and its key, give the session the certificate, and point the trust at your instance CA:
+
+```csharp
+using DeviceChain.Sdk.Mqtt;
+using DeviceChain.Sdk.Transport;
+
+// A PEM certificate and key: PKCS#8, PKCS#1 or SEC1, or an encrypted PKCS#8 key (pass its password as a third argument)...
+using var cert = MqttClientCertificate.FromPemFiles("device.crt", "device.key");
+// ...or a PFX:  MqttClientCertificate.FromPfxFile("device.pfx", password)
+
+var options = new MqttSessionOptions(
+    new Uri("ssl://mqtt.example.com:8883"), "devicechain", "acme", "pv-SN-000123-06e08144e3e8", credentialId: "")
+{
+    ClientCertificate = cert,
+    Trust = MqttTrust.PinnedCaFromFile("instance-ca.crt"),   // omit when the broker's certificate chains to a public root
+};
+
+await using var session = new MqttDeviceSession(options);
+await session.StartAsync(handler, cancellationToken);
+```
+
+With a certificate set, the session connects with the username `{tenant}:@x509`, no password and the usual client id, so the credential id argument is not used. The device's trust in the broker is separate from its identity: `Trust` decides whether the device believes the broker.
+
+- **Errors are raised before any connection.** A certificate without its private key, a key that does not match, a CA certificate, a certificate whose extended key usage lacks client authentication, and a wrong PFX or key password each throw `MqttClientCertificateException` with the reason. A plaintext (`tcp://`) broker address throws `ArgumentException` when the session is constructed. A session whose certificate becomes unusable stops retrying and reports `Blind`.
+- **RSA and ECDSA keys only.** .NET cannot use an Ed25519 key, so a device holding an Ed25519 certificate cannot present it with this SDK.
+- **The device clock.** The SDK does not refuse an expired certificate by itself, because a device's clock is not always right. `cert.NotAfter` and `cert.IsExpired(DateTimeOffset.UtcNow)` let you check, and a connect failure on a certificate expired by the local clock says so.
+- **Send only the device certificate.** Anchor the tenant at the CA that issues the device certificates, as in [Add the CA as a trust anchor](#trust-anchor). Intermediates found beside the certificate are offered to the TLS stack, but whether it sends them depends on the platform.
+- **Unity.** The package uses the same classes. Certificates need a native or desktop build; WebGL has no MQTT.
+
 ## Try it without firmware {#simulator}
 
 The simulator plays certificate devices: `dc-simulator --x509` mints a throwaway CA and certificates (ECDSA P-256, client authentication, CN = external id), registers them through the API with `--x509-register`, and connects each one. `--x509-jit N` mints certificates for devices it never registers, to exercise a certificate profile. See the simulator's README for the flags.
 
 ## What this does not do {#limits}
 
-- **No CRL, no OCSP.** To stop a certificate, disable its credential (or the device, or the anchor), and issue short-lived certificates.
+- **No OCSP, and no CRL fetching.** Upload a CA's revocation list to the trust anchor, or revoke a certificate by fingerprint; both refuse it from its next connect and also end the open sessions it affects (check `sessionsEnded` in the result). A CA-level revocation reconnects every device under the anchor. To stop one device without revoking a certificate, disable its credential (or the device, or the anchor). See [Revocation](../concepts/device-certificates.md#revocation).
 - **A name-constrained CA is refused.** The trust anchor is the identity boundary.
 - **No renewal of a registered device by presenting a new certificate, and no adoption of a reset device.** Not available yet.
-- **No client certificate in the C# SDK.** Not available yet.
 - **No certificates over HTTP or LwM2M.**
 
 The [concept page](../concepts/device-certificates.md#not-supported) says why. For the broker side, including what changes when you upgrade an existing instance, see [Certificate authentication](../deployment/device-certificates.md).
