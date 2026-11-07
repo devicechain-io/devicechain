@@ -77,7 +77,19 @@ rig_tmp="$(mktemp -d "${TMPDIR:-/tmp}/dc-dec-rig.XXXXXX")"
 rig_cmd="${1:-?}"
 run_log="$state_dir/run-$(date -u +%Y%m%dT%H%M%SZ).log"
 exec > >(tee -a "$run_log") 2>&1
-cleanup() { local rc=$?; rm -rf "$rig_tmp"; printf 'decoder-rig: %s exited with status %d\n' "$rig_cmd" "$rc" >>"$run_log"; }
+# cleanup is the ONE EXIT trap. Phases that need a teardown register it here (a variable, never a
+# new trap) so `all` and `mixed` compose: replacing the trap would drop the other's teardown.
+dm_restore_to=""  # set by `mixed` while device-management is scaled to zero
+down_on_exit=0    # set by `all`: tear the cluster down however the run ends
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if [[ -n "$dm_restore_to" ]]; then k -n "$namespace" scale deploy/device-management --replicas="$dm_restore_to" >/dev/null 2>&1; fi
+  if [[ "$down_on_exit" == 1 ]]; then (cmd_down) || true; fi
+  rm -rf "$rig_tmp"; printf 'decoder-rig: %s exited with status %d\n' "$rig_cmd" "$rc" >>"$run_log"
+  exit "$rc"
+}
 trap cleanup EXIT
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -380,19 +392,45 @@ check_body() {
   done
   first="$(sed -n '/^temperature /{p;q;}' <<<"$body")"
   [[ "$first" == *" C" ]] || fail "$label: the declared metric's unit was not applied: $first"
+  # The simulator's value space is fixed (ReadingsOf and the two simulated gateways), so every
+  # stored number must be a decimal inside it, with the unit its metric declares. A decoder that
+  # scales wrongly, drops a sign or loses a unit lands outside.
+  check_range "$label" "$body" temperature 15 29.5 C
+  check_range "$label" "$body" humidity 40 73 null
+  check_range "$label" "$body" battery.voltage 3.0 3.4 V
+  check_range "$label" "$body" lorawan.rssi -87 -80 null
+  check_range "$label" "$body" lorawan.snr 6 8.5 null
   bad="$(awk '$1 == "door" && $2 != "0" && $2 != "1"' <<<"$body")"
   [[ -z "$bad" ]] || fail "$label: a boolean must be stored as 0 or 1: $bad"
+  bad="$(awk '$1 == "door" && $3 != "null"' <<<"$body")"
+  [[ -z "$bad" ]] || fail "$label: a boolean carries no unit: $bad"
   c="$(awk '$1 == "door" && $2 == "1" { c++ } END { print c + 0 }' <<<"$body")"
   [[ "$c" == 2 ]] || fail "$label: door is open on the odd uplinks (2 of $uplinks), got $c"
-  bad="$(awk '$1 == "lorawan.gateways" && $2 != "2"' <<<"$body")"
+  bad="$(awk '$1 == "lorawan.gateways" && ($2 != "2" || $3 != "null")' <<<"$body")"
   [[ -z "$bad" ]] || fail "$label: two gateways reported every uplink: $bad"
-  note "$label: all 7 keys stored $uplinks times, unit and 1/0 booleans as declared"
+  note "$label: all 7 keys stored $uplinks times, values in range, units and 1/0 booleans as declared"
+}
+
+# check_range <label> <body> <key> <min> <max> <unit>: every line for <key> is a plain decimal in
+# [min, max] and carries exactly <unit> ("null" for none).
+check_range() {
+  local bad
+  bad="$(awk -v k="$3" -v lo="$4" -v hi="$5" -v u="$6" '
+    $1 == k && !($2 ~ /^-?[0-9]+(\.[0-9]+)?$/ && $2 + 0 >= lo + 0 && $2 + 0 <= hi + 0 && $3 == u) { print }' <<<"$2")"
+  [[ -z "$bad" ]] || fail "$1: '$3' outside [$4, $5] unit $6: $(head -n1 <<<"$bad")"
 }
 
 good_body() {
   local i
   for i in $(seq 0 $((uplinks - 1))); do
-    printf 'temperature 21.5 C\nhumidity 50 null\nbattery.voltage 3.1 V\ndoor %s null\nlorawan.rssi -80 null\nlorawan.snr 8.5 null\nlorawan.gateways 2 null\n' $((i % 2))
+    printf 'temperature %s C
+humidity %s null
+battery.voltage 3.1 V
+door %s null
+lorawan.rssi -80 null
+lorawan.snr 8.5 null
+lorawan.gateways 2 null
+' "$((20 + i)).5" $((50 + i)) $((i % 2))
   done
 }
 
@@ -450,6 +488,16 @@ cmd_selftest() {
     ["a wrong unit"]="${good/temperature 21.5 C/temperature 21.5 F}"
     ["a boolean stored as 2"]="${good/door 1 null/door 2 null}"
     ["a gateway count of 3"]="${good/lorawan.gateways 2 null/lorawan.gateways 3 null}"
+    ["a temperature of 0"]="${good/temperature 20.5 C/temperature 0 C}"
+    ["a temperature scaled by 10"]="${good/temperature 21.5 C/temperature 215 C}"
+    ["a humidity of 5"]="${good/humidity 50 null/humidity 5 null}"
+    ["a non-numeric humidity"]="${good/humidity 51 null/humidity NaN null}"
+    ["a battery of 31"]="${good/battery.voltage 3.1 V/battery.voltage 31 V}"
+    ["a battery without its unit"]="${good/battery.voltage 3.1 V/battery.voltage 3.1 null}"
+    ["a humidity given a unit"]="${good/humidity 52 null/humidity 52 C}"
+    ["a positive rssi"]="${good/lorawan.rssi -80 null/lorawan.rssi 80 null}"
+    ["a snr of 85"]="${good/lorawan.snr 8.5 null/lorawan.snr 85 null}"
+    ["a door with a unit"]="${good/door 1 null/door 1 V}"
     ["no readings at all"]=""
   )
   for name in "${!planted[@]}"; do
@@ -554,8 +602,13 @@ cmd_test() {
 }
 
 # ---------------------------------------------------------------------------
-# mixed: the rolling-upgrade window
+# mixed: the device-management OUTAGE window (not a mixed-version roll)
 # ---------------------------------------------------------------------------
+#
+# What this proves is an OUTAGE, and only that: uplinks accepted while nothing reads the stream are
+# parked and drained exactly once, never failed. It does not prove an old pod and a new pod can
+# overlap, and a minor upgrade can pass it while an old pod restarting mid-roll cannot start (see
+# below for why that half is not built).
 #
 # During a rolling upgrade there are moments with new event-sources and NO device-management that
 # knows the integration-uplinks stream. This phase makes that moment exactly: device-management is
@@ -592,7 +645,7 @@ cmd_mixed() {
   say "scaling device-management ($replicas replica(s)) to zero: nothing reads the integration-uplinks stream"
   k -n "$namespace" scale deploy/device-management --replicas=0 >/dev/null
   # A pod that survived would read the stream and make the whole phase pass without an outage.
-  trap 'k -n "$namespace" scale deploy/device-management --replicas="$replicas" >/dev/null 2>&1 || true; rm -rf "$rig_tmp"' EXIT
+  dm_restore_to="$replicas"
   local left
   for _ in $(seq 1 60); do
     left="$(k -n "$namespace" get pods -l devicechain.io/functional-area=device-management -o name 2>/dev/null | grep -c . || true)"
@@ -608,6 +661,7 @@ cmd_mixed() {
   # The read path is device-management's too, so the counts are read once it is back.
   say "device-management comes back"
   k -n "$namespace" scale deploy/device-management --replicas="$replicas" >/dev/null
+  dm_restore_to=""
   k -n "$namespace" rollout status deploy/device-management --timeout=300s >/dev/null || fail "device-management did not come back"
   tenant_login
   say "(b) the parked uplinks are decoded and stored exactly once, and nothing was recorded as failed"
@@ -616,7 +670,6 @@ cmd_mixed() {
   [[ "$(count_of "$dev")" == $((base + 21)) ]] || fail "after the outage $dev holds $(count_of "$dev"), wanted exactly $((base + 21))"
   [[ "$(all_failed_count "$dev")" == "$failed_base" ]] || fail "an uplink parked during the outage was recorded as failed"
   note "$dev rose by exactly 21 (3 uplinks x 7 keys); no failed event"
-  trap 'rm -rf "$rig_tmp"' EXIT
   say "PASS (mixed): accepted, parked, never failed, drained exactly once"
 }
 
@@ -627,7 +680,7 @@ case "${1:-}" in
   down) cmd_down ;;
   selftest) cmd_selftest ;;
   all)
-    trap 'cmd_down || true; rm -rf "$rig_tmp"' EXIT
+    down_on_exit=1
     cmd_up
     cmd_test
     cmd_mixed
