@@ -167,9 +167,8 @@ spec:
   selector: {app: mosquitto}
   ports: [{port: 1883}]
 EOF
-# kind nodes do not share the host's image cache: load the pinned image rather than depend on a pull.
-docker pull "$MOSQUITTO_IMAGE" >/dev/null
-kind load docker-image "$MOSQUITTO_IMAGE" --name "$CLUSTER" >/dev/null
+# The node pulls the digest-pinned image itself (kind load cannot import a digest-addressed image
+# from a containerd-backed Docker store).
 kubectl -n rig rollout status deployment/mosquitto --timeout=180s
 
 fi
