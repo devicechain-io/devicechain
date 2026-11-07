@@ -87,6 +87,11 @@ function SymbolBody({ symbol, reading: r, onAt, vertical, scale: ws }: { symbol:
   // The image's accessible name is the whole caption, alarm included.
   const label = words.label(name, caption);
   const captionRoom = ws.px('font-md') * 1.8;
+  // The symbol is held to the aspect it is drawn at, from the room the body measures. An unmeasured
+  // body (no layout yet, or a test renderer) sets no limit: a limit read off a 0 would shrink the
+  // symbol to a pixel and leave it there until something re-rendered it.
+  const room = ws.size.height - captionRoom;
+  const measuredWidth = room > 0 ? `${room * (symbol === 'pipe' && !vertical ? 4 : 1.1)}px` : undefined;
 
   return (
     <div
@@ -94,7 +99,7 @@ function SymbolBody({ symbol, reading: r, onAt, vertical, scale: ws }: { symbol:
       data-threshold-level={r.band?.level}
       style={{ height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: ws.px('space-1'), minHeight: 0 }}
     >
-      <div style={{ flex: '1 1 0', minHeight: ws.px('space-4'), width: '100%', maxWidth: `${Math.max(ws.size.height - captionRoom, 1) * (symbol === 'pipe' && !vertical ? 4 : 1.1)}px` }}>
+      <div style={{ flex: '1 1 0', minHeight: ws.px('space-4'), width: '100%', maxWidth: measuredWidth }}>
         <SymbolArt
           symbol={symbol}
           label={label}
