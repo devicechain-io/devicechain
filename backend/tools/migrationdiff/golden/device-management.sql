@@ -229,10 +229,12 @@ ALTER TABLE ONLY "device-management".metric_definitions
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
+ALTER TABLE ONLY "device-management".pending_revocation_expansion_serials
+ ADD CONSTRAINT pending_revocation_expansion_serials_pkey PRIMARY KEY (tenant_id, trust_anchor_id, generation, serial);
+ALTER TABLE ONLY "device-management".pending_revocation_expansions
+ ADD CONSTRAINT pending_revocation_expansions_pkey PRIMARY KEY (tenant_id, trust_anchor_id, generation);
 ALTER TABLE ONLY "device-management".pending_revocation_kicks
- ADD CONSTRAINT pending_revocation_kicks_pkey PRIMARY KEY (tenant_id, trust_anchor_id, generation);
-ALTER TABLE ONLY "device-management".pending_revocation_serials
- ADD CONSTRAINT pending_revocation_serials_pkey PRIMARY KEY (tenant_id, trust_anchor_id, generation, serial);
+ ADD CONSTRAINT pending_revocation_kicks_pkey PRIMARY KEY (tenant_id, device_token, origin);
 ALTER TABLE ONLY "device-management".pending_session_kicks
  ADD CONSTRAINT pending_session_kicks_pkey PRIMARY KEY (tenant_id, device_token, origin);
 ALTER TABLE ONLY "device-management".profile_decoder_healths
@@ -1031,6 +1033,7 @@ CREATE TABLE "device-management".device_revoked_certificates (
  revoked_at timestamp with time zone NOT NULL,
  created_at timestamp with time zone,
  created_by character varying(255),
+ kick_queued_at timestamp with time zone,
  CONSTRAINT ck_device_revoked_certificates_kind CHECK (((((kind)::text = 'MANUAL'::text) AND (fingerprint IS NOT NULL) AND (serial IS NULL) AND (revocation_list_id IS NULL)) OR (((kind)::text = 'CRL'::text) AND (fingerprint IS NULL) AND (issuer_key IS NOT NULL) AND (issuer_name IS NOT NULL) AND (serial IS NOT NULL) AND (revocation_list_id IS NOT NULL))))
 );
 CREATE TABLE "device-management".device_trust_anchors (
@@ -1326,7 +1329,13 @@ CREATE TABLE "device-management".pending_ownership_facts (
  generation bigint NOT NULL,
  requested_at timestamp with time zone NOT NULL
 );
-CREATE TABLE "device-management".pending_revocation_kicks (
+CREATE TABLE "device-management".pending_revocation_expansion_serials (
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ generation bigint NOT NULL,
+ serial character varying(64) NOT NULL
+);
+CREATE TABLE "device-management".pending_revocation_expansions (
  tenant_id character varying(128) NOT NULL,
  trust_anchor_id bigint NOT NULL,
  generation bigint NOT NULL,
@@ -1338,11 +1347,13 @@ CREATE TABLE "device-management".pending_revocation_kicks (
  issuer_name character varying(64),
  requested_at timestamp with time zone NOT NULL
 );
-CREATE TABLE "device-management".pending_revocation_serials (
+CREATE TABLE "device-management".pending_revocation_kicks (
  tenant_id character varying(128) NOT NULL,
- trust_anchor_id bigint NOT NULL,
+ device_token character varying(255) NOT NULL,
+ origin bigint NOT NULL,
  generation bigint NOT NULL,
- serial character varying(64) NOT NULL
+ requested_at timestamp with time zone NOT NULL,
+ not_before timestamp with time zone
 );
 CREATE TABLE "device-management".pending_session_kicks (
  tenant_id character varying(128) NOT NULL,

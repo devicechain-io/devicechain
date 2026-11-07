@@ -288,7 +288,7 @@ dcctl upgrade local my-instance --values runway.yaml
 | 10,000 | 3.2 GiB | 3.2 GiB | 3.8 GiB | 22Gi | 24Gi |
 | 20,000 | 6.4 GiB | 6.4 GiB | 7.5 GiB | 33Gi | 36Gi |
 
-“刚好放得下的卷”是其 `max_file_store` 能容纳该预留的最小卷，已计入其他流、MQTT 网关的存储和键值桶（默认合计约 8.6 GiB）；20,000 一行的余量不足 100 MiB。请使用较大的数值，它为后续版本新增的流和桶留出空间。`dcctl` 没有设置 JetStream 卷大小的选项。StatefulSet 的卷声明无法原地修改，因此扩容是手动步骤：
+“刚好放得下的卷”是其 `max_file_store` 能容纳该预留的最小卷，已计入其他流、MQTT 网关的存储和键值桶（默认合计约 8.7 GiB）；20,000 一行的余量不足 100 MiB。请使用较大的数值，它为后续版本新增的流和桶留出空间。`dcctl` 没有设置 JetStream 卷大小的选项。StatefulSet 的卷声明无法原地修改，因此扩容是手动步骤：
 
 ```bash
 kubectl -n dci-my-instance delete statefulset dc-nats --cascade=orphan
@@ -459,7 +459,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `inMemoryCache.ttlSeconds` | `300` | 副本将值保留在自身内存中的时长，1 到 3600 秒。变更会同时清除所有副本中的该值，所以它只约束丢失的清除消息。键值缓存自身的存活时间对它设上限（见下文），见[键值缓存](#kv-caches)。 |
 | `deviceCacheTtlSeconds`、`relationshipCacheTtlSeconds`、`metricDefCacheTtlSeconds`、`membershipCacheTtlSeconds` | `300` | 代理中各键值缓存的存活时间，1 到 3600 秒。 |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | 每副本三个逐设备内存缓存各自的条目上限：按令牌设备、追踪关系和分组成员，见[键值缓存](#kv-caches)。 |
-| `inMemoryCache.perDeviceCacheMiB` | `24` | 各缓存在每副本的内存 MiB 上限，调高时同步提高服务内存限制，见[键值缓存](#kv-caches)。 |
+| `inMemoryCache.perDeviceCacheMiB` | `80` | 各缓存在每副本的内存 MiB 上限，约为每 1,000 台按令牌解析的设备 4 MiB，调高时同步提高服务内存限制，见[键值缓存](#kv-caches)。 |
 | `inMemoryCache.credentialCacheMiB` | `32` | 设备凭据缓存在每副本的内存 MiB 上限，1 到 256。默认值约容纳 29,000 个有凭据的设备，60,000 个约需 70。调高时同步提高服务内存限制，见[键值缓存](#kv-caches)。 |
 
 `resolve_inflight` 持续等于 worker 数且 CPU 有余量时可增加。CPU 已到限制时，增加解析器无效，应增加 CPU，参见[服务容量](./bootstrap.md#service-sizing)。进程内针对三节点代理测量、各查找 750 微秒且依次执行时，5 个解析器约每秒 1,500 事件，10 个约 2,900。完成顺序可能比到达乱序几分之一秒，检测按进入解析流顺序处理。超范围配置阻止启动，错误指出设置；启动日志列出实际值。
@@ -508,7 +508,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 - 过载时尚不会形成反压，该设置也不能保证代理内存耗尽时不丢消息。在[服务质量](../guides/connecting-a-device.md#quality-of-service)所述的环境中，每秒 9,000 条 QoS 1 事件时三次运行中有一次让一台代理服务器内存耗尽，丢失了 264 万条已确认事件中的 294,740 条；每秒 12,000 条时三台服务器全部内存耗尽，336 万条中丢失 621,280 条（18.5%）。存储的大小上限和 80% 的连接退避都没有起作用：服务器被终止时存储不到 30%，增长的是代理中等待写入存储的发布队列，位于存储之前。丢失发生在内存耗尽之前，没有任何计数器变化，事件在哪一环丢失尚未查明。请保持在那里测得的上限以下（约每秒 8,000 条），不要指望该设置能扛住代理崩溃。
 - 与捕获流相比，存储每次发布给代理带来的开销更大，而且开启该设置后平台能跟上的流量更少。在[服务质量](../guides/connecting-a-device.md#quality-of-service)所述的环境中，第 99 百分位的 PUBACK 时间在每秒 6,000 条事件时为 45 ms，7,500 条时为 485 ms，8,250 条时为 1.12 s；关闭该设置、每秒 6,000 条时为 55 ms。开启时实测的无损上限约为每秒 8,000 条。
 - 退避机制按字节衡量存储大小，并且只拒绝新连接：已连接的设备会继续发布。即使远低于上限的 80%，积压也可能很大。
-- 存储中的积压本身占用的代理内存很少，存储写满时每台服务器约为几十 MiB。每台 NATS 服务器的内存主要用于重复检测窗口，每台服务器上每个持续的每秒事件约占 89 KiB 存活堆，服务器的常驻内存约为其存活堆的两倍，因此在每秒 8,000 条事件的持续负载下，一台服务器已接近其 4 GiB 上限中的 3 GiB，无论该设置开启与否。CPU 不足的服务器还会在内存中排队积压工作，因此如果某台服务器曾因内存不足（OOM）被终止，请调高 `nats_memory_limit`。没有告警监控代理内存：健康的服务器本来就运行在上限附近，对它设阈值会一直沉默到服务器被终止。`InstanceContainerRestarted` 会报告这次终止（代理容器的最后状态为 `OOMKilled`），这才是该采取行动的信号。
+- 存储中的积压本身占用的代理内存很少，存储写满时每台服务器约为几十 MiB。每台 NATS 服务器的内存主要用于重复检测窗口，每台服务器上每个持续的每秒事件约占 89 KiB 存活堆，服务器的常驻内存约为其存活堆的两倍，因此在每秒 8,000 条事件的持续负载下，一台服务器已接近其 4 GiB 上限中的 3 GiB，无论该设置开启与否。CPU 不足的服务器还会在内存中排队积压工作，因此当某台服务器的工作集处于其软上限时就应调高 `nats_memory_limit`，而不只是在它因内存不足（OOM）被终止之后：处于软上限的服务器会持续回收并变慢，却不会重启。[代理的内存](./bootstrap.md#broker-sizing)给出了每秒 8,000 至 20,000 个事件下测得的工作集以及上限的设定规则。没有告警监控代理内存，因为健康的服务器本来就运行在上限附近。`InstanceContainerRestarted` 会报告终止（代理容器的最后状态为 `OOMKilled`）。
 
 ## 事件持久化 {#event-persistence}
 
@@ -697,13 +697,21 @@ UPDATE "event-management".calculated_backfills
 
 常见原因是 NATS 服务器网络失联却未关闭连接。桶所有副本都响应读取，其他服务器约一到一分半发现失联前，部分读取仍发往旧服务器。事件继续解析，但增加数据库读取。
 
-每个副本还将桶读写结果在内存保留最多五分钟（`inMemoryCache.ttlSeconds`，且不超过缓存的存活时间），直接响应，包括桶被绕过期间。时间从读取而非最近使用计算。三个逐设备缓存各最多 131,072 条或 24 MiB，由 `inMemoryCache.perDeviceCacheEntries` 和 `inMemoryCache.perDeviceCacheMiB` 配置，大约容纳无追踪关系 87,000 设备、有一条关系 26,000 设备。按类型和租户的配置、分组范围缓存各 4,096 条或 4 MiB。满时移除最近最少使用条目；插入时也从该端移除过期条目，遇到首个未过期即停止。NATS 报告不存在的结果不缓存。
+每个副本还将桶读写结果在内存保留最多五分钟（`inMemoryCache.ttlSeconds`，且不超过缓存的存活时间），直接响应，包括桶被绕过期间。时间从读取而非最近使用计算。三个逐设备缓存各最多 131,072 条或 80 MiB，由 `inMemoryCache.perDeviceCacheEntries` 和 `inMemoryCache.perDeviceCacheMiB` 配置。按令牌缓存中一台设备占 2.5 至 3.1 KB（设备及其设备类型，编码与解码各存一份），因此 80 MiB 在那里约容纳 27,000 台设备；追踪关系缓存约容纳有一条关系的 34,000 台设备，无追踪关系的设备则可填满全部 131,072 条。按令牌缓存最先写满。`v1.2.0` 之前该上限为 24 MiB，只容纳 8,000 至 10,000 台设备：16,000 台设备时，按令牌缓存在 73% 的查找中淘汰了条目，`device-management` 每个事件的 CPU 成本在 8,000 至 16,000 台设备之间从每 1,000 个事件 0.048 CPU 秒升到 0.105，20,000 台时读取落到键值桶并超时。
+
+**为设备群设定逐设备缓存的大小。** 每个副本保存整个活跃设备群，而不是自己的份额，因为 `inbound-events` 消费者是共享的，副本处理它取到的下一批。对于在 `inMemoryCache.ttlSeconds` 内上报的 N 台设备：
+
+- `inMemoryCache.perDeviceCacheMiB`：每 1,000 台按令牌解析的设备 4（N × 3.1 KB 再加四分之一；出示凭据且各有一条追踪关系的设备为每 1,000 台 3）。默认的 80 可覆盖 20,000 台设备并留有四分之一余量。超过约 131,000 台设备的设备群还要提高 `perDeviceCacheEntries`。
+- `inMemoryCache.credentialCacheMiB`：每 1,000 台出示凭据的设备 1.4。一个事件走其中一条路径，所以两者由不同的设备填满。
+- 服务的内存限制：2 × (3 × `perDeviceCacheMiB` + `credentialCacheMiB` + 36 + 60) MiB。36 是两个小缓存，60 是服务的其余部分。默认的 768Mi 就是默认上限下的这条规则。该规则把三个逐设备缓存都按写满计算，而在这些规模下只有按令牌缓存会满，所以偏保守。
+
+60,000 台按令牌解析的设备，将 `perDeviceCacheMiB` 设为 240，内存限制设为 1.7Gi。`DeviceLookupCacheTooSmall` 在某副本的缓存已满且在 15 分钟内淘汰超过 5% 的查找时触发；它表明设备群已超出该设置。按类型和租户的配置、分组范围缓存各 4,096 条或 4 MiB。满时移除最近最少使用条目；插入时也从该端移除过期条目，遇到首个未过期即停止。NATS 报告不存在的结果不缓存。
 
 **变更同时到达所有副本，存活时间只兜底丢失的消息。** 使已缓存值失效的变更（设备更新或删除、关系增删、配置发布或回滚、分组成员变化、租户被清除）先从桶中移除该值，再通过 NATS 发送一条消息，使每个设备管理副本丢弃自己的副本。副本与 NATS 断开又重新连上时，会丢弃其持有的全部内容，因为可能漏收了消息。所以副本只有在连接期间丢失了消息（例如落后太多而未能收到）时，才会在短暂时刻之后继续提供旧值，而且只持续到时间用尽。变更发生时正在进行的读取若在变更之前读到并随后写入缓存，情况相同。消息数由 `cache_eviction_broadcasts_total` 统计。
 
 **设备凭据。** 各副本将刚验证的凭据及其设备从读取起内存缓存五分钟，因包含密码，绝不放键值桶。每副本最多保留 `inMemoryCache.credentialCacheMiB`（默认 32 MiB）。每次使用仍比较密码及到期时间，验证失败不缓存。凭据或设备变更使执行变更的副本立即清缓存，并用 NATS 通知其他副本。因此撤销或跨副本设备删除，所有副本下个事件即生效；通知丢失时，则在副本到期时生效。MQTT 连接始终读数据库。
 
-**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请让每个副本按整个活跃设备群设定上限，而不是按设备群除以副本数：入站流是所有副本共享的单个持久消费者，事件不会按设备在副本之间分配，当副本数乘以设备上报间隔小于该时间时，每个副本几乎看到每一台设备。缓存小于设备群时会循环淘汰，几乎没有命中。例如 60,000 台设备每 10 秒上报，每台有一条追踪关系，则每个副本需要 `inMemoryCache.credentialCacheMiB` 约 80（每条约 1.1 KB）和 `inMemoryCache.perDeviceCacheMiB` 约 64（一组关系约 950 字节），并将内存上限提高到 768Mi。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。chart 用 `DeviceCredentialCacheTooSmall` 和 `DeviceLookupCacheTooSmall`（warning）对此告警：某副本因容量淘汰的比例连续 15 分钟超过其查找的 5%。告警触发时，提高边界（`inMemoryCache.credentialCacheMiB` 或 `inMemoryCache.perDeviceCacheMiB`）并同步提高内存限制。默认六个内存缓存共最多 112 MiB。`device-management` 以 `GOGC=400` 运行，并把软内存上限（`GOMEMLIMIT`）设为其内存上限的 75%，因此回收器允许堆增长到持有量的约五倍，接近软上限时更努力地回收；未设置 `GOMEMLIMIT` 的地方，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
+**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请让每个副本按整个活跃设备群设定上限，而不是按设备群除以副本数：入站流是所有副本共享的单个持久消费者，事件不会按设备在副本之间分配，当副本数乘以设备上报间隔小于该时间时，每个副本几乎看到每一台设备。缓存小于设备群时会循环淘汰，几乎没有命中。例如 60,000 台设备每 10 秒上报，每台有一条追踪关系并出示凭据，则每个副本需要 `inMemoryCache.credentialCacheMiB` 约 80（每条约 1.1 KB）和 `inMemoryCache.perDeviceCacheMiB` 约 180（一组关系按计约 2.4 KB），并将内存上限提高到 1.4Gi；同一设备群按令牌解析则需要 `perDeviceCacheMiB` 240 和 1.7Gi（见上面的规则）。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}`（或 `cache="device-by-token"`）接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。chart 用 `DeviceCredentialCacheTooSmall` 和 `DeviceLookupCacheTooSmall`（warning）对此告警：某副本因容量淘汰的比例连续 15 分钟超过其查找的 5%。告警触发时，提高边界（`inMemoryCache.credentialCacheMiB` 或 `inMemoryCache.perDeviceCacheMiB`）并同步提高内存限制。默认六个内存缓存共最多 308 MiB。`device-management` 以 `GOGC=400` 运行，并把软内存上限（`GOMEMLIMIT`）设为其内存上限的 75%，因此回收器允许堆增长到持有量的约五倍，接近软上限时更努力地回收；未设置 `GOMEMLIMIT` 的地方，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
 
 变更后移除条目（设备删除、配置发布）绝不跳过，因为只有桶主副本接受，最多等五秒。仍失败会记录 `A key-value cache eviction failed`，旧条目可服务至配置 TTL 到期，已有内存副本则至内存时间到期，二者取较短者。
 

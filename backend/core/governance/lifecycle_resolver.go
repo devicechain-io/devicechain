@@ -111,18 +111,40 @@ func NewTenantLifecycleResolver(client *svcclient.Client, umURL string) *TenantL
 // gates records whether the gate came up (GateTenantLifecycle), so a service that started with it
 // OFF is visible as safety_gate_enabled == 0 rather than only as a startup WARN. It may be nil.
 func NewTenantLifecycleGate(umCfg config.UserManagementConfiguration, serviceSecret, subject string, gates *SafetyGates) func(string) bool {
+	gate, _ := NewTenantLifecycleGates(umCfg, serviceSecret, subject, gates)
+	return gate
+}
+
+// NewTenantLifecycleGates is NewTenantLifecycleGate plus the STRICT reading of the same cache: the
+// second closure reports a tenant as gone unless an authoritative live answer says it is active
+// (see TenantLifecycleResolver.GoneOrUnverified). Both are nil when user-management is not
+// configured. They share one resolver, so the strict reading adds no lookups of its own.
+func NewTenantLifecycleGates(umCfg config.UserManagementConfiguration, serviceSecret, subject string, gates *SafetyGates) (gate, strict func(string) bool) {
 	if serviceSecret == "" || umCfg.Hostname == "" || umCfg.Port == 0 {
 		log.Warn().Str("service", subject).
 			Msg("user-management endpoint or service secret not configured — this service will NOT refuse work for tenants that have been deleted.")
 		gates.Set(GateTenantLifecycle, false)
-		return nil
+		return nil, nil
 	}
 	gates.Set(GateTenantLifecycle, true)
 	client := svcclient.New(umCfg, serviceSecret, subject, []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", umCfg.Hostname, umCfg.Port)
 	log.Info().Str("service", subject).Str("userManagement", umURL).
 		Msg("Work for tenants that have been deleted will be refused (tenant deletion lifecycle).")
-	return NewTenantLifecycleResolver(client, umURL).Deleted
+	r := NewTenantLifecycleResolver(client, umURL)
+	return r.Deleted, r.GoneOrUnverified
+}
+
+// GoneOrUnverified is the FAIL-CLOSED reading of the lifecycle: it reports true unless a fresh,
+// successful answer from user-management says the tenant is active. A cold cache, an unresolvable
+// tenant, a failed refresh, a stale entry and an empty answer all read gone; so does any state
+// but "active". It is for callers whose action cannot be undone and is wrong for a gone tenant
+// (storing an erased tenant's event again), where Deleted's fail-open default (carry on as if the
+// gate did not exist) would be the wrong direction. The cost is that such a caller holds off
+// until the cache is warm, so it must have somewhere safe to wait.
+func (r *TenantLifecycleResolver) GoneOrUnverified(tenant string) bool {
+	state, fresh := r.resolveFresh(tenant)
+	return !fresh || state != LifecycleActive
 }
 
 // Deleted reports whether the tenant has been through the delete door and must no longer

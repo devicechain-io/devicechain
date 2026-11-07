@@ -290,7 +290,7 @@ instance:
         # that scale with fleet size, so they are the ones that must carry the smaller
         # bound. See kv.All in backend/core/kv for the per-bucket classification.
         kvCacheMaxBytes: 67108864 # 64 MiB per cache bucket (5 buckets)
-        kvStateMaxBytes: 134217728 # 128 MiB per state bucket (6 buckets)
+        kvStateMaxBytes: 134217728 # 128 MiB per state bucket (11 buckets; the placement mirror declares its own 4 MiB)
         # How the plain durable readers pull from the broker (defaults shown). Optional;
         # omitted, a reader asks for 256 messages and asks for the next batch while it hands
         # out the current one. This is a fixed setting read when a reader is built, so
@@ -1442,21 +1442,26 @@ functionalAreas:
     resources:
       limits:
         cpu: "2"
-    # MEMORY LIMIT raised from the 256Mi default to 512Mi, as a FLOOR (memoryLimitFloor), not as an
+    # MEMORY LIMIT raised from the 256Mi default to 768Mi, as a FLOOR (memoryLimitFloor), not as an
     # area-level limit: it applies only when the merged limit is lower, so a raised top-level
     # resources.limits.memory still reaches this service, and a functionalAreas.device-management
     # .resources.limits.memory of your own is used as written. Every replica caches the whole
     # device fleet, so the heap grows with the fleet, not with the ingest rate. Measured on GKE
-    # (round 29): Go heap in use 154 MiB at 6,000 devices and 193 to 218 MiB at 12,000 to 16,000,
-    # and 250 MiB resident at 16,000 devices, against the old 256Mi limit and its 192 MiB
-    # GOMEMLIMIT: a fleet near 12,000 devices reached the soft limit. At 512Mi the soft limit is
-    # 384 MiB, which that growth (about 6.4 MiB per 1,000 devices above a base near 115 MiB)
-    # reaches at a fleet of roughly 40,000 devices, or about 37,000 when the replica also holds
-    # a full payload-decoder cache (its in-process copy is now bounded at 32 MiB rather than
-    # 4 MiB, inMemoryCache.profileResolutionCacheMiB, so up to 28 MiB more is live); size above
-    # that. Only the limit moves; the
-    # memory request stays 128Mi, so scheduling is unchanged. sizing_test.go holds it.
-    memoryLimitFloor: 512Mi
+    # (round 29): Go heap in use 154 MiB at 6,000 devices and 193 to 218 MiB at 12,000 to 16,000;
+    # (round 30, 8,000 to 20,000 devices): 206 to 243 MiB heap and 248 to 320 MiB resident,
+    # with the per-device caches' old 24 MiB bound full. That bound turned out to be smaller than
+    # the fleet (device-by-token costs 2.5 to 3.1 KB a device, not the 0.3 to 0.95 KB it had been
+    # sized from), so the default is now 80 MiB each (inMemoryCache.perDeviceCacheMiB), which
+    # holds 27,000 devices with a quarter over a 20,000 fleet. The limit is set against that
+    # bound's worst case: the six in-process caches full hold 3 x 80 + 4 + 32 + 32 = 308 MiB, and
+    # with the rest of the service about 370 MiB live; at 768Mi the soft limit (GOMEMLIMIT) is
+    # 576 MiB, 1.5 times that. The 512Mi it replaces would have left 384 MiB, 1.04 times, the
+    # collector held at its limit. To size another fleet: 4 MiB of perDeviceCacheMiB for each
+    # 1,000 devices that resolve on their token, and a memory limit of 2 x (3 x perDeviceCacheMiB
+    # + credentialCacheMiB + 36 + 60) MiB (the deployment guide's Service sizing has the
+    # derivation). Only the limit moves; the memory request stays 128Mi, so scheduling is
+    # unchanged. sizing_test.go and memoryfloor_test.go hold it.
+    memoryLimitFloor: 768Mi
     # CPU REQUEST: what this service used at 6,000 events/s, applied while
     # useMeasuredRequests is on (not under --compact). Re-measured on GKE round 10 (3 x
     # n2-custom-4-8192 service nodes, --ha, shipped defaults): 0.072 cores per 1,000
@@ -1593,9 +1598,12 @@ functionalAreas:
       #
       # What each replica keeps in its own memory of each of the three lookup caches
       # kept per device (a device by its token, its tracked relationships, its group
-      # memberships), per cache (defaults shown). An entry costs about 290 bytes for a
-      # device with no tracked relationship and 950 with one, so 24 MiB holds about
-      # 87,000 or 26,000 devices.
+      # memberships), per cache (defaults shown). An entry costs about 500 bytes in the
+      # relationships cache for a device with no tracked relationship and 2.4 KB with one, and
+      # 2.5 to 3.1 KB in the device-by-token cache (the device row and its type, held encoded
+      # and decoded), which is the one that fills first: 80 MiB holds about 27,000 devices
+      # by token (the 24 MiB this replaced held 8,000 to 10,000, and at 16,000 devices it
+      # evicted on 73% of lookups), or 34,000 singly assigned devices in the relationships cache.
       #
       # A value is kept for ttlSeconds (5 minutes) from when it was read, so a device
       # that reports less often than that but more often than every 5 minutes is answered
@@ -1612,15 +1620,21 @@ functionalAreas:
       # replica sees nearly every device. A bound below the fleet makes the
       # least-recently-used order cycle and answer almost nothing. The device credentials
       # (an entry is about 1.1 KB, never stored in the broker) have their own bound,
-      # credentialCacheMiB: 32 MiB holds about 29,000 devices. Example, 60,000 devices
-      # each with one tracked edge: credentialCacheMiB 80, perDeviceCacheMiB 64 (relationship
-      # sets are about 950 B each), and the memory limit raised to 768Mi. At the defaults the six in-memory caches
-      # (these three, two small ones, and the credentials) hold at most 112 MiB, which
-      # the heap can double before a collection: raise the memory limit with them.
+      # credentialCacheMiB: 32 MiB holds about 29,000 devices. Sizing rule, per replica, for N
+      # devices reporting within the time: perDeviceCacheMiB = 4 for each 1,000 devices that
+      # resolve on their token (N x 3.1 KB x 1.25); credentialCacheMiB = 1.4 for each 1,000
+      # devices that present a credential; memory limit = 2 x (3 x perDeviceCacheMiB +
+      # credentialCacheMiB + 36 + 60) MiB. Example, 60,000 devices on the token path:
+      # perDeviceCacheMiB 240 and a memory limit of 1.7Gi (set under
+      # functionalAreas.device-management.resources.limits.memory); the same fleet presenting
+      # credentials, each with one tracked edge (2.4 KB, so 3 per 1,000 devices):
+      # credentialCacheMiB 80, perDeviceCacheMiB 180, and 1.4Gi. At the defaults the
+      # six in-memory caches (these three, two small ones, and the credentials) hold at most
+      # 308 MiB, against the 768Mi floor above: raise the memory limit with any of them.
       #   inMemoryCache:
       #     ttlSeconds: 300
       #     perDeviceCacheEntries: 131072
-      #     perDeviceCacheMiB: 24
+      #     perDeviceCacheMiB: 80
       #     credentialCacheMiB: 32
       #
       # Device self-registration (POST /api/device-management/provisioning/{tenant}/register,
@@ -2136,11 +2150,21 @@ functionalAreas:
     # GKE (round 29), resident memory with the switches on was 265 to 269 MiB at 4,500 to 6,000
     # events/s and 388 MiB at 12,000, against 68 to 85 MiB with them off (about +190 MiB at 6,000
     # and +300 MiB at 12,000, which is 44 to 55 bytes for each identity held); Go heap in use
-    # reached 353 MiB at 12,000 events/s. At 384Mi (GOMEMLIMIT 288 MiB) the collector would have
-    # been held at its soft limit above about 8,000 events/s. At 768Mi the soft limit is 576 MiB:
-    # 1.5 times the 12,000 events/s heap, and the sizing rule in the deployment guide covers up
-    # to about 15,000 events/s. Above that, set this service's own limit (about 1Gi at 20,000).
-    # Switches off: the 384Mi floor above, unchanged. sizing_test.go holds all three.
+    # reached 353 MiB at 12,000 events/s. Round 30 (8,000 to 20,000 events/s, ramped step to step)
+    # read a Go heap of 441, 488, 511 and 516 MiB and a resident maximum of 500, 547, 551 and
+    # 571 MiB at 8,000, 12,000, 16,000 and 20,000 events/s, against the 576 MiB soft limit this
+    # floor gives (GOMEMLIMIT, 75% of 768Mi): the floor held with no restart, but the heap was
+    # 77%, 85%, 89% and 90% of the soft limit and the resident maximum 99% of it at 20,000, where
+    # the collector works continuously. The guard's size is the rate
+    # times its ten minutes across consecutive steps, so a ramp reads higher than an isolated
+    # step. At 384Mi (GOMEMLIMIT 288 MiB) the collector would have been held at its soft limit
+    # above about 8,000 events/s. At 768Mi the soft limit is 576 MiB: 1.2 times the 12,000
+    # events/s heap of round 30 (488 MiB), so the floor covers about 12,000 events/s with room
+    # and 16,000 with little. THE FLOOR DOES NOT SCALE WITH THE RATE: from 16,000 events/s
+    # sustained, set this service's own limit to about 1Gi (soft limit 768 MiB; 1.5 times the
+    # 20,000 events/s heap) with functionalAreas.event-processing.resources.limits.memory, or
+    # raise memoryLimitFloorWithEnvelopes. Switches off: the 384Mi floor above, unchanged.
+    # sizing_test.go holds all three.
     memoryLimitFloorWithEnvelopes: 768Mi
     # CPU REQUEST (as device-management above), from its one UNTHROTTLED reading: 0.37
     # cores at 6,800 events/s with a 1-core limit, rounded up to 400m. At 6,000 under

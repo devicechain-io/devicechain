@@ -10,14 +10,14 @@ import (
 	"gorm.io/gorm"
 )
 
-// pendingRevocationKick is the SNAPSHOT of the revocation-kick marker as of this migration. It is
-// not model.PendingRevocationKick and must never be replaced by it, for the reason every shape in
+// pendingRevocationExpansion is the SNAPSHOT of the revocation-kick marker as of this migration. It is
+// not model.PendingRevocationExpansion and must never be replaced by it, for the reason every shape in
 // this package gives (see migration_device_replacements.go).
 //
 // # What the table is
 //
 // One row per revocation write that still owes its per-device kick rows. A revocation that ends
-// live sessions used to write one pending_session_kicks row per affected device while holding its
+// live sessions used to write one pending_revocation_kicks row per affected device while holding its
 // trust anchor row FOR UPDATE, which for a CA-level entry over a fleet is seconds of lock held
 // against every certificate registration. It now writes this single marker inside the lock and
 // expands it into the per-device rows in a second transaction that holds no anchor lock; the
@@ -25,9 +25,9 @@ import (
 // writes the device rows, so it is empty whenever every revocation has been expanded.
 //
 // Kind is MANUAL (Fingerprint names the entry) or CRL (IssuerKey and IssuerName name the issuer,
-// and the serials the upload newly revoked are the pendingRevocationSerial rows of the same
+// and the serials the upload newly revoked are the pendingRevocationExpansionSerial rows of the same
 // Generation). Ca and LinksWhole are the revocation writer's targeting inputs.
-type pendingRevocationKick struct {
+type pendingRevocationExpansion struct {
 	TenantId      string    `gorm:"primaryKey;not null;size:128"`
 	TrustAnchorId uint      `gorm:"primaryKey;not null;autoIncrement:false"`
 	Generation    int64     `gorm:"primaryKey;not null;autoIncrement:false"`
@@ -40,10 +40,10 @@ type pendingRevocationKick struct {
 	RequestedAt   time.Time `gorm:"not null"`
 }
 
-// pendingRevocationSerial is the SNAPSHOT of the serials a CRL upload newly revoked, kept until
+// pendingRevocationExpansionSerial is the SNAPSHOT of the serials a CRL upload newly revoked, kept until
 // its marker is expanded. They are written before the anchor row is locked, so the lock covers
 // only the marker row.
-type pendingRevocationSerial struct {
+type pendingRevocationExpansionSerial struct {
 	TenantId      string `gorm:"primaryKey;not null;size:128"`
 	TrustAnchorId uint   `gorm:"primaryKey;not null;autoIncrement:false"`
 	Generation    int64  `gorm:"primaryKey;not null;autoIncrement:false"`
@@ -51,10 +51,10 @@ type pendingRevocationSerial struct {
 }
 
 // TableName is NOT declared on either type: it would bypass the area's TablePrefix (see
-// migration_list_order_indexes.go); the type names derive pending_revocation_kicks and
-// pending_revocation_serials.
+// migration_list_order_indexes.go); the type names derive pending_revocation_expansions and
+// pending_revocation_expansion_serials.
 
-// NewRevocationKickMarkersSchema creates the two tables.
+// NewRevocationExpansionMarkersSchema creates the two tables.
 //
 // # Additive only
 //
@@ -76,14 +76,14 @@ type pendingRevocationSerial struct {
 //
 // Both tables carry tenant_id, so the catalog-driven tenant purge classifies and erases them with
 // no exemption to register.
-func NewRevocationKickMarkersSchema() *gormigrate.Migration {
+func NewRevocationExpansionMarkersSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "20261111100000",
+		ID: "20261112100000",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.AutoMigrate(&pendingRevocationKick{}, &pendingRevocationSerial{})
+			return tx.AutoMigrate(&pendingRevocationExpansion{}, &pendingRevocationExpansionSerial{})
 		},
 		Rollback: func(tx *gorm.DB) error {
-			return dropTables(tx, []string{"pending_revocation_serials", "pending_revocation_kicks"})
+			return dropTables(tx, []string{"pending_revocation_expansion_serials", "pending_revocation_expansions"})
 		},
 	}
 }

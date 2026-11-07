@@ -179,7 +179,7 @@ readings per second.
   3 to 6 checkpoints in every 7.5-minute window at 4.5 to 7 MB/s of log, which is expected there and
   is not a sign that the event store is mistuned.
   An upgrade applies this to an existing store too, at its current volume size. If that volume
-  is already close to full, set `timescale_max_wal_size_mib` to 1024 to keep the previous 1 GiB.
+  is already close to full, run `dcctl upgrade --event-store-max-wal-mib 1024` to keep the previous 1 GiB (OpenTofu users set `timescale_max_wal_size_mib` to 1024).
 - **Chunk interval.** `lifecycle.chunkIntervalHours` is 24 by default and only affects chunks
   created after it changes. A chunk's indexes should fit in memory while it is being written, and
   the active chunks' indexes should fit in about a quarter of the database's RAM. At 1,000

@@ -54,6 +54,11 @@ type Options struct {
 	// BrokerMaxConnections is --broker-max-connections: nil when not given (keep what is recorded),
 	// 0 to clear it. See mqttexposure.go.
 	BrokerMaxConnections *int
+	// EventStoreMaxWALMiB is --event-store-max-wal-mib and EventStoreCheckpointTimeout is
+	// --event-store-checkpoint-timeout: nil when not given (keep what the instance has), 0 / "" to
+	// return to the derived value. Upgrade only. See eventstorewal.go.
+	EventStoreMaxWALMiB         *int
+	EventStoreCheckpointTimeout *string
 	// TrustedProxies is --trusted-proxies: nil when not given, "auto" alone to return to
 	// deriving the list from the cluster, otherwise the CIDRs to render as
 	// infrastructure.http.trustedProxies. See trustedproxies.go.

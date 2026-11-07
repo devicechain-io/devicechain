@@ -615,7 +615,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			}
 			// device-management raises it too: its heap grows with the fleet it caches.
 			if area == "device-management" {
-				wantMem = "512Mi"
+				wantMem = "768Mi"
 			}
 			want := map[string]string{
 				"limits.cpu": wantCPU, "limits.memory": wantMem,

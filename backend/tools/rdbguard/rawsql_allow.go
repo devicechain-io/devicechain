@@ -114,17 +114,18 @@ var rawSQLAllowList = []siteEntry{
 			"same statement, and only one runs. Only package constants are formatted into the text.",
 	},
 	{
-		Path: "backend/services/device-management/model/api_x509_revocation_kicks.go", Func: "crlRevocationKickTargets", Count: 1,
-		Why: "joins a CRL upload's durable set of newly revoked serials (pending_revocation_serials, one " +
-			"generation) to device_credential_chain_links. The text is constant, and the WHERE binds " +
-			"tenant_id and trust_anchor_id on BOTH tables explicitly (plus the generation, the issuer name " +
-			"and the issuer key).",
+		Path: "backend/services/device-management/model/api_x509_revocation_kicks.go", Func: "crlRevocationKickTargets", Count: 3,
+		Why: "joins a CRL upload's durable set of newly revoked serials (pending_revocation_expansion_serials, one " +
+			"generation) to device_credential_chain_links. Three statements, each constant text whose WHERE binds " +
+			"tenant_id and trust_anchor_id explicitly on every table (plus the generation, and the issuer name and " +
+			"key where it applies): the join of the serials to the links, the count of serials no link accounts " +
+			"for, and the legacy depth-0 links of other issuers.",
 	},
 	{
 		Path: "backend/services/device-management/model/api_x509_revocation_markers.go", Func: "stashCrlRevocationSerials", Count: 1,
-		Why: "copies the transaction's TEMP table of newly revoked serials into pending_revocation_serials, " +
-			"binding tenant_id and trust_anchor_id from the caller on every row it writes. The only " +
-			"formatted-in name is a package constant naming the temp table.",
+		Why: "copies the transaction's TEMP table of newly revoked serials into pending_revocation_expansion_serials, " +
+			"binding tenant_id and trust_anchor_id from the caller on every row it writes. The only formatted-in " +
+			"name is a package constant naming the temp table.",
 	},
 
 	// --- erasure ---

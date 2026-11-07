@@ -20,6 +20,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/partition"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -29,6 +30,7 @@ import (
 	"github.com/devicechain-io/dc-user-management/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/identity"
+	"github.com/devicechain-io/dc-user-management/placement"
 	"github.com/devicechain-io/dc-user-management/purge"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/devicechain-io/dc-user-management/settings"
@@ -54,6 +56,10 @@ var (
 
 	// MfaSweeper prunes idle second-factor source-failure rows.
 	MfaSweeper *identity.MfaSourceFailureSweeper
+
+	// PlacementMirror keeps the KV copy of the placement table (core/partition) equal to the
+	// database's. Nothing routes by either yet.
+	PlacementMirror *core.PeriodicTask
 
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
@@ -451,7 +457,60 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		log.Info().Msg("Dead-letter retention sweep disabled by configuration; the store grows unbounded")
 	}
 
+	if err := initPlacement(ctx); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// placementMirrorInterval is how often the placement mirror is rewritten. It is a constant, not
+// configuration: it only has to be well inside the mirror bucket's lifetime (a day), so an
+// unchanged mirror never lapses, and nothing reads the mirror yet.
+const placementMirrorInterval = 5 * time.Minute
+
+// initPlacement records the instance's placement (the vpartition count P, one shard group, no
+// pins) on first start, verifies it on every later one, and mirrors it into the broker.
+//
+// 🔴 A CHANGED P STOPS THE SERVICE. P is fixed for the instance's life (core/partition), and a
+// database or a mirror that records a different one is a restore gone wrong or a hand edit; carrying on would
+// leave every later slice routing on a lane that does not match where the data is. Everything
+// else here (the broker away, the bucket full) is retried by the mirror's own pass and changes
+// no behaviour today, since nothing reads the mirror and S = 1.
+func initPlacement(ctx context.Context) error {
+	store := iam.NewStore(RdbManager)
+	if _, err := store.EnsurePlacement(ctx, partition.DefaultP); err != nil {
+		switch {
+		case errors.Is(err, partition.ErrPChanged):
+			return fmt.Errorf("recording the instance placement: %w", err)
+		case errors.Is(err, iam.ErrPlacementInvalid):
+			// Only a changed P is fatal. A table that does not validate is an operator's repair,
+			// nothing routes by it yet, and the mirror's passes fail (and alert) until it is fixed.
+			log.Error().Err(err).Msg("The stored placement table is not usable; the placement mirror will fail " +
+				"until it is repaired. Nothing routes by it yet, so the service starts.")
+		default:
+			return fmt.Errorf("recording the instance placement: %w", err)
+		}
+	}
+	// The bucket is opened on first use and retried, never eagerly: a broker that cannot open it
+	// must not stop a service that nothing yet routes through the mirror of.
+	bucket := placement.NewLazyBucket(func() (partition.Bucket, error) {
+		placementKV, err := NatsManager.PartitionPlacementStore()
+		if err != nil {
+			return nil, err
+		}
+		return partition.FromKeyValue(placementKV), nil
+	})
+	if err := placement.Sync(ctx, store, bucket); err != nil {
+		if placement.IsFatal(err) {
+			return fmt.Errorf("mirroring the instance placement: %w", err)
+		}
+		log.Warn().Err(err).Msg("Could not mirror the placement table at start; the periodic pass will retry. " +
+			"Nothing routes by it yet, so nothing is affected.")
+	}
+	PlacementMirror = placement.NewMirrorTask(Microservice, store, bucket, placementMirrorInterval,
+		core.NewNoOpLifecycleCallbacks())
+	return PlacementMirror.Initialize(ctx)
 }
 
 // bootstrapConfig is what the identity manager seeds from: the superuser's email and
@@ -724,6 +783,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if PlacementMirror != nil {
+		if err := PlacementMirror.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -752,6 +816,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 	if MfaSweeper != nil {
 		if err := MfaSweeper.Stop(ctx); err != nil {
+			return err
+		}
+	}
+	if PlacementMirror != nil {
+		if err := PlacementMirror.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -785,6 +854,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if MfaSweeper != nil {
 		if err := MfaSweeper.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if PlacementMirror != nil {
+		if err := PlacementMirror.Terminate(ctx); err != nil {
 			return err
 		}
 	}

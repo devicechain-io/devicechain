@@ -138,7 +138,7 @@ dcctl upgrade local my-instance --version <new-version>
   为 5 分钟）；同一次基准测试中它在每个 7.5 分钟窗口内请求了 3 到 6 次检查点，日志速率为
   4.5 到 7 MB/s，这在它身上属于预期，并不表示事件库的调优有问题。
   升级时，这一设置也会按现有卷的当前大小应用到已有的事件库。如果该卷已接近写满，请把
-  `timescale_max_wal_size_mib` 设为 1024，以保留原来的 1 GiB。
+  运行 `dcctl upgrade --event-store-max-wal-mib 1024`，以保留原来的 1 GiB（使用 OpenTofu 时，把 `timescale_max_wal_size_mib` 设为 1024）。
 - **分块间隔。** `lifecycle.chunkIntervalHours` 默认为 24，且只影响修改之后创建的分块。写入期间，
   分块的索引应能放进内存，活跃分块的索引应能放进数据库内存的约四分之一。每秒 1,000 次读数时，
   一个按天的分块有几十 GB，默认值是合适的；达到每秒 10,000 次及以上时，请使用 1 到 6 小时。

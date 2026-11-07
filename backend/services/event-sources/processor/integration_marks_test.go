@@ -272,12 +272,16 @@ func TestADeviceBodyThatNamesTheIntegrationUplinkTypeIsRefused(t *testing.T) {
 // The files that may name eventtype.IntegrationUplink, relative to backend/: the registry and wire
 // plumbing of the type, the device-facing refusals, and the one producer and one consumer.
 var integrationUplinkAllowed = map[string]bool{
-	filepath.Join("services", "event-sources", "model", "events.go"):                      true,
-	filepath.Join("services", "event-sources", "proto", "marshal.go"):                     true,
-	filepath.Join("services", "event-sources", "processor", "decoders.go"):                true,
-	filepath.Join("services", "event-sources", "processor", "http_integration.go"):        true,
-	filepath.Join("services", "event-sources", "main.go"):                                 true,
-	filepath.Join("services", "device-management", "processor", "integration_resolve.go"): true,
+	filepath.Join("services", "event-sources", "model", "events.go"):                       true,
+	filepath.Join("services", "event-sources", "proto", "marshal.go"):                      true,
+	filepath.Join("services", "event-sources", "processor", "decoders.go"):                 true,
+	filepath.Join("services", "event-sources", "processor", "http_integration.go"):         true,
+	filepath.Join("services", "event-sources", "processor", "http_integration_decoder.go"): true,
+	filepath.Join("services", "event-sources", "main.go"):                                  true,
+	filepath.Join("services", "device-management", "processor", "integration_resolve.go"):  true,
+	// The consumer: the decode step, and the resolver's routing of the type to it.
+	filepath.Join("services", "device-management", "processor", "integration_decode.go"): true,
+	filepath.Join("services", "device-management", "processor", "event_resolver.go"):     true,
 }
 
 func TestNothingOutsideTheIntegrationPathNamesTheIntegrationUplinkType(t *testing.T) {

@@ -225,6 +225,13 @@ const config: Config = {
           className: 'navbar-social navbar-social--x',
           position: 'right',
         },
+        {
+          href: 'https://www.youtube.com/@devicechain-iot',
+          label: 'YouTube',
+          'aria-label': 'DeviceChain on YouTube',
+          className: 'navbar-social navbar-social--youtube',
+          position: 'right',
+        },
       ],
     },
     footer: {
@@ -251,6 +258,7 @@ const config: Config = {
             // handle itself is written out, so someone can find the account by
             // name rather than only by clicking a glyph.
             { label: 'Follow @DeviceChain_IoT', href: 'https://x.com/DeviceChain_IoT' },
+            { label: 'YouTube', href: 'https://www.youtube.com/@devicechain-iot' },
           ],
         },
       ],

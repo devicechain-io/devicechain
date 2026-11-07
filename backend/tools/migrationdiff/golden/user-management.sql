@@ -96,6 +96,8 @@ ALTER TABLE ONLY "user-management".iam_mfa_source_failures
 ALTER TABLE ONLY "user-management".iam_oauth_clients
  ADD CONSTRAINT iam_oauth_clients_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_oauth_clients ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_oauth_clients_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_partition_config
+ ADD CONSTRAINT iam_partition_config_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_roles
  ADD CONSTRAINT iam_roles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_roles ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_roles_id_seq'::regclass);
@@ -129,11 +131,15 @@ ALTER TABLE ONLY "user-management".iam_tenant_purges ALTER COLUMN id SET DEFAULT
 ALTER TABLE ONLY "user-management".iam_tenant_tiers
  ADD CONSTRAINT iam_tenant_tiers_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_tenant_tiers ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenant_tiers_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_tenant_vpartition_overrides
+ ADD CONSTRAINT iam_tenant_vpartition_overrides_pkey PRIMARY KEY (tenant_token);
 ALTER TABLE ONLY "user-management".iam_tenants
  ADD CONSTRAINT fk_iam_tenants_tier FOREIGN KEY (tier_id) REFERENCES "user-management".iam_tenant_tiers(id) ON DELETE RESTRICT;
 ALTER TABLE ONLY "user-management".iam_tenants
  ADD CONSTRAINT iam_tenants_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_tenants ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_tenants_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_vpartition_assignments
+ ADD CONSTRAINT iam_vpartition_assignments_pkey PRIMARY KEY (vpartition);
 ALTER TABLE ONLY "user-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 ALTER TABLE ONLY "user-management".secrets
@@ -472,6 +478,16 @@ CREATE TABLE "user-management".iam_oauth_clients (
  enabled boolean DEFAULT true NOT NULL,
  secret_hash character varying(100)
 );
+CREATE TABLE "user-management".iam_partition_config (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ p bigint NOT NULL,
+ generation bigint DEFAULT 0 NOT NULL,
+ CONSTRAINT chk_iam_partition_config_generation CHECK ((generation >= 0)),
+ CONSTRAINT chk_iam_partition_config_p CHECK (((p >= 1) AND (p <= 1024))),
+ CONSTRAINT chk_iam_partition_config_singleton CHECK ((id = 1))
+);
 CREATE TABLE "user-management".iam_roles (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -555,6 +571,13 @@ CREATE TABLE "user-management".iam_tenant_tiers (
  display_order bigint DEFAULT 0 NOT NULL,
  color character varying(32)
 );
+CREATE TABLE "user-management".iam_tenant_vpartition_overrides (
+ tenant_token character varying(128) NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ vpartition bigint NOT NULL,
+ CONSTRAINT chk_iam_tenant_vpartition_overrides_vp CHECK ((vpartition >= 0))
+);
 CREATE TABLE "user-management".iam_tenants (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -597,6 +620,14 @@ CREATE TABLE "user-management".iam_tenants (
  provisioning_registrations_per_second numeric,
  provisioning_burst bigint,
  mfa_required boolean DEFAULT false NOT NULL
+);
+CREATE TABLE "user-management".iam_vpartition_assignments (
+ vpartition bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ shard_group bigint DEFAULT 0 NOT NULL,
+ CONSTRAINT chk_iam_vpartition_assignments_group CHECK ((shard_group >= 0)),
+ CONSTRAINT chk_iam_vpartition_assignments_vp CHECK ((vpartition >= 0))
 );
 CREATE TABLE "user-management".purged_tenants (
  token character varying(128) NOT NULL,

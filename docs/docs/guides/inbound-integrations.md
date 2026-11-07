@@ -129,7 +129,7 @@ ChirpStack sends uplinks through an **HTTP integration** on an application.
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack adds `?event=up` itself. |
    | Headers | Name `Authorization`, value `Bearer <bearer-token>`. |
 
-3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). The platform stores the values the network server decodes; it does not decode the raw frame. Without a codec, ChirpStack sends the raw frame and no decoded object, and the uplink is [counted as undecoded](#undecoded) instead of stored. A [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain, arrives in v1.2.
+3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). The platform stores the values the network server decodes; it does not decode the raw frame. Without a codec, ChirpStack sends the raw frame and no decoded object, and the uplink is [counted as undecoded](#undecoded) instead of stored. Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias.
 
 Only uplinks are read. ChirpStack sends other events (join, status, acknowledgements) to the same URL with a different `event` value, and they are answered `204` and ignored. The uplink's `deduplicationId` must be a UUID, which ChirpStack always sends; anything else is refused with `400`. The message time is the `time` ChirpStack reports, or the time the platform received it when the field is absent.
@@ -147,7 +147,7 @@ The Things Stack sends uplinks through a **webhook** on an application.
    | Additional headers | Name `Authorization`, value `Bearer <bearer-token>`. |
    | Enabled event types | Uplink message, enabled, with the path `/uplink-message`. The platform also reads the paths `/up`, `/uplink` and `/uplinks`. |
 
-3. **Set a payload formatter** on the application or on the device (the LoRaWAN Device Repository offers one for many sensors). The platform stores the formatter's output; it does not decode the raw frame. Without one, the uplink is [counted as undecoded](#undecoded). A [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain, arrives in v1.2.
+3. **Set a payload formatter** on the application or on the device (the LoRaWAN Device Repository offers one for many sensors). The platform stores the formatter's output; it does not decode the raw frame. Without one, the uplink is [counted as undecoded](#undecoded). Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias, or their device id as a `tts.device-id` alias if you chose **Device id**.
 
 A message posted to any other path (a join accept, a downlink acknowledgement) is answered `204` and ignored, so you can enable other message types without changing anything in DeviceChain, but there is no reason to. The message time is the uplink's `received_at`, which must be present and not older than 366 days. The deduplication key is the device, the frame counter and that time together, because the counter restarts when a device rejoins.
@@ -183,7 +183,7 @@ Without `timePointer`, the platform stamps an item with the time it received it,
 
 ## Generic binary {#generic-binary}
 
-A generic binary integration accepts a body of raw bytes, with the identifier in a header or a query parameter (`idFrom` is `header:` or `query:`; a binary body has no fields to point into). The platform has no decoder for the bytes in v1, so every such uplink is accepted, counted as [undecoded](#undecoded) and its first 512 bytes kept as a sample on the integration. Use it to see what a sender sends before a decoder exists, not to store readings. A [payload decoder](./payload-decoders.md) that reads these bytes arrives in v1.2.
+A generic binary integration accepts a body of raw bytes, with the identifier in a header or a query parameter (`idFrom` is `header:` or `query:`; a binary body has no fields to point into). Without a [payload decoder](./payload-decoders.md) on the device's type, the platform cannot read the bytes, so every such uplink is accepted, counted as [undecoded](#undecoded) and its first 512 bytes kept as a sample on the integration. Use it to see what a sender sends before a decoder exists. With a decoder on the device's type, the bytes are decoded into readings.
 
 ## What is stored {#what-is-stored}
 
@@ -289,12 +289,11 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Decoders you write, running on live uplinks.** The platform stores what the network server decoded. You can already write and test a [payload decoder](./payload-decoders.md) on a device profile, but it decodes live uplinks only from v1.2, so until then the codec has to run in ChirpStack or The Things Stack, or in your generic sender.
 - **Downlink.** Commands cannot be sent to a device through a network server. See [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.
-- **Decoding a generic binary body.** It is accepted and counted, not decoded, until [payload decoders](./payload-decoders.md) decode live uplinks in v1.2.
+- **Decoding a generic binary body without a decoder.** It is accepted and counted, not decoded, unless the device's type has a [payload decoder](./payload-decoders.md).
 
 ## Troubleshooting {#troubleshooting}
 

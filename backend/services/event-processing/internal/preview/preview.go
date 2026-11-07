@@ -159,7 +159,16 @@ type ConstantSource interface {
 type Option func(*options)
 
 type options struct {
-	constants map[string][]calcfield.Constant
+	constants    map[string][]calcfield.Constant
+	appliedGuard bool
+}
+
+// WithAppliedGuard says whether the instance runs live DETECT's duplicate-event guard, which is
+// the case exactly when event envelopes are on (main.go: cfg.AppliedGuard). The preview must apply
+// the rule live applies: with envelopes off live builds no guard and counts a retransmitted
+// duplicate, so the preview counts it too. The default is OFF, live's default.
+func WithAppliedGuard(enabled bool) Option {
+	return func(o *options) { o.appliedGuard = enabled }
 }
 
 // WithDeviceConstants gives the replay each device's current constants, by device token, for the
@@ -198,7 +207,11 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		maxRead = DefaultMaxRead
 	}
 	engine := core.NewEngine(reg.Cores(), lateness)
-	applied := runtime.NewAppliedGuard(0, 0)
+	// Live's rule exactly: a guard only when the instance runs one, and none otherwise.
+	var applied *runtime.AppliedGuard
+	if o.appliedGuard {
+		applied = runtime.NewAppliedGuard(0, 0)
+	}
 	// The fence-set resolver for this preview: one memoizing reader over the frozen snapshots,
 	// scoped to this tenant for its whole life, so no replayed event can reach another tenant's
 	// fences however it is stamped.
@@ -281,8 +294,9 @@ replay:
 			if event.ProfileVersionToken != profileVersion {
 				continue
 			}
-			// An event already applied inside the guard's retention is not applied again, as live
-			// (runtime.AppliedGuard). Asked of the in-scope events only: the preview feeds one
+			// With the guard on (WithAppliedGuard: event envelopes enabled, as live) an event already
+			// applied inside the guard's retention is not applied again (runtime.AppliedGuard).
+			// With it off nothing is dropped here, because live drops nothing. Asked of the in-scope events only: the preview feeds one
 			// profile version's rules, so a copy stored under another version is not its duplicate.
 			//
 			// 🔴 THIS GUARD IS UNPRIMED AND VERSION-SCOPED, SO IT IS NOT LIVE'S. It starts empty at
@@ -291,8 +305,10 @@ replay:
 			// apply a duplicate that live would have refused. It errs toward applying, never toward
 			// dropping an event live applied; it exists so a replay of a window holding both
 			// copies does not count the event twice.
-			if id, ierr := runtime.EventIdentity(tenant, event); ierr == nil && !applied.Admit(msg.AppendTime, id) {
-				continue
+			if applied != nil {
+				if id, ierr := runtime.EventIdentity(tenant, event); ierr == nil && !applied.Admit(msg.AppendTime, id) {
+					continue
+				}
 			}
 			// Already bounded at resolution and stored that way, so replay reads the SAME instant
 			// live detection read. It used to call the clamp with a tolerance of 0, which disables

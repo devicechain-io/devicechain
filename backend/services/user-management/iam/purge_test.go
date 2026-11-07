@@ -22,7 +22,8 @@ func newPurgeTestStore(t *testing.T) *Store {
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, db.AutoMigrate(&Tenant{}, &TenantPurge{}, &TenantPurgeStore{}))
+	require.NoError(t, db.AutoMigrate(&Tenant{}, &TenantPurge{}, &TenantPurgeStore{},
+		&PartitionConfig{}, &VPartitionAssignment{}, &TenantVPartitionOverride{}))
 	return NewStore(&rdb.RdbManager{Database: db})
 }
 

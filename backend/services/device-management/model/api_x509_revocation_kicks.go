@@ -11,7 +11,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"gorm.io/gorm"
@@ -48,21 +47,6 @@ import (
 //
 // revocationLockOrder names this comment for the others to point at.
 const revocationLockOrder = "crl-writers advisory -> anchor row -> issuer rows/entries -> kick queue rows"
-
-// kickOriginRevocationBase separates the Origin of a certificate-revocation kick from a
-// provisioning profile's id, a device reset's 0, and a trust-anchor disable's kickOriginAnchorBase
-// plus id. Adding the anchor's id to a base no other namespace reaches keeps the debts apart;
-// TestKickOriginsDoNotCollide pins it.
-const kickOriginRevocationBase uint = 1 << 41
-
-// revocationKickOrigin is the queue Origin of the kicks owed because certificates under trust
-// anchor id were revoked.
-func revocationKickOrigin(anchorId uint) uint { return kickOriginRevocationBase + anchorId }
-
-// isRevocationKickOrigin is whether o names a certificate-revocation debt.
-func isRevocationKickOrigin(o uint) bool {
-	return o >= kickOriginRevocationBase && o < kickOriginDeviceDisabled
-}
 
 // DefaultRevocationResweepAfter is how long after its first sweep a revocation's kick is repeated.
 // It must outlast the admission that was in flight when the revocation committed: the callout's
@@ -247,39 +231,73 @@ func kickTokensFor(tx *gorm.DB, tenant string, anchorId uint, credentials map[ui
 }
 
 // crlRevocationKickTargets names the devices whose live sessions a CRL's newly revoked serials end
-// (the pending_revocation_serials of generation gen), read in tx. The match is a join of that set to
-// the credentials' links on (issuer name, serial), the issuer key equal or absent, so no serial
+// (the pending_revocation_expansion_serials of generation gen), read in tx. The match is a join of that
+// set to the credentials' links on (issuer name, serial), the issuer key equal or absent, so no serial
 // passes through Go. With the links not whole the kick covers the anchor, as for a manual revoke.
 func crlRevocationKickTargets(tx *gorm.DB, tenant string, anchorId uint, issuer x509trust.IssuerID, gen int64, linksWhole bool) ([]string, error) {
+	var tokens []string
+	var err error
 	if !linksWhole {
-		return anchorDeviceTokens(tx, tenant, anchorId)
+		tokens, err = anchorDeviceTokens(tx, tenant, anchorId)
+	} else {
+		var rows []struct {
+			CredentialId uint
+			Depth        int16
+		}
+		if err = tx.Raw("SELECT l.credential_id AS credential_id, l.depth AS depth FROM device_credential_chain_links l "+
+			"JOIN pending_revocation_expansion_serials n ON n.serial = l.serial "+
+			"WHERE n.tenant_id = ? AND n.trust_anchor_id = ? AND n.generation = ? "+
+			"AND l.tenant_id = ? AND l.trust_anchor_id = ? AND l.issuer_name = ? AND (l.issuer_key IS NULL OR l.issuer_key = ?)",
+			tenant, anchorId, gen, tenant, anchorId, issuer.Name, issuer.Key).Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("finding the devices whose sessions a CRL ends: %w", err)
+		}
+		credentials := map[uint]struct{}{}
+		wide := false
+		for _, r := range rows {
+			if r.Depth >= 1 {
+				wide = true
+			} else {
+				credentials[r.CredentialId] = struct{}{}
+			}
+		}
+		// 🔴 A SERIAL THAT NAMES NO LINK MAY NAME A CA WE NEVER SAW. A credential created before the
+		// links existed has only its leaf's depth-0 link, whose issuer is the intermediate; a CRL signed
+		// by the root that revokes that intermediate matches no link at all. So when some newly revoked
+		// serial is accounted for by no link, every credential whose path this CRL's issuer cannot be
+		// shown to be the end of (a legacy link: no issuer key, issued by someone other than the CRL's
+		// issuer) is asked about, never missed. A fully accounted upload (the common one: it revokes
+		// registered leaves) widens nothing.
+		if !wide {
+			var unaccounted int64
+			if err = tx.Raw("SELECT count(*) FROM pending_revocation_expansion_serials n WHERE n.tenant_id = ? AND n.trust_anchor_id = ? AND n.generation = ? AND NOT EXISTS (SELECT 1 FROM device_credential_chain_links l "+
+				"WHERE l.tenant_id = ? AND l.trust_anchor_id = ? AND l.issuer_name = ? AND l.serial = n.serial "+
+				"AND (l.issuer_key IS NULL OR l.issuer_key = ?))",
+				tenant, anchorId, gen, tenant, anchorId, issuer.Name, issuer.Key).Scan(&unaccounted).Error; err != nil {
+				return nil, fmt.Errorf("finding the devices whose sessions a CRL ends: %w", err)
+			}
+			if unaccounted > 0 {
+				var legacy []uint
+				if err = tx.Raw("SELECT credential_id FROM device_credential_chain_links "+
+					"WHERE tenant_id = ? AND trust_anchor_id = ? AND depth = 0 AND issuer_key IS NULL AND issuer_name <> ?",
+					tenant, anchorId, issuer.Name).Scan(&legacy).Error; err != nil {
+					return nil, fmt.Errorf("finding the devices whose sessions a CRL ends: %w", err)
+				}
+				for _, id := range legacy {
+					credentials[id] = struct{}{}
+				}
+			}
+		}
+		tokens, err = kickTokensFor(tx, tenant, anchorId, credentials, wide)
 	}
-	var rows []struct {
-		CredentialId uint
-		Depth        int16
-	}
-	if err := tx.Raw("SELECT l.credential_id AS credential_id, l.depth AS depth FROM device_credential_chain_links l "+
-		"JOIN pending_revocation_serials n ON n.serial = l.serial "+
-		"WHERE n.tenant_id = ? AND n.trust_anchor_id = ? AND n.generation = ? "+
-		"AND l.tenant_id = ? AND l.trust_anchor_id = ? AND l.issuer_name = ? AND (l.issuer_key IS NULL OR l.issuer_key = ?)",
-		tenant, anchorId, gen, tenant, anchorId, issuer.Name, issuer.Key).Scan(&rows).Error; err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("finding the devices whose sessions a CRL ends: %w", err)
 	}
-	credentials := map[uint]struct{}{}
-	wide := false
-	for _, r := range rows {
-		if r.Depth >= 1 {
-			wide = true
-		} else {
-			credentials[r.CredentialId] = struct{}{}
-		}
-	}
-	return kickTokensFor(tx, tenant, anchorId, credentials, wide)
+	return tokens, nil
 }
 
 // stashCrlKickSerials is the CRL upload's step 2a, BEFORE the anchor row is locked: the serials the
-// upload newly revoked (crlNewTable, built before the entries were written) are copied to the
-// durable table under a fresh generation, which the marker of step 2b carries. 0 when nothing is owed.
+// upload newly revoked (crlNewTable, built before the entries were written) are copied to the durable
+// table under a fresh generation, which the marker of step 2b carries. 0 when nothing is owed.
 func (api *Api) stashCrlKickSerials(tx *gorm.DB, tenant string, anchorId uint) (int64, error) {
 	if api.SessionKicker == nil {
 		return 0, nil
@@ -288,13 +306,13 @@ func (api *Api) stashCrlKickSerials(tx *gorm.DB, tenant string, anchorId uint) (
 }
 
 // queueCrlRevocationKicksOnTx is the CRL upload's step 2b: in the upload's transaction, with the
-// anchor locked, write the MARKER of the kicks the stashed serials (generation gen) owe. One row;
-// the per-device rows are written outside the lock (see expandRevocationMarkers).
+// anchor locked, write the MARKER of the kicks the stashed serials (generation gen) owe. One row; the
+// per-device rows are written outside the lock (see expandRevocationMarkers).
 func (api *Api) queueCrlRevocationKicksOnTx(tx *gorm.DB, tenant string, anchorId uint, issuer x509trust.IssuerID, gen int64, linksWhole bool) error {
 	if api.SessionKicker == nil {
 		return nil
 	}
-	return writeRevocationMarkerOnTx(tx, PendingRevocationKick{
+	return writeRevocationMarkerOnTx(tx, PendingRevocationExpansion{
 		TenantId: tenant, TrustAnchorId: anchorId, Generation: gen, Kind: revocationMarkerCRL,
 		LinksWhole: linksWhole, IssuerKey: &issuer.Key, IssuerName: &issuer.Name, RequestedAt: time.Now().UTC(),
 	})
@@ -339,8 +357,8 @@ func (api *Api) prepareRevocationKicks(ctx context.Context, tenant, anchorToken 
 
 // queueRevocationKicksOnTx records, in tx (the revocation's transaction, the anchor locked), that the
 // delta owes kicks: ONE marker row, expanded into the per-device rows after the commit by
-// expandRevocationMarkers, outside the lock. With no kicker wired there are no sessions of ours to
-// end and nothing is read or written. A delta names one manual entry (the only writer).
+// expandRevocationMarkers, outside the lock. With no kicker wired there are no sessions of ours to end
+// and nothing is read or written. A delta names one manual entry (the only writer).
 func (api *Api) queueRevocationKicksOnTx(tx *gorm.DB, tenant string, anchorId uint, d RevocationDelta, linksWhole bool) error {
 	if api.SessionKicker == nil || d.empty() {
 		return nil
@@ -349,7 +367,7 @@ func (api *Api) queueRevocationKicksOnTx(tx *gorm.DB, tenant string, anchorId ui
 		return errors.New("a revocation marker names exactly one manual entry")
 	}
 	fp := d.Fingerprints[0]
-	return writeRevocationMarkerOnTx(tx, PendingRevocationKick{
+	return writeRevocationMarkerOnTx(tx, PendingRevocationExpansion{
 		TenantId: tenant, TrustAnchorId: anchorId, Generation: rand.Int64(), Kind: revocationMarkerManual,
 		Ca: d.CA, LinksWhole: linksWhole, Fingerprint: &fp, RequestedAt: time.Now().UTC(),
 	})
@@ -364,17 +382,14 @@ func (api *Api) endRevokedSessions(ctx context.Context, tenant string, anchorId 
 	if api.SessionKicker == nil {
 		return nil
 	}
-	origin := revocationKickOrigin(anchorId)
 	started := time.Now().UTC()
 	// The markers first: the rows the drain below settles are written by their expansion. One that
-	// fails, or that another expander holds, stays on record and is reported below.
-	expandErr := api.expandRevocationMarkers(ctx, tenant, anchorId)
-	if err := api.drainSessionKicks(ctx, tenant, revocationInlineKickRows, func(db *gorm.DB) *gorm.DB {
-		return db.Where("origin = ?", origin)
-	}); err != nil {
+	// fails stays on record and is reported below.
+	listed, expandErr := api.expandRevocationMarkers(ctx, tenant, anchorId)
+	if err := api.drainRevocationKicks(ctx, tenant, revocationInlineKickRows, anchorId); err != nil {
 		return err
 	}
-	owed, merr := api.revocationMarkersOwed(ctx, tenant, anchorId)
+	owed, merr := api.markersStanding(ctx, tenant, listed)
 	if merr != nil {
 		return fmt.Errorf("%w: could not re-read the pending revocation markers: %v", ErrSessionsNotEnded, merr)
 	}
@@ -385,13 +400,11 @@ func (api *Api) endRevokedSessions(ctx context.Context, tenant string, anchorId 
 	// What is still owed and was due when this call began: a first sweep beyond the inline limit,
 	// or a re-sweep that came due before this call and was not reached. (A row this call settled
 	// waits for a re-sweep that is not due yet, and is not owed.)
-	var left []PendingSessionKick
-	if err := api.RDB.DB(core.WithTenant(ctx, tenant)).
-		Where("tenant_id = ? AND origin = ? AND (not_before IS NULL OR not_before <= ?)", tenant, origin, started).
-		Limit(1).Find(&left).Error; err != nil {
-		return fmt.Errorf("%w: could not re-read the pending session kicks: %v", ErrSessionsNotEnded, err)
+	left, err := api.dueRevocationKickRemains(ctx, tenant, anchorId, started)
+	if err != nil {
+		return fmt.Errorf("%w: could not re-read the pending certificate-revocation kicks: %v", ErrSessionsNotEnded, err)
 	}
-	if len(left) > 0 {
+	if left {
 		return fmt.Errorf("%w: more devices are owed a kick than one call settles; the background retry continues", ErrSessionsNotEnded)
 	}
 	return nil

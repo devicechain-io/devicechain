@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
 	"github.com/devicechain-io/dc-microservice/integrationcodec"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	graphql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +55,7 @@ func TestEveryDocumentValidatesAgainstDeviceManagementsServedSchema(t *testing.T
 	docs := map[string]string{
 		"integrationAuth": authQuery, "resolveIntegrationDevice": resolveMutation,
 		"recordIntegrationUndecoded": undecodedMutation, "recordIntegrationAuthFailure": authFailureMutation,
+		"integrationDecoder": decoderQuery,
 	}
 	for name, doc := range docs {
 		require.Contains(t, doc, name)
@@ -114,7 +115,12 @@ func (s *stub) Query(ctx context.Context, baseURL, tenant, query string, variabl
 		return err
 	}
 	if len(env.Errors) > 0 {
-		return errors.New(env.Errors[0].Message)
+		// As svcclient.Query does: the peer answered, and what it said is a GraphQLError.
+		gqlErr := &svcclient.GraphQLError{URL: baseURL}
+		for _, e := range env.Errors {
+			gqlErr.Messages = append(gqlErr.Messages, e.Message)
+		}
+		return gqlErr
 	}
 	return json.Unmarshal(env.Data, out)
 }

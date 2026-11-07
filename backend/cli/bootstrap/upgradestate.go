@@ -405,6 +405,10 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	if err := adoptBrokerMaxConnections(st, st.BrokerMaxConnections, opts.BrokerMaxConnections); err != nil {
 		return err
 	}
+	if err := checkEventStoreTuning(opts.EventStoreMaxWALMiB, opts.EventStoreCheckpointTimeout); err != nil {
+		return err
+	}
+	st.EventStoreMaxWALMiB, st.EventStoreCheckpointTimeout = opts.EventStoreMaxWALMiB, opts.EventStoreCheckpointTimeout
 
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a

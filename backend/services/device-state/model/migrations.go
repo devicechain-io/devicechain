@@ -33,5 +33,6 @@ var (
 		NewDeviceStateScopeAnchorsSchema(),
 		NewDroppedMeasurementsSchema(),
 		NewProjectionStorageSchema(),
+		NewInactivityAlarmTimeRestoreSchema(),
 	}
 )

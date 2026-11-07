@@ -625,6 +625,8 @@ enum FailedEventReason {
     NOT_GATEWAY_CHILD
     """An integration's event named a device that no longer holds the alias it was resolved from."""
     INTEGRATION_ALIAS_MISMATCH
+    """A payload decoder refused an integration's uplink; the start of the error text names why (for example no_section or invalid_output)."""
+    DECODE_FAILED
     """No reason, or one this version does not name; see reasonCode."""
     UNKNOWN
 }

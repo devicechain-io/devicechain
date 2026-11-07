@@ -4,11 +4,19 @@ sidebar_position: 1
 title: Introduction
 ---
 
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
 # DeviceChain
 
 DeviceChain is a cloud-native **IoT Application Enablement Platform** built in Go and React. It connects, manages and processes data from large, heterogeneous device fleets. It covers device lifecycle, telemetry ingestion, command and control, organizational modeling and multi-tenancy, and exposes all of it through a GraphQL API and embeddable, version-controlled dashboards.
 
 DeviceChain is a ground-up rebuild of the SiteWhere platform. It keeps SiteWhere's proven domain model and replaces the heavy Java/Spring stack with efficient, operationally simple microservices that run on any Kubernetes cluster.
+
+## See it end to end {#see-it-end-to-end}
+
+A simulated quarry on a real instance, from a reading to a rule, an alarm and a command.
+
+<YouTubeLite id="VMoWwXf4IAI" title="DeviceChain in a simulated quarry: reading, rule, alarm, command" />
 
 ## Why DeviceChain
 

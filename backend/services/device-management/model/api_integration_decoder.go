@@ -6,6 +6,8 @@ package model
 import (
 	"context"
 	"errors"
+
+	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 )
 
 // IntegrationDecoderAnswer is what the ingest path learns about a device type's payload decoder.
@@ -22,6 +24,10 @@ type IntegrationDecoderAnswer struct {
 	// EstimatedCost is its static worst-case cost, the term of the ingest charge that prices work
 	// that emits little or nothing; 0 for a decoder this build cannot run.
 	EstimatedCost uint64
+	// Cost is what EstimatedCost is made of, so that ingest prices an uplink by its actual size
+	// (payloaddecode.Plan.CostFor) instead of charging the largest parse every time. The zero
+	// value for a decoder this build cannot run.
+	Cost plancost.Shape
 	// ProfileVersionToken names the version the answer is for ("{profile}@{version}").
 	ProfileVersionToken string
 }
@@ -68,6 +74,7 @@ func IntegrationDecoder(ctx context.Context, api DeviceManagementApi, integratio
 		Input:               dec.Input(),
 		MaxReadings:         dec.MaxReadings(),
 		EstimatedCost:       dec.EstimatedCost(),
+		Cost:                dec.CostShape(),
 		ProfileVersionToken: res.Scope().ProfileVersionToken,
 	}, nil
 }

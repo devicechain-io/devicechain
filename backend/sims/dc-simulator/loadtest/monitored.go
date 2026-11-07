@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/graphqlws"
 	"github.com/devicechain-io/dc-microservice/userclient"
 	"github.com/devicechain-io/dc-simulator/loadtest/monitor"
 	"github.com/devicechain-io/dc-simulator/sim"
@@ -140,7 +141,7 @@ func RunMonitored(ctx context.Context, hs *sim.Handshake, p Profile, cohortSize 
 	}
 
 	// Subscribe before driving so the monitor catches events from the first tick.
-	mon, err := monitor.Dial(ctx, hs.Endpoints.EventMgmtWS, monitorToken)
+	mon, err := monitor.Dial(ctx, hs.Endpoints.EventMgmtWS, monitorToken, graphqlws.WithHost(hs.HostHeader))
 	if err != nil {
 		return nil, err
 	}

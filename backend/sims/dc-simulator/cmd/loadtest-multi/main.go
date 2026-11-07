@@ -122,6 +122,10 @@ func runCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "run: at least one --handshake is required")
 		return loadtest.ExitError
 	}
+	if err := loadtest.CheckLaunchCount(*expect, len(handshakes)); err != nil {
+		fmt.Fprintln(os.Stderr, "run:", err)
+		return loadtest.ExitError
+	}
 	var hs []*sim.Handshake
 	for _, p := range handshakes {
 		h, err := sim.LoadHandshake(p)

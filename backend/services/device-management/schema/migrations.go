@@ -60,6 +60,7 @@ var (
 		NewDeviceTrustAnchorsSchema(),
 		NewX509RevocationSchema(),
 		NewProfileDecodersSchema(),
-		NewRevocationKickMarkersSchema(),
+		NewRevocationKickQueueSchema(),
+		NewRevocationExpansionMarkersSchema(),
 	}
 )

@@ -98,7 +98,8 @@ func newHarness(t *testing.T, stores ...Store) *harness {
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, db.AutoMigrate(&iam.Tenant{}, &iam.TenantPurge{}, &iam.TenantPurgeStore{}))
+	require.NoError(t, db.AutoMigrate(&iam.Tenant{}, &iam.TenantPurge{}, &iam.TenantPurgeStore{},
+		&iam.PartitionConfig{}, &iam.VPartitionAssignment{}, &iam.TenantVPartitionOverride{}))
 
 	mgr := &rdb.RdbManager{Database: db}
 	store := iam.NewStore(mgr)

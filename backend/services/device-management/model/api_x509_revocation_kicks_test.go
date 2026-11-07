@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"math/big"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -80,7 +81,7 @@ func (f *revKickFixture) queueDelta(tx *gorm.DB, anchorId uint, d RevocationDelt
 	if err != nil {
 		return err
 	}
-	return f.api.queueSessionKicksOnTx(tx, "acme", revocationKickOrigin(anchorId), tokens)
+	return f.api.queueRevocationKickRowsOnTx(tx, "acme", anchorId, tokens)
 }
 
 // seam runs a revocation writer's three calls with a delta of its own: what a CRL upload does.
@@ -109,9 +110,9 @@ func (f *revKickFixture) pin(anchor, device string, leaf *pkiNode, inters ...*pk
 	return c
 }
 
-func (f *revKickFixture) rowsOfRevocation(anchorId uint) []PendingSessionKick {
+func (f *revKickFixture) rowsOfRevocation(anchorId uint) []PendingRevocationKick {
 	f.t.Helper()
-	var rows []PendingSessionKick
+	var rows []PendingRevocationKick
 	require.NoError(f.t, f.api.RDB.DB(f.ctx).Where("origin = ?", revocationKickOrigin(anchorId)).Order("device_token").Find(&rows).Error)
 	return rows
 }
@@ -480,6 +481,9 @@ func TestRevocationWithNoKickerQueuesNothing(t *testing.T) {
 	_, err := f.revokeFp("maker", x509trust.Fingerprint(leaf.cert))
 	require.NoError(t, err)
 	assert.Empty(t, f.pendingKicks())
+	var n int64
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&PendingRevocationKick{}).Count(&n).Error)
+	assert.Zero(t, n)
 }
 
 func TestValidateRevocationResweepAfter(t *testing.T) {
@@ -506,12 +510,12 @@ func TestAFleetSizedKickGivesUpAfterConsecutiveFailures(t *testing.T) {
 		tokens = append(tokens, fmt.Sprintf("dev-%05d", i))
 	}
 	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		return f.api.queueSessionKicksOnTx(tx, "acme", revocationKickOrigin(1), tokens)
+		return f.api.queueRevocationKickRowsOnTx(tx, "acme", 1, tokens)
 	}))
-	err := f.api.drainSessionKicks(f.ctx, "acme", 0, func(db *gorm.DB) *gorm.DB { return db })
+	err := f.api.drainRevocationKicks(f.ctx, "acme", 0, 0)
 	require.ErrorIs(t, err, ErrSessionsNotEnded)
 	assert.Len(t, f.kicker.calls, maxConsecutiveKickFailures, "ten chunks were owed; the pass stopped asking after three failures")
-	assert.Len(t, f.pendingKicks(), len(tokens), "nothing was lost")
+	assert.Len(t, f.rowsOfRevocation(1), len(tokens), "nothing was lost")
 }
 
 // A debt too large to settle inside the writer's own call is not reported as settled: the call asks
@@ -589,12 +593,12 @@ func TestASlowResponderDoesNotHoldADrainBeyondItsBudget(t *testing.T) {
 		tokens = append(tokens, fmt.Sprintf("dev-%05d", i))
 	}
 	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		return f.api.queueSessionKicksOnTx(tx, "acme", revocationKickOrigin(1), tokens)
+		return f.api.queueRevocationKickRowsOnTx(tx, "acme", 1, tokens)
 	}))
-	err := f.api.drainSessionKicks(f.ctx, "acme", 0, func(db *gorm.DB) *gorm.DB { return db })
+	err := f.api.drainRevocationKicks(f.ctx, "acme", 0, 0)
 	require.ErrorIs(t, err, ErrSessionsNotEnded)
 	assert.Less(t, int(slow.calls.Load()), 6, "it stopped asking when the budget ran out")
-	assert.Greater(t, len(f.pendingKicks()), 0, "and left the rest pending")
+	assert.Greater(t, len(f.rowsOfRevocation(1)), 0, "and left the rest pending")
 }
 
 type slowKicker struct {
@@ -624,7 +628,7 @@ func TestARequeueDuringTheFirstSweepIsNotSettledByIt(t *testing.T) {
 		// While the broker is being asked: another revocation of the same anchor queues the device.
 		require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
 			// The expansion of that revocation's marker writes exactly this row.
-			return f.api.queueSessionKicksOnTx(tx, "acme", revocationKickOrigin(a.ID), []string{"dev-1"})
+			return f.api.queueRevocationKickRowsOnTx(tx, "acme", a.ID, []string{"dev-1"})
 		}))
 	}
 	var once atomic.Bool
@@ -726,4 +730,116 @@ func TestRevokingACaByPemIsAnchorWideEvenWhenNoLinkNamesIt(t *testing.T) {
 	_, err = f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: "maker", CertificatePem: &leafPem})
 	require.NoError(t, err)
 	assert.Empty(t, f.kicked(), "a leaf PEM is not a CA")
+}
+
+// 🔴 A v1.1 POD'S DRAIN CANNOT TOUCH A REVOCATION KICK. During a rolling upgrade v1.1 pods drain
+// pending_session_kicks beside the new ones: they read EVERY row of a tenant, kick it under
+// "credential-changed", ignore any not_before, and DELETE it once confirmed. This runs that drain,
+// verbatim in what it reads and deletes, over a database holding revocation rows: they must survive
+// with their re-sweep intact. They survive because they are not in that table.
+func TestAV11DrainSurvivesAndNeverSeesRevocationKickRows(t *testing.T) {
+	f := newRevKickFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	ca := newRootCA(t, "Maker Root")
+	a := f.anchor("maker", ca)
+	leaf := ca.leaf(t, "SN-1")
+	f.pin("maker", "dev-1", leaf)
+	// An ordinary v1.1-owed kick, to prove the v1.1 drain below does read what is its own.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+		return f.api.queueSessionKicksOnTx(tx, "acme", kickOriginReset, []string{"dev-reset"})
+	}))
+	_, err := f.revokeFp("maker", x509trust.Fingerprint(leaf.cert))
+	require.NoError(t, err)
+	before := f.rowsOfRevocation(a.ID)
+	require.Len(t, before, 1)
+	require.NotNil(t, before[0].NotBefore, "the re-sweep is pending")
+
+	// The v1.1 drain: the v1.1 row shape (no not_before), every row of the tenant, delete by
+	// (device, origin, generation) after the kick is confirmed.
+	type v11Row struct {
+		TenantId    string
+		DeviceToken string
+		Origin      uint
+		Generation  int64
+		RequestedAt time.Time
+	}
+	db := f.api.RDB.DB(f.ctx)
+	var seen []v11Row
+	require.NoError(t, db.Table("pending_session_kicks").Where("tenant_id = ?", "acme").
+		Order("requested_at ASC, device_token ASC, origin ASC").Find(&seen).Error)
+	require.Len(t, seen, 1, "the v1.1 drain sees only the kick it owns")
+	assert.Equal(t, "dev-reset", seen[0].DeviceToken)
+	for _, r := range seen {
+		require.NoError(t, db.Table("pending_session_kicks").
+			Where("tenant_id = ? AND (device_token, origin, generation) IN ?", "acme", [][]any{{r.DeviceToken, r.Origin, r.Generation}}).
+			Delete(&v11Row{}).Error)
+	}
+
+	after := f.rowsOfRevocation(a.ID)
+	require.Len(t, after, 1, "the revocation kick survived the v1.1 drain")
+	assert.Equal(t, before[0].Generation, after[0].Generation)
+	require.NotNil(t, after[0].NotBefore)
+	assert.True(t, after[0].NotBefore.Equal(*before[0].NotBefore), "and its re-sweep time is untouched")
+	var inOld int64
+	require.NoError(t, db.Model(&PendingSessionKick{}).Where("device_token = ?", "dev-1").Count(&inOld).Error)
+	assert.Zero(t, inOld, "no revocation row was ever written to the table a v1.1 pod drains")
+}
+
+// 🔴 A ROOT'S CRL THAT REVOKES AN INTERMEDIATE ENDS THE SESSIONS OF CREDENTIALS WHOSE CHAIN WE NEVER
+// SAW. A credential created before the links existed has only its leaf's depth-0 link, issued by the
+// intermediate; the root's CRL entry for the intermediate matches no link. Any newly revoked serial
+// no link accounts for therefore asks about the legacy credentials the CRL's issuer is not shown to
+// be the end of. The control: an upload whose every entry is a registered leaf widens nothing.
+func TestCrlOfARootRevokingAnUnseenIntermediateKicksLegacyCredentials(t *testing.T) {
+	f := newCrlKickFixture(t)
+	inter := newPki(t, f.ca, pkiOpts{cn: "Line", ca: true})
+	inter2 := newPki(t, f.ca, pkiOpts{cn: "Line 2", ca: true})
+	legacyLeaf := inter.leaf(t, "SN-L")
+	lc := f.pin("dev-legacy", legacyLeaf, inter)
+	directLeaf := f.ca.leaf(t, "SN-D")
+	f.pin("dev-direct", directLeaf)
+	f.pin("dev-new", inter2.leaf(t, "SN-N"), inter2)
+	// The state before the links existed, rewritten the way the reconciler writes it.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("credential_id = ?", lc.ID).Delete(&DeviceCredentialChainLink{}).Error)
+	f.reset()
+
+	// The control: a CRL whose entries are all registered leaves widens nothing.
+	f.mustPut(f.ca.crl(t, crlSpec{number: big.NewInt(1), revoked: revokedSerials(serialOf(directLeaf.cert))}))
+	assert.Equal(t, []string{"dev-direct"}, f.kicked())
+
+	f.reset()
+	res := f.mustPut(f.ca.crl(t, crlSpec{number: big.NewInt(2),
+		revoked: revokedSerials(serialOf(directLeaf.cert), serialOf(inter.cert))}))
+	assert.True(t, res.SessionsEnded)
+	assert.Equal(t, []string{"dev-legacy"}, f.kicked(),
+		"the unseen intermediate's legacy credential is asked about; the root's own leaf is not new, and the credential with full links is not a suspect")
+}
+
+// 🔴 REPEATING A REVOCATION THAT PREDATES ITS KICK DEBT QUEUES THE DEBT, ONCE. An entry made with no
+// session kicker wired (or before the debt existed) carries no kick_queued_at; the repeat finds the
+// entry, queues what it owes, marks it, and a further repeat does not ask again.
+func TestRepeatingARevocationThatPredatesItsKickDebtQueuesItOnce(t *testing.T) {
+	f := newRevKickFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	f.anchor("maker", ca)
+	leaf := ca.leaf(t, "SN-1")
+	f.pin("maker", "dev-1", leaf)
+	fp := x509trust.Fingerprint(leaf.cert)
+
+	f.api.SessionKicker = nil
+	first, err := f.revokeFp("maker", fp)
+	require.NoError(t, err)
+	require.Nil(t, first.KickQueuedAt, "made with no kicker: no debt recorded")
+
+	f.api.SessionKicker = f.kicker
+	f.resetCalls()
+	again, err := f.revokeFp("maker", fp)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dev-1"}, f.kicked(), "the repeat queued the debt and asked about the device")
+	require.NotNil(t, again.KickQueuedAt)
+
+	f.resetCalls()
+	_, err = f.revokeFp("maker", fp)
+	require.NoError(t, err)
+	assert.Empty(t, f.kicked(), "a further repeat does not queue it again")
 }

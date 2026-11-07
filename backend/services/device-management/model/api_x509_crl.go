@@ -305,8 +305,8 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		if err := dropCrlStage(tx); err != nil {
 			return err
 		}
-		// Before the anchor lock too: the newly revoked serials are copied to the durable table, so
-		// the locked part below writes one marker row (see expandRevocationMarkers).
+		// Before the anchor lock too: the newly revoked serials are copied to the durable table, so the
+		// locked part below writes one marker row (see expandRevocationMarkers).
 		var kickGen int64
 		if keepNew && res.NewlyRevoked > 0 {
 			if kickGen, err = api.stashCrlKickSerials(tx, tenant, anchor.ID); err != nil {

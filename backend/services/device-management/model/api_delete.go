@@ -458,6 +458,13 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 				return err
 			}
 		}
+		for _, c := range locked {
+			if c.TrustAnchorId != nil && CredentialType(c.CredentialType) == CredentialX509Certificate {
+				if err := api.widenOwedMarkersOnTx(tx, c.TenantId, *c.TrustAnchorId, c.ID); err != nil {
+					return err
+				}
+			}
+		}
 		if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("token = ?", token), &credentials); err != nil {
 			return err
 		}

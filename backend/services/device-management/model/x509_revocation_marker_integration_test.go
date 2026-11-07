@@ -49,12 +49,18 @@ func (f *pgCertFixture) registerVia(leaf, inter *pkiNode) (*ProvisionResult, err
 		Leaf: leaf.cert, NotAfter: verified.NotAfter, AnchorId: f.anchor.ID, AnchorFingerprint: f.anchor.FingerprintSha256, Verified: verified}})
 }
 
-func (f *pgCertFixture) markers() int64      { return f.count(&PendingRevocationKick{}) }
-func (f *pgCertFixture) serialRows() int64   { return f.count(&PendingRevocationSerial{}) }
+// expand runs the expansion of this fixture's anchor and returns its error.
+func (f *pgCertFixture) expand() error {
+	_, err := f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID)
+	return err
+}
+
+func (f *pgCertFixture) markers() int64      { return f.count(&PendingRevocationExpansion{}) }
+func (f *pgCertFixture) serialRows() int64   { return f.count(&PendingRevocationExpansionSerial{}) }
 func (f *pgCertFixture) revocationRows() int { return len(f.revocationKickRows()) }
 
-func (f *pgCertFixture) revocationKickRows() []PendingSessionKick {
-	var out []PendingSessionKick
+func (f *pgCertFixture) revocationKickRows() []PendingRevocationKick {
+	var out []PendingRevocationKick
 	require.NoError(f.t, f.api.RDB.DB(f.ctx).Where("origin = ?", revocationKickOrigin(f.anchor.ID)).Find(&out).Error)
 	return out
 }
@@ -240,19 +246,25 @@ func TestRevocationMarkerCrlUploadExpandsOutsideTheLock(t *testing.T) {
 	_, _ = f.api.DrainSessionKicks(f.ctx, SessionKickDrainPageSize)
 	assert.EqualValues(t, 0, f.markers())
 	assert.EqualValues(t, 0, f.serialRows())
-	assert.Equal(t, map[string]bool{tokens[0]: true, tokens[1]: true}, f.kickedRevoked())
+	// Not an equality of the whole set: the drain is instance-wide and a shared server may hold another
+	// test's due rows, which it asks about too.
+	kicked := f.kickedRevoked()
+	assert.True(t, kicked[tokens[0]] && kicked[tokens[1]], "the two serials the list revokes")
+	assert.False(t, kicked[tokens[2]], "the leaf it does not name is not asked")
 }
 
 // TestRevocationMarkerLockHoldMeasurement measures how long the locked transaction of a CA-level
 // revocation holds the anchor row at fleet size: the previous design (find every device, upsert a
 // kick row each, under the lock) against the marker (one row), and the expansion that now runs
-// outside it. Skipped unless DC_MARKER_MEASURE is set:
+// outside it. Runs a small fleet unless DC_MARKER_MEASURE names sizes:
 //
 //	DC_MARKER_MEASURE=20000,100000 DC_IT_PGPORT=... go test -tags integration -count=1 ./model/ -run LockHoldMeasurement -v
 func TestRevocationMarkerLockHoldMeasurement(t *testing.T) {
+	// A small fleet by default so it runs with the rest of the integration tests; the sizes the numbers in
+	// the PR come from are set through the environment.
 	sizes := os.Getenv("DC_MARKER_MEASURE")
 	if sizes == "" {
-		t.Skip("set DC_MARKER_MEASURE=20000,100000 to measure")
+		sizes = "2000"
 	}
 	for _, field := range strings.Split(sizes, ",") {
 		n, err := strconv.Atoi(strings.TrimSpace(field))
@@ -288,17 +300,17 @@ func TestRevocationMarkerLockHoldMeasurement(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return f.api.queueSessionKicksOnTx(tx, f.tenant, revocationKickOrigin(f.anchor.ID), tokens)
+				return f.api.queueRevocationKickRowsOnTx(tx, f.tenant, f.anchor.ID, tokens)
 			})
-			require.NoError(t, f.api.RDB.DB(f.ctx).Where("tenant_id = ?", f.tenant).Delete(&PendingSessionKick{}).Error)
+			require.NoError(t, f.api.RDB.DB(f.ctx).Where("tenant_id = ?", f.tenant).Delete(&PendingRevocationKick{}).Error)
 			after := lockHold(func(tx *gorm.DB) error {
 				return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
 					RevocationDelta{Fingerprints: []string{"ab" + strings.Repeat("0", 62)}, CA: true}, true)
 			})
 			start := time.Now()
-			require.NoError(t, f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID))
+			require.NoError(t, f.expand())
 			expand := time.Since(start)
-			require.EqualValues(t, n, f.count(&PendingSessionKick{}))
+			require.EqualValues(t, n, f.count(&PendingRevocationKick{}))
 			t.Logf("n=%d: anchor lock held %s before (kick rows under the lock), %s now (marker); expansion outside the lock %s",
 				n, before, after, expand)
 		})
@@ -326,8 +338,8 @@ func TestRevocationMarkerCredentialDeletedOrMovedBeforeTheExpansionIsStillKicked
 	deletedCred, movedCred := credTokenOf(deleted), credTokenOf(moved)
 
 	var hookErr error
-	revocationExpandHook = func() error {
-		revocationExpandHook = nil
+	revocationBeforeExpandHook = func() {
+		revocationBeforeExpandHook = nil
 		f.kicker.set(false) // the writes' own inline kicks fail
 		defer f.kicker.set(true)
 		if _, err := f.api.DeleteDeviceCredential(f.ctx, deletedCred); err != nil && !errors.Is(err, ErrSessionsNotEnded) {
@@ -337,9 +349,8 @@ func TestRevocationMarkerCredentialDeletedOrMovedBeforeTheExpansionIsStillKicked
 			&DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf(target)}); err != nil && !errors.Is(err, ErrSessionsNotEnded) {
 			hookErr = err
 		}
-		return nil
 	}
-	t.Cleanup(func() { revocationExpandHook = nil })
+	t.Cleanup(func() { revocationBeforeExpandHook = nil })
 
 	_, err := f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{
 		AnchorToken: "maker", FingerprintSha256: strp(x509trust.Fingerprint(inter.cert))})
@@ -367,7 +378,7 @@ func TestRevocationMarkerConcurrentExpandersConverge(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		go func() {
 			<-start
-			errs <- f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID)
+			errs <- f.expand()
 		}()
 	}
 	close(start)
@@ -442,7 +453,7 @@ func TestRevocationMarkerDeleteRacingAMoveQueuesTheOwnerInForce(t *testing.T) {
 		}
 	}
 
-	require.NoError(t, f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID))
+	require.NoError(t, f.expand())
 	owed := map[string]bool{}
 	for _, r := range f.revocationKickRows() {
 		owed[r.DeviceToken] = true
@@ -485,7 +496,7 @@ func TestRevocationMarkerSystemDeleteOfATokenInTwoTenantsQueuesBoth(t *testing.T
 		require.ErrorIs(t, err, ErrSessionsNotEnded)
 	}
 	for i, f := range []*pgCertFixture{f1, f2} {
-		var rows []PendingSessionKick
+		var rows []PendingRevocationKick
 		require.NoError(t, f.api.RDB.DB(core.WithSystemContext(f.ctx)).
 			Where("tenant_id = ? AND origin = ?", f.tenant, revocationKickOrigin(f.anchor.ID)).Find(&rows).Error)
 		require.Len(t, rows, 1, "tenant %d", i+1)
@@ -531,7 +542,7 @@ func TestRevocationMarkerSecondMoveQueuesTheOwnerTheFirstLeftItWith(t *testing.T
 		}
 	}
 
-	require.NoError(t, f.api.expandRevocationMarkers(f.ctx, f.tenant, f.anchor.ID))
+	require.NoError(t, f.expand())
 	owed := map[string]bool{}
 	for _, r := range f.revocationKickRows() {
 		owed[r.DeviceToken] = true
@@ -574,4 +585,84 @@ func TestRevocationMarkerStaleMetadataEditDoesNotUndoAMove(t *testing.T) {
 	require.NoError(t, f.api.RDB.DB(f.ctx).Preload("Device").Where("token = ?", cred).Take(&after).Error)
 	require.NotNil(t, after.Device)
 	assert.Equal(t, "moved-to", after.Device.Token, "the edit left the credential on the device the move gave it")
+}
+
+// A writer answers for the markers it listed, not for any marker of its anchor: another writer's
+// marker committed while this call was expanding is that writer's debt, and this call still settles.
+func TestRevocationMarkerAnotherWritersMarkerIsNotThisCallsDebt(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, _ := pgIntermediateFleet(t, f, 3)
+	revocationExpandHook = func() error {
+		revocationExpandHook = nil
+		return f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+			return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+				RevocationDelta{Fingerprints: []string{strings.Repeat("cd", 32)}, CA: true}, true)
+		})
+	}
+	t.Cleanup(func() { revocationExpandHook = nil })
+
+	_, err := f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{
+		AnchorToken: "maker", FingerprintSha256: strp(x509trust.Fingerprint(inter.cert))})
+	require.NoError(t, err, "the other writer's marker is not this call's to settle")
+	assert.EqualValues(t, 1, f.markers(), "the other writer's marker stands for its own call")
+	require.NoError(t, f.expand())
+	assert.EqualValues(t, 0, f.markers())
+}
+
+// A backlog past the expansion bound does not hide the caller's own marker: the listing is newest
+// first, so the marker the call just committed is reached and its devices are kicked.
+func TestRevocationMarkerOwnMarkerIsReachedBehindABacklog(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, tokens := pgIntermediateFleet(t, f, 3)
+	oldRounds, oldMax := maxExpansionRounds, maxMarkersPerExpansion
+	maxExpansionRounds, maxMarkersPerExpansion = 1, 2
+	t.Cleanup(func() { maxExpansionRounds, maxMarkersPerExpansion = oldRounds, oldMax })
+	for i := 0; i < 5; i++ {
+		fp := strings.Repeat(fmt.Sprintf("%x", i+1), 64)
+		old := PendingRevocationExpansion{TenantId: f.tenant, TrustAnchorId: f.anchor.ID, Generation: int64(1000 + i), Kind: revocationMarkerManual,
+			LinksWhole: true, Fingerprint: &fp, RequestedAt: time.Now().UTC().Add(-time.Hour + time.Duration(i)*time.Minute)}
+		require.NoError(t, f.api.RDB.DB(f.ctx).Create(&old).Error)
+	}
+
+	_, err := f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{
+		AnchorToken: "maker", FingerprintSha256: strp(x509trust.Fingerprint(inter.cert))})
+	require.NoError(t, err)
+	for _, tok := range tokens {
+		assert.True(t, f.kickedRevoked()[tok], "%s: the caller's own marker was expanded", tok)
+	}
+}
+
+// 🔑 DELETING THE ONLY CREDENTIAL THAT MADE A REVOCATION CA-LEVEL does not narrow it. A bare-fingerprint
+// revoke of an intermediate is anchor-wide only because some link at depth 1 or more names it; the
+// credential carrying that link is deleted while the marker waits, and its links go with it. The delete
+// marks the marker "links not whole", so the expansion covers the anchor: the device registered straight
+// under the root, which no link of the intermediate reaches, is still kicked.
+func TestRevocationMarkerDeletingTheOnlyDeepLinkDoesNotNarrowTheRevocation(t *testing.T) {
+	f := newPgCertFixture(t)
+	f.api.RevocationResweepAfter = time.Hour
+	inter, viaInter := pgIntermediateFleet(t, f, 1)
+	direct, err := f.registerLeaf(f.ca.leaf(t, "SN-direct"))
+	require.NoError(t, err)
+	var creds []DeviceCredential
+	require.NoError(t, f.api.RDB.DB(f.ctx).Joins("JOIN devices ON devices.id = device_credentials.device_id").
+		Where("devices.token = ? AND device_credentials.credential_type = ?", viaInter[0], string(CredentialX509Certificate)).Find(&creds).Error)
+	require.Len(t, creds, 1)
+
+	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
+		return f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+			RevocationDelta{Fingerprints: []string{x509trust.Fingerprint(inter.cert)}}, true)
+	}))
+	f.kicker.set(false) // the delete's own inline kick fails
+	_, derr := f.api.DeleteDeviceCredential(f.ctx, creds[0].Token)
+	if derr != nil {
+		require.ErrorIs(t, derr, ErrSessionsNotEnded)
+	}
+	f.kicker.set(true)
+	require.NoError(t, f.expand())
+	require.NoError(t, f.api.drainRevocationKicks(f.ctx, f.tenant, 0, f.anchor.ID))
+	kicked := f.kickedRevoked()
+	assert.True(t, kicked[viaInter[0]], "the device whose credential was deleted")
+	assert.True(t, kicked[direct.DeviceToken], "the device under the root, reached only because the revocation stayed anchor-wide")
 }

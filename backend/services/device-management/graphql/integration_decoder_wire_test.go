@@ -28,7 +28,7 @@ import (
 
 const wireIntegrationDecoder = `query ($i: String!, $s: String!, $t: String!) {
   integrationDecoder(integration: $i, secret: $s, deviceTypeToken: $t) {
-    present input maxReadings estimatedCost profileVersionToken } }`
+    present input maxReadings estimatedCost composedCost parsesJson parsesDecoded profileVersionToken } }`
 
 func newIntegrationDecoderFixture(t *testing.T) (scopeFixture, string) {
 	t.Helper()
@@ -106,6 +106,11 @@ func TestIntegrationDecoderAnswersTheActiveVersionsDecoder(t *testing.T) {
 	assert.Equal(t, "FRAME", got["input"])
 	assert.EqualValues(t, 1, got["maxReadings"])
 	assert.Greater(t, got["estimatedCost"], float64(0))
+	// A frame decoder reads no JSON, so its whole cost is the expressions' and does not vary with
+	// the size of the uplink; ingest prices the rest by the uplink's actual size.
+	assert.Equal(t, got["estimatedCost"], got["composedCost"])
+	assert.Equal(t, false, got["parsesJson"])
+	assert.Equal(t, false, got["parsesDecoded"])
 	assert.Equal(t, "meter@1", got["profileVersionToken"])
 
 	// A publish without it withdraws it; the question is answered by the active version.

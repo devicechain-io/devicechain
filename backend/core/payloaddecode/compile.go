@@ -13,6 +13,7 @@ import (
 	"github.com/google/cel-go/common/types"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 )
 
 // Metrics is the profile's declared metrics, as the decoder sees them. The device-management
@@ -132,15 +133,12 @@ func (p *Plan) EstimatedCost() uint64 { return p.estimatedCost }
 // CostFor is the static worst-case cost of decoding in: the composition plus the parse of the
 // JSON inputs the decoder reads, at their actual sizes. It is at most EstimatedCost, and a
 // successful or failed Decode of in never spends more than it.
-func (p *Plan) CostFor(in Input) uint64 {
-	c := p.composedCost
-	if p.usesJSON {
-		c += ParseCost(len(in.JSON))
-	}
-	if p.usesDecoded {
-		c += ParseCost(len(in.Decoded))
-	}
-	return c
+func (p *Plan) CostFor(in Input) uint64 { return p.CostShape().For(len(in.JSON), len(in.Decoded)) }
+
+// CostShape is what CostFor is made of, for a caller that prices an uplink without the plan:
+// ingest holds only this and the uplink's sizes, and prices them with the same formula.
+func (p *Plan) CostShape() plancost.Shape {
+	return plancost.Shape{Composed: p.composedCost, ParsesJSON: p.usesJSON, ParsesDecoded: p.usesDecoded}
 }
 
 // InputKind is the input an uplink must carry for the decoder to run.

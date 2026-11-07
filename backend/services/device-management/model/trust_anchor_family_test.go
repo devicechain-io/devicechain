@@ -24,7 +24,7 @@ func trustAnchorFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "deviceTrustAnchor",
 		Token: "ta-1",
-		Migrate: []any{&DeviceTrustAnchor{}, &DeviceCredential{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationSerial{},
+		Migrate: []any{&DeviceTrustAnchor{}, &DeviceCredential{}, &PendingSessionKick{}, &PendingRevocationKick{}, &PendingRevocationExpansion{}, &PendingRevocationExpansionSerial{},
 			&DeviceRevocationIssuer{}, &DeviceRevocationList{}, &DeviceRevokedCertificate{}, &DeviceCredentialChainLink{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			ca := newRootCA(t, "Seed Root")

@@ -500,6 +500,10 @@ type DeviceManagementApi interface {
 	// (scheme, canonical form of value). The resolver asks it of every integration event: the route's
 	// device cache can name a device that has since lost or handed on the alias.
 	DeviceHoldsAlias(ctx context.Context, deviceId uint, scheme, value string) (bool, error)
+	// RecordIntegrationUndecoded adds count to an integration's undecoded tally and keeps the
+	// latest sample of the frame (hex). The resolver calls it for an uplink it flattened to
+	// nothing, the way the ingest route does for one it flattened itself.
+	RecordIntegrationUndecoded(ctx context.Context, integrationToken, presented string, count int64, sampleHex string) error
 
 	// Entity relationships (uniform edge model, ADR-013).
 	EntityRelationshipsById(ctx context.Context, ids []uint) ([]*EntityRelationship, error)

@@ -50,7 +50,7 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
   "device": "sensor-001",
   "eventType": "Measurement",
   "credentialType": "ACCESS_TOKEN",
-  "credentialId": "5f989616-2a0d-4160-8ae1-da5fad2898b2",
+  "credentialId": "<your-generated-credential-id>",
   "payload": { "entries": [ { "measurements": { "temperature": "21.5" } } ] }
 }
 ```

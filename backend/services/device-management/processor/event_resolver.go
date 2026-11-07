@@ -103,6 +103,12 @@ type EventResolver struct {
 	// drops counts and reports measurement entries dropped while the rest of the event is stored.
 	// Pool-wide; nil in tests that do not look at it (a nil value records nothing).
 	drops *MeasurementDropMetrics
+	// decode counts payload-decoder outcomes and the two kinds of skew a rolling publish causes.
+	// Pool-wide; a nil value counts nothing (tests that do not look at it).
+	decode *DecodeMetrics
+	// decodeObserver is told the outcome of every decode attempt (see DecodeObserver). Nil
+	// observes nothing.
+	decodeObserver DecodeObserver
 	// hold keeps an event alive, unacked and outside its delivery budget, while the
 	// relational store cannot take the lookups and writes resolution makes (core/storehold).
 	// Shared across the pool. Nil holds nothing: a resolver built without one fails the event
@@ -945,6 +951,21 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	if err != nil {
 		return nil, reason, err
 	}
+	// A reading an integration flattened at the door, for a type whose published version now has
+	// a decoder: the route's window on the plan (60 s) straddled the publish. Accepted exactly as
+	// Cut A would, and counted, so the window is visible.
+	if event.EventType == eventtype.Measurement && event.Integration != "" && res.HasDecoder() {
+		rez.decode.kindSkew(kindSkewDecoderNew)
+	}
+	return rez.finishStandardEvent(ctx, api, res, device, event)
+}
+
+// finishStandardEvent is the rest of a standard event's resolution once its one profile read is
+// in hand: validation, the payload, the anchors and the merge. A decoded integration uplink
+// enters here with the measurement its decoder produced, so everything after the decode is the
+// code an ordinary measurement runs.
+func (rez *EventResolver) finishStandardEvent(ctx context.Context, api model.DeviceManagementApi,
+	res model.ProfileResolution, device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
 	scope := res.Scope()
 
 	// Validate measurements against the device's metric definitions (resolved via
@@ -1144,6 +1165,8 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 		return rez.HandleNewRelationshipEvent(ctx, device, unresolved)
 	case eventtype.Location, eventtype.Measurement, eventtype.Alert, eventtype.StateChange:
 		return rez.HandleStandardEvent(ctx, device, unresolved)
+	case eventtype.IntegrationUplink:
+		return rez.HandleIntegrationUplink(ctx, device, unresolved)
 	default:
 		return nil, uint(resolvedevent.FailureReason_Invalid), fmt.Errorf("unhandled event type: %s", unresolved.EventType.String())
 	}
@@ -1332,13 +1355,28 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// this event rather than following it: the identity is the broker's (the gateway) plus the
 	// assignment (the child), and a gateway event carries no credential to authenticate.
 	resolve := rez.resolveDevice
+	// 🔴 AN INTEGRATION UPLINK IS TRUSTED ONLY THROUGH AN INTEGRATION'S MARK. It is raw input from
+	// a network server or a webhook, and no device path produces one (event-sources refuses it
+	// on every device-facing publish), so one that arrives without the mark is a producer that
+	// is confused or forging. It is refused here, before any device lookup, and HandleEvent
+	// refuses it again for want of the authenticated integration the mark yields.
+	if unrez.EventType == eventtype.IntegrationUplink && unrez.Integration == "" && unrez.SealedIntegrationToken == nil {
+		return nil, uint(resolvedevent.FailureReason_Unauthenticated),
+			errors.New("an integration uplink must come from an authenticated integration")
+	}
 	switch {
 	// An integration's event is decided by the integration's own authentication and device type
 	// scope (integration_resolve.go), BEFORE the gateway and credential rules: it carries no
 	// other authority, and one that claims another is refused rather than resolved by whichever
 	// check came first.
 	case unrez.Integration != "" || unrez.SealedIntegrationToken != nil:
-		resolve = rez.resolveIntegrationEvent
+		resolve = func(c context.Context, u *esmodel.UnresolvedEvent) (*model.Device, uint, error) {
+			device, auth, reason, err := rez.resolveIntegration(c, u)
+			if err == nil {
+				ctx = withIntegration(ctx, auth)
+			}
+			return device, reason, err
+		}
 	case unrez.Gateway != "":
 		resolve = rez.resolveGatewayChild
 	}
@@ -1531,9 +1569,16 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) ||
-					errors.Is(err, ErrIntegrationAliasMismatch) {
+					errors.Is(err, ErrIntegrationAliasMismatch) || errors.Is(err, ErrDecodeFailed) {
 					// An alias mismatch is dead-lettered on its first delivery, like a refusal for age:
 					// a redelivery reads the same alias row and answers the same.
+					//
+					// So is a failed decode, for the same reason: it is a pure function of the uplink
+					// and the published decoder, so a redelivery answers the same. Retrying it would
+					// multiply a broken decoder's load by MaxDeliver and hold the tenant's feedback
+					// back by minutes. This includes a decoder this build cannot run (a snapshot from
+					// a newer release): that is an operator event, and the records are what tell the
+					// operator.
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else if _, member := unresolved.MemberIndex(); member && reason != uint(resolvedevent.FailureReason_ApiCallFailed) &&

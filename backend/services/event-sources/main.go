@@ -125,6 +125,10 @@ var (
 	IntegrationRateLimiter        *core.TenantRateLimiter
 	IntegrationReadingRateLimiter *core.TenantRateLimiter
 
+	// TenantGone is the FAIL-CLOSED reading of the deleted-tenant lifecycle, shared with the
+	// envelope walks so an evicted round is not stepped past for an erased tenant: true unless a
+	// fresh answer says the tenant is active. Nil when user-management is unconfigured.
+	TenantGone func(string) bool
 	// ShedPriorityResolver resolves a tenant's ADR-063 shed priority (band) from
 	// user-management, cached like the ingest ceiling. It is what turns the contention
 	// floor into a per-tenant shed factor and what labels a shed by its class. nil when
@@ -134,6 +138,9 @@ var (
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
+	// IntegrationUplinksWriter writes the integration route's IntegrationUplink events, which go to
+	// their own stream and never to InboundEventsWriter's (streams.IntegrationUplinks says why).
+	IntegrationUplinksWriter messaging.MessageWriter
 	// InboundEnvelopeMetrics are the instruments of inbound envelopes (realised k, linger paid,
 	// settlement counters). Built once with the other instruments; nil-safe, so it exists whether
 	// or not the setting is on.
@@ -256,6 +263,10 @@ var (
 	IntegrationUplinksCounter              *prometheus.CounterVec
 	IntegrationFlattenSkippedCounter       *prometheus.CounterVec
 	IntegrationUnregisteredOverflowCounter prometheus.Counter
+	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
+	IntegrationDecoderLookupsCounter          *prometheus.CounterVec
+	IntegrationDecoderProbeUnsupportedCounter prometheus.Counter
+	IntegrationDecoderChargedCounter          prometheus.Counter
 	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
 	integrationUndecoded               []*integration.Undecoded
 	IntegrationUndecodedDroppedCounter prometheus.Counter
@@ -432,6 +443,23 @@ func initializeIntegrationMetrics() {
 	IntegrationUnregisteredOverflowCounter = Microservice.NewCounter(
 		"integration_unregistered_overflow_total",
 		"Count of unregistered-device sightings not recorded because an integration already records the most it may")
+	IntegrationDecoderLookupsCounter = Microservice.NewCounterVec(
+		"integration_decoder_lookups_total",
+		"Count of payload-decoder plan lookups made for resolved integration uplinks, by result. unsupported "+
+			"is a device-management that predates payload decoders (a rolling upgrade): those uplinks are "+
+			"flattened as before, and are counted here and not as an error",
+		[]string{"result"})
+	IntegrationDecoderProbeUnsupportedCounter = Microservice.NewCounter(
+		"integration_decoder_probe_unsupported_total",
+		"Count of calls to device-management's integrationDecoder query that a device-management without "+
+			"the query answered with a validation error. Non-zero outside a rolling upgrade means "+
+			"device-management is older than event-sources")
+	IntegrationDecoderChargedCounter = Microservice.NewCounter(
+		"integration_decoder_charged_readings_total",
+		"Count of readings charged at the reading gate for integration uplinks carried to a payload decoder")
+	for _, r := range processor.IntegrationDecoderLookupResults {
+		IntegrationDecoderLookupsCounter.WithLabelValues(r)
+	}
 	for _, t := range processor.IntegrationTypes {
 		for _, r := range processor.IntegrationRequestResults {
 			IntegrationRequestsCounter.WithLabelValues(t, r)
@@ -467,6 +495,16 @@ func integrationMetrics() processor.IntegrationMetrics {
 		UnregisteredOverflow: func() {
 			if IntegrationUnregisteredOverflowCounter != nil {
 				IntegrationUnregisteredOverflowCounter.Inc()
+			}
+		},
+		DecoderLookup: func(result string) {
+			if IntegrationDecoderLookupsCounter != nil {
+				IntegrationDecoderLookupsCounter.WithLabelValues(result).Inc()
+			}
+		},
+		DecoderCharge: func(n int) {
+			if IntegrationDecoderChargedCounter != nil {
+				IntegrationDecoderChargedCounter.Add(float64(n))
 			}
 		},
 	}
@@ -525,7 +563,12 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Sources:        sources,
 		TrustedProxies: trusted,
 		Devices:        integration.NewDevices(backend, integration.DeviceConfig{}),
-		Undecoded:      undecoded,
+		Decoders: integration.NewDecoders(backend, integration.DecoderConfig{OnUnsupported: func() {
+			if IntegrationDecoderProbeUnsupportedCounter != nil {
+				IntegrationDecoderProbeUnsupportedCounter.Inc()
+			}
+		}}),
+		Undecoded: undecoded,
 		Seal: func(tenant, integrationToken, bearer string) ([]byte, error) {
 			if SecretTransit == nil {
 				return nil, errors.New("no transit key to seal the integration token with")
@@ -692,8 +735,10 @@ func buildEventSources() error {
 	// CONNECTS are stopped at the broker callout (but an established session keeps its
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	tenantGate, tenantGoneStrict := ingestTenantGates(infra, safetyGates)
+	TenantGone = tenantGoneStrict
 	ingestGate = processor.RefuseDeletedTenants(
-		ingestTenantGate(infra, safetyGates),
+		tenantGate,
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
 		onTenantGone)
 	// The live/backlog routing decision the capture source makes once per message, sized to
@@ -1196,7 +1241,26 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 	if !ok {
 		return nil
 	}
+	if event.EventType == eventtype.IntegrationUplink {
+		return writeIntegrationUplink(ctx, source, msg)
+	}
 	return writeInbound(ctx, source, msg)
+}
+
+// writeIntegrationUplink writes an IntegrationUplink to ITS OWN stream. It is never written to
+// inbound-events: a device-management built before payload decoders reads that stream, fails to
+// unmarshal a type it does not know and dead-letters the message on delivery 1, so every
+// uplink a rolling upgrade routed to such a replica would be lost (streams.IntegrationUplinks).
+func writeIntegrationUplink(ctx context.Context, source string, msg messaging.Message) error {
+	if IntegrationUplinksWriter == nil {
+		return errors.New("no writer for the integration uplink stream")
+	}
+	err := IntegrationUplinksWriter.WriteMessages(ctx, msg)
+	IntegrationUplinksWriter.HandleResponse(err)
+	if errors.Is(err, messaging.ErrStreamBackpressure) {
+		countBackpressured(source)
+	}
+	return err
 }
 
 // writeInbound writes one message to inbound-events and accounts for a backpressure refusal.
@@ -1309,6 +1373,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	InboundEventsWriter = ievents
 
+	iuplinks, err := nmgr.NewWriter(streams.IntegrationUplinks)
+	if err != nil {
+		return err
+	}
+	IntegrationUplinksWriter = iuplinks
+
 	// The presence tap's asynchronous writer (see newPresenceWriter). Built here, once for
 	// the life of the process, and closed by stopBrokerPresence.
 	if err := buildPresenceWriter(nmgr); err != nil {
@@ -1349,7 +1419,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 				return err
 			}
 			if err := GatewaySource.UseEnvelopes(processor.CaptureEnvelopes{
-				Rounds: rounds, Former: inboundFormerConfig(), Metrics: InboundEnvelopeMetrics,
+				Rounds: rounds, Former: inboundFormerConfig(), Metrics: InboundEnvelopeMetrics, TenantGone: TenantGone,
 			}); err != nil {
 				return err
 			}
@@ -1383,10 +1453,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
 var safetyGates *governance.SafetyGates
 
-// ingestTenantGate is the deleted-tenant gate every ingest transport refuses work through: nil when
-// user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way.
-func ingestTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
-	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
+// ingestTenantGates builds the deleted-tenant gate every ingest transport refuses work through (nil
+// when user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way)
+// plus the strict (fail-closed) reading of the same cache,
+// which the envelope walks ask before stepping past a missing round (see TenantGone).
+func ingestTenantGates(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) (gate, strict func(string) bool) {
+	return governance.NewTenantLifecycleGates(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
 }
 
 func afterMicroserviceInitialized(ctx context.Context) error {

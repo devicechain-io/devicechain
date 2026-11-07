@@ -72,12 +72,20 @@ func (r *DeviceStateResolver) LastActivityTime() *string {
 	return nil
 }
 
-// InactivityAlarmTime is deprecated and derived: the sweep stamped it with the same instant as
-// lastDisconnectTime, so an INFERRED device that is currently inactive answers that, and any
-// other row answers null. The stored column is no longer read or written.
+// InactivityAlarmTime is deprecated but served exactly as it was in v1.0: the instant the
+// inactivity sweep marked the device inactive, from the stored column. The sweep sets it and
+// an active device has it cleared, so a device that went offline by a DISCONNECTED transition
+// (or was demoted to INFERRED afterwards) answers null, as it always did.
+//
+// It is not derived from lastDisconnectTime. That was tried in v1.1 and answered a time for
+// a device no sweep ever marked inactive (CONNECTED, DISCONNECTED, then demoted to INFERRED).
+// The !Active guard, and the requirement that the value not predate the last connect, cover a row
+// a v1.1 pod resurrected or reconnected without clearing the column. v1.0 stamps the value after
+// the last activity, so for a v1.0 row neither changes the answer.
 func (r *DeviceStateResolver) InactivityAlarmTime() *string {
-	if !r.M.Active && r.M.PresenceSource != model.PresenceSourceAsserted && r.M.LastDisconnectTime.Valid {
-		return util.FormatTime(r.M.LastDisconnectTime.Time)
+	if r.M.InactivityAlarmTime.Valid && !r.M.Active &&
+		!(r.M.LastConnectTime.Valid && r.M.InactivityAlarmTime.Time.Before(r.M.LastConnectTime.Time)) {
+		return util.FormatTime(r.M.InactivityAlarmTime.Time)
 	}
 	return nil
 }

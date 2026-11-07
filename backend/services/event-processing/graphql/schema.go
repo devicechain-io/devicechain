@@ -52,6 +52,9 @@ type SchemaResolver struct {
 	// formulas read them. Nil when the seam is not wired, in which case such a preview says so
 	// and skips those formulas rather than computing them with defaults.
 	Constants preview.ConstantSource
+	// AppliedGuard is whether live DETECT runs its duplicate-event guard (event envelopes on). The
+	// preview applies the same rule, so it neither drops nor keeps a duplicate differently.
+	AppliedGuard bool
 }
 
 // EventProcessingInfo resolves the scaffold identity query.

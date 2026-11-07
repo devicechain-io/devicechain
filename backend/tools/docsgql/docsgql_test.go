@@ -280,3 +280,17 @@ func TestPublishedDocsExamplesValidate(t *testing.T) {
 	t.Logf("%d graphql blocks validated, %d curl payloads, %d failed, %d skipped; per locale %v",
 		r.Checked, r.Payloads, len(r.Failures), len(r.Skips), counts)
 }
+
+// A shell variable spliced into the single-quoted body ('"$VAR"') must not end the payload.
+func TestExtractPayloadsSplicedVariable(t *testing.T) {
+	md := "```bash\ncurl -s http://localhost/api/things/graphql \\n" +
+		"  -d '{\"query\":\"mutation($r:ThingInput!){createThing(request:$r){token}}\",\n" +
+		"       \"variables\":{\"r\":{\"token\":\"'\"$ID\"'\"}}}'\n```\n"
+	ps := ExtractPayloads("x.md", []byte(md))
+	if len(ps) != 1 || ps[0].Err != "" {
+		t.Fatalf("want one clean payload, got %+v", ps)
+	}
+	if got := ps[0].Variables["r"].(map[string]any)["token"]; got != "spliced" {
+		t.Fatalf("splice not substituted: %v", got)
+	}
+}

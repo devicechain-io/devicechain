@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/storehold"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -109,11 +111,17 @@ type InboundEventsProcessor struct {
 	// empty list or a nil entry: a processor with no reader resolves nothing while reporting
 	// started.
 	InboundEventsReaders []messaging.MessageReader
-	ResolvedEventsWriter messaging.OrderedWriter
-	FailedEventsWriter   messaging.OrderedWriter
-	Api                  dmodel.DeviceManagementApi
-	AuthMode             string
-	secretTransit        *credential.SecretTransit
+	// IntegrationUplinkReaders are the pull readers on the integration-uplinks durable (one read
+	// loop each), which carry an integration's raw input to the payload decoder on the device's
+	// profile. They feed the SAME resolver pool as the inbound readers, so the uplink resolves
+	// under the same caches, hold, dispositions and publish path; only its source stream differs
+	// (see fromUplinkStream). Empty means none are read: the stream only fills (WithIntegrationUplinkReaders).
+	IntegrationUplinkReaders []messaging.MessageReader
+	ResolvedEventsWriter     messaging.OrderedWriter
+	FailedEventsWriter       messaging.OrderedWriter
+	Api                      dmodel.DeviceManagementApi
+	AuthMode                 string
+	secretTransit            *credential.SecretTransit
 	// gatewayNoticer tells a gateway its publish for a child was refused; nil sends no notice.
 	gatewayNoticer GatewayNoticer
 	// MaxFutureSkew bounds how far a device-reported instant may lead the server's
@@ -143,6 +151,10 @@ type InboundEventsProcessor struct {
 	envelopeChunkMax   int
 	env                *envelopeEngine
 	envCancel          context.CancelFunc
+	tenantGone         func(tenant string) bool
+	// envWalkGrace is how long the envelope walks get to finish once the readers have stopped,
+	// before they are cancelled; zero means the default. Tests shorten it.
+	envWalkGrace time.Duration
 
 	messages  chan messaging.Message
 	failed    chan failedItem
@@ -191,7 +203,28 @@ type InboundEventsProcessor struct {
 	// drives readLoop itself.
 	readPacers []*core.ReadPacer
 
+	// decodeObserver is told every decode outcome (WithDecodeObserver); copied to each resolver.
+	decodeObserver DecodeObserver
+
 	lifecycle core.LifecycleManager
+}
+
+// readers is every reader the processor runs a loop for: the inbound readers, then the
+// integration-uplink readers. A loop is identified by its index here.
+func (iproc *InboundEventsProcessor) readers() []messaging.MessageReader {
+	if len(iproc.IntegrationUplinkReaders) == 0 {
+		return iproc.InboundEventsReaders
+	}
+	all := make([]messaging.MessageReader, 0, len(iproc.InboundEventsReaders)+len(iproc.IntegrationUplinkReaders))
+	all = append(all, iproc.InboundEventsReaders...)
+	return append(all, iproc.IntegrationUplinkReaders...)
+}
+
+// WithIntegrationUplinkReaders gives the processor the readers of the integration-uplinks durable.
+// The durable exists only in a build that can decode, which is the point: a replica built before
+// payload decoders never subscribes to it and so can never be handed an uplink it would refuse.
+func WithIntegrationUplinkReaders(r []messaging.MessageReader) InboundOption {
+	return func(p *InboundEventsProcessor) { p.IntegrationUplinkReaders = r }
 }
 
 // pacer returns reader i's error pacer, building it when it is missing. ExecuteStart calls
@@ -236,6 +269,9 @@ type ResolveMetrics struct {
 	// longer holds the alias they were resolved from.
 	integrationAliasMismatch prometheus.Counter
 
+	// decode counts payload-decoder outcomes and the kind and charge skew of a rolling publish.
+	decode *DecodeMetrics
+
 	// notGatewayChild counts a gateway's publishes refused because the device it named is not
 	// assigned to it (or does not exist). ONE label-free counter for the pool; each refusal is
 	// also dead-lettered with reason NotGatewayChild.
@@ -258,6 +294,7 @@ type ResolveMetrics struct {
 	envProbeFailures prometheus.Counter
 	envRetries       prometheus.Counter
 	envProbeDenied   prometheus.Counter
+	envRoundsEvicted prometheus.Counter
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -271,9 +308,10 @@ type ResolveMetrics struct {
 func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 	calc := newCalcMetrics(ms)
 	return ResolveMetrics{
-		calc:  &calc,
-		drops: newMeasurementDropMetrics(ms),
-		red:   ms.NewProcessorMetrics("resolve"),
+		calc:   &calc,
+		drops:  newMeasurementDropMetrics(ms),
+		decode: newDecodeMetrics(ms),
+		red:    ms.NewProcessorMetrics("resolve"),
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
 			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling"),
@@ -299,6 +337,8 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 			"Resolved-envelope rounds the broker rejected, published again under the same id until their outcome was known"),
 		envProbeDenied: ms.NewCounter("resolve_envelope_probe_denied_total",
 			"Read-backs of a stored resolved envelope the broker REFUSED: this writer lacks the read-back grant, which no retry cures; each leaves its sources unacknowledged"),
+		envRoundsEvicted: ms.NewCounter("resolve_envelope_rounds_evicted_total",
+			"Resolved-envelope rounds a duplicate answer named whose message retention had already evicted, so the walk stepped past them: the stream holds less than one duplicate window of messages"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -352,6 +392,13 @@ func WithSplitWriter(w messaging.MessageWriter) InboundOption {
 // message (resolved_envelope.go). enabled false changes nothing at all. enabled true needs the
 // resolved writer to be a messaging.AckedWriter and rounds to be non-nil, and the processor
 // refuses to start without them - it will not publish envelopes it cannot settle.
+// WithTenantGone gives the envelope walks the erasure fence: asked when a round's message is found
+// missing, so an evicted round is not stepped past for a tenant whose data is being erased (the
+// purge is also "not found"). It must fail closed: report true when the fence cannot be read.
+func WithTenantGone(gone func(tenant string) bool) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.tenantGone = gone }
+}
+
 func WithResolvedEnvelopes(enabled bool, rounds messaging.RoundPublisher) InboundOption {
 	return func(iproc *InboundEventsProcessor) {
 		iproc.envelopeResolved = enabled
@@ -817,6 +864,14 @@ func sourceDedupID(kind, tenant string, src messaging.Message, index int) string
 	if src.StreamSeq == 0 {
 		return ""
 	}
+	// 🔴 A SEQUENCE IS UNIQUE WITHIN ITS OWN STREAM ONLY. The resolved and failed streams are shared by
+	// every source stream, so an uplink at integration-uplinks sequence 100 and an inbound event at
+	// inbound-events sequence 100 would carry the same id and the broker would store only the first:
+	// a silent, unrecoverable loss. An uplink's ids therefore lead with a kind of their own, which no
+	// inbound id can equal ("ru:acme:..." against "r:acme:...").
+	if fromUplinkStream(src) {
+		kind += dedupUplinkSuffix
+	}
 	// A member of an inbound event envelope is a source of its own at (envelope sequence,
 	// member index): the failed record is f:<tenant>:<seq>:<member>, and a resolved event
 	// is r:<tenant>:<seq>:<member>.<fan-out position>. The dot keeps every member id
@@ -841,7 +896,15 @@ func sourceDedupID(kind, tenant string, src messaging.Message, index int) string
 const (
 	dedupKindResolved = "r"
 	dedupKindFailed   = "f"
+	// dedupUplinkSuffix is appended to the kind of a publish made on behalf of an integration uplink.
+	dedupUplinkSuffix = "u"
 )
+
+// fromUplinkStream reports whether src was read from the integration-uplinks stream, by the last
+// token of its subject, which the platform sets ({instance}.{tenant}.integration-uplinks).
+func fromUplinkStream(src messaging.Message) bool {
+	return strings.HasSuffix(src.Subject, "."+streams.IntegrationUplinks)
+}
 
 // settleResolved records the outcome of publishing one resolved event against
 // its source's ack coordinator: a publish failure latches failure so the source
@@ -945,6 +1008,8 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.holdCtx = iproc.holdCtx
 		resolver.calcObs.metrics = iproc.metrics.calc
 		resolver.drops = iproc.metrics.drops
+		resolver.decode = iproc.metrics.decode
+		resolver.decodeObserver = iproc.decodeObserver
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to
@@ -1002,7 +1067,7 @@ func (iproc *InboundEventsProcessor) Start(ctx context.Context) error {
 // It is a named method rather than the body of the goroutine in ExecuteStart so the pacing
 // tests can drive the SAME line production runs.
 func (iproc *InboundEventsProcessor) readLoop(ctx context.Context, i int) {
-	messaging.RunConsumer(ctx, iproc.InboundEventsReaders[i], iproc.pacer(i), func(msg messaging.Message) bool {
+	messaging.RunConsumer(ctx, iproc.readers()[i], iproc.pacer(i), func(msg messaging.Message) bool {
 		return iproc.handOff(ctx, msg)
 	})
 }
@@ -1054,9 +1119,9 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 	if len(iproc.InboundEventsReaders) == 0 {
 		return fmt.Errorf("the inbound events processor has no reader: it would resolve nothing")
 	}
-	for i, r := range iproc.InboundEventsReaders {
+	for i, r := range iproc.readers() {
 		if r == nil {
-			return fmt.Errorf("inbound reader %d of %d is nil", i+1, len(iproc.InboundEventsReaders))
+			return fmt.Errorf("inbound reader %d of %d is nil", i+1, len(iproc.readers()))
 		}
 		// Built here, before any loop runs, so no two goroutines build pacers at once.
 		iproc.pacer(i)
@@ -1101,9 +1166,10 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 	// together, so the stop waits for the LAST reader: a reader whose pull is still in flight
 	// when the context ends returns within the fetch timeout, and handing off what it brings
 	// back after messages closed would be a send on a closed channel.
-	log.Info().Int("resolution.inboundReaders", len(iproc.InboundEventsReaders)).Msg("Reading inbound events")
-	iproc.readerWG.Add(len(iproc.InboundEventsReaders))
-	for i := range iproc.InboundEventsReaders {
+	log.Info().Int("resolution.inboundReaders", len(iproc.InboundEventsReaders)).
+		Int("integrationUplinkReaders", len(iproc.IntegrationUplinkReaders)).Msg("Reading inbound events")
+	iproc.readerWG.Add(len(iproc.readers()))
+	for i := range iproc.readers() {
 		go func(i int) {
 			defer iproc.readerWG.Done()
 			iproc.readLoop(iproc.procCtx, i)
@@ -1131,6 +1197,21 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 		iproc.procCancel()
 	}
 	iproc.readerWG.Wait() // every reader stopped: no more sends to messages
+	// 🔴 The walk-cancel grace is armed HERE, before the resolver and outbound waits below, not
+	// after them. A full walk pool blocks a writer's settle callback in startWalk, which backs up
+	// the submitters and the resolvers behind it; armed after those waits, the timer that frees
+	// the pool would never be set. Walks get 5 s from the readers stopping to finish, then are
+	// cancelled: what they leave unsettled stays unacknowledged for the next pod. Without the
+	// bound a walk retrying a round against a broker that is down would hold the shutdown past
+	// its budget.
+	if iproc.envCancel != nil {
+		wait := iproc.envWalkGrace
+		if wait <= 0 {
+			wait = 5 * time.Second
+		}
+		grace := time.AfterFunc(wait, iproc.envCancel)
+		defer grace.Stop()
+	}
 	// Nothing more is fetched from here on, so a failing stream no longer needs its
 	// consumption slowed: what is left is only what this pod already holds, and every
 	// source a failure leaves unacked is redelivered either way.
@@ -1153,14 +1234,12 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	// publish was still settling here — held past AckWait — is published again by whichever
 	// pod gets it, and the dedup id (sourceDedupID) keeps that copy out of the stream for the
 	// stream's duplicate window (streams.RedeliveryDuplicateWindowSeconds).
-	// Walks (duplicate recoveries, retried rounds) get a short grace to finish, then are cancelled:
-	// what they leave unsettled stays unacknowledged for the next pod. Without the bound a walk
-	// retrying a round against a broker that is down would hold the shutdown past its budget.
-	if iproc.envCancel != nil {
-		grace := time.AfterFunc(5*time.Second, iproc.envCancel)
-		defer grace.Stop()
-		defer iproc.envCancel()
-	}
+	// Walks are cancelled at the latest when this returns (see the grace armed above).
+	defer func() {
+		if iproc.envCancel != nil {
+			iproc.envCancel()
+		}
+	}()
 	if iproc.ResolvedEventsWriter != nil {
 		iproc.ResolvedEventsWriter.Close()
 	}

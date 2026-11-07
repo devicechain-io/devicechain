@@ -114,17 +114,17 @@ func TestMergeAndSweep(t *testing.T) {
 	if states[0].Active {
 		t.Fatalf("device should be inactive after sweep")
 	}
-	if !states[0].LastDisconnectTime.Valid {
-		t.Fatalf("inactive device missing disconnect time: %+v", states[0])
+	if !states[0].InactivityAlarmTime.Valid || !states[0].LastDisconnectTime.Valid {
+		t.Fatalf("inactive device missing alarm/disconnect times: %+v", states[0])
 	}
 
-	// A new event reconnects the device.
+	// A new event reconnects the device and clears the inactivity alarm.
 	ds, err = api.MergeDeviceState(ctx, "device-100", now.Add(1*time.Minute), nil, DeviceIdentity{})
 	if err != nil {
 		t.Fatalf("reconnect merge failed: %v", err)
 	}
-	if !ds.Active {
-		t.Fatalf("reconnect did not reactivate: %+v", ds)
+	if !ds.Active || ds.InactivityAlarmTime.Valid {
+		t.Fatalf("reconnect did not reactivate/clear alarm: %+v", ds)
 	}
 	if !ds.LastConnectTime.Time.Equal(now.Add(1 * time.Minute)) {
 		t.Fatalf("reconnect did not update connect time: %v", ds.LastConnectTime.Time)

@@ -144,6 +144,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	_, err = credential.NewChecker(attemptsKV, identity.CredentialPolicies, credential.WithServiceAccountSecretKey(saKey))
 	require.NoError(t, err)
 
+	// initPlacement: the mirrored placement table's bucket.
+	_, err = NatsManager.PartitionPlacementStore()
+	require.NoError(t, err, "the placement mirror bucket")
+
 	// afterMicroserviceStarted: NatsManager.Start runs the oncreate callback (the reader and the
 	// consumer's durable), then DeadLetterConsumer.Start.
 	require.NoError(t, NatsManager.Start(ctx), "starting under the catalog: dead-letters reader, max-delivery recorder")

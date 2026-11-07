@@ -363,7 +363,7 @@ variable "nats_memory_request" {
 }
 
 variable "nats_memory_limit" {
-  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 4Gi by default, from the duplicate-detection budget at 10,000 events/s. See modules/nats var.memory_limit, including what was not measured."
+  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 4Gi by default, from the duplicate-detection budget at 10,000 events/s; raise it when a server's working set sits at its soft limit (not only after an OOM kill), about 0.35 GiB per 1,000 events/s of design rate. See modules/nats var.memory_limit, including what was not measured."
   type        = string
   default     = "4Gi"
 
@@ -967,7 +967,8 @@ variable "timescale_max_wal_size_mib" {
     🔴 UPGRADING an existing instance applies the derived value to the volume it already has:
     on the default 32Gi the allowance goes from the stock 1 GiB to 6.4 GiB, and pg_wal may
     now grow that far between checkpoints. An event store that is already close to full has
-    less room than that to give. To keep the stock allowance, set this to 1024.
+    less room than that to give. To keep the stock allowance, set this to 1024; under dcctl,
+    `dcctl upgrade --event-store-max-wal-mib 1024` does it and records the value beside the state.
   EOT
   type        = number
   default     = 0

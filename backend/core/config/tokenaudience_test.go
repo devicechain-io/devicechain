@@ -83,6 +83,14 @@ func TestTokenAudienceRefusals(t *testing.T) {
 		})
 	}
 
+	long := "https://a.example.org/" + strings.Repeat("p", MaxTokenAudienceResourceLen)
+	assert.ErrorContains(t, TokenAudienceConfiguration{ExternalResources: []string{long}}.Validate(), "at most 2048")
+	assert.ErrorContains(t, TokenAudienceConfiguration{McpResources: []string{long}}.Validate(), "at most 2048")
+	assert.ErrorContains(t, TokenAudienceConfiguration{AreaBaseUrl: long}.Validate(), "at most 2048")
+	atCap := "https://a.example.org/" + strings.Repeat("p", MaxTokenAudienceResourceLen-len("https://a.example.org/"))
+	require.Len(t, atCap, MaxTokenAudienceResourceLen)
+	require.NoError(t, TokenAudienceConfiguration{ExternalResources: []string{atCap}}.Validate())
+
 	nine := make([]string, 9)
 	for i := range nine {
 		nine[i] = fmt.Sprintf("https://r%d.example.org", i)

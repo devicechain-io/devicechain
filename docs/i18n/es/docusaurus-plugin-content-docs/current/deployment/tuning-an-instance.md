@@ -189,8 +189,8 @@ de lecturas por segundo.
   prueba solicitó de 3 a 6 puntos de control en cada ventana de 7,5 minutos con 4,5 a 7 MB/s de
   registro, algo esperable en ella y no una señal de que el almacén de eventos esté mal ajustado.
   Una actualización lo aplica también a un almacén existente, con el tamaño actual de su volumen.
-  Si ese volumen ya está casi lleno, fije `timescale_max_wal_size_mib` en 1024 para conservar el
-  1 GiB anterior.
+  Si ese volumen ya está casi lleno, ejecute `dcctl upgrade --event-store-max-wal-mib 1024` para conservar el
+  1 GiB anterior (con OpenTofu, fije `timescale_max_wal_size_mib` en 1024).
 - **Intervalo de fragmento.** `lifecycle.chunkIntervalHours` es 24 por defecto y solo afecta a los
   fragmentos creados después de cambiarlo. Los índices de un fragmento deben caber en memoria
   mientras se escribe en él, y los de los fragmentos activos en aproximadamente una cuarta parte

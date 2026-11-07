@@ -186,15 +186,40 @@ func TestAbsorbKeepsTheShardsStampsAndTheReplayableFlag(t *testing.T) {
 	}
 }
 
-// The invariant counter and the barrier histogram are wired to the observer the engine is given.
+// The processor hands its metrics to the engine it builds as the shards' observer: a checkpoint on a
+// concurrent engine is a barrier, and its wait must land in the barrier histogram. The test goes
+// through the processor, so dropping the SetObserver call in observed() fails it.
 func TestShardObserverFeedsTheSeries(t *testing.T) {
+	ctx := context.Background()
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	m := NewDetectMetrics(ms)
-	m.InvariantViolation()
-	m.InvariantViolation()
-	if got := testutil.ToFloat64(m.shard.violations); got != 2 {
-		t.Fatalf("violations = %v, want 2", got)
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	rp := shardedProcessor(t, ctx, newTestStore(t), &valueCapture{}, 1, false)
+	rp.cfg.Shards = 2
+	rp.metrics = NewDetectMetrics(ms)
+	if err := rp.restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer rp.closeDetector()
+	for i := uint64(1); i <= 20; i++ {
+		rp.handle(shardedMessage(t, i))
+	}
+	rp.checkpoint(ctx)
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen bool
+	for _, f := range families {
+		if strings.HasSuffix(f.GetName(), "detect_barrier_wait_seconds") {
+			seen = true
+			if f.GetMetric()[0].GetHistogram().GetSampleCount() == 0 {
+				t.Fatal("a checkpoint on concurrent shards observed no barrier wait: the engine was not given the metrics as its observer")
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("the barrier histogram is not registered")
 	}
 }
 

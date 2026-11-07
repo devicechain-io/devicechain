@@ -3760,6 +3760,16 @@ type IntegrationDecoderPlan {
     maxReadings: Int!
     """The decoder's static worst-case cost; 0 when there is no decoder this build can run."""
     estimatedCost: Int!
+    """
+    The part of estimatedCost that does not depend on the size of the uplink: the decoder's
+    expressions alone. The ingest charge adds the parse of the inputs the decoder reads at their
+    actual sizes. 0 when there is no decoder this build can run.
+    """
+    composedCost: Int!
+    """Whether the decoder reads the generic item's JSON, which is parsed and priced by size."""
+    parsesJson: Boolean!
+    """Whether the decoder reads the network server's decoded object, parsed and priced by size."""
+    parsesDecoded: Boolean!
     """The profile version the answer is for, as "{profile}@{version}"; empty when there is no decoder."""
     profileVersionToken: String!
 }

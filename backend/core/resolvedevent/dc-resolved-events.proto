@@ -26,6 +26,7 @@ enum FailureReason {
     DeviceDisabled = 5; // The device was resolved, but an operator has disabled it
     NotGatewayChild = 6; // A gateway published for a device that is not assigned to it (or that does not exist)
     IntegrationAliasMismatch = 7; // An inbound integration's event named a device that no longer holds the alias the event was resolved from
+    DecodeFailed = 8; // A payload decoder refused an integration uplink (the sub-reason leads the record's error text)
 }
 
 /**
