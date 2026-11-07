@@ -294,7 +294,9 @@ phase_cluster() {
   cluster_exists && fail "kind cluster $cluster already exists: a clean start needs none (run 'hack/ttft-rig.sh down')"
   [[ ! -e "${HOME:?}/.devicechain/instances/$instance" ]] ||
     fail "$HOME/.devicechain/instances/$instance exists: it belongs to something else; pick DC_TTFT_INSTANCE"
-  if dk ps --format '{{.Names}} {{.Ports}}' | grep -q ":$https_port->"; then
+  local published
+  published="$(dk ps --format '{{.Names}} {{.Ports}}')"
+  if grep -q ":$https_port->" <<<"$published"; then
     fail "host port $https_port is already published by another container; pick DC_TTFT_HTTPS_PORT"
   fi
   # deploy/local/kind-cluster.yaml, less host ports 80 and 1883 and with 443 moved to a loopback
