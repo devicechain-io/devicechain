@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
-import { useQuery } from '@/lib/hooks/use-query';
+import { AsyncCombobox } from '@/components/ui/async-combobox';
+import { resolveDeviceType, searchDeviceTypes } from '@/lib/api/pickers';
 import { errMessage } from '@/routes/common';
-import { listDeviceTypes, createDevices } from '@/lib/api/device-management';
+import { createDevices } from '@/lib/api/device-management';
 
 // Mirrors model.MaxBulkDeviceCount — the server rejects anything larger, but the
 // form gives the same ceiling as inline feedback rather than a round-trip error.
@@ -45,15 +45,6 @@ function renderPreview(template: string, index: number): string {
 // {random} for a per-device random business id.
 export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }) {
   const { t } = useTranslation('devices');
-  const { data: types } = useQuery(
-    () => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results),
-    [],
-  );
-  const typeOptions: ComboboxOption[] = (types ?? []).map((t) => ({
-    value: t.token,
-    label: t.name || t.token,
-  }));
-
   const [deviceTypeToken, setDeviceTypeToken] = useState('');
   const [count, setCount] = useState(10);
   const [startIndex, setStartIndex] = useState(1);
@@ -132,8 +123,9 @@ export function DeviceBulkForm({ onDone }: { onDone: (message: string) => void }
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
 
       <FormField label={t('deviceTypeLabel')} htmlFor="b-type" description={t('deviceTypeBatchHint')}>
-        <Combobox
-          options={typeOptions}
+        <AsyncCombobox
+          search={searchDeviceTypes}
+          resolve={resolveDeviceType}
           value={deviceTypeToken}
           onChange={setDeviceTypeToken}
           placeholder={t('selectDeviceTypePlaceholder')}

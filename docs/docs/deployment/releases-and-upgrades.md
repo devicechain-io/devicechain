@@ -939,6 +939,12 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
 
+#### The console searches devices by name {#v120-console}
+
+Nothing here needs action. The device search and the device-type search take one new optional argument each, `nameContains`: a case-insensitive substring match on the name, where `%` and `_` match themselves and blank text matches everything. It composes with the filters the device search already had. A client that does not send it sees the same results as before.
+
+In the console, the devices list now has a name search and a device-type filter, both kept in the page address, and the type pickers on the device, bulk-create, import and provisioning-profile forms search the server as you type instead of reading the first 1,000 types.
+
 #### Other changes in this release {#v120-other-changes}
 
 Nothing here needs action beyond the two `dcctl` items in the list above. Each is a fix or an addition to something that already shipped.

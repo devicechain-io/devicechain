@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { FormField } from '@/components/ui/form-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
+import { AsyncCombobox } from '@/components/ui/async-combobox';
+import { resolveDeviceType, searchDeviceTypes } from '@/lib/api/pickers';
 import { FilePicker } from '@/components/ui/file-picker';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Textarea } from '@/components/ui/textarea';
@@ -20,11 +22,9 @@ import {
   DataTableHeaderCell,
   DataTableRow,
 } from '@/components/ui/data-table';
-import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
 import {
   importDevices,
-  listDeviceTypes,
   type DeviceImportMode,
   type DeviceImportOutcome,
 } from '@/lib/api/device-management';
@@ -77,12 +77,6 @@ const outcomeVariant = (o: DeviceImportOutcome) =>
 // the results, and are blanked when the import ends.
 export function DeviceImportForm({ onDone }: { onDone: (message: string) => void }) {
   const { t } = useTranslation('devices');
-  const { data: types } = useQuery(
-    () => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results),
-    [],
-  );
-  const typeOptions: ComboboxOption[] = (types ?? []).map((ty) => ({ value: ty.token, label: ty.name || ty.token }));
-
   const [mode, setMode] = useState<DeviceImportMode>('NONE');
   const [paste, setPaste] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
@@ -355,9 +349,10 @@ export function DeviceImportForm({ onDone }: { onDone: (message: string) => void
                 </FormField>
               ))}
               <FormField label={t('importFileTypeLabel')} htmlFor="imp-type" description={t('importFileTypeHint')}>
-                <Combobox
+                <AsyncCombobox
                   id="imp-type"
-                  options={typeOptions}
+                  search={searchDeviceTypes}
+                  resolve={resolveDeviceType}
                   value={fileType}
                   onChange={(v) => {
                     setFileType(v);

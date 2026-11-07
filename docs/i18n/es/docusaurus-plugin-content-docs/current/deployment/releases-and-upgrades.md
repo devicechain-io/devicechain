@@ -984,6 +984,12 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 
 Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge-agent"` además del agente. `agent` es una etiqueta externa global del colector de la máquina, así que un colector que también rasca otra cosa en la máquina (node exporter, por ejemplo) sumaba la memoria, la CPU, las goroutines y los archivos abiertos de ese proceso a los paneles de todos los agentes. La configuración de rascado documentada ya usa `job_name: dc-edge-agent`, de modo que un tablero importado con ella no necesita cambios. Si dio otro nombre al job, cámbielo en el colector o edite las cinco consultas de proceso y de runtime del tablero (`process_*` y `go_goroutines`) con su nombre de job. Vuelva a importar el tablero desde `backend/edge/dc-edge-agent/dashboards/edge-agent.json` para aplicar el cambio.
 
+#### La consola busca dispositivos por nombre {#v120-console}
+
+No requiere ninguna acción. La búsqueda de dispositivos y la de tipos de dispositivo aceptan un nuevo argumento opcional, `nameContains`: una coincidencia de subcadena sin distinguir mayúsculas en el nombre, donde `%` y `_` se toman literalmente y un texto en blanco coincide con todo. Se combina con los filtros que la búsqueda de dispositivos ya tenía. Un cliente que no lo envía obtiene los mismos resultados que antes.
+
+En la consola, la lista de dispositivos ahora tiene una búsqueda por nombre y un filtro por tipo de dispositivo, ambos guardados en la dirección de la página, y los selectores de tipo de los formularios de dispositivo, creación en lote, importación y perfil de aprovisionamiento buscan en el servidor mientras escribe, en lugar de leer los primeros 1.000 tipos.
+
 #### Otros cambios en esta versión {#v120-other-changes}
 
 Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista anterior. Cada uno es una corrección o una adición a algo que ya se había publicado.
