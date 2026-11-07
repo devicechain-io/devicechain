@@ -305,6 +305,17 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		if err := dropCrlStage(tx); err != nil {
 			return err
 		}
+		// Before the anchor lock too: the newly revoked serials are copied to the durable table, so the
+		// locked part below writes one marker row (see expandRevocationMarkers).
+		var kickGen int64
+		if keepNew && res.NewlyRevoked > 0 {
+			if kickGen, err = api.stashCrlKickSerials(tx, tenant, anchor.ID); err != nil {
+				return err
+			}
+			if err := dropCrlNew(tx); err != nil {
+				return err
+			}
+		}
 		if res.Unchanged {
 			return nil
 		}
@@ -327,10 +338,7 @@ func (api *Api) PutDeviceRevocationList(ctx context.Context, req *RevocationList
 		// a credential registered meanwhile has committed its links (and is matched) or waits for this
 		// commit and finds the entries.
 		if keepNew && res.NewlyRevoked > 0 {
-			if _, err := api.queueCrlRevocationKicksOnTx(tx, tenant, locked.ID, x509trust.IssuerID{Key: rl.Issuer.Key, Name: rl.Issuer.Name}, linksWhole); err != nil {
-				return err
-			}
-			return dropCrlNew(tx)
+			return api.queueCrlRevocationKicksOnTx(tx, tenant, locked.ID, x509trust.IssuerID{Key: rl.Issuer.Key, Name: rl.Issuer.Name}, kickGen, linksWhole)
 		}
 		return nil
 	})

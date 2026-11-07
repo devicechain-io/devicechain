@@ -14,6 +14,9 @@ import type {
   NotificationPolicyRegistryQuery,
   NotificationPolicyCreateRequest,
   NotificationPolicyUpdateRequest,
+  NotificationChannelRegistryQuery,
+  NotificationChannelCreateRequest,
+  NotificationChannelUpdateRequest,
 } from '@/gql/notification-management/graphql';
 
 export type NotificationPolicy = NotificationPoliciesQuery['notificationPolicies']['results'][number];
@@ -288,4 +291,102 @@ const DELETE_NOTIFICATION_POLICY = graphql(`
 export async function deleteNotificationPolicy(token: string): Promise<boolean> {
   const data = await gql('notification-management', DELETE_NOTIFICATION_POLICY, { token });
   return data.deleteNotificationPolicy;
+}
+
+// ── The channel registry (list / create / edit / delete) ──
+//
+// A channel is {type, non-secret config, write-only secret}. The secret is never selected
+// (it is never returned); `hasSecret` says whether one is stored. An edit sends the secret
+// only when the operator typed a new one, which leaves the stored one in place otherwise.
+
+const NOTIFICATION_CHANNEL_REGISTRY = graphql(`
+  query NotificationChannelRegistry($criteria: NotificationChannelSearchCriteria!) {
+    notificationChannels(criteria: $criteria) {
+      results {
+        id
+        token
+        name
+        description
+        channelType
+        config
+        hasSecret
+        enabled
+        updatedAt
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+export type NotificationChannelRecord =
+  NotificationChannelRegistryQuery['notificationChannels']['results'][number];
+export type NotificationChannelSearchResults = NotificationChannelRegistryQuery['notificationChannels'];
+export type { NotificationChannelCreateRequest, NotificationChannelUpdateRequest };
+
+export async function listNotificationChannelRecords(opts: {
+  pageNumber: number;
+  pageSize: number;
+}): Promise<NotificationChannelSearchResults> {
+  const data = await gql('notification-management', NOTIFICATION_CHANNEL_REGISTRY, {
+    criteria: { pageNumber: opts.pageNumber, pageSize: opts.pageSize },
+  });
+  return data.notificationChannels;
+}
+
+const NOTIFICATION_CHANNEL_TYPES = graphql(`
+  query NotificationChannelTypes {
+    notificationChannelTypes {
+      id
+      label
+      description
+      available
+    }
+  }
+`);
+
+export async function listNotificationChannelTypes() {
+  const data = await gql('notification-management', NOTIFICATION_CHANNEL_TYPES);
+  return data.notificationChannelTypes;
+}
+
+const CREATE_NOTIFICATION_CHANNEL = graphql(`
+  mutation CreateNotificationChannel($request: NotificationChannelCreateRequest!) {
+    createNotificationChannel(request: $request) {
+      token
+    }
+  }
+`);
+
+export async function createNotificationChannel(request: NotificationChannelCreateRequest) {
+  const data = await gql('notification-management', CREATE_NOTIFICATION_CHANNEL, { request });
+  return data.createNotificationChannel;
+}
+
+const UPDATE_NOTIFICATION_CHANNEL = graphql(`
+  mutation UpdateNotificationChannel($token: String!, $request: NotificationChannelUpdateRequest!) {
+    updateNotificationChannel(token: $token, request: $request) {
+      token
+    }
+  }
+`);
+
+/** A PARTIAL update: omit a field to keep it, send `null` to clear it, a value to set it. */
+export async function updateNotificationChannel(token: string, request: NotificationChannelUpdateRequest) {
+  const data = await gql('notification-management', UPDATE_NOTIFICATION_CHANNEL, { token, request });
+  return data.updateNotificationChannel;
+}
+
+const DELETE_NOTIFICATION_CHANNEL = graphql(`
+  mutation DeleteNotificationChannel($token: String!) {
+    deleteNotificationChannel(token: $token)
+  }
+`);
+
+export async function deleteNotificationChannel(token: string): Promise<boolean> {
+  const data = await gql('notification-management', DELETE_NOTIFICATION_CHANNEL, { token });
+  return data.deleteNotificationChannel;
 }

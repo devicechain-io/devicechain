@@ -2432,6 +2432,21 @@ export type PayloadDecoderFunctionsQueryVariables = Exact<{ [key: string]: never
 
 export type PayloadDecoderFunctionsQuery = { payloadDecoderFunctions: Array<{ name: string, signature: string, description: string }> };
 
+export type PayloadDecoderHealthQueryVariables = Exact<{
+  profileToken: string;
+  minutes?: number | null | undefined;
+}>;
+
+
+export type PayloadDecoderHealthQuery = { payloadDecoderHealth: { decoded: number, ignored: number, failed: number, suppressed: number } };
+
+export type PayloadDecoderSamplesQueryVariables = Exact<{
+  profileToken: string;
+}>;
+
+
+export type PayloadDecoderSamplesQuery = { payloadDecoderSamples: Array<{ id: string, profileVersion: number, createdAt: string, deviceToken: string, reason: string, error: string }> };
+
 export type ProvisioningProfilesQueryVariables = Exact<{
   criteria: ProvisioningProfileSearchCriteria;
 }>;
@@ -4941,6 +4956,28 @@ export const PayloadDecoderFunctionsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<PayloadDecoderFunctionsQuery, PayloadDecoderFunctionsQueryVariables>;
+export const PayloadDecoderHealthDocument = new TypedDocumentString(`
+    query PayloadDecoderHealth($profileToken: String!, $minutes: Int) {
+  payloadDecoderHealth(profileToken: $profileToken, minutes: $minutes) {
+    decoded
+    ignored
+    failed
+    suppressed
+  }
+}
+    `) as unknown as TypedDocumentString<PayloadDecoderHealthQuery, PayloadDecoderHealthQueryVariables>;
+export const PayloadDecoderSamplesDocument = new TypedDocumentString(`
+    query PayloadDecoderSamples($profileToken: String!) {
+  payloadDecoderSamples(profileToken: $profileToken) {
+    id
+    profileVersion
+    createdAt
+    deviceToken
+    reason
+    error
+  }
+}
+    `) as unknown as TypedDocumentString<PayloadDecoderSamplesQuery, PayloadDecoderSamplesQueryVariables>;
 export const ProvisioningProfilesDocument = new TypedDocumentString(`
     query ProvisioningProfiles($criteria: ProvisioningProfileSearchCriteria!) {
   provisioningProfiles(criteria: $criteria) {

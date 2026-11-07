@@ -642,6 +642,10 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
 - **滚动升级期间，只有当每个 `device-management` 副本都运行本版本之后，才发布解码器。**由旧副本处理请求时发布的版本，会在没有解码器的情况下被冻结，因为该副本不认识这个字段。升级完成后，请检查你发布的版本上是否存在 `DeviceProfileVersion.decoder`，如果没有，请重新发布。
 
+#### 控制台显示解码器的运行状况 {#v120-decoder-console}
+
+设备配置文件的**解码器**标签页现在显示该配置文件解码器最近 24 小时的情况：已解码、已忽略、失败和未记录的上行数量（参见[持续失败的载荷解码器有预算限制](#v120-decoder-budget)），以及作为样本保留的失败上行，每条都有一个按钮，可将其载入测试面板。一个链接会打开按 `DECODE_FAILED` 过滤的**失败事件**页面；该页面现在把这个原因作为独立的过滤项，并接受 `?reason=DECODE_FAILED`。标签页的这两部分都需要 `device:write`，与其背后的查询一致。升级时无需任何操作：这只涉及控制台，使用的是前面已介绍的 `payloadDecoderHealth` 和 `payloadDecoderSamples` 查询。
+
 #### X.509 吊销列表 {#v120-x509-crl}
 
 租户现在可以把证书颁发机构的吊销列表（CRL）存放到信任锚上，每个信任锚也有了吊销模式。没有列表、也没有手动吊销的信任锚，行为与以前完全一致。
@@ -652,12 +656,19 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **`REQUIRE_CURRENT` 按信任锚自行选择启用。** 如果信任锚没有任何有效列表，或者某个已注册证书的颁发 CA 没有有效列表，平台会拒绝切换到该模式，因为切换后所有此类设备都会被拒绝。
 - **滚动升级期间**，尚未替换的副本在回答代理的授权回调时不检查吊销，因此吊销只有在滚动完成后才会在各处生效。回退到 `v1.1.0` 时这些表保留但不再被读取：吊销将不再生效。
 
+#### C# SDK 中的客户端证书 {#v120-sdk-x509}
+
+C# SDK 和 Unity 包现在可以用 X.509 客户端证书连接设备。这是增量变更：未设置证书的会话不受影响，升级无需任何操作。
+
+- **把 `MqttSessionOptions.ClientCertificate` 设为** 从 PFX 或 PEM 文件加载的 `MqttClientCertificate`。会话随后用用户名 `{tenant}:@x509` 且无密码连接。见[从 C# SDK 连接](../guides/device-x509.md#csharp-sdk)。
+- **只能出示 RSA 和 ECDSA 密钥**，因为 .NET 没有 Ed25519。代理地址必须是 `ssl://`；明文地址会在构造会话时被拒绝。
+
 #### 吊销证书会结束已打开的会话 {#v120-x509-sessions}
 
 无论是手动吊销证书，还是上传点名该证书的 CRL，现在都会同时结束受影响设备已打开的会话。此前，已打开的会话会一直保持到令牌过期（默认最长 12 小时）。没有任何吊销操作的实例不受影响。
 
 - **叶证书会结束持有它的设备的会话。** 吊销证书颁发机构的范围更大：当您通过提供 CA 证书来吊销 CA，或某个 CRL 点名了已注册凭据被发现使用过的中间证书时，该信任锚下**所有拥有证书凭据的设备**的会话都会被结束。这些设备会自行重新连接；证书链仍受信任的设备会立即被接纳。一次调用自身会结束最多约 5,000 台设备的会话，因此 CA 级吊销可能让大约这么多设备在同一时刻重新连接；其余的在后台结束。**在从早期版本升级而来的实例上**，升级前注册的凭据没有记录中间证书，因此当某个 CRL 新增了与任何已存储凭据都不匹配的条目时，也会结束这些旧凭据的会话，以防该条目是它们所用的中间证书。
-- **会话会被结束两次。** 第一次在吊销提交时，第二次约 10 秒之后。第二次用于捕获吊销瞬间正在被接纳的设备。因此 CA 级吊销会对整个信任锚询问两次。
+- **会话会被结束两次。** 第一次在吊销提交时，第二次约 10 秒之后。第二次用于捕获吊销瞬间正在被接纳的设备。延迟由固定设置 `deviceManagement.callout.revocation.resweepAfter` 决定（默认 10 秒，最长 5 分钟）；它必须大于 callout 查询超时加上代理 5 秒的授权超时，否则 `device-management` 会拒绝启动。因此 CA 级吊销会对整个信任锚询问两次。
 - **面对响应缓慢的服务时，吊销可能耗时较长。** 调用最多会等待负责结束会话的服务（`event-sources`）约 90 秒。如果无法确认，吊销依然有效，新连接会被拒绝；结果会显示 `sessionsEnded: false`，平台会持续重试，重复执行吊销或上传也会再次询问。
 - **在滚动升级期间**，新的会话终止请求带有 `event-sources` 必须识别的新原因。在 `event-sources` 被替换之前，这些请求会保持待处理并被重试，因此升级过程中进行的吊销会在 `event-sources` 更新完成后结束已打开的会话。上一版本的 Pod 既不会处理这些待处理的请求，也不会删除它们。
 
@@ -709,6 +720,10 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 
 边缘代理看板的进程面板除选择代理外，还选择 `job="dc-edge-agent"`。`agent` 是机器上采集器的全局外部标签，因此如果采集器还抓取了机器上的其他进程（例如 node exporter），那个进程的内存、CPU、goroutine 和打开的文件就会被加进每个代理的面板。文档中的抓取配置已使用 `job_name: dc-edge-agent`，按它导入的看板无需改动。如果您给作业起了别的名字，请在采集器中改名，或把看板上五个进程与运行时查询（`process_*` 和 `go_goroutines`）改成您的作业名。请从 `backend/edge/dc-edge-agent/dashboards/edge-agent.json` 重新导入看板以应用此变更。
 
+#### 实例在数据库之外保存的内容已分类 {#v120-backup-classification}
+
+[灾难恢复](./disaster-recovery.md#other-state)页面现在用一张由平台自身声明生成的表，说明恢复对每个消息流、键值存储桶和对象存储负有什么义务。三项需要单独备份：原始采集流、无法送达的出站连接器投递的死信流，以及保存更新制品和品牌图片的对象存储。其余一切都会从数据库重建，或存活时间很短。本版本不改变任何行为，也不提供针对消息流的备份工具。它新增了该页面、一项在添加未分类的消息流或存储桶时会失败的测试，以及对象存储的规则：在与之配套的数据库基础备份之后再做副本。
+
 #### 本版本的其他变更 {#v120-other-changes}
 
 除上面列表中的两项 `dcctl` 变更外，这里的内容都不需要你采取行动。每一项都是对已发布功能的修复或补充。
@@ -730,13 +745,24 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 - **基础设施。**未设置 `nats_mqtt_capable_users` 时，OpenTofu 的 broker 模块不再写出会被 broker 拒绝的空 `allowed_connection_types`；事件库备份的证书修复器会监视运营商配置的命名空间。
 - **`dcctl upgrade` 现在接受 `--yes`（`-y`），与 `dcctl install` 和 `dcctl bootstrap` 一致，并能找到用 `--escrow-file` 写出的托管文件。**`--yes` 表示对提示一律回答是；升级不会提问，所以它不改变任何行为，脚本现在可以把它同时传给这三个命令。`dcctl bootstrap --escrow-file` 会记录托管文件的写入位置，升级的根密钥托管检查会到那里查找，因此对于托管文件位于自定义路径的实例，不再报告“没有托管”。对于更早创建的实例，请给升级传一次 `--escrow-file`，它会记录该路径。
 
+#### 三个新的仪表板组件 {#v120-widgets}
+
+**Add widget** 菜单的 Telemetry 分组新增了三个组件。它们是对现有组件的补充，不改变任何现有组件，不使用它们的仪表板不受影响。
+
+- **Status grid**（状态网格）为设备组中的每台设备显示一个方块，针对一个测量值，按每台设备最新读数所处的阈值区间着色。没有读数的设备以空心方块显示并单独计数，绝不会显示为正常。
+- **State timeline**（状态时间线）把一台设备的各测量值显示为仪表板时间范围内的离散状态泳道，阈值即状态。每一段是某个时间桶平均值所处的状态，组件会注明这一点。
+- **Scada symbol**（SCADA 符号）按一个测量值决定的状态绘制泵、阀门、储罐、电机、风扇、管段、传感器、断路器或指示灯：运行、停止或故障，管段还会显示流向，支持亮色和暗色模式；系统要求减少动态效果时保持静止。
+
+无需任何操作。各组件的选项见[仪表板](../user-guide/dashboards.md#adding-a-widget)。
+
 #### 架构变更与回退 {#v120-going-back}
 
-六个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
+七个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
 
 - **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
 - **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
 - **吊销触发的会话终止队列**（`device-management`，迁移 `20261111120000`）。一张新表 `pending_revocation_kicks`，以及一个允许为空的新列：`device_revoked_certificates` 上的 `kick_queued_at`。该表与现有的会话终止队列分开，因此 `v1.1.0` 的副本永远不会读取或删除其中的行。
+- **吊销触发的会话终止标记**（`device-management`，迁移 `20261112100000`）。两张新表：`pending_revocation_expansions` 和 `pending_revocation_expansion_serials`。在逐设备的终止记录写入之前，它们保存仍欠这些记录的吊销，因此吊销在为信任锚下的每个设备排队终止时不再占用该信任锚。`v1.1.0` 的副本永远不会读取它们。
 - **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
 - **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。迁移本身不写入任何行；`user-management` 首次启动时会写入默认放置（`iam_partition_config` 一行和 `iam_vpartition_assignments` 64 行），并在消息 broker 中创建 `dc_partition_placement` 存储桶。
 - **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
@@ -744,6 +770,15 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 除这份默认放置外，新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们，只有一个例外：见下文的租户删除。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
 
 **当运行租户删除的是 `v1.1.0` 的 `user-management` 副本时，删除会被卡住。** `v1.1.0` 的副本不认识这三张放置表，它的关系型清除在遇到无法归类的表时会拒绝运行。只要由它执行清除，关系型存储就会为该删除报告错误，日志和账本失败记录中会点出 `iam_partition_config`、`iam_vpartition_assignments` 或 `iam_tenant_vpartition_overrides`，同时 `tenant_purge_store_blocked{store="rdb",reason="error"}` 大于零。被拒绝的这一步不会从数据库删除任何内容，也不会丢失任何数据；其他存储在同一轮中照常被清除。删除无法完成：租户保持在 `purging` 状态。运行本版本的副本会在下一轮接手，并在其通常的检查满足后完成。滚动升级期间，最后一个 `v1.1.0` 副本消失后会自行完成；回退到 `v1.1.0` 后则一直被卡住，直到你再次向前升级。条件允许时，请在升级完成后再发起删除。
+
+#### 原生 Slack、Teams 和 PagerDuty 通知渠道 {#v120-notification-channels}
+
+通知渠道新增三种类型：`slack`、`teams` 和 `pagerduty`。它们是增量的：现有 `smtp` 或 `webhook` 渠道不受影响，通过 `webhook` 渠道访问的 Slack 入站 webhook 仍照常工作。
+
+- **升级时无需任何操作。** 新类型的渠道需要密钥（webhook URL 或 PagerDuty 路由密钥），没有密钥时保存会被拒绝。参见[原生 Slack、Teams 和 PagerDuty 渠道](../guides/notification-channels.md#native-channels)。
+- **请注意，新类型与 webhook 经过同一道出站防护。** 指向私有、环回或云元数据地址的目标会被拒绝，并计入 `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`。
+- **请注意，`notificationChannelTypes` 查询现在多列出三种类型，** GraphQL 模式只有描述发生变化。对渠道类型做穷尽匹配的客户端会多看到三个值。
+- **控制台新增了通知渠道页面，** 可配置所有类型的渠道。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 

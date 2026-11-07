@@ -2414,6 +2414,273 @@ export declare const WIDGET_OPTIONS: {
             readonly helpId: 'widgetHintWindowSeconds';
         };
     }>;
+    readonly 'scada-symbol': import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly symbol: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "pump",
+                "valve",
+                "tank",
+                "motor",
+                "fan",
+                "pipe",
+                "sensor",
+                "breaker",
+                "light"
+            ];
+            readonly labelId: "widgetLabelScadaSymbol";
+            readonly helpId: "widgetHintScadaSymbol";
+            readonly valueLabelIds: {
+                readonly pump: "widgetScadaPump";
+                readonly valve: "widgetScadaValve";
+                readonly tank: "widgetScadaTank";
+                readonly motor: "widgetScadaMotor";
+                readonly fan: "widgetScadaFan";
+                readonly pipe: "widgetScadaPipe";
+                readonly sensor: "widgetScadaSensor";
+                readonly breaker: "widgetScadaBreaker";
+                readonly light: "widgetScadaLight";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly onAt: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelOnAt";
+            readonly helpId: "widgetHintScadaOnAt";
+        };
+        readonly orientation: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "horizontal",
+                "vertical"
+            ];
+            readonly labelId: "widgetLabelOrientation";
+            readonly valueLabelIds: {
+                readonly horizontal: "widgetOrientationHorizontal";
+                readonly vertical: "widgetOrientationVertical";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly min: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMin";
+        };
+        readonly max: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMax";
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly window: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelWindow';
+            readonly helpId: 'widgetHintWindow';
+        };
+    }>;
+    readonly 'status-grid': import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly worstFirst: {
+            readonly kind: "boolean";
+            readonly labelId: "widgetLabelWorstFirst";
+            readonly helpId: "widgetHintWorstFirst";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>;
+    readonly 'state-timeline': import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+            readonly required: true;
+            readonly helpId: "widgetHintStateThresholds";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>;
 };
 ```
 
@@ -4379,6 +4646,273 @@ export declare const builtinWidgetDefinitions: readonly [
             readonly labelId: 'widgetLabelWindowSeconds';
             readonly helpId: 'widgetHintWindowSeconds';
         };
+    }>>,
+    import("@devicechain/widget-sdk").WidgetDefinition<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly symbol: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "pump",
+                "valve",
+                "tank",
+                "motor",
+                "fan",
+                "pipe",
+                "sensor",
+                "breaker",
+                "light"
+            ];
+            readonly labelId: "widgetLabelScadaSymbol";
+            readonly helpId: "widgetHintScadaSymbol";
+            readonly valueLabelIds: {
+                readonly pump: "widgetScadaPump";
+                readonly valve: "widgetScadaValve";
+                readonly tank: "widgetScadaTank";
+                readonly motor: "widgetScadaMotor";
+                readonly fan: "widgetScadaFan";
+                readonly pipe: "widgetScadaPipe";
+                readonly sensor: "widgetScadaSensor";
+                readonly breaker: "widgetScadaBreaker";
+                readonly light: "widgetScadaLight";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly onAt: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelOnAt";
+            readonly helpId: "widgetHintScadaOnAt";
+        };
+        readonly orientation: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "horizontal",
+                "vertical"
+            ];
+            readonly labelId: "widgetLabelOrientation";
+            readonly valueLabelIds: {
+                readonly horizontal: "widgetOrientationHorizontal";
+                readonly vertical: "widgetOrientationVertical";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly min: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMin";
+        };
+        readonly max: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMax";
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly window: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelWindow';
+            readonly helpId: 'widgetHintWindow';
+        };
+    }>>,
+    import("@devicechain/widget-sdk").WidgetDefinition<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly worstFirst: {
+            readonly kind: "boolean";
+            readonly labelId: "widgetLabelWorstFirst";
+            readonly helpId: "widgetHintWorstFirst";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>>,
+    import("@devicechain/widget-sdk").WidgetDefinition<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+            readonly required: true;
+            readonly helpId: "widgetHintStateThresholds";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
     }>>
 ];
 ```
@@ -6232,6 +6766,273 @@ export declare const builtinWidgetDefinitions: readonly [
             readonly labelId: 'widgetLabelWindowSeconds';
             readonly helpId: 'widgetHintWindowSeconds';
         };
+    }>>,
+    import("@devicechain/widget-sdk").WidgetDefinition<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly symbol: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "pump",
+                "valve",
+                "tank",
+                "motor",
+                "fan",
+                "pipe",
+                "sensor",
+                "breaker",
+                "light"
+            ];
+            readonly labelId: "widgetLabelScadaSymbol";
+            readonly helpId: "widgetHintScadaSymbol";
+            readonly valueLabelIds: {
+                readonly pump: "widgetScadaPump";
+                readonly valve: "widgetScadaValve";
+                readonly tank: "widgetScadaTank";
+                readonly motor: "widgetScadaMotor";
+                readonly fan: "widgetScadaFan";
+                readonly pipe: "widgetScadaPipe";
+                readonly sensor: "widgetScadaSensor";
+                readonly breaker: "widgetScadaBreaker";
+                readonly light: "widgetScadaLight";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly onAt: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelOnAt";
+            readonly helpId: "widgetHintScadaOnAt";
+        };
+        readonly orientation: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "horizontal",
+                "vertical"
+            ];
+            readonly labelId: "widgetLabelOrientation";
+            readonly valueLabelIds: {
+                readonly horizontal: "widgetOrientationHorizontal";
+                readonly vertical: "widgetOrientationVertical";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly min: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMin";
+        };
+        readonly max: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMax";
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly window: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelWindow';
+            readonly helpId: 'widgetHintWindow';
+        };
+    }>>,
+    import("@devicechain/widget-sdk").WidgetDefinition<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly worstFirst: {
+            readonly kind: "boolean";
+            readonly labelId: "widgetLabelWorstFirst";
+            readonly helpId: "widgetHintWorstFirst";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>>,
+    import("@devicechain/widget-sdk").WidgetDefinition<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+            readonly required: true;
+            readonly helpId: "widgetHintStateThresholds";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
     }>>
 ];
 ```
@@ -8068,6 +8869,273 @@ export declare const builtinWidgetDescriptors: {
             readonly min: 5;
             readonly max: 100;
             readonly labelId: "widgetLabelRowsPerPage";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>>;
+    readonly 'scada-symbol': WidgetDescriptor<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly symbol: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "pump",
+                "valve",
+                "tank",
+                "motor",
+                "fan",
+                "pipe",
+                "sensor",
+                "breaker",
+                "light"
+            ];
+            readonly labelId: "widgetLabelScadaSymbol";
+            readonly helpId: "widgetHintScadaSymbol";
+            readonly valueLabelIds: {
+                readonly pump: "widgetScadaPump";
+                readonly valve: "widgetScadaValve";
+                readonly tank: "widgetScadaTank";
+                readonly motor: "widgetScadaMotor";
+                readonly fan: "widgetScadaFan";
+                readonly pipe: "widgetScadaPipe";
+                readonly sensor: "widgetScadaSensor";
+                readonly breaker: "widgetScadaBreaker";
+                readonly light: "widgetScadaLight";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly onAt: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelOnAt";
+            readonly helpId: "widgetHintScadaOnAt";
+        };
+        readonly orientation: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "horizontal",
+                "vertical"
+            ];
+            readonly labelId: "widgetLabelOrientation";
+            readonly valueLabelIds: {
+                readonly horizontal: "widgetOrientationHorizontal";
+                readonly vertical: "widgetOrientationVertical";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly min: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMin";
+        };
+        readonly max: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMax";
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly window: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelWindow';
+            readonly helpId: 'widgetHintWindow';
+        };
+    }>>;
+    readonly 'status-grid': WidgetDescriptor<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly worstFirst: {
+            readonly kind: "boolean";
+            readonly labelId: "widgetLabelWorstFirst";
+            readonly helpId: "widgetHintWorstFirst";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>>;
+    readonly 'state-timeline': WidgetDescriptor<"measurement", import("./builtin-descriptors").DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+            readonly required: true;
+            readonly helpId: "widgetHintStateThresholds";
         };
         readonly staleAfterSeconds: {
             readonly kind: 'number';
@@ -10360,6 +11428,273 @@ export declare const builtinWidgetDescriptors: {
             readonly min: 5;
             readonly max: 100;
             readonly labelId: "widgetLabelRowsPerPage";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>>;
+    readonly 'scada-symbol': WidgetDescriptor<"measurement", DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly symbol: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "pump",
+                "valve",
+                "tank",
+                "motor",
+                "fan",
+                "pipe",
+                "sensor",
+                "breaker",
+                "light"
+            ];
+            readonly labelId: "widgetLabelScadaSymbol";
+            readonly helpId: "widgetHintScadaSymbol";
+            readonly valueLabelIds: {
+                readonly pump: "widgetScadaPump";
+                readonly valve: "widgetScadaValve";
+                readonly tank: "widgetScadaTank";
+                readonly motor: "widgetScadaMotor";
+                readonly fan: "widgetScadaFan";
+                readonly pipe: "widgetScadaPipe";
+                readonly sensor: "widgetScadaSensor";
+                readonly breaker: "widgetScadaBreaker";
+                readonly light: "widgetScadaLight";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly onAt: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelOnAt";
+            readonly helpId: "widgetHintScadaOnAt";
+        };
+        readonly orientation: {
+            readonly kind: "enum";
+            readonly values: readonly [
+                "horizontal",
+                "vertical"
+            ];
+            readonly labelId: "widgetLabelOrientation";
+            readonly valueLabelIds: {
+                readonly horizontal: "widgetOrientationHorizontal";
+                readonly vertical: "widgetOrientationVertical";
+            };
+            readonly placeholderId: "widgetPlaceholderDefault";
+        };
+        readonly min: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMin";
+        };
+        readonly max: {
+            readonly kind: "number";
+            readonly labelId: "widgetLabelMax";
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly window: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelWindow';
+            readonly helpId: 'widgetHintWindow';
+        };
+    }>>;
+    readonly 'status-grid': WidgetDescriptor<"measurement", DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly measurement: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelMeasurement';
+            readonly helpId: 'widgetHintMeasurement';
+        };
+        readonly unit: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelUnit';
+        };
+        readonly precision: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 0;
+            readonly max: 100;
+            readonly labelId: 'widgetLabelPrecision';
+            readonly helpId: 'widgetHintPrecision';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly helpId: 'widgetHintThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+        };
+        readonly worstFirst: {
+            readonly kind: "boolean";
+            readonly labelId: "widgetLabelWorstFirst";
+            readonly helpId: "widgetHintWorstFirst";
+        };
+        readonly staleAfterSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 1;
+            readonly labelId: 'widgetLabelStaleAfter';
+            readonly helpId: 'widgetHintStaleAfter';
+        };
+        readonly windowSeconds: {
+            readonly kind: 'number';
+            readonly integer: true;
+            readonly min: 60;
+            readonly max: 604800;
+            readonly labelId: 'widgetLabelWindowSeconds';
+            readonly helpId: 'widgetHintWindowSeconds';
+        };
+    }>>;
+    readonly 'state-timeline': WidgetDescriptor<"measurement", DocumentedSpecs<{
+        readonly title: {
+            readonly kind: 'string';
+            readonly labelId: 'widgetLabelTitle';
+        };
+        readonly thresholds: {
+            readonly kind: 'list';
+            readonly maxItems: 12;
+            readonly labelId: 'widgetLabelThresholds';
+            readonly item: {
+                readonly value: {
+                    readonly kind: 'number';
+                    readonly required: true;
+                    readonly labelId: 'widgetLabelThresholdValue';
+                };
+                readonly level: {
+                    readonly kind: 'enum';
+                    readonly required: true;
+                    readonly values: readonly [
+                        "normal",
+                        "warning",
+                        "minor",
+                        "major",
+                        "critical"
+                    ];
+                    readonly labelId: 'widgetLabelThresholdLevel';
+                    readonly valueLabelIds: {
+                        readonly normal: 'widgetSeverityNormal';
+                        readonly warning: 'widgetSeverityWarning';
+                        readonly minor: 'widgetSeverityMinor';
+                        readonly major: 'widgetSeverityMajor';
+                        readonly critical: 'widgetSeverityCritical';
+                    };
+                    readonly placeholderId: 'widgetPlaceholderThresholdLevel';
+                };
+                readonly label: {
+                    readonly kind: 'string';
+                    readonly labelId: 'widgetLabelThresholdLabel';
+                };
+            };
+            readonly required: true;
+            readonly helpId: "widgetHintStateThresholds";
         };
         readonly staleAfterSeconds: {
             readonly kind: 'number';

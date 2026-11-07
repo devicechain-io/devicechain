@@ -274,9 +274,21 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 		return res, fmt.Errorf("listing tenants with pending certificate-revocation kicks: %w", err)
 	}
 	tenants = mergeSortedTenants(tenants, revTenants)
+	// A tenant owing only an unexpanded revocation marker (a crash between the revocation's commit and
+	// its expansion) owes a kick as well: its per-device rows do not exist yet.
+	owingMarkers, err := api.tenantsOwingMarkers(ctx)
+	if err != nil {
+		return res, fmt.Errorf("listing tenants with pending revocation markers: %w", err)
+	}
+	tenants = mergeSortedTenants(tenants, owingMarkers)
 	res.Tenants = len(tenants)
 	var lastErr error
 	for _, tenant := range tenants {
+		if _, err := api.expandRevocationMarkers(ctx, tenant, 0); err != nil {
+			res.Failed++
+			lastErr = err
+			continue
+		}
 		// A fleet-sized debt (a revoked CA) is more than one page: keep paging while every page
 		// is confirmed and more is due, to a bound, so one tenant cannot hold the pass for ever.
 		passStarted := time.Now()
@@ -351,7 +363,13 @@ func (api *Api) observeSessionKicks(ctx context.Context) {
 		log.Warn().Err(rerr).Msg("Unable to read the pending certificate-revocation kicks")
 		return
 	}
-	api.SessionKickObserver(int(n)+rn, max(age, rage))
+	// Unexpanded revocation markers are debts too.
+	mn, mage, merr := api.markerGauge(db)
+	if merr != nil {
+		log.Warn().Err(merr).Msg("Unable to read the pending revocation markers")
+		return
+	}
+	api.SessionKickObserver(int(n)+rn+mn, max(age, rage, mage))
 }
 
 // sessionKickDrainLockName names the advisory lock one background pass runs under.

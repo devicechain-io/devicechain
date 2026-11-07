@@ -12,7 +12,7 @@ import (
 )
 
 // ChannelAdapter delivers one rendered notification through a concrete transport
-// (ADR-017): the SMTP sender, the webhook poster. The dispatcher resolves the adapter
+// (ADR-017): the SMTP sender, the webhook poster, and the native Slack, Teams and PagerDuty senders. The dispatcher resolves the adapter
 // for a channel's type and calls Deliver; keeping delivery behind this seam lets a
 // later slice add a transport (SMS, push) without touching the policy-evaluation or
 // consumer plumbing.
@@ -43,8 +43,11 @@ type ChannelAdapter interface {
 // worked.
 func newAdapterRegistry(guard *egress.Guard) map[string]ChannelAdapter {
 	return map[string]ChannelAdapter{
-		model.ChannelTypeSMTP:    &smtpAdapter{guard: guard},
-		model.ChannelTypeWebhook: &webhookAdapter{client: egressClient(guard)},
+		model.ChannelTypeSMTP:      &smtpAdapter{guard: guard},
+		model.ChannelTypeWebhook:   &webhookAdapter{client: egressClient(guard)},
+		model.ChannelTypeSlack:     &slackAdapter{client: egressClient(guard)},
+		model.ChannelTypeTeams:     &teamsAdapter{client: egressClient(guard)},
+		model.ChannelTypePagerDuty: &pagerDutyAdapter{client: egressClient(guard)},
 	}
 }
 

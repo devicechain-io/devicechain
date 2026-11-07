@@ -45,5 +45,6 @@
   "connect": "Conectar",
   "organization": "Organización",
   "access": "Acceso",
-  "deviceProfilesHint": "reglas, métricas, comandos"
+  "deviceProfilesHint": "reglas, métricas, comandos",
+  "notificationChannels": "Canales de notificación"
 }

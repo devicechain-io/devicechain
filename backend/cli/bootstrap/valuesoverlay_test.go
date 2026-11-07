@@ -682,3 +682,19 @@ func TestTheProfilerSwitchesAreTunable(t *testing.T) {
 		t.Fatal("the overlay was dropped")
 	}
 }
+
+// The ingest-metering switch is an operator dial: an overlay may set it, and a value the chart's
+// schema does not name is still refused.
+func TestTheIngestMeteringSwitchIsTunable(t *testing.T) {
+	t.Parallel()
+	got, err := LoadValuesOverlay([]string{writeOverlayFile(t, "metering.yaml", "eventSources:\n  ingestMetering: legacy\n")})
+	if err != nil {
+		t.Fatalf("eventSources.ingestMetering was refused: %v", err)
+	}
+	if got == nil {
+		t.Fatal("the overlay was dropped")
+	}
+	if _, err := LoadValuesOverlay([]string{writeOverlayFile(t, "metering-bad.yaml", "eventSources:\n  somethingElse: x\n")}); err == nil {
+		t.Fatal("a sibling of ingestMetering was accepted")
+	}
+}

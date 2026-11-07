@@ -886,6 +886,10 @@ A device profile can now carry a **payload decoder**: rules, written as expressi
 - **The test door is rate-limited per replica.** `testPayloadDecoder` allows 10 requests a second for each tenant, with a burst of 20, on each `device-management` replica, so a tenant's total rate rises with the replica count. A request over the limit is refused with `RATE_LIMITED`.
 - **During a rolling upgrade, publish a decoder only after every `device-management` replica runs this release.** A version published while an older replica handles the request is frozen without its decoder, because that replica does not know the field. After the rollout, check that `DeviceProfileVersion.decoder` is present on the version you published and, if it is not, publish again.
 
+#### The console shows a decoder's health {#v120-decoder-console}
+
+The **Decoder** tab of a device profile now shows the last 24 hours of the profile's decoder: how many uplinks were decoded, ignored, failed and not recorded (see [A failing payload decoder is held to a budget](#v120-decoder-budget)), and the failing uplinks kept as samples, each with a button that loads it into the test panel. A link opens the **Failed events** page filtered to `DECODE_FAILED`, and that page now offers the reason as a filter of its own and accepts it as `?reason=DECODE_FAILED`. Both parts of the tab need `device:write`, as the queries behind them do. Nothing needs doing to upgrade: this is the console only, and it uses the `payloadDecoderHealth` and `payloadDecoderSamples` queries already described.
+
 #### X.509 revocation lists {#v120-x509-crl}
 
 A tenant can now store a certificate authority's revocation list (CRL) against a trust anchor, and an anchor has a revocation mode. An anchor with no list and no manual revocation behaves exactly as it did.
@@ -896,12 +900,19 @@ A tenant can now store a certificate authority's revocation list (CRL) against a
 - **`REQUIRE_CURRENT` is opt-in per anchor.** The platform refuses to switch an anchor to it while the anchor holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused.
 - **During a rolling upgrade**, replicas that have not been replaced answer the broker's authorization callout without revocation checks, so a revocation is enforced everywhere only once the rollout completes. Going back to `v1.1.0` leaves the tables in place and unread: revocations stop being enforced.
 
+#### A client certificate in the C# SDK {#v120-sdk-x509}
+
+The C# SDK and the Unity package can now connect a device with an X.509 client certificate. This is additive: nothing changes for a session that does not set one, and no action is needed to upgrade.
+
+- **Set `MqttSessionOptions.ClientCertificate`** to a `MqttClientCertificate` loaded from a PFX or from PEM files. The session then connects with the username `{tenant}:@x509` and no password. See [Connect from the C# SDK](../guides/device-x509.md#csharp-sdk).
+- **Only RSA and ECDSA keys can be presented**, because .NET has no Ed25519. The broker address must be `ssl://`; a plaintext address is refused when the session is constructed.
+
 #### Revoking a certificate ends open sessions {#v120-x509-sessions}
 
 Revoking a certificate, by hand or by uploading a CRL that names it, now also ends the open sessions of the devices it affects. Before, a session already open stayed up until its token expired (up to 12 hours by default). Nothing changes for an instance that revokes nothing.
 
 - **A leaf certificate ends the sessions of the devices that hold it.** A revocation of a certificate authority is wider: when you revoke a CA by giving its certificate, or a CRL names an intermediate that a registered credential was seen to use, the sessions of **every device with a certificate credential under that trust anchor** are ended. Those devices reconnect on their own; the ones whose chain is still trusted are admitted at once. A call ends the sessions of up to about 5,000 devices itself, so a CA-level revocation can reconnect about that many at the same moment; the rest are ended in the background. **On an instance upgraded from an earlier release**, a credential registered before the upgrade has no recorded intermediate, so a CRL that adds an entry matching no stored credential also ends the sessions of those older credentials, in case the entry is an intermediate they use.
-- **Sessions are ended twice.** Once when the revocation commits, and again about 10 seconds later. The second pass catches a device that was being admitted at the instant of the revocation. A CA-level revocation therefore asks about the whole anchor twice.
+- **Sessions are ended twice.** Once when the revocation commits, and again about 10 seconds later. The second pass catches a device that was being admitted at the instant of the revocation. The delay is the fixed setting `deviceManagement.callout.revocation.resweepAfter` (default 10 seconds, up to 5 minutes); it must exceed the callout lookup timeout plus the broker's 5 second authorization timeout, or `device-management` refuses to start. A CA-level revocation therefore asks about the whole anchor twice.
 - **Revoking can take a while against a slow responder.** The call waits for the service that ends sessions (`event-sources`) for up to about 90 seconds. If it cannot confirm, the revocation still stands and new connections are refused; the result says `sessionsEnded: false`, the platform keeps retrying, and repeating the revoke or the upload asks again.
 - **During a rolling upgrade**, the new kicks carry a new reason that `event-sources` must understand. Until `event-sources` has been replaced, these kicks stay pending and are retried, so a revocation made in the middle of the upgrade ends the open sessions once `event-sources` has rolled. Pods of the previous release neither take these pending kicks nor remove them.
 
@@ -953,6 +964,10 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
 
+#### What an instance keeps outside its databases is classified {#v120-backup-classification}
+
+The [Disaster Recovery](./disaster-recovery.md#other-state) page now says what a restore owes every message stream, key-value bucket and the object store, in one table generated from the platform's own declarations. Three items need a backup of their own: the raw capture stream, the dead-letter stream of undeliverable outbound connector deliveries, and the object store that holds update artifacts and branding images. Everything else is rebuilt from the databases or is short-lived. This release changes no behaviour and ships no backup tool for the streams. It adds the page, a test that fails when a stream or bucket is added without a class, and the rule for the object store: take its copy after the database base backup it belongs with.
+
 #### Other changes in this release {#v120-other-changes}
 
 Nothing here needs action beyond the two `dcctl` items in the list above. Each is a fix or an addition to something that already shipped.
@@ -974,13 +989,24 @@ Nothing here needs action beyond the two `dcctl` items in the list above. Each i
 - **Infrastructure.** With `nats_mqtt_capable_users` unset, the OpenTofu broker module no longer writes a null `allowed_connection_types` that the broker refused; the certificate healer for the event store's backups watches the operator's configured namespace.
 - **`dcctl upgrade` accepts `--yes` (`-y`), as `dcctl install` and `dcctl bootstrap` do, and finds an escrow written with `--escrow-file`.** `--yes` assumes yes for prompts; an upgrade asks none, so it changes nothing, and a script can now pass it to all three. `dcctl bootstrap --escrow-file` records where the artifact was written, and the upgrade's root-key escrow check looks there, so it no longer reports "no escrow" for an instance whose artifact is at a custom path. For an instance bootstrapped earlier, give the upgrade `--escrow-file` once; it records the path.
 
+#### Three new dashboard widgets {#v120-widgets}
+
+Three widgets are new in the **Add widget** menu, all under Telemetry. They add to the existing widgets and change none of them, and a dashboard that does not use them is unaffected.
+
+- **Status grid** shows one tile per device of a group for one measurement, coloured by the threshold band of each device's latest reading. A device with no reading is drawn hollow and counted apart; it is never shown as OK.
+- **State timeline** shows one device's measurements as lanes of discrete states over the dashboard's time range, with the thresholds as the states. Each stretch is the state of a time bucket's average, and the widget says so.
+- **Scada symbol** draws a pump, valve, tank, motor, fan, pipe segment, sensor, breaker or light in the state one measurement puts it in: running, stopped or faulted, with a pipe's flow direction, in light and dark. It stands still for a viewer who asked for reduced motion.
+
+Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widget) for the options of each.
+
 #### Schema changes and going back {#v120-going-back}
 
-Six migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
+Seven migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
 
 - **X.509 revocation** (`device-management`, migration `20261105100000`). Four new tables: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` and `device_credential_chain_links`. Four new columns: `revocation_mode`, `revocation_stale_grace` and `revocation_rows` on `device_trust_anchors`, and `not_before` on `pending_session_kicks`. Existing trust anchors keep `revocation_mode` empty, which is read as `ENTRIES`: a certificate is refused only when it is listed.
 - **Payload decoders** (`device-management`, migration `20261110120000`). Two new tables, `profile_decoder_healths` and `profile_decoder_samples`, and one new column, `decoder_declaration` on `device_profiles`.
 - **Revocation kick queue** (`device-management`, migration `20261111120000`). One new table, `pending_revocation_kicks`, and one new nullable column, `kick_queued_at` on `device_revoked_certificates`. The table is separate from the existing session-kick queue so that a replica from `v1.1.0` never reads or removes its rows.
+- **Revocation kick markers** (`device-management`, migration `20261112100000`). Two new tables, `pending_revocation_expansions` and `pending_revocation_expansion_serials`. They hold, until the per-device kick rows are written, the revocations that still owe them, so a revocation no longer holds the trust anchor while it queues a kick for every device under it. A replica from `v1.1.0` never reads them.
 - **Projection storage** (`device-state`, migration `20261104120000`). No table or column is added. It sets storage parameters (a fill factor of 75 and autovacuum thresholds) on `device_states`, `latest_measurements` and `latest_locations`. Rows that already exist gain the fill-factor headroom only as their pages are rewritten, so an upgraded instance feels the change slowly.
 - **Placement tables** (`user-management`, migration `20261105120000`). Three new tables: `iam_partition_config`, `iam_vpartition_assignments` and `iam_tenant_vpartition_overrides`. The migration seeds no rows; the first start of `user-management` writes the default placement (one `iam_partition_config` row and 64 `iam_vpartition_assignments` rows) and creates the `dc_partition_placement` bucket in the message broker.
 - **Inactivity alarm time repair** (`device-state`, migration `20261106120000`). Adds nothing to the schema. It is a data-only repair of `inactivity_alarm_time` in `device_states`, run in batches of 5,000, restoring what the column held before `v1.1.0`. There is nothing to undo when going back to `v1.1.0`.
@@ -988,6 +1014,15 @@ Six migrations append the following. Every new column is nullable, so a service 
 Apart from that default placement, the new tables start empty. **Nothing in a database needs undoing to go back to `v1.1.0`:** the new tables, columns and storage parameters stay in place and the `v1.1.0` services ignore them, with one exception: tenant deletion, below. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again. For the configuration change that going back needs, see [Tokens are checked against their resource](#v120-token-audience).
 
 **Tenant deletion is held back while a `v1.1.0` `user-management` replica is the one running it.** A `v1.1.0` replica does not know the three placement tables, and its relational purge refuses to run against a table it cannot classify. While one is running the purge, the relational store reports an error for the deletion, with a log line and a ledger failure that name `iam_partition_config`, `iam_vpartition_assignments` or `iam_tenant_vpartition_overrides`, and `tenant_purge_store_blocked{store="rdb",reason="error"}` is above zero. The refused step deletes nothing from the database and loses nothing; the other stores are still erased in the same pass. The deletion cannot finish: the tenant stays in `purging`. A replica running this release takes it up on its next pass, and it finishes once its usual checks are met. During a rolling upgrade that happens by itself when the last `v1.1.0` replica is gone; after going back to `v1.1.0` it is held until you roll forward again. Start deletions after the upgrade finishes if you can.
+
+#### Native Slack, Teams and PagerDuty notification channels {#v120-notification-channels}
+
+Notification channels gain three types: `slack`, `teams` and `pagerduty`. They are additive: nothing changes for an existing `smtp` or `webhook` channel, and a Slack incoming webhook that you reach through a `webhook` channel keeps working as it did.
+
+- **Nothing needs doing to upgrade.** A channel of a new type needs a secret (the webhook URL, or the PagerDuty routing key) and is refused at save without one. See [Native Slack, Teams and PagerDuty channels](../guides/notification-channels.md#native-channels).
+- **Know that the new types dial out through the same guard as a webhook.** A destination on a private, loopback or cloud-metadata address is refused and counted with `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`.
+- **Know that the `notificationChannelTypes` query now lists three more types,** and that the GraphQL schema changes only in its descriptions. A client that switches exhaustively over channel types sees three more values.
+- **The console has a new Notification Channels page** for configuring channels of every type.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 

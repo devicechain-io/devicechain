@@ -12,12 +12,16 @@ import type {
   ProfileDecoderQuery,
   TestPayloadDecoderQuery,
   PayloadDecoderFunctionsQuery,
+  PayloadDecoderHealthQuery,
+  PayloadDecoderSamplesQuery,
 } from '@/gql/device-management/graphql';
 
 export type { PayloadDecoderTestInput };
 export type ProfileDecoders = NonNullable<ProfileDecoderQuery['deviceProfilesByToken'][number]>;
 export type StoredDecoder = NonNullable<ProfileDecoders['decoder']>;
 export type PayloadDecoderTestResult = TestPayloadDecoderQuery['testPayloadDecoder'];
+export type PayloadDecoderHealth = PayloadDecoderHealthQuery['payloadDecoderHealth'];
+export type PayloadDecoderSample = PayloadDecoderSamplesQuery['payloadDecoderSamples'][number];
 export type PayloadDecoderFunction = PayloadDecoderFunctionsQuery['payloadDecoderFunctions'][number];
 
 const PROFILE_DECODER = graphql(`
@@ -136,4 +140,40 @@ const DECODER_FUNCTIONS = graphql(`
 export async function listPayloadDecoderFunctions(): Promise<PayloadDecoderFunction[]> {
   const data = await gql('device-management', DECODER_FUNCTIONS);
   return data.payloadDecoderFunctions;
+}
+
+const DECODER_HEALTH = graphql(`
+  query PayloadDecoderHealth($profileToken: String!, $minutes: Int) {
+    payloadDecoderHealth(profileToken: $profileToken, minutes: $minutes) {
+      decoded
+      ignored
+      failed
+      suppressed
+    }
+  }
+`);
+
+/** How the profile's decoder has done over the last `minutes` (device:write). */
+export async function getPayloadDecoderHealth(profileToken: string, minutes: number): Promise<PayloadDecoderHealth> {
+  const data = await gql('device-management', DECODER_HEALTH, { profileToken, minutes });
+  return data.payloadDecoderHealth;
+}
+
+const DECODER_SAMPLES = graphql(`
+  query PayloadDecoderSamples($profileToken: String!) {
+    payloadDecoderSamples(profileToken: $profileToken) {
+      id
+      profileVersion
+      createdAt
+      deviceToken
+      reason
+      error
+    }
+  }
+`);
+
+/** The failing uplinks kept for the profile, newest first (device:write). The bytes are not listed; a sample is read by id in the test panel. */
+export async function listPayloadDecoderSamples(profileToken: string): Promise<PayloadDecoderSample[]> {
+  const data = await gql('device-management', DECODER_SAMPLES, { profileToken });
+  return data.payloadDecoderSamples;
 }
