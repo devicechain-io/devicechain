@@ -310,6 +310,7 @@ const sidebars: SidebarsConfig = {
             'deployment/releases-and-upgrades',
             'deployment/versioning-policy',
             'deployment/verifying-releases',
+            'deployment/security-process',
             // The label's translations live under `sidebar.docs.link.All releases on GitHub`.
             {
               type: 'link',
