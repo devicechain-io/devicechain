@@ -32,6 +32,8 @@ title: 出站连接器
 
 认证可选，使用**密钥句柄**。令牌保存在**密钥存储**中，发送时作为 `Authorization: Bearer <token>` 标头提供。标头名称和认证方案不可配置，因此这种方式不能用于要求自定义 API 密钥标头的接收方。如果动作指定的句柄下没有密钥，调用绝不会在缺少凭据的情况下发出：它会以 `invalid` 结果写入一次死信，不再重试。没有机制重放它，因此该次触发的调用不会执行；请修正动作的密钥句柄，让后续触发正常认证。
 
+`httpCall` 也可以**签名**，让接收方验证请求确实来自 DeviceChain 且未被篡改。在动作的 `signingSecretRef` 中指定签名密钥，调用就会携带 Standard Webhooks 规范的 `webhook-id`、`webhook-timestamp` 和 `webhook-signature` 请求头。除非你设置，否则默认关闭。参见[为出站 Webhook 签名](../guides/signed-webhooks.md)。
+
 webhook 投递通过以下方式加固：
 
 - 拒绝跟随重定向，外部端点不能通过 `3xx` 将请求转到其他位置。

@@ -32,6 +32,8 @@ The form builder's action picker offers all four actions. A webhook action there
 
 Authentication is optional and uses a **secret handle**. The token is stored in the **secret store** and presented at send time as an `Authorization: Bearer <token>` header. The header name and scheme are not configurable, so you cannot authenticate to a receiver that expects a custom API-key header this way. If the action names a handle but no secret is stored under it, the call is never sent without its credential: it is dead-lettered once with the outcome `invalid` and not retried. Nothing replays it, so that firing's call is not made; correct the action's secret handle so later firings authenticate.
 
+An `httpCall` can also be **signed**, so the receiver can verify the request came from DeviceChain and was not altered. Name a signing secret in the action's `signingSecretRef` and the call carries the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers of the Standard Webhooks specification. It is off unless you set it. See [Signing Outbound Webhooks](../guides/signed-webhooks.md).
+
 Webhook delivery is hardened in these ways:
 
 - It refuses to follow redirects, so an external endpoint cannot `3xx` the request somewhere else.

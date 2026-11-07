@@ -86,6 +86,8 @@ mutation {
 
 For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out.
 
+A webhook channel can also **sign** its deliveries so the receiver can verify them. It is off unless you ask for it, by adding `"signing":true` to the channel's `config` once you have generated a signing secret for it. A channel set to sign that holds no secret is refused, not sent unsigned, and counted with `reason="signing"`. See [Signing Outbound Webhooks](signed-webhooks.md).
+
 ## Policies
 
 A **policy** decides which raised alarms are delivered, to whom, and through which channels. It carries a set of **rules**. Each rule maps:

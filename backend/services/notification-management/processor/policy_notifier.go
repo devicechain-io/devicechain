@@ -185,6 +185,9 @@ func (n *PolicyNotifier) countQuiet(outcome string, by int) {
 const (
 	refusalReasonEgress     = "egress"
 	refusalReasonCredential = "credential"
+	// refusalReasonSigning: a webhook channel is set to sign but cannot (no signing key is stored,
+	// or the stored key is not a valid signing secret). The delivery is refused, never sent unsigned.
+	refusalReasonSigning = "signing"
 	// refusalReasonNoAdapter: the channel's type has no delivery adapter in this build, so the
 	// channel was skipped from the plan and nobody was paged through it.
 	refusalReasonNoAdapter = "no_adapter"
@@ -220,7 +223,7 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 	return &PolicyNotifier{
 		api:           api,
 		store:         store,
-		adapters:      newAdapterRegistry(guard),
+		adapters:      newAdapterRegistry(guard, store),
 		attempts:      attempts,
 		timeout:       timeout,
 		budget:        dispatchBudget,
@@ -939,6 +942,9 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 
 	adapter := n.adapters[d.channel.ChannelType]
 	tenant, _ := core.TenantFromContext(ctx)
+	// One webhook-id for the whole delivery: a retry of this message re-sends it under the same id
+	// (with a fresh timestamp), so a receiver that deduplicates on webhook-id sees one message.
+	ctx = withMessageID(ctx, newMessageID())
 	for attempt := 1; attempt <= n.attempts; attempt++ {
 		dctx, cancel := context.WithTimeout(ctx, n.timeout)
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
@@ -967,6 +973,17 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 					"is missing, or a secret is stored that the channel never presents); not retrying. " +
 					"Fix the channel's config or secret.")
 			n.countRefusal(refusalReasonCredential)
+			return deliveryRefused
+		}
+		// A channel set to sign that cannot is terminal too: a redelivery finds the same missing or
+		// invalid key. It is refused rather than sent unsigned, because the receiver was promised a
+		// signature and may be dropping what lacks one.
+		if errors.Is(err, httpsink.ErrSigningRefused) {
+			log.Error().Err(err).Str("tenant", tenant).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).
+				Msg("Notification channel is set to sign its deliveries but cannot (no signing secret is " +
+					"stored, or it is not valid); not retrying and not sending unsigned. Generate a signing " +
+					"secret for the channel, or turn signing off in its config.")
+			n.countRefusal(refusalReasonSigning)
 			return deliveryRefused
 		}
 		log.Warn().Err(err).Str("channel", d.channel.Token).Str("type", d.channel.ChannelType).

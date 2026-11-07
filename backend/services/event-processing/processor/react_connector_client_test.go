@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,39 @@ func TestConnectorClientDispatchHTTPCall(t *testing.T) {
 	if got.HTTPCall.URL != "https://hooks.example/x" || got.HTTPCall.SecretRef != "httpcall/acme/auth" ||
 		got.HTTPCall.Headers["X-Env"] != "prod" || got.HTTPCall.TimeoutMs != 5000 {
 		t.Fatalf("httpCall config not carried: %+v", got.HTTPCall)
+	}
+}
+
+// TestConnectorClientCarriesTheSigningHandleAndNeverAKey proves a signed httpCall puts only the
+// signing HANDLE on the wire, and that an unsigned one omits the field entirely (the message is
+// byte-for-byte what it was before signing existed).
+func TestConnectorClientCarriesTheSigningHandleAndNeverAKey(t *testing.T) {
+	w := &captureConnectorWriter{}
+	c := NewConnectorClient(w)
+	a := rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{
+		URL: "https://hooks.example/x", SigningSecretRef: "hooks/prod",
+	}}
+	if err := c.Dispatch(context.Background(), connReq(a)); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	got, err := connectorwire.UnmarshalConnectorDispatchRequest(w.payload)
+	if err != nil {
+		t.Fatalf("unmarshal wire: %v", err)
+	}
+	if got.HTTPCall.SigningSecretRef != "hooks/prod" {
+		t.Fatalf("signing handle not carried: %+v", got.HTTPCall)
+	}
+	if strings.Contains(string(w.payload), "whsec_") {
+		t.Fatal("a signing key must never ride the wire")
+	}
+
+	a.HTTPCall.SigningSecretRef = ""
+	w2 := &captureConnectorWriter{}
+	if err := NewConnectorClient(w2).Dispatch(context.Background(), connReq(a)); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if strings.Contains(string(w2.payload), "signingSecretRef") {
+		t.Fatalf("an unsigned call must omit the field: %s", w2.payload)
 	}
 }
 

@@ -83,6 +83,8 @@ mutation {
 
 Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。
 
+webhook 渠道还可以对投递**签名**，让接收方能够验证。除非你要求，否则默认关闭：为渠道生成签名密钥后，在渠道的 `config` 中加入 `"signing":true`。设置了签名却没有密钥的渠道会被拒绝而不是以未签名形式发送，并计入 `reason="signing"`。参见[为出站 Webhook 签名](signed-webhooks.md)。
+
 ## 策略 {#policies}
 
 **策略**决定哪些告警投递给谁、通过哪些渠道。它携带一组**规则**，每条映射：
