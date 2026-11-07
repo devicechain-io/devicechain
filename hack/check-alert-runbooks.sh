@@ -70,7 +70,7 @@ python3 "$TOOL" check "$work/clean" >/dev/null || { echo "SELF-TEST FAILED: a cl
 echo "ok: a clean copy passes"
 
 rules="deploy/helm/devicechain/templates"
-victim="$(grep -l 'alert: DeviceCredentialAttemptStoreFull' "$ROOT/$rules"/prometheusrule*.yaml | head -1)"
+victim="$(grep -l 'alert: DeviceCredentialAttemptStoreFull' "$ROOT/$rules"/prometheusrule*.yaml | sed -n '1p')"
 victim="$rules/$(basename "$victim")"
 
 # 1. a rule loses its runbook_url
@@ -98,7 +98,7 @@ expect_fail "a stale runbook page" "$work/d3" "is stale against the rules"
 
 # 4. a locale's page is missing
 fresh "$work/d4"
-rm -f "$work"/d4/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/alert-runbook.md
+rm -f "$work/d4/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/alert-runbook.md"
 expect_fail "a missing translated page" "$work/d4" "is missing"
 
 # 5. a new alert nobody wrote an entry for
@@ -117,7 +117,7 @@ expect_fail "a new alert with no page entry" "$work/d5" "is stale against the ru
 
 # 6. an empty rules directory must not read as clean
 fresh "$work/d6"
-rm -f "$work"/d6/$rules/prometheusrule*.yaml
+rm -f "$work/d6/$rules"/prometheusrule*.yaml
 expect_fail "no rules at all" "$work/d6" "found no alerts"
 
 [ "$fails" -eq 0 ] || exit 1
