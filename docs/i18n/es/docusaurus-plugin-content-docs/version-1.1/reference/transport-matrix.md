@@ -141,7 +141,6 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   - **`503` con una cabecera `Retry-After` cuando la plataforma aplica contrapresión**: rechaza
     eventos nuevos para que no desplacen eventos que un consumidor aún no ha procesado
     (consulta [contrapresión en la ruta de ingesta](../deployment/observability.md#ingest-backpressure));
-  - **`500` cuando el evento se descartó porque no se pudo construir su mensaje** (una credencial que presentó no se pudo sellar, o el evento no se pudo codificar). No se almacenó y un reintento falla igual, así que es terminal; `total_msg_build_dropped` lo cuenta por causa;
   - **`503` sin `Retry-After` cuando el evento no pudo entregarse al stream.**
 
   Reintenta ante un `503`: es la plataforma diciéndote, en el único transporte que puede hacerlo,

@@ -105,7 +105,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 
 检测引擎在整个实例内跟踪一个统一的时间前沿，并根据每条消息自己的时间推进它。离线一段时间后一次性上传全部历史的设备，其较早读数可能到达时已落在前沿之后。带时间窗口的规则会丢弃窗口已被前沿越过的读数：包括滚动窗口聚合、会话/间隔规则，以及滑动类型（重复、滑动聚合和关联）。持续时间规则会丢弃满足条件、但落后前沿超过规则保持时长的读数，其余读数按自身时间放置。丢弃不会产生日志或告警记录。
 
-滑动类型和持续时间规则会在 `detect_late_samples_total` 指标中统计丢弃数量。滚动窗口聚合及会话/间隔规则静默丢弃，不计入该指标。
+滑动类型和持续时间规则会在 `devicechain_eventprocessing_detect_late_samples_total` 指标中统计丢弃数量。滚动窗口聚合及会话/间隔规则静默丢弃，不计入该指标。
 
 阈值、计数窗口和速率规则仍会评估这些读数。
 
@@ -239,7 +239,7 @@ QoS ≥ 1 会消耗实际的服务器存储。消息代理除在服务流中保�
 - **关闭（默认）。** 平台对存储设置上限，避免占满卷。PUBACK 表示代理收下了消息，而不是平台一定会保留它：持续的积压会丢弃**最早**的未送达消息，而不是让实例宕机，且设备不会得到通知。在捕获流更换主节点期间（代理重启、升级或节点丢失都会引起），无论负载高低，代理已确认的 QoS 1 消息也可能丢失；没有任何计数器记录，`JetStreamCaptureLeaderChanged` 会警告发生过切换（见 [MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)）。在持续负载下，即使没有更换主节点也可能丢失：当 `event-sources` 落后、捕获流的积压达到上限时，每确认一条新消息，该流就丢弃最早的一条未读消息，且设备不会得到通知。在一次负载测试中，这丢失了约 7% 到 13% 的 MQTT 流量。`devicechain_<area>_jetstream_consumer_unread_skipped_total` 会统计这些丢失，`JetStreamCaptureBacklogGrowing`、`JetStreamCaptureBacklogWillOverflow` 和 `JetStreamDurableLostUnread` 会对此告警。
 - **开启。** PUBACK 表示平台已保存该消息，覆盖事件、命令响应和设备报告。当平台处理落后、存储写满时，它会**拒绝新的发布**，而不是丢弃旧消息。代理不发送 PUBACK 并关闭连接，因此设备保留该消息，并在重新连接后再次发送：设备被要求等待，数据不会丢失。存储没有主节点期间也是如此：代理不确认 QoS 1 发布，设备会再次发送。该设置会降低实例能跟上的流量，而且代理在过载下内存耗尽时仍可能丢失已确认的消息，因此请按低于其上限的规模部署。存储超过 80% 时，新的设备连接会被拒绝，直到回落到 60% 以下。拒绝表现为 MQTT CONNACK 返回码 5（未授权），因此固件在收到返回码 5 后必须继续重试，而不是放弃。以这种方式被关闭连接、并在 30 秒内重新连接的设备不会被报告为离线。一个例外：超出其租户摄取上限的消息仍会被确认并丢弃，与关闭该设置时相同。要开启该设置，请在 `dcctl bootstrap` 或 `dcctl upgrade` 上使用 `--mqtt-fail-closed`；参见 [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。
 
-**Fail-closed 在 1.0 中默认关闭。** 开启它会降低实例能跟上的负载，而且过载时尚不会形成反压：超过该上限后，代理会内存耗尽并丢失消息，而不是拒绝消息。因此它在 1.0 中是可选项，改为默认开启已列入[路线图](https://github.com/devicechain-io/devicechain/blob/main/ROADMAP.md)。要开启它，请在 `dcctl bootstrap` 或 `dcctl upgrade` 上使用 `--mqtt-fail-closed`（`--mqtt-fail-closed=false` 可再次关闭）。
+**Fail-closed 默认关闭。** 开启它会降低实例能跟上的负载，但此时过载会形成反压：代理的消息存储占用超过 80% 后，会拒绝新的设备连接，直到占用降到 60% 以下；存储写满后则拒绝新的发布，而不是丢失消息。代理在过载下内存耗尽时，仍可能丢失它已确认的消息，因此请把部署规模控制在上限之下。它是可选项，改为默认开启已列入[路线图](https://github.com/devicechain-io/devicechain/blob/main/ROADMAP.md)。要开启它，请在 `dcctl bootstrap` 或 `dcctl upgrade` 上使用 `--mqtt-fail-closed`（`--mqtt-fail-closed=false` 可再次关闭）。
 
 该设置**关闭**时，PUBACK 之后仍可能通过三条路径丢失消息，以下是目前测得的上界：
 
@@ -286,7 +286,6 @@ QoS 1 完全受支持。如果设备链路中丢失传输中的发布比存储�
 - 事件入队后，`POST` 返回 **202 Accepted**。
 - 租户超过 HTTP 摄取上限时返回 **429 Too Many Requests**。上限按读数计数，因此包含多个读数的消息比单个读数消息成本更高。MQTT 路径会丢弃超限消息，而不返回响应。
 - 正文无法读取或解码，或路径中的租户不是有效令牌时，返回 **400 Bad Request**。重新发送相同请求仍会得到相同结果。
-- 事件在入队之前被丢弃时返回 **500 Internal Server Error**，原因是无法构建其消息（它携带的凭据无法密封，或事件无法编码）。事件未被存储，重新发送同一请求会得到相同的响应，因此不要重试；原因记录在 `event-sources` 日志中，`total_msg_build_dropped` 按原因对其计数。
 - 事件未被接受时返回 **503 Service Unavailable**。带 `Retry-After` 响应头时，平台正在拒绝新事件（[背压](../deployment/observability.md#ingest-backpressure)），事件未被存储：等待指定秒数后重新发送。不带该响应头时，发布失败，但事件仍可能已经存储，因此除非带 `altId` 和 `occurredTime`，重发就可能存储两次（参见[服务质量](#quality-of-service)）。两种情况都应重试。租户自身上限先被检查，因此超出租户上限会返回 `429`，而不是这里的 `503`。[传输矩阵](../reference/transport-matrix.md#http)列出完整结果。
 
 HTTP 摄取有独立的逐租户额度，与租户 MQTT 流量消耗的额度分开，因此指定租户名称的 HTTP 请求无法耗尽该租户的 MQTT 遥测额度（参见[未确认的租户名称](../concepts/governance.md#unconfirmed-tenants)）。
