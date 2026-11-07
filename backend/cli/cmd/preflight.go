@@ -114,9 +114,12 @@ func (d *doctor) checkTools(provider string, opts doctorOpts) {
 	if opts.needsDocker() {
 		checks = append(checks, toolCheck{names: []string{"docker"}, required: true, guidance: dockerInstallHint})
 	}
+	// There is no helm entry on purpose: dcctl installs the chart through Helm's Go
+	// library, and nothing in this module or in the OpenTofu roots it applies runs the
+	// helm command, so requiring the binary turned away a host that installs fine.
+	// tofu stays: the cluster-prerequisite and instance applies drive it as a binary.
 	checks = append(checks,
 		toolCheck{names: []string{"kubectl"}, required: true, guidance: "https://kubernetes.io/docs/tasks/tools/"},
-		toolCheck{names: []string{"helm"}, required: true, guidance: "https://helm.sh/docs/intro/install/"},
 		toolCheck{names: []string{"tofu", "terraform"}, required: true, guidance: "install OpenTofu (https://opentofu.org) or Terraform"},
 	)
 	// The local provider targets a kind cluster specifically, so require kind
