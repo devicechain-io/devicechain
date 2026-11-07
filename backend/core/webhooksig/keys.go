@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/devicechain-io/dc-microservice/secrets"
 )
@@ -32,6 +33,16 @@ var (
 	// ErrSigningSecretExists reports a Create over a base that already has a current key.
 	ErrSigningSecretExists = errors.New("webhooksig: a signing secret already exists for this handle")
 )
+
+// ReservedPrefix is the namespace every signing secret is stored under, ahead of the handle. The
+// secret store is shared with the Bearer credentials a rule names by handle, so a rule that named
+// a signing key as its Bearer credential would send the key, which is never meant to be readable
+// after it is issued, to its own endpoint. The connectors service refuses a credential handle in
+// this namespace when it delivers, and the rule compiler refuses it when the rule is saved.
+const ReservedPrefix = "webhook-signing/"
+
+// InReservedNamespace reports whether a credential handle names something in the signing keyspace.
+func InReservedNamespace(handle string) bool { return strings.HasPrefix(handle, ReservedPrefix) }
 
 // KeyNames returns the secret-store names of a base's two slots.
 func KeyNames(base string) (current, previous string) { return base + slotCurrent, base + slotPrevious }
@@ -73,8 +84,23 @@ func ResolveKeys(ctx context.Context, base string, resolve Resolve) ([]string, e
 
 // Keyring manages the write side of a base's two slots in one tenant's scope. The secrets it
 // generates are returned to the caller exactly once and are otherwise unreadable through any API.
+//
+// Rotations of one base are serialized within a process. Across replicas they are not: the secret
+// store offers no compare-and-swap, so two operators rotating the same base at the same instant
+// on different replicas can leave the first one's new key already replaced, and a receiver
+// configured with it would stop verifying. The key that is current after both calls is the one
+// the last writer returned, so rotating once more resolves it.
 type Keyring struct {
 	Store secrets.SecretStore
+}
+
+var rotating sync.Map // base key -> *sync.Mutex
+
+func lockRotation(tenant, base string) func() {
+	m, _ := rotating.LoadOrStore(tenant+"\n"+base, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func (k Keyring) ref(tenant, name string) secrets.SecretRef {
@@ -106,6 +132,7 @@ func (k Keyring) Create(ctx context.Context, tenant, base string) (string, error
 // the key a receiver still holds. Rotating again while a rotation is open replaces previous with
 // the then-current key, so a key two rotations old stops being signed with.
 func (k Keyring) Rotate(ctx context.Context, tenant, base string) (string, error) {
+	defer lockRotation(tenant, base)()
 	cur, prev := KeyNames(base)
 	old, err := k.Store.Resolve(ctx, k.ref(tenant, cur))
 	if errors.Is(err, secrets.ErrSecretNotFound) {

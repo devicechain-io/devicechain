@@ -96,6 +96,15 @@ func TestVerifyRejectsAStaleTimestampInEitherDirection(t *testing.T) {
 	assert.ErrorIs(t, Verify(h, []byte(specBody), signedAt.Add(time.Minute), 30*time.Second, specSecret), ErrStale, "custom tolerance")
 }
 
+// A timestamp centuries away must be stale, not wrap around into the window.
+func TestVerifyRejectsAnAbsurdTimestamp(t *testing.T) {
+	now := time.Unix(specTimestamp, 0)
+	for _, ts := range []string{"9223372036854775807", "-9223372036854775808", "9000000000000000000", "-9000000000000000000"} {
+		h := hdr(specID, ts, specSignature)
+		assert.ErrorIs(t, Verify(h, []byte(specBody), now, 0, specSecret), ErrStale, ts)
+	}
+}
+
 func TestVerifyRejectsMissingAndMalformedHeaders(t *testing.T) {
 	now := time.Unix(specTimestamp, 0)
 	for name, h := range map[string]http.Header{

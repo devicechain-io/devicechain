@@ -155,7 +155,8 @@ func Verify(h http.Header, body []byte, now time.Time, secrets ...string) error 
 	if err != nil {
 		return errors.New("malformed webhook-timestamp")
 	}
-	if d := now.Sub(time.Unix(sec, 0)); d > 5*time.Minute || d < -5*time.Minute {
+	// Whole seconds, not a time.Duration: a timestamp centuries away would saturate a Duration.
+	if sec > now.Unix()+300 || sec < now.Unix()-300 {
 		return errors.New("timestamp outside the tolerance window")
 	}
 	for _, secret := range secrets {

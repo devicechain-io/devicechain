@@ -655,6 +655,10 @@ func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
 	if err := validateSecretHandle(h.SecretRef); err != nil {
 		return invalid(ruleID, "actions", "action %d httpCall secretRef: %v", i, err)
 	}
+	if webhooksig.InReservedNamespace(h.SecretRef) {
+		return invalid(ruleID, "actions", "action %d httpCall secretRef: the %q namespace holds webhook signing "+
+			"keys and cannot be used as a credential; name them in signingSecretRef instead", i, webhooksig.ReservedPrefix)
+	}
 	if h.SigningSecretRef != "" {
 		if err := webhooksig.ValidateHandle(h.SigningSecretRef); err != nil {
 			return invalid(ruleID, "actions", "action %d httpCall signingSecretRef: %v", i, err)

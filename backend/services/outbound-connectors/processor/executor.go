@@ -134,6 +134,14 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 	// blip recovers on redelivery.
 	auth := httpsink.Auth{Mode: httpsink.AuthNone}
 	var secret string
+	// A Bearer credential handle may not name a signing key. The two share one secret store, and a
+	// signing key must never be readable after it is issued; presenting it as a credential would
+	// send it to the rule's own endpoint. Terminal: a redelivery names the same handle.
+	if webhooksig.InReservedNamespace(h.SecretRef) {
+		return execOutcome{outcome: outcomeInvalid, retryable: false,
+			err: fmt.Errorf("httpCall secretRef %q: %w: the %q namespace holds webhook signing keys and "+
+				"cannot be used as a credential", h.SecretRef, httpsink.ErrAuthRefused, webhooksig.ReservedPrefix)}
+	}
 	if h.SecretRef != "" {
 		auth = httpsink.Auth{Mode: httpsink.AuthBearer}
 		// Bound the resolve with its own timeout: it is the one otherwise-unbounded term inside the

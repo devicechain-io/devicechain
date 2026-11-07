@@ -17,7 +17,7 @@ import (
 // webhookSigningPrefix namespaces signing secrets inside a tenant's secret store, apart from
 // connector credentials ("connector/<id>") and the Bearer secrets an httpCall action names, so no
 // handle a tenant chooses for one can address another.
-const webhookSigningPrefix = "webhook-signing/"
+const webhookSigningPrefix = webhooksig.ReservedPrefix
 
 // WebhookSigningBase is the secret-store base name for a signing handle: the two key slots (see
 // core/webhooksig) live beneath it. The httpCall executor resolves the same base from the handle a

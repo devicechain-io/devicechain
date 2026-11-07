@@ -158,11 +158,11 @@ func Verify(h http.Header, body []byte, now time.Time, tolerance time.Duration, 
 	if tolerance <= 0 {
 		tolerance = DefaultTolerance
 	}
-	skew := now.Sub(time.Unix(ts, 0))
-	if skew < 0 {
-		skew = -skew
-	}
-	if skew > tolerance {
+	// Compared in whole seconds on both sides. Converting the timestamp to a time.Time and taking
+	// a Duration difference saturates for a timestamp centuries away, and negating the saturated
+	// minimum overflows back to itself, which would let an arbitrarily future-dated message pass.
+	tolSec := int64(tolerance / time.Second)
+	if ts > now.Unix()+tolSec || ts < now.Unix()-tolSec {
 		return ErrStale
 	}
 	keys := make([][]byte, 0, len(secrets))
