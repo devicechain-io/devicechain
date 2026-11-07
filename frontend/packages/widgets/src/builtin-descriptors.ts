@@ -1352,6 +1352,54 @@ export const builtinWidgetDescriptors = {
     interactions: {},
     layout: { defaultSpan: { cols: 6, rows: 5 }, minSpan: { cols: 4, rows: 3 } },
   }),
+
+  // A tile per device of a fleet for one measurement, coloured by its threshold band.
+  'status-grid': defineRuntimeDescriptor({
+    id: 'status-grid',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Status grid', category: 'Telemetry', titleId: 'widgetTypeStatusGrid', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { windowSeconds: { option: 'windowSeconds' }, members: { const: true } },
+    options: {
+      title: TITLE,
+      measurement: MEASUREMENT,
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      worstFirst: { kind: 'boolean', labelId: 'widgetLabelWorstFirst', helpId: 'widgetHintWorstFirst' },
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'Status grid' },
+    freshness: true,
+    interactions: {},
+    layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 3, rows: 3 } },
+  }),
+
+  // Discrete states over time: one lane per measurement, the threshold bands as the states.
+  'state-timeline': defineRuntimeDescriptor({
+    id: 'state-timeline',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'State timeline', category: 'Telemetry', titleId: 'widgetTypeStateTimeline', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
+    binding: { windowSeconds: { option: 'windowSeconds' }, history: { const: true } },
+    options: {
+      title: TITLE,
+      thresholds: { ...THRESHOLDS, required: true, helpId: 'widgetHintStateThresholds' },
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'State timeline' },
+    freshness: true,
+    interactions: {},
+    layout: { defaultSpan: { cols: 8, rows: 3 }, minSpan: { cols: 4, rows: 2 } },
+  }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 
 // The catalog the headless validators read. Constructed at module load, so a built-in that

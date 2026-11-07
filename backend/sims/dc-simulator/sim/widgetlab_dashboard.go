@@ -445,6 +445,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabAlarmSeverity(onZone)...)
 	def.Widgets = append(def.Widgets, widgetlabPresence(onSensor(), onZone)...)
 	def.Widgets = append(def.Widgets, widgetlabHistory(onSensor())...)
+	def.Widgets = append(def.Widgets, widgetlabStateViews(onZone, onSensor(WidgetlabTemperatureKey))...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -814,6 +815,43 @@ func widgetlabHistory(onSensor widgetSubject) []dashboardWidget {
 				{"measurement": WidgetlabTemperatureKey, "label": "Temperature", "unit": "C", "precision": 1},
 				{"measurement": WidgetlabHumidityKey, "label": "Humidity", "unit": "%", "precision": 0},
 			}, 8),
+	}
+}
+
+// widgetlabStateViewsRow is the first row of the status-grid and state-timeline block (rows 66-69),
+// under the history block that ends at row 65.
+const widgetlabStateViewsRow = 66
+
+// widgetlabStateViews places the status grid over the zone (a tile per sensor, coloured by the
+// temperature bands) and the state timeline over one sensor (its temperature as three labelled
+// states over the board's span).
+func widgetlabStateViews(onZone, onSensor widgetSubject) []dashboardWidget {
+	const r = widgetlabStateViewsRow
+	return []dashboardWidget{
+		{
+			Id: "wl-status-grid", Type: "status-grid", Layout: box{0, 6, r, 4}.layout(),
+			Datasource: widgetSubject{Slot: onZone.Slot, Measurements: []string{WidgetlabTemperatureKey}}.datasource(),
+			Options: map[string]any{
+				"title": "Sensor temperatures", "measurement": WidgetlabTemperatureKey, "unit": "C", "precision": 1,
+				"thresholds": []widgetThreshold{
+					{Value: WidgetlabSweepMin, Level: "normal", Label: "Nominal"},
+					{Value: 28, Level: "warning", Label: "Warm"},
+					{Value: 32, Level: "critical", Label: "Hot"},
+				},
+				"worstFirst": true,
+			},
+		},
+		{
+			Id: "wl-state-timeline", Type: "state-timeline", Layout: box{6, 6, r, 4}.layout(), Datasource: onSensor.datasource(),
+			Options: map[string]any{
+				"title": "Sensor state",
+				"thresholds": []widgetThreshold{
+					{Value: WidgetlabSweepMin, Level: "normal", Label: "Nominal"},
+					{Value: 28, Level: "warning", Label: "Warm"},
+					{Value: 32, Level: "critical", Label: "Hot"},
+				},
+			},
+		},
 	}
 }
 

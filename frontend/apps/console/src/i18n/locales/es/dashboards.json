@@ -576,5 +576,10 @@
   "timeRangeAbsDismiss": "Descartar",
   "timeRangeAbsIgnored": "Se ignoró el intervalo de tiempo del enlace: {{reason}} ({{raw}}). Se muestra el panel en vivo.",
   "timeRangeAbsIncomplete": "se requieren tanto from como to",
-  "timeRangeAbsUnzoned": "las horas deben ser ISO 8601 con zona horaria, por ejemplo 2026-10-22T02:00:00Z o +02:00"
+  "timeRangeAbsUnzoned": "las horas deben ser ISO 8601 con zona horaria, por ejemplo 2026-10-22T02:00:00Z o +02:00",
+  "widgetTypeStatusGrid": "Cuadrícula de estado",
+  "widgetTypeStateTimeline": "Línea de estados",
+  "widgetLabelWorstFirst": "Los peores primero",
+  "widgetHintWorstFirst": "Coloca los dispositivos de la banda más grave arriba a la izquierda de la cuadrícula. Desactivado conserva el orden de la flota.",
+  "widgetHintStateThresholds": "Los estados, de menor a mayor. Cada fila inicia un estado en su valor que dura hasta la fila siguiente; asígnele una etiqueta (por ejemplo Detenido, En marcha, Falla) y un nivel que lo colorea. Por debajo de la primera fila el carril muestra Normal. Cada tramo es el estado del promedio de un intervalo de tiempo."
 }
