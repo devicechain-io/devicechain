@@ -539,6 +539,7 @@ dcctl bootstrap local devicechain
 
 - **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
 - **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
+- **把告警路由给真人。**开箱即用时 Alertmanager 会丢弃所有告警，处于这种状态的实例现在会在 `dcctl instances list` 和其 `AlertsRouted` 条件中报告 `ALERTS NOT ROUTED`。给 `dcctl install` 或 `dcctl upgrade` 传入 `--alert-webhook`、`--alert-email` 或 `--alert-config`，并用 `--alert-watchdog-webhook` 在告警系统自身停止时得到通知。由早期版本安装的集群需要先运行一次 `dcctl install`。参见[告警送达真人](#v120-alert-routing)。
 
 #### 检测分片并行运行 {#v120-detect-shards}
 
@@ -690,6 +691,14 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 #### 边缘代理看板与抓取作业 {#v120-edge-board-job}
 
 边缘代理看板的进程面板除选择代理外，还选择 `job="dc-edge-agent"`。`agent` 是机器上采集器的全局外部标签，因此如果采集器还抓取了机器上的其他进程（例如 node exporter），那个进程的内存、CPU、goroutine 和打开的文件就会被加进每个代理的面板。文档中的抓取配置已使用 `job_name: dc-edge-agent`，按它导入的看板无需改动。如果您给作业起了别的名字，请在采集器中改名，或把看板上五个进程与运行时查询（`process_*` 和 `go_goroutines`）改成您的作业名。请从 `backend/edge/dc-edge-agent/dashboards/edge-agent.json` 重新导入看板以应用此变更。
+
+#### 告警送达真人 {#v120-alert-routing}
+
+Chart 附带的每条告警规则现在都带有 `runbook_url`，会打开其在新增的[告警手册](./alert-runbook.md)中的条目。规则的其他方面均未改变：名称、表达式、`for` 时长和标签与之前一致。
+
+`dcctl install` 和 `dcctl upgrade` 现在接受 `--alert-webhook`、`--alert-email`（配合 `--alert-smtp-host`、`--alert-smtp-from`、`--alert-smtp-user` 和 `--alert-smtp-password-file`）、`--alert-config`、`--alert-watchdog-webhook` 和 `--clear-alert-routing`。Alertmanager 现在从 `monitoring` 命名空间中的 Secret `dc-alertmanager-config` 读取配置，`dcctl install` 会在应用监控栈之前写入它。不带任何 `--alert-*` 参数重新运行 `dcctl install` 会保留现有路由；首次安装不带参数时写入一份没有接收器的配置，这与早期版本的行为一致。实例会在新的 `AlertsRouted` 条件和 `dcctl instances list` 中报告是否有人在接收；该条件绝不会使实例变为未就绪。
+
+对于由早期版本安装的集群，在对 `dcctl upgrade` 使用这些参数之前，请先运行一次 `dcctl install`；否则 `dcctl upgrade` 会拒绝，因为旧的 Alertmanager 不会读取我们的 Secret。参见[将告警路由给真人](./observability.md#alert-routing)。
 
 #### 本版本的其他变更 {#v120-other-changes}
 

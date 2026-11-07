@@ -59,6 +59,10 @@ type UpgradeOptions struct {
 	// AllowEnvelopeDowngrade skips the refusal to move below the first release that reads event
 	// envelopes while the streams may hold one. See envelopedowngrade.go.
 	AllowEnvelopeDowngrade bool
+
+	// AlertRouting replaces where the cluster's Alertmanager sends alerts. The zero value
+	// changes nothing. See AlertRoutingRequest.
+	AlertRouting AlertRoutingRequest
 }
 
 // Upgrade moves a live instance onto a release: its message broker and event store
@@ -159,6 +163,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 	st.Evolving = true
+	st.AlertRouting = opts.AlertRouting
 
 	if st.AreaChange != nil {
 		fmt.Println(GreenUnderline(fmt.Sprintf(
@@ -248,6 +253,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// 🔴 A MOVE BELOW THE FIRST RELEASE THAT READS EVENT ENVELOPES IS REFUSED WHILE THE HOT
 	// STREAMS MAY HOLD ONE, before the declaration is written. See envelopedowngrade.go.
 	if err := precheckEnvelopeDowngrade(ctx, st, opts.AllowEnvelopeDowngrade); err != nil {
+		return err
+	}
+
+	// Asked before the first write: a cluster whose Alertmanager reads no Secret of ours has
+	// nothing for the alert flags to change, and finding that out after the services moved
+	// would leave an upgrade that did half of what was asked.
+	if err := PrecheckAlertRoutingUpgrade(ctx, typed, st); err != nil {
 		return err
 	}
 
@@ -387,6 +399,18 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// pessimistic date stays (TestTheExpiryIsPublishedOnlyAfterTheBrokerRestartIsWaitedOn).
 	// Published whether or not anything was renewed, so an instance bootstrapped before the
 	// date existed gets it on its first upgrade.
+	if st.AlertRouting.Given() {
+		doing("changing where alerts are sent")
+		routing, aerr := applyAlertRoutingUpgrade(ctx, typed, st.AlertRouting)
+		if aerr != nil {
+			return fail("changing where alerts are sent", aerr)
+		}
+		done()
+		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(routing))
+		for _, perr := range publishAlertRoutingToCluster(ctx, st.KubeContext, routing) {
+			fmt.Printf("  %s %v\n", color.YellowString("warning:"), perr)
+		}
+	}
 	if brokerExpiryUnverified(st) {
 		// The servers have not been restarted onto the renewed certificate and no StatefulSet
 		// exists to restart them, so the date would claim a certificate nobody serves yet. The next
@@ -399,6 +423,9 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			return fail("publishing the broker certificate's expiry", err)
 		}
 		done()
+	}
+	if err := publishAlertRouting(ctx, typed, dyn, st); err != nil {
+		return fail("publishing the alert routing", err)
 	}
 
 	// THE BROKER AND THE EVENT STORE, BEFORE THE SERVICES.

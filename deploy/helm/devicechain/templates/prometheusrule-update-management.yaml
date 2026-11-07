@@ -57,6 +57,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updatedownloadsnotconfigured"
             summary: "Devices are asking for update downloads and none can be granted"
             description: >-
               Devices have been asking for a download for at least 15 minutes and update-management
@@ -101,6 +102,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updatereportsmostlyrefused"
             summary: "More than a quarter of device update reports are being refused by the state machine"
             description: >-
               For 15 minutes, over a quarter of the update progress reports devices send have been refused
@@ -132,6 +134,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updaterolloutstepsfailing"
             summary: "Group rollouts are failing to advance"
             description: >-
               The rollout driver has been failing steps for at least 15 minutes and leaving them
@@ -161,6 +164,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updateattemptsgoingunknown"
             summary: "A burst of devices went quiet in the middle of an update"
             description: >-
               Five or more update attempts in the last 30 minutes were moved to UNKNOWN because the

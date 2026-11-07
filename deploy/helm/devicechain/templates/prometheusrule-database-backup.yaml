@@ -129,6 +129,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivingnotconfigured"
             summary: "A PostgreSQL cluster has no WAL archiver attached and is NOT being backed up"
             description: >-
               {{ "{{ $labels.pod }}" }} is running with archiving switched on and NO backup plugin
@@ -160,6 +161,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivingfailing"
             summary: "PostgreSQL WAL archiving is failing"
             description: >-
               {{ "{{ $labels.pod }}" }} last FAILED to archive a WAL segment more recently than it
@@ -207,6 +209,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivebacklog"
             summary: "PostgreSQL is holding WAL it has not shipped to the backup destination"
             description: >-
               {{ "{{ $labels.pod }}" }} has {{ "{{ $value }}" }} WAL segments (16 MiB each) waiting to be
@@ -238,6 +241,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreshasneverarchivedwal"
             summary: "PostgreSQL has never successfully archived a WAL segment"
             description: >-
               {{ "{{ $labels.pod }}" }} has archived no WAL segment, ever. The first base backup
@@ -276,6 +280,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgresnorecentbasebackup"
             summary: {{ ternary "No successful database base backup in the backup store in 8.5 days" "No successful database base backup in 36 hours" $snapshots | quote }}
             description: >-
               {{ "{{ $labels.pod }}" }} has taken no successful base backup {{ ternary "into the backup store in 8.5 days, against a weekly schedule" "in 36 hours against a daily schedule" $snapshots }}. WAL archiving alone restores NOTHING — a recovery replays WAL forward
@@ -310,6 +315,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#backupdestinationalmostfull"
             summary: "The backup destination is almost full"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is over 85% full. When it fills, WAL
@@ -357,6 +363,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#backupdestinationfillingfast"
             summary: "The backup destination will be full within the hour at its current rate"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is more than 65% full and filling fast enough to
