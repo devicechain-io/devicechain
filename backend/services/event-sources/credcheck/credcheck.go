@@ -31,6 +31,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"hash"
 	"sync"
 	"time"
 
@@ -90,8 +91,8 @@ type Config struct {
 	// May be nil.
 	OnCall func(outcome string)
 	// OnSkip is told of each check that was not made, with a reason: "busy" (the in-flight
-	// bound), "held" (the credential is in hold-off), "table_full" (the failure table is at its
-	// bound). May be nil.
+	// bound), "held" (the credential is in hold-off), "probing" (another call for the same
+	// credential is in flight), "table_full" (the failure table is at its bound). May be nil.
 	OnSkip func(reason string)
 }
 
@@ -144,13 +145,16 @@ type Verifier struct {
 	backend Backend
 	// salt keys every digest below. It is random per process and never leaves it, so a digest
 	// neither reveals the secret it covers nor can be computed by anyone else.
-	salt []byte
-	sem  chan struct{}
-	sf   singleflight.Group
+	salt    []byte
+	scratch sync.Pool
+	sem     chan struct{}
+	sf      singleflight.Group
 
 	mu       sync.Mutex
 	verdicts map[key]verdictEntry
 	failures map[key]failureEntry
+	// probing holds the credentials with a call in flight (see ask). Bounded by MaxInFlight.
+	probing map[key]struct{}
 }
 
 // New builds a verifier over backend.
@@ -160,27 +164,42 @@ func New(backend Backend, cfg Config) (*Verifier, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	return &Verifier{
+	v := &Verifier{
 		cfg:      cfg,
 		backend:  backend,
 		salt:     salt,
 		sem:      make(chan struct{}, cfg.MaxInFlight),
 		verdicts: make(map[key]verdictEntry),
 		failures: make(map[key]failureEntry),
-	}, nil
+		probing:  make(map[key]struct{}),
+	}
+	v.scratch.New = func() any { return &scratch{buf: make([]byte, 0, 256), mac: hmac.New(sha256.New, salt)} }
+	return v, nil
+}
+
+// scratch is a reusable buffer for building a digest input and a keyed hash to compute it with. A
+// digest is the one thing every request pays for, even a warm one, so neither is allocated per call.
+type scratch struct {
+	buf []byte
+	mac hash.Hash
 }
 
 // digest is the HMAC of the length-prefixed fields, so ("ab","c") and ("a","bc") differ.
 func (v *Verifier) digest(fields ...string) key {
-	m := hmac.New(sha256.New, v.salt)
-	var n [4]byte
+	sc := v.scratch.Get().(*scratch)
+	sc.buf = sc.buf[:0]
 	for _, f := range fields {
-		n[0], n[1], n[2], n[3] = byte(len(f)>>24), byte(len(f)>>16), byte(len(f)>>8), byte(len(f))
-		m.Write(n[:])
-		m.Write([]byte(f))
+		n := len(f)
+		sc.buf = append(sc.buf, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		sc.buf = append(sc.buf, f...)
 	}
+	sc.mac.Reset()
+	sc.mac.Write(sc.buf)
 	var out key
-	m.Sum(out[:0])
+	sc.mac.Sum(out[:0])
+	// The input holds the presented secret in the clear: it is wiped before the buffer is reused.
+	clear(sc.buf)
+	v.scratch.Put(sc)
 	return out
 }
 
@@ -197,28 +216,57 @@ func (v *Verifier) Verify(ctx context.Context, tenant string, p Presented) Verdi
 		v.skip("held")
 		return Unknown
 	}
-	res, err, _ := v.sf.Do(string(full[:]), func() (any, error) {
-		select {
-		case v.sem <- struct{}{}:
-		default:
-			return nil, errBusy
-		}
-		defer func() { <-v.sem }()
-		// Detached from the request: a shared call must not be cancelled by the caller that
-		// happened to start it, and the timeout is the bound.
-		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.cfg.Timeout)
-		defer cancel()
-		return v.backend.Check(cctx, tenant, p)
+	// Identical requests share one call, and so share its counting: a wrong credential posted by
+	// twenty devices at once is one rejection, not twenty.
+	res, _, _ := v.sf.Do(string(full[:]), func() (any, error) {
+		return v.ask(ctx, tenant, p, full, who), nil
 	})
+	return res.(Verdict)
+}
+
+// ask makes the call and does ALL the accounting for it, once.
+//
+// 🔴 ONE CALL PER CREDENTIAL AT A TIME. The hold-off is checked before a call is made, so without
+// this a burst of N different guesses at one credential all pass the check before any has come
+// back, and every verdict reaches its caller: the threshold would bound guesses per burst and not
+// per credential. A credential with a call in flight answers UNKNOWN to everything else, and the
+// hold is checked again once the slot is held, because the call that held it before may just have
+// started the hold. The cost is that a fleet sharing one credential id is verified one device at a
+// time while its verdicts are cold; the others are accepted unchecked, as before this check, and
+// asked again on their next event.
+func (v *Verifier) ask(ctx context.Context, tenant string, p Presented, full, who key) Verdict {
+	if !v.beginProbe(who) {
+		v.skip("probing")
+		return Unknown
+	}
+	defer v.endProbe(who)
+	if v.held(who, v.cfg.Now()) {
+		v.skip("held")
+		return Unknown
+	}
+	select {
+	case v.sem <- struct{}{}:
+	default:
+		v.skip("busy")
+		return Unknown
+	}
+	defer func() { <-v.sem }()
+	// Detached from the request: a shared call must not be cancelled by the caller that happened
+	// to start it, and the timeout is the bound.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.cfg.Timeout)
+	defer cancel()
+	accepted, err := v.backend.Check(cctx, tenant, p)
+	// An answer that arrived with the deadline already gone is not an answer to act on: a refusal
+	// must come from a call that finished in time, never from one that raced its own timeout.
+	if err == nil {
+		err = cctx.Err()
+	}
 	if err != nil {
-		if err == errBusy {
-			v.skip("busy")
-		} else if v.cfg.OnCall != nil {
+		if v.cfg.OnCall != nil {
 			v.cfg.OnCall("error")
 		}
 		return Unknown
 	}
-	accepted := res.(bool)
 	if v.cfg.OnCall != nil {
 		if accepted {
 			v.cfg.OnCall("accepted")
@@ -241,11 +289,21 @@ func (v *Verifier) Verify(ctx context.Context, tenant string, p Presented) Verdi
 	return Rejected
 }
 
-type errString string
+func (v *Verifier) beginProbe(who key) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if _, busy := v.probing[who]; busy {
+		return false
+	}
+	v.probing[who] = struct{}{}
+	return true
+}
 
-func (e errString) Error() string { return string(e) }
-
-const errBusy = errString("credcheck: at the in-flight bound")
+func (v *Verifier) endProbe(who key) {
+	v.mu.Lock()
+	delete(v.probing, who)
+	v.mu.Unlock()
+}
 
 func (v *Verifier) skip(reason string) {
 	if v.cfg.OnSkip != nil {

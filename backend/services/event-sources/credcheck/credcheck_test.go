@@ -4,7 +4,10 @@
 package credcheck
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -138,6 +141,35 @@ func TestVerify_NeverHoldsThePlaintextSecret(t *testing.T) {
 		assert.NotContains(t, string(k[:]), good.Secret)
 	}
 	assert.Len(t, v.verdicts, 1)
+}
+
+// The digest input holds the presented secret in the clear, in a buffer that is reused. It is
+// wiped before it goes back, so the pool never holds a secret between requests.
+func TestDigest_WipesItsScratchBuffer(t *testing.T) {
+	v, _ := newVerifier(t, &fakeBackend{accept: onlyGood}, nil)
+	v.digest("acme", "d1", "MQTT_BASIC", "user-1", "super-secret-value-0123456789")
+	sc := v.scratch.Get().(*scratch)
+	defer v.scratch.Put(sc)
+	raw := sc.buf[:cap(sc.buf)]
+	if bytes.Contains(raw, []byte("super-secret")) {
+		t.Fatal("the pooled scratch buffer still holds the secret")
+	}
+}
+
+// The pooled digest is the HMAC of the same input a fresh hasher would compute.
+func TestDigest_MatchesAFreshHMAC(t *testing.T) {
+	v, _ := newVerifier(t, &fakeBackend{accept: onlyGood}, nil)
+	m := hmac.New(sha256.New, v.salt)
+	for _, f := range []string{"acme", "", "d1"} {
+		n := len(f)
+		m.Write([]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+		m.Write([]byte(f))
+	}
+	var want key
+	m.Sum(want[:0])
+	for i := 0; i < 3; i++ { // repeated, so a reused hasher that is not reset shows
+		assert.Equal(t, want, v.digest("acme", "", "d1"))
+	}
 }
 
 // Two verifiers key differently: a digest from one process means nothing to another.
@@ -317,6 +349,90 @@ func TestVerify_IdenticalConcurrentRequestsShareOneCall(t *testing.T) {
 	assert.Equal(t, 1, b.callCount())
 }
 
+// 🔴 THE THRESHOLD HOLDS UNDER CONCURRENCY. N different guesses at one credential, all in flight
+// before any has come back, must not all be answered: one call per credential at a time, the rest
+// UNKNOWN. Without it the hold-off bounds guesses per burst and not per credential.
+func TestVerify_OneCallPerCredentialAtATime(t *testing.T) {
+	b := &fakeBackend{accept: onlyGood, release: make(chan struct{}), started: make(chan struct{}, 32)}
+	var skips sync.Map
+	v, _ := newVerifier(t, b, func(c *Config) {
+		c.OnSkip = func(r string) {
+			n, _ := skips.LoadOrStore(r, new(atomic.Int32))
+			n.(*atomic.Int32).Add(1)
+		}
+	})
+	results := make(chan Verdict, 10)
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			p := good
+			p.Secret = fmt.Sprintf("guess-%d", i)
+			results <- v.Verify(context.Background(), "acme", p)
+		}(i)
+	}
+	<-b.started // one is in flight
+	// The nine others are answered at once, without waiting for it.
+	unknown := 0
+	for i := 0; i < 9; i++ {
+		select {
+		case r := <-results:
+			assert.Equal(t, Unknown, r)
+			unknown++
+		case <-time.After(5 * time.Second):
+			t.Fatal("a guess at a credential with a call in flight waited instead of being answered UNKNOWN")
+		}
+	}
+	close(b.release)
+	assert.Equal(t, Rejected, <-results)
+	assert.Equal(t, 9, unknown)
+	assert.Equal(t, 1, b.callCount(), "only one call reached the backend")
+	n, _ := skips.Load("probing")
+	require.NotNil(t, n)
+	assert.EqualValues(t, 9, n.(*atomic.Int32).Load())
+}
+
+// The same wrong request posted by many devices at once is ONE call and ONE rejection: the
+// waiters share the verdict and the accounting, so a fleet cannot put a credential into hold-off
+// (or inflate the call counter) by sharing a bad one.
+func TestVerify_IdenticalConcurrentRejectionsAreCountedOnce(t *testing.T) {
+	b := &fakeBackend{accept: onlyGood, release: make(chan struct{}), started: make(chan struct{}, 32)}
+	var calls atomic.Int32
+	v, _ := newVerifier(t, b, func(c *Config) { c.OnCall = func(string) { calls.Add(1) } })
+	bad := good
+	bad.Secret = "wrong"
+	results := make(chan Verdict, 8)
+	for i := 0; i < 8; i++ {
+		go func() { results <- v.Verify(context.Background(), "acme", bad) }()
+	}
+	<-b.started
+	time.Sleep(50 * time.Millisecond) // let the rest join the flight
+	close(b.release)
+	for i := 0; i < 8; i++ {
+		assert.Equal(t, Rejected, <-results)
+	}
+	assert.Equal(t, 1, b.callCount())
+	assert.EqualValues(t, 1, calls.Load(), "the call counter counts calls, not callers")
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, f := range v.failures {
+		assert.Equal(t, 1, f.count, "eight callers sharing one call are one failure")
+	}
+}
+
+// The hold is checked again once the credential's slot is held: the call that held it before may
+// have just started the hold, and the verdict this call would release is past the threshold.
+func TestAsk_RechecksTheHoldOnceItHoldsTheSlot(t *testing.T) {
+	b := &fakeBackend{accept: onlyGood}
+	v, clk := newVerifier(t, b, nil)
+	who := v.digest("acme", good.Type, good.Id)
+	v.failures[who] = failureEntry{count: v.cfg.FreeFailures, last: clk.now()}
+	assert.Equal(t, Unknown, v.ask(context.Background(), "acme", good, v.digest("k"), who))
+	assert.Equal(t, 0, b.callCount(), "a held credential reached the backend")
+	v.mu.Lock()
+	_, stillProbing := v.probing[who]
+	v.mu.Unlock()
+	assert.False(t, stillProbing, "the slot is released on every path")
+}
+
 // The cache is bounded: a flood of distinct requests cannot grow it past Entries.
 func TestVerify_CacheIsBounded(t *testing.T) {
 	b := &fakeBackend{accept: func(Presented) bool { return true }}
@@ -420,4 +536,28 @@ func BenchmarkVerify_WarmParallel(b *testing.B) {
 			v.Verify(ctx, "acme", good)
 		}
 	})
+}
+
+// A backend that answers "no" after its deadline has passed has not refused anything: the answer is
+// unusable, so it is UNKNOWN, uncounted and uncached.
+func TestVerify_AnAnswerAfterTheDeadlineIsNotARefusal(t *testing.T) {
+	late := backendFunc(func(ctx context.Context, _ string, _ Presented) (bool, error) {
+		<-ctx.Done()
+		return false, nil // ignores its own cancellation and answers "no"
+	})
+	var outcomes []string
+	v, _ := newVerifier(t, late, func(c *Config) {
+		c.Timeout = 10 * time.Millisecond
+		c.OnCall = func(o string) { outcomes = append(outcomes, o) }
+	})
+	bad := good
+	bad.Secret = "wrong"
+	for i := 0; i < 8; i++ {
+		assert.Equal(t, Unknown, v.Verify(context.Background(), "acme", bad))
+	}
+	assert.Equal(t, []string{"error", "error", "error", "error", "error", "error", "error", "error"}, outcomes)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	assert.Empty(t, v.failures, "a late answer is not a failure of the credential")
+	assert.Empty(t, v.verdicts, "and is not remembered")
 }

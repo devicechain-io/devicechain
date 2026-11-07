@@ -198,6 +198,8 @@ func TestHttpEvents_Unprocessable_NamesTheValue(t *testing.T) {
 		{"location out of range", `{"device":"d","eventType":"Location","payload":{"entries":[{"latitude":"91","longitude":"0"}]}}`, "/payload/entries/0/latitude"},
 		{"location missing", `{"device":"d","eventType":"Location","payload":{"entries":[{"latitude":"1"}]}}`, "/payload/entries/0/longitude"},
 		{"wrong json type", `{"device":"d","eventType":"Alert","payload":{"entries":[{"type":"x","level":"high"}]}}`, "/payload/entries"},
+		{"envelope field of the wrong type", `{"device":5,"eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, "/device"},
+		{"payload that is not an object", `{"device":"d","eventType":"Measurement","payload":"temp=1"}`, "/payload"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -283,4 +285,49 @@ func TestAtPointer_KeepsTheMoreSpecificPointer(t *testing.T) {
 
 func TestPointerError_MessageIsTheWrappedErrorsOwn(t *testing.T) {
 	assert.Equal(t, "boom", atPointer("/x", errors.New("boom")).Error())
+}
+
+// The reading limit's refusal points at the entries, where the readings are.
+func TestHttpEvents_Unprocessable_TooManyReadingsPointsAtTheEntries(t *testing.T) {
+	var readings strings.Builder
+	for i := 0; i < 257; i++ {
+		if i > 0 {
+			readings.WriteString(",")
+		}
+		readings.WriteString(`"m` + strconv.Itoa(i) + `":"1"`)
+	}
+	body := `{"device":"d","eventType":"Measurement","payload":{"entries":[{"measurements":{` + readings.String() + `}}]}}`
+	es, dec, _ := newTestHttpSource(t, nil)
+	rec := post(es, "acme", body)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	assert.False(t, dec.called)
+	var got unprocessableBody
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Errors, 1)
+	assert.Equal(t, "/payload/entries", got.Errors[0].Pointer)
+}
+
+// A refusal's log line is sampled to one a second per reason, so a flood of refusals cannot flood
+// the log, and one reason's flood does not hide another's first.
+func TestSampler_OnePerIntervalPerKey(t *testing.T) {
+	s := &sampler{interval: time.Second, last: map[string]time.Time{}}
+	t0 := time.Unix(1_700_000_000, 0)
+	assert.True(t, s.allow("a", t0))
+	assert.False(t, s.allow("a", t0.Add(999*time.Millisecond)))
+	assert.True(t, s.allow("b", t0.Add(time.Millisecond)), "another reason is its own key")
+	assert.True(t, s.allow("a", t0.Add(time.Second)))
+}
+
+// A refusal is counted once, by source and reason, whatever the sampled log does.
+func TestHttpEvents_RefusalIsCountedEveryTimeEvenWhenTheLogIsSampled(t *testing.T) {
+	es, _, _ := newTestHttpSource(t, nil)
+	n := map[string]int{}
+	es.UseIngestChecks(&IngestChecks{
+		TenantUnknown: func(context.Context, string) bool { return true },
+		Refused:       func(source, reason string) { n[source+"/"+reason]++ },
+	})
+	for i := 0; i < 5; i++ {
+		post(es, "typo", canonicalMeasurementBody)
+	}
+	assert.Equal(t, 5, n["http-test/"+RefusedUnknownTenant])
 }

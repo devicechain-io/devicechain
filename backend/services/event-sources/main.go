@@ -297,7 +297,7 @@ var (
 	IngestRefusedCounter *prometheus.CounterVec
 	// CredentialCheckCounter counts the credential check's calls to device-management by outcome
 	// (accepted, rejected, error), and CredentialCheckSkippedCounter the checks not made by reason
-	// (busy, held, table_full): each skipped check is a request accepted unchecked.
+	// (busy, held, probing, table_full): each skipped check is a request accepted unchecked.
 	CredentialCheckCounter        *prometheus.CounterVec
 	CredentialCheckSkippedCounter *prometheus.CounterVec
 	// TenantDirectory answers whether a tenant is known not to exist, from the same cache the
@@ -446,13 +446,14 @@ func initializeMetrics() {
 	CredentialCheckSkippedCounter = Microservice.NewCounterVec(
 		"total_http_credential_checks_skipped",
 		"Count of HTTP credential checks not made, by reason: the in-flight bound (busy), the credential "+
-			"is held off after repeated failures (held), or the failure table is full (table_full). The "+
+			"is held off after repeated failures (held), another check of the same credential is in flight "+
+			"(probing), or the failure table is full (table_full). The "+
 			"request is accepted unchecked and device-management decides, as it always did",
 		[]string{"reason"})
 	for _, outcome := range []string{"accepted", "rejected", "error"} {
 		CredentialCheckCounter.WithLabelValues(outcome)
 	}
-	for _, reason := range []string{"busy", "held", "table_full"} {
+	for _, reason := range []string{"busy", "held", "probing", "table_full"} {
 		CredentialCheckSkippedCounter.WithLabelValues(reason)
 	}
 	ShedAcknowledgedCounter = Microservice.NewCounterVec(

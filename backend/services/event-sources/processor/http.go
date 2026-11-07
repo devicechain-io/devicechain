@@ -174,8 +174,11 @@ func (es *HttpEventSource) handler() http.Handler {
 }
 
 // handleEvent decodes a single posted event and forwards it to the shared
-// publish path. It returns 202 once the event is stored in the inbound stream, 400
-// when the body cannot be decoded, 429 when the tenant is over its ingest ceiling
+// publish path. It returns 202 once the event is stored in the inbound stream (with an
+// X-DC-Event-Id receipt), 400 when the body is not JSON, 422 when it is JSON the platform
+// refuses (naming the value by a JSON Pointer), 401 when the tenant does not exist or the
+// credential in the body will not authenticate (one answer for both, see IngestChecks),
+// 429 when the tenant is over its ingest ceiling
 // (in messages before decode, or in readings after it), and 503 when it was not
 // accepted: with a Retry-After when the pipeline refused it under backpressure (a
 // reader is far behind; the event was certainly not stored), and without one when

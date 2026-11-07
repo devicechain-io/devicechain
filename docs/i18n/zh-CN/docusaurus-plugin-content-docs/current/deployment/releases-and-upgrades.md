@@ -682,7 +682,7 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 
 `POST /{instanceId}/{tenant}/events` 曾对永远无法存储的请求返回 `202 Accepted`：租户名拼写有误，以及无法通过认证的凭据。平台随后把它们丢弃，并只在失败事件中记录原因，设备却被告知数据是安全的。从本版本起，该端点在入口处就拒绝它们。
 
-- 对不存在的租户，以及无法通过认证的凭据（未知、已过期、密钥错误、属于另一台设备，或在实例要求凭据时缺失），返回 **`401 Unauthorized`**。响应体始终是 `{"error":"unauthorized"}`，响应头对所有原因也都相同，因此无法借此端点查明哪些租户或凭据 id 存在。运营者可在 `total_http_ingest_refused{source,reason}` 上区分二者，`reason` 为 `unknown_tenant` 或 `bad_credential`。
+- 对不存在的租户，以及无法通过认证的凭据（未知、已过期、密钥错误、属于另一台设备，或在实例要求凭据时缺失），返回 **`401 Unauthorized`**。响应体始终是 `{"error":"unauthorized"}`，响应头对所有原因也都相同，因此无法借此端点查明哪些租户或凭据 id 存在（按租户的速率上限一直对存在与不存在的租户给出不同回答，这是另一个渠道，本变更并未封闭它）。运营者可在 `total_http_ingest_refused{source,reason}` 上区分二者，`reason` 为 `unknown_tenant` 或 `bad_credential`。
 - 对有效 JSON 但被平台拒绝的正文（此前返回 `400`），返回 **`422 Unprocessable Content`**：未知的 `eventType`、没有条目的载荷、空条目、不是 RFC 3339 的时间戳、超过 256 个读数。响应体为 `{"error":"unprocessable_event","eventId":"...","errors":[{"pointer":"/payload/entries/1/measurements","detail":"..."}]}`，其中 `pointer` 是指向所发送正文的 RFC 6901 JSON Pointer。完全不是 JSON 的正文仍为 `400`。
 - `202` 和 `422` 带有 **`X-DC-Event-Id` 响应头**：这是该请求的回执，询问时可引用。它标识的是请求，而不是已存储的事件。
 
@@ -691,8 +691,8 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 - **需要做什么：**查找您以为数据正在到达的设备。现在收到 `401` 的设备此前一直被丢弃；请给它一个能通过认证的凭据，或正确的租户。它之前的事件记录在失败事件中（参见[为什么看不到我的数据](../guides/why-isnt-my-data-showing-up.md)）。
 - **它只查询、不猜测，也绝不因自身故障而阻塞入口。**租户检查读取接入上限已在使用的缓存；对从未见过的租户的第一个请求会等待该次查询（最多 300 毫秒）。凭据检查通过服务平面询问 device-management。若任何一方无法访问、响应缓慢或繁忙，请求会像以前一样被接受，并在稍后判定。`deviceAuthMode` 为 `disabled` 时不做任何检查；未配置 user-management 或 device-management 时，对应的检查处于关闭状态。
 - **检查的开销。**不会对每个请求发起查询：判定结果会被记住，已接受的凭据 `30 秒`，被拒绝的凭据 `10 秒`，因此每隔几秒发送一次的设备每个间隔只产生一次调用。因此，被轮换或停用的凭据在入口处最多仍可能被接受 30 秒（解析器会像以前一样拒绝它），刚修复的凭据最多仍可能被拒绝 10 秒。
-- **无法借此入口猜测密钥。**失败五次的凭据在一个不断增长的间隔内（从一秒开始翻倍，最长一分钟）不会再被查询，其请求以 `202` 被接受，并像以前一样在稍后判定。按凭据记录的表有上限；表满时，请求不经检查直接被接受，而不是被回答。
-- **新增计数器：**`total_http_ingest_refused{source,reason}`、`total_http_credential_checks{outcome}`（对 device-management 发起的调用，按 `accepted`、`rejected` 和 `error` 计）以及 `total_http_credential_checks_skipped{reason}`（未执行的检查：`busy`、`held`、`table_full`）。均以 0 导出。`error` 或 `busy` 持续出现，意味着请求在未经检查的情况下被接受。
+- **无法借此入口猜测密钥。**失败五次的凭据在一个不断增长的间隔内（从一秒开始翻倍，最长一分钟）不会再被查询，其请求以 `202` 被接受，并像以前一样在稍后判定。同一凭据同一时间只做一次检查，因此一批猜测不会被并行回答；共用同一凭据 id 的设备群在判定结果尚未缓存时逐台验证，其余设备不经检查直接被接受。按凭据记录的表有上限；表满时，请求不经检查直接被接受，而不是被回答。
+- **新增计数器：**`total_http_ingest_refused{source,reason}`、`total_http_credential_checks{outcome}`（对 device-management 发起的调用，按 `accepted`、`rejected` 和 `error` 计）以及 `total_http_credential_checks_skipped{reason}`（未执行的检查：`busy`、`held`、`probing`、`table_full`）。均以 0 导出。`error` 或 `busy` 持续出现，意味着请求在未经检查的情况下被接受。
 - 集成端点、MQTT 和其他传输方式不变。
 
 #### 规格预设 {#v120-size-presets}
