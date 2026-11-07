@@ -2,9 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # One small GKE cluster for the hosted playground, in a project of its own, with a
-# budget alert. It creates the cluster and nothing inside it, and nothing public: no
-# address, no DNS record, no load balancer. DeviceChain goes on with dcctl, and what the
-# internet can reach is decided afterwards by hand (README.md, "Going public").
+# budget alert. It creates the cluster and nothing inside it, and nothing DeviceChain
+# serves is public: no address, no DNS record, no load balancer. DeviceChain goes on with
+# dcctl, and what the internet can reach is decided afterwards by hand (README.md, "Going
+# public").
+#
+# Two things are public the way every GKE Standard cluster's are, and are said here rather
+# than discovered: the Kubernetes API endpoint (authenticated; restrict who may even reach
+# it with control_plane_authorized_cidrs) and the nodes' external addresses (a private
+# cluster needs Cloud NAT to pull images, which is a cost and a decision of its own).
 
 locals {
   cluster_enabled = var.create_cluster ? 1 : 0
@@ -59,6 +65,34 @@ resource "google_container_cluster" "this" {
     channel = var.release_channel
   }
 
+  # 🔴 NetworkPolicy objects are enforced only by a dataplane that implements them. The
+  # provider's default (LEGACY_DATAPATH with the policy add-on off) accepts and ignores
+  # every policy this root creates, so the driver's confinement would be on paper only.
+  # Dataplane V2 enforces them with nothing further to switch on, and needs a VPC-native
+  # cluster, which is stated rather than assumed.
+  datapath_provider = "ADVANCED_DATAPATH"
+  ip_allocation_policy {}
+
+  # With workload identity on the cluster and GKE_METADATA on the pool, a pod cannot read
+  # the node service account's token from the metadata server.
+  workload_identity_config {
+    workload_pool = "${var.project_id}.svc.id.goog"
+  }
+
+  # Who may reach the Kubernetes API endpoint at all. Empty leaves Google's default.
+  dynamic "master_authorized_networks_config" {
+    for_each = length(var.control_plane_authorized_cidrs) > 0 ? [1] : []
+    content {
+      dynamic "cidr_blocks" {
+        for_each = var.control_plane_authorized_cidrs
+        content {
+          cidr_block   = cidr_blocks.value
+          display_name = "maintainer"
+        }
+      }
+    }
+  }
+
   # dcctl install brings its own Prometheus; a second managed one would bill per sample.
   monitoring_config {
     enable_components = ["SYSTEM_COMPONENTS"]
@@ -87,7 +121,18 @@ resource "google_container_node_pool" "this" {
     disk_size_gb = var.disk_size_gb
     spot         = var.spot
     labels       = var.labels
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    # Logging and monitoring only. cloud-platform would hand every pod on the node the
+    # whole of the node service account's IAM; the images come from a public registry, so
+    # no storage scope is needed either.
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+    ]
+
+    workload_metadata_config {
+      mode = "GKE_METADATA"
+    }
   }
 
   management {

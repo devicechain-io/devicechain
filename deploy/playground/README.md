@@ -22,7 +22,12 @@ it (`hack/tofu-roots.sh` lists what `dcctl` embeds).
 | The nightly reset | `driver.tf` | A CronJob that rolls the driver at the start of each playground day. |
 | The policy | `backend/tools/playground` | Which tenants exist on which day. Tested; maintainer-only, shipped in no release. |
 
-It creates **no address, no DNS record and no load balancer**.
+It creates **no address, no DNS record and no load balancer**, and nothing DeviceChain
+serves is reachable from outside until you decide it is. Two things are public the way every
+GKE Standard cluster's are: the Kubernetes API endpoint (every request must authenticate;
+narrow who can reach it with `control_plane_authorized_cidrs`, and do) and the nodes'
+external addresses (a private cluster needs Cloud NAT to pull images, which is a cost and a
+decision of its own, left to you).
 
 ## How the nightly reset works
 
@@ -45,6 +50,14 @@ its token has been free for at least a day.
   and not a missed one.
 - A failed destroy is logged and retried at the next start; a failed create is fatal and the
   pod crash-loops where the maintainer will see it.
+- A slot whose destroy keeps failing (a member added to its tenant blocks the delete) would
+  be reused, with a visitor's changes, when it came round again. The driver keeps a ledger
+  of the day each sim was created on, and refuses such a slot with a message naming it
+  instead of reporting a reset that did not happen. Fixing it is yours: destroy it by hand,
+  then wait out the token hold.
+- The ledger and the sim records share the driver's volume. If that volume is lost, tenants
+  the driver can no longer name are left behind on the instance (their destroy reports no
+  such sim): remove them with the instance's admin API.
 
 ## Prerequisites
 
@@ -71,18 +84,22 @@ tofu apply \
   -var create_cluster=true \
   -var project_id=<playground project> \
   -var billing_account=<XXXXXX-XXXXXX-XXXXXX> \
-  -var budget_alert_email=<you@example.com>
+  -var budget_alert_email=<you@example.com> \
+  -var 'control_plane_authorized_cidrs=["<your address>/32"]'
 ```
 
-Defaults: one `e2-standard-8` spot node in `us-east4-b`, `$300` a month, deletion
+Defaults: one `e2-standard-8` spot node in `us-east4-b`, a monthly budget alert (`budget_usd`), deletion
 protection on. The budget alert is created in the same apply and the plan is refused
 without the three inputs above. `tofu output get_credentials_command` prints the command
 that adds the cluster to your kubeconfig; `tofu output kube_context` is the context it
 creates.
 
-A spot node can be taken back by Google at any time. The instance restarts with it and the
-driver recreates the day's tenants on its way back up; a visitor may see an empty page for
-a few minutes. That is the price of the pool.
+The cluster enforces NetworkPolicy (Dataplane V2), keeps pods from reading the node service
+account's token (workload identity), and gives the nodes logging and monitoring scopes only.
+
+A spot node can be taken back by Google at any time. The instance and the driver restart on
+their volumes and the day's tenants are still there; a visitor may see an error page for a
+few minutes. That is the price of the pool.
 
 ### 2. DeviceChain
 
@@ -169,7 +186,8 @@ tofu destroy -var create_cluster=true ...
 | `slots` | `3` | Never fewer than 3. |
 | `reset_hour_utc` | `3` | The driver and the CronJob follow this one number. |
 | `spot` | `true` | |
-| `budget_usd` | `300` | |
+| `budget_usd` | see `variables.tf` | The monthly budget the alert is set on, in US dollars. |
+| `control_plane_authorized_cidrs` | none | Who may reach the Kubernetes API endpoint. Empty is Google's default (anyone, with credentials). |
 | `network_policy` | `true` | Confines the driver to DNS, the instance and the ingress controller's namespace (`ingress_namespace`). Ignored by a network plugin that does not enforce policies. |
 
 ## Checks
@@ -186,10 +204,26 @@ CI runs the same (`opentofu` job).
 
 ## What was validated {#validated}
 
-On a kind cluster, never on Google Cloud: the in-cluster half of the root was applied to a
-fresh kind cluster beside a DeviceChain instance, the driver seeded the day's tenants, a
-mutation was planted in a live tenant, the reset was run, and the mutation was gone while
-the seeded content was identical. The details are in the pull request that added this.
+On a kind cluster, never on Google Cloud. A lane-private kind cluster took a released
+DeviceChain (compact install, default profile) and this root's in-cluster half with a driver
+image built from `image/`. Then:
+
+- the driver created `sitepulse`, `buildingpulse` and `fleetpulse` tenants (19, 12 and 6
+  devices) and their simulators fed them: device state kept updating;
+- a device was added to a live tenant, a driver restart inside the same day kept it, and the
+  reset CronJob (run by hand) rolled the driver through its role, which allows nothing else;
+- the day was moved forward, the driver created the next slot with exactly the seeded devices
+  (the added one absent), destroyed the old slot (its tenants `purging`, its identities
+  gone, its logins refused), and left no failed destroy in its log;
+- recreating one of the old tenants under its own name was refused by the platform with "that
+  tenant token is reserved", which is why the reset rotates.
+
+Applying it to kind found two defects that the plan-level tests did not: a container must set
+`runAsNonRoot` itself under the restricted pod security level, and `dcctl sim destroy`
+refuses the create-only flags. Both have tests that fail without the fix.
+
+The Google Cloud half (`create_cluster`) is validated by `tofu validate` and the mocked
+`tofu test` suite only. The first real apply is yours.
 
 ## What is not here {#not-here}
 
@@ -198,6 +232,7 @@ the seeded content was identical. The details are in the pull request that added
   and not a deployment one.
 - **A `coldline` tenant.** The simulator has no such scenario yet; the seeded set is the
   scenarios it does have.
-- **A byte-for-byte state digest.** The reset creates a tenant from a fixed seed; the check
-  that the new tenant equals the seed is the test in the pull request, not a runtime check.
+- **A runtime seed check.** The reset creates a tenant from a fixed seed; that the new tenant
+  holds exactly the seed was checked on kind by listing its devices, and is not checked on
+  each night. Telemetry is not part of the seed: a new slot starts with no history.
 - **Anything public.** See "Going public".

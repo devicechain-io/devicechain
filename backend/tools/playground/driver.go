@@ -4,10 +4,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -27,11 +29,33 @@ type Runner interface {
 	Run(ctx context.Context, name string, args ...string) (string, error)
 }
 
-type execRunner struct{}
+// execRunner runs real commands. WaitDelay bounds how long a cancelled command may keep its
+// output pipe open.
+//
+// 🔴 `dcctl sim run` starts dc-simulator as a CHILD that inherits the output pipe. Killing
+// dcctl alone leaves the child holding the pipe, and the wait for output waits for the pipe
+// to close: without a WaitDelay a cancelled supervisor never returns, and the day-boundary
+// exit that hands the next day to a fresh start would hang on yesterday's simulator
+// forever. The interrupt asks dcctl to stop its child the way it does for Ctrl+C; where a
+// process cannot be sent one (Windows) it is killed; the delay then closes the pipes on
+// whatever is left.
+type execRunner struct {
+	WaitDelay time.Duration
+}
 
-func (execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-	return string(out), err
+func (r execRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	c := exec.CommandContext(ctx, name, args...)
+	c.Cancel = func() error {
+		if err := c.Process.Signal(os.Interrupt); err != nil {
+			return c.Process.Kill()
+		}
+		return nil
+	}
+	c.WaitDelay = r.WaitDelay
+	var buf bytes.Buffer
+	c.Stdout, c.Stderr = &buf, &buf
+	err := c.Run()
+	return buf.String(), err
 }
 
 // Driver performs a rotation and then keeps the current slot's simulators running.
@@ -47,6 +71,9 @@ type Driver struct {
 	// policy, so they come from the environment of the pod.
 	ReachArgs  []string
 	CreateArgs []string
+	// Days records, per sim, the playground day it was created on, so a slot that comes
+	// round again still holding an earlier day's tenant is noticed. Nil records nothing.
+	Days *DayLedger
 	// BaseControlPort is the first of the control ports; each scenario gets one.
 	BaseControlPort int
 	Runner          Runner
@@ -90,13 +117,30 @@ func (d *Driver) Rotate(ctx context.Context, now time.Time) (Plan, error) {
 		return Plan{}, err
 	}
 	p := PlanRotation(now, d.Cfg)
+	day := Day(now, d.Cfg.ResetHour)
 	for i, sc := range d.Cfg.Scenarios {
 		name := SimName(sc, p.Slot)
 		if !ValidSimName(name) {
 			return p, fmt.Errorf("sim name %q is not valid", name)
 		}
+		// 🔴 A SLOT THAT IS STILL HOLDING AN EARLIER DAY'S TENANT IS NOT FRESH. `dcctl sim
+		// create` is idempotent: against a tenant that survived (its destroy failed on each
+		// of the nights since, because a member was added to it, say) it succeeds and keeps
+		// whatever a visitor left there, and the reset would report success. Refusing is
+		// loud and is the only honest answer; the 12-hour hold on a token means destroying
+		// it now and creating it again is not available either.
+		if was, ok, err := d.Days.Get(name); err != nil {
+			return p, err
+		} else if ok && was != day {
+			return p, fmt.Errorf("%s still holds the tenant of playground day %d (today is day %d): an earlier destroy "+
+				"of it failed and nothing since has removed it, so today's slot would not be fresh. Destroy it by hand "+
+				"(dcctl sim destroy %s), then wait out the token hold before this slot can be used again", name, was, day, name)
+		}
 		if out, err := d.Runner.Run(ctx, d.Dcctl, d.createArgs(sc, name, i)...); err != nil {
 			return p, fmt.Errorf("create %s: %w\n%s", name, err, out)
+		}
+		if err := d.Days.Set(name, day); err != nil {
+			return p, err
 		}
 		d.logf("created %s", name)
 	}
@@ -106,8 +150,14 @@ func (d *Driver) Rotate(ctx context.Context, now time.Time) (Plan, error) {
 		switch {
 		case err == nil:
 			d.logf("destroyed %s", name)
+			if err := d.Days.Forget(name); err != nil {
+				return p, err
+			}
 		case strings.Contains(out, noSuchSim):
 			// Never created, or already gone: nothing to tear down.
+			if err := d.Days.Forget(name); err != nil {
+				return p, err
+			}
 		default:
 			d.logf("destroy %s failed, will retry at the next start: %v\n%s", name, err, out)
 			failed = append(failed, name)

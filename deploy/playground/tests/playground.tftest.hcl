@@ -67,6 +67,64 @@ run "the_cluster_is_one_spot_pool_with_a_budget" {
   }
 }
 
+# Found by Codex's review of the first version: the provider's default dataplane ignores
+# NetworkPolicy objects, the pool's cloud-platform scope gave every pod the node account's
+# IAM, and the API endpoint was open with no way to narrow it.
+run "the_cluster_enforces_network_policy_and_hides_the_node_account" {
+  command = plan
+
+  variables {
+    create_cluster     = true
+    project_id         = "dc-playground-test"
+    billing_account    = "AAAAAA-BBBBBB-CCCCCC"
+    budget_alert_email = "ops@example.com"
+  }
+
+  assert {
+    condition     = google_container_cluster.this[0].datapath_provider == "ADVANCED_DATAPATH"
+    error_message = "NetworkPolicy objects are ignored unless the dataplane enforces them."
+  }
+  assert {
+    condition     = google_container_node_pool.this[0].node_config[0].workload_metadata_config[0].mode == "GKE_METADATA"
+    error_message = "Pods should not be able to read the node service account's token."
+  }
+  assert {
+    condition     = !contains(google_container_node_pool.this[0].node_config[0].oauth_scopes, "https://www.googleapis.com/auth/cloud-platform")
+    error_message = "The pool must not carry the cloud-platform scope."
+  }
+  assert {
+    condition     = length(google_container_cluster.this[0].master_authorized_networks_config) == 0
+    error_message = "With no authorized ranges set the cluster should keep Google's default endpoint access."
+  }
+}
+
+run "the_api_endpoint_can_be_restricted_to_the_maintainer" {
+  command = plan
+
+  variables {
+    create_cluster                 = true
+    project_id                     = "dc-playground-test"
+    billing_account                = "AAAAAA-BBBBBB-CCCCCC"
+    budget_alert_email             = "ops@example.com"
+    control_plane_authorized_cidrs = ["203.0.113.7/32"]
+  }
+
+  assert {
+    condition     = one(one(google_container_cluster.this[0].master_authorized_networks_config).cidr_blocks).cidr_block == "203.0.113.7/32"
+    error_message = "The authorized range should reach the cluster."
+  }
+}
+
+run "an_authorized_range_must_be_a_cidr" {
+  command = plan
+
+  variables {
+    control_plane_authorized_cidrs = ["not-a-range"]
+  }
+
+  expect_failures = [var.control_plane_authorized_cidrs]
+}
+
 run "spot_can_be_turned_off" {
   command = plan
 

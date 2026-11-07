@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -53,6 +54,9 @@ func main() {
 	dcctl := fs.String("dcctl", env("DC_PLAYGROUND_DCCTL", "dcctl"), "dcctl binary")
 	simulator := fs.String("simulator", env("DC_PLAYGROUND_SIMULATOR", "dc-simulator"), "dc-simulator binary")
 	port := fs.Int("control-port", envInt("DC_PLAYGROUND_CONTROL_PORT", 8090), "first sim control port")
+	// Beside the sim records' parent, not inside ~/.devicechain, whose entries dcctl reads
+	// as instances.
+	ledger := fs.String("ledger", env("DC_PLAYGROUND_LEDGER", filepath.Join(os.Getenv("HOME"), "playground-days.json")), "run: file recording the playground day each sim was created on")
 	at := fs.String("at", "", "plan: the instant to plan for (RFC3339); default now")
 	deployment := fs.String("deployment", env("DC_PLAYGROUND_DEPLOYMENT", "playground-driver"), "restart: the Deployment to roll")
 	_ = fs.Parse(args)
@@ -79,7 +83,8 @@ func main() {
 			Cfg: cfg, Dcctl: *dcctl, Simulator: *simulator,
 			ReachArgs:       strings.Fields(os.Getenv("DC_PLAYGROUND_REACH_ARGS")),
 			CreateArgs:      strings.Fields(os.Getenv("DC_PLAYGROUND_CREATE_ARGS")),
-			BaseControlPort: *port, Runner: execRunner{}, Log: os.Stderr,
+			BaseControlPort: *port, Runner: execRunner{WaitDelay: 30 * time.Second}, Log: os.Stderr,
+			Days: NewDayLedger(*ledger),
 		}
 		if err := d.Run(ctx, time.Now); err != nil {
 			fatal(err)

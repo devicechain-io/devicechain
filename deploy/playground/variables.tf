@@ -66,6 +66,17 @@ variable "location" {
   }
 }
 
+variable "control_plane_authorized_cidrs" {
+  description = "IPv4 ranges allowed to reach the Kubernetes API endpoint, such as your own address as 203.0.113.7/32. Empty leaves Google's default, which is reachable from anywhere (every request still has to authenticate). Set it: nothing about the playground needs the API open to the internet."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.control_plane_authorized_cidrs : can(cidrnetmask(c))])
+    error_message = "control_plane_authorized_cidrs must be IPv4 CIDR ranges such as 203.0.113.7/32."
+  }
+}
+
 variable "cluster_name" {
   description = "Name of the GKE cluster."
   type        = string
