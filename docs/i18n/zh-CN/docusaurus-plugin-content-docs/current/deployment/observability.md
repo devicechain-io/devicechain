@@ -376,6 +376,8 @@ kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests
 
 最近十分钟内，MQTT 来源只要在租户的摄取上限处丢弃了任何消息（`devicechain_eventsources_total_msg_shed_acknowledged` 上升），`MqttIngestShedAfterAcknowledgement`（warning）立即触发。它没有等待期，因为平台停顿造成的丢弃只持续数秒。这些消息在丢弃之前，代理已向设备确认（PUBACK），设备不会重发：它们是丢失，而不是延后。原因要么是租户发送量超过其上限，要么是平台短暂停顿后积压的消息一起到达。该计数器带有来源而非租户：请按丢弃等级对比 `total_msg_rate_limited` 和 `total_msg_reading_limited`，把日志级别调到 `debug` 以查看租户，核对其上限与设备实际发送量，并在消息代理日志中查找耗时过长的内部订阅。HTTP 的丢弃会以 `429` 应答并被重试，因此不计入此处。
 
+启用 `eventSources.ingestMetering: lagCredit` 后，`devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}` 会给出每条消息被丢弃的原因。当 `ingest_lag_credit_seconds` 偏高时，`route="fresh"` 上出现 `cause="ceiling"` 的丢弃，说明有租户未超出上限，却在一次大于额度的停顿之后被丢弃，请上报。`cause="contention"` 和 `cause="hard_drop"` 是过载档位按配置在起作用，`route="backlog"` 上的丢弃则是租户在被排空的积压中超出了上限。`reader_lag_seconds` 和 `append_skew_seconds` 显示各副本的测量值；偏差停在任一方向的 2 秒（`append_skew_clamped_total` 上升）意味着消息代理的时钟与 Pod 时钟相差超出了闸门可修正的范围。
+
 ## 超过确认窗口的消息 {#held-past-ack-wait}
 
 代理为每条交付消息提供固定确认窗口。窗口关闭仍未确认，会重新交付，服务按新消息处理。告警通知和对外连接器的工作是向平台外慢速发送，因此可能重复通知或调用 webhook。两者仅在有空闲 worker 时读取相应数量消息，避免排队消耗窗口；每次发送也会在窗口结束前留有余量地截止。下列告警报告仍超时的情况。

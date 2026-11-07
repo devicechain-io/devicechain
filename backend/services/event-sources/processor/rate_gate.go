@@ -92,6 +92,13 @@ const (
 	// the permanent loss of data the broker already acknowledged), and never on the pool the
 	// unauthenticated HTTP path shares.
 	OriginIntegration
+	// OriginPreMetered: the transport has metered this message ITSELF, in the lag-credited gate
+	// (a gateway source in lagCredit mode, which needs the metering decision at its own message
+	// stage and carries it to the reading stage), and asks the gate only for the refusals composed
+	// in front of the metering: the tenant lifecycle. It exists only when ingestMetering is
+	// lagCredit; the existing rate gate refuses it, loudly, because metering it there would charge
+	// it twice or not at all.
+	OriginPreMetered
 )
 
 // RefuseDeletedTenants composes the ADR-077 lifecycle refusal in front of an ingest
@@ -317,6 +324,9 @@ func meterTimeAt(now, sentAt time.Time, after time.Duration) time.Time {
 // (one MeterAt judged backlog) to the backlog limiter at that time; everything else to the live limiter at now.
 func admitN(live, backlog, untrusted, integration *core.TenantRateLimiter, tenant string, sentAt time.Time,
 	origin Origin, n int) bool {
+	if origin == OriginPreMetered {
+		panic("processor: OriginPreMetered reached the existing rate gate; it is valid only with the lag-credited gate (ingestMetering: lagCredit)")
+	}
 	if origin == OriginIntegration {
 		// Always at now: an integration request is admitted as it arrives, with no durable
 		// backlog behind it. A confirmed bucket, because the pre-check proved the tenant.
