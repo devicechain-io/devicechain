@@ -105,6 +105,16 @@ public static class DevicePlane
         return tenant + ":" + credentialId;
     }
 
+    /// <summary>
+    /// The CONNECT username of a certificate device: <c>{tenant}:@x509</c>, with no password. The
+    /// <c>@</c> cannot appear in a credential id, so it is never confused with one.
+    /// </summary>
+    public static string X509ConnectUsername(string tenant)
+    {
+        RequireToken(tenant, nameof(tenant));
+        return tenant + ":@x509";
+    }
+
     /// <summary>The topic a device publishes its own telemetry to.</summary>
     /// <remarks>
     /// The broker grant is minted from exactly this subject, so a device is confined to it — a

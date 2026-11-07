@@ -944,6 +944,13 @@ Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad cer
 - **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
 - **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
 
+#### Un certificado de cliente en el SDK de C# {#v120-sdk-x509}
+
+El SDK de C# y el paquete de Unity ya pueden conectar un dispositivo con un certificado de cliente X.509. Es un cambio aditivo: nada cambia para una sesión que no lo configure, y no hace falta ninguna acción para actualizar.
+
+- **Asigne `MqttSessionOptions.ClientCertificate`** a un `MqttClientCertificate` cargado desde un PFX o desde archivos PEM. La sesión se conecta entonces con el usuario `{tenant}:@x509` y sin contraseña. Consulte [Conectar desde el SDK de C#](../guides/device-x509.md#csharp-sdk).
+- **Solo se pueden presentar claves RSA y ECDSA**, porque .NET no tiene Ed25519. La dirección del broker debe ser `ssl://`; una dirección en texto plano se rechaza al construir la sesión.
+
 #### Revocar un certificado termina las sesiones abiertas {#v120-x509-sessions}
 
 Revocar un certificado, a mano o subiendo una CRL que lo nombra, ahora también termina las sesiones abiertas de los dispositivos a los que afecta. Antes, una sesión ya abierta seguía hasta que caducaba su token (hasta 12 horas por defecto). No cambia nada en una instancia que no revoca nada.
