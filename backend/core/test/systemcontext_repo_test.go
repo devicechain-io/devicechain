@@ -58,6 +58,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/session_kick_pending.go": {
 		"Api.tenantsOwingKicks", "Api.observeSessionKicks",
 	},
+	"backend/services/device-management/model/session_kick_revocation.go":     {"Api.tenantsOwingRevocationKicks"},
+	"backend/services/device-management/model/api_x509_revocation_markers.go": {"Api.tenantsOwingMarkers"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},

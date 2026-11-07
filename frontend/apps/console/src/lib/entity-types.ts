@@ -47,6 +47,7 @@ export const ENTITY_TYPES = [
   'integration',
   'maintenance-window',
   'metric-definition',
+  'notification-channel',
   'notification-policy',
   'provisioning-profile',
   'role',

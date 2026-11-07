@@ -46,9 +46,6 @@ type PendingSessionKick struct {
 	Origin      uint      `gorm:"primaryKey;not null;autoIncrement:false"`
 	Generation  int64     `gorm:"not null"`
 	RequestedAt time.Time `gorm:"not null"`
-	// NotBefore is the instant a re-sweep row may first be drained; NULL for every other row. Added
-	// nullable and unread until the live-session slice uses it (an old replica ignores it).
-	NotBefore *time.Time
 }
 
 // kickOriginReset is the Origin of a device reset. Profile ids start at 1, so it is no profile.
@@ -78,6 +75,20 @@ func (r PendingSessionKick) reason() string {
 // SessionKickDrainPageSize is how many pending rows of one tenant one background pass handles.
 const SessionKickDrainPageSize = 500
 
+// sortedUniqueTokens is the non-empty tokens of the input, sorted and deduplicated, in
+// O(n log n): a fleet-sized kick (every device of a CA) must not pay for a membership scan per
+// token. The input is not modified.
+func sortedUniqueTokens(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, t := range in {
+		if t != "" {
+			out = append(out, t)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // queueSessionKicksOnTx records, in tx (the transaction of the credential change), that the
 // given devices of tenant owe a kick to origin. With no kicker wired there are no sessions of
 // ours to end and nothing is recorded. Tokens are upserted in sorted order so two writers
@@ -87,16 +98,10 @@ func (api *Api) queueSessionKicksOnTx(tx *gorm.DB, tenant string, origin uint, d
 	if api.SessionKicker == nil {
 		return nil
 	}
-	tokens := make([]string, 0, len(deviceTokens))
-	for _, t := range deviceTokens {
-		if t != "" && !slices.Contains(tokens, t) {
-			tokens = append(tokens, t)
-		}
-	}
+	tokens := sortedUniqueTokens(deviceTokens)
 	if len(tokens) == 0 {
 		return nil
 	}
-	slices.Sort(tokens)
 	now := time.Now().UTC()
 	rows := make([]PendingSessionKick, len(tokens))
 	for i, t := range tokens {
@@ -157,12 +162,31 @@ func (api *Api) drainSessionKicks(ctx context.Context, tenant string, limit int,
 		byReason[reasonOf[t]] = append(byReason[reasonOf[t]], t)
 	}
 	var errs []error
+	failures := 0
+	started := time.Now()
 	for reason, group := range byReason {
 		for chunk := range slices.Chunk(group, messaging.MaxSessionKickTokens) {
+			// A time budget as well as a failure budget: a responder that answers, slowly, would
+			// otherwise hold this call for (requests x its latency). The rest stays pending.
+			if time.Since(started) > sessionKickDrainBudget {
+				errs = append(errs, fmt.Errorf("%w: the time allowed for one pass (%s) ran out; the rest stays pending",
+					ErrSessionsNotEnded, sessionKickDrainBudget))
+				return errors.Join(errs...)
+			}
+			// 🔴 A KICK STORM AGAINST A DEAD RESPONDER. A fleet-sized debt is thousands of
+			// requests, and each failed one waits out its attempts and backoff: carrying on past
+			// the first few failures would hold this call (and the lock of the background pass)
+			// for hours to learn what three failures already said. The rows stay; the next pass
+			// asks again.
+			if failures >= maxConsecutiveKickFailures {
+				break
+			}
 			if kerr := api.endDeviceSessions(ctx, tenant, reason, chunk...); kerr != nil {
 				errs = append(errs, kerr)
+				failures++
 				continue
 			}
+			failures = 0
 			var done []PendingSessionKick
 			for _, t := range chunk {
 				done = append(done, rowsOf[t]...)
@@ -172,8 +196,24 @@ func (api *Api) drainSessionKicks(ctx context.Context, tenant string, limit int,
 			}
 		}
 	}
+	if failures >= maxConsecutiveKickFailures {
+		errs = append(errs, fmt.Errorf("%w: giving up on this pass after %d failed requests in a row; the rest stays pending",
+			ErrSessionsNotEnded, failures))
+	}
 	return errors.Join(errs...)
 }
+
+// sessionKickDrainBudget is how long one drain may keep asking the broker, and
+// sessionKickPassBudget how long one background pass may keep paging across a tenant's queue.
+// Variables so a test can shrink them.
+var (
+	sessionKickDrainBudget = 90 * time.Second
+	sessionKickPassBudget  = 5 * time.Minute
+)
+
+// maxConsecutiveKickFailures is how many kick requests in a row one drain may see fail before it
+// stops asking and leaves the remaining rows for the next pass.
+const maxConsecutiveKickFailures = 3
 
 // deleteConfirmedKicks deletes the given rows where each still holds the Generation that was
 // read, so a row re-queued while its kick was in flight survives for the next pass.
@@ -229,15 +269,65 @@ func (api *Api) DrainSessionKicks(ctx context.Context, pageSize int) (SessionKic
 	if err != nil {
 		return res, fmt.Errorf("listing tenants with pending session kicks: %w", err)
 	}
+	revTenants, err := api.tenantsOwingRevocationKicks(ctx)
+	if err != nil {
+		return res, fmt.Errorf("listing tenants with pending certificate-revocation kicks: %w", err)
+	}
+	tenants = mergeSortedTenants(tenants, revTenants)
+	// A tenant owing only an unexpanded revocation marker (a crash between the revocation's commit and
+	// its expansion) owes a kick as well: its per-device rows do not exist yet.
+	owingMarkers, err := api.tenantsOwingMarkers(ctx)
+	if err != nil {
+		return res, fmt.Errorf("listing tenants with pending revocation markers: %w", err)
+	}
+	tenants = mergeSortedTenants(tenants, owingMarkers)
 	res.Tenants = len(tenants)
 	var lastErr error
 	for _, tenant := range tenants {
-		if err := api.drainSessionKicks(ctx, tenant, pageSize, func(db *gorm.DB) *gorm.DB { return db }); err != nil {
+		if _, err := api.expandRevocationMarkers(ctx, tenant, 0); err != nil {
 			res.Failed++
 			lastErr = err
+			continue
+		}
+		// A fleet-sized debt (a revoked CA) is more than one page: keep paging while every page
+		// is confirmed and more is due, to a bound, so one tenant cannot hold the pass for ever.
+		passStarted := time.Now()
+		for page := 0; page < maxDrainPagesPerTenant && time.Since(passStarted) < sessionKickPassBudget; page++ {
+			if err := api.drainSessionKicks(ctx, tenant, pageSize, func(db *gorm.DB) *gorm.DB { return db }); err != nil {
+				res.Failed++
+				lastErr = err
+				break
+			}
+			more, merr := api.hasDueKicks(ctx, tenant)
+			if merr != nil || !more {
+				break
+			}
+		}
+		// The certificate-revocation queue is its own table (see PendingRevocationKick).
+		passStarted = time.Now()
+		for page := 0; page < maxDrainPagesPerTenant && time.Since(passStarted) < sessionKickPassBudget; page++ {
+			if err := api.drainRevocationKicks(ctx, tenant, pageSize, 0); err != nil {
+				res.Failed++
+				lastErr = err
+				break
+			}
+			more, merr := api.hasDueRevocationKicks(ctx, tenant)
+			if merr != nil || !more {
+				break
+			}
 		}
 	}
 	return res, core.PassResult(res.Tenants, res.Failed, lastErr)
+}
+
+// maxDrainPagesPerTenant bounds the pages one background pass drains for one tenant.
+const maxDrainPagesPerTenant = 20
+
+// hasDueKicks reports whether the tenant still holds a pending kick that is due.
+func (api *Api) hasDueKicks(ctx context.Context, tenant string) (bool, error) {
+	var one []PendingSessionKick
+	err := api.RDB.DB(core.WithTenant(ctx, tenant)).Where("tenant_id = ?", tenant).Limit(1).Find(&one).Error
+	return len(one) > 0, err
 }
 
 // observeSessionKicks tells the observer how much is owed and how long the oldest has waited.
@@ -267,7 +357,19 @@ func (api *Api) observeSessionKicks(ctx context.Context) {
 			age = max(time.Since(oldest[0].RequestedAt), 0)
 		}
 	}
-	api.SessionKickObserver(int(n), age)
+	// The certificate-revocation queue counts too: the same alert covers it.
+	rn, rage, rerr := api.revocationQueueGauge(db)
+	if rerr != nil {
+		log.Warn().Err(rerr).Msg("Unable to read the pending certificate-revocation kicks")
+		return
+	}
+	// Unexpanded revocation markers are debts too.
+	mn, mage, merr := api.markerGauge(db)
+	if merr != nil {
+		log.Warn().Err(merr).Msg("Unable to read the pending revocation markers")
+		return
+	}
+	api.SessionKickObserver(int(n)+rn+mn, max(age, rage, mage))
 }
 
 // sessionKickDrainLockName names the advisory lock one background pass runs under.

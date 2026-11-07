@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -61,10 +62,17 @@ func (r *SchemaResolver) RevokeDeviceCertificate(ctx context.Context, args struc
 		AnchorToken: args.AnchorToken, CertificatePem: args.CertificatePem,
 		FingerprintSha256: args.FingerprintSha256, Reason: args.Reason,
 	})
+	// The revocation is saved even when its sessions could not be confirmed ended; that is the
+	// result's sessionsEnded, not a failed mutation (an error would null the result and hide that
+	// the revocation stands).
+	ended, err := model.SessionsEndedOf(err)
 	if err != nil {
 		return nil, err
 	}
-	return &DeviceRevokedCertificateResolver{M: *revoked, S: r, C: ctx}, nil
+	if revoked == nil {
+		return nil, errors.New("the revocation returned no entry")
+	}
+	return &DeviceRevokedCertificateResolver{M: *revoked, S: r, C: ctx, Ended: &ended}, nil
 }
 
 // Remove a manual revocation.
@@ -101,8 +109,13 @@ func (r *SchemaResolver) PutDeviceRevocationList(ctx context.Context, args struc
 		AnchorToken: args.AnchorToken, Crl: []byte(args.CrlPem), IssuerChainPem: chain,
 		MaxBytes: api.GraphqlCrlTextBound(),
 	})
-	if err != nil {
+	// The list is stored even when its sessions could not be confirmed ended: that is the result's
+	// sessionsEnded, not a failed mutation.
+	if _, err = model.SessionsEndedOf(err); err != nil {
 		return nil, err
+	}
+	if res == nil {
+		return nil, errors.New("the upload returned no result")
 	}
 	grace := api.RevocationLimits().DefaultStaleGrace
 	if anchor, aerr := api.DeviceTrustAnchorsByToken(ctx, []string{args.AnchorToken}); aerr == nil && len(anchor) == 1 {

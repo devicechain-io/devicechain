@@ -435,6 +435,13 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// ours to end, and the kicker stays nil.
 	if nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutEnabled() {
 		api.SessionKicker = natsSessionKicker{nmgr: nmgr, instanceId: nmgr.Microservice.InstanceId}
+		// A certificate revocation sweeps a device's sessions twice; the second must outlast an
+		// admission that was in flight at the first (the callout lookup timeout plus the broker's
+		// own authorization timeout). Refused at startup rather than run with no real re-sweep.
+		api.RevocationResweepAfter = cfg.Callout.Revocation.ResweepAfterDuration()
+		if err := model.ValidateRevocationResweepAfter(api.RevocationResweepAfter, processor.DefaultCalloutLookupTimeout); err != nil {
+			return nil, nil, err
+		}
 	}
 	return api, cached, nil
 }

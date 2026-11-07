@@ -11,5 +11,6 @@ export { Compass } from './compass';
 export { LevelGauge } from './level-gauge';
 export { LinearGauge } from './linear-gauge';
 export { ProgressRing } from './progress-ring';
+export { ScadaSymbol } from './scada-symbol';
 export { SignalBars } from './signal-bars';
 export { StatusLight } from './status-light';

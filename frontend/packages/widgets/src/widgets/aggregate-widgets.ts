@@ -11,3 +11,4 @@ export { FleetCount } from './fleet-count';
 export { FleetTable } from './fleet-table';
 export { PieChart } from './pie-chart';
 export { StatCard } from './stat-card';
+export { StatusGrid } from './status-grid';

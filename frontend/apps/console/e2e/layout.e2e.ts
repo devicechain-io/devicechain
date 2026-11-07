@@ -276,6 +276,9 @@ for (const lang of LANGS) {
       await expect(section.getByTestId('cel-preview').first()).toContainText('double(i16be(frame, 1)) / 10.0 - 40.0');
       // The draft was changed from the active version, and the tab says so.
       await expect(page.locator('[data-status="differs"]')).toBeVisible();
+      // The health strip and the kept failures are drawn too, with a long device token in the list.
+      await expect(page.getByTestId('decoder-health')).toBeVisible();
+      await expect(page.getByTestId('decoder-failures')).toBeVisible();
       const findings = await page.evaluate(() => {
         const out: string[] = [];
         const doc = document.documentElement;

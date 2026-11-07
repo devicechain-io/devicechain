@@ -80,9 +80,9 @@ func TestX509RevocationSchemaOnPostgres(t *testing.T) {
 		require.NoError(t, sys.Raw(`SELECT table_name AS "table", column_name AS "column", is_nullable AS nullable,
 			coalesce(column_default, '') AS "default" FROM information_schema.columns
 			WHERE table_schema = 'device-management' AND column_name IN
-			('revocation_mode', 'revocation_stale_grace', 'revocation_rows', 'not_before')
+			('revocation_mode', 'revocation_stale_grace', 'revocation_rows', 'not_before', 'kick_queued_at')
 			AND NOT (table_name = 'device_trust_anchors' AND column_name = 'not_before') ORDER BY column_name`).Scan(&cols).Error)
-		require.Len(t, cols, 4)
+		require.Len(t, cols, 6, "three on the anchor, not_before on both kick queues, kick_queued_at on the entries")
 		for _, c := range cols {
 			assert.Equal(t, "YES", c.Nullable, c.Column)
 			assert.Empty(t, c.Default, "%s: a default would put a value in the catalog's attmissingval", c.Column)

@@ -250,6 +250,17 @@ var tableSweepExemptions = map[string]string{
 		"transaction of a profile revoke or a device reset, and deleted once the broker's responder confirmed " +
 		"the device's sessions ended. A seed that revokes or resets with a healthy responder leaves it empty; " +
 		"a row that stays means the kick is still owed, which the repeat of that operation retries.",
+	"device-management.pending_revocation_kicks": "the certificate-revocation kick queue: a row is written in the " +
+		"transaction of a revocation (a manual revoke or a CRL upload) for each device whose live sessions it " +
+		"ends, rescheduled when the first sweep is confirmed and deleted when the re-sweep about ten seconds " +
+		"later is. The seed revokes nothing, so it is empty; a row that stays means the kick is still owed, " +
+		"which a repeat of the revocation retries.",
+	"device-management.pending_revocation_expansions": "the marker of a certificate revocation whose per-device " +
+		"kick rows are not written yet: a revocation writes one in the transaction that holds the trust anchor, " +
+		"and the expansion that follows it (or the background drain) writes the device rows and deletes it. " +
+		"The seed revokes nothing, so it is empty; a row that stays means the expansion is owed.",
+	"device-management.pending_revocation_expansion_serials": "the serials a CRL upload newly revoked, kept with " +
+		"their marker until it is expanded. Empty whenever no marker is pending.",
 	"device-management.pending_ownership_facts": "the ownership outbox: a row lives from the commit of " +
 		"a write that may move a device's owners until device-management's drain, which runs every " +
 		"second, has published the device's anchors to device-state. Every edge the seed writes queues " +

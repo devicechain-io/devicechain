@@ -6,6 +6,7 @@ package runtime
 import (
 	"encoding/binary"
 	"math/bits"
+	"math/rand/v2"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventidentity/eventid"
@@ -82,12 +83,11 @@ func (d Digest) Fingerprint() uint64 {
 // retention are dropped whole, and if the total passes MaxEntries the oldest generation goes too
 // (identically live and on replay while the cap binds the same way; under cap pressure priming
 // starts at the cap boundary, so exactness there is approximate and the cap is sized so it does not
-// bind at the rates the platform targets). Each generation is a bucketed open-addressing table of
-// 8-byte fingerprints at <= 90% load, sized from the previous generation's count and rehashed
+// bind at the rates the platform targets). Each generation is an open-addressing table of
+// 8-byte fingerprints (Robin Hood probing) at <= 90% load, sized from the previous generation's count and rehashed
 // to its real count when it is sealed: ~9-10 bytes per remembered event at any rate (no
 // power-of-two steps). At the default 10 minutes, at 20,000 events/s that is about 12 million
-// events and ~115 MB; at 5,000/s ~30 MB. The
-// 16,000,000 cap is reached near 25,000 events/s, past which coverage falls below the redelivery
+// events and ~115 MB; at 5,000/s ~30 MB. The 16,000,000 cap is reached near 25,000 events/s, past which coverage falls below the redelivery
 // span (at 100,000/s it is ~2.7 minutes). The memory is held by the DETECT LEADER only; a standby
 // builds it when it takes over.
 //
@@ -323,8 +323,17 @@ func (g *AppliedGuard) open(gen int64) {
 	g.gens = append(g.gens, &generation{gen: gen, slots: sized})
 }
 
-// mix spreads the fingerprint's bits (it is already a hash, but its low bits index the table).
+// mixSeed is drawn once per process. The fingerprint is a prefix of a SHA-256 and mix is a bijection,
+// so without a seed the home slot of any event is computable by anyone who can choose payload bytes,
+// and fingerprints ground to share a home would make one table scan linearly. Seeding changes only
+// where entries sit, never an Admit answer: the table is rebuilt by priming from the stream and is
+// never persisted, so a restart (a new seed) is invisible to the guard's behaviour.
+var mixSeed = rand.Uint64()
+
+// mix scrambles the seeded fingerprint (already a hash) so that its HIGH bits, which home takes via
+// the multiply-shift reduction, are well spread whatever the table size.
 func mix(x uint64) uint64 {
+	x ^= mixSeed
 	x ^= x >> 33
 	x *= 0xff51afd7ed558ccd
 	x ^= x >> 33

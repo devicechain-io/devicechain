@@ -118,7 +118,18 @@ public sealed class MqttNetConnection : IMqttConnection
             // The device plane's password is EMPTY and that is meaningful — it selects
             // access-token credential mode at the auth callout — so it is passed through as
             // given rather than treated as "no credentials".
-            builder = builder.WithCredentials(options.Username, options.Password ?? string.Empty);
+            //
+            // The exception is a certificate connect: its password must be ABSENT (the callout
+            // refuses a certificate connect that also carries one), so there null stays null.
+            builder = options.ClientCertificate != null && options.Password == null
+                ? builder.WithCredentials(options.Username, (string?)null)
+                : builder.WithCredentials(options.Username, options.Password ?? string.Empty);
+        }
+
+        if (options.ClientCertificate != null && !IsTls(options.BrokerUri))
+        {
+            throw new MqttClientCertificateException(
+                $"a client certificate is presented in the TLS handshake, but {options.BrokerUri} is not a TLS address; use an ssl:// broker address");
         }
 
         if (IsTls(options.BrokerUri))
@@ -127,6 +138,11 @@ public sealed class MqttNetConnection : IMqttConnection
             builder = builder.WithTlsOptions(tls =>
             {
                 tls.UseTls(true);
+                if (options.ClientCertificate != null)
+                {
+                    tls.WithClientCertificates(options.ClientCertificate.TlsCertificates);
+                }
+
                 switch (trust.Mode)
                 {
                     case MqttTrustMode.SystemRoots:
@@ -184,8 +200,11 @@ public sealed class MqttNetConnection : IMqttConnection
             // test, which is why it asserts the type rather than merely that something was thrown.)
             cancellationToken.ThrowIfCancellationRequested();
 
+            var expired = options.ClientCertificate != null && options.ClientCertificate.IsExpired(DateTimeOffset.UtcNow)
+                ? $" (the client certificate \"{options.ClientCertificate.Subject}\" expired at {options.ClientCertificate.NotAfter:u} by this device's clock)"
+                : string.Empty;
             throw new MqttConnectionException(
-                $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed: {ex.Message}", ex);
+                $"connecting to {options.BrokerUri} as \"{options.ClientId}\" failed: {ex.Message}{expired}", ex);
         }
     }
 
@@ -411,6 +430,8 @@ public sealed class MqttNetConnection : IMqttConnection
         _client.Dispose();
         return default;
     }
+
+    internal static bool IsTlsAddress(Uri uri) => IsTls(uri);
 
     private static bool IsTls(Uri uri) =>
         uri.Scheme.Equals("ssl", StringComparison.OrdinalIgnoreCase) ||

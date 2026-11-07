@@ -35,7 +35,7 @@ Un servidor de red con un códec o un payload formatter entrega a DeviceChain un
 - `curl` y `jq`.
 - `dc-simulator`, adjunto a cada versión desde la v1.2 junto a `dcctl`. Ponlo en tu `PATH` y compruébalo con `dc-simulator --lorawan-print-decoder`, que imprime un documento JSON.
 
-Los comandos llaman a la instancia en `http://localhost`. Si tu consola está en otro puerto, define la dirección una sola vez y dale a `dcctl sim create` el mismo host y puerto con `--server`:
+Los comandos llaman a la instancia en `http://localhost`. Si tu consola está en otro puerto, define la dirección una sola vez y dale a `dcctl sim create` el mismo host y puerto con `--server` (por ejemplo `--server localhost:8080`), y el nombre de la instancia con `--instance` si no la llamaste `devicechain`:
 
 ```bash
 export DC_URL=http://localhost
@@ -376,7 +376,7 @@ curl -sS -i -X POST "$DC_URL/api/integrations/sim-lora/chirpstack?event=up" \
 HTTP/1.1 202 Accepted
 ```
 
-Al servidor de red se le dice `202`, porque la integración aceptó el mensaje. El rechazo es un registro de tu lado. Léelo con `dcctl events failed`, con el tenant, la identidad y su contraseña. Añade `--server` con tu host y puerto si la instancia no está en `localhost`:
+Al servidor de red se le dice `202`, porque la integración aceptó el mensaje. El rechazo es un registro de tu lado. Léelo con `dcctl events failed`, con el tenant, la identidad y su contraseña. Añade `--server` con tu host y puerto (`localhost:8080`, por ejemplo) si la instancia no está en `localhost` puerto 80; este comando no tiene `--instance`:
 
 ```bash
 dcctl events failed -t sim-lora --email lora@sim.devicechain.local --password "$PW"
@@ -390,6 +390,62 @@ WHEN                         REASON         DEVICE  SOURCE             FOLDED  P
 ```
 
 El inicio del texto del error es el motivo de [la tabla de rechazos](./payload-decoders.md#refusal-reasons): aquí `no_section`, porque el puerto 9 no coincidió con ninguna sección. Una trama demasiado corta (`eval_error`) y un valor fuera de los límites de una métrica (`invalid_output`) tienen cada uno el suyo. La columna PAYLOAD indica si la plataforma conserva todavía el mensaje original. Los mismos registros están en **Monitor → Ingest failures** en la consola. El `deduplicationId` está fijo en este comando; para enviar otro fallo, cambia sus últimos dígitos, porque una repetición dentro de diez minutos se descarta antes de procesarse.
+
+## 11. Recibir un aviso (opcional) {#11-get-told}
+
+Una alarma que nadie ve sirve de poco. Un **canal de notificación** es un lugar al que enviar alarmas, y una **política** dice qué alarmas van a qué canal. Este paso envía la alarma room-too-warm a un webhook, que es también la forma de llegar a Slack o a un servicio de guardias. El correo por SMTP funciona igual; la [guía de canales](./notification-channels.md) lo explica.
+
+Necesitas una URL que acepte un `POST` y a la que la instancia pueda llegar por internet público: un webhook entrante de Slack, o un endpoint propio. Un receptor en tu portátil no sirve, porque las llamadas salientes de la instancia rechazan las direcciones privadas y de loopback; un operador puede [permitir una dirección concreta](../concepts/outbound-connectors.md#destinations) cuando haga falta. Guarda la URL en una variable. Un webhook entrante de Slack lleva su credencial en la URL, así que el canal no necesita un secreto aparte (`"auth":"none"`):
+
+```bash
+export WEBHOOK_URL='https://hooks.example.com/alarms'
+
+gql notification-management "$DC_TOKEN" 'mutation($r:NotificationChannelCreateRequest!){createNotificationChannel(request:$r){token channelType enabled}}' \
+  "$(jq -nc --arg u "$WEBHOOK_URL" '{r:{token:"ops-hook",name:"Ops webhook",channelType:"webhook",config:({url:$u,auth:"none"}|tojson),enabled:true}}')"
+
+gql notification-management "$DC_TOKEN" 'mutation($r:NotificationPolicyCreateRequest!){createNotificationPolicy(request:$r){token enabled rules{severity channel{token}}}}' \
+  '{"r":{"token":"warm-rooms","name":"Warm rooms","enabled":true,"rules":[{"severity":"WARNING","channelToken":"ops-hook","recipients":"[]"}]}}'
+```
+
+```text
+{"data":{"createNotificationChannel":{"token":"ops-hook","channelType":"webhook","enabled":true}}}
+{"data":{"createNotificationPolicy":{"token":"warm-rooms","enabled":true,"rules":[{"severity":"WARNING","channel":{"token":"ops-hook"}}]}}}
+```
+
+La severidad de la regla es `warning`, en minúsculas, porque así se escribe una regla de detección. La alarma que levanta es `WARNING`, en mayúsculas, y una regla de notificación coincide con la forma de la alarma. Las políticas abarcan todo el tenant, y `recipients` va vacío porque un webhook no tiene destinatarios que nombrar.
+
+Ahora repite el [paso 7](#7-send-uplinks). Los doce uplinks vuelven a superar los 25 grados, la regla vuelve a levantar la alarma y la política la envía. El receptor recibe un `POST` cuando se levanta la alarma:
+
+```json
+{
+  "acknowledged": false,
+  "alarmKey": "room-too-warm",
+  "alarmToken": "e0a22e6d-08d9-4963-8124-5e672ccebdf3",
+  "eventType": "RAISED",
+  "metricKey": "temperature",
+  "occurredTime": "2026-11-07T06:38:37Z",
+  "originatorId": 1,
+  "originatorType": "device",
+  "raisedTime": "2026-11-07T06:38:37Z",
+  "severity": "WARNING",
+  "state": "ACTIVE",
+  "text": "[WARNING] Alarm raised: room-too-warm on device 1",
+  "value": 25.4
+}
+```
+
+Aquí, la alarma que se cierra cuatro uplinks después no envía nada: esta política notifica cuando se levanta una alarma, y de nuevo si sigue sin reconocerse y la política escala. El servicio también guarda un registro de lo que hizo con cada alarma. Pídelo por el token de la alarma, que es `alarmToken` en el mensaje y `token` en la alarma del [paso 8](#8-see-the-result):
+
+```bash
+gql notification-management "$DC_TOKEN" 'query($t:[String!]!){notificationStatesByAlarmToken(alarmTokens:$t){alarmToken firstNotifiedAt notifyCount}}' \
+  '{"t":["e0a22e6d-08d9-4963-8124-5e672ccebdf3"]}'
+```
+
+```text
+{"data":{"notificationStatesByAlarmToken":[{"alarmToken":"e0a22e6d-08d9-4963-8124-5e672ccebdf3","firstNotifiedAt":"2026-11-07T06:38:37.847456Z","notifyCount":1}]}}
+```
+
+Si no llega nada, el registro es el primer sitio donde mirar: sin registro, la alarma no llegó a la política (revisa la severidad); con registro y el receptor en silencio, la entrega fue rechazada (revisa que la URL sea pública). La limitación, la escalada de una alarma que nadie reconoce y las horas de silencio están en [Configurar canales de notificación](./notification-channels.md#políticas).
 
 ## El servidor de red real {#real-network-server}
 
@@ -416,5 +472,6 @@ Si has terminado con la instancia, `dcctl destroy local devicechain` la elimina.
 
 - [Decodificadores de payload](./payload-decoders.md): cada parte de un decodificador, la biblioteca de funciones, el panel de pruebas y los rechazos.
 - [Integraciones de entrada](./inbound-integrations.md): los remitentes, los alias, lo que se almacena y los límites.
+- [Configurar canales de notificación](./notification-channels.md): canales de correo y webhook, políticas, escalada y horas de silencio.
 - [Reglas de detección](../user-guide/detection-rules.md) y [Alarmas](../user-guide/alarms.md): cómo escribir reglas y trabajar las alarmas que levantan.
 - [Por qué no aparecen los datos de mi dispositivo](./why-isnt-my-data-showing-up.md): el registro de la plataforma de lo que rechazó.

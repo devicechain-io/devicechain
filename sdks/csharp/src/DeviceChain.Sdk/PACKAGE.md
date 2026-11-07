@@ -71,6 +71,7 @@ await publisher.EmitMeasurementsAsync("car-42", credentialId,
 | Live subscriptions | `Subscriptions.GraphQlWsClient` — `graphql-transport-ws`, one multiplexed socket per area |
 | Device-plane emit | `Ingest.DeviceEventPublisher` — measurements and locations over HTTP or MQTT |
 | Device command session | `Mqtt.MqttDeviceSession` — connect, confirmed subscribe, command receive, de-duplication and reply, and reconnect. Commands run one at a time by default; `MaxConcurrentCommands` runs them in parallel, keeping arrival order only within a lane |
+| Client certificate | `Transport.MqttClientCertificate` — load a PFX or PEM certificate and key, set it as `MqttSessionOptions.ClientCertificate`, and the device authenticates with an X.509 certificate (RSA or ECDSA, `ssl://` broker); pin a private broker CA with `MqttTrust.PinnedCaFromFile` |
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` — pluggable, so the SDK runs where `HttpClient` and `ClientWebSocket` do not (Unity WebGL) |
 | Facade | `DeviceChainClient` — wires all of the above against one origin |
 
