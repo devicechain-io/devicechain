@@ -35,7 +35,7 @@ A network server with a codec or a payload formatter hands DeviceChain an object
 - `curl` and `jq`.
 - `dc-simulator`, attached to every release from v1.2 beside `dcctl`. Put it on your `PATH`, and check it with `dc-simulator --lorawan-print-decoder`, which prints a JSON document.
 
-The commands call the instance at `http://localhost`. If your console is on another port, set the address once, and give `dcctl sim create` the same host and port with `--server`:
+The commands call the instance at `http://localhost`. If your console is on another port, set the address once, and give `dcctl sim create` the same host and port with `--server` (for example `--server localhost:8080`), and the instance's name with `--instance` if you did not call it `devicechain`:
 
 ```bash
 export DC_URL=http://localhost
@@ -376,7 +376,7 @@ curl -sS -i -X POST "$DC_URL/api/integrations/sim-lora/chirpstack?event=up" \
 HTTP/1.1 202 Accepted
 ```
 
-The network server is told `202`, because the integration accepted the message. The refusal is a record on your side. Read it with `dcctl events failed`, with the tenant, the identity and its password. Add `--server` with your host and port if the instance is not on `localhost`:
+The network server is told `202`, because the integration accepted the message. The refusal is a record on your side. Read it with `dcctl events failed`, with the tenant, the identity and its password. Add `--server` with your host and port (`localhost:8080`, say) if the instance is not on `localhost` port 80; this command has no `--instance`:
 
 ```bash
 dcctl events failed -t sim-lora --email lora@sim.devicechain.local --password "$PW"
@@ -390,6 +390,59 @@ WHEN                         REASON         DEVICE  SOURCE             FOLDED  P
 ```
 
 The start of the error text is the reason from [the table of refusals](./payload-decoders.md#refusal-reasons): `no_section` here, because port 9 matched no section. A frame that is too short (`eval_error`) and a value outside a metric's limits (`invalid_output`) each have their own. The PAYLOAD column says whether the platform still holds the original message. The same records are under **Monitor → Ingest failures** in the console. The `deduplicationId` is fixed in this command; to send another failure, change its last digits, because a repeat inside ten minutes is dropped before it is processed.
+
+## 11. Get told about it (optional) {#11-get-told}
+
+An alarm that nobody sees is not much use. A **notification channel** is a place to send alarms, and a **policy** says which alarms go to which channel. This step sends the room-too-warm alarm to a webhook, which is also how you reach Slack or a paging service. Email over SMTP works the same way; the [channels guide](./notification-channels.md) has it.
+
+You need a URL that accepts a `POST` and that the instance can reach over the public internet: a Slack incoming webhook, or an endpoint of your own. A receiver on your laptop will not do, because outbound calls from the instance refuse private and loopback addresses; an operator can [allow a specific address](../concepts/outbound-connectors.md#destinations) when one is needed. Put the URL in a variable. A Slack incoming webhook carries its credential in the URL, so the channel needs no separate secret (`"auth":"none"`):
+
+```bash
+export WEBHOOK_URL='https://hooks.example.com/alarms'
+
+gql notification-management "$DC_TOKEN" 'mutation($r:NotificationChannelCreateRequest!){createNotificationChannel(request:$r){token channelType enabled}}'   "$(jq -nc --arg u "$WEBHOOK_URL" '{r:{token:"ops-hook",name:"Ops webhook",channelType:"webhook",config:({url:$u,auth:"none"}|tojson),enabled:true}}')"
+
+gql notification-management "$DC_TOKEN" 'mutation($r:NotificationPolicyCreateRequest!){createNotificationPolicy(request:$r){token enabled rules{severity channel{token}}}}'   '{"r":{"token":"warm-rooms","name":"Warm rooms","enabled":true,"rules":[{"severity":"WARNING","channelToken":"ops-hook","recipients":"[]"}]}}'
+```
+
+```text
+{"data":{"createNotificationChannel":{"token":"ops-hook","channelType":"webhook","enabled":true}}}
+{"data":{"createNotificationPolicy":{"token":"warm-rooms","enabled":true,"rules":[{"severity":"WARNING","channel":{"token":"ops-hook"}}]}}}
+```
+
+The rule's severity is `warning`, in lower case, because that is how a detection rule is authored. The alarm it raises is `WARNING`, in upper case, and a notification rule matches the alarm's form. Policies are tenant-wide, and `recipients` is empty because a webhook has no recipients to name.
+
+Now repeat [step 7](#7-send-uplinks). The twelve uplinks climb past 25 degrees again, the rule raises the alarm again, and the policy sends it. The receiver gets one `POST` as the alarm is raised:
+
+```json
+{
+  "acknowledged": false,
+  "alarmKey": "room-too-warm",
+  "alarmToken": "e0a22e6d-08d9-4963-8124-5e672ccebdf3",
+  "eventType": "RAISED",
+  "metricKey": "temperature",
+  "occurredTime": "2026-11-07T06:38:37Z",
+  "originatorId": 1,
+  "originatorType": "device",
+  "raisedTime": "2026-11-07T06:38:37Z",
+  "severity": "WARNING",
+  "state": "ACTIVE",
+  "text": "[WARNING] Alarm raised: room-too-warm on device 1",
+  "value": 25.4
+}
+```
+
+The alarm clearing four uplinks later sends nothing here: this policy notifies when an alarm is raised, and again if it stays unacknowledged and the policy escalates. The service also keeps a record of what it did for each alarm. Ask for it by the alarm's token, which is `alarmToken` in the message and `token` on the alarm in [step 8](#8-see-the-result):
+
+```bash
+gql notification-management "$DC_TOKEN" 'query($t:[String!]!){notificationStatesByAlarmToken(alarmTokens:$t){alarmToken firstNotifiedAt notifyCount}}'   '{"t":["e0a22e6d-08d9-4963-8124-5e672ccebdf3"]}'
+```
+
+```text
+{"data":{"notificationStatesByAlarmToken":[{"alarmToken":"e0a22e6d-08d9-4963-8124-5e672ccebdf3","firstNotifiedAt":"2026-11-07T06:38:37.847456Z","notifyCount":1}]}}
+```
+
+If nothing arrives, the record is the first place to look: no record means the alarm did not reach the policy (check the severity), and a record with the receiver silent means the delivery was refused (check the URL is public). Throttling, escalation of an alarm nobody acknowledges, and quiet hours are in [Configuring notification channels](./notification-channels.md#policies).
 
 ## The real network server {#real-network-server}
 
@@ -416,5 +469,6 @@ If you are done with the instance, `dcctl destroy local devicechain` removes it.
 
 - [Payload decoders](./payload-decoders.md): every part of a decoder, the function library, the test panel and the refusals.
 - [Inbound integrations](./inbound-integrations.md): the senders, aliases, what is stored, and the limits.
+- [Configuring notification channels](./notification-channels.md): email and webhook channels, policies, escalation and quiet hours.
 - [Detection rules](../user-guide/detection-rules.md) and [Alarms](../user-guide/alarms.md): authoring rules and working the alarms they raise.
 - [Why isn't my device's data showing up](./why-isnt-my-data-showing-up.md): the platform's record of what it refused.

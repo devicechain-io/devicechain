@@ -42,6 +42,8 @@ package kv
 import (
 	"slices"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/durability"
 )
 
 // Tier is a KV bucket's disk-budget class. The two tiers are distinguished by
@@ -127,6 +129,11 @@ type Bucket struct {
 	// tier's. A bucket that holds a handful of small entries should not reserve a tier's worth
 	// of disk up front: KV buckets are streams and reserve their ceiling at creation.
 	MaxBytes int64
+	// Durability says what a restore owes this bucket, and DurabilityWhy the reason. Both are
+	// REQUIRED (see streams.Stream.Durability); core/backupset fails for a bucket that omits them.
+	Durability    durability.Class
+	DurabilityWhy string
+
 	// Why records what drives this bucket's growth and what a full bucket breaks.
 	// It sits next to the tier so a reclassification has to confront it.
 	Why string
@@ -144,6 +151,9 @@ var All = []Bucket{
 		TTL:     7 * 24 * time.Hour,
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "a live session token; people sign in again",
 		Why: "One entry per live refresh token (jti -> email), plus two small entries " +
 			"per sign-in (its record and its per-identity index entry), so it scales " +
 			"with concurrent signed-in humans, not with devices. A full bucket refuses " +
@@ -156,6 +166,9 @@ var All = []Bucket{
 		TTL:     60 * time.Second, // identity.AuthCodeTTL: the bucket's lifetime is what bounds redeemability
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "an authorization code that lives sixty seconds",
 		Why: "One entry per in-flight OAuth 2.1 authorization code (ADR-047), held " +
 			"only between the authorize redirect and the token exchange. Lowest " +
 			"volume of any bucket here; a full one breaks MCP authorization.",
@@ -167,6 +180,9 @@ var All = []Bucket{
 		TTL:     10 * time.Minute, // identity.SsoStateTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "an in-flight single sign-on attempt that lives ten minutes",
 		Why: "One entry per in-flight single sign-on attempt (state, nonce, the upstream " +
 			"PKCE verifier and the return address), written by the UNAUTHENTICATED beginSso " +
 			"call and held ten minutes or until the identity provider's redirect consumes it. " +
@@ -182,6 +198,9 @@ var All = []Bucket{
 		TTL:     60 * time.Second, // identity.SsoCodeTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "a completed single sign-on awaiting redemption for sixty seconds",
 		Why: "One entry per completed single sign-on awaiting its completeSso call, " +
 			"single-use with a 60-second lifetime. Kept apart from the OAuth authorization " +
 			"codes so neither redeemer can ever be handed the other's record. Lowest volume " +
@@ -194,6 +213,9 @@ var All = []Bucket{
 		TTL:     5 * time.Minute, // identity.MfaChallengeTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "a second-factor challenge that lives five minutes",
 		Why: "One entry per password sign-in that is waiting for its second factor: the owner's " +
 			"email, the session epoch it was minted under and a count of the codes tried, written " +
 			"when a correct password belongs to an identity with a second factor and held five " +
@@ -210,6 +232,9 @@ var All = []Bucket{
 		TTL:     10 * time.Minute, // credential.AttemptTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "sign-in backoff counters that expire after ten minutes",
 		Why: "One entry per principal of a throttled kind (in user-management, a " +
 			"hashed email; OAuth client secrets are unthrottled and write nothing) that " +
 			"was checked recently, expiring 10 minutes after its last write, so it " +
@@ -234,6 +259,9 @@ var All = []Bucket{
 		TTL:     10 * time.Minute, // credential.AttemptTTL
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "device connect backoff counters that expire after ten minutes",
 		Why: "device-management's MQTT password backoff (credential.KindDeviceCredential): " +
 			"one entry per MQTT username tried in the last 10 minutes, a real one or not, " +
 			"since a connect is charged before the credential is looked up. A SUCCESSFUL " +
@@ -254,6 +282,9 @@ var All = []Bucket{
 		TTL:     30 * time.Second, // the longest of the lifetimes its openers asked for before this was declared
 		Writers: []string{"event-sources", "user-management"},
 		Readers: []string{"event-sources", "user-management"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "held locks that expire after thirty seconds",
 		Why: "One entry per HELD lock — a handful at a time, TTL'd so a crashed " +
 			"holder cannot wedge one. A full bucket fails acquisition, and " +
 			"DistributedLock.WithLock is fail-closed, so guarded reconcilers stop.",
@@ -264,6 +295,9 @@ var All = []Bucket{
 		TTL:     2 * time.Hour, // longer than the largest per-source reboot window (3600 s), the longest an entry is awaited or a reboot mark is needed
 		Writers: []string{"sparkplug-ingest"},
 		Readers: []string{"sparkplug-ingest"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "commands in flight inside a confirm window of at most two hours",
 		Why: "One entry per Sparkplug command that was published to a node and has not yet been " +
 			"resolved, keyed tenant|commandToken, written BEFORE the publish so a change of leader " +
 			"can find what the last one left in flight. It scales with the commands outstanding " +
@@ -286,6 +320,9 @@ var All = []Bucket{
 		TTL:      24 * time.Hour, // user-management rewrites it every few minutes; this only bounds a table nobody keeps alive
 		Writers:  []string{"user-management"},
 		Readers:  []string{"user-management"},
+
+		Durability:    durability.Rebuildable,
+		DurabilityWhy: "a mirror of the placement table in the user-management database, rewritten every few minutes",
 		Why: "ONE entry (key \"table\"): the instance's placement table, tenant -> vpartition -> shard " +
 			"group, mirrored from user-management's database so that no hot path ever queries a " +
 			"database to route. It holds 64 group numbers and the tenants pinned by hand, " +
@@ -300,6 +337,9 @@ var All = []Bucket{
 		TTL:     30 * time.Second, // messaging.DefaultLeaseTTL
 		Writers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
 		Readers: []string{"event-processing", "event-sources", "lwm2m-ingest", "sparkplug-ingest"},
+
+		Durability:    durability.Transient,
+		DurabilityWhy: "partition leases that expire after thirty seconds; a restore must also be treated as a fence invalidation, because the epoch is the bucket revision and a rebuilt bucket restarts it",
 		Why: "One entry per HELD partition lease (ADR-070) — a handful at a time, one " +
 			"per Class-3 partition (DETECT per tenant, Sparkplug and LwM2M per Instance, an " +
 			"event-sources external MQTT source per source), TTL'd " +
@@ -313,6 +353,9 @@ var All = []Bucket{
 		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
+
+		Durability:    durability.Rebuildable,
+		DurabilityWhy: "a cache of the device store",
 		Why: "One entry per device resolved on the hot ingest path. Scales directly " +
 			"with fleet size — the single largest KV consumer at scale, and the " +
 			"reason the cache tier is bounded below the state tier.",
@@ -323,6 +366,9 @@ var All = []Bucket{
 		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
+
+		Durability:    durability.Rebuildable,
+		DurabilityWhy: "a cache of the relationship store",
 		Why: "One entry per device holding tracked relationships (ADR-044 F2), so " +
 			"it scales with fleet size.",
 	},
@@ -332,6 +378,9 @@ var All = []Bucket{
 		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
+
+		Durability:    durability.Rebuildable,
+		DurabilityWhy: "a cache of the group membership store",
 		Why: "One entry per entity with rule-scoped group memberships (ADR-062), so " +
 			"it scales with fleet size.",
 	},
@@ -341,6 +390,9 @@ var All = []Bucket{
 		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
+
+		Durability:    durability.Rebuildable,
+		DurabilityWhy: "a cache of the published profile versions",
 		Why: "One entry per device TYPE: the active published profile version's metric " +
 			"definitions and rule-scoping identity (with the tenant's fence-set version), " +
 			"read once per resolved event (ADR-016/045/051). Scales with the type catalog, " +
@@ -352,6 +404,9 @@ var All = []Bucket{
 		TTL:     CacheTTL,
 		Writers: []string{"device-management"},
 		Readers: []string{"device-management"},
+
+		Durability:    durability.Rebuildable,
+		DurabilityWhy: "a cache of the group store",
 		Why: "One entry per TENANT — the resolver's pay-nothing gate (ADR-062 " +
 			"Decision 7). The smallest bucket the platform creates.",
 	},
