@@ -66,12 +66,14 @@ const (
 const PullUnacknowledgedReason = "DELIVERY_UNACKNOWLEDGED: the command was handed to the device's pull " +
 	"the most times its attempts allow and was never acknowledged."
 
-// RejectDeliveryOptionNotApplicable: deliveryMode or maxAttempts was sent for a device that is
-// not on the HTTP pull channel, where neither means anything.
-const RejectDeliveryOptionNotApplicable RejectionCode = "DELIVERY_OPTION_NOT_APPLICABLE"
+const (
+	// RejectDeliveryOptionNotApplicable: deliveryMode or maxAttempts was sent for a device that is
+	// not on the HTTP pull channel, where neither means anything.
+	RejectDeliveryOptionNotApplicable RejectionCode = "DELIVERY_OPTION_NOT_APPLICABLE"
 
-// RejectDeliveryOptionInvalid: deliveryMode is not a known mode, or maxAttempts is out of range.
-const RejectDeliveryOptionInvalid RejectionCode = "DELIVERY_OPTION_INVALID"
+	// RejectDeliveryOptionInvalid: deliveryMode is not a known mode, or maxAttempts is out of range.
+	RejectDeliveryOptionInvalid RejectionCode = "DELIVERY_OPTION_INVALID"
+)
 
 // PullChannelResolver asks the owner of the device types (device-management) which of a set of
 // devices take their commands over HTTP_PULL. An error means nothing was decided.
