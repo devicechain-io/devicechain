@@ -223,10 +223,10 @@ Give Alertmanager a receiver when you install, or later on any instance:
 
 ```bash
 # A webhook: Slack-compatible relays, PagerDuty, Opsgenie and most incident tools accept one.
-dcctl install --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
 
 # Email. The password is read from a file so it never lands in your shell history.
-dcctl install \
+dcctl install local \
   --alert-email oncall@example.com --alert-email backup@example.com \
   --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
   --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
@@ -257,7 +257,7 @@ time, by design. Send it to a dead-man's-switch service (Healthchecks, Dead Man'
 Cronitor) that alerts you when the pings stop:
 
 ```bash
-dcctl install --alert-webhook https://hooks.example.com/... \
+dcctl install local --alert-webhook https://hooks.example.com/... \
   --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
 ```
 
@@ -270,7 +270,7 @@ silent alerting pipeline would go unnoticed.
 `--alert-config <file>` uses your own Alertmanager configuration as it is. Use it for Slack,
 PagerDuty, Opsgenie or Teams receivers, or for routing by label. It cannot be combined with the
 other `--alert-*` flags. `dcctl` checks that the file parses, that every route names a receiver the
-file defines, and whether some receiver delivers anywhere. It does not send a test message.
+file defines, and whether some receiver delivers anywhere. It does not send a test message, and it is not Alertmanager's own parser: run `amtool check-config` on the file first, because an Alertmanager that rejects a configuration keeps running on the one before it.
 Route the `Watchdog` alert inside your file: `dcctl` counts it as routed when a route selects
 `alertname = "Watchdog"` and its receiver delivers.
 

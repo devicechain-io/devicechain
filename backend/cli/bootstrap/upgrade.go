@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -259,7 +260,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// Asked before the first write: a cluster whose Alertmanager reads no Secret of ours has
 	// nothing for the alert flags to change, and finding that out after the services moved
 	// would leave an upgrade that did half of what was asked.
-	if err := PrecheckAlertRoutingUpgrade(ctx, typed, st); err != nil {
+	if err := PrecheckAlertRoutingUpgrade(ctx, typed, dyn, st); err != nil {
 		return err
 	}
 
@@ -401,14 +402,18 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	// date existed gets it on its first upgrade.
 	if st.AlertRouting.Given() {
 		doing("changing where alerts are sent")
-		routing, aerr := applyAlertRoutingUpgrade(ctx, typed, st.AlertRouting)
-		if aerr != nil {
+		if _, aerr := applyAlertRoutingUpgrade(ctx, typed, dyn, st.AlertRouting); aerr != nil {
 			return fail("changing where alerts are sent", aerr)
 		}
 		done()
-		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(routing))
-		for _, perr := range publishAlertRoutingToCluster(ctx, st.KubeContext, routing) {
-			fmt.Printf("  %s %v\n", color.YellowString("warning:"), perr)
+		// 🔴 A FAILURE HERE IS AN ERROR, NOT A WARNING. The Secret is already changed, so an
+		// instance this could not reach keeps its previous claim, and after a clear that claim
+		// is "routed" over an Alertmanager that drops everything. Re-running with the same
+		// flags is idempotent and tries again.
+		published, perrs := publishAlertRoutingToCluster(ctx, st.KubeContext)
+		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(published))
+		if len(perrs) > 0 {
+			return fail("publishing the alert routing", errors.Join(perrs...))
 		}
 	}
 	if brokerExpiryUnverified(st) {

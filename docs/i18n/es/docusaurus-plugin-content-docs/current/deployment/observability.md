@@ -228,10 +228,10 @@ Dé un receptor a Alertmanager al instalar, o más tarde en cualquier instancia:
 
 ```bash
 # Un webhook: los relés compatibles con Slack, PagerDuty, Opsgenie y la mayoría de las herramientas de incidentes lo aceptan.
-dcctl install --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
 
 # Correo electrónico. La contraseña se lee de un archivo para que no quede en el historial del shell.
-dcctl install \
+dcctl install local \
   --alert-email oncall@example.com --alert-email backup@example.com \
   --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
   --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
@@ -263,7 +263,7 @@ diseño. Envíela a un servicio de interruptor de hombre muerto (Healthchecks, D
 Cronitor) que le avise cuando los avisos dejen de llegar:
 
 ```bash
-dcctl install --alert-webhook https://hooks.example.com/... \
+dcctl install local --alert-webhook https://hooks.example.com/... \
   --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
 ```
 
@@ -277,7 +277,7 @@ alertas en silencio pasaría inadvertido.
 de Slack, PagerDuty, Opsgenie o Teams, o para enrutar por etiquetas. No se puede combinar con las
 demás opciones `--alert-*`. `dcctl` comprueba que el archivo se analiza, que cada ruta nombra un
 receptor definido en el archivo y si algún receptor entrega a alguna parte. No envía ningún mensaje
-de prueba. Enrute la alerta `Watchdog` dentro de su archivo: `dcctl` la cuenta como enrutada cuando
+de prueba, y no es el analizador de Alertmanager: ejecute antes `amtool check-config` sobre el archivo, porque un Alertmanager que rechaza una configuración sigue funcionando con la anterior. Enrute la alerta `Watchdog` dentro de su archivo: `dcctl` la cuenta como enrutada cuando
 una ruta selecciona `alertname = "Watchdog"` y su receptor entrega.
 
 Cada alerta incluye un `runbook_url` que abre su entrada en la [Guía de alertas](./alert-runbook.md),

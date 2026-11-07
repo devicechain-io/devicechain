@@ -12,8 +12,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/fatih/color"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -241,10 +244,21 @@ func inspectAlertConfig(text string) (dcv1beta1.AlertRouting, error) {
 		}
 		d := false
 		for k, v := range r {
-			if strings.HasSuffix(k, "_configs") {
-				if l, ok := v.([]any); ok && len(l) > 0 {
-					d = true
+			if k == "name" {
+				continue
+			}
+			if !strings.HasSuffix(k, "_configs") {
+				return routing, fmt.Errorf("receiver %q has a field %q, which is not a notification integration (they end in _configs)", name, k)
+			}
+			l, ok := v.([]any)
+			if !ok {
+				return routing, fmt.Errorf("receiver %q: %s must be a list", name, k)
+			}
+			for i, e := range l {
+				if err := checkIntegration(name, k, i, e); err != nil {
+					return routing, err
 				}
+				d = true
 			}
 		}
 		delivers[name] = d
@@ -258,11 +272,19 @@ func inspectAlertConfig(text string) (dcv1beta1.AlertRouting, error) {
 				return fmt.Errorf("routes to receiver %q, which it does not define", recv)
 			}
 			if d {
-				routing.Receivers = []string{dcv1beta1.AlertReceiverConfig}
+				// 🔴 A RECEIVER REACHED ONLY THROUGH THE WATCHDOG IS NOT A PERSON. The dead-man's
+				// receiver delivers by design, and counting it as routing would silence the
+				// warning over a configuration whose every real alert goes to the null receiver.
 				if routesWatchdog(route) {
 					routing.Watchdog = true
+				} else {
+					routing.Receivers = []string{dcv1beta1.AlertReceiverConfig}
 				}
 			}
+		}
+		if routesWatchdog(route) {
+			// Everything beneath a route that selects the Watchdog sees only the Watchdog.
+			return nil
 		}
 		kids, _ := route["routes"].([]any)
 		for _, k := range kids {
@@ -278,6 +300,36 @@ func inspectAlertConfig(text string) (dcv1beta1.AlertRouting, error) {
 		return routing, err
 	}
 	return routing, nil
+}
+
+// checkIntegration refuses a notification integration Alertmanager would refuse for want of
+// the field that makes it deliver. It is not Alertmanager's parser, and a configuration that
+// passes here can still be rejected by it (see the docs: run amtool check-config first); it
+// closes the common way a file looks complete and is not.
+func checkIntegration(receiver, kind string, i int, e any) error {
+	m, ok := e.(map[string]any)
+	if !ok || len(m) == 0 {
+		return fmt.Errorf("receiver %q: %s[%d] is empty, so it delivers nowhere", receiver, kind, i)
+	}
+	has := func(keys ...string) bool {
+		for _, k := range keys {
+			if v, ok := m[k]; ok && v != nil && v != "" {
+				return true
+			}
+		}
+		return false
+	}
+	switch kind {
+	case "webhook_configs":
+		if !has("url", "url_file") {
+			return fmt.Errorf("receiver %q: webhook_configs[%d] needs a url (or url_file)", receiver, i)
+		}
+	case "email_configs":
+		if !has("to") {
+			return fmt.Errorf("receiver %q: email_configs[%d] needs a to address", receiver, i)
+		}
+	}
+	return nil
 }
 
 // routesWatchdog reports whether a route selects the Watchdog alert by name.
@@ -406,35 +458,67 @@ func applyAlertRoutingRequest(ctx context.Context, typed kubernetes.Interface, r
 // applyAlertRoutingUpgrade is the upgrade's step. The Secret has to exist already: it is
 // written by `dcctl install` at this release, together with the stack's wiring to it, so a
 // Secret nobody reads must not be created here and reported as routing.
-func applyAlertRoutingUpgrade(ctx context.Context, typed kubernetes.Interface, req AlertRoutingRequest) (dcv1beta1.AlertRouting, error) {
-	if err := requireAlertWiring(ctx, typed); err != nil {
+func applyAlertRoutingUpgrade(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, req AlertRoutingRequest) (dcv1beta1.AlertRouting, error) {
+	if err := requireAlertWiring(ctx, typed, dyn); err != nil {
 		return dcv1beta1.AlertRouting{}, err
 	}
 	return applyAlertRoutingRequest(ctx, typed, req)
 }
 
-func requireAlertWiring(ctx context.Context, typed kubernetes.Interface) error {
+// alertmanagerGVR is the Prometheus Operator's Alertmanager, which the monitoring stack
+// creates and whose spec.configSecret names the Secret it reads its configuration from.
+var alertmanagerGVR = schema.GroupVersionResource{Group: "monitoring.coreos.com", Version: "v1", Resource: "alertmanagers"}
+
+// alertmanagerReadsOurSecret reports whether the Alertmanager the monitoring stack runs is
+// told to read the configuration Secret dcctl writes.
+//
+// 🔴 THE SECRET'S EXISTENCE PROVES NOTHING ABOUT WHO READS IT. Install writes the Secret
+// BEFORE the apply that points the Alertmanager at it, so an apply that failed leaves a
+// Secret nothing reads while the Alertmanager still runs its previous (null) configuration;
+// a later upgrade would then write receivers into it and report them routed. Asking the
+// Alertmanager itself is the only answer that is not a guess.
+func alertmanagerReadsOurSecret(ctx context.Context, dyn dynamic.Interface) (bool, error) {
+	list, err := dyn.Resource(alertmanagerGVR).Namespace(monitoringNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Errorf("reading the Alertmanager the monitoring stack runs: %w", err)
+	}
+	for _, a := range list.Items {
+		if v, _, _ := unstructured.NestedString(a.Object, "spec", "configSecret"); v == alertConfigSecretName {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func requireAlertWiring(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface) error {
 	_, found, err := readAlertRouting(ctx, typed)
 	if err != nil {
 		return err
 	}
-	if !found {
+	reads := false
+	if found {
+		if reads, err = alertmanagerReadsOurSecret(ctx, dyn); err != nil {
+			return err
+		}
+	}
+	if !found || !reads {
 		return fmt.Errorf("this cluster's Alertmanager is not wired to a configuration dcctl writes yet " +
-			"(it was installed by an earlier release), so the alert flags would write a Secret nothing reads. " +
+			"(it was installed by an earlier release, or an install that would have wired it did not finish), " +
+			"so the alert flags would write a Secret nothing reads. " +
 			"Run `dcctl install` with the same flags first; it re-applies the cluster prerequisites in place")
 	}
 	return nil
 }
 
 // PrecheckAlertRoutingUpgrade is the read an upgrade makes before it writes anything.
-func PrecheckAlertRoutingUpgrade(ctx context.Context, typed kubernetes.Interface, st *State) error {
+func PrecheckAlertRoutingUpgrade(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, st *State) error {
 	if !st.AlertRouting.Given() {
 		return nil
 	}
 	if !monitoringEnabled(st) {
 		return fmt.Errorf("this instance's cluster runs no monitoring stack (installed with --no-monitoring), so there is no Alertmanager to route alerts from")
 	}
-	return requireAlertWiring(ctx, typed)
+	return requireAlertWiring(ctx, typed, dyn)
 }
 
 // patchAlertRouting publishes the routing on one Instance. A merge patch, for the reason
@@ -455,37 +539,73 @@ func patchAlertRouting(ctx context.Context, dyn dynamic.Interface, id string, ro
 	return nil
 }
 
+// effectiveAlertRouting is what the cluster's alerts do RIGHT NOW: the routing the
+// configuration Secret holds, but only when the Alertmanager is told to read it. A cluster
+// whose Alertmanager has never been wired to a Secret dcctl writes (installed by an earlier
+// release, or an install that did not finish) runs the stack's default configuration, whose
+// only receiver drops everything, and that is "none".
+//
+// An error means this could not be established, which is not "none": the caller publishes
+// nothing, and the operator reports Unknown rather than a claim in either direction.
+func effectiveAlertRouting(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface) (dcv1beta1.AlertRouting, error) {
+	routing, found, err := readAlertRouting(ctx, typed)
+	if err != nil {
+		return dcv1beta1.AlertRouting{}, err
+	}
+	if !found {
+		return dcv1beta1.AlertRouting{}, nil
+	}
+	reads, err := alertmanagerReadsOurSecret(ctx, dyn)
+	if err != nil {
+		return dcv1beta1.AlertRouting{}, err
+	}
+	if !reads {
+		return dcv1beta1.AlertRouting{}, nil
+	}
+	return routing, nil
+}
+
 // publishAlertRouting records, on the Instance, where the cluster's alerts go, so the
 // operator can report the AlertsRouted condition without access to Secrets (see
 // dcv1beta1.AnnotationAlertRouting). Callers are bootstrap and upgrade.
 //
 // With no monitoring stack it publishes nothing: the operator reports that from the
-// declaration. A cluster whose Alertmanager has never been wired to a configuration dcctl
-// writes (installed by an earlier release) publishes "none", which is true of it: its
-// Alertmanager runs the stack's default configuration, whose only receiver drops everything.
+// declaration. When the routing cannot be established it publishes nothing and says so,
+// rather than failing a bootstrap or an upgrade over an observation.
 func publishAlertRouting(ctx context.Context, typed kubernetes.Interface, dyn dynamic.Interface, st *State) error {
 	if !monitoringEnabled(st) {
 		return nil
 	}
-	routing, _, err := readAlertRouting(ctx, typed)
+	routing, err := effectiveAlertRouting(ctx, typed, dyn)
 	if err != nil {
-		return err
+		fmt.Printf("  %s not publishing the alert routing: %v\n", color.YellowString("warning:"), err)
+		return nil
 	}
 	return patchAlertRouting(ctx, dyn, st.Instance, routing)
 }
 
 // publishAlertRoutingToCluster publishes the routing on every instance the cluster holds.
-// Best effort by design: the install it ends has already succeeded, and an instance that
-// cannot be patched now is patched by its next upgrade, so a failure is returned for the
-// caller to print rather than to fail on.
-func publishAlertRoutingToCluster(ctx context.Context, kubeContext string, routing dcv1beta1.AlertRouting) []error {
-	dyn, _, _, err := kubeClients(kubeContext)
+//
+// 🔴 IT READS THE ROUTING AT PUBLICATION, NOT AT THE START OF THE RUN. An install holds the
+// routing it settled across a long apply, and a second dcctl run can change it meanwhile;
+// publishing the earlier reading would tell every instance a webhook exists that the Secret
+// no longer has. The cluster is the source of truth, read as late as possible.
+//
+// The errors are returned for the caller to decide on: an install that has already built the
+// cluster prints them, an upgrade fails on them, because an instance left holding an older
+// "routed" claim would read as routed after the routing was cleared.
+func publishAlertRoutingToCluster(ctx context.Context, kubeContext string) (dcv1beta1.AlertRouting, []error) {
+	dyn, _, typed, err := kubeClients(kubeContext)
 	if err != nil {
-		return []error{err}
+		return dcv1beta1.AlertRouting{}, []error{err}
+	}
+	routing, err := effectiveAlertRouting(ctx, typed, dyn)
+	if err != nil {
+		return routing, []error{err}
 	}
 	held, err := readClusterInstances(ctx, kubeContext)
 	if err != nil {
-		return []error{err}
+		return routing, []error{err}
 	}
 	var errs []error
 	for _, id := range held.IDs {
@@ -493,7 +613,7 @@ func publishAlertRoutingToCluster(ctx context.Context, kubeContext string, routi
 			errs = append(errs, err)
 		}
 	}
-	return errs
+	return routing, errs
 }
 
 // SayAlertRouting says what the cluster's alerts do, in the install's and upgrade's output.
