@@ -58,6 +58,13 @@ type Uplink struct {
 	noticesTopic string
 	onNotice     func(messaging.GatewayNotice)
 
+	// acceptsTopic is the MQTT topic the platform tells this gateway which events it durably
+	// accepted on; onAccept receives each acceptance's keys. Subscribed only when the agent
+	// retires on accept (retireOnAccept): an agent that retires on PUBACK has no use for it.
+	acceptsTopic   string
+	onAccept       func([]string)
+	retireOnAccept bool
+
 	mu     sync.RWMutex
 	client mqtt.Client
 }
@@ -121,6 +128,8 @@ func NewUplink(cfg config.UplinkConfiguration, instanceId string, log *slog.Logg
 		backoffMax:     time.Duration(cfg.BackoffMaxSeconds) * time.Second,
 		log:            log,
 		noticesTopic:   messaging.SubjectToMqttTopic(messaging.GatewayNoticesSubject(instanceId, cfg.Tenant, cfg.GatewayToken)),
+		acceptsTopic:   messaging.SubjectToMqttTopic(messaging.GatewayAcceptsSubject(instanceId, cfg.Tenant, cfg.GatewayToken)),
+		retireOnAccept: cfg.RetireOn == config.RetireOnAccept,
 	}, nil
 }
 
@@ -216,6 +225,14 @@ func (up *Uplink) connectOnce(ctx context.Context) error {
 		client.Disconnect(0)
 		return fmt.Errorf("subscribe to gateway notices: %w (does the platform grant this gateway device its notices subject? the broker and the platform must both be upgraded before an agent uses the gateway uplink)", err)
 	}
+	// An agent that retires on acceptance and cannot hear acceptances would resend every event
+	// forever, so a refused subscription fails the connect for the same reason the notices do.
+	if up.retireOnAccept {
+		if err := messaging.SubscribeMqttConfirmed(client, up.acceptsTopic, 0, up.handleAccept, uplinkSubscribeTimeout); err != nil {
+			client.Disconnect(0)
+			return fmt.Errorf("subscribe to gateway acceptances: %w (retireOn is %q, which needs a platform that grants and sends them: upgrade the platform, or set uplink.retireOn to %q)", err, config.RetireOnAccept, config.RetireOnPuback)
+		}
+	}
 	up.mu.Lock()
 	up.client = client
 	up.mu.Unlock()
@@ -277,6 +294,20 @@ func (up *Uplink) handleNotice(_ mqtt.Client, m mqtt.Message) {
 	}
 	if up.onNotice != nil {
 		up.onNotice(n)
+	}
+}
+
+// handleAccept decodes one acceptance and hands its keys to the agent. One that does not decode
+// is logged and dropped: the events it named are offered again, and the platform suppresses
+// the duplicates.
+func (up *Uplink) handleAccept(_ mqtt.Client, m mqtt.Message) {
+	var acc messaging.GatewayAccept
+	if err := json.Unmarshal(m.Payload(), &acc); err != nil {
+		up.log.Warn("gateway acceptance did not decode", "err", err, "topic", m.Topic())
+		return
+	}
+	if up.onAccept != nil {
+		up.onAccept(acc.AltIds)
 	}
 }
 

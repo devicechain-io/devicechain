@@ -71,3 +71,41 @@ func (p *GatewayNoticePublisher) Notice(tenant, gateway string, n GatewayNotice)
 	}
 	return nc.Publish(GatewayNoticesSubject(p.instanceId, tenant, gateway), body)
 }
+
+// GatewayNoticeReasonOverCeiling is the notice reason for an event the platform received and
+// then SHED at the tenant's ingest ceiling. The broker had PUBACKed it, so without this notice
+// the gateway would believe it stored. Unlike NotGatewayChild it is a statement about load, not
+// about the event: the gateway keeps the event and offers it again later.
+const GatewayNoticeReasonOverCeiling = "over_ceiling"
+
+// GatewayAccept is the body of an acceptance: the idempotency keys (altId) of events the
+// platform has durably accepted from this gateway, so the gateway may retire them from its
+// spool. It is sent on the gateway's accepts subject (GatewayAcceptsSubject), never on the
+// notices subject.
+//
+// 🔴 BEST EFFORT, AND A MISSING ONE COSTS A RESEND, NEVER A LOSS. An acceptance is a plain
+// publish; a gateway that is offline when it is sent misses it, and keeps the event, and
+// offers it again, where the platform's idempotency key suppresses the duplicate. The signal
+// can therefore be late or absent without losing data, which is why it needs no store of its own.
+type GatewayAccept struct {
+	AltIds []string `json:"altIds"`
+}
+
+// Accept sends ids to gateway's accepts subject as one acceptance.
+func (p *GatewayNoticePublisher) Accept(tenant, gateway string, ids []string) error {
+	if err := core.ValidateToken(tenant); err != nil {
+		return fmt.Errorf("refusing to accept for an invalid tenant: %w", err)
+	}
+	if err := core.ValidateToken(gateway); err != nil {
+		return fmt.Errorf("refusing to accept for an invalid gateway token: %w", err)
+	}
+	nc := p.conn()
+	if nc == nil {
+		return errors.New("no broker connection to send a gateway acceptance on")
+	}
+	body, err := json.Marshal(GatewayAccept{AltIds: ids})
+	if err != nil {
+		return err
+	}
+	return nc.Publish(GatewayAcceptsSubject(p.instanceId, tenant, gateway), body)
+}
