@@ -55,6 +55,8 @@ type SchemaResolver struct {
 	// AppliedGuard is whether live DETECT runs its duplicate-event guard (event envelopes on). The
 	// preview applies the same rule, so it neither drops nor keeps a duplicate differently.
 	AppliedGuard bool
+	// ForkTimelineEnabled gates experimentalForkTimeline. False (the default) refuses it.
+	ForkTimelineEnabled bool
 }
 
 // EventProcessingInfo resolves the scaffold identity query.
