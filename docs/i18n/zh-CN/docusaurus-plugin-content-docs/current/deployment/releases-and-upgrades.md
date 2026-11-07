@@ -668,6 +668,7 @@ C# SDK 和 Unity 包现在可以用 X.509 客户端证书连接设备。这是�
 
 - **叶证书会结束持有它的设备的会话。** 吊销证书颁发机构的范围更大：当您通过提供 CA 证书来吊销 CA，或某个 CRL 点名了已注册凭据被发现使用过的中间证书时，该信任锚下**所有拥有证书凭据的设备**的会话都会被结束。这些设备会自行重新连接；证书链仍受信任的设备会立即被接纳。一次调用自身会结束最多约 5,000 台设备的会话，因此 CA 级吊销可能让大约这么多设备在同一时刻重新连接；其余的在后台结束。**在从早期版本升级而来的实例上**，升级前注册的凭据没有记录中间证书，因此当某个 CRL 新增了与任何已存储凭据都不匹配的条目时，也会结束这些旧凭据的会话，以防该条目是它们所用的中间证书。
 - **会话会被结束两次。** 第一次在吊销提交时，第二次约 10 秒之后。第二次用于捕获吊销瞬间正在被接纳的设备。延迟由固定设置 `deviceManagement.callout.revocation.resweepAfter` 决定（默认 10 秒，最长 5 分钟）；它必须大于 callout 查询超时加上代理 5 秒的授权超时，否则 `device-management` 会拒绝启动。因此 CA 级吊销会对整个信任锚询问两次。
+- **在升级后的实例上，仅按指纹吊销可能返回 `sessionsEnded: false`。** 升级前注册的凭据没有记录中间证书，因此只用 `fingerprintSha256` 吊销中间证书，无法判断它影响哪些会话。吊销仍然有效，经由它的新连接会被拒绝，但结果会显示 `sessionsEnded: false`。请用该中间证书的 `certificatePem` 重复吊销，以结束该信任锚下所有设备的会话。
 - **面对响应缓慢的服务时，吊销可能耗时较长。** 调用最多会等待负责结束会话的服务（`event-sources`）约 90 秒。如果无法确认，吊销依然有效，新连接会被拒绝；结果会显示 `sessionsEnded: false`，平台会持续重试，重复执行吊销或上传也会再次询问。
 - **在滚动升级期间**，新的会话终止请求带有 `event-sources` 必须识别的新原因。在 `event-sources` 被替换之前，这些请求会保持待处理并被重试，因此升级过程中进行的吊销会在 `event-sources` 更新完成后结束已打开的会话。上一版本的 Pod 既不会处理这些待处理的请求，也不会删除它们。
 
@@ -758,6 +759,7 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 通知渠道新增三种类型：`slack`、`teams` 和 `pagerduty`。它们是增量的：现有 `smtp` 或 `webhook` 渠道不受影响，通过 `webhook` 渠道访问的 Slack 入站 webhook 仍照常工作。
 
 - **升级时无需任何操作。** 新类型的渠道需要密钥（webhook URL 或 PagerDuty 路由密钥），没有密钥时保存会被拒绝。参见[原生 Slack、Teams 和 PagerDuty 渠道](../guides/notification-channels.md#native-channels)。
+- **请在滚动升级完成后再创建 Slack、Teams 和 PagerDuty 渠道。** 滚动期间仍在运行的上一版本 Pod 不认识这些新类型：它们会以 `no_adapter` 跳过这类目标且不会重试，因此由它们处理的告警不会送达该渠道。
 - **请注意，新类型与 webhook 经过同一道出站防护。** 指向私有、环回或云元数据地址的目标会被拒绝，并计入 `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`。
 - **请注意，`notificationChannelTypes` 查询现在多列出三种类型，** GraphQL 模式只有描述发生变化。对渠道类型做穷尽匹配的客户端会多看到三个值。
 - **控制台新增了通知渠道页面，** 可配置所有类型的渠道。

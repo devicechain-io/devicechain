@@ -407,6 +407,14 @@ func (api *Api) endRevokedSessions(ctx context.Context, tenant string, anchorId 
 	if left {
 		return fmt.Errorf("%w: more devices are owed a kick than one call settles; the background retry continues", ErrSessionsNotEnded)
 	}
+	if expandErr != nil {
+		// 🔴 A FAILED LISTING IS NOT "NOTHING OWED". A round of markers could not be read (or one could
+		// not be expanded and is no longer standing), so the lists above cannot say none is owed. The
+		// debt is durable and the background drain carries it on, but this call must not report the
+		// sessions ended.
+		return fmt.Errorf("%w: the pending revocation markers could not be fully listed or expanded (%v); the background retry continues",
+			ErrSessionsNotEnded, expandErr)
+	}
 	return nil
 }
 
