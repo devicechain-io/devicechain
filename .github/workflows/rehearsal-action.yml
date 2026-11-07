@@ -1,0 +1,108 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The fleet-rehearsal composite action, run as a consumer would run it, against a broker that
+# is not DeviceChain (an off-the-shelf Mosquitto), with its NEGATIVE CONTROL in the same job.
+#
+#   1. The action runs against Mosquitto directly and must pass.
+#   2. The action runs again, publishing through dc-loadtest-dropproxy at N=100 (it PUBACKs every
+#      100th publish and never forwards it) with the tap on Mosquitto, and must FAIL with the
+#      loss exit code. The step is allowed to fail so the job can check HOW it failed: exit code 3
+#      and no other. A step that passed here would mean the action cannot fail a pull request on a
+#      planted loss, and the job goes red.
+#
+# It runs on pull requests that touch the action or the harness it wraps, and on demand.
+name: Rehearsal action
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/rehearsal/**"
+      - ".github/workflows/rehearsal-action.yml"
+      - "backend/sims/dc-simulator/cmd/loadtest-mqtt/**"
+      - "backend/sims/dc-simulator/cmd/loadtest-dropproxy/**"
+      - "backend/sims/dc-simulator/internal/dropproxy/**"
+      - "backend/sims/dc-simulator/loadtest/target*.go"
+      - "backend/sims/dc-simulator/mqttload/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rehearsal-action-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+
+      - name: Start Mosquitto and write the fleet
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mosq"
+          cat > "$RUNNER_TEMP/mosq/mosquitto.conf" <<'EOF'
+          listener 1883
+          allow_anonymous true
+          persistence false
+          max_queued_messages 0
+          max_inflight_messages 0
+          EOF
+          # Pinned by digest; the tag says which version a bump would move.
+          docker run -d --name mosquitto -p 1883:1883 \
+            -v "$RUNNER_TEMP/mosq/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" \
+            eclipse-mosquitto:2.0.21@sha256:94f5a3d7deafa59fa3440d227ddad558f59d293c612138de841eec61bfa4d353
+          { echo "device,client_id"; for i in $(seq 1 20); do printf 'rig-%03d,rig-%03d\n' "$i" "$i"; done; } > "$RUNNER_TEMP/fleet.csv"
+          for _ in $(seq 1 30); do (exec 3<>/dev/tcp/127.0.0.1/1883) 2>/dev/null && break; sleep 1; done
+
+      - name: Control, the action passes against a broker that delivers
+        uses: ./.github/actions/rehearsal
+        with:
+          target: mqtt://127.0.0.1:1883
+          credentials: ${{ runner.temp }}/fleet.csv
+          rate: "200"
+          duration: "15s"
+          report: ${{ runner.temp }}/control.json
+
+      - name: Start the drop proxy (N=100)
+        working-directory: backend/sims/dc-simulator
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/dc-loadtest-dropproxy" ./cmd/loadtest-dropproxy
+          nohup "$RUNNER_TEMP/dc-loadtest-dropproxy" --listen 127.0.0.1:1884 --upstream 127.0.0.1:1883 \
+            --every 100 --report "$RUNNER_TEMP/proxy.json" > "$RUNNER_TEMP/proxy.log" 2>&1 &
+          sleep 2
+
+      - name: Planted loss, the action must fail
+        id: planted
+        continue-on-error: true
+        uses: ./.github/actions/rehearsal
+        with:
+          target: mqtt://127.0.0.1:1884
+          tap-target: mqtt://127.0.0.1:1883
+          credentials: ${{ runner.temp }}/fleet.csv
+          rate: "200"
+          duration: "15s"
+          report: ${{ runner.temp }}/planted.json
+
+      - name: The planted loss failed the action with exit 3 and the exact count
+        env:
+          PLANTED_OUTCOME: ${{ steps.planted.outcome }}
+          PLANTED_CODE: ${{ steps.planted.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          sleep 1
+          [ "$PLANTED_OUTCOME" = "failure" ] || { echo "the planted loss did not fail the action (outcome $PLANTED_OUTCOME): the action cannot fail a PR"; exit 1; }
+          [ "$PLANTED_CODE" = "3" ] || { echo "the planted loss failed with exit $PLANTED_CODE, want 3"; exit 1; }
+          dropped="$(jq -r .dropped "$RUNNER_TEMP/proxy.json")"
+          lost="$(jq -r .storage.lost "$RUNNER_TEMP/planted.json")"
+          [ "$dropped" -gt 0 ] && [ "$lost" = "$dropped" ] || { echo "verdict lost=$lost, proxy dropped=$dropped"; exit 1; }
+          echo "planted loss failed the action: exit 3, exactly $dropped missing"

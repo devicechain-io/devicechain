@@ -277,6 +277,10 @@ type MQTTReport struct {
 
 	// Identity is the identity reconciliation's evidence (full mode only).
 	Identity *IdentityReport `json:"identity,omitempty"`
+	// Target is set by a target-mode run (a broker that is not a DeviceChain gateway): how it
+	// authenticated, what the read-back tap saw, and the limit of the verdict. Storage then
+	// means "delivered to the tap", not "persisted".
+	Target *TargetInfo `json:"target,omitempty"`
 	// Loss is true when PUBACKed events were not persisted.
 	Loss       bool        `json:"loss"`
 	Invariants []Invariant `json:"invariants"`
@@ -347,6 +351,10 @@ func (r *MQTTReport) Human() string {
 	if s.MaskedLossBound > 0 {
 		fmt.Fprintf(&b, "  NO DURABILITY VERDICT: a count-only comparison could be masking up to %d PUBACKed loss(es) (%d unconfirmed, %d re-sent); rerun with --identity full\n",
 			s.MaskedLossBound, d.Unconfirmed, d.Resent)
+	}
+	if r.Target != nil {
+		fmt.Fprintf(&b, "  target: %s read back through a tap on %q (storage above means delivered to the tap); this verdict %s"+"\n",
+			r.Target.Broker, r.Target.Tap.Filter, r.Target.Limit)
 	}
 	for _, inv := range r.Invariants {
 		mark := "FAIL"

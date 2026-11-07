@@ -64,6 +64,11 @@ type Config struct {
 	InstanceId string
 	Tenant     string
 
+	// Target marks a fleet aimed at a broker that is NOT a DeviceChain gateway: its sessions
+	// present the identities of a bring-your-own credential list (see NewTargetFleet), so there
+	// is no instance or tenant to name.
+	Target bool
+
 	// QoS is 1 (PUBACKed delivery) or 0 (fire and forget).
 	QoS byte
 	// CleanSession starts every connection with no session state. False keeps the session
@@ -132,11 +137,13 @@ func (c Config) Validate() error {
 	if c.TLSInsecure && !c.TLS {
 		return fmt.Errorf("--tls-insecure skips certificate verification and means nothing without TLS")
 	}
-	if err := core.ValidateToken(c.InstanceId); err != nil {
-		return fmt.Errorf("instance id: %w", err)
-	}
-	if err := core.ValidateToken(c.Tenant); err != nil {
-		return fmt.Errorf("tenant: %w", err)
+	if !c.Target {
+		if err := core.ValidateToken(c.InstanceId); err != nil {
+			return fmt.Errorf("instance id: %w", err)
+		}
+		if err := core.ValidateToken(c.Tenant); err != nil {
+			return fmt.Errorf("tenant: %w", err)
+		}
 	}
 	if c.MaxInflight > MaxMaxInflight {
 		return fmt.Errorf("max in-flight %d exceeds %d, the client's outbound queue depth", c.MaxInflight, MaxMaxInflight)
