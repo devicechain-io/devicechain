@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,26 @@ func TestConsoleURL(t *testing.T) {
 	dockerPortOutput = func(string) (string, error) { return "80/tcp -> 0.0.0.0:80\n", nil }
 	if got := ConsoleURL("kind-x", "http", "localhost"); got != "http://localhost/" {
 		t.Errorf("got %s", got)
+	}
+}
+
+// The summary's GraphQL line must carry the same host:port as the console line.
+func TestReportGraphQLAddressMatchesConsolePort(t *testing.T) {
+	old := dockerPortOutput
+	defer func() { dockerPortOutput = old }()
+	dockerPortOutput = func(string) (string, error) { return sampleDockerPort, nil }
+	st := aWritableState()
+	st.KubeContext = "kind-x"
+	st.Values = map[string]string{"ingressHost": "localhost", "scheme": "http"}
+	out := captureStdout(t, func() {
+		if err := stepReport(t.Context(), st); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "http://localhost:8080/") {
+		t.Fatalf("console line lost its port:\n%s", out)
+	}
+	if !strings.Contains(out, "http://localhost:8080/api/<area>/graphql") {
+		t.Errorf("GraphQL line disagrees with the console port:\n%s", out)
 	}
 }

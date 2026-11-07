@@ -1887,7 +1887,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "process_resident_memory_bytes{agent=~\"$agent\"}",
+          "expr": "process_resident_memory_bytes{job=\"dc-edge-agent\",agent=~\"$agent\"}",
           "legendFormat": "{{agent}}"
         }
       ],
@@ -1941,7 +1941,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (agent) (rate(process_cpu_seconds_total{agent=~\"$agent\"}[$__rate_interval]))",
+          "expr": "sum by (agent) (rate(process_cpu_seconds_total{job=\"dc-edge-agent\",agent=~\"$agent\"}[$__rate_interval]))",
           "legendFormat": "{{agent}}"
         }
       ],
@@ -1995,7 +1995,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "go_goroutines{agent=~\"$agent\"}",
+          "expr": "go_goroutines{job=\"dc-edge-agent\",agent=~\"$agent\"}",
           "legendFormat": "{{agent}}"
         }
       ],
@@ -2049,7 +2049,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "process_open_fds{agent=~\"$agent\"}",
+          "expr": "process_open_fds{job=\"dc-edge-agent\",agent=~\"$agent\"}",
           "legendFormat": "{{agent}} open"
         },
         {
@@ -2058,7 +2058,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "process_max_fds{agent=~\"$agent\"}",
+          "expr": "process_max_fds{job=\"dc-edge-agent\",agent=~\"$agent\"}",
           "legendFormat": "{{agent}} limit"
         }
       ],

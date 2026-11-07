@@ -111,3 +111,24 @@ func TestARefusedValuesFileStopsUpgradeBeforeAnyCluster(t *testing.T) {
 		t.Errorf("--values with --reset-values should be refused as contradictory: %v", err)
 	}
 }
+
+// --yes (-y) is accepted by upgrade as it is by install and bootstrap, defaults to false, and
+// reaches Options.AssumeYes.
+func TestUpgradeAcceptsYesLikeInstallAndBootstrap(t *testing.T) {
+	for name, c := range map[string]*cobra.Command{"upgrade": upgradeCmd, "install": installCmd, "bootstrap": bootstrapCmd} {
+		f := c.Flags().Lookup("yes")
+		if f == nil || f.Shorthand != "y" || f.DefValue != "false" {
+			t.Errorf("dcctl %s --yes = %+v; want a boolean -y flag defaulting to false", name, f)
+		}
+	}
+	if upgradeOptions("i", nil, nil).AssumeYes {
+		t.Error("AssumeYes is on without the flag")
+	}
+	t.Cleanup(func() { upgradeAssumeYes = false })
+	if err := upgradeCmd.Flags().Parse([]string{"--yes"}); err != nil {
+		t.Fatalf("--yes was rejected: %v", err)
+	}
+	if !upgradeOptions("i", nil, nil).AssumeYes {
+		t.Error("--yes does not reach Options.AssumeYes")
+	}
+}

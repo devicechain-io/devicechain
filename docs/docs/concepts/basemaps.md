@@ -71,7 +71,7 @@ These values are also refused on save at the tenant and instance tiers:
 
 | Field | Bound |
 | --- | --- |
-| `tileUrl` | 2048 characters |
+| `tileUrl` | 2048 bytes |
 | `attribution` | 512 characters, and no control characters |
 | `zoom` | 0 to 24 |
 | `centerLat` | −90 to 90 |

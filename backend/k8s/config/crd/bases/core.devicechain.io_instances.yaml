@@ -324,6 +324,14 @@ spec:
                   completed.
                 format: date-time
                 type: string
+              size:
+                description: |-
+                  Size names the size preset the instance runs ("compact", "perf-12k"); empty is base. It
+                  is a NAME, never a number: the numbers belong to the dcctl release that applies it, and a
+                  release that retunes a preset retunes every instance recorded with it on its next
+                  upgrade. A compact instance records "compact" here beside compact: true.
+                maxLength: 32
+                type: string
               tls:
                 description: |-
                   TLS reports whether the ingress serves HTTPS. This describes the INGRESS and

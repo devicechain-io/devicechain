@@ -154,6 +154,14 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	SessionKickDrain = core.NewPeriodicTask(area, "session-kick-drain", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, SessionKickDrain.Initialize(context.Background()))
+	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
+	// the package may have left the global stopped.
+	prevAccountant, prevAccounting := DecodeAccountant, DecodeAccounting
+	t.Cleanup(func() { DecodeAccountant, DecodeAccounting = prevAccountant, prevAccounting })
+	DecodeAccountant = processor.NewDecodeAccountant(nil, "test", nil)
+	DecodeAccounting = core.NewPeriodicTask(area, "decode-accounting", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, DecodeAccounting.Initialize(context.Background()))
 
 	// The callout responder is nil-guarded in the stopper; there is nothing to stop.
 	CalloutResponder = nil

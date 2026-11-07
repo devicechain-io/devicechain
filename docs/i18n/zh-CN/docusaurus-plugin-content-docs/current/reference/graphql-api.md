@@ -755,7 +755,7 @@ mutation Verify($challenge: String!, $code: String!) {
 ## 请求限制 {#request-limits}
 
 每个 GraphQL 端点都会在执行前拒绝过大或工作量过多的请求。
-唯一例外是凭据检查上限，它在执行期间生效，参见[每请求凭据检查](#credential-checks-per-request)。
+例外是执行时间上限（到期时会取消已在运行的工作）和凭据检查上限，后者在执行期间生效，参见[每请求凭据检查](#credential-checks-per-request)。
 
 所有服务使用相同限制，可通过表中环境变量逐服务修改。
 值缺失、不是数字或小于 1 时回退到默认值；这些限制都不能关闭。
@@ -770,7 +770,7 @@ mutation Verify($challenge: String!, $code: String!) {
 | 每变更根字段数 | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | 顶层字段数超过此值的变更操作。 |
 | 每请求凭据检查数 | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | 一次请求中超过此数的密码检查，见[下文](#credential-checks-per-request)。 |
 
-除了正文限制和凭据检查限制，被拒绝的请求会返回 HTTP 200，`errors` 中只有一项，无 `data`，且不执行任何内容。
+除了正文限制、执行时间限制和凭据检查限制，被拒绝的请求会返回 HTTP 200，`errors` 中只有一项，无 `data`，且不执行任何内容。在执行时间截止时被取消的请求已经开始运行，因此响应会为被中断的工作返回一个错误。
 凭据检查限制只拒绝超限检查，各自返回错误，其他请求内容仍执行。
 根字段拒绝携带 `extensions.code: TOO_MANY_ROOT_FIELDS`：
 

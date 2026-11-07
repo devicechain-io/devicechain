@@ -47,7 +47,7 @@ Arbitrary CSS injection is deliberately not offered. It would be an XSS and main
 A logo is an opaque reference, resolved one of three ways:
 
 - **Uploaded**: stored in the [object store](./object-storage.md) and streamed back through an authorizing per-tenant proxy path, never a public URL.
-- **Inline**: a bounded `data:` URI (≤ 256 KB) kept directly on the branding record, for installs with no extra infrastructure.
+- **Inline**: a bounded `data:` URI (≤ 256 KiB of decoded image bytes; the encoded URI is larger) kept directly on the branding record, for installs with no extra infrastructure.
 - **External URL**: an `https://` asset the tenant hosts itself.
 
 The server validates uploads and inline images before storing them: raster image types only, with size ceilings enforced.

@@ -69,8 +69,15 @@ func instanceConnectionLimit(st *State) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// The size preset's replica counts are part of the sizing, under the overlay (size.go
+	// precedence): a perf size runs more device-management pods than the chart default.
+	effective := st.ValuesOverlay
+	if preset := sizeFor(st).helmValues(); len(preset) > 0 {
+		effective = preset
+		mergeOverlay(effective, st.ValuesOverlay)
+	}
 	var chartDefaults map[string]interface{}
-	if len(st.ValuesOverlay) > 0 {
+	if len(effective) > 0 {
 		ch, err := loadEmbeddedChart()
 		if err != nil {
 			return 0, fmt.Errorf("loading the chart to size the values overlay's connections: %w", err)
@@ -83,9 +90,9 @@ func instanceConnectionLimit(st *State) (int, error) {
 			continue
 		}
 		replicas, pool := 1, servicePoolSize
-		if len(st.ValuesOverlay) > 0 {
-			replicas = overlayAreaReplicas(chartDefaults, st.ValuesOverlay, string(a))
-			pool = overlayAreaPool(st.ValuesOverlay, string(a))
+		if len(effective) > 0 {
+			replicas = overlayAreaReplicas(chartDefaults, effective, string(a))
+			pool = overlayAreaPool(effective, string(a))
 		}
 		n += replicas * pool * rolloutSurge
 	}

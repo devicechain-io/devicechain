@@ -221,7 +221,7 @@ POST /api/device-management/provisioning/{tenant}/register
 
 | Campo | Obligatorio | Reglas |
 | --- | :---: | --- |
-| `provisionKey`, `provisionSecret` | sí | De 1 a 256 caracteres cada uno. El secreto es el que el servidor generó para el perfil. |
+| `provisionKey`, `provisionSecret` | sí | De 1 a 256 bytes cada uno. El secreto es el que el servidor generó para el perfil. |
 | `externalId` | sí | El número de serie u otro id del dispositivo, de 1 a 256 caracteres. Es como la plataforma encuentra el dispositivo. |
 | `credentialSecret` | sí | El material de credencial propio del dispositivo, que pasa a ser su token de acceso. **base64url** (letras, dígitos, `-` y `_`, sin relleno), **de 22 a 256 caracteres**. Genera 32 bytes aleatorios y codifícalos (43 caracteres). |
 | `name` | no | Como máximo 128 caracteres. Solo se usa cuando esta petición crea el dispositivo. |

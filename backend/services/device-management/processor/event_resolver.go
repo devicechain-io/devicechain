@@ -1514,8 +1514,11 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				resolved []EventResolutionResults
 				reason   uint
 			)
+			// One per delivery, shared by every run of the closure below (see deliveryState).
+			delivery := &deliveryState{redelivered: unresolved.NumDelivered > 1}
 			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
 				var rerr error
+				c = withDelivery(c, delivery)
 				resolved, reason, rerr = rez.ResolveEvent(c, event)
 				return rerr
 			})
@@ -1557,6 +1560,14 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					done(core.ResultErased)
 				} else if errors.Is(err, model.ErrDeviceDisabled) {
 					log.Debug().Str("correlation", correlation).Err(err).Msg("Discarding an event from a disabled device.")
+					_ = unresolved.Ack()
+					done(core.ResultDropped)
+				} else if df := (*DecodeFailure)(nil); errors.As(err, &df) && df.Suppressed {
+					// A failed decode past its device type's record budget: counted as suppressed by the
+					// accountant and settled here WITHOUT a failed-events record, so a broken decoder at
+					// a large tenant cannot flood the platform-wide stream. It is terminal on the first
+					// delivery like any failed decode, and never silent: the first records of the
+					// window are already out and the tally says how many were not written.
 					_ = unresolved.Ack()
 					done(core.ResultDropped)
 				} else if errors.Is(err, ErrNotGatewayChild) {

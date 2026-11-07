@@ -209,6 +209,9 @@ Guarda ese `accessToken`. Todas las llamadas a partir de aquí lo llevan:
 export DC_TOKEN='<accessToken>'
 ```
 
+Un token de acceso dura **15 minutos**. Cuando las llamadas empiecen a fallar con un error de autenticación, repite las dos
+peticiones anteriores (`login` y después `selectTenant`) y exporta el nuevo `accessToken`.
+
 ## 4. Crear el dispositivo {#4-create-the-device}
 
 Los dispositivos son tipados, así que primero creas un tipo de dispositivo. Todo se direcciona por

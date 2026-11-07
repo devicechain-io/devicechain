@@ -108,7 +108,15 @@ type InstanceRecord struct {
 	// Being printed with the rest of the record is the test that list is really about.
 	// Omitted when empty, so an instance from before this existed reads as silent rather
 	// than as a cluster whose identity is the empty string.
-	ClusterUID   string    `json:"clusterUid,omitempty"`
+	ClusterUID string `json:"clusterUid,omitempty"`
+	// EscrowPath is where this instance's root-key escrow artifact was written when that is
+	// NOT the default (~/.devicechain/escrow/<instance>-rootkey.escrow): the location given
+	// to `dcctl bootstrap --escrow-file`. It is a filesystem path to a file, never anything
+	// inside it, and the one field here that is neither a name, a flag nor a timestamp.
+	// `dcctl upgrade` looks here before the default, so it does not report "no escrow" for
+	// an artifact an operator deliberately put elsewhere. Omitted when empty, so an instance
+	// from before this existed, or one on the default path, reads as default.
+	EscrowPath   string    `json:"escrowPath,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	DcctlVersion string    `json:"dcctlVersion,omitempty"`
 }

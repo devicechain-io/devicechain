@@ -114,7 +114,7 @@ To find a device by alias, give `devices` a criteria `alias: {scheme: "lorawan.d
 
 The integration's **Device identifier** decides which scheme it looks up: `DEV_EUI` reads `lorawan.deveui`, `DEVICE_ID` reads `tts.device-id`, and `ALIAS:custom.serial` reads `custom.serial`. A device that carries only a different scheme is not found.
 
-**Changing or removing a device's identifier.** Moving an identifier (a DevEUI, a device id) to another device, or removing it, takes effect within about five minutes. Until then the integration endpoint may still name the old device for that identifier, but the platform checks at the event that the device still holds the identifier, so those uplinks are refused and kept in the dead-letter store for inspection (reason `IntegrationAliasMismatch`, counted by `resolve_integration_alias_mismatch_total`). They are never stored on any device and cannot be replayed. Once the change has propagated, uplinks land on the device that holds the identifier now. A device you create for an identifier that was already arriving starts receiving within a minute.
+**Changing or removing a device's identifier.** Moving an identifier (a DevEUI, a device id) to another device, or removing it, takes effect within about five minutes. Until then the integration endpoint may still name the old device for that identifier, but the platform checks at the event that the device still holds the identifier, so those uplinks are refused and kept in the dead-letter store for inspection (reason `IntegrationAliasMismatch`, counted by `devicechain_devicemanagement_resolve_integration_alias_mismatch_total`). They are never stored on any device and cannot be replayed. Once the change has propagated, uplinks land on the device that holds the identifier now. A device you create for an identifier that was already arriving starts receiving within a minute.
 
 ## ChirpStack v4 {#chirpstack}
 
@@ -311,6 +311,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Related {#related}
 
+- [LoRaWAN Uplink to Alarm](./lorawan-uplink-to-alarm.md): a walkthrough from a binary uplink through an integration and a decoder to a detection rule and an alarm.
 - [Payload decoders](./payload-decoders.md): turn a raw frame or a network server's decoded object into measurements.
 - [Devices](../user-guide/devices.md): the device form, with its **Aliases** field.
 - [Connecting a Device](./connecting-a-device.md): the MQTT and HTTP paths a device uses itself.

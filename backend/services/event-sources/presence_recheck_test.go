@@ -191,12 +191,26 @@ func TestOnlyAnUnreachableBrokerGetsARecheck(t *testing.T) {
 	assert.Equal(t, presence.TapOffBrokerUnreachable, presence.TapOffReason("broker_unreachable"),
 		"the reason this wiring keys on")
 
+	reachable := func(context.Context) bool { return true }
+	recovered := func() {}
+	checked := 0
 	for _, r := range presence.AllTapOffReasons() {
-		wrapped := r == presence.TapOffBrokerUnreachable
-		if reasonIsInstanceWide(r) && !wrapped {
-			// disabled / no_system_credential: configuration, re-read only by a new pod.
-			assert.True(t, r == presence.TapOffDisabled || r == presence.TapOffNoSystemCredential,
-				"an instance-wide reason other than the broker one appeared without a decision: %s", r)
+		if !reasonIsInstanceWide(r) {
+			continue // not drained at all: startPresenceDemotion returns before selecting a runner
 		}
+		checked++
+		drain := &recordingRunner{}
+		got := demoteRunnerFor(r, drain, reachable, recovered)
+		if r == presence.TapOffBrokerUnreachable {
+			rb, ok := got.(*recheckBroker)
+			require.True(t, ok, "an unreachable broker must get the recheck wrapper, got %T", got)
+			assert.Same(t, drain, rb.drain, "the wrapper must drain through the runner it was given")
+			continue
+		}
+		// disabled / no_system_credential: configuration, re-read only by a new pod.
+		require.True(t, r == presence.TapOffDisabled || r == presence.TapOffNoSystemCredential,
+			"an instance-wide reason other than the broker one appeared without a decision: %s", r)
+		assert.Same(t, drain, got, "%s is read from mounted configuration and must not be re-dialled", r)
 	}
+	require.Equal(t, 3, checked, "all three instance-wide reasons must be exercised")
 }

@@ -8,10 +8,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
+	gql "github.com/graph-gophers/graphql-go"
 )
 
 // PayloadDecoderResolver resolves a stored decoder document. The kind, version and input come
@@ -296,3 +299,36 @@ type PayloadDecoderFunctionResolver struct{ M payloaddecode.FunctionDoc }
 func (r *PayloadDecoderFunctionResolver) Name() string        { return r.M.Name }
 func (r *PayloadDecoderFunctionResolver) Signature() string   { return r.M.Signature }
 func (r *PayloadDecoderFunctionResolver) Description() string { return r.M.Doc }
+
+// PayloadDecoderHealthResolver resolves PayloadDecoderHealth.
+type PayloadDecoderHealthResolver struct{ M model.DecoderHealth }
+
+func (r *PayloadDecoderHealthResolver) Decoded() float64    { return float64(r.M.Decoded) }
+func (r *PayloadDecoderHealthResolver) Ignored() float64    { return float64(r.M.Ignored) }
+func (r *PayloadDecoderHealthResolver) Failed() float64     { return float64(r.M.Failed) }
+func (r *PayloadDecoderHealthResolver) Suppressed() float64 { return float64(r.M.Suppressed) }
+func (r *PayloadDecoderHealthResolver) ChargeSkew() float64 { return float64(r.M.ChargeSkew) }
+func (r *PayloadDecoderHealthResolver) LastError() string   { return r.M.LastError }
+func (r *PayloadDecoderHealthResolver) Windows() int32      { return int32(r.M.Windows) }
+func (r *PayloadDecoderHealthResolver) Since() string       { return r.M.Since.UTC().Format(time.RFC3339) }
+func (r *PayloadDecoderHealthResolver) LastFailureAt() *string {
+	if r.M.LastFailureAt == nil {
+		return nil
+	}
+	s := r.M.LastFailureAt.UTC().Format(time.RFC3339)
+	return &s
+}
+
+// PayloadDecoderSampleResolver resolves PayloadDecoderSample.
+type PayloadDecoderSampleResolver struct{ M model.DecoderSampleSummary }
+
+func (r *PayloadDecoderSampleResolver) Id() gql.ID {
+	return gql.ID(strconv.FormatUint(uint64(r.M.ID), 10))
+}
+func (r *PayloadDecoderSampleResolver) ProfileVersion() int32 { return r.M.ProfileVersion }
+func (r *PayloadDecoderSampleResolver) CreatedAt() string {
+	return r.M.CreatedAt.UTC().Format(time.RFC3339)
+}
+func (r *PayloadDecoderSampleResolver) DeviceToken() string { return r.M.DeviceToken }
+func (r *PayloadDecoderSampleResolver) Reason() string      { return r.M.Reason }
+func (r *PayloadDecoderSampleResolver) Error() string       { return r.M.Error }

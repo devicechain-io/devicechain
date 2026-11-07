@@ -106,7 +106,7 @@ The sections below cover properties specific to broker-asserted MQTT presence.
 
 ### Confirming the broker tap is running {#confirming-the-tap}
 
-Reading connections off DeviceChain's own broker needs four things. If any is missing, the tap **declines to start**. It logs why and sets `presence_tap_off{reason}` to say which one. MQTT devices that were never asserted stay inferred, which looks exactly like an instance that never had asserted presence, because functionally it is one. The four requirements:
+Reading connections off DeviceChain's own broker needs four things. If any is missing, the tap **declines to start**. It logs why and sets `devicechain_eventsources_presence_tap_off{reason}` to say which one. MQTT devices that were never asserted stay inferred, which looks exactly like an instance that never had asserted presence, because functionally it is one. The four requirements:
 
 - `brokerPresence.enabled` is not set to `false`.
 - A NATS system-account credential is configured. `dcctl bootstrap` mints one; a missing one is the usual reason a hand-assembled instance has no tap.
@@ -137,13 +137,13 @@ Nothing is released automatically in the remaining three cases:
 
 Two signals tell you the tap is not running, and they cover different failures.
 
-`presence_tap_off{reason}` is the direct one. It goes to 1 on every path where the tap declines to start, with the label naming which. It answers a question a quiet fleet otherwise makes unanswerable: a long-lived MQTT fleet legitimately emits no connect or disconnect advisories for days, so nothing in the ordinary flow of presence events distinguishes an instance that is asserting presence from one that silently never started.
+`devicechain_eventsources_presence_tap_off{reason}` is the direct one. It goes to 1 on every path where the tap declines to start, with the label naming which. It answers a question a quiet fleet otherwise makes unanswerable: a long-lived MQTT fleet legitimately emits no connect or disconnect advisories for days, so nothing in the ordinary flow of presence events distinguishes an instance that is asserting presence from one that silently never started.
 
-It does not cover a tap that started and then stopped working, because then nothing declines to start. **`presence_canary_missed_total` covers that case, and it is the counter to alarm on.** The service opens its own MQTT connection once a minute purely so that a working tap has something to observe. `presence_canary_observed_total` rises on a healthy tap, and `presence_canary_missed_total` rises when the chain is broken.
+It does not cover a tap that started and then stopped working, because then nothing declines to start. **`devicechain_eventsources_presence_canary_missed_total` covers that case, and it is the counter to alarm on.** The service opens its own MQTT connection once a minute purely so that a working tap has something to observe. `devicechain_eventsources_presence_canary_observed_total` rises on a healthy tap, and `devicechain_eventsources_presence_canary_missed_total` rises when the chain is broken.
 
 The canary runs on its own schedule, independently of the repair pass described below. That separation is what makes the counter trustworthy: an instrument that could only report while the thing it watches was healthy would go quiet at exactly the moment it mattered.
 
-Read the other presence counters as traffic, not health. `presence_events_total` is legitimately flat on a quiet fleet. It is also legitimately *not* flat on a tap that has just been switched off, because releasing the devices that tap had asserted emits one event per device under `presence_events_total{state="demoted"}`. Neither shape says anything about whether presence is being read.
+Read the other presence counters as traffic, not health. `devicechain_eventsources_presence_events_total` is legitimately flat on a quiet fleet. It is also legitimately *not* flat on a tap that has just been switched off, because releasing the devices that tap had asserted emits one event per device under `devicechain_eventsources_presence_events_total{state="demoted"}`. Neither shape says anything about whether presence is being read.
 
 ### Tuning the tap {#broker-presence-settings}
 
@@ -153,7 +153,7 @@ The tap ships with working defaults, and most instances never change them. The s
 |---|---|---|
 | `enabled` | on when unset | Runs the tap. Set it to `false` to turn broker-asserted MQTT presence off deliberately, for example on an instance whose broker is shared with something that objects to a system-account subscriber. MQTT devices then run on inferred presence, and any the tap had already asserted are released back to it, paced, over the following minutes. |
 | `reconcileSeconds` | `300` | How often the broker's live connection list is compared against the platform's own, in both directions. **This is not a backstop.** A graceful broker restart announces no disconnects at all, so this pass is the only thing that ever corrects those devices, and an asserted device has no inactivity sweep behind it. Lower it for a faster repair, at the cost of one cluster-wide inventory plus one read per tenant on every pass. |
-| `canarySeconds` | `60` | How often the service opens its own MQTT connection to prove the tap is still live. This is the schedule `presence_canary_missed_total` counts against. |
+| `canarySeconds` | `60` | How often the service opens its own MQTT connection to prove the tap is still live. This is the schedule `devicechain_eventsources_presence_canary_missed_total` counts against. |
 | `canaryDeadlineSeconds` | `15` | Bounds one probe. Too tight and it reports failures the tap does not have. |
 | `inventoryGatherSeconds` | `5` | How long a pass collects replies from the broker cluster. Too short and a merely slow node reads as absent, which withholds every disconnect that pass. |
 
@@ -161,14 +161,14 @@ A non-positive value on any of the four intervals falls back to the default abov
 
 ### A repair pass that runs out of time says so {#reconcile-pass-timeout}
 
-Each repair pass walks every tenant on the instance and reads that tenant's asserted devices, so a large instance's pass is long. It is bounded: a pass that cannot finish inside its budget stops, reports `presence_reconcile_runs_total{outcome="timeout"}`, and logs how many tenants it covered.
+Each repair pass walks every tenant on the instance and reads that tenant's asserted devices, so a large instance's pass is long. It is bounded: a pass that cannot finish inside its budget stops, reports `devicechain_eventsources_presence_reconcile_runs_total{outcome="timeout"}`, and logs how many tenants it covered.
 
 The next pass then resumes at the first tenant it did not reach, rather than starting again from the beginning. Without that, a fleet whose pass never fit in the budget would repair the same first few tenants on every attempt and never reach the rest: not late, never.
 
 - Occasional `timeout` outcomes mean repairs are lagging, and every tenant still gets its turn.
 - A sustained run of them means the instance needs more headroom. The devices at the back of the rotation are the ones whose missed disconnects go uncorrected longest.
 
-`presence_reconcile_runs_total` carries one outcome per pass:
+`devicechain_eventsources_presence_reconcile_runs_total` carries one outcome per pass:
 
 | Outcome | What it means |
 | --- | --- |
@@ -182,7 +182,7 @@ Alarm on `failed` alongside the canary. A single tenant's state read failing is 
 
 ### Presence transitions are metered against the tenant's ingest ceiling {#presence-and-the-ingest-ceiling}
 
-Connect and disconnect transitions pass the same per-tenant [ingest limit](./governance.md) as telemetry. They are **refused when a tenant is at its ceiling**, and counted in `presence_events_refused_total`.
+Connect and disconnect transitions pass the same per-tenant [ingest limit](./governance.md) as telemetry. They are **refused when a tenant is at its ceiling**, and counted in `devicechain_eventsources_presence_events_refused_total`.
 
 This is deliberate. Connection churn is entirely device-controlled and otherwise free: a device reconnecting in a loop would be an unmetered write amplifier that the ingest limiter never sees.
 
@@ -206,6 +206,6 @@ The repair comparison declines to mark anything offline unless it can account fo
 
 The cost is one case the design cannot distinguish: **deliberately scaling the broker cluster down**. Fewer nodes answer than the remembered maximum, so every later pass is treated as incomplete and no offline repair is ever made, not just until the next pass but for the life of the process. Devices orphaned by the removed node read online indefinitely, and because an asserted device has no inactivity backstop, no timeout corrects them.
 
-**After scaling the NATS cluster down, restart `event-sources`.** If you needed to and did not, `presence_reconcile_withheld_disconnects_total` rises without settling. Scaling up needs nothing.
+**After scaling the NATS cluster down, restart `event-sources`.** If you needed to and did not, `devicechain_eventsources_presence_reconcile_withheld_disconnects_total` rises without settling. Scaling up needs nothing.
 
 If the restart has to wait, the orphaned devices do not have to. Run `dcctl presence demote` on that source to release them back to inferred presence, where the ten-minute inactivity sweep can mark them offline on their own evidence. See [returning a device to inferred presence](../deployment/edge-services.md#demoting-a-device). The demotion repairs the devices that are already wrong; the restart is still what stops the next ones going wrong.

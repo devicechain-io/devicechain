@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1148,7 +1149,7 @@ func brokerResourceDecreases(before, after map[string]interface{}, in operatorIn
 		}
 		what := fmt.Sprintf("the broker's %s is LOWERED from %s to %s.", strings.Join(path[1:], "."), b, a)
 		if in.passed(r.variable) {
-			out = append(out, what+fmt.Sprintf(" dcctl sets %s itself for this instance (--compact), "+
+			out = append(out, what+fmt.Sprintf(" dcctl sets %s itself for this instance (--compact or --size), "+
 				"so a value in terraform.tfvars would not change it", r.variable))
 			continue
 		}
@@ -1378,8 +1379,12 @@ func flattenValues(prefix string, v interface{}, out map[string]interface{}) {
 // on top: a value set there survives every bootstrap and upgrade, one passed by hand
 // with -var survives none.
 func statedByOperator(rootdir, name string) bool {
-	if os.Getenv("TF_VAR_"+name) != "" {
-		return true
+	// The exact, case-sensitive prefix OpenTofu reads. os.Getenv is case-insensitive on Windows,
+	// where tf_var_nats_memory_limit would otherwise count as stated and tofu would ignore it.
+	for _, e := range os.Environ() {
+		if v, ok := strings.CutPrefix(e, "TF_VAR_"+name+"="); ok && v != "" {
+			return true
+		}
 	}
 	entries, err := os.ReadDir(rootdir)
 	if err != nil {
@@ -1388,7 +1393,13 @@ func statedByOperator(rootdir, name string) bool {
 	decl := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(name) + `\s*=`)
 	for _, e := range entries {
 		n := e.Name()
-		if e.IsDir() || !(n == "terraform.tfvars" || n == "terraform.tfvars.json" ||
+		// The two fixed names are found case-insensitively where the file system is (Windows finds
+		// Terraform.tfvars for tofu); the auto-file suffixes are matched exactly, as tofu does.
+		fixed := n
+		if runtime.GOOS == "windows" {
+			fixed = strings.ToLower(n)
+		}
+		if e.IsDir() || !(fixed == "terraform.tfvars" || fixed == "terraform.tfvars.json" ||
 			strings.HasSuffix(n, ".auto.tfvars") || strings.HasSuffix(n, ".auto.tfvars.json")) {
 			continue
 		}
@@ -1437,6 +1448,14 @@ func sayKeptVolumes(st *State) []string {
 
 // releaseVolumeSize is the size this release gives a NEW instance's volume.
 func releaseVolumeSize(st *State, name string) string {
+	if p := sizeFor(st); p != nil {
+		switch name {
+		case "nats_jetstream_storage":
+			return p.JetStreamStorage
+		case "timescale_storage":
+			return p.TimescaleStorage
+		}
+	}
 	if st.Compact {
 		switch name {
 		case "nats_jetstream_storage":
@@ -1556,7 +1575,7 @@ func prepareUpgradePlan(ctx context.Context, st *State, tf upgradeTofu, rootdir 
 		return nil, err
 	}
 	st.LiveMaxFileStore = maxStoreAfterGrowth(state, rootdir, st.LiveVolumes.JetStream, liveMaxFileStore(state))
-	vars, err := instanceRootVars(st)
+	vars, err := instanceRootVarsIn(st, rootdir)
 	if err != nil {
 		return nil, err
 	}
@@ -1651,6 +1670,14 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 	if st.DryRun {
 		return errRehearsalApplies
 	}
+	// 🔴 THE EVENT STORE TUNING IS RECORDED BEFORE THE APPLY, NOT AFTER IT. The flags reach the
+	// apply as -var on the plan, so nothing else holds them: an apply that reloads the store and
+	// then fails, or an output read that fails after it, would leave the next (flagless) run
+	// deriving the value the operator had just replaced. The plan has been judged by now, so a
+	// refused one never gets here.
+	if err := writeEventStoreVarFile(p.rootdir, st); err != nil {
+		return err
+	}
 	if err := p.tf.Apply(ctx, tfexec.DirOrPlan(p.planPath)); err != nil {
 		if !isCNPGWebhookUnavailable(err.Error()) {
 			return fmt.Errorf("applying instance %q's infrastructure: %w", st.Instance, err)
@@ -1679,9 +1706,6 @@ func applyUpgradeInfra(ctx context.Context, st *State, p *upgradeInfraPlan, wait
 		return err
 	}
 	st.InfraApplied = true
-	if err := writeEventStoreVarFile(p.rootdir, st); err != nil {
-		return err
-	}
 	if err := waits.broker(ctx); err != nil {
 		return err
 	}

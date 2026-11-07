@@ -175,7 +175,7 @@ Si creas un dispositivo de antemano para un perfil de certificado, deja su token
 
 ## Cuando se rechaza una conexión {#refused}
 
-Como en todos los rechazos de dispositivos, el dispositivo solo ve el código de retorno CONNACK 5. El motivo está del lado del operador, como la etiqueta `result` del contador `callout_x509_total`. Comprueba en este orden:
+Como en todos los rechazos de dispositivos, el dispositivo solo ve el código de retorno CONNACK 5. El motivo está del lado del operador, como la etiqueta `result` del contador `devicechain_devicemanagement_callout_x509_total`. Comprueba en este orden:
 
 1. **`no_cert`.** El cliente no envió certificado. Revisa `--cert` y que la clave corresponda al certificado.
 2. **`chain_invalid`.** La cadena no llega al ancla, un certificado ha caducado, al uso extendido de clave le falta la autenticación de cliente, una firma usa SHA-1 o una clave está fuera del conjunto permitido. Reprodúcelo con `openssl verify -CAfile ca.crt -purpose sslclient device.crt` y comprueba que el dispositivo envía sus intermedios.

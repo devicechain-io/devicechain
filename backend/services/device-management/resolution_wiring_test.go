@@ -50,7 +50,7 @@ func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
 			DeadLetters = deadletter.NewProducer(Microservice)
 			SecretTransit = testTransit(t)
 
-			require.Equal(t, tc.want, newInboundEventsProcessor().Resolvers())
+			require.Equal(t, tc.want, builtInboundProcessor(t).Resolvers())
 		})
 	}
 }
@@ -141,7 +141,7 @@ func TestTheProcessorReadsItsCachesAtTheSameTime(t *testing.T) {
 	SecretTransit = testTransit(t)
 	CachedApi = model.NewCachedApi(&model.Api{}, &model.Caches{})
 
-	require.True(t, model.ReadsAheadConcurrently(newInboundEventsProcessor().Api),
+	require.True(t, model.ReadsAheadConcurrently(builtInboundProcessor(t).Api),
 		"the inbound processor's api is not the CachedApi itself, so no event reads its caches at the same time")
 }
 
@@ -165,7 +165,7 @@ func TestTheInboundProcessorCountsLostRecordsOnTheServiceProducer(t *testing.T) 
 	SecretTransit = testTransit(t)
 
 	require.NotNil(t, DeadLetters)
-	require.Same(t, DeadLetters, newInboundEventsProcessor().DeadLetters())
+	require.Same(t, DeadLetters, builtInboundProcessor(t).DeadLetters())
 }
 
 // The key the service derives from the root key is the one the processor's resolvers open
@@ -185,7 +185,7 @@ func TestTheProcessorOpensSealedSecretsWithTheServicesKey(t *testing.T) {
 	DeadLetters = deadletter.NewProducer(Microservice)
 	SecretTransit = testTransit(t)
 
-	require.Same(t, SecretTransit, newInboundEventsProcessor().SecretTransit())
+	require.Same(t, SecretTransit, builtInboundProcessor(t).SecretTransit())
 }
 
 func testTransit(t *testing.T) *credential.SecretTransit {

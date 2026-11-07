@@ -738,6 +738,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
+| `--size <size>` | The instance's size preset: `base` (the default) or `perf-12k`, the measured high-throughput shape. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest and LwM2M ingest; over-the-air update management is part of `default`), `telemetry`, or `ingest-only`. |
 | `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area outbound-connectors`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
@@ -901,6 +902,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--cluster <name>` | `local` provider: the kind cluster to install into (default `devicechain`), created if it does not exist. |
 | `--kube-context <name>` | Install into the existing cluster this kube-context points at. `dcctl` never creates or deletes it. |
 | `--compact` | Small-footprint preset — see below. |
+| `--size compact` | The same as `--compact`, which stays. `base` is accepted and means no preset. The `perf` sizes are chosen per instance on `dcctl bootstrap`. See [Choosing a size](./sizing.md). |
 | `--ha` | High availability — see below. Needs at least **3 schedulable nodes**. |
 | `--no-tls` | With `--compact`: install no cert-manager, and therefore no database backups. `--compact --no-tls=false` keeps both. Refused without `--compact` — use `dcctl bootstrap --no-tls` to serve an instance over plain HTTP. |
 | `--no-monitoring` | Skip the monitoring stack (Prometheus and Grafana). |

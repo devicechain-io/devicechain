@@ -89,7 +89,7 @@ func TestConfiguredInboundReadersHoldThatManyPullsAtTheBroker(t *testing.T) {
 			nmgr.MeasureBackpressureForTesting(t, streams.ResolvedEvents)
 			require.NoError(t, nmgr.Backpressure(streams.ResolvedEvents), "precondition: the downstream gate is open")
 			require.Len(t, InboundEventsReaders, tc.want, "inbound readers built")
-			iproc := newInboundEventsProcessor()
+			iproc := builtInboundProcessor(t)
 			require.NoError(t, iproc.Initialize(context.Background()))
 			require.NoError(t, iproc.Start(context.Background()))
 
@@ -184,7 +184,7 @@ func TestConfiguredInboundReadersAlsoHoldThatManyPullsOnTheUplinkDurable(t *test
 			require.NoError(t, nmgr.Backpressure(streams.ResolvedEvents), "precondition: the downstream gate is open")
 			require.Len(t, InboundEventsReaders, tc.want, "inbound readers built")
 			require.Len(t, IntegrationUplinkReaders, tc.want, "uplink readers built")
-			iproc := newInboundEventsProcessor()
+			iproc := builtInboundProcessor(t)
 			require.NoError(t, iproc.Initialize(context.Background()))
 			require.NoError(t, iproc.Start(context.Background()))
 

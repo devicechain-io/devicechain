@@ -182,3 +182,24 @@ func TestALazyBucketRetriesItsOpenUntilItWorks(t *testing.T) {
 	require.NoError(t, Sync(context.Background(), src, lazy))
 	require.Equal(t, 0, opens, "an opened bucket is kept")
 }
+
+// A changed P found on a PERIODIC pass fails the pass (so the pass metric and its alert see it),
+// keeps the sentinel, and is reported through the fatal hook. It does not stop the process: see
+// IsFatal for why only the start does. A transient failure is not reported that way.
+func TestPeriodicPassReportsAChangedPLoudly(t *testing.T) {
+	var reported []error
+	onFatal := func(err error) { reported = append(reported, err) }
+
+	b := newBucket()
+	require.NoError(t, partition.Publish(b, partition.NewTable(partition.DefaultP*2)))
+	err := mirrorPass(&source{table: newTable()}, b, onFatal)(context.Background())
+	require.Error(t, err)
+	require.True(t, IsFatal(err))
+	require.Len(t, reported, 1)
+	require.True(t, IsFatal(reported[0]))
+
+	reported = nil
+	err = mirrorPass(&source{err: errors.New("db away")}, newBucket(), onFatal)(context.Background())
+	require.Error(t, err)
+	require.Empty(t, reported)
+}
