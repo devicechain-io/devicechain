@@ -418,3 +418,40 @@ func TestPreviewCancellationStillFails(t *testing.T) {
 		t.Fatal("a cancelled preview must return the error")
 	}
 }
+
+// withAppendTime stamps the broker append time the real replay reader sets on every message.
+func withAppendTime(m messaging.Message, at time.Time) messaging.Message {
+	m.AppendTime = at
+	return m
+}
+
+// TestPreviewFastDeviceClockDoesNotMakeOtherDevicesLate holds the replay preview to the same
+// frontier clamp the live loop applies: one device whose clock is 290 s fast, stored at base+1 s,
+// must not carry the shared frontier past a second device's on-time reading stored at base+2 s.
+// Without the clamp the second reading is refused as late and the preview answers "the rule would
+// not have fired" about a reading it never used.
+func TestPreviewFastDeviceClockDoesNotMakeOtherDevicesLate(t *testing.T) {
+	thr := 50.0
+	cr, err := rules0.Compile(rules0.Rule{
+		ID: "acme/p@1/slide", Name: "slide", Type: rules0.TypeAggregate, Mode: rules0.ModeSliding,
+		Metric: "temperature", Agg: rules0.AggMax, Op: rules0.OpGt, Threshold: &thr, Window: rules0.Duration(10 * time.Second),
+	}, rules0.Limits{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	reg := runtime.NewRuleRegistry([]runtime.ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: cr}})
+	op := &fakeOpener{msgs: []messaging.Message{
+		withAppendTime(msg(t, 1, "acme", "fast", "p@1", "temperature", "10", base.Add(290*time.Second)), base.Add(time.Second)),
+		withAppendTime(msg(t, 2, "acme", "ontime", "p@1", "temperature", "90", base.Add(2*time.Second)), base.Add(2*time.Second)),
+	}}
+	res, err := Run(context.Background(), op, "resolved-events", reg, "acme", "p@1", window(), 0, 0, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Degraded != "" {
+		t.Errorf("the on-time reading was refused as late behind a fast clock: %q", res.Degraded)
+	}
+	if len(res.Firings) != 1 || res.Firings[0].Series != "ontime" {
+		t.Fatalf("firings = %+v, want exactly one for the on-time device", res.Firings)
+	}
+}

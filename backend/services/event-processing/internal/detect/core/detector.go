@@ -31,6 +31,8 @@ type Detector interface {
 	Drain() []Detection
 	DrainLateSamples() uint64
 	Watermark() time.Time
+	// RestoredFrontier is the FrontierVersion of the snapshot the engine was restored from.
+	RestoredFrontier() int
 	LastSeq() uint64
 	HasPendingWork() bool
 	PendingTimerCount() int
