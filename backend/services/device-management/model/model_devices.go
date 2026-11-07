@@ -134,8 +134,8 @@ func (DeviceType) DefaultOrder() string {
 // Search criteria for locating device types.
 type DeviceTypeSearchCriteria struct {
 	rdb.Pagination
-	// NameContains keeps the device types whose name contains this text, ignoring case. Blank
-	// matches everything; % and _ match themselves.
+	// NameContains keeps the device types whose name or token contains this text, ignoring
+	// case. Blank matches everything; % and _ match themselves.
 	NameContains *string
 }
 
@@ -351,8 +351,8 @@ func (Device) DefaultOrder() string {
 type DeviceSearchCriteria struct {
 	rdb.Pagination
 	DeviceType *string
-	// NameContains keeps the devices whose name contains this text, ignoring case. Blank
-	// matches everything; % and _ match themselves.
+	// NameContains keeps the devices whose name or token contains this text, ignoring case.
+	// Blank matches everything; % and _ match themselves.
 	NameContains *string
 	// ProvisioningProfile selects the devices that hold a credential issued by the provisioning
 	// profile with this token (disabled and expired ones included). An unknown token matches

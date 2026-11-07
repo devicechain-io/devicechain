@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Layers, Search, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -122,6 +122,8 @@ export default function DevicesPage() {
     provisioningProfile !== '' || expectedProvisioningProfile !== '' || nameContains.trim() !== '' || deviceType !== '';
   // The box types freely; the URL (and so the query) follows after a pause.
   const [searchText, setSearchText] = useState(nameContains);
+  const latestParams = useRef(params);
+  latestParams.current = params;
   useEffect(() => {
     if (searchText === nameContains) return;
     const timer = setTimeout(() => {
@@ -135,9 +137,13 @@ export default function DevicesPage() {
     setSearchText(nameContains);
   }, [nameContains]);
   const setFilter = (key: typeof REGISTERED_PARAM | typeof EXPECTED_PARAM | typeof SEARCH_PARAM | typeof TYPE_PARAM, value: string) => {
-    const next = new URLSearchParams(params);
+    // The newest address, not the one this render closed over: the search box calls this after
+    // its pause, by which time another filter may have been picked, and writing the older
+    // parameters back would silently undo that pick.
+    const next = new URLSearchParams(latestParams.current);
     if (value) next.set(key, value);
     else next.delete(key);
+    latestParams.current = next;
     setParams(next, { replace: true });
     setPageNumber(1);
   };
@@ -333,7 +339,6 @@ export default function DevicesPage() {
             size="sm"
             onClick={() => {
               setParams(new URLSearchParams(), { replace: true });
-              setSearchText('');
               setPageNumber(1);
             }}
           >
