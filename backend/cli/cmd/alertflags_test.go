@@ -131,3 +131,22 @@ func TestAlertFlagFilesAreReadAndChecked(t *testing.T) {
 		}
 	}
 }
+
+// RunE settles the alert request (reads the files, validates) before anything else that can
+// fail, and upgradeOptions copies what it settled. Driven through RunE itself, stopped by a
+// refusal that comes right after the settle, so a hand-off dropped from RunE is not invisible.
+func TestUpgradeRunESettlesTheAlertRequest(t *testing.T) {
+	resetAlertFlags(t)
+	t.Cleanup(func() { upgradeResetValues, upgradeValues = false, nil })
+	if err := upgradeCmd.Flags().Set("alert-webhook", "https://hooks.example.test/x"); err != nil {
+		t.Fatal(err)
+	}
+	upgradeResetValues, upgradeValues = true, []string{"x"} // refused after the settle, before any cluster
+	err := upgradeCmd.RunE(upgradeCmd, []string{"local", "prod"})
+	if err == nil || !strings.Contains(err.Error(), "--reset-values") {
+		t.Fatalf("got %v, want the refusal that follows the settle", err)
+	}
+	if upgradeAlertRequest.Webhook != "https://hooks.example.test/x" {
+		t.Fatalf("RunE did not settle the alert request: %+v", upgradeAlertRequest)
+	}
+}

@@ -501,3 +501,33 @@ func TestTheInstallStateCarriesTheAlertRequest(t *testing.T) {
 		t.Fatalf("the install state dropped the alert request: %+v", st.AlertRouting)
 	}
 }
+
+// The precheck and the write are separate steps, so the write asks again: between them the
+// Alertmanager can have been re-pointed (an install re-applied) and a Secret nothing reads must
+// not be filled with receivers and reported as routing.
+func TestTheUpgradeWriteRefusesAnUnwiredClusterOnItsOwn(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewSimpleClientset()
+	if _, err := settleAlertRouting(ctx, c, AlertRoutingRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := applyAlertRoutingUpgrade(ctx, c, stackClient("-"), AlertRoutingRequest{Webhook: testWebhook})
+	if err == nil || !strings.Contains(err.Error(), "dcctl install") {
+		t.Fatalf("got %v, want a refusal that says to install", err)
+	}
+	s := getAlertSecret(t, c)
+	if strings.Contains(string(s.Data[alertConfigKey]), testWebhook) || s.Annotations[dcv1beta1.AnnotationAlertRouting] != "none" {
+		t.Fatal("the refused upgrade wrote into the Secret anyway")
+	}
+}
+
+// A Secret of that name that dcctl did not write may carry any annotation; it is not this
+// cluster's routing, and reading it as one would publish a claim nobody made.
+func TestAForeignSecretIsNotReadAsOurRouting(t *testing.T) {
+	c := fake.NewSimpleClientset(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: alertConfigSecretName, Namespace: monitoringNamespace,
+		Annotations: map[string]string{dcv1beta1.AnnotationAlertRouting: "webhook"}}})
+	if r, _, err := readAlertRouting(context.Background(), c); err == nil {
+		t.Fatalf("read %+v from a Secret dcctl did not write", r)
+	}
+}

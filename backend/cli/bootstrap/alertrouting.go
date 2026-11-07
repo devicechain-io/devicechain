@@ -445,9 +445,8 @@ func settleAlertRouting(ctx context.Context, typed kubernetes.Interface, req Ale
 }
 
 func applyAlertRoutingRequest(ctx context.Context, typed kubernetes.Interface, req AlertRoutingRequest) (dcv1beta1.AlertRouting, error) {
-	if req.Clear {
-		req = AlertRoutingRequest{}
-	}
+	// A clear carries no receiver (Validate refuses it beside any other --alert-* flag), so
+	// rendering it is rendering the no-receiver default: no branch is needed for it here.
 	cfg, routing, err := renderAlertmanagerConfig(req)
 	if err != nil {
 		return routing, err
