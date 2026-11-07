@@ -534,6 +534,7 @@ dcctl bootstrap local devicechain
 - **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
+- **代理重载修复无需任何操作。**配置重载不再断开由认证调用放行的设备。参见[更改代理配置不再断开已连接的设备](#v120-broker-reload)。
 - **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
 
 - **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
@@ -680,6 +681,13 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 #### 边缘代理看板与抓取作业 {#v120-edge-board-job}
 
 边缘代理看板的进程面板除选择代理外，还选择 `job="dc-edge-agent"`。`agent` 是机器上采集器的全局外部标签，因此如果采集器还抓取了机器上的其他进程（例如 node exporter），那个进程的内存、CPU、goroutine 和打开的文件就会被加进每个代理的面板。文档中的抓取配置已使用 `job_name: dc-edge-agent`，按它导入的看板无需改动。如果您给作业起了别的名字，请在采集器中改名，或把看板上五个进程与运行时查询（`process_*` 和 `go_goroutines`）改成您的作业名。请从 `backend/edge/dc-edge-agent/dashboards/edge-agent.json` 重新导入看板以应用此变更。
+
+#### 更改代理配置不再断开已连接的设备 {#v120-broker-reload}
+
+过去，更改代理配置会关闭认证调用放行的所有连接，其中包括所有用用户名认证的 MQTT 设备。代理的 `nats-server` 库把这些连接当作已不存在的用户，在任何配置重载时都会关闭它们，即使重载并未改变任何内容。设备会自行重连，但一次滚动或一次设置更改就会带来一波重连。现在代理基于包含该修复的 `nats-server` 构建，重载会应用新配置并保持这些连接。
+
+- **无需任何操作。**只要升级改变了代理的镜像或配置，`dcctl upgrade` 仍会滚动代理；滚动会重启 pod 并像以前一样断开其设备。变化的是不重启的重载，例如仅更改设置。
+- **续期的 TLS 证书**行为不变：它会在不重载的情况下应用于新连接。
 
 #### 本版本的其他变更 {#v120-other-changes}
 
@@ -906,7 +914,7 @@ dcctl upgrade   <provider> <instance> --broker-max-connections N          # 可�
 #### 已知问题 {#v110-known-issues}
 
 - **失败即关闭的 MQTT 确认默认关闭，** 与 `v1.0.0` 相同。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)页面给出了关闭和开启时的实测限制。
-- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
+- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。 **已在 `v1.2.0` 中修复：**参见[更改代理配置不再断开已连接的设备](#v120-broker-reload)。
 
 ### v1.0.0：首个稳定版本，数据库故障时事件被保留，Traefik 成为默认入口 {#v100-upgrade}
 

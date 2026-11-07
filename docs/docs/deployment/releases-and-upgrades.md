@@ -778,6 +778,7 @@ What needs action:
 - **If you chart the edge agents with the shipped board, scrape them under the job name `dc-edge-agent`.** The board's process panels (memory, CPU, goroutines, open files) now select that job, so another job on the same box no longer adds its own process series to an agent's panels. A different job name shows those panels empty. See [Edge agent board and the scrape job](#v120-edge-board-job).
 - **`dcctl sim create` now refuses an existing tier that does not state a limit it was asked to hold.** With `--tier` naming a tier that already exists, `dcctl` only raises limits that are below what the scenario or `--tier-config` names, and it cannot see a default that the tier inherits. Until now a limit the tier left out was read as 0 and set to the floor, which could replace a larger value the tier inherited; the tier is now refused, naming the missing key. Add the key to the tier (the `updateTenantTier` mutation on the user-management admin API), or choose a tier that states it. A `dcctl sim create --tier-config` run on `v1.1` could write such keys into an existing tier, as the `v1.1.0` notes describe; from this release it does not. A `null` limit in `--tier-config` is refused too; it used to be read as 0. See [Other changes](#v120-other-changes).
 - **Know that `dcctl upgrade` can now fail with `upgrade incomplete` after the broker rolls.** Once the broker servers are ready, the upgrade re-reads their volume claims for up to two minutes and fails if one still has less capacity than it requests, because the broker's file-store ceiling follows the request. Finish or revert the volume resize (`kubectl -n <namespace> describe pvc`) and run `dcctl upgrade` again. See [Other changes](#v120-other-changes).
+- **Nothing needs doing for the broker reload fix.** A configuration reload no longer disconnects the devices the auth callout admitted. See [A change to the broker's configuration keeps connected devices](#v120-broker-reload).
 - **Know that `POST /{instanceId}/{tenant}/events` can now answer `500`.** An event dropped while its message was built (a credential it presented could not be sealed, or the event could not be encoded) used to be answered `202` and stored nowhere. It is now answered `500`, is not stored, and a retry fails the same way, so a client that treated every non-`202` as retryable should stop retrying a `500`. See [HTTP ingest no longer answers 202 for a dropped event](#v120-http-build-dropped).
 
 - **Nothing needs doing for the new `--size` option.** `dcctl bootstrap --size perf-12k` applies a measured high-throughput sizing, and `dcctl install --size compact` is the same as `--compact`, which stays. An instance that names no size renders exactly what it did before. See [Size presets](#v120-size-presets).
@@ -924,6 +925,13 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 #### Edge agent board and the scrape job {#v120-edge-board-job}
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
+
+#### A change to the broker's configuration keeps connected devices {#v120-broker-reload}
+
+A change to the broker's configuration used to close every connection the auth callout had admitted, which includes every MQTT device that authenticates with a username. The broker's `nats-server` library treated those connections as belonging to users that no longer existed, and closed them on any configuration reload, even one that changed nothing. Devices reconnected on their own, but a rollout or a settings change meant a burst of reconnects. The broker now builds against a `nats-server` that carries the fix, so a reload applies the new configuration and leaves those connections open.
+
+- **Nothing needs doing.** `dcctl upgrade` still rolls the broker for any upgrade that changes its image or configuration; a roll restarts the pods and disconnects their devices as before. What changes is a reload without a restart, such as a settings-only change.
+- **A renewed TLS certificate** keeps its earlier behaviour: it is applied to new connections without a reload.
 
 #### Other changes in this release {#v120-other-changes}
 
@@ -1150,7 +1158,7 @@ Two migrations append a table each (`failed_event_records` in the event store an
 #### Known issues {#v110-known-issues}
 
 - **Fail-closed MQTT acknowledgement is off by default,** as in `v1.0.0`. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) page states the measured limits with it off and on.
-- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not. **Fixed in `v1.2.0`:** see [A change to the broker's configuration keeps connected devices](#v120-broker-reload).
 
 ### v1.0.0 — the first stable release: a database outage holds events, and Traefik is the default front end {#v100-upgrade}
 

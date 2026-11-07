@@ -21,8 +21,11 @@ import (
 // is by definition not a configured user, so EVERY callout-admitted session with a username (all
 // MQTT devices) is closed by ANY reload, including one whose config is byte-identical. Measured in
 // TestTLSRotationReloadKeepsMQTTSessions: 20 of 20 sessions lost, with no TLS option involved.
-// Fixed upstream on main (nats-io/nats-server #8759, "Config reload disconnects clients authorized
-// by auth callout", October 2026) and in no release yet: v2.15.2 does not carry it.
+// Fixed upstream (nats-io/nats-server #8759, "Config reload disconnects clients authorized by auth
+// callout") in v2.15.3; this module builds against that fix, so a full reload now keeps callout
+// sessions too (TestFullReloadKeepsCalloutSessions, TestConfigChangeKeepsCalloutSessions). The hot
+// path below remains because it still avoids a needless reload for the common case, and applies the
+// renewed certificate with no work on the server; it is no longer what protects the sessions.
 //
 // WHAT THIS DOES INSTEAD. When the only thing that moved is key material (same config digest, same
 // CA pools), the broker never calls ReloadOptions. The TLS configs the server is started with are
@@ -46,8 +49,7 @@ import (
 // STALE after a hot swap (monitor.go). The served certificate's expiry is
 // dc_broker_mqtt_tls_cert_not_after_seconds; use that, not varz, to watch for an expiring leaf.
 //
-// DROP THIS FILE when the library carries the upstream fix: TestFullReloadDropsCalloutSessions is
-// the canary, and fails the day a bump makes the full reload keep sessions.
+// The reasoning above describes v2.15.2 and earlier. Do not pin the module below v2.15.3.
 
 // swappable is one listener's TLS config, replaceable while the server runs.
 type swappable struct {
