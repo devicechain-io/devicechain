@@ -84,8 +84,15 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// This service's whole HTTP surface, registered in the INITIALIZE phase. See
 	// registerHttpRoutes for why it is here and not where the server starts.
+	// The experimental tools are off unless the configuration turns them on; a scenario
+	// directory that cannot be loaded stops the service here rather than serving a
+	// half-built arena.
+	experimental, err := Configuration.ArenaOptions()
+	if err != nil {
+		return err
+	}
 	registerHttpRoutes(Configuration.ResourceUrl, Configuration.IssuerUrl, validator,
-		server.NewGraphQLClient(), Configuration.Limits())
+		server.NewGraphQLClient(), Configuration.Limits(), experimental)
 	return initializeService(ctx)
 }
 
@@ -133,8 +140,8 @@ func initializeService(ctx context.Context) error {
 // exists to prevent. The uncovered remainder is one line — that the initializer calls
 // this — because the initializer needs configuration and a JWKS endpoint.
 func registerHttpRoutes(resourceURL, issuerURL string, validator func() *coreauth.Validator,
-	gql *server.GraphQLClient, limits server.Limits) {
-	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator, gql, limits)
+	gql *server.GraphQLClient, limits server.Limits, experimental server.Options) {
+	server.RoutesWith(Microservice.Mux(), resourceURL, issuerURL, validator, gql, limits, experimental)
 }
 
 // afterMicroserviceStarted starts the HTTP server, which core/service builds fresh on each

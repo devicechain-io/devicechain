@@ -1,0 +1,57 @@
+{
+  "name": "tower-hvac",
+  "title": "Office tower HVAC",
+  "suite": "hvac-certification",
+  "recording": "towerpulse-fixture.json",
+  "controlKind": "vav",
+  "rule": {
+    "key": "zone-hot",
+    "severity": "MAJOR",
+    "metric": "temp_c",
+    "windowSec": 120,
+    "above": 26,
+    "whileAbove": 0
+  },
+  "commandBudget": 4,
+  "commands": [
+    {
+      "deviceKind": "vav",
+      "key": "set-setpoint",
+      "name": "Set setpoint",
+      "parameterSchema": [
+        {"name": "celsius", "kind": "SCALAR", "dataType": "DOUBLE", "unit": "C", "required": true, "minValue": 18, "maxValue": 28}
+      ]
+    },
+    {
+      "deviceKind": "vav",
+      "key": "boost-cooling",
+      "name": "Boost cooling",
+      "parameterSchema": [
+        {"name": "minutes", "kind": "SCALAR", "dataType": "INT", "unit": "min", "required": true, "minValue": 1, "maxValue": 120}
+      ]
+    }
+  ],
+  "episodes": [
+    {
+      "id": "f4-meeting",
+      "title": "A meeting fills a fourth-floor zone",
+      "brief": "24 VAV zone controllers, one of which is about to take on heat. Keep every zone out of the zone-hot rule for as long as you can, spend as few commands as you can, and stay inside the typed bounds.",
+      "t0Sec": 62,
+      "durationSec": 540
+    },
+    {
+      "id": "inherited-alarm",
+      "title": "You inherit a zone-hot alarm",
+      "brief": "A zone-hot alarm is already open when you arrive. Bring the building back under the line quickly.",
+      "t0Sec": 332,
+      "durationSec": 240
+    },
+    {
+      "id": "quiet-ramp",
+      "title": "A warm-up that never becomes an alarm",
+      "brief": "One zone is warming, but on the shipped rule it does not alarm inside this window. Restraint is part of the test: every command spent counts against you.",
+      "t0Sec": 62,
+      "durationSec": 240
+    }
+  ]
+}
