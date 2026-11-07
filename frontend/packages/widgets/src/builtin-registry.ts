@@ -28,6 +28,7 @@ import {
   levelGaugeWidget,
   linearGaugeWidget,
   progressRingWidget,
+  scadaSymbolWidget,
   signalBarsWidget,
   statusLightWidget,
 } from './widgets/level-lazy';
@@ -65,6 +66,7 @@ export const builtinWidgetDefinitions = [
   deviceStatusWidget,
   onlineDoughnutWidget,
   historyTableWidget,
+  scadaSymbolWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent

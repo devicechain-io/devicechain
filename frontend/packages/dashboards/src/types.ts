@@ -186,6 +186,7 @@ export const WIDGET_TYPES = [
   'device-status',
   'online-doughnut',
   'history-table',
+  'scada-symbol',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];

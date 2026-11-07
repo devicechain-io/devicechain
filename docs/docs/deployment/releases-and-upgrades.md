@@ -956,6 +956,12 @@ Nothing here needs action beyond the two `dcctl` items in the list above. Each i
 - **Infrastructure.** With `nats_mqtt_capable_users` unset, the OpenTofu broker module no longer writes a null `allowed_connection_types` that the broker refused; the certificate healer for the event store's backups watches the operator's configured namespace.
 - **`dcctl upgrade` accepts `--yes` (`-y`), as `dcctl install` and `dcctl bootstrap` do, and finds an escrow written with `--escrow-file`.** `--yes` assumes yes for prompts; an upgrade asks none, so it changes nothing, and a script can now pass it to all three. `dcctl bootstrap --escrow-file` records where the artifact was written, and the upgrade's root-key escrow check looks there, so it no longer reports "no escrow" for an instance whose artifact is at a custom path. For an instance bootstrapped earlier, give the upgrade `--escrow-file` once; it records the path.
 
+#### A scada symbol widget {#v120-widgets}
+
+A new **Scada symbol** widget is in the **Add widget** menu under Telemetry. It draws a pump, valve, tank, motor, fan, pipe segment, sensor, breaker or light in the state one measurement puts it in: running, stopped or faulted, with a pipe's flow direction, in light and dark. It adds to the existing widgets and changes none of them, and a dashboard that does not use it is unaffected.
+
+Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widget) for its options.
+
 #### Schema changes and going back {#v120-going-back}
 
 Six migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.

@@ -712,6 +712,12 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 - **基础设施。**未设置 `nats_mqtt_capable_users` 时，OpenTofu 的 broker 模块不再写出会被 broker 拒绝的空 `allowed_connection_types`；事件库备份的证书修复器会监视运营商配置的命名空间。
 - **`dcctl upgrade` 现在接受 `--yes`（`-y`），与 `dcctl install` 和 `dcctl bootstrap` 一致，并能找到用 `--escrow-file` 写出的托管文件。**`--yes` 表示对提示一律回答是；升级不会提问，所以它不改变任何行为，脚本现在可以把它同时传给这三个命令。`dcctl bootstrap --escrow-file` 会记录托管文件的写入位置，升级的根密钥托管检查会到那里查找，因此对于托管文件位于自定义路径的实例，不再报告“没有托管”。对于更早创建的实例，请给升级传一次 `--escrow-file`，它会记录该路径。
 
+#### SCADA 符号组件 {#v120-widgets}
+
+**Add widget** 菜单的 Telemetry 分组新增了 **Scada symbol**（SCADA 符号）组件。它按一个测量值决定的状态绘制泵、阀门、储罐、电机、风扇、管段、传感器、断路器或指示灯：运行、停止或故障，管段还会显示流向，并支持亮色和暗色模式。它是对现有组件的补充，不改变任何现有组件，不使用它的仪表板不受影响。
+
+无需任何操作。其选项见[仪表板](../user-guide/dashboards.md#adding-a-widget)。
+
 #### 架构变更与回退 {#v120-going-back}
 
 六个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。

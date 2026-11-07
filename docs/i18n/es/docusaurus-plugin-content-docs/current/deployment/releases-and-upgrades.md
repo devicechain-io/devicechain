@@ -1001,6 +1001,12 @@ Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista an
 - **Infraestructura.** Con `nats_mqtt_capable_users` sin definir, el módulo OpenTofu del broker ya no escribe un `allowed_connection_types` nulo que el broker rechazaba; el reparador de certificados de las copias de seguridad del almacén de eventos vigila el espacio de nombres configurado del operador.
 - **`dcctl upgrade` acepta `--yes` (`-y`), igual que `dcctl install` y `dcctl bootstrap`, y encuentra un escrow escrito con `--escrow-file`.** `--yes` da por respondidas con sí las preguntas; una actualización no hace ninguna, así que no cambia nada, y un script ya puede pasarlo a los tres comandos. `dcctl bootstrap --escrow-file` registra dónde se escribió el artefacto y la comprobación del escrow de la clave raíz de la actualización mira allí, de modo que ya no informa de «sin escrow» para una instancia cuyo artefacto está en una ruta personalizada. Para una instancia creada antes, pase `--escrow-file` una vez a la actualización; ella registra la ruta.
 
+#### Un widget de símbolo SCADA {#v120-widgets}
+
+Un nuevo widget **Símbolo SCADA** está en el menú **Añadir widget**, en Telemetría. Dibuja una bomba, válvula, depósito, motor, ventilador, tramo de tubería, sensor, interruptor o luz en el estado que le da una medición: en marcha, detenido o con falla, con el sentido del flujo en una tubería, en modo claro y oscuro. Se suma a los widgets existentes sin cambiar ninguno, y un tablero que no lo use no se ve afectado.
+
+No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md#adding-a-widget) para sus opciones.
+
 #### Cambios de esquema y cómo volver atrás {#v120-going-back}
 
 Seis migraciones añaden lo siguiente. Toda columna nueva admite nulos, así que un servicio de `v1.1.0` que se ejecute con el esquema nuevo escribe filas que sigue pudiendo almacenar.
