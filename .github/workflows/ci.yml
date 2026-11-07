@@ -825,6 +825,21 @@ jobs:
       - name: no bcrypt compare outside the credential primitive
         run: hack/check-credential-compare.sh
 
+      # Two red lines on what an AI agent can be made to do, enforced as parsed, tree-wide
+      # properties. Declarative-only: no tenant code runtime (a script interpreter or a
+      # WebAssembly runtime) may appear in any go.mod, go.sum, go.work or Go import, and the
+      # allowance list is empty. Constant remediation: the text an error gives an agent is a
+      # string literal or a constant, never formatted from runtime data. The self-test
+      # plants a goja import, requirement, replace target and checksum line, the other
+      # runtimes, and a Sprintf, a concatenation and a variable in a remediation, and requires
+      # each to be named by file and line; it also requires clean shapes to pass and unusable
+      # inputs (an empty tree, a file that does not parse) to exit 2.
+      - name: red-lines guard self-test
+        run: hack/check-redlines.sh --self-test
+
+      - name: no tenant code runtime, constant agent remediation text
+        run: hack/check-redlines.sh
+
       # Proves this checker can fail too, and does it BEFORE the green run below is
       # read as evidence. It plants 21 evasion shapes across all three phase rules —
       # each one a module that really type-checks against a miniature framework of
