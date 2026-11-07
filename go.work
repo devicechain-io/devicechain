@@ -70,6 +70,7 @@ use (
 	./backend/tools/phaseguard
 	./backend/tools/promqlguard
 	./backend/tools/rdbguard
+	./backend/tools/redlines
 	./backend/tools/subconfirm
 	./deploy
 	./examples/ota-device
