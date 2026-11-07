@@ -16,10 +16,11 @@ import { FormField } from '@/components/ui/form-field';
 import { TokenField } from '@/components/ui/token-field';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
+import { AsyncCombobox } from '@/components/ui/async-combobox';
+import { resolveDeviceType, searchDeviceTypes } from '@/lib/api/pickers';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage } from '@/routes/common';
-import { listDeviceTypes } from '@/lib/api/device-management';
 import { listTrustAnchors } from '@/lib/api/trust-anchors';
 import {
   PROVISIONING_STRATEGIES,
@@ -62,20 +63,6 @@ export function ProvisioningProfileForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<ProfileDraft>) => setDraft((d) => ({ ...d, ...patch }));
-
-  const { data: types } = useQuery(
-    () => listDeviceTypes({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results),
-    [],
-  );
-  const typeOptions: ComboboxOption[] = (types ?? []).map((ty) => ({
-    value: ty.token,
-    label: ty.name || ty.token,
-    description: ty.name ? ty.token : undefined,
-  }));
-  // A profile whose type is not in the first page still shows it.
-  if (entity && !typeOptions.some((o) => o.value === entity.deviceType.token)) {
-    typeOptions.push({ value: entity.deviceType.token, label: entity.deviceType.name || entity.deviceType.token });
-  }
 
   // The anchors a certificate profile can name. Only enabled ones are offered (the server refuses
   // the rest), plus the one the profile already names so the field never reads as empty.
@@ -211,11 +198,12 @@ export function ProvisioningProfileForm({
         htmlFor="pp-type"
         description={t('provisioning:typeHelp')}
       >
-        <Combobox
+        <AsyncCombobox
           id="pp-type"
           value={draft.deviceTypeToken}
           onChange={(v) => set({ deviceTypeToken: v })}
-          options={typeOptions}
+          search={searchDeviceTypes}
+          resolve={resolveDeviceType}
           placeholder={t('provisioning:typeSelect')}
           disabled={disabled}
           allowClear={false}

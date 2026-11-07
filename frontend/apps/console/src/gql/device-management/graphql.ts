@@ -678,6 +678,11 @@ export type DeviceSearchCriteria = {
    * token matches nothing.
    */
   expectedProvisioningProfile?: string | null | undefined;
+  /**
+   * Return only devices whose name or token contains this text, ignoring case (a name is
+   * optional, so an unnamed device is found by its token). Blank matches all.
+   */
+  nameContains?: string | null | undefined;
   /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
@@ -790,6 +795,11 @@ export type DeviceTypeCreateRequest = {
 
 /** Criteria for searching device types. Results are newest first. */
 export type DeviceTypeSearchCriteria = {
+  /**
+   * Return only device types whose name or token contains this text, ignoring case (a name is
+   * optional, so an unnamed type is found by its token). Blank matches all.
+   */
+  nameContains?: string | null | undefined;
   /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */

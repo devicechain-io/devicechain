@@ -2194,6 +2194,11 @@ input DeviceTypeSearchCriteria {
     pageNumber: Int!
     """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """
+    Return only device types whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed type is found by its token). Blank matches all.
+    """
+    nameContains: String
 }
 
 """One page of device types matching a search."""
@@ -2584,6 +2589,11 @@ input DeviceSearchCriteria {
     pageSize: Int!
     """Return only devices of the device type with this token. An unknown token matches nothing."""
     deviceType: String
+    """
+    Return only devices whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed device is found by its token). Blank matches all.
+    """
+    nameContains: String
     """
     Return only devices that hold a credential issued by the provisioning profile with this
     token, revoked ones included. An unknown token matches nothing.
