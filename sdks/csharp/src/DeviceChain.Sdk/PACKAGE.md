@@ -32,7 +32,7 @@ dotnet add package DeviceChain.Sdk
 ## Quick start
 
 ```csharp
-await using var client = new DeviceChainClient(new Uri("https://demo.devicechain.io"));
+await using var client = new DeviceChainClient(new Uri("https://devicechain.example.com"));
 
 await client.LoginAsync("me@example.com", "…");
 await client.SelectTenantAsync("acme");
@@ -55,7 +55,7 @@ await foreach (var evt in client.Subscriptions(Area.EventManagement).SubscribeAs
 // Emit device-plane telemetry. The device-plane ingress is a SEPARATE listener from
 // the GraphQL origin, so its origin is passed explicitly:
 var publisher = client.DevicePublisher(
-    ingressOrigin: new Uri("https://ingress.demo.devicechain.io"),
+    ingressOrigin: new Uri("https://ingress.devicechain.example.com"),
     instanceId: "dc", tenant: "acme");
 
 await publisher.EmitMeasurementsAsync("car-42", credentialId,

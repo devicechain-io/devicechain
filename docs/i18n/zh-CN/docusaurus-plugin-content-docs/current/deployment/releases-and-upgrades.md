@@ -695,6 +695,10 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 
 边缘代理看板的进程面板除选择代理外，还选择 `job="dc-edge-agent"`。`agent` 是机器上采集器的全局外部标签，因此如果采集器还抓取了机器上的其他进程（例如 node exporter），那个进程的内存、CPU、goroutine 和打开的文件就会被加进每个代理的面板。文档中的抓取配置已使用 `job_name: dc-edge-agent`，按它导入的看板无需改动。如果您给作业起了别的名字，请在采集器中改名，或把看板上五个进程与运行时查询（`process_*` 和 `go_goroutines`）改成您的作业名。请从 `backend/edge/dc-edge-agent/dashboards/edge-agent.json` 重新导入看板以应用此变更。
 
+#### 文档、示例主机与智能体说明 {#v120-docs-hosts}
+
+无需任何操作。.NET 和 Unity SDK 的文档以及 `DeviceChainClient.Origin` 的文档注释原先用 `demo.devicechain.io` 作为示例主机，该主机无法解析；现在改用 `devicechain.example.com`。SDK 没有默认主机，因此行为不变。新增的[设备 API 一览](../reference/device-apis.md)页面为设备接入平台的每种方式给出一条命令，`docs/static/llms.txt` 不再称该项目为预发布版本，`@devicechain/client`、`@devicechain/widget-sdk` 两个包和 .NET SDK 也各自带有一份面向编码智能体的 `AGENTS.md`。
+
 #### 本版本的其他变更 {#v120-other-changes}
 
 除上面列表中的两项 `dcctl` 变更外，这里的内容都不需要你采取行动。每一项都是对已发布功能的修复或补充。
