@@ -960,3 +960,21 @@ func ReaderDurableName(instanceId, functionalArea, suffix string) string {
 	}
 	return DurableName(instanceId, functionalArea, suffix)
 }
+
+// ParseGatewayChildSubject recovers who a gateway-shape subject carrying leaf speaks for:
+// the gateway whose namespace it is in and the child device it names. It is the downlink
+// counterpart of ParseDeviceEventsSubject (which is fixed to the events leaf): a gateway
+// reads the commands and desired leaves addressed to its children, and the child must come
+// from the SUBJECT, which the broker's grant confined to this gateway, never from a body.
+// ok is false for any other shape, an empty token, or a different leaf.
+func ParseGatewayChildSubject(subject, leaf string) (gateway, child string, ok bool) {
+	parts := strings.Split(subject, ".")
+	if len(parts) != GatewaySegmentCount {
+		return "", "", false
+	}
+	if parts[GatewayGatewaysIndex] != SegmentGateways || parts[GatewayDevicesIndex] != SegmentDevices ||
+		parts[GatewayLeafIndex] != leaf || parts[GatewayTokenIndex] == "" || parts[GatewayChildIndex] == "" {
+		return "", "", false
+	}
+	return parts[GatewayTokenIndex], parts[GatewayChildIndex], true
+}
