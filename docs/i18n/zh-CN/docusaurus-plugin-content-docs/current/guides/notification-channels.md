@@ -5,7 +5,7 @@ title: 配置通知渠道
 
 # 配置通知渠道 {#configuring-notification-channels}
 
-通知将已触发的**告警**送到最后一环——人员。检测规则动作触发告警后，每租户**策略**按严重程度，将它路由到配置的**渠道**：SMTP 电子邮件或 webhook。策略还提供节流，以及未确认告警的**升级通知**。
+通知将已触发的**告警**送到最后一环——人员。检测规则动作触发告警后，每租户**策略**按严重程度，将它路由到配置的**渠道**：SMTP 电子邮件、webhook，或原生的 Slack、Microsoft Teams、PagerDuty 渠道。策略还提供节流，以及未确认告警的**升级通知**。
 
 机器到人的路径有意与机器到机器的**[出站连接器](../concepts/outbound-connectors.md)**分开。连接器向*系统*传递载荷；通知通过收件人和按严重程度路由，向*人员*传递警报。告警如何触发见[事件处理与告警](../concepts/event-processing.md)。
 
@@ -17,7 +17,7 @@ title: 配置通知渠道
 
 ## 渠道 {#channels}
 
-**渠道**是租户配置的投递端点：某种渠道**类型**的实例，加上连接配置。查询 `notificationChannelTypes` 可获取平台定义的类型。目前 `smtp` 和 `webhook` 提供可用适配器，各类型的 `available` 标志说明适配器是否已提供。
+**渠道**是租户配置的投递端点：某种渠道**类型**的实例，加上连接配置。查询 `notificationChannelTypes` 可获取平台定义的类型。目前 `smtp`、`webhook`、`slack`、`teams` 和 `pagerduty` 提供可用适配器，各类型的 `available` 标志说明适配器是否已提供。
 
 渠道将设置分成两部分：
 
@@ -81,7 +81,81 @@ mutation {
 }
 ```
 
-Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。
+Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 [Slack 渠道](#create-a-slack-channel)会为你排版消息，是更好的选择。
+
+### 原生 Slack、Teams 和 PagerDuty 渠道 {#native-channels}
+
+这三种原生类型使用各服务自己的格式，而不是通用的 JSON 正文。它们共享三条规则：
+
+- **凭据就是 `secret`。** Slack 和 Teams 的凭据是 webhook URL（它本身就是凭据，因此加密存储且不会返回，不放在 `config` 中）；PagerDuty 的凭据是 Events API v2 路由密钥。没有 `auth` 设置。没有密钥的原生渠道在保存时被拒绝；向没有密钥的渠道投递，会在首次尝试时被拒绝且不重试，计入 `reason="credential"`。
+- **`config` 可选且严格。** 保存渠道时，未知键会被拒绝，因此拼错的设置不会被悄悄忽略。`linkBaseUrl` 是控制台的地址；设置后，消息会带有指向 `<linkBaseUrl>/alarms` 的 **Open alarms** 按钮或链接。
+- **投递经过与 webhook 相同的出站防护。** 指向私有、环回或云元数据地址的目标会被拒绝且不重试（`reason="egress"`），实例的出站放行规则与 webhook 完全一样地生效。规则的 `recipients` 会被忽略：消息发往何处由 webhook 或路由密钥决定。
+
+每条消息都会写明告警、严重程度、状态、来源设备、触发它的指标和值，以及触发时间。告警处于打开且未确认状态时，会提示在控制台中确认告警以停止后续通知；已清除或已确认的告警不显示该提示。
+
+### 创建 Slack 渠道 {#create-a-slack-channel}
+
+Slack 渠道向 Slack 入站 webhook URL 发布 Block Kit 消息：标题、告警字段网格、确认提示，以及可选的 **Open alarms** 按钮。消息的颜色条随严重程度变化（`CRITICAL` 为红色，`MAJOR` 为橙色，`MINOR` 和 `WARNING` 为琥珀色，`INDETERMINATE` 为灰色），告警清除时变为绿色，被确认时变为蓝色。来自告警的文本会被转义，因此无法注入 Slack 提及或链接。
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-slack",
+    name: "运维 Slack",
+    channelType: "slack",
+    config: "{\"linkBaseUrl\":\"https://console.example.com\"}",
+    secret: "https://hooks.slack.com/services/T000/B000/XXXXXXXX",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+密钥必须是 `https` URL。
+
+### 创建 Microsoft Teams 渠道 {#create-a-microsoft-teams-channel}
+
+Teams 渠道向 Teams **Workflows**（Power Automate）流程的 webhook URL 发布 Adaptive Card；该流程使用 *When a Teams webhook request is received* 触发器，并把卡片发布到聊天或频道。已停用的 Office 365 连接器 webhook 不受支持。卡片包含与 Slack 消息相同的信息，标题颜色随严重程度变化；设置了 `linkBaseUrl` 时还带有 **Open alarms** 操作。
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-teams",
+    channelType: "teams",
+    secret: "https://prod-00.westus.logic.azure.com:443/workflows/...",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### 创建 PagerDuty 渠道 {#create-a-pagerduty-channel}
+
+PagerDuty 渠道发送 Events API v2 事件，并把告警的生命周期映射到事件（incident）的生命周期。每个事件的 `dedup_key` 都是告警的令牌，因此一个告警的整个生命周期对应一个 incident：
+
+| 告警事件 | PagerDuty 动作 |
+| --- | --- |
+| 触发、升级、降级，或被策略的升级通知再次通知 | `trigger`（对已打开 incident 的重复事件会更新它，而不是再开一个） |
+| 已确认 | `acknowledge` |
+| 已清除 | `resolve` |
+
+告警严重程度映射到 PagerDuty 的严重程度：`CRITICAL` 对应 `critical`，`MAJOR` 对应 `error`，`MINOR` 和 `WARNING` 对应 `warning`，其他对应 `info`。要让策略能解决 incident，请让清除和确认这两种转换与触发走同一个渠道。
+
+`config` 接受 `region`（`us` 为默认，`eu` 选择 `events.eu.pagerduty.com`）、`source`（事件来源，默认 `devicechain`）和 `linkBaseUrl`。
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-pagerduty",
+    channelType: "pagerduty",
+    config: "{\"region\":\"eu\",\"source\":\"plant-3\"}",
+    secret: "<routing key>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### 在控制台中 {#channels-in-the-console}
+
+侧边栏中**通知策略**旁边的**通知渠道**页面，可用针对每种类型的表单列出、创建、编辑和删除渠道。凭据输入框只写：已有渠道的输入框会提示已存储凭据，留空则保留它。
 
 ## 策略 {#policies}
 
