@@ -92,7 +92,7 @@ func protoBuilder(mode protoMode, k int) engineBuilder {
 			}
 			parts := make([]snapshot, k)
 			for i := range parts {
-				parts[i] = snapshot{Watermark: s.Watermark, LastSeq: s.LastSeq}
+				parts[i] = snapshot{Frontier: s.Frontier, Watermark: s.Watermark, LastSeq: s.LastSeq}
 			}
 			sh := func(r, se string) int { return protoHash(r, se) % k }
 			for _, x := range s.Active {
@@ -371,6 +371,9 @@ func (p *protoSharded) Snapshot() ([]byte, error) {
 		var x snapshot
 		if err := json.Unmarshal(b, &x); err != nil {
 			return nil, err
+		}
+		if i == 0 {
+			m.Frontier = x.Frontier
 		}
 		if i == 0 || x.Watermark.After(m.Watermark) {
 			m.Watermark = x.Watermark
