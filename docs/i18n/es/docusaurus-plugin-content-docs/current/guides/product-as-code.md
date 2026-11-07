@@ -205,8 +205,12 @@ eliminación pueda reutilizarse.
   En un perfil también publica cuando las métricas, los comandos, el decodificador o la declaración de
   configuración de la versión activa difieren de los del paquete. De una versión publicada no se
   pueden volver a leer sus reglas ni su declaración de posición, así que un cambio de regla o de
-  posición hecho fuera de `apply` no provoca por sí solo una publicación. `--no-publish` converge los
-  borradores y se detiene. Las versiones publicadas llevan la etiqueta `dcctl product apply`.
+  posición hecho fuera de `apply` no provoca por sí solo una publicación. Un conector se publica
+  cuando su borrador se escribió después de su última versión, y un panel cuando su borrador difiere
+  de su versión publicada. `--no-publish` converge los borradores y se detiene, y `--republish`
+  publica todos los perfiles, conectores y paneles del paquete aunque no parezca haber cambiado
+  nada: úsalo para terminar una publicación que se omitió o falló después de escribir el borrador.
+  Las versiones publicadas llevan la etiqueta `dcctl product apply`.
 - **Solo lo que nombra el paquete.** Un tipo de dispositivo, perfil, integración, conector o panel
   que está en el tenant y no en el paquete se deja como está, y `plan` lo muestra como nota. La única
   excepción son las definiciones bajo un perfil que el paquete contiene, que convergen a las del

@@ -66,10 +66,12 @@ func (b *Bundle) Normalize() error {
 		canon(w+" decoder", &p.Decoder)
 		for j := range p.Metrics {
 			canon(w+" metric "+p.Metrics[j].Token+" enum", &p.Metrics[j].Enum)
+			p.Metrics[j].Enum = noEmptyEnum(p.Metrics[j].Enum)
 			canon(w+" metric "+p.Metrics[j].Token+" metadata", &p.Metrics[j].Metadata)
 		}
 		for j := range p.CalculatedMetrics {
 			canon(w+" calculated metric "+p.CalculatedMetrics[j].Token+" enum", &p.CalculatedMetrics[j].Enum)
+			p.CalculatedMetrics[j].Enum = noEmptyEnum(p.CalculatedMetrics[j].Enum)
 			canon(w+" calculated metric "+p.CalculatedMetrics[j].Token+" metadata", &p.CalculatedMetrics[j].Metadata)
 		}
 		for j := range p.Commands {
@@ -246,6 +248,15 @@ func (b *Bundle) Validate() error {
 	return errors.Join(errs...)
 }
 
+// noEmptyEnum treats an empty allowed-values list as none: the server reads it as "any value
+// is allowed" and a published version reports it as absent, so the two must compare equal.
+func noEmptyEnum(d Doc) Doc {
+	if string(d) == "[]" {
+		return nil
+	}
+	return d
+}
+
 func isObject(d Doc) bool { return len(d) > 0 && d[0] == '{' }
 
 func isStringArray(d Doc) bool {
@@ -257,18 +268,22 @@ func isStringArray(d Doc) bool {
 // other scheme is refused rather than treated as a literal, since a handle that silently
 // became a value would be exactly the leak this design prevents.
 func parseHandle(h string) (envVar string, err error) {
+	// The messages never repeat the handle: a handle is exactly where someone who has pasted a
+	// secret value would have put it, and an error is printed.
 	scheme, rest, ok := strings.Cut(h, ":")
 	if !ok || rest == "" {
-		return "", fmt.Errorf("credential handle %q is not scheme:name", h)
+		return "", fmt.Errorf("credential handle is not of the form scheme:name")
 	}
 	if scheme != "env" {
-		return "", fmt.Errorf("credential handle %q uses scheme %q, which this build does not support (only env:NAME)", h, scheme)
+		return "", fmt.Errorf("credential handle uses a scheme this build does not support (only env:NAME)")
 	}
-	if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(rest) {
-		return "", fmt.Errorf("credential handle %q: %q is not an environment variable name", h, rest)
+	if !envVarRe.MatchString(rest) {
+		return "", fmt.Errorf("credential handle env:NAME does not name an environment variable")
 	}
 	return rest, nil
 }
+
+var envVarRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Write writes the bundle to dir. An empty or absent dir is fine; a directory that already
 // holds a bundle (a product.yaml) is rewritten in place, with the files of resources that no
@@ -295,6 +310,13 @@ func (b *Bundle) Write(dir string) error {
 	case len(ents) > 0:
 		if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
 			return fmt.Errorf("%s is not empty and holds no %s: refusing to write a bundle into it", dir, ManifestFile)
+		}
+		// Check every managed directory BEFORE removing anything from any of them, so a
+		// refusal cannot leave an existing bundle half-emptied.
+		for _, d := range managedDirs {
+			if err := checkFilesOnly(filepath.Join(dir, d)); err != nil {
+				return err
+			}
 		}
 		for _, d := range managedDirs {
 			if err := removeFiles(filepath.Join(dir, d)); err != nil {
@@ -351,6 +373,23 @@ func (b *Bundle) Write(dir string) error {
 		}
 		if err := os.WriteFile(full, data, 0o644); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkFilesOnly reports whether d holds nothing but regular files (or does not exist).
+func checkFilesOnly(d string) error {
+	ents, err := os.ReadDir(d)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if e.IsDir() {
+			return fmt.Errorf("%s: unexpected directory %q in a bundle", d, e.Name())
 		}
 	}
 	return nil
@@ -481,6 +520,9 @@ func Read(dir string) (*Bundle, error) {
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&v); err != nil {
 			return err
+		}
+		if dec.More() {
+			return fmt.Errorf("unexpected content after the dashboard document")
 		}
 		b.Dashboards = append(b.Dashboards, v)
 		return check(n, v.Token, v.Kind, KindDashboard)

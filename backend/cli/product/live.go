@@ -119,7 +119,7 @@ const (
 		`connectors(criteria:$criteria){results{token name description type config hasSecret updatedAt} ` +
 		`pagination{totalRecords}}}`
 	qConnectorVersions = `query ProductConnectorVersions($token:String!){` +
-		`connectorVersions(token:$token,limit:1){version}}`
+		`connectorVersions(token:$token,limit:1){version publishedAt}}`
 
 	qDashboards = `query ProductDashboards($criteria:DashboardSearchCriteria!){` +
 		`dashboards(criteria:$criteria){results{token publishedVersion} pagination{totalRecords}}}`
@@ -172,6 +172,9 @@ type LiveConnector struct {
 	// UpdatedAt is the draft's version stamp, sent back as expectedUpdatedAt.
 	UpdatedAt string
 	Published bool
+	// PublishedAt is when the latest version was published. A draft written after it holds
+	// changes no version carries yet.
+	PublishedAt string
 }
 
 // LiveDashboard is a dashboard as the tenant holds it.
@@ -190,6 +193,8 @@ type Live struct {
 	Integrations map[string]Integration
 	Connectors   map[string]*LiveConnector
 	Dashboards   map[string]*LiveDashboard
+	// DashboardTokens is every dashboard in the tenant, whether or not its definition was read.
+	DashboardTokens []string
 	// Skipped lists kinds left out because the instance does not serve their area.
 	Skipped []string
 }

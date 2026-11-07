@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 )
 
 func sortStrings(s []string) { sort.Strings(s) }
@@ -65,6 +66,11 @@ type Options struct {
 	NoPublish bool
 	// Label is the label on the versions apply publishes.
 	Label string
+	// Republish publishes every profile, connector and dashboard in the bundle even when
+	// nothing seems to have changed. It recovers a publish that was skipped (--no-publish) or
+	// failed after the draft was written, for the parts of a profile a published version
+	// cannot be read back for (its rules and position declaration).
+	Republish bool
 }
 
 func (o Options) getenv(k string) string {
@@ -265,6 +271,7 @@ func (pl *planner) unmanaged(b *Bundle, l *Live) {
 	note("profile(s)", pp, w(len(b.Profiles), func(i int) string { return b.Profiles[i].Token }))
 	note("integration(s)", ii, w(len(b.Integrations), func(i int) string { return b.Integrations[i].Token }))
 	note("connector(s)", cc, w(len(b.Connectors), func(i int) string { return b.Connectors[i].Token }))
+	note("dashboard(s)", l.DashboardTokens, w(len(b.Dashboards), func(i int) string { return b.Dashboards[i].Token }))
 }
 
 func (pl *planner) deviceType(d DeviceType, l *Live) {
@@ -371,7 +378,8 @@ func (pl *planner) connector(d Connector, live *LiveConnector) {
 		changed["secret"] = *secret
 		names = append(names, "credential")
 	}
-	needPublish := len(names) > 0 || !live.Published
+	stale := !live.Published || draftNewer(live.UpdatedAt, live.PublishedAt) || pl.o.Republish
+	needPublish := len(names) > 0 || stale
 	if len(names) > 0 {
 		pl.add(Change{Kind: KindConnector, Token: d.Token, Action: ActionUpdate, Fields: names}, "update connector "+d.Token,
 			func(ctx context.Context) error {
@@ -384,17 +392,29 @@ func (pl *planner) connector(d Connector, live *LiveConnector) {
 				if err := pl.c.Query(ctx, pl.ep.Connectors, mUpdateConnector, vars, &out); err != nil {
 					return err
 				}
-				if only := names; len(only) == 1 && only[0] == "credential" {
-					return nil // the credential belongs to the connector, not to a version
-				}
 				return pl.maybePublish(ctx, publish, deref(out.C.UpdatedAt))
 			})
 		return
 	}
 	if needPublish && !pl.o.NoPublish {
-		pl.add(Change{Kind: KindConnector, Token: d.Token, Action: ActionPublish, Note: "never published"}, "publish connector "+d.Token,
+		note := "the draft is newer than the published version"
+		if !live.Published {
+			note = "never published"
+		} else if pl.o.Republish && !draftNewer(live.UpdatedAt, live.PublishedAt) {
+			note = "--republish"
+		}
+		pl.add(Change{Kind: KindConnector, Token: d.Token, Action: ActionPublish, Note: note}, "publish connector "+d.Token,
 			func(ctx context.Context) error { return publish(ctx, live.UpdatedAt) })
 	}
+}
+
+// draftNewer reports whether a draft was last written after its latest version was published.
+// A timestamp that does not parse is treated as "not newer", so a server that formats them
+// differently costs a missed recovery rather than a publish on every run.
+func draftNewer(updatedAt, publishedAt string) bool {
+	u, err1 := time.Parse(time.RFC3339Nano, updatedAt)
+	p, err2 := time.Parse(time.RFC3339Nano, publishedAt)
+	return err1 == nil && err2 == nil && u.After(p)
 }
 
 func (pl *planner) maybePublish(ctx context.Context, publish func(context.Context, string) error, updatedAt string) error {
@@ -429,7 +449,7 @@ func (pl *planner) dashboard(d Dashboard, live *LiveDashboard) {
 		return
 	}
 	changed, names := diffInputs(d.input(), live.input())
-	stale := !live.Published || !eqDoc(d.Definition, live.PublishedDefinition)
+	stale := !live.Published || !eqDoc(d.Definition, live.PublishedDefinition) || pl.o.Republish
 	switch {
 	case len(names) > 0:
 		pl.add(Change{Kind: KindDashboard, Token: d.Token, Action: ActionUpdate, Fields: names}, "update dashboard "+d.Token,
@@ -449,6 +469,8 @@ func (pl *planner) dashboard(d Dashboard, live *LiveDashboard) {
 		note := "the draft differs from the published version"
 		if !live.Published {
 			note = "never published"
+		} else if eqDoc(d.Definition, live.PublishedDefinition) {
+			note = "--republish"
 		}
 		pl.add(Change{Kind: KindDashboard, Token: d.Token, Action: ActionPublish, Note: note}, "publish dashboard "+d.Token,
 			func(ctx context.Context) error { return publish(ctx, live.UpdatedAt) })
@@ -499,9 +521,23 @@ func (pl *planner) profiles(b *Bundle, l *Live) {
 	// Publishing waits until every profile's definitions have converged: a definition that
 	// moves between profiles changes both, and publishing the source before the move would
 	// freeze it into the old version.
+	// A definition moving out of a profile changes that profile too, and its published version
+	// still holds the definition, so the source is republished as well as the destination.
+	movedFrom := map[string]bool{}
+	inBundle := map[string]bool{}
+	for _, p := range b.Profiles {
+		inBundle[p.Token] = true
+	}
+	for _, p := range b.Profiles {
+		for _, t := range desiredTokens(p) {
+			if ow, ok := liveAt[t.kind][t.token]; ok && ow.profile != p.Token && inBundle[ow.profile] {
+				movedFrom[ow.profile] = true
+			}
+		}
+	}
 	var publishes []func()
 	for _, p := range b.Profiles {
-		if pub := pl.profile(p, l.Profiles[p.Token], liveAt, wanted); pub != nil {
+		if pub := pl.profile(p, l.Profiles[p.Token], liveAt, wanted, movedFrom[p.Token]); pub != nil {
 			publishes = append(publishes, pub)
 		}
 	}
@@ -511,7 +547,7 @@ func (pl *planner) profiles(b *Bundle, l *Live) {
 }
 
 // profile plans one profile and returns the step that publishes it, or nil for none.
-func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[string]owner, wanted map[Kind]map[string]bool) func() {
+func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[string]owner, wanted map[Kind]map[string]bool, movedFrom bool) func() {
 	touched := false
 	have := Profile{Token: d.Token}
 	if live != nil {
@@ -598,6 +634,19 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 		haveIn[KindRule][r.Token] = r.input()
 	}
 
+	// keyOwner is which definition of this profile holds each key now, so an update that
+	// takes a key a retained definition still holds is caught before anything is written.
+	keyOwner := map[Kind]map[string]string{KindMetric: {}, KindCommand: {}}
+	for _, m := range have.Metrics {
+		keyOwner[KindMetric][m.Key] = m.Token
+	}
+	for _, m := range have.CalculatedMetrics {
+		keyOwner[KindMetric][m.Key] = m.Token
+	}
+	for _, c := range have.Commands {
+		keyOwner[KindCommand][c.Key] = c.Token
+	}
+
 	docs := map[Kind][3]string{
 		KindMetric:  {mCreateMetric, mUpdateMetric, mDeleteMetric},
 		KindCommand: {mCreateCommand, mUpdateCommand, mDeleteCommand},
@@ -643,6 +692,12 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 					cur = pl.liveInputOf(w.kind, w.token, ow.profile)
 				}
 				changed, names := diffInputs(w.input, cur)
+				if k, ok := changed[keyField(w.kind)].(string); ok {
+					if other := keyOwner[w.kind][k]; other != "" && other != w.token && wanted[w.kind][other] {
+						pl.block("%s %q takes the key %q that %q holds in the tenant; updates run in token order, so free the key in a separate apply first", label[w.kind], w.token, k, other)
+						continue
+					}
+				}
 				if ow.profile != d.Token {
 					changed["deviceProfileToken"] = d.Token
 					names = append([]string{"profile"}, names...)
@@ -672,15 +727,20 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 	if pl.o.NoPublish {
 		return nil
 	}
-	stale := live == nil || live.Published == nil
+	published := live != nil && live.Published != nil
+	stale := !published
 	note := "never published"
-	if !stale {
-		note = "the draft changed"
-		if !reflect.DeepEqual(publishedViewOf(d), live.Published) {
-			stale = true
-			if !touched {
-				note = "the published version differs from the bundle"
-			}
+	if published {
+		switch {
+		case !reflect.DeepEqual(publishedViewOf(d), live.Published):
+			stale, note = true, "the published version differs from the bundle"
+		case movedFrom:
+			stale, note = true, "a definition moved out of it"
+		case pl.o.Republish:
+			stale, note = true, "--republish"
+		}
+		if touched {
+			note = "the draft changed"
 		}
 	}
 	if !touched && !stale {
@@ -730,6 +790,40 @@ func (pl *planner) liveInputOf(k Kind, token, profile string) map[string]any {
 		}
 	}
 	return nil
+}
+
+type defRef struct {
+	kind  Kind
+	token string
+}
+
+// desiredTokens lists every definition token a profile in the bundle carries.
+func desiredTokens(p Profile) []defRef {
+	var out []defRef
+	for _, m := range p.Metrics {
+		out = append(out, defRef{KindMetric, m.Token})
+	}
+	for _, m := range p.CalculatedMetrics {
+		out = append(out, defRef{KindMetric, m.Token})
+	}
+	for _, c := range p.Commands {
+		out = append(out, defRef{KindCommand, c.Token})
+	}
+	for _, r := range p.Rules {
+		out = append(out, defRef{KindRule, r.Token})
+	}
+	return out
+}
+
+// keyField is the update field that carries a definition's key, or "" for a kind that has none.
+func keyField(k Kind) string {
+	switch k {
+	case KindMetric:
+		return "metricKey"
+	case KindCommand:
+		return "commandKey"
+	}
+	return ""
 }
 
 func calcWord(c bool) string {

@@ -612,8 +612,9 @@ func TestACredentialIsSentOnlyToAConnectorThatHasNone(t *testing.T) {
 	if f.secrets["audit-sink"] != "a-different-value" {
 		t.Fatal("--rotate-secrets did not send the credential")
 	}
-	if f.connectors["audit-sink"]["_versions"] != 2 {
-		// a name change publishes; a credential-only change does not.
+	if f.connectors["audit-sink"]["_versions"] != 3 {
+		// the name change published (2); the rotation moved the draft's stamp, so it published
+		// again (3) rather than leave a draft newer than every version.
 		t.Errorf("versions: %v", f.connectors["audit-sink"]["_versions"])
 	}
 }

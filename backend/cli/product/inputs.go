@@ -25,14 +25,12 @@ func locInput(l *Location) any {
 	if l == nil {
 		return nil
 	}
-	m := map[string]any{}
-	if l.ExpectedAccuracyMeters != nil {
-		m["expectedAccuracyMeters"] = *l.ExpectedAccuracyMeters
+	// Both keys are always present, null when absent: an update is partial, so an omitted
+	// key would leave the stored value in place instead of clearing it.
+	return map[string]any{
+		"expectedAccuracyMeters":        fptr(l.ExpectedAccuracyMeters),
+		"expectedUpdateIntervalSeconds": iptr(l.ExpectedUpdateIntervalSeconds),
 	}
-	if l.ExpectedUpdateIntervalSeconds != nil {
-		m["expectedUpdateIntervalSeconds"] = *l.ExpectedUpdateIntervalSeconds
-	}
-	return m
 }
 
 func (p Profile) input() map[string]any {

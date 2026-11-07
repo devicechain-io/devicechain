@@ -58,6 +58,7 @@ func (b *Bundle) Scan() []Finding {
 			walk(where, g)
 		}
 	}
+	each(ManifestFile, b.Product)
 	for _, t := range b.DeviceTypes {
 		each(dirDeviceTypes+"/"+t.Token, t)
 	}
@@ -77,20 +78,27 @@ func (b *Bundle) Scan() []Finding {
 	return out
 }
 
+// scanValue walks one document. sensitive is true once an ancestor key named a secret, so a
+// secret nested under it ({"password": {"value": "..."}}) is still found.
 func scanValue(where, key string, v any) []Finding {
+	return scanNode(where, key, v, false)
+}
+
+func scanNode(where, key string, v any, sensitive bool) []Finding {
 	var out []Finding
+	sensitive = sensitive || sensitiveKeys[normKey(key)]
 	switch x := v.(type) {
 	case map[string]any:
 		for k, c := range x {
-			out = append(out, scanValue(where+"."+k, k, c)...)
+			out = append(out, scanNode(where+"."+safeKey(k), k, c, sensitive)...)
 		}
 	case []any:
 		for i, c := range x {
-			out = append(out, scanValue(fmt.Sprintf("%s[%d]", where, i), key, c)...)
+			out = append(out, scanNode(fmt.Sprintf("%s[%d]", where, i), key, c, sensitive)...)
 		}
 	case string:
-		if sensitiveKeys[normKey(key)] && strings.TrimSpace(x) != "" && !isHandle(x) {
-			out = append(out, Finding{where, "a value under the secret-named key " + key})
+		if sensitive && strings.TrimSpace(x) != "" && !isHandle(x) {
+			out = append(out, Finding{where, "a value under a secret-named key"})
 		}
 		for _, r := range valueRules {
 			if r.re.MatchString(x) {
@@ -98,11 +106,22 @@ func scanValue(where, key string, v any) []Finding {
 			}
 		}
 	case float64:
-		if sensitiveKeys[normKey(key)] {
-			out = append(out, Finding{where, "a value under the secret-named key " + key})
+		if sensitive {
+			out = append(out, Finding{where, "a value under a secret-named key"})
 		}
 	}
 	return out
+}
+
+// safeKey is a document key as it appears in a finding's path. A key can itself be a secret,
+// and a finding is printed, so a key that matches a secret shape is not repeated.
+func safeKey(k string) string {
+	for _, r := range valueRules {
+		if r.re.MatchString(k) {
+			return "<key that looks like " + r.name + ">"
+		}
+	}
+	return k
 }
 
 func isHandle(s string) bool {

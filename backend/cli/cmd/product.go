@@ -94,6 +94,12 @@ plan was made, so an edit made by someone else in between is refused rather than
 Device types, profiles and their definitions, and integrations carry no such stamp, so a
 concurrent edit to those is last-writer-wins.
 
+Publishing: a profile, connector or dashboard is published when this run changed it, when it
+was never published, or when its published version is seen to differ from the bundle. A
+profile's rules and position declaration cannot be read back from a published version, so a
+change to them made by a run that did not publish (--no-publish, or a failure after the draft
+was written) is finished with --republish.
+
 Credentials: a connector's credential is sent only to a connector that has none, from the
 environment variable its handle names; --rotate-secrets sends it to every connector. A new
 inbound integration gets a server-generated bearer token that this command does not capture;
@@ -118,6 +124,7 @@ func init() {
 		c.Flags().Bool("allow-suspected-secrets", false, "proceed although the bundle holds values shaped like a secret")
 		c.Flags().Bool("no-publish", false, "converge drafts and stop; do not publish")
 		c.Flags().Bool("rotate-secrets", false, "send every connector credential whose handle is set, not only to connectors without one")
+		c.Flags().Bool("republish", false, "publish every profile, connector and dashboard in the bundle even if nothing seems to have changed")
 	}
 	productApplyCmd.Flags().Bool("yes", false, "apply without printing the plan first")
 
@@ -188,7 +195,8 @@ func readBundle(cmd *cobra.Command, dir string) (*product.Bundle, error) {
 func productOptions(cmd *cobra.Command) product.Options {
 	noPublish, _ := cmd.Flags().GetBool("no-publish")
 	rotate, _ := cmd.Flags().GetBool("rotate-secrets")
-	return product.Options{NoPublish: noPublish, RotateSecrets: rotate}
+	republish, _ := cmd.Flags().GetBool("republish")
+	return product.Options{NoPublish: noPublish, RotateSecrets: rotate, Republish: republish}
 }
 
 // restrict drops the kinds --kinds leaves out, so a plan or apply touches only what was asked.

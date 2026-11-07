@@ -1447,6 +1447,12 @@ plan was made, so an edit made by someone else in between is refused rather than
 Device types, profiles and their definitions, and integrations carry no such stamp, so a
 concurrent edit to those is last-writer-wins.
 
+Publishing: a profile, connector or dashboard is published when this run changed it, when it
+was never published, or when its published version is seen to differ from the bundle. A
+profile's rules and position declaration cannot be read back from a published version, so a
+change to them made by a run that did not publish (--no-publish, or a failure after the draft
+was written) is finished with --republish.
+
 Credentials: a connector's credential is sent only to a connector that has none, from the
 environment variable its handle names; --rotate-secrets sends it to every connector. A new
 inbound integration gets a server-generated bearer token that this command does not capture;
@@ -1462,6 +1468,7 @@ dcctl product apply <dir> [flags]
       --allow-suspected-secrets   proceed although the bundle holds values shaped like a secret
   -h, --help                      help for apply
       --no-publish                converge drafts and stop; do not publish
+      --republish                 publish every profile, connector and dashboard in the bundle even if nothing seems to have changed
       --rotate-secrets            send every connector credential whose handle is set, not only to connectors without one
       --yes                       apply without printing the plan first
 ```
@@ -1557,6 +1564,7 @@ dcctl product plan <dir> [flags]
       --fail-on-changes           exit non-zero when the plan has changes
   -h, --help                      help for plan
       --no-publish                converge drafts and stop; do not publish
+      --republish                 publish every profile, connector and dashboard in the bundle even if nothing seems to have changed
       --rotate-secrets            send every connector credential whose handle is set, not only to connectors without one
 ```
 

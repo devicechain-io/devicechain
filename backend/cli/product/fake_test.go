@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeTenant is an in-memory stand-in for the three tenant GraphQL planes the product spans.
@@ -69,7 +70,7 @@ var opRe = regexp.MustCompile(`^\s*(query|mutation)\s+(\w+)`)
 
 func (f *fakeTenant) stamp() string {
 	f.clock++
-	return fmt.Sprintf("2026-11-07T00:00:%02d.000Z", f.clock%60) + fmt.Sprint(f.clock)
+	return time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC).Add(time.Duration(f.clock) * time.Second).Format(time.RFC3339Nano)
 }
 
 func ep() Endpoints {
@@ -258,7 +259,7 @@ func (f *fakeTenant) dispatch(op string, v map[string]any) (any, error) {
 		}
 		var vs []map[string]any
 		if n, _ := c["_versions"].(int); n > 0 {
-			vs = append(vs, map[string]any{"version": n})
+			vs = append(vs, map[string]any{"version": n, "publishedAt": c["_publishedAt"]})
 		}
 		return map[string]any{"connectorVersions": vs}, nil
 	case "ProductDashboards":
@@ -343,6 +344,7 @@ func (f *fakeTenant) dispatch(op string, v map[string]any) (any, error) {
 		if p == nil {
 			return nil, fmt.Errorf("fake: no profile %q", tok)
 		}
+		f.mergeLocation(p, req)
 		merge(p, req, nil)
 		return map[string]any{"updateDeviceProfile": map[string]any{"token": tok}}, nil
 	case "ProductSetConfigurationDeclaration":
@@ -444,6 +446,7 @@ func (f *fakeTenant) dispatch(op string, v map[string]any) (any, error) {
 		}
 		n, _ := c["_versions"].(int)
 		c["_versions"] = n + 1
+		c["_publishedAt"] = f.stamp()
 		return map[string]any{"publishConnector": map[string]any{"version": n + 1}}, nil
 
 	// ---- dashboards ----
@@ -483,6 +486,28 @@ func (f *fakeTenant) dispatch(op string, v map[string]any) (any, error) {
 		return map[string]any{"publishDashboard": map[string]any{"version": map[string]any{"version": ver}}}, nil
 	}
 	return nil, fmt.Errorf("fake: unhandled operation %s", op)
+}
+
+// mergeLocation gives the position declaration the server's partial semantics: a key the request
+// leaves out keeps its stored value, an explicit null clears it.
+func (f *fakeTenant) mergeLocation(p, req map[string]any) {
+	nl, ok := req["location"].(map[string]any)
+	if !ok {
+		return
+	}
+	cur, _ := p["location"].(map[string]any)
+	merged := map[string]any{}
+	for k, v := range cur {
+		merged[k] = v
+	}
+	for k, v := range nl {
+		if v == nil {
+			delete(merged, k)
+		} else {
+			merged[k] = v
+		}
+	}
+	req["location"] = merged
 }
 
 func (f *fakeTenant) childStore(op string) map[string]map[string]any {

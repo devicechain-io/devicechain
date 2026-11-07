@@ -198,8 +198,12 @@ then updates, then creates, so a key freed by a removal can be reused.
   For a profile it also publishes when the active version's metrics, commands, decoder or
   configuration declaration differ from the bundle. A published version cannot be read back with
   its rules or position declaration, so a rule or position change made outside `apply` does not by
-  itself trigger a publish. `--no-publish` converges drafts and stops. Published versions carry the
-  label `dcctl product apply`.
+  itself trigger a publish. A connector is published when its draft was written after its latest
+  version, and a dashboard when its draft differs from its published version. `--no-publish`
+  converges drafts and stops, and `--republish` publishes every profile, connector and dashboard in
+  the bundle whether or not anything seems to have changed: use it to finish a publish that was
+  skipped or failed after the draft was written. Published versions carry the label
+  `dcctl product apply`.
 - **Only what the bundle names.** A device type, profile, integration, connector or dashboard that
   is in the tenant and not in the bundle is left alone, and `plan` lists it as a note. The one
   exception is the definitions under a profile the bundle carries, which converge to the bundle's:

@@ -213,13 +213,17 @@ func (l *Live) loadConnectors(ctx context.Context, c Client, ep Endpoints) error
 			}
 			var vout struct {
 				V []struct {
-					Version int `json:"version"`
+					Version     int    `json:"version"`
+					PublishedAt string `json:"publishedAt"`
 				} `json:"connectorVersions"`
 			}
 			if err := c.Query(ctx, ep.Connectors, qConnectorVersions, map[string]any{"token": a.Token}, &vout); err != nil {
 				return 0, nil, fmt.Errorf("reading connector %q versions: %w", a.Token, err)
 			}
 			lc.Published = len(vout.V) > 0
+			if lc.Published {
+				lc.PublishedAt = vout.V[0].PublishedAt
+			}
 			l.Connectors[lc.Token] = lc
 		}
 		return len(out.R.Results), out.R.Pagination.TotalRecords, nil
@@ -250,6 +254,7 @@ func (l *Live) loadDashboards(ctx context.Context, c Client, ep Endpoints, only 
 	if err != nil {
 		return err
 	}
+	l.DashboardTokens = tokens
 	for _, tok := range tokens {
 		if only != nil && !only[tok] {
 			continue
