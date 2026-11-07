@@ -930,6 +930,10 @@ Un perfil de dispositivo puede llevar ahora un **decodificador de payload**: reg
 - **La puerta de prueba tiene un límite de frecuencia por réplica.** `testPayloadDecoder` permite 10 peticiones por segundo por inquilino, con una ráfaga de 20, en cada réplica de `device-management`, así que el total de un inquilino crece con el número de réplicas. Una petición por encima del límite se rechaza con `RATE_LIMITED`.
 - **Durante una actualización progresiva, publique un decodificador solo cuando todas las réplicas de `device-management` ejecuten esta versión.** Una versión publicada mientras la petición la atiende una réplica anterior se congela sin su decodificador, porque esa réplica no conoce el campo. Terminada la actualización, compruebe que `DeviceProfileVersion.decoder` está presente en la versión que publicó y, si no lo está, publique de nuevo.
 
+#### La consola muestra el estado de un decodificador {#v120-decoder-console}
+
+La pestaña **Decodificador** de un perfil de dispositivo muestra ahora las últimas 24 horas del decodificador del perfil: cuántos uplinks se decodificaron, se ignoraron, fallaron y no se registraron (consulte [Un decodificador de carga útil que falla tiene un presupuesto](#v120-decoder-budget)), y los uplinks fallidos guardados como muestras, cada uno con un botón que lo carga en el panel de prueba. Un enlace abre la página **Eventos fallidos** filtrada por `DECODE_FAILED`; esa página ofrece ahora el motivo como filtro propio y lo acepta como `?reason=DECODE_FAILED`. Ambas partes de la pestaña requieren `device:write`, igual que las consultas en que se apoyan. No hay que hacer nada para actualizar: es solo la consola y usa las consultas `payloadDecoderHealth` y `payloadDecoderSamples` ya descritas.
+
 #### Listas de revocación X.509 {#v120-x509-crl}
 
 Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad certificadora en un ancla de confianza, y cada ancla tiene un modo de revocación. Un ancla sin lista y sin revocación manual se comporta exactamente como antes.

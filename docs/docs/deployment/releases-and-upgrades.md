@@ -885,6 +885,10 @@ A device profile can now carry a **payload decoder**: rules, written as expressi
 - **The test door is rate-limited per replica.** `testPayloadDecoder` allows 10 requests a second for each tenant, with a burst of 20, on each `device-management` replica, so a tenant's total rate rises with the replica count. A request over the limit is refused with `RATE_LIMITED`.
 - **During a rolling upgrade, publish a decoder only after every `device-management` replica runs this release.** A version published while an older replica handles the request is frozen without its decoder, because that replica does not know the field. After the rollout, check that `DeviceProfileVersion.decoder` is present on the version you published and, if it is not, publish again.
 
+#### The console shows a decoder's health {#v120-decoder-console}
+
+The **Decoder** tab of a device profile now shows the last 24 hours of the profile's decoder: how many uplinks were decoded, ignored, failed and not recorded (see [A failing payload decoder is held to a budget](#v120-decoder-budget)), and the failing uplinks kept as samples, each with a button that loads it into the test panel. A link opens the **Failed events** page filtered to `DECODE_FAILED`, and that page now offers the reason as a filter of its own and accepts it as `?reason=DECODE_FAILED`. Both parts of the tab need `device:write`, as the queries behind them do. Nothing needs doing to upgrade: this is the console only, and it uses the `payloadDecoderHealth` and `payloadDecoderSamples` queries already described.
+
 #### X.509 revocation lists {#v120-x509-crl}
 
 A tenant can now store a certificate authority's revocation list (CRL) against a trust anchor, and an anchor has a revocation mode. An anchor with no list and no manual revocation behaves exactly as it did.
