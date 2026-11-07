@@ -23,6 +23,11 @@ type Documents = {
     "\n  mutation CreateNotificationPolicyRecord($request: NotificationPolicyCreateRequest!) {\n    createNotificationPolicy(request: $request) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.CreateNotificationPolicyRecordDocument,
     "\n  mutation UpdateNotificationPolicy(\n    $token: String!\n    $request: NotificationPolicyUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateNotificationPolicy(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateNotificationPolicyDocument,
     "\n  mutation DeleteNotificationPolicy($token: String!) {\n    deleteNotificationPolicy(token: $token)\n  }\n": typeof types.DeleteNotificationPolicyDocument,
+    "\n  query NotificationChannelRegistry($criteria: NotificationChannelSearchCriteria!) {\n    notificationChannels(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        channelType\n        config\n        hasSecret\n        enabled\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.NotificationChannelRegistryDocument,
+    "\n  query NotificationChannelTypes {\n    notificationChannelTypes {\n      id\n      label\n      description\n      available\n    }\n  }\n": typeof types.NotificationChannelTypesDocument,
+    "\n  mutation CreateNotificationChannel($request: NotificationChannelCreateRequest!) {\n    createNotificationChannel(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateNotificationChannelDocument,
+    "\n  mutation UpdateNotificationChannel($token: String!, $request: NotificationChannelUpdateRequest!) {\n    updateNotificationChannel(token: $token, request: $request) {\n      token\n    }\n  }\n": typeof types.UpdateNotificationChannelDocument,
+    "\n  mutation DeleteNotificationChannel($token: String!) {\n    deleteNotificationChannel(token: $token)\n  }\n": typeof types.DeleteNotificationChannelDocument,
 };
 const documents: Documents = {
     "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        deviceTypeToken\n        rules {\n          severity\n          recipients\n          channel {\n            token\n            enabled\n            channelType\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.NotificationPoliciesDocument,
@@ -33,6 +38,11 @@ const documents: Documents = {
     "\n  mutation CreateNotificationPolicyRecord($request: NotificationPolicyCreateRequest!) {\n    createNotificationPolicy(request: $request) {\n      token\n      updatedAt\n    }\n  }\n": types.CreateNotificationPolicyRecordDocument,
     "\n  mutation UpdateNotificationPolicy(\n    $token: String!\n    $request: NotificationPolicyUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateNotificationPolicy(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateNotificationPolicyDocument,
     "\n  mutation DeleteNotificationPolicy($token: String!) {\n    deleteNotificationPolicy(token: $token)\n  }\n": types.DeleteNotificationPolicyDocument,
+    "\n  query NotificationChannelRegistry($criteria: NotificationChannelSearchCriteria!) {\n    notificationChannels(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        channelType\n        config\n        hasSecret\n        enabled\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.NotificationChannelRegistryDocument,
+    "\n  query NotificationChannelTypes {\n    notificationChannelTypes {\n      id\n      label\n      description\n      available\n    }\n  }\n": types.NotificationChannelTypesDocument,
+    "\n  mutation CreateNotificationChannel($request: NotificationChannelCreateRequest!) {\n    createNotificationChannel(request: $request) {\n      token\n    }\n  }\n": types.CreateNotificationChannelDocument,
+    "\n  mutation UpdateNotificationChannel($token: String!, $request: NotificationChannelUpdateRequest!) {\n    updateNotificationChannel(token: $token, request: $request) {\n      token\n    }\n  }\n": types.UpdateNotificationChannelDocument,
+    "\n  mutation DeleteNotificationChannel($token: String!) {\n    deleteNotificationChannel(token: $token)\n  }\n": types.DeleteNotificationChannelDocument,
 };
 
 /**
@@ -67,6 +77,26 @@ export function graphql(source: "\n  mutation UpdateNotificationPolicy(\n    $to
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteNotificationPolicy($token: String!) {\n    deleteNotificationPolicy(token: $token)\n  }\n"): typeof import('./graphql').DeleteNotificationPolicyDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query NotificationChannelRegistry($criteria: NotificationChannelSearchCriteria!) {\n    notificationChannels(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        channelType\n        config\n        hasSecret\n        enabled\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').NotificationChannelRegistryDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query NotificationChannelTypes {\n    notificationChannelTypes {\n      id\n      label\n      description\n      available\n    }\n  }\n"): typeof import('./graphql').NotificationChannelTypesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateNotificationChannel($request: NotificationChannelCreateRequest!) {\n    createNotificationChannel(request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').CreateNotificationChannelDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateNotificationChannel($token: String!, $request: NotificationChannelUpdateRequest!) {\n    updateNotificationChannel(token: $token, request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').UpdateNotificationChannelDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteNotificationChannel($token: String!) {\n    deleteNotificationChannel(token: $token)\n  }\n"): typeof import('./graphql').DeleteNotificationChannelDocument;
 
 
 export function graphql(source: string) {

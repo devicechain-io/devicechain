@@ -147,8 +147,8 @@
       "translationSha256": "ebba6d1ee6c28b49bf925a1c71188cf103b377d1996a3a6a2c57cc9f742c78d0"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "3105be103ec643ff22d79e4d3ba78de76c4de1f5747c09a60dee9c17a2aebce9",
-      "translationSha256": "5c78b5a30f96c43fbe9a9939ef854714a18b9c9a08d1a15a39eb01a4eb81f79e"
+      "sourceSha256": "fe174f82a7f1c5d9aa53ef5f58c014faef0c1d562d19f580a93554be96e9a4a7",
+      "translationSha256": "2c84ddb6b90a96961feb0a1c81bfc3d33f8e0c7d695f1b98f6af6581f83e956a"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",
@@ -215,8 +215,8 @@
       "translationSha256": "5f4743c06d37ef9c24f9c79fe0700eaf8410d25fae0005a0bb1ef89c02de0ff4"
     },
     "guides/lorawan-uplink-to-alarm.md": {
-      "sourceSha256": "7d01dff408a0329859e202d66e3cf1b1389a2d1c78d9b9554fdea26fc5e7ef34",
-      "translationSha256": "73a5ce34c1dd9d438000f250607a8f1d16d6dafb8c82eada6d2f8fa45cfee195"
+      "sourceSha256": "d80a118d20fc545cc4abcd2bcd5e13faa13f9f62359ebd009566cccc3a99c230",
+      "translationSha256": "6cfd537361d53fc0dfb6a248254427835be334e462ad801f954f98f658d0e414"
     },
     "guides/maintenance-windows.md": {
       "sourceSha256": "1168eb0fd4d4c3887e5519523500da2d7f61b71c4a58f0337c56d19741cff7d4",
@@ -335,8 +335,8 @@
       "translationSha256": "859716996bd2d046f9696e097e06e10616c43a5312e447998cfaf75e5c66e380"
     },
     "user-guide/dashboards.md": {
-      "sourceSha256": "2021e833b2e9e73534fcc2112662510aa7d01933cbf9d5e5d3480ae9b1679433",
-      "translationSha256": "8670b8753c8a1c654cab3af1992d586815ccb5887308a3a006f13ad5145845c2"
+      "sourceSha256": "23078eae74a34da2731e2f7d66d12907b87fc7aba8742d39b49198b0c982b73e",
+      "translationSha256": "553f375f611dae7112c860c5a290fb84bd229db05a5b67a737eff55d1fc8601a"
     },
     "user-guide/detection-rules.md": {
       "sourceSha256": "d74fd46606c3cadddb74126ec3ea9ad1986ce77c01a8be3a1d9366bd7ca80a49",

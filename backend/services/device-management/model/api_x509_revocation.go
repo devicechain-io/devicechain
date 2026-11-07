@@ -378,7 +378,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 			// own marker. An entry made before the debt existed (or with no session kicker wired) has
 			// none: queue it now, once, and say so on the entry.
 			if api.SessionKicker != nil && out.KickQueuedAt == nil {
-				if _, err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+				if err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
 					RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
 					return err
 				}
@@ -421,7 +421,7 @@ func (api *Api) RevokeDeviceCertificate(ctx context.Context, req *DeviceCertific
 		}
 		// The sessions this entry ends are queued in the same transaction (lock order: anchor,
 		// then the entry, then the kick rows).
-		if _, err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
+		if err := api.queueRevocationKicksOnTx(tx, tenant, anchor.ID,
 			RevocationDelta{Fingerprints: []string{fp}, CA: isCA}, linksWhole); err != nil {
 			return err
 		}
