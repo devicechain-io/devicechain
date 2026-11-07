@@ -202,7 +202,20 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		return err
 	}
 
-	return applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info())
+	if err := applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info()); err != nil {
+		return err
+	}
+
+	// Shard databases, when configured (shard_handles.go). Unconfigured, this is a no-op
+	// and nothing above changed.
+	shards, err := rdb.openShards(ctx, pgconf)
+	if err != nil {
+		// Do not leave the home pool open behind a startup that is about to fail.
+		_ = closeHandle(rdb.Database)
+		return err
+	}
+	rdb.shardHandles = shards
+	return nil
 }
 
 // registerCallbacks installs, on a service's root handle, every global callback chain the
