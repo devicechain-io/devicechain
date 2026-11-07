@@ -27,16 +27,17 @@ Desde el 2026-09-11, un fabricante debe notificar a las autoridades una vulnerab
 | --- | --- | --- |
 | Alerta temprana | en 24 horas | en 24 horas |
 | Notificación, con lo que se sabe hasta el momento | en 72 horas | en 72 horas |
-| Informe final | 14 días después de disponer de una medida correctora | 1 mes después de la notificación |
+| Informe final | 14 días después de disponer de una medida correctora o de mitigación | 1 mes después de la notificación; si el incidente sigue en curso, un informe de situación en ese momento y el informe final en el mes siguiente a su resolución |
 
 El procedimiento que siguen los responsables:
 
 1. **Decidir si el plazo ha empezado.** Explotación activa significa evidencia creíble de que alguien ha usado la debilidad contra un sistema real sin permiso de su propietario. Una prueba de concepto enviada por un investigador no lo inicia. Un informe de uso real, sí.
 2. **Enviar la alerta temprana** a través de la plataforma única de notificación que opera la agencia de ciberseguridad de la UE, que la encamina al coordinador nacional (CSIRT) de los Estados miembros afectados. Indica que es una alerta temprana, si se sospecha una acción maliciosa y los Estados miembros donde está disponible el producto.
 3. **Enviar la notificación** en 72 horas: la naturaleza de la vulnerabilidad, las versiones afectadas, cualquier mitigación ya disponible y una valoración de la gravedad.
-4. **Publicar la corrección e informar a los usuarios.** Una versión de parche corregida y un aviso de seguridad de GitHub (con un CVE cuando proceda) salen juntos, y el aviso indica qué hacer antes de actualizar si hay algo.
-5. **Enviar el informe final** con la causa raíz, la corrección, el actor malicioso si se conoce y cómo se informó a los usuarios.
-6. **Registrar** las fechas de cada paso en el aviso privado para que el siguiente incidente parta de un ejemplo que funciona.
+4. **Informar a los usuarios sin demora indebida**, en cuanto salga la alerta temprana y antes de que exista una corrección: qué está afectado y qué mitigación pueden aplicar ya (un borrador de aviso de seguridad de GitHub, una nota de versión o un aviso en el repositorio).
+5. **Publicar la corrección.** Una versión de parche corregida y el aviso de seguridad de GitHub publicado (con un CVE cuando proceda) salen juntos, y el aviso indica qué hacer antes de actualizar si hay algo.
+6. **Enviar el informe final** con la causa raíz, la corrección, el actor malicioso si se conoce y cómo se informó a los usuarios.
+7. **Registrar** las fechas de cada paso en el aviso privado para que el siguiente incidente parta de un ejemplo que funciona.
 
 DeviceChain es software de código abierto que no se vende, de modo que determinar si un despliegue concreto convierte a su operador en fabricante a estos efectos corresponde a ese operador. El proyecto aplica este proceso al software que publica en cualquier caso.
 

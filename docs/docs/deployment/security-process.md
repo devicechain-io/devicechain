@@ -36,7 +36,7 @@ Both follow the same three steps, counted from the moment the project becomes aw
 | --- | --- | --- |
 | Early warning | within 24 hours | within 24 hours |
 | Notification, with what is known so far | within 72 hours | within 72 hours |
-| Final report | 14 days after a corrective measure is available | 1 month after the notification |
+| Final report | 14 days after a corrective or mitigating measure is available | 1 month after the notification; if the incident is still ongoing then, a progress report at that point and the final report within 1 month of handling it |
 
 The runbook the maintainers follow:
 
@@ -49,11 +49,14 @@ The runbook the maintainers follow:
    member states where the product is available.
 3. **Send the notification** within 72 hours: the nature of the vulnerability, the affected versions, any
    mitigation already available, and an assessment of severity.
-4. **Ship the fix and tell users.** A fixed patch release and a GitHub Security Advisory (with a CVE where one
+4. **Tell users without undue delay**, as soon as the early warning is out and before a fix exists: what is
+   affected and any mitigation they can apply now (a GitHub Security Advisory draft, a release note, or a
+   notice on the repository).
+5. **Ship the fix.** A fixed patch release and the published GitHub Security Advisory (with a CVE where one
    applies) go out together, and the advisory says what to do before upgrading if there is anything.
-5. **Send the final report** with the root cause, the fix, the malicious actor if known, and how
+6. **Send the final report** with the root cause, the fix, the malicious actor if known, and how
    users were informed.
-6. **Record** the dates of each step in the private advisory so the next incident starts from a
+7. **Record** the dates of each step in the private advisory so the next incident starts from a
    working example.
 
 DeviceChain is open-source software that is not sold, so whether a given deployment makes its

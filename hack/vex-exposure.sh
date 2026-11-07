@@ -56,8 +56,9 @@ run() {
     hits="$(jq -r --slurpfile a "$advisory" '
         ($a[0]) as $adv
         | .packages[] | select(.name == $adv.package) | . as $p
-        | select(($adv.affected | index("*")) or ($adv.affected | index($p.versionInfo)))
-        | "\(.name)@\(.versionInfo)"' "$f" | sort -u)"
+        | select(($adv.affected | index("*")) or ($p.versionInfo == null) or ($p.versionInfo == "")
+                 or ($adv.affected | index($p.versionInfo)))
+        | "\(.name)@\(.versionInfo // "unknown-version")"' "$f" | sort -u)"
     if [ -n "$hits" ]; then
       while IFS= read -r h; do
         echo "EXPOSED $name $h"; exposed+=("$name")
@@ -76,6 +77,7 @@ run() {
       | {"@context":"https://openvex.dev/ns/v0.2.0",
          "@id":("https://devicechain.io/vex/" + $id),
          author:"DeviceChain maintainers", version:1,
+         timestamp:(now | strftime("%Y-%m-%dT%H:%M:%SZ")),
          statements:([ { vulnerability:{name:$id},
                          products: ($arts | map({"@id": ("pkg:oci/" + .)})),
                          status:$status }
@@ -95,7 +97,7 @@ selftest() {
   [ "$rc" = 1 ] || { echo "SELF-TEST FAIL: exposure not reported (rc=$rc)" >&2; return 1; }
   echo "$out" | grep -q '^EXPOSED image-a ' || { echo "SELF-TEST FAIL: image-a not listed" >&2; return 1; }
   ! echo "$out" | grep -q '^EXPOSED image-b ' || { echo "SELF-TEST FAIL: unexposed image-b listed" >&2; return 1; }
-  jq -e '.statements[0].vulnerability.name=="CVE-2099-0001" and (.statements[0].products|length==1) and .statements[0].status=="under_investigation"' "$t/v.json" >/dev/null \
+  jq -e '.statements[0].vulnerability.name=="CVE-2099-0001" and (.statements[0].products|length==1) and .statements[0].status=="under_investigation" and (.timestamp|length==20)' "$t/v.json" >/dev/null \
     || { echo "SELF-TEST FAIL: VEX entry wrong" >&2; return 1; }
   echo "== control: a fixed version must not be reported"
   rc=0; "$0" --advisory "$d/advisory-fixed-only.json" --sbom "$d/image-a.spdx.json" >/dev/null || rc=$?
@@ -103,6 +105,9 @@ selftest() {
   echo "== a wildcard advisory exposes every version"
   rc=0; out="$("$0" --advisory "$d/advisory-wildcard.json" --sbom "$d/image-b.spdx.json")" || rc=$?
   [ "$rc" = 1 ] && echo "$out" | grep -q '^EXPOSED image-b ' || { echo "SELF-TEST FAIL: wildcard advisory missed image-b (rc=$rc)" >&2; return 1; }
+  echo "== a matching package with no version is exposure unknown, never clean"
+  rc=0; out="$("$0" --advisory "$d/advisory-fixed-only.json" --sbom "$d/image-c.spdx.json")" || rc=$?
+  [ "$rc" = 1 ] && echo "$out" | grep -q '^EXPOSED image-c ' || { echo "SELF-TEST FAIL: versionless package reported clean (rc=$rc)" >&2; return 1; }
   echo "== negative control: an SBOM with no packages is an error, not 'clean'"
   rc=0; "$0" --advisory "$d/advisory-affected.json" --sbom "$d/empty.spdx.json" >/dev/null 2>&1 || rc=$?
   [ "$rc" = 2 ] || { echo "SELF-TEST FAIL: empty SBOM accepted (rc=$rc)" >&2; return 1; }
