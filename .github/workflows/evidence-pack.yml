@@ -49,6 +49,7 @@ jobs:
       security-events: read # the CodeQL open-alert count
     env:
       TAG: ${{ inputs.tag }}
+      MAX_AGE_DAYS: ${{ inputs.max_age_days }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check the tag shape
@@ -138,7 +139,7 @@ jobs:
           mkdir -p work/out
           hack/evidence-pack.sh build --rigs-dir work/rigs --commit "$(git rev-parse HEAD)" \
             --out work/out --sbom work/sbom --vex work/devicechain.openvex.json \
-            --max-age-days "${{ inputs.max_age_days }}" \
+            --max-age-days "$MAX_AGE_DAYS" \
             --attach work/attach/release-signature-verification.txt \
             --attach work/attach/codeql-open-alerts.json \
             --attach work/attach/scorecard.json \
