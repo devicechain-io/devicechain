@@ -90,3 +90,6 @@ frontend/.api-selftest/
 
 # hack/x509-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
 /.x509-rig/
+
+# hack/decoder-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
+/.decoder-rig/
