@@ -9,7 +9,7 @@ A device can prove who it is with a **client certificate** instead of a token or
 This page explains how the platform decides to trust a certificate, and where that trust stops. To set it up, follow [Connecting with a certificate](../guides/device-x509.md); the console side is in [Provisioning and trust anchors](../user-guide/provisioning-and-trust-anchors.md). To run the broker and watch it, see [Certificate authentication](../deployment/device-certificates.md).
 
 :::note Status
-Available over **MQTT on the platform broker**. HTTP ingest and LwM2M do not accept client certificates, the C# SDK cannot yet present one, and renewal of a certificate on its own is not available yet. [What is not supported](#not-supported) lists everything left out.
+Available over **MQTT on the platform broker**. HTTP ingest and LwM2M do not accept client certificates, the C# SDK presents one only for RSA and ECDSA keys, and renewal of a certificate on its own is not available yet. [What is not supported](#not-supported) lists everything left out.
 :::
 
 ## The trust anchor is the identity boundary {#trust-anchor}
@@ -88,7 +88,7 @@ The session is granted until the earliest `notAfter` among the device certificat
 - **Name constraints.** A name-constrained CA is refused, as above.
 - **Certificate revocation lists and OCSP.** See [Revocation](#revocation).
 - **Renewal on its own, and adopting a device after its provisioning is reset.** A device that holds a certificate and then presents a different one is refused (`ALREADY_PROVISIONED`) when it connects for registration. Until renewal ships, add the new certificate as a pinned credential (a device can hold three) before the old one expires.
-- **The C# SDK.** It cannot present a client certificate yet.
+- **Ed25519 keys in the C# SDK.** The SDK presents a client certificate, but .NET has no Ed25519, so it cannot present one that uses that key type.
 - **HTTP ingest and LwM2M.** Neither authenticates with a client certificate. HTTP devices use a token or basic credential, and LwM2M devices use pre-shared keys. A certificate presented on MQTT with any username other than `{tenant}:@x509` is ignored, and the connect is judged on its token or password as before.
 - **Other brokers.** Only the platform's own broker authenticates by certificate. A device connecting through an operator-owned external broker is not covered.
 - **Certificates issued by the platform.** You bring your own CA and your own certificates.

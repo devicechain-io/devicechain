@@ -894,6 +894,13 @@ A tenant can now store a certificate authority's revocation list (CRL) against a
 - **`REQUIRE_CURRENT` is opt-in per anchor.** The platform refuses to switch an anchor to it while the anchor holds no current list, or while a registered certificate was issued by a CA that has none, because every such device would then be refused.
 - **During a rolling upgrade**, replicas that have not been replaced answer the broker's authorization callout without revocation checks, so a revocation is enforced everywhere only once the rollout completes. Going back to `v1.1.0` leaves the tables in place and unread: revocations stop being enforced.
 
+#### A client certificate in the C# SDK {#v120-sdk-x509}
+
+The C# SDK and the Unity package can now connect a device with an X.509 client certificate. This is additive: nothing changes for a session that does not set one, and no action is needed to upgrade.
+
+- **Set `MqttSessionOptions.ClientCertificate`** to a `MqttClientCertificate` loaded from a PFX or from PEM files. The session then connects with the username `{tenant}:@x509` and no password. See [Connect from the C# SDK](../guides/device-x509.md#csharp-sdk).
+- **Only RSA and ECDSA keys can be presented**, because .NET has no Ed25519. The broker address must be `ssl://`; a plaintext address is refused when the session is constructed.
+
 #### Event store write-ahead log allowance {#v120-event-store-wal}
 
 The event store's `max_wal_size` is now a fifth of its volume, never below Postgres's own 1 GiB, and an upgrade applies it to an existing store at the volume it has. On the default 32Gi that is 6.4 GiB where an upgraded instance had 1 GiB. `max_wal_size` is a target for how often checkpoints are requested, not a limit and not a reservation: the log can grow past it when checkpoints cannot keep up or WAL archiving falls behind. It sits on the data volume, though, so a store that is already close to full has less room than that to give, and a long archiving stall can use more than the value.

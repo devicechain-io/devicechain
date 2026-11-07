@@ -206,6 +206,30 @@ public sealed class MqttTrust
     }
 
     /// <summary>
+    /// Like <see cref="PinnedCa"/>, reading the root (DER or PEM) from a file.
+    /// </summary>
+    /// <exception cref="ArgumentException">The file is missing, unreadable or empty.</exception>
+    public static MqttTrust PinnedCaFromFile(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            throw new ArgumentException("a CA certificate path is required", nameof(path));
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = System.IO.File.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is System.IO.IOException || ex is UnauthorizedAccessException)
+        {
+            throw new ArgumentException($"cannot read the CA certificate \"{path}\": {ex.Message}", nameof(path), ex);
+        }
+
+        return PinnedCa(bytes);
+    }
+
+    /// <summary>
     /// Accept ANY server certificate without validating it. This disables the protection TLS
     /// exists to provide: it stops an eavesdropper reading the traffic but does nothing to stop
     /// an impersonator, so anything able to intercept the connection can present its own
@@ -309,6 +333,13 @@ public sealed class MqttConnectOptions
     /// Defaults to <see cref="MqttTrust.SystemRoots"/>; ignored for a plaintext broker.
     /// </summary>
     public MqttTrust Trust { get; set; } = MqttTrust.SystemRoots;
+
+    /// <summary>
+    /// The X.509 client certificate to present in the TLS handshake, or null. Requires an
+    /// <c>ssl</c> broker address. When set and <see cref="Password"/> is null, no password is
+    /// sent: the platform refuses a certificate connect that also carries one.
+    /// </summary>
+    public MqttClientCertificate? ClientCertificate { get; set; }
 }
 
 /// <summary>Thrown when a connection cannot be established or the broker refuses CONNECT.</summary>

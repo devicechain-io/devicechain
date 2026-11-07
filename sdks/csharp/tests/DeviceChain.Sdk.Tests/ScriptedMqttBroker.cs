@@ -5,7 +5,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,6 +43,7 @@ internal sealed class ScriptedMqttBroker : IDisposable
     private readonly byte[] _subackCodes;
     private readonly byte _connackCode;
     private readonly bool _closeOnConnect;
+    private readonly X509Certificate2? _tlsServerCertificate;
 
     /// <summary>Topics the broker received a PUBLISH for, in arrival order.</summary>
     public List<string> PublishedTopics { get; } = new();
@@ -62,6 +66,9 @@ internal sealed class ScriptedMqttBroker : IDisposable
     /// <summary>Whether CONNECT asked for a clean session.</summary>
     public bool CleanSession { get; private set; }
 
+    /// <summary>The client certificate the TLS handshake presented, when TLS is on.</summary>
+    public X509Certificate2? PresentedClientCertificate { get; private set; }
+
     /// <summary>The loopback endpoint clients dial.</summary>
     public Uri BrokerUri { get; }
 
@@ -75,15 +82,17 @@ internal sealed class ScriptedMqttBroker : IDisposable
     /// serve yet (for instance while the account's JetStream is not ready). No CONNACK is a fault,
     /// not a refusal.
     /// </param>
-    public ScriptedMqttBroker(byte[]? subackCodes = null, byte connackCode = 0x00, bool closeOnConnect = false)
+    public ScriptedMqttBroker(byte[]? subackCodes = null, byte connackCode = 0x00, bool closeOnConnect = false,
+        X509Certificate2? tlsServerCertificate = null)
     {
+        _tlsServerCertificate = tlsServerCertificate;
         _subackCodes = subackCodes ?? new byte[] { 0x01 };
         _connackCode = connackCode;
         _closeOnConnect = closeOnConnect;
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         var port = ((IPEndPoint)_listener.LocalEndpoint).Port;
-        BrokerUri = new Uri($"tcp://127.0.0.1:{port}");
+        BrokerUri = new Uri($"{(tlsServerCertificate != null ? "ssl" : "tcp")}://127.0.0.1:{port}");
         _ = Task.Run(AcceptLoopAsync);
     }
 
@@ -108,8 +117,25 @@ internal sealed class ScriptedMqttBroker : IDisposable
         try
         {
             using (client)
-            using (var stream = client.GetStream())
+            using (var raw = client.GetStream())
             {
+                Stream stream = raw;
+                if (_tlsServerCertificate != null)
+                {
+                    // Ask for a client certificate and accept whatever is offered (or nothing), so
+                    // the test can read what the client actually presented.
+                    var ssl = new SslStream(raw, false, (_, cert, _, _) =>
+                    {
+                        PresentedClientCertificate = cert == null ? null : new X509Certificate2(cert);
+                        return true;
+                    });
+                    await ssl.AuthenticateAsServerAsync(
+                        _tlsServerCertificate, clientCertificateRequired: true,
+                        enabledSslProtocols: SslProtocols.Tls12 | SslProtocols.Tls13,
+                        checkCertificateRevocation: false).ConfigureAwait(false);
+                    stream = ssl;
+                }
+
                 while (!_cts.IsCancellationRequested)
                 {
                     var header = await ReadByteAsync(stream).ConfigureAwait(false);

@@ -137,6 +137,13 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _factory = factory ?? new MqttNetClientFactory();
+        if (options.ClientCertificate != null && !MqttNetConnection.IsTlsAddress(options.BrokerUri))
+        {
+            throw new ArgumentException(
+                $"a client certificate is presented in the TLS handshake, but {options.BrokerUri} is not a TLS address; use an ssl:// broker address",
+                nameof(options));
+        }
+
         _clientId = DevicePlane.DeviceClientId(
             options.InstanceId, options.Tenant, options.DeviceToken, options.ClientIdDiscriminator);
         _commandsTopic = DevicePlane.CommandsTopic(options.InstanceId, options.Tenant, options.DeviceToken);
@@ -291,9 +298,14 @@ public sealed class MqttDeviceSession : IAsyncDisposable
 
         var options = new MqttConnectOptions(_options.BrokerUri, _clientId)
         {
-            Username = DevicePlane.ConnectUsername(_options.Tenant, _options.CredentialId),
-            // Empty, not absent: it is what selects access-token credential mode at the callout.
-            Password = string.Empty,
+            // A certificate device's username is {tenant}:@x509 and it sends NO password (the
+            // callout refuses one); a token device's password is EMPTY, not absent, which is what
+            // selects access-token credential mode at the callout.
+            Username = _options.ClientCertificate != null
+                ? DevicePlane.X509ConnectUsername(_options.Tenant)
+                : DevicePlane.ConnectUsername(_options.Tenant, _options.CredentialId),
+            Password = _options.ClientCertificate != null ? null : string.Empty,
+            ClientCertificate = _options.ClientCertificate,
             // False so the broker restores this device's SUBSCRIPTION across a reconnect. It
             // re-arms it during CONNECT processing, before this client could send SUBSCRIBE, so
             // there is no window where the device is connected but not subscribed.
@@ -423,6 +435,12 @@ public sealed class MqttDeviceSession : IAsyncDisposable
                     // A refusal is not transient: the credential is not permitted to read that
                     // topic, so retrying forever would change nothing while looking like progress.
                     // Stay Blind and stop — the state is the report.
+                    return;
+                }
+                catch (MqttClientCertificateException)
+                {
+                    // A configuration fault; retrying cannot change it.
+                    SetState(MqttSessionState.Blind);
                     return;
                 }
                 catch (MqttConnectRefusedException)

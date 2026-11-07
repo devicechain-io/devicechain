@@ -7,6 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 
 ## [0.1.0] — unreleased
 
+- MQTT device sessions can authenticate with an X.509 client certificate (`MqttClientCertificate`,
+  `MqttSessionOptions.ClientCertificate`), through the C# SDK the package builds on. Needs a TLS (`ssl://`)
+  broker address and RSA or ECDSA keys; not available on WebGL, which has no MQTT.
+
 Initial Unity plugin scaffolding, built on the C# SDK's transport seam.
 
 - `DeviceChainRuntime.CreateClient` — platform-selecting bootstrap (UnityWebRequest HTTP everywhere;

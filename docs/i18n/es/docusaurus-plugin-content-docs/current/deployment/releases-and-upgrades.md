@@ -939,6 +939,13 @@ Un tenant puede ahora guardar la lista de revocación (CRL) de una autoridad cer
 - **`REQUIRE_CURRENT` es opcional por ancla.** La plataforma se niega a cambiar un ancla a ese modo mientras no tenga ninguna lista vigente, o mientras un certificado registrado haya sido emitido por una CA que no la tiene, porque todos esos dispositivos serían rechazados.
 - **Durante una actualización gradual**, las réplicas que aún no se han sustituido responden al callout de autorización del broker sin comprobar revocaciones, así que una revocación solo se aplica en todas partes cuando termina el despliegue. Volver a `v1.1.0` deja las tablas sin leer: las revocaciones dejan de aplicarse.
 
+#### Un certificado de cliente en el SDK de C# {#v120-sdk-x509}
+
+El SDK de C# y el paquete de Unity ya pueden conectar un dispositivo con un certificado de cliente X.509. Es un cambio aditivo: nada cambia para una sesión que no lo configure, y no hace falta ninguna acción para actualizar.
+
+- **Asigne `MqttSessionOptions.ClientCertificate`** a un `MqttClientCertificate` cargado desde un PFX o desde archivos PEM. La sesión se conecta entonces con el usuario `{tenant}:@x509` y sin contraseña. Consulte [Conectar desde el SDK de C#](../guides/device-x509.md#csharp-sdk).
+- **Solo se pueden presentar claves RSA y ECDSA**, porque .NET no tiene Ed25519. La dirección del broker debe ser `ssl://`; una dirección en texto plano se rechaza al construir la sesión.
+
 #### Asignación del registro de escritura anticipada del almacén de eventos {#v120-event-store-wal}
 
 El `max_wal_size` del almacén de eventos es ahora una quinta parte de su volumen, nunca por debajo del 1 GiB propio de Postgres, y una actualización lo aplica a un almacén existente con el volumen que ya tiene. Con los 32Gi predeterminados son 6,4 GiB, donde una instancia actualizada tenía 1 GiB. `max_wal_size` es un objetivo de frecuencia de los puntos de control, no un límite ni una reserva: el registro puede superarlo cuando los puntos de control no dan abasto o el archivado de WAL se retrasa. Sin embargo, reside en el volumen de datos, así que un almacén que ya está casi lleno tiene menos margen que ese, y un atasco prolongado del archivado puede usar más que ese valor.

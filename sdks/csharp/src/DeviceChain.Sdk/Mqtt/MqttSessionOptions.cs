@@ -54,6 +54,15 @@ public sealed class MqttSessionOptions
     /// <summary>How TLS trust is established. Defaults to system roots.</summary>
     public MqttTrust Trust { get; set; } = MqttTrust.SystemRoots;
 
+    /// <summary>
+    /// An X.509 client certificate the device authenticates with instead of its access-token
+    /// credential, or null (the default). When set, the CONNECT username is <c>{tenant}:@x509</c>
+    /// with no password, the credential id is not used, and the broker address must be <c>ssl</c>.
+    /// The device must have a pinned certificate credential, or match a certificate profile.
+    /// </summary>
+    /// <exception cref="ArgumentException">Set on options whose broker address is not TLS (at session construction).</exception>
+    public MqttClientCertificate? ClientCertificate { get; set; }
+
     /// <summary>The MQTT keep-alive interval.</summary>
     public TimeSpan KeepAlive { get; set; } = TimeSpan.FromSeconds(60);
 
