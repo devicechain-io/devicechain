@@ -506,11 +506,30 @@ dcctl bootstrap local devicechain
 
 最近三个次版本的说明完整保留，按从新到旧排列。
 
-### v1.2.0 {#v120-upgrade}
+### v1.2.0：租户自行编写的载荷解码器，以及会结束会话的证书吊销 {#v120-upgrade}
 
-`v1.2.0` 是原地升级，方式见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。本版本更改的 Helm 值不在兼容性策略的覆盖范围内，次版本在本节中说明这一点。
+`v1.2.0` 是从 `v1.1.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。升级时会运行八个追加的迁移（`device-management` 四个，`device-state` 三个，`user-management` 一个）；它们新增表、可为空的列和存储参数，其中两个修复 `device_states` 的一个列。参见[架构变更与回退](#v120-going-back)。`Instance` 的新字段 `spec.size` 随 operator 一同发布，由 `dcctl install` 更新，因此请如上所述先运行它，再升级实例。如果从 `v1.0.0` 升级，请先阅读 [`v1.1.0` 的说明](#v110-upgrade)，并在其中使用 `--version v1.2.0`。
 
-需要处理的事项：
+```bash
+dcctl install local --version v1.2.0
+dcctl upgrade local devicechain --version v1.2.0 --dry-run
+dcctl upgrade local devicechain --version v1.2.0
+```
+
+适用[版本与升级策略](./versioning-policy.md)。本版本扩充了受保护的接口（新的 `dcctl` 标志，新的 GraphQL 查询、变更和字段，一个新的失败事件原因，三种新的通知渠道类型，一个新的 `Instance` 字段，以及 C# SDK 的一个新选项），没有移除任何接口。有一种 OAuth 请求形式已被[弃用](#v120-token-audience)，在下一个主版本之前仍被接受。本版本更改的 Helm 值不在兼容性策略的覆盖范围内，次版本在本节中说明这一点。
+
+新功能：
+
+- **租户可以编写自己的载荷解码器。** 设备配置文件可以携带一个用表达式编写的解码器，把 LoRaWAN 或其他二进制帧、通用 JSON 正文或网络服务器已解码的对象转换为测量值。它在控制台的**解码器**选项卡中编写和测试，发布时必须通过已保存的测试向量，并在每个入站集成上行消息上实时运行。每个解码器都有预算，因此出错的解码器不会淹没平台；它的健康状况（已解码、已忽略、失败、已抑制）和最近失败的上行消息显示在同一选项卡中。参见[载荷解码器](#v120-payload-decoders)和[失败的载荷解码器受预算约束](#v120-decoder-budget)。
+- **X.509 证书可以吊销，吊销会结束受影响的会话。** 可以把证书颁发机构的吊销列表（CRL）上传到信任锚，也可以手动吊销证书；信任锚可以要求有当前有效的列表。吊销会结束受影响设备已打开的会话，并在几秒后再进行一次清理（`resweepAfter`）。C# SDK 和 Unity 包现在可以用客户端证书连接设备。参见[X.509 吊销列表](#v120-x509-crl)和[吊销证书会结束已打开的会话](#v120-x509-sessions)。
+- **告警可以原生发送到 Slack、Microsoft Teams 和 PagerDuty，** 它们是独立的通知渠道，在控制台的新页面中配置。参见[原生通知渠道](#v120-notification-channels)。
+- **三个新的仪表板小部件**：设备组的状态网格、状态时间线，以及 SCADA 符号（泵、阀门、储罐、电机、风扇、管道、传感器、断路器、灯）。参见[三个新的仪表板小部件](#v120-widgets)。
+- **规模预设。** `dcctl bootstrap --size perf-12k` 应用在持续每秒 12,000 个事件的集群上实测得到的规模配置；未指定规模的实例保持不变。参见[规模预设](#v120-size-presets)。
+- **检测占用的内存大幅减少。** 静默或会话规则每个设备只保留一个定时器，而不是每个事件一个（在一个实测场景中从 370 MiB 降到 2.6 MiB）；在每秒 20,000 个事件时，重复事件防护占用的内存约减少 40%。参见[检测的内存](#v120-detect-memory)。
+- **令牌受众在观察模式下校验。** 绑定到本实例不提供的资源的令牌会被计数并记录日志，本版本不拒绝任何请求。参见[令牌按其资源校验](#v120-token-audience)。
+- **与数据相关的修复：** HTTP 事件端点对无法构建的事件返回 `500` 而不是 `202`，因此调用方不会再在事件未存储时被告知已存储；无法确定受影响会话的吊销会如实说明（`sessionsEnded: false`），而不是报告成功。灾难恢复页面现在按恢复时对它们的要求，对每个流、每个存储桶以及对象存储进行了分类。
+
+需要采取的行动，按执行顺序如下：
 
 - **了解有两个内存上限变高了。** `device-management` 的上限现在是 512Mi（原为 256Mi）；只要任一事件信封设置处于开启状态，`event-processing` 的上限为 768Mi（原为 384Mi）。两个信封设置都关闭时，`event-processing` 不变。内存请求不变，因此调度不变；每个上限只是 Pod 可使用的上限。参见[内存上限](#v120-memory)。
 - **检查你自己设置的内存上限。** 在 `functionalAreas.<服务>.resources.limits.memory` 下为 `device-management` 或 `event-processing` 设置的上限按原值使用，更高的顶层 `resources.limits.memory` 也是如此。如果你的值低于[服务规格](./bootstrap.md#service-sizing)中对应你的设备规模或事件速率的数字，请调高。
@@ -521,7 +540,7 @@ dcctl bootstrap local devicechain
 - **检查是否有客户端为本实例不提供的资源申请令牌。** 默认情况下，本版本会统计这类请求以及使用这些令牌的 API 调用，但一律不拒绝。`v1.3` 默认拒绝它们。`infrastructure.tokenAudience.enforcement: observe` 可以在那一个次版本内保留本版本的行为，`v1.4` 会在启动时以及在 chart 的 values schema 中拒绝 `observe`。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **让指定了 `resource` 的 `client_credentials` 请求同时指定 `scope`。** 这样的请求在本版本中会被统计并记录日志，仍然成功，只会在下一个主版本中被拒绝。参见[令牌按其资源进行检查](#v120-token-audience)。
 - **如果你自己编写实例配置**（`instance.existingSecret`），请添加 `infrastructure.tokenAudience`。在 MCP 区域已部署而文档没有列出它的资源时，`dcctl upgrade` 会打印警告，给出需要添加的配置块；当 `enforcement` 为 `enforce` 时则拒绝继续。参见[令牌按其资源进行检查](#v120-token-audience)。
-- **请知悉：滚动升级期间重启的 `v1.1` Pod 将无法启动。**实例配置现在带有 `infrastructure.tokenAudience`，而 `v1.1` 的服务在启动时会拒绝它不认识的键。在配置变更之后、滚动替换它之前被重新调度、驱逐或重启的 `v1.1` Pod，会一直无法启动，直到被 `v1.2` 的 Pod 替换，因此请让滚动升级持续进行，不要中途暂停。已经在运行的 Pod 继续运行。参见[令牌按其资源校验](#v120-token-audience)。
+- **请知悉：滚动升级期间重启的 `v1.1` Pod 将无法启动，它会等待替换它的 Pod。** 在 Pod 滚动之前有两处变化。实例配置现在带有 `infrastructure.tokenAudience`，而 `v1.1` 的服务在启动时会拒绝它不认识的键。此外，升级中的代理步骤（chart 的 pre-upgrade 钩子）会把代理的流和存储桶调整为 `v1.2` 声明的样子，而 `v1.1` 的 Pod 在启动时会按自己的声明检查它们，因此在该步骤之后启动的 `v1.1` Pod 可能会以 `stream ... does not match what this build declares` 停止。从那时起被重新调度、驱逐或重启的 `v1.1` Pod，会一直无法启动，直到被 `v1.2` 的 Pod 替换，滚动升级会自行完成这一替换，因此请让滚动升级持续进行，不要中途暂停。已经在运行的 Pod 继续运行。参见[令牌按其资源校验](#v120-token-audience)。
 - **如果你自己设置了 MCP 服务器的 `resourceUrl`，请在强制执行之前把它的 scheme 和主机写成小写。** 参见[令牌按其资源进行检查](#v120-token-audience)。
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 - **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
@@ -536,9 +555,11 @@ dcctl bootstrap local devicechain
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
 - **请知悉：吊销证书现在会结束其影响到的已打开会话。** 吊销证书颁发机构可能让整个设备群同时重新连接。参见[吊销证书会结束已打开的会话](#v120-x509-sessions)。
 - **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
+- **请在滚动升级完成之后再创建 Slack、Teams 和 PagerDuty 通知渠道。** 仍在运行的 `v1.1` Pod 会跳过新类型的渠道，且不会重试。参见[原生通知渠道](#v120-notification-channels)。
 
 - **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
-- **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
+- **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。参见[检测的内存](#v120-detect-memory)。
+- **`eventSources.ingestMetering` 无需任何操作。** 这是一个新的 Helm 值，其默认值 `legacy` 就是以往所有版本使用的接入计量方式。参见[接入计量](#v120-ingest-metering)。
 
 #### 检测分片并行运行 {#v120-detect-shards}
 
@@ -549,6 +570,19 @@ event-processing 的 `detectShards` 设置（默认 1，范围 1 到 64）按键
 - **新增两条告警**：`DetectShardSaturated`（某个分片是检测速度的上限）和 `DetectShardInvariantViolated`（各分片在检查点上意见不一致，检查点被拒绝）。无论取何值都会安装，但只有 `detectShards` 大于 1 时才可能触发。请把它们加入告警路由。同时新增一组 `detect_shard_*` 指标和 `detect_barrier_wait_seconds`；其中两个不带标签的在取 1 时以 0 导出。
 - **内存随 `detectShards` 增长。** 每个分片最多持有 1024 条排队消息，因此已在大于 1 的取值下运行的 Pod，在循环领先于最慢分片时，内存中最多可能积压 `detectShards` 倍于此数量的消息。依赖新设置之前请检查 Pod 的内存限制。
 - **回退**只需用旧值重启。检查点完全相同，没有需要撤销的内容。
+
+#### 检测的内存 {#v120-detect-memory}
+
+`event-processing` 中有两部分占用的内存会随事件速率增长。这两项变更都不会改变任何检测结果、检查点或设置。
+
+- **静默和会话规则每个设备只保留一个定时器。** 以前它们每个事件推入一个定时器，被取代的定时器要到期限才会移除。在 10,000 台设备、每秒 12,000 个事件、一条 5 分钟静默规则的条件下，引擎的存活堆从 369.9 MiB（3,660,015 个定时器）降到 2.6 MiB（10,000 个定时器）。滑动窗口只有在规则需要时才构建最小值和最大值的额外结构；在相同负载下，5 分钟平均值从 188.7 MiB 降到 178.9 MiB，对有趋势的序列降幅更大。检查点与以前逐字节相同，因此无需迁移，回退只需重启。`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的设备，如上文列表所述。
+- **重复事件防护更小。** 开启事件信封时，它在每秒 20,000 个事件下约占用 188 MiB 存活内存；现在约为 113 MiB，在任何速率下每个记住的事件约 9.4 字节，在每秒约 13,000 个事件附近也不再有内存跳变。它放行哪些事件保持不变。
+
+[内存上限](#v120-memory)和[缓存与代理的规模](#v120-sizing-defaults)中的内存下限是在这些变更之前测得的，没有调低：它们为带窗口的规则和更高的速率留有余量。
+
+#### 接入计量 {#v120-ingest-metering}
+
+chart 新增了一个值 `eventSources.ingestMetering`，用于决定 `event-sources` 如何按租户的接入上限对消息计量。其默认值 `legacy` 就是以往所有版本使用的计量方式，因此没有任何变化。另一个值 `lagCredit` 预留给一种计量方式：在平台短暂停顿期间，不会对保持在上限之内的租户进行削减。本版本中它尚不可用：使用它时 `event-sources` 会拒绝启动，而不是回退到 `legacy`，因此请不要设置该值。它以环境变量的形式传给 `event-sources` 的 Pod，并且有意不作为实例配置的键，因此升级期间重启的 `v1.1` Pod 永远不会看到它。`dcctl` 接受在 `--values` 覆盖文件中设置它。
 
 #### 内存上限 {#v120-memory}
 
@@ -668,6 +702,7 @@ C# SDK 和 Unity 包现在可以用 X.509 客户端证书连接设备。这是�
 
 - **叶证书会结束持有它的设备的会话。** 吊销证书颁发机构的范围更大：当您通过提供 CA 证书来吊销 CA，或某个 CRL 点名了已注册凭据被发现使用过的中间证书时，该信任锚下**所有拥有证书凭据的设备**的会话都会被结束。这些设备会自行重新连接；证书链仍受信任的设备会立即被接纳。一次调用自身会结束最多约 5,000 台设备的会话，因此 CA 级吊销可能让大约这么多设备在同一时刻重新连接；其余的在后台结束。**在从早期版本升级而来的实例上**，升级前注册的凭据没有记录中间证书，因此当某个 CRL 新增了与任何已存储凭据都不匹配的条目时，也会结束这些旧凭据的会话，以防该条目是它们所用的中间证书。
 - **会话会被结束两次。** 第一次在吊销提交时，第二次约 10 秒之后。第二次用于捕获吊销瞬间正在被接纳的设备。延迟由固定设置 `deviceManagement.callout.revocation.resweepAfter` 决定（默认 10 秒，最长 5 分钟）；它必须大于 callout 查询超时加上代理 5 秒的授权超时，否则 `device-management` 会拒绝启动。因此 CA 级吊销会对整个信任锚询问两次。
+- **在升级后的实例上，仅按指纹吊销可能返回 `sessionsEnded: false`。** 升级前注册的凭据没有记录中间证书，因此只用 `fingerprintSha256` 吊销中间证书，无法判断它影响哪些会话。吊销仍然有效，经由它的新连接会被拒绝，但结果会显示 `sessionsEnded: false`。请用该中间证书的 `certificatePem` 重复吊销，以结束该信任锚下所有设备的会话。
 - **面对响应缓慢的服务时，吊销可能耗时较长。** 调用最多会等待负责结束会话的服务（`event-sources`）约 90 秒。如果无法确认，吊销依然有效，新连接会被拒绝；结果会显示 `sessionsEnded: false`，平台会持续重试，重复执行吊销或上传也会再次询问。
 - **在滚动升级期间**，新的会话终止请求带有 `event-sources` 必须识别的新原因。在 `event-sources` 被替换之前，这些请求会保持待处理并被重试，因此升级过程中进行的吊销会在 `event-sources` 更新完成后结束已打开的会话。上一版本的 Pod 既不会处理这些待处理的请求，也不会删除它们。
 
@@ -739,7 +774,7 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 
 #### 架构变更与回退 {#v120-going-back}
 
-七个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
+八个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
 
 - **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
 - **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
@@ -748,6 +783,7 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 - **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
 - **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。迁移本身不写入任何行；`user-management` 首次启动时会写入默认放置（`iam_partition_config` 一行和 `iam_vpartition_assignments` 64 行），并在消息 broker 中创建 `dc_partition_placement` 存储桶。
 - **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
+- **不活动告警时间修复，第二遍**（`device-state`，迁移 `20261107120000`）。不改变架构。它处理第一遍运行期间被 `v1.1.0` 写入方锁住的行，重试约半分钟，之后仍被锁住的行会记录日志并跳过。回退到 `v1.1.0` 时无需撤销。
 
 除这份默认放置外，新表一开始都是空的。**回退到 `v1.1.0` 时，数据库中无需撤销任何内容：** 新的表、列和存储参数留在原处，`v1.1.0` 的服务会忽略它们，只有一个例外：见下文的租户删除。能向前走就向前走：升级失败时，再次运行 `dcctl upgrade` 即可修复。回退所需的配置变更，参见[令牌按其资源受到检查](#v120-token-audience)。
 
@@ -758,9 +794,16 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 通知渠道新增三种类型：`slack`、`teams` 和 `pagerduty`。它们是增量的：现有 `smtp` 或 `webhook` 渠道不受影响，通过 `webhook` 渠道访问的 Slack 入站 webhook 仍照常工作。
 
 - **升级时无需任何操作。** 新类型的渠道需要密钥（webhook URL 或 PagerDuty 路由密钥），没有密钥时保存会被拒绝。参见[原生 Slack、Teams 和 PagerDuty 渠道](../guides/notification-channels.md#native-channels)。
+- **请在滚动升级完成后再创建 Slack、Teams 和 PagerDuty 渠道。** 滚动期间仍在运行的上一版本 Pod 不认识这些新类型：它们会以 `no_adapter` 跳过这类目标且不会重试，因此由它们处理的告警不会送达该渠道。
 - **请注意，新类型与 webhook 经过同一道出站防护。** 指向私有、环回或云元数据地址的目标会被拒绝，并计入 `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`。
 - **请注意，`notificationChannelTypes` 查询现在多列出三种类型，** GraphQL 模式只有描述发生变化。对渠道类型做穷尽匹配的客户端会多看到三个值。
 - **控制台新增了通知渠道页面，** 可配置所有类型的渠道。
+
+#### 已知问题 {#v120-known-issues}
+
+- **失败即关闭的 MQTT 确认默认关闭，** 与 `v1.1.0` 相同。[MQTT 传输](../reference/transport-matrix.md#mqtt--the-platform-broker)页面给出了关闭和开启时的实测限制。
+- **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。计划在一个补丁版本中修复。
+- **`eventSources.ingestMetering: lagCredit` 尚不可用；** 参见[接入计量](#v120-ingest-metering)。
 
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 
