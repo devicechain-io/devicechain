@@ -344,9 +344,8 @@ func isFullIRI(s string) bool {
 // the grave accent. It returns found=false, never a zero rune, for a clean
 // string: NUL is a character that must be refused, so it cannot also mean "none".
 func badChar(s string) (bad rune, found bool) {
-	if !utf8.ValidString(s) {
-		return utf8.RuneError, true
-	}
+	// Ranging over a string yields U+FFFD for each invalid byte, so the
+	// RuneError test also refuses invalid UTF-8.
 	for _, c := range s {
 		if c == utf8.RuneError || unicode.IsControl(c) || unicode.IsSpace(c) || unicode.Is(unicode.Cf, c) ||
 			strings.ContainsRune("<>\"{}|\\^`", c) {
