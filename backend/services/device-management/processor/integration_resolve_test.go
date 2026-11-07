@@ -54,7 +54,8 @@ func (r *integrationRig) setAliases(device string, euis ...string) {
 func newIntegrationRig(t *testing.T) *integrationRig {
 	t.Helper()
 	tables := append(append([]any{}, resolveRigTables...),
-		&model.Integration{}, &model.IntegrationDeviceType{}, &model.DeviceAlias{}, &model.IntegrationUnregisteredDevice{})
+		&model.Integration{}, &model.IntegrationDeviceType{}, &model.DeviceAlias{}, &model.IntegrationUnregisteredDevice{},
+		&model.ProfileDecoderSample{}, &model.ProfileDecoderHealth{})
 	rig := buildResolveRig(t, putest.NewSQLiteDB(t, tables...), false, 0, nil)
 	keys := dmtest.EnrollmentKeys()
 	rig.api.EnrollmentKeys = keys

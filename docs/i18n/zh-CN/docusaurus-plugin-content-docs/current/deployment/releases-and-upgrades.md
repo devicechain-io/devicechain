@@ -526,6 +526,7 @@ dcctl bootstrap local devicechain
 - **了解滚动升级期间，配置文件和设备类型的变更会较晚到达已升级的副本。** 参见[滚动升级期间的配置文件变更](#v120-profile-cache)。
 - **请注意：带有载荷解码器的设备类型的上行消息会在一个小型流中等待。** 参见[解码器上行消息与 device-management 中断](#v120-decoder-stream)。
 - **处理新的失败事件原因 `DECODE_FAILED`。** 对 `FailedEventReason` 做穷举 `switch` 的客户端会多看到一个值。参见[新的失败事件原因](#v120-decode-failed)。
+- **预期持续失败的载荷解码器不再灌满失败事件。** 对每个设备类型，每个 `device-management` 副本记录前 20 次解码失败，之后每分钟记录 10 次；其余失败的源消息会被确认（ack），并计为已抑制，不再记录。新增两条告警 `PayloadDecoderFailuresHigh` 和 `PayloadDecoderSuppressing`：请把它们加入告警路由。参见[持续失败的载荷解码器有预算限制](#v120-decoder-budget)。
 - **请注意 `DeviceState.inactivityAlarmTime` 已恢复为 `v1.1.0` 之前的行为。** `v1.1.0` 由 `lastDisconnectTime` 推导该字段，因此对于因断开报告而离线、从未沉默的设备，它也会返回一个时间。现在它重新表示不活跃扫描将设备标记为不活跃的时刻；对于尚未被扫描标记或已重新活跃的设备则为 null。该字段仍已弃用，将在下一个主版本中移除，仍应使用 `lastDisconnectTime`。`v1.2.0` 首次启动会修复 `v1.1.0` 留下的行：清除活跃设备上残留的值，并为不活跃且没有该值的推断设备用 `lastDisconnectTime` 填充。滚动升级仍在进行时，被 `v1.1.0` 的 Pod 标记为不活跃的设备，该字段返回该 Pod 标记它的时刻（从 `lastDisconnectTime` 读取），与 `v1.0.0` 一致。随后第二个迁移会处理第一个迁移运行期间被 `v1.1.0` 写入方持有锁的行，并重试约半分钟。之后仍被持有的行会被记录并保留，读取该字段时仍会得到正确的结果。
 - **只有当每个 `device-management` 副本都运行本版本之后，才发布配置文件的载荷解码器。**在旧副本仍在提供服务时发布的版本，可能缺少它的解码器；参见[载荷解码器](#v120-payload-decoders)。
 - **请知悉：X.509 证书吊销列表是新增的可选功能。** 升级本身无需任何操作；上传之前请先阅读[吊销列表](#v120-x509-crl)。
@@ -602,6 +603,18 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 
 `FailedEventReason` 新增 `DECODE_FAILED`：载荷解码器拒绝了某个集成的上行消息。错误文本的开头说明了原因（例如 `no_section`、`eval_error` 或 `invalid_output`）。它在第一次投递时即被记录，不会重试，因为相同的上行消息和解码器会给出相同的结果。版本策略允许在次要版本中新增枚举值；对原因做穷举 `switch` 的客户端应处理该值，较旧的 event-management 会把该编号显示为 `UNKNOWN`，并附带 `reasonCode`。`dcctl` 的 `--reason` 接受 `DECODE_FAILED`。
 
+#### 持续失败的载荷解码器有预算限制 {#v120-decoder-budget}
+
+对某个设备不正确的解码器，会在该设备的每条上行消息上失败，而每次失败过去都会产生一条失败事件记录。在流量大的租户上，这会在全平台共用的流里产生大量记录。从本版本起，`device-management` 在写入记录之前，对每个设备类型执行预算限制：
+
+- **记录。** 在每个副本上，对每个租户和设备类型，前 20 次解码失败会记入失败事件（原因为 `DECODE_FAILED`，并归档该上行消息）。之后每分钟再记录 10 次。其余失败的源消息会被确认而不产生记录，并计为**已抑制**。只有在该设备类型已写入 20 条记录之后才会出现已抑制的失败，所以损坏的解码器不会悄无声息。
+- **样本。** 在每个副本上，对每个租户和配置文件，每 10 秒保留一条失败的上行消息，每个配置文件保留最新的 20 条。测试面板可以把其中一条载入解码器测试，得到它在线上时的结果。样本是尽力而为的：无法保存的样本（写入失败，或携带的 JSON 无法重新编码）会计入 `resolve_decode_samples_dropped_total`，其失败仍会被记录。
+- **预算按副本计算，** 因此租户的总量会随副本数增加。没有可配置的选项。
+- **每条上行消息每次投递只计一次。** 配置文件的解码器健康度按分钟汇总已解码、已忽略、失败（已记录）和已抑制（未记录）的上行消息。`payloadDecoderHealth` 中的计数是 `Float` 而不是 `Int`，因为流量大的解码器一周内就会超过 32 位整数；它们是整数，在 2^53 以内精确。`device-management` GraphQL API 上的 `payloadDecoderHealth` 和 `payloadDecoderSamples` 查询是新增的、向后兼容的，并且需要 `device:write`；样本的字节只能通过带 `sampleId` 的 `testPayloadDecoder` 获取，权限相同。健康度记录保留 7 天。
+- **崩溃后计数可能偏少。** 汇总每分钟写入一次，所以崩溃最多丢失一分钟的计数，不会丢失失败事件记录。崩溃后，或失败事件流不可用期间，被重新投递的上行消息可能被计两次。被重新投递的失败总是会被记录，并且仍会消耗预算中的一个令牌。
+- **新增两条告警。** 当 15 分钟内超过 5% 的已解码上行消息失败时触发 `PayloadDecoderFailuresHigh`，当 10 分钟内被抑制的失败超过 50 次时触发 `PayloadDecoderSuppressing`。它们不带租户标签；失败事件索引和配置文件的解码器健康度会指明租户和配置文件。新增指标：`resolve_decode_suppressed_total`、`resolve_decode_samples_dropped_total`、`resolve_decode_health_flush_failures_total`、`resolve_decode_health_lost_total` 和 `resolve_decode_unattributed_total`。
+- **升级时无需任何操作。** 这些表由本版本较早的迁移创建，不会运行新的迁移。早于本版本的副本不会写入健康度或样本，也不会对失败应用预算。
+
 #### 解码器上行消息与 device-management 中断 {#v120-decoder-stream}
 
 带有载荷解码器的设备类型的上行消息，通过专用的流从 event-sources 传给 device-management。该流很小且大小固定（32 MiB），因此默认的 JetStream 卷和已发布的容量表都不会变化。如果 device-management 停止读取，该流在高速率下几秒内就会写满，随后 event-sources 对这些集成的请求返回 503。会重试失败投递的发送方会在该流排空后送达上行消息；不重试的发送方则不会。The Things Stack 的 webhook 仅在启用其可选的 webhook 重试功能（Cloud Plus 功能，任何非 2xx 响应都算一次失败尝试）时才会重试失败的投递，而 ChirpStack v4 的 HTTP 集成没有文档说明任何重试，因此应将其在中断期间发送的上行消息视为不会被重新投递。已被接受（返回 202）的上行消息不会丢失。没有解码器的设备类型的上行消息照常处理，不受影响。请运行多个 device-management 副本（至少足以让重启其中一个不会中断读取），使中断保持短暂。
@@ -621,7 +634,7 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **编写和测试包含在本版本中。**控制台的配置文件页面有一个 **Decoder** 选项卡。在 `device-management` 的 GraphQL API 上，`setDeviceProfileDecoder` 和 `clearDeviceProfileDecoder` 写入配置文件的草稿解码器，`testPayloadDecoder` 在不存储任何内容的情况下对一个输入运行解码器，`payloadDecoderFunctions` 列出函数库。`DeviceProfile.decoder` 和 `DeviceProfileVersion.decoder` 是新增的可空字段。以上全部是增量变化。
 - **对实时上行的解码已包含在本版本中。**当[入站集成](../guides/inbound-integrations.md)上行所属的设备，其设备类型的配置文件版本带有解码器时，`device-management` 会用该解码器解码这条上行，网络服务器解码出的内容不会被存储。event-sources 会把设备类型的解码器查询结果记住约一分钟，因此在你发布解码器之后的一分钟内，上行仍可能按网络服务器解码出的内容存储。没有解码器的设备类型的上行照旧存储。上行在被接受时计入租户的接入额度：至少是解码器的最大读数数（集成存储链路指标时再加 3），运行代价高的解码器更多，且最多 256。如果期间发布的解码器产生了更多读数，这些读数仍会被存储，`device-management` 会统计超出的部分。解码失败的上行不会存储任何内容，而是被记录为原因为 `DECODE_FAILED` 的失败事件；参见[新的失败事件原因](#v120-decode-failed)。集成端点现在还会向 `device-management` 询问设备的类型是否有解码器，无法得到答复、且没有记住最近 15 分钟内的答复时返回 `503`，而不是存储本应由解码器产生的读数。如果 `device-management` 还不认识这个查询（滚动升级期间可能出现），上行照旧存储。
 - **发布取决于解码器。**带有解码器的配置文件，只有在解码器能针对该版本的指标编译、且所有已保存的测试向量都通过时，才能发布或回滚到该版本。没有解码器的配置文件不受影响。
-- **迁移是增量的。**它为设备配置文件增加一个可空列，以及两张目前还没有任何内容写入的表。旧副本不会读取它们。
+- **迁移是增量的。**它为设备配置文件增加一个可空列，以及两张由 `device-management` 写入解码器健康度与失败样本的表（参见[持续失败的载荷解码器有预算限制](#v120-decoder-budget)）。旧副本不会读取它们。
 - **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
 - **滚动升级期间，只有当每个 `device-management` 副本都运行本版本之后，才发布解码器。**由旧副本处理请求时发布的版本，会在没有解码器的情况下被冻结，因为该副本不认识这个字段。升级完成后，请检查你发布的版本上是否存在 `DeviceProfileVersion.decoder`，如果没有，请重新发布。
 

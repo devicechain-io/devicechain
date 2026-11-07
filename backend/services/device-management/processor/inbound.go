@@ -479,6 +479,11 @@ func WithDeadLetters(p *deadletter.Producer) InboundOption {
 // test can check main.go hands on the producer core/service built.
 func (iproc *InboundEventsProcessor) DeadLetters() *deadletter.Producer { return iproc.deadLetters }
 
+// DecodeObserver is the observer every resolver of the pool tells its decode outcomes to (see
+// WithDecodeObserver). The service's wiring test pins that it is the accountant: without one a
+// failing decoder is unbudgeted.
+func (iproc *InboundEventsProcessor) DecodeObserver() DecodeObserver { return iproc.decodeObserver }
+
 // tenantDeleted answers the dead-letter producer's tenant-deletion gate, reading "not deleted"
 // with no producer. It is a method, and the resolvers hold it as a method value, so the
 // producer is read when a resolution fails rather than copied when the pool is built.

@@ -44,7 +44,7 @@ type e2eRig struct {
 	iproc *InboundEventsProcessor
 }
 
-func newE2ERig(t *testing.T) *e2eRig {
+func newE2ERig(t *testing.T, opts ...InboundOption) *e2eRig {
 	t.Helper()
 	rig := newIntegrationRig(t)
 	rig.publishDecoderForE2E()
@@ -102,8 +102,8 @@ func newE2ERig(t *testing.T) *e2eRig {
 	iproc := NewInboundEventsProcessor(dm.Microservice, []messaging.MessageReader{inboundReader}, resolved, failed,
 		core.NewNoOpLifecycleCallbacks(), rig.capi, config.AuthModeDisabled,
 		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second, NewResolveMetrics(dm.Microservice),
-		WithIntegrationUplinkReaders([]messaging.MessageReader{uplinkReader}),
-		WithSecretTransit(testSecretTransit(t)))
+		append([]InboundOption{WithIntegrationUplinkReaders([]messaging.MessageReader{uplinkReader}),
+			WithSecretTransit(testSecretTransit(t))}, opts...)...)
 	require.NoError(t, iproc.Initialize(context.Background()))
 	require.NoError(t, iproc.Start(context.Background()))
 	t.Cleanup(func() { _ = iproc.Stop(context.Background()) })
@@ -199,4 +199,65 @@ func brokerAddr(t *testing.T, clientURL string) (string, uint32) {
 	port, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
 	return u.Hostname(), uint32(port)
+}
+
+// THE RECORD BUDGET, ON A REAL BROKER. A decoder that fails on every uplink must not write a
+// failed-events record for every one: the first DecodeRecordBurst are recorded, the rest are acked
+// and counted as suppressed. Nothing is redelivered and nothing is silent.
+func TestABrokenDecoderCannotFloodFailedEvents(t *testing.T) {
+	const offered = 30
+	clock := newFakeClock()
+	store := &fakeStore{}
+	acct := newDecodeAccountant(store, "pod-a", nil, clock.now)
+	e := newE2ERig(t, WithDecodeObserver(acct))
+	for i := 0; i < offered; i++ {
+		e.publish(frameUplink(0x00))
+	}
+
+	// Every source is settled (acked) exactly once, none redelivered.
+	require.Eventually(t, func() bool {
+		ci := e.consumerInfo(streams.IntegrationUplinks, "device-management")
+		return ci.AckFloor.Consumer == offered && ci.NumAckPending == 0 && ci.NumPending == 0
+	}, 20*time.Second, 50*time.Millisecond)
+	require.EqualValues(t, offered, e.consumerInfo(streams.IntegrationUplinks, "device-management").Delivered.Consumer)
+
+	// The failed-events stream holds the budget, not the flood.
+	info, err := e.js.StreamInfo(messaging.StreamName(e2eInstance, streams.FailedEvents))
+	require.NoError(t, err)
+	require.EqualValues(t, DecodeRecordBurst, info.State.Msgs, "records are bounded by the budget")
+
+	// And the tally accounts for every uplink offered.
+	require.NoError(t, acct.Flush(context.Background()))
+	r, found := store.last("acme", "p", 2)
+	require.True(t, found, "%+v", store.writes)
+	require.EqualValues(t, DecodeRecordBurst, r.Failed)
+	require.EqualValues(t, offered-DecodeRecordBurst, r.Suppressed)
+	require.EqualValues(t, offered, r.Decoded+r.Ignored+r.Failed+r.Suppressed)
+}
+
+// THE LOOP MARKS A REDELIVERY. A message the broker delivers a second time reaches the observer as
+// Redelivered, and a first delivery does not. The messages are handed to the resolver pool the way a
+// reader hands them (NumDelivered is the broker's count).
+func TestTheResolverLoopTellsTheObserverARedeliveryWhenTheCountIsAbove1(t *testing.T) {
+	obs := &recordingObserver{}
+	e := newE2ERig(t, WithDecodeObserver(obs))
+
+	ev := e.uplink("chirp-1", e.token, frameUplink(0x00))
+	ev.OccurredTime, ev.ProcessedTime = time.Now(), time.Now()
+	wire, err := esproto.MarshalUnresolvedEvent(ev)
+	require.NoError(t, err)
+	subject := messaging.ScopedSubject(e2eInstance, "acme", streams.IntegrationUplinks)
+
+	e.iproc.messages <- messaging.NewConsumedMessage(subject, wire, 1, nil, nil)
+	e.iproc.messages <- messaging.NewConsumedMessage(subject, wire, 3, nil, nil)
+	require.Eventually(t, func() bool { return len(obs.all()) == 2 }, 20*time.Second, 20*time.Millisecond)
+
+	got := obs.all()
+	redelivered := 0
+	for _, o := range got {
+		if o.Redelivered {
+			redelivered++
+		}
+	}
+	require.Equal(t, 1, redelivered, "exactly the message delivered a third time is a redelivery: %+v", got)
 }

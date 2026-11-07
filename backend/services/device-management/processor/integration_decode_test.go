@@ -76,12 +76,15 @@ type decodeRig struct {
 type recordingObserver struct {
 	mu  sync.Mutex
 	got []DecodeObservation
+	// refuse, when set, is the verdict on a failed outcome's record (false suppresses it).
+	refuse bool
 }
 
-func (o *recordingObserver) ObserveDecode(d DecodeObservation) {
+func (o *recordingObserver) ObserveDecode(d DecodeObservation) bool {
 	o.mu.Lock()
 	o.got = append(o.got, d)
 	o.mu.Unlock()
+	return !(o.refuse && d.Outcome == DecodeFailed)
 }
 
 func (o *recordingObserver) all() []DecodeObservation {
