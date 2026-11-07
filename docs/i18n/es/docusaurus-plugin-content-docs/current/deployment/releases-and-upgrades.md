@@ -1005,7 +1005,7 @@ Nada de esto requiere acción, salvo los dos elementos de `dcctl` de la lista an
 
 Un nuevo widget **Símbolo SCADA** está en el menú **Añadir widget**, en Telemetría. Dibuja una bomba, válvula, depósito, motor, ventilador, tramo de tubería, sensor, interruptor o luz en el estado que le da una medición: en marcha, detenido o con falla, con el sentido del flujo en una tubería, en modo claro y oscuro. Se suma a los widgets existentes sin cambiar ninguno, y un tablero que no lo use no se ve afectado.
 
-No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md#adding-a-widget) para sus opciones.
+No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md) para sus opciones.
 
 #### Cambios de esquema y cómo volver atrás {#v120-going-back}
 
