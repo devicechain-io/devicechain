@@ -266,3 +266,197 @@ func TestADashboardWhoseDraftWasNeverPublishedOrDiffersFromItsPublishedVersionIs
 		t.Fatalf("an unpublished dashboard was not noticed:\n%s", text)
 	}
 }
+
+func TestASecretUsedAsAnObjectKeyIsFoundAndNotRepeated(t *testing.T) {
+	const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdef"
+	b := fixture(t)
+	b.Dashboards[0].Definition = Doc(`{"` + jwt + `":"harmless"}`)
+	fs := b.Scan()
+	if len(fs) != 1 || !strings.Contains(fs[0].Rule, "object key") {
+		t.Fatalf("a secret-shaped key was not reported: %v", fs)
+	}
+	if strings.Contains(fs[0].String(), "eyJhbGci") {
+		t.Errorf("the key was repeated: %s", fs[0])
+	}
+	if err := b.Write(t.TempDir()); err == nil {
+		t.Error("export wrote a bundle whose key is a credential")
+	}
+	// Counterweight: an ordinary key is not flagged.
+	b.Dashboards[0].Definition = Doc(`{"title":"harmless"}`)
+	if fs := b.Scan(); len(fs) != 0 {
+		t.Errorf("an ordinary key was flagged: %v", fs)
+	}
+}
+
+// outsideTree is a directory beside the bundle holding files an export must never touch.
+func outsideTree(t *testing.T) (string, []string) {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, n := range []string{"keep-1.yaml", "keep-2.json"} {
+		if err := os.WriteFile(filepath.Join(out, n), []byte("precious"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, n)
+	}
+	return out, names
+}
+
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symlinks here: %v", err)
+	}
+}
+
+func TestExportNeverDeletesThroughASymlinkedManagedDirectory(t *testing.T) {
+	for _, sub := range managedDirs {
+		t.Run(sub, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "b")
+			if err := fixture(t).Write(dir); err != nil {
+				t.Fatal(err)
+			}
+			out, names := outsideTree(t)
+			if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+				t.Fatal(err)
+			}
+			symlinkOrSkip(t, out, filepath.Join(dir, sub))
+			if err := fixture(t).Write(dir); err == nil {
+				t.Fatal("export went through a symlinked managed directory")
+			}
+			for _, n := range names {
+				if _, err := os.Stat(filepath.Join(out, n)); err != nil {
+					t.Errorf("a file outside the bundle was deleted: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestExportRefusesASymlinkedEntryAndKeepsTheBundle(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "b")
+	if err := fixture(t).Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	out, names := outsideTree(t)
+	symlinkOrSkip(t, filepath.Join(out, names[0]), filepath.Join(dir, "dashboards", "link.json"))
+	before := tree(t, dir)
+	if err := fixture(t).Write(dir); err == nil {
+		t.Fatal("expected a refusal for a symlinked entry")
+	}
+	if _, err := os.Stat(filepath.Join(out, names[0])); err != nil {
+		t.Errorf("the link target was deleted: %v", err)
+	}
+	for name := range before {
+		if _, ok := tree(t, dir)[name]; !ok {
+			t.Errorf("%s was removed by a refused write", name)
+		}
+	}
+}
+
+func TestConfinedRejectsAPathThatResolvesOutside(t *testing.T) {
+	root := t.TempDir()
+	out, _ := outsideTree(t)
+	if err := confined(root, root); err != nil {
+		t.Errorf("the root itself: %v", err)
+	}
+	symlinkOrSkip(t, out, filepath.Join(root, "profiles"))
+	if err := confined(root, filepath.Join(root, "profiles")); err == nil {
+		t.Error("a link out of the root was accepted")
+	}
+	if err := confined(root, out); err == nil {
+		t.Error("a sibling directory was accepted")
+	}
+}
+
+func TestSwappingDefinitionsBetweenProfilesIsBlockedBeforeAnyWrite(t *testing.T) {
+	f, dir := seeded(t)
+	editBundle(t, dir, func(b *Bundle) {
+		b.Profiles[0].Metrics = append(b.Profiles[0].Metrics, Metric{Token: "m-a", Key: "shared", DataType: "DOUBLE"})
+		b.Profiles[1].Metrics = append(b.Profiles[1].Metrics, Metric{Token: "m-b", Key: "shared", DataType: "DOUBLE"})
+	})
+	apply(t, f, dir, env(defaultEnv))
+	editBundle(t, dir, func(b *Bundle) {
+		take := func(p *Profile, tok string) Metric {
+			for i, m := range p.Metrics {
+				if m.Token == tok {
+					p.Metrics = append(p.Metrics[:i:i], p.Metrics[i+1:]...)
+					return m
+				}
+			}
+			t.Fatalf("no metric %s", tok)
+			return Metric{}
+		}
+		ma, mb := take(&b.Profiles[0], "m-a"), take(&b.Profiles[1], "m-b")
+		b.Profiles[0].Metrics = append(b.Profiles[0].Metrics, mb)
+		b.Profiles[1].Metrics = append(b.Profiles[1].Metrics, ma)
+	})
+	p := plan(t, f, dir, env(defaultEnv))
+	if len(p.Blockers) == 0 || !strings.Contains(p.Blockers[0], "separate apply") {
+		t.Fatalf("expected a blocker for the cross-profile swap:\n%s", planText(p))
+	}
+	before := f.writes
+	if err := p.Apply(context.Background(), &bytes.Buffer{}); err == nil || f.writes != before {
+		t.Fatalf("apply wrote before refusing a cross-profile swap: %v (writes %d -> %d)", err, before, f.writes)
+	}
+}
+
+func TestAMoveOntoAKeyNobodyHoldsIsNotBlocked(t *testing.T) {
+	f, dir := seeded(t)
+	editBundle(t, dir, func(b *Bundle) {
+		// m-kwh moves from meter to thermostat; the key is free there.
+		m := b.Profiles[0].Metrics[0]
+		b.Profiles[0].Metrics = nil
+		b.Profiles[1].Metrics = append(b.Profiles[1].Metrics, m)
+	})
+	p := plan(t, f, dir, env(defaultEnv))
+	if len(p.Blockers) != 0 {
+		t.Fatalf("a free key was blocked: %v", p.Blockers)
+	}
+}
+
+func TestAReparentedDefinitionNamesTheProfileItLeftWhenThatProfileIsNotInTheBundle(t *testing.T) {
+	f, dir := seeded(t)
+	editBundle(t, dir, func(b *Bundle) {
+		m := b.Profiles[0].Metrics[0]
+		b.Profiles[0].Metrics = nil
+		b.Profiles[1].Metrics = append(b.Profiles[1].Metrics, m)
+	})
+	// Drop the meter profile (and its device type) from the bundle: the tenant keeps it.
+	b, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Profiles = b.Profiles[1:]
+	b.DeviceTypes = b.DeviceTypes[:1]
+	p, err := PlanBundle(context.Background(), f, ep(), b, env(defaultEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := planText(p); !strings.Contains(text, "moved out of profile meter, which is not in the bundle") {
+		t.Fatalf("the unmanaged source profile is not reported:\n%s", text)
+	}
+}
+
+func TestExportRefusesAManagedDirectoryLinkedToAnotherInsideTheBundle(t *testing.T) {
+	// The link stays within the bundle root, so confinement alone would pass it; deleting
+	// "through" it would still empty a different kind's directory.
+	dir := filepath.Join(t.TempDir(), "b")
+	if err := fixture(t).Write(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "connectors")); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, filepath.Join(dir, "dashboards"), filepath.Join(dir, "connectors"))
+	before := tree(t, filepath.Join(dir, "dashboards"))
+	if err := fixture(t).Write(dir); err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if len(tree(t, filepath.Join(dir, "dashboards"))) != len(before) {
+		t.Error("the linked directory's files were deleted")
+	}
+}

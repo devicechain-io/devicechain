@@ -90,6 +90,11 @@ func scanNode(where, key string, v any, sensitive bool) []Finding {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, c := range x {
+			for _, r := range valueRules {
+				if r.re.MatchString(k) {
+					out = append(out, Finding{where + "." + safeKey(k), "an object key that looks like " + r.name})
+				}
+			}
 			out = append(out, scanNode(where+"."+safeKey(k), k, c, sensitive)...)
 		}
 	case []any:

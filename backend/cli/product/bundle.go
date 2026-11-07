@@ -311,15 +311,18 @@ func (b *Bundle) Write(dir string) error {
 		if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
 			return fmt.Errorf("%s is not empty and holds no %s: refusing to write a bundle into it", dir, ManifestFile)
 		}
+		if fi, err := os.Lstat(filepath.Join(dir, ManifestFile)); err != nil || !fi.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file: refusing to write a bundle through it", filepath.Join(dir, ManifestFile))
+		}
 		// Check every managed directory BEFORE removing anything from any of them, so a
 		// refusal cannot leave an existing bundle half-emptied.
 		for _, d := range managedDirs {
-			if err := checkFilesOnly(filepath.Join(dir, d)); err != nil {
+			if err := checkFilesOnly(dir, filepath.Join(dir, d)); err != nil {
 				return err
 			}
 		}
 		for _, d := range managedDirs {
-			if err := removeFiles(filepath.Join(dir, d)); err != nil {
+			if err := removeFiles(dir, filepath.Join(dir, d)); err != nil {
 				return err
 			}
 		}
@@ -378,25 +381,61 @@ func (b *Bundle) Write(dir string) error {
 	return nil
 }
 
-// checkFilesOnly reports whether d holds nothing but regular files (or does not exist).
-func checkFilesOnly(d string) error {
-	ents, err := os.ReadDir(d)
+// confined resolves d and root through any symlinks and reports an error unless d lies
+// inside root. A managed directory that is, or sits behind, a link to somewhere else would
+// otherwise let an export delete files that are not part of the bundle.
+func confined(root, d string) error {
+	rr, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	rd, err := filepath.EvalSymlinks(d)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(rr, rd)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("%s resolves outside the bundle (%s): refusing to touch it", d, rd)
+	}
+	return nil
+}
+
+// checkFilesOnly reports whether d, a managed kind directory of the bundle at root, is a
+// real directory inside it holding nothing but regular files (or does not exist). A symlink,
+// whether the directory itself or an entry in it, is refused rather than followed.
+func checkFilesOnly(root, d string) error {
+	fi, err := os.Lstat(d)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return fmt.Errorf("%s is a symbolic link or not a directory: refusing to export through it", d)
+	}
+	if err := confined(root, d); err != nil {
+		return err
+	}
+	ents, err := os.ReadDir(d)
+	if err != nil {
+		return err
+	}
 	for _, e := range ents {
-		if e.IsDir() {
-			return fmt.Errorf("%s: unexpected directory %q in a bundle", d, e.Name())
+		if !e.Type().IsRegular() {
+			return fmt.Errorf("%s: %q is not a regular file (a directory or symbolic link) and cannot be part of a bundle", d, e.Name())
 		}
 	}
 	return nil
 }
 
-// removeFiles deletes the regular files directly inside d (a managed kind directory).
-func removeFiles(d string) error {
+// removeFiles deletes the regular files directly inside d (a managed kind directory of the
+// bundle at root). It re-checks each entry as it goes, so a link planted after the check is
+// still never followed.
+func removeFiles(root, d string) error {
+	if err := checkFilesOnly(root, d); err != nil {
+		return err
+	}
 	ents, err := os.ReadDir(d)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -404,11 +443,27 @@ func removeFiles(d string) error {
 	if err != nil {
 		return err
 	}
+	// Remove through an os.Root: even a link swapped in after the checks cannot take a delete
+	// outside the bundle.
+	rt, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
 	for _, e := range ents {
-		if e.IsDir() {
-			return fmt.Errorf("%s: unexpected directory %q in a bundle", d, e.Name())
+		p := filepath.Join(d, e.Name())
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return err
 		}
-		if err := os.Remove(filepath.Join(d, e.Name())); err != nil {
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%s is not a regular file: refusing to delete it", p)
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		if err := rt.Remove(rel); err != nil {
 			return err
 		}
 	}

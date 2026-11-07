@@ -194,6 +194,10 @@ type planner struct {
 	// liveProfiles lets a definition that is moving between profiles be compared with where
 	// it is now.
 	liveProfiles map[string]*LiveProfile
+	// inBundle is the profiles the bundle carries; keyAt is which definition each live profile
+	// holds a key under (profile, kind, key), across the whole tenant.
+	inBundle map[string]bool
+	keyAt    map[[3]string]string
 }
 
 func (pl *planner) add(ch Change, desc string, run func(ctx context.Context) error) {
@@ -528,6 +532,19 @@ func (pl *planner) profiles(b *Bundle, l *Live) {
 	for _, p := range b.Profiles {
 		inBundle[p.Token] = true
 	}
+	pl.inBundle = inBundle
+	pl.keyAt = map[[3]string]string{}
+	for _, lp := range l.Profiles {
+		for _, m := range lp.Metrics {
+			pl.keyAt[[3]string{lp.Token, string(KindMetric), m.Key}] = m.Token
+		}
+		for _, m := range lp.CalculatedMetrics {
+			pl.keyAt[[3]string{lp.Token, string(KindMetric), m.Key}] = m.Token
+		}
+		for _, c := range lp.Commands {
+			pl.keyAt[[3]string{lp.Token, string(KindCommand), c.Key}] = c.Token
+		}
+	}
 	for _, p := range b.Profiles {
 		for _, t := range desiredTokens(p) {
 			if ow, ok := liveAt[t.kind][t.token]; ok && ow.profile != p.Token && inBundle[ow.profile] {
@@ -634,19 +651,6 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 		haveIn[KindRule][r.Token] = r.input()
 	}
 
-	// keyOwner is which definition of this profile holds each key now, so an update that
-	// takes a key a retained definition still holds is caught before anything is written.
-	keyOwner := map[Kind]map[string]string{KindMetric: {}, KindCommand: {}}
-	for _, m := range have.Metrics {
-		keyOwner[KindMetric][m.Key] = m.Token
-	}
-	for _, m := range have.CalculatedMetrics {
-		keyOwner[KindMetric][m.Key] = m.Token
-	}
-	for _, c := range have.Commands {
-		keyOwner[KindCommand][c.Key] = c.Token
-	}
-
 	docs := map[Kind][3]string{
 		KindMetric:  {mCreateMetric, mUpdateMetric, mDeleteMetric},
 		KindCommand: {mCreateCommand, mUpdateCommand, mDeleteCommand},
@@ -692,25 +696,29 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 					cur = pl.liveInputOf(w.kind, w.token, ow.profile)
 				}
 				changed, names := diffInputs(w.input, cur)
-				if k, ok := changed[keyField(w.kind)].(string); ok {
-					if other := keyOwner[w.kind][k]; other != "" && other != w.token && wanted[w.kind][other] {
-						pl.block("%s %q takes the key %q that %q holds in the tenant; updates run in token order, so free the key in a separate apply first", label[w.kind], w.token, k, other)
-						continue
-					}
+				if pl.blockKeyConflict(d.Token, w.kind, w.token, w.input, wanted, label[w.kind]) {
+					continue
 				}
+				note := ""
 				if ow.profile != d.Token {
 					changed["deviceProfileToken"] = d.Token
 					names = append([]string{"profile"}, names...)
+					if !pl.inBundle[ow.profile] {
+						note = "moved out of profile " + ow.profile + ", which is not in the bundle"
+					}
 				}
 				if len(names) == 0 {
 					continue
 				}
-				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionUpdate, Fields: names},
+				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionUpdate, Fields: names, Note: note},
 					"update "+label[w.kind]+" "+w.token, func(ctx context.Context) error {
 						return pl.send(ctx, pl.ep.DeviceManagement, docs[w.kind][1], map[string]any{"token": w.token, "request": changed})
 					})
 			}
 			if pass == "create" && !exists {
+				if pl.blockKeyConflict(d.Token, w.kind, w.token, w.input, wanted, label[w.kind]) {
+					continue
+				}
 				in := createInput(w.input, map[string]any{"token": w.token, "deviceProfileToken": d.Token})
 				mark(Change{Kind: kind, Token: w.token, Parent: d.Token, Action: ActionCreate},
 					"create "+label[w.kind]+" "+w.token, func(ctx context.Context) error {
@@ -752,6 +760,25 @@ func (pl *planner) profile(d Profile, live *LiveProfile, liveAt map[Kind]map[str
 				return pl.send(ctx, pl.ep.DeviceManagement, mPublishProfile, map[string]any{"token": d.Token, "label": pl.o.label()})
 			})
 	}
+}
+
+// blockKeyConflict refuses, before anything is written, a definition whose key in its
+// DESTINATION profile is held by another definition the bundle keeps. Keys are unique per
+// profile and the operations are not ordered across profiles, so a swap (or a move onto a
+// key the occupant has not yet vacated) would fail at the server on every retry, after some
+// of the run had already been applied. It reports whether it blocked.
+func (pl *planner) blockKeyConflict(profile string, k Kind, token string, input map[string]any, wanted map[Kind]map[string]bool, label string) bool {
+	f := keyField(k)
+	if f == "" {
+		return false
+	}
+	key, _ := input[f].(string)
+	other := pl.keyAt[[3]string{profile, string(k), key}]
+	if key == "" || other == "" || other == token || !wanted[k][other] {
+		return false
+	}
+	pl.block("%s %q takes the key %q in profile %q that %q holds in the tenant; free the key in a separate apply first (the operations are not ordered across definitions)", label, token, key, profile, other)
+	return true
 }
 
 // liveInputOf is the input rendering of a definition that currently sits under another

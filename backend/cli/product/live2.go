@@ -110,7 +110,10 @@ func (v *PublishedView) sort() {
 }
 
 // publishedViewOf projects what publishing this profile would freeze, in the shape the live
-// active version is read back in.
+// active version is read back in. A calculated metric's
+// expression is deliberately absent: the served PublishedMetric type does not expose it, so
+// a formula-only change cannot be told apart from the active version. The run that makes the
+// change republishes; if that publish is skipped or fails, --republish closes the gap.
 func publishedViewOf(p Profile) *PublishedView {
 	v := &PublishedView{Config: append([]ConfigKey(nil), p.ConfigurationDeclaration...), Decoder: p.Decoder}
 	for _, m := range p.Metrics {
