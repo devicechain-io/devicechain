@@ -318,7 +318,7 @@ self_test() {
   record_all 2026-11-05T12:00:00Z
   rm -rf "$tmp/out"; mkdir -p "$tmp/out"
   if build >/dev/null 2>&1; then echo "  ok: fresh results build a pack"; else echo "FAIL: a valid pack was refused"; build; bad=1; fi
-  local tb; tb="$(find "$tmp/out" -name '*.tar.gz' | head -1)"
+  local tb; tb="$(find "$tmp/out" -name '*.tar.gz' | sed -n 1p)"
   [ -n "$tb" ] || { echo "FAIL: no tarball"; bad=1; tb=/nonexistent; }
 
   if [ -f "$tb" ]; then
@@ -404,9 +404,9 @@ self_test() {
   record_all 2026-11-05T12:00:00Z
 
   # Archive structure: links, extra top-level entries and unlisted nested manifests are all refused.
-  local tbl; tbl="$(find "$tmp/out" -name '*.tar.gz' | head -1)"
+  local tbl; tbl="$(find "$tmp/out" -name '*.tar.gz' | sed -n 1p)"
   rm -rf "$tmp/out"; mkdir -p "$tmp/out"; build >/dev/null 2>&1
-  tbl="$(find "$tmp/out" -name '*.tar.gz' | head -1)"
+  tbl="$(find "$tmp/out" -name '*.tar.gz' | sed -n 1p)"
   archive_must_fail() { # <what> <reason-regexp> <mutator-fn>
     local wk; wk="$(mktemp -d)"; tar -xzf "$tbl" -C "$wk"
     "$3" "$(echo "$wk"/*)" "$wk"
