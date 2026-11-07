@@ -5,11 +5,16 @@ package semantic
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
-// Registry is the immutable, concurrency-safe index over a set of packs.
+// Registry is the immutable, concurrency-safe index over a set of packs. It
+// copies what it is given and hands out copies, so nothing a caller does to a
+// pack, a term or a slice it received can change what Validate answers.
 type Registry struct {
 	packs    map[string]*Pack // by ID
 	prefixes map[string]*Pack // by prefix
@@ -37,6 +42,7 @@ func NewRegistry(packs []*Pack, units *UnitPack) (*Registry, error) {
 		if p == nil {
 			return nil, fmt.Errorf("semantic: nil pack")
 		}
+		p = p.clone()
 		if !validPackID(p.ID) {
 			return nil, fmt.Errorf("semantic: pack id %q is not [a-z0-9-]+", p.ID)
 		}
@@ -52,8 +58,8 @@ func NewRegistry(packs []*Pack, units *UnitPack) (*Registry, error) {
 		if other, dup := r.prefixes[p.Prefix]; dup {
 			return nil, fmt.Errorf("semantic: packs %q and %q share prefix %q", other.ID, p.ID, p.Prefix)
 		}
-		for _, o := range packs {
-			if o != p && o != nil && namespacesOverlap(o.Namespace, p.Namespace) {
+		for _, o := range r.ordered {
+			if namespacesOverlap(o.Namespace, p.Namespace) {
 				return nil, fmt.Errorf("semantic: packs %q and %q have overlapping namespaces", o.ID, p.ID)
 			}
 		}
@@ -78,6 +84,9 @@ func NewRegistry(packs []*Pack, units *UnitPack) (*Registry, error) {
 	sort.Slice(r.ordered, func(i, j int) bool { return r.ordered[i].ID < r.ordered[j].ID })
 
 	if units != nil {
+		cp := *units
+		cp.Units = append([]Unit(nil), units.Units...)
+		units = &cp
 		r.unitPack = units
 		r.byUCUM = make(map[string]Unit, len(units.Units))
 		r.byCommon = map[string]Unit{}
@@ -106,19 +115,31 @@ func NewRegistry(packs []*Pack, units *UnitPack) (*Registry, error) {
 	return r, nil
 }
 
-// Packs lists the registry's packs ordered by id.
-func (r *Registry) Packs() []*Pack { return append([]*Pack(nil), r.ordered...) }
-
-// Pack returns a pack by id.
-func (r *Registry) Pack(id string) (*Pack, bool) {
-	p, ok := r.packs[id]
-	return p, ok
+// Packs lists copies of the registry's packs ordered by id.
+func (r *Registry) Packs() []*Pack {
+	out := make([]*Pack, 0, len(r.ordered))
+	for _, p := range r.ordered {
+		out = append(out, p.clone())
+	}
+	return out
 }
 
-// Term returns the term with this expanded IRI from any pack, enabled or not.
+// Pack returns a copy of a pack by id. The copy is deep, so it is a few
+// thousand allocations for Brick; callers on a request path want Term or
+// Resolve instead.
+func (r *Registry) Pack(id string) (*Pack, bool) {
+	p, ok := r.packs[id]
+	if !ok {
+		return nil, false
+	}
+	return p.clone(), true
+}
+
+// Term returns a copy of the term with this expanded IRI from any pack, enabled
+// or not.
 func (r *Registry) Term(iri IRI) (Term, bool) {
 	t, ok := r.terms[iri]
-	return t, ok
+	return t.clone(), ok
 }
 
 // IsA reports whether iri is ancestor or reaches it through Parents. It is
@@ -232,7 +253,7 @@ func (r *Registry) Resolve(curie string, wantKind Kind, ctx TenantContext) (Reso
 		}
 		return Resolution{}, refuse(ErrDeprecatedTerm, curie, "%s is deprecated and may not be used in a new binding", iri)
 	}
-	return Resolution{IRI: iri, Pack: pack.ID, Term: t}, nil
+	return Resolution{IRI: iri, Pack: pack.ID, Term: t.clone()}, nil
 }
 
 // locate does everything Expand and Validate share. Exactly one of pack and
@@ -241,10 +262,14 @@ func (r *Registry) locate(curie string, ctx TenantContext) (IRI, *Pack, bool, er
 	if curie == "" {
 		return "", nil, false, refuse(ErrMalformed, curie, "empty")
 	}
-	if len(curie) > MaxCURIEBytes {
-		return "", nil, false, refuse(ErrMalformed, curie[:32]+"...", "%d bytes exceeds the %d byte limit", len(curie), MaxCURIEBytes)
+	limit := MaxCURIEBytes
+	if isFullIRI(curie) {
+		limit = MaxIRIBytes
 	}
-	if bad := badChar(curie); bad != 0 {
+	if len(curie) > limit {
+		return "", nil, false, refuse(ErrMalformed, truncate(curie), "%d bytes exceeds the %d byte limit", len(curie), limit)
+	}
+	if bad, found := badChar(curie); found {
 		return "", nil, false, refuse(ErrMalformed, curie, "contains the character %q", bad)
 	}
 	enabled, customs, err := r.resolveContext(ctx)
@@ -258,7 +283,7 @@ func (r *Registry) locate(curie string, ctx TenantContext) (IRI, *Pack, bool, er
 				if len(curie) == len(p.Namespace) {
 					return "", nil, false, refuse(ErrMalformed, curie, "a namespace with no term")
 				}
-				return IRI(curie), p, false, nil
+				return finish(curie, curie, p, false)
 			}
 		}
 		for _, c := range customs {
@@ -266,7 +291,7 @@ func (r *Registry) locate(curie string, ctx TenantContext) (IRI, *Pack, bool, er
 				if len(curie) == len(c.namespace) {
 					return "", nil, false, refuse(ErrMalformed, curie, "a namespace with no term")
 				}
-				return IRI(curie), nil, true, nil
+				return finish(curie, curie, nil, true)
 			}
 		}
 		return "", nil, false, refuse(ErrUnknownPrefix, curie, "no enabled vocabulary or custom namespace contains this IRI")
@@ -285,12 +310,12 @@ func (r *Registry) locate(curie string, ctx TenantContext) (IRI, *Pack, bool, er
 	}
 	for _, p := range enabled {
 		if p.Prefix == prefix {
-			return IRI(p.Namespace + local), p, false, nil
+			return finish(curie, p.Namespace+local, p, false)
 		}
 	}
 	for _, c := range customs {
 		if c.prefix == prefix {
-			return IRI(c.namespace + local), nil, true, nil
+			return finish(curie, c.namespace+local, nil, true)
 		}
 	}
 	if p, ok := r.prefixes[prefix]; ok {
@@ -299,18 +324,36 @@ func (r *Registry) locate(curie string, ctx TenantContext) (IRI, *Pack, bool, er
 	return "", nil, false, refuse(ErrUnknownPrefix, curie, "prefix %q is neither an enabled pack nor a custom prefix", prefix)
 }
 
+// finish is the last check on an expansion: an IRI has at most one fragment
+// delimiter, so a local part carrying a '#' into a namespace that already ends in
+// one is not an IRI.
+func finish(curie, iri string, pack *Pack, custom bool) (IRI, *Pack, bool, error) {
+	if strings.Count(iri, "#") > 1 {
+		return "", nil, false, refuse(ErrMalformed, curie, "expands to an IRI with more than one '#'")
+	}
+	return IRI(iri), pack, custom, nil
+}
+
 func isFullIRI(s string) bool {
 	return strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "urn:")
 }
 
-// badChar returns the first character no CURIE or IRI may contain, or 0.
-func badChar(s string) rune {
+// badChar reports the first character no CURIE or IRI may contain: invalid
+// UTF-8, U+FFFD, any control character (C0, DEL, C1), any space, any format
+// character (zero-width and bidirectional controls), or one of < > " { } | \ ^ and
+// the grave accent. It returns found=false, never a zero rune, for a clean
+// string: NUL is a character that must be refused, so it cannot also mean "none".
+func badChar(s string) (bad rune, found bool) {
+	if !utf8.ValidString(s) {
+		return utf8.RuneError, true
+	}
 	for _, c := range s {
-		if c <= ' ' || c == 0x7f || strings.ContainsRune("<>\"{}|\\^`", c) {
-			return c
+		if c == utf8.RuneError || unicode.IsControl(c) || unicode.IsSpace(c) || unicode.Is(unicode.Cf, c) ||
+			strings.ContainsRune("<>\"{}|\\^`", c) {
+			return c, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 func validPackID(s string) bool {
@@ -348,18 +391,17 @@ func checkNamespace(ns string) error {
 	if len(ns) > MaxCURIEBytes {
 		return fmt.Errorf("%d bytes exceeds the %d byte limit", len(ns), MaxCURIEBytes)
 	}
-	if bad := badChar(ns); bad != 0 {
+	if bad, found := badChar(ns); found {
 		return fmt.Errorf("contains the character %q", bad)
+	}
+	if strings.Contains(ns, "#") && (strings.Count(ns, "#") > 1 || !strings.HasSuffix(ns, "#")) {
+		return fmt.Errorf("a '#' may only end a namespace")
 	}
 	switch {
 	case strings.HasPrefix(ns, "https://"):
-		rest := ns[len("https://"):]
-		host := rest
-		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
-			host = rest[:i]
-		}
-		if host == "" {
-			return fmt.Errorf("an https namespace needs a host")
+		u, err := url.Parse(ns)
+		if err != nil || u.Hostname() == "" || u.User != nil {
+			return fmt.Errorf("an https namespace needs a plain host")
 		}
 		return nil
 	case strings.HasPrefix(ns, "urn:"):
@@ -441,7 +483,7 @@ func (r *Registry) ValidateContext(ctx TenantContext) error {
 
 func truncate(s string) string {
 	if len(s) > 48 {
-		return s[:48] + "..."
+		return strings.ToValidUTF8(s[:48], "") + "..."
 	}
 	return s
 }

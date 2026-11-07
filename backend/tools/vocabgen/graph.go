@@ -124,7 +124,9 @@ func (g *graph) label(s string, preds ...string) string {
 
 func (g *graph) flag(s, p string) bool {
 	for _, o := range g.objs(s, p) {
-		if o.Kind == nodeLiteral && o.Value == "true" {
+		// xsd:boolean has two true lexical forms. A plain or language-tagged
+		// string "true" is a string, not a flag.
+		if o.Kind == nodeLiteral && o.Datatype == xsdNS+"boolean" && (o.Value == "true" || o.Value == "1") {
 			return true
 		}
 	}
