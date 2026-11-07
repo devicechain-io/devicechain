@@ -113,6 +113,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			if err = initSessionKickDrain(); err != nil {
 				return err
 			}
+			if err = initDecodeAccounting(); err != nil {
+				return err
+			}
 			// The third: the self-registration endpoint is mounted on the real mux here, so
 			// the route is proved present after the whole start path, not only in isolation.
 			return wireProvisioningEndpoint()

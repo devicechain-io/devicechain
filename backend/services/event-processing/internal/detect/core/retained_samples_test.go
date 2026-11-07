@@ -4,6 +4,7 @@
 package core
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -69,39 +70,37 @@ func TestRetainedSampleCountsSeesWhatLiveKeyCountsCannot(t *testing.T) {
 	}
 }
 
-// TestPendingTimerCountSeesWhatNeitherMapGaugeCan is the third axis's control, and it is the
-// same comparative shape as the test above: an Absence rule resets its deadline on every
-// heartbeat, and each reset PUSHES a heap entry while the superseded one lingers until its
-// deadline passes. So the heap grows per EVENT on a single series — live keys stay at 1 (one
-// wheel entry) and retained samples stay at 0 (absence retains no samples), while the heap
-// climbs with the traffic.
-//
-// This is the defect the retained-sample gauge was added for, reproduced one structure over. If
-// this test ever goes flat, the wheel stopped retaining and PendingTimerCount is measuring
-// nothing — check that before deleting it.
-func TestPendingTimerCountSeesWhatNeitherMapGaugeCan(t *testing.T) {
+// TestPendingTimerCountIsOnePerKeyNotPerEvent pins the wheel's size: an Absence rule resets its
+// deadline on every heartbeat, and a reset MOVES the key's one heap entry, so the heap holds one
+// entry per armed key however many events arrived. (It used to push a fresh entry per reset and
+// leave the superseded one to linger until its deadline, which at 12k events/s and a 5 minute
+// timeout was ~3.6M entries; this test failing high means that came back.)
+func TestPendingTimerCountIsOnePerKeyNotPerEvent(t *testing.T) {
 	const id = "acme/p@1/abs"
 	const beats = 200
+	const series = 3
 	// A timeout far longer than the span of heartbeats, so nothing reaches its deadline during
-	// the run: the point is that SUPERSEDED entries accumulate, not that live ones do.
+	// the run: every entry the heap holds is a live one.
 	e := NewEngine([]Rule{{ID: id, Kind: Absence, Timeout: time.Hour}}, 0)
 
+	seq := uint64(0)
 	for i := 1; i <= beats; i++ {
-		e.ProcessEvent(Event{Seq: uint64(i), Key: SeriesKey{Rule: id, Series: "d1"}, Time: at(i), Match: true})
+		for d := 0; d < series; d++ {
+			seq++
+			e.ProcessEvent(Event{Seq: seq, Key: SeriesKey{Rule: id, Series: fmt.Sprintf("d%d", d)}, Time: at(i), Match: true})
+		}
 	}
 	e.Drain()
 
-	if got := e.LiveKeyCounts()[id]; got != 1 {
-		t.Fatalf("one series must be ONE live key however many heartbeats it sent; got %d — this test "+
-			"no longer demonstrates the blindness it guards against", got)
+	if got := e.LiveKeyCounts()[id]; got != series {
+		t.Fatalf("want %d live keys, got %d", series, got)
 	}
 	if got := e.RetainedSampleCounts()[id]; got != 0 {
 		t.Fatalf("absence retains no samples, so the retained-sample gauge must read 0; got %d", got)
 	}
-	// The heap holds the current live timer plus every superseded one that has not come due.
-	if got := e.PendingTimerCount(); got != beats {
-		t.Fatalf("want %d pending timer entries after %d deadline resets, got %d — if this is 1 the wheel "+
-			"now evicts superseded entries eagerly and this gauge is measuring nothing", beats, beats, got)
+	if got := e.PendingTimerCount(); got != series {
+		t.Fatalf("want %d pending timer entries (one per armed key) after %d events, got %d",
+			series, beats*series, got)
 	}
 }
 
@@ -115,9 +114,9 @@ func TestPendingTimerCountFallsWhenTimersComeDue(t *testing.T) {
 	}
 	e.Drain()
 	if got := e.PendingTimerCount(); got == 0 {
-		t.Fatal("heartbeats must leave pending timer entries behind")
+		t.Fatal("heartbeats must leave an armed timer behind")
 	}
-	// Advance far past every deadline: popDue drains the heap, discarding the stale entries.
+	// Advance far past every deadline: popDue drains the heap.
 	e.Advance(at(10_000))
 	e.Drain()
 	if got := e.PendingTimerCount(); got != 0 {

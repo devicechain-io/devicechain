@@ -571,7 +571,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral en alarma descarta una lectura más antigua que la más reciente del dispositivo, mientras que una sin alarma descarta una lectura que cumple la condición y llega más tarde que este margen solo si se reintentó o se retuvo por el camino. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. Del mismo modo, las reglas de ventana de conteo y de tasa deciden la última lectura antes de un periodo de silencio solo cuando llega un evento posterior. |
-| `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. Con un valor superior a 1, cada parte se ejecuta en su propia goroutine, de modo que el motor puede usar más de un núcleo; el bucle que lee y planifica los mensajes sigue siendo uno solo, así que la mejora queda limitada por ese bucle y por los núcleos que se le den al pod (véase [Ejecutar el motor en más núcleos](#detect-shards)). Déjelo en 1 salvo que haya medido que el límite es el motor y no el bucle ni la base de datos. El valor en vigor es la métrica `detect_shards`. |
+| `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (0 o sin definir significa 1; cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. Con un valor superior a 1, cada parte se ejecuta en su propia goroutine, de modo que el motor puede usar más de un núcleo; el bucle que lee y planifica los mensajes sigue siendo uno solo, así que la mejora queda limitada por ese bucle y por los núcleos que se le den al pod (véase [Ejecutar el motor en más núcleos](#detect-shards)). Déjelo en 1 salvo que haya medido que el límite es el motor y no el bucle ni la base de datos. El valor en vigor es la métrica `devicechain_eventprocessing_detect_shards`. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. **Como máximo 30**: un punto de control es lo que confirma el flujo, así que un intervalo cercano o superior a la ventana de confirmación de 60 segundos del broker hace que los mensajes de un flujo tranquilo se vuelvan a entregar. 30 deja margen para el propio punto de control, y el servicio rechaza al arrancar cualquier valor mayor. |
 | `checkpointTimeoutSeconds` | 10 | Cuánto puede tardar una llamada de un punto de control (publicar detecciones, guardar la instantánea) antes de abandonarla y contar el punto de control como fallido, en lugar de bloquear la detección con una base de datos o un bróker que ha dejado de responder. Máximo 120. El límite del guardado de la instantánea crece solo, hasta cuatro veces el último guardado completado (con tope de dos minutos), de modo que un motor grande sobre una base de datos lenta no se queda fallando; súbalo solo si el primer guardado ya es más lento que este valor. |
@@ -692,12 +692,11 @@ exposición para toda la instancia, así que dimensiónelo antes de cambiarlo: a
 *frecuencia de reporte × ventana × dispositivos × 32 bytes*, sumado sobre las reglas que usan
 ventanas largas.
 
-Los tiempos de espera de silencio y los huecos de sesión están acotados por la misma razón, aunque
-no retengan lecturas. Esas reglas insertan una entrada nueva en el montículo de temporizadores del
-motor cada vez que un dispositivo reporta, y la entrada sustituida no se descarta hasta que vence su
-plazo: un tiempo de espera de tres días sobre un dispositivo que reporta cada diez segundos acumula
-unas 26.000 entradas pendientes *para ese único dispositivo*. Un tiempo de espera largo cuesta
-memoria en proporción directa a su longitud, igual que una ventana larga.
+Los tiempos de espera de silencio y los huecos de sesión también están acotados, aunque no
+retengan lecturas. El motor guarda una entrada de temporizador por dispositivo para cada una de esas
+reglas y la mueve cuando el dispositivo reporta, de modo que su memoria sigue el número de
+dispositivos, no la frecuencia de los reportes ni la longitud del tiempo de espera. El techo se
+aplica igualmente, para que una duración signifique lo mismo que cualquier otra que lleve una regla.
 
 :::danger Una regla por encima del techo NO se ejecuta: se rechaza al arrancar, no se preserva
 El techo se aplica cuando el motor **carga** una regla, no solo cuando se publica una. Una regla
@@ -749,10 +748,10 @@ otras, así que cualquiera de ellas leída por separado puede parecer sana mient
 |---|---|---|
 | `devicechain_eventprocessing_detect_live_keys` | ventanas y temporizadores abiertos | muchos dispositivos repartidos sobre muchas reglas |
 | `devicechain_eventprocessing_detect_retained_samples` | lecturas retenidas dentro de las ventanas abiertas | una regla de ventana larga sobre un dispositivo con mucho tráfico: **una** clave viva y cientos de miles de lecturas |
-| `devicechain_eventprocessing_detect_pending_timers` | entradas en el montículo de temporizadores | un tiempo de espera de silencio o un hueco de sesión largos con reportes frecuentes: de nuevo una sola clave viva, y ninguna lectura retenida |
+| `devicechain_eventprocessing_detect_pending_timers` | entradas en el montículo de temporizadores, una por cada temporizador de silencio, sesión o espera armado | muchos dispositivos bajo una regla de ausencia o de sesión: sigue a las claves armadas, no la frecuencia de los reportes |
 
-La segunda y la tercera existen porque la primera queda plana precisamente en los casos que agotan
-la memoria más rápido. Solo las dos primeras tienen techos por inquilino; el montículo de
+La segunda existe porque la primera queda plana precisamente en el caso que agota la memoria más
+rápido: una regla de ventana larga sobre un solo dispositivo con mucho tráfico. Solo las dos primeras tienen techos por inquilino; el montículo de
 temporizadores se reporta como un total de toda la instancia, porque atribuirlo a un inquilino
 exigiría recorrerlo entero en cada punto de control.
 :::

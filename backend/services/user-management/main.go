@@ -472,7 +472,8 @@ const placementMirrorInterval = 5 * time.Minute
 // initPlacement records the instance's placement (the vpartition count P, one shard group, no
 // pins) on first start, verifies it on every later one, and mirrors it into the broker.
 //
-// 🔴 A CHANGED P STOPS THE SERVICE. P is fixed for the instance's life (core/partition), and a
+// 🔴 A CHANGED P STOPS THE SERVICE AT START (the periodic pass reports it, loudly, without exiting; see
+// placement.IsFatal). P is fixed for the instance's life (core/partition), and a
 // database or a mirror that records a different one is a restore gone wrong or a hand edit; carrying on would
 // leave every later slice routing on a lane that does not match where the data is. Everything
 // else here (the broker away, the bucket full) is retried by the mirror's own pass and changes

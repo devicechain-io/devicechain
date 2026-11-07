@@ -412,7 +412,7 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	drainReady := drainEndpointsReady(GatewaySourceId, infra.ServiceAuth.Secret, infra.UserManagement.Hostname,
 		infra.UserManagement.Port, infra.DeviceState.Hostname, infra.DeviceState.Port)
-	rechecks := reason == presence.TapOffBrokerUnreachable
+	rechecks := recheckApplies(reason)
 
 	if !drainReady {
 		log.Warn().Str("reason", string(reason)).Msg("Broker-asserted MQTT presence is off, so the devices " +
@@ -447,19 +447,31 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 			reader, presence.NewRateWaiter(),
 			presence.DemoterMetrics{Released: PresenceReleasedCounter, Remaining: PresenceStillAssertedGauge})
 	}
-	if rechecks {
-		nats := infra.Nats
-		runner = &recheckBroker{
-			drain:     runner,
-			reachable: func(ctx context.Context) bool { return systemAccountReachable(ctx, nats) },
-			recovered: restartForRecoveredBroker,
-		}
-	}
+	nats := infra.Nats
+	runner = demoteRunnerFor(reason, runner,
+		func(ctx context.Context) bool { return systemAccountReachable(ctx, nats) }, restartForRecoveredBroker)
 
 	interval := Configuration.BrokerPresence.ReconcileInterval()
 	delay := presence.StartDelayFor(reason, demotionStartJitter())
 	launchDemoteLoop(runCtx, rt, runner, interval, delay)
 	brokerPresence = rt
+}
+
+// recheckApplies reports whether a bail reason gets the broker recheck: only an unreachable
+// broker, the one instance-wide reason whose truth this process can re-establish itself.
+func recheckApplies(reason presence.TapOffReason) bool {
+	return reason == presence.TapOffBrokerUnreachable
+}
+
+// demoteRunnerFor selects the runner for a bail reason: the drain wrapped in the broker
+// recheck when the reason gets one, the bare drain otherwise. It is separate from
+// startPresenceDemotion so a test drives THIS selection rather than restating it.
+func demoteRunnerFor(reason presence.TapOffReason, drain presence.DemoteRunner,
+	reachable func(context.Context) bool, recovered func()) presence.DemoteRunner {
+	if !recheckApplies(reason) {
+		return drain
+	}
+	return &recheckBroker{drain: drain, reachable: reachable, recovered: recovered}
 }
 
 // launchDemoteLoop runs the demote loop on its own goroutine, which closes rt.stopped when

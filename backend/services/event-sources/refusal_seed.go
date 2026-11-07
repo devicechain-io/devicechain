@@ -30,6 +30,9 @@ func seedRefusalCounters(sourceIDs []string) {
 		BackpressureCounter.WithLabelValues(source)
 		TenantGoneCounter.WithLabelValues(source)
 		PublishFailedCounter.WithLabelValues(source)
+		for _, cause := range []string{buildDropNoTenant, buildDropNoTransitKey, buildDropSealFailed, buildDropMarshal} {
+			BuildDroppedCounter.WithLabelValues(source, cause)
+		}
 		for class := governance.ShedBestEffort; class <= governance.ShedGold; class++ {
 			RateLimitedCounter.WithLabelValues(source, class.String())
 			ReadingLimitedCounter.WithLabelValues(source, class.String())

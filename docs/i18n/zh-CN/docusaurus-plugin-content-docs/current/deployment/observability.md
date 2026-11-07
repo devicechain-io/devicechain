@@ -349,7 +349,7 @@ kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests
 
 | 设置 | 默认值 | 作用 |
 | --- | --- | --- |
-| `batch` | 256 | 每次拉取请求的消息数，范围为 1 到 256（其他值在启动时被拒绝）。更大的批次把一次拉取的耗时分摊到更多消息上。它也是一次连接中断最多可能从单次拉取中丢失的数量，检测引擎会在继续之前从流中重新读取这一范围。 |
+| `batch` | 256 | 每次拉取请求的消息数，范围为 1 到 256（0 或未设置表示 256；其他值在启动时被拒绝）。更大的批次把一次拉取的耗时分摊到更多消息上。它也是一次连接中断最多可能从单次拉取中丢失的数量，检测引擎会在继续之前从流中重新读取这一范围。 |
 | `ahead` | 开启 | 在交出当前批次的同时请求下一批，使拉取与处理重叠。设为 `ahead: false` 则每次只拉取一批。消息仍按到达顺序处理。 |
 | `aheadHoldBudgetMillis` | 1000 | 提前请求的批次要等前一批处理完，而它的确认窗口已经开始计时。如果最近的批次交出所需的时间超过该值，服务会停止提前请求，回到每次一个请求。最大为确认窗口的十分之一，否则服务拒绝启动。 |
 
@@ -712,6 +712,8 @@ UPDATE "event-management".calculated_backfills
 **设备凭据。** 各副本将刚验证的凭据及其设备从读取起内存缓存五分钟，因包含密码，绝不放键值桶。每副本最多保留 `inMemoryCache.credentialCacheMiB`（默认 32 MiB）。每次使用仍比较密码及到期时间，验证失败不缓存。凭据或设备变更使执行变更的副本立即清缓存，并用 NATS 通知其他副本。因此撤销或跨副本设备删除，所有副本下个事件即生效；通知丢失时，则在副本到期时生效。MQTT 连接始终读数据库。
 
 **按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请让每个副本按整个活跃设备群设定上限，而不是按设备群除以副本数：入站流是所有副本共享的单个持久消费者，事件不会按设备在副本之间分配，当副本数乘以设备上报间隔小于该时间时，每个副本几乎看到每一台设备。缓存小于设备群时会循环淘汰，几乎没有命中。例如 60,000 台设备每 10 秒上报，每台有一条追踪关系并出示凭据，则每个副本需要 `inMemoryCache.credentialCacheMiB` 约 80（每条约 1.1 KB）和 `inMemoryCache.perDeviceCacheMiB` 约 180（一组关系按计约 2.4 KB），并将内存上限提高到 1.4Gi；同一设备群按令牌解析则需要 `perDeviceCacheMiB` 240 和 1.7Gi（见上面的规则）。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}`（或 `cache="device-by-token"`）接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。chart 用 `DeviceCredentialCacheTooSmall` 和 `DeviceLookupCacheTooSmall`（warning）对此告警：某副本因容量淘汰的比例连续 15 分钟超过其查找的 5%。告警触发时，提高边界（`inMemoryCache.credentialCacheMiB` 或 `inMemoryCache.perDeviceCacheMiB`）并同步提高内存限制。默认六个内存缓存共最多 308 MiB。`device-management` 以 `GOGC=400` 运行，并把软内存上限（`GOMEMLIMIT`）设为其内存上限的 75%，因此回收器允许堆增长到持有量的约五倍，接近软上限时更努力地回收；未设置 `GOMEMLIMIT` 的地方，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
+
+载荷解码器在读取设备类型的解析结果且未保留其解码副本时编译，大型解码器需要数十毫秒，所以被丢弃后又重新编译的解码器会拖慢事件本身。`payload_decoder_compiles_total` 统计编译次数，当某副本连续 15 分钟每秒编译超过一次，且其解析缓存同时在因空间不足而驱逐条目（`reason` 为 `capacity` 或 `tenant_share`）时，`PayloadDecoderRecompileSustained`（警告）触发，从而与许多小型解码器仅仅按存活时间过期相区分。原因是租户同时使用的解码器放不进它在解析缓存中的份额（最大的解码器约 6 MiB，默认份额为 8 MiB）：按 `reason` 比较 `kv_cache_local_evictions_total{cache="profile-resolution-by-type"}`，`tenant_share` 指向份额，`capacity` 指向整个缓存。请调高 `inMemoryCache.profileResolutionCacheMiB` 或 `inMemoryCache.profileResolutionTenantSharePercent`，并同步调高内存上限。
 
 变更后移除条目（设备删除、配置发布）绝不跳过，因为只有桶主副本接受，最多等五秒。仍失败会记录 `A key-value cache eviction failed`，旧条目可服务至配置 TTL 到期，已有内存副本则至内存时间到期，二者取较短者。
 

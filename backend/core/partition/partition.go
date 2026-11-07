@@ -102,6 +102,12 @@ type Lane struct {
 // It is a plain value. user-management holds the authoritative copy in its database and mirrors
 // it into a KV bucket; everything else reads the mirror.
 type Table struct {
+	// Format is the wire format of the table. 0 means the first format (TableFormat), so a table
+	// written before this field existed, and one written today, are byte-identical: an old
+	// reader that rejects unknown fields is not broken by a rolling upgrade. A reader REFUSES a
+	// Format above the one it knows (a table it would half-understand) and TOLERATES additive
+	// fields under a known one.
+	Format int `json:"format,omitempty"`
 	// P is the vpartition count. Fixed for the instance's life.
 	P int `json:"p"`
 	// Groups maps vpartition -> shard group; its length is P.
@@ -114,6 +120,9 @@ type Table struct {
 	Generation uint64 `json:"generation"`
 }
 
+// TableFormat is the table wire format this build understands.
+const TableFormat = 1
+
 // NewTable is the degenerate placement every instance starts with: P vpartitions, all on shard
 // group 0, no overrides. It is exactly today's behaviour: one lane.
 func NewTable(p int) Table {
@@ -122,6 +131,9 @@ func NewTable(p int) Table {
 
 // Validate reports whether the table is internally consistent.
 func (t Table) Validate() error {
+	if t.Format < 0 || t.Format > TableFormat {
+		return fmt.Errorf("partition: the table has format %d, this build understands up to %d", t.Format, TableFormat)
+	}
 	if t.P < 1 || t.P > MaxP {
 		return fmt.Errorf("partition: P must be between 1 and %d, got %d", MaxP, t.P)
 	}
@@ -184,7 +196,7 @@ func (t Table) S() int {
 
 // Equal reports whether two tables describe the same placement, generation included.
 func (t Table) Equal(o Table) bool {
-	if t.P != o.P || t.Generation != o.Generation || len(t.Groups) != len(o.Groups) || len(t.Overrides) != len(o.Overrides) {
+	if t.P != o.P || t.Generation != o.Generation || max(t.Format, 1) != max(o.Format, 1) || len(t.Groups) != len(o.Groups) || len(t.Overrides) != len(o.Overrides) {
 		return false
 	}
 	for i := range t.Groups {

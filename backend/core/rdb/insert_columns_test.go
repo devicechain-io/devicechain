@@ -482,36 +482,53 @@ func TestColumnarInsertAccountsForEveryCreateCallback(t *testing.T) {
 		"dc:token_grammar_create":             "models with a Token field are refused",
 		"dc:audit_create":                     "audited models are refused",
 		fenceCreateCallback:                   "readFence, when the handle has this callback",
+		shardGuardCreate:                      "checkPlacement, when the handle has this callback",
 	}
-	db, err := gorm.Open(sqlite.Open("file:callbacks?mode=memory"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("opening sqlite: %v", err)
-	}
-	// The same registration every service's handle gets (postgres.go), so a chain added
-	// there is a chain this test sees.
-	if err := registerCallbacks(db); err != nil {
-		t.Fatalf("registering: %v", err)
-	}
-	// gorm keeps its processor's callbacks unexported; their names are read, not called.
-	cbs := reflect.ValueOf(db.Callback().Create()).Elem().FieldByName("callbacks")
-	if !cbs.IsValid() || cbs.Len() == 0 {
-		t.Fatal("could not read the create processor's callbacks: gorm's internals changed, so this " +
-			"test can no longer see what a Create runs")
-	}
-	registered := map[string]bool{}
-	for i := 0; i < cbs.Len(); i++ {
-		name := cbs.Index(i).Elem().FieldByName("name").String()
-		registered[name] = true
-		if _, ok := accounted[name]; !ok {
-			t.Errorf("create callback %q is not accounted for by the column-array insert "+
-				"(insert_columns.go), which bypasses the create chain", name)
-		}
-	}
-	for name := range accounted {
-		if !registered[name] {
-			t.Errorf("the column-array insert accounts for create callback %q, which is not registered: "+
-				"renamed or removed — update the list and what the insert does for it", name)
-		}
+	for _, sharded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "plain", true: "shard handle"}[sharded], func(t *testing.T) {
+			acc := map[string]string{}
+			for k, v := range accounted {
+				if k != shardGuardCreate || sharded {
+					acc[k] = v
+				}
+			}
+			accounted := acc
+			db, err := gorm.Open(sqlite.Open("file:callbacks?mode=memory"), &gorm.Config{})
+			if err != nil {
+				t.Fatalf("opening sqlite: %v", err)
+			}
+			// The same registration every service's handle gets (postgres.go), so a chain added
+			// there is a chain this test sees.
+			if err := registerCallbacks(db); err != nil {
+				t.Fatalf("registering: %v", err)
+			}
+			if sharded {
+				if err := registerShardGuard(db); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// gorm keeps its processor's callbacks unexported; their names are read, not called.
+			cbs := reflect.ValueOf(db.Callback().Create()).Elem().FieldByName("callbacks")
+			if !cbs.IsValid() || cbs.Len() == 0 {
+				t.Fatal("could not read the create processor's callbacks: gorm's internals changed, so this " +
+					"test can no longer see what a Create runs")
+			}
+			registered := map[string]bool{}
+			for i := 0; i < cbs.Len(); i++ {
+				name := cbs.Index(i).Elem().FieldByName("name").String()
+				registered[name] = true
+				if _, ok := accounted[name]; !ok {
+					t.Errorf("create callback %q is not accounted for by the column-array insert "+
+						"(insert_columns.go), which bypasses the create chain", name)
+				}
+			}
+			for name := range accounted {
+				if !registered[name] {
+					t.Errorf("the column-array insert accounts for create callback %q, which is not registered: "+
+						"renamed or removed — update the list and what the insert does for it", name)
+				}
+			}
+		})
 	}
 }
 

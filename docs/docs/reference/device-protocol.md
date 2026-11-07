@@ -221,7 +221,7 @@ POST /api/device-management/provisioning/{tenant}/register
 
 | Field | Required | Rules |
 | --- | :---: | --- |
-| `provisionKey`, `provisionSecret` | yes | 1 to 256 characters each. The secret is the one the server generated for the profile. |
+| `provisionKey`, `provisionSecret` | yes | 1 to 256 bytes each. The secret is the one the server generated for the profile. |
 | `externalId` | yes | The device's serial number or other id, 1 to 256 characters. It is how the platform finds the device. |
 | `credentialSecret` | yes | The device's own credential material, which becomes its access token. **base64url** (letters, digits, `-` and `_`, no padding), **22 to 256 characters**. Generate 32 random bytes and encode them (43 characters). |
 | `name` | no | At most 128 characters. Used only when this request creates the device. |
@@ -336,6 +336,7 @@ Checked by `event-sources` when the message is received and decoded.
 | The body's `device` is not the device in the topic | — | Routed to `failed-decode` | `total_msg_failed_decode` |
 | The body carries `credentialType`, `credentialId` or `credentialSecret`, on the platform's MQTT broker | — | Routed to `failed-decode` (redacted) | `total_msg_failed_decode`, `total_msg_credential_in_mqtt_body` |
 | The platform is applying [backpressure](../deployment/observability.md#ingest-backpressure) | `503` **with** `Retry-After`: not stored, send it again | Not refused: it waits in the capture stream; the oldest captured messages are discarded only if that stream fills | |
+| The event's message could not be built: a credential it presented could not be sealed, or the event could not be encoded | `500`: not stored, and sending it again fails the same way | Dropped | `total_msg_build_dropped`, by `cause` |
 | The event could not be handed to the pipeline | `503` **without** `Retry-After`: it may have been stored, so a resend stores it twice unless it carries an [`altId`](#altid) | — | |
 | Accepted | `202` | `PUBACK` (QoS 1) | |
 

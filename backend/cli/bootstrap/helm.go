@@ -481,6 +481,9 @@ func helmValues(st *State) map[string]interface{} {
 		for k, v := range compact.natsValues() {
 			natsVals[k] = v
 		}
+	} else if p := sizeFor(st); p != nil {
+		// A size preset states its own design rate (size.go), through the same key.
+		natsVals["streamDesignRate"] = p.StreamDesignRate
 	} else {
 		// The standard profile states its design rate here rather than leaving it to the
 		// chart: the chart's own default is "not sized by time", so that a raw `helm upgrade`
@@ -683,6 +686,14 @@ func helmValues(st *State) map[string]interface{} {
 		mergeFunctionalArea(vals, "sparkplug-ingest", sparkplugProvisioning(st.Instance, st.SparkplugSources))
 	}
 
+	// The size preset sits BELOW everything above (size.go, precedence layer 2): it is merged
+	// as the base and what dcctl computed is merged over it, so an HA replica count or the
+	// envelope switch beats a preset and the --values overlay (authoringValues) beats both. Base
+	// and compact have no preset values and return vals untouched, byte for byte.
+	if preset := sizeFor(st).helmValues(); len(preset) > 0 {
+		mergeOverlay(preset, vals)
+		return preset
+	}
 	return vals
 }
 

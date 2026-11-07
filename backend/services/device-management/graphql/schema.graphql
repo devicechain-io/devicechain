@@ -779,6 +779,56 @@ type PayloadDecoderTestResult {
     uplinks: Int!
 }
 
+"""
+How a profile's decoder has been doing over a span. Every uplink the decoder saw lands in exactly
+one of decoded, ignored, failed or suppressed. Counts are at least what happened: they are kept
+in memory and written about once a minute, so a crash loses up to a minute of them.
+The counts are Float, not Int: a busy decoder passes a 32-bit Int in a week. They are whole
+numbers, exact up to 2^53, so read them as integers.
+"""
+type PayloadDecoderHealth {
+    """Uplinks decoded to readings. A whole number, exact up to 2^53 (Float so it cannot overflow)."""
+    decoded: Float!
+    """Uplinks an ignore section matched: accepted, nothing stored. A whole number, exact up to 2^53."""
+    ignored: Float!
+    """Failed uplinks that have a failed-events record (filter DECODE_FAILED). A whole number, exact up to 2^53."""
+    failed: Float!
+    """
+    Failed uplinks that were NOT given a record because the device type's record budget was spent
+    (a burst of 20, refilled 10 a minute, on each replica). They are counted here and nowhere else. A whole number, exact up to 2^53.
+    """
+    suppressed: Float!
+    """Readings stored beyond what the route charged for, because a newer decoder produces more. A whole number, exact up to 2^53."""
+    chargeSkew: Float!
+    """When the most recent failure happened, as an RFC 3339 time, or null when there was none."""
+    lastFailureAt: String
+    """The text of the most recent failure, or empty when there was none."""
+    lastError: String!
+    """How many replica-minutes of tallies the sums cover."""
+    windows: Int!
+    """The start of the span, as an RFC 3339 time."""
+    since: String!
+}
+
+"""
+One failing uplink kept for replay. Its bytes are not listed: load it into the test panel with
+testPayloadDecoder sampleId.
+"""
+type PayloadDecoderSample {
+    """Pass this as testPayloadDecoder sampleId."""
+    id: ID!
+    """The profile version whose decoder failed on it."""
+    profileVersion: Int!
+    """When it was kept, as an RFC 3339 time."""
+    createdAt: String!
+    """Token of the device the uplink was for."""
+    deviceToken: String!
+    """The failure's sub-reason, such as missing_input."""
+    reason: String!
+    """The failure text."""
+    error: String!
+}
+
 """One function of the decoder library."""
 type PayloadDecoderFunction {
     """The function's name, such as `i16be`."""
@@ -4527,6 +4577,26 @@ type Query {
     call, with its signature and limits. It drives the editor's help. Requires device:read.
     """
     payloadDecoderFunctions: [PayloadDecoderFunction!]!
+    """
+    How the decoder of the profile has been doing over the last `minutes` (default 60, at most
+    10080, one week), summed over replicas. Rows are kept 7 days. Requires device:write.
+    """
+    payloadDecoderHealth(
+        """Token of the profile."""
+        profileToken: String!
+        """The span in minutes."""
+        minutes: Int
+    ): PayloadDecoderHealth!
+    """
+    The failing uplinks kept for the profile, newest first: at most 20 are kept, and a new
+    one is kept at most every 10 seconds per replica. Requires device:write.
+    """
+    payloadDecoderSamples(
+        """Token of the profile."""
+        profileToken: String!
+        """How many to list (default and at most 20 kept)."""
+        limit: Int
+    ): [PayloadDecoderSample!]!
     """
     Returns the command definitions with the given ids. Ids that match nothing are omitted,
     an id that is not a number fails the request, and more than 1000 ids are refused with

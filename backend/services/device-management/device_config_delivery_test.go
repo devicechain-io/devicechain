@@ -83,6 +83,10 @@ func startDeliveryFixture(t *testing.T) *deliveryFixture {
 	RdbManager = &rdb.RdbManager{Database: db}
 	Api = model.NewApi(RdbManager)
 	CachedApi = model.NewCachedApi(Api, &model.Caches{DeviceByToken: msgtest.NewMemoryKV().NewCache()})
+	// createNatsComponents refuses to build the inbound processor without the decode accountant.
+	prevAccountant := DecodeAccountant
+	t.Cleanup(func() { DecodeAccountant = prevAccountant })
+	DecodeAccountant = processor.NewDecodeAccountant(Api, "test", nil)
 
 	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
 	NatsManager.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(Svc.DeadLetters))
@@ -492,6 +496,10 @@ func TestTheDeviceReportsConsumerResolvesDevicesUncached(t *testing.T) {
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Api = model.NewApi(&rdb.RdbManager{})
 	CachedApi = model.NewCachedApi(Api, &model.Caches{DeviceByToken: msgtest.NewMemoryKV().NewCache()})
+	// createNatsComponents refuses to build the inbound processor without the decode accountant.
+	prevAccountant := DecodeAccountant
+	t.Cleanup(func() { DecodeAccountant = prevAccountant })
+	DecodeAccountant = processor.NewDecodeAccountant(Api, "test", nil)
 	DeviceReportsMetrics = processor.NewDeviceReportsMetrics(Microservice)
 
 	rc := newDeviceReportsConsumer(nil, nil)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dcctl/bootstrap"
@@ -83,7 +84,34 @@ func resolveAdminPassword(cmd *cobra.Command, instance string) (string, error) {
 	pw, err := readSuperuserPassword(cmd.Context(), kubeContext, instance)
 	if err != nil {
 		return "", fmt.Errorf("no superuser password was given (--admin-password or $%s) and it could not be "+
-			"read from the cluster: %w", adminPasswordEnv, err)
+			"read from the cluster: %w%s", adminPasswordEnv, err, otherInstancesHint(instance))
 	}
 	return pw, nil
+}
+
+// otherInstancesHint names the instances recorded on this machine when the one asked for has
+// no record. --instance defaults to "devicechain", so an operator whose instance has another
+// name meets "context kind-devicechain does not exist" with nothing pointing at the cause.
+// This only SAYS what exists; it never retargets the command, so a script that passes
+// --instance (or relies on the default) behaves exactly as before. Empty when the instance
+// is recorded, or when nothing is.
+func otherInstancesHint(instance string) string {
+	if _, err := bootstrap.ReadInstanceRecord(instance); err == nil {
+		return ""
+	}
+	known, err := bootstrap.ListInstances()
+	if err != nil {
+		return ""
+	}
+	var names []string
+	for _, k := range known {
+		if k.Instance != instance {
+			names = append(names, k.Instance)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nno instance named %q is recorded on this machine (--instance defaults to \"devicechain\"); "+
+		"instances that are: %s. Pass --instance <name> to choose one.", instance, strings.Join(names, ", "))
 }

@@ -51,7 +51,7 @@ The 24-hour default cap applies to every time span a rule declares: a window, a 
 
 The cap exists because a windowed rule keeps **one record per reading** for the whole window, per device, in an engine shared by every tenant. A multi-day window over a fleet reporting every few seconds is a large amount of memory held indefinitely. Everyone on the instance pays that cost, not only the tenant that authored the rule.
 
-Silence timeouts and session gaps are capped too, even though they hold no readings. Those rules re-arm a timer every time a device reports, and the superseded timers are not released until their deadline passes. A long timeout under frequent reporting therefore accumulates in the same way.
+Silence timeouts and session gaps are capped too, even though they hold no readings. Those rules keep one timer per device and move it each time the device reports, so their memory follows the number of devices rather than how often they report.
 
 If you need a longer span, an operator can raise the limit for the instance ([`maxRuleDurationSeconds`](../deployment/detection-engine.md#configuration)) after sizing the memory. Before asking for one, consider whether the question is really about *retention* rather than *detection*. A "compare against last month" question is usually better answered by querying stored history than by holding a month of readings in memory.
 

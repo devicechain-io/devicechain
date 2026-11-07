@@ -16,6 +16,7 @@ var (
 	upgradeRegistry    string
 	upgradeVersion     string
 	upgradeDryRun      bool
+	upgradeAssumeYes   bool
 	upgradeEscrowFile  string
 	upgradeEscrowPass  string
 	upgradeSkipInfra   bool
@@ -60,7 +61,7 @@ const (
 
 const (
 	eventStoreMaxWALUsage     = "set the event store's max_wal_size, in MiB (at least 64). An upgrade derives it as a fifth of the event store volume, never below 1024, so a store close to full can keep the previous allowance with 1024. 0 returns to the derived value. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
-	eventStoreCheckpointUsage = "set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
+	eventStoreCheckpointUsage = "set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). An empty value returns to the default. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart"
 )
 
 // eventStoreIntFlag and eventStoreStringFlag turn a flag's (given, value) pair into the pointer
@@ -87,6 +88,7 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			Instance:      instance,
 			KubeContext:   upgradeKubeContext,
 			DryRun:        upgradeDryRun,
+			AssumeYes:     upgradeAssumeYes,
 			ImageRegistry: upgradeRegistry,
 			ImageVersion:  upgradeVersion,
 
@@ -305,6 +307,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeRegistry, "registry", "", "image registry to pull from (default: "+bootstrap.DefaultImageRegistry+")")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to (default: this dcctl's pinned version)")
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
+	upgradeCmd.Flags().BoolVarP(&upgradeAssumeYes, "yes", "y", false, "assume yes for prompts (an upgrade asks none, so this changes nothing; it is accepted so a script can pass the same flag to install, bootstrap and upgrade)")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().BoolVar(&upgradeAllowEnvelopeDowngrade, "allow-envelope-downgrade", false, "move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service")

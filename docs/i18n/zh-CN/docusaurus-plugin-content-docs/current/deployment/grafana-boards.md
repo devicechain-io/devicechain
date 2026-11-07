@@ -251,6 +251,8 @@ remote_write:
   - url: https://prometheus.example.com/api/v1/write
 ```
 
+看板的进程面板（内存、CPU、goroutine、打开的文件）选择作业 `dc-edge-agent`，请保留该 `job_name`：使用其他名称时这些面板为空。
+
 代理的默认端口 9090 同时也是 Prometheus 的默认监听端口，所以要让其中一个换端口：像下面这样让采集器使用另一个端口，或在代理配置中设置 `local.metricsPort` 并抓取该端口。
 
 ```bash
