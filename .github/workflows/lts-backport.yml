@@ -1,0 +1,128 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The LTS BACKPORT BOT: a merged fix labelled `security` or `critical` is proposed, as a pull request,
+# for the long-term-support branch. Nothing else is ever proposed, and nothing is ever merged by this
+# workflow -- a backport is a pull request like any other: the full CI matrix runs against the LTS
+# branch (ci.yml runs on every pull request, whatever its base) and a maintainer merges it.
+#
+# WHAT DECIDES. hack/lts-policy names the LTS line (or `none`, in which case this does nothing);
+# hack/lts-backport.sh decides eligibility and builds the cherry-pick; this file only moves the result
+# onto GitHub. A conflict is not forced through: the bot says so on the original pull request and a human
+# backports it.
+#
+# 🔴 THIS RUNS ON `pull_request_target`, WHICH HOLDS A WRITE TOKEN, SO IT IS BUILT TO NEVER EXECUTE THE
+# PULL REQUEST'S CODE. It checks out the base repository at its own default branch (the trusted
+# scripts), fetches the merged commit as DATA from the base repository's history, and cherry-picks it.
+# A cherry-pick runs no code from the tree. The pull request's title and branch name, which a
+# contributor controls, are passed through the environment and never interpolated into a script. It
+# fires on `closed` (merged) and on `labeled` (a label added after the merge), and the label can be added
+# only by someone with triage rights, which is the human decision "this one is worth backporting".
+
+name: lts-backport
+
+on:
+  pull_request_target:
+    types: [closed, labeled]
+    branches: [main]
+  # Re-run for a merged pull request whose label was added before this workflow existed, or to retry.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Number of the merged pull request to propose for the LTS branch'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lts-backport-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    # Only a MERGED pull request, and for `labeled` only the two labels that mean anything. The script
+    # re-checks eligibility from the labels as they are NOW, so this `if` is a cost saver and not the gate.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       (github.event.action == 'closed' ||
+        github.event.label.name == 'security' ||
+        github.event.label.name == 'critical'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # push the backport branch
+      pull-requests: write # open the backport pull request and comment on a conflict
+    env:
+      # A pull request opened with the built-in token does NOT trigger other workflows, so the CI matrix
+      # that gates a backport would never start. LTS_BACKPORT_TOKEN (a fine-grained token with contents and
+      # pull-requests write) is what makes the backport a pull request CI runs on; without it the bot still
+      # opens the pull request but says so loudly, and the maintainer closes and reopens it to start CI.
+      GH_TOKEN: ${{ secrets.LTS_BACKPORT_TOKEN || secrets.GITHUB_TOKEN }}
+      HAVE_BACKPORT_TOKEN: ${{ secrets.LTS_BACKPORT_TOKEN != '' }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+    steps:
+      # The base repository's default branch: the trusted scripts. Never the pull request's head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Read the merged pull request
+        id: pr
+        run: |
+          set -euo pipefail
+          json="$(gh pr view "$PR_NUMBER" --json state,mergeCommit,labels,title,baseRefName)"
+          [ "$(jq -r .state <<<"$json")" = MERGED ] || { echo "::error::pull request $PR_NUMBER is not merged"; exit 1; }
+          [ "$(jq -r .baseRefName <<<"$json")" = "${{ github.event.repository.default_branch }}" ] ||
+            { echo "::notice::pull request $PR_NUMBER did not merge into the default branch; nothing to backport"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          {
+            echo "sha=$(jq -r .mergeCommit.oid <<<"$json")"
+            echo "labels=$(jq -r '[.labels[].name] | join(",")' <<<"$json")"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+          # The title is attacker-influenced text: it goes to a file, not into a command line.
+          jq -r .title <<<"$json" > "$RUNNER_TEMP/pr-title.txt"
+
+      - name: Cherry-pick onto the LTS branch
+        id: pick
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+          LABELS: ${{ steps.pr.outputs.labels }}
+        run: |
+          set -euo pipefail
+          git config user.name "devicechain-lts-backport"
+          git config user.email "lts-backport@users.noreply.github.com"
+          hack/lts-backport.sh prepare "$PR_NUMBER" "$SHA" "$LABELS" | tee "$RUNNER_TEMP/prepare.out" >> "$GITHUB_OUTPUT"
+
+      - name: Push and open the backport pull request
+        if: steps.pick.outputs.status == 'ready'
+        env:
+          BRANCH: ${{ steps.pick.outputs.branch }}
+          LTS_BRANCH: ${{ steps.pick.outputs.lts_branch }}
+        run: |
+          set -euo pipefail
+          git push origin "$BRANCH"
+          title="$(cat "$RUNNER_TEMP/pr-title.txt")"
+          body="$(printf '%s\n\n%s\n\n%s\n' \
+            "Automated backport of #${PR_NUMBER} to \`${LTS_BRANCH}\`, proposed because the fix is labelled \`security\` or \`critical\`." \
+            'The commit is cherry-picked with -x, so it names its origin. This pull request runs the full CI matrix against the LTS branch; review it like any other change and merge it only if it belongs in a security-and-critical-fixes-only line.' \
+            'This workflow never merges.')"
+          if [ "$HAVE_BACKPORT_TOKEN" != true ]; then
+            echo "::warning::LTS_BACKPORT_TOKEN is not set, so CI will not start on the backport pull request until it is closed and reopened."
+          fi
+          gh pr create --base "$LTS_BRANCH" --head "$BRANCH" \
+            --title "[${LTS_BRANCH}] ${title}" --body "$body"
+
+      - name: Say so on the original pull request when it does not apply
+        if: steps.pick.outputs.status == 'conflict'
+        run: |
+          gh pr comment "$PR_NUMBER" --body "This fix is labelled for backport to the LTS branch, but the cherry-pick does not apply cleanly. It needs a manual backport onto the LTS branch (\`git cherry-pick -x\` the merge commit and resolve)."
+
+      - name: What happened
+        if: always() && steps.pr.outputs.skip != 'true'
+        run: echo "backport status for #${PR_NUMBER}: ${{ steps.pick.outputs.status || 'not reached' }}"
