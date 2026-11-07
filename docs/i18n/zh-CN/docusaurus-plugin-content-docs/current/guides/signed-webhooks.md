@@ -98,7 +98,11 @@ query { webhookSigningSecret(handle: "hooks/prod") { handle rotating } }
 
    ```graphql
    mutation { rotateNotificationChannelSigningSecret(token: "oncall-hook") { secret rotating } }
-   # 或者，针对 httpCall 句柄：
+   ```
+
+   对于 `httpCall` 的句柄：
+
+   ```graphql
    mutation { rotateWebhookSigningSecret(handle: "hooks/prod") { secret rotating } }
    ```
 
@@ -110,7 +114,11 @@ query { webhookSigningSecret(handle: "hooks/prod") { handle rotating } }
 
    ```graphql
    mutation { endNotificationChannelSigningRotation(token: "oncall-hook") { token signingRotationOpen } }
-   # 或者：
+   ```
+
+   对于 `httpCall` 的句柄：
+
+   ```graphql
    mutation { endWebhookSigningRotation(handle: "hooks/prod") { handle rotating } }
    ```
 

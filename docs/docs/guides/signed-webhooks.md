@@ -98,7 +98,11 @@ Rotation never drops a delivery, because for a while both secrets sign.
 
    ```graphql
    mutation { rotateNotificationChannelSigningSecret(token: "oncall-hook") { secret rotating } }
-   # or, for an httpCall handle:
+   ```
+
+   For an `httpCall` handle:
+
+   ```graphql
    mutation { rotateWebhookSigningSecret(handle: "hooks/prod") { secret rotating } }
    ```
 
@@ -110,7 +114,11 @@ Rotation never drops a delivery, because for a while both secrets sign.
 
    ```graphql
    mutation { endNotificationChannelSigningRotation(token: "oncall-hook") { token signingRotationOpen } }
-   # or:
+   ```
+
+   For an `httpCall` handle:
+
+   ```graphql
    mutation { endWebhookSigningRotation(handle: "hooks/prod") { handle rotating } }
    ```
 
