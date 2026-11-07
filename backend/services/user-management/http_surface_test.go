@@ -305,3 +305,19 @@ func TestSsoCallbackRouteIsRegisteredIffAnIssuerIsConfigured(t *testing.T) {
 			"every connection has its own path under the same route")
 	})
 }
+
+// The mint endpoint is wired to the authority-ceiling observer: registering it puts the
+// per-caller counter on the service's metrics registry, with every series at zero. Nothing else
+// exercises main.go's wiring, so a refactor that dropped the observer argument would leave the
+// handler tests green and the metric absent.
+func TestServiceTokenHandlerIsWiredToTheCeilingObserver(t *testing.T) {
+	ms := newUserManagementForRoutes(t, "")
+	registerServiceTokenHandler()
+
+	rec := httptest.NewRecorder()
+	ms.MetricsHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	require.Contains(t, body, "_service_token_checks_total{caller=\"other\",verdict=\"unknown_caller\"} 0",
+		"the service-token ceiling counter is not registered, or its series are not pre-created")
+	require.Contains(t, body, "_service_token_checks_total{caller=\"event-sources\",verdict=\"within_ceiling\"} 0")
+}
