@@ -607,9 +607,13 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 	return route
 }
 
-// buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when
-// device-management cannot be reached from here (the route then does not exist).
-func buildDeviceUplinkRoute() *processor.DeviceUplinkRoute {
+// buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when the operator has
+// not turned the route on (httpIngest.deviceUplinks, off by default so a rolling upgrade cannot lose
+// an accepted uplink) or device-management cannot be reached from here. The route then does not exist.
+func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRoute {
+	if !ingest.DeviceUplinks {
+		return nil
+	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.DeviceManagement.Hostname == "" {
 		return nil
@@ -942,7 +946,7 @@ func buildEventSources() error {
 					return err
 				}
 			}
-			if dr := buildDeviceUplinkRoute(); dr != nil {
+			if dr := buildDeviceUplinkRoute(Configuration.HttpIngest); dr != nil {
 				if err := http.UseDeviceUplinks(dr); err != nil {
 					return err
 				}

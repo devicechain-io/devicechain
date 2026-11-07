@@ -1874,6 +1874,10 @@ functionalAreas:
     #     httpIngest:
     #       headerTimeoutSeconds: 5    # wait for the request headers
     #       requestTimeoutSeconds: 60  # whole request, headers and body
+    #       deviceUplinks: false       # serve POST /{instanceId}/{tenant}/devices/{token}/uplink (a device's own
+    #                                  # payload, read by its type's decoder). Off by default: turn it on only after
+    #                                  # every device-management replica runs a release that reads it, or an uplink
+    #                                  # answered 202 during the roll could be refused by an old replica.
     #
     # HTTP device-ingest listener (PR #38): event-sources serves
     # POST /{instanceId}/{tenant}/events on 8081, in addition to the 8080 GraphQL/management

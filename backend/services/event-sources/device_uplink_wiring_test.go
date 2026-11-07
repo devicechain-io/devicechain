@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-event-sources/processor"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
@@ -80,4 +81,16 @@ func TestADeviceUplinkWriteFailureIsReturnedNotSwallowed(t *testing.T) {
 	// A message that cannot be built is the route's 500, not a success.
 	IntegrationUplinksWriter = &recordingWriter{}
 	require.ErrorIs(t, onDeviceUplinkDecoded("http", "", deviceUplinkEvent(), payload), processor.ErrEventNotBuilt)
+}
+
+// 🔴 THE ROUTE IS OFF UNLESS THE OPERATOR TURNS IT ON. It publishes an uplink with no integration
+// mark, which a device-management from before the route refuses; so during a rolling upgrade an
+// old resolver would record as failed a request the route had already answered 202. Off is the
+// default and builds no route at all (the source then answers 404).
+func TestTheDeviceUplinkRouteIsOffUnlessTheOperatorEnablesIt(t *testing.T) {
+	require.Nil(t, buildDeviceUplinkRoute(config.HttpIngest{}))
+	require.Nil(t, buildDeviceUplinkRoute(config.HttpIngest{DeviceUplinks: false, HeaderTimeoutSeconds: 5}))
+	// The paired positive: enabling it reaches the part that needs the instance (a nil Microservice
+	// here), so the guard above is what stopped the others.
+	require.Panics(t, func() { buildDeviceUplinkRoute(config.HttpIngest{DeviceUplinks: true}) })
 }

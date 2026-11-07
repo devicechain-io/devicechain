@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/payloaddecode/plancost"
 )
@@ -80,19 +81,34 @@ func IntegrationDecoder(ctx context.Context, api DeviceManagementApi, integratio
 }
 
 // DeviceDecoder answers whether the type of the device with this token has a payload decoder, for
-// a device that publishes its own payload. An unknown device and a type without a decoder are the
-// same answer (present: false), so the question says nothing about which devices exist. It reads
-// through ProfileResolutionByDeviceType like IntegrationDecoder, so what is answered is what the
-// resolver will run.
-func DeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken string) (*IntegrationDecoderAnswer, error) {
-	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
-	if err != nil {
+// a device that publishes its own payload, AFTER authenticating the credential the device presented.
+//
+// 🔴 THE CREDENTIAL IS CHECKED BEFORE ANYTHING ABOUT THE DEVICE IS SAID. It returns (nil, nil) for
+// every failure to authenticate, whatever the cause (nothing presented, an unknown or disabled or
+// expired credential, a wrong secret, a credential that belongs to another device or tenant, a
+// device that does not exist), so the answer discloses neither whether a decoder is attached nor
+// whether the device exists to a caller who does not hold the device's credential. The ingest route
+// turns that one answer into one response.
+//
+// It authenticates whatever deviceAuthMode the instance runs: this wire has no unauthenticated
+// form, because the answer selects a decoder and spends the profile's budgets on the device's
+// behalf.
+//
+// It reads through ProfileResolutionByDeviceType like IntegrationDecoder, so what is answered is
+// what the resolver will run.
+func DeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken string, presented *PresentedCredential) (*IntegrationDecoderAnswer, error) {
+	device, err := api.AuthenticateDevice(ctx, presented, time.Now())
+	switch {
+	case err == nil:
+	case IsCredentialRefusal(err), errors.Is(err, ErrCredentialMisconfigured):
+		return nil, nil
+	default:
 		return nil, err
 	}
-	if len(devices) != 1 {
-		return &IntegrationDecoderAnswer{}, nil
+	if device == nil || device.Token != deviceToken {
+		return nil, nil
 	}
-	res, err := api.ProfileResolutionByDeviceType(ctx, devices[0].DeviceTypeId)
+	res, err := api.ProfileResolutionByDeviceType(ctx, device.DeviceTypeId)
 	if err != nil {
 		return nil, err
 	}

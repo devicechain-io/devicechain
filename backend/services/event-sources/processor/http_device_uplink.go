@@ -38,9 +38,21 @@ import (
 // looks like or by a decoder being attached: a device uses the decoder by addressing this route. A
 // device type with no decoder is answered 422, never accepted and never flattened.
 //
-// The order is the design: the tenant's message gate, then the body, then the plan, then the reading
-// gate, then the shared backpressure gate, then the publish. The plan is advisory (the resolver
-// decides what runs); it chooses the charge and whether the bytes are carried at all.
+// The order is the design: the credential is PROVEN FIRST (device-management authenticates it as it
+// resolves the plan), then the tenant's message gate, then the body, then the reading gate, then the
+// shared backpressure gate, then the publish. The plan is advisory (the resolver decides what runs);
+// it chooses the charge and whether the bytes are carried at all.
+//
+// 🔴 NOTHING IS SAID BEFORE THE CREDENTIAL IS PROVEN. A caller who does not hold the device's
+// credential gets one answer, 401, whether the device exists and whether its type has a decoder: the
+// refusals that depend on the device (no decoder, the shape of the body) come only after, so they
+// reach only its own holder. The tenant's message gate and the lookup budgets are charged to the
+// tenant the credential was proven for, never to the tenant the URL names.
+//
+// 🔴 THE ROUTE IS OFF UNLESS THE OPERATOR TURNS IT ON (httpIngest.deviceUplinks). It publishes an
+// uplink that carries no integration mark, which a device-management from before this route
+// refuses and records as a failed event; the operator turns it on once every device-management
+// replica has been rolled to a release that reads it, so no request is answered 202 and then lost.
 
 // Results of a device-uplink request (the result label of device_uplink_requests_total).
 const (
@@ -171,11 +183,39 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// The tenant's own message ceiling first, before the body is read, as /events.
+	// 🔴 THE CREDENTIAL IS PROVEN BEFORE ANYTHING ELSE IS DECIDED OR SAID, and before the body is read.
+	// Device-management authenticates it while it resolves the plan; every way of not being
+	// authenticated is this one 401, so an anonymous caller learns nothing about the device or its
+	// type. Not knowing the answer is never "unauthenticated" and never "no decoder": the device is
+	// told to retry.
+	look, err := rt.Plans.Lookup(r.Context(), tenant, device, integration.DeviceCredential{Type: *ctype, ID: *cid, Secret: csecret})
+	if err != nil {
+		log.Warn().Err(err).Msg("Device decoder lookup failed; refusing the uplink")
+		rt.result(DeviceUplinkPlanUnavail)
+		w.Header().Set("Retry-After", retryAfterSeconds)
+		http.Error(w, "decoder lookup is unavailable; retry later", http.StatusServiceUnavailable)
+		return
+	}
+	if !look.Authenticated {
+		rt.result(DeviceUplinkUnauthorized)
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "device authentication failed", http.StatusUnauthorized)
+		return
+	}
+
+	// The tenant's own message ceiling, charged to the tenant the credential was proven for (the
+	// path's tenant is that tenant: device-management authenticated the credential inside it).
 	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginUntrusted) {
 		rt.result(DeviceUplinkRateLimited)
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "ingest rate limit exceeded for tenant", http.StatusTooManyRequests)
+		return
+	}
+
+	plan := look.Plan
+	if !plan.Present {
+		rt.result(DeviceUplinkNoDecoder)
+		http.Error(w, "no payload decoder is attached to this device's type", http.StatusUnprocessableEntity)
 		return
 	}
 
@@ -192,22 +232,6 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 		return
 	}
 	es.received(es.Id, body)
-
-	look, err := rt.Plans.Lookup(r.Context(), tenant, device)
-	if err != nil {
-		// Not knowing whether a decoder exists is never "no decoder": the device is told to retry.
-		log.Warn().Err(err).Msg("Device decoder lookup failed; refusing the uplink")
-		rt.result(DeviceUplinkPlanUnavail)
-		w.Header().Set("Retry-After", retryAfterSeconds)
-		http.Error(w, "decoder lookup is unavailable; retry later", http.StatusServiceUnavailable)
-		return
-	}
-	plan := look.Plan
-	if !plan.Present {
-		rt.result(DeviceUplinkNoDecoder)
-		http.Error(w, "no payload decoder is attached to this device's type", http.StatusUnprocessableEntity)
-		return
-	}
 
 	// What the decoder reads decides what is parsed. The JSON is parsed only for a JSON content type
 	// and only when the decoder reads it; an unknown input kind is carried in full, as the integration

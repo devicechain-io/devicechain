@@ -30,14 +30,19 @@ type devicePlanFake struct {
 	plan  *integration.DecoderPlan
 	err   error
 	calls int
+	// valid is the set of credential ids device-management authenticates; any other is refused.
+	valid map[string]bool
 }
 
-func (f *devicePlanFake) DeviceDecoder(context.Context, string, string) (*integration.DecoderPlan, error) {
+func (f *devicePlanFake) DeviceDecoder(_ context.Context, _, _ string, cred integration.DeviceCredential) (*integration.DecoderPlan, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
+	}
+	if !f.valid[cred.ID] {
+		return nil, nil
 	}
 	if f.plan == nil {
 		return &integration.DecoderPlan{}, nil
@@ -47,28 +52,33 @@ func (f *devicePlanFake) DeviceDecoder(context.Context, string, string) (*integr
 }
 
 type deviceHarness struct {
-	es        *HttpEventSource
-	plans     *devicePlanFake
-	published []*model.UnresolvedEvent
-	payloads  []*model.UnresolvedIntegrationUplinkPayload
-	pubErr    error
-	results   []string
-	charged   []int
-	readings  []int
-	allowed   bool
-	admitErr  error
-	events    int
-	failed    int
+	es         *HttpEventSource
+	plans      *devicePlanFake
+	published  []*model.UnresolvedEvent
+	payloads   []*model.UnresolvedIntegrationUplinkPayload
+	pubErr     error
+	results    []string
+	charged    []int
+	readings   []int
+	allowed    bool
+	allowCalls []string
+	admitErr   error
+	events     int
+	failed     int
+	received   int
 }
 
 func newDeviceHarness(t *testing.T, plan *integration.DecoderPlan) *deviceHarness {
 	t.Helper()
-	h := &deviceHarness{plans: &devicePlanFake{plan: plan}, allowed: true}
+	h := &deviceHarness{plans: &devicePlanFake{plan: plan, valid: map[string]bool{"tok-1": true, "u": true}}, allowed: true}
 	es, err := NewHttpEventSource("http", map[string]string{}, "inst", config.HttpIngest{}, NewJsonDecoder(nil),
-		func(string, []byte) {},
+		func(string, []byte) { h.received++ },
 		func(string, string, *model.UnresolvedEvent, interface{}, string) error { h.events++; return nil },
 		func(string, string, []byte, error) error { h.failed++; return nil },
-		func(string, string, time.Time, bool, Origin) bool { return h.allowed },
+		func(_, tenant string, _ time.Time, _ bool, _ Origin) bool {
+			h.allowCalls = append(h.allowCalls, tenant)
+			return h.allowed
+		},
 		func(_, _ string, _ time.Time, _ bool, _ Origin, n int) bool {
 			h.readings = append(h.readings, n)
 			return true
@@ -242,7 +252,8 @@ func TestDeviceUplinkRefusals(t *testing.T) {
 	rl.allowed = false
 	rec = rl.post(uplinkPath, "", "x", bearer)
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
-	require.Zero(t, rl.plans.calls, "the ceiling is checked before the plan is asked")
+	require.Equal(t, 1, rl.plans.calls, "the credential is proven before the ceiling is spent")
+	require.Zero(t, rl.received, "and the body is not read for a request the ceiling refused")
 
 	// Backpressure and publish outcomes.
 	bp := newDeviceHarness(t, fplan())
@@ -295,5 +306,74 @@ func TestDeviceUplinkPlanIsCachedPerDevice(t *testing.T) {
 	}
 	require.Equal(t, 1, h.plans.calls)
 	require.Equal(t, http.StatusAccepted, h.post("/inst/acme/devices/meter-2/uplink", "", "x", bearer).Code)
+	require.Equal(t, 2, h.plans.calls)
+}
+
+// 🔴 A CALLER WHO DOES NOT HOLD THE CREDENTIAL LEARNS NOTHING. Whether the device exists, and whether
+// its type has a decoder, change nothing about the response to a wrong credential: the status, the
+// body and the headers are the same, nothing is published, the body is never read, and the tenant's
+// message ceiling is not spent (it belongs to the tenant the credential was proven for, not to the
+// one the URL names). Each is paired with the request that holds the credential.
+func TestDeviceUplinkUnauthenticatedRequestsAreIndistinguishable(t *testing.T) {
+	garbage := map[string]string{"Authorization": "Bearer garbage"}
+	withDecoder := newDeviceHarness(t, fplan())
+	withoutDecoder := newDeviceHarness(t, nil)
+
+	// The paired positives: the credential holder is told the truth, and the truth differs.
+	require.Equal(t, http.StatusAccepted, withDecoder.post(uplinkPath, "", "x", bearer).Code)
+	require.Equal(t, http.StatusUnprocessableEntity, withoutDecoder.post(uplinkPath, "", "x", bearer).Code)
+	withDecoder.allowCalls, withoutDecoder.allowCalls = nil, nil
+	withDecoder.received, withoutDecoder.received = 0, 0
+	published := len(withDecoder.published)
+
+	type seen struct {
+		code   int
+		body   string
+		header string
+	}
+	var got []seen
+	for name, h := range map[string]*deviceHarness{"a decoder is attached": withDecoder, "no decoder": withoutDecoder} {
+		h.allowed = false // would be a 429 if the ceiling were consulted first
+		for _, path := range []string{uplinkPath, "/inst/acme/devices/no-such-device/uplink", "/inst/victim/devices/meter-1/uplink"} {
+			rec := h.post(path, "application/octet-stream", "\x01\x02", garbage)
+			got = append(got, seen{rec.Code, rec.Body.String(), rec.Header().Get("WWW-Authenticate")})
+			require.Equal(t, http.StatusUnauthorized, rec.Code, "%s %s", name, path)
+		}
+		require.Empty(t, h.allowCalls, "%s: an unauthenticated request spends no tenant's ceiling", name)
+		require.Zero(t, h.received, "%s: the body of an unauthenticated request is never read", name)
+		require.Equal(t, []string{DeviceUplinkAccepted, DeviceUplinkNoDecoder}[boolIndex(name == "no decoder")], h.results[0], "the paired positive was counted")
+	}
+	for _, s := range got[1:] {
+		require.Equal(t, got[0], s, "every unauthenticated response is the same response")
+	}
+	require.Len(t, withDecoder.published, published, "nothing was published for an unauthenticated request")
+	require.Contains(t, withDecoder.results, DeviceUplinkUnauthorized)
+}
+
+func boolIndex(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// A device-management that cannot be asked is a retryable 503, never a 401 (the credential may be
+// right) and never a 202.
+func TestDeviceUplinkAuthenticationUnavailableIsRetryableNotRefusal(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	h.plans.err = errors.New("dm down")
+	rec := h.post(uplinkPath, "", "x", map[string]string{"Authorization": "Bearer garbage"})
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+	require.Empty(t, h.published)
+}
+
+// The authenticated credential is what is asked: a request is authenticated as presented, and the
+// same device with another credential is a separate question.
+func TestDeviceUplinkAsksTheCredentialItPresented(t *testing.T) {
+	h := newDeviceHarness(t, fplan())
+	require.Equal(t, http.StatusAccepted, h.post(uplinkPath, "", "x", bearer).Code)
+	require.Equal(t, http.StatusUnauthorized, h.post(uplinkPath, "", "x", map[string]string{"Authorization": "Bearer tok-2"}).Code,
+		"another credential for the same device is not served the first one's answer")
 	require.Equal(t, 2, h.plans.calls)
 }

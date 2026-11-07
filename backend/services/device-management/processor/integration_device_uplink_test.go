@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,20 +189,41 @@ func TestADeviceUplinkOnInboundEventsIsNeverDecoded(t *testing.T) {
 	require.NoError(t, err)
 	ctx := core.WithTenant(context.Background(), "acme")
 	require.NoError(t, inbound.WriteMessages(ctx, messaging.Message{Key: []byte("dev"), Value: wire}))
+	// The delivery is observed, and the resolver is given a bounded window in which a decode would
+	// show. The event is held for retry rather than settled (a device the platform does not know yet
+	// may appear), so there is no settled state to wait for; what makes the check sound is that it
+	// can only fail loudly: a stream that was never created has no messages, and any other failure to
+	// ask is a failed test, never a skipped assertion.
 	require.Eventually(t, func() bool {
 		return e.consumerInfo(streams.InboundEvents, "device-management").Delivered.Consumer >= 1
 	}, 10*time.Second, 50*time.Millisecond)
-	time.Sleep(2 * time.Second)
-	if info, err := e.js.StreamInfo(messaging.StreamName(e2eInstance, streams.ResolvedEvents)); err == nil {
-		require.Zero(t, info.State.Msgs, "a mark-less uplink read from inbound-events was decoded")
+	resolvedMsgs := func() uint64 {
+		info, err := e.js.StreamInfo(messaging.StreamName(e2eInstance, streams.ResolvedEvents))
+		if errors.Is(err, nats.ErrStreamNotFound) {
+			return 0
+		}
+		require.NoError(t, err)
+		return info.State.Msgs
 	}
+	require.Never(t, func() bool { return resolvedMsgs() != 0 }, 2*time.Second, 50*time.Millisecond,
+		"a mark-less uplink read from inbound-events was decoded")
 
-	// The control: the same event on the uplink stream resolves, so the rig can resolve it at all.
-	require.NoError(t, e.uplk.WriteMessages(ctx, messaging.Message{Key: []byte("dev"), Value: wire}))
+	// The control: a DIFFERENT frame on the uplink stream resolves, so the rig can resolve it at all,
+	// and it is the first and only thing on resolved-events. Were the forbidden event emitted late,
+	// it would be read first (21.5) or make the count two.
+	ctrl := e.uplink("chirp-1", e.token, frameUplink(0x00, 0xD8))
+	ctrl.Integration, ctrl.SealedIntegrationToken, ctrl.IntegrationIdentifier = "", nil, ""
+	ctrl.Source = "http"
+	ctrl.OccurredTime, ctrl.ProcessedTime = time.Now(), time.Now()
+	ctrlWire, err := esproto.MarshalUnresolvedEvent(ctrl)
+	require.NoError(t, err)
+	require.NoError(t, e.uplk.WriteMessages(ctx, messaging.Message{Key: []byte("dev"), Value: ctrlWire}))
 	m := e.next(streams.ResolvedEvents)
 	re, err := resolvedevent.UnmarshalResolvedEvent(m.Data)
 	require.NoError(t, err)
-	require.Equal(t, "21.5", re.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value)
+	require.Equal(t, "21.6", re.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value)
+	require.Never(t, func() bool { return resolvedMsgs() > 1 }, time.Second, 50*time.Millisecond,
+		"the inbound-events uplink was decoded after the control")
 }
 
 // A device's uplink is never given link metrics, whatever it carries: they are the platform's,

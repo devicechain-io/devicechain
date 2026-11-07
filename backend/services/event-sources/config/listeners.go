@@ -62,6 +62,13 @@ type HttpIngest struct {
 	// Defaults to DefaultHttpRequestTimeoutSeconds; a non-positive value falls back to
 	// it, for the same reason.
 	RequestTimeoutSeconds int
+	// DeviceUplinks serves the device-uplink route (POST /{instanceId}/{tenant}/devices/{token}/uplink)
+	// on every HTTP source. It is OFF unless set, and the default is the safe one: the route publishes
+	// an uplink that carries no integration mark, which a device-management from before the route
+	// refuses and records as a failed event, so a request answered 202 during a rolling upgrade could
+	// be lost. Set it only after every device-management replica runs a release that reads the
+	// device-uplink event. With it off the route does not exist (404), exactly as before the route did.
+	DeviceUplinks bool
 }
 
 // HeaderTimeout and RequestTimeout render the configured seconds as durations, applying

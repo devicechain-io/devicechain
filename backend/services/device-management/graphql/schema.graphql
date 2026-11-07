@@ -5077,13 +5077,23 @@ type Query {
     user's access token. What the ingest path needs to know about the payload decoder of the
     device with this token, for a device that publishes its own payload: whether the active
     published version of its type's profile declares one, which input it reads, and the figures
-    the ingest charge is built from. A device that does not exist and a device whose type has no
-    decoder are indistinguishable (present: false).
+    the ingest charge is built from. The credential the device presented is authenticated
+    first, and the answer is null for every failure to do so (nothing presented, an unknown,
+    disabled or expired credential, a wrong secret, a credential that belongs to another device,
+    a device that does not exist): those are indistinguishable from one another and say nothing
+    about whether a decoder is attached. A device that authenticates and whose type has no decoder
+    is present: false.
     """
     deviceDecoder(
         """Token of the device the uplink is addressed to."""
         deviceToken: String!
-    ): DeviceDecoderPlan!
+        """Type of the credential the device presented (ACCESS_TOKEN, MQTT_BASIC)."""
+        credentialType: String!
+        """The credential id the device presented (for an access token, the token)."""
+        credentialId: String!
+        """The secret the device presented, for a credential type that carries one."""
+        credentialSecret: String
+    ): DeviceDecoderPlan
     """
     Service-only: callable with a service token that holds device:read, and refused for any
     user's access token. Proves a bearer token belongs to the integration with this token.
