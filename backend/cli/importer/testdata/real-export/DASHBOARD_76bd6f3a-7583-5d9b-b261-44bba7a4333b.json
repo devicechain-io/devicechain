@@ -1,0 +1,37 @@
+{
+  "entityType": "DASHBOARD",
+  "entity": {
+    "id": {
+      "entityType": "DASHBOARD",
+      "id": "76bd6f3a-7583-5d9b-b261-44bba7a4333b"
+    },
+    "createdTime": 1794037722127,
+    "title": "Fleet overview",
+    "name": "Fleet overview",
+    "image": null,
+    "mobileHide": false,
+    "mobileOrder": null,
+    "assignedCustomers": null,
+    "configuration": {
+      "widgets": {},
+      "states": {
+        "default": {
+          "name": "Fleet",
+          "root": true,
+          "layouts": {
+            "main": {
+              "widgets": {},
+              "gridSettings": {
+                "columns": 24
+              }
+            }
+          }
+        }
+      },
+      "entityAliases": {}
+    },
+    "resources": null,
+    "version": 1,
+    "externalId": null
+  }
+}

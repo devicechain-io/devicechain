@@ -1,0 +1,89 @@
+{
+  "entityType": "ASSET",
+  "entity": {
+    "id": {
+      "entityType": "ASSET",
+      "id": "955e2e74-58bd-5798-9999-a9106915db7e"
+    },
+    "createdTime": 1794035374970,
+    "customerId": {
+      "entityType": "CUSTOMER",
+      "id": "13814000-1dd2-11b2-8080-808080808080"
+    },
+    "name": "HQ Building",
+    "type": "Building",
+    "label": "Headquarters",
+    "assetProfileId": {
+      "entityType": "ASSET_PROFILE",
+      "id": "5714e19e-a08a-53a9-b952-e24a3cd328e9"
+    },
+    "externalId": null,
+    "version": 1,
+    "additionalInfo": {
+      "description": "Asset HQ Building"
+    }
+  },
+  "relations": [
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "955e2e74-58bd-5798-9999-a9106915db7e"
+      },
+      "to": {
+        "entityType": "ASSET",
+        "id": "79710bb9-38f0-5425-a83b-c7674b23987c"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 29,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "955e2e74-58bd-5798-9999-a9106915db7e"
+      },
+      "to": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 30,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "955e2e74-58bd-5798-9999-a9106915db7e"
+      },
+      "to": {
+        "entityType": "ASSET",
+        "id": "c8ad55de-1e6d-5e0a-8626-a4f23bd312d4"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 31,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "955e2e74-58bd-5798-9999-a9106915db7e"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "858c0c72-33a0-5168-9b5d-32bf922c0f55"
+      },
+      "type": "Manages",
+      "typeGroup": "COMMON",
+      "version": 53,
+      "additionalInfo": null
+    }
+  ],
+  "attributes": {
+    "SERVER_SCOPE": [],
+    "SHARED_SCOPE": [],
+    "CLIENT_SCOPE": []
+  }
+}

@@ -30,6 +30,7 @@ dcctl [command]
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl events](#dcctl-events)	 - Inspect a tenant's events
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
+* [dcctl import](#dcctl-import)	 - Load another platform's JSON entity export (EXPERIMENTAL)
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
 * [dcctl preflight](#dcctl-preflight)	 - Check local prerequisites for installing a cluster
@@ -997,6 +998,56 @@ dcctl ha verify-db [flags]
 ### SEE ALSO
 
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
+
+## dcctl import {#dcctl-import}
+
+Load another platform's JSON entity export (EXPERIMENTAL)
+
+### Synopsis
+
+Load the JSON entity exports other IoT platforms produce into a tenant: device profiles,
+devices, asset profiles, assets, their relations and their attributes.
+
+EXPERIMENTAL. This is a spike. It converts only what maps cleanly and tells you, line by line,
+what it did not. Read the report before you trust the result.
+
+By default nothing is sent: the command reads the export, prints the plan and the report, and
+stops. Pass --apply (with --tenant, --email and --password) to write. Applying is create-only and
+safe to repeat: anything that already exists is left alone and counted as existing, and a profile
+is published only by the run that created it.
+
+The input is one JSON file or a directory of them; a file may hold one record, an array of
+records, or \{"entities": [...]\}. A record is \{"entityType", "entity", "relations", "attributes",
+"credentials"\}. Source ids become tokens, so a re-run matches what the first run made.
+
+Credentials are not carried unless you pass --carry-access-tokens, and then only access tokens.
+Devices still need to speak this platform's wire to connect.
+
+Not converted: customers and users, alarm rules (classified in the report), rule chains,
+dashboards, entity views, update packages, telemetry history.
+
+```
+dcctl import <file-or-directory> [flags]
+```
+
+### Options
+
+```
+      --apply                 write to the tenant (default: print the plan and report only)
+      --carry-access-tokens   import each device's access-token credential with the device
+      --email string          identity to authenticate as (required with --apply)
+  -h, --help                  help for import
+      --otp string            one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -o, --output string         report format: text or json (default "text")
+      --password string       password for the identity (required with --apply)
+  -s, --server string         instance host for platform API calls (default "localhost")
+  -t, --tenant string         tenant to import into (required with --apply)
+      --tls                   use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
 
 ## dcctl install {#dcctl-install}
 

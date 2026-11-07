@@ -1,0 +1,112 @@
+{
+  "entityType": "DEVICE",
+  "entity": {
+    "id": {
+      "entityType": "DEVICE",
+      "id": "9420269a-e559-5504-93b7-dee75c7dc59d"
+    },
+    "createdTime": 1794035522620,
+    "customerId": {
+      "entityType": "CUSTOMER",
+      "id": "13814000-1dd2-11b2-8080-808080808080"
+    },
+    "name": "Thermostat 01",
+    "type": "Thermostat",
+    "label": "Unit 1",
+    "deviceProfileId": {
+      "entityType": "DEVICE_PROFILE",
+      "id": "214f7c75-88b1-5cd9-94c0-86a6d99f2755"
+    },
+    "firmwareId": null,
+    "softwareId": null,
+    "externalId": null,
+    "version": 1,
+    "additionalInfo": {
+      "gateway": false,
+      "description": "Sample device 1"
+    },
+    "deviceData": {
+      "configuration": {
+        "type": "DEFAULT"
+      },
+      "transportConfiguration": {
+        "type": "DEFAULT"
+      }
+    }
+  },
+  "relations": [
+    {
+      "from": {
+        "entityType": "DEVICE",
+        "id": "9420269a-e559-5504-93b7-dee75c7dc59d"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "e60bed6e-e230-59c9-9ebb-bd99c9df67e4"
+      },
+      "type": "Monitors",
+      "typeGroup": "COMMON",
+      "version": 52,
+      "additionalInfo": null
+    }
+  ],
+  "attributes": {
+    "SERVER_SCOPE": [
+      {
+        "lastUpdateTs": 1794035565728,
+        "key": "serial",
+        "value": "SN-00001"
+      },
+      {
+        "lastUpdateTs": 1794035565728,
+        "key": "installed",
+        "value": true
+      },
+      {
+        "lastUpdateTs": 1794035565728,
+        "key": "calibration",
+        "value": 1.6
+      },
+      {
+        "lastUpdateTs": 1794035565728,
+        "key": "location",
+        "value": {
+          "lat": 40.01,
+          "lon": -74.0
+        }
+      },
+      {
+        "lastUpdateTs": 1794036170531,
+        "key": "inactivityAlarmTime",
+        "value": 1794036170531
+      },
+      {
+        "lastUpdateTs": 1794036170541,
+        "key": "active",
+        "value": false
+      }
+    ],
+    "SHARED_SCOPE": [
+      {
+        "lastUpdateTs": 1794035587126,
+        "key": "targetTemp",
+        "value": 22
+      }
+    ],
+    "CLIENT_SCOPE": []
+  },
+  "credentials": {
+    "id": {
+      "id": "1fd1afdd-245e-5eed-adc4-2fbb3a06dba9"
+    },
+    "createdTime": 1794035522757,
+    "deviceId": {
+      "entityType": "DEVICE",
+      "id": "9420269a-e559-5504-93b7-dee75c7dc59d"
+    },
+    "credentialsType": "ACCESS_TOKEN",
+    "credentialsId": "FIXTUREF07E65A29D0D1",
+    "credentialsValue": null,
+    "version": 1
+  }
+}

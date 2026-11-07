@@ -1,0 +1,131 @@
+{
+  "entityType": "ASSET",
+  "entity": {
+    "id": {
+      "entityType": "ASSET",
+      "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+    },
+    "createdTime": 1794035417615,
+    "customerId": {
+      "entityType": "CUSTOMER",
+      "id": "13814000-1dd2-11b2-8080-808080808080"
+    },
+    "name": "HQ Floor 2",
+    "type": "Floor",
+    "label": null,
+    "assetProfileId": {
+      "entityType": "ASSET_PROFILE",
+      "id": "4de83441-f64a-5eaa-bd7d-d8c7c4e48439"
+    },
+    "externalId": null,
+    "version": 1,
+    "additionalInfo": {
+      "description": "Asset HQ Floor 2"
+    }
+  },
+  "relations": [
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "9420269a-e559-5504-93b7-dee75c7dc59d"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 32,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "5ea67de7-0402-53f6-88a3-2c5cc8d4babe"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 35,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "b51d771d-deb4-5b08-81e7-25eaf5d4bcea"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 38,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "2a3676f9-a37e-5d73-9456-cf2812decb68"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 41,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "bc73c4ce-cf06-53e2-9211-47f6cd0c8d9e"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 44,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "e8fce71d-add8-5ece-a412-2db73ce5086c"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 47,
+      "additionalInfo": null
+    },
+    {
+      "from": {
+        "entityType": "ASSET",
+        "id": "cc3f2e38-30d6-5e9e-8b22-59877810de2b"
+      },
+      "to": {
+        "entityType": "DEVICE",
+        "id": "a5d5223a-cf8e-5372-839f-9256b6b1445a"
+      },
+      "type": "Contains",
+      "typeGroup": "COMMON",
+      "version": 50,
+      "additionalInfo": null
+    }
+  ],
+  "attributes": {
+    "SERVER_SCOPE": [],
+    "SHARED_SCOPE": [],
+    "CLIENT_SCOPE": []
+  }
+}

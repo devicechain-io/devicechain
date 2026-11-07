@@ -1,0 +1,97 @@
+{
+  "entityType": "DEVICE",
+  "entity": {
+    "id": {
+      "entityType": "DEVICE",
+      "id": "55097d5d-4b09-58d5-baa5-854c945274c3"
+    },
+    "createdTime": 1794037002184,
+    "customerId": {
+      "entityType": "CUSTOMER",
+      "id": "13814000-1dd2-11b2-8080-808080808080"
+    },
+    "name": "Flow Meter 15",
+    "type": "Flow Meter",
+    "label": "Unit 15",
+    "deviceProfileId": {
+      "entityType": "DEVICE_PROFILE",
+      "id": "016493f8-fbf6-56c4-b307-cd1cea619a82"
+    },
+    "firmwareId": null,
+    "softwareId": null,
+    "externalId": null,
+    "version": 1,
+    "additionalInfo": {
+      "gateway": false,
+      "description": "Sample device 15"
+    },
+    "deviceData": {
+      "configuration": {
+        "type": "DEFAULT"
+      },
+      "transportConfiguration": {
+        "type": "DEFAULT"
+      }
+    }
+  },
+  "relations": [],
+  "attributes": {
+    "SERVER_SCOPE": [
+      {
+        "lastUpdateTs": 1794037044585,
+        "key": "serial",
+        "value": "SN-00015"
+      },
+      {
+        "lastUpdateTs": 1794037044585,
+        "key": "installed",
+        "value": true
+      },
+      {
+        "lastUpdateTs": 1794037044585,
+        "key": "calibration",
+        "value": 3.0
+      },
+      {
+        "lastUpdateTs": 1794037044585,
+        "key": "location",
+        "value": {
+          "lat": 40.15,
+          "lon": -74.0
+        }
+      },
+      {
+        "lastUpdateTs": 1794037645689,
+        "key": "inactivityAlarmTime",
+        "value": 1794037645689
+      },
+      {
+        "lastUpdateTs": 1794037645695,
+        "key": "active",
+        "value": false
+      }
+    ],
+    "SHARED_SCOPE": [
+      {
+        "lastUpdateTs": 1794037065529,
+        "key": "targetTemp",
+        "value": 21
+      }
+    ],
+    "CLIENT_SCOPE": []
+  },
+  "credentials": {
+    "id": {
+      "id": "fb4acf61-efe1-5100-8cbb-c959c75940be"
+    },
+    "createdTime": 1794037002210,
+    "deviceId": {
+      "entityType": "DEVICE",
+      "id": "55097d5d-4b09-58d5-baa5-854c945274c3"
+    },
+    "credentialsType": "ACCESS_TOKEN",
+    "credentialsId": "FIXTUREBA045995CA67F",
+    "credentialsValue": null,
+    "version": 1
+  }
+}

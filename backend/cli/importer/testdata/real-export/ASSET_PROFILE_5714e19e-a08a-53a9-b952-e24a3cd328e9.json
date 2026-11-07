@@ -1,0 +1,20 @@
+{
+  "entityType": "ASSET_PROFILE",
+  "entity": {
+    "id": {
+      "entityType": "ASSET_PROFILE",
+      "id": "5714e19e-a08a-53a9-b952-e24a3cd328e9"
+    },
+    "createdTime": 1794035332338,
+    "name": "Building",
+    "description": "A building",
+    "image": null,
+    "defaultRuleChainId": null,
+    "defaultDashboardId": null,
+    "defaultQueueName": null,
+    "defaultEdgeRuleChainId": null,
+    "externalId": null,
+    "version": 1,
+    "default": false
+  }
+}

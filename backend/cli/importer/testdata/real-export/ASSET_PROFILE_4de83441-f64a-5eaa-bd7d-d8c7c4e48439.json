@@ -1,0 +1,20 @@
+{
+  "entityType": "ASSET_PROFILE",
+  "entity": {
+    "id": {
+      "entityType": "ASSET_PROFILE",
+      "id": "4de83441-f64a-5eaa-bd7d-d8c7c4e48439"
+    },
+    "createdTime": 1794035353912,
+    "name": "Floor",
+    "description": null,
+    "image": null,
+    "defaultRuleChainId": null,
+    "defaultDashboardId": null,
+    "defaultQueueName": null,
+    "defaultEdgeRuleChainId": null,
+    "externalId": null,
+    "version": 1,
+    "default": false
+  }
+}
