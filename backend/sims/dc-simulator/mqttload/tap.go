@@ -134,6 +134,7 @@ func NewTap(ctx context.Context, cfg TapConfig) (*Tap, error) {
 	if err := wait(t.client.Connect(), "connect"); err != nil {
 		return nil, err
 	}
+	//subconfirm:ok the SUBACK return codes are read below: a 0x80 refusal or any grant other than QoS 1 fails the tap
 	sub := t.client.Subscribe(cfg.Filter, 1, t.onMessage)
 	if err := wait(sub, "subscribe"); err != nil {
 		t.Close()

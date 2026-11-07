@@ -104,5 +104,5 @@ jobs:
           [ "$PLANTED_CODE" = "3" ] || { echo "the planted loss failed with exit $PLANTED_CODE, want 3"; exit 1; }
           dropped="$(jq -r .dropped "$RUNNER_TEMP/proxy.json")"
           lost="$(jq -r .storage.lost "$RUNNER_TEMP/planted.json")"
-          [ "$dropped" -gt 0 ] && [ "$lost" = "$dropped" ] || { echo "verdict lost=$lost, proxy dropped=$dropped"; exit 1; }
+          if ! { [ "$dropped" -gt 0 ] && [ "$lost" = "$dropped" ]; }; then echo "verdict lost=$lost, proxy dropped=$dropped"; exit 1; fi
           echo "planted loss failed the action: exit 3, exactly $dropped missing"
