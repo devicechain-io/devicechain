@@ -5,6 +5,7 @@ package importer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -22,7 +23,7 @@ type Client interface {
 const (
 	createProfileMutation   = `mutation($request:DeviceProfileCreateRequest){createDeviceProfile(request:$request){token}}`
 	publishProfileMutation  = `mutation($token:String!,$label:String){publishDeviceProfile(token:$token,label:$label){version}}`
-	profileVersionsQuery    = `query($token:String!){deviceProfileVersions(token:$token,limit:1){version}}`
+	profileVersionsQuery    = `query($token:String!,$tokens:[String!]!){deviceProfileVersions(token:$token,limit:1){version} deviceProfilesByToken(tokens:$tokens){token metadata}}`
 	createTypeMutation      = `mutation($request:DeviceTypeCreateRequest){createDeviceType(request:$request){token}}`
 	createAssetTypeMutation = `mutation($request:AssetTypeCreateRequest){createAssetType(request:$request){token}}`
 	createAssetMutation     = `mutation($request:AssetCreateRequest){createAsset(request:$request){token}}`
@@ -39,6 +40,30 @@ type profileVersionsResult struct {
 	DeviceProfileVersions []struct {
 		Version int `json:"version"`
 	} `json:"deviceProfileVersions"`
+	DeviceProfilesByToken []struct {
+		Token    string  `json:"token"`
+		Metadata *string `json:"metadata"`
+	} `json:"deviceProfilesByToken"`
+}
+
+// importedProfile reports whether the profile named by token carries this importer's provenance:
+// the "source" metadata object Build writes, whose id is the token itself. A draft someone made
+// by hand under the same token has no such mark and is never published on their behalf.
+func (r profileVersionsResult) importedProfile(token string) bool {
+	for _, p := range r.DeviceProfilesByToken {
+		if p.Token != token || p.Metadata == nil {
+			continue
+		}
+		var m struct {
+			Source struct {
+				ID string `json:"id"`
+			} `json:"source"`
+		}
+		if json.Unmarshal([]byte(*p.Metadata), &m) == nil && m.Source.ID == token {
+			return true
+		}
+	}
+	return false
 }
 
 // authGuard stops a run at the first refused credential. A 401 means the token, not the item,
@@ -153,10 +178,10 @@ func Apply(ctx context.Context, client Client, endpoint string, p *Plan) ([]Tall
 		publish := created
 		if existed {
 			var vs profileVersionsResult
-			if err := c.Query(ctx, endpoint, profileVersionsQuery, map[string]any{"token": pr.Token}, &vs); err != nil {
+			if err := c.Query(ctx, endpoint, profileVersionsQuery, map[string]any{"token": pr.Token, "tokens": []string{pr.Token}}, &vs); err != nil {
 				t.fail(pr.Token+" (versions)", err)
 			} else {
-				publish = len(vs.DeviceProfileVersions) == 0
+				publish = len(vs.DeviceProfileVersions) == 0 && vs.importedProfile(pr.Token)
 			}
 		}
 		if publish {
@@ -327,6 +352,12 @@ func importRows(ctx context.Context, c Client, endpoint string, t *Tally, rows [
 		var res importResult
 		err := c.Query(ctx, endpoint, importDevicesMutation, map[string]any{"rows": in, "mode": mode, "dryRun": false}, &res)
 		if err != nil {
+			if userclient.IsUnauthorized(err) {
+				// The session was refused, not the rows: one failure says so, and the caller's
+				// guard stops the run.
+				t.fail(fmt.Sprintf("%d device row(s) from %s", len(batch), batch[0].Token), err)
+				return
+			}
 			for _, r := range batch {
 				t.fail(r.Token, err)
 			}

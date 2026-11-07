@@ -278,6 +278,8 @@ type fake struct {
 	// unpublished makes the profile-versions query answer "none", as for a profile an earlier run
 	// created and never published.
 	unpublished bool
+	// foreignDraft makes the existing profile one this importer did not write.
+	foreignDraft bool
 }
 
 func (f *fake) Query(_ context.Context, _ string, q string, v map[string]any, out any) error {
@@ -287,10 +289,21 @@ func (f *fake) Query(_ context.Context, _ string, q string, v map[string]any, ou
 			return err
 		}
 	}
-	if res, ok := out.(*profileVersionsResult); ok && !f.unpublished {
-		res.DeviceProfileVersions = append(res.DeviceProfileVersions, struct {
-			Version int `json:"version"`
-		}{Version: 1})
+	if res, ok := out.(*profileVersionsResult); ok {
+		if !f.unpublished {
+			res.DeviceProfileVersions = append(res.DeviceProfileVersions, struct {
+				Version int `json:"version"`
+			}{Version: 1})
+		}
+		tok := v["token"].(string)
+		meta := `{"source":{"id":"` + tok + `"}}`
+		if f.foreignDraft {
+			meta = `{}`
+		}
+		res.DeviceProfilesByToken = append(res.DeviceProfilesByToken, struct {
+			Token    string  `json:"token"`
+			Metadata *string `json:"metadata"`
+		}{Token: tok, Metadata: &meta})
 	}
 	if res, ok := out.(*importResult); ok {
 		outcome := f.outcome
@@ -650,5 +663,88 @@ func TestJSONAttributesAreCompacted(t *testing.T) {
 	js := "[1,\n 2]"
 	if _, v, _ := attrValue(Attribute{JSONValue: &js}); v != "[1,2]" {
 		t.Errorf("typed JSON attribute stored as %q", v)
+	}
+}
+
+func TestApplyNeverPublishesADraftItDidNotWrite(t *testing.T) {
+	f := &fake{
+		unpublished:  true,
+		foreignDraft: true,
+		fail: func(q string) error {
+			if q == createProfileMutation {
+				return &userclient.GraphQLError{Messages: []string{"token in use"}, Codes: []string{"CONFLICT"}}
+			}
+			return nil
+		},
+	}
+	if _, err := Apply(context.Background(), f, "http://x", sample(t, Options{})); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.calls {
+		if c.query == publishProfileMutation {
+			t.Fatal("a profile without this importer's provenance must not be published")
+		}
+	}
+}
+
+func TestRefusedSessionOnADeviceBatchIsOneFailure(t *testing.T) {
+	p := realPlan(t, Options{CarryAccessTokens: true})
+	f := &fake{fail: func(q string) error {
+		if q == importDevicesMutation {
+			return &userclient.StatusError{URL: "http://x", StatusCode: 401, Body: "invalid or expired token"}
+		}
+		return nil
+	}}
+	tallies, err := Apply(context.Background(), f, "http://x", p)
+	if err == nil || !strings.Contains(err.Error(), "refused the session") {
+		t.Fatalf("got %v", err)
+	}
+	if d := tally(tallies, "devices"); d.Failed != 1 {
+		t.Errorf("a refused batch is one failure, not one per row: %+v", d)
+	}
+}
+
+func TestUntypedValueRefusesAnIntegerThatDoesNotFit(t *testing.T) {
+	for _, in := range []string{`9223372036854775807`, `-9223372036854775808`} {
+		if vt, _, ok := untypedValue([]byte(in)); !ok || vt != "LONG" {
+			t.Errorf("%s must be a LONG", in)
+		}
+	}
+	for _, in := range []string{`9223372036854775808`, `-9223372036854775809`} {
+		if _, _, ok := untypedValue([]byte(in)); ok {
+			t.Errorf("%s does not fit a long and must not be rounded into a double", in)
+		}
+	}
+	if vt, _, ok := untypedValue([]byte(`9223372036854775808.5`)); !ok || vt != "DOUBLE" {
+		t.Error("an explicit fraction is a double")
+	}
+}
+
+func TestRecoveryDocumentValidatesAgainstTheServedSchema(t *testing.T) {
+	schema := servedSchema(t)
+	f := &fake{
+		unpublished: true,
+		fail: func(q string) error {
+			if q == createProfileMutation {
+				return &userclient.GraphQLError{Messages: []string{"token in use"}, Codes: []string{"CONFLICT"}}
+			}
+			return nil
+		},
+	}
+	if _, err := Apply(context.Background(), f, "http://x", sample(t, Options{})); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, c := range f.calls {
+		if c.query != profileVersionsQuery {
+			continue
+		}
+		seen = true
+		if errs := schema.ValidateWithVariables(c.query, c.vars); len(errs) > 0 {
+			t.Errorf("%s: %v", c.query, errs)
+		}
+	}
+	if !seen {
+		t.Fatal("the versions query was never sent")
 	}
 }

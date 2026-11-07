@@ -400,7 +400,7 @@ func (b *builder) attributes(kind, id, ref string, attrs map[string][]Attribute)
 			}
 			vt, v, ok := attrValue(a)
 			if !ok {
-				b.add(Unsupported, "ATTRIBUTE", ref, "%s has no value; skipped", a.Key)
+				b.add(Unsupported, "ATTRIBUTE", ref, "%s has no value, or one that cannot be stored exactly; skipped", a.Key)
 				continue
 			}
 			if scope == "SHARED" && kind == "DEVICE" {
@@ -667,6 +667,11 @@ func untypedValue(raw json.RawMessage) (vt, v string, ok bool) {
 	}
 	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return "LONG", s, true
+	}
+	// A bare integer that does not fit a long is refused, not stored as a double: the double
+	// would round it, and the line reports it as skipped rather than quietly altering a value.
+	if !strings.ContainsAny(s, ".eE") {
+		return "", "", false
 	}
 	if _, err := strconv.ParseFloat(s, 64); err == nil {
 		return "DOUBLE", s, true
