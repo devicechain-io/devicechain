@@ -96,6 +96,21 @@ type OutboundConnectorsConfiguration struct {
 	// Unset (0) defaults to DefaultEgressWaitBudgetMs; a non-positive value or one above
 	// MaxEgressWaitBudgetMs is rejected.
 	EgressWaitBudgetMs int
+
+	// LpwanDownlink turns on the LoRaWAN command downlink: this service then consumes the
+	// device-commands stream for devices that report through an inbound integration and enqueues
+	// each command on the integration's network server. Off, the service is exactly what it was.
+	//
+	// 🔴 THE CHART DERIVES command-delivery's lpwanDownlink FROM THIS, and refuses a hand-set
+	// copy there, so the two cannot disagree: command-delivery would otherwise dispatch commands
+	// no adapter reads (they would time out), or hide a working path.
+	LpwanDownlink LpwanDownlinkConfiguration
+}
+
+// LpwanDownlinkConfiguration is the LoRaWAN downlink adapter's switch. Its worker count is
+// MaxConcurrentSends: a downlink is one outbound call, metered and bounded like the others.
+type LpwanDownlinkConfiguration struct {
+	Enabled bool
 }
 
 // NewOutboundConnectorsConfiguration creates the default configuration.

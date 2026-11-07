@@ -36,6 +36,12 @@ const HeaderCommandImpact = "Dc-Command-Impact"
 // so a missing header costs only the earlier refusal, never a late actuation.
 const HeaderCommandExpires = "Dc-Command-Expires"
 
+// HeaderSource is the device's whole projected source ("integration:<integration token>"), stamped
+// only for a device that reports through an inbound integration and only when the LPWAN downlink is
+// enabled. ROUTING ONLY, like HeaderTransport: the adapter finds the device's network-server link
+// from it and treats its absence as "cannot route", never as a guess.
+const HeaderSource = "Dc-Source"
+
 // DeliveryEnvelope is command-delivery's wire payload on the device-commands subject. Its fields
 // and JSON tags MUST stay byte-identical to command-delivery/processor.deliveryEnvelope: the
 // services agree on this shape with no shared type, which is why command-delivery pins it with a

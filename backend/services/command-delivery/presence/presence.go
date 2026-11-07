@@ -160,11 +160,28 @@ var nonDeliveringTransports = map[transport.Name]bool{
 //
 // Every other entry is unconditional on purpose. Widening the flag to a general "capabilities"
 // bag would make the next transport's verdict a thing an operator can flip.
-func nonDelivering(t transport.Name, sparkplugCommands bool) bool {
-	if t == transport.Sparkplug && sparkplugCommands {
+func nonDelivering(t transport.Name, caps Capabilities) bool {
+	if t == transport.Sparkplug && caps.Sparkplug {
+		return false
+	}
+	// 🔴 AN INBOUND INTEGRATION IS DELIVERABLE ONLY WHEN SOME outbound-connectors REPLICA RUNS THE LPWAN
+	// DOWNLINK. Like Sparkplug, the flag says that SOME network-server link can carry commands, never that
+	// THIS device's can: the adapter refuses (UNSENT) a command whose integration has no link.
+	if t == transport.Integration && caps.Lpwan {
 		return false
 	}
 	return nonDeliveringTransports[t]
+}
+
+// Capabilities is which optional command paths this deployment has. It is a struct, not a list of
+// bools, so two paths cannot be passed in each other's place, and it is REQUIRED by Decide so a caller
+// that forgets it does not compile.
+type Capabilities struct {
+	// Sparkplug: some Sparkplug source publishes NCMD/DCMD on its Host session.
+	Sparkplug bool
+	// Lpwan: the outbound-connectors LPWAN downlink adapter is enabled, so a device that reports
+	// through an inbound integration can be commanded through its network server.
+	Lpwan bool
 }
 
 // Decide reduces one device's projected state to a verdict.
@@ -185,18 +202,18 @@ func nonDelivering(t transport.Name, sparkplugCommands bool) bool {
 // reconciler catches up. The gate withholds on positive evidence; the evidence is not
 // infallible.
 //
-// sparkplugCommands is the deployment's derived capability flag (see nonDelivering). It is a
+// caps is the deployment's derived capability flags (see nonDelivering). It is a
 // REQUIRED argument and not a package variable or an option with a zero default, so a caller
 // that forgets it does not compile: the call sites are the sweep and the hold reconciler, and
 // they must agree, because one reading a Sparkplug command as Undeliverable while the other
 // reads it as releasable would flap a row between the two.
-func Decide(s State, sparkplugCommands bool) Verdict {
+func Decide(s State, caps Capabilities) Verdict {
 	if !s.Known {
 		// No row at all: the platform has never been told anything about this device.
 		// Dispatch, exactly as before the gate existed.
 		return Dispatch
 	}
-	if nonDelivering(transport.Of(s.Source), sparkplugCommands) {
+	if nonDelivering(transport.Of(s.Source), caps) {
 		return Undeliverable
 	}
 	if s.Asserted && !s.Active {

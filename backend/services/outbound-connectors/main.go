@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -23,6 +24,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/devicechain-io/dc-outbound-connectors/config"
 	"github.com/devicechain-io/dc-outbound-connectors/graphql"
+	"github.com/devicechain-io/dc-outbound-connectors/lpwan"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/processor"
 	"github.com/devicechain-io/dc-outbound-connectors/schema"
@@ -46,6 +48,11 @@ var (
 	SecretStore secrets.SecretStore
 	RateLimiter *core.TenantRateLimiter
 	Consumer    *processor.DispatchConsumer
+	// Lpwan is the LoRaWAN downlink adapter: nil unless lpwanDownlink.enabled, in which case the
+	// service behaves exactly as it did before the adapter existed.
+	Lpwan *lpwan.Adapter
+	// LpwanMetrics is built ONCE in buildMetrics (nil when the adapter is off).
+	LpwanMetrics *lpwan.PromMetrics
 	// DispatchMetrics is built ONCE, in the initialize phase, and shared by every
 	// DispatchConsumer the NATS manager's oncreate callback builds. See buildMetrics.
 	DispatchMetrics *processor.DispatchMetrics
@@ -106,6 +113,9 @@ func buildMetrics() {
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
 	DeadLetters = Svc.DeadLetters
+	if Configuration != nil && Configuration.LpwanDownlink.Enabled {
+		LpwanMetrics = lpwan.NewPromMetrics(Microservice)
+	}
 }
 
 // createNatsComponents wires the durable connector-dispatch consumer and its dead-letter writer.
@@ -177,7 +187,64 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		RateLimiter, time.Duration(Configuration.EgressWaitBudgetMs)*time.Millisecond,
 		tenantDeleted, Configuration.MaxConcurrentSends,
 		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))
+	if Configuration.LpwanDownlink.Enabled {
+		Lpwan, err = buildLpwan(nmgr, infra, tenantDeleted)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// buildLpwan assembles the LoRaWAN downlink adapter. It fails closed at startup when anything the
+// path needs is not configured: an adapter that read commands it could not claim would send a
+// device a downlink twice, and one that could not answer would leave every command to time out.
+//
+// 🔑 TWO CLIENTS, EACH WITH THE ONE AUTHORITY IT NEEDS. The claim client holds command:claim and
+// nothing else (command:write would let it create and cancel commands for any tenant); the device
+// client holds device:read, to read a device's DevEUI alias. Neither can be widened by the other.
+func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfiguration,
+	tenantDeleted func(string) bool) (*lpwan.Adapter, error) {
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		return nil, fmt.Errorf("lpwanDownlink is enabled but the service secret or user-management endpoint is not configured (infrastructure.serviceAuth, infrastructure.userManagement)")
+	}
+	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		return nil, fmt.Errorf("lpwanDownlink is enabled but the command-delivery endpoint is not configured (infrastructure.commandDelivery): it could not claim or answer a command")
+	}
+	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		return nil, fmt.Errorf("lpwanDownlink is enabled but the device-management endpoint is not configured (infrastructure.deviceManagement): it could not read a device's DevEUI")
+	}
+	guard, err := egress.FromConfig(infra.Egress)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := nmgr.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew(),
+		messaging.ReaderWithCapacity(Configuration.MaxConcurrentSends))
+	if err != nil {
+		return nil, err
+	}
+	responses, err := nmgr.NewWriter(streams.CommandResponses)
+	if err != nil {
+		return nil, err
+	}
+	cdURL := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	claimClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors",
+		[]string{string(auth.CommandClaim)})
+	deviceClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors",
+		[]string{string(auth.DeviceRead)})
+	log.Info().Str("commandDelivery", cdURL).
+		Msg("LoRaWAN downlink is enabled: consuming device-commands for devices behind inbound integrations.")
+	return lpwan.New(reader, responses, cmddownlink.NewClaimer(claimClient, cdURL),
+		lpwan.NewStoreLinks(Api, processor.NewSecretResolver(SecretStore)),
+		lpwan.NewServiceDevices(deviceClient, dmURL), lpwan.NewChirpStack(guard), LpwanMetrics,
+		lpwan.Options{
+			Workers:       Configuration.MaxConcurrentSends,
+			Rate:          RateLimiter,
+			TenantDeleted: tenantDeleted,
+			ReadPacer:     core.NewReadPacer(Microservice, "device commands"),
+			SendTimeout:   time.Duration(Configuration.SendTimeoutMs) * time.Millisecond,
+		}), nil
 }
 
 // newExecutor builds the dispatch executor over the instance's tenant-egress boundary. The
@@ -352,13 +419,22 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 	// Start the consumer last (after its reader is live). It is built by the NATS manager's
 	// oncreate callback, so it does not exist until the line above has run.
-	return Consumer.Start(ctx)
+	if err := Consumer.Start(ctx); err != nil {
+		return err
+	}
+	if Lpwan != nil {
+		Lpwan.Start()
+	}
+	return nil
 }
 
 // beforeMicroserviceStopped stops components in reverse dependency order.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	// Stop the consumer first (before its reader is torn down with the NATS manager), symmetric with
-	// start, so no worker sends on a torn-down reader/writer.
+	// Stop the consumers first (before their readers are torn down with the NATS manager), symmetric
+	// with start, so no worker sends on a torn-down reader/writer.
+	if Lpwan != nil {
+		Lpwan.Stop()
+	}
 	if Consumer != nil {
 		if err := Consumer.Stop(ctx); err != nil {
 			return err

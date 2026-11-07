@@ -264,14 +264,53 @@ A change to an integration is quick but not instant at the endpoint, which remem
 
 ## Commands to integration devices {#commands}
 
-A device that reports through an integration has no connection to DeviceChain to send a command down, and v1 has no downlink to a network server's API. A command to such a device **is accepted when you issue it**, and then **fails at the next delivery sweep** with `COMMAND_TRANSPORT_UNSUPPORTED`, because the platform recognizes the transport and has no way to deliver on it. It does not wait in the queue until it expires.
+A device that reports through an integration has no connection to DeviceChain to send a command down. Unless the [LoRaWAN downlink](#lorawan-downlink) is switched on for your installation, a command to such a device **is accepted when you issue it**, and then **fails at the next delivery sweep** with `COMMAND_TRANSPORT_UNSUPPORTED`, because the platform recognizes the transport and has no way to deliver on it. It does not wait in the queue until it expires.
 
 Two cases are worth knowing:
 
 - A device that also connects over MQTT is judged by the last transport it reported on. While it last reported through the integration its commands fail; after it reports over MQTT they are delivered.
 - A device that has never reported has no recorded transport, so its commands are dispatched as usual, and expire unanswered, until it first reports.
 
-For a device that must be commanded, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
+For a device that must be commanded and is not behind a ChirpStack v4 network server, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
+
+## LoRaWAN downlink (ChirpStack v4) {#lorawan-downlink}
+
+An installation that runs the outbound connectors with the downlink switched on (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; the Helm chart then makes command delivery dispatch these commands, and refuses a hand-set copy of that flag) sends a command to a device behind a ChirpStack v4 network server by queueing a downlink on that server. Nothing changes for an installation that leaves it off.
+
+**1. Link the integration to its network server.** Create and publish a connector of type `lorawan_downlink`:
+
+```json
+{
+  "networkServer": "chirpstack_v4",
+  "baseUrl": "https://chirpstack.example.com",
+  "integration": "my-integration-token"
+}
+```
+
+`integration` is the token of the inbound integration whose devices this server serves. The connector's **secret** is a ChirpStack API key allowed to enqueue downlinks (the REST API of ChirpStack v4, served by its `chirpstack-rest-api` component); it is stored encrypted and never shown again. Exactly one published connector may name an integration: with none, or with two, a command is refused rather than sent. Like every connector, the call to `baseUrl` goes through the platform's egress policy, so a server on a private address needs an operator allowance.
+
+**2. Define the command.** Give the device type's profile a command with these parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `fPort` | The LoRaWAN application port, 1 to 223. Required. |
+| `hex` or `base64` | The application payload, as hexadecimal or standard padded base64. Give exactly one. At most 242 bytes. |
+| `confirmed` | Not available yet. A command that sets it is refused, not sent unconfirmed. |
+
+Any other parameter name is refused.
+
+**3. Send it.** The device must carry a `lorawan.deveui` [alias](#aliases): the DevEUI is read from the device, never from the command. The command goes through the integration the device **last reported through**.
+
+**What the outcome means.** `SUCCEEDED` means the network server **queued** the downlink (the result carries `{"stage":"queued","queueItemId":...}`). It does not mean the device has received it: a class A device hears downlinks only after it next transmits, and an unconfirmed downlink gets no acknowledgement. The other outcomes:
+
+| What happened | Outcome |
+| --- | --- |
+| A parameter is invalid, the device has no DevEUI, the integration has no (or two) links, the command expired, or the tenant is over its outbound call ceiling | `FAILED`, not delivered. Safe to send again. |
+| The network server refused it (a 4xx: wrong API key, unknown device, payload too large for the device's current data rate) or could not be reached before anything was sent | `FAILED`, not delivered. The reason names the server's answer. |
+| The request was sent and the server failed or did not answer (a 5xx, a timeout) | The outcome is **unknown**: the downlink may be queued, and sending again may send it twice. |
+
+Check the `lpwan_downlinks_total` metric by result to see where commands stop.
+
 
 ## What an integration token can do {#trust}
 
@@ -289,7 +328,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Downlink.** Commands cannot be sent to a device through a network server. See [Commands to integration devices](#commands).
+- **Downlink to The Things Stack and generic senders, confirmed downlinks, and payload encoders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and raw payloads only. Commands to any other integration device fail as described in [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.

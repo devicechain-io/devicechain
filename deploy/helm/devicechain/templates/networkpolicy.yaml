@@ -230,6 +230,22 @@ spec:
         - protocol: TCP
           port: {{ include "devicechain.authInternalPort" $root }}
 
+    {{- if include "devicechain.lpwanDownlinkEnabled" $root }}
+    # The LoRaWAN command downlink: command-delivery (claim and answer a command) and
+    # device-management (read a device's DevEUI), in this same namespace. Rendered only when
+    # the downlink is on, so the policy is unchanged otherwise.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "devicechain.areaLabels" (dict "root" $root "area" "command-delivery") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "devicechain.areaLabels" (dict "root" $root "area" "device-management") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $root.Values.service.port }}
+    {{- end }}
+
     {{- with $np.additionalAllowedCidrs }}
     # Operator-declared exceptions. Most often the Service CIDR, for a CNI that evaluates
     # egress before kube-proxy's DNAT and therefore sees a ClusterIP where the selectors
