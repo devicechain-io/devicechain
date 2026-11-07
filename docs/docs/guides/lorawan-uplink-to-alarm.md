@@ -35,7 +35,7 @@ A network server with a codec or a payload formatter hands DeviceChain an object
 - `curl` and `jq`.
 - `dc-simulator`, attached to every release from v1.2 beside `dcctl`. Put it on your `PATH`, and check it with `dc-simulator --lorawan-print-decoder`, which prints a JSON document.
 
-The commands call the instance at `http://localhost`. If your console is on another port, set the address once, and give `dcctl sim create` the same host and port with `--server`:
+The commands call the instance at `http://localhost`. If your console is on another port, set the address once, and give `dcctl sim create` the same host and port with `--server` (for example `--server localhost:8080`), and the instance's name with `--instance` if you did not call it `devicechain`:
 
 ```bash
 export DC_URL=http://localhost
@@ -376,7 +376,7 @@ curl -sS -i -X POST "$DC_URL/api/integrations/sim-lora/chirpstack?event=up" \
 HTTP/1.1 202 Accepted
 ```
 
-The network server is told `202`, because the integration accepted the message. The refusal is a record on your side. Read it with `dcctl events failed`, with the tenant, the identity and its password. Add `--server` with your host and port if the instance is not on `localhost`:
+The network server is told `202`, because the integration accepted the message. The refusal is a record on your side. Read it with `dcctl events failed`, with the tenant, the identity and its password. Add `--server` with your host and port (`localhost:8080`, say) if the instance is not on `localhost` port 80; this command has no `--instance`:
 
 ```bash
 dcctl events failed -t sim-lora --email lora@sim.devicechain.local --password "$PW"
