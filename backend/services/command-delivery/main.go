@@ -160,7 +160,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		tenantLifecycleGate(infra, safetyGates),
-		presenceReader(infra, safetyGates), deadLetters, DeliveryMetrics)
+		withPullChannels(presenceReader(infra, safetyGates)), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
@@ -279,6 +279,20 @@ func disabledSource(infra mscfg.InfrastructureConfiguration) processor.DisabledS
 	return verify.NewDisabledSource(client, dmURL, umURL, Microservice.InstanceId)
 }
 
+// withPullChannels layers the HTTP pull channel over the presence reader, so a device whose type
+// takes its commands over it is held for its pull instead of being published to. With no
+// device-management to ask there are no pull devices, and the reader is returned as it is.
+//
+// 🔴 IT HOLDS THE LAYERING EVEN WHEN THERE IS NO PRESENCE READER (an instance without
+// device-state), because the pull channel does not depend on presence: a nil reader becomes one
+// that knows nothing and the pull devices are still held.
+func withPullChannels(reader presence.Reader) presence.Reader {
+	if Api == nil || Api.PullChannels == nil {
+		return reader
+	}
+	return presence.WithPullChannels(reader, Api.PullChannels)
+}
+
 // presenceReader builds the presence gate's read side, or nil to run the sweep ungated.
 //
 // 🔴 FAIL-OPEN, AND LOUDLY, which is the opposite of wireEnqueueValidator's neighbours in
@@ -366,6 +380,10 @@ func wireDeviceManagementGates() {
 	Api.DispatchScheduler = windows
 	Api.WindowOpenings = windows
 	Api.CommandImpacts = windows
+	// Which devices take their commands over the HTTP pull channel: asked of the same owner, so
+	// a device type's channel is never copied here. It layers over the presence reader (see
+	// createNatsComponents) and refuses delivery options for a device that is not on it.
+	Api.PullChannels = verify.NewPullChannels(client, url)
 	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043), for single commands and for fleet batches; entity groups will be resolved there as batch targets; disruptive commands will be held for their device type's maintenance window.")
 }
 

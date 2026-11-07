@@ -757,6 +757,11 @@ export type DeviceTypeCreateRequest = {
   backgroundColor?: string | null | undefined;
   /** Border colour, up to 32 characters. */
   borderColor?: string | null | undefined;
+  /**
+   * Command channel of the type: HTTP_PULL, or omit it (or send an empty value) for the
+   * default channel. Any other value fails the request with INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
   /** Foreground (text) colour, up to 32 characters. */
@@ -807,6 +812,11 @@ export type DeviceTypeUpdateRequest = {
   backgroundColor?: string | null | undefined;
   /** New border colour, or null to clear it. */
   borderColor?: string | null | undefined;
+  /**
+   * New command channel: HTTP_PULL, or null (or an empty value) to return the type to the
+   * default channel. Any other value fails the whole update with INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;
   /** New foreground colour, or null to clear it. */

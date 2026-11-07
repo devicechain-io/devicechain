@@ -184,6 +184,34 @@ type Command implements Model & TokenReference & MetadataEntity {
     # device said no, outcome unknown) and only the writer knows which one it is recording.
     # Retrying a batch's unsuccessful targets keys on this.
     outcome: String
+    """
+    When the platform first had evidence that the device had the command, as an RFC 3339
+    timestamp; null when it has none. This is evidence beside the status, not a status: a
+    command can be SUCCESSFUL with no delivery time (a channel with no acknowledgement and no
+    answer to count) and a command that failed as NOT_DELIVERED never has one.
+    """
+    deliveredTime: String
+    """
+    What the delivery time rests on: DEVICE_ACK (the device acknowledged receipt on the HTTP
+    pull channel) or DEVICE_RESPONSE (the device answered the command, on any channel). Null
+    when deliveredTime is. The first piece of evidence is kept.
+    """
+    deliveryEvidence: String
+    """
+    ONEWAY for a command the device acknowledges and does not answer (the acknowledgement
+    settles it as SUCCESSFUL), null for an ordinary two-way command.
+    """
+    deliveryMode: String
+    """
+    The most times the HTTP pull channel hands this command out before giving up on its
+    acknowledgement; null for the platform default of 3.
+    """
+    maxAttempts: Int
+    """
+    How many times the HTTP pull channel has handed this command out; null for a command it
+    never handed out.
+    """
+    deliveryAttempts: Int
 }
 
 """Fields for issuing a command to one device."""
@@ -218,6 +246,18 @@ input CommandCreateRequest {
     65536 bytes (METADATA_TOO_LARGE). Optional.
     """
     metadata: String
+    """
+    ONEWAY for a command the device acknowledges and does not answer. Accepted only for a device
+    whose type has the HTTP_PULL command channel; otherwise the request is refused with
+    DELIVERY_OPTION_NOT_APPLICABLE (or DELIVERY_OPTION_INVALID for any other value). Optional.
+    """
+    deliveryMode: String
+    """
+    The most times the HTTP pull channel hands the command out before giving up on its
+    acknowledgement, 1 to 10. Accepted only for a device on the HTTP_PULL channel, like
+    deliveryMode. Optional; the platform default is 3.
+    """
+    maxAttempts: Int
 }
 
 """
@@ -236,7 +276,8 @@ type CommandEnqueueRejection {
     Stable, machine-readable classification: PAYLOAD_NOT_JSON, METADATA_NOT_JSON,
     COMMAND_NAME_TOO_LONG, PAYLOAD_TOO_LARGE, METADATA_TOO_LARGE, EXPIRES_AT_INVALID,
     HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND, DEVICE_DISABLED,
-    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, or COMMAND_REJECTED when a refusal
+    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, DELIVERY_OPTION_INVALID,
+    DELIVERY_OPTION_NOT_APPLICABLE, or COMMAND_REJECTED when a refusal
     arrived without a classification.
 
     Branch on this, never on reason. The list is open: treat an unrecognized code as a refusal
@@ -954,6 +995,22 @@ type Query {
     ): [Command!]!
 }
 
+"""A command the HTTP pull channel handed to a device."""
+type PulledCommand {
+    """Token of the command; the device quotes it when it acknowledges and when it answers."""
+    token: String!
+    """The command's name, as defined in the command vocabulary of the device's profile."""
+    name: String!
+    """The command's arguments as a JSON document serialized to a string; null when none."""
+    payload: String
+    """ONEWAY if the device only acknowledges the command; null if it must also answer."""
+    deliveryMode: String
+    """How many times this command has now been handed out, counting this one."""
+    attempt: Int!
+    """When the command expires, as an RFC 3339 timestamp; null if it does not."""
+    expiresAt: String
+}
+
 type Mutation {
     """
     Issues a command to one device. Returns the created command, or a typed rejection when the
@@ -1091,6 +1148,53 @@ type Mutation {
         """Token of the command to claim."""
         token: String!
     ): String
+    """
+    For the HTTP pull channel: hands a device the commands it may be sent, oldest first, and
+    claims each one (QUEUED, HELD or PARKED to SENT) in the same conditional update markCommandSent
+    uses, so two pulls can never both be handed one. A command an earlier pull handed out and
+    never saw acknowledged for 60 seconds is handed out again, until its maxAttempts are spent;
+    a command whose attempts are spent is first failed as NOT_DELIVERED. Requires command:claim,
+    a system-tier authority; the caller must already have authenticated the device.
+    """
+    pullCommands(
+        """Token of the device pulling."""
+        deviceToken: String!
+        """At most this many commands, up to 16. Omit it for 16."""
+        limit: Int
+    ): [PulledCommand!]!
+    """
+    For the HTTP pull channel: records that the device acknowledged a command a pull handed it,
+    which sets the command's deliveredTime and deliveryEvidence (DEVICE_ACK) and settles a ONEWAY
+    command as SUCCESSFUL. Idempotent. Answers RECORDED (this call recorded it, or an earlier
+    one did), NOT_FOUND (no such command for the device), NOT_PULLED (the command was never
+    handed to a pull), or NOT_AWAITING (the command is already finished without a delivery, for
+    instance failed as NOT_DELIVERED). Requires command:claim, a system-tier authority.
+    """
+    acknowledgeCommandDelivery(
+        """Token of the command."""
+        token: String!
+        """Token of the device that acknowledged."""
+        deviceToken: String!
+    ): String!
+    """
+    For the HTTP pull channel: records the device's answer to a command a pull handed it,
+    settling it as SUCCESSFUL or FAILED and recording delivery evidence (DEVICE_RESPONSE) if no
+    acknowledgement came first. Idempotent for a command that is already finished. Answers
+    RECORDED, NOT_FOUND, NOT_PULLED, or NOT_ANSWERABLE (the command is not awaiting an answer
+    from this device). Requires command:claim, a system-tier authority.
+    """
+    respondToPulledCommand(
+        """Token of the command."""
+        token: String!
+        """Token of the device that answered."""
+        deviceToken: String!
+        """True if the device carried the command out."""
+        success: Boolean!
+        """The device's answer payload as text. At most 65536 bytes. Optional."""
+        payload: String
+        """Why the device did not carry the command out. Optional."""
+        error: String
+    ): String!
     """
     For a transport that received a command on the live delivery stream: confirms, just before
     actuating, that the delivery is still the dispatch the platform holds. Returns a new

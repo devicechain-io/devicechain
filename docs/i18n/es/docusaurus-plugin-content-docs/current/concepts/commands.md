@@ -105,7 +105,7 @@ volvió nada, lo que apunta al dispositivo.
 Todo comando terminal lleva además un `outcome` que dice qué ocurrió físicamente, porque `FAILED` por sí solo abarca tres hechos distintos:
 
 - **`SUCCEEDED`** — el dispositivo informó éxito.
-- **`NOT_DELIVERED`** — demostrado que nunca llegó al dispositivo (`EXPIRED`, `CANCELLED` y los casos de `FAILED` en que el transporte no puede llevar comandos, la plataforma dejó de intentar publicarlo o el perfil del dispositivo ya no define un comando que esperaba una ventana).
+- **`NOT_DELIVERED`** — demostrado que nunca llegó al dispositivo (`EXPIRED`, `CANCELLED` y los casos de `FAILED` en que el transporte no puede llevar comandos, la plataforma dejó de intentar publicarlo, el perfil del dispositivo ya no define un comando que esperaba una ventana, o un comando del [canal de consulta HTTP](#http-command-pull) se entregó tantas veces como permite y nunca se acusó).
 - **`REJECTED`** — el dispositivo recibió el comando e informó un fallo.
 - **`UNKNOWN`** — puede haber actuado: `TIMEOUT`, o un `FAILED` en el que el dispositivo respondió y la plataforma perdió la respuesta.
 
@@ -291,6 +291,30 @@ Cualquier otro rechazo con código describe una petición que estará igual de m
 se resuelve solo conforme sale el pendiente. Es el único código que vale la pena reintentar, y los
 demás vale la pena mostrarlos a una persona. Consulta
 [Enviar un comando](../guides/sending-commands.md#when-an-enqueue-is-refused).
+
+### Dispositivos que obtienen sus comandos por HTTP {#http-command-pull}
+
+Un dispositivo que solo habla HTTP, como un sensor a batería que despierta, envía una lectura y vuelve a dormir, no mantiene ninguna conexión a la que la plataforma pueda publicar. Fije el `commandChannel` del tipo de dispositivo en `HTTP_PULL` y sus comandos esperan a que el dispositivo los pida. Un tipo de dispositivo sin valor, o con `PUBLISH` (el valor por defecto), no se ve afectado: sus comandos se entregan exactamente como antes.
+
+El dispositivo usa tres solicitudes en el listener de ingesta HTTP, cada una con `Authorization: Bearer <el token de acceso del dispositivo>`. El dispositivo de la ruta debe ser aquel al que pertenece el token, y un token en la URL nunca se acepta.
+
+| Solicitud | Significado | Respuestas |
+| --- | --- | --- |
+| `GET /{instanceId}/{tenant}/devices/{device}/commands?wait=25` | Reclama los comandos que esperan al dispositivo. `wait` son los segundos que se mantiene abierta la solicitud cuando no hay ninguno: de 0 a 30, 25 por defecto. | `200` con `{"commands": [...]}`, o `204` si no llegó ninguno. |
+| `POST .../commands/{command}/ack` | El comando llegó al dispositivo. Envíela **antes** de actuar sobre el comando. | `204`. |
+| `POST .../commands/{command}/response` | Lo que hizo el dispositivo: `{"success": true, "payload": ..., "error": "..."}`. | `204`. |
+
+El cuerpo del `200` y el de una respuesta se publican como [command-pull.schema.json](pathname:///schema/device/command-pull.schema.json) y [command-pull-response.schema.json](pathname:///schema/device/command-pull-response.schema.json). `401` significa que no se aceptó el token, `403` que pertenece a otro dispositivo o que el tipo del dispositivo no se ha acogido, `404` que el comando no es de este dispositivo, `409` que el comando no está esperando esa solicitud y `429` que el inquilino ya tiene tantas solicitudes abiertas como se le permiten (reintente tras el `Retry-After`) o que la dirección de origen hace demasiadas solicitudes. `503` significa reintentar.
+
+Cada comando que entrega una consulta queda reclamado por ella, de modo que dos solicitudes, dos réplicas o un reintento nunca reciben el mismo comando. Una solicitud abierta pregunta a la plataforma por los comandos del dispositivo cada un par de segundos, así que un comando emitido mientras el dispositivo consulta le llega en pocos segundos.
+
+**Acuse de recibo.** Un comando cuyo acuse no llega en 60 segundos se entrega de nuevo en la siguiente consulta, con un `attempt` mayor, hasta agotar sus `maxAttempts` (3 salvo que el comando fije otro, hasta 10). Después falla con el resultado [`NOT_DELIVERED`](#outcome) y sin hora de entrega. Esto descansa en que el dispositivo acuse antes de actuar: un comando sin acuse es uno sobre el que no se ha visto actuar al dispositivo, así que enviarlo otra vez es seguro. Un dispositivo que actúa primero y acusa después puede recibir un comando dos veces y no debe apoyarse en el acuse para evitarlo.
+
+**Comandos unidireccionales.** Un comando creado con `deliveryMode: ONEWAY` se completa con su acuse: pasa a `SUCCESSFUL` y el dispositivo no envía respuesta. `deliveryMode` y `maxAttempts` solo se aceptan para un dispositivo del canal `HTTP_PULL`; para cualquier otro, el comando se rechaza con `DELIVERY_OPTION_NOT_APPLICABLE`.
+
+#### Evidencia de entrega {#delivery-evidence}
+
+Un comando lleva `deliveredTime` y `deliveryEvidence` cuando la plataforma tiene evidencia de que el dispositivo lo recibió: `DEVICE_ACK` cuando el dispositivo lo acusó en el canal de consulta, o `DEVICE_RESPONSE` cuando el dispositivo lo respondió, por cualquier canal. Se conserva la primera evidencia. No existe un estado `DELIVERED`: el estado conserva su significado y la evidencia se registra a su lado. Un comando `SUCCESSFUL` de un canal sin acuse ni respuesta que contar no tiene hora de entrega, y un comando que falló como `NOT_DELIVERED` nunca la tiene.
 
 ### Quién informa del desenlace {#who-reports-the-outcome}
 

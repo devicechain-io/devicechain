@@ -22,6 +22,8 @@ Cada mensaje de esta página se publica como un esquema JSON (draft 2020-12). Ú
 | [`new-relationship-payload.schema.json`](pathname:///schema/device/new-relationship-payload.schema.json) | El payload de un evento [`NewRelationship`](#new-relationship-payload) |
 | [`command-delivery.schema.json`](pathname:///schema/device/command-delivery.schema.json) | El [comando](#command-delivery) que la plataforma entrega a un dispositivo |
 | [`command-response.schema.json`](pathname:///schema/device/command-response.schema.json) | La [respuesta](#command-response) que devuelve un dispositivo |
+| [`command-pull.schema.json`](pathname:///schema/device/command-pull.schema.json) | Los comandos que recibe un dispositivo de una [consulta HTTP](../concepts/commands.md#http-command-pull) |
+| [`command-pull-response.schema.json`](pathname:///schema/device/command-pull-response.schema.json) | La respuesta que envía un dispositivo en el [canal de consulta HTTP](../concepts/commands.md#http-command-pull) |
 
 La misma lista, con URL absolutas, está bajo `deviceProtocol` en [`/schema/index.json`](pathname:///schema/index.json). El esquema del sobre hace referencia a los esquemas de payload mediante URL relativas, así que un validador que lo cargue por URL los resuelve por sí solo.
 

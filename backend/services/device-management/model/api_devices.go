@@ -91,6 +91,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 	if err != nil {
 		return nil, err
 	}
+	commandChannel, err := normalizeCommandChannel(request.CommandChannel)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -113,6 +117,7 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 		MaintenanceWindowId: windowId,
 		Manufacturer:        rdb.NullStrOf(request.Manufacturer),
 		ModelName:           rdb.NullStrOf(request.Model),
+		CommandChannel:      commandChannel,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -163,6 +168,14 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 		}
 	}
 
+	commandChannel := found.CommandChannel
+	if request.CommandChannel.Set {
+		commandChannel, err = normalizeCommandChannel(request.CommandChannel.Value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	found.Name = request.Name.ApplyToNullString(found.Name)
 	found.Description = request.Description.ApplyToNullString(found.Description)
 	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
@@ -182,6 +195,7 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	found.MaintenanceWindow = nil
 	found.Manufacturer = request.Manufacturer.ApplyToNullString(found.Manufacturer)
 	found.ModelName = request.Model.ApplyToNullString(found.ModelName)
+	found.CommandChannel = commandChannel
 
 	repointed := !uintPtrEqual(oldProfileId, profileId)
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {

@@ -1071,7 +1071,8 @@ CREATE TABLE "device-management".device_types (
  profile_id bigint,
  manufacturer character varying(128),
  model character varying(128),
- maintenance_window_id bigint
+ maintenance_window_id bigint,
+ command_channel character varying(32)
 );
 CREATE TABLE "device-management".devices (
  id bigint NOT NULL,
