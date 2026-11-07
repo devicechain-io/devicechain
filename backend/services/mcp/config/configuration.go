@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 
+	"github.com/devicechain-io/dc-mcp/arena"
 	"github.com/devicechain-io/dc-mcp/server"
 	coreconfig "github.com/devicechain-io/dc-microservice/config"
 )
@@ -38,6 +39,22 @@ type McpConfiguration struct {
 	// MaxBatchEntries.
 	CallsPerSecond float64
 	CallsBurst     int
+
+	// ExperimentalArena configures the experimental Proving Ground tools. Absent, or with
+	// enabled false, none of them is served. It may change or be removed in any release.
+	ExperimentalArena *ExperimentalArena
+}
+
+// ExperimentalArena is the switch and the inputs of the Proving Ground, an experimental
+// graded-test environment built from recordings (experimental_arena_* tools).
+type ExperimentalArena struct {
+	// Enabled turns the tools on. It is false unless set.
+	Enabled bool
+	// ScenarioDir holds the *.scenario.json files and the recordings they name. Required
+	// when enabled; the service refuses to start on a directory it cannot load.
+	ScenarioDir string
+	// Policy is the tenant's graduated-autonomy policy the scorecard reports against.
+	Policy arena.Policy
 }
 
 // NewMcpConfiguration builds a defaulted configuration.
@@ -79,6 +96,16 @@ func (c *McpConfiguration) Validate() error {
 	if err := validateHTTPSUrl("issuerUrl", c.IssuerUrl); err != nil {
 		return err
 	}
+	if a := c.ExperimentalArena; a != nil && a.Enabled {
+		if a.ScenarioDir == "" {
+			return fmt.Errorf("experimentalArena.scenarioDir: required when the arena is enabled")
+		}
+		for i, r := range a.Policy.Rules {
+			if r.Suite == "" || len(r.Commands) == 0 || r.MinScore < 0 || r.MinScore > 1 || r.MaxUnsafe < 0 {
+				return fmt.Errorf("experimentalArena.policy.rules[%d]: needs a suite, at least one command, minScore in [0, 1] and a non-negative maxUnsafe", i)
+			}
+		}
+	}
 	if c.MaxBatchEntries < 1 {
 		return fmt.Errorf("maxBatchEntries: must be at least 1 (got %d)", c.MaxBatchEntries)
 	}
@@ -100,4 +127,25 @@ func (c *McpConfiguration) Validate() error {
 // and adding it here would refuse, in a minor release, a resourceUrl that starts today.
 func validateHTTPSUrl(field, raw string) error {
 	return coreconfig.ValidateResourceURL(field, raw, false)
+}
+
+// ArenaOptions builds the experimental server options from the configuration: the zero
+// Options (nothing experimental served) unless the arena is enabled. A scenario directory
+// that cannot be loaded, or a policy naming a suite or command the scenarios do not have,
+// is an error the service refuses to start on.
+func (c *McpConfiguration) ArenaOptions() (server.Options, error) {
+	a := c.ExperimentalArena
+	if a == nil || !a.Enabled {
+		return server.Options{}, nil
+	}
+	cat, err := arena.LoadCatalog(a.ScenarioDir)
+	if err != nil {
+		return server.Options{}, fmt.Errorf("experimentalArena: %w", err)
+	}
+	for i, r := range a.Policy.Rules {
+		if !cat.HasSuite(r.Suite) {
+			return server.Options{}, fmt.Errorf("experimentalArena.policy.rules[%d]: no scenario belongs to suite %q", i, r.Suite)
+		}
+	}
+	return server.Options{Arena: arena.NewRegistry(cat), ArenaPolicy: a.Policy}, nil
 }

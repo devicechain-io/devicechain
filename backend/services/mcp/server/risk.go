@@ -170,6 +170,15 @@ func (c *Catalog) Names() []string {
 // declaration under a namespaced `_meta` key.
 func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolRisk,
 	h mcp.ToolHandlerFor[In, Out]) {
+	registerAnnotated(s, c, tool, risk, &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}, h)
+}
+
+// registerAnnotated is register with the annotations stated by the caller. It exists for
+// the experimental arena tools, which change the caller's own simulated episode and so
+// cannot honestly carry the read-only hint; everything else about registration (the
+// declaration, the duplicate check, the catalog entry) is the same code.
+func registerAnnotated[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolRisk,
+	annotations *mcp.ToolAnnotations, h mcp.ToolHandlerFor[In, Out]) {
 	if err := risk.validate(tool.Name); err != nil {
 		panic("mcp: " + err.Error())
 	}
@@ -207,7 +216,7 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 	// downstream, by the caller's own token, because no token this server accepts carries
 	// a write authority to run it with. Changing that takes a new scope with a new
 	// ceiling and a new consent string, which is the conversation this comment wanted.
-	tool.Annotations = &mcp.ToolAnnotations{ReadOnlyHint: true, IdempotentHint: true}
+	tool.Annotations = annotations
 	if tool.Meta == nil {
 		tool.Meta = mcp.Meta{}
 	}
@@ -225,12 +234,12 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 	for k, v := range tool.Meta {
 		meta[k] = v
 	}
-	annotations := *tool.Annotations
+	declared := *tool.Annotations
 	c.decls[tool.Name] = &mcp.Tool{
 		Name:        tool.Name,
 		Title:       tool.Title,
 		Description: tool.Description,
-		Annotations: &annotations,
+		Annotations: &declared,
 		Meta:        meta,
 	}
 

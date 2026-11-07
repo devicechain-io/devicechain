@@ -72,11 +72,17 @@ func bounds(maxBodyBytes int64, stream bool) core.RequestBounds {
 // what the ingress delivers and what the 401 challenge advertises), and leaving them to
 // each caller is how the endpoint came to be served at a path nothing published.
 func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits) (mcpHandler, metadataHandler http.Handler) {
+	return NewWith(resourceID, issuer, validator, gql, limits, Options{})
+}
+
+// NewWith is New with the experimental options. The zero Options is exactly New: every
+// experimental tool is absent unless its option is set.
+func NewWith(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits, opts Options) (mcpHandler, metadataHandler http.Handler) {
 	// The catalog of risk declarations is not needed here: it is published on each tool's
 	// own listing at registration, so nothing at runtime consults it, and it is dropped
 	// rather than stashed on a field nobody reads. The ratchet gets its copy by calling
 	// newServer itself, and gets the tool NAMES from the handler built below.
-	mcpServer, _ := newServer(gql)
+	mcpServer, _ := newServerWith(gql, opts)
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
@@ -113,9 +119,16 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 // test green. Construction lives here now, New only wires HTTP in front of it, and the
 // ratchet lists what New's own handler offers a real session — so the gap has to be
 // visible from the outside to exist at all.
-func newServer(gql *GraphQLClient) (*mcp.Server, *Catalog) {
+func newServer(gql *GraphQLClient) (*mcp.Server, *Catalog) { return newServerWith(gql, Options{}) }
+
+// newServerWith is newServer with the experimental options applied. The experimental
+// tools go through the same register path as every other, so the same ratchets see them.
+func newServerWith(gql *GraphQLClient, opts Options) (*mcp.Server, *Catalog) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
 	c := registerTools(s, NewTools(gql))
+	if opts.Arena != nil {
+		registerArenaTools(s, c, newArenaTools(opts.Arena, opts.ArenaPolicy))
+	}
 	// Every tools/call this server answers writes one audit record (audit.go). It is a
 	// middleware on the served server rather than a wrapper inside register, so a call
 	// that never reaches a handler — an unknown tool, arguments that fail validation — is
@@ -271,7 +284,13 @@ func metadataURL(resourceID string) string {
 // ServeMux still routes them ahead of this catch-all.
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
 	gql *GraphQLClient, limits Limits) {
-	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits)
+	RoutesWith(mux, resourceID, issuer, validator, gql, limits, Options{})
+}
+
+// RoutesWith is Routes with the experimental options; the zero Options is exactly Routes.
+func RoutesWith(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
+	gql *GraphQLClient, limits Limits, opts Options) {
+	mcpHandler, metadataHandler := NewWith(resourceID, issuer, validator, gql, limits, opts)
 
 	// Every handler here runs with a body-delivery deadline and an execution deadline;
 	// without them only the server's header timeout applies, and a client that stalls
