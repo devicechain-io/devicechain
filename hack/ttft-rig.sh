@@ -149,7 +149,7 @@ write_result() {
   local status="$1" failed="${2:-}" head dirty dcctl_ver total
   head="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)"
   dirty="$(git -C "$repo_root" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-  dcctl_ver="$("$dcctl" version 2>/dev/null | head -n1 | tr -d '\r' || true)"
+  dcctl_ver="$("$dcctl" version 2>/dev/null | sed -n '1,1p' | tr -d '\r' || true)"
   jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {key: .[0], value: (.[1]|tonumber)}) | from_entries' "$phases_file" >"$work/phases.json"
   jq -R -s 'split("\n") | map(select(length>0) | split("\t") | {name: .[0], ms: (.[1]|tonumber)})' "$steps_file" >"$work/steps.json"
   total=null
