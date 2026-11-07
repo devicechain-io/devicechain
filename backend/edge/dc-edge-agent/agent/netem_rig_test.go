@@ -182,6 +182,15 @@ type modelPlatform struct {
 	accepts   string
 	notices   string
 	shedEvery int
+	// noDedup turns the store's idempotency key off, so a redelivered offer is stored again.
+	// It exists only for the negative control that proves the exactly-once assertion can fail.
+	noDedup bool
+	// withholdEvery > 0 stores every Nth new event but does NOT send its acceptance the first
+	// time, so the agent offers an event the store already holds. This is what makes a
+	// duplicate store possible at all; without it only shed events are ever offered twice.
+	withholdEvery int
+	withheld      map[string]bool
+	storeN        int
 
 	mu        sync.Mutex
 	stored    map[string]int // key -> times stored (must end at 1)
@@ -199,6 +208,7 @@ func newModelPlatform(t *testing.T, cloudAddr string, shedEvery int) *modelPlatf
 		notices:   messaging.SubjectToMqttTopic(messaging.GatewayNoticesSubject("test", "tenant1", "gw1")),
 		shedEvery: shedEvery,
 		stored:    map[string]int{}, offered: map[string]int{}, shedKeys: map[string]bool{},
+		withholdEvery: 5, withheld: map[string]bool{},
 	}
 	m.client = mqttConnect(t, cloudAddr, "model-platform")
 	if err := messaging.SubscribeMqttConfirmed(m.client, "test/tenant1/gateways/gw1/devices/+/events", 1, m.onEvent, 5*time.Second); err != nil {
@@ -227,12 +237,23 @@ func (m *modelPlatform) onEvent(_ mqtt.Client, msg mqtt.Message) {
 			return
 		}
 	}
-	if m.stored[ev.AltId] > 0 {
+	withhold := false
+	if m.stored[ev.AltId] > 0 && !m.noDedup {
 		m.suppress++ // the store's idempotency key suppresses it: still one stored copy
 	} else {
-		m.stored[ev.AltId] = 1
+		if m.stored[ev.AltId] == 0 {
+			m.storeN++
+			if m.withholdEvery > 0 && m.storeN%m.withholdEvery == 0 && !m.withheld[ev.AltId] {
+				m.withheld[ev.AltId] = true
+				withhold = true
+			}
+		}
+		m.stored[ev.AltId]++ // a copy written; the dedup above is what keeps this at 1
 	}
 	m.mu.Unlock()
+	if withhold {
+		return
+	}
 	body, _ := json.Marshal(messaging.GatewayAccept{AltIds: []string{ev.AltId}})
 	m.client.Publish(m.accepts, 0, false, body)
 }
@@ -260,10 +281,16 @@ func eventBody(i int, occurred time.Time) []byte {
 // returns the platform and the agent for the caller to judge.
 func runNetemScenario(t *testing.T, retireOn string) (*modelPlatform, *Agent, int) {
 	t.Helper()
+	return runNetemScenarioWith(t, retireOn, false)
+}
+
+func runNetemScenarioWith(t *testing.T, retireOn string, noDedup bool) (*modelPlatform, *Agent, int) {
+	t.Helper()
 	cloudPort := startCloudBroker(t)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 	proxy := newNetem(t, cloudAddr)
 	platform := newModelPlatform(t, cloudAddr, 4)
+	platform.noDedup = noDedup
 
 	a := newAgent(t, config.Configuration{
 		InstanceId: "test",
@@ -314,10 +341,36 @@ func TestNetemRigAcceptModeLosesNothingAndStoresNothingTwice(t *testing.T) {
 	if platform.shedCount == 0 {
 		t.Fatal("the platform never shed anything: the over-ceiling path was not exercised")
 	}
+	if platform.suppress == 0 {
+		t.Fatal("the store never suppressed a duplicate offer: the exactly-once check was not exercised")
+	}
 	if a.overCeiling.Load() == 0 {
 		t.Errorf("the agent counted no over-ceiling refusal although the platform shed %d", platform.shedCount)
 	}
 	t.Logf("n=%d shed=%d agent_over_ceiling=%d offers_suppressed_by_the_store=%d", n, platform.shedCount, a.overCeiling.Load(), platform.suppress)
+}
+
+// TestNetemRigExactlyOnceAssertionCanFail is the negative control of the test above: the same
+// run against a store with its idempotency key switched off. If no event is then stored twice,
+// the link never caused a redelivery and "stored exactly once" proved nothing; if one is, the
+// assertion above is able to fail and its pass means the dedup held.
+func TestNetemRigExactlyOnceAssertionCanFail(t *testing.T) {
+	platform, a, n := runNetemScenarioWith(t, config.RetireOnAccept, true)
+
+	waitUntil(t, 120*time.Second, func() bool { return platform.storedCount() == n && a.spoolDepth() == 0 })
+
+	platform.mu.Lock()
+	defer platform.mu.Unlock()
+	twice := 0
+	for _, c := range platform.stored {
+		if c > 1 {
+			twice++
+		}
+	}
+	if twice == 0 {
+		t.Fatalf("with the store's dedup off, no event was stored twice (offers=%v): the run never redelivered, so the exactly-once test cannot fail", platform.offered)
+	}
+	t.Logf("dedup off: %d of %d events stored more than once", twice, n)
 }
 
 // TestNetemRigPubackModeLosesTheShedEvents is the negative control: every release before the

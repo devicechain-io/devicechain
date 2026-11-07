@@ -202,6 +202,9 @@ type Agent struct {
 	accepted    atomic.Int64
 	overCeiling atomic.Int64
 	unaccepted  atomic.Int64
+	// keylessRetired counts accept-mode entries with no idempotency key (payload not a JSON
+	// object) that were acked on PUBACK, since no acceptance can ever name them.
+	keylessRetired atomic.Int64
 
 	// overCeilingRetry overrides defaultOverCeilingRetry; tests only.
 	overCeilingRetry time.Duration
@@ -761,7 +764,7 @@ func (a *Agent) forwardBatch(ctx context.Context, msgs []*nats.Msg) {
 		// Held BEFORE the publish for the same reason: the platform's acceptance can beat
 		// this goroutine's PUBACK, and an acceptance that finds nothing held would leave the
 		// message in the spool to be sent again.
-		if a.retireOnAccept() {
+		if a.retireOnAccept() && ev.altId != "" {
 			a.pending.put(ev.altId, msg)
 		}
 		wait, err := a.begin(ev.topic, ev.payload)
@@ -781,6 +784,14 @@ func (a *Agent) forwardBatch(ctx context.Context, msgs []*nats.Msg) {
 				return
 			}
 			a.forwarded.Add(1)
+			if a.retireOnAccept() && ev.altId == "" {
+				// No key: the platform cannot name this entry in an acceptance, so holding it
+				// would resend it at every ack wait until the ring evicts it. Retire it on
+				// PUBACK, as puback mode does, and count it.
+				a.keylessRetired.Add(1)
+				a.ackAndCount(msg)
+				return
+			}
 			if a.retireOnAccept() {
 				// A PUBACK retires nothing here: the message leaves the spool when the platform
 				// says it durably accepted the event (handleAccept), or is offered again.

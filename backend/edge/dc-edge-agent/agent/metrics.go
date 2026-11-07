@@ -107,6 +107,7 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 	counterFunc("accepted_total", "Events the platform said it durably accepted (retireOn accept).", func() float64 { return float64(a.accepted.Load()) })
 	counterFunc("over_ceiling_total", "Events the platform shed at the tenant's ingest ceiling; each was kept in the spool and offered again (retireOn accept).", func() float64 { return float64(a.overCeiling.Load()) })
 	counterFunc("unaccepted_total", "Events not accepted within the accept timeout and offered again (retireOn accept).", func() float64 { return float64(a.unaccepted.Load()) })
+	counterFunc("keyless_retired_total", "Events with no idempotency key (payload not a JSON object) retired on PUBACK in accept mode, because the platform cannot acknowledge them.", func() float64 { return float64(a.keylessRetired.Load()) })
 	auto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "awaiting_accept",
 		Help: "Events published and awaiting the platform's acceptance (retireOn accept).",

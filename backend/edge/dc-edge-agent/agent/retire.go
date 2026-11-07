@@ -27,6 +27,9 @@ import (
 //     held on a platform stream, so the entry is acked;
 //   - the platform sends a terminal refusal (handleNotice): the event is in the dead-letter
 //     file, so the entry is acked;
+//   - the payload is not a JSON object, so it carries no key and the platform can never name it
+//     (keyless): it is acked on PUBACK and counted (keyless_retired_total), because holding it
+//     would resend it for ever;
 //   - neither happens within the accept timeout: the spool's own redelivery offers it again,
 //     with the same key, and the platform suppresses a duplicate.
 //
@@ -47,18 +50,25 @@ type pendingAccepts struct {
 
 type pendingEntry struct {
 	msg *nats.Msg
-	at  time.Time
+	// at is when the event was FIRST held. A redelivery replaces msg but keeps at, so an event
+	// the platform never answers ages out (and is counted) instead of being refreshed forever.
+	at time.Time
 }
 
 func newPendingAccepts() *pendingAccepts { return &pendingAccepts{m: map[string]pendingEntry{}} }
 
-// put holds msg under altId. A redelivery of the same event replaces the earlier delivery.
+// put holds msg under altId. A redelivery of the same event replaces the earlier delivery and
+// keeps the time the event was first held.
 func (p *pendingAccepts) put(altId string, msg *nats.Msg) {
 	if altId == "" {
 		return
 	}
 	p.mu.Lock()
-	p.m[altId] = pendingEntry{msg: msg, at: time.Now()}
+	at := time.Now()
+	if prev, ok := p.m[altId]; ok {
+		at = prev.at
+	}
+	p.m[altId] = pendingEntry{msg: msg, at: at}
 	p.mu.Unlock()
 }
 

@@ -210,6 +210,65 @@ func TestPendingAcceptsExpireAndBound(t *testing.T) {
 	}
 }
 
+func TestPendingAcceptsRedeliveryDoesNotRefreshAge(t *testing.T) {
+	p := newPendingAccepts()
+	p.put("a", nil)
+	time.Sleep(30 * time.Millisecond)
+	p.put("a", nil) // the spool offered it again; nothing answered
+	if n := p.expire(20 * time.Millisecond); n != 1 {
+		t.Fatalf("expire = %d, want 1: a redelivery must not restart the entry's age", n)
+	}
+}
+
+// TestUnansweredEventIsCountedUnaccepted: an event that is offered again and never answered
+// reaches unaccepted_total.
+func TestUnansweredEventIsCountedUnaccepted(t *testing.T) {
+	a, cap := retireAgent(t, config.RetireOnAccept, nil)
+	publishOne(t, a, "dev1")
+	waitUntil(t, 10*time.Second, func() bool { return a.forwarded.Load() == 1 })
+	key := cap.first()
+	a.pending.mu.Lock()
+	e := a.pending.m[key]
+	e.at = time.Now().Add(-time.Hour)
+	a.pending.m[key] = e
+	a.pending.mu.Unlock()
+	// A redelivery arrives meanwhile.
+	a.pending.put(key, e.msg)
+	a.expirePending()
+	if got := a.unaccepted.Load(); got != 1 {
+		t.Fatalf("unaccepted = %d, want 1", got)
+	}
+}
+
+// TestKeylessPayloadIsRetiredOnPubackInAcceptMode: a payload that is not a JSON object has no
+// key, so no acceptance can name it. It must leave the spool on PUBACK, counted, not be resent.
+func TestKeylessPayloadIsRetiredOnPubackInAcceptMode(t *testing.T) {
+	a, cap := retireAgent(t, config.RetireOnAccept, nil)
+	devicePublish(t, fmt.Sprintf("127.0.0.1:%d", a.cfg.Local.ListenPort), "bin-pub",
+		"test/tenant1/devices/dev1/events", []byte{0x00, 0x01, 0x02, 0xff})
+	waitUntil(t, 10*time.Second, func() bool { return a.forwarded.Load() == 1 })
+	waitUntil(t, 5*time.Second, func() bool { return a.spoolDepth() == 0 })
+	if got := a.keylessRetired.Load(); got != 1 {
+		t.Fatalf("keylessRetired = %d, want 1", got)
+	}
+	if a.pending.len() != 0 {
+		t.Fatalf("a keyless entry is held pending")
+	}
+	// Control: a keyed event in the same mode is still held after its PUBACK.
+	publishOne(t, a, "dev2")
+	waitUntil(t, 10*time.Second, func() bool { return a.forwarded.Load() == 2 })
+	if got := a.spoolDepth(); got != 1 {
+		t.Fatalf("keyed event spool depth = %d, want 1", got)
+	}
+	if got := a.keylessRetired.Load(); got != 1 {
+		t.Fatalf("keylessRetired = %d after a keyed event, want 1", got)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	if cap.count() != 2 {
+		t.Fatalf("offered %d times, want 2: the keyless entry must not be resent", cap.count())
+	}
+}
+
 func TestRetireConfigValidation(t *testing.T) {
 	base := func() config.Configuration {
 		c := config.Configuration{
