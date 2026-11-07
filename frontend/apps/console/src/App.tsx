@@ -35,6 +35,7 @@ const AlarmsPage = lazy(() => import('@/routes/alarms/AlarmsPage'));
 const SignersPage = lazy(() => import('@/routes/updates/SignersPage'));
 const CommandBatchesPage = lazy(() => import('@/routes/command-batches/CommandBatchesPage'));
 const IngestFailuresPage = lazy(() => import('@/routes/ingest-failures/IngestFailuresPage'));
+const OutcomesPage = lazy(() => import('@/routes/outcomes/OutcomesPage'));
 const CommandBatchDetailPage = lazy(() => import('@/routes/command-batches/CommandBatchDetailPage'));
 const ArtifactsPage = lazy(() => import('@/routes/updates/ArtifactsPage'));
 const ArtifactDetailPage = lazy(() => import('@/routes/updates/ArtifactDetailPage'));
@@ -150,6 +151,8 @@ export default function App() {
           <Route path="connectors/:token" element={<AreaGate area={AREA.outboundConnectors}><ConnectorDetailPage /></AreaGate>} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="ingest-failures" element={<IngestFailuresPage />} />
+          {/* EXPERIMENT: renders its own "not enabled" state when the instance has the feature off. */}
+          <Route path="outcomes" element={<OutcomesPage />} />
           <Route path="facets" element={<FacetKeysPage />} />
           <Route path="browse" element={<BrowsePage />} />
           <Route path="branding" element={<BrandingPage />} />

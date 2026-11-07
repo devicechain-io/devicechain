@@ -104,6 +104,18 @@ type EventManagementConfiguration struct {
 	// CalculatedBackfill governs the worker that fills calculated metrics into stored
 	// history (ADR-082). It is a FIXED setting, read once at startup.
 	CalculatedBackfill CalculatedBackfillConfiguration
+
+	// Experimental gathers features that are prototypes: off unless asked for, and free to
+	// change or disappear in any release.
+	Experimental ExperimentalConfiguration
+}
+
+// ExperimentalConfiguration switches prototype features on. Every field defaults to off.
+type ExperimentalConfiguration struct {
+	// Outcomes enables evaluating outcome objects (a target over a measurement, per area, with an
+	// error budget) through the evaluateOutcome query. While false the query is refused as
+	// UNAVAILABLE and reads no measurement.
+	Outcomes bool
 }
 
 // Calculated-metric backfill (ADR-082). Only two settings are the operator's; the batch size,

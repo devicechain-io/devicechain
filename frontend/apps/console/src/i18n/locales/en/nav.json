@@ -10,6 +10,7 @@
   "deviceGroups": "Device Groups",
   "commandBatches": "Command Batches",
   "ingestFailures": "Ingest failures",
+  "outcomes": "Outcomes (experimental)",
   "assets": "Assets",
   "assetTypes": "Asset Types",
   "assetGroups": "Asset Groups",

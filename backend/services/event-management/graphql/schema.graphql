@@ -805,6 +805,20 @@ type Query {
         criteria: MeasurementAggregationCriteria!
     ): [MeasurementBucket!]!
     """
+    EXPERIMENTAL, off unless the instance enables it (refused as UNAVAILABLE otherwise, reading
+    nothing). Judges an outcome: a target over one measurement, per area, over the trailing window,
+    against an error budget. The window is cut into complete, epoch-aligned buckets ending at the last bucket boundary, so the bucket still filling is not judged; a bucket is good
+    when its aggregate meets the threshold, and an area's compliance is good buckets over ALL buckets,
+    so a silent area is charged like a failing one. Returns each area's status, compliance and
+    remaining budget, and the equity spread between the worst area and the median. Reads the same
+    stored measurements, under the same access rules, as bucketedMeasurements. Nothing is stored.
+    Requires event:read.
+    """
+    evaluateOutcome(
+        """The outcome to judge."""
+        definition: OutcomeDefinitionInput!
+    ): OutcomeEvaluation!
+    """
     Evaluates a DRAFT calculated-metric formula over one device's stored readings, for previewing
     the formula while it is being written: each sample (the readings of one stored event that
     share one instant) is evaluated as it would be when readings are recorded, and returned with
@@ -984,4 +998,106 @@ schema {
     query: Query
     mutation: Mutation
     subscription: Subscription
+}
+
+"""EXPERIMENTAL. An outcome: a target over one measurement, per area, with a window and an error budget."""
+input OutcomeDefinitionInput {
+    """Stable token of the outcome, echoed back so a client can match the answer to the request."""
+    token: String!
+    """Measurement name to judge."""
+    metric: String!
+    """Which aggregate of each bucket is judged: AVG, MIN or MAX."""
+    aggregation: String!
+    """How the aggregate is held against the threshold: LT, LTE, GT or GTE."""
+    comparator: String!
+    """The threshold the aggregate is compared to."""
+    threshold: Float!
+    """Tokens of the areas judged, each on its own. At most 25."""
+    areas: [String!]!
+    """Length of the trailing window, in seconds. At most 31 days."""
+    windowSeconds: Int!
+    """Bucket width, in seconds: a whole number of minutes that divides a day."""
+    intervalSeconds: Int!
+    """Share of buckets that must be good, from 0.001 to 0.999."""
+    objective: Float!
+    """Readings a bucket needs to be judged; omit for 1."""
+    minSamples: Int
+    """The largest allowed gap, as a fraction, between the median area's compliance and the worst area's; omit or 0 for no limit."""
+    maxEquitySpread: Float
+}
+
+"""EXPERIMENTAL. The verdict on an outcome."""
+type OutcomeEvaluation {
+    """Token of the evaluated outcome."""
+    token: String!
+    """OK, AT_RISK, BREACHED or NO_DATA: the worst area, raised to at least AT_RISK when the equity limit is broken."""
+    status: String!
+    """The worst area's status, before the equity limit is applied."""
+    objectiveStatus: String!
+    """The exact span judged."""
+    span: OutcomeSpan!
+    """One entry per requested area, in request order."""
+    areas: [OutcomeAreaStatus!]!
+    """How evenly the outcome is met across areas."""
+    equity: OutcomeEquity!
+    """Buckets the store returned outside the span, which were ignored."""
+    strayBuckets: Int!
+}
+
+"""EXPERIMENTAL. The buckets an evaluation judged."""
+type OutcomeSpan {
+    """Start of the first bucket, as an RFC 3339 timestamp."""
+    start: String!
+    """End of the last bucket, as an RFC 3339 timestamp."""
+    end: String!
+    """Bucket width in seconds."""
+    intervalSeconds: Int!
+    """Number of buckets per area."""
+    bucketCount: Int!
+}
+
+"""EXPERIMENTAL. One area's verdict."""
+type OutcomeAreaStatus {
+    """Token of the area."""
+    area: String!
+    """OK, AT_RISK, BREACHED or NO_DATA. NO_DATA is never a pass."""
+    status: String!
+    """Buckets that met the threshold."""
+    goodBuckets: Int!
+    """Buckets that held enough readings and did not meet it."""
+    badBuckets: Int!
+    """Buckets with too few readings to judge; charged against the objective like bad ones."""
+    emptyBuckets: Int!
+    """Buckets in the window."""
+    totalBuckets: Int!
+    """Good buckets over all buckets, from 0 to 1."""
+    compliance: Float!
+    """Judged buckets over all buckets: how much of the window could be seen at all."""
+    coverage: Float!
+    """Unspent share of the error budget; 1 untouched, 0 spent, negative overspent."""
+    budgetRemaining: Float!
+}
+
+"""EXPERIMENTAL. The spread of an outcome across areas."""
+type OutcomeEquity {
+    """Areas that had at least one judged bucket."""
+    evaluatedAreas: Int!
+    """Areas with none, left out of the spread."""
+    excludedAreas: Int!
+    """True when fewer than two areas were evaluated, so there is no spread to report."""
+    spreadUndefined: Boolean!
+    """False when any requested area was excluded: the figures then describe fewer areas than were asked about."""
+    complete: Boolean!
+    """Lowest compliance among evaluated areas; null when the spread is undefined."""
+    worst: Float
+    """Token of the area with the lowest compliance (the smallest token on a tie); null when undefined."""
+    worstArea: String
+    """Median compliance among evaluated areas; null when undefined."""
+    median: Float
+    """Median minus worst, as a fraction; null when undefined."""
+    spread: Float
+    """Compliance over every bucket of every requested area: the figure that hides a failing area."""
+    pooled: Float!
+    """True when a limit was set and the spread is over it."""
+    breached: Boolean!
 }

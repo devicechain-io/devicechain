@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
   FileWarning,
+  Target,
   BellRing,
   Boxes,
   Building2,
@@ -120,6 +121,10 @@ export const NAV: NavNode[] = [
       // and so can act on one (device:write). A whole-tenant view with no
       // customer to scope it to, so it is not offered to a customer-scoped member.
       { labelKey: 'ingestFailures', href: '/ingest-failures', icon: FileWarning, requires: 'device:write' },
+      // EXPERIMENT: outcome objects (a target per area with an error budget). Read-only, over the same
+      // measurements as the event reads, so it asks for the same grant. The page says so when the
+      // instance has the feature off.
+      { labelKey: 'outcomes', href: '/outcomes', icon: Target, requires: 'event:read' },
       // Who gets paged for an alarm, and when they are left alone. notification-management has its
       // own authority pair, separate from alarm:read.
       { labelKey: 'notificationPolicies', href: '/notification-policies', icon: BellRing, requires: 'notification:read' },

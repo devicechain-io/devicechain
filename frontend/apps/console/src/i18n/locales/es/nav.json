@@ -11,6 +11,7 @@
   "deviceGroups": "Grupos de dispositivos",
   "commandBatches": "Lotes de comandos",
   "ingestFailures": "Fallos de ingesta",
+  "outcomes": "Resultados (experimental)",
   "assets": "Activos",
   "assetTypes": "Tipos de activo",
   "assetGroups": "Grupos de activos",
