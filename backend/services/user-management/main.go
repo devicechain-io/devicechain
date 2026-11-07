@@ -731,6 +731,7 @@ func registerServiceTokenHandler() {
 	internalAuthMux().Handle(auth.ServiceTokenPath, identity.ServiceTokenHandler(
 		func() string { return Microservice.InstanceConfiguration.Infrastructure.ServiceAuth.Secret },
 		IdentityManager.IssueServiceToken,
+		identity.NewServiceCeilingObserver(Microservice.MetricsRegisterer(), Microservice.MetricsSubsystem()),
 	))
 }
 

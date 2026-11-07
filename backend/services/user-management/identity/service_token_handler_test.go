@@ -42,7 +42,7 @@ func TestServiceTokenHandler(t *testing.T) {
 			req.Header.Set(auth.ServiceSecretHeader, presented)
 		}
 		rec := httptest.NewRecorder()
-		ServiceTokenHandler(secretFn, issue).ServeHTTP(rec, req)
+		ServiceTokenHandler(secretFn, issue, nil).ServeHTTP(rec, req)
 		return rec
 	}
 
