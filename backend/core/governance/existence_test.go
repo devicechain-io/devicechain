@@ -109,3 +109,44 @@ func TestTenantLimitResolver_Existence(t *testing.T) {
 type fetcherFunc func(ctx context.Context, tenant string) (Limits, error)
 
 func (f fetcherFunc) Fetch(ctx context.Context, tenant string) (Limits, error) { return f(ctx, tenant) }
+
+// A negative verdict is a verdict only while it is fresh. Past its expiry it is NO OPINION until
+// the refresh it triggers answers, so a tenant created after it was first asked about is not
+// refused for as long as refresh admission stays saturated.
+func TestExistence_AnExpiredNegativeVerdictIsNotServed(t *testing.T) {
+	var calls atomic.Int64
+	clk := newFakeClock()
+	r := newTenantResolver(countingFetch(&calls, 42, unknownTenantErr()), 7, "test")
+	r.Configure(ResolverOptions{NegativeTTL: time.Minute, RefreshesPerSecond: 0.001, RefreshBurst: 1, Clock: clk.now})
+	r.existence("typo")
+	require.Eventually(t, r.idle, 10*time.Second, time.Millisecond)
+	assert.Equal(t, ExistenceNone, r.existence("typo"), "fresh negative verdict is served")
+
+	// Expired, and the refresh budget is spent (one token, refilling at 0.001/s): no refresh can
+	// start, so nothing can supersede the old verdict. It must not be served.
+	clk.advance(2 * time.Minute)
+	assert.Equal(t, ExistenceUnknown, r.existence("typo"))
+	assert.EqualValues(t, 1, calls.Load(), "the saturated bound refused the refresh")
+}
+
+// The counterweight: a known tenant stays known when its entry is stale (it exists), and the
+// negative verdict is served again once a refresh re-confirms it.
+func TestExistence_StaleKnownStaysKnownAndNegativeIsReconfirmed(t *testing.T) {
+	var calls atomic.Int64
+	clk := newFakeClock()
+	r := newTenantResolver(countingFetch(&calls, 42, nil), 7, "test")
+	r.Configure(ResolverOptions{TTL: time.Minute, Clock: clk.now})
+	r.existence("acme")
+	require.Eventually(t, r.idle, 10*time.Second, time.Millisecond)
+	clk.advance(2 * time.Minute)
+	assert.Equal(t, ExistenceKnown, r.existence("acme"))
+
+	n := newTenantResolver(countingFetch(&calls, 42, unknownTenantErr()), 7, "test")
+	n.Configure(ResolverOptions{NegativeTTL: time.Minute, Clock: clk.now})
+	n.existence("typo")
+	require.Eventually(t, n.idle, 10*time.Second, time.Millisecond)
+	clk.advance(2 * time.Minute)
+	assert.Equal(t, ExistenceUnknown, n.existence("typo"))
+	require.Eventually(t, n.idle, 10*time.Second, time.Millisecond)
+	assert.Equal(t, ExistenceNone, n.existence("typo"))
+}

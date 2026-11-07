@@ -175,8 +175,8 @@ func (es *HttpEventSource) handler() http.Handler {
 
 // handleEvent decodes a single posted event and forwards it to the shared
 // publish path. It returns 202 once the event is stored in the inbound stream (with an
-// X-DC-Event-Id receipt), 400 when the body is not JSON, 422 when it is JSON the platform
-// refuses (naming the value by a JSON Pointer), 401 when the tenant does not exist or the
+// X-DC-Event-Id receipt), 400 when the body is not JSON or is JSON the platform
+// refuses (the latter names the value by a JSON Pointer in a JSON body), 401 when the tenant does not exist or the
 // credential in the body will not authenticate (one answer for both, see IngestChecks),
 // 429 when the tenant is over its ingest ceiling
 // (in messages before decode, or in readings after it), and 503 when it was not
@@ -235,9 +235,9 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	event, payload, err := es.Decoder.Decode(body, time.Time{})
 	if err != nil {
 		es.failed(es.Id, tenant, body, err)
-		// Not JSON at all: nothing in it can be pointed at, so it stays the 400 it always was.
-		// JSON that is well formed and says something the platform refuses is a 422 that names
-		// the value (an RFC 6901 pointer), so the sender can fix the field rather than guess.
+		// Not JSON at all: nothing in it can be pointed at, so it is a plain-text 400.
+		// JSON that is well formed and says something the platform refuses is still a 400, with a JSON body
+		// that names the value (an RFC 6901 pointer), so the sender can fix the field rather than guess.
 		if IsMalformedJSON(err) {
 			http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
 			return

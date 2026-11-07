@@ -396,11 +396,21 @@ const (
 
 // existence reads the cache without blocking, starting a refresh when one is due.
 func (r *tenantResolver[V]) existence(tenant string) Existence {
-	_, src := r.resolveOK(tenant)
-	switch src {
-	case core.CeilingResolved:
+	r.mu.Lock()
+	e, ok := r.cache[tenant]
+	expired := !ok || !r.now().Before(e.nextRefreshAt)
+	if expired {
+		r.triggerRefreshLocked(tenant)
+	}
+	r.mu.Unlock()
+
+	switch {
+	case ok && e.have:
 		return ExistenceKnown
-	case core.CeilingUnknownTenant:
+	case ok && !expired && e.cause == core.CeilingUnknownTenant:
+		// A negative verdict is a verdict only while it is fresh. Once expired it is served as
+		// no opinion until the refresh it triggered answers: a tenant created after it was
+		// first asked about must not stay refused for as long as refresh admission is saturated.
 		return ExistenceNone
 	}
 	return ExistenceUnknown

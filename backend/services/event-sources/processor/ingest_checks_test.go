@@ -155,7 +155,7 @@ func TestHttpEvents_MalformedBodyDoesNotRevealWhetherTheTenantExists(t *testing.
 
 	c := post(es, "typo", `{"device":"d","eventType":"Measurement","payload":{}}`)
 	d := post(es, "acme", `{"device":"d","eventType":"Measurement","payload":{}}`)
-	assert.Equal(t, http.StatusUnprocessableEntity, c.Code)
+	assert.Equal(t, http.StatusBadRequest, c.Code)
 	assert.Equal(t, c.Code, d.Code)
 	var cb, db unprocessableBody
 	require.NoError(t, json.Unmarshal(c.Body.Bytes(), &cb))
@@ -184,7 +184,7 @@ func TestHttpEvents_NoEventIdOnAPublishFailure(t *testing.T) {
 	assert.Empty(t, rec.Header().Get(EventIdHeader))
 }
 
-// The 422 contract: a well-formed document the platform refuses answers 422 with a JSON Pointer
+// The 422 contract: a well-formed document the platform refuses answers 400 with a JSON Pointer
 // that resolves to the offending value, and the receipt.
 func TestHttpEvents_Unprocessable_NamesTheValue(t *testing.T) {
 	cases := []struct {
@@ -206,7 +206,7 @@ func TestHttpEvents_Unprocessable_NamesTheValue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			es, dec, fail := newTestHttpSource(t, nil)
 			rec := post(es, "acme", tc.body)
-			require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 			assert.False(t, dec.called)
 			assert.True(t, fail.called, "the failure still goes to the failed-decode path")
 			assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -217,6 +217,7 @@ func TestHttpEvents_Unprocessable_NamesTheValue(t *testing.T) {
 			require.Len(t, body.Errors, 1)
 			assert.Equal(t, tc.pointer, body.Errors[0].Pointer)
 			assert.NotEmpty(t, body.Errors[0].Detail)
+			assert.True(t, strings.HasPrefix(body.Message, "unable to decode event: "), "the sentence the plain-text 400 always carried: %q", body.Message)
 			assert.Regexp(t, `^[0-9a-f]{32}$`, body.EventId)
 			assert.Equal(t, body.EventId, rec.Header().Get(EventIdHeader))
 		})
@@ -300,7 +301,7 @@ func TestHttpEvents_Unprocessable_TooManyReadingsPointsAtTheEntries(t *testing.T
 	body := `{"device":"d","eventType":"Measurement","payload":{"entries":[{"measurements":{` + readings.String() + `}}]}}`
 	es, dec, _ := newTestHttpSource(t, nil)
 	rec := post(es, "acme", body)
-	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 	assert.False(t, dec.called)
 	var got unprocessableBody
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))

@@ -69,7 +69,7 @@ Un payload `Measurement`, `Location` o `Alert` envuelve su contenido en un arreg
 - Los valores de medición y todos los campos de `Location` son **cadenas JSON** (`"21.5"`, no `21.5`).
 - El `level` de una alerta es un **entero JSON sin comillas** de 0 a 2147483647.
 
-Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `422` con el valor señalado por un JSON Pointer y una publicación MQTT va a la cola de mensajes fallidos.
+Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` con el valor señalado por un JSON Pointer y una publicación MQTT va a la cola de mensajes fallidos.
 
 Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su propio `occurredTime`. Ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se devuelve, de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir una serie acumulada (hasta el límite descrito más abajo) y conservar el historial que realmente registró.
 
@@ -92,7 +92,7 @@ Por encima del límite, el mensaje se **rechaza entero**, nunca se recorta para 
 
 Cómo se entera el dispositivo depende del transporte:
 
-- **HTTP** responde `422`, indicando el número de lecturas y el límite.
+- **HTTP** responde `400`, indicando el número de lecturas y el límite.
 - **MQTT** no le dice nada al dispositivo. El broker confirma una publicación cuando la captura de forma duradera, lo que ocurre antes de decodificar el mensaje. Por tanto, un `PUBACK` no promete que el mensaje se aceptara, y un rechazo posterior solo es visible para el operador.
 
 Los operadores ven todos los rechazos en el contador `total_msg_too_many_readings`. El límite no es configurable. Una instancia actualizada desde una versión que admitía más rechaza con el límite nuevo los mensajes ya capturados y aún sin decodificar.
@@ -288,10 +288,10 @@ Publica con QoS 0, o con QoS 1 con `altId` y `occurredTime`. Un operador que rea
 - Devuelve **429 Too Many Requests** si el inquilino supera su techo de ingesta HTTP, contado en lecturas, así que un mensaje que lleva muchas lecturas cuesta más que uno que lleva una sola. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
 - Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o no es JSON, o el inquilino de la
   ruta no es un token válido. Enviar de nuevo la misma petición recibe la misma respuesta.
-- Devuelve **422 Unprocessable Content** cuando el cuerpo es JSON pero dice algo que la plataforma rechaza: un `eventType` desconocido, un payload sin entradas, una entrada vacía, una marca de tiempo que no es RFC 3339, más de 256 lecturas. El cuerpo nombra el valor para que pueda corregir el campo:
+- Devuelve **400 Bad Request** cuando el cuerpo es JSON pero dice algo que la plataforma rechaza: un `eventType` desconocido, un payload sin entradas, una entrada vacía, una marca de tiempo que no es RFC 3339, más de 256 lecturas. El cuerpo nombra el valor para que pueda corregir el campo:
 
   ```json
-  {"error":"unprocessable_event","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
+  {"error":"unprocessable_event","message":"unable to decode event: ...","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
   ```
 
   `pointer` es un JSON Pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) dentro del cuerpo enviado, y uno vacío significa el documento entero. No se almacenó nada y reenviar la misma petición da la misma respuesta.

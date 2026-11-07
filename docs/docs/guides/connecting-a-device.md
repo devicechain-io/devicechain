@@ -69,7 +69,7 @@ A `Measurement`, `Location` or `Alert` payload wraps its content in an `entries`
 - Measurement values and every `Location` field are **JSON strings** (`"21.5"`, not `21.5`).
 - An alert's `level` is a **bare JSON integer** from 0 to 2147483647.
 
-Both rules are enforced. A payload with no entries, an entry with nothing in it, a value of the wrong JSON type (a bare number where a string is expected, or a quoted alert `level`), or an alert `level` outside that range is rejected rather than silently accepted: HTTP answers `422` with the value named by a JSON Pointer, and an MQTT publish is dead-lettered.
+Both rules are enforced. A payload with no entries, an entry with nothing in it, a value of the wrong JSON type (a bare number where a string is expected, or a quoted alert `level`), or an alert `level` outside that range is rejected rather than silently accepted: HTTP answers `400` with the value named by a JSON Pointer, and an MQTT publish is dead-lettered.
 
 One entry is one reading, taken at one instant. An entry may carry its own `occurredTime`. That is the instant the reading is stored, charted, evaluated and returned at, so a device that buffers readings while offline can upload a buffered run (up to the limit below) and keep the history it actually recorded.
 
@@ -92,7 +92,7 @@ Over the limit, a message is **refused whole**, never trimmed to fit. A batch qu
 
 How the device finds out depends on the transport:
 
-- **HTTP** answers `422`, naming the count and the limit.
+- **HTTP** answers `400`, naming the count and the limit.
 - **MQTT** does not tell the device anything. The broker acknowledges a publish when it durably captures it, which is before the message is decoded. A `PUBACK` is therefore not a promise that the message was accepted, and a refusal that happens afterwards is visible only to the operator.
 
 Operators see every refusal on the `total_msg_too_many_readings` counter. The limit is not configurable. An instance upgraded from a release that allowed more refuses, on the new limit, messages that were already captured and not yet decoded.
@@ -293,10 +293,10 @@ Publish at QoS 0, or QoS 1 with `altId` and `occurredTime`. An operator who genu
 - It returns **429 Too Many Requests** if the tenant is over its HTTP ingest ceiling, counted in readings, so a message carrying many readings costs more than one carrying a single reading. The MQTT path drops over-limit messages instead of answering.
 - It returns **400 Bad Request** when the body cannot be read or is not JSON, or the tenant in the path
   is not a valid token. Sending the same request again gets the same answer.
-- It returns **422 Unprocessable Content** when the body is JSON but says something the platform refuses: an unknown `eventType`, a payload with no entries, an empty entry, a timestamp that is not RFC 3339, more than 256 readings. The body names the value so you can fix the field:
+- It returns **400 Bad Request** when the body is JSON but says something the platform refuses: an unknown `eventType`, a payload with no entries, an empty entry, a timestamp that is not RFC 3339, more than 256 readings. The body names the value so you can fix the field:
 
   ```json
-  {"error":"unprocessable_event","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
+  {"error":"unprocessable_event","message":"unable to decode event: ...","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
   ```
 
   `pointer` is an [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901) JSON Pointer into the body you sent, and an empty one means the document as a whole. Nothing was stored and sending the same request again gets the same answer.

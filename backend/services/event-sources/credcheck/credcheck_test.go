@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -482,9 +483,10 @@ func TestDM_Check(t *testing.T) {
 	c := clientFunc(func(ctx context.Context, url, tenant, query string, vars map[string]any, out any) error {
 		gotQuery, gotTenant, gotVars = query, tenant, vars
 		ptr := out.(*struct {
-			Accepted bool `json:"checkDeviceCredential"`
+			Accepted *bool `json:"checkDeviceCredential"`
 		})
-		ptr.Accepted = true
+		yes := true
+		ptr.Accepted = &yes
 		return nil
 	})
 	dm := NewDM(c, "http://dm/graphql")
@@ -504,6 +506,35 @@ func TestDM_Check(t *testing.T) {
 	}), "u")
 	_, err = failing.Check(context.Background(), "acme", good)
 	assert.Error(t, err)
+}
+
+// An answer with no verdict (what a faulty peer sends as {} or {"data":null}) is an ERROR, not a
+// rejection, and an explicit false is still a rejection. Through the real JSON decoder, so the
+// test fails if the field goes back to a plain bool.
+func TestDM_Check_MissingVerdictIsNotARejection(t *testing.T) {
+	for name, doc := range map[string]string{
+		"empty object": `{}`,
+		"null field":   `{"checkDeviceCredential":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dm := NewDM(clientFunc(func(_ context.Context, _, _, _ string, _ map[string]any, out any) error {
+				return json.Unmarshal([]byte(doc), out)
+			}), "u")
+			ok, err := dm.Check(context.Background(), "acme", good)
+			assert.ErrorIs(t, err, ErrNoVerdict)
+			assert.False(t, ok)
+
+			// Through the verifier: UNKNOWN, and nothing cached (a rejection would be).
+			v, _ := New(dm, Config{})
+			assert.Equal(t, Unknown, v.Verify(context.Background(), "acme", good))
+		})
+	}
+	dm := NewDM(clientFunc(func(_ context.Context, _, _, _ string, _ map[string]any, out any) error {
+		return json.Unmarshal([]byte(`{"checkDeviceCredential":false}`), out)
+	}), "u")
+	ok, err := dm.Check(context.Background(), "acme", good)
+	require.NoError(t, err)
+	assert.False(t, ok, "an explicit false is a rejection")
 }
 
 type clientFunc func(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error

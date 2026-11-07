@@ -13,7 +13,7 @@ import (
 // PointerError is a decode failure that names WHERE in the posted document the problem is, as an
 // RFC 6901 JSON Pointer ("/payload/entries/0/measurements"). Its message is the wrapped error's
 // own, unchanged, so every place that logs or compares the text sees what it always did; the
-// pointer is for the one caller that can hand it back to the sender, the HTTP route's 422.
+// pointer is for the one caller that can hand it back to the sender, the HTTP route's JSON 400.
 type PointerError struct {
 	// Pointer addresses the offending value in the request body. The empty string is the whole
 	// document, which is what RFC 6901 says it is.
@@ -54,13 +54,13 @@ func escapePointerToken(s string) string {
 
 // IsMalformedJSON reports whether err says the body is not JSON at all (a syntax error or a
 // truncated document). That is a 400: nothing in it can be pointed at. Everything else a decoder
-// refuses is a well-formed document with something wrong in it, which is a 422 with a pointer.
+// refuses is a well-formed document with something wrong in it, which is a 400 with a pointer.
 func IsMalformedJSON(err error) bool {
 	var syn *json.SyntaxError
 	return errors.As(err, &syn)
 }
 
-// DecodeProblem is the pointer and message a 422 carries for a decode failure.
+// DecodeProblem is the pointer and message the JSON 400 carries for a decode failure.
 type DecodeProblem struct {
 	Pointer string `json:"pointer"`
 	Detail  string `json:"detail"`

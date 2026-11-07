@@ -3,7 +3,15 @@
 
 package credcheck
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNoVerdict is a peer answer that carried no verdict at all. It is an error, never a
+// rejection: the verifier reads it as UNKNOWN, so a faulty peer cannot turn a legitimate
+// credential into a cached 401.
+var ErrNoVerdict = errors.New("credcheck: the answer carried no verdict")
 
 // GraphQLClient is the slice of svcclient.Client the backend needs.
 type GraphQLClient interface {
@@ -32,11 +40,16 @@ func (d *DM) Check(ctx context.Context, tenant string, p Presented) (bool, error
 	if p.Secret != "" {
 		vars["secret"] = p.Secret
 	}
+	// A pointer, so an answer that carries no verdict ({}, {"data":null}, a null field) is told
+	// apart from an explicit false. Only an explicit false is a rejection.
 	var out struct {
-		Accepted bool `json:"checkDeviceCredential"`
+		Accepted *bool `json:"checkDeviceCredential"`
 	}
 	if err := d.client.Query(ctx, d.url, tenant, checkQuery, vars, &out); err != nil {
 		return false, err
 	}
-	return out.Accepted, nil
+	if out.Accepted == nil {
+		return false, ErrNoVerdict
+	}
+	return *out.Accepted, nil
 }

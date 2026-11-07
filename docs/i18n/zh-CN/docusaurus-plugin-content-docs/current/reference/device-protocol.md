@@ -332,9 +332,9 @@ POST /api/device-management/provisioning/{tenant}/register
 | 正文中的凭据无法通过认证：未知、已过期、密钥错误、属于另一台设备，或在实例要求凭据时缺失 | `401`，始终是 `{"error":"unauthorized"}` | 设备连接时由 broker 判定 | `total_http_ingest_refused`，`reason="bad_credential"` |
 | 租户超出其接入上限（按消息数或按读数） | `429`，带 `Retry-After: 1` | 先确认，然后**丢弃** | `total_msg_rate_limited`、`total_msg_reading_limited` |
 | 正文无法读取，或超过 1 MiB | `400` | — | — |
-| 正文无法解码：不是 JSON、未知或仅限平台的 `eventType`（`StateChange`、`CommandInvocation`、`CommandResponse`）、值的 JSON 类型错误、没有条目、空条目、位置字段缺失或超出范围、告警缺少 `type` 或 `level` 大于 2147483647 | 正文不是 JSON 时为 `400`；否则为 `422`，给出原因以及指向正文中该值的 [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) | 先确认，然后转入 `failed-decode` 流 | `total_msg_failed_decode` |
-| 时间戳不是 RFC 3339、等于 `0001-01-01T00:00:00Z`，或早于 366 天以上 | `422`，并指出字段 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_invalid_event_time` |
-| 超过 256 个读数 | `422`，给出数量和上限 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_too_many_readings` |
+| 正文无法解码：不是 JSON、未知或仅限平台的 `eventType`（`StateChange`、`CommandInvocation`、`CommandResponse`）、值的 JSON 类型错误、没有条目、空条目、位置字段缺失或超出范围、告警缺少 `type` 或 `level` 大于 2147483647 | 正文不是 JSON 时为 `400`；否则为 `400`，给出原因以及指向正文中该值的 [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) | 先确认，然后转入 `failed-decode` 流 | `total_msg_failed_decode` |
+| 时间戳不是 RFC 3339、等于 `0001-01-01T00:00:00Z`，或早于 366 天以上 | `400`，并指出字段 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_invalid_event_time` |
+| 超过 256 个读数 | `400`，给出数量和上限 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_too_many_readings` |
 | 正文中的 `device` 不是主题中的设备 | — | 转入 `failed-decode` | `total_msg_failed_decode` |
 | 正文携带 `credentialType`、`credentialId` 或 `credentialSecret`，且在平台 MQTT 消息代理上 | — | 转入 `failed-decode`（已脱敏） | `total_msg_failed_decode`、`total_msg_credential_in_mqtt_body` |
 | 平台正在施加[背压](../deployment/observability.md#ingest-backpressure) | `503`，**带** `Retry-After`：未存储，请重新发送 | 不会被拒绝：它在捕获流中等待；只有该流写满时，最早捕获的消息才会被丢弃 | |

@@ -134,8 +134,7 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
 - **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
   - `202` una vez almacenado el evento en el stream de entrada de la plataforma, con una cabecera de recibo `X-DC-Event-Id`;
   - `401` cuando el inquilino de la ruta no existe o la credencial del cuerpo no se autentica (una sola respuesta para ambos);
-  - `400` ante un cuerpo que no es JSON o no puede leerse, o un inquilino sintácticamente inválido;
-  - `422` ante un JSON que la plataforma rechaza, con un JSON Pointer al valor ofensivo del cuerpo;
+  - `400` ante un cuerpo que no es JSON o es un JSON que la plataforma rechaza (en ese caso con un JSON Pointer al valor ofensivo en un cuerpo JSON), o un inquilino sintácticamente inválido;
   - `404` cuando el id de instancia de la ruta es incorrecto;
   - `429` cuando el inquilino supera su techo de ingesta, contado en lecturas. Se comprueba antes
     de la contrapresión, así que un inquilino por encima de su propio techo recibe `429`, nunca el
@@ -152,7 +151,7 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   significa que la publicación falló, y si falló después de que el stream almacenara el evento, un
   reintento lo almacena dos veces, salvo que el evento lleve `altId` y `occurredTime` (consulta
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). Un `429` también significa que el evento no se aceptó; lleva una
-  cabecera `Retry-After`, así que espera y reintenta. `202`, `400`, `401`, `404` y `422` son terminales
+  cabecera `Retry-After`, así que espera y reintenta. `202`, `400`, `401` y `404` son terminales
   para esa petición.
 - **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que
   llega a la plataforma solo por HTTP no puede recibir comandos. Más que una carencia a la espera

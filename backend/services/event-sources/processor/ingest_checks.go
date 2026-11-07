@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -17,7 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// EventIdHeader is the response header a 202 (and a 422) carries: the receipt the platform minted
+// EventIdHeader is the response header a 202 (and a 400 for a refused document) carries: the receipt the platform minted
 // for the request. It is a receipt for THIS request, not the stored event's id: that is derived
 // from the resolved event and does not exist yet at the door.
 const EventIdHeader = "X-DC-Event-Id"
@@ -143,23 +144,27 @@ func writeUnauthorized(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(unauthorizedBody))
 }
 
-// unprocessableBody is the 422 body: what is wrong and where.
+// unprocessableBody is the 400 body for a JSON document the platform refuses: what is wrong and
+// where. The status is the 400 the endpoint always answered; Message is the sentence the plain-text
+// body always carried, and Errors (the JSON Pointer) is the additive part.
 type unprocessableBody struct {
 	Error   string          `json:"error"`
+	Message string          `json:"message"`
 	EventId string          `json:"eventId,omitempty"`
 	Errors  []DecodeProblem `json:"errors"`
 }
 
-// writeUnprocessable answers 422 for a document that is well-formed JSON the platform refuses.
+// writeUnprocessable answers 400 for a document that is well-formed JSON the platform refuses.
 func writeUnprocessable(w http.ResponseWriter, eventId string, err error) {
 	h := w.Header()
 	if eventId != "" {
 		h.Set(EventIdHeader, eventId)
 	}
 	h.Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnprocessableEntity)
+	w.WriteHeader(http.StatusBadRequest)
 	_ = json.NewEncoder(w).Encode(unprocessableBody{
 		Error:   "unprocessable_event",
+		Message: fmt.Sprintf("unable to decode event: %v", err),
 		EventId: eventId,
 		Errors:  []DecodeProblem{ProblemOf(err)},
 	})
