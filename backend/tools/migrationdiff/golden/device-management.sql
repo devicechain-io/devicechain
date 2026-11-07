@@ -229,6 +229,10 @@ ALTER TABLE ONLY "device-management".metric_definitions
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".pending_ownership_facts
  ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
+ALTER TABLE ONLY "device-management".pending_revocation_expansion_serials
+ ADD CONSTRAINT pending_revocation_expansion_serials_pkey PRIMARY KEY (tenant_id, trust_anchor_id, generation, serial);
+ALTER TABLE ONLY "device-management".pending_revocation_expansions
+ ADD CONSTRAINT pending_revocation_expansions_pkey PRIMARY KEY (tenant_id, trust_anchor_id, generation);
 ALTER TABLE ONLY "device-management".pending_revocation_kicks
  ADD CONSTRAINT pending_revocation_kicks_pkey PRIMARY KEY (tenant_id, device_token, origin);
 ALTER TABLE ONLY "device-management".pending_session_kicks
@@ -1323,6 +1327,24 @@ CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
  device_id bigint NOT NULL,
  generation bigint NOT NULL,
+ requested_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "device-management".pending_revocation_expansion_serials (
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ generation bigint NOT NULL,
+ serial character varying(64) NOT NULL
+);
+CREATE TABLE "device-management".pending_revocation_expansions (
+ tenant_id character varying(128) NOT NULL,
+ trust_anchor_id bigint NOT NULL,
+ generation bigint NOT NULL,
+ kind character varying(16) NOT NULL,
+ ca boolean NOT NULL,
+ links_whole boolean NOT NULL,
+ fingerprint character varying(64),
+ issuer_key character varying(64),
+ issuer_name character varying(64),
  requested_at timestamp with time zone NOT NULL
 );
 CREATE TABLE "device-management".pending_revocation_kicks (
