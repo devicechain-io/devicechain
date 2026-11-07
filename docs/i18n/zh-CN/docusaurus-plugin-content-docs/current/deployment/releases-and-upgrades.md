@@ -698,7 +698,7 @@ Chart 附带的每条告警规则现在都带有 `runbook_url`，会打开其在
 
 `dcctl install` 和 `dcctl upgrade` 现在接受 `--alert-webhook`、`--alert-email`（配合 `--alert-smtp-host`、`--alert-smtp-from`、`--alert-smtp-user` 和 `--alert-smtp-password-file`）、`--alert-config`、`--alert-watchdog-webhook` 和 `--clear-alert-routing`。Alertmanager 现在从 `monitoring` 命名空间中的 Secret `dc-alertmanager-config` 读取配置，`dcctl install` 会在应用监控栈之前写入它。不带任何 `--alert-*` 参数重新运行 `dcctl install` 会保留现有路由；首次安装不带参数时写入一份没有接收器的配置，这与早期版本的行为一致。实例会在新的 `AlertsRouted` 条件和 `dcctl instances list` 中报告是否有人在接收；该条件绝不会使实例变为未就绪。
 
-对于由早期版本安装的集群，在对 `dcctl upgrade` 使用这些参数之前，请先运行一次 `dcctl install`；否则 `dcctl upgrade` 会拒绝，因为旧的 Alertmanager 不会读取我们的 Secret。参见[将告警路由给真人](./observability.md#alert-routing)。
+如果你曾手工编辑 Alertmanager 自己的 Secret 来路由告警，请把该配置迁移到 `--alert-config`：监控栈现在读取的是 `dc-alertmanager-config`，对旧 Secret 的手工修改不会再被读取。对于由早期版本安装的集群，在对 `dcctl upgrade` 使用这些参数之前，请先运行一次 `dcctl install`；否则 `dcctl upgrade` 会拒绝，因为旧的 Alertmanager 不会读取我们的 Secret。参见[将告警路由给真人](./observability.md#alert-routing)。
 
 #### 本版本的其他变更 {#v120-other-changes}
 

@@ -942,7 +942,7 @@ Every alert rule the chart ships now carries a `runbook_url` that opens its entr
 
 `dcctl install` and `dcctl upgrade` take `--alert-webhook`, `--alert-email` (with `--alert-smtp-host`, `--alert-smtp-from`, `--alert-smtp-user` and `--alert-smtp-password-file`), `--alert-config`, `--alert-watchdog-webhook` and `--clear-alert-routing`. The Alertmanager now reads its configuration from the Secret `dc-alertmanager-config` in the `monitoring` namespace, which `dcctl install` writes before it applies the monitoring stack. A re-run of `dcctl install` with no `--alert-*` flag keeps the routing that is there, and a first install with none writes a configuration with no receiver, which is the behaviour of earlier releases. An instance reports whether anything is listening in its new `AlertsRouted` condition and in `dcctl instances list`; the condition never makes the instance unready.
 
-Re-run `dcctl install` once on a cluster installed by an earlier release before using the flags with `dcctl upgrade`; `dcctl upgrade` refuses otherwise, because the older Alertmanager reads no Secret of ours. See [Routing alerts to a person](./observability.md#alert-routing).
+If you routed alerts by editing the Alertmanager's own Secret by hand, move that configuration to `--alert-config`: the stack now reads `dc-alertmanager-config` instead, and a hand edit of the old Secret is not read. Re-run `dcctl install` once on a cluster installed by an earlier release before using the flags with `dcctl upgrade`; `dcctl upgrade` refuses otherwise, because the older Alertmanager reads no Secret of ours. See [Routing alerts to a person](./observability.md#alert-routing).
 
 #### Other changes in this release {#v120-other-changes}
 

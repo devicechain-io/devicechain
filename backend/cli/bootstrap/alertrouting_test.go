@@ -5,12 +5,18 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/yaml"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -21,6 +27,35 @@ const (
 	testWatchdog = "https://hc.example.test/ping/abc-123"
 	testSMTPPass = "hunter2-smtp"
 )
+
+// stackClient is a dynamic client holding the declarations a test puts in it and, when
+// configSecret is not empty, the monitoring stack's Alertmanager told to read that Secret.
+func stackClient(configSecret string, objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	if configSecret != "" || configSecret == "-" {
+		am := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "monitoring.coreos.com/v1", "kind": "Alertmanager",
+			"metadata": map[string]any{"name": "kps", "namespace": monitoringNamespace},
+			"spec":     map[string]any{},
+		}}
+		if configSecret != "-" {
+			am.Object["spec"] = map[string]any{"configSecret": configSecret}
+		}
+		objs = append(objs, am)
+	}
+	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{instanceGVR: "InstanceList", alertmanagerGVR: "AlertmanagerList"},
+		objs...)
+}
+
+// brokenStackClient cannot list Alertmanagers, as a client without the right to would not.
+func brokenStackClient(objs ...runtime.Object) *dynamicfake.FakeDynamicClient {
+	c := stackClient("", objs...)
+	c.PrependReactor("list", "alertmanagers", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("forbidden")
+	})
+	return c
+}
 
 func emailRequest() AlertRoutingRequest {
 	return AlertRoutingRequest{
@@ -164,9 +199,41 @@ receivers:
   - name: "null"
   - name: snitch
     webhook_configs: [{url: "https://snitch.test/x"}]
+`, "none,watchdog", ""},
+		{"a person and the watchdog", `
+route:
+  receiver: team
+  routes:
+    - receiver: snitch
+      matchers: ['alertname = "Watchdog"']
+receivers:
+  - name: team
+    email_configs: [{to: ops@example.test}]
+  - name: snitch
+    webhook_configs: [{url: "https://snitch.test/x"}]
 `, "config,watchdog", ""},
+		{"a receiver reached only through the watchdog is not a person", `
+route:
+  receiver: "null"
+  routes:
+    - receiver: snitch
+      matchers: ['alertname = "Watchdog"']
+      routes:
+        - receiver: other
+receivers:
+  - name: "null"
+  - name: snitch
+    webhook_configs: [{url: "https://snitch.test/x"}]
+  - name: other
+    webhook_configs: [{url: "https://other.test/x"}]
+`, "none,watchdog", ""},
 		{"only the null receiver", "route: {receiver: \"null\"}\nreceivers:\n  - name: \"null\"\n", "none", ""},
 		{"a receiver that delivers nowhere", "route: {receiver: r}\nreceivers:\n  - name: r\n    webhook_configs: []\n", "none", ""},
+		{"a webhook with no url", "route: {receiver: r}\nreceivers:\n  - name: r\n    webhook_configs: [{}]\n", "", "is empty"},
+		{"a webhook whose url is blank", "route: {receiver: r}\nreceivers:\n  - name: r\n    webhook_configs: [{send_resolved: true}]\n", "", "needs a url"},
+		{"an email with no recipient", "route: {receiver: r}\nreceivers:\n  - name: r\n    email_configs: [{from: a@example.test}]\n", "", "needs a to"},
+		{"a receiver field that is not an integration", "route: {receiver: r}\nreceivers:\n  - name: r\n    webhook_url: https://x.test\n", "", "not a notification integration"},
+		{"an integration that is not a list", "route: {receiver: r}\nreceivers:\n  - name: r\n    webhook_configs: {url: https://x.test}\n", "", "must be a list"},
 		{"a route to a receiver it does not define", "route: {receiver: ghost}\nreceivers:\n  - name: r\n", "", `receiver "ghost"`},
 		{"a duplicate receiver", "route: {receiver: r}\nreceivers:\n  - name: r\n  - name: r\n", "", "twice"},
 		{"no receivers", "route: {receiver: r}\n", "", "at least one receiver"},
@@ -295,32 +362,47 @@ func TestAnUpgradeNeedsTheWiringAnInstallLeaves(t *testing.T) {
 	c := fake.NewSimpleClientset()
 	st := &State{AlertRouting: AlertRoutingRequest{Webhook: testWebhook}}
 
-	if err := PrecheckAlertRoutingUpgrade(ctx, c, st); err == nil || !strings.Contains(err.Error(), "dcctl install") {
+	// An Alertmanager that reads the stack's own configuration.
+	if err := PrecheckAlertRoutingUpgrade(ctx, c, stackClient("-"), st); err == nil || !strings.Contains(err.Error(), "dcctl install") {
 		t.Fatalf("an upgrade on a cluster whose Alertmanager reads nothing of ours must say to install first, got %v", err)
 	}
 	if _, err := c.CoreV1().Secrets(monitoringNamespace).Get(ctx, alertConfigSecretName, metav1.GetOptions{}); err == nil {
 		t.Fatal("the refusal created the Secret anyway: a Secret nothing reads would be reported as routing")
 	}
 
+	// 🔴 The Secret is there but the apply that points the Alertmanager at it never finished
+	// (install writes the Secret first). Existence is not wiring.
 	if _, err := settleAlertRouting(ctx, c, AlertRoutingRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := PrecheckAlertRoutingUpgrade(ctx, c, st); err != nil {
+	if err := PrecheckAlertRoutingUpgrade(ctx, c, stackClient("-"), st); err == nil || !strings.Contains(err.Error(), "dcctl install") {
+		t.Fatalf("a Secret the Alertmanager does not read was accepted as wiring: %v", err)
+	}
+	if err := PrecheckAlertRoutingUpgrade(ctx, c, stackClient("some-other-secret"), st); err == nil {
+		t.Fatal("an Alertmanager reading a different Secret was accepted as wiring")
+	}
+
+	wired := stackClient(alertConfigSecretName)
+	if err := PrecheckAlertRoutingUpgrade(ctx, c, wired, st); err != nil {
 		t.Fatal(err)
 	}
-	routing, err := applyAlertRoutingUpgrade(ctx, c, st.AlertRouting)
+	routing, err := applyAlertRoutingUpgrade(ctx, c, wired, st.AlertRouting)
 	if err != nil || routing.Format() != "webhook" {
 		t.Fatalf("got %+v, %v", routing, err)
 	}
 	// No flag, no precheck, no write.
-	if err := PrecheckAlertRoutingUpgrade(ctx, fake.NewSimpleClientset(), &State{}); err != nil {
+	if err := PrecheckAlertRoutingUpgrade(ctx, fake.NewSimpleClientset(), stackClient(""), &State{}); err != nil {
 		t.Fatalf("an upgrade without alert flags must not look at the wiring: %v", err)
+	}
+	// And an Alertmanager that cannot be listed is a refusal, not a pass.
+	if err := PrecheckAlertRoutingUpgrade(ctx, c, brokenStackClient(), st); err == nil {
+		t.Fatal("an unreadable Alertmanager was treated as wired")
 	}
 }
 
 func TestAlertFlagsAreRefusedWhereThereIsNoMonitoring(t *testing.T) {
 	st := &State{NoMonitoring: true, AlertRouting: AlertRoutingRequest{Webhook: testWebhook}}
-	err := PrecheckAlertRoutingUpgrade(context.Background(), fake.NewSimpleClientset(), st)
+	err := PrecheckAlertRoutingUpgrade(context.Background(), fake.NewSimpleClientset(), stackClient(""), st)
 	if err == nil || !strings.Contains(err.Error(), "no monitoring") {
 		t.Fatalf("got %v", err)
 	}
@@ -329,7 +411,7 @@ func TestAlertFlagsAreRefusedWhereThereIsNoMonitoring(t *testing.T) {
 func TestPublishingTheRoutingOnTheInstance(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewSimpleClientset()
-	dyn := declarationClient(declaredInstance(t, "prod", nil))
+	dyn := stackClient("-", declaredInstance(t, "prod", nil))
 	st := &State{Instance: "prod"}
 
 	// A cluster installed before alert routing existed: its Alertmanager drops everything,
@@ -344,15 +426,24 @@ func TestPublishingTheRoutingOnTheInstance(t *testing.T) {
 	if _, err := settleAlertRouting(ctx, c, AlertRoutingRequest{Webhook: testWebhook, WatchdogWebhook: testWatchdog}); err != nil {
 		t.Fatal(err)
 	}
+	// 🔴 The Secret says webhook, but the Alertmanager does not read it: that is not routed.
 	if err := publishAlertRouting(ctx, c, dyn, st); err != nil {
 		t.Fatal(err)
 	}
-	if got := readBack(t, dyn, "prod").Annotations[dcv1beta1.AnnotationAlertRouting]; got != "webhook,watchdog" {
+	if got := readBack(t, dyn, "prod").Annotations[dcv1beta1.AnnotationAlertRouting]; got != "none" {
+		t.Fatalf("published %q over an Alertmanager that does not read the Secret", got)
+	}
+
+	wired := stackClient(alertConfigSecretName, declaredInstance(t, "prod", nil))
+	if err := publishAlertRouting(ctx, c, wired, st); err != nil {
+		t.Fatal(err)
+	}
+	if got := readBack(t, wired, "prod").Annotations[dcv1beta1.AnnotationAlertRouting]; got != "webhook,watchdog" {
 		t.Fatalf("published %q", got)
 	}
 
 	// Without a monitoring stack there is nothing to publish.
-	off := declarationClient(declaredInstance(t, "bare", nil))
+	off := stackClient("", declaredInstance(t, "bare", nil))
 	if err := publishAlertRouting(ctx, c, off, &State{Instance: "bare", NoMonitoring: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -360,8 +451,17 @@ func TestPublishingTheRoutingOnTheInstance(t *testing.T) {
 		t.Fatal("published a routing for an instance with no monitoring")
 	}
 
+	// A routing that cannot be established publishes nothing rather than a guess.
+	unknown := brokenStackClient(declaredInstance(t, "prod", nil))
+	if err := publishAlertRouting(ctx, c, unknown, st); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readBack(t, unknown, "prod").Annotations[dcv1beta1.AnnotationAlertRouting]; ok {
+		t.Fatal("published a routing that could not be established")
+	}
+
 	// A missing declaration is quiet: the next bootstrap writes one.
-	if err := publishAlertRouting(ctx, c, declarationClient(), &State{Instance: "ghost"}); err != nil {
+	if err := publishAlertRouting(ctx, c, stackClient("-"), &State{Instance: "ghost"}); err != nil {
 		t.Fatalf("a missing declaration must not fail the run: %v", err)
 	}
 }

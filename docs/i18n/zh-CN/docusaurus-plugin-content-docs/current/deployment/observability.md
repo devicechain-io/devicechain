@@ -112,10 +112,10 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 
 ```bash
 # Webhook：兼容 Slack 的中继、PagerDuty、Opsgenie 以及大多数事件管理工具都接受。
-dcctl install --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
 
 # 电子邮件。密码从文件读取，不会留在 shell 历史记录中。
-dcctl install \
+dcctl install local \
   --alert-email oncall@example.com --alert-email backup@example.com \
   --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
   --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
@@ -135,7 +135,7 @@ dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/servic
 如果 Alertmanager 宕机，或无法连接其接收器，就不会有任何告警送达，而没有告警的集群看上去与健康的集群毫无区别。`Watchdog` 告警正是为此而设：它按设计始终处于触发状态。把它发送到死人开关（dead-man's-switch）服务（Healthchecks、Dead Man's Snitch、Cronitor），当心跳停止时由该服务通知你：
 
 ```bash
-dcctl install --alert-webhook https://hooks.example.com/... \
+dcctl install local --alert-webhook https://hooks.example.com/... \
   --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
 ```
 
@@ -143,7 +143,7 @@ Watchdog 每分钟发送一次到它专用的接收器，绝不会发送到真�
 
 ### Webhook 和电子邮件之外的接收器
 
-`--alert-config <文件>` 原样使用你自己的 Alertmanager 配置。Slack、PagerDuty、Opsgenie 或 Teams 接收器，以及按标签路由，都可以用它。它不能与其他 `--alert-*` 参数同时使用。`dcctl` 会检查文件能否解析、每条路由是否指向文件中定义的接收器，以及是否有接收器真正会投递到某处，但不会发送测试消息。请在你的文件内路由 `Watchdog` 告警：当某条路由选中 `alertname = "Watchdog"` 且其接收器会投递时，`dcctl` 会将其计为已路由。
+`--alert-config <文件>` 原样使用你自己的 Alertmanager 配置。Slack、PagerDuty、Opsgenie 或 Teams 接收器，以及按标签路由，都可以用它。它不能与其他 `--alert-*` 参数同时使用。`dcctl` 会检查文件能否解析、每条路由是否指向文件中定义的接收器，以及是否有接收器真正会投递到某处，但不会发送测试消息，也不是 Alertmanager 自己的解析器：请先对该文件运行 `amtool check-config`，因为拒绝某份配置的 Alertmanager 会继续使用上一份配置运行。请在你的文件内路由 `Watchdog` 告警：当某条路由选中 `alertname = "Watchdog"` 且其接收器会投递时，`dcctl` 会将其计为已路由。
 
 每条告警都带有 `runbook_url`，会打开其在[告警手册](./alert-runbook.md)中的条目，因此通知可以直接链接到它的含义以及该怎么处理。
 

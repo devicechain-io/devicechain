@@ -14,7 +14,6 @@ import (
 	"time"
 
 	assets "github.com/devicechain-io/dc-deploy"
-	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -299,10 +298,8 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	}
 	// 🔴 BEFORE THE APPLY: the monitoring stack is told to read this Secret by name, and an
 	// Alertmanager whose configuration Secret is missing does not start.
-	var alertRouting dcv1beta1.AlertRouting
 	if monitoringEnabled(st) {
-		var err error
-		if alertRouting, err = settleAlertRouting(ctx, typed, st.AlertRouting); err != nil {
+		if _, err := settleAlertRouting(ctx, typed, st.AlertRouting); err != nil {
 			return fmt.Errorf("settling the Alertmanager's routing: %w", err)
 		}
 	}
@@ -346,10 +343,12 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return err
 	}
 	if monitoringEnabled(st) {
-		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(alertRouting))
-		// Best effort: the cluster is built, and an instance not patched now is patched by its
-		// next upgrade. The operator's AlertsRouted condition follows what is published.
-		for _, perr := range publishAlertRoutingToCluster(ctx, st.KubeContext, alertRouting) {
+		// Read again from the cluster, not taken from the settle step above: a second dcctl
+		// run can have changed the routing during this apply. Best effort: the cluster is
+		// built, and an instance not patched now is patched by its next upgrade.
+		published, perrs := publishAlertRoutingToCluster(ctx, st.KubeContext)
+		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(published))
+		for _, perr := range perrs {
 			fmt.Printf("  %s %v\n", color.YellowString("warning:"), perr)
 		}
 	}
