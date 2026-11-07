@@ -536,6 +536,7 @@ dcctl bootstrap local devicechain
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
 - **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
 
+- **请知悉：`eventSources.ingestMetering: lagCredit` 已可用，默认关闭。** 除非你设置它，否则没有任何变化。它可防止一次短暂的平台停顿丢弃本来未超出上限的租户的消息。参见[带滞后额度的接入计量](#v120-ingest-metering)。
 - **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
 - **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
 
@@ -666,6 +667,16 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 - **对所有非 `202` 响应都重试的客户端，不应重试该端点的 `500`：** 同一请求会以同样方式失败。`503`（无论是否带 `Retry-After`）和 `429` 的含义不变。
 - **新增计数器 `total_msg_build_dropped{source,cause}`**，在所有传输上统计这些丢弃，`cause` 取 `no_tenant`、`no_transit_key`、`seal_failed` 或 `marshal_failed`。它为每个已配置的来源导出初值 0。任何大于 0 的值都表示有事件未被存储。
 - 集成端点在消息被丢弃时仍保留文档中说明的 `202`。
+
+#### 带滞后额度的接入计量 {#v120-ingest-metering}
+
+目前，接入闸门按消息的存在时间判断一条被延迟读取的消息属于“实时”还是“积压”。在一次短暂的平台停顿（消息代理暂停、读取器被暂停、解码阶段变慢）之后，未超出上限的租户排队的流量会被一次性读出，而实时额度容纳不下的部分会在设备已被告知消息送达之后被丢弃。新的计量模式消除了这种损失。
+
+- **默认没有任何变化。** `eventSources.ingestMetering` 为 `legacy`，即一直以来的闸门。设置 `eventSources.ingestMetering: lagCredit` 即可试用新闸门，改回 `legacy` 即可退回。它是一个 Helm 值，以环境变量形式传入 event-sources Pod，不是实例配置的键，因此在滚动升级中重启的旧版本 Pod 永远看不到它。无法识别的取值会让 Pod 在启动时停止，而不会改为运行另一个闸门。
+- **它做什么。** 新近的流量仍在 Pod 读取时计数，但租户的额度会增加其速率在读取器测得的延迟内所赚取的部分，上限为其突发量所覆盖的时间（最多 5 秒）。未超出上限的租户不会因这个量级的停顿被丢弃，无论捕获流、消息存储和外部 MQTT 如何交错。超出上限的租户仍按其超出的部分被丢弃，早于该覆盖时间的积压则与以前一样被排空。
+- **不变的部分。** 因超出上限、过载档位或硬丢弃而被丢弃的消息，在 MQTT 上仍是在设备收到确认之后被丢弃，与以前相同，限流计数器仍会统计它们。HTTP 和入站集成保持原有限制。上限仍按副本计算，因此租户在每个副本上最多可以被放行到其上限。
+- **如何测量。** 每个副本根据消息代理随每条消息发送的投递信息，估算代理追加时间戳与自身时钟之间的偏差，以及每个读取流落后了多少。对于空闲的流，它每秒向代理询问约四次是否有排队消息。在停顿中途启动的副本还没有时钟估计值，因此如果代理的时钟与其自身相差较大，这次停顿的最初片刻给出的额度会低于应有的值。
+- **新增指标：** 在 `legacy` 模式下均为空，且都不带租户：`ingest_shed_cause_total{stream,route,cause}`、`ingest_lag_credit_seconds{stream}`、`reader_lag_seconds{stream}`、`append_skew_seconds{stream}` 和 `append_skew_clamped_total{stream}`。现有计数器的名称和含义不变。当额度直方图接近其覆盖时间时，`route="fresh"` 上出现 `cause="ceiling"` 的丢弃，说明停顿大于额度；这正是此模式要解决的情形，请上报。
 
 #### 规格预设 {#v120-size-presets}
 

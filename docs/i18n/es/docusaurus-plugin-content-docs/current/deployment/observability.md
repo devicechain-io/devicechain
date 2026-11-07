@@ -700,6 +700,8 @@ sube el nivel de registro a `debug` para ver el tenant, contrasta su techo con l
 dispositivos y busca en el registro del bróker de mensajería una suscripción interna que tardó demasiado.
 Los descartes por HTTP se responden con `429` y se reintentan, así que no se cuentan aquí.
 
+Con `eventSources.ingestMetering: lagCredit`, `devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}` indica por qué se descartó cada mensaje. Un descarte `cause="ceiling"` en `route="fresh"` mientras `ingest_lag_credit_seconds` es alto es un tenant que se mantuvo dentro de su techo pero fue descartado tras una parada mayor que el crédito: infórmalo. `cause="contention"` y `cause="hard_drop"` son las bandas de sobrecarga haciendo lo configurado, y los descartes con `route="backlog"` son un tenant por encima de su techo en un atraso que se drena. `reader_lag_seconds` y `append_skew_seconds` muestran lo que midió cada réplica; un desfase que se queda en 2 segundos en cualquiera de los dos sentidos (`append_skew_clamped_total` en aumento) significa que el reloj del bróker de mensajería está más lejos de los relojes de los pods de lo que la compuerta corrige.
+
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 
 El broker da a un servicio una ventana fija para confirmar cada mensaje que le entrega. Un
