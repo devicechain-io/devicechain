@@ -72,16 +72,25 @@ type cmdRig struct {
 	storeDir  string
 	stop      func()
 
+	agentTweak func(*Agent)
+
 	responses chan mqtt.Message // what the cloud receives on the gateway responses topic
 	childGot  chan []byte       // what the child receives on its command topic
 }
 
 func newCmdRig(t *testing.T, adapter ChildAdapter, tweak func(*config.Configuration)) *cmdRig {
 	t.Helper()
+	return newCmdRigAgent(t, adapter, tweak, nil)
+}
+
+// newCmdRigAgent is newCmdRig with a hook that configures the agent before it starts.
+func newCmdRigAgent(t *testing.T, adapter ChildAdapter, tweak func(*config.Configuration), agentTweak func(*Agent)) *cmdRig {
+	t.Helper()
 	cloudPort := startCloudBroker(t)
 	r := &cmdRig{t: t, cloudAddr: fmt.Sprintf("127.0.0.1:%d", cloudPort), storeDir: dctest.JetStreamStoreDir(t)}
 	r.cloud = mqttConnect(t, r.cloudAddr, "cloud-pub")
 	r.subscribeResponses()
+	r.agentTweak = agentTweak
 	r.boot(adapter, tweak)
 	return r
 }
@@ -105,6 +114,9 @@ func (r *cmdRig) boot(adapter ChildAdapter, tweak func(*config.Configuration)) {
 	}
 	r.a = newAgent(r.t, cfg, func(a *Agent) {
 		a.cmdAckWaitOverride = 3 * time.Second
+		if r.agentTweak != nil {
+			r.agentTweak(a)
+		}
 		if adapter != nil {
 			a.adapterOverride = adapter
 		}
@@ -727,5 +739,170 @@ func TestParseGatewayTopicRoundTrip(t *testing.T) {
 	g, c, ok := messaging.ParseGatewayChildSubject(subj, messaging.SegmentCommands)
 	if !ok || g != "gw1" || c != "dev1" {
 		t.Errorf("parse(%q) = %q, %q, %v", subj, g, c, ok)
+	}
+}
+
+// TestDuplicateInboxMessageForADeliveredCommandIsDropped: the crash window between the inbox
+// write and the ledger write can leave two inbox messages for one command. The second must be
+// dropped (not delivered, not retried forever) once the first has been delivered.
+func TestDuplicateInboxMessageForADeliveredCommandIsDropped(t *testing.T) {
+	fa := &fakeAdapter{}
+	r := newCmdRig(t, fa, nil)
+	env := cmdEnvelope("cmd-1", "dev1", "n1", "")
+	r.send("dev1", env)
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.delivered.Load() == 1 })
+
+	if err := r.a.sealedPublish(cmdInboxPrefix+"dev1", env, "second-copy"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 10*time.Second, func() bool {
+		info, err := r.a.js.StreamInfo(cmdInboxStream)
+		return err == nil && info.State.Msgs == 0
+	})
+	if fa.count() != 1 {
+		t.Errorf("adapter calls = %d, want 1", fa.count())
+	}
+	if r.a.cmd.duplicates.Load() == 0 {
+		t.Error("the duplicate was not counted")
+	}
+}
+
+// TestRefusalOfARepeatNeverSettlesALiveCommand: a malformed repeat of a command that is already
+// in flight or delivered (here: the body names another device) must not tell the cloud the
+// command was never delivered.
+func TestRefusalOfARepeatNeverSettlesALiveCommand(t *testing.T) {
+	fa := &fakeAdapter{}
+	r := newCmdRig(t, fa, nil)
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.delivered.Load() == 1 })
+
+	r.send("dev1", cmdEnvelope("cmd-1", "dev2", "n2", "")) // body names another device
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.refused.Load() >= 1 })
+	r.noResponse(1500 * time.Millisecond)
+	if st := r.ledger("cmd-1").State; st != stDelivered {
+		t.Errorf("state = %s, want delivered (a refused repeat settled the live command)", st)
+	}
+}
+
+// TestAnInboxMessageForAnotherChildNeverTouchesTheLedgerEntry: the ledger holds the token for
+// dev1; an inbox message for the same token under dev2 (the crash-window collision) is refused
+// without claiming dev1's entry or reaching an adapter.
+func TestAnInboxMessageForAnotherChildNeverTouchesTheLedgerEntry(t *testing.T) {
+	fa := &fakeAdapter{fn: func(int, string, []byte) error { return fmt.Errorf("%w: down", errNotSubmitted) }}
+	r := newCmdRig(t, fa, nil)
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	waitUntil(t, 10*time.Second, func() bool { return fa.count() >= 1 })
+	before := fa.count()
+
+	if err := r.a.sealedPublish(cmdInboxPrefix+"dev2", cmdEnvelope("cmd-1", "dev2", "n1", ""), "collide"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.refused.Load() >= 1 })
+	for _, c := range fa.calls[before:] {
+		if strings.HasPrefix(c, "dev2|") {
+			t.Errorf("the adapter was called for the colliding child: %s", c)
+		}
+	}
+	if le := r.ledger("cmd-1"); le.Device != "dev1" {
+		t.Errorf("ledger device = %q, want dev1", le.Device)
+	}
+}
+
+// TestACommandIsNotHandedOverAfterItsDeadline: time spent claiming the command must not carry
+// it past its deadline into the adapter.
+func TestACommandIsNotHandedOverAfterItsDeadline(t *testing.T) {
+	fa := &fakeAdapter{}
+	r := newCmdRig(t, fa, nil)
+	r.a.beforeDeliverHook = func() { time.Sleep(1500 * time.Millisecond) }
+	soon := time.Now().Add(1200 * time.Millisecond).UTC().Format(time.RFC3339Nano)
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", fmt.Sprintf(`,"expiresAt":%q`, soon)))
+
+	cr, _ := r.nextResponse(20 * time.Second)
+	if cr.Reach != "UNSENT" || cr.DispatchNonce != "n1" {
+		t.Errorf("answer = %+v, want UNSENT", cr)
+	}
+	if fa.count() != 0 {
+		t.Errorf("the adapter was called %d times after the deadline", fa.count())
+	}
+}
+
+// TestAReplayStillOwedIsDischargedByARedelivery: the ledger records that an answer is owed to
+// a newer dispatch; the next sight of that dispatch pays it, so a failed or interrupted replay
+// is never lost.
+func TestAReplayStillOwedIsDischargedByARedelivery(t *testing.T) {
+	r := newCmdRig(t, nil, nil)
+	child := r.child("dev1")
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	<-r.childGot
+	respond(child, t, "dev1", `{"commandToken":"cmd-1","success":true,"dispatchNonce":"n1"}`)
+	r.nextResponse(15 * time.Second)
+	waitUntil(t, 5*time.Second, func() bool { return r.ledger("cmd-1").State == stAnswered })
+
+	// The state a crash between "nonce recorded" and "replay queued" leaves behind.
+	if _, err := r.a.cmd.mutate("cmd-1", func(e *ledgerEntry) bool { e.Nonce = "n2"; e.ReplayPending = true; return true }); err != nil {
+		t.Fatal(err)
+	}
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n2", "")) // same nonce as recorded
+	cr, _ := r.nextResponse(15 * time.Second)
+	if cr.DispatchNonce != "n2" || !cr.Success {
+		t.Errorf("replayed answer = %+v", cr)
+	}
+	waitUntil(t, 5*time.Second, func() bool { return !r.ledger("cmd-1").ReplayPending })
+}
+
+// TestACommandOnlyAcceptedOnceUnderConcurrentRepeats floods one token and checks one delivery.
+func TestACommandOnlyReachesTheAdapterOnceUnderConcurrentRepeats(t *testing.T) {
+	fa := &fakeAdapter{}
+	r := newCmdRig(t, fa, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", "")) }()
+	}
+	wg.Wait()
+	waitUntil(t, 10*time.Second, func() bool { return fa.count() >= 1 })
+	time.Sleep(2 * time.Second)
+	if fa.count() != 1 {
+		t.Errorf("adapter calls = %d, want 1", fa.count())
+	}
+}
+
+// TestAnAnswerThatFailedToForwardIsRetried: an answer is removed from the durable stream only
+// after the cloud has taken it; a failed forward leaves it to be redelivered.
+func TestAnAnswerThatFailedToForwardIsRetried(t *testing.T) {
+	var attempts atomic.Int32
+	r := newCmdRigAgent(t, nil, nil, func(a *Agent) {
+		a.publishOverride = func(topic string, payload []byte) error {
+			if strings.HasSuffix(topic, "/responses") && attempts.Add(1) == 1 {
+				return errors.New("simulated cloud rejection")
+			}
+			return nil
+		}
+	})
+	child := r.child("dev1")
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	<-r.childGot
+	respond(child, t, "dev1", `{"commandToken":"cmd-1","success":true,"dispatchNonce":"n1"}`)
+
+	waitUntil(t, 20*time.Second, func() bool { return attempts.Load() >= 2 })
+	waitUntil(t, 10*time.Second, func() bool { return r.ledger("cmd-1").State == stAnswered })
+}
+
+// TestASyntheticAnswerForAWaitingCommandIsRefused: the agent only makes answers for commands it
+// refused, expired, claimed or answered; a sealed answer for one still waiting is not one it wrote.
+func TestASyntheticAnswerForAWaitingCommandIsRefused(t *testing.T) {
+	fa := &fakeAdapter{fn: func(int, string, []byte) error { return fmt.Errorf("%w: down", errNotSubmitted) }}
+	r := newCmdRig(t, fa, nil)
+	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
+	waitUntil(t, 10*time.Second, func() bool { return fa.count() >= 1 })
+
+	body := []byte(`{"commandToken":"cmd-1","success":false,"reach":"UNSENT","dispatchNonce":"n1"}`)
+	if err := r.a.sealedPublish(cmdSyntheticPrefix+"dev1", body, "stray"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.respRefused.Load() >= 1 })
+	r.noResponse(time.Second)
+	if st := r.ledger("cmd-1").State; st == stAnswered {
+		t.Error("a stray synthetic answer settled a waiting command")
 	}
 }

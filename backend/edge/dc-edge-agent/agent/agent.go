@@ -195,9 +195,12 @@ type Agent struct {
 
 	// cmd is the command downlink, nil unless commands.enabled. adapterOverride replaces the
 	// local MQTT adapter; it exists only for tests that must make local delivery fail.
-	cmd             *commandPlane
-	cmdSeal         string
-	adapterOverride ChildAdapter
+	cmd     *commandPlane
+	cmdSeal string
+	// beforeDeliverHook runs after a command is claimed and before it is handed to the adapter.
+	// Tests only: it lets a test spend time at the one moment a deadline must be re-checked.
+	beforeDeliverHook func()
+	adapterOverride   ChildAdapter
 	// cmdAckWaitOverride, when positive, replaces the command consumers' redelivery wait. Tests only.
 	cmdAckWaitOverride time.Duration
 }

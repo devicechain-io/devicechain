@@ -129,10 +129,8 @@ func (m *mqttChildAdapter) Deliver(ctx context.Context, child string, envelope [
 		return fmt.Errorf("%w: local MQTT client is not connected", errNotSubmitted)
 	}
 	tok := m.client.Publish(m.topic(child), 1, false, envelope)
-	done := make(chan struct{})
-	go func() { tok.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-tok.Done():
 		return tok.Error()
 	case <-time.After(cmdLocalPublishTimeout):
 		return errors.New("local publish timed out")
@@ -164,6 +162,10 @@ type ledgerEntry struct {
 	Deadline time.Time `json:"deadline"`
 	// Response is the answer that was forwarded, when small enough to keep, for replay.
 	Response json.RawMessage `json:"response,omitempty"`
+	// ReplayPending records, in the same compare-and-set as the nonce change that created it,
+	// that the stored answer still has to be re-sent for the newest dispatch. It is cleared only
+	// after the replay is durably queued, so a crash or a failed publish cannot lose it.
+	ReplayPending bool `json:"replayPending,omitempty"`
 }
 
 // commandPlane is the downlink's state, present only when commands.enabled.
@@ -179,7 +181,7 @@ type commandPlane struct {
 	received, delivered, expired, duplicates atomic.Int64
 	refused                                  atomic.Int64
 	respForwarded, respRefused, respDropped  atomic.Int64
-	respAcked                                atomic.Int64
+	respAcked, respAckInFlight               atomic.Int64
 	refusalLog                               logLimiter
 
 	// claims holds the tokens THIS process has claimed. A ledger entry in "delivering" that is
@@ -483,13 +485,17 @@ func (a *Agent) repeatCommand(child string, env *commandEnvelope, le *ledgerEntr
 			// A redelivery of a refused command: the owed answer may not have been queued.
 			return a.emitSynthetic(child, env.Token, env.DispatchNonce, reachUnsent, refusedWhy, "refuse:"+env.Token+":"+env.DispatchNonce)
 		}
-		return true
+		// A redelivery may be the chance to finish a replay a failure left owing.
+		return a.settleReplay(child, env.Token)
 	}
 	cur, err := cp.mutate(env.Token, func(e *ledgerEntry) bool {
 		if e.Nonce == env.DispatchNonce {
 			return false
 		}
 		e.Nonce = env.DispatchNonce
+		if e.State == stAnswered && len(e.Response) > 0 {
+			e.ReplayPending = true // durable with the nonce change itself
+		}
 		return true
 	})
 	if err != nil {
@@ -500,13 +506,8 @@ func (a *Agent) repeatCommand(child string, env *commandEnvelope, le *ledgerEntr
 		// Refused or expired earlier and never delivered: the new dispatch is refused too.
 		return a.emitSynthetic(child, env.Token, env.DispatchNonce, reachUnsent, refusedWhy, "refuse:"+env.Token+":"+env.DispatchNonce)
 	}
-	if cur.State == stAnswered && len(cur.Response) > 0 {
-		// The child already answered the earlier dispatch; the cloud is now waiting on this one.
-		if !a.emitReplay(child, env.Token, cur.Response) {
-			return false
-		}
-	}
-	return true
+	// If the child already answered the earlier dispatch, the cloud is now waiting on this one.
+	return a.settleReplay(child, env.Token)
 }
 
 func (a *Agent) refuseCommand(reason, child, token string, env *commandEnvelope) bool {
@@ -523,9 +524,21 @@ func (a *Agent) refuseCommand(reason, child, token string, env *commandEnvelope)
 		// could be accepted and actuate after the cloud was told it was not. Then the owed
 		// answer; acknowledge only when both are durable.
 		tomb := &ledgerEntry{Device: child, Nonce: env.DispatchNonce, State: stExpired, Deadline: time.Now()}
-		if err := cp.create(token, tomb); err != nil && !errors.Is(err, nats.ErrKeyExists) {
-			a.log.Warn("could not record a refused command; leaving it unacknowledged", "command", token, "err", err)
-			return false
+		if err := cp.create(token, tomb); err != nil {
+			if !errors.Is(err, nats.ErrKeyExists) {
+				a.log.Warn("could not record a refused command; leaving it unacknowledged", "command", token, "err", err)
+				return false
+			}
+			// The token is already known. An UNSENT answer is authorised only by a durable refusal
+			// of the same child: a live command (in flight, delivered or answered) must not be
+			// settled as "never delivered" because a malformed repeat of it arrived.
+			existing, _, gerr := cp.get(token)
+			if gerr != nil {
+				return false
+			}
+			if existing.Device != child || existing.State != stExpired {
+				return true
+			}
 		}
 		return a.emitSynthetic(child, token, env.DispatchNonce, reachUnsent, refusedWhy, "refuse:"+token+":"+env.DispatchNonce)
 	}
@@ -575,17 +588,49 @@ func (a *Agent) emitSynthetic(child, token, nonce, reach, why, msgID string) boo
 	return true
 }
 
-func (a *Agent) emitReplay(child, token string, stored json.RawMessage) bool {
+func (a *Agent) emitReplay(child, token, nonce string, stored json.RawMessage) bool {
 	m := nats.NewMsg(cmdSyntheticPrefix + child)
 	m.Data = []byte(stored)
 	m.Header.Set(hdrSeal, a.cmdSeal)
 	m.Header.Set(hdrReplay, "1")
-	m.Header.Set(nats.MsgIdHdr, fmt.Sprintf("replay:%s:%d", token, time.Now().UnixNano()))
+	m.Header.Set(nats.MsgIdHdr, "replay:"+token+":"+nonce)
 	if _, err := a.js.PublishMsg(m); err != nil {
 		a.log.Warn("could not queue a replayed answer for the cloud", "device", child, "command", token, "err", err)
 		return false
 	}
 	return true
+}
+
+// settleReplay discharges a pending replay obligation: it re-sends the stored answer addressed
+// to the ledger's current nonce, then clears the marker. It reports whether nothing is left
+// owing. Safe to call at any time, any number of times.
+func (a *Agent) settleReplay(child, token string) bool {
+	cp := a.cmd
+	le, _, err := cp.get(token)
+	if err != nil {
+		return false
+	}
+	if !le.ReplayPending {
+		return true
+	}
+	if le.State != stAnswered || len(le.Response) == 0 {
+		// Nothing to replay (the answer was too large to keep): the obligation cannot be met, and
+		// the cloud's own timeout settles the re-dispatch. Drop the marker so it cannot loop.
+		_, _ = cp.mutate(token, func(e *ledgerEntry) bool { e.ReplayPending = false; return true })
+		return true
+	}
+	if !a.emitReplay(child, token, le.Nonce, le.Response) {
+		return false
+	}
+	nonce := le.Nonce
+	_, err = cp.mutate(token, func(e *ledgerEntry) bool {
+		if !e.ReplayPending || e.Nonce != nonce {
+			return false // a newer dispatch arrived: its own replay is still owed
+		}
+		e.ReplayPending = false
+		return true
+	})
+	return err == nil
 }
 
 // ---- local delivery -------------------------------------------------------------------
@@ -663,6 +708,16 @@ func (a *Agent) deliverCommand(ctx context.Context, m *nats.Msg) {
 		return
 	}
 
+	if le.Device != child {
+		// An inbox message for one child under a token the ledger holds for another: never claim
+		// or transition the other child's entry.
+		cp.refused.Add(1)
+		if a.metrics != nil {
+			a.metrics.cmdRefused.WithLabelValues("token_reused").Inc()
+		}
+		_ = m.AckSync()
+		return
+	}
 	switch le.State {
 	case stDelivered, stAnswered:
 		cp.duplicates.Add(1)
@@ -727,6 +782,26 @@ func (a *Agent) deliverCommand(ctx context.Context, m *nats.Msg) {
 	}
 	cp.claims.Store(env.Token, true)
 	defer cp.claims.Delete(env.Token)
+	if a.beforeDeliverHook != nil {
+		a.beforeDeliverHook()
+	}
+	// The claim's reads and writes took time. The guarantee is "never handed to the adapter after
+	// the deadline", so it is checked again at the last moment before the handoff.
+	if !time.Now().Before(claimed.Deadline) {
+		if _, err := cp.mutate(env.Token, func(e *ledgerEntry) bool {
+			if e.State != stDelivering {
+				return false
+			}
+			e.State = stExpired
+			e.Delivered = ""
+			return true
+		}); err != nil {
+			_ = m.NakWithDelay(cp.retryDelay)
+			return
+		}
+		a.expireCommand(m, child, env.Token, claimed.Nonce)
+		return
+	}
 	if err := cp.adapter.Deliver(ctx, child, m.Data); err != nil && !errors.Is(err, errNotSubmitted) {
 		// The publish was started and its outcome is unknown, so the command may be on its way
 		// to the device: it is NOT sent again. Treated as delivered; the device answer, or the
@@ -810,6 +885,11 @@ func (a *Agent) runCommandResponses(ctx context.Context) {
 
 // ackResponse settles a response message and counts it as removed by ack (for the eviction ratchet).
 func (a *Agent) ackResponse(m *nats.Msg) {
+	// The server removes the message before AckSync returns, so for that interval the stream's
+	// first sequence has moved and the acked count has not: counted as in flight, so the sampler
+	// cannot mistake a delivered answer for an evicted one.
+	a.cmd.respAckInFlight.Add(1)
+	defer a.cmd.respAckInFlight.Add(-1)
 	if err := m.AckSync(); err != nil {
 		a.log.Warn("response ack not confirmed; it will be redelivered", "err", err)
 		return
@@ -879,7 +959,16 @@ func (a *Agent) forwardResponse(m *nats.Msg) {
 	replay := m.Header.Get(hdrReplay) != ""
 	if le.State == stAnswered && !replay {
 		cp.duplicates.Add(1)
+		if !a.settleReplay(child, token) {
+			return // a replay is still owed and could not be queued: keep this message
+		}
 		a.refuseResponse(m, "duplicate", child, token)
+		return
+	}
+	if synthetic && le.State == stAccepted {
+		// The agent only makes an answer for a command it has refused, expired, claimed or
+		// answered; one for a command still waiting its turn is not something it wrote.
+		a.refuseResponse(m, "not_dispatched", child, token)
 		return
 	}
 	if !synthetic && le.State != stDelivering && le.State != stDelivered {
@@ -925,7 +1014,6 @@ func (a *Agent) forwardResponse(m *nats.Msg) {
 		return
 	}
 	cp.respForwarded.Add(1)
-	var replayBody json.RawMessage
 	if cur, merr := cp.mutate(token, func(e *ledgerEntry) bool {
 		if e.State == stAnswered && !replay {
 			return false
@@ -934,21 +1022,23 @@ func (a *Agent) forwardResponse(m *nats.Msg) {
 		if len(out) <= maxStoredResponseBytes {
 			e.Response = out
 		}
+		// A re-dispatch that arrived while this answer was in flight is waiting on a different
+		// nonce than the one just sent: the stored answer is owed to it, recorded in this same
+		// compare-and-set so it survives a failed or interrupted replay.
+		if e.Nonce != stamped && len(e.Response) > 0 {
+			e.ReplayPending = true
+		}
 		return true
 	}); merr == nil {
-		// A re-dispatch that arrived while this answer was in flight is waiting on a different
-		// nonce than the one just sent; it is answered again from the stored answer.
-		if cur.Nonce != stamped && len(cur.Response) > 0 {
-			replayBody = cur.Response
-		}
+		_ = cur
 	} else {
 		// Forwarded but unrecorded: leave it unacked, and let the redelivery forward it again
 		// (the cloud settles a command once and refuses a repeat).
 		a.log.Warn("forwarded a command response but could not record it", "command", token, "err", merr)
 		return
 	}
-	if replayBody != nil && !a.emitReplay(child, token, replayBody) {
-		return
+	if !a.settleReplay(child, token) {
+		return // the answer was forwarded; the replay it owes could not be queued, so keep the message
 	}
 	a.ackResponse(m)
 }
@@ -961,7 +1051,10 @@ func (a *Agent) sampleCommandPlane() {
 		return
 	}
 	if info, err := a.js.StreamInfo(cmdResponsesStream); err == nil && info.State.FirstSeq > 0 {
-		drops := int64(info.State.FirstSeq-1) - cp.respAcked.Load()
+		// In-flight acknowledgements are read FIRST and counted as acked: the error this can make
+		// is a momentary under-count of drops, never a fabricated one.
+		inflight := cp.respAckInFlight.Load()
+		drops := int64(info.State.FirstSeq-1) - cp.respAcked.Load() - inflight
 		for {
 			prev := cp.respDropped.Load()
 			if drops <= prev {
