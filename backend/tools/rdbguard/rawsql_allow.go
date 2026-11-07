@@ -105,6 +105,23 @@ var rawSQLAllowList = []siteEntry{
 			"replaces (see the memory and lock-hold test)",
 	},
 
+	{
+		Path: "backend/services/device-management/model/api_x509_crl_stage.go", Func: "keepNewSerials", Count: 2,
+		Why: "copies, into a TEMP table private to the transaction, the staged serials the list does not hold " +
+			"yet (the live-session kick's input). The SELECT's NOT EXISTS over device_revoked_certificates is a " +
+			"constant text whose WHERE binds tenant_id, trust_anchor_id, revocation_list_id, kind, issuer_key " +
+			"and issuer_name from the caller; the two counts are the Postgres and the SQLite spelling of the " +
+			"same statement, and only one runs. Only package constants are formatted into the text.",
+	},
+	{
+		Path: "backend/services/device-management/model/api_x509_revocation_kicks.go", Func: "Api.queueCrlRevocationKicksOnTx", Count: 3,
+		Why: "joins the transaction's own TEMP table of newly revoked serials to device_credential_chain_links. " +
+			"Three statements, each constant text whose WHERE binds tenant_id and trust_anchor_id explicitly (plus " +
+			"the issuer name and key where it applies): the join of the transaction's own TEMP table of newly " +
+			"revoked serials to the links, the count of serials no link accounts for, and the legacy " +
+			"depth-0 links of other issuers. The only formatted-in name is a package constant naming the temp table.",
+	},
+
 	// --- erasure ---
 	{
 		Path: "backend/core/tenantpurge/fence.go", Func: "PlantFence", Count: 1,

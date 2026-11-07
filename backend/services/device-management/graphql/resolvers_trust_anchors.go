@@ -74,7 +74,11 @@ type DeviceRevokedCertificateResolver struct {
 	M model.DeviceRevokedCertificate
 	S *SchemaResolver
 	C context.Context
+	// Ended is the revoke mutation's verdict on the live sessions; nil on every other path.
+	Ended *bool
 }
+
+func (r *DeviceRevokedCertificateResolver) SessionsEnded() *bool { return r.Ended }
 
 func (r *DeviceRevokedCertificateResolver) Kind() string               { return r.M.Kind }
 func (r *DeviceRevokedCertificateResolver) FingerprintSha256() *string { return r.M.Fingerprint }
@@ -181,3 +185,4 @@ func (r *DeviceRevocationListResultResolver) List() *DeviceRevocationListResolve
 }
 func (r *DeviceRevocationListResultResolver) NewlyRevoked() int32 { return int32(r.M.NewlyRevoked) }
 func (r *DeviceRevocationListResultResolver) Unchanged() bool     { return r.M.Unchanged }
+func (r *DeviceRevocationListResultResolver) SessionsEnded() bool { return r.M.SessionsEnded }
