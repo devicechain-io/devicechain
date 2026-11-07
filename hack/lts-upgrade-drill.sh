@@ -239,6 +239,8 @@ EOF
   git init -q "$r"
   git -C "$r" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m base
   git -C "$r" -c user.name=t -c user.email=t@t -c tag.gpgsign=false tag v1.2.4
+  # a real tag on the WRONG line, so "FROM not on the LTS line" is refused for that reason and not for a missing tag
+  git -C "$r" -c user.name=t -c user.email=t@t -c tag.gpgsign=false tag v1.3.0
   printf 'current-lts: 1.2\n' >"$pol"
   printf 'current-lts: none\n' >"$polnone"
   plan_in() { (repo_root="$r"; policy_file="$1"; shift; cmd_plan "$@"); }
