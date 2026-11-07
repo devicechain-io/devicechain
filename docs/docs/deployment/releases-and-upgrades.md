@@ -750,11 +750,30 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases are documented in full, newest first.
 
-### v1.2.0 {#v120-upgrade}
+### v1.2.0 — payload decoders a tenant writes, and revocation that ends sessions {#v120-upgrade}
 
-`v1.2.0` is an in-place upgrade, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). The Helm values it changes are not covered by the compatibility policy, and this section is where a minor release says so.
+`v1.2.0` is an in-place upgrade from `v1.1.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Eight appended migrations run on upgrade (four in `device-management`, three in `device-state`, one in `user-management`); they add tables, nullable columns and storage parameters, and two repair one column of `device_states`. See [Schema changes and going back](#v120-going-back). The new `Instance` field `spec.size` ships with the operator, which `dcctl install` updates, so run it before the instance upgrade, as above. Coming from `v1.0.0`, read the [`v1.1.0` notes](#v110-upgrade) first and follow them with `--version v1.2.0`.
 
-What needs action:
+```bash
+dcctl install local --version v1.2.0
+dcctl upgrade local devicechain --version v1.2.0 --dry-run
+dcctl upgrade local devicechain --version v1.2.0
+```
+
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds to the covered interfaces (new `dcctl` flags, new GraphQL queries, mutations and fields, a new failed-event reason, three new notification channel types, a new `Instance` field and a new C# SDK option) and removes none. One OAuth request shape is [deprecated](#v120-token-audience) and stays accepted until the next major release. The Helm values it changes are not covered by the compatibility policy, and this section is where a minor release says so.
+
+What is new:
+
+- **A tenant can write its own payload decoders.** A device profile carries a decoder written as expressions, which turns a LoRaWAN or other binary frame, a generic JSON body or a network server's decoded object into measurements. It is authored and tested in the console's **Decoder** tab, gated at publish by its saved test vectors, and run live on every inbound integration uplink. Each decoder is held to a budget, so a broken one cannot flood the platform, and its health (decoded, ignored, failed, suppressed) and recent failing uplinks are on the same tab. See [Payload decoders](#v120-payload-decoders) and [A failing payload decoder is held to a budget](#v120-decoder-budget).
+- **X.509 certificates can be revoked, and a revocation ends the sessions it affects.** Upload a certificate authority's revocation list (CRL) against a trust anchor, or revoke a certificate by hand; an anchor can require a current list. Revoking ends the open sessions of the devices it affects, with a second pass a few seconds later (`resweepAfter`). The C# SDK and the Unity package can now connect a device with a client certificate. See [X.509 revocation lists](#v120-x509-crl) and [Revoking a certificate ends open sessions](#v120-x509-sessions).
+- **Alarms reach Slack, Microsoft Teams and PagerDuty natively,** as notification channels of their own, configured on a new console page. See [Native notification channels](#v120-notification-channels).
+- **Three new dashboard widgets**: a status grid for a group of devices, a state timeline, and SCADA symbols (pump, valve, tank, motor, fan, pipe, sensor, breaker, light). See [Three new dashboard widgets](#v120-widgets).
+- **Size presets.** `dcctl bootstrap --size perf-12k` applies the sizing measured on a cluster sustaining 12,000 events a second; an instance that names no size is unchanged. See [Size presets](#v120-size-presets).
+- **Detection uses far less memory.** An absence or session rule keeps one timer per device instead of one per event (370 MiB to 2.6 MiB in a measured case), and the duplicate-event guard is about 40% smaller at 20,000 events a second. See [Detection memory](#v120-detect-memory).
+- **The token audience is checked, in observe mode.** Tokens bound to a resource this instance does not serve are counted and logged, and nothing is refused in this release. See [Tokens are checked against their resource](#v120-token-audience).
+- **Fixes that matter for data:** the HTTP event endpoint answers `500`, not `202`, for an event it could not build, so a caller is no longer told an event was stored when it was not; a revocation that cannot identify the sessions it affects says so (`sessionsEnded: false`) instead of reporting success. The disaster recovery page now classifies every stream, bucket and the object store by what a restore owes it.
+
+What needs action, in the order to do it:
 
 - **Know that two memory limits are higher.** `device-management` is now limited to 512Mi (it was 256Mi), and `event-processing` is limited to 768Mi (it was 384Mi) while either event-envelope setting is on. Nothing changes for `event-processing` with both settings off. The memory requests do not change, so scheduling is the same; each limit is a ceiling the pod may use. See [Memory limits](#v120-memory).
 - **Check any memory limit you set yourself.** A limit you set on `device-management` or `event-processing` under `functionalAreas.<service>.resources.limits.memory` is used as written, and so is a higher top-level `resources.limits.memory`. If yours is below the figures in [Service sizing](./bootstrap.md#service-sizing) for your fleet or event rate, raise it.
@@ -765,7 +784,7 @@ What needs action:
 - **Check whether anything requests tokens for a resource this instance does not serve.** By default this release counts such requests, and the API calls that use their tokens, and refuses none of them. `v1.3` refuses them by default. `infrastructure.tokenAudience.enforcement: observe` keeps this release's behaviour for that one minor, and `v1.4` refuses `observe` at startup and in the chart's values schema. See [Tokens are checked against their resource](#v120-token-audience).
 - **Move `client_credentials` requests that name a `resource` to also name a `scope`.** Such a request is counted and logged in this release and still succeeds. It is refused only in the next major release. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you write the instance configuration yourself** (`instance.existingSecret`), add `infrastructure.tokenAudience`. When the MCP area is deployed and the document does not list its resource, `dcctl upgrade` prints a warning with the block to add, and refuses once `enforcement` is `enforce`. See [Tokens are checked against their resource](#v120-token-audience).
-- **Know that a `v1.1` pod restarted during the roll will not start.** The instance configuration now carries `infrastructure.tokenAudience`, and `v1.1` services reject a key they do not know at startup. A `v1.1` pod that is rescheduled, evicted or restarted after the configuration changes and before the roll replaces it stays down until a `v1.2` pod replaces it, so keep the roll moving and do not pause it half way. Pods that were already running keep running. See [Tokens are checked against their resource](#v120-token-audience).
+- **Know that a `v1.1` pod restarted during the roll will not start; it waits for its replacement.** Two things change before the pods roll. The instance configuration now carries `infrastructure.tokenAudience`, and `v1.1` services reject a key they do not know at startup. And the upgrade's broker step (the chart's pre-upgrade hook) reconciles the broker's streams and buckets to what `v1.2` declares, and a `v1.1` pod checks them at startup against its own declarations, so one that starts after the step can stop with `stream ... does not match what this build declares`. A `v1.1` pod that is rescheduled, evicted or restarted after that point stays down until a `v1.2` pod replaces it, which the roll does by itself: keep the roll moving and do not pause it half way. Pods that were already running keep running. See [Tokens are checked against their resource](#v120-token-audience).
 - **If you set the MCP server's `resourceUrl` yourself, write its scheme and host in lowercase** before enforcement. See [Tokens are checked against their resource](#v120-token-audience).
 - **Expect profile and device-type changes to reach upgraded replicas late while the rollout runs.** See [Profile changes during a rolling upgrade](#v120-profile-cache).
 - **Know that uplinks for device types with a payload decoder wait in a small stream.** See [Decoder uplinks and device-management outages](#v120-decoder-stream).
@@ -780,9 +799,11 @@ What needs action:
 - **Know that `dcctl upgrade` can now fail with `upgrade incomplete` after the broker rolls.** Once the broker servers are ready, the upgrade re-reads their volume claims for up to two minutes and fails if one still has less capacity than it requests, because the broker's file-store ceiling follows the request. Finish or revert the volume resize (`kubectl -n <namespace> describe pvc`) and run `dcctl upgrade` again. See [Other changes](#v120-other-changes).
 - **Know that a certificate revocation now ends the open sessions it affects.** A revocation of a certificate authority can reconnect a whole fleet at once. See [Revoking a certificate ends open sessions](#v120-x509-sessions).
 - **Know that `POST /{instanceId}/{tenant}/events` can now answer `500`.** An event dropped while its message was built (a credential it presented could not be sealed, or the event could not be encoded) used to be answered `202` and stored nowhere. It is now answered `500`, is not stored, and a retry fails the same way, so a client that treated every non-`202` as retryable should stop retrying a `500`. See [HTTP ingest no longer answers 202 for a dropped event](#v120-http-build-dropped).
+- **Create Slack, Teams and PagerDuty notification channels only after the rollout completes.** A pod of `v1.1` that is still running skips a channel of a new type, and nothing retries it. See [Native notification channels](#v120-notification-channels).
 
 - **Nothing needs doing for the new `--size` option.** `dcctl bootstrap --size perf-12k` applies a measured high-throughput sizing, and `dcctl install --size compact` is the same as `--compact`, which stays. An instance that names no size renders exactly what it did before. See [Size presets](#v120-size-presets).
-- **Know that `devicechain_eventprocessing_detect_pending_timers` now counts armed keys.** It used to count every timer an absence or session rule had ever pushed that had not yet come due, which grew with the event rate; the engine now keeps one entry per armed device, so the gauge follows the number of devices and the memory of absence and session rules no longer grows with the event rate. The name and the alert are unchanged; a dashboard or alert threshold you tuned against the old, larger values can be lowered.
+- **Know that `devicechain_eventprocessing_detect_pending_timers` now counts armed keys.** It used to count every timer an absence or session rule had ever pushed that had not yet come due, which grew with the event rate; the engine now keeps one entry per armed device, so the gauge follows the number of devices and the memory of absence and session rules no longer grows with the event rate. The name and the alert are unchanged; a dashboard or alert threshold you tuned against the old, larger values can be lowered. See [Detection memory](#v120-detect-memory).
+- **Nothing needs doing for `eventSources.ingestMetering`.** It is a new Helm value whose default, `legacy`, is the ingest metering every release has used. See [Ingest metering](#v120-ingest-metering).
 
 #### Detection shards run in parallel {#v120-detect-shards}
 
@@ -793,6 +814,19 @@ The `detectShards` setting of event-processing (default 1, range 1 to 64) splits
 - **Two alerts are new**: `DetectShardSaturated` (a shard is the limit on detection speed) and `DetectShardInvariantViolated` (the parts disagreed at a checkpoint and it was refused). They are installed at every setting but can only fire when `detectShards` is above 1. Add them to your alert routing. A new set of `detect_shard_*` metrics and `detect_barrier_wait_seconds` accompany them; the two unlabelled ones are exported as 0 at 1.
 - **Memory grows with `detectShards`.** Each shard holds up to 1024 queued messages, so a pod already running above 1 can hold up to that many times `detectShards` messages in memory while the loop is ahead of the slowest shard. Check the pod's memory limit before relying on the new setting.
 - **Going back** is a restart with the setting at the old value. The checkpoint is identical, so there is nothing to undo.
+
+#### Detection memory {#v120-detect-memory}
+
+Two parts of `event-processing` used memory that grew with the event rate. Neither change alters a detection, a checkpoint or a setting.
+
+- **Absence and session rules keep one timer per device.** They used to push a timer for every event and leave the superseded one until its deadline. With 10,000 devices at 12,000 events a second and one absence rule over 5 minutes, the engine's live heap fell from 369.9 MiB (3,660,015 timers) to 2.6 MiB (10,000 timers). Sliding windows build the extra structures for minimum and maximum only when a rule asks for them; on the same load a 5-minute average went from 188.7 to 178.9 MiB, and more on a trending series. A checkpoint is byte for byte what it was, so nothing is migrated and going back is a restart. `devicechain_eventprocessing_detect_pending_timers` now counts armed devices, as described in the list above.
+- **The duplicate-event guard is smaller.** With event envelopes on, it held about 188 MiB live at 20,000 events a second; it now holds about 113 MiB, about 9.4 bytes per remembered event at any rate, with no step in memory near 13,000 events a second. Which events it admits is unchanged.
+
+The memory floors under [Memory limits](#v120-memory) and [Cache and broker sizing](#v120-sizing-defaults) were measured before these changes and are not lowered: they leave room for windowed rules and for the busier rates.
+
+#### Ingest metering {#v120-ingest-metering}
+
+The chart has a new value, `eventSources.ingestMetering`, for how `event-sources` meters a message against its tenant's ingest ceiling. Its default, `legacy`, is the metering every earlier release used, so nothing changes. The other value, `lagCredit`, is reserved for a metering that does not shed a tenant that stayed within its ceiling during a short platform stall. It is not available in this release: `event-sources` refuses to start with it rather than fall back to `legacy`, so leave the value unset. It is rendered as an environment variable of the `event-sources` pods and is deliberately not a key of the instance configuration, so a `v1.1` pod that restarts during the upgrade never sees it. `dcctl` accepts it in a `--values` overlay.
 
 #### Memory limits {#v120-memory}
 
@@ -984,7 +1018,7 @@ Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widg
 
 #### Schema changes and going back {#v120-going-back}
 
-Seven migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
+Eight migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
 
 - **X.509 revocation** (`device-management`, migration `20261105100000`). Four new tables: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` and `device_credential_chain_links`. Four new columns: `revocation_mode`, `revocation_stale_grace` and `revocation_rows` on `device_trust_anchors`, and `not_before` on `pending_session_kicks`. Existing trust anchors keep `revocation_mode` empty, which is read as `ENTRIES`: a certificate is refused only when it is listed.
 - **Payload decoders** (`device-management`, migration `20261110120000`). Two new tables, `profile_decoder_healths` and `profile_decoder_samples`, and one new column, `decoder_declaration` on `device_profiles`.
@@ -993,6 +1027,7 @@ Seven migrations append the following. Every new column is nullable, so a servic
 - **Projection storage** (`device-state`, migration `20261104120000`). No table or column is added. It sets storage parameters (a fill factor of 75 and autovacuum thresholds) on `device_states`, `latest_measurements` and `latest_locations`. Rows that already exist gain the fill-factor headroom only as their pages are rewritten, so an upgraded instance feels the change slowly.
 - **Placement tables** (`user-management`, migration `20261105120000`). Three new tables: `iam_partition_config`, `iam_vpartition_assignments` and `iam_tenant_vpartition_overrides`. The migration seeds no rows; the first start of `user-management` writes the default placement (one `iam_partition_config` row and 64 `iam_vpartition_assignments` rows) and creates the `dc_partition_placement` bucket in the message broker.
 - **Inactivity alarm time repair** (`device-state`, migration `20261106120000`). Adds nothing to the schema. It is a data-only repair of `inactivity_alarm_time` in `device_states`, run in batches of 5,000, restoring what the column held before `v1.1.0`. There is nothing to undo when going back to `v1.1.0`.
+- **Inactivity alarm time repair, second pass** (`device-state`, migration `20261107120000`). Adds nothing to the schema. It goes over the rows a `v1.1.0` writer held while the first pass ran, retrying for about half a minute, and logs and leaves a row still held after that. There is nothing to undo when going back to `v1.1.0`.
 
 Apart from that default placement, the new tables start empty. **Nothing in a database needs undoing to go back to `v1.1.0`:** the new tables, columns and storage parameters stay in place and the `v1.1.0` services ignore them, with one exception: tenant deletion, below. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again. For the configuration change that going back needs, see [Tokens are checked against their resource](#v120-token-audience).
 
@@ -1007,6 +1042,12 @@ Notification channels gain three types: `slack`, `teams` and `pagerduty`. They a
 - **Know that the new types dial out through the same guard as a webhook.** A destination on a private, loopback or cloud-metadata address is refused and counted with `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`.
 - **Know that the `notificationChannelTypes` query now lists three more types,** and that the GraphQL schema changes only in its descriptions. A client that switches exhaustively over channel types sees three more values.
 - **The console has a new Notification Channels page** for configuring channels of every type.
+
+#### Known issues {#v120-known-issues}
+
+- **Fail-closed MQTT acknowledgement is off by default,** as in `v1.1.0`. The [MQTT transport](../reference/transport-matrix.md#mqtt--the-platform-broker) page states the measured limits with it off and on.
+- **A change to the broker's configuration still disconnects the devices the auth callout admitted,** until the broker library carries the upstream fix. A certificate renewal does not. A fix is planned for a patch release.
+- **`eventSources.ingestMetering: lagCredit` is not available yet;** see [Ingest metering](#v120-ingest-metering).
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 
