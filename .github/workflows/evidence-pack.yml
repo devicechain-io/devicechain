@@ -1,0 +1,185 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build, sign and (optionally) attach the EVIDENCE PACK for a release candidate.
+#
+# Manual on purpose (workflow_dispatch): the ha, dr, x509 and ota rigs need a real cluster and are run by
+# a maintainer, so this workflow cannot produce their results and must not pretend to. The maintainer
+# runs each rig, `hack/evidence-pack.sh record`s it, tars the rigs directory as `rig-results.tar.gz`
+# and uploads it to the GitHub Release of the tag being packed. This workflow then:
+#   1. fetches rig-results.tar.gz from that release;
+#   2. writes a CycloneDX SBOM per released image, at the digest the tag resolves to;
+#   3. runs govulncheck over every module and turns the reports into one OpenVEX document;
+#   4. runs the release signature verifier and keeps its output (the cosign + SLSA state);
+#   5. keeps the CodeQL open-alert count and the Scorecard result, each with the date it was read;
+#   6. builds the pack (refusing stale or missing rig results), and signs the manifest keylessly
+#      with this workflow's identity (cosign attest-blob), then re-verifies it.
+# Nothing is published unless `upload` is true; the pack is always kept as a run artifact.
+#
+# 🔴 THE SIGNING IDENTITY HERE IS THIS WORKFLOW, not release.yml. `evidence-pack.sh verify` is given
+# the identity regexp explicitly, and the last step of this job calls it, so a pack signed under any
+# other identity fails the run.
+name: evidence-pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to pack, e.g. v1.3.0-rc.1 (its GitHub Release must hold rig-results.tar.gz)'
+        required: true
+      max_age_days:
+        description: 'Freshness window for each rig result, in days'
+        required: false
+        default: '30'
+      upload:
+        description: 'Attach the signed pack to the GitHub Release (otherwise run artifact only)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only used by the optional upload step
+      id-token: write # keyless signing of the pack manifest
+      security-events: read # the CodeQL open-alert count
+    env:
+      TAG: ${{ inputs.tag }}
+      MAX_AGE_DAYS: ${{ inputs.max_age_days }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the tag shape
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::'$TAG' is not a release tag"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+
+      - run: hack/go-mod-download.sh --workspace
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Install syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.55.0
+
+      # 🔴 FIRST: prove the generators can refuse before their output is used as evidence.
+      - name: Generator self-tests
+        run: |
+          hack/evidence-pack.sh --self-test
+          hack/vex-from-govulncheck.sh --self-test
+          hack/govulncheck.sh --self-test
+
+      - name: Fetch the recorded rig results
+        run: |
+          mkdir -p work/rigs
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern rig-results.tar.gz --dir work
+          # Plain files only, no absolute or parent paths: the archive comes from a release asset.
+          if tar -tvzf work/rig-results.tar.gz | grep -qvE '^[-d]' || tar -tzf work/rig-results.tar.gz | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+            echo "::error::rig-results.tar.gz holds links or unsafe paths"; exit 1
+          fi
+          tar -xzf work/rig-results.tar.gz -C work/rigs
+
+      - name: CycloneDX SBOM per image
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          mkdir -p work/sbom work/attach
+          : > work/attach/image-digests.txt
+          # The image list is the verifier's, which the release contract test pins to release.yml.
+          # Each SBOM is of a RESOLVED DIGEST, recorded below and re-resolved after the signature
+          # verification step: a tag that moved in between fails the run instead of pairing an SBOM
+          # with image bytes the verifier never saw.
+          while IFS= read -r img; do
+            ref="ghcr.io/devicechain-io/$img:$TAG"
+            digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' | jq -r .digest)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::could not resolve $ref to a digest"; exit 1; }
+            echo "$img $digest" >> work/attach/image-digests.txt
+            "$SYFT" scan "registry:ghcr.io/devicechain-io/$img@$digest" -o "cyclonedx-json=work/sbom/$img.cdx.json"
+            n="$(jq '.components | length' "work/sbom/$img.cdx.json")"
+            [ "${n:-0}" -gt 0 ] || { echo "::error::SBOM for $ref has no components"; exit 1; }
+            echo "$img: $n components"
+          done < <(hack/verify-release-signatures.sh --list-images)
+
+      - name: govulncheck every module, then OpenVEX
+        run: |
+          mkdir -p work/vuln
+          export GOVULNCHECK_JSON_DIR="$PWD/work/vuln"
+          args=()
+          for d in backend/cli backend/core backend/k8s backend/edge/*/ backend/services/*/ backend/sims/*/ backend/tools/*/; do
+            m="${d%/}"
+            [ -f "$m/go.mod" ] || continue
+            # A reachable, unreviewed vulnerability fails here as it does in CI: the pack is for a
+            # release that passed its gates, and a VEX that hides a failing scan would be worse than none.
+            hack/govulncheck.sh "$m"
+            args+=("$m=work/vuln/${m//\//_}.json")
+          done
+          hack/vex-from-govulncheck.sh --commit "$(git rev-parse HEAD)" --out work/devicechain.openvex.json "${args[@]}"
+
+      - name: Collect signature, CodeQL and Scorecard state
+        run: |
+          mkdir -p work/attach
+          # Fail-open here would turn a verification failure into a pack without the evidence of it.
+          hack/verify-release-signatures.sh "$TAG" 2>&1 | tee work/attach/release-signature-verification.txt
+          # The tags must still resolve to the digests the SBOMs were taken of.
+          while read -r img digest; do
+            now="$(docker buildx imagetools inspect "ghcr.io/devicechain-io/$img:$TAG" --format '{{json .Manifest}}' | jq -r .digest)"
+            [ "$now" = "$digest" ] || { echo "::error::$img:$TAG moved from $digest to $now during the run"; exit 1; }
+          done < work/attach/image-digests.txt
+          date -u +%Y-%m-%dT%H:%M:%SZ > work/attach/collected-at.txt
+          gh api --paginate "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&per_page=100" \
+            --jq '[.[] | {number, rule: .rule.id, severity: .rule.security_severity_level, created_at}]' \
+            | jq -s 'add // []' > work/attach/codeql-open-alerts.json
+          curl -fsSL --retry 3 "https://api.scorecard.dev/projects/github.com/$GITHUB_REPOSITORY" \
+            -o work/attach/scorecard.json
+          jq -e '.score != null' work/attach/scorecard.json >/dev/null
+
+      - name: Build the pack
+        id: build
+        run: |
+          mkdir -p work/out
+          hack/evidence-pack.sh build --rigs-dir work/rigs --commit "$(git rev-parse HEAD)" \
+            --out work/out --sbom work/sbom --vex work/devicechain.openvex.json \
+            --max-age-days "$MAX_AGE_DAYS" \
+            --attach work/attach/release-signature-verification.txt \
+            --attach work/attach/codeql-open-alerts.json \
+            --attach work/attach/scorecard.json \
+            --attach work/attach/collected-at.txt \
+            --attach work/attach/image-digests.txt
+          echo "tarball=$(ls work/out/*.tar.gz)" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and verify the pack
+        env:
+          TARBALL: ${{ steps.build.outputs.tarball }}
+        run: |
+          hack/evidence-pack.sh sign --tarball "$TARBALL"
+          hack/evidence-pack.sh verify --tarball "$TARBALL" \
+            --identity-regexp "^https://github\.com/${GITHUB_REPOSITORY//./\\.}/\.github/workflows/evidence-pack\.yml@refs/.*$"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: evidence-pack-${{ inputs.tag }}
+          path: work/out/
+          if-no-files-found: error
+
+      - name: Attach to the GitHub Release
+        if: inputs.upload
+        env:
+          TARBALL: ${{ steps.build.outputs.tarball }}
+        run: |
+          gh release upload "$TAG" "$TARBALL" "$TARBALL.bundle" "$TARBALL.sha256" --repo "$GITHUB_REPOSITORY"
