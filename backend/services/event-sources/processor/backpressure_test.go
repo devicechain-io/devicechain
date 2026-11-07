@@ -117,3 +117,18 @@ func TestExternalMqttDropsWhileThePipelineRefuses(t *testing.T) {
 	assert.True(t, metered, "the tenant's own ceiling is checked before the shared gate")
 	assert.Len(t, es.messages, 0, "a refused message must not be queued for decode")
 }
+
+// An event whose message could not be built (sealed or marshalled) was dropped, and the
+// client is told so: 500, never the 202 that read as stored. It is not the retryable 503
+// and carries no Retry-After, because a retry fails identically.
+func TestHttpEventDroppedAtConstructionIsA500NotA202(t *testing.T) {
+	es, dec, _ := newTestHttpSource(t, nil)
+	dec.publishErr = ErrEventNotBuilt
+	rec := httptest.NewRecorder()
+	es.handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/inst-1/acme/events",
+		strings.NewReader(canonicalMeasurementBody)))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Empty(t, rec.Header().Get("Retry-After"))
+	assert.NotContains(t, rec.Body.String(), ErrEventNotBuilt.Error(), "the cause stays in the log")
+	assert.True(t, dec.called)
+}

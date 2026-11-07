@@ -336,6 +336,7 @@ Lo comprueba `event-sources` al recibir y decodificar el mensaje.
 | El `device` del cuerpo no es el dispositivo del topic | — | Se envía a `failed-decode` | `total_msg_failed_decode` |
 | El cuerpo lleva `credentialType`, `credentialId` o `credentialSecret`, en el broker MQTT de la plataforma | — | Se envía a `failed-decode` (redactado) | `total_msg_failed_decode`, `total_msg_credential_in_mqtt_body` |
 | La plataforma está aplicando [contrapresión](../deployment/observability.md#ingest-backpressure) | `503` **con** `Retry-After`: no se almacenó, envíalo de nuevo | No se rechaza: espera en el stream de captura; los mensajes capturados más antiguos solo se descartan si ese stream se llena | |
+| No se pudo construir el mensaje del evento: una credencial que presentó no se pudo sellar, o el evento no se pudo codificar | `500`: no se almacena, y reenviarlo falla igual | Descartado | `total_msg_build_dropped`, por `cause` |
 | El evento no se pudo entregar a la cadena de proceso | `503` **sin** `Retry-After`: puede haberse almacenado, así que reenviarlo lo almacena dos veces salvo que lleve un [`altId`](#altid) | — | |
 | Aceptado | `202` | `PUBACK` (QoS 1) | |
 

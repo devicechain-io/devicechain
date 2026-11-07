@@ -534,6 +534,8 @@ dcctl bootstrap local devicechain
 - **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
+- **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
+
 - **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
 - **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
 
@@ -655,6 +657,15 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **该值升高时，`dcctl upgrade` 会告知。** 计划中会打印一行，写明旧值和新值。它还会读取事件库卷的剩余空间，在剩余空间小于新值或无法读取时打印警告。它不会拒绝执行：剩余空间少的事件库在当前速率下可能完全健康，剩余空间的读取只是尽力而为，而补救办法只需一个标志。
 - **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`；传入空值 `--event-store-checkpoint-timeout=""` 即恢复默认）。`dcctl` 会在应用变更之前就记录这两个值，因此升级中途失败后不带这些标志再次运行时，它们仍会保留。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
 - **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
+
+#### HTTP 接入不再对被丢弃的事件返回 202 {#v120-http-build-dropped}
+
+HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建入站消息时被丢弃的事件返回 `202 Accepted`：这类事件包括所携带的凭据无法密封，或事件无法编码。调用方被告知数据已安全，实际上它没有存储在任何地方。从本版本起，端点对这些事件返回 `500 Internal Server Error`，不带 `Retry-After`，响应中也不包含原因。
+
+- **如果没有客户端看到 `500`，则无需任何操作。** 这些情况是服务上的实例密钥缺失或失败，或事件无法编码，正常运行中都不会出现。
+- **对所有非 `202` 响应都重试的客户端，不应重试该端点的 `500`：** 同一请求会以同样方式失败。`503`（无论是否带 `Retry-After`）和 `429` 的含义不变。
+- **新增计数器 `total_msg_build_dropped{source,cause}`**，在所有传输上统计这些丢弃，`cause` 取 `no_tenant`、`no_transit_key`、`seal_failed` 或 `marshal_failed`。它为每个已配置的来源导出初值 0。任何大于 0 的值都表示有事件未被存储。
+- 集成端点在消息被丢弃时仍保留文档中说明的 `202`。
 
 #### 规格预设 {#v120-size-presets}
 

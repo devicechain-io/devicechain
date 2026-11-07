@@ -284,6 +284,12 @@ var (
 	// event lost.
 	PublishFailedCounter *prometheus.CounterVec
 
+	// BuildDroppedCounter counts decoded events whose inbound-events message could not be built, by
+	// source and cause (see the buildDrop* constants): the event is dropped, never published as sent.
+	// HTTP answers such a request 500, and the other transports settle the message, so each is an
+	// event stored nowhere.
+	BuildDroppedCounter *prometheus.CounterVec
+
 	// ShedAcknowledgedCounter counts messages shed at the per-tenant ingest ceiling from an MQTT
 	// source, every one of which the device (or the operator's broker) had ALREADY been told
 	// arrived: a PUBACK is sent before this service reads the message, and a shed message is
@@ -406,6 +412,12 @@ func initializeMetrics() {
 		"Count of decoded messages from an external MQTT broker that were not stored because the publish to "+
 			"the platform's inbound-events stream failed. That source does not retry, so each one is lost",
 		[]string{"source"})
+	BuildDroppedCounter = Microservice.NewCounterVec(
+		"total_msg_build_dropped",
+		"Count of decoded events dropped because their inbound-events message could not be built, by cause: "+
+			"no tenant, no transit key, a credential that could not be sealed, or a marshal failure. "+
+			"HTTP answers 500 for each; no transport stores them",
+		[]string{"source", "cause"})
 	ShedAcknowledgedCounter = Microservice.NewCounterVec(
 		"total_msg_shed_acknowledged",
 		"Count of messages from an MQTT source shed at the per-tenant ingest ceiling after the device had "+
@@ -1099,18 +1111,21 @@ func buildInboundMessage(source string, tenant string, event *model.UnresolvedEv
 
 	if tenant == "" {
 		log.Warn().Msg(fmt.Sprintf("Dropping decoded event from source %q with no tenant", source))
+		countBuildDropped(source, buildDropNoTenant)
 		return nil, messaging.Message{}, false
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
 
-	if !sealPresentedSecret(tenant, event) {
+	if cause := sealPresentedSecret(tenant, event); cause != "" {
+		countBuildDropped(source, cause)
 		return nil, messaging.Message{}, false
 	}
 
 	// Marshal event message to protobuf.
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {
-		log.Error().Err(err).Msg("unable to marshal event to protobuf")
+		log.Error().Err(err).Str("source", source).Msg("unable to marshal event to protobuf")
+		countBuildDropped(source, buildDropMarshal)
 		return nil, messaging.Message{}, false
 	}
 
@@ -1146,69 +1161,86 @@ func deriveSecretTransit() (*credential.SecretTransit, error) {
 // sealPresentedSecret replaces the secret a device presented with its sealed form, so the
 // message published to inbound-events (stored for the stream's retention period) never
 // carries a password as sent. It reports false when the event must not be published: a
-// secret that could not be sealed is dropped, never published as sent.
+// secret that could not be sealed is dropped, never published as sent. The result is "" when
+// the event may be published, else the buildDrop* cause it must be dropped for.
 //
 // A secret presented without a credential id authenticates nothing downstream (the
 // resolver treats such an event as presenting no credential), so it is discarded rather
 // than sealed. Dropping that is a terminal decision like the others in inboundEventMessage.
-func sealPresentedSecret(tenant string, event *model.UnresolvedEvent) bool {
+func sealPresentedSecret(tenant string, event *model.UnresolvedEvent) string {
 	secret := event.CredentialSecret
 	event.CredentialSecret = nil
 	event.SealedCredentialSecret = nil
 	event.SealedCredentialId = nil
-	if !sealPresentedToken(tenant, event) {
-		return false
+	if cause := sealPresentedToken(tenant, event); cause != "" {
+		return cause
 	}
 	if secret == nil || *secret == "" || event.CredentialId == nil || *event.CredentialId == "" {
-		return true
+		return ""
 	}
 	if SecretTransit == nil {
 		log.Error().Msg("Dropping an event carrying a credential secret: no transit key to seal it with")
-		return false
+		return buildDropNoTransitKey
 	}
 	sealed, err := SecretTransit.Seal(tenant, *event.CredentialId, *secret)
 	if err != nil {
 		log.Error().Err(err).Msg("Dropping an event carrying a credential secret: it could not be sealed")
-		return false
+		return buildDropSealFailed
 	}
 	event.SealedCredentialSecret = sealed
-	return true
+	return ""
 }
 
 // sealPresentedToken replaces an ACCESS_TOKEN credential id, which is the bearer token
 // itself, with its sealed form, bound to the tenant and the credential type (a token
 // cannot be its own authenticated data). It reports false when the event must not be
-// published: a token that could not be sealed is dropped, never published as sent.
+// published: a token that could not be sealed is dropped, never published as sent. The result
+// is "" when the event may be published, else the buildDrop* cause.
 //
 // A token presented without a credential type authenticates nothing downstream (the
 // resolver treats such an event as presenting no credential), so it is discarded.
-func sealPresentedToken(tenant string, event *model.UnresolvedEvent) bool {
+func sealPresentedToken(tenant string, event *model.UnresolvedEvent) string {
 	if event.CredentialId == nil {
-		return true
+		return ""
 	}
 	if event.CredentialType == nil && *event.CredentialId != "" {
 		event.CredentialId = nil
-		return true
+		return ""
 	}
 	if !esproto.IsBearerCredentialType(event.CredentialType) {
-		return true
+		return ""
 	}
 	token := *event.CredentialId
 	event.CredentialId = nil
 	if token == "" {
-		return true
+		return ""
 	}
 	if SecretTransit == nil {
 		log.Error().Msg("Dropping an event carrying an access token: no transit key to seal it with")
-		return false
+		return buildDropNoTransitKey
 	}
 	sealed, err := SecretTransit.SealToken(tenant, *event.CredentialType, token)
 	if err != nil {
 		log.Error().Err(err).Msg("Dropping an event carrying an access token: it could not be sealed")
-		return false
+		return buildDropSealFailed
 	}
 	event.SealedCredentialId = sealed
-	return true
+	return ""
+}
+
+// The causes an inbound-events message is dropped for before it is published (the "cause" label
+// of BuildDroppedCounter).
+const (
+	buildDropNoTenant     = "no_tenant"
+	buildDropNoTransitKey = "no_transit_key"
+	buildDropSealFailed   = "seal_failed"
+	buildDropMarshal      = "marshal_failed"
+)
+
+func countBuildDropped(source, cause string) {
+	if BuildDroppedCounter != nil {
+		BuildDroppedCounter.WithLabelValues(source, cause).Inc()
+	}
 }
 
 // onEventDecoded publishes a decoded event synchronously, for the source that publishes
@@ -1216,15 +1248,18 @@ func sealPresentedToken(tenant string, event *model.UnresolvedEvent) bool {
 // The gateway source pipelines the same message through its own ordered writer, and an
 // external MQTT broker's source through its own AsyncWriter (processor.AsyncEventPublisher).
 //
-// It returns whether the event was DURABLY published, nil for a deliberate drop (see
-// inboundEventMessage). A source that acknowledges its broker does so on this answer, so
+// It returns whether the event was DURABLY published: nil only when it was, processor.ErrEventNotBuilt
+// when the message could not be built (see inboundEventMessage). A source that acknowledges its broker does so on this answer, so
 // a swallowed error here would ack a message that was never forwarded; sources with
 // nothing to acknowledge ignore the result.
 func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
 	dedupID string) error {
 	ctx, msg, ok := inboundEventMessage(source, tenant, event, payload, dedupID)
 	if !ok {
-		return nil
+		// The HTTP source answers its client from this result, and a nil here was a 202 for an event
+		// that was dropped. The drop is terminal (a retry fails identically), so it is reported as
+		// its own error, which the source answers 500 and not the retryable 503.
+		return processor.ErrEventNotBuilt
 	}
 	if g := HTTPGroupCommit; g != nil {
 		// A group commit (infrastructure.messaging.envelopes.inbound): this returns after the PubAck
