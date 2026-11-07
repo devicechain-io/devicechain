@@ -87,6 +87,11 @@ type DeviceRevokedCertificate struct {
 	CreatedAt        time.Time
 	// CreatedBy is the actor of a MANUAL entry, for the journal. CRL rows carry none.
 	CreatedBy *string `gorm:"size:255"`
+	// KickQueuedAt is when the live-session kick debt for this entry was queued; NULL until then. A
+	// repeat of the revocation queues the debt once if it is NULL (an entry that predates the debt,
+	// or was made on an instance with no session kicker), so the repeat does not report "sessions
+	// ended" for a debt nobody recorded, and does not queue it again once it has been.
+	KickQueuedAt *time.Time
 }
 
 // AuditLabel is the certificate's fingerprint: public, and what an auditor looks a revocation up by.

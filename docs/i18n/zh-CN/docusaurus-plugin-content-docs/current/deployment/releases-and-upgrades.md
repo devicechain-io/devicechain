@@ -534,6 +534,7 @@ dcctl bootstrap local devicechain
 - **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
+- **请知悉：吊销证书现在会结束其影响到的已打开会话。** 吊销证书颁发机构可能让整个设备群同时重新连接。参见[吊销证书会结束已打开的会话](#v120-x509-sessions)。
 - **请知悉：`POST /{instanceId}/{tenant}/events` 现在可能返回 `500`。** 在构建其消息时被丢弃的事件（它携带的凭据无法密封，或事件无法编码）此前会收到 `202`，却没有在任何地方存储。现在它返回 `500`，事件不会被存储，重试会以同样方式失败；对所有非 `202` 响应都重试的客户端应停止重试该端点的 `500`。参见 [HTTP 接入不再对被丢弃的事件返回 202](#v120-http-build-dropped)。
 
 - **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
@@ -640,6 +641,10 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **测试入口按副本限速。**`testPayloadDecoder` 允许每个租户在每个 `device-management` 副本上每秒 10 个请求，突发 20 个，因此租户的总速率会随副本数增加而提高。超出限制的请求会以 `RATE_LIMITED` 被拒绝。
 - **滚动升级期间，只有当每个 `device-management` 副本都运行本版本之后，才发布解码器。**由旧副本处理请求时发布的版本，会在没有解码器的情况下被冻结，因为该副本不认识这个字段。升级完成后，请检查你发布的版本上是否存在 `DeviceProfileVersion.decoder`，如果没有，请重新发布。
 
+#### 控制台显示解码器的运行状况 {#v120-decoder-console}
+
+设备配置文件的**解码器**标签页现在显示该配置文件解码器最近 24 小时的情况：已解码、已忽略、失败和未记录的上行数量（参见[持续失败的载荷解码器有预算限制](#v120-decoder-budget)），以及作为样本保留的失败上行，每条都有一个按钮，可将其载入测试面板。一个链接会打开按 `DECODE_FAILED` 过滤的**失败事件**页面；该页面现在把这个原因作为独立的过滤项，并接受 `?reason=DECODE_FAILED`。标签页的这两部分都需要 `device:write`，与其背后的查询一致。升级时无需任何操作：这只涉及控制台，使用的是前面已介绍的 `payloadDecoderHealth` 和 `payloadDecoderSamples` 查询。
+
 #### X.509 吊销列表 {#v120-x509-crl}
 
 租户现在可以把证书颁发机构的吊销列表（CRL）存放到信任锚上，每个信任锚也有了吊销模式。没有列表、也没有手动吊销的信任锚，行为与以前完全一致。
@@ -656,6 +661,15 @@ C# SDK 和 Unity 包现在可以用 X.509 客户端证书连接设备。这是�
 
 - **把 `MqttSessionOptions.ClientCertificate` 设为** 从 PFX 或 PEM 文件加载的 `MqttClientCertificate`。会话随后用用户名 `{tenant}:@x509` 且无密码连接。见[从 C# SDK 连接](../guides/device-x509.md#csharp-sdk)。
 - **只能出示 RSA 和 ECDSA 密钥**，因为 .NET 没有 Ed25519。代理地址必须是 `ssl://`；明文地址会在构造会话时被拒绝。
+
+#### 吊销证书会结束已打开的会话 {#v120-x509-sessions}
+
+无论是手动吊销证书，还是上传点名该证书的 CRL，现在都会同时结束受影响设备已打开的会话。此前，已打开的会话会一直保持到令牌过期（默认最长 12 小时）。没有任何吊销操作的实例不受影响。
+
+- **叶证书会结束持有它的设备的会话。** 吊销证书颁发机构的范围更大：当您通过提供 CA 证书来吊销 CA，或某个 CRL 点名了已注册凭据被发现使用过的中间证书时，该信任锚下**所有拥有证书凭据的设备**的会话都会被结束。这些设备会自行重新连接；证书链仍受信任的设备会立即被接纳。一次调用自身会结束最多约 5,000 台设备的会话，因此 CA 级吊销可能让大约这么多设备在同一时刻重新连接；其余的在后台结束。**在从早期版本升级而来的实例上**，升级前注册的凭据没有记录中间证书，因此当某个 CRL 新增了与任何已存储凭据都不匹配的条目时，也会结束这些旧凭据的会话，以防该条目是它们所用的中间证书。
+- **会话会被结束两次。** 第一次在吊销提交时，第二次约 10 秒之后。第二次用于捕获吊销瞬间正在被接纳的设备。因此 CA 级吊销会对整个信任锚询问两次。
+- **面对响应缓慢的服务时，吊销可能耗时较长。** 调用最多会等待负责结束会话的服务（`event-sources`）约 90 秒。如果无法确认，吊销依然有效，新连接会被拒绝；结果会显示 `sessionsEnded: false`，平台会持续重试，重复执行吊销或上传也会再次询问。
+- **在滚动升级期间**，新的会话终止请求带有 `event-sources` 必须识别的新原因。在 `event-sources` 被替换之前，这些请求会保持待处理并被重试，因此升级过程中进行的吊销会在 `event-sources` 更新完成后结束已打开的会话。上一版本的 Pod 既不会处理这些待处理的请求，也不会删除它们。
 
 #### 事件库的预写日志额度 {#v120-event-store-wal}
 
@@ -711,10 +725,11 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 
 #### 架构变更与回退 {#v120-going-back}
 
-五个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
+六个迁移追加了以下内容。每个新列都允许为空，因此运行在新架构上的 `v1.1.0` 服务写入的行仍然可以存储。
 
 - **X.509 吊销**（`device-management`，迁移 `20261105100000`）。四张新表：`device_revocation_issuers`、`device_revocation_lists`、`device_revoked_certificates` 和 `device_credential_chain_links`。四个新列：`device_trust_anchors` 上的 `revocation_mode`、`revocation_stale_grace` 和 `revocation_rows`，以及 `pending_session_kicks` 上的 `not_before`。已有的信任锚的 `revocation_mode` 保持为空，按 `ENTRIES` 读取：证书只有列在名单上才会被拒绝。
 - **载荷解码器**（`device-management`，迁移 `20261110120000`）。两张新表 `profile_decoder_healths` 和 `profile_decoder_samples`，以及一个新列：`device_profiles` 上的 `decoder_declaration`。
+- **吊销触发的会话终止队列**（`device-management`，迁移 `20261111120000`）。一张新表 `pending_revocation_kicks`，以及一个允许为空的新列：`device_revoked_certificates` 上的 `kick_queued_at`。该表与现有的会话终止队列分开，因此 `v1.1.0` 的副本永远不会读取或删除其中的行。
 - **投影存储**（`device-state`，迁移 `20261104120000`）。不新增表或列，只为 `device_states`、`latest_measurements` 和 `latest_locations` 设置存储参数（填充因子 75 和 autovacuum 阈值）。已有的行只有在其页面被重写时才获得填充因子留出的余量，因此升级后的实例会缓慢感受到这一变化。
 - **放置表**（`user-management`，迁移 `20261105120000`）。三张新表：`iam_partition_config`、`iam_vpartition_assignments` 和 `iam_tenant_vpartition_overrides`。迁移本身不写入任何行；`user-management` 首次启动时会写入默认放置（`iam_partition_config` 一行和 `iam_vpartition_assignments` 64 行），并在消息 broker 中创建 `dc_partition_placement` 存储桶。
 - **不活动告警时间修复**（`device-state`，迁移 `20261106120000`）。不改变架构，只对 `device_states` 中的 `inactivity_alarm_time` 做仅数据修复，每批 5,000 个，恢复该列在 `v1.1.0` 之前的内容。回退到 `v1.1.0` 时无需撤销。
