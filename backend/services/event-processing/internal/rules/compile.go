@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-microservice/httpsink"
+	"github.com/devicechain-io/dc-microservice/webhooksig"
 )
 
 // Limits are the compile-time ceilings a caller may vary. Today that is only
@@ -499,7 +500,7 @@ func ActionDedupKey(a Action) string {
 		// react.actionContentKey (slice C2b) calls the SAME exported MethodOrPost / HeaderKey so the
 		// durable idempotency token can never drift from this gate's identity (one implementation, not
 		// two mirrored copies).
-		return "httpCall|" + h.URL + "|" + MethodOrPost(h.Method) + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + HeaderKey(h.Headers) + guardSeg
+		return "httpCall|" + h.URL + "|" + MethodOrPost(h.Method) + "|" + h.BodyTemplate + "|" + h.SecretRef + "|" + HeaderKey(h.Headers) + SigningKeySeg(h.SigningSecretRef) + guardSeg
 	case ActionPublish:
 		p := a.Publish
 		return "publish|" + p.ConnectorRef + "|" + p.PayloadTemplate + guardSeg
@@ -654,6 +655,11 @@ func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
 	if err := validateSecretHandle(h.SecretRef); err != nil {
 		return invalid(ruleID, "actions", "action %d httpCall secretRef: %v", i, err)
 	}
+	if h.SigningSecretRef != "" {
+		if err := webhooksig.ValidateHandle(h.SigningSecretRef); err != nil {
+			return invalid(ruleID, "actions", "action %d httpCall signingSecretRef: %v", i, err)
+		}
+	}
 	if err := validateTimeout(h.TimeoutMs); err != nil {
 		return invalid(ruleID, "actions", "action %d httpCall %v", i, err)
 	}
@@ -683,6 +689,20 @@ func validateTimeout(ms int) error {
 		return fmt.Errorf("timeoutMs %d out of range [0,%d]", ms, MaxActionTimeoutMs)
 	}
 	return nil
+}
+
+// SigningKeySeg is the identity segment a webhook signing handle adds to an httpCall's dedupe key
+// and durable idempotency token. It is EMPTY for an unsigned call, so every token minted before
+// signing existed is unchanged byte for byte (a redelivery after an upgrade must still dedup); a
+// signed call differs from an otherwise identical unsigned one, because they are different
+// requests. Exported so react.actionContentKey shares this one definition.
+func SigningKeySeg(handle string) string {
+	if handle == "" {
+		return ""
+	}
+	// NUL delimits it on both sides: it cannot occur in a validated header, handle or guard, so no
+	// unsigned action's key can be made to look like a signed one's.
+	return "\x00sig\x00" + handle
 }
 
 // validateSecretHandle checks an authored secret handle (HTTPCallAction.SecretRef). Empty is

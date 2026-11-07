@@ -142,7 +142,7 @@ func TestSMTPAdapterUsesTheInjectedGuard(t *testing.T) {
 // And the registry must hand that guard to BOTH transports.
 func TestTheRegistryGivesBothTransportsTheGuard(t *testing.T) {
 	guard := egress.NewGuard(nil)
-	reg := newAdapterRegistry(guard)
+	reg := newAdapterRegistry(guard, nil)
 
 	smtp, ok := reg[model.ChannelTypeSMTP].(*smtpAdapter)
 	if !ok || smtp.guard != guard {

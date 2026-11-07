@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/webhooksig"
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/devicechain-io/dc-outbound-connectors/publish"
@@ -159,6 +160,22 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		secret = resolved
 	}
 
+	// Signing is opt-in per action: no handle, no signature, and the request is exactly what it was
+	// before signing existed. A handle that was authored is a promise the receiver relies on, so
+	// it is fail-closed like the credential above: a handle naming no stored key is terminal and a
+	// store error is retryable, and neither ever falls through to an unsigned send.
+	var signing *httpsink.Signing
+	if h.SigningSecretRef != "" {
+		keys, oc := e.resolveSigningKeys(ctx, req.Tenant, h.SigningSecretRef)
+		if oc != nil {
+			return *oc
+		}
+		// The message id is the dispatch idempotency key: stable across every redelivery of this
+		// detection and action, which is what lets a receiver deduplicate on webhook-id. The
+		// timestamp is stamped per attempt inside Send.
+		signing = &httpsink.Signing{ID: req.IdempotencyKey, Secrets: keys}
+	}
+
 	sendCtx, cancel := sendContext(ctx, e.effectiveSendTimeout(h.TimeoutMs))
 	defer cancel()
 
@@ -170,6 +187,7 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		Secret:         secret,
 		Auth:           auth,
 		IdempotencyKey: req.IdempotencyKey,
+		Signing:        signing,
 	})
 	if err != nil {
 		// A destination the egress boundary refused is TERMINAL, and separating it here is the whole
@@ -183,7 +201,7 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		// A refused credential (an authored handle whose stored value is empty) is terminal for the
 		// same reason: a redelivery resolves the same value and is refused the same way. Nothing was
 		// sent.
-		if errors.Is(err, httpsink.ErrAuthRefused) {
+		if errors.Is(err, httpsink.ErrAuthRefused) || errors.Is(err, httpsink.ErrSigningRefused) {
 			return execOutcome{outcome: outcomeInvalid, retryable: false, err: err}
 		}
 		// A send error or non-2xx is transient (bounded by the redelivery cap): the endpoint may be
@@ -192,6 +210,29 @@ func (e *Executor) executeHTTPCall(ctx context.Context, req *connectorwire.Conne
 		return execOutcome{outcome: outcomeRetry, retryable: true, err: err}
 	}
 	return execOutcome{outcome: outcomeSent, retryable: false}
+}
+
+// resolveSigningKeys loads the keys an httpCall is signed with: the current key, plus the previous
+// one while a rotation is open. It returns a non-nil outcome when the call must not be made. A
+// handle with no stored key, or a stored value that is not a signing secret, is terminal (a
+// redelivery asks the store the same question); any other store error is retryable.
+func (e *Executor) resolveSigningKeys(ctx context.Context, tenant, handle string) ([]string, *execOutcome) {
+	resolveCtx, cancel := context.WithTimeout(ctx, secretResolveTimeout)
+	defer cancel()
+	keys, err := webhooksig.ResolveKeys(resolveCtx, model.WebhookSigningBase(handle),
+		func(ctx context.Context, name string) (string, error) {
+			return e.secrets.Resolve(ctx, tenant, name)
+		})
+	switch {
+	case err == nil:
+		return keys, nil
+	case errors.Is(err, webhooksig.ErrNoSigningSecret), errors.Is(err, webhooksig.ErrInvalidSecret):
+		return nil, &execOutcome{outcome: outcomeInvalid, retryable: false,
+			err: fmt.Errorf("signing secret %q: %w: %w", handle, httpsink.ErrSigningRefused, err)}
+	default:
+		return nil, &execOutcome{outcome: outcomeRetry, retryable: true,
+			err: fmt.Errorf("resolve signing secret %q: %w", handle, err)}
+	}
 }
 
 // effectiveSendTimeout clamps the EFFECTIVE per-send timeout at the SHARED ceiling

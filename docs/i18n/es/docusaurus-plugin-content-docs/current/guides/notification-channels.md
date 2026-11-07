@@ -86,6 +86,8 @@ mutation {
 
 Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`.
 
+Un canal webhook también puede **firmar** sus entregas para que el receptor pueda verificarlas. Está desactivado salvo que lo pidas, añadiendo `"signing":true` al `config` del canal una vez que le hayas generado un secreto de firma. Un canal configurado para firmar que no tiene secreto se rechaza, no se envía sin firma, y se cuenta con `reason="signing"`. Consulta [Firma de Webhooks de Salida](signed-webhooks.md).
+
 ## Políticas
 
 Una **política** decide qué alarmas levantadas se entregan, a quién y a través de qué canales. Lleva un conjunto de **reglas**. Cada regla mapea:

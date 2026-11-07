@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -403,6 +404,13 @@ func (api *Api) DeleteNotificationChannel(ctx context.Context, token string) (bo
 	if err := api.Secrets.Delete(ctx, ref); err != nil {
 		log.Warn().Err(err).Str("token", token).
 			Msg("Deleted channel but failed to remove its stored secret (orphaned ciphertext)")
+	}
+	// The signing keys go the same way; both slots, idempotent, same reasoning.
+	if tenant, ok := core.TenantFromContext(ctx); ok {
+		if err := api.channelKeyring().Delete(ctx, tenant, ChannelSigningBase(matches[0].ID)); err != nil {
+			log.Warn().Err(err).Str("token", token).
+				Msg("Deleted channel but failed to remove its signing secrets (orphaned ciphertext)")
+		}
 	}
 	return result.RowsAffected > 0, nil
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -41,10 +42,13 @@ type ChannelAdapter interface {
 // configuration reaches BOTH transports or neither — an escape hatch that applied to
 // webhooks and not to SMTP would be worse than none, because it would look like it
 // worked.
-func newAdapterRegistry(guard *egress.Guard) map[string]ChannelAdapter {
+//
+// store is where a signing channel's keys are read; nil is allowed and means no channel can sign,
+// so a channel that asks to is refused rather than sent unsigned.
+func newAdapterRegistry(guard *egress.Guard, store secrets.SecretStore) map[string]ChannelAdapter {
 	return map[string]ChannelAdapter{
 		model.ChannelTypeSMTP:    &smtpAdapter{guard: guard},
-		model.ChannelTypeWebhook: &webhookAdapter{client: egressClient(guard)},
+		model.ChannelTypeWebhook: &webhookAdapter{client: egressClient(guard), store: store},
 	}
 }
 
