@@ -941,7 +941,7 @@ The edge agent board's process panels select `job="dc-edge-agent"` as well as th
 
 #### The console searches devices by name {#v120-console}
 
-Nothing here needs action. The device search and the device-type search take one new optional argument each, `nameContains`: a case-insensitive substring match on the name, where `%` and `_` match themselves and blank text matches everything. It composes with the filters the device search already had. A client that does not send it sees the same results as before.
+Nothing here needs action. The device search and the device-type search take one new optional argument each, `nameContains`: a case-insensitive substring match on the name or the token (a name is optional, so an unnamed device is found by its token), where `%` and `_` match themselves and blank text matches everything. It composes with the filters the device search already had. A client that does not send it sees the same results as before.
 
 In the console, the devices list now has a name search and a device-type filter, both kept in the page address, and the type pickers on the device, bulk-create, import and provisioning-profile forms search the server as you type instead of reading the first 1,000 types.
 

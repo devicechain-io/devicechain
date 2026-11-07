@@ -142,7 +142,7 @@ export async function listDevices(opts: {
   pageNumber: number;
   pageSize: number;
   deviceType?: string;
-  /** Only devices whose name contains this text, ignoring case. Blank is no filter. */
+  /** Only devices whose name or token contains this text, ignoring case. Blank is no filter. */
   nameContains?: string;
   /** Only devices holding a credential this provisioning profile issued (unscoped callers). */
   provisioningProfile?: string;
@@ -469,7 +469,7 @@ const DEVICE_TYPES = graphql(`
 export async function listDeviceTypes(opts: {
   pageNumber: number;
   pageSize: number;
-  /** Only device types whose name contains this text, ignoring case. Blank is no filter. */
+  /** Only device types whose name or token contains this text, ignoring case. Blank is no filter. */
   nameContains?: string;
 }): Promise<DeviceTypeSearchResults> {
   const data = await gql('device-management', DEVICE_TYPES, {

@@ -986,7 +986,7 @@ Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge
 
 #### La consola busca dispositivos por nombre {#v120-console}
 
-No requiere ninguna acción. La búsqueda de dispositivos y la de tipos de dispositivo aceptan un nuevo argumento opcional, `nameContains`: una coincidencia de subcadena sin distinguir mayúsculas en el nombre, donde `%` y `_` se toman literalmente y un texto en blanco coincide con todo. Se combina con los filtros que la búsqueda de dispositivos ya tenía. Un cliente que no lo envía obtiene los mismos resultados que antes.
+No requiere ninguna acción. La búsqueda de dispositivos y la de tipos de dispositivo aceptan un nuevo argumento opcional, `nameContains`: una coincidencia de subcadena sin distinguir mayúsculas en el nombre o el token (el nombre es opcional, así que un dispositivo sin nombre se encuentra por su token), donde `%` y `_` se toman literalmente y un texto en blanco coincide con todo. Se combina con los filtros que la búsqueda de dispositivos ya tenía. Un cliente que no lo envía obtiene los mismos resultados que antes.
 
 En la consola, la lista de dispositivos ahora tiene una búsqueda por nombre y un filtro por tipo de dispositivo, ambos guardados en la dirección de la página, y los selectores de tipo de los formularios de dispositivo, creación en lote, importación y perfil de aprovisionamiento buscan en el servidor mientras escribe, en lugar de leer los primeros 1.000 tipos.
 

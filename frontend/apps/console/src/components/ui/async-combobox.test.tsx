@@ -64,6 +64,19 @@ describe('AsyncCombobox', () => {
     expect(search.mock.calls.map((c) => c[0])).toEqual(['', 'pum']);
   });
 
+  it('does not search for a keystroke the next one replaces within the pause', async () => {
+    const search = vi.fn().mockResolvedValue({ options: [opt('a')] });
+    render(<Harness search={search} />);
+    open();
+    await screen.findByText('a');
+    const box = screen.getByPlaceholderText('Search…');
+    fireEvent.change(box, { target: { value: 'p' } });
+    await new Promise((r) => setTimeout(r, 60));
+    fireEvent.change(box, { target: { value: 'pu' } });
+    await waitFor(() => expect(search).toHaveBeenCalledWith('pu'));
+    expect(search.mock.calls.map((c) => c[0])).toEqual(['', 'pu']);
+  });
+
   it('keeps only the newest answer when an earlier request lands late', async () => {
     let releaseSlow: (p: AsyncComboboxPage) => void = () => {};
     const search = vi.fn((q: string) =>
@@ -112,6 +125,25 @@ describe('AsyncCombobox', () => {
     expect(await screen.findByText('No matches.')).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'x' } });
     expect(await screen.findByRole('alert')).toBeTruthy();
+  });
+
+  it('chooses the highlighted option on Enter in the search box only', async () => {
+    const onChange = vi.fn();
+    render(<Harness search={vi.fn().mockResolvedValue({ options: [opt('a'), opt('b')] })} onChange={onChange} />);
+    open();
+    const second = await screen.findByText('b');
+    fireEvent.keyDown(second.closest('button')!, { key: 'Enter' });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByPlaceholderText('Search…'), { key: 'ArrowDown' });
+    fireEvent.keyDown(screen.getByPlaceholderText('Search…'), { key: 'Enter' });
+    expect(onChange).toHaveBeenCalledWith('b');
+  });
+
+  it('clears from the keyboard with Backspace on the trigger', async () => {
+    const onChange = vi.fn();
+    render(<Harness search={vi.fn().mockResolvedValue({ options: [opt('a')] })} initial="a" onChange={onChange} />);
+    fireEvent.keyDown(document.getElementById('pick') as HTMLButtonElement, { key: 'Backspace' });
+    expect(onChange).toHaveBeenCalledWith('');
   });
 
   it('clears the selection', async () => {

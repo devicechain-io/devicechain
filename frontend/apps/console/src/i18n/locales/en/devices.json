@@ -570,7 +570,7 @@
   "filterAnyProfile": "Any",
   "filterClear": "Clear filters",
   "searchLabel": "Search",
-  "searchPlaceholder": "Name contains…",
+  "searchPlaceholder": "Name or token contains…",
   "filterDeviceType": "Device type",
   "filterAnyType": "Any type",
   "emptyFiltered": "No devices match these filters.",

@@ -26,8 +26,10 @@ const device = (token: string) => ({
 });
 
 let sent: { op: string; variables: any }[] = [];
+let deviceRows: string[] = [];
 beforeEach(() => {
   sent = [];
+  deviceRows = ['pump-1'];
   h.gql.mockImplementation((service: string, doc: unknown, variables: any) => {
     if (service === 'user-management/settings') return Promise.resolve({ tokenMasks: '{}' });
     const op = /(?:query|mutation)\s+(\w+)/.exec(String(doc))?.[1] ?? '';
@@ -35,7 +37,7 @@ beforeEach(() => {
     switch (op) {
       case 'Devices':
         return Promise.resolve({
-          devices: { results: [device('pump-1')], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } },
+          devices: { results: deviceRows.map(device), pagination: { pageStart: 1, pageEnd: deviceRows.length, totalRecords: deviceRows.length } },
         });
       case 'DeviceTypes':
         return Promise.resolve({
@@ -66,10 +68,28 @@ describe('device search and type filter', () => {
     const before = searches().length;
     const box = screen.getByLabelText('Search');
     fireEvent.change(box, { target: { value: 'pu' } });
+    // A pause shorter than the debounce: the first keystroke must not have searched yet.
+    await new Promise((r) => setTimeout(r, 60));
     fireEvent.change(box, { target: { value: 'pump' } });
     expect(searches().length).toBe(before);
     await waitFor(() => expect(last()).toMatchObject({ nameContains: 'pump' }));
     expect(searches().length).toBe(before + 1);
+    expect(searches().some((c) => c.nameContains === 'pu')).toBe(false);
+  });
+
+  it('keeps a type picked while a typed name is still waiting out its pause', async () => {
+    renderPage();
+    await screen.findByText('Device pump-1');
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'pu' } });
+    fireEvent.click(document.getElementById('dev-filter-type') as HTMLButtonElement);
+    fireEvent.click(await screen.findByText('Pump', { selector: 'span.block' }));
+    await waitFor(() => expect(last()).toMatchObject({ nameContains: 'pu', deviceType: 'pump' }));
+  });
+
+  it('says the filters matched nothing when only a name is set', async () => {
+    deviceRows = [];
+    renderPage('?q=zzz');
+    expect(await screen.findByText('No devices match these filters.')).toBeTruthy();
   });
 
   it('reads the name and type from the URL', async () => {
@@ -88,6 +108,29 @@ describe('device search and type filter', () => {
     await waitFor(() => expect(last()).toMatchObject({ deviceType: 'pump' }));
     // The picker asked the server, not a list it holds.
     expect(sent.some((s) => s.op === 'DeviceTypes' && s.variables.criteria.pageSize === 25)).toBe(true);
+  });
+
+  it('narrows the type picker on the server by what is typed into it', async () => {
+    renderPage();
+    await screen.findByText('Device pump-1');
+    fireEvent.click(document.getElementById('dev-filter-type') as HTMLButtonElement);
+    await screen.findByText('Pump', { selector: 'span.block' });
+    fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'pu' } });
+    await waitFor(() =>
+      expect(sent.some((s) => s.op === 'DeviceTypes' && s.variables.criteria.nameContains === 'pu')).toBe(true),
+    );
+  });
+
+  it('exports the filtered list, not the whole registry', async () => {
+    URL.createObjectURL = vi.fn(() => 'blob:x');
+    URL.revokeObjectURL = vi.fn();
+    renderPage('?q=pump&type=pump');
+    await screen.findByText('Device pump-1');
+    const before = searches().length;
+    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    await waitFor(() => expect(searches().length).toBeGreaterThan(before));
+    expect(last()).toMatchObject({ nameContains: 'pump', deviceType: 'pump' });
+    expect(last().pageSize).toBeGreaterThan(20);
   });
 
   it('clears both filters', async () => {

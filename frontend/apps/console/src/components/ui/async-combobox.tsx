@@ -170,7 +170,8 @@ export function AsyncCombobox({
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setActive((i) => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter') {
+    } else if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+      // Only from the search box: on a focused option Enter is that option's own click.
       e.preventDefault();
       if (options[active]) choose(options[active]);
     }
@@ -190,6 +191,13 @@ export function AsyncCombobox({
         aria-labelledby={ariaLabel ? `${labelId} ${triggerId}` : undefined}
         disabled={disabled}
         className={cn(triggerClasses, className)}
+        onKeyDown={(e) => {
+          // The clear control is a pointer target nested in the trigger; this is its keyboard way.
+          if (allowClear && selected && (e.key === 'Backspace' || e.key === 'Delete')) {
+            e.preventDefault();
+            onChange('');
+          }
+        }}
       >
         <span title={selected ? optionLabel(selected) : undefined} className={cn('truncate', !selected && 'text-muted-foreground')}>
           {selected ? optionLabel(selected) : (placeholder ?? t('select'))}
@@ -203,7 +211,6 @@ export function AsyncCombobox({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              setChosen(null);
               onChange('');
             }}
           />

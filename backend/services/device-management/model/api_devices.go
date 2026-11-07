@@ -243,7 +243,7 @@ func (api *Api) DeviceTypesByToken(ctx context.Context, tokens []string) ([]*Dev
 func (api *Api) DeviceTypes(ctx context.Context, criteria DeviceTypeSearchCriteria) (*DeviceTypeSearchResults, error) {
 	results := make([]DeviceType, 0)
 	db, pag := api.RDB.ListOf(ctx, &DeviceType{}, func(result *gorm.DB) *gorm.DB {
-		return whereNameContains(result, "device_types.name", criteria.NameContains)
+		return whereNameContains(result, "device_types", criteria.NameContains)
 	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
@@ -967,10 +967,11 @@ func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) (
 	return found, nil
 }
 
-// whereNameContains narrows a list to rows whose column contains the text, ignoring case.
-// A blank or absent filter is no filter. The text is escaped, so % and _ match themselves
-// rather than every row.
-func whereNameContains(db *gorm.DB, column string, text *string) *gorm.DB {
+// whereNameContains narrows a list to rows whose name or token contains the text, ignoring
+// case. The token is searched as well because a name is optional: an unnamed row is shown
+// (and so looked for) by its token. A blank or absent filter is no filter. The text is escaped,
+// so % and _ match themselves rather than every row.
+func whereNameContains(db *gorm.DB, table string, text *string) *gorm.DB {
 	if text == nil {
 		return db
 	}
@@ -978,7 +979,8 @@ func whereNameContains(db *gorm.DB, column string, text *string) *gorm.DB {
 	if needle == "" {
 		return db
 	}
-	return db.Where("LOWER("+column+") LIKE ? ESCAPE '\\'", "%"+likeEscaper.Replace(strings.ToLower(needle))+"%")
+	like := "%" + likeEscaper.Replace(strings.ToLower(needle)) + "%"
+	return db.Where("(LOWER("+table+".name) LIKE ? ESCAPE '\\' OR LOWER("+table+".token) LIKE ? ESCAPE '\\')", like, like)
 }
 
 // Search for devices that meet criteria.
@@ -993,7 +995,7 @@ func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*De
 	}
 	results := make([]Device, 0)
 	db, pag := api.RDB.ListOf(ctx, &Device{}, func(result *gorm.DB) *gorm.DB {
-		result = whereNameContains(result, "devices.name", criteria.NameContains)
+		result = whereNameContains(result, "devices", criteria.NameContains)
 		if criteria.DeviceType != nil {
 			result = result.Where("device_type_id = (?)",
 				api.RDB.DB(ctx).Model(&DeviceType{}).Select("id").Where("token = ?", criteria.DeviceType))
