@@ -533,8 +533,8 @@ dcctl bootstrap local devicechain
 - **如果用随附的看板绘制边缘代理的图表，请以作业名 `dc-edge-agent` 抓取它们。** 看板的进程面板（内存、CPU、goroutine、打开的文件）现在会选择该作业，因此同一台机器上的其他作业不再把自己的进程指标加进某个代理的面板。作业名不同时，这些面板会显示为空。参见[边缘代理看板与抓取作业](#v120-edge-board-job)。
 - **`dcctl sim create` 现在会拒绝未声明所需限额的已有套餐层级。**`--tier` 指向已存在的层级时，`dcctl` 只会提高低于场景或 `--tier-config` 所要求的限额，并且看不到该层级继承的默认值。此前层级中缺失的限额会被读作 0 并设为下限，这可能覆盖层级继承的较大值；现在该层级会被拒绝，并指出缺失的键。请把该键加到层级中（user-management 管理 API 的 `updateTenantTier` 变更），或选择已声明它的层级。在 `v1.1` 上运行 `dcctl sim create --tier-config` 可能会把这类键写入已有的层级，如 `v1.1.0` 的说明所述；从本版本起不再如此。`--tier-config` 中的 `null` 限额同样被拒绝，此前它会被读作 0。参见[其他变更](#v120-other-changes)。
 - **请知悉：broker 滚动之后，`dcctl upgrade` 现在可能以 `upgrade incomplete` 失败。**broker 服务器就绪后，升级会在最长两分钟内重新读取它们的卷声明，如果某个声明的容量仍小于其请求就会失败，因为 broker 的文件存储上限跟随请求值。请完成或撤销该卷的扩容（`kubectl -n <namespace> describe pvc`），然后再次运行 `dcctl upgrade`。参见[其他变更](#v120-other-changes)。
+- **新的 `--size` 选项无需任何操作。** `dcctl bootstrap --size perf-12k` 会应用一套经过实测的高吞吐规格，`dcctl install --size compact` 等同于 `--compact`（后者会保留）。未指定规格的实例渲染结果与之前完全相同。见[规格预设](#v120-size-presets)。
 - **请知悉：`devicechain_eventprocessing_detect_pending_timers` 现在统计已启用的键。** 此前它统计静默或会话规则推入且尚未到期的所有定时器，随事件速率增长；引擎现在为每个已启用的设备只保留一个条目，因此该指标随设备数量变化，静默和会话规则的内存不再随事件速率增长。名称和告警不变；按旧的较大数值调整过的面板或告警阈值可以调低。
-
 
 #### 检测分片并行运行 {#v120-detect-shards}
 
@@ -642,6 +642,16 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 - **该值升高时，`dcctl upgrade` 会告知。** 计划中会打印一行，写明旧值和新值。它还会读取事件库卷的剩余空间，在剩余空间小于新值或无法读取时打印警告。它不会拒绝执行：剩余空间少的事件库在当前速率下可能完全健康，剩余空间的读取只是尽力而为，而补救办法只需一个标志。
 - **要保留较小的额度**，给升级加上 `--event-store-max-wal-mib`，例如 `dcctl upgrade local devicechain --event-store-max-wal-mib 1024` 即保留原来的 1 GiB。可先用 `--dry-run` 查看效果。省略该标志时，之后的升级会保留此值；`--event-store-max-wal-mib 0` 则恢复为推导出的值。`--event-store-checkpoint-timeout` 以同样方式设置检查点间隔（默认 `15min`；传入空值 `--event-store-checkpoint-timeout=""` 即恢复默认）。`dcctl` 会在应用变更之前就记录这两个值，因此升级中途失败后不带这些标志再次运行时，它们仍会保留。两者都通过重新加载生效，事件库无需重启。`dcctl` 把它们记录在实例 OpenTofu 状态旁边的 `zz-dcctl-event-store.auto.tfvars.json` 中，位于执行升级的那台机器上；参见[事件库调优](./tuning-an-instance.md)。
 - **如果你自己管理实例的 OpenTofu**，照旧设置 `timescale_max_wal_size_mib` 和 `timescale_checkpoint_timeout`。
+
+#### 规格预设 {#v120-size-presets}
+
+`dcctl bootstrap` 新增了 `--size` 选项，`dcctl install` 接受 `--size base` 和 `--size compact`。不传就没有任何变化：未指定规格的实例渲染结果与此变更之前逐字节一致，`--compact` 的行为与之前完全相同。
+
+- **`perf-12k` 是第一个规格。** 它设置五个繁忙服务的副本数、CPU 与内存，Broker 的请求与内存上限，JetStream 与事件库的卷，以及事件库预写日志的额度，这些数值来自一个在开启事件信封的情况下持续每秒 12,000 个事件的集群。具体数字见[选择规格](./sizing.md#perf-12k)。
+- **已有的紧凑实例会在下次写入时获得 `spec.size: "compact"`。** 用 `--compact` 构建的实例，其声明会在 `dcctl` 下次写入时（升级会写入）连同 `compact: true` 一起写上规格名；实例本身没有任何变化。
+- **它记录在实例上**（声明中的 `spec.size`，base 时为空），每次 `dcctl upgrade` 都会重新应用。某个版本如果调整了某个规格，用该规格记录的实例会在下一次升级时随之改变，并在此说明。
+- **你自己的设置优先。** 从低到高：Chart 默认值、规格、`dcctl` 自己算出的内容、你的 `--values` 覆盖文件，最后是你自行声明的 OpenTofu 变量。见[哪个值优先](./sizing.md#precedence)。
+- **它不会开启别的东西。** 规格不会开启事件信封或 MQTT 故障关闭确认；与 `--ha` 同用时，会提示这种组合尚未实测。
 
 #### 边缘代理看板与抓取作业 {#v120-edge-board-job}
 

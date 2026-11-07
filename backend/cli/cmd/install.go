@@ -20,6 +20,7 @@ var (
 	installDev               bool
 	installHA                bool
 	installCompact           bool
+	installSize              string
 	installNoTLS             bool
 	installNoMonitoring      bool
 	installNoCNPG            bool
@@ -242,6 +243,11 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
+		compactOn, err := resolveInstallSize(installCompact, cmd.Flags().Changed("compact"), installSize)
+		if err != nil {
+			return err
+		}
+		installCompact = compactOn
 		if installDev {
 			res, err := resolveInstallDevMode(cmd.Flags().Changed, installBuild, installVersion)
 			if err != nil {
@@ -357,6 +363,7 @@ func init() {
 	installCmd.Flags().BoolVar(&installDev, "dev", false, "local-developer preset: --build --yes (builds the operator image from this source checkout); rejects contradictory flags")
 	installCmd.Flags().BoolVar(&installHA, "ha", false, "a replicated relational store (3 CloudNativePG instances, synchronous), and every instance bootstrapped on this cluster HA too: a 3-server NATS cluster with replicated streams and a replicated event store. Needs at least 3 schedulable nodes; database volumes are sized per instance")
 	installCmd.Flags().BoolVar(&installCompact, "compact", false, "small-footprint preset for the cluster and every instance on it: smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and — unless --no-tls=false — no cert-manager and therefore no database backups. Instances on a compact cluster keep the default profile or a smaller one")
+	installCmd.Flags().StringVar(&installSize, "size", "", sizeInstallUsage)
 	installCmd.Flags().BoolVar(&installNoTLS, "no-tls", false, "with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both")
 	installCmd.Flags().BoolVar(&installNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts")
 	installCmd.Flags().BoolVar(&installNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")

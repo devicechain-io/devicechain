@@ -335,6 +335,7 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
+| `--size <size>` | 实例的规格预设：`base`（默认）或 `perf-12k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
 | `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取，空中（OTA）更新管理已包含在 `default` 中；还可选 `telemetry` 或 `ingest-only`。 |
 | `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area outbound-connectors`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
@@ -464,6 +465,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 | `--cluster <name>` | `local` 提供方的 kind 集群，默认 `devicechain`，不存在时创建。 |
 | `--kube-context <name>` | 安装至此 kube-context 指向的已有集群，`dcctl` 不创建或删除它。 |
 | `--compact` | 小资源配置，见下文。 |
+| `--size compact` | 等同于 `--compact`，后者会保留。接受 `base`，表示不使用预设。`perf` 规格按实例在 `dcctl bootstrap` 上选择。见[选择规格](./sizing.md)。 |
 | `--ha` | 高可用，至少需 **3 个可调度节点**，见下文。 |
 | `--no-tls` | 配合 `--compact` 不安装 cert-manager，也无数据库备份；`--compact --no-tls=false` 保留两者。不带 `--compact` 时拒绝；实例纯 HTTP 用 `dcctl bootstrap --no-tls`。 |
 | `--no-monitoring` | 不安装 Prometheus 和 Grafana 监控栈。 |
