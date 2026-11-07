@@ -267,7 +267,10 @@ var (
 	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
 	IntegrationDecoderLookupsCounter          *prometheus.CounterVec
 	IntegrationDecoderProbeUnsupportedCounter prometheus.Counter
-	IntegrationDecoderChargedCounter          prometheus.Counter
+	// DeviceUplinkRequestsCounter and DeviceUplinkChargedCounter report the device-uplink route.
+	DeviceUplinkRequestsCounter      *prometheus.CounterVec
+	DeviceUplinkChargedCounter       prometheus.Counter
+	IntegrationDecoderChargedCounter prometheus.Counter
 	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
 	integrationUndecoded               []*integration.Undecoded
 	IntegrationUndecodedDroppedCounter prometheus.Counter
@@ -470,6 +473,16 @@ func initializeIntegrationMetrics() {
 	IntegrationDecoderChargedCounter = Microservice.NewCounter(
 		"integration_decoder_charged_readings_total",
 		"Count of readings charged at the reading gate for integration uplinks carried to a payload decoder")
+	DeviceUplinkRequestsCounter = Microservice.NewCounterVec(
+		"device_uplink_requests_total",
+		"Count of requests to the device-uplink route (a device's own payload, read by its type's decoder) by result",
+		[]string{"result"})
+	DeviceUplinkChargedCounter = Microservice.NewCounter(
+		"device_uplink_charged_readings_total",
+		"Count of readings charged at the reading gate for device uplinks carried to a payload decoder")
+	for _, r := range processor.DeviceUplinkResults {
+		DeviceUplinkRequestsCounter.WithLabelValues(r)
+	}
 	for _, r := range processor.IntegrationDecoderLookupResults {
 		IntegrationDecoderLookupsCounter.WithLabelValues(r)
 	}
@@ -592,6 +605,45 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Metrics: integrationMetrics(),
 	}
 	return route
+}
+
+// buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when
+// device-management cannot be reached from here (the route then does not exist).
+func buildDeviceUplinkRoute() *processor.DeviceUplinkRoute {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.DeviceManagement.Hostname == "" {
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	return &processor.DeviceUplinkRoute{
+		Plans:   integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
+		Publish: onDeviceUplinkDecoded,
+		Result: func(result string) {
+			if DeviceUplinkRequestsCounter != nil {
+				DeviceUplinkRequestsCounter.WithLabelValues(result).Inc()
+			}
+		},
+		Charged: func(n int) {
+			if DeviceUplinkChargedCounter != nil {
+				DeviceUplinkChargedCounter.Add(float64(n))
+			}
+		},
+	}
+}
+
+// onDeviceUplinkDecoded publishes a device's own IntegrationUplink, synchronously, to the uplink
+// stream. It is the only device-facing publish that may carry that type: the event is stamped with
+// the source, any integration mark is cleared (a device has none), the presented credential is
+// sealed, and nothing is written to inbound-events.
+func onDeviceUplinkDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{}) error {
+	event.Source = source
+	processor.ClearIntegrationMark(event)
+	ctx, msg, ok := buildInboundMessage(source, tenant, event, payload, "")
+	if !ok {
+		return processor.ErrEventNotBuilt
+	}
+	return writeIntegrationUplink(ctx, source, msg)
 }
 
 // contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
@@ -887,6 +939,11 @@ func buildEventSources() error {
 			// device-management from here it answers 503.
 			if route := buildIntegrationRoute(); route != nil {
 				if err := http.UseIntegrations(route); err != nil {
+					return err
+				}
+			}
+			if dr := buildDeviceUplinkRoute(); dr != nil {
+				if err := http.UseDeviceUplinks(dr); err != nil {
 					return err
 				}
 			}

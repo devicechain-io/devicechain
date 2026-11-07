@@ -82,6 +82,12 @@ func (r *IntegrationDecoderPlanResolver) ParsesDecoded() bool { return r.M.Cost.
 
 func (r *IntegrationDecoderPlanResolver) ProfileVersionToken() string { return r.M.ProfileVersionToken }
 
+// DeviceDecoderPlanResolver serves deviceDecoder: the same answer, under the type a device's
+// ingest path asks for.
+type DeviceDecoderPlanResolver struct {
+	IntegrationDecoderPlanResolver
+}
+
 func clampInt32(v int64) int32 {
 	if v > math.MaxInt32 {
 		return math.MaxInt32

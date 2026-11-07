@@ -78,3 +78,34 @@ func IntegrationDecoder(ctx context.Context, api DeviceManagementApi, integratio
 		ProfileVersionToken: res.Scope().ProfileVersionToken,
 	}, nil
 }
+
+// DeviceDecoder answers whether the type of the device with this token has a payload decoder, for
+// a device that publishes its own payload. An unknown device and a type without a decoder are the
+// same answer (present: false), so the question says nothing about which devices exist. It reads
+// through ProfileResolutionByDeviceType like IntegrationDecoder, so what is answered is what the
+// resolver will run.
+func DeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken string) (*IntegrationDecoderAnswer, error) {
+	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) != 1 {
+		return &IntegrationDecoderAnswer{}, nil
+	}
+	res, err := api.ProfileResolutionByDeviceType(ctx, devices[0].DeviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	dec := res.Decoder()
+	if !dec.Declared() {
+		return &IntegrationDecoderAnswer{}, nil
+	}
+	return &IntegrationDecoderAnswer{
+		Present:             true,
+		Input:               dec.Input(),
+		MaxReadings:         dec.MaxReadings(),
+		EstimatedCost:       dec.EstimatedCost(),
+		Cost:                dec.CostShape(),
+		ProfileVersionToken: res.Scope().ProfileVersionToken,
+	}, nil
+}

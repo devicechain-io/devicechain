@@ -278,7 +278,10 @@ var integrationUplinkAllowed = map[string]bool{
 	filepath.Join("services", "event-sources", "processor", "http_integration.go"):         true,
 	filepath.Join("services", "event-sources", "processor", "http_integration_decoder.go"): true,
 	filepath.Join("services", "event-sources", "main.go"):                                  true,
-	filepath.Join("services", "device-management", "processor", "integration_resolve.go"):  true,
+	// The device's own connection: the second producer, which builds the type for a device that
+	// presented its own credential (see http_device_uplink.go).
+	filepath.Join("services", "event-sources", "processor", "http_device_uplink.go"):      true,
+	filepath.Join("services", "device-management", "processor", "integration_resolve.go"): true,
 	// The consumer: the decode step, and the resolver's routing of the type to it.
 	filepath.Join("services", "device-management", "processor", "integration_decode.go"): true,
 	filepath.Join("services", "device-management", "processor", "event_resolver.go"):     true,
