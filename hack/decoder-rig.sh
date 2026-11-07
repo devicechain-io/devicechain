@@ -586,9 +586,20 @@ cmd_mixed() {
   failed_base="$(all_failed_count "$dev")"
 
   replicas="$(dm_replicas)"
+  # The selector must match something, or "no pods left" below would be true of any label.
+  [[ "$(k -n "$namespace" get pods -l devicechain.io/functional-area=device-management -o name | grep -c . || true)" -ge 1 ]] ||
+    fail "the device-management pod selector matches no pod"
   say "scaling device-management ($replicas replica(s)) to zero: nothing reads the integration-uplinks stream"
   k -n "$namespace" scale deploy/device-management --replicas=0 >/dev/null
-  k -n "$namespace" wait --for=delete pod -l app.kubernetes.io/name=device-management --timeout=120s >/dev/null 2>&1 || true
+  # A pod that survived would read the stream and make the whole phase pass without an outage.
+  trap 'k -n "$namespace" scale deploy/device-management --replicas="$replicas" >/dev/null 2>&1 || true; rm -rf "$rig_tmp"' EXIT
+  local left
+  for _ in $(seq 1 60); do
+    left="$(k -n "$namespace" get pods -l devicechain.io/functional-area=device-management -o name 2>/dev/null | grep -c . || true)"
+    [[ "$left" == 0 ]] && break
+    sleep 2
+  done
+  [[ "$left" == 0 ]] || fail "$left device-management pod(s) still run after scaling to zero: there is no outage to test"
 
   say "(a) uplinks for a decoder's type meanwhile: accepted, parked, not stored, not failed"
   s="$(send "$eui" 3)"; note "$s"
@@ -605,6 +616,7 @@ cmd_mixed() {
   [[ "$(count_of "$dev")" == $((base + 21)) ]] || fail "after the outage $dev holds $(count_of "$dev"), wanted exactly $((base + 21))"
   [[ "$(all_failed_count "$dev")" == "$failed_base" ]] || fail "an uplink parked during the outage was recorded as failed"
   note "$dev rose by exactly 21 (3 uplinks x 7 keys); no failed event"
+  trap 'rm -rf "$rig_tmp"' EXIT
   say "PASS (mixed): accepted, parked, never failed, drained exactly once"
 }
 
