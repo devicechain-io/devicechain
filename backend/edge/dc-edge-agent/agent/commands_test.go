@@ -45,6 +45,13 @@ func (f *fakeAdapter) Deliver(_ context.Context, child string, env []byte) error
 	return f.fn(n, child, env)
 }
 
+// snapshot is a copy of the recorded calls, safe to range over while deliveries continue.
+func (f *fakeAdapter) snapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
 func (f *fakeAdapter) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -596,7 +603,7 @@ func TestFullInboxRefusesDurablyAndTellsTheCloud(t *testing.T) {
 		return err == nil && (le.State == stExpired || le.State == stAnswered)
 	})
 	time.Sleep(2 * time.Second)
-	for _, c := range fa.calls {
+	for _, c := range fa.snapshot() {
 		if strings.Contains(c, `"token":"`+refusedToken+`"`) {
 			t.Errorf("a refused command was delivered: the redelivery was accepted")
 		}
@@ -801,7 +808,7 @@ func TestAnInboxMessageForAnotherChildNeverTouchesTheLedgerEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, 10*time.Second, func() bool { return r.a.cmd.refused.Load() >= 1 })
-	for _, c := range fa.calls[before:] {
+	for _, c := range fa.snapshot()[before:] {
 		if strings.HasPrefix(c, "dev2|") {
 			t.Errorf("the adapter was called for the colliding child: %s", c)
 		}
@@ -895,9 +902,12 @@ func TestAnAnswerThatFailedToForwardIsRetried(t *testing.T) {
 // refused, expired, claimed or answered; a sealed answer for one still waiting is not one it wrote.
 func TestASyntheticAnswerForAWaitingCommandIsRefused(t *testing.T) {
 	fa := &fakeAdapter{fn: func(int, string, []byte) error { return fmt.Errorf("%w: down", errNotSubmitted) }}
-	r := newCmdRig(t, fa, nil)
+	r := newCmdRig(t, fa, func(c *config.Configuration) { c.Commands.RetryDelaySeconds = 60 })
 	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
-	waitUntil(t, 10*time.Second, func() bool { return fa.count() >= 1 })
+	waitUntil(t, 10*time.Second, func() bool {
+		le, _, err := r.a.cmd.get("cmd-1")
+		return err == nil && fa.count() >= 1 && le.State == stAccepted
+	})
 
 	body := []byte(`{"commandToken":"cmd-1","success":false,"reach":"UNSENT","dispatchNonce":"n1"}`)
 	if err := r.a.sealedPublish(cmdSyntheticPrefix+"dev1", body, "stray"); err != nil {
@@ -947,10 +957,15 @@ func TestLocalClientCannotForgeAnAnswer(t *testing.T) {
 // to any adapter; an answer for it is a fabrication and is refused for that reason.
 func TestAChildCannotAnswerACommandItWasNeverGiven(t *testing.T) {
 	fa := &fakeAdapter{fn: func(int, string, []byte) error { return fmt.Errorf("%w: down", errNotSubmitted) }}
-	r := newCmdRig(t, fa, nil)
+	// A long retry delay parks the command in "accepted" after its one failed attempt, so the
+	// answer below meets a command that is certainly not in flight.
+	r := newCmdRig(t, fa, func(c *config.Configuration) { c.Commands.RetryDelaySeconds = 60 })
 	child := r.child("dev1")
 	r.send("dev1", cmdEnvelope("cmd-1", "dev1", "n1", ""))
-	waitUntil(t, 10*time.Second, func() bool { return fa.count() >= 1 })
+	waitUntil(t, 10*time.Second, func() bool {
+		le, _, err := r.a.cmd.get("cmd-1")
+		return err == nil && fa.count() >= 1 && le.State == stAccepted
+	})
 
 	respond(child, t, "dev1", `{"commandToken":"cmd-1","success":true,"dispatchNonce":"n1"}`)
 	waitUntil(t, 10*time.Second, func() bool { return r.refusedReason("command_responses_refused_total", "not_dispatched") >= 1 })
