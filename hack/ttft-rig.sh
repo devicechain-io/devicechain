@@ -235,6 +235,32 @@ first_dashboard	70000
   : >"$phases_file"
   : >"$steps_file"
   t_start=0
+  # Container ownership: a stand-in docker records every rm. An unlabelled or foreign-labelled
+  # container must survive (and the call must fail); an own-labelled one must go; an absent one is fine.
+  local rm_log="$work/docker-rm.log" label
+  : >"$rm_log"
+  docker() {
+    case "$1" in
+      inspect) [[ -n "${fake_label+x}" ]] || return 1; printf '%s
+' "$fake_label" ;;
+      rm) printf '%s
+' "$*" >>"$rm_log" ;;
+    esac
+  }
+  for label in "" "not-$cluster"; do
+    fake_label="$label"
+    if (remove_device_container) >/dev/null 2>&1; then fail "remove_device_container accepted a container labelled '$label'"; fi
+    [[ ! -s "$rm_log" ]] || fail "a container labelled '$label' was removed"
+  done
+  fake_label="$cluster"
+  remove_device_container
+  [[ "$(wc -l <"$rm_log")" -eq 1 ]] || fail "an own container was not removed exactly once"
+  : >"$rm_log"
+  unset fake_label
+  remove_device_container
+  [[ ! -s "$rm_log" ]] || fail "rm ran for an absent container"
+  unset -f docker
+  pass "a container is removed only when it carries this rig's label"
   result_file="$saved_result"
   dcctl="$saved_dcctl"
 }
@@ -362,7 +388,9 @@ admin_token=""
 tenant_token=""
 curl_revoke=()
 [[ "$(curl -V 2>/dev/null)" != *[Ss]channel* ]] || curl_revoke=(--ssl-no-revoke)
-curl_api() { curl -sS "${curl_revoke[@]}" --resolve "$host:$https_port:127.0.0.1" --cacert "$(winpath "$ingress_ca")" "$@"; }
+# A bounded call: an ingress that accepts and never answers must fail the call, or the polling loops
+# that wrap it could never reach their own timeout and a hung rig would never record the failure.
+curl_api() { curl -sS --connect-timeout "${DC_TTFT_CURL_CONNECT_TIMEOUT:-10}" --max-time "${DC_TTFT_CURL_MAX_TIME:-60}" "${curl_revoke[@]}" --resolve "$host:$https_port:127.0.0.1" --cacert "$(winpath "$ingress_ca")" "$@"; }
 
 # gql <url> <token|-> <query> [variables-json] prints .data; a GraphQL error prints to stderr, returns 1.
 gql() {
@@ -442,8 +470,19 @@ phase_provision() {
   phase_end
 }
 
+# remove_device_container removes $device_container only if this rig made it (the label carries the
+# cluster name). A container that exists under the name but is not ours is somebody else's: refuse
+# rather than delete it, whatever the cluster state turns out to be.
+remove_device_container() {
+  local owner
+  owner="$(dk inspect -f '{{index .Config.Labels "devicechain.io/ttft-rig"}}' "$device_container" 2>/dev/null)" || return 0
+  [[ "$owner" == "$cluster" ]] ||
+    fail "container $device_container exists but is not this rig's (label devicechain.io/ttft-rig=${owner:-<none>}, want $cluster): refusing to remove it; set DC_TTFT_DEVICE_CONTAINER to another name"
+  dk rm -f "$device_container" >/dev/null
+}
+
 start_container() {
-  dk rm -f "$device_container" >/dev/null 2>&1 || true
+  remove_device_container
   cp "$broker_ca" "$work/broker-ca.pem" 2>/dev/null || true
   dk run -d --init --name "$device_container" --network kind --label devicechain.io/ttft-rig="$cluster" \
     -v "$(winpath "$work"):/work" --entrypoint /bin/sleep "$device_image" infinity >/dev/null
@@ -525,7 +564,7 @@ cmd_down() {
   need kind; need docker; need kubectl
   if docker inspect "$device_container" >/dev/null 2>&1; then
     say "removing the device container $device_container"
-    docker rm -f "$device_container" >/dev/null
+    remove_device_container
   fi
   local rec="${HOME:?}/.devicechain/instances/$instance/instance.json" uid="" recctx
   if cluster_exists; then
