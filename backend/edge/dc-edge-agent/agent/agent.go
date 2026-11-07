@@ -192,6 +192,17 @@ type Agent struct {
 	sent       *recentSent
 	dead       *deadLetters
 	refusalLog logLimiter
+
+	// cmd is the command downlink, nil unless commands.enabled. adapterOverride replaces the
+	// local MQTT adapter; it exists only for tests that must make local delivery fail.
+	cmd     *commandPlane
+	cmdSeal string
+	// beforeDeliverHook runs after a command is claimed and before it is handed to the adapter.
+	// Tests only: it lets a test spend time at the one moment a deadline must be re-checked.
+	beforeDeliverHook func()
+	adapterOverride   ChildAdapter
+	// cmdAckWaitOverride, when positive, replaces the command consumers' redelivery wait. Tests only.
+	cmdAckWaitOverride time.Duration
 }
 
 // New builds an Agent from validated config (the uplink credential is resolved
@@ -229,6 +240,10 @@ func New(cfg config.Configuration, log *slog.Logger) (*Agent, error) {
 		sent: newRecentSent(), dead: newDeadLetters(cfg.Local.StoreDir),
 	}
 	up.onNotice = a.handleNotice
+	if cfg.Commands.Enabled {
+		a.cmd = newCommandPlane(cfg.Commands)
+		up.onCommand = a.acceptCommand
+	}
 	return a, nil
 }
 
@@ -326,6 +341,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	defer a.stopMetrics()
 
+	// The command downlink (opt-in) is up BEFORE the uplink connects, so the first command the
+	// broker delivers finds the inbox and ledger ready.
+	if a.commandsOn() {
+		if err := a.startCommandPlane(ctx); err != nil {
+			return fmt.Errorf("start command downlink: %w", err)
+		}
+	}
+
 	// The uplink runs its own bounded-backoff reconnect loop for the life of ctx.
 	go a.uplink.Run(ctx)
 
@@ -401,6 +424,11 @@ func (a *Agent) bootstrapStream() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if a.commandsOn() {
+		if err := a.ensureCommandPlane(js); err != nil {
+			return "", fmt.Errorf("command downlink streams: %w", err)
+		}
+	}
 	// Seed the acked-count from the stream's first sequence, MQTT still disabled. An absent
 	// token (fresh store, or first E3 boot over a pre-E3 store) assumes everything already
 	// removed was acked, so drops count from this baseline forward; a present token is
@@ -440,7 +468,7 @@ func (a *Agent) newServer(mqttEnabled bool) (*natsserver.Server, error) {
 		// reservation and crash-loop the agent — on exactly the box (small disk, long
 		// outage, reboot) E3 exists for. Pinning it decouples admission from boot-time
 		// free space; the headroom covers the internal MQTT streams too.
-		JetStreamMaxStore: a.cfg.Local.SpoolMaxBytes + mqttStoreHeadroom,
+		JetStreamMaxStore: a.cfg.Local.SpoolMaxBytes + mqttStoreHeadroom + a.commandStoreBytes(),
 		// Lift the per-stream consumer cap nats-server 2.15 introduced. Left at zero it
 		// resolves to 1,000 consumers per stream, and every QoS 1 or 2 MQTT subscription
 		// is a durable consumer on the server's own $MQTT_msgs stream (a QoS 2 session
@@ -927,6 +955,7 @@ func (a *Agent) sampleLoop(ctx context.Context) {
 // refreshes the /healthz liveness flag, and emits a status line (escalated to WARN near
 // the high-water mark or on new drops / an instanceId mismatch).
 func (a *Agent) sampleMetrics() {
+	a.sampleCommandPlane()
 	info, err := a.js.StreamInfo(captureStream)
 	if err != nil {
 		// A failed read may be a real JetStream wedge OR a transient blip (a JS-API timeout

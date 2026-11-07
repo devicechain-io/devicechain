@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -38,6 +39,11 @@ type edgeMetrics struct {
 	// agent refused to forward itself, by reason. A CounterVec because the reason is a label;
 	// the agent increments it beside its own atomic total (see Agent.refuse).
 	refused *prometheus.CounterVec
+
+	// Command downlink series; nil unless commands.enabled.
+	cmdRefused     *prometheus.CounterVec
+	cmdRespRefused *prometheus.CounterVec
+	cmdInboxDepth  prometheus.Gauge
 
 	// Set on the sample tick from StreamInfo().State.
 	spoolUsedBytes        prometheus.Gauge
@@ -87,6 +93,10 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 		spoolLimitBytes:       gauge("spool_limit_bytes", "Configured maximum size of the durable capture spool (spoolMaxBytes)."),
 		spoolUsedMessages:     gauge("spool_used_messages", "Events currently buffered in the capture spool (captured but not yet forwarded)."),
 		spoolOldestAgeSeconds: gauge("spool_oldest_age_seconds", "Age in seconds of the oldest buffered event; the primary backlog signal."),
+	}
+
+	if a.cmd != nil {
+		m.registerCommandMetrics(auto, a.cmd)
 	}
 
 	m.refused = auto.NewCounterVec(prometheus.CounterOpts{
@@ -189,4 +199,38 @@ func (m *edgeMetrics) stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = m.srv.Shutdown(ctx)
+}
+
+// registerCommandMetrics adds the downlink's series. They exist only when the downlink is
+// enabled, so an agent that never opted in exports nothing new.
+func (m *edgeMetrics) registerCommandMetrics(auto promauto.Factory, cp *commandPlane) {
+	cf := func(name, help string, v *atomic.Int64) {
+		auto.NewCounterFunc(prometheus.CounterOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: name, Help: help,
+		}, func() float64 { return float64(v.Load()) })
+	}
+	cf("commands_received_total", "Commands received from the platform for this gateway's devices.", &cp.received)
+	cf("commands_delivered_total", "Commands handed to a device's local adapter.", &cp.delivered)
+	cf("commands_expired_total", "Commands that expired at the agent before local delivery (the cloud was told UNSENT).", &cp.expired)
+	cf("commands_duplicate_total", "Repeats of a command or answer the agent recognised and did not act on twice.", &cp.duplicates)
+	cf("command_responses_forwarded_total", "Command answers acknowledged by the cloud uplink.", &cp.respForwarded)
+	cf("command_responses_dropped_total", "Command answers evicted from the bounded responses stream before they were forwarded.", &cp.respDropped)
+	m.cmdRefused = auto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "commands_refused_total",
+		Help: "Commands the agent refused, by reason (inbox_full, bad_envelope, device_mismatch, token_reused, gateway_self, too_large, forged).",
+	}, []string{"reason"})
+	m.cmdRespRefused = auto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "command_responses_refused_total",
+		Help: "Command answers the agent would not forward, by reason (not_owner, unknown_command, not_dispatched, duplicate, undecodable, bad_subject, nonce_mismatch, forged).",
+	}, []string{"reason"})
+	for _, r := range []string{"inbox_full", "bad_envelope", "device_mismatch", "token_reused", "gateway_self", "too_large", "forged"} {
+		m.cmdRefused.WithLabelValues(r)
+	}
+	for _, r := range []string{"not_owner", "unknown_command", "not_dispatched", "duplicate", "undecodable", "bad_subject", "nonce_mismatch", "forged"} {
+		m.cmdRespRefused.WithLabelValues(r)
+	}
+	m.cmdInboxDepth = auto.NewGauge(prometheus.GaugeOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "command_inbox_depth",
+		Help: "Commands durable on this box and not yet delivered or expired.",
+	})
 }
