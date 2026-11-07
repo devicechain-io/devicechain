@@ -260,11 +260,21 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 			writeBackpressured(w)
 			return
 		}
+		if errors.Is(err, ErrEventNotBuilt) {
+			// Nothing was published and a retry fails the same way: not a 202, and not the 503 a
+			// client retries. The reason is in the service's log, never in the response.
+			http.Error(w, "unable to accept event: internal error", http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, "unable to accept event: downstream unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
+
+// ErrEventNotBuilt is what the decoded hook returns for an event whose message could not be built
+// (it could not be sealed or marshalled): dropped, never published. It is the HTTP 500.
+var ErrEventNotBuilt = errors.New("the event's message could not be built, so it was not published")
 
 // retryAfterSeconds is the Retry-After a backpressure refusal carries: the interval after
 // which the gate has been measured again.
