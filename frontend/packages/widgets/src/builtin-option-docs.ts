@@ -132,6 +132,25 @@ export const OPTION_DOC_OVERRIDES: Readonly<Record<string, Readonly<Record<strin
     pageSize: 'Rows per page. Default 10. The CSV export holds every row, not just the page.',
     staleAfterSeconds: 'Marks the table stale once its history has not been read for longer than this many seconds (it is re-read at the end of each time bucket, so only reads that keep failing make it stale). Unset, the age is shown and nothing is marked stale.',
   },
+  'scada-symbol': {
+    symbol: 'Which process symbol to draw. Default pump.',
+    onAt: 'The value at or above which the symbol is on (pump or motor running, valve open, breaker closed, light lit). Default 1. For a pipe, the smallest flow that counts; a negative flow shows the reverse direction. Not used by a tank or a sensor.',
+    title: 'Heading shown in the widget frame. Defaults to the displayed measurement name.',
+    measurement: 'The signal that drives the symbol. A 0/1 signal needs nothing else; a speed or current is read against On at.',
+    min: 'Value of an empty tank. Used by the tank symbol only; set it with Max.',
+    max: 'Value of a full tank. Used by the tank symbol only; set it with Min.',
+    thresholds: 'Severity bands over the value. A value in a major or critical band shows the symbol as faulted, in that band’s colour; a tank takes its liquid colour from the band it is in.',
+  },
+  'status-grid': {
+    worstFirst: 'Put the devices in the most severe band first (top-left). Off keeps the fleet’s own order.',
+    measurement: 'The measurement each tile shows. Defaults to the first the datasource selects.',
+    thresholds: 'Severity bands over the measurement. A tile takes the colour of the band its device’s latest reading is in; a reading outside every band, or in a normal band, keeps the neutral colour. A device with no reading is drawn hollow, never as OK.',
+    staleAfterSeconds: 'Marks the grid stale once its newest reading in the fleet is older than this many seconds. Unset, the age is shown and nothing is marked stale.',
+  },
+  'state-timeline': {
+    thresholds: 'The states of the measurement, lowest first: each entry starts a state at its value that lasts until the next entry. Give each a label and a level that colours it. Below the first entry the lane reads Normal. Each stretch is the state of the average of a time bucket, not an exact moment of change.',
+    staleAfterSeconds: 'Marks the timeline stale once its history has not been read for longer than this many seconds (it is re-read at the end of each time bucket). Unset, the age is shown and nothing is marked stale.',
+  },
   'fleet-count': {
     measurement: 'The measurement whose bands flag a device. Defaults to the first the datasource selects.',
   },

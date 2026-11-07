@@ -46,6 +46,7 @@ const REASONS: FailedEventReason[] = [
   'INVALID',
   'API_CALL_FAILED',
   'INTEGRATION_ALIAS_MISMATCH',
+  'DECODE_FAILED',
   'UNKNOWN',
 ];
 
@@ -64,10 +65,13 @@ function sinceFor(hours: number): string {
 function IngestFailuresView() {
   const { t } = useTranslation('ingestFailures');
   const [pageNumber, setPageNumber] = useState(1);
-  const [reason, setReason] = useState<FailedEventReason | ''>('');
-  const [range, setRange] = useState('24');
-  // The device page links here with the device it is about.
+  // The device page links here with the device it is about, and a profile's Decoder tab with the reason.
   const [params] = useSearchParams();
+  const [reason, setReason] = useState<FailedEventReason | ''>(() => {
+    const r = params.get('reason');
+    return REASONS.find((x) => x === r) ?? '';
+  });
+  const [range, setRange] = useState('24');
   const [deviceInput, setDeviceInput] = useState(params.get('device') ?? '');
   const device = useDebouncedValue(deviceInput.trim(), 300);
 
