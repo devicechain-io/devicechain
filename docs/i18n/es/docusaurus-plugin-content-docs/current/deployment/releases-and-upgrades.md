@@ -828,6 +828,7 @@ Qué requiere acción:
 
 - **No hace falta hacer nada por la nueva opción `--size`.** `dcctl bootstrap --size perf-12k` aplica un dimensionamiento de alto rendimiento medido, y `dcctl install --size compact` equivale a `--compact`, que se mantiene. Una instancia que no indica tamaño genera exactamente lo que generaba antes. Consulte [Preajustes de tamaño](#v120-size-presets).
 - **Sepa que `devicechain_eventprocessing_detect_pending_timers` ahora cuenta las claves armadas.** Antes contaba cada temporizador que una regla de ausencia o de sesión había insertado y que aún no vencía, y crecía con la tasa de eventos; el motor ahora guarda una entrada por dispositivo armado, de modo que el indicador sigue el número de dispositivos y la memoria de las reglas de ausencia y de sesión ya no crece con la tasa de eventos. El nombre y la alerta no cambian; un panel o un umbral de alerta que ajustó a los valores anteriores, más altos, puede bajarse.
+- **Enrute sus alertas a una persona.** De fábrica Alertmanager descarta todas las alertas, y una instancia en ese estado ahora muestra `ALERTS NOT ROUTED` en `dcctl instances list` y en su condición `AlertsRouted`. Pase `--alert-webhook`, `--alert-email` o `--alert-config` a `dcctl install` o `dcctl upgrade`, y `--alert-watchdog-webhook` para enterarse de cuándo se detiene el propio sistema de alertas. Un clúster instalado con una versión anterior ejecuta antes `dcctl install` una vez. Consulte [Las alertas llegan a una persona](#v120-alert-routing).
 
 #### Las partes de la detección se ejecutan en paralelo {#v120-detect-shards}
 
@@ -983,6 +984,14 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 #### Tablero del agente de borde y el job de rascado {#v120-edge-board-job}
 
 Los paneles de proceso del tablero del agente de borde seleccionan `job="dc-edge-agent"` además del agente. `agent` es una etiqueta externa global del colector de la máquina, así que un colector que también rasca otra cosa en la máquina (node exporter, por ejemplo) sumaba la memoria, la CPU, las goroutines y los archivos abiertos de ese proceso a los paneles de todos los agentes. La configuración de rascado documentada ya usa `job_name: dc-edge-agent`, de modo que un tablero importado con ella no necesita cambios. Si dio otro nombre al job, cámbielo en el colector o edite las cinco consultas de proceso y de runtime del tablero (`process_*` y `go_goroutines`) con su nombre de job. Vuelva a importar el tablero desde `backend/edge/dc-edge-agent/dashboards/edge-agent.json` para aplicar el cambio.
+
+#### Las alertas llegan a una persona {#v120-alert-routing}
+
+Cada regla de alerta que incluye el chart lleva ahora un `runbook_url` que abre su entrada en la nueva [Guía de alertas](./alert-runbook.md). Nada más de una regla cambia: nombres, expresiones, duraciones `for` y etiquetas son los mismos.
+
+`dcctl install` y `dcctl upgrade` aceptan `--alert-webhook`, `--alert-email` (con `--alert-smtp-host`, `--alert-smtp-from`, `--alert-smtp-user` y `--alert-smtp-password-file`), `--alert-config`, `--alert-watchdog-webhook` y `--clear-alert-routing`. Alertmanager lee ahora su configuración del Secret `dc-alertmanager-config` del namespace `monitoring`, que `dcctl install` escribe antes de aplicar la pila de monitoreo. Volver a ejecutar `dcctl install` sin ninguna opción `--alert-*` conserva el enrutamiento existente, y una primera instalación sin ellas escribe una configuración sin receptor, que es el comportamiento de las versiones anteriores. Una instancia indica si alguien escucha en su nueva condición `AlertsRouted` y en `dcctl instances list`; la condición nunca hace que la instancia deje de estar lista.
+
+Si enrutaba las alertas editando a mano el propio Secret de Alertmanager, traslade esa configuración a `--alert-config`: la pila lee ahora `dc-alertmanager-config`, y una edición manual del Secret anterior no se lee. Vuelva a ejecutar `dcctl install` una vez en un clúster instalado con una versión anterior antes de usar las opciones con `dcctl upgrade`; en caso contrario `dcctl upgrade` las rechaza, porque el Alertmanager anterior no lee ningún Secret nuestro. Consulte [Enrutar las alertas a una persona](./observability.md#alert-routing).
 
 #### Otros cambios en esta versión {#v120-other-changes}
 

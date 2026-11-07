@@ -73,6 +73,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#instancecontainerrestarted"
             summary: "a container in this instance was restarted"
             description: "Kubernetes restarted the container named by the pod and container labels in the last 15 minutes. A DeviceChain service exits on purpose when it cannot do its job, and the reason is in the log of the container that exited: run kubectl logs --previous on the pod and read the last error line, usually after 'A component has declared this process unfit to continue'. A read loop that failed for two minutes with no answer from the message broker names its stream and its last error there. Several services restarting together point at the broker: check that its servers are running and run dcctl ha verify. If the restarted container is a broker server (dc-nats-*), read its previous log too; its streams take a few minutes to be current again. A container whose last state is OOMKilled needs a higher memory limit. Restarts in the first minutes of an install or upgrade are expected. Messages the container had read from the broker but not acknowledged are delivered again, but requests a device or client had in flight to it fail and must be retried, and every restart lengthens the outage it happened in."
 {{- end }}

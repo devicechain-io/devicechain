@@ -94,6 +94,7 @@ tests:
               namespace: dci-devicechain
               cluster: dc-tsdb
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgresnorecentsnapshotbackup"
               summary: "No database snapshot backup has completed in 36 hours"
               description: >-
                 The dc-tsdb database in dci-devicechain has completed no volume-snapshot base
@@ -133,6 +134,7 @@ tests:
               namespace: dc-system
               cluster: dc-rdb
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgresnorecentsnapshotbackup"
               summary: "No database snapshot backup has completed in 36 hours"
               description: >-
                 The dc-rdb database in dc-system has completed no volume-snapshot base backup in
@@ -181,6 +183,7 @@ tests:
               scheduledbackup: dc-tsdb-snapshot
               method: volumeSnapshot
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasesnapshotpruningstalled"
               summary: "Database snapshot backups are not being pruned"
               description: >-
                 The DeviceChain operator has not finished pruning the volume snapshots of
@@ -202,6 +205,7 @@ tests:
               scheduledbackup: dc-rdb-snapshot
               method: volumeSnapshot
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasesnapshotpruningstalled"
               summary: "Database snapshot backups are not being pruned"
               description: >-
                 The DeviceChain operator has not finished pruning the volume snapshots of
@@ -220,6 +224,7 @@ tests:
               scheduledbackup: dc-tsdb-snapshot
               method: volumeSnapshot
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasesnapshotpruningstalled"
               summary: "Database snapshot backups are not being pruned"
               description: >-
                 The DeviceChain operator has not finished pruning the volume snapshots of
@@ -256,6 +261,7 @@ tests:
               devicechain_instance: devicechain
               method: volumeSnapshot
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasesnapshotbackupsunobserved"
               summary: "Database snapshot backups are on, but nothing is reporting on them"
               description: >-
                 This instance's databases take their daily base backups as volume snapshots, but
@@ -297,6 +303,7 @@ tests:
               namespace: dci-devicechain
               cluster: dc-tsdb
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgresnorecentsnapshotbackup"
               summary: "No database snapshot backup has completed in 36 hours"
               description: >-
                 The dc-tsdb database in dci-devicechain has completed no volume-snapshot base

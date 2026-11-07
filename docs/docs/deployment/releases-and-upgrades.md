@@ -783,6 +783,7 @@ What needs action:
 
 - **Nothing needs doing for the new `--size` option.** `dcctl bootstrap --size perf-12k` applies a measured high-throughput sizing, and `dcctl install --size compact` is the same as `--compact`, which stays. An instance that names no size renders exactly what it did before. See [Size presets](#v120-size-presets).
 - **Know that `devicechain_eventprocessing_detect_pending_timers` now counts armed keys.** It used to count every timer an absence or session rule had ever pushed that had not yet come due, which grew with the event rate; the engine now keeps one entry per armed device, so the gauge follows the number of devices and the memory of absence and session rules no longer grows with the event rate. The name and the alert are unchanged; a dashboard or alert threshold you tuned against the old, larger values can be lowered.
+- **Route your alerts to a person.** Out of the box Alertmanager drops every alert, and an instance in that state now reports `ALERTS NOT ROUTED` in `dcctl instances list` and in its `AlertsRouted` condition. Pass `--alert-webhook`, `--alert-email` or `--alert-config` to `dcctl install` or `dcctl upgrade`, and `--alert-watchdog-webhook` to hear when alerting itself stops. A cluster installed by an earlier release runs `dcctl install` once first. See [Alerts reach a person](#v120-alert-routing).
 
 #### Detection shards run in parallel {#v120-detect-shards}
 
@@ -938,6 +939,14 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 #### Edge agent board and the scrape job {#v120-edge-board-job}
 
 The edge agent board's process panels select `job="dc-edge-agent"` as well as the agent. `agent` is a global external label on the box's collector, so a collector that also scrapes something else on the box (node exporter, for example) used to have that process's memory, CPU, goroutines and open files added into every agent's panels. The documented scrape configuration already uses `job_name: dc-edge-agent`, so a board imported with it needs no change. If you named the job something else, either rename it in the collector or edit the five process and runtime queries on the board (`process_*` and `go_goroutines`) to your job name. Re-import the board from `backend/edge/dc-edge-agent/dashboards/edge-agent.json` to take the change.
+
+#### Alerts reach a person {#v120-alert-routing}
+
+Every alert rule the chart ships now carries a `runbook_url` that opens its entry in the new [Alert Runbook](./alert-runbook.md). Nothing else about a rule changes: names, expressions, `for` durations and labels are as they were.
+
+`dcctl install` and `dcctl upgrade` take `--alert-webhook`, `--alert-email` (with `--alert-smtp-host`, `--alert-smtp-from`, `--alert-smtp-user` and `--alert-smtp-password-file`), `--alert-config`, `--alert-watchdog-webhook` and `--clear-alert-routing`. The Alertmanager now reads its configuration from the Secret `dc-alertmanager-config` in the `monitoring` namespace, which `dcctl install` writes before it applies the monitoring stack. A re-run of `dcctl install` with no `--alert-*` flag keeps the routing that is there, and a first install with none writes a configuration with no receiver, which is the behaviour of earlier releases. An instance reports whether anything is listening in its new `AlertsRouted` condition and in `dcctl instances list`; the condition never makes the instance unready.
+
+If you routed alerts by editing the Alertmanager's own Secret by hand, move that configuration to `--alert-config`: the stack now reads `dc-alertmanager-config` instead, and a hand edit of the old Secret is not read. Re-run `dcctl install` once on a cluster installed by an earlier release before using the flags with `dcctl upgrade`; `dcctl upgrade` refuses otherwise, because the older Alertmanager reads no Secret of ours. See [Routing alerts to a person](./observability.md#alert-routing).
 
 #### Other changes in this release {#v120-other-changes}
 
