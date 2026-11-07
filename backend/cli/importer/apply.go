@@ -22,6 +22,7 @@ type Client interface {
 const (
 	createProfileMutation   = `mutation($request:DeviceProfileCreateRequest){createDeviceProfile(request:$request){token}}`
 	publishProfileMutation  = `mutation($token:String!,$label:String){publishDeviceProfile(token:$token,label:$label){version}}`
+	profileVersionsQuery    = `query($token:String!){deviceProfileVersions(token:$token,limit:1){version}}`
 	createTypeMutation      = `mutation($request:DeviceTypeCreateRequest){createDeviceType(request:$request){token}}`
 	createAssetTypeMutation = `mutation($request:AssetTypeCreateRequest){createAssetType(request:$request){token}}`
 	createAssetMutation     = `mutation($request:AssetCreateRequest){createAsset(request:$request){token}}`
@@ -32,6 +33,39 @@ const (
 	createRelMutation     = `mutation($request:EntityRelationshipCreateRequest!){createEntityRelationship(request:$request){token}}`
 	setAttrMutation       = `mutation($request:EntityAttributeSetRequest!){setEntityAttribute(request:$request){attrKey}}`
 )
+
+// profileVersionsResult is the answer to profileVersionsQuery: the profile's newest version, if any.
+type profileVersionsResult struct {
+	DeviceProfileVersions []struct {
+		Version int `json:"version"`
+	} `json:"deviceProfileVersions"`
+}
+
+// authGuard stops a run at the first refused credential. A 401 means the token, not the item,
+// was refused, so every later call would fail the same way; without this a rejected session turns
+// into one failure line per entity and the real cause scrolls away. Every call after the first
+// refusal fails at once, without touching the network, and Apply returns the cause.
+type authGuard struct {
+	Client
+	err error
+}
+
+func (g *authGuard) Query(ctx context.Context, baseURL, query string, variables map[string]any, out any) error {
+	if g.err != nil {
+		return g.err
+	}
+	err := g.Client.Query(ctx, baseURL, query, variables, out)
+	if userclient.IsUnauthorized(err) {
+		g.err = err
+	}
+	return err
+}
+
+func (g *authGuard) halted() bool { return g.err != nil }
+
+func (g *authGuard) haltError() error {
+	return fmt.Errorf("the server refused the session (%v); the run stopped at the first refusal and nothing after it was attempted. Re-run to continue: it only retries what is missing", g.err)
+}
 
 // importBatch is the importDevices row ceiling.
 const importBatch = 1000
@@ -85,51 +119,93 @@ func asGraphQL(err error, target **userclient.GraphQLError) bool {
 // is create-only and idempotent: a thing that already exists counts as existing and is never
 // updated. A failure on one item does not stop the rest, because every item is independent of
 // its siblings; items that depend on a failed one fail in turn and say so.
-func Apply(ctx context.Context, c Client, endpoint string, p *Plan) ([]Tally, error) {
+func Apply(ctx context.Context, client Client, endpoint string, p *Plan) ([]Tally, error) {
 	var out []Tally
 	tally := func(kind string) *Tally { out = append(out, Tally{Kind: kind}); return &out[len(out)-1] }
-	create := func(t *Tally, ref, q string, vars map[string]any) bool {
+	c := &authGuard{Client: client}
+	// createOutcome says whether the write made the thing, found it already there, or failed.
+	createOutcome := func(t *Tally, ref, q string, vars map[string]any) (created, existed bool) {
 		err := c.Query(ctx, endpoint, q, vars, nil)
 		switch {
 		case err == nil:
 			t.Created++
-			return true
+			return true, false
 		case conflict(err):
 			t.Exists++
-			return false
+			return false, true
 		default:
 			t.fail(ref, err)
-			return false
+			return false, false
 		}
+	}
+	create := func(t *Tally, ref, q string, vars map[string]any) bool {
+		created, _ := createOutcome(t, ref, q, vars)
+		return created
 	}
 
 	t := tally("device profiles")
 	for _, pr := range p.Profiles {
 		req := map[string]any{"token": pr.Token, "name": pr.Name, "description": pr.Description, "metadata": pr.Metadata}
-		// Publish only a profile this run created, so a re-run never mints another version.
-		if create(t, pr.Token, createProfileMutation, map[string]any{"request": req}) {
+		// Publish a profile this run created, and one an earlier run created but never published
+		// (the publish failed after the create). Never publish one that already has a version, so
+		// a re-run does not mint another.
+		created, existed := createOutcome(t, pr.Token, createProfileMutation, map[string]any{"request": req})
+		publish := created
+		if existed {
+			var vs profileVersionsResult
+			if err := c.Query(ctx, endpoint, profileVersionsQuery, map[string]any{"token": pr.Token}, &vs); err != nil {
+				t.fail(pr.Token+" (versions)", err)
+			} else {
+				publish = len(vs.DeviceProfileVersions) == 0
+			}
+		}
+		if publish {
 			if err := c.Query(ctx, endpoint, publishProfileMutation, map[string]any{"token": pr.Token, "label": "imported"}, nil); err != nil {
 				t.fail(pr.Token+" (publish)", err)
 			}
 		}
+		if c.halted() {
+			break
+		}
+	}
+	if c.halted() {
+		return out, c.haltError()
 	}
 	t = tally("device types")
 	for _, pr := range p.Profiles {
+		if c.halted() {
+			break
+		}
 		req := map[string]any{"token": pr.Token, "name": pr.Name, "description": pr.Description, "profileToken": pr.Token}
 		create(t, pr.Token, createTypeMutation, map[string]any{"request": req})
 	}
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("asset types")
 	for _, a := range p.AssetTypes {
+		if c.halted() {
+			break
+		}
 		req := map[string]any{"token": a.Token, "name": a.Name, "description": a.Description, "metadata": a.Metadata}
 		create(t, a.Token, createAssetTypeMutation, map[string]any{"request": req})
 	}
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("assets")
 	for _, a := range p.Assets {
+		if c.halted() {
+			break
+		}
 		req := map[string]any{"token": a.Token, "name": a.Name, "description": a.Description,
 			"assetTypeToken": a.TypeToken, "metadata": a.Metadata}
 		create(t, a.Token, createAssetMutation, map[string]any{"request": req})
 	}
 
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("devices")
 	var plain, carried []DeviceRow
 	for _, r := range p.Devices {
@@ -142,13 +218,25 @@ func Apply(ctx context.Context, c Client, endpoint string, p *Plan) ([]Tally, er
 	importRows(ctx, c, endpoint, t, plain, "NONE")
 	importRows(ctx, c, endpoint, t, carried, "FACTORY_CREDENTIALS")
 
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("relationship types")
 	for _, r := range p.RelTypes {
+		if c.halted() {
+			break
+		}
 		req := map[string]any{"token": r.Token, "name": r.Name, "tracked": false}
 		create(t, r.Token, createRelTypeMutation, map[string]any{"request": req})
 	}
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("asset hierarchy")
 	for _, pp := range p.Parents {
+		if c.halted() {
+			break
+		}
 		// setAssetParent replaces the parent, so it is already idempotent: count it as created.
 		if err := c.Query(ctx, endpoint, setParentMutation, map[string]any{"child": pp.Child, "parent": pp.Parent}, nil); err != nil {
 			t.fail(pp.Child, err)
@@ -156,14 +244,26 @@ func Apply(ctx context.Context, c Client, endpoint string, p *Plan) ([]Tally, er
 			t.Created++
 		}
 	}
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("relationships")
 	for _, r := range p.Relations {
+		if c.halted() {
+			break
+		}
 		req := map[string]any{"token": r.Token, "sourceType": r.SourceType, "source": r.Source,
 			"targetType": r.TargetType, "target": r.Target, "relationshipType": r.Type}
 		create(t, r.Token, createRelMutation, map[string]any{"request": req})
 	}
+	if c.halted() {
+		return out, c.haltError()
+	}
 	t = tally("attributes")
 	for _, a := range p.Attributes {
+		if c.halted() {
+			break
+		}
 		req := map[string]any{"entityType": a.EntityType, "entity": a.Entity, "scope": a.Scope,
 			"attrKey": a.Key, "valueType": a.ValueType, "value": a.Value}
 		// An upsert: the same write twice is one row, so it counts as written either way.
@@ -174,6 +274,9 @@ func Apply(ctx context.Context, c Client, endpoint string, p *Plan) ([]Tally, er
 		}
 	}
 
+	if c.halted() {
+		return out, c.haltError()
+	}
 	failed := 0
 	for _, x := range out {
 		failed += x.Failed
@@ -198,6 +301,9 @@ type importResult struct {
 
 func importRows(ctx context.Context, c Client, endpoint string, t *Tally, rows []DeviceRow, mode string) {
 	for start := 0; start < len(rows); start += importBatch {
+		if g, ok := c.(*authGuard); ok && g.halted() {
+			return
+		}
 		end := min(start+importBatch, len(rows))
 		batch := rows[start:end]
 		in := make([]any, 0, len(batch))

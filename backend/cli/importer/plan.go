@@ -4,6 +4,7 @@
 package importer
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -425,7 +426,7 @@ func attrValue(a Attribute) (vt, v string, ok bool) {
 	case a.DoubleValue != nil:
 		return "DOUBLE", fmt.Sprintf("%v", *a.DoubleValue), true
 	case a.JSONValue != nil:
-		return "JSON", *a.JSONValue, true
+		return "JSON", compactJSON(*a.JSONValue), true
 	case a.StrValue != nil:
 		return "STRING", *a.StrValue, true
 	}
@@ -660,7 +661,7 @@ func untypedValue(raw json.RawMessage) (vt, v string, ok bool) {
 		}
 		return "STRING", str, true
 	case '{', '[':
-		return "JSON", s, true
+		return "JSON", compactJSON(s), true
 	case 't', 'f':
 		return "BOOLEAN", s, s == "true" || s == "false"
 	}
@@ -671,4 +672,15 @@ func untypedValue(raw json.RawMessage) (vt, v string, ok bool) {
 		return "DOUBLE", s, true
 	}
 	return "", "", false
+}
+
+// compactJSON drops the insignificant whitespace an export is pretty-printed with, so a stored
+// JSON attribute does not carry the source file's indentation or line endings. Text that is not
+// valid JSON is returned unchanged.
+func compactJSON(s string) string {
+	var b bytes.Buffer
+	if json.Compact(&b, []byte(s)) != nil {
+		return s
+	}
+	return b.String()
 }

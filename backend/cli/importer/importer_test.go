@@ -275,6 +275,9 @@ type fake struct {
 	calls   []call
 	fail    func(query string) error
 	outcome string
+	// unpublished makes the profile-versions query answer "none", as for a profile an earlier run
+	// created and never published.
+	unpublished bool
 }
 
 func (f *fake) Query(_ context.Context, _ string, q string, v map[string]any, out any) error {
@@ -283,6 +286,11 @@ func (f *fake) Query(_ context.Context, _ string, q string, v map[string]any, ou
 		if err := f.fail(q); err != nil {
 			return err
 		}
+	}
+	if res, ok := out.(*profileVersionsResult); ok && !f.unpublished {
+		res.DeviceProfileVersions = append(res.DeviceProfileVersions, struct {
+			Version int `json:"version"`
+		}{Version: 1})
 	}
 	if res, ok := out.(*importResult); ok {
 		outcome := f.outcome
@@ -580,5 +588,67 @@ func TestRealExportValidatesAgainstTheServedSchema(t *testing.T) {
 		if errs := schema.ValidateWithVariables(c.query, c.vars); len(errs) > 0 {
 			t.Errorf("%s: %v", c.query, errs)
 		}
+	}
+}
+
+func TestApplyPublishesAProfileAnEarlierRunLeftUnpublished(t *testing.T) {
+	p := sample(t, Options{})
+	f := &fake{
+		unpublished: true,
+		fail: func(q string) error {
+			if q == createProfileMutation {
+				return &userclient.GraphQLError{Messages: []string{"token in use"}, Codes: []string{"CONFLICT"}}
+			}
+			return nil
+		},
+	}
+	if _, err := Apply(context.Background(), f, "http://x", p); err != nil {
+		t.Fatal(err)
+	}
+	published := 0
+	for _, c := range f.calls {
+		if c.query == publishProfileMutation {
+			published++
+		}
+	}
+	if published != len(p.Profiles) {
+		t.Errorf("a profile with no version must be published by the re-run: %d of %d", published, len(p.Profiles))
+	}
+}
+
+func TestApplyStopsAtTheFirstRefusedSession(t *testing.T) {
+	p := realPlan(t, Options{CarryAccessTokens: true})
+	n := 0
+	f := &fake{fail: func(q string) error {
+		n++
+		if n > 1 {
+			return &userclient.StatusError{URL: "http://x", StatusCode: 401, Body: "invalid or expired token"}
+		}
+		return nil
+	}}
+	tallies, err := Apply(context.Background(), f, "http://x", p)
+	if err == nil || !strings.Contains(err.Error(), "refused the session") {
+		t.Fatalf("a refused session must say so, got %v", err)
+	}
+	if len(f.calls) != 2 {
+		t.Errorf("nothing may be sent after the first refusal: %d calls", len(f.calls))
+	}
+	failed := 0
+	for _, ta := range tallies {
+		failed += ta.Failed
+	}
+	if failed > 2 {
+		t.Errorf("a refusal must not become one failure per entity: %d failures", failed)
+	}
+}
+
+func TestJSONAttributesAreCompacted(t *testing.T) {
+	_, v, _ := untypedValue([]byte("{\r\n  \"lat\": 40.2,\r\n  \"lon\": -74.0\r\n}"))
+	if v != `{"lat":40.2,"lon":-74.0}` {
+		t.Errorf("JSON attribute stored as %q", v)
+	}
+	js := "[1,\n 2]"
+	if _, v, _ := attrValue(Attribute{JSONValue: &js}); v != "[1,2]" {
+		t.Errorf("typed JSON attribute stored as %q", v)
 	}
 }
