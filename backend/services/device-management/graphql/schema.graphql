@@ -3519,6 +3519,13 @@ type DeviceRevocationListResult {
     newlyRevoked: Int!
     """True when this very CRL was already the current list and nothing was written."""
     unchanged: Boolean!
+    """
+    True when the live broker sessions of the devices the list newly revokes were confirmed ended.
+    False when the list is stored and new connects are refused, but a session already open could not
+    be confirmed ended: the retry (automatic, and on repeating the upload, which is idempotent) ends
+    it, or its token expires.
+    """
+    sessionsEnded: Boolean!
 }
 
 """
@@ -3564,6 +3571,14 @@ type DeviceRevokedCertificate {
     reason: CertificateRevocationReason!
     """When it was revoked, as an RFC 3339 timestamp."""
     revokedAt: String!
+    """
+    Set only on the result of revokeDeviceCertificate, null everywhere else. True when the live
+    broker sessions of the devices the revocation affects were confirmed ended. False when the
+    revocation is saved and new connects are refused, but a session already open could not be
+    confirmed ended: it may still be publishing until the retry (automatic, and on repeating the
+    mutation, which is idempotent) ends it, or its token expires.
+    """
+    sessionsEnded: Boolean
 }
 
 """Criteria used when listing the revoked certificates of a trust anchor."""
@@ -5705,7 +5720,10 @@ type Mutation {
     its credential or its device does not let it register again. It applies to any certificate on a
     verified path, a leaf or an intermediate. Name it with exactly one of certificatePem and
     fingerprintSha256. Revoking one already revoked returns the existing entry. The anchor's own
-    certificate is refused (disable the anchor instead). This does not end sessions already open.
+    certificate is refused (disable the anchor instead). The live broker sessions of the devices the
+    certificate affects are ended: those whose credential is this leaf, or every device under the
+    anchor when the certificate is a CA that a registered credential's chain was seen to use. The
+    result's sessionsEnded says whether that was confirmed.
     """
     revokeDeviceCertificate(
         """Token of the trust anchor."""
@@ -5736,7 +5754,8 @@ type Mutation {
     from the next connect on every replica. Uploading the very CRL already in force changes
     nothing. The text is limited (the instance's callout.revocation.maxGraphqlCrlBytes, 2 MiB of
     DER at most); larger lists go over the streaming REST upload,
-    PUT /trust-anchors/{token}/crl on this service. This does not end sessions already open.
+    PUT /trust-anchors/{token}/crl on this service. The live sessions of the devices the list newly
+    revokes are ended; sessionsEnded on the result says whether that was confirmed.
     """
     putDeviceRevocationList(
         """Token of the trust anchor."""

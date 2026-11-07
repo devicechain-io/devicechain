@@ -668,7 +668,17 @@ func TestLegacyCredentialsGetADepthZeroLinkWithNoIssuerKey(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("the reconciler spun on an unreadable leaf")
 		}
-		assert.Empty(t, f.links(cred.ID))
+		// MARKED, not left bare: a bare credential would be read again at every revocation. The
+		// mark carries the pin as its fingerprint (so a manual revoke finds it) and an issuer and
+		// serial no CRL entry can match.
+		marked := f.links(cred.ID)
+		require.Len(t, marked, 1)
+		assert.Equal(t, cred.CredentialId, marked[0].Fingerprint)
+		assert.Equal(t, unlinkableSerial, marked[0].Serial)
+		assert.Equal(t, unlinkableIssuerName, marked[0].IssuerName)
+		n, err := f.api.ReconcileLegacyChainLinks(f.ctx, 0)
+		require.NoError(t, err)
+		assert.Zero(t, n, "a marked credential is not read again")
 	})
 	t.Run("no tenant in the context", func(t *testing.T) {
 		_, err := f.api.ReconcileLegacyChainLinks(context.Background(), 0)

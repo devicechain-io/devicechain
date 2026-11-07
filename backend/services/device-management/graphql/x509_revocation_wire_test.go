@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -134,4 +135,62 @@ func TestManualRevocationNeedsUnscopedDeviceAuthority(t *testing.T) {
 
 func modelCriteria() model.DeviceRevokedCertificateSearchCriteria {
 	return model.DeviceRevokedCertificateSearchCriteria{}
+}
+
+// A scriptable session kicker: it answers up or down.
+type wireKicker struct{ up bool }
+
+func (k *wireKicker) KickDeviceSessions(context.Context, string, string, []string) error {
+	if !k.up {
+		return errors.New("no responder")
+	}
+	return nil
+}
+
+// 🔑 sessionsEnded: the revoke result says whether the live sessions were confirmed ended. A kick
+// that could not be confirmed is NOT a failed mutation (an error would null the result and hide
+// that the revocation stands): the entry comes back with sessionsEnded false, and repeating the
+// mutation once the responder is back reports true. It is null everywhere else.
+func TestRevokeReportsWhetherLiveSessionsWereEnded(t *testing.T) {
+	f := newTrustAnchorWireFixture(t)
+	kicker := &wireKicker{}
+	f.api.SessionKicker = kicker
+	ctx := f.operator()
+	ca := newWirePki(t, nil, "Maker Root", true)
+	if made := serve(t, ctx, wireCreateAnchor, map[string]any{"request": map[string]any{"token": "maker", "certificatePem": ca.pem()}}); len(made.errs) > 0 {
+		t.Fatalf("create anchor: %v", made.errs[0].Message)
+	}
+	leaf := newWirePki(t, &ca, "SN-0001", false)
+	if made := serve(t, ctx, wireCreateCredential, map[string]any{"request": map[string]any{
+		"token": "c1", "deviceToken": "acme-pump", "credentialType": "X509_CERTIFICATE", "credentialId": "",
+		"enabled": true, "certificatePem": leaf.pem(), "trustAnchorToken": "maker"}}); len(made.errs) > 0 {
+		t.Fatalf("create credential: %v", made.errs[0].Message)
+	}
+	const revoke = `mutation ($a: String!, $f: String) { revokeDeviceCertificate(anchorToken: $a, fingerprintSha256: $f) {
+	  fingerprintSha256 sessionsEnded } }`
+	fp := x509trust.Fingerprint(leaf.cert)
+
+	got := serve(t, ctx, revoke, map[string]any{"a": "maker", "f": fp})
+	if len(got.errs) > 0 {
+		t.Fatalf("an unconfirmed kick must not fail the mutation: %v", got.errs[0].Message)
+	}
+	row := got.data["revokeDeviceCertificate"].(map[string]any)
+	if row["fingerprintSha256"] != fp || row["sessionsEnded"] != false {
+		t.Fatalf("revoked with the responder down = %v", row)
+	}
+
+	kicker.up = true
+	got = serve(t, ctx, revoke, map[string]any{"a": "maker", "f": fp})
+	if len(got.errs) > 0 || got.data["revokeDeviceCertificate"].(map[string]any)["sessionsEnded"] != true {
+		t.Fatalf("the repeat with the responder up: %v %v", got.errs, got.data)
+	}
+
+	list := serve(t, ctx, `query ($a: String!) { deviceRevokedCertificates(anchorToken: $a, criteria: {pageNumber: 1, pageSize: 10}) {
+	  results { fingerprintSha256 sessionsEnded } } }`, map[string]any{"a": "maker"})
+	if len(list.errs) > 0 {
+		t.Fatalf("list: %v", list.errs[0].Message)
+	}
+	if r := list.data["deviceRevokedCertificates"].(map[string]any)["results"].([]any)[0].(map[string]any); r["sessionsEnded"] != nil {
+		t.Fatalf("a listed entry says nothing about sessions: %v", r)
+	}
 }
