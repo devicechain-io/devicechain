@@ -110,6 +110,194 @@ type Query {
         """The draft rule, the profile and the time window to replay."""
         input: PreviewRuleInput!
     ): PreviewResult!
+
+    """
+    EXPERIMENTAL. Replays two versions of a detection rule over the same recorded window and
+    reports how the head's behaviour differs from the base's: alarms added, suppressed or moved in
+    time, and the devices affected. A physical pull request: a change is reviewed by what it would
+    have done to real traffic. Nothing is saved or published. Refuses unless the deployment sets
+    DC_EXPERIMENTAL_PHYSICAL_PR=true. Requires device:read, and location:read for a rule that
+    tests geofence containment. May change or be removed in any release.
+    """
+    experimentalPreviewRuleDiff(
+        """The two rule versions, the profile and the window to replay both over."""
+        input: ExperimentalRuleDiffInput!
+    ): ExperimentalRuleDiff!
+
+    """
+    EXPERIMENTAL. Given an ordered history of rule versions (oldest first), replays them over the
+    window around a moment and names the first version whose answer to "was an alarm raised on
+    this device then" differs from the oldest version's, with the principal who published it. Takes
+    about log2(n) replays. Refuses unless the deployment sets DC_EXPERIMENTAL_PHYSICAL_PR=true.
+    Requires device:read. May change or be removed in any release.
+    """
+    experimentalBisectRule(
+        """The version history, the device and the moment in question."""
+        input: ExperimentalBisectInput!
+    ): ExperimentalBisectResult!
+}
+
+"""One side of an experimental rule comparison. Exactly one of graph and ruleDefinition is given."""
+input ExperimentalRuleSideInput {
+    """A short name for this side in the report, for example a commit id."""
+    label: String
+    """The principal that published this side, for the report."""
+    author: String
+    """A canvas definition, as the JSON document the console editor emits, serialized to a string."""
+    graph: String
+    """A rule definition, as a JSON document serialized to a string."""
+    ruleDefinition: String
+    """The draft profile's metric list this side is replayed under, as in previewRule."""
+    draftMetrics: [PreviewMetricInput!]
+}
+
+"""Input to experimentalPreviewRuleDiff."""
+input ExperimentalRuleDiffInput {
+    """Token of the device profile whose recorded history both sides are replayed against."""
+    profileToken: String!
+    """The version being changed from."""
+    base: ExperimentalRuleSideInput!
+    """The version being proposed."""
+    head: ExperimentalRuleSideInput!
+    """Start of the replay window by event occurred time, as an RFC 3339 timestamp."""
+    start: String!
+    """End of the replay window, as an RFC 3339 timestamp. A window over 24 hours is shortened."""
+    end: String!
+    """
+    How far apart, in seconds, a base alarm and a head alarm on the same device may be and still
+    count as the same alarm moved in time. Defaults to one hour.
+    """
+    shiftWindowSeconds: Int
+}
+
+"""The difference in behaviour between two rule versions over one recorded window."""
+type ExperimentalRuleDiff {
+    """True when both sides compiled and were replayed. False when the request or a side was rejected."""
+    ok: Boolean!
+    """True when the head raises and resolves exactly what the base does over the window."""
+    empty: Boolean!
+    """The headline numbers."""
+    summary: ExperimentalDiffSummary!
+    """Every difference, ordered by time, then device."""
+    changes: [ExperimentalFiringChange!]!
+    """The review report as text, ready to print or attach to a change."""
+    report: String!
+    """Why the result is partial, for either side or the window. Null for a complete result."""
+    degraded: String
+    """The reasons when ok is false."""
+    diagnostics: [CanvasDiagnostic!]!
+}
+
+"""The headline numbers of an experimental rule diff."""
+type ExperimentalDiffSummary {
+    """Alarms the head raises that the base does not."""
+    alarmsAdded: Int!
+    """Alarms the base raises that the head does not."""
+    alarmsSuppressed: Int!
+    """Alarms both raise, at different instants."""
+    alarmsMoved: Int!
+    """Alarms both raise, at the same instant."""
+    alarmsUnchanged: Int!
+    """Resolutions that were added, suppressed or moved."""
+    resolutionsChanged: Int!
+    """Devices with at least one alarm difference."""
+    devicesAffected: Int!
+    """Calculated-metric results that produced no value under the base."""
+    baseCalculatedSkips: Int!
+    """Calculated-metric results that produced no value under the head."""
+    headCalculatedSkips: Int!
+    """Events the base replay processed."""
+    baseEventsScanned: Int!
+    """Events the head replay processed."""
+    headEventsScanned: Int!
+}
+
+"""One edge that differs between the base and the head."""
+type ExperimentalFiringChange {
+    """The device token the edge is for."""
+    series: String!
+    """"raise" or "resolve"."""
+    edge: String!
+    """"added", "removed" or "shifted"."""
+    kind: String!
+    """When the base had the edge, as an RFC 3339 timestamp. Null for an added edge."""
+    baseAt: String
+    """When the head has the edge, as an RFC 3339 timestamp. Null for a removed edge."""
+    headAt: String
+    """For a shifted edge, head minus base in seconds: negative means the head fires earlier."""
+    shiftSeconds: Int
+}
+
+"""One published version of a rule, for a bisect."""
+input ExperimentalRuleVersionInput {
+    """The version's identifier."""
+    commit: String!
+    """The principal that published it."""
+    author: String!
+    """"human" or "agent"."""
+    authorKind: String
+    """Why it was published."""
+    message: String
+    """When it was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
+    """A canvas definition, serialized to a string. Exactly one of graph and ruleDefinition."""
+    graph: String
+    """A rule definition, serialized to a string."""
+    ruleDefinition: String
+    """The draft profile's metric list this version is replayed under."""
+    draftMetrics: [PreviewMetricInput!]
+}
+
+"""Input to experimentalBisectRule."""
+input ExperimentalBisectInput {
+    """Token of the device profile whose recorded history is replayed."""
+    profileToken: String!
+    """The rule's versions, oldest first. Between 2 and 64."""
+    versions: [ExperimentalRuleVersionInput!]!
+    """The device token the question is about."""
+    series: String!
+    """The moment in question, as an RFC 3339 timestamp."""
+    at: String!
+    """How far either side of the moment an alarm still counts as the one in question. Default 300."""
+    slackSeconds: Int
+    """How many hours of history before the moment each replay covers, 1 to 24. Default 6."""
+    lookbackHours: Int
+}
+
+"""The verdict of an experimental bisect."""
+type ExperimentalBisectResult {
+    """True when the request was accepted and the versions replayed."""
+    ok: Boolean!
+    """True when a version was found whose outcome differs from the oldest version's."""
+    found: Boolean!
+    """"appears" when the alarm exists from the named version on, "disappears" when it stops. Null when not found."""
+    outcome: String
+    """The first version whose outcome differs from the oldest version's."""
+    commit: ExperimentalCommit
+    """The version just before it, which still behaves like the oldest."""
+    previousCommit: ExperimentalCommit
+    """How many replays the search took."""
+    replays: Int!
+    """The verdict as text, ready to print."""
+    report: String!
+    """Why the result is partial. Null for a complete result."""
+    degraded: String
+    """The reasons when ok is false."""
+    diagnostics: [CanvasDiagnostic!]!
+}
+
+"""A published version of a rule and who published it."""
+type ExperimentalCommit {
+    """The version's identifier."""
+    id: String!
+    """The principal that published it."""
+    author: String!
+    """"human" or "agent", when recorded."""
+    authorKind: String
+    """Why it was published."""
+    message: String
+    """When it was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
 }
 
 type Mutation {
