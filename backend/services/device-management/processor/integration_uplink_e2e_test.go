@@ -234,3 +234,30 @@ func TestABrokenDecoderCannotFloodFailedEvents(t *testing.T) {
 	require.EqualValues(t, offered-DecodeRecordBurst, r.Suppressed)
 	require.EqualValues(t, offered, r.Decoded+r.Ignored+r.Failed+r.Suppressed)
 }
+
+// THE LOOP MARKS A REDELIVERY. A message the broker delivers a second time reaches the observer as
+// Redelivered, and a first delivery does not. The messages are handed to the resolver pool the way a
+// reader hands them (NumDelivered is the broker's count).
+func TestTheResolverLoopTellsTheObserverARedeliveryWhenTheCountIsAbove1(t *testing.T) {
+	obs := &recordingObserver{}
+	e := newE2ERig(t, WithDecodeObserver(obs))
+
+	ev := e.uplink("chirp-1", e.token, frameUplink(0x00))
+	ev.OccurredTime, ev.ProcessedTime = time.Now(), time.Now()
+	wire, err := esproto.MarshalUnresolvedEvent(ev)
+	require.NoError(t, err)
+	subject := messaging.ScopedSubject(e2eInstance, "acme", streams.IntegrationUplinks)
+
+	e.iproc.messages <- messaging.NewConsumedMessage(subject, wire, 1, nil, nil)
+	e.iproc.messages <- messaging.NewConsumedMessage(subject, wire, 3, nil, nil)
+	require.Eventually(t, func() bool { return len(obs.all()) == 2 }, 20*time.Second, 20*time.Millisecond)
+
+	got := obs.all()
+	redelivered := 0
+	for _, o := range got {
+		if o.Redelivered {
+			redelivered++
+		}
+	}
+	require.Equal(t, 1, redelivered, "exactly the message delivered a third time is a redelivery: %+v", got)
+}

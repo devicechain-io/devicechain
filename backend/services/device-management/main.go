@@ -351,12 +351,14 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
 			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)),
 	}
-	// 🔴 WITHOUT THE ACCOUNTANT A FAILING DECODER IS UNBUDGETED: every failed uplink is a failed-events
-	// record. It is built with the Api, before the processor in every real start; a nil here is a
-	// test that builds the processor without one.
-	if DecodeAccountant != nil {
-		opts = append(opts, processor.WithDecodeObserver(DecodeAccountant))
+	// 🔴 WITHOUT THE ACCOUNTANT A FAILING DECODER IS UNBUDGETED: every failed uplink would be a
+	// failed-events record, which is the flood the budgets exist to stop. It is built with the Api,
+	// before the processor in every real start, so a nil here is a wiring defect and the service
+	// refuses to run rather than quietly run without it.
+	if DecodeAccountant == nil {
+		panic("device-management: the decode accountant was not built before the inbound processor; refusing to run decoders unbudgeted")
 	}
+	opts = append(opts, processor.WithDecodeObserver(DecodeAccountant))
 	return processor.NewInboundEventsProcessor(Microservice, InboundEventsReaders, ResolvedEventsWriter, FailedEventsWriter,
 		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics, opts...)

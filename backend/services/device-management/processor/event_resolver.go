@@ -1514,11 +1514,11 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				resolved []EventResolutionResults
 				reason   uint
 			)
+			// One per delivery, shared by every run of the closure below (see deliveryState).
+			delivery := &deliveryState{redelivered: unresolved.NumDelivered > 1}
 			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
 				var rerr error
-				if unresolved.NumDelivered > 1 {
-					c = withRedelivered(c)
-				}
+				c = withDelivery(c, delivery)
 				resolved, reason, rerr = rez.ResolveEvent(c, event)
 				return rerr
 			})

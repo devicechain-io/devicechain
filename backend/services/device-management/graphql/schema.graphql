@@ -783,21 +783,23 @@ type PayloadDecoderTestResult {
 How a profile's decoder has been doing over a span. Every uplink the decoder saw lands in exactly
 one of decoded, ignored, failed or suppressed. Counts are at least what happened: they are kept
 in memory and written about once a minute, so a crash loses up to a minute of them.
+The counts are Float, not Int: a busy decoder passes a 32-bit Int in a week. They are whole
+numbers, exact up to 2^53, so read them as integers.
 """
 type PayloadDecoderHealth {
-    """Uplinks decoded to readings."""
-    decoded: Int!
-    """Uplinks an ignore section matched: accepted, nothing stored."""
-    ignored: Int!
-    """Failed uplinks that have a failed-events record (filter DECODE_FAILED)."""
-    failed: Int!
+    """Uplinks decoded to readings. A whole number, exact up to 2^53 (Float so it cannot overflow)."""
+    decoded: Float!
+    """Uplinks an ignore section matched: accepted, nothing stored. A whole number, exact up to 2^53."""
+    ignored: Float!
+    """Failed uplinks that have a failed-events record (filter DECODE_FAILED). A whole number, exact up to 2^53."""
+    failed: Float!
     """
     Failed uplinks that were NOT given a record because the device type's record budget was spent
-    (a burst of 20, refilled 10 a minute, on each replica). They are counted here and nowhere else.
+    (a burst of 20, refilled 10 a minute, on each replica). They are counted here and nowhere else. A whole number, exact up to 2^53.
     """
-    suppressed: Int!
-    """Readings stored beyond what the route charged for, because a newer decoder produces more."""
-    chargeSkew: Int!
+    suppressed: Float!
+    """Readings stored beyond what the route charged for, because a newer decoder produces more. A whole number, exact up to 2^53."""
+    chargeSkew: Float!
     """When the most recent failure happened, as an RFC 3339 time, or null when there was none."""
     lastFailureAt: String
     """The text of the most recent failure, or empty when there was none."""

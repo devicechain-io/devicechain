@@ -608,11 +608,11 @@ chart 和 `dcctl` 会根据 ingress 主机和 MCP 服务器的地址为你写入
 对某个设备不正确的解码器，会在该设备的每条上行消息上失败，而每次失败过去都会产生一条失败事件记录。在流量大的租户上，这会在全平台共用的流里产生大量记录。从本版本起，`device-management` 在写入记录之前，对每个设备类型执行预算限制：
 
 - **记录。** 在每个副本上，对每个租户和设备类型，前 20 次解码失败会记入失败事件（原因为 `DECODE_FAILED`，并归档该上行消息）。之后每分钟再记录 10 次。其余失败的源消息会被确认而不产生记录，并计为**已抑制**。只有在该设备类型已写入 20 条记录之后才会出现已抑制的失败，所以损坏的解码器不会悄无声息。
-- **样本。** 在每个副本上，对每个租户和配置文件，每 10 秒保留一条失败的上行消息，每个配置文件保留最新的 20 条。测试面板可以把其中一条载入解码器测试。
+- **样本。** 在每个副本上，对每个租户和配置文件，每 10 秒保留一条失败的上行消息，每个配置文件保留最新的 20 条。测试面板可以把其中一条载入解码器测试，得到它在线上时的结果。样本是尽力而为的：无法保存的样本（写入失败，或携带的 JSON 无法重新编码）会计入 `resolve_decode_samples_dropped_total`，其失败仍会被记录。
 - **预算按副本计算，** 因此租户的总量会随副本数增加。没有可配置的选项。
-- **每条上行消息只计一次。** 配置文件的解码器健康度按分钟汇总已解码、已忽略、失败（已记录）和已抑制（未记录）的上行消息。`device-management` GraphQL API 上的 `payloadDecoderHealth` 和 `payloadDecoderSamples` 查询是新增的、向后兼容的，并且需要 `device:write`；样本的字节只能通过带 `sampleId` 的 `testPayloadDecoder` 获取，权限相同。健康度记录保留 7 天。
-- **崩溃后计数可能偏少。** 汇总每分钟写入一次，所以崩溃最多丢失一分钟的计数，不会丢失失败事件记录。崩溃后被重新投递的上行消息可能被计两次。
-- **新增两条告警。** 当 15 分钟内超过 5% 的已解码上行消息失败时触发 `PayloadDecoderFailuresHigh`，当预算开始截断记录时触发 `PayloadDecoderSuppressing`。它们不带租户标签；失败事件索引和配置文件的解码器健康度会指明租户和配置文件。新增指标：`resolve_decode_suppressed_total`、`resolve_decode_samples_dropped_total`、`resolve_decode_health_flush_failures_total`、`resolve_decode_health_lost_total` 和 `resolve_decode_unattributed_total`。
+- **每条上行消息每次投递只计一次。** 配置文件的解码器健康度按分钟汇总已解码、已忽略、失败（已记录）和已抑制（未记录）的上行消息。`payloadDecoderHealth` 中的计数是 `Float` 而不是 `Int`，因为流量大的解码器一周内就会超过 32 位整数；它们是整数，在 2^53 以内精确。`device-management` GraphQL API 上的 `payloadDecoderHealth` 和 `payloadDecoderSamples` 查询是新增的、向后兼容的，并且需要 `device:write`；样本的字节只能通过带 `sampleId` 的 `testPayloadDecoder` 获取，权限相同。健康度记录保留 7 天。
+- **崩溃后计数可能偏少。** 汇总每分钟写入一次，所以崩溃最多丢失一分钟的计数，不会丢失失败事件记录。崩溃后，或失败事件流不可用期间，被重新投递的上行消息可能被计两次。被重新投递的失败总是会被记录，并且仍会消耗预算中的一个令牌。
+- **新增两条告警。** 当 15 分钟内超过 5% 的已解码上行消息失败时触发 `PayloadDecoderFailuresHigh`，当 10 分钟内被抑制的失败超过 50 次时触发 `PayloadDecoderSuppressing`。它们不带租户标签；失败事件索引和配置文件的解码器健康度会指明租户和配置文件。新增指标：`resolve_decode_suppressed_total`、`resolve_decode_samples_dropped_total`、`resolve_decode_health_flush_failures_total`、`resolve_decode_health_lost_total` 和 `resolve_decode_unattributed_total`。
 - **升级时无需任何操作。** 这些表由本版本较早的迁移创建，不会运行新的迁移。早于本版本的副本不会写入健康度或样本，也不会对失败应用预算。
 
 #### 解码器上行消息与 device-management 中断 {#v120-decoder-stream}

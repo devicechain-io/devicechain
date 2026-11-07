@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,11 +32,13 @@ const (
 	// DecodeSampleInterval is the minimum time between two stored samples of one profile.
 	DecodeSampleInterval = 10 * time.Second
 
-	// maxBudgetKeys bounds the number of distinct keys either budget holds. Keys come from tenants
-	// and device types, which a caller does not choose, but the bound is what keeps the map small if
-	// that ever stops being true. Past it, a key with no bucket gets none: it is DENIED, which
-	// suppresses (counted) rather than records, so exhausting the map can only quiet the stream.
-	maxBudgetKeys = 50_000
+	// maxBudgetKeysPerTenant bounds the distinct keys ONE tenant may hold in either budget, and
+	// maxBudgetKeys the total. The per-tenant bound is the one that matters: a tenant that churns
+	// device types or profiles can use up only its own share, and past it only ITS new keys are
+	// denied (suppressed and counted), so it cannot suppress another tenant's first failures. The
+	// total is a backstop well above what the per-tenant bound lets a few hundred tenants hold.
+	maxBudgetKeysPerTenant = 2_000
+	maxBudgetKeys          = 50_000
 )
 
 type recordKey struct {
@@ -55,14 +58,18 @@ type decodeBudget struct {
 	mu      sync.Mutex
 	records map[recordKey]*bucket
 	samples map[string]time.Time // "tenant\x00profile" -> last stored
-	swept   time.Time
+	// recordsBy and samplesBy count each tenant's keys in the two maps above.
+	recordsBy map[string]int
+	samplesBy map[string]int
+	swept     time.Time
 }
 
 func newDecodeBudget(now func() time.Time) *decodeBudget {
 	if now == nil {
 		now = time.Now
 	}
-	return &decodeBudget{now: now, records: map[recordKey]*bucket{}, samples: map[string]time.Time{}}
+	return &decodeBudget{now: now, records: map[recordKey]*bucket{}, samples: map[string]time.Time{},
+		recordsBy: map[string]int{}, samplesBy: map[string]int{}}
 }
 
 // AllowRecord takes one token from the (tenant, device type) bucket and reports whether there was
@@ -75,11 +82,12 @@ func (b *decodeBudget) AllowRecord(tenant string, deviceType uint) bool {
 	bk, ok := b.records[k]
 	if !ok {
 		b.sweep(now)
-		if len(b.records) >= maxBudgetKeys {
+		if len(b.records) >= maxBudgetKeys || b.recordsBy[tenant] >= maxBudgetKeysPerTenant {
 			return false
 		}
 		bk = &bucket{tokens: DecodeRecordBurst, at: now}
 		b.records[k] = bk
+		b.recordsBy[tenant]++
 	} else if el := now.Sub(bk.at); el > 0 {
 		bk.tokens = min(DecodeRecordBurst, bk.tokens+el.Minutes()*DecodeRecordRefillPerMinute)
 		bk.at = now
@@ -103,9 +111,10 @@ func (b *decodeBudget) AllowSample(tenant, profile string) bool {
 	}
 	if !ok {
 		b.sweep(now)
-		if len(b.samples) >= maxBudgetKeys {
+		if len(b.samples) >= maxBudgetKeys || b.samplesBy[tenant] >= maxBudgetKeysPerTenant {
 			return false
 		}
+		b.samplesBy[tenant]++
 	}
 	b.samples[k] = now
 	return true
@@ -123,11 +132,36 @@ func (b *decodeBudget) sweep(now time.Time) {
 	for k, bk := range b.records {
 		if now.Sub(bk.at) >= full {
 			delete(b.records, k)
+			b.recordsBy[k.tenant]--
 		}
 	}
 	for k, t := range b.samples {
 		if now.Sub(t) >= DecodeSampleInterval {
 			delete(b.samples, k)
+			b.samplesBy[k[:strings.IndexByte(k, 0)]]--
 		}
 	}
+}
+
+// Charge takes a token from the (tenant, device type) bucket if it has one, and never refuses: it is
+// the cost of a failure that is recorded regardless (a redelivery). A key with no bucket and no room
+// for one is simply not charged, which is the same bound AllowRecord applies.
+func (b *decodeBudget) Charge(tenant string, deviceType uint) {
+	now := b.now()
+	k := recordKey{tenant, deviceType}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	bk, ok := b.records[k]
+	if !ok {
+		if len(b.records) >= maxBudgetKeys || b.recordsBy[tenant] >= maxBudgetKeysPerTenant {
+			return
+		}
+		bk = &bucket{tokens: DecodeRecordBurst, at: now}
+		b.records[k] = bk
+		b.recordsBy[tenant]++
+	} else if el := now.Sub(bk.at); el > 0 {
+		bk.tokens = min(DecodeRecordBurst, bk.tokens+el.Minutes()*DecodeRecordRefillPerMinute)
+		bk.at = now
+	}
+	bk.tokens = max(0, bk.tokens-1)
 }

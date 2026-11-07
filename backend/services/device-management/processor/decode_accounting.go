@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/payloaddecode"
 	"github.com/prometheus/client_golang/prometheus"
@@ -37,7 +39,8 @@ import (
 // in memory until the next flush (about a minute), so a crash loses up to that much of the COUNTS,
 // and a sample is best-effort. A suppressed failure only happens once 20 records for its device type
 // are already out, so a broken decoder is never invisible; only its exact tally can be short. After
-// a crash a redelivered source can be counted twice, so counts are "at least".
+// a crash (or a failed-events outage) a redelivered source can be counted twice, so counts are "at
+// least". The resolver tells the accountant once per delivery, not once per store-hold re-run.
 //
 // 🔴 THE FLUSH IS IDEMPOTENT. Each row is this replica's CUMULATIVE tally for the window and is
 // written with SET, so a write whose commit succeeded but whose reply was lost, written again on
@@ -168,18 +171,29 @@ func boundText(s string, n int) string {
 // budget is spent: the one verdict the resolver acts on.
 func (a *DecodeAccountant) ObserveDecode(o DecodeObservation) bool {
 	record := true
-	// 🔴 A REDELIVERED FAILURE IS ALWAYS RECORDED, AND NOT TALLIED AGAIN. The record is published
-	// before the source is acked, so a redelivery means that publish did not complete (or the
-	// process died first). Spending a second token on it could suppress a failure whose first record
-	// never landed, and the earlier attempt has already counted it. The extra records this allows
-	// are bounded by the redelivery cap and by the failed-events stream being unavailable.
-	if o.Outcome == DecodeFailed && o.Redelivered {
-		return true
-	}
+	// 🔴 A REDELIVERED FAILURE IS ALWAYS RECORDED, BUT IT STILL CHARGES THE BUDGET, and it is tallied.
+	//
+	// The record is published before the source is acked, so a redelivery means that publish did not
+	// complete (or the process died first, possibly before the first delivery reached a decode at
+	// all). Denying it could suppress a failure whose first record never landed, so it is recorded.
+	// But a free pass would be a hole: a failed-events outage makes every failure a redelivery, and a
+	// redelivery that cost nothing would be unbudgeted. So it takes a token when there is one and goes
+	// ahead when there is not. Redeliveries can only follow a first delivery that was recorded (a
+	// suppressed one is acked), or one that crashed, so they are bounded by the first deliveries'
+	// budget times the redelivery cap, and while they run they drain the bucket so that NEW failures
+	// are suppressed rather than added on top.
+	//
+	// It is tallied as failed like any other recorded failure: where the first delivery never reached
+	// a decode the redelivery is the only count there will be, and where it did the uplink is counted
+	// twice, which is the documented "at least" behaviour of the counts.
 	if o.Outcome == DecodeFailed {
-		record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
-		if !record && a.metrics != nil {
-			a.metrics.suppressed.Inc()
+		if o.Redelivered {
+			a.budget.Charge(o.Tenant, o.DeviceTypeId)
+		} else {
+			record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
+			if !record && a.metrics != nil {
+				a.metrics.suppressed.Inc()
+			}
 		}
 	}
 	profile, version, ok := splitProfileVersion(o.ProfileVersionToken)
@@ -222,22 +236,8 @@ func (a *DecodeAccountant) ObserveDecode(o DecodeObservation) bool {
 }
 
 func (a *DecodeAccountant) queueSample(o DecodeObservation, profile string, version int32, now time.Time) {
-	up := o.Uplink
-	in := payloaddecode.VectorInput{JSON: up.Json, Decoded: up.Decoded, Link: up.Link}
-	if up.Frame != nil {
-		h := hex.EncodeToString(up.Frame)
-		in.FrameHex = &h
-	}
-	if up.FPort != nil {
-		v := int(*up.FPort)
-		in.FPort = &v
-	}
-	if up.FCnt != nil {
-		v := int(*up.FCnt)
-		in.FCnt = &v
-	}
-	raw, err := json.Marshal(in)
-	if err != nil || len(raw) > model.MaxDecoderSampleBytes {
+	raw, err := marshalSample(o.Uplink)
+	if err != nil {
 		a.sampleLost()
 		return
 	}
@@ -252,6 +252,60 @@ func (a *DecodeAccountant) queueSample(o DecodeObservation, profile string, vers
 	}
 	a.samples = append(a.samples, s)
 	a.mu.Unlock()
+}
+
+// vectorOf is THE mapping from a carried uplink to the form a decoder vector and a stored sample
+// share (payloaddecode.VectorInput). A stored sample is replayed through testPayloadDecoder by
+// turning this back into an input (model inputFromVector), so the two must agree; the round-trip
+// test replays a stored sample and expects the live outcome.
+//
+// It refuses a carried json or decoded object that is not valid JSON. The carrier holds the canonical
+// JSON event-sources produced, so this should not happen; if it does, a sample is not stored (and is
+// counted on resolve_decode_samples_dropped_total) rather than stored in a form that would replay as
+// a different failure. The failure itself is still recorded.
+func vectorOf(up *esmodel.UnresolvedIntegrationUplinkPayload) (payloaddecode.VectorInput, error) {
+	in := payloaddecode.VectorInput{Link: up.Link}
+	if len(up.Json) > 0 {
+		if !json.Valid(up.Json) {
+			return in, errors.New("the carried json is not valid JSON")
+		}
+		in.JSON = up.Json
+	}
+	if len(up.Decoded) > 0 {
+		if !json.Valid(up.Decoded) {
+			return in, errors.New("the carried decoded object is not valid JSON")
+		}
+		in.Decoded = up.Decoded
+	}
+	if up.Frame != nil {
+		h := hex.EncodeToString(up.Frame)
+		in.FrameHex = &h
+	}
+	if up.FPort != nil {
+		v := int(*up.FPort)
+		in.FPort = &v
+	}
+	if up.FCnt != nil {
+		v := int(*up.FCnt)
+		in.FCnt = &v
+	}
+	return in, nil
+}
+
+// marshalSample is the stored form of a failing uplink, bounded by model.MaxDecoderSampleBytes.
+func marshalSample(up *esmodel.UnresolvedIntegrationUplinkPayload) ([]byte, error) {
+	in, err := vectorOf(up)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > model.MaxDecoderSampleBytes {
+		return nil, errors.New("the sample is too large")
+	}
+	return raw, nil
 }
 
 func (a *DecodeAccountant) sampleLost() {

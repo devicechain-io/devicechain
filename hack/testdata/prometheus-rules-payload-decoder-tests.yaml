@@ -14,8 +14,8 @@
 #   - a decoder failing most uplinks, with volume, must page after the 15m `for`;
 #   - another instance's namespace must not page; no series must not page.
 #
-# PayloadDecoderSuppressing fires on any suppressed failure that lasts 5m: the budget cutting
-# records off. It must stay quiet while suppressed is flat at zero and while failures are
+# PayloadDecoderSuppressing fires on MORE THAN 50 suppressed failures in 10 minutes: the budget cutting
+# records off at a rate that matters. A small burst (under 50) must not page. It must stay quiet while suppressed is flat at zero and while failures are
 # recorded inside the budget.
 #
 # THE SERIES (both seeded at 0 by device-management when it builds them):
@@ -135,7 +135,7 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
-  # The budget cuts records off: suppressed climbs from 10m. Fires after the 5m `for`; not before; clears after the window.
+  # The budget cuts records off: suppressed climbs from 10m. Fires once more than 50 are suppressed inside 10m; not before; clears after the window.
   # ------------------------------------------------------------------
   - interval: 1m
     input_series:
@@ -154,9 +154,23 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
-              summary: "decode failures are being counted but no longer recorded in failed-events"
-              description: "A payload decoder is failing so often that device-management has spent the budget of failed-events records for its device type (a burst of 20, refilled 10 a minute, on each replica), and it now only counts the rest. Nothing is lost silently: the count is in the profile's decoder health as suppressed, and the first failures of the window are recorded with the uplink. Fix or unpublish the decoder; the budget refills by itself once it stops failing."
+              summary: "payload decode failures are being counted but no longer recorded in failed-events"
+              description: "A payload decoder is failing so often that device-management has spent the budget of failed-events records for its device type (a burst of 20, refilled 10 a minute, on each replica): more than 50 failures were counted and not recorded in the last 10 minutes. Nothing is lost silently: the count is in the profile's decoder health as suppressed, and the first failures of the window are recorded with the uplink. Fix or unpublish the decoder; the budget refills by itself once it stops failing."
       - eval_time: 70m
+        alertname: PayloadDecoderSuppressing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A small burst: 30 suppressed in all, never more than 50 in a 10m window. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_resolve_decode_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="decoded"}'
+        values: '0+100x80'
+      - series: 'devicechain_devicemanagement_resolve_decode_suppressed_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x9 0+3x10 30x60'
+    alert_rule_test:
+      - eval_time: 25m
         alertname: PayloadDecoderSuppressing
         exp_alerts: []
 

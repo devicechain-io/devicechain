@@ -30,7 +30,7 @@ func TestTheInboundProcessorIsBuiltWithAStoreHold(t *testing.T) {
 	t.Cleanup(func() { SecretTransit = savedTransit })
 	SecretTransit = testTransit(t)
 
-	require.NotNil(t, newInboundEventsProcessor().StoreHold())
+	require.NotNil(t, builtInboundProcessor(t).StoreHold())
 }
 
 // The raise-alarm and device-reports consumers this service builds carry a store hold, for the

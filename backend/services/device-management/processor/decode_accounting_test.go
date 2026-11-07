@@ -285,9 +285,9 @@ func TestHealthRowsAreTrimmedPastRetentionOncePerHour(t *testing.T) {
 	require.Equal(t, 1, st.trims, "once an hour")
 }
 
-// A failure delivered before is always recorded and not tallied again: the record is published
-// before the source is acked, so a redelivery means that publish did not finish.
-func TestARedeliveredFailureIsRecordedEvenWithTheBudgetSpent(t *testing.T) {
+// A redelivered failure is always recorded, is tallied as failed (the first delivery may never have
+// reached a decode), and still charges the budget so a failed-events outage cannot make failures free.
+func TestARedeliveredFailureIsRecordedTalliedAndChargesTheBudget(t *testing.T) {
 	c := newFakeClock()
 	st := &fakeStore{}
 	a := newDecodeAccountant(st, "pod-a", nil, c.now)
@@ -298,11 +298,23 @@ func TestARedeliveredFailureIsRecordedEvenWithTheBudgetSpent(t *testing.T) {
 
 	again := failure("acme", 7, "meter@1")
 	again.Redelivered = true
-	require.True(t, a.ObserveDecode(again), "its redelivery is recorded")
+	require.True(t, a.ObserveDecode(again), "its redelivery is recorded even so")
 	require.NoError(t, a.Flush(context.Background()))
 	r, _ := st.last("acme", "meter", 1)
-	require.EqualValues(t, DecodeRecordBurst, r.Failed, "and the earlier attempt's count stands")
+	require.EqualValues(t, DecodeRecordBurst+1, r.Failed, "the redelivery is tallied as failed")
 	require.EqualValues(t, 1, r.Suppressed)
+}
+
+func TestRedeliveriesDrainTheBudgetSoNewFailuresAreSuppressedNotAddedOnTop(t *testing.T) {
+	c := newFakeClock()
+	a := newDecodeAccountant(&fakeStore{}, "pod-a", nil, c.now)
+	redo := failure("acme", 7, "meter@1")
+	redo.Redelivered = true
+	for i := 0; i < 3*DecodeRecordBurst; i++ {
+		require.True(t, a.ObserveDecode(redo), "a redelivery is never denied")
+	}
+	require.False(t, a.ObserveDecode(failure("acme", 7, "meter@1")),
+		"but the redeliveries spent the bucket, so a first delivery is now suppressed")
 }
 
 func TestTheStoredErrorIsBoundedOnARuneBoundary(t *testing.T) {

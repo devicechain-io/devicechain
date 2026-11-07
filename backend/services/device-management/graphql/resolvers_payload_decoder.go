@@ -303,14 +303,14 @@ func (r *PayloadDecoderFunctionResolver) Description() string { return r.M.Doc }
 // PayloadDecoderHealthResolver resolves PayloadDecoderHealth.
 type PayloadDecoderHealthResolver struct{ M model.DecoderHealth }
 
-func (r *PayloadDecoderHealthResolver) Decoded() int32    { return clampInt32(r.M.Decoded) }
-func (r *PayloadDecoderHealthResolver) Ignored() int32    { return clampInt32(r.M.Ignored) }
-func (r *PayloadDecoderHealthResolver) Failed() int32     { return clampInt32(r.M.Failed) }
-func (r *PayloadDecoderHealthResolver) Suppressed() int32 { return clampInt32(r.M.Suppressed) }
-func (r *PayloadDecoderHealthResolver) ChargeSkew() int32 { return clampInt32(r.M.ChargeSkew) }
-func (r *PayloadDecoderHealthResolver) LastError() string { return r.M.LastError }
-func (r *PayloadDecoderHealthResolver) Windows() int32    { return int32(r.M.Windows) }
-func (r *PayloadDecoderHealthResolver) Since() string     { return r.M.Since.UTC().Format(time.RFC3339) }
+func (r *PayloadDecoderHealthResolver) Decoded() float64    { return float64(r.M.Decoded) }
+func (r *PayloadDecoderHealthResolver) Ignored() float64    { return float64(r.M.Ignored) }
+func (r *PayloadDecoderHealthResolver) Failed() float64     { return float64(r.M.Failed) }
+func (r *PayloadDecoderHealthResolver) Suppressed() float64 { return float64(r.M.Suppressed) }
+func (r *PayloadDecoderHealthResolver) ChargeSkew() float64 { return float64(r.M.ChargeSkew) }
+func (r *PayloadDecoderHealthResolver) LastError() string   { return r.M.LastError }
+func (r *PayloadDecoderHealthResolver) Windows() int32      { return int32(r.M.Windows) }
+func (r *PayloadDecoderHealthResolver) Since() string       { return r.M.Since.UTC().Format(time.RFC3339) }
 func (r *PayloadDecoderHealthResolver) LastFailureAt() *string {
 	if r.M.LastFailureAt == nil {
 		return nil

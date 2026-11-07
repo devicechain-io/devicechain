@@ -83,17 +83,36 @@ func TestTheSampleBudgetIsOnePerProfilePerTenInSeconds(t *testing.T) {
 	require.True(t, b.AllowSample("acme", "meter"))
 }
 
-func TestAKeyPastTheBoundIsDeniedNotAdmitted(t *testing.T) {
+func TestATenantPastItsOwnKeyBoundIsDeniedAndNoOtherTenantIs(t *testing.T) {
 	c := newFakeClock()
 	b := newDecodeBudget(c.now)
-	for i := 0; i < maxBudgetKeys; i++ {
+	for i := 0; i < maxBudgetKeysPerTenant; i++ {
 		require.True(t, b.AllowRecord("acme", uint(i)), fmt.Sprint(i))
+		require.True(t, b.AllowSample("acme", fmt.Sprint("p", i)), fmt.Sprint(i))
 	}
-	require.False(t, b.AllowRecord("acme", uint(maxBudgetKeys)), "past the bound a new key is suppressed, never unbudgeted")
+	require.False(t, b.AllowRecord("acme", uint(maxBudgetKeysPerTenant)), "acme's new key is denied: suppressed, never unbudgeted")
+	require.False(t, b.AllowSample("acme", "one-more"))
 
-	// What has recovered is forgotten, which makes room.
+	require.True(t, b.AllowRecord("globex", 1), "another tenant's first failure is still recorded")
+	require.True(t, b.AllowSample("globex", "meter"), "and sampled")
+	require.True(t, b.AllowRecord("acme", 0), "acme's existing keys keep working")
+
+	// What has recovered is forgotten, which makes room for acme again.
 	c.add(10 * time.Minute)
-	require.True(t, b.AllowRecord("acme", uint(maxBudgetKeys)))
+	require.True(t, b.AllowRecord("acme", uint(maxBudgetKeysPerTenant)))
+	require.True(t, b.AllowSample("acme", "one-more"))
+}
+
+func TestTheGlobalKeyBoundIsABackstopAboveThePerTenantOne(t *testing.T) {
+	require.Greater(t, maxBudgetKeys, 10*maxBudgetKeysPerTenant)
+	c := newFakeClock()
+	b := newDecodeBudget(c.now)
+	for i := 0; i < maxBudgetKeys/maxBudgetKeysPerTenant; i++ {
+		for k := 0; k < maxBudgetKeysPerTenant; k++ {
+			require.True(t, b.AllowRecord(fmt.Sprint("t", i), uint(k)))
+		}
+	}
+	require.False(t, b.AllowRecord("one-tenant-too-many", 1), "the total is bounded as well")
 }
 
 // The figures are the contract the documentation and the alert text state, so they are pinned as

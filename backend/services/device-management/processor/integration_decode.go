@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -136,16 +137,34 @@ type integrationAuth struct {
 
 type integrationAuthKey struct{}
 
-type redeliveredKey struct{}
+// deliveryState is what one delivery of a message carries through its resolve, created OUTSIDE the
+// store hold's RunCtx so that a re-run of the closure shares it.
+//
+//   - redelivered: the message was delivered before (NumDelivered > 1);
+//   - the first decode outcome and its verdict: the hold re-runs the whole resolve on every probe of a
+//     store outage, and each run would otherwise tell the observer again and count the uplink once
+//     per probe. The observer hears each delivery once; a re-run gets the same verdict back.
+type deliveryState struct {
+	redelivered bool
+	mu          sync.Mutex
+	observed    bool
+	verdict     bool
+}
 
-// withRedelivered marks a resolve as the redelivery of a message that already failed once.
-func withRedelivered(ctx context.Context) context.Context {
-	return context.WithValue(ctx, redeliveredKey{}, true)
+type deliveryStateKey struct{}
+
+func withDelivery(ctx context.Context, d *deliveryState) context.Context {
+	return context.WithValue(ctx, deliveryStateKey{}, d)
+}
+
+func deliveryFrom(ctx context.Context) *deliveryState {
+	d, _ := ctx.Value(deliveryStateKey{}).(*deliveryState)
+	return d
 }
 
 func redeliveredFrom(ctx context.Context) bool {
-	v, _ := ctx.Value(redeliveredKey{}).(bool)
-	return v
+	d := deliveryFrom(ctx)
+	return d != nil && d.redelivered
 }
 
 func withIntegration(ctx context.Context, a integrationAuth) context.Context {
@@ -317,12 +336,12 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 	// none, with nothing to say so. The failure is terminal and visible; the version's other event
 	// types resolved above this point as they always did.
 	if unusable := dec.Unusable(); unusable != nil {
-		return nil, false, rez.decodeFailed(&obs, &DecodeFailure{Reason: unusable.Reason, Text: planFailureText(unusable)})
+		return nil, false, rez.decodeFailed(ctx, &obs, &DecodeFailure{Reason: unusable.Reason, Text: planFailureText(unusable)})
 	}
 	plan := dec.Plan()
 	out, derr := plan.Decode(uplinkInput(up))
 	if derr != nil {
-		return nil, false, rez.decodeFailed(&obs, &DecodeFailure{Reason: derr.Reason, Text: derr.Error(), Cost: derr.Cost})
+		return nil, false, rez.decodeFailed(ctx, &obs, &DecodeFailure{Reason: derr.Reason, Text: derr.Error(), Cost: derr.Cost})
 	}
 	obs.Section, obs.Cost = out.Section, out.Cost
 	for _, s := range out.Skipped {
@@ -331,7 +350,7 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 	if out.Ignored {
 		obs.Outcome = DecodeIgnored
 		rez.decode.result(string(DecodeIgnored))
-		rez.observeDecode(obs)
+		rez.observeDecode(ctx, obs)
 		return nil, true, nil
 	}
 
@@ -357,24 +376,38 @@ func (rez *EventResolver) decodeUplink(ctx context.Context, device *model.Device
 	}
 	obs.Outcome = DecodeDecoded
 	rez.decode.result(string(DecodeDecoded))
-	rez.observeDecode(obs)
+	rez.observeDecode(ctx, obs)
 	return readings, false, nil
 }
 
 // decodeFailed counts, reports and builds the error of one refused decode.
-func (rez *EventResolver) decodeFailed(obs *DecodeObservation, f *DecodeFailure) error {
+func (rez *EventResolver) decodeFailed(ctx context.Context, obs *DecodeObservation, f *DecodeFailure) error {
 	obs.Outcome, obs.Reason, obs.Cost, obs.Error = DecodeFailed, f.Reason, f.Cost, f.Error()
 	rez.decode.result(string(f.Reason))
-	f.Suppressed = !rez.observeDecode(*obs)
+	f.Suppressed = !rez.observeDecode(ctx, *obs)
 	return f
 }
 
 // observeDecode tells the observer and returns whether the outcome may be recorded.
-func (rez *EventResolver) observeDecode(o DecodeObservation) bool {
+//
+// Once per delivery: a re-run of the same delivery (the store hold re-runs the resolve on each probe
+// of an outage) gets the first run's verdict and is not observed, or counted, again.
+func (rez *EventResolver) observeDecode(ctx context.Context, o DecodeObservation) bool {
 	if rez.decodeObserver == nil {
 		return true
 	}
-	return rez.decodeObserver.ObserveDecode(o)
+	d := deliveryFrom(ctx)
+	if d == nil {
+		return rez.decodeObserver.ObserveDecode(o)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.observed {
+		return d.verdict
+	}
+	d.verdict = rez.decodeObserver.ObserveDecode(o)
+	d.observed = true
+	return d.verdict
 }
 
 // planFailureText is the tenant-facing text of a decoder this build cannot run. The compile error
@@ -461,7 +494,7 @@ func (rez *EventResolver) flattenUplink(ctx context.Context, device *model.Devic
 		var tooMany integrationcodec.ErrTooManyReadings
 		if errors.As(ferr, &tooMany) {
 			return nil, false, uint(resolvedevent.FailureReason_DecodeFailed),
-				rez.decodeFailed(&obs, &DecodeFailure{Reason: ReasonTooManyReadings, Text: string(ReasonTooManyReadings) + ": " + ferr.Error()})
+				rez.decodeFailed(ctx, &obs, &DecodeFailure{Reason: ReasonTooManyReadings, Text: string(ReasonTooManyReadings) + ": " + ferr.Error()})
 		}
 		if ferr != nil {
 			return nil, false, uint(resolvedevent.FailureReason_Invalid), ferr
