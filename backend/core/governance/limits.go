@@ -158,3 +158,13 @@ func (r *TenantLimitResolver) Ceiling(tenant string) core.TenantCeiling {
 	l, src := r.resolveOK(tenant)
 	return core.TenantCeiling{RatePerSecond: l.RatePerSecond, Burst: l.Burst, Source: src}
 }
+
+// Existence reports, without blocking, whether the authority has said the tenant exists. Only
+// ExistenceNone is a reason to refuse anything; see Existence.
+func (r *TenantLimitResolver) Existence(tenant string) Existence { return r.existence(tenant) }
+
+// AwaitExistence is Existence, but a tenant never seen before waits (up to ctx) for the lookup
+// it triggers, so the first request for an invented tenant name is answered as the second is.
+func (r *TenantLimitResolver) AwaitExistence(ctx context.Context, tenant string) Existence {
+	return r.awaitExistence(ctx, tenant)
+}

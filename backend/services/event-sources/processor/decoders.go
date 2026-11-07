@@ -159,24 +159,24 @@ func validateLocationEntry(index int, entry *model.UnresolvedLocationEntry) erro
 	} {
 		if b.value == nil {
 			if b.required {
-				return fmt.Errorf("location entry %d is missing required field %q", index, b.name)
+				return atPointer(entryPointer(index, b.name), fmt.Errorf("location entry %d is missing required field %q", index, b.name))
 			}
 			continue
 		}
 		parsed, err := strconv.ParseFloat(*b.value, 64)
 		if err != nil {
-			return fmt.Errorf("location entry %d field %q is not a number: %q", index, b.name, *b.value)
+			return atPointer(entryPointer(index, b.name), fmt.Errorf("location entry %d field %q is not a number: %q", index, b.name, *b.value))
 		}
 		// NaN fails every comparison below, so it would pass a naive range check.
 		if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-			return fmt.Errorf("location entry %d field %q is not a finite number: %q", index, b.name, *b.value)
+			return atPointer(entryPointer(index, b.name), fmt.Errorf("location entry %d field %q is not a finite number: %q", index, b.name, *b.value))
 		}
 		tooBig := parsed > b.max
 		if b.maxExclusive {
 			tooBig = parsed >= b.max
 		}
 		if parsed < b.min || tooBig {
-			return fmt.Errorf("location entry %d field %q is out of range: %q", index, b.name, *b.value)
+			return atPointer(entryPointer(index, b.name), fmt.Errorf("location entry %d field %q is out of range: %q", index, b.name, *b.value))
 		}
 	}
 	return nil
@@ -232,7 +232,7 @@ func validateEntryTimes(kind string, payload []byte) error {
 	if err := json.Unmarshal(payload, probe); err != nil {
 		// A non-string occurredTime lands here (e.g. an epoch number). Say so in the
 		// same vocabulary rather than leaking the probe's field path.
-		return fmt.Errorf("%w: %s entry occurredTime must be an RFC3339 string: %v", ErrInvalidEventTime, kind, err)
+		return atPointer("/payload/entries", fmt.Errorf("%w: %s entry occurredTime must be an RFC3339 string: %v", ErrInvalidEventTime, kind, err))
 	}
 	for i, entry := range probe.Entries {
 		if entry.OccurredTime == nil {
@@ -240,12 +240,12 @@ func validateEntryTimes(kind string, payload []byte) error {
 		}
 		parsed, err := time.Parse(time.RFC3339, *entry.OccurredTime)
 		if err != nil {
-			return fmt.Errorf("%w: %s entry %d field \"occurredTime\" is not an RFC3339 timestamp: %q",
-				ErrInvalidEventTime, kind, i, *entry.OccurredTime)
+			return atPointer(entryPointer(i, "occurredTime"), fmt.Errorf("%w: %s entry %d field \"occurredTime\" is not an RFC3339 timestamp: %q",
+				ErrInvalidEventTime, kind, i, *entry.OccurredTime))
 		}
 		if parsed.IsZero() {
-			return fmt.Errorf("%w: %s entry %d field \"occurredTime\" is the zero instant (%q), which the "+
-				"platform reserves to mean NO time was reported", ErrInvalidEventTime, kind, i, *entry.OccurredTime)
+			return atPointer(entryPointer(i, "occurredTime"), fmt.Errorf("%w: %s entry %d field \"occurredTime\" is the zero instant (%q), which the "+
+				"platform reserves to mean NO time was reported", ErrInvalidEventTime, kind, i, *entry.OccurredTime))
 		}
 	}
 	return nil
@@ -277,7 +277,7 @@ func validateEntryTimes(kind string, payload []byte) error {
 // per-entry checks in the three Build*Payload functions below. The wrapper check
 // alone would still ack `{"entries":[{}]}` as 202.
 func errNoEntries(kind, example string) error {
-	return fmt.Errorf("%s payload carries no entries: content belongs in payload.entries[], as %s", kind, example)
+	return atPointer("/payload/entries", fmt.Errorf("%s payload carries no entries: content belongs in payload.entries[], as %s", kind, example))
 }
 
 // Parses a locations event.
@@ -312,7 +312,7 @@ func (jd *JsonDecoder) buildLocationsPayloadFromBytes(locbytes []byte, probe boo
 	}
 	payload := &model.UnresolvedLocationsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
-		return nil, err
+		return nil, atPointer(payloadErrorPointer(err), err)
 	}
 	if len(payload.Entries) == 0 {
 		return nil, errNoEntries("location", `{"entries":[{"latitude":"...","longitude":"..."}]}`)
@@ -343,7 +343,7 @@ func (jd *JsonDecoder) buildMeasurementsPayloadFromBytes(locbytes []byte, probe 
 	}
 	payload := &model.UnresolvedMeasurementsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
-		return nil, err
+		return nil, atPointer(payloadErrorPointer(err), err)
 	}
 	if len(payload.Entries) == 0 {
 		return nil, errNoEntries("measurement", `{"entries":[{"measurements":{"temperature":"21.5"}}]}`)
@@ -354,7 +354,7 @@ func (jd *JsonDecoder) buildMeasurementsPayloadFromBytes(locbytes []byte, probe 
 	// an SDK emitting an empty reading set produces — is told its data landed.
 	for i := range payload.Entries {
 		if len(payload.Entries[i].Measurements) == 0 {
-			return nil, fmt.Errorf("measurement entry %d carries no measurements", i)
+			return nil, atPointer(entryPointer(i, "measurements"), fmt.Errorf("measurement entry %d carries no measurements", i))
 		}
 	}
 	return payload, nil
@@ -378,7 +378,7 @@ func (jd *JsonDecoder) buildAlertsPayloadFromBytes(locbytes []byte, probe bool) 
 	}
 	payload := &model.UnresolvedAlertsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
-		return nil, err
+		return nil, atPointer(payloadErrorPointer(err), err)
 	}
 	if len(payload.Entries) == 0 {
 		return nil, errNoEntries("alert", `{"entries":[{"type":"...","level":1,"message":"...","source":"..."}]}`)
@@ -391,14 +391,14 @@ func (jd *JsonDecoder) buildAlertsPayloadFromBytes(locbytes []byte, probe bool) 
 	// unhelpful, not corrupt.
 	for i := range payload.Entries {
 		if payload.Entries[i].Type == "" {
-			return nil, fmt.Errorf("alert entry %d has no type: an alert must carry the classifier consumers route on", i)
+			return nil, atPointer(entryPointer(i, "type"), fmt.Errorf("alert entry %d has no type: an alert must carry the classifier consumers route on", i))
 		}
 		// Level is served as a GraphQL Int, which is 32-bit, while the wire accepts any
 		// uint32. Without this a level above 2147483647 is stored and then either reads
 		// back as a negative number or — since the read refuses to wrap it — makes every
 		// alert listing that includes the row an error.
 		if payload.Entries[i].Level > math.MaxInt32 {
-			return nil, fmt.Errorf("alert entry %d has level %d: a level must be at most %d", i, payload.Entries[i].Level, math.MaxInt32)
+			return nil, atPointer(entryPointer(i, "level"), fmt.Errorf("alert entry %d has level %d: a level must be at most %d", i, payload.Entries[i].Level, math.MaxInt32))
 		}
 	}
 	return payload, nil
@@ -439,17 +439,17 @@ func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent, receivedAt time.Time) (*
 	if etype, ok := model.EventTypesByName[jevent.EventType]; ok {
 		event.EventType = etype
 	} else {
-		return nil, fmt.Errorf("unknown event type in json payload: %s", jevent.EventType)
+		return nil, atPointer("/eventType", fmt.Errorf("unknown event type in json payload: %s", jevent.EventType))
 	}
 	if jevent.OccurredTime != nil {
 		otime, err := time.Parse(time.RFC3339, *jevent.OccurredTime)
 		if err != nil {
-			return nil, fmt.Errorf("%w: envelope occurredTime is not an RFC3339 timestamp: %q",
-				ErrInvalidEventTime, *jevent.OccurredTime)
+			return nil, atPointer("/occurredTime", fmt.Errorf("%w: envelope occurredTime is not an RFC3339 timestamp: %q",
+				ErrInvalidEventTime, *jevent.OccurredTime))
 		}
 		if otime.IsZero() {
-			return nil, fmt.Errorf("%w: envelope occurredTime is the zero instant (%q), which the platform "+
-				"reserves to mean NO time was reported", ErrInvalidEventTime, *jevent.OccurredTime)
+			return nil, atPointer("/occurredTime", fmt.Errorf("%w: envelope occurredTime is the zero instant (%q), which the platform "+
+				"reserves to mean NO time was reported", ErrInvalidEventTime, *jevent.OccurredTime))
 		}
 		event.OccurredTime = otime
 	} else {
@@ -627,15 +627,15 @@ func (jd *JsonDecoder) decodeReference(payload []byte, receivedAt time.Time) (*m
 		// remedy would be an operator demoting it by hand, which is not a remedy for a
 		// device that simply does it again. What the demotion changes is the cost of the
 		// mistake, not whether it is one.
-		return nil, nil, fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest")
+		return nil, nil, atPointer("/eventType", fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest"))
 	case eventtype.IntegrationUplink:
 		// An integration uplink is a sender's raw input for a decoder on the device's profile, built
 		// only by the integration route after it authenticated the sender. A device naming the
 		// type would be asking the resolver to run a decoder over bytes the device chose, as
 		// though an integration had vouched for them.
-		return nil, nil, fmt.Errorf("integration-uplink events are produced by the integration route and not accepted from device ingest")
+		return nil, nil, atPointer("/eventType", fmt.Errorf("integration-uplink events are produced by the integration route and not accepted from device ingest"))
 	default:
-		return nil, nil, fmt.Errorf("unhandled event type: %s", jevent.EventType)
+		return nil, nil, atPointer("/eventType", fmt.Errorf("unhandled event type: %s", jevent.EventType))
 	}
 	if err != nil {
 		return nil, nil, err
@@ -658,7 +658,7 @@ func checkBuilt(event *model.UnresolvedEvent, built interface{}) error {
 	// truncates: the device is told the count and the limit, and the message routes to the
 	// failed-decode path intact.
 	if err := model.CheckReadingCount(built); err != nil {
-		return err
+		return atPointer("/payload/entries", err)
 	}
 	// 🔴 THE AGE FLOOR, at the door so HTTP can answer 400 and a broker transport dead-letters
 	// with the reason. Measured against the event's ProcessedTime, which AssembleEvent set

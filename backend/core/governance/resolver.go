@@ -378,3 +378,55 @@ func failureCause(err error) core.CeilingSource {
 	}
 	return core.CeilingUnreachable
 }
+
+// Existence is what a resolver has learned about whether a tenant exists.
+type Existence uint8
+
+const (
+	// ExistenceUnknown: nothing has answered for this tenant (a cold miss, a refresh the
+	// resolver's bounds refused to start, or the authority unreachable). It is NOT a verdict:
+	// a caller that refuses on anything but ExistenceNone fails open, as the resolver does.
+	ExistenceUnknown Existence = iota
+	// ExistenceKnown: the authority has answered for this tenant, so it exists (or did, as
+	// of a fetch within the cache's reach).
+	ExistenceKnown
+	// ExistenceNone: the authority answered that no such tenant exists.
+	ExistenceNone
+)
+
+// existence reads the cache without blocking, starting a refresh when one is due.
+func (r *tenantResolver[V]) existence(tenant string) Existence {
+	_, src := r.resolveOK(tenant)
+	switch src {
+	case core.CeilingResolved:
+		return ExistenceKnown
+	case core.CeilingUnknownTenant:
+		return ExistenceNone
+	}
+	return ExistenceUnknown
+}
+
+// awaitExistence is existence, but a COLD tenant waits for the refresh it started, up to ctx.
+// The wait is only for a refresh that is actually running: when the resolver's rate or
+// concurrency bound refused to start one, the answer is ExistenceUnknown at once, so a flood of
+// invented tenant names costs no waiting beyond the bound it already hits.
+func (r *tenantResolver[V]) awaitExistence(ctx context.Context, tenant string) Existence {
+	if e := r.existence(tenant); e != ExistenceUnknown {
+		return e
+	}
+	tick := time.NewTicker(2 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		r.mu.Lock()
+		_, running := r.inflight[tenant]
+		r.mu.Unlock()
+		if !running {
+			return r.existence(tenant)
+		}
+		select {
+		case <-ctx.Done():
+			return ExistenceUnknown
+		case <-tick.C:
+		}
+	}
+}

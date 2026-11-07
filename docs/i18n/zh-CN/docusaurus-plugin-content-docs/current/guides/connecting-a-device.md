@@ -69,7 +69,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 - 测量值和所有 `Location` 字段都是 **JSON 字符串**（`"21.5"`，不是 `21.5`）。
 - 告警的 `level` 是 0 到 2147483647 之间的**未加引号的 JSON 整数**。
 
-这两条规则都会强制执行。没有条目的载荷、没有内容的条目、JSON 类型错误的值（应为字符串却传入数字，或告警 `level` 被加上引号），以及范围之外的告警 `level`，都会被拒绝，而不会静默接受：HTTP 返回 `400`，MQTT 发布进入死信流。
+这两条规则都会强制执行。没有条目的载荷、没有内容的条目、JSON 类型错误的值（应为字符串却传入数字，或告警 `level` 被加上引号），以及范围之外的告警 `level`，都会被拒绝，而不会静默接受：HTTP 返回 `422` 并用 JSON Pointer 指出该值，MQTT 发布进入死信流。
 
 一个条目是一组在某个时间点采集的读数。条目可以携带自己的 `occurredTime`。存储、图表、评估和返回读数时都会使用该时间，因此设备离线期间缓存的读数可以成批上传（不超过下述限制），并保留实际记录的历史。
 
@@ -92,7 +92,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 
 设备如何得知结果取决于传输：
 
-- **HTTP** 返回 `400`，指出计数和限制。
+- **HTTP** 返回 `422`，指出计数和限制。
 - **MQTT** 不会向设备通知任何内容。消息代理在持久捕获发布时就确认，此时消息尚未解码。因此 `PUBACK` 并不承诺消息已被接受，之后发生的拒绝只有运维人员能看到。
 
 运维人员可通过 `total_msg_too_many_readings` 计数器看到每次拒绝。该限制不可配置。从允许更多读数的版本升级后，已经捕获但尚未解码的消息，也会按新限制被拒绝。
@@ -283,9 +283,17 @@ QoS 1 完全受支持。如果设备链路中丢失传输中的发布比存储�
 
 `event-sources` 也在 **8081** 端口接受 HTTP 事件。实例 ID 和租户来自路径 `/{instanceId}/{tenant}/events`，与 MQTT 主题约定对应；设备及其凭据放在正文中。
 
-- 事件入队后，`POST` 返回 **202 Accepted**。
+- 事件入队后，`POST` 返回 **202 Accepted**，并带有 `X-DC-Event-Id` 响应头：这是该请求的回执，询问时可引用。它标识的是请求，而不是已存储的事件（其 id 此时尚不存在）。
+- 路径中的租户不存在，或正文中的凭据无法通过认证（未知、已过期、密钥错误、属于所指名设备之外的另一台设备，或在实例要求凭据时缺失）时，返回 **401 Unauthorized**。响应体始终是 `{"error":"unauthorized"}`，对所有原因都相同，因此无法借此端点查明哪些租户或凭据 id 存在；运营者可通过 `total_http_ingest_refused` 计数器得知具体原因。未存储任何内容，重新发送同一请求会得到相同的响应。参见[为什么看不到我的数据](./why-isnt-my-data-showing-up.md)。
 - 租户超过 HTTP 摄取上限时返回 **429 Too Many Requests**。上限按读数计数，因此包含多个读数的消息比单个读数消息成本更高。MQTT 路径会丢弃超限消息，而不返回响应。
-- 正文无法读取或解码，或路径中的租户不是有效令牌时，返回 **400 Bad Request**。重新发送相同请求仍会得到相同结果。
+- 正文无法读取或不是 JSON，或路径中的租户不是有效令牌时，返回 **400 Bad Request**。重新发送相同请求仍会得到相同结果。
+- 正文是 JSON 但内容被平台拒绝时返回 **422 Unprocessable Content**：未知的 `eventType`、没有条目的载荷、空条目、不是 RFC 3339 的时间戳、超过 256 个读数。响应体会指出有问题的值，便于您修正该字段：
+
+  ```json
+  {"error":"unprocessable_event","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
+  ```
+
+  `pointer` 是指向您所发送正文的 [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901) JSON Pointer，空字符串表示整个文档。未存储任何内容，重新发送同一请求会得到相同的响应。
 - 事件在入队之前被丢弃时返回 **500 Internal Server Error**，原因是无法构建其消息（它携带的凭据无法密封，或事件无法编码）。事件未被存储，重新发送同一请求会得到相同的响应，因此不要重试；原因记录在 `event-sources` 日志中，`total_msg_build_dropped` 按原因对其计数。
 - 事件未被接受时返回 **503 Service Unavailable**。带 `Retry-After` 响应头时，平台正在拒绝新事件（[背压](../deployment/observability.md#ingest-backpressure)），事件未被存储：等待指定秒数后重新发送。不带该响应头时，发布失败，但事件仍可能已经存储，因此除非带 `altId` 和 `occurredTime`，重发就可能存储两次（参见[服务质量](#quality-of-service)）。两种情况都应重试。租户自身上限先被检查，因此超出租户上限会返回 `429`，而不是这里的 `503`。[传输矩阵](../reference/transport-matrix.md#http)列出完整结果。
 

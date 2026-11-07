@@ -328,17 +328,19 @@ Checked by `event-sources` when the message is received and decoded.
 | --- | --- | --- | --- |
 | Instance id in the path or topic is not this instance's | `404` | The broker refuses the publish: the device is not authorized for that topic | — |
 | Tenant in the path is not a valid token | `400` | The broker refuses the publish | — |
+| The tenant in the path does not exist | `401`, the same answer as a bad credential | The broker refuses the connection | `total_http_ingest_refused`, `reason="unknown_tenant"` |
+| The credential in the body will not authenticate: unknown, expired, the wrong secret, another device's, or missing where the instance requires one | `401`, always `{"error":"unauthorized"}` | Judged at the broker when the device connects | `total_http_ingest_refused`, `reason="bad_credential"` |
 | Tenant is over its ingest ceiling, by messages or by readings | `429` with `Retry-After: 1` | Acknowledged, then **dropped** | `total_msg_rate_limited`, `total_msg_reading_limited` |
 | Body cannot be read, or is over 1 MiB | `400` | — | — |
-| Body does not decode: not JSON, an unknown or platform-only `eventType` (`StateChange`, `CommandInvocation`, `CommandResponse`), a value of the wrong JSON type, no entries, an empty entry, a missing or out-of-range location field, an alert with no `type` or with a `level` over 2147483647 | `400`, with the reason in the body | Acknowledged, then routed to the `failed-decode` stream | `total_msg_failed_decode` |
-| A timestamp that is not RFC 3339, is `0001-01-01T00:00:00Z`, or is more than 366 days old | `400`, naming the field | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
-| More than 256 readings | `400`, naming the count and the limit | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
+| Body does not decode: not JSON, an unknown or platform-only `eventType` (`StateChange`, `CommandInvocation`, `CommandResponse`), a value of the wrong JSON type, no entries, an empty entry, a missing or out-of-range location field, an alert with no `type` or with a `level` over 2147483647 | `400` when the body is not JSON; otherwise `422`, with the reason and a [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) to the value in the body | Acknowledged, then routed to the `failed-decode` stream | `total_msg_failed_decode` |
+| A timestamp that is not RFC 3339, is `0001-01-01T00:00:00Z`, or is more than 366 days old | `422`, naming the field | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
+| More than 256 readings | `422`, naming the count and the limit | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
 | The body's `device` is not the device in the topic | — | Routed to `failed-decode` | `total_msg_failed_decode` |
 | The body carries `credentialType`, `credentialId` or `credentialSecret`, on the platform's MQTT broker | — | Routed to `failed-decode` (redacted) | `total_msg_failed_decode`, `total_msg_credential_in_mqtt_body` |
 | The platform is applying [backpressure](../deployment/observability.md#ingest-backpressure) | `503` **with** `Retry-After`: not stored, send it again | Not refused: it waits in the capture stream; the oldest captured messages are discarded only if that stream fills | |
 | The event's message could not be built: a credential it presented could not be sealed, or the event could not be encoded | `500`: not stored, and sending it again fails the same way | Dropped | `total_msg_build_dropped`, by `cause` |
 | The event could not be handed to the pipeline | `503` **without** `Retry-After`: it may have been stored, so a resend stores it twice unless it carries an [`altId`](#altid) | — | |
-| Accepted | `202` | `PUBACK` (QoS 1) | |
+| Accepted | `202`, with an `X-DC-Event-Id` receipt header | `PUBACK` (QoS 1) | |
 
 A `400` is terminal: the same request gets the same answer. A refusal at the door refuses the **whole message**, including every other entry in it.
 
