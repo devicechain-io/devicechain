@@ -998,7 +998,7 @@ Dos widgets son nuevos en el menú **Añadir widget**, ambos en Telemetría. Se 
 - **Cuadrícula de estado** muestra un mosaico por dispositivo de un grupo para una medición, coloreado según la banda de umbral de la última lectura de cada dispositivo. Un dispositivo sin lectura se dibuja hueco y se cuenta aparte; nunca se muestra como correcto.
 - **Línea de estados** muestra las mediciones de un dispositivo como carriles de estados discretos en el intervalo de tiempo del tablero, con los umbrales como estados. Cada tramo es el estado del promedio de un intervalo, y el widget lo indica.
 
-No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md#adding-a-widget) para las opciones de cada uno.
+No requiere ninguna acción. Consulte [Tableros](../user-guide/dashboards.md) para las opciones de cada uno.
 
 #### Cambios de esquema y cómo volver atrás {#v120-going-back}
 
