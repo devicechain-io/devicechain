@@ -17,6 +17,14 @@ import (
 // maxScenarioBytes bounds a scenario document.
 const maxScenarioBytes = 1 << 20
 
+// Work bounds, so a scenario cannot make one reset do unbounded simulation: an episode
+// plays at most maxEpisodeSeconds of virtual time, and zones x seconds is capped. A reset
+// simulates the episode three times (agent, baseline, ceiling).
+const (
+	maxEpisodeSeconds = 6 * 3600
+	maxEpisodeWork    = 4_000_000 // zone-seconds per simulated run
+)
+
 // Fixed measurement names of the plant. The plant models a zone controller, so the arena
 // reads and writes exactly these on the controlled kind; a scenario that names others is
 // refused at load rather than graded against a plant that does not model them.
@@ -98,16 +106,22 @@ type EpisodeSpec struct {
 // the rule that defines an alarm, the plant, and the windows (episodes) that make up a
 // suite.
 type Scenario struct {
-	Name          string        `json:"name"`
-	Title         string        `json:"title"`
-	Suite         string        `json:"suite"`
-	Recording     string        `json:"recording"`
-	ControlKind   string        `json:"controlKind"`
-	Rule          RuleSpec      `json:"rule"`
-	Plant         *PlantParams  `json:"plant,omitempty"`
-	Commands      []CommandDef  `json:"commands"`
-	CommandBudget int           `json:"commandBudget"`
-	Episodes      []EpisodeSpec `json:"episodes"`
+	Name  string `json:"name"`
+	Title string `json:"title"`
+	Suite string `json:"suite"`
+	// Tenants lists the tenants allowed to play this scenario, because a recording is a
+	// tenant's operational history. SharedWithAllTenants is the explicit alternative for
+	// an operator-installed fixture that is no tenant's data. Exactly one must be set: a
+	// scenario that names neither is refused rather than served to everybody.
+	Tenants              []string      `json:"tenants,omitempty"`
+	SharedWithAllTenants bool          `json:"sharedWithAllTenants,omitempty"`
+	Recording            string        `json:"recording"`
+	ControlKind          string        `json:"controlKind"`
+	Rule                 RuleSpec      `json:"rule"`
+	Plant                *PlantParams  `json:"plant,omitempty"`
+	Commands             []CommandDef  `json:"commands"`
+	CommandBudget        int           `json:"commandBudget"`
+	Episodes             []EpisodeSpec `json:"episodes"`
 
 	rec   *Recording
 	plant PlantParams
@@ -116,6 +130,19 @@ type Scenario struct {
 
 // Rec returns the parsed recording.
 func (s *Scenario) Rec() *Recording { return s.rec }
+
+// VisibleTo reports whether a tenant may see and play this scenario.
+func (s *Scenario) VisibleTo(tenant string) bool {
+	if s.SharedWithAllTenants {
+		return true
+	}
+	for _, t := range s.Tenants {
+		if t == tenant {
+			return true
+		}
+	}
+	return false
+}
 
 // ID is the handle an agent passes to reset: scenario/episode.
 func (s *Scenario) ID(e EpisodeSpec) string { return s.Name + "/" + e.ID }
@@ -149,6 +176,14 @@ func (s *Scenario) validate() error {
 	}
 	if s.Suite == "" {
 		return fmt.Errorf("suite is required")
+	}
+	if s.SharedWithAllTenants == (len(s.Tenants) > 0) {
+		return fmt.Errorf("set exactly one of tenants (who may play it) or sharedWithAllTenants (an operator fixture that is no tenant's data)")
+	}
+	for _, t := range s.Tenants {
+		if t == "" {
+			return fmt.Errorf("tenants may not contain an empty name")
+		}
 	}
 	if s.ControlKind == "" {
 		return fmt.Errorf("controlKind is required")
@@ -202,6 +237,9 @@ func (s *Scenario) validate() error {
 			return fmt.Errorf("command %q must declare exactly one parameter", c.Key)
 		}
 		pd := c.ParameterSchema[0]
+		if !pd.Required {
+			return fmt.Errorf("command %q parameter %q must be required: an optional bounded parameter, left out, would apply a default the bounds never saw", c.Key, pd.Name)
+		}
 		if pd.Min == nil || pd.Max == nil || *pd.Min >= *pd.Max {
 			return fmt.Errorf("command %q parameter %q must declare minValue < maxValue: the bounds are what the arena grades safety against", c.Key, pd.Name)
 		}
@@ -220,6 +258,9 @@ func (s *Scenario) validate() error {
 		ids[e.ID] = true
 		if e.T0Sec < 0 || e.DurationSec <= 0 || e.T0Sec+e.DurationSec > s.rec.DurationSec {
 			return fmt.Errorf("episode %q window [%v, %v] is outside the recording [0, %v]", e.ID, e.T0Sec, e.T0Sec+e.DurationSec, s.rec.DurationSec)
+		}
+		if e.DurationSec > maxEpisodeSeconds || e.DurationSec*float64(len(s.zones)) > maxEpisodeWork {
+			return fmt.Errorf("episode %q plays %.0f s over %d zones; the arena bounds an episode to %d s and %d zone-seconds", e.ID, e.DurationSec, len(s.zones), maxEpisodeSeconds, maxEpisodeWork)
 		}
 	}
 	return nil
@@ -277,6 +318,11 @@ func (c CommandDef) Validate(params map[string]any) (value float64, outOfBounds 
 			value = f
 		default:
 			return 0, false, fmt.Errorf("parameter %q has dataType %q, which the arena does not execute", p.Name, p.DataType)
+		}
+	}
+	if len(c.ParameterSchema) > 0 && c.ParameterSchema[0].Required {
+		if _, ok := params[c.ParameterSchema[0].Name]; !ok {
+			return 0, false, fmt.Errorf("parameter %q is required", c.ParameterSchema[0].Name)
 		}
 	}
 	return value, false, nil
@@ -399,22 +445,24 @@ func insideDir(dir, rel string) (string, error) {
 	return full, nil
 }
 
-// Resolve finds the scenario and episode a handle (scenario/episode) names.
-func (c *Catalog) Resolve(id string) (*Scenario, EpisodeSpec, error) {
+// Resolve finds the scenario and episode a handle (scenario/episode) names for a tenant.
+// A scenario the tenant may not play answers exactly as one that does not exist, so the
+// catalog cannot be probed for another tenant's recordings.
+func (c *Catalog) Resolve(tenant, id string) (*Scenario, EpisodeSpec, error) {
 	name, ep, ok := strings.Cut(id, "/")
 	if !ok {
-		return nil, EpisodeSpec{}, fmt.Errorf("scenario %q is not of the form <scenario>/<episode>; call reset with no scenario to list them", id)
+		return nil, EpisodeSpec{}, fmt.Errorf("scenario %q is not of the form <scenario>/<episode>; call reset with no scenario to list them", clip(id))
 	}
 	s := c.scenarios[name]
-	if s == nil {
-		return nil, EpisodeSpec{}, fmt.Errorf("no scenario %q; call reset with no scenario to list them", name)
+	if s == nil || !s.VisibleTo(tenant) {
+		return nil, EpisodeSpec{}, fmt.Errorf("no scenario %q; call reset with no scenario to list them", clip(name))
 	}
 	for _, e := range s.Episodes {
 		if e.ID == ep {
 			return s, e, nil
 		}
 	}
-	return nil, EpisodeSpec{}, fmt.Errorf("scenario %q has no episode %q", name, ep)
+	return nil, EpisodeSpec{}, fmt.Errorf("scenario %q has no episode %q", name, clip(ep))
 }
 
 // Listing is one playable episode, as reset's catalog shows it.
@@ -426,10 +474,13 @@ type Listing struct {
 	DurationSec float64 `json:"durationSec"`
 }
 
-// List shows every playable episode, sorted.
-func (c *Catalog) List() []Listing {
+// List shows every episode a tenant may play, sorted.
+func (c *Catalog) List(tenant string) []Listing {
 	var out []Listing
 	for _, s := range c.scenarios {
+		if !s.VisibleTo(tenant) {
+			continue
+		}
 		for _, e := range s.Episodes {
 			out = append(out, Listing{Scenario: s.ID(e), Suite: s.Suite, Title: e.Title, Brief: e.Brief, DurationSec: e.DurationSec})
 		}
@@ -438,13 +489,24 @@ func (c *Catalog) List() []Listing {
 	return out
 }
 
-// Suite returns the scenario handles that make up a suite, sorted.
-func (c *Catalog) Suite(suite string) []string {
+// Suite returns the scenario handles of a suite that a tenant may play, sorted.
+func (c *Catalog) Suite(tenant, suite string) []string {
 	var out []string
-	for _, l := range c.List() {
+	for _, l := range c.List(tenant) {
 		if l.Suite == suite {
 			out = append(out, l.Scenario)
 		}
 	}
 	return out
+}
+
+// HasSuite reports whether any scenario, for any tenant, belongs to the suite; the
+// configuration check uses it to refuse a policy for a suite that does not exist.
+func (c *Catalog) HasSuite(suite string) bool {
+	for _, s := range c.scenarios {
+		if s.Suite == suite {
+			return true
+		}
+	}
+	return false
 }

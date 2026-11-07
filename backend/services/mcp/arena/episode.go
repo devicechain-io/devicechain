@@ -78,9 +78,7 @@ func newEpisode(id, tenant, agent string, sc *Scenario, spec EpisodeSpec, now ti
 	// legal play (it spends a command per zone and ignores the economy); it is the yardstick
 	// that turns "alarm-minutes avoided" into "how much of the avoidable did you avoid".
 	ep.ceil = newEngine(sc, spec.T0Sec)
-	for _, z := range ep.ceil.zones {
-		z.boostEnds = ep.end + 1
-	}
+	ep.ceil.pinned = true
 	ep.ceil.advanceTo(ep.end)
 	return ep
 }
@@ -129,9 +127,18 @@ func (e *Episode) Act(device, command string, params map[string]any) (ActResult,
 		return ActResult{}, fmt.Errorf("an episode takes at most %d actions", maxActionsPerEpisode)
 	}
 	now := e.eng.now
+	// What the agent sent is kept bounded: the names are clipped, and the parameters are
+	// kept only for a call the typed definition accepted or rejected on its bounds (which
+	// have already been checked to name only declared parameters). A refused call's
+	// arguments are arbitrary and are not retained.
+	device, command = clip(device), clip(command)
 	rec := func(outcome, detail string) ActResult {
-		e.actions = append(e.actions, Action{T: now, Device: device, Command: command, Params: params, Outcome: outcome, Detail: detail})
-		return ActResult{Outcome: outcome, Detail: detail, TSec: now}
+		kept := params
+		if outcome == OutcomeRefused {
+			kept = nil
+		}
+		e.actions = append(e.actions, Action{T: now, Device: device, Command: command, Params: kept, Outcome: outcome, Detail: clip(detail)})
+		return ActResult{Outcome: outcome, Detail: clip(detail), TSec: now}
 	}
 	z, ok := e.eng.zones[device]
 	if !ok {
@@ -160,6 +167,16 @@ func (e *Episode) Act(device, command string, params map[string]any) (ActResult,
 	}
 	e.applied++
 	return rec(OutcomeApplied, fmt.Sprintf("%s accepted by %s", command, device)), nil
+}
+
+// maxEcho bounds how much of a caller-supplied string is echoed back or kept.
+const maxEcho = 96
+
+func clip(s string) string {
+	if len(s) <= maxEcho {
+		return s
+	}
+	return s[:maxEcho] + "..."
 }
 
 // ---- observation ----------------------------------------------------------------------

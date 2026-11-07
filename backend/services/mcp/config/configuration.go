@@ -143,7 +143,7 @@ func (c *McpConfiguration) ArenaOptions() (server.Options, error) {
 		return server.Options{}, fmt.Errorf("experimentalArena: %w", err)
 	}
 	for i, r := range a.Policy.Rules {
-		if len(cat.Suite(r.Suite)) == 0 {
+		if !cat.HasSuite(r.Suite) {
 			return server.Options{}, fmt.Errorf("experimentalArena.policy.rules[%d]: no scenario belongs to suite %q", i, r.Suite)
 		}
 	}

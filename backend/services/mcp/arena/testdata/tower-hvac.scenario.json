@@ -2,6 +2,7 @@
   "name": "tower-hvac",
   "title": "Office tower HVAC",
   "suite": "hvac-certification",
+  "sharedWithAllTenants": true,
   "recording": "towerpulse-fixture.json",
   "controlKind": "vav",
   "rule": {

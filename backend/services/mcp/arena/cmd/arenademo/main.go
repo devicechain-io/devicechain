@@ -51,7 +51,7 @@ func run(dir, out string) error {
 		Commands: []string{arena.CmdSetSetpoint, arena.CmdBoostCooling},
 	}}}
 	suite := "hvac-certification"
-	episodes := cat.Suite(suite)
+	episodes := cat.Suite(tenant, suite)
 
 	agents := []agent{
 		{"idle-v1", "does nothing", playIdle},
@@ -67,7 +67,7 @@ func run(dir, out string) error {
 	}
 	var all []*arena.Scorecard
 	fmt.Printf("Proving Ground: suite %q, %d episodes\n", suite, len(episodes))
-	for _, ep := range cat.List() {
+	for _, ep := range cat.List(tenant) {
 		fmt.Printf("  %-26s %s\n", ep.Scenario, ep.Title)
 	}
 	for _, a := range agents {

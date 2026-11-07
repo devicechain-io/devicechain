@@ -30,7 +30,7 @@ func testCatalog(t *testing.T) *Catalog {
 func newTestEpisode(t *testing.T, scenario string) *Episode {
 	t.Helper()
 	cat := testCatalog(t)
-	sc, spec, err := cat.Resolve(scenario)
+	sc, spec, err := cat.Resolve(tenant, scenario)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestInheritedEpisodeOpensWithTheAlarmAlreadyOpen(t *testing.T) {
 // observation at the cutoff to be byte-identical, with the agent having acted.
 func TestObservationIsStrictlyCausal(t *testing.T) {
 	cat := testCatalog(t)
-	sc, spec, err := cat.Resolve("tower-hvac/f4-meeting")
+	sc, spec, err := cat.Resolve(tenant, "tower-hvac/f4-meeting")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +154,12 @@ func TestObservationIsStrictlyCausal(t *testing.T) {
 // mutateFuture returns a recording identical up to cutoff and wildly different after it.
 func mutateFuture(t *testing.T, rec *Recording, cutoff float64) *Recording {
 	t.Helper()
+	return mutateFutureWith(t, cutoff, func(v float64) float64 { return v*3 + 11 })
+}
+
+// mutateFutureWith rewrites every recorded value after cutoff with f.
+func mutateFutureWith(t *testing.T, cutoff float64, f func(float64) float64) *Recording {
+	t.Helper()
 	raw, err := os.ReadFile("testdata/towerpulse-fixture.json")
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +173,7 @@ func mutateFuture(t *testing.T, rec *Recording, cutoff float64) *Recording {
 	changed := 0
 	for i := range ts {
 		if ts[i].(float64)/1000 > cutoff {
-			vs[i] = vs[i].(float64)*3 + 11
+			vs[i] = f(vs[i].(float64))
 			changed++
 		}
 	}
@@ -361,6 +367,9 @@ func TestCatalogRefusesWhatItCannotGradeHonestly(t *testing.T) {
 		"a command the plant cannot run":    strings.Replace(good, `"key": "set-setpoint"`, `"key": "restart"`, 1),
 		"an episode outside the recording":  strings.Replace(good, `"durationSec": 540`, `"durationSec": 5400`, 1),
 		"a kind with no devices":            strings.Replace(good, `"controlKind": "vav"`, `"controlKind": "elevator"`, 1),
+		"no audience at all":                strings.Replace(good, `"sharedWithAllTenants": true,`, ``, 1),
+		"both audiences":                    strings.Replace(good, `"sharedWithAllTenants": true,`, `"sharedWithAllTenants": true, "tenants": ["acme"],`, 1),
+		"an optional bounded parameter":     strings.Replace(good, `"required": true, "minValue": 18`, `"minValue": 18`, 1),
 		"an unphysical plant":               strings.Replace(good, `"commandBudget": 4`, `"commandBudget": 4, "plant": {"coolCapCPerMin": 2, "boostCapCPerMin": 1, "controlBase": 20, "controlGain": 40, "damperFloor": 10, "atSetpointC": 0.1}`, 1),
 	}
 	for name, doc := range cases {
@@ -420,7 +429,7 @@ func TestRegistryIsolatesCallers(t *testing.T) {
 
 func playSuite(t *testing.T, r *Registry, agent string, act func(ep *Episode, id string)) {
 	t.Helper()
-	for _, id := range r.cat.Suite("hvac-certification") {
+	for _, id := range r.cat.Suite(tenant, "hvac-certification") {
 		if _, _, err := r.Reset(tenant, subj, agent, id); err != nil {
 			t.Fatal(err)
 		}
@@ -605,5 +614,156 @@ func TestExportedReplayCarriesTheAgentsRunAndItsActions(t *testing.T) {
 	}
 	if os.Getenv("ARENA_WRITE_REPLAY") != "" {
 		_ = os.WriteFile(os.Getenv("ARENA_WRITE_REPLAY"), out, 0o644)
+	}
+}
+
+// A recording is a tenant's operational history. A scenario that names its tenants is
+// invisible to every other tenant, and answers exactly as a scenario that does not exist.
+func TestATenantRestrictedScenarioIsInvisibleToOtherTenants(t *testing.T) {
+	base, _ := os.ReadFile("testdata/tower-hvac.scenario.json")
+	doc := strings.Replace(string(base), `"sharedWithAllTenants": true,`, `"tenants": ["acme"],`, 1)
+	cat, err := LoadCatalog(writeScenarioDir(t, doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cat.Resolve("acme", "tower-hvac/f4-meeting"); err != nil {
+		t.Fatalf("the named tenant was refused: %v", err)
+	}
+	_, _, hidden := cat.Resolve("rival", "tower-hvac/f4-meeting")
+	_, _, absent := cat.Resolve("rival", "no-such/f4-meeting")
+	if hidden == nil || absent == nil {
+		t.Fatal("another tenant resolved the scenario")
+	}
+	if strings.ReplaceAll(hidden.Error(), "tower-hvac", "X") != strings.ReplaceAll(absent.Error(), "no-such", "X") {
+		t.Fatalf("a hidden scenario answers differently from an absent one, which tells a tenant it exists: %v vs %v", hidden, absent)
+	}
+	if got := cat.List("rival"); len(got) != 0 {
+		t.Fatalf("the listing leaks %d episodes to another tenant", len(got))
+	}
+	r := NewRegistry(cat)
+	if _, _, err := r.Reset("rival", subj, "x", "tower-hvac/f4-meeting"); err == nil {
+		t.Fatal("another tenant started an episode on a recording that is not theirs")
+	}
+	if _, _, err := r.Reset("acme", subj, "x", "tower-hvac/f4-meeting"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A report carries nothing that happens after its own instant: changing the plant's
+// reaction AFTER a report must not change the report.
+func TestAReportDoesNotCarryTheStepThatCrossedIt(t *testing.T) {
+	ep := newTestEpisode(t, "tower-hvac/f4-meeting")
+	run(t, ep, 100)
+	mustAct(t, ep, hotZone, CmdBoostCooling, map[string]any{"minutes": 5.0}, OutcomeApplied)
+	ep.eng.advanceTo(122) // crosses the 121.2 s report inside the 121-122 step
+	z := ep.eng.zones[hotZone]
+	var at *tick
+	for i := range z.ticks {
+		if z.ticks[i].T == 121.2 {
+			at = &z.ticks[i]
+		}
+	}
+	if at == nil {
+		t.Fatal("no report at 121.2 s")
+	}
+	// The offset at 121.2 s lies strictly between the offset at 121 s and at 122 s.
+	rt, _ := ep.sc.rec.Interp(hotZone, metricTemp, 121.2)
+	if got := at.Temp - rt; got <= z.delta+1e-6 || got < z.delta-1.0 {
+		t.Fatalf("report offset %.4f should be the offset at 121.2 s, earlier (more positive) than the end-of-step %.4f", got, z.delta)
+	}
+}
+
+// 🔴 THE BOOST FLAG IS OBSERVABLE, SO IT MAY NOT DEPEND ON A LATER SAMPLE. The controller
+// ends a boost when the zone has reached its setpoint; judged on the recording
+// interpolated towards the next report, a future sample made far colder would end the
+// boost early. Every observation up to the cutoff must be byte-identical.
+func TestTheBoostFlagIgnoresTheFuture(t *testing.T) {
+	cat := testCatalog(t)
+	sc, spec, err := cat.Resolve(tenant, "tower-hvac/f4-meeting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const cutoff = 200.0
+	cold := mutateFutureWith(t, cutoff, func(float64) float64 { return -100 })
+	doc, _ := os.ReadFile("testdata/tower-hvac.scenario.json")
+	trace := func(rec *Recording) []string {
+		s, err := ParseScenario(doc, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ep := newEpisode("ep", tenant, "a", s, spec, time.Unix(0, 0))
+		ep.eng.advanceTo(100)
+		mustAct(t, ep, hotZone, CmdBoostCooling, map[string]any{"minutes": 30.0}, OutcomeApplied)
+		var out []string
+		for ep.Now() < cutoff-1e-9 {
+			ep.Step(5)
+			b, _ := json.Marshal(ep.Observe(nil))
+			out = append(out, string(b))
+		}
+		return out
+	}
+	a, b := trace(sc.rec), trace(cold)
+	if len(a) == 0 || len(a) != len(b) {
+		t.Fatalf("traces of %d and %d observations", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("observation %d differs when only the future changed: %s vs %s", i, a[i], b[i])
+		}
+	}
+	if !strings.Contains(a[len(a)-1], `"boosting":true`) {
+		t.Fatal("the boost was not running at the cutoff; the test measures nothing")
+	}
+}
+
+func TestTheClockLandsExactlyOnAFractionalTarget(t *testing.T) {
+	ep := newTestEpisode(t, "tower-hvac/f4-meeting")
+	ep.eng.advanceTo(62.5)
+	if ep.eng.now != 62.5 {
+		t.Fatalf("clock at %v, want 62.5: the final partial step must not overshoot", ep.eng.now)
+	}
+}
+
+func TestABoostedZoneReportsItsDamperPinnedOpen(t *testing.T) {
+	ep := newTestEpisode(t, "tower-hvac/f4-meeting")
+	run(t, ep, 100)
+	mustAct(t, ep, hotZone, CmdBoostCooling, map[string]any{"minutes": 5.0}, OutcomeApplied)
+	run(t, ep, 160)
+	z := ep.eng.zones[hotZone]
+	if last := z.ticks[len(z.ticks)-1]; last.Damper != 100 {
+		t.Fatalf("a boosting zone reported damper %v, want 100", last.Damper)
+	}
+}
+
+// The ceiling is what is physically attainable, so it must never be beaten: it holds full
+// cooling for the whole run and does not stop at the setpoint.
+func TestTheCeilingRunIsNeverBeaten(t *testing.T) {
+	ep := newTestEpisode(t, "tower-hvac/f4-meeting")
+	run(t, ep, 182)
+	mustAct(t, ep, hotZone, CmdBoostCooling, map[string]any{"minutes": 5.0}, OutcomeApplied)
+	card := finish(t, ep)
+	if ep.ceil.alarmSeconds(ep.end) > card.AlarmSecondsAgent {
+		t.Fatalf("ceiling %.1f s of alarm, agent %.1f s", ep.ceil.alarmSeconds(ep.end), card.AlarmSecondsAgent)
+	}
+	z := ep.ceil.zones[hotZone]
+	if z.boostEnds != 0 || !ep.ceil.pinned {
+		t.Fatal("the ceiling must be pinned, not a boost that can end")
+	}
+	last := z.ticks[len(z.ticks)-1].Temp
+	agent := ep.eng.zones[hotZone].ticks[len(ep.eng.zones[hotZone].ticks)-1].Temp
+	if last > agent {
+		t.Fatalf("ceiling ends at %.2f, warmer than the agent's %.2f", last, agent)
+	}
+}
+
+func TestAnEpisodeThatWouldMeanUnboundedWorkIsRefusedAtLoad(t *testing.T) {
+	cat := testCatalog(t)
+	sc, _, _ := cat.Resolve(tenant, "tower-hvac/f4-meeting")
+	long := *sc.rec
+	long.DurationSec = 1e12
+	doc, _ := os.ReadFile("testdata/tower-hvac.scenario.json")
+	huge := strings.Replace(string(doc), `"durationSec": 540`, `"durationSec": 100000000`, 1)
+	if _, err := ParseScenario([]byte(huge), &long); err == nil || !strings.Contains(err.Error(), "bounds an episode") {
+		t.Fatalf("a 100-million-second episode was accepted: %v", err)
 	}
 }

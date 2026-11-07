@@ -55,9 +55,9 @@ func callerKey(tenant, subject string) string { return tenant + "/" + subject }
 // nothing and returns the catalog instead.
 func (r *Registry) Reset(tenant, subject, agent, scenario string) (*Observation, []Listing, error) {
 	if scenario == "" {
-		return nil, r.cat.List(), nil
+		return nil, r.cat.List(tenant), nil
 	}
-	sc, spec, err := r.cat.Resolve(scenario)
+	sc, spec, err := r.cat.Resolve(tenant, scenario)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -68,13 +68,15 @@ func (r *Registry) Reset(tenant, subject, agent, scenario string) (*Observation,
 	if len(agent) > maxAgentLabel {
 		agent = agent[:maxAgentLabel]
 	}
+	// The episode is built (its baseline and ceiling runs are simulated) BEFORE the lock is
+	// taken, so one caller's reset never holds up another tenant's calls.
+	ep := newEpisode(newID(), tenant, agent, sc, spec, r.now())
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.evictLocked()
 	if _, replacing := r.episodes[callerKey(tenant, subject)]; !replacing && len(r.episodes) >= maxEpisodes {
 		return nil, nil, fmt.Errorf("the arena is full (%d live episodes); try again shortly", maxEpisodes)
 	}
-	ep := newEpisode(newID(), tenant, agent, sc, spec, r.now())
 	r.episodes[callerKey(tenant, subject)] = ep
 	obs := ep.Observe(nil)
 	return &obs, nil, nil
@@ -203,11 +205,11 @@ type Standing struct {
 func (r *Registry) Leaderboard(tenant, suite string) []Standing {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return leaderboard(r.cat, r.scorecards[tenant], suite)
+	return leaderboard(r.cat, tenant, r.scorecards[tenant], suite)
 }
 
-func leaderboard(cat *Catalog, cards []*Scorecard, suite string) []Standing {
-	required := cat.Suite(suite)
+func leaderboard(cat *Catalog, tenant string, cards []*Scorecard, suite string) []Standing {
+	required := cat.Suite(tenant, suite)
 	best := map[string]map[string]*Scorecard{}
 	for _, c := range cards {
 		if c.Suite != suite {

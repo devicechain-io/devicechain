@@ -76,6 +76,9 @@ type engine struct {
 	zones map[string]*zone
 	order []string
 
+	// pinned holds every zone at full cooling for the whole run, for the ceiling run only.
+	pinned bool
+
 	alarms   []*alarm
 	nextTick map[string]int // index into the recorded temp series of the zone's next report
 }
@@ -114,18 +117,18 @@ func (e *engine) damper(temp, setpoint float64) float64 {
 	return clamp(p.ControlBase+p.ControlGain*(temp-setpoint), p.DamperFloor, 100)
 }
 
-// advanceTo steps the plant to virtual second target (whole substeps; a target that is not
-// a multiple of the step rounds up).
+// advanceTo steps the plant to virtual second target. Whole substeps, then a final partial
+// one, so the clock lands exactly on the target and an episode never runs past its end.
 func (e *engine) advanceTo(target float64) {
 	for e.now < target-1e-9 {
-		e.step()
+		e.step(math.Min(substep, target-e.now))
 	}
 }
 
-func (e *engine) step() {
+func (e *engine) step(dt float64) {
 	p := e.sc.plant
 	t := e.now
-	next := t + substep
+	next := t + dt
 	for _, tok := range e.order {
 		z := e.zones[tok]
 		rt, _ := e.rec.Interp(tok, metricTemp, t)
@@ -137,15 +140,21 @@ func (e *engine) step() {
 		}
 		dampBase := e.damper(rt, spRec)
 		dampSim, capSim := e.damper(temp, spSim), p.CoolCapCPerMin
-		boosting := z.boostEnds > t
+		boosting := e.pinned || z.boostEnds > t
 		if boosting {
 			dampSim, capSim = 100, p.BoostCapCPerMin
-			z.boostSecs += substep
+			z.boostSecs += dt
 		}
-		z.delta += (-capSim*dampSim/100 + p.CoolCapCPerMin*dampBase/100) * substep / 60
-		if boosting {
-			rtNext, _ := e.rec.Interp(tok, metricTemp, next)
-			if rtNext+z.delta <= spSim+p.AtSetpointC || next >= z.boostEnds {
+		prev := z.delta
+		z.delta += (-capSim*dampSim/100 + p.CoolCapCPerMin*dampBase/100) * dt / 60
+		if boosting && !e.pinned {
+			// 🔴 THE CONTROLLER DECIDES FROM WHAT IT HAS BEEN TOLD. Whether the boost has
+			// done its job is judged on the last recorded report at or before now, held
+			// flat, not on the recording interpolated towards a report that has not
+			// happened yet: the boost flag is observable, and an observable must not
+			// depend on a later sample.
+			held, _ := e.rec.At(tok, metricTemp, t)
+			if held.V+z.delta <= spSim+p.AtSetpointC || next >= z.boostEnds {
 				z.boostEnds = 0 // the boost has done its job, or run out of time
 			}
 		}
@@ -155,12 +164,19 @@ func (e *engine) step() {
 			e.nextTick[tok] = i + 1
 			tk := series[i].T
 			rtk, _ := e.rec.Interp(tok, metricTemp, tk)
-			v := rtk + z.delta
+			// The offset AT the report instant, not at the end of the step that crossed it:
+			// a report may carry nothing that happens after it.
+			frac := clamp((tk-t)/dt, 0, 1)
+			v := rtk + prev + (z.delta-prev)*frac
 			spk := e.recordedSetpoint(tok, tk)
 			if z.spTouched {
 				spk = z.setpoint
 			}
-			z.ticks = append(z.ticks, tick{T: tk, Temp: round(v), Setpoint: spk, Damper: e.damper(v, spk)})
+			damper := e.damper(v, spk)
+			if boosting {
+				damper = 100 // a boosting zone has its damper pinned open
+			}
+			z.ticks = append(z.ticks, tick{T: tk, Temp: round(v), Setpoint: spk, Damper: damper})
 			e.feed(z, tk, round(v))
 		}
 	}
