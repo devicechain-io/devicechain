@@ -751,6 +751,15 @@ HTTP 事件端点（`POST /{instanceId}/{tenant}/events`）会对一个在构建
 
 **当运行租户删除的是 `v1.1.0` 的 `user-management` 副本时，删除会被卡住。** `v1.1.0` 的副本不认识这三张放置表，它的关系型清除在遇到无法归类的表时会拒绝运行。只要由它执行清除，关系型存储就会为该删除报告错误，日志和账本失败记录中会点出 `iam_partition_config`、`iam_vpartition_assignments` 或 `iam_tenant_vpartition_overrides`，同时 `tenant_purge_store_blocked{store="rdb",reason="error"}` 大于零。被拒绝的这一步不会从数据库删除任何内容，也不会丢失任何数据；其他存储在同一轮中照常被清除。删除无法完成：租户保持在 `purging` 状态。运行本版本的副本会在下一轮接手，并在其通常的检查满足后完成。滚动升级期间，最后一个 `v1.1.0` 副本消失后会自行完成；回退到 `v1.1.0` 后则一直被卡住，直到你再次向前升级。条件允许时，请在升级完成后再发起删除。
 
+#### 原生 Slack、Teams 和 PagerDuty 通知渠道 {#v120-notification-channels}
+
+通知渠道新增三种类型：`slack`、`teams` 和 `pagerduty`。它们是增量的：现有 `smtp` 或 `webhook` 渠道不受影响，通过 `webhook` 渠道访问的 Slack 入站 webhook 仍照常工作。
+
+- **升级时无需任何操作。** 新类型的渠道需要密钥（webhook URL 或 PagerDuty 路由密钥），没有密钥时保存会被拒绝。参见[原生 Slack、Teams 和 PagerDuty 渠道](../guides/notification-channels.md#native-channels)。
+- **请注意，新类型与 webhook 经过同一道出站防护。** 指向私有、环回或云元数据地址的目标会被拒绝，并计入 `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`。
+- **请注意，`notificationChannelTypes` 查询现在多列出三种类型，** GraphQL 模式只有描述发生变化。对渠道类型做穷尽匹配的客户端会多看到三个值。
+- **控制台新增了通知渠道页面，** 可配置所有类型的渠道。
+
 ### v1.1.0：摄取每个事件更省 CPU，集群外的设备可通过 MQTT 接入 {#v110-upgrade}
 
 `v1.1.0` 是从 `v1.0.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。升级时会运行两个追加的迁移（一个在 `event-management`，一个在 `device-state`）；每个迁移只新增一张表，不改写任何现有行。`Instance` 的新字段（参见[集群外的设备](#v110-mqtt-exposure)）随 operator 一同发布，由 `dcctl install` 更新，因此请如上所述先运行它，再升级实例。如果从 `v0.27.0` 或更早版本升级，请先阅读 [`v1.0.0` 的说明](#v100-upgrade)，并在其中使用 `--version v1.1.0`。
