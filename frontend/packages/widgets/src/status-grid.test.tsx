@@ -79,6 +79,10 @@ describe('the model', () => {
     expect(tiles.map((t) => t.token)).toEqual(['b', 'c', 'a', 'd']);
   });
 
+  it('applies the ceiling before testing the fit, so one tile in a wide, short body is not shrunk to the floor', () => {
+    expect(tileSide(1, 500, 200, 64, 160, 4)).toBe(160);
+  });
+
   it('sizes tiles to fit, within the floor and ceiling', () => {
     expect(tileSide(4, 400, 400, 64, 160, 4)).toBe(160);
     expect(tileSide(0, 400, 400, 64, 160, 4)).toBe(64);
@@ -95,6 +99,13 @@ describe('rendering and binding', () => {
     expect(tile(container, 'b').getAttribute('data-threshold-level')).toBe('warning');
     expect(tile(container, 'c').getAttribute('data-threshold-level')).toBe('critical');
     expect(tile(container, 'b').getAttribute('aria-label')).toBe('Pump B: 85 C, Hot');
+  });
+
+  it('says the state on a tile that is not OK, so colour is not the only cue', () => {
+    const { container } = show(fleet([member('a', 'A', 20), member('b', 'B', 85)]));
+    expect(tile(container, 'b').querySelector('[data-tile-state]')?.textContent).toBe('Hot');
+    expect(tile(container, 'a').querySelector('[data-tile-state]')).toBeNull();
+    expect(tile(container, 'b').getAttribute('title')).toContain('Hot');
   });
 
   it('keeps two devices reporting the same name apart', () => {

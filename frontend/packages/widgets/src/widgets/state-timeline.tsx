@@ -38,6 +38,7 @@ import {
   laneNames,
   shares,
   statesUsed,
+  type Lane,
   type StateKey,
 } from '../state-timeline-model';
 import { stateTimelineStrings, type StateTimelineStrings } from '../state-timeline-strings';
@@ -67,7 +68,17 @@ export function stateLabel(key: StateKey, bands: readonly Threshold[], strings: 
   if (key === 'none') return strings.noData;
   if (key === -1) return strings.baseline;
   const band = bands[key];
-  return band?.label ?? band?.level ?? String(band?.value ?? '');
+  return band?.label ?? (band ? (strings.levels[band.level] ?? band.level) : '');
+}
+
+// A lane's accessible description: how long each state lasted, then the runs in order (capped, so a
+// flapping signal does not become a wall of speech). The segments' own `title`s are not reachable
+// under role="img", so the sequence has to be said here.
+const MAX_SPOKEN_RUNS = 24;
+function laneDescription(lane: Lane, share: Map<StateKey, number>, bands: readonly Threshold[], strings: StateTimelineStrings, when: (ms: number) => string): string {
+  const shares = [...share.entries()].map(([k, v]) => `${stateLabel(k, bands, strings)} ${Math.round(v * 100)}%`).join(', ');
+  const runs = lane.segments.slice(0, MAX_SPOKEN_RUNS).map((s) => strings.segment(stateLabel(s.state, bands, strings), when(s.from), when(s.to))).join('; ');
+  return strings.lane(lane.measurement, shares, runs);
 }
 
 function Ready({ widget, history, strings }: { widget: WidgetProps['widget']; history: Extract<HistoryView, { status: 'ready' }>; strings: StateTimelineStrings }) {
@@ -116,7 +127,7 @@ function Ready({ widget, history, strings }: { widget: WidgetProps['widget']; hi
               return (
                 <div key={lane.measurement} data-lane={lane.measurement} style={{ display: 'flex', alignItems: 'center', gap: spaceVar(2), minHeight: '1.75rem', flex: '1 1 0' }}>
                   <span style={{ width: LANE_NAME_PX, flexShrink: 0, fontSize: fontVar('sm'), overflowWrap: 'anywhere', lineHeight: 1.15 }}>{lane.measurement}</span>
-                  <div role="img" aria-label={[...share.entries()].map(([k, v]) => `${stateLabel(k, bands, strings)} ${Math.round(v * 100)}%`).join(', ')} style={{ position: 'relative', flex: '1 1 0', minWidth: 0, height: '100%', minHeight: '1.25rem', maxHeight: '3rem' }}>
+                  <div role="img" aria-label={laneDescription(lane, share, bands, strings, when)} style={{ position: 'relative', flex: '1 1 0', minWidth: 0, height: '100%', minHeight: '1.25rem', maxHeight: '3rem' }}>
                     {lane.segments.map((s) => (
                       <div
                         key={s.from}

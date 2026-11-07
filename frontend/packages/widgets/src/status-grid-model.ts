@@ -63,10 +63,13 @@ export function tileSide(count: number, width: number, height: number, min: numb
   if (count <= 0 || width <= 0 || height <= 0) return min;
   let best = min;
   for (let cols = 1; cols <= count; cols++) {
-    const side = Math.floor((width - gap * (cols - 1)) / cols);
-    if (side < min) break;
+    const fit = Math.floor((width - gap * (cols - 1)) / cols);
+    if (fit < min) break;
+    // The ceiling is applied BEFORE the fit test: a tile never drawn above it must be judged at the
+    // size it would be drawn.
+    const side = Math.min(fit, max);
     const rows = Math.ceil(count / cols);
-    if (rows * side + gap * (rows - 1) <= height) best = Math.max(best, Math.min(side, max));
+    if (rows * side + gap * (rows - 1) <= height) best = Math.max(best, side);
   }
   return Math.min(best, max);
 }

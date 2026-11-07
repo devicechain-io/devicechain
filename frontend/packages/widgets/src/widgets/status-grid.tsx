@@ -38,6 +38,8 @@ import { statusGridStrings } from '../status-grid-strings';
 
 const MIN_SIDE_PX = 64;
 const MAX_SIDE_PX = 160;
+// From this tile size a tile that is not OK prints its state under the value.
+const SAY_STATE_FROM_PX = 72;
 
 export function StatusGrid({ widget, data }: WidgetProps) {
   const strings = fleetStrings();
@@ -142,13 +144,18 @@ function Grid({
         {drawn.map((t) => {
           const color = levelColor(colors, t.band?.level);
           const has = t.cell.kind === 'value';
+          const stateName = t.band?.label ?? groupName(t.group);
+          // A tile that is not simply OK also SAYS its state, so colour is never the only cue. Only when
+          // the tile is big enough to hold a third line (an unmeasured body takes the full presentation).
+          const sayState = has && t.group !== 'ok' && (side >= SAY_STATE_FROM_PX || ws.size.width === 0);
           const reading = t.cell.kind === 'value' ? `${formatValue(t.cell.value, precision)}${unit ? ` ${unit}` : ''}` : reasonOf(t, strings);
           return (
             <div
               key={t.token}
               role="group"
-              aria-label={words.tile(t.label, reading, t.band?.label ?? groupName(t.group))}
-              title={`${t.label}\n${reading}`}
+              aria-label={words.tile(t.label, reading, stateName)}
+              title={`${t.label}\n${reading}
+${stateName}`}
               data-tile={t.token}
               data-threshold-level={t.band?.level}
               data-tile-group={t.group}
@@ -169,6 +176,11 @@ function Grid({
               <span style={{ fontSize: has ? fontVar('md') : fontVar('xs'), fontWeight: 600, fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere', lineHeight: 1.15 }}>
                 {has ? reading : '—'}
               </span>
+              {sayState && (
+                <span data-tile-state="" style={{ fontSize: fontVar('xs'), lineHeight: 1.1, overflowWrap: 'anywhere', color: css('muted-foreground') }}>
+                  {stateName}
+                </span>
+              )}
             </div>
           );
         })}

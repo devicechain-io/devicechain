@@ -71,6 +71,14 @@ describe('the model', () => {
     expect(statesUsed([lane])).toEqual([0, 1, 'none']);
   });
 
+  it('draws each bucket over its OWN span when the window starts off the store’s grid', () => {
+    // The window starts at 12:02 but the store's five-minute buckets start at 12:00, 12:05, 12:10.
+    const w = { startTime: new Date(START + 2 * MIN).toISOString(), endTime: new Date(START + 12 * MIN).toISOString(), intervalSeconds: 300 } as HistoryWindow;
+    const b = [bucket(0, 'run', 0), bucket(5, 'run', 1), bucket(10, 'run', 2)];
+    const lane = buildLane('run', b, w, BANDS);
+    expect(lane.segments.map((s) => [s.state, (s.from - START) / MIN, (s.to - START) / MIN])).toEqual([[0, 2, 5], [1, 5, 10], [2, 10, 12]]);
+  });
+
   it('draws nothing for an empty or inverted window', () => {
     expect(buildLane('run', [], { ...window5, endTime: window5.startTime }, BANDS).segments).toEqual([]);
   });
@@ -118,7 +126,11 @@ describe('rendering and binding', () => {
 
   it('describes each lane to assistive tech by its shares', () => {
     const { container } = render(<StateTimeline widget={widget()} data={data} history={{ status: 'ready', buckets: [bucket(0, 'run', 1), bucket(1, 'run', 1), bucket(2, 'run', 0), bucket(3, 'run', 0), bucket(4, 'run', 0)], window: window5 }} />);
-    expect(container.querySelector('[data-lane="run"] [role="img"]')?.getAttribute('aria-label')).toBe('Running 40%, Stopped 60%');
+    const label = container.querySelector('[data-lane="run"] [role="img"]')?.getAttribute('aria-label') ?? '';
+    expect(label).toContain('run: Running 40%, Stopped 60%.');
+    // the sequence is spoken too: the segments' own titles are hidden under role="img"
+    expect(label.indexOf('Running,')).toBeGreaterThan(-1);
+    expect(label.indexOf('Running,')).toBeLessThan(label.indexOf('Stopped,'));
   });
 
   it('says there are no readings when the whole span is empty, and explains every other absence', () => {
@@ -132,6 +144,13 @@ describe('rendering and binding', () => {
     expect(view({ status: 'failed' })).toContain('could not be read');
     cleanup();
     expect(view({ status: 'unsupported' })).toContain('cannot read stored history');
+  });
+
+  it('names an unlabelled band by its level, in the viewer’s language', () => {
+    document.documentElement.lang = 'es';
+    const bands = [{ value: 0, level: 'warning' as const }];
+    const { container } = render(<StateTimeline widget={widget({ thresholds: bands })} data={data} history={{ status: 'ready', buckets: [bucket(0, 'run', 1)], window: window5 }} />);
+    expect(container.querySelector('[data-state-legend]')?.textContent).toContain('Aviso');
   });
 
   it('words itself in Spanish', () => {

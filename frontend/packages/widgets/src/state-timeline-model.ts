@@ -55,31 +55,31 @@ export function buildLane(measurement: string, buckets: readonly MeasurementBuck
   const step = Math.max(1, window.intervalSeconds) * 1000;
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return { measurement, segments: [] };
   const avgs = new Map<number, number | null | undefined>();
+  let anchor: number | undefined;
   for (const b of buckets) {
-    if (b.name !== measurement) continue;
     const at = Date.parse(b.bucketStart);
     if (Number.isNaN(at)) continue;
-    avgs.set(at, b.avg);
+    // The slot grid is the STORE's: its bucket starts are aligned to the interval, while the window
+    // the widget asks for starts on a whole minute, so the grid is anchored on a bucket start (any
+    // measurement's) and not on the window's start.
+    if (anchor === undefined) anchor = at;
+    if (b.name === measurement) avgs.set(at, b.avg);
   }
+  const origin = anchor ?? start;
+  const first = origin + Math.floor((start - origin) / step) * step;
   const segments: Segment[] = [];
-  for (let from = start; from < end; from += step) {
+  for (let from = first; from < end; from += step) {
+    // Each slot is drawn over its own span, clipped to the window.
+    const lo = Math.max(from, start);
     const to = Math.min(from + step, end);
-    // The store's bucket starts are aligned to the interval, the window's are rounded to whole
-    // minutes: find the slot that starts inside this step.
-    let avg: number | null | undefined;
-    for (const [at, v] of avgs) {
-      if (at >= from && at < from + step) {
-        avg = v;
-        break;
-      }
-    }
-    const state = stateOf(bands, avg);
+    if (to <= lo) continue;
+    const state = stateOf(bands, avgs.get(from));
     const last = segments[segments.length - 1];
-    if (last && last.state === state && last.to === from) {
+    if (last && last.state === state && last.to === lo) {
       last.to = to;
       last.slots += 1;
     } else {
-      segments.push({ state, from, to, slots: 1 });
+      segments.push({ state, from: lo, to, slots: 1 });
     }
   }
   return { measurement, segments };

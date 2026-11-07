@@ -19,6 +19,10 @@ export interface StateTimelineStrings {
   // The neutral stretch below the lowest threshold, and a slot with no readings.
   baseline: string;
   noData: string;
+  // The severity levels, by name: what an unlabelled threshold row is called.
+  levels: Record<string, string>;
+  // A stretch, in a lane's accessible description: "Running 06:00 to 08:00"
+  lane: (name: string, shares: string, runs: string) => string;
   // "state of the average per 5m": what each segment is.
   basis: (bucket: string) => string;
   basisTitle: (bucket: string) => string;
@@ -36,6 +40,8 @@ export const STATE_TIMELINE_STRINGS: Record<'en' | 'es', StateTimelineStrings> =
     empty: 'No readings in this span',
     baseline: 'Normal',
     noData: 'No readings',
+    levels: { critical: 'Critical', major: 'Major', minor: 'Minor', warning: 'Warning', info: 'Info', normal: 'Normal' },
+    lane: (name, shares, runs) => `${name}: ${shares}. ${runs}`,
     basis: (bucket) => `state of the average per ${bucket}`,
     basisTitle: (bucket) =>
       `Each stretch is the state its ${bucket} average was in, not an exact moment of change: a signal that flips inside a ${bucket} slot reads as the state of that slot's average.`,
@@ -50,6 +56,8 @@ export const STATE_TIMELINE_STRINGS: Record<'en' | 'es', StateTimelineStrings> =
     empty: 'No hay lecturas en este intervalo',
     baseline: 'Normal',
     noData: 'Sin lecturas',
+    levels: { critical: 'Crítico', major: 'Mayor', minor: 'Menor', warning: 'Aviso', info: 'Info', normal: 'Normal' },
+    lane: (name, shares, runs) => `${name}: ${shares}. ${runs}`,
     basis: (bucket) => `estado del promedio de cada ${bucket}`,
     basisTitle: (bucket) =>
       `Cada tramo es el estado en que estaba su promedio de ${bucket}, no el instante exacto del cambio: una señal que cambia dentro de un intervalo de ${bucket} se lee como el estado del promedio de ese intervalo.`,
