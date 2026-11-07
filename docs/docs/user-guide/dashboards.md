@@ -310,7 +310,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut, History table, Status grid, State timeline |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut, History table, Status grid, State timeline, Scada symbol |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count, Alarm severity |
 | Control | Command button, Command slider, Command toggle |
@@ -486,6 +486,21 @@ The settings depend on the widget. Common ones:
   not be read is noted apart ("1 could not be read") and left out of the ring. It reads the first
   500 devices of a group and says "Showing 500 of N devices" when the group is larger. **Stale
   after** marks the ring stale once the group's status has not been read for that many seconds.
+- **Scada symbol**: a process symbol bound to one measurement of a device, drawn in the state that
+  measurement puts it in. **Symbol** picks a pump, valve, tank, motor, fan, pipe segment, sensor,
+  breaker or light. A pump, motor or fan turns while it runs, a valve is open or closed, a breaker
+  is closed, open or tripped, a light glows while it is on, and a pipe's dashes move along it in the
+  direction of flow, the other way for a negative value. A tank fills to its level between **Min**
+  and **Max** and prints the value; a sensor prints its reading. **On at** is the value at or above
+  which the symbol is on (default 1, for a signal that is 1 while on and 0 while off); for a pipe it
+  is the smallest flow that counts. A value in a major or critical band of **Thresholds** shows the
+  symbol as faulted, in that band's color, with a pulsing "!" badge. What the symbol is doing is
+  always printed under it as well (*Running*, *Closed*, *Tripped*, *Flowing (reverse)*), so color
+  and motion are never the only cue, and a symbol with no reading is drawn hollow and says *No data*
+  rather than looking stopped. The symbols take their colors from the theme, so they follow light
+  and dark, and they stand still for a viewer whose system asks for reduced motion. Like any other
+  widget it binds to a device or to a slot, so a board of symbols can be pointed at another site
+  with a binding manifest.
 - **Status grid**: one tile per device of a group, for one measurement, each coloured by the
   threshold band of that device's own latest reading and printing its name and value. It answers
   "which of my devices need me" at a glance where the fleet table answers "what are their numbers".

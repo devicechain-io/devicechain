@@ -1504,6 +1504,295 @@
       "datasource": {
         "kind": "slot",
         "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-pump",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 2,
+          "mode": "grid",
+          "row": 70,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "onAt": 25,
+        "symbol": "pump",
+        "thresholds": [
+          {
+            "label": "Overheat",
+            "level": "critical",
+            "value": 33
+          }
+        ],
+        "title": "Feed pump"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-valve",
+      "layout": {
+        "base": {
+          "col": 2,
+          "cols": 2,
+          "mode": "grid",
+          "row": 70,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "onAt": 20,
+        "symbol": "valve",
+        "title": "Inlet valve"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-tank",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 2,
+          "mode": "grid",
+          "row": 70,
+          "rows": 3
+        }
+      },
+      "options": {
+        "max": 60,
+        "measurement": "humidity",
+        "min": 40,
+        "precision": 0,
+        "symbol": "tank",
+        "thresholds": [
+          {
+            "label": "High",
+            "level": "major",
+            "value": 57
+          }
+        ],
+        "title": "Storage tank",
+        "unit": "%"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-motor",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 2,
+          "mode": "grid",
+          "row": 70,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "onAt": 18,
+        "symbol": "motor",
+        "title": "Drive motor"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-fan",
+      "layout": {
+        "base": {
+          "col": 8,
+          "cols": 2,
+          "mode": "grid",
+          "row": 70,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "onAt": 30,
+        "symbol": "fan",
+        "thresholds": [
+          {
+            "label": "Stalled",
+            "level": "critical",
+            "value": 34
+          }
+        ],
+        "title": "Exhaust fan"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-pipe",
+      "layout": {
+        "base": {
+          "col": 10,
+          "cols": 2,
+          "mode": "grid",
+          "row": 70,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "onAt": 22,
+        "symbol": "pipe",
+        "title": "Main line"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-sensor",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 73,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "symbol": "sensor",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Zone temperature",
+        "unit": "C"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-breaker",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 73,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "humidity",
+        "onAt": 50,
+        "symbol": "breaker",
+        "thresholds": [
+          {
+            "label": "Tripped",
+            "level": "critical",
+            "value": 58
+          }
+        ],
+        "title": "Feeder breaker"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-scada-light",
+      "layout": {
+        "base": {
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 73,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "humidity",
+        "onAt": 45,
+        "symbol": "light",
+        "title": "Beacon"
+      },
+      "type": "scada-symbol"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
           "temperature"
         ],
         "slot": "zone"

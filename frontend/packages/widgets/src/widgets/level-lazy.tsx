@@ -56,3 +56,8 @@ export const progressRingWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['progress-ring'],
   implementation: { kind: 'trusted-react', component: lazyComponent('ProgressRing') },
 });
+
+export const scadaSymbolWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['scada-symbol'],
+  implementation: { kind: 'trusted-react', component: lazyComponent('ScadaSymbol') },
+});

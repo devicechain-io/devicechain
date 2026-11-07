@@ -971,22 +971,24 @@ Nothing here needs action beyond the two `dcctl` items in the list above. Each i
 - **Infrastructure.** With `nats_mqtt_capable_users` unset, the OpenTofu broker module no longer writes a null `allowed_connection_types` that the broker refused; the certificate healer for the event store's backups watches the operator's configured namespace.
 - **`dcctl upgrade` accepts `--yes` (`-y`), as `dcctl install` and `dcctl bootstrap` do, and finds an escrow written with `--escrow-file`.** `--yes` assumes yes for prompts; an upgrade asks none, so it changes nothing, and a script can now pass it to all three. `dcctl bootstrap --escrow-file` records where the artifact was written, and the upgrade's root-key escrow check looks there, so it no longer reports "no escrow" for an instance whose artifact is at a custom path. For an instance bootstrapped earlier, give the upgrade `--escrow-file` once; it records the path.
 
-#### Two new dashboard widgets {#v120-widgets}
+#### Three new dashboard widgets {#v120-widgets}
 
-Two widgets are new in the **Add widget** menu, both under Telemetry. They add to the existing widgets and change none of them, and a dashboard that does not use them is unaffected.
+Three widgets are new in the **Add widget** menu, all under Telemetry. They add to the existing widgets and change none of them, and a dashboard that does not use them is unaffected.
 
 - **Status grid** shows one tile per device of a group for one measurement, coloured by the threshold band of each device's latest reading. A device with no reading is drawn hollow and counted apart; it is never shown as OK.
 - **State timeline** shows one device's measurements as lanes of discrete states over the dashboard's time range, with the thresholds as the states. Each stretch is the state of a time bucket's average, and the widget says so.
+- **Scada symbol** draws a pump, valve, tank, motor, fan, pipe segment, sensor, breaker or light in the state one measurement puts it in: running, stopped or faulted, with a pipe's flow direction, in light and dark. It stands still for a viewer who asked for reduced motion.
 
 Nothing needs action. See [Dashboards](../user-guide/dashboards.md#adding-a-widget) for the options of each.
 
 #### Schema changes and going back {#v120-going-back}
 
-Six migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
+Seven migrations append the following. Every new column is nullable, so a service from `v1.1.0` that runs against the new schema writes rows it can still store.
 
 - **X.509 revocation** (`device-management`, migration `20261105100000`). Four new tables: `device_revocation_issuers`, `device_revocation_lists`, `device_revoked_certificates` and `device_credential_chain_links`. Four new columns: `revocation_mode`, `revocation_stale_grace` and `revocation_rows` on `device_trust_anchors`, and `not_before` on `pending_session_kicks`. Existing trust anchors keep `revocation_mode` empty, which is read as `ENTRIES`: a certificate is refused only when it is listed.
 - **Payload decoders** (`device-management`, migration `20261110120000`). Two new tables, `profile_decoder_healths` and `profile_decoder_samples`, and one new column, `decoder_declaration` on `device_profiles`.
 - **Revocation kick queue** (`device-management`, migration `20261111120000`). One new table, `pending_revocation_kicks`, and one new nullable column, `kick_queued_at` on `device_revoked_certificates`. The table is separate from the existing session-kick queue so that a replica from `v1.1.0` never reads or removes its rows.
+- **Revocation kick markers** (`device-management`, migration `20261112100000`). Two new tables, `pending_revocation_expansions` and `pending_revocation_expansion_serials`. They hold, until the per-device kick rows are written, the revocations that still owe them, so a revocation no longer holds the trust anchor while it queues a kick for every device under it. A replica from `v1.1.0` never reads them.
 - **Projection storage** (`device-state`, migration `20261104120000`). No table or column is added. It sets storage parameters (a fill factor of 75 and autovacuum thresholds) on `device_states`, `latest_measurements` and `latest_locations`. Rows that already exist gain the fill-factor headroom only as their pages are rewritten, so an upgraded instance feels the change slowly.
 - **Placement tables** (`user-management`, migration `20261105120000`). Three new tables: `iam_partition_config`, `iam_vpartition_assignments` and `iam_tenant_vpartition_overrides`. The migration seeds no rows; the first start of `user-management` writes the default placement (one `iam_partition_config` row and 64 `iam_vpartition_assignments` rows) and creates the `dc_partition_placement` bucket in the message broker.
 - **Inactivity alarm time repair** (`device-state`, migration `20261106120000`). Adds nothing to the schema. It is a data-only repair of `inactivity_alarm_time` in `device_states`, run in batches of 5,000, restoring what the column held before `v1.1.0`. There is nothing to undo when going back to `v1.1.0`.
@@ -994,6 +996,15 @@ Six migrations append the following. Every new column is nullable, so a service 
 Apart from that default placement, the new tables start empty. **Nothing in a database needs undoing to go back to `v1.1.0`:** the new tables, columns and storage parameters stay in place and the `v1.1.0` services ignore them, with one exception: tenant deletion, below. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again. For the configuration change that going back needs, see [Tokens are checked against their resource](#v120-token-audience).
 
 **Tenant deletion is held back while a `v1.1.0` `user-management` replica is the one running it.** A `v1.1.0` replica does not know the three placement tables, and its relational purge refuses to run against a table it cannot classify. While one is running the purge, the relational store reports an error for the deletion, with a log line and a ledger failure that name `iam_partition_config`, `iam_vpartition_assignments` or `iam_tenant_vpartition_overrides`, and `tenant_purge_store_blocked{store="rdb",reason="error"}` is above zero. The refused step deletes nothing from the database and loses nothing; the other stores are still erased in the same pass. The deletion cannot finish: the tenant stays in `purging`. A replica running this release takes it up on its next pass, and it finishes once its usual checks are met. During a rolling upgrade that happens by itself when the last `v1.1.0` replica is gone; after going back to `v1.1.0` it is held until you roll forward again. Start deletions after the upgrade finishes if you can.
+
+#### Native Slack, Teams and PagerDuty notification channels {#v120-notification-channels}
+
+Notification channels gain three types: `slack`, `teams` and `pagerduty`. They are additive: nothing changes for an existing `smtp` or `webhook` channel, and a Slack incoming webhook that you reach through a `webhook` channel keeps working as it did.
+
+- **Nothing needs doing to upgrade.** A channel of a new type needs a secret (the webhook URL, or the PagerDuty routing key) and is refused at save without one. See [Native Slack, Teams and PagerDuty channels](../guides/notification-channels.md#native-channels).
+- **Know that the new types dial out through the same guard as a webhook.** A destination on a private, loopback or cloud-metadata address is refused and counted with `devicechain_notificationmanagement_deliveries_refused_total{reason="egress"}`.
+- **Know that the `notificationChannelTypes` query now lists three more types,** and that the GraphQL schema changes only in its descriptions. A client that switches exhaustively over channel types sees three more values.
+- **The console has a new Notification Channels page** for configuring channels of every type.
 
 ### v1.1.0 — ingest costs less per event, and devices outside the cluster connect over MQTT {#v110-upgrade}
 

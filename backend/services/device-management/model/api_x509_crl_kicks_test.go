@@ -163,10 +163,12 @@ func TestCrlKickJoinComparesTheIssuerKeyOfAKeyedLink(t *testing.T) {
 			require.NoError(t, tx.Exec("DROP TABLE IF EXISTS temp."+crlNewTable).Error)
 			require.NoError(t, tx.Exec("CREATE TEMP TABLE "+crlNewTable+" (serial varchar(64))").Error)
 			require.NoError(t, tx.Exec("INSERT INTO "+crlNewTable+" (serial) VALUES (?)", serial).Error)
-			var err error
-			n, err = f.api.queueCrlRevocationKicksOnTx(tx, partialUpdateTenant, f.anchor.ID,
-				x509trust.IssuerID{Key: key, Name: real.Name}, true)
+			gen, err := stashCrlRevocationSerials(tx, partialUpdateTenant, f.anchor.ID)
 			require.NoError(t, err)
+			tokens, err := crlRevocationKickTargets(tx, partialUpdateTenant, f.anchor.ID,
+				x509trust.IssuerID{Key: key, Name: real.Name}, gen, true)
+			require.NoError(t, err)
+			n = len(tokens)
 			return dropCrlNew(tx)
 		}))
 		return n

@@ -445,6 +445,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabAlarmSeverity(onZone)...)
 	def.Widgets = append(def.Widgets, widgetlabPresence(onSensor(), onZone)...)
 	def.Widgets = append(def.Widgets, widgetlabHistory(onSensor())...)
+	def.Widgets = append(def.Widgets, widgetlabScadaSymbols(onSensor())...)
 	def.Widgets = append(def.Widgets, widgetlabStateViews(onZone, onSensor(WidgetlabTemperatureKey))...)
 
 	raw, err := json.Marshal(def)
@@ -815,6 +816,42 @@ func widgetlabHistory(onSensor widgetSubject) []dashboardWidget {
 				{"measurement": WidgetlabTemperatureKey, "label": "Temperature", "unit": "C", "precision": 1},
 				{"measurement": WidgetlabHumidityKey, "label": "Humidity", "unit": "%", "precision": 0},
 			}, 8),
+	}
+}
+
+// widgetlabScadaRow is the first row of the process-symbol block (rows 70-75), under the history
+// block that ends at row 65 and the state views (rows 66-69) a sibling slice reserves.
+const widgetlabScadaRow = 70
+
+// buildScadaSymbolWidget draws one process symbol bound to one measurement of the sensor.
+func buildScadaSymbolWidget(id string, b box, s widgetSubject, title, symbol, measurement string, options map[string]any) dashboardWidget {
+	o := map[string]any{"title": title, "symbol": symbol, "measurement": measurement}
+	for k, v := range options {
+		o[k] = v
+	}
+	return dashboardWidget{Id: id, Type: "scada-symbol", Layout: b.layout(), Datasource: s.datasource(), Options: o}
+}
+
+// widgetlabScadaSymbols places the nine process symbols. The sensor's temperature sweeps 15 to 35 and
+// its humidity 40 to 60, so each symbol's on-threshold sits inside the sweep and the board shows both
+// of its states over a cycle; two carry a critical band so the fault state is reached too.
+func widgetlabScadaSymbols(onSensor widgetSubject) []dashboardWidget {
+	const r = widgetlabScadaRow
+	t, h := WidgetlabTemperatureKey, WidgetlabHumidityKey
+	s := widgetSubject{Slot: onSensor.Slot, Measurements: []string{t, h}}
+	critical := []widgetThreshold{{Value: 33, Level: "critical", Label: "Overheat"}}
+	return []dashboardWidget{
+		buildScadaSymbolWidget("wl-scada-pump", box{0, 2, r, 3}, s, "Feed pump", "pump", t, map[string]any{"onAt": 25.0, "thresholds": critical}),
+		buildScadaSymbolWidget("wl-scada-valve", box{2, 2, r, 3}, s, "Inlet valve", "valve", t, map[string]any{"onAt": 20.0}),
+		buildScadaSymbolWidget("wl-scada-tank", box{4, 2, r, 3}, s, "Storage tank", "tank", h,
+			map[string]any{"min": 40.0, "max": 60.0, "unit": "%", "precision": 0, "thresholds": []widgetThreshold{{Value: 57, Level: "major", Label: "High"}}}),
+		buildScadaSymbolWidget("wl-scada-motor", box{6, 2, r, 3}, s, "Drive motor", "motor", t, map[string]any{"onAt": 18.0}),
+		buildScadaSymbolWidget("wl-scada-fan", box{8, 2, r, 3}, s, "Exhaust fan", "fan", t, map[string]any{"onAt": 30.0, "thresholds": []widgetThreshold{{Value: 34, Level: "critical", Label: "Stalled"}}}),
+		buildScadaSymbolWidget("wl-scada-pipe", box{10, 2, r, 3}, s, "Main line", "pipe", t, map[string]any{"onAt": 22.0}),
+		buildScadaSymbolWidget("wl-scada-sensor", box{0, 4, r + 3, 3}, s, "Zone temperature", "sensor", t,
+			map[string]any{"unit": "C", "precision": 1, "thresholds": []widgetThreshold{{Value: 15, Level: "normal"}, {Value: 28, Level: "warning"}, {Value: 32, Level: "critical"}}}),
+		buildScadaSymbolWidget("wl-scada-breaker", box{4, 4, r + 3, 3}, s, "Feeder breaker", "breaker", h, map[string]any{"onAt": 50.0, "thresholds": []widgetThreshold{{Value: 58, Level: "critical", Label: "Tripped"}}}),
+		buildScadaSymbolWidget("wl-scada-light", box{8, 4, r + 3, 3}, s, "Beacon", "light", h, map[string]any{"onAt": 45.0}),
 	}
 }
 
