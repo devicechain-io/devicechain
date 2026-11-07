@@ -198,7 +198,7 @@ The simulator plays certificate devices: `dc-simulator --x509` mints a throwaway
 
 ## What this does not do {#limits}
 
-- **No OCSP, and no CRL fetching.** Upload a CA's revocation list to the trust anchor, or revoke a certificate by fingerprint; both refuse it from its next connect and neither ends an open session. To stop a connected device now, disable its credential (or the device, or the anchor). See [Revocation](../concepts/device-certificates.md#revocation).
+- **No OCSP, and no CRL fetching.** Upload a CA's revocation list to the trust anchor, or revoke a certificate by fingerprint; both refuse it from its next connect and also end the open sessions it affects (check `sessionsEnded` in the result). A CA-level revocation reconnects every device under the anchor. To stop one device without revoking a certificate, disable its credential (or the device, or the anchor). See [Revocation](../concepts/device-certificates.md#revocation).
 - **A name-constrained CA is refused.** The trust anchor is the identity boundary.
 - **No renewal of a registered device by presenting a new certificate, and no adoption of a reset device.** Not available yet.
 - **No client certificate in the C# SDK.** Not available yet.

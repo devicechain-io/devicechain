@@ -198,7 +198,7 @@ El simulador representa dispositivos con certificado: `dc-simulator --x509` crea
 
 ## Lo que esto no hace {#limits}
 
-- **Sin OCSP ni descarga de CRL.** Sube la lista de revocación de una CA al ancla de confianza, o revoca un certificado por huella; ambas cosas lo rechazan desde su siguiente conexión y ninguna termina una sesión abierta. Para detener ya a un dispositivo conectado, deshabilita su credencial (o el dispositivo, o el ancla). Consulta [Revocación](../concepts/device-certificates.md#revocation).
+- **Sin OCSP ni descarga de CRL.** Sube la lista de revocación de una CA al ancla de confianza, o revoca un certificado por huella; ambas cosas lo rechazan desde su siguiente conexión y además terminan las sesiones abiertas que afecta (comprueba `sessionsEnded` en el resultado). Una revocación de CA reconecta a todos los dispositivos del ancla. Para detener un dispositivo sin revocar un certificado, deshabilita su credencial (o el dispositivo, o el ancla). Consulta [Revocación](../concepts/device-certificates.md#revocation).
 - **Una CA con restricciones de nombre se rechaza.** El ancla de confianza es el límite de la identidad.
 - **Sin renovación de un dispositivo registrado presentando un certificado nuevo, ni adopción de un dispositivo restablecido.** Todavía no está disponible.
 - **Sin certificado de cliente en el SDK de C#.** Todavía no está disponible.
