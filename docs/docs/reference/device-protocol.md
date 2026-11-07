@@ -22,6 +22,8 @@ Every message on this page is published as a JSON Schema (draft 2020-12). Use th
 | [`new-relationship-payload.schema.json`](pathname:///schema/device/new-relationship-payload.schema.json) | The payload of a [`NewRelationship`](#new-relationship-payload) event |
 | [`command-delivery.schema.json`](pathname:///schema/device/command-delivery.schema.json) | The [command](#command-delivery) the platform delivers to a device |
 | [`command-response.schema.json`](pathname:///schema/device/command-response.schema.json) | The [response](#command-response) a device sends back |
+| [`command-pull.schema.json`](pathname:///schema/device/command-pull.schema.json) | The commands a device receives from an [HTTP pull](../concepts/commands.md#http-command-pull) |
+| [`command-pull-response.schema.json`](pathname:///schema/device/command-pull-response.schema.json) | The response a device sends on the [HTTP pull channel](../concepts/commands.md#http-command-pull) |
 
 The same list, with absolute URLs, is under `deviceProtocol` in [`/schema/index.json`](pathname:///schema/index.json). The envelope schema references the payload schemas by relative URL, so a validator that loads it by URL resolves them on its own.
 

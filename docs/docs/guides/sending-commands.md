@@ -108,6 +108,7 @@ change.
 | `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | The payload or metadata string is over 64 KiB. | No |
 | `COMMAND_NAME_TOO_LONG` | The command name is over 128 bytes. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` is not an RFC3339 timestamp. | No |
+| `DELIVERY_OPTION_INVALID` / `DELIVERY_OPTION_NOT_APPLICABLE` | `deliveryMode` or `maxAttempts` is not a value the platform knows, or the device is not on the [HTTP pull command channel](../concepts/commands.md#http-command-pull), the only one they apply to. | No |
 | `TOKEN_IN_USE` | The token is held by a command you do not own — in practice one the platform minted for a batch. | No — pick another token |
 | `COMMAND_REJECTED` | A rejection arrived carrying no classification. | No |
 

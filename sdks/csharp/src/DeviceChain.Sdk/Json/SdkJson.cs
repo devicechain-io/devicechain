@@ -4,6 +4,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeviceChain.Sdk.Auth;
+using DeviceChain.Sdk.Commands;
 using DeviceChain.Sdk.Ingest;
 using DeviceChain.Sdk.Mqtt;
 
@@ -37,6 +38,9 @@ namespace DeviceChain.Sdk.Json;
 // MQTT device plane — the command envelopes mirror command-delivery's wire shapes.
 [JsonSerializable(typeof(CommandDeliveryEnvelope))]
 [JsonSerializable(typeof(CommandResponseEnvelope))]
+// HTTP command pull — the device wire of GET/POST .../devices/{device}/commands.
+[JsonSerializable(typeof(PulledCommandList))]
+[JsonSerializable(typeof(PulledCommandResponse))]
 internal partial class SdkJson : JsonSerializerContext
 {
 }

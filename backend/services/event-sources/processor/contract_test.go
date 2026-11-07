@@ -61,6 +61,10 @@ func TestStructsMatchTheirPublishedSchemas(t *testing.T) {
 		}
 	}
 	check("device-event.schema.json", "", JsonEvent{})
+	// The HTTP command pull's wire (http_command_pull.go).
+	check("command-pull.schema.json", "", pullBody{})
+	check("command-pull.schema.json", "/$defs/command", pullWire{})
+	check("command-pull-response.schema.json", "", responseBody{})
 	for _, pc := range payloadContracts {
 		for pointer, v := range pc.structs {
 			check(pc.file, pointer, v)
@@ -239,7 +243,7 @@ func TestContractFilesAreIdentifiedByWhereTheyArePublished(t *testing.T) {
 	}
 	// By name: a new file here is a new published contract, and it needs a struct test
 	// above before it is one.
-	want := []string{"device-event.schema.json"}
+	want := []string{"device-event.schema.json", "command-pull.schema.json", "command-pull-response.schema.json"}
 	for _, pc := range payloadContracts {
 		want = append(want, pc.file)
 	}

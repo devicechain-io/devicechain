@@ -1178,6 +1178,7 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 			log.Info().Int64("expired", count).Interface("fromStatus", byFromStatus).
 				Msg("Command expiry sweep reached a terminal state for stale commands.")
 		}
+		cproc.failUnacknowledgedPulls(ctx)
 		delivered := cproc.deliverPendingCommands(ctx)
 		// After delivery, so a row whose window just opened is claimed this tick and a row
 		// whose window just closed is rolled on, not the other way round.
@@ -1455,4 +1456,31 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		return
 	}
 	incr(cproc.ResponsesDeadLettered, 1)
+}
+
+// pullFailer is the one operation of the HTTP pull channel the sweep performs. It is asked of the
+// Api through this narrow interface so the many fakes of model.CommandDeliveryApi need not grow
+// a method for a channel they do not exercise.
+type pullFailer interface {
+	FailUnacknowledgedPulls(ctx context.Context, deviceToken string, now time.Time) (int64, error)
+}
+
+// failUnacknowledgedPulls ends the commands the pull channel handed out as many times as their
+// attempts allow and never saw acknowledged (FAILED, NOT_DELIVERED). A device settles its own on
+// each pull; this covers a device that stopped pulling, so its commands do not wait for their
+// TTL to be called a TIMEOUT, which says the device may have acted.
+func (cproc *CommandDeliveryProcessor) failUnacknowledgedPulls(ctx context.Context) {
+	failer, ok := cproc.Api.(pullFailer)
+	if !ok {
+		return
+	}
+	failed, err := failer.FailUnacknowledgedPulls(core.WithSystemContext(ctx), "", time.Now())
+	if err != nil {
+		log.Error().Err(err).Msg("unable to fail unacknowledged pull-channel commands")
+		return
+	}
+	if failed > 0 {
+		log.Info().Int64("failed", failed).
+			Msg("Failed pull-channel commands whose hand-outs were never acknowledged; they are NOT_DELIVERED.")
+	}
 }
