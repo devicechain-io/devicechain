@@ -1156,7 +1156,7 @@ func stepReport(ctx context.Context, st *State) error {
 	if host := st.Values["ingressHost"]; host != "" {
 		scheme := st.Values["scheme"]
 		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s", ConsoleURL(st.KubeContext, scheme, host)))
-		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s://%s/api/<area>/graphql", scheme, host))
+		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s/api/<area>/graphql", IngressBase(st.KubeContext, scheme, host)))
 		if note := ssoUnavailableNote(scheme, host); note != "" {
 			fmt.Printf("  %s %s\n", color.WhiteString("Single sign-on:"), color.YellowString("%s", note))
 		}
