@@ -70,3 +70,27 @@ func TestTargetProfileDevicesMustMatchTheList(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+// --tls-insecure=false is the operator FORCING verification: the tap must verify, and only an
+// explicit =true may switch it off.
+func TestTargetProfileTapInsecureReadsTheFlagValue(t *testing.T) {
+	creds := writeCreds(t)
+	for name, tc := range map[string]struct{ set, val, want bool }{
+		"absent":         {false, false, false},
+		"explicit false": {true, false, false},
+		"explicit true":  {true, true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := targetProfile(loadtest.MQTTProfile{}, targetFlags{
+				target: "mqtts://broker:8883", credentials: creds, topicTemplate: "d/{device}",
+				tapTarget: "mqtts://tap:8883", tlsInsecureSet: tc.set, tlsInsecure: tc.val,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Tap.TLSInsecure != tc.want {
+				t.Fatalf("Tap.TLSInsecure = %v, want %v", p.Tap.TLSInsecure, tc.want)
+			}
+		})
+	}
+}

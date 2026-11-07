@@ -21,8 +21,10 @@ type targetFlags struct {
 	maxRegression                                           float64
 	// tlsFlagSet says the operator gave --tls or --no-tls; tlsOn is what they asked for.
 	tlsFlagSet, tlsOn bool
-	tlsInsecureSet    bool
-	mqttBrokerSet     bool
+	// tlsInsecureSet says --tls-insecure was given; tlsInsecure is its VALUE. Presence is not
+	// consent: --tls-insecure=false is the operator forcing verification.
+	tlsInsecureSet, tlsInsecure bool
+	mqttBrokerSet               bool
 }
 
 // seedOf is the handshake's seed, or 0 when there is no handshake (a target run).
@@ -85,7 +87,7 @@ func targetProfile(base loadtest.MQTTProfile, f targetFlags) (loadtest.TargetPro
 		if err != nil {
 			return zero, fmt.Errorf("--tap-target: %w", err)
 		}
-		p.Tap.Broker, p.Tap.TLS, p.Tap.TLSInsecure = tb, ttls, f.tlsInsecureSet && ttls
+		p.Tap.Broker, p.Tap.TLS, p.Tap.TLSInsecure = tb, ttls, f.tlsInsecure && ttls
 	}
 	if f.baseline != "" {
 		b, err := os.ReadFile(f.baseline)

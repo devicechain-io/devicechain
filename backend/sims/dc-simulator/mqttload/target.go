@@ -109,10 +109,16 @@ func ParseCredentials(r io.Reader, baseDir, topicTemplate string) ([]Credential,
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		line, _ := cr.FieldPos(0)
 		if err != nil {
-			return nil, fmt.Errorf("credential list line %d: %w", line, err)
+			// A parse error leaves no record to take a position from (FieldPos panics on it),
+			// so the line comes from the error itself.
+			var pe *csv.ParseError
+			if errors.As(err, &pe) {
+				return nil, fmt.Errorf("credential list line %d: %w", pe.Line, err)
+			}
+			return nil, fmt.Errorf("credential list: %w", err)
 		}
+		line, _ := cr.FieldPos(0)
 		get := func(name string) string {
 			i, ok := col[name]
 			if !ok || i >= len(rec) {
@@ -122,6 +128,9 @@ func ParseCredentials(r io.Reader, baseDir, topicTemplate string) ([]Credential,
 		}
 		if len(rec) == 1 && strings.TrimSpace(rec[0]) == "" {
 			continue // a blank line
+		}
+		if len(rec) != len(header) {
+			return nil, fmt.Errorf("credential list line %d: %d field(s), the header has %d: a truncated row would connect anonymously and a surplus field is ignored, so either way the rehearsal is not of the fleet written", line, len(rec), len(header))
 		}
 		c := Credential{Device: get("device"), ClientID: get("client_id"), Username: get("username"), Password: get("password"), Topic: get("topic")}
 		if c.Device == "" {

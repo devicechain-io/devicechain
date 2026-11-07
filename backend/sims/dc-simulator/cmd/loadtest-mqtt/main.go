@@ -204,7 +204,7 @@ func run() int {
 			tapTopic: *tapTopic, tapClientID: *tapClientID, tapUsername: *tapUsername, tapPasswordFile: *tapPasswordFile,
 			baseline: *baselinePath, maxRegression: *maxRegression,
 			tlsFlagSet: flagSet("tls") || flagSet("no-tls"), tlsOn: tlsOn,
-			tlsInsecureSet: flagSet("tls-insecure"), mqttBrokerSet: *broker != "",
+			tlsInsecureSet: flagSet("tls-insecure"), tlsInsecure: *tlsInsecure, mqttBrokerSet: *broker != "",
 		})
 		if terr != nil {
 			log.Error().Err(terr).Msg("--target")

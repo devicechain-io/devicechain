@@ -49,6 +49,9 @@ func TestParseCredentialsRefusesMalformedLists(t *testing.T) {
 		"wildcard device":   {"device\na+b\n", "must not contain"},
 		"wildcard topic":    {"device,topic\na,x/#\n", "wildcard"},
 		"missing device":    {"device,token\n,t\n", "no device"},
+		"truncated row":     {"device,token\na\n", "1 field(s)"},
+		"truncated mid-row": {"device,token,password\na,t\n", "2 field(s)"},
+		"surplus field":     {"device,token\na,t,extra\n", "3 field(s)"},
 		"cert file missing": {"device,cert_file,key_file\na,/nonexistent.crt,/nonexistent.key\n", "nonexistent"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -105,5 +108,22 @@ func TestFilterMatches(t *testing.T) {
 		if got := FilterMatches(tc.f, tc.topic); got != tc.want {
 			t.Errorf("%q vs %q: %v", tc.f, tc.topic, got)
 		}
+	}
+}
+
+// A parse error must be reported with its line, never panic: the first record can be absent.
+func TestParseCredentialsBadQuoteReportsInsteadOfPanicking(t *testing.T) {
+	for _, in := range []string{"device\"x\n", "device,token\n\"a,t\n", "device,token\na,\"t\"x\n"} {
+		if _, err := parse(t, in); err == nil || !strings.Contains(err.Error(), "line") {
+			t.Fatalf("%q: err %v", in, err)
+		}
+	}
+}
+
+// A full-width row with empty optional cells is still a deliberate anonymous device.
+func TestParseCredentialsEmptyCellsStayAnonymous(t *testing.T) {
+	cs, err := parse(t, "device,token\na,\n")
+	if err != nil || len(cs) != 1 || cs[0].Authentication() != "anonymous" {
+		t.Fatalf("%+v %v", cs, err)
 	}
 }
