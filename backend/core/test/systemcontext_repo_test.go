@@ -48,8 +48,11 @@ var sanctionedSystemContexts = map[string][]string{
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
 		"CommandDeliveryProcessor.failUnacknowledgedPulls",
 	},
-	"backend/services/update-management/model/api_updates.go":                {"Api.SweepDeadlines"},
-	"backend/services/update-management/model/api_rollouts.go":               {"Api.AdvanceRollouts"},
+	"backend/services/update-management/model/api_updates.go":  {"Api.SweepDeadlines"},
+	"backend/services/update-management/model/api_rollouts.go": {"Api.AdvanceRollouts"},
+	// The campaign tick and the campaign pruner each list the tenants that have campaigns (or
+	// open claims), then do each tenant's work under core.WithTenant.
+	"backend/services/command-delivery/model/api_campaign.go":                {"Api.TickCampaigns", "Api.PruneCampaignHistory"},
 	"backend/services/command-delivery/processor/HoldReconciler.go":          {"CommandDeliveryProcessor.readHeldPage"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go":      {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/command-delivery/processor/WindowRestamp.go":           {"CommandDeliveryProcessor.restampWindows"},

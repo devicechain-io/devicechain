@@ -75,6 +75,14 @@ type GroupTargetResolver interface {
 // a fifty-thousand-device group and reporting success is the worst available answer, because
 // nothing in the record would distinguish it from a complete fan-out.
 func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCreateRequest) (*batchTargets, error) {
+	return api.resolveGroupTargetsUpTo(ctx, request, MaxBatchDeviceTokens)
+}
+
+// resolveGroupTargetsUpTo is the walk with the size bound named by the caller. A batch is
+// bounded by MaxBatchDeviceTokens because it is ONE transaction; a campaign cycle is planned
+// as rows and dispatched in many batches, so it may resolve a larger group.
+func (api *Api) resolveGroupTargetsUpTo(ctx context.Context, request *CommandBatchCreateRequest,
+	maxDevices int) (*batchTargets, error) {
 	targets := &batchTargets{
 		kind:       BatchTargetGroup,
 		groupToken: sql.NullString{String: *request.GroupToken, Valid: true},
@@ -134,11 +142,11 @@ func (api *Api) resolveGroupTargets(ctx context.Context, request *CommandBatchCr
 			seen[token] = struct{}{}
 			targets.deviceTokens = append(targets.deviceTokens, token)
 		}
-		if len(targets.deviceTokens) > MaxBatchDeviceTokens {
+		if len(targets.deviceTokens) > maxDevices {
 			return nil, rejected(RejectBatchTooLarge,
 				"group %q resolves to more than %d devices, which is more than one batch may "+
 					"command; narrow the group or split the operation",
-				*request.GroupToken, MaxBatchDeviceTokens)
+				*request.GroupToken, maxDevices)
 		}
 		if resolved.NextCursor == "" {
 			return targets, nil

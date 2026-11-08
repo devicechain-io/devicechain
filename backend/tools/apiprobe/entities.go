@@ -866,6 +866,8 @@ var entities = []entity{
 		Read:     "entityGroupsByToken",
 		Fields: "token name description imageUrl icon backgroundColor foregroundColor borderColor " +
 			"metadata memberType membershipMode selector activeVersion",
+		// A campaign targets this group, so its token is recorded for that row.
+		Record: record("entity-group"),
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
 				"token":           s.tok("entity-group"),
@@ -1244,6 +1246,37 @@ var entities = []entity{
 				"deviceTokens": []any{s.tokens["device"]},
 				"allowPartial": true,
 				"metadata":     meta("command-batch"),
+			}}
+		},
+	},
+	{
+		// Depends on: entity-group (a campaign targets one).
+		//
+		// 🔑 CREATED SWITCHED OFF. An enabled campaign plans cycles and fires commands at the
+		// group's devices; a drill row must be an inert stored record, so enabled is false and
+		// the trigger is a once-a-day CRON nothing here waits for. What must survive an upgrade
+		// is the stored definition: trigger, steps, target and bounds. plannedThrough and
+		// lastError are operational and not selected.
+		Name:     "campaign",
+		Area:     "command-delivery",
+		Mutation: "createCampaign",
+		Input:    "CampaignCreateRequest!",
+		Read:     "campaign",
+		Single:   true,
+		Wrap:     "campaign",
+		Reject:   "rejection{code reason}",
+		Fields: "token name enabled trigger targetKind groupToken maxLatenessSeconds expiresInSeconds " +
+			"steps{type name payload delaySeconds}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("campaign"),
+				"name":               "apiprobe campaign",
+				"trigger":            `{"kind":"CRON","zone":"Europe/Berlin","cron":"30 3 * * *"}`,
+				"steps":              []any{map[string]any{"type": "COMMAND", "name": probeCommandKey, "payload": `{"delaySeconds":15}`, "delaySeconds": 60}},
+				"groupToken":         s.tokens["entity-group"],
+				"maxLatenessSeconds": 600,
+				"expiresInSeconds":   1800,
+				"enabled":            false,
 			}}
 		},
 	},
@@ -1627,7 +1660,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 33
+const tenantCreateMutations = 34
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

@@ -27,7 +27,11 @@ backend/
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline; per-tenant
                               ingest rate limiting w/ platform-default ceiling (ADR-023)
     device-state/             live last-known-state projection per device
-    command-delivery/         persistent two-way command dispatch (typed command defs on the profile, ADR-043)
+    command-delivery/         persistent two-way command dispatch (typed command defs on the profile, ADR-043);
+                              campaigns: scheduled, tracked fan-outs to a group (cron, calendar, holiday and
+                              per-device solar triggers from core/schedule + core/solar), planned as cycles of
+                              per-device elements dispatched through the batch path, claimed by compare-and-set
+                              so every replica ticks and none leads
     dashboard-management/     dashboard CRUD + versioning (draft/publish/rollback); definitions are
                               versioned tenant resources stored as opaque JSON (ADR-039)
     notification-management/  alarm→human last mile: per-tenant policy, SMTP + webhook adapters,
