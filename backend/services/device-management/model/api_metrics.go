@@ -55,6 +55,14 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	semanticProperty, err := api.bindMetricProperty(ctx, request.SemanticProperty)
+	if err != nil {
+		return nil, err
+	}
+	semanticPointClass, err := api.bindMetricPointClass(ctx, request.SemanticPointClass)
+	if err != nil {
+		return nil, err
+	}
 	created := &MetricDefinition{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -75,6 +83,9 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 		Enum:          enumJSON,
 		Descriptor:    rdb.NullStrOf(request.Descriptor),
 		Expression:    rdb.NullStrOf(request.Expression),
+
+		SemanticProperty:   semanticProperty,
+		SemanticPointClass: semanticPointClass,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -146,8 +157,19 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 		return nil, err
 	}
 
+	semanticProperty, err := foldMetricBinding(ctx, request.SemanticProperty, updated.SemanticProperty, api.bindMetricProperty)
+	if err != nil {
+		return nil, err
+	}
+	semanticPointClass, err := foldMetricBinding(ctx, request.SemanticPointClass, updated.SemanticPointClass, api.bindMetricPointClass)
+	if err != nil {
+		return nil, err
+	}
+
 	updated.MetricKey = metricKey
 	updated.DataType = dataType
+	updated.SemanticProperty = semanticProperty
+	updated.SemanticPointClass = semanticPointClass
 	updated.Metadata = metadataJSON
 	updated.Enum = enumJSON
 	updated.Name = request.Name.ApplyToNullString(updated.Name)

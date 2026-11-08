@@ -95,6 +95,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 	if err != nil {
 		return nil, err
 	}
+	semanticTypes, err := api.semanticTypesOnCreate(ctx, request.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -113,6 +117,7 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
+		SemanticTypes:       semanticTypes,
 		ProfileId:           profileId,
 		MaintenanceWindowId: windowId,
 		Manufacturer:        rdb.NullStrOf(request.Manufacturer),
@@ -188,6 +193,10 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 		return nil, err
 	}
 	found.Metadata = metadataJSON
+	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
 	found.ProfileId = profileId
 	found.MaintenanceWindowId = windowId
 	// gorm's Save syncs a belongs-to FK from the loaded association, and this read does not

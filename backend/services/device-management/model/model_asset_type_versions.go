@@ -54,6 +54,15 @@ type AssetTypeVersion struct {
 	// data migration.
 	PropertySchema datatypes.JSON `gorm:"not null"`
 
+	// SemanticTypes is the type's binding (expanded IRIs) frozen with the schema, and
+	// SemanticPackVersions the {pack id: version} of the vocabularies those terms were
+	// validated against. Both are NULL on a version published before the layer existed, and
+	// on one published while the type bound nothing. A rollback restores SemanticTypes onto
+	// the type, so the binding publishes and rolls back with the contract it was published
+	// beside.
+	SemanticTypes        rdb.Anchors `gorm:"type:text[]"`
+	SemanticPackVersions *datatypes.JSON
+
 	// The identity that published this version (claims username, falling back to
 	// email).
 	PublishedBy string `gorm:"size:256"`

@@ -77,6 +77,14 @@ export type AreaTypeCreateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   token: string;
 };
 
@@ -94,6 +102,11 @@ export type AreaTypeUpdateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 export type AreaUpdateRequest = {
@@ -133,6 +146,14 @@ export type AssetTypeCreateRequest = {
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   propertySchema?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   token: string;
 };
 
@@ -151,6 +172,11 @@ export type AssetTypeUpdateRequest = {
   metadata?: string | null | undefined;
   name?: string | null | undefined;
   propertySchema?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 export type AssetUpdateRequest = {
@@ -320,6 +346,14 @@ export type CustomerTypeCreateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   token: string;
 };
 
@@ -337,6 +371,11 @@ export type CustomerTypeUpdateRequest = {
   imageUrl?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 export type CustomerUpdateRequest = {
@@ -853,6 +892,14 @@ export type DeviceTypeCreateRequest = {
    * type with no profile. An unknown token fails the request.
    */
   profileToken?: string | null | undefined;
+  /**
+   * The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+   * or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+   * enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+   * enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+   * INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+   */
+  semanticTypes?: Array<string> | null | undefined;
   /** Identifier for the new device type. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
@@ -916,6 +963,11 @@ export type DeviceTypeUpdateRequest = {
    * what every device of the type measures and accepts.
    */
   profileToken?: string | null | undefined;
+  /**
+   * New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+   * them alone. Validated as on create; only a request that names this field is validated.
+   */
+  semanticTypes?: Array<string> | null | undefined;
 };
 
 /**
@@ -1213,6 +1265,18 @@ export type MetricDefinitionCreateRequest = {
   minValue?: number | null | undefined;
   /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The Brick point class of the metric's series: a class of the enabled brick pack that is a
+   * brick:Point. A custom-prefix class cannot be shown to be one and is refused.
+   */
+  semanticPointClass?: string | null | undefined;
+  /**
+   * The quantity or property the metric observes: an OBSERVABLE_PROPERTY term of an enabled
+   * vocabulary pack, as a CURIE or full IRI. Fails with INVALID_ARGUMENT naming the term when
+   * it is unknown, of another kind, deprecated or outside the enabled vocabularies. Stored
+   * as an expanded IRI.
+   */
+  semanticProperty?: string | null | undefined;
   /** Identifier for the new metric definition. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
   /** Unit of measure, such as a UCUM code (Cel, kW). */
@@ -1270,6 +1334,10 @@ export type MetricDefinitionUpdateRequest = {
   minValue?: number | null | undefined;
   /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** New Brick point class, or null to clear it. Omit to leave it alone. */
+  semanticPointClass?: string | null | undefined;
+  /** New observed property, or null to clear it. Omit to leave it alone. */
+  semanticProperty?: string | null | undefined;
   /** New unit, or null to clear it. */
   unit?: string | null | undefined;
 };

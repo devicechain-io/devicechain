@@ -60,8 +60,10 @@ func (r *DeviceProfileVersionResolver) PublishedBy() *string {
 
 // ThingModel renders the version as a W3C WoT Thing Model. A snapshot that cannot be
 // rendered is an error, never an empty model.
-func (r *DeviceProfileVersionResolver) ThingModel() (string, error) {
-	out, err := r.S.GetApi(r.C).DeviceProfileVersionThingModel(r.C, &r.M)
+func (r *DeviceProfileVersionResolver) ThingModel(args struct {
+	IncludeSemanticTypes bool
+}) (string, error) {
+	out, err := r.S.GetApi(r.C).DeviceProfileVersionThingModelWith(r.C, &r.M, args.IncludeSemanticTypes)
 	if err != nil {
 		return "", err
 	}

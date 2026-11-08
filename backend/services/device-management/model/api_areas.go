@@ -19,6 +19,10 @@ func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateReque
 	if err != nil {
 		return nil, err
 	}
+	semanticTypes, err := api.semanticTypesOnCreate(ctx, request.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
 	created := &AreaType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -37,6 +41,7 @@ func (api *Api) CreateAreaType(ctx context.Context, request *AreaTypeCreateReque
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
+		SemanticTypes: semanticTypes,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -80,6 +85,10 @@ func (api *Api) UpdateAreaType(ctx context.Context, token string,
 		return nil, err
 	}
 	found.Metadata = metadataJSON
+	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
 
 	result := api.RDB.DB(ctx).Save(found)
 	if result.Error != nil {

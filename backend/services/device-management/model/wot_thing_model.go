@@ -78,6 +78,17 @@ func wotDataType(t MetricDataType) (string, error) {
 // The output is deterministic: keys are emitted sorted, so the same version, under the same
 // profile name and description, always renders the same bytes.
 func ThingModelOf(profile *DeviceProfile, version *DeviceProfileVersion) ([]byte, error) {
+	return ThingModelWith(profile, version, false)
+}
+
+// ThingModelWith is ThingModelOf with the semantic layer's opt-in. With includeSemanticTypes
+// false the output is exactly what ThingModelOf has always produced, byte for byte: a
+// property's `@type` is its Descriptor as a string, and a metric's semantic binding is not
+// mentioned. With it true, a property's `@type` becomes a list of the Descriptor (when set),
+// the metric's semantic property IRI and its point class IRI (each when bound), in that
+// order and without repeats, and a property with none of them carries no `@type`. The order is fixed so the same version always
+// renders the same bytes.
+func ThingModelWith(profile *DeviceProfile, version *DeviceProfileVersion, includeSemanticTypes bool) ([]byte, error) {
 	if profile == nil || version == nil {
 		return nil, fmt.Errorf("a Thing Model needs a profile and one of its published versions")
 	}
@@ -105,7 +116,7 @@ func ThingModelOf(profile *DeviceProfile, version *DeviceProfileVersion) ([]byte
 		if m == nil {
 			continue
 		}
-		prop, err := wotProperty(m)
+		prop, err := wotProperty(m, includeSemanticTypes)
 		if err != nil {
 			return nil, fmt.Errorf("metric %q: %w", m.MetricKey, err)
 		}
@@ -135,6 +146,13 @@ func ThingModelOf(profile *DeviceProfile, version *DeviceProfileVersion) ([]byte
 // DeviceProfileVersionThingModel renders a published version as a Thing Model, reading the
 // profile it belongs to (in the caller's tenant) for its title and description.
 func (api *Api) DeviceProfileVersionThingModel(ctx context.Context, version *DeviceProfileVersion) ([]byte, error) {
+	return api.DeviceProfileVersionThingModelWith(ctx, version, false)
+}
+
+// DeviceProfileVersionThingModelWith is DeviceProfileVersionThingModel with ThingModelWith's
+// semantic opt-in.
+func (api *Api) DeviceProfileVersionThingModelWith(ctx context.Context, version *DeviceProfileVersion,
+	includeSemanticTypes bool) ([]byte, error) {
 	profiles, err := api.DeviceProfilesById(ctx, []uint{version.DeviceProfileId})
 	if err != nil {
 		return nil, err
@@ -142,19 +160,46 @@ func (api *Api) DeviceProfileVersionThingModel(ctx context.Context, version *Dev
 	if len(profiles) == 0 {
 		return nil, fmt.Errorf("profile of version %d: %w", version.Version, gorm.ErrRecordNotFound)
 	}
-	return ThingModelOf(profiles[0], version)
+	return ThingModelWith(profiles[0], version, includeSemanticTypes)
 }
 
 // wotProperty renders one metric definition. A metric is reported by the device, never
 // written through the platform, so it is readOnly; it changes over time and is delivered
 // as it changes, so it is observable.
-func wotProperty(m *MetricDefinition) (map[string]any, error) {
+func wotProperty(m *MetricDefinition, includeSemanticTypes bool) (map[string]any, error) {
 	typ, err := wotDataType(MetricDataType(m.DataType))
 	if err != nil {
 		return nil, err
 	}
 	prop := map[string]any{"type": typ, "readOnly": true, "observable": true}
-	if m.Descriptor.Valid && m.Descriptor.String != "" {
+	if includeSemanticTypes {
+		// Fixed order [descriptor, observed property, point class], without repeats. The
+		// point class is the series' own rdf:type; the property is what it observes.
+		var types []string
+		add := func(t string) {
+			if t == "" {
+				return
+			}
+			for _, have := range types {
+				if have == t {
+					return
+				}
+			}
+			types = append(types, t)
+		}
+		if m.Descriptor.Valid {
+			add(m.Descriptor.String)
+		}
+		if m.SemanticProperty != nil {
+			add(*m.SemanticProperty)
+		}
+		if m.SemanticPointClass != nil {
+			add(*m.SemanticPointClass)
+		}
+		if len(types) > 0 {
+			prop["@type"] = types
+		}
+	} else if m.Descriptor.Valid && m.Descriptor.String != "" {
 		prop["@type"] = m.Descriptor.String
 	}
 	if m.Name.Valid && m.Name.String != "" {

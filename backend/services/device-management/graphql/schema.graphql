@@ -151,6 +151,12 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     the values already in use.
     """
     model: String
+    """
+    The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
+    it is bound to none. Each carries its expanded IRI and a display CURIE. Null only when the
+    terms could not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
@@ -421,7 +427,15 @@ type DeviceProfileVersion {
     emitted as written, so it should be an absolute IRI or a prefixed term the consumer
     knows.
     """
-    thingModel: String!
+    thingModel(
+        """
+        When true, each property's @type becomes a list, in this order and without repeats: the
+        descriptor (when set), the metric's semantic property IRI and its semantic point class
+        IRI (each when bound). When false, the default, the document is exactly what it has
+        always been.
+        """
+        includeSemanticTypes: Boolean! = false
+    ): String!
     """
     The metrics frozen into this version, in declaration order: what a device's measurements
     are validated against while this version is active. Calculated metrics are included and
@@ -492,6 +506,16 @@ type MetricDefinition implements Model & TokenReference & NamedEntity & Metadata
     ingest; a published version's thingModel carries it as the property's @type.
     """
     descriptor: String
+    """
+    The quantity or property this metric observes, as a term of an enabled vocabulary, or
+    null when unbound. Independent of descriptor.
+    """
+    semanticProperty: SemanticTerm
+    """
+    The Brick point class this metric's series is (a class that is a brick:Point), or null
+    when unbound.
+    """
+    semanticPointClass: SemanticTerm
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     """
@@ -538,6 +562,18 @@ input MetricDefinitionCreateRequest {
     enum: String
     """Optional semantic tag, such as a Web of Things type."""
     descriptor: String
+    """
+    The quantity or property the metric observes: an OBSERVABLE_PROPERTY term of an enabled
+    vocabulary pack, as a CURIE or full IRI. Fails with INVALID_ARGUMENT naming the term when
+    it is unknown, of another kind, deprecated or outside the enabled vocabularies. Stored
+    as an expanded IRI.
+    """
+    semanticProperty: String
+    """
+    The Brick point class of the metric's series: a class of the enabled brick pack that is a
+    brick:Point. A custom-prefix class cannot be shown to be one and is refused.
+    """
+    semanticPointClass: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
     """
@@ -598,6 +634,10 @@ input MetricDefinitionUpdateRequest {
     enum: String
     """New semantic tag, or null to clear it."""
     descriptor: String
+    """New observed property, or null to clear it. Omit to leave it alone."""
+    semanticProperty: String
+    """New Brick point class, or null to clear it. Omit to leave it alone."""
+    semanticPointClass: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
     """
@@ -2253,6 +2293,14 @@ input DeviceTypeCreateRequest {
     commandChannel: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the
@@ -2305,6 +2353,11 @@ input DeviceTypeUpdateRequest {
     commandChannel: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 """Criteria for searching device types. Results are newest first."""
@@ -4217,6 +4270,13 @@ type AssetType implements Model & TokenReference & NamedEntity & BrandedEntity &
     # the type has never been published. An asset of an unpublished type may carry
     # no properties at all.
     activeVersion: Int
+    """
+    The classes this type's draft is, as terms of the vocabularies the tenant has enabled
+    (a published version freezes its own copy); empty when it is bound to none. Each carries
+    its expanded IRI and a display CURIE. Null only when the terms could not be rendered, with
+    an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
 }
 
 # An immutable published snapshot of an asset type's property contract. Assets are
@@ -4234,6 +4294,18 @@ type AssetTypeVersion {
     # exposed: an author needs to see what a version froze in order to decide whether
     # to roll back to it.
     propertySchema: String!
+    """
+    The classes the type was bound to when this version was published; empty when it was
+    bound to none, and for every version published before the semantic layer existed.
+    Rolling back to this version restores them onto the type. Null only when the terms could
+    not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
+    """
+    The vocabulary versions the frozen classes were validated against; empty when none were
+    bound. Null only when the stored record could not be read, with an error saying why.
+    """
+    semanticPackVersions: [SemanticPackVersion!]
 }
 
 # Data required to create an asset type.
@@ -4253,6 +4325,14 @@ input AssetTypeCreateRequest {
     # contract nothing could satisfy — a duplicate name, an unknown data type, a
     # default outside its own enum.
     propertySchema: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # A PARTIAL update to an asset type: omit a field to leave it alone, send null to
@@ -4278,6 +4358,11 @@ input AssetTypeUpdateRequest {
     # leave the stored draft alone. It is validated the same way as on create, and a
     # rejection writes nothing at all.
     propertySchema: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 # Criteria used when searching for asset types.
@@ -4386,6 +4471,12 @@ type CustomerType implements Model & TokenReference & NamedEntity & BrandedEntit
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
+    it is bound to none. Each carries its expanded IRI and a display CURIE. Null only when the
+    terms could not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
 }
 
 # Data required to create a customer type.
@@ -4399,6 +4490,14 @@ input CustomerTypeCreateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # A PARTIAL update to a customer type: omit a field to leave it alone, send null to
@@ -4420,6 +4519,11 @@ input CustomerTypeUpdateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 # Criteria used when searching for customer types.
@@ -4502,6 +4606,12 @@ type AreaType implements Model & TokenReference & NamedEntity & BrandedEntity & 
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes this type is, as terms of the vocabularies the tenant has enabled; empty when
+    it is bound to none. Each carries its expanded IRI and a display CURIE. Null only when the
+    terms could not be rendered, with an error saying why.
+    """
+    semanticTypes: [SemanticTerm!]
 }
 
 # Data required to create an area type.
@@ -4515,6 +4625,14 @@ input AreaTypeCreateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    The classes an entity of this type is, as CURIEs (for example sdm-streetlighting:Streetlight)
+    or full IRIs inside an enabled vocabulary. Each must be a CLASS of a pack the tenant has
+    enabled, or a term under a custom prefix it declared; at most 8. A term outside the
+    enabled vocabularies, of the wrong kind, deprecated, or malformed fails the request with
+    INVALID_ARGUMENT naming it. Stored as expanded IRIs. Omit for none.
+    """
+    semanticTypes: [String!]
 }
 
 # A PARTIAL update to an area type: omit a field to leave it alone, send null to
@@ -4536,6 +4654,11 @@ input AreaTypeUpdateRequest {
     foregroundColor: String
     borderColor: String
     metadata: String
+    """
+    New classes, replacing the stored ones: null or an empty list clears them. Omit to leave
+    them alone. Validated as on create; only a request that names this field is validated.
+    """
+    semanticTypes: [String!]
 }
 
 # Criteria used when searching for area types.
@@ -4644,6 +4767,13 @@ type EntityRelationshipType implements Model & TokenReference & NamedEntity & Me
     description: String
     metadata: String
     tracked: Boolean!
+    """
+    The vocabulary predicate this relationship is (for example brick:feeds), or null when it
+    is bound to none.
+    """
+    semanticPredicate: SemanticTerm
+    """The predicate's inverse (for example brick:isFedBy), or null when there is none."""
+    semanticInverse: SemanticTerm
 }
 
 # Data required to create an entity relationship type.
@@ -4653,6 +4783,18 @@ input EntityRelationshipTypeCreateRequest {
     description: String
     metadata: String
     tracked: Boolean!
+    """
+    A PREDICATE of an enabled vocabulary pack, as a CURIE or full IRI. A term of the wrong
+    kind, deprecated, or outside the enabled vocabularies fails the request with
+    INVALID_ARGUMENT naming it. Stored as an expanded IRI.
+    """
+    semanticPredicate: String
+    """
+    The predicate's inverse. Omitted, it is the inverse the vocabulary declares for the
+    predicate (none when it declares none), and the stored value is that resolved term. An
+    inverse without a predicate is refused.
+    """
+    semanticInverse: String
 }
 
 # A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
@@ -4671,6 +4813,17 @@ input EntityRelationshipTypeUpdateRequest {
     # Required and unclearable: null is refused rather than read as false, which would
     # stop denormalizing this type's relationships onto events and report success.
     tracked: Boolean
+    """
+    New predicate: null clears it, and the inverse with it. Omit to leave it alone. Validated
+    as on create.
+    """
+    semanticPredicate: String
+    """
+    New inverse: null clears it. Omitted while the predicate changes, it becomes the inverse
+    the vocabulary declares for the new predicate. An inverse is refused while no predicate
+    is bound.
+    """
+    semanticInverse: String
 }
 
 # Criteria used when searching for entity relationship types.
@@ -4727,6 +4880,94 @@ input EntityRelationshipSearchCriteria {
 type EntityRelationshipSearchResults {
     results: [EntityRelationship!]!
     pagination: SearchResultsPagination!
+}
+
+"""A term of a vocabulary the tenant has enabled, as it is stored and as it is displayed."""
+type SemanticTerm {
+    """The expanded IRI. This is what is stored; it does not change when a prefix is remapped."""
+    iri: String!
+    """A display form, prefix:local, using the vocabulary's prefix or the tenant's custom prefix. It is the IRI itself when no prefix explains it."""
+    curie: String!
+}
+
+"""
+A vocabulary pack this build ships. New packs may be added in a minor release, so a client
+should tolerate a value it does not know.
+"""
+enum SemanticPack {
+    """Brick (pack id brick): buildings, equipment and points."""
+    BRICK
+    """The NGSI-LD core vocabulary (pack id ngsi-ld)."""
+    NGSI_LD
+    """SAREF for buildings (pack id s4bldg)."""
+    S4BLDG
+    """SAREF for smart cities (pack id s4city)."""
+    S4CITY
+    """SAREF core (pack id saref): devices, properties and measurements."""
+    SAREF
+    """Smart Data Models, environment domain (pack id sdm-environment)."""
+    SDM_ENVIRONMENT
+    """Smart Data Models, parking domain (pack id sdm-parking)."""
+    SDM_PARKING
+    """Smart Data Models, street lighting domain (pack id sdm-streetlighting)."""
+    SDM_STREETLIGHTING
+}
+
+"""A tenant's semantic configuration."""
+type SemanticContext {
+    """
+    The vocabulary packs the tenant has enabled, sorted by pack id. Null only when the stored
+    record could not be read, with an error saying why.
+    """
+    enabledPacks: [SemanticPack!]
+    """
+    The custom prefixes the tenant declared for its own terms, sorted by prefix. Null only
+    when the stored record could not be read, with an error saying why.
+    """
+    customPrefixes: [CustomPrefix!]
+    """
+    The version of each enabled pack as this build shipped it when the context was last set,
+    sorted by pack. Null only when the stored record could not be read, with an error saying
+    why.
+    """
+    packVersions: [SemanticPackVersion!]
+    """When the context was last set, as an RFC 3339 timestamp; null when it never was."""
+    updatedAt: String
+}
+
+"""A custom prefix and the namespace it stands for."""
+type CustomPrefix {
+    """The prefix, as written before the colon in a CURIE (city in city:SmartBin)."""
+    prefix: String!
+    """The namespace IRI the prefix expands to."""
+    namespace: String!
+}
+
+"""The version of one vocabulary pack."""
+type SemanticPackVersion {
+    """The pack."""
+    pack: SemanticPack!
+    """The pack's version, as this build shipped it (for example the upstream release it was generated from)."""
+    version: String!
+}
+
+"""The semantic context to set. It replaces the stored one whole."""
+input SemanticContextRequest {
+    """The packs to enable. An empty list enables none."""
+    enabledPacks: [SemanticPack!]!
+    """
+    Custom prefixes for the tenant's own terms; at most 32. An empty list declares none. A
+    prefix may not shadow a pack's, and namespaces may not overlap.
+    """
+    customPrefixes: [CustomPrefixInput!]!
+}
+
+"""One custom prefix declaration."""
+input CustomPrefixInput {
+    """The prefix, as it will be written before the colon in a CURIE. It may not be a pack's prefix."""
+    prefix: String!
+    """The namespace IRI the prefix expands to. It may not overlap a pack's or another prefix's namespace."""
+    namespace: String!
 }
 
 # Contains queries executed against model.
@@ -5460,6 +5701,13 @@ type Query {
     entityRelationshipTypesByToken(tokens: [String!]!): [EntityRelationshipType!]!
     # List entity relationship types that meet criteria.
     entityRelationshipTypes(criteria: EntityRelationshipTypeSearchCriteria!): EntityRelationshipTypeSearchResults!
+    """
+    The tenant's semantic context: the vocabulary packs it has enabled and the custom prefixes
+    it declared. A tenant that never set one has an empty context, which enables nothing, so
+    no binding is accepted. Requires device:read; a member limited to part of the tenant may
+    read it. Null only on an error, which says why.
+    """
+    semanticContext: SemanticContext
     # Find entity relationships by unique id.
     entityRelationshipsById(ids: [String!]!): [EntityRelationship!]!
     # Find entity relationships by unique token.
@@ -5596,6 +5844,21 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
+    """
+    Replaces the tenant's semantic context and returns it. Enabling a pack or declaring a
+    custom prefix makes its terms bindable; a pack this build does not ship, a custom prefix
+    that shadows a pack's, or overlapping namespaces fail with INVALID_ARGUMENT. A context
+    that would leave any stored binding unexplained (it stops enabling a pack, or declaring a
+    custom namespace, that a binding uses) is refused with SEMANTIC_CONTEXT_IN_USE and
+    extensions.references, the number of such bindings; keep the vocabulary or unbind them
+    first. Two first sets for one tenant at once: the loser fails with CONFLICT, and may read
+    the context and retry. Requires device:write, and a member limited to part of the tenant
+    is refused. Null only on an error, which says why.
+    """
+    setSemanticContext(
+        """The context to store. It replaces the stored one whole."""
+        request: SemanticContextRequest!
+    ): SemanticContext
     """Creates a device type and returns it. Requires device:write."""
     createDeviceType(
         """The new device type's fields. Although the schema lets it be omitted, a call without it fails."""

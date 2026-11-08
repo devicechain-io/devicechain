@@ -245,6 +245,8 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), key, value))
 	}
 	r = r.WithContext(context.WithValue(r.Context(), contextRemoteAddrKey, requestSourceAddr(r)))
+	// One memo per request, never shared with another (see Memoize).
+	r = r.WithContext(WithRequestMemo(r.Context()))
 
 	// Authenticate via the verified JWT (ADR-008), which replaces the former
 	// trusted X-DC-Tenant gateway header: a verified token's claims cannot be

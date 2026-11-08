@@ -24,6 +24,10 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 	if err != nil {
 		return nil, err
 	}
+	semanticTypes, err := api.semanticTypesOnCreate(ctx, request.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
 	created := &AssetType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -42,6 +46,7 @@ func (api *Api) CreateAssetType(ctx context.Context, request *AssetTypeCreateReq
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
+		SemanticTypes:  semanticTypes,
 		PropertySchema: propertySchema,
 	}
 	result := api.RDB.DB(ctx).Create(created)
@@ -86,6 +91,10 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 		return nil, err
 	}
 	found.Metadata = metadataJSON
+	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	if err != nil {
+		return nil, err
+	}
 
 	// MetadataStr is the generic *datatypes.JSON -> *string projection; it is named for
 	// its first caller, not for metadata specifically.

@@ -69,8 +69,17 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	for _, dr := range rules {
 		dr.DeviceProfile = nil
 	}
+	var bound []string
+	for _, m := range metrics {
+		if m.SemanticProperty != nil {
+			bound = append(bound, *m.SemanticProperty)
+		}
+		if m.SemanticPointClass != nil {
+			bound = append(bound, *m.SemanticPointClass)
+		}
+	}
 	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location,
-		Configuration: configuration, Decoder: decoder})
+		Configuration: configuration, Decoder: decoder, SemanticPackVersions: semanticPackVersionsFor(bound)})
 	if err != nil {
 		return nil, err
 	}

@@ -66,5 +66,6 @@ var (
 		NewAnchorOcspSchema(),
 		NewAlarmDispositionsSchema(),
 		NewInstalledPositionSchema(),
+		NewSemanticBindingsSchema(),
 	}
 )

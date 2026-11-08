@@ -135,6 +135,8 @@ export function MetricDefinitionForm({
           descriptor: null,
           metadata: null,
           expression: calculated ? expression.trim() : null,
+          semanticProperty: null,
+          semanticPointClass: null,
         };
         await createMetricDefinition(created);
         onDone(t('deviceProfiles:defMetricCreatedToast', { key: created.metricKey }));
