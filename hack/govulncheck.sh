@@ -204,7 +204,21 @@ scan() {
     return 1
   fi
 
+  keep_report "$module" "$json" || return 1
   evaluate "$module" "$json" "$allowfile"
+}
+
+# keep_report: when GOVULNCHECK_JSON_DIR is set, keep the raw report as <dir>/<module with / as _>.json
+# so hack/vex-from-govulncheck.sh can turn the same scan into OpenVEX statements. It is called only
+# AFTER the scan's two guards, so a kept report is always one that completed. A directory that cannot
+# be written is a failure, not a shrug: the evidence pack would otherwise be built from a partial set.
+keep_report() {
+  local module="$1" json="$2" dir="${GOVULNCHECK_JSON_DIR:-}"
+  [ -n "$dir" ] || return 0
+  mkdir -p "$dir" && cp "$json" "$dir/${module//\//_}.json" || {
+    echo "::error::could not keep the govulncheck report for $module in $dir"
+    return 1
+  }
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -268,6 +282,18 @@ EOF
     echo "  FAIL: an exception with no written justification was accepted" >&2; exit 1
   fi
   echo "  ok: an exception with no justification is rejected"
+
+  # 6b. GOVULNCHECK_JSON_DIR keeps the report under a path-safe name, and keeps nothing when unset.
+  GOVULNCHECK_JSON_DIR="$tmp/kept" keep_report backend/cli "$tmp/reachable.json"
+  [ -s "$tmp/kept/backend_cli.json" ] || { echo "  FAIL: the report was not kept" >&2; exit 1; }
+  # Unset: it must not even try to write (mkdir/cp are shadowed so any attempt is recorded).
+  : > "$tmp/touched"
+  ( unset GOVULNCHECK_JSON_DIR; mkdir() { echo mkdir >> "$tmp/touched"; }; cp() { echo cp >> "$tmp/touched"; }; keep_report backend/core "$tmp/reachable.json" )
+  [ ! -s "$tmp/touched" ] || { echo "  FAIL: a report was kept with no directory configured" >&2; exit 1; }
+  if GOVULNCHECK_JSON_DIR="$tmp/empty-allow.txt/x" keep_report backend/cli "$tmp/reachable.json" >/dev/null 2>&1; then
+    echo "  FAIL: an unwritable report directory was ignored" >&2; exit 1
+  fi
+  echo "  ok: reports are kept on request, and an unwritable directory fails"
 
   echo "==> Self-test: the install retry must retry, must give up, and must stop"
   echo "    retrying once it succeeds"

@@ -76,6 +76,16 @@ jobs:
       - name: release manifest publisher self-test
         run: hack/publish-release-manifest.sh --self-test
 
+      # The evidence-pack generator and the OpenVEX generator, each against inputs it must refuse:
+      # a stale, missing, failing, future-dated or edited rig result, an empty SBOM or VEX document,
+      # a tampered or smuggled pack member, and a govulncheck report from a scan that never completed.
+      - name: evidence pack and OpenVEX generator self-tests
+        run: |
+          hack/evidence-pack.sh --self-test
+          hack/vex-from-govulncheck.sh --self-test
+          hack/check-evidence-pack-workflow.sh --self-test
+          hack/check-evidence-pack-workflow.sh
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test
