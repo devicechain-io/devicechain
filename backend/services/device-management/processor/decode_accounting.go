@@ -171,29 +171,18 @@ func boundText(s string, n int) string {
 // budget is spent: the one verdict the resolver acts on.
 func (a *DecodeAccountant) ObserveDecode(o DecodeObservation) bool {
 	record := true
-	// 🔴 A REDELIVERED FAILURE IS ALWAYS RECORDED, BUT IT STILL CHARGES THE BUDGET, and it is tallied.
+	// 🔴 A REDELIVERED FAILURE IS HELD TO THE BUDGET LIKE A FIRST ONE.
 	//
-	// The record is published before the source is acked, so a redelivery means that publish did not
-	// complete (or the process died first, possibly before the first delivery reached a decode at
-	// all). Denying it could suppress a failure whose first record never landed, so it is recorded.
-	// But a free pass would be a hole: a failed-events outage makes every failure a redelivery, and a
-	// redelivery that cost nothing would be unbudgeted. So it takes a token when there is one and goes
-	// ahead when there is not. Redeliveries can only follow a first delivery that was recorded (a
-	// suppressed one is acked), or one that crashed, so they are bounded by the first deliveries'
-	// budget times the redelivery cap, and while they run they drain the bucket so that NEW failures
-	// are suppressed rather than added on top.
-	//
-	// It is tallied as failed like any other recorded failure: where the first delivery never reached
-	// a decode the redelivery is the only count there will be, and where it did the uplink is counted
-	// twice, which is the documented "at least" behaviour of the counts.
+	// A redelivery does not prove the failure was ever admitted: a first delivery that fails before
+	// the decode (a transient lookup error, a store hold released at shutdown) is redelivered with
+	// no token ever taken. Exempting redeliveries would let a restart with a backlog of a failing
+	// tenant's uplinks record every one of them, which is the flood the budget exists to stop. The
+	// cost is that a failure whose first record never landed may be suppressed once the bucket is
+	// spent; it is tallied as suppressed, which is what the budget means.
 	if o.Outcome == DecodeFailed {
-		if o.Redelivered {
-			a.budget.Charge(o.Tenant, o.DeviceTypeId)
-		} else {
-			record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
-			if !record && a.metrics != nil {
-				a.metrics.suppressed.Inc()
-			}
+		record = a.budget.AllowRecord(o.Tenant, o.DeviceTypeId)
+		if !record && a.metrics != nil {
+			a.metrics.suppressed.Inc()
 		}
 	}
 	profile, version, ok := splitProfileVersion(o.ProfileVersionToken)

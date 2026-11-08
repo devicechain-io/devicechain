@@ -99,8 +99,8 @@ type DecodeObservation struct {
 	Section string
 	// Cost is the cost the decode spent.
 	Cost uint64
-	// Redelivered is set when this message was delivered before. A failed decode is recorded before its
-	// source is acked, so a redelivery means the earlier record may not have reached the stream.
+	// Redelivered is set when this message was delivered before. It is informational: a redelivered
+	// failure is held to the record budget exactly like a first one.
 	Redelivered bool
 	// Error is the tenant-facing text of a failed outcome (`decode_failed: <reason>: ...`).
 	Error string
