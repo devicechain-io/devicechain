@@ -2,10 +2,11 @@
 
 > An open-source IoT platform: device management, a typed relationship graph,
 > time-series telemetry, two-way command dispatch, and a streaming detection and
-> reaction engine. Apache 2.0, self-hosted, multi-tenant. Pre-release — models and
-> APIs still change.
+> reaction engine. Apache 2.0, self-hosted, multi-tenant. Generally available (v1.x):
+> the served interfaces follow a published versioning policy.
 
-Every external API is GraphQL, and **introspection is disabled by default**, so a
+Every management and query API is GraphQL (devices use MQTT, HTTP and the other
+transports on the device APIs page below), and **introspection is disabled by default**, so a
 running instance will not describe itself. The schemas below are the way to read the
 API without deploying one. They are generated on every build from the files the
 services parse at startup, so they cannot drift from the running API.
@@ -30,6 +31,9 @@ never authorize, and the schema files themselves do not carry that distinction.
 - [GraphQL API](/reference/graphql-api): endpoints, the `/api/<area>/graphql`
   convention, auth planes, pagination and search-criteria conventions, and why an
   undeclared input field fails the whole request.
+- [Device APIs at a glance](/reference/device-apis): every way a device reaches the
+  platform (MQTT, HTTP, LwM2M, Sparkplug B, X.509, self-registration), each with one
+  command to paste.
 - [Domain model](/concepts/domain-model): the entities, their identifiers and their
   lifecycle states.
 - [Architecture](/concepts/architecture): the services, what each owns, and how a

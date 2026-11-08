@@ -30,7 +30,7 @@ and the library builds with `TreatWarningsAsErrors` + `IsAotCompatible`. It mult
 ## Usage
 
 ```csharp
-await using var client = new DeviceChainClient(new Uri("https://demo.devicechain.io"));
+await using var client = new DeviceChainClient(new Uri("https://devicechain.example.com"));
 
 await client.LoginAsync("me@example.com", "…");
 await client.SelectTenantAsync("acme");
@@ -52,7 +52,7 @@ await foreach (var evt in client.Subscriptions(Area.EventManagement).SubscribeAs
 // Emit device-plane telemetry (an interactive twin). The device-plane ingress is a SEPARATE
 // listener from the /api GraphQL origin, so its origin is passed explicitly:
 var publisher = client.DevicePublisher(
-    ingressOrigin: new Uri("https://ingress.demo.devicechain.io"), instanceId: "dc", tenant: "acme");
+    ingressOrigin: new Uri("https://ingress.devicechain.example.com"), instanceId: "dc", tenant: "acme");
 await publisher.EmitMeasurementsAsync("car-42", credentialId,
     new Dictionary<string, double> { ["speed"] = 55.0 });
 
@@ -85,7 +85,7 @@ with plain-.NET defaults (`HttpClientTransport`, `ClientWebSocketFactory`) that 
 // On plain .NET nothing changes — the defaults are used automatically. On Unity WebGL, inject
 // transports backed by UnityWebRequest + a browser WebSocket (shipped by the slice-4 UPM plugin):
 await using var client = new DeviceChainClient(
-    new Uri("https://demo.devicechain.io"),
+    new Uri("https://devicechain.example.com"),
     httpTransport: new MyUnityWebRequestTransport(),   // : IHttpTransport
     webSocketFactory: new MyBrowserWebSocketFactory()); // : IWebSocketFactory
 ```
