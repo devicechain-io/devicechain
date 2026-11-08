@@ -801,6 +801,7 @@ these operations, and each answers only with what those customers own:
 | `customers`, `customersById`, `customersByToken` | Only the member's own customer records. |
 | `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Alarms raised while the device belonged to one of the customers. |
 | `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | The same alarms. |
+| `alarmDispositions` | The labels of alarm cycles raised while the device belonged to one of the customers. `setAlarmDisposition` is refused: labels are the tenant's ground truth for its rules. |
 | `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Events recorded while the device belonged to one of the customers. A customer keeps the history from the time it owned a device, and does not see the history from before. |
 | `deviceStates`, `deviceStatesByDeviceToken`, `deviceStatesByExternalId`, `latestMeasurements`, `droppedMeasurements`, `latestLocation`, `latestLocations` | The live state, latest readings and last-known position of the devices the customers own now. When a device moves to another customer, its live state moves with it, without waiting for the device to report again. `latestLocation` and `latestLocations` also require `location:read`, which the read-only baseline does not include. |
 | Device types, device profiles and their versions, metric and command definitions, customer types | Everything, because this is configuration. These can be read but not changed. |
