@@ -296,11 +296,48 @@ mutation {
 
 在控制台中，静默时段在 **Monitor → Notification Policies** 页面编辑；参见[通知策略](../user-guide/notification-policies.md)。
 
+## 投递记录 {#delivery-ledger}
+
+每次通过某个渠道发送告警通知的尝试，都会记录在租户的**投递记录**中，因此"这个告警是否真的通知到了、通知了谁、没通知到又是为什么"都有答案。使用 `notificationAttempts` 查询（需要 `notification:read`）：
+
+```graphql
+query {
+  notificationAttempts(criteria: { pageNumber: 1, pageSize: 20, alarmToken: "<告警令牌>" }) {
+    results {
+      attemptedAt trigger policyToken channelToken recipients
+      status attempt maxAttempts latencyMillis errorCode errorMessage
+    }
+  }
+}
+```
+
+每条记录对应一次尝试，按时间从新到旧排列。一个允许尝试三次的渠道如果失败两次后投递成功，会留下三条记录：`FAILED`（第 1 次）、`FAILED`（第 2 次）和 `SENT`（第 3 次）。可按 `alarmToken`、`channelToken` 或 `status` 过滤，也可用 `since` 和 `until`（RFC 3339）按时间过滤。
+
+| `status` | 含义 |
+| --- | --- |
+| `SENT` | 渠道已接受该通知。 |
+| `FAILED` | 重试可能解决的失败：超时、错误状态码、连接被拒绝。 |
+| `REFUSED` | 被永久拒绝，因此不会重试：目标是出站流量不允许到达的地址（`EGRESS_BLOCKED`），或渠道的凭据配置被拒绝（`CREDENTIAL_REFUSED`）。 |
+| `NOT_ATTEMPTED` | 已计划但从未尝试：无法读取渠道的投递密钥（`SECRET_UNAVAILABLE`），或在轮到该渠道之前，该告警的投递时间已用尽（`BUDGET_SPENT`）。 |
+
+`trigger` 说明投递的起因：`ALARM`（告警状态变化）、`ESCALATION`（对未确认的告警再次通知）或 `QUIET_HOURS_RELEASE`（静默时段结束时发送了被暂存的通知）。后续版本可能新增 `status`、`trigger` 和 `errorCode` 的取值，遇到无法识别的值时请将其视为提示信息。
+
+`errorMessage` 是服务提供方的错误文本，其中所有 URL 都被替换为 `<url>`，因为 Slack 或 Teams 的 webhook URL 本身就是凭据，而任何拥有 `notification:read` 的人都能读取投递记录。通知内容本身不会被存储：`subjectHash`（主题行的 SHA-256）可用于判断两次尝试是否发送了相同的内容。
+
+每个渠道还会提供从投递记录读取的 `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`。`consecutiveFailures` 统计自该渠道上次投递成功以来失败和被拒绝的尝试次数。`NOT_ATTEMPTED` 记录不计入渠道的失败，因为它们描述的是平台没有执行的操作；`errorCode` 为 `BUDGET_SPENT` 的 `FAILED` 记录同样不计入：该告警所有投递的可用时间在这次尝试进行中耗尽，是平台中止了它。对于没有 `notification:read` 的调用方（例如可写但不可读的调用方在变更中拿到的渠道），`deliveryHealth` 为 null。
+
+需要注意两点：
+
+- **投递记录绝不会延迟通知。** 记录在尝试之后、在投递路径之外写入。如果数据库无法接收某条记录，该记录会被丢弃，并计入 `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}`（等待写入的记录过多时计入 `outcome="dropped"`）。有记录能证明发生过尝试；没有记录并不能证明没有尝试。
+- **收件人属于个人数据。** 记录会在 7 天后删除（与已解决的通知状态相同的保留期），或在 notification-management 配置的 `AttemptRetentionSeconds` 之后删除。删除租户时，这些记录也会随之清除。
+- **调高保留期之前先估算规模。** 投递记录每次尝试保存一条：大致等于被通知的告警状态变化数 × 每次到达的渠道数 × 每个渠道的尝试次数，再加上升级通知。一个每天通知 10,000 次、经由 3 个渠道的租户，在默认的 7 天保留期下约保存 210,000 条记录，每条都带有收件人列表。
+
 ## 端到端验证 {#verify-the-path-end-to-end}
 
 1. **创建渠道**（如上）。确认结果 `enabled: true`；有用户名的 SMTP 或声明 `bearer`/`header` 的 webhook，应为 `hasSecret: true`；声明 `none` 的 webhook 应为 `false`。
 2. **创建策略**，将关注的严重程度映射到该渠道。
 3. **触发真实告警。** 在测试设备触发检测规则（参见[事件处理与告警](../concepts/event-processing.md)），确认邮件或 webhook 到达。
 4. **检查投递状态。** 服务为每个告警保存已执行操作的只读记录。查询 `notificationStatesByAlarmToken(alarmTokens: [...])`，或通过 `notificationStates` 搜索。检查 `firstNotifiedAt` 和 `notifyCount`；告警未确认超过升级窗口后，检查 `escalationLevel`。
+5. **查看投递记录。** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` 列出该告警的每次尝试及其结果。`FAILED` 或 `REFUSED` 记录带有 `errorCode` 和服务提供方的 `errorMessage`；参见[投递记录](#delivery-ledger)。
 
 确认或解除告警会停止后续升级。状态行在通知历史旁记录 `acknowledgedAt`/`clearedAt`。如果告警解除后其条件再次出现，平台会重新打开同一个告警，其状态行也会为新周期重新开始：在该周期被确认或解除之前，升级会再次进行。

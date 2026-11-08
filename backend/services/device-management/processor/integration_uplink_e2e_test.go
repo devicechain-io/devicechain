@@ -41,6 +41,7 @@ type e2eRig struct {
 	dm    *messaging.NatsManager
 	js    nats.JetStreamContext
 	uplk  messaging.MessageWriter
+	esm   *messaging.NatsManager
 	iproc *InboundEventsProcessor
 }
 
@@ -110,7 +111,7 @@ func newE2ERig(t *testing.T, opts ...InboundOption) *e2eRig {
 
 	js, err := dm.Conn().JetStream()
 	require.NoError(t, err)
-	return &e2eRig{integrationRig: rig, dm: dm, js: js, uplk: w, iproc: iproc}
+	return &e2eRig{integrationRig: rig, dm: dm, js: js, uplk: w, esm: esm, iproc: iproc}
 }
 
 func (r *integrationRig) publishDecoderForE2E() { r.publishDecoder(tempDecoder) }

@@ -36,13 +36,24 @@ type RetentionSweeper struct {
 	Microservice *core.Microservice
 	Api          *model.Api
 	retention    time.Duration
+
+	// attemptRetention is how long a delivery-ledger row is kept. Zero leaves the ledger
+	// unpruned (a sweeper built by the older constructor).
+	attemptRetention time.Duration
 }
 
 // NewRetentionSweeper builds the sweep. retention is how long a cleared row is kept;
 // interval is the tick period.
 func NewRetentionSweeper(ms *core.Microservice, api *model.Api, retention, interval time.Duration,
 	callbacks core.LifecycleCallbacks) *RetentionSweeper {
-	s := &RetentionSweeper{Microservice: ms, Api: api, retention: retention}
+	return NewRetentionSweeperWithLedger(ms, api, retention, 0, interval, callbacks)
+}
+
+// NewRetentionSweeperWithLedger is NewRetentionSweeper that also prunes delivery-ledger
+// rows older than attemptRetention.
+func NewRetentionSweeperWithLedger(ms *core.Microservice, api *model.Api, retention, attemptRetention,
+	interval time.Duration, callbacks core.LifecycleCallbacks) *RetentionSweeper {
+	s := &RetentionSweeper{Microservice: ms, Api: api, retention: retention, attemptRetention: attemptRetention}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "retention-sweep", interval,
 		s.runOnce, callbacks, core.WithPassMetrics(ms.NewPeriodicTaskMetrics("retention_sweep")))
 	return s
@@ -76,5 +87,46 @@ func (s *RetentionSweeper) runOnce(ctx context.Context) error {
 				Msg("Retention sweep pruned cleared notification state")
 		}
 	}
+	if s.attemptRetention > 0 {
+		// The system context is taken HERE, in the one function declared as a bypass of
+		// tenant isolation, and handed down; pruneAttempts only lists tenants under it.
+		v, f, err := s.pruneAttempts(ctx, core.WithSystemContext(ctx))
+		visited += v
+		failed += f
+		if err != nil {
+			lastErr = err
+		}
+	}
 	return core.PassResult(visited, failed, lastErr)
+}
+
+// pruneAttempts deletes every tenant's delivery-ledger rows older than the ledger's
+// retention window, tenant by tenant under that tenant's context.
+// sysCtx is ctx with the system context the cross-tenant listing needs.
+func (s *RetentionSweeper) pruneAttempts(ctx, sysCtx context.Context) (visited, failed int, lastErr error) {
+	before := time.Now().Add(-s.attemptRetention)
+	tenants, err := s.Api.DistinctAttemptTenants(sysCtx)
+	if err != nil {
+		return 1, 1, fmt.Errorf("listing tenants with delivery-ledger rows: %w", err)
+	}
+	for _, tenant := range tenants {
+		select {
+		case <-ctx.Done():
+			return visited, failed, ctx.Err()
+		default:
+		}
+		visited++
+		removed, err := s.Api.PruneNotificationAttempts(core.WithTenant(ctx, tenant), before)
+		if err != nil {
+			log.Error().Err(err).Str("tenant", tenant).Msg("Retention sweep: delivery-ledger prune failed")
+			failed++
+			lastErr = err
+			continue
+		}
+		if removed > 0 {
+			log.Info().Str("tenant", tenant).Int64("attemptsPruned", removed).
+				Msg("Retention sweep pruned delivery-ledger rows")
+		}
+	}
+	return visited, failed, lastErr
 }

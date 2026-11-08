@@ -394,6 +394,12 @@ type Request struct {
 	// Signing, when non-nil, signs the delivery (webhook-id, webhook-timestamp, webhook-signature).
 	// Nil leaves the request exactly as it was before signing existed.
 	Signing *Signing
+	// SuppressBody keeps the response body out of a non-2xx error even though no Secret
+	// is presented as a header. Set it when the credential travels in the URL (a Slack or
+	// Teams incoming webhook) or in the request body (a PagerDuty routing key): an endpoint
+	// that echoes the request ("Cannot POST /services/T/B/XXXX") would otherwise put the
+	// credential into the error, without the scheme a URL scrub looks for.
+	SuppressBody bool
 }
 
 // Send delivers req using client (nil ⇒ DefaultClient), bounded by ctx. It validates
@@ -498,7 +504,7 @@ func Send(ctx context.Context, client *http.Client, req Request) error {
 	// This is not a full drain, so it does not by itself enable keep-alive reuse.
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if req.Secret != "" {
+		if req.Secret != "" || req.SuppressBody {
 			// Never surface the body of a secret-bearing call (it could reflect the
 			// Authorization header).
 			return fmt.Errorf("returned %d", resp.StatusCode)

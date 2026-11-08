@@ -11,8 +11,10 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
@@ -75,6 +77,15 @@ type DeviceImportRow struct {
 	// holds makes the row a CONFLICT; a malformed one makes it INVALID. On a re-run a device that
 	// exists with a different alias set is a CONFLICT.
 	Aliases *[]DeviceAliasInput
+	// InstalledLatitude and InstalledLongitude are where the device was installed, for a device that
+	// is fixed in place. Both or neither: half a coordinate makes the row INVALID, as does a value
+	// outside the WGS84 range. The position is stored with source IMPORT. InstalledElevation and
+	// InstalledAccuracy are optional beside a position; against a device that exists, an omitted
+	// one compares as NONE, so it differs from a stored value (see installedPositionDiffers).
+	InstalledLatitude  *float64
+	InstalledLongitude *float64
+	InstalledElevation *float64
+	InstalledAccuracy  *float64
 }
 
 // DeviceImportRowResult is the outcome of one row. Row is 1-based within the call. Code and
@@ -146,6 +157,8 @@ type importRow struct {
 	earmark      *ProvisioningProfile
 	// aliases are the row's aliases in their canonical form.
 	aliases []DeviceAliasInput
+	// installed is the row's installed position, or nil when the row states none.
+	installed *InstalledPositionInput
 	// credStored is credID as the credential_id column holds it (see storedCredentialId):
 	// the keyed digest for an ACCESS_TOKEN. Set by decideImportRows, which has the key.
 	credStored string
@@ -212,7 +225,12 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 		return DeviceImportInvalid, importCodeInvalidValue, err.Error(), nil
 	}
 
-	p := &importRow{row: row, name: name, desc: desc, external: external, metadata: metadata, aliases: aliases}
+	installed, err := installedPositionOfRow(row)
+	if err != nil {
+		return DeviceImportInvalid, importCodeInvalidValue, err.Error(), nil
+	}
+
+	p := &importRow{row: row, name: name, desc: desc, external: external, metadata: metadata, aliases: aliases, installed: installed}
 	if !blank(row.ProvisioningProfileToken) {
 		p.earmarkToken = strings.TrimSpace(*row.ProvisioningProfileToken)
 	}
@@ -269,6 +287,53 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 	return "", "", "", p
 }
 
+// installedPositionOfRow reads the optional installed-position columns of a row. It returns nil
+// when the row states none, and a refusal naming the columns when it states half a coordinate or
+// one outside the WGS84 range. The range check is the one setInstalledPosition applies, so a file
+// cannot store what the mutation refuses.
+func installedPositionOfRow(row *DeviceImportRow) (*InstalledPositionInput, error) {
+	if row.InstalledLatitude == nil && row.InstalledLongitude == nil {
+		if row.InstalledElevation != nil || row.InstalledAccuracy != nil {
+			return nil, fmt.Errorf("installedElevation and installedAccuracy need installedLatitude and installedLongitude")
+		}
+		return nil, nil
+	}
+	if row.InstalledLatitude == nil || row.InstalledLongitude == nil {
+		return nil, fmt.Errorf("installedLatitude and installedLongitude must be given together")
+	}
+	source := InstalledSourceImport
+	in := &InstalledPositionInput{
+		Latitude: *row.InstalledLatitude, Longitude: *row.InstalledLongitude,
+		Elevation: row.InstalledElevation, Accuracy: row.InstalledAccuracy, Source: &source,
+	}
+	if _, err := in.validate(); err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
+// sameDecimal compares an incoming value with a stored one at the column's scale, so a coordinate
+// that was rounded on the way in is not reported as different from itself. Both sides go through
+// roundToScale, the rounding every write applies, so the comparison and the storage agree.
+func sameDecimal(stored, incoming *float64, scale int) bool {
+	if incoming == nil || stored == nil {
+		return incoming == nil && stored == nil
+	}
+	return roundToScale(*stored, scale) == roundToScale(*incoming, scale)
+}
+
+// installedPositionDiffers reports whether the row's installed position differs from the stored
+// one. A row that states none never differs: the optional columns absent mean "not stated".
+func installedPositionDiffers(d *Device, in *InstalledPositionInput) bool {
+	if in == nil {
+		return false
+	}
+	p := d.InstalledPosition
+	lat, lon := in.Latitude, in.Longitude
+	return !sameDecimal(p.InstalledLat, &lat, coordinateScale) || !sameDecimal(p.InstalledLon, &lon, coordinateScale) ||
+		!sameDecimal(p.InstalledElev, in.Elevation, metresScale) || !sameDecimal(p.InstalledAccuracy, in.Accuracy, metresScale)
+}
+
 const (
 	maxDeviceDescriptionLen     = 1024
 	maxCredentialIdLen          = 256
@@ -292,8 +357,15 @@ func metadataEqual(stored []byte, incoming *string) bool {
 
 // differingFields names the fields of the stored device that the row would change. Names
 // only: a value is never echoed.
-func differingFields(d *Device, p *importRow, storedAliases []DeviceAlias) []string {
+func differingFields(d *Device, p *importRow, storedAliases []DeviceAlias, mayCompareInstalled bool) []string {
 	var diff []string
+	// 🔴 A CALLER THAT MAY NOT READ INSTALLED POSITIONS IS NEVER TOLD WHETHER THE ROW'S MATCHES.
+	// Comparing for it would make a re-run an oracle for a guessed coordinate (EXISTS when right,
+	// CONFLICT when wrong), so for that caller a row that states a position against a device that
+	// exists is a CONFLICT whatever the device holds.
+	if p.installed != nil && (!mayCompareInstalled || installedPositionDiffers(d, p.installed)) {
+		diff = append(diff, "installedPosition")
+	}
 	if !aliasSetsEqual(storedAliases, p.aliases) {
 		diff = append(diff, "aliases")
 	}
@@ -585,7 +657,7 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 		}
 
 		if dev := byToken[row.Token]; dev != nil {
-			if diff := differingFields(dev, p, storedAliases[dev.ID]); len(diff) > 0 {
+			if diff := differingFields(dev, p, storedAliases[dev.ID], auth.CanReadInstalledPosition(ctx)); len(diff) > 0 {
 				result.set(i, row, DeviceImportConflict, conflict.Code,
 					"a device with this token exists with a different "+strings.Join(diff, ", ")+"; an import never updates an existing device")
 				continue
@@ -709,6 +781,15 @@ func (api *Api) createImportedDevice(ctx context.Context, p *importRow, dt *Devi
 		}
 		if err := insertAliasesOnTx(tx, device.ID, p.aliases); err != nil {
 			return err
+		}
+		if p.installed != nil {
+			source, _ := p.installed.validate()
+			// The row was validated when it was read, so this cannot refuse; the columns are written
+			// by name because the Device's own create never writes them.
+			if err := writeInstalledOnTx(tx, &Device{}, device.ID,
+				p.installed.installedColumns(source, time.Now().UTC().Truncate(time.Microsecond))); err != nil {
+				return err
+			}
 		}
 		if mode != DeviceImportModeCredentials {
 			return nil

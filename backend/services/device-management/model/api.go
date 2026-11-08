@@ -232,6 +232,9 @@ type Api struct {
 	// revocation holds the X.509 revocation store's fixed bounds and the slots that bound the
 	// CRL uploads one replica works on at once (SetRevocationLimits). Unset means the defaults.
 	revocation atomic.Pointer[revocationConfig]
+
+	// ocspPolicy is the instance-wide OCSP switch (SetOcspPolicy). Unset means everything off.
+	ocspPolicy atomic.Pointer[OcspPolicy]
 }
 
 // CacheEvictor drops the hot-path caches (ADR-022 B2) that a mutation makes stale.

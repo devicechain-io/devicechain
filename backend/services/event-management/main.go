@@ -69,6 +69,8 @@ var (
 	// correct, for readings the platform accepted dated that far back. It runs whether or not the
 	// calculated-metric backfill does.
 	RollupTail *backfill.TailSweeper
+	// UsageRollup keeps the per-tenant daily usage record current (see model.TenantEventUsageDay).
+	UsageRollup *processor.UsageRollupSweep
 )
 
 func main() {
@@ -255,6 +257,26 @@ func wireRollupTail(ctx context.Context) error {
 	return RollupTail.Initialize(ctx)
 }
 
+// wireUsage builds the usage rollup sweep and registers the admin plane that serves its record.
+//
+// The admin handler is the instance-scoped /admin/graphql endpoint: it validates IDENTITY-tier
+// tokens only, so a tenant access token cannot reach it. It sets no tenant and no system context;
+// the usage read puts the requested tenant in its own context (model.Api.TenantEventUsage).
+func wireUsage(ctx context.Context) error {
+	UsageRollup = processor.NewUsageRollupSweep(Microservice, RdbManager, Api, processor.UsageRollupInterval,
+		core.NewNoOpLifecycleCallbacks())
+	if err := UsageRollup.Initialize(ctx); err != nil {
+		return err
+	}
+	adminSchema := gqlcore.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
+	admin := gqlcore.NewAdminHttpHandler(adminSchema, map[gqlcore.ContextKey]interface{}{
+		gqlcore.ContextRdbKey: RdbManager,
+		gqlcore.ContextApiKey: Api,
+	}, Microservice.Readiness)
+	Microservice.Mux().Handle("/admin/graphql", admin)
+	return nil
+}
+
 // wireBackfill builds the calculated-metric backfill worker (ADR-082), unless it is off: the
 // operator switched it off, or left it unset on a pool with no room for it
 // (CalculatedBackfillConfiguration.Runs). It is inert until a job exists: a pass is one lock attempt and one query.
@@ -414,7 +436,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err := wireBackfill(ctx); err != nil {
 				return err
 			}
-			return wireRollupTail(ctx)
+			if err := wireRollupTail(ctx); err != nil {
+				return err
+			}
+			return wireUsage(ctx)
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
@@ -492,6 +517,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// Start the usage rollup.
+	if UsageRollup != nil {
+		if err := UsageRollup.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -501,6 +533,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// a pass in flight rolls its batch back and stops at the next statement.
 	if BackfillWorker != nil {
 		if err := BackfillWorker.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
+	if UsageRollup != nil {
+		if err := UsageRollup.Stop(ctx); err != nil {
 			return err
 		}
 	}

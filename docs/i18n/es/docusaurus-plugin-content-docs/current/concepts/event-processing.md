@@ -155,6 +155,18 @@ Una alarma nombra el dispositivo que la levantó. Consultas las alarmas a nivel 
 
 Cada alarma lleva una **severidad**: `CRITICAL`, `MAJOR`, `MINOR`, `WARNING` o `INDETERMINATE`. Una sola condición puede declarar reglas en varios niveles de severidad (por ejemplo `temp > 80 → MAJOR`, `temp > 100 → CRITICAL`). Cuando esas reglas levantan bajo la misma clave de alarma, el motor **escala en el mismo lugar una única alarma activa** hasta el nivel más alto que se cumple en ese momento, y la desescala a medida que las condiciones ceden, en lugar de abrir una alarma separada por nivel. Una acción de levantar alarma sin clave de alarma usa como clave la propia regla (sus tokens de perfil y de regla), así que las reglas que se dejan con ese valor por defecto abren alarmas separadas.
 
+### Etiquetar el resultado de una alarma {#labelling-an-alarms-outcome}
+
+Cuando alguien sabe qué resultó ser una alarma, puede etiquetarla con `setAlarmDisposition`:
+
+- `TRUE_POSITIVE`: la condición era real y requería atención.
+- `FALSE_POSITIVE`: la condición no era real, por ejemplo una lectura errónea, un sensor sucio o un umbral mal configurado. Una regla distinta no la habría levantado.
+- `EXPECTED`: la condición era real pero esperada y no requería acción, como un mantenimiento planificado o una prueba de puesta en marcha. La regla acertó; en todo caso, la alarma debería haberse suprimido.
+
+Una etiqueta pertenece a un **ciclo** de la alarma: un levantamiento, identificado por el `raisedTime` que tenía la alarma cuando se etiquetó. Cuando una condición intermitente reactiva la misma alarma, el nuevo ciclo empieza sin etiqueta y el ciclo anterior conserva la suya. Pasa el `raisedTime` que estabas viendo y la etiqueta se rechaza si la alarma se ha vuelto a levantar desde entonces, de modo que un veredicto sobre un ciclo nunca cae en el siguiente. Etiquetar un ciclo de nuevo reemplaza su etiqueta, y la plataforma registra quién la escribió y cuándo. Etiquetar no cambia nada más de la alarma: su estado, su reconocimiento y su severidad se mantienen, y no se envía ninguna notificación.
+
+El campo `disposition` de una alarma responde con la etiqueta de su ciclo actual. `alarmDispositions` lista todos los ciclos etiquetados, del más reciente al más antiguo, filtrados por alarma, etiqueta o intervalo de tiempo. Juntos son la verdad de referencia para medir una regla: cuántas de las alarmas que levantó eran reales.
+
 ## Llegar a una persona {#reaching-a-human}
 
 Una alarma levantada puede notificar a las personas a través del sistema de **notificaciones**. Una política por inquilino enruta las alarmas a canales de correo electrónico (SMTP) y webhook con enrutamiento por severidad: cada regla de la política asigna una severidad (o cualquiera) a un canal y a una lista de destinatarios.

@@ -7,7 +7,7 @@ title: Conectar con un certificado
 
 Un dispositivo puede autenticarse en el broker de la plataforma con un certificado de cliente X.509 en lugar de un token o una contraseña. Esta guía te lleva de una autoridad certificadora (CA) a un dispositivo que publica su primer evento, y muestra las dos formas en que un certificado puede convertirse en dispositivo: una **credencial fijada** que creas para un dispositivo que ya existe, y un **perfil de certificado** que registra dispositivos la primera vez que se conectan.
 
-Cómo decide la plataforma confiar en un certificado, y dónde se detiene esa confianza, está en [Identidad por certificado](../concepts/device-certificates.md). Lee sus [límites](../concepts/device-certificates.md#not-supported) antes de planificar una flota con esto: no hay OCSP ni descarga de CRL (las listas se suben), las CA con restricciones de nombre se rechazan, y la renovación todavía no está disponible.
+Cómo decide la plataforma confiar en un certificado, y dónde se detiene esa confianza, está en [Identidad por certificado](../concepts/device-certificates.md). Lee sus [límites](../concepts/device-certificates.md#not-supported) antes de planificar una flota con esto: no hay descarga de CRL (las listas se suben), OCSP es una comprobación opcional por ancla y desactivada por defecto, las CA con restricciones de nombre se rechazan, y la renovación todavía no está disponible.
 
 :::note Estado
 Disponible por MQTT en el broker de la plataforma. HTTP y LwM2M no aceptan certificados de cliente.
@@ -229,7 +229,7 @@ El simulador representa dispositivos con certificado: `dc-simulator --x509` crea
 
 ## Lo que esto no hace {#limits}
 
-- **Sin OCSP ni descarga de CRL.** Sube la lista de revocación de una CA al ancla de confianza, o revoca un certificado por huella; ambas cosas lo rechazan desde su siguiente conexión y además terminan las sesiones abiertas que afecta (comprueba `sessionsEnded` en el resultado). Una revocación de CA reconecta a todos los dispositivos del ancla. Para detener un dispositivo sin revocar un certificado, deshabilita su credencial (o el dispositivo, o el ancla). Consulta [Revocación](../concepts/device-certificates.md#revocation).
+- **Sin descarga de CRL; OCSP es opcional y limitado.** Sube la lista de revocación de una CA al ancla de confianza, o revoca un certificado por huella; ambas cosas lo rechazan desde su siguiente conexión y además terminan las sesiones abiertas que afecta (comprueba `sessionsEnded` en el resultado). Una revocación de CA reconecta a todos los dispositivos del ancla. Para detener un dispositivo sin revocar un certificado, deshabilita su credencial (o el dispositivo, o el ancla). Un ancla también puede consultar al respondedor OCSP del certificado en la conexión (`ocspMode` con `ENFORCE_KNOWN` o `REQUIRE_CURRENT`; el valor por defecto es `OFF`, y el interruptor de la instancia `deviceManagement.callout.ocsp.enabled` está desactivado hasta que un operador lo active). Una respuesta revocada rechaza esa conexión, pero todavía no termina las sesiones abiertas ni actualiza el almacén de revocaciones, y no hay actualización en segundo plano. Consulta [Revocación](../concepts/device-certificates.md#revocation).
 - **Una CA con restricciones de nombre se rechaza.** El ancla de confianza es el límite de la identidad.
 - **Sin renovación de un dispositivo registrado presentando un certificado nuevo, ni adopción de un dispositivo restablecido.** Todavía no está disponible.
 - **Sin certificados por HTTP ni LwM2M.**

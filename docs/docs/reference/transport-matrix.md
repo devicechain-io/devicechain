@@ -8,7 +8,11 @@ title: Transport Capability Matrix
 This page shows what each transport does today, in each direction, and names the gaps.
 
 :::info The code is the source of truth
-This page is maintained by hand against the implementation, not generated, so it can fall behind.
+The prose on this page is maintained by hand against the implementation, so it can fall behind. The
+symbols in the device-transport table and in the LwM2M operations table are different: they are
+generated from a conformance suite that drives a real instance with clients somebody else wrote
+(Eclipse Paho, Eclipse Leshan, Eclipse Tahu and curl), and every filled circle in them names checks
+that passed against a recent build, each shown to fail on a planted defect first.
 Where it and your instance disagree, your instance is right. Every claim below was read from the
 service that implements it, not from a design document; anything that could not be established that
 way is marked as such rather than filled in. A cell that overstates what the platform does is a bug
@@ -45,6 +49,8 @@ device transport, so **None** there is always a real answer to a real question.
 ## Device transports
 
 How devices reach the platform, and how the platform reaches back.
+
+{/* conformance:table device-transports */}
 
 | Transport | Read | Write | Subscribe |
 | --- | :---: | :---: | :---: |
@@ -118,7 +124,7 @@ operator has switched that on; see [Connecting devices from outside the cluster]
   as a command whose response carries the value, but that is a vocabulary you define on the
   device profile, not something the transport provides.
 
-- **Client certificates.** Instead of a token or password, a device can authenticate with an X.509 client certificate presented in the TLS handshake, with the MQTT username `{tenant}:@x509` and no password. The certificate must chain to a [trust anchor](../concepts/device-certificates.md) the tenant added, either pinned to a device's credential or accepted by a certificate profile that registers the device on its first connect. The limits are stated plainly: a CA with name constraints is refused, there is no OCSP and no CRL fetching (upload a CA's revocation list or revoke a certificate by fingerprint, which also ends the open sessions it affects, disable the credential or the anchor to end sessions without revoking a certificate, and use short-lived certificates), and renewal is not available yet. The C# SDK and the Unity package can present a client certificate. See [Connecting with a certificate](../guides/device-x509.md).
+- **Client certificates.** Instead of a token or password, a device can authenticate with an X.509 client certificate presented in the TLS handshake, with the MQTT username `{tenant}:@x509` and no password. The certificate must chain to a [trust anchor](../concepts/device-certificates.md) the tenant added, either pinned to a device's credential or accepted by a certificate profile that registers the device on its first connect. The limits are stated plainly: a CA with name constraints is refused, there is no CRL fetching, and the optional per-anchor OCSP check is off by default and does not yet end live sessions (upload a CA's revocation list or revoke a certificate by fingerprint, which also ends the open sessions it affects, disable the credential or the anchor to end sessions without revoking a certificate, and use short-lived certificates), and renewal is not available yet. The C# SDK and the Unity package can present a client certificate. See [Connecting with a certificate](../guides/device-x509.md).
 - **Gateways.** A device can front other devices. The [edge agent](../deployment/edge-services.md#gateway-identity) signs in as a gateway device and publishes each device's events in the [gateway namespace](./device-protocol.md#gateway-namespace). The platform accepts an event only for a device assigned to that gateway, and refuses any other loudly (the reason `NotGatewayChild`, a counter, and a notice to the gateway) rather than letting the broker acknowledge it and drop it. Commands to devices behind a gateway are not routed yet.
 
 ### HTTP
@@ -333,14 +339,16 @@ For constrained devices over CoAP/UDP with DTLS.
 
 #### LwM2M operations in detail
 
+{/* conformance:table lwm2m-operations */}
+
 | Operation | | Notes |
 | --- | :---: | --- |
-| Read | ◐ | CoAP GET; a response over 8 KiB is silently truncated and still reported successful |
+| Read | ◐ | CoAP GET; the body is returned as the device sent it, in the device's own content format (base64 when it is not text, as TLV is); a response over 8 KiB is silently truncated and still reported successful |
 | Write | ◐ | Single scalar resource, replace only |
 | Execute | ● | With or without arguments. A raw Execute of the Device object's Factory Reset resource (`/3/0/5`) is refused with `COMMAND_DESTRUCTIVE_REFUSED`; a confirmed named operation is planned |
 | Reboot (`lwm2m.reboot`) | ● | A named command that Executes the Device object's Reboot resource; takes no parameters |
-| Read device information (`lwm2m.readDeviceInfo`) | ● | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have |
-| Device-information harvest | ● | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry |
+| Read device information (`lwm2m.readDeviceInfo`) | ◐ | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have. Only text/plain answers are decoded: a device that answers a single-resource read in TLV, as Eclipse Leshan does by default, has every resource listed as missing and the command fails |
+| Device-information harvest | ◐ | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry. Only text/plain answers are decoded, so nothing is recorded for a device that answers in TLV |
 | Observe | ◐ | SenML-JSON only; numeric resources only; fixed object allowlist; 32 per registration |
 | Discover | ○ | Not implemented |
 | Create | ○ | Not implemented |

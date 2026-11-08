@@ -114,6 +114,21 @@ func (r *DeviceTrustAnchorResolver) RevocationMode() (string, error) {
 	return string(m), err
 }
 
+// OcspMode is the anchor's OCSP mode; a stored value this build does not know is an error, not OFF.
+func (r *DeviceTrustAnchorResolver) OcspMode() (string, error) {
+	m, err := r.M.OcspModeOf()
+	return string(m), err
+}
+
+// OcspResponderUrl is the anchor's own responder, null when it uses the certificates' entries.
+func (r *DeviceTrustAnchorResolver) OcspResponderUrl() *string {
+	if !r.M.OcspResponderUrl.Valid {
+		return nil
+	}
+	u := r.M.OcspResponderUrl.String
+	return &u
+}
+
 // RevocationStaleGrace is the grace in force for the anchor.
 func (r *DeviceTrustAnchorResolver) RevocationStaleGrace(ctx context.Context) (string, error) {
 	g, err := r.M.RevocationStaleGraceOf(r.S.GetApi(ctx).RevocationLimits().DefaultStaleGrace)

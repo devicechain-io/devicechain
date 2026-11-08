@@ -63,6 +63,9 @@ var (
 		NewRevocationKickQueueSchema(),
 		NewDeviceTypeCommandChannelSchema(),
 		NewRevocationExpansionMarkersSchema(),
+		NewAnchorOcspSchema(),
+		NewAlarmDispositionsSchema(),
+		NewInstalledPositionSchema(),
 		NewSemanticBindingsSchema(),
 	}
 )

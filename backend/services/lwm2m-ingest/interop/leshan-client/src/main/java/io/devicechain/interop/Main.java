@@ -36,6 +36,15 @@ import org.eclipse.leshan.core.model.ObjectLoader;
 import org.eclipse.leshan.core.model.ObjectModel;
 import org.eclipse.leshan.core.model.ResourceModel;
 import org.eclipse.leshan.core.model.StaticModel;
+import org.eclipse.leshan.core.node.LwM2mResource;
+import org.eclipse.leshan.core.node.codec.DefaultLwM2mEncoder;
+import org.eclipse.leshan.core.node.codec.LwM2mValueConverter;
+import org.eclipse.leshan.core.node.codec.NodeEncoder;
+import org.eclipse.leshan.core.node.codec.PathEncoder;
+import org.eclipse.leshan.core.request.ContentFormat;
+import org.eclipse.leshan.core.request.argument.Arguments;
+import org.eclipse.leshan.core.response.ExecuteResponse;
+import org.eclipse.leshan.core.response.WriteResponse;
 import org.eclipse.leshan.core.request.DeregisterRequest;
 import org.eclipse.leshan.core.request.RegisterRequest;
 import org.eclipse.leshan.core.request.UpdateRequest;
@@ -116,6 +125,17 @@ public final class Main {
         LeshanClientBuilder builder = new LeshanClientBuilder(endpoint);
         builder.setObjects(enablers);
         builder.setEndpointsProviders(endpoints);
+        if (scenario.equals("tlv-only")) {
+            // A LwM2M 1.0-era client: it can encode TLV, text and opaque, and NOT SenML. Asked to Observe
+            // in SenML-JSON it has no encoder for the answer, so it refuses (4.06) and sends no telemetry.
+            // That is correct client behaviour; the platform has to cope with it, and the matrix says what
+            // it does (registers, drives presence, accepts commands, reports no telemetry).
+            Map<ContentFormat, NodeEncoder> nodeEncoders = new HashMap<>(DefaultLwM2mEncoder.getDefaultNodeEncoders(true));
+            nodeEncoders.keySet().removeIf(f -> !(f.equals(ContentFormat.TLV) || f.equals(ContentFormat.TEXT)
+                    || f.equals(ContentFormat.OPAQUE)));
+            Map<ContentFormat, PathEncoder> pathEncoders = new HashMap<>(DefaultLwM2mEncoder.getDefaultPathEncoder());
+            builder.setEncoder(new DefaultLwM2mEncoder(nodeEncoders, pathEncoders, new DefaultConverter().converter()));
+        }
         LeshanClient client = builder.build();
 
         CountDownLatch registered = new CountDownLatch(1);
@@ -178,6 +198,26 @@ public final class Main {
                 holdUntilKilled();
                 break;
 
+            case "tlv-only":
+                // Registered as a client that cannot produce SenML. The platform's Observe is refused; the
+                // harness asserts no telemetry is stored and that presence still reads CONNECTED. The
+                // value keeps changing, so a client that COULD notify would have something to say.
+                for (int i = 1; ; i++) {
+                    Thread.sleep(3000);
+                    temp.set(value + 100 + i);
+                }
+
+            case "observe-hold":
+                // The conformance rig's client (hack/conformance-rig.sh). Like "observe", but it keeps
+                // changing the value for as long as it lives, so a notification that follows the
+                // platform's Observe is certain to exist however slowly the platform sets it up, and it
+                // answers the platform's own Read, Write and Execute on the Device object. The rig judges
+                // by what the platform stores and records, never by what this client prints.
+                for (int i = 1; ; i++) {
+                    Thread.sleep(3000);
+                    temp.set(value + 100 + i);
+                }
+
             case "register-hold":
                 // Register and hold with NO Update and NO Deregister; the harness kills us and asserts
                 // the server marks the device offline on lifetime expiry.
@@ -190,6 +230,13 @@ public final class Main {
                 System.exit(3);
         }
         System.exit(0);
+    }
+
+    /** Exposes the default encoder's value converter, which is protected, to build a narrower encoder. */
+    static final class DefaultConverter extends DefaultLwM2mEncoder {
+        LwM2mValueConverter converter() {
+            return converter;
+        }
     }
 
     static void holdUntilKilled() throws InterruptedException {
@@ -274,7 +321,33 @@ public final class Main {
 
     /** A minimal LwM2M Device (object 3) so registration has a well-formed object list. */
     public static final class SimpleDevice extends BaseInstanceEnabler {
+        // Time Zone (/3/0/15) is the Device object's read-write resource, so a platform Write has
+        // something real to change and a Read afterwards something real to prove it changed.
+        private volatile String timezone = "Etc/UTC";
+
         public SimpleDevice() {
+        }
+
+        // Reboot (/3/0/4) is the one Execute the Device object offers that is safe to accept: this client
+        // answers 2.04 and does nothing, so the platform has a real device response to settle a command on.
+        @Override
+        public ExecuteResponse execute(LwM2mServer server, int resourceId, Arguments arguments) {
+            if (resourceId == 4) {
+                status("observe-hold", "executed", "", "/3/0/4");
+                return ExecuteResponse.success();
+            }
+            return super.execute(server, resourceId, arguments);
+        }
+
+        @Override
+        public WriteResponse write(LwM2mServer server, boolean replace, int resourceId, LwM2mResource value) {
+            if (resourceId == 15) {
+                timezone = String.valueOf(value.getValue());
+                status("observe-hold", "written", "", "/3/0/15=" + timezone);
+                fireResourceChange(15);
+                return WriteResponse.success();
+            }
+            return super.write(server, replace, resourceId, value);
         }
 
         @Override
@@ -286,6 +359,8 @@ public final class Main {
                     return ReadResponse.success(1, "InteropClient");
                 case 2:
                     return ReadResponse.success(2, "leshan-interop");
+                case 15:
+                    return ReadResponse.success(15, timezone);
                 case 16:
                     return ReadResponse.success(16, "U");
                 default:

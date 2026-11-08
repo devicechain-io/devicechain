@@ -54,6 +54,8 @@ export type AlarmSearchCriteria = {
 
 export type AreaCreateRequest = {
   areaTypeToken: string;
+  /** The token of the geofence that bounds the area. It must name an existing fence. */
+  boundaryFenceToken?: string | null | undefined;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
@@ -109,6 +111,11 @@ export type AreaTypeUpdateRequest = {
 
 export type AreaUpdateRequest = {
   areaTypeToken?: string | null | undefined;
+  /**
+   * Links the area to the geofence that bounds it: omit to keep the link, send null to remove
+   * it, send a token to set it. The token must name an existing fence.
+   */
+  boundaryFenceToken?: string | null | undefined;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
@@ -191,6 +198,25 @@ export type AuditEventSearchCriteria = {
   startTime?: string | null | undefined;
   tableName?: string | null | undefined;
 };
+
+/**
+ * How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+ * revoked is always refused (a verified revoked answer for any certificate on any verified path
+ * wins); the modes differ in what an answer that could not be had means.
+ */
+export type CertificateOcspMode =
+  /**
+   * A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+   * refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+   */
+  | 'ENFORCE_KNOWN'
+  /** No responder is asked. The default for every anchor. */
+  | 'OFF'
+  /**
+   * A revoked answer refuses, and so does a certificate whose status could not be confirmed
+   * current. A responder outage refuses new connects once cached answers expire.
+   */
+  | 'REQUIRE_CURRENT';
 
 /** How an anchor treats the completeness of its revocation lists. */
 export type CertificateRevocationMode =
@@ -598,6 +624,27 @@ export type DeviceImportRow = {
   deviceTypeToken: string;
   /** Optional business identifier, up to 256 characters. Checked for conflicts; never the key. */
   externalId?: string | null | undefined;
+  /**
+   * Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude.
+   * Like installedElevation, an omitted accuracy compares as none against a device that exists.
+   */
+  installedAccuracy?: number | null | undefined;
+  /**
+   * Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. When a
+   * device that already exists is compared, an omitted elevation compares as NONE: a row that
+   * leaves it out, against a device whose stored position has one, is a CONFLICT.
+   */
+  installedElevation?: number | null | undefined;
+  /**
+   * Degrees north where the device was installed, for a device that is fixed in place. Given
+   * together with installedLongitude or not at all. A value outside -90 to 90 makes the row
+   * INVALID. The position is stored with source IMPORT. A device that already exists makes the
+   * row a CONFLICT when its stored position differs, and always for a caller without
+   * location:installed:read, which is never told whether the position matches.
+   */
+  installedLatitude?: number | null | undefined;
+  /** Degrees east where the device was installed, -180 to 180. See installedLatitude. */
+  installedLongitude?: number | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */
@@ -781,6 +828,17 @@ export type DeviceTrustAnchorUpdateRequest = {
   metadata?: string | null | undefined;
   /** Human-readable name. Null clears it. */
   name?: string | null | undefined;
+  /**
+   * Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+   * while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+   * it, and needs ocspResponderUrl.
+   */
+  ocspMode?: CertificateOcspMode | null | undefined;
+  /**
+   * An http or https URL, without credentials, that replaces each certificate's own responder.
+   * Null clears it. The address it resolves to must be one the instance's egress policy allows.
+   */
+  ocspResponderUrl?: string | null | undefined;
   /**
    * Required and unclearable. Switching to REQUIRE_CURRENT is refused while the anchor holds no
    * current revocation list, or a registered certificate under it was issued by a CA that has none:
@@ -1447,6 +1505,13 @@ export type AcknowledgeAlarmMutationVariables = Exact<{
 
 
 export type AcknowledgeAlarmMutation = { acknowledgeAlarm: { id: string } };
+
+export type AcknowledgeAlarmsMutationVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AcknowledgeAlarmsMutation = { acknowledgeAlarms: { acknowledged: Array<{ token: string }>, refusals: Array<{ token: string, code: string, reason: string }> } };
 
 export type ClearAlarmMutationVariables = Exact<{
   token: string;
@@ -2753,6 +2818,20 @@ export const AcknowledgeAlarmDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcknowledgeAlarmMutation, AcknowledgeAlarmMutationVariables>;
+export const AcknowledgeAlarmsDocument = new TypedDocumentString(`
+    mutation AcknowledgeAlarms($tokens: [String!]!) {
+  acknowledgeAlarms(tokens: $tokens) {
+    acknowledged {
+      token
+    }
+    refusals {
+      token
+      code
+      reason
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AcknowledgeAlarmsMutation, AcknowledgeAlarmsMutationVariables>;
 export const ClearAlarmDocument = new TypedDocumentString(`
     mutation ClearAlarm($token: String!) {
   clearAlarm(token: $token) {

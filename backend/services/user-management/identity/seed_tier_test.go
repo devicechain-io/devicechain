@@ -264,3 +264,18 @@ func TestTheConsoleLoginPathUnionsTheViewerBaseline(t *testing.T) {
 		t.Errorf("a member holding a role was minted %v, which omits the baseline", roleClaims.Authorities)
 	}
 }
+
+// location:installed:read is outside the viewer baseline for now. Whether lamp-post
+// coordinates belong in the pinned baseline is a separate decision from whether the
+// authority exists, and it is the maintainer's to make; until it is made, nobody receives
+// installed positions by being an enabled member. TestViewerAuthoritiesAreExactlyTheseAuthorities
+// pins the whole list, and this names the one absence so a failure says why.
+func TestLocationInstalledReadIsNotInTheViewerBaseline(t *testing.T) {
+	if !slices.Contains(viewerAuthorities, string(auth.EventRead)) {
+		t.Fatal("precondition: the baseline no longer grants event:read")
+	}
+	if slices.Contains(viewerAuthorities, string(auth.LocationInstalledRead)) {
+		t.Fatalf("the viewer baseline grants %q, which is a decision still waiting on the maintainer",
+			auth.LocationInstalledRead)
+	}
+}

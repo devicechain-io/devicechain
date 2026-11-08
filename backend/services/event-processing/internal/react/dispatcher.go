@@ -42,6 +42,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -347,6 +348,19 @@ const DropUnknownKind = "unknown_kind"
 // rule, so a non-zero count means a definition that never passed the gate.
 const DropInvalidAction = "invalid_action"
 
+// The reasons below are reported only to a WithDropObserver observer, never to Metrics: live REACT
+// logs these skips, and its metric vocabulary is unchanged.
+const (
+	// DropMissingVariant: an action whose declared type has no payload variant.
+	DropMissingVariant = "missing_variant"
+	// DropGuardError: an action guard that failed to build or errored at evaluation.
+	DropGuardError = "guard_error"
+	// DropRenderError: a connector payload template that failed to build or errored.
+	DropRenderError = "render_error"
+	// DropAlarmKeyError: an alarm-key template that failed to build or yield a usable key.
+	DropAlarmKeyError = "alarm_key_error"
+)
+
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
 // idempotency lives in the deterministic token the command sink dedups on (and the upsert-keyed
 // alarm) — so for commands and alarms it would be safe to run as a queue group. It is not run that
@@ -368,6 +382,11 @@ type Dispatcher struct {
 
 	// now is the clock a command's expiry is measured from. Injectable so a test can pin it.
 	now func() time.Time
+
+	// log is where a fail-closed drop is reported (the process logger by default, WithLogger).
+	log zerolog.Logger
+	// onDrop, when set (WithDropObserver), is told the reason of every action skipped fail-closed.
+	onDrop func(reason string)
 
 	// templates caches a compiled payload-template program per distinct template source (ADR-060),
 	// mirroring the guard cache below: the dispatcher resolves rules.Rule (not a compiled form) fresh
@@ -404,8 +423,41 @@ type Dispatcher struct {
 // configuration. A dispatcher with all sinks nil dispatches nothing (every action inert). connectorRate
 // is the SOURCE-side outbound egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging
 // (every connector dispatch admitted, metered only by the downstream outbound-connectors egress limiter).
-func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, connectorRate ConnectorRateGate, metrics Metrics) *Dispatcher {
-	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics, now: time.Now}
+func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, connectorRate ConnectorRateGate, metrics Metrics, opts ...Option) *Dispatcher {
+	d := &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics, now: time.Now, log: log.Logger}
+	for _, o := range opts {
+		o(d)
+	}
+	return d
+}
+
+// Option configures a Dispatcher at construction.
+type Option func(*Dispatcher)
+
+// WithClock replaces the clock a command's expiry is measured from (time.Now by default). It exists
+// for the one caller that dispatches into recording sinks in VIRTUAL time, the rule evaluator
+// (internal/evaluate), where an expiry computed from the wall clock would differ on every run and a
+// test of "the command expires in 15m" could never be repeated. The function is called once per
+// sendCommand dispatch, so a caller may close over a value it moves between dispatches.
+func WithClock(now func() time.Time) Option { return func(d *Dispatcher) { d.now = now } }
+
+// WithLogger sends the dispatcher's fail-closed drop reports to l instead of the process logger. The
+// rule evaluator passes a quiet logger: a tenant's test of a malformed rule is reported to the tenant
+// in the result, not written to the service log once per evaluated edge.
+func WithLogger(l zerolog.Logger) Option { return func(d *Dispatcher) { d.log = l } }
+
+// WithDropObserver is told the reason (one of the Drop* constants) of every action the dispatcher
+// skips fail-closed: a missing payload variant, an invalid stored setting, a guard, payload template
+// or alarm-key template that failed, an unknown action type. Live REACT counts some of these in its
+// metrics and logs all of them; the evaluator needs every one in its result, because a test that
+// silently lost an action would report "no command was sent" as if the rule had decided so.
+func WithDropObserver(f func(reason string)) Option { return func(d *Dispatcher) { d.onDrop = f } }
+
+// dropped reports a fail-closed skip to the observer, when there is one.
+func (d *Dispatcher) dropped(reason string) {
+	if d.onDrop != nil {
+		d.onDrop(reason)
+	}
 }
 
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
@@ -497,8 +549,9 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// loop into a redelivery crash-loop. Guarding one variant and not its sibling leaves the class
 		// open, which is what happened here.
 		if a.SendCommand == nil {
-			log.Error().Str("rule", ev.RuleID).
+			d.log.Error().Str("rule", ev.RuleID).
 				Msg("REACT: dropping a sendCommand action whose payload variant is missing (malformed/forged rule).")
+			d.dropped(DropMissingVariant)
 			return
 		}
 		if resolved {
@@ -520,9 +573,10 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// out-of-range value is dropped (fail closed) rather than sent with no expiry or a clamped one.
 		expiry, err := rules.ParseCommandExpiry(a.SendCommand.ExpiresAfter)
 		if err != nil {
-			log.Error().Err(err).Str("rule", ev.RuleID).
+			d.log.Error().Err(err).Str("rule", ev.RuleID).
 				Msg("REACT: dropping a sendCommand action with an invalid expiresAfter (malformed/forged rule).")
 			d.metrics.RecordDropped(DropInvalidAction)
+			d.dropped(DropInvalidAction)
 			return
 		}
 		req := CommandRequest{
@@ -547,7 +601,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 				// device indistinguishable from command-delivery being down. Logged at warn
 				// because a rule firing at a device that cannot accept its command is an
 				// AUTHORING defect the operator has to see; the metric makes it countable.
-				log.Warn().Str("tenant", ev.Tenant).Str("device", ev.Series).
+				d.log.Warn().Str("tenant", ev.Tenant).Str("device", ev.Series).
 					Str("command", a.SendCommand.Command).Str("code", permanent.Code).
 					Str("reason", permanent.Reason).
 					Msg("REACT send-command permanently rejected; dropping (a retry cannot change the verdict).")
@@ -601,8 +655,9 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// reach here and would nil-panic the shared consumer loop into a redelivery crash-loop (there is
 		// no recover on it). Drop it fail-closed, exactly as the default case drops an unknown action.
 		if a.RaiseAlarm == nil {
-			log.Error().Str("rule", ev.RuleID).
+			d.log.Error().Str("rule", ev.RuleID).
 				Msg("REACT: dropping a raiseAlarm action whose payload variant is missing (malformed/forged rule).")
+			d.dropped(DropMissingVariant)
 			return
 		}
 
@@ -649,8 +704,9 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// projection, so a hand-edited row can reach here; drop it fail-closed (log + ack) exactly as the
 		// default case drops an unknown action, so a forged definition never wedges the loop.
 		if (a.Type == rules.ActionHTTPCall && a.HTTPCall == nil) || (a.Type == rules.ActionPublish && a.Publish == nil) {
-			log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
+			d.log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
 				Msg("REACT: dropping a connector action whose payload variant is missing (malformed/forged rule).")
+			d.dropped(DropMissingVariant)
 			return
 		}
 		kind := string(a.Type) // "httpCall" / "publish" — a fixed metric enum, never a tenant/rule value
@@ -711,9 +767,10 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		// The publish gate (rules.Compile) rejects unknown action types, so this is unreachable for
 		// a gate-validated rule; a forged/hand-edited definition's unknown action is skipped (not a
 		// wedge) — but loudly: an error log and a counted drop, so the skip is never silent.
-		log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
+		d.log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
 			Msg("REACT: skipping an action of an unknown type; the rule definition carries an action this build cannot dispatch.")
 		d.metrics.RecordDropped(DropUnknownKind)
+		d.dropped(DropUnknownKind)
 		return
 	}
 }
@@ -732,12 +789,14 @@ func (d *Dispatcher) guardAllows(ev runtime.DerivedEvent, a rules.Action) bool {
 	}
 	g, err := d.guardProgram(a.Guard)
 	if err != nil {
-		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published action guard failed to build; skipping the action (fail closed).")
+		d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published action guard failed to build; skipping the action (fail closed).")
+		d.dropped(DropGuardError)
 		return false
 	}
 	ok, err := g.Eval(rules.GuardInput{Value: ev.Value, Series: ev.Series})
 	if err != nil {
-		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: an action guard errored at evaluation; skipping the action (fail closed).")
+		d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: an action guard errored at evaluation; skipping the action (fail closed).")
+		d.dropped(DropGuardError)
 		return false
 	}
 	return ok
@@ -774,12 +833,14 @@ func (d *Dispatcher) renderPayload(ev runtime.DerivedEvent, a rules.Action) (str
 	}
 	prog, err := d.templateProgram(src)
 	if err != nil {
-		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published connector payload template failed to build; skipping the action (fail closed).")
+		d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a published connector payload template failed to build; skipping the action (fail closed).")
+		d.dropped(DropRenderError)
 		return "", false
 	}
 	out, err := prog.Eval(rules.GuardInput{Value: ev.Value, Series: ev.Series})
 	if err != nil {
-		log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a connector payload template errored at evaluation; skipping the action (fail closed).")
+		d.log.Error().Err(err).Str("rule", ev.RuleID).Msg("REACT: a connector payload template errored at evaluation; skipping the action (fail closed).")
+		d.dropped(DropRenderError)
 		return "", false
 	}
 	return out, true
@@ -863,8 +924,9 @@ func (d *Dispatcher) resolveAlarmKey(ev runtime.DerivedEvent, a *rules.RaiseAlar
 	}
 	prog, err := d.alarmKeyProgram(a.AlarmKeyTemplate)
 	if err != nil {
-		log.Error().Err(err).Str("rule", ev.RuleID).
+		d.log.Error().Err(err).Str("rule", ev.RuleID).
 			Msg("REACT: a published alarm-key template failed to build; skipping the action (fail closed).")
+		d.dropped(DropAlarmKeyError)
 		return "", false
 	}
 	key, err := prog.Eval(ev.Series)
@@ -873,8 +935,9 @@ func (d *Dispatcher) resolveAlarmKey(ev runtime.DerivedEvent, a *rules.RaiseAlar
 		// failure: the device token is what varies, so a template can pass publish and still render an
 		// over-long or malformed key for some devices. Logged with the device so an operator can see
 		// WHICH devices the rule is inert on rather than only that it is.
-		log.Error().Err(err).Str("rule", ev.RuleID).Str("device", ev.Series).
+		d.log.Error().Err(err).Str("rule", ev.RuleID).Str("device", ev.Series).
 			Msg("REACT: an alarm-key template did not yield a usable key; skipping the action (fail closed).")
+		d.dropped(DropAlarmKeyError)
 		return "", false
 	}
 	return key, true

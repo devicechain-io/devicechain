@@ -211,7 +211,11 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'Alerts',
           collapsed: false,
-          items: ['guides/notification-channels', 'guides/signed-webhooks'],
+          items: [
+            'guides/notification-channels',
+            'guides/signed-webhooks',
+            'guides/testing-your-rules',
+          ],
         },
         {
           type: 'category',

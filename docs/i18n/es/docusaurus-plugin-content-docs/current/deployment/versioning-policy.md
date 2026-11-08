@@ -55,6 +55,24 @@ Estas pueden cambiar en una versión menor. Cuando lo hacen, las notas de versi�
 - Los nombres de métricas y de alertas
 - El catálogo de herramientas MCP (nombres de las herramientas, entradas y forma de los resultados)
 
+### Vista previa: puede cambiar en una versión menor, durante un tiempo limitado {#preview-interfaces}
+
+Una superficie nueva puede pasar su primera versión menor en un nivel de **vista previa** antes de quedar
+cubierta por la promesa anterior. Una superficie en vista previa lo dice donde se lee sobre ella: en su
+página de referencia o de guía y, en una operación de GraphQL, en su descripción. Mientras una superficie
+está en vista previa puede cambiar de forma incompatible en una versión menor; cuando lo hace, la sección
+de esa versión en [Versiones y actualizaciones](./releases-and-upgrades.md) dice qué cambió y qué hacer.
+Una superficie permanece en vista previa como máximo durante dos versiones menores; al terminar la segunda
+se promueve y queda cubierta como todo lo demás. Un cambio incompatible en una superficie en vista previa
+no queda exento de las comprobaciones de compatibilidad del proyecto: se declara allí como una ruptura
+intencionada, igual que cualquier otra, de modo que ningún cambio en vista previa se publica sin que se
+note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
+conoce la versión rechaza el archivo en lugar de adivinar.
+
+Hoy el nivel de vista previa contiene las pruebas de reglas: la operación `evaluateRules` de la API de
+event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test` que los lee.
+Consulta [Probar tus reglas](../guides/testing-your-rules.md).
+
 ## Rutas de actualización admitidas {#upgrade-paths}
 
 - **Dentro de una versión menor** (`1.4.0` a `1.4.3`) y **a la siguiente versión menor** (`1.4.x` a `1.5.0`) son las rutas admitidas.

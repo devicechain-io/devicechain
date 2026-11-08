@@ -178,6 +178,10 @@ type Asset struct {
 	AssetTypeId uint
 	AssetType   *AssetType
 
+	// InstalledPosition is where the asset was installed. It is written only by
+	// SetInstalledPosition / ClearInstalledPosition (see the type).
+	InstalledPosition
+
 	// Properties is the asset's property document (ADR-072) — a JSON object whose
 	// keys are the property names its type's published schema declares. It is to
 	// that schema exactly what a command payload is to a command definition's

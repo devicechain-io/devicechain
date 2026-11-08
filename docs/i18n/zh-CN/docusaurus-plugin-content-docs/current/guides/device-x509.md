@@ -7,7 +7,7 @@ title: 使用证书连接设备
 
 设备可以用 X.509 客户端证书而不是令牌或密码向平台消息代理认证。本指南带你从证书颁发机构（CA）一直走到设备发布第一个事件，并展示证书成为设备的两种方式：为已存在的设备创建的**固定凭据**，以及在设备首次连接时为其注册的**证书配置**。
 
-平台如何决定信任一张证书，以及这种信任到哪里为止，见[证书身份](../concepts/device-certificates.md)。在围绕它规划设备群之前，请先阅读其中的[限制](../concepts/device-certificates.md#not-supported)：没有 OCSP、也不获取 CRL（吊销列表是上传的），带名称约束的 CA 会被拒绝，续期尚未提供。
+平台如何决定信任一张证书，以及这种信任到哪里为止，见[证书身份](../concepts/device-certificates.md)。在围绕它规划设备群之前，请先阅读其中的[限制](../concepts/device-certificates.md#not-supported)：不获取 CRL（吊销列表是上传的），OCSP 是按信任锚配置的可选检查且默认关闭，带名称约束的 CA 会被拒绝，续期尚未提供。
 
 :::note 状态
 在平台消息代理上的 MQTT 中可用。HTTP 和 LwM2M 不接受客户端证书。
@@ -229,7 +229,7 @@ await session.StartAsync(handler, cancellationToken);
 
 ## 它不做什么 {#limits}
 
-- **没有 OCSP，也不获取 CRL。** 把 CA 的吊销列表上传到信任锚，或按指纹撤销某张证书；两者都会从其下一次连接起拒绝它，并结束它所影响的打开的会话（请查看结果中的 `sessionsEnded`）。撤销 CA 会让该信任锚下的所有设备重新连接。要在不撤销证书的情况下停用一台设备，请禁用它的凭据（或该设备，或信任锚）。见[撤销](../concepts/device-certificates.md#revocation)。
+- **不获取 CRL；OCSP 是可选的，且有限制。** 把 CA 的吊销列表上传到信任锚，或按指纹撤销某张证书；两者都会从其下一次连接起拒绝它，并结束它所影响的打开的会话（请查看结果中的 `sessionsEnded`）。撤销 CA 会让该信任锚下的所有设备重新连接。要在不撤销证书的情况下停用一台设备，请禁用它的凭据（或该设备，或信任锚）。信任锚也可以在连接时询问证书的 OCSP 响应方（`ocspMode` 为 `ENFORCE_KNOWN` 或 `REQUIRE_CURRENT`；默认为 `OFF`，实例开关 `deviceManagement.callout.ocsp.enabled` 在运营方打开之前保持关闭）。已撤销的响应会拒绝该次连接，但目前还不会结束已打开的会话或更新吊销存储，也没有后台刷新。见[撤销](../concepts/device-certificates.md#revocation)。
 - **带名称约束的 CA 会被拒绝。** 信任锚是身份的边界。
 - **已注册设备不能通过出示新证书续期，被重置的设备也不能重新采用。** 目前尚未提供。
 - **HTTP 或 LwM2M 上没有证书认证。**

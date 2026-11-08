@@ -23,7 +23,7 @@ import (
 // computed one.
 func TestAPublishedCalculatedMetricResolvesAsCalculated(t *testing.T) {
 	f := newCalcFixture(t)
-	require.NoError(t, f.api.RDB.Database.AutoMigrate(&GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}))
+	require.NoError(t, f.api.RDB.Database.AutoMigrate(&GeoFence{}, &Area{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}))
 	f.api.CalculatedMetricsCeiling = &stubCeiling{n: 1}
 	f.metric("voltage", "DOUBLE", "")
 	f.metric("current", "DOUBLE", "")

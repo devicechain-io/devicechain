@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -116,8 +117,22 @@ func Execute() {
 	}()
 
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCoder is an error that names the status the process exits with. A command whose exit status
+// means something to a caller (dcctl test: 1 a failed expectation, 2 a run that could not be judged)
+// returns one; every other error exits 1.
+type exitCoder interface{ ExitCode() int }
+
+// exitCode is the status Execute exits with for err.
+func exitCode(err error) int {
+	var ec exitCoder
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return 1
 }
 
 func init() {

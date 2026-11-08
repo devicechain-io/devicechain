@@ -155,6 +155,18 @@ An alarm names the device that raised it. You query alarms tenant-wide with filt
 
 Each alarm carries a **severity**: `CRITICAL`, `MAJOR`, `MINOR`, `WARNING`, or `INDETERMINATE`. A single condition can declare rules at several severity tiers (for example `temp > 80 → MAJOR`, `temp > 100 → CRITICAL`). When those rules raise under the same alarm key, the engine **escalates a single active alarm in place** to the highest tier currently met, and de-escalates as conditions ease, rather than opening a separate alarm per tier. A raise alarm action with no alarm key is keyed on the rule itself (its profile and rule tokens), so rules left at that default open separate alarms.
 
+### Labelling an alarm's outcome {#labelling-an-alarms-outcome}
+
+Once someone knows what an alarm turned out to be, they can label it with `setAlarmDisposition`:
+
+- `TRUE_POSITIVE`: the condition was real and needed attention.
+- `FALSE_POSITIVE`: the condition was not real, for example a bad reading, a fouled sensor or a threshold set wrong. A different rule should not have raised it.
+- `EXPECTED`: the condition was real but expected and needed no action, such as planned maintenance or a commissioning test. The rule was right; if anything, the alarm should have been suppressed.
+
+A label belongs to one **cycle** of the alarm: one raise, named by the alarm's `raisedTime` when it was labelled. When a flapping condition re-activates the same alarm, the new cycle starts unlabelled and the earlier cycle keeps its label. Pass the `raisedTime` you were looking at, and the label is refused if the alarm has been raised again since, so a verdict on one cycle never lands on the next. Labelling a cycle again replaces its label, and the platform records who wrote it and when. Labelling changes nothing else about the alarm: its state, acknowledgement and severity stay as they are, and no notification is sent.
+
+An alarm's `disposition` field answers the label of its current cycle. `alarmDispositions` lists every labelled cycle, newest first, filtered by alarm, label or time range. Together they are the ground truth for measuring a rule: how many of the alarms it raised were real.
+
 ## Reaching a human {#reaching-a-human}
 
 A raised alarm can notify people through the **notification** system. A per-tenant policy routes alarms to email (SMTP) and webhook channels with per-severity routing: each of a policy's rules maps one severity (or any) to a channel and a recipient list.

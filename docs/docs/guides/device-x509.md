@@ -7,7 +7,7 @@ title: Connecting with a Certificate
 
 A device can authenticate to the platform broker with an X.509 client certificate instead of a token or a password. This guide takes you from a certificate authority (CA) to a device publishing its first event, and shows both ways a certificate can become a device: a **pinned credential** you create for a device that exists, and a **certificate profile** that registers devices the first time they connect.
 
-How the platform decides to trust a certificate, and where that trust stops, is in [Certificate identity](../concepts/device-certificates.md). Read its [limits](../concepts/device-certificates.md#not-supported) before you plan a fleet around this: there is no OCSP and no CRL fetching (lists are uploaded), name-constrained CAs are refused, and renewal is not available yet.
+How the platform decides to trust a certificate, and where that trust stops, is in [Certificate identity](../concepts/device-certificates.md). Read its [limits](../concepts/device-certificates.md#not-supported) before you plan a fleet around this: there is no CRL fetching (lists are uploaded), OCSP is an optional per-anchor check that is off by default, name-constrained CAs are refused, and renewal is not available yet.
 
 :::note Status
 Available over MQTT on the platform broker. HTTP ingest and LwM2M do not accept client certificates.
@@ -229,7 +229,7 @@ The simulator plays certificate devices: `dc-simulator --x509` mints a throwaway
 
 ## What this does not do {#limits}
 
-- **No OCSP, and no CRL fetching.** Upload a CA's revocation list to the trust anchor, or revoke a certificate by fingerprint; both refuse it from its next connect and also end the open sessions it affects (check `sessionsEnded` in the result). A CA-level revocation reconnects every device under the anchor. To stop one device without revoking a certificate, disable its credential (or the device, or the anchor). See [Revocation](../concepts/device-certificates.md#revocation).
+- **No CRL fetching; OCSP is optional and limited.** Upload a CA's revocation list to the trust anchor, or revoke a certificate by fingerprint; both refuse it from its next connect and also end the open sessions it affects (check `sessionsEnded` in the result). A CA-level revocation reconnects every device under the anchor. To stop one device without revoking a certificate, disable its credential (or the device, or the anchor). An anchor can also ask the certificate's OCSP responder at connect (`ocspMode` of `ENFORCE_KNOWN` or `REQUIRE_CURRENT`; the default is `OFF`, and the instance switch `deviceManagement.callout.ocsp.enabled` is off until an operator turns it on). A revoked answer refuses that connect, but it does not yet end live sessions or update the revocation store, and there is no background refresh. See [Revocation](../concepts/device-certificates.md#revocation).
 - **A name-constrained CA is refused.** The trust anchor is the identity boundary.
 - **No renewal of a registered device by presenting a new certificate, and no adoption of a reset device.** Not available yet.
 - **No certificates over HTTP or LwM2M.**

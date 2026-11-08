@@ -452,7 +452,28 @@ func (api *Api) DeleteGeoFence(ctx context.Context, token string) (bool, error) 
 	capsAttempt := geoFenceCapsNotNeeded()
 	var minted *GeoFenceSetVersion
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Unscoped().Where("token = ?", token).Delete(&GeoFence{})
+		// 🔴 LOCK THE FENCE, THEN ASK WHETHER AN AREA NAMES IT. An area links a fence under the
+		// same row lock (lockGeoFenceOnTx), so either the link commits first and this sees it, or
+		// this delete commits first and the link finds no fence: a link can never be left naming a
+		// deleted fence, and a fence recreated under the same token can never be picked up by an
+		// area that named its predecessor.
+		var fence GeoFence
+		found := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("token = ?", token).Limit(1).Find(&fence)
+		if found.Error != nil {
+			return found.Error
+		}
+		if found.RowsAffected == 0 {
+			return nil
+		}
+		var naming int64
+		if err := tx.Model(&Area{}).Where("boundary_fence_token = ?", token).Count(&naming).Error; err != nil {
+			return err
+		}
+		if naming > 0 {
+			return fmt.Errorf("%w: geofence %q is the boundary of %d area(s); remove the link first", ErrEntityInUse, token, naming)
+		}
+		result := tx.Unscoped().Where("id = ?", fence.ID).Delete(&GeoFence{})
 		if result.Error != nil {
 			return result.Error
 		}

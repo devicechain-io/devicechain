@@ -161,6 +161,16 @@ func (f scopeFixture) member(anchors ...string) context.Context {
 		ScopeAnchors: anchors})
 }
 
+// sweepMember is member plus location:read, the caller the isolation sweeps run as. Holding it
+// puts the installed-position fields themselves under the sweep: without it they answer the
+// withheld marker for every entity and the sweep would never read a stored position.
+func (f scopeFixture) sweepMember(anchors ...string) context.Context {
+	return f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead), string(auth.AlarmRead), string(auth.AlarmWrite),
+			string(auth.EventRead), string(auth.LocationRead)},
+		ScopeAnchors: anchors})
+}
+
 func (f scopeFixture) withClaims(c *auth.Claims) context.Context {
 	ctx := auth.WithClaims(core.WithTenant(context.Background(), c.Tenant), c)
 	return context.WithValue(ctx, gqlcore.ContextApiKey, f.api)

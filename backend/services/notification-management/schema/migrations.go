@@ -28,5 +28,6 @@ var (
 		NewBaselineSchema(),
 		NewQuietHoursSchema(),
 		NewNotificationStateCycleSchema(),
+		NewNotificationAttemptsSchema(),
 	}
 )

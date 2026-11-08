@@ -71,6 +71,11 @@ authorities do not line up with intuition:
 
 - Reading device credentials requires `device:write`, not `device:read`.
 - `latestLocation` requires `location:read`, while its `device-state` siblings require `state:read`.
+- A fixed asset's installed position (`Device.installedPosition`, `Asset.installedPosition`) requires
+  `location:installed:read`, which `location:read` includes. It is installation data and never falls back to
+  a position the device reported. A caller without either authority reads `positionWithheld: true` on every
+  device and asset, whether or not it has a position; the flag concerns the installed position only. Setting and clearing an installed position (`setInstalledPosition`,
+  `clearInstalledPosition`) require `device:write`, and a member limited to part of the tenant may not write one.
 - `demoteAssertedPresence` requires `state:demote`, which is neither of those. No role names it by
   default; only a role holding the `*` super-authority, such as the seeded `tenant-admin` role, has
   it without an explicit grant. It is the only thing outside the event pipeline that writes the
@@ -801,6 +806,7 @@ these operations, and each answers only with what those customers own:
 | `customers`, `customersById`, `customersByToken` | Only the member's own customer records. |
 | `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Alarms raised while the device belonged to one of the customers. |
 | `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | The same alarms. |
+| `alarmDispositions` | The labels of alarm cycles raised while the device belonged to one of the customers. `setAlarmDisposition` is refused: labels are the tenant's ground truth for its rules. |
 | `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Events recorded while the device belonged to one of the customers. A customer keeps the history from the time it owned a device, and does not see the history from before. |
 | `deviceStates`, `deviceStatesByDeviceToken`, `deviceStatesByExternalId`, `latestMeasurements`, `droppedMeasurements`, `latestLocation`, `latestLocations` | The live state, latest readings and last-known position of the devices the customers own now. When a device moves to another customer, its live state moves with it, without waiting for the device to report again. `latestLocation` and `latestLocations` also require `location:read`, which the read-only baseline does not include. |
 | Device types, device profiles and their versions, metric and command definitions, customer types | Everything, because this is configuration. These can be read but not changed. |
