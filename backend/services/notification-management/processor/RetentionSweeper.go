@@ -88,7 +88,9 @@ func (s *RetentionSweeper) runOnce(ctx context.Context) error {
 		}
 	}
 	if s.attemptRetention > 0 {
-		v, f, err := s.pruneAttempts(ctx)
+		// The system context is taken HERE, in the one function declared as a bypass of
+		// tenant isolation, and handed down; pruneAttempts only lists tenants under it.
+		v, f, err := s.pruneAttempts(ctx, core.WithSystemContext(ctx))
 		visited += v
 		failed += f
 		if err != nil {
@@ -100,9 +102,10 @@ func (s *RetentionSweeper) runOnce(ctx context.Context) error {
 
 // pruneAttempts deletes every tenant's delivery-ledger rows older than the ledger's
 // retention window, tenant by tenant under that tenant's context.
-func (s *RetentionSweeper) pruneAttempts(ctx context.Context) (visited, failed int, lastErr error) {
+// sysCtx is ctx with the system context the cross-tenant listing needs.
+func (s *RetentionSweeper) pruneAttempts(ctx, sysCtx context.Context) (visited, failed int, lastErr error) {
 	before := time.Now().Add(-s.attemptRetention)
-	tenants, err := s.Api.DistinctAttemptTenants(core.WithSystemContext(ctx))
+	tenants, err := s.Api.DistinctAttemptTenants(sysCtx)
 	if err != nil {
 		return 1, 1, fmt.Errorf("listing tenants with delivery-ledger rows: %w", err)
 	}
