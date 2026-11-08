@@ -1,0 +1,78 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Event Management ADMIN GraphQL Schema
+#
+# The INSTANCE-scoped, operator-facing record of what each tenant used of THIS service: the
+# events it ingested and the devices that sent them. Served at /admin/graphql behind an
+# IDENTITY token - the same shape user-management's and ai-inference's admin planes use. A
+# tenant access token cannot authenticate here. Usage measured by other services (commands,
+# AI-agent calls, stored bytes) is not this API's to report; it gets its own.
+#
+# The record reports and never enforces: nothing on this plane limits, throttles or bills
+# anyone. It exists so an operator can see what each tenant used, and so a self-hoster can
+# feed their own billing.
+#
+# Descriptions: a """string""" above an element is its PUBLIC description - served by
+# introspection, read by every GraphQL tool, published on the docs site - and may not
+# cite a decision record. A # comment is a maintainer note.
+
+schema {
+    query: Query
+}
+
+type Query {
+    """
+    One tenant's event usage for each UTC calendar day from `from` to `to`, both inclusive,
+    oldest first. Every figure is counted by INGEST time, the time the platform received
+    each event, not the time the event is dated. Every day in the range is returned: a day
+    on which the tenant had no events reads zero, and so does every day of a tenant the
+    instance does not know (the record does not consult the tenant catalogue). `complete`
+    says whether the day's figures are final. Each UTC hour becomes final a few minutes
+    after it ends, so a day in progress lags by a little over an hour. At most 366 days per
+    request. Requires the usage:read authority.
+    """
+    tenantEventUsage(
+        "The tenant's token."
+        tenant: String!
+        "First day, as YYYY-MM-DD (UTC)."
+        from: String!
+        "Last day, as YYYY-MM-DD (UTC)."
+        to: String!
+    ): [TenantEventUsageDay!]!
+}
+
+"""
+One tenant's event usage on one UTC calendar day, counted from the events the event store
+holds by the time the platform received them. Devices that are registered but silent are
+not counted.
+"""
+type TenantEventUsageDay {
+    "The tenant's token."
+    tenant: String!
+    "The day, as YYYY-MM-DD (UTC)."
+    day: String!
+    """
+    Events the platform received for the tenant on this day, each counted exactly once, as a
+    whole number. A late or backfilled reading counts on the day it was received, never on
+    the day it is dated, so a complete day is never revised. One per event, not per reading;
+    a redelivered duplicate is stored once and counted once.
+    """
+    eventsIngested: Float!
+    "Distinct devices with at least one event received on this day."
+    devicesActive: Int!
+    "The largest number of distinct devices with an event received in any single UTC hour of the day."
+    devicesPeak: Int!
+    """
+    The mean of the day's 24 hourly distinct-device counts. An hour with no events, or one
+    whose figures are not final yet, counts as zero.
+    """
+    devicesAvg: Float!
+    """
+    True once every hour of the day is final, after which the day's figures never change. A
+    day still in progress, or one not (or never) fully measured, is false: a zero on such a
+    day means not yet measured, not nothing used.
+    """
+    complete: Boolean!
+}

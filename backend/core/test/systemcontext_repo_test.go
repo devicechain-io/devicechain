@@ -75,8 +75,10 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/processor/AnchorReconciliationSweep.go": {"AnchorReconciliationSweep.runOnce"},
-	"backend/services/event-management/processor/backfill/worker.go":           {"Worker.pass"},
-	"backend/services/event-management/processor/backfill/tail.go":             {"TailSweeper.sweep"},
+	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
+		"Api.RollupUsagePass"},
+	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
+	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
 	// must rebuild its rule set, dead-man arming and dynamic-threshold view from every
 	// tenant's rows, so each of these four reads the whole projection. They are the only

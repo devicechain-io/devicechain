@@ -109,6 +109,14 @@ const (
 	TenantRead  Authority = "tenant:read"
 	TenantWrite Authority = "tenant:write"
 
+	// UsageRead reads the per-tenant usage record on the instance admin plane
+	// (event-management's tenantEventUsage). System-tier only: it is what a self-hoster
+	// bills their own customers from, so it is an operator's view across tenants, and a
+	// tenant does not read its own figures through it. It is its own authority rather than
+	// tenant:read so a billing integration can be granted the usage record without the
+	// tenant catalogue.
+	UsageRead Authority = "usage:read"
+
 	// Device management (device-management). Enforcement is rolled out per service
 	// in later PRs; the vocabulary is defined here up front so resolvers across
 	// services reference one canonical set.
@@ -408,6 +416,7 @@ var vocabulary = map[Authority]Tiers{
 	UserWrite:   system,
 	TenantRead:  system,
 	TenantWrite: system,
+	UsageRead:   system,
 	// role:read and role:write are DUAL-tier (ADR-081), on exactly the audit:read
 	// argument: one capability with two scopes, told apart by the plane and by the
 	// row's tenant, not two capabilities. On the admin plane (an identity token)

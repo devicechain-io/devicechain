@@ -94,6 +94,7 @@ export const SCHEMAS = [
   { source: 'backend/services/dashboard-management/graphql/schema.graphql', area: 'dashboard-management' },
   { source: 'backend/services/device-management/graphql/schema.graphql', area: 'device-management' },
   { source: 'backend/services/device-state/graphql/schema.graphql', area: 'device-state' },
+  { source: 'backend/services/event-management/graphql/admin_schema.graphql', area: 'event-management' },
   { source: 'backend/services/event-management/graphql/schema.graphql', area: 'event-management' },
   { source: 'backend/services/event-processing/graphql/schema.graphql', area: 'event-processing' },
   {
