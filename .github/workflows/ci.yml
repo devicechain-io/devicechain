@@ -1487,6 +1487,16 @@ jobs:
       - name: No ADR references in published docs
         run: hack/check-docs-adr-refs.sh
 
+      # The narrowed public claims: phrases the project must never use on a served
+      # surface ("operator-blind", "agents run the city", ...), each with the honest
+      # wording that replaces it. Self-test first: it plants each phrase alone and
+      # also proves the honest wording passes.
+      - name: Public-claims guard self-test
+        run: hack/check-docs-claims.sh --self-test
+
+      - name: No forbidden public claims in published surfaces
+        run: hack/check-docs-claims.sh
+
       # Same rule, one surface the guard above does not scan: .github/release-highlights.json
       # publishes `theme` and `highlights[]` verbatim into the GitHub release body and into
       # devicechain.io/releases.json, while its `_comment` block is maintainer prose that
