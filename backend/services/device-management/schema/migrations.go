@@ -65,5 +65,6 @@ var (
 		NewRevocationExpansionMarkersSchema(),
 		NewAnchorOcspSchema(),
 		NewAlarmDispositionsSchema(),
+		NewInstalledPositionSchema(),
 	}
 )

@@ -60,7 +60,7 @@ func TestIsolationSweepForAGroupMember(t *testing.T) {
 	f := newGroupScopeFixture(t)
 	out := isolationsweep.Run(t, isolationsweep.Config{
 		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
-		Scoped:   f.member("group:north"),
+		Scoped:   f.sweepMember("group:north"),
 		Unscoped: f.operator(),
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},

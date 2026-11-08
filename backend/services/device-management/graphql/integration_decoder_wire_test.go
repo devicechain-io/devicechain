@@ -39,7 +39,7 @@ func newIntegrationDecoderFixture(t *testing.T) (scopeFixture, string) {
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	f := seedScopeFixture(t, db, &model.ProvisioningProfile{}, &model.Integration{}, &model.IntegrationDeviceType{},
-		&model.DeviceAlias{}, &model.IntegrationUnregisteredDevice{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
+		&model.DeviceAlias{}, &model.IntegrationUnregisteredDevice{}, &model.GeoFence{}, &model.Area{}, &model.GeoFenceSetVersion{},
 		&model.GeoFenceGeometryBlob{}, &model.ProfileDecoderSample{}, &model.DetectionRule{}, &model.DetectionRuleScopeRef{},
 		&model.DeviceCredential{})
 	f.api.DeviceSecretKey = dmtest.DeviceSecretKey()

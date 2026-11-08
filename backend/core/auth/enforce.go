@@ -219,3 +219,19 @@ func AuthorizeCatalogue(ctx context.Context, required Authority) error {
 	}
 	return nil
 }
+
+// CanReadInstalledPosition reports whether the caller may read a fixed asset's INSTALLED
+// position: it holds LocationInstalledRead or LocationRead, at a tier its token may carry
+// them on. LocationRead implies the narrower authority, and this function is the one place
+// that implication lives, so a resolver cannot spell it differently from its neighbour.
+//
+// It answers a bool rather than an error because the installed-position field does not
+// refuse: a caller without the authority gets a withheld marker that looks the same for
+// every entity (see the schema), and an unauthenticated context is simply "no".
+func CanReadInstalledPosition(ctx context.Context) bool {
+	claims, ok := ClaimsFromContext(ctx)
+	if !ok {
+		return false
+	}
+	return satisfies(claims, LocationInstalledRead) || satisfies(claims, LocationRead)
+}

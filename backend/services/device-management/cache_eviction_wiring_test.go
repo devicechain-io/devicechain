@@ -33,7 +33,7 @@ import (
 func evictionTables() []any {
 	return append(credentialTables(), &model.DeviceReplacement{}, &model.DeviceAlias{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{},
 		&model.EntityRelationshipType{}, &model.EntityAttribute{}, &model.Alarm{},
-		&model.EntityGroupMembership{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
+		&model.EntityGroupMembership{}, &model.GeoFence{}, &model.Area{}, &model.GeoFenceSetVersion{},
 		&model.GeoFenceGeometryBlob{},
 		// A device delete removes the device's configuration revisions and reported state in
 		// the same transaction, so a rig that deletes a device needs both tables.

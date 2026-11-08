@@ -396,21 +396,34 @@ func customerFamily() putest.Family[*Api] {
 	}
 }
 
+// The two fences the area family's boundary link moves between.
+const (
+	seededFenceToken = "fence-a"
+	otherFenceToken  = "fence-b"
+)
+
 func areaFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "area",
 		Token:   "ar-1",
-		Migrate: []any{&AreaType{}, &Area{}},
+		Migrate: []any{&AreaType{}, &Area{}, &GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
 				if _, err := api.CreateAreaType(ctx, &AreaTypeCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed area type %q: %v", tok, err)
 				}
 			}
+			// The boundary link must name a fence that exists, so both of the values the
+			// harness writes are real fences.
+			for _, tok := range []string{seededFenceToken, otherFenceToken} {
+				if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{Token: tok, Geometry: boxGeometry(0, 0, 1, 1)}); err != nil {
+					t.Fatalf("seed geofence %q: %v", tok, err)
+				}
+			}
 			if _, err := api.CreateArea(ctx, &AreaCreateRequest{
 				Token: "ar-1", AreaTypeToken: seededTypeToken,
 				Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),
-				Metadata: strp(memberSeed.Metadata),
+				Metadata: strp(memberSeed.Metadata), BoundaryFenceToken: strp(seededFenceToken),
 			}); err != nil {
 				t.Fatalf("seed area: %v", err)
 			}
@@ -418,20 +431,23 @@ func areaFamily() putest.Family[*Api] {
 		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
 			rows, err := api.AreasByToken(ctx, []string{"ar-1"})
 			e := requireOne(t, "area", rows, err)
-			return readMember(&namedRow{e.NamedEntity, e.Metadata}, "areaTypeToken",
+			got := readMember(&namedRow{e.NamedEntity, e.Metadata}, "areaTypeToken",
 				refTokenOf(t, e.AreaType == nil, func() string { return e.AreaType.Token }))
+			got["boundaryFenceToken"] = nullStr(e.BoundaryFenceToken)
+			return got
 		},
 		NewRequest: func() any { return new(AreaUpdateRequest) },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateArea(ctx, token, req.(*AreaUpdateRequest))
 			return err
 		},
-		Fields: memberFields("areaTypeToken",
+		Fields: append(memberFields("areaTypeToken",
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Name },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Description },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata },
 			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.AreaTypeToken },
-		),
+		), putest.OptionalStringField("boundaryFenceToken", seededFenceToken, otherFenceToken,
+			func(r *AreaUpdateRequest) *dcgraphql.OptionalString { return &r.BoundaryFenceToken })),
 	}
 }
 

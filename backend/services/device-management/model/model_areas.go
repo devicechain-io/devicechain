@@ -4,6 +4,8 @@
 package model
 
 import (
+	"database/sql"
+
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -90,6 +92,9 @@ type AreaCreateRequest struct {
 	Description   *string
 	AreaTypeToken string
 	Metadata      *string
+	// BoundaryFenceToken links the area to the geofence that bounds it. It must name a fence
+	// that exists.
+	BoundaryFenceToken *string
 }
 
 // AreaUpdateRequest is the PARTIAL-update counterpart of AreaCreateRequest.
@@ -108,6 +113,9 @@ type AreaUpdateRequest struct {
 	// refusal is total — nothing is written.
 	AreaTypeToken dcgraphql.OptionalString
 	Metadata      dcgraphql.OptionalString
+	// BoundaryFenceToken links the area to the geofence that bounds it: omitted leaves the
+	// link, null clears it, a value sets it and must name a fence that exists.
+	BoundaryFenceToken dcgraphql.OptionalString
 }
 
 // Represents an area.
@@ -120,6 +128,11 @@ type Area struct {
 
 	AreaTypeId uint
 	AreaType   *AreaType
+
+	// BoundaryFenceToken names the geofence that bounds the area, or is NULL when none does. It
+	// is a token and not a foreign key, like the other same-service references here; a reader
+	// that finds the fence gone says so rather than answering "no boundary".
+	BoundaryFenceToken sql.NullString
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token

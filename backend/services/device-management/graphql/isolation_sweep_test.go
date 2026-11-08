@@ -18,7 +18,7 @@ func TestIsolationSweep(t *testing.T) {
 	f := newScopeFixture(t)
 	out := isolationsweep.Run(t, isolationsweep.Config{
 		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
-		Scoped:   f.member("customer:acme"),
+		Scoped:   f.sweepMember("customer:acme"),
 		Unscoped: f.operator(),
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},
@@ -96,7 +96,7 @@ func TestIsolationSweepAimedAtAHiddenAreaAndAsset(t *testing.T) {
 			f := newScopeFixture(t)
 			out := isolationsweep.Run(t, isolationsweep.Config{
 				Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
-				Scoped:   f.member("customer:acme"),
+				Scoped:   f.sweepMember("customer:acme"),
 				Unscoped: f.operator(),
 				Probe:    c.probe,
 				Hidden:   []string{"globex"},
@@ -134,7 +134,7 @@ func TestIsolationSweepAimedAtACustomerAlarmAnchor(t *testing.T) {
 	f := newScopeFixture(t)
 	out := isolationsweep.Run(t, isolationsweep.Config{
 		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
-		Scoped:   f.member("customer:acme"),
+		Scoped:   f.sweepMember("customer:acme"),
 		Unscoped: f.operator(),
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},

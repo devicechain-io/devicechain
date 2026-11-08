@@ -24,7 +24,7 @@ func backfillFixture(t *testing.T) *calcFixture {
 	t.Helper()
 	f := newCalcFixture(t)
 	require.NoError(t, f.api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).
-		AutoMigrate(&Device{}, &GeoFence{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}))
+		AutoMigrate(&Device{}, &GeoFence{}, &Area{}, &GeoFenceSetVersion{}, &GeoFenceGeometryBlob{}))
 	f.api.CalculatedMetricsCeiling = &stubCeiling{n: 10}
 	return f
 }

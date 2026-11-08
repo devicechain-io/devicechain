@@ -262,6 +262,10 @@ type Device struct {
 	DeviceTypeId uint
 	DeviceType   *DeviceType
 
+	// InstalledPosition is where the device was installed, for a device that is fixed in place.
+	// It is written only by SetInstalledPosition / ClearInstalledPosition (see the type).
+	InstalledPosition
+
 	// ExpectedSince is when the device's membership of its current profile began — the base
 	// of the detection engine's never-reported dead-man clock. A re-type of the device, or a
 	// re-point of its type onto another profile, stamps it; NULL means "since the device was

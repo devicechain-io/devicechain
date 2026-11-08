@@ -241,12 +241,21 @@ func (a authSet) intersect(b authSet) authSet {
 
 // missingFrom returns the first authority in list that a does not cover, or "" when it
 // covers them all. "*" in list is covered only by a set that is itself "*".
+//
+// location:read covers location:installed:read, the one implication between authorities the
+// platform has (auth.CanReadInstalledPosition): a holder of location:read already reads installed
+// positions, so handing that narrower authority out is no escalation. The implication lives here
+// and not in has, because has also decides what narrows, and location:read -> installed:read is a
+// narrowing.
 func (a authSet) missingFrom(list []string) string {
 	for _, x := range list {
 		if x == string(auth.AuthorityAll) {
 			if !a.all {
 				return x
 			}
+			continue
+		}
+		if x == string(auth.LocationInstalledRead) && a.has(string(auth.LocationRead)) {
 			continue
 		}
 		if !a.has(x) {

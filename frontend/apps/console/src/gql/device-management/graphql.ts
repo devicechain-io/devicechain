@@ -54,6 +54,8 @@ export type AlarmSearchCriteria = {
 
 export type AreaCreateRequest = {
   areaTypeToken: string;
+  /** The token of the geofence that bounds the area. It must name an existing fence. */
+  boundaryFenceToken?: string | null | undefined;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
@@ -96,6 +98,11 @@ export type AreaTypeUpdateRequest = {
 
 export type AreaUpdateRequest = {
   areaTypeToken?: string | null | undefined;
+  /**
+   * Links the area to the geofence that bounds it: omit to keep the link, send null to remove
+   * it, send a token to set it. The token must name an existing fence.
+   */
+  boundaryFenceToken?: string | null | undefined;
   description?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
@@ -578,6 +585,27 @@ export type DeviceImportRow = {
   deviceTypeToken: string;
   /** Optional business identifier, up to 256 characters. Checked for conflicts; never the key. */
   externalId?: string | null | undefined;
+  /**
+   * Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude.
+   * Like installedElevation, an omitted accuracy compares as none against a device that exists.
+   */
+  installedAccuracy?: number | null | undefined;
+  /**
+   * Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. When a
+   * device that already exists is compared, an omitted elevation compares as NONE: a row that
+   * leaves it out, against a device whose stored position has one, is a CONFLICT.
+   */
+  installedElevation?: number | null | undefined;
+  /**
+   * Degrees north where the device was installed, for a device that is fixed in place. Given
+   * together with installedLongitude or not at all. A value outside -90 to 90 makes the row
+   * INVALID. The position is stored with source IMPORT. A device that already exists makes the
+   * row a CONFLICT when its stored position differs, and always for a caller without
+   * location:installed:read, which is never told whether the position matches.
+   */
+  installedLatitude?: number | null | undefined;
+  /** Degrees east where the device was installed, -180 to 180. See installedLatitude. */
+  installedLongitude?: number | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */

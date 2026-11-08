@@ -379,6 +379,7 @@ CREATE INDEX idx_alarm_dispositions_alarm ON "device-management".alarm_dispositi
 CREATE INDEX idx_alarm_dispositions_tenant_alarm_token ON "device-management".alarm_dispositions USING btree (tenant_id, alarm_token);
 CREATE INDEX idx_alarm_dispositions_tenant_raised ON "device-management".alarm_dispositions USING btree (tenant_id, raised_time);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
+CREATE INDEX idx_areas_boundary_fence ON "device-management".areas USING btree (tenant_id, boundary_fence_token) WHERE (boundary_fence_token IS NOT NULL);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
 CREATE INDEX idx_device_credentials_trust_anchor ON "device-management".device_credentials USING btree (trust_anchor_id) WHERE (trust_anchor_id IS NOT NULL);
@@ -759,7 +760,8 @@ CREATE TABLE "device-management".areas (
  name character varying(128),
  description character varying(1024),
  metadata jsonb,
- area_type_id bigint
+ area_type_id bigint,
+ boundary_fence_token text
 );
 CREATE TABLE "device-management".asset_type_versions (
  id bigint NOT NULL,
@@ -803,7 +805,13 @@ CREATE TABLE "device-management".assets (
  description character varying(1024),
  metadata jsonb,
  asset_type_id bigint,
- properties jsonb
+ properties jsonb,
+ installed_lat numeric(10,8),
+ installed_lon numeric(11,8),
+ installed_elev numeric(12,4),
+ installed_accuracy numeric(12,4),
+ installed_source text,
+ installed_updated_at timestamp with time zone
 );
 CREATE TABLE "device-management".audit_events (
  id bigint NOT NULL,
@@ -1128,7 +1136,13 @@ CREATE TABLE "device-management".devices (
  expected_since timestamp with time zone,
  disabled_at timestamp with time zone,
  gateway_id bigint,
- expected_provisioning_profile_id bigint
+ expected_provisioning_profile_id bigint,
+ installed_lat numeric(10,8),
+ installed_lon numeric(11,8),
+ installed_elev numeric(12,4),
+ installed_accuracy numeric(12,4),
+ installed_source text,
+ installed_updated_at timestamp with time zone
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,
