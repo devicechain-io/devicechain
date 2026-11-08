@@ -48,6 +48,8 @@ var (
 	DeviceCommandsWriter     messaging.MessageWriter
 	CommandDeliveryProcessor *processor.CommandDeliveryProcessor
 	DeadLetterWriteback      *processor.DeadLetterWriteback
+	// CampaignScheduler plans and fires campaigns. It runs in every replica; see its type.
+	CampaignScheduler *processor.CampaignScheduler
 
 	// RosterConsumer keeps the record of disabled devices current from device-management's
 	// device-roster facts, so commands queued for a disabled device are held, not sent.
@@ -374,6 +376,14 @@ func wireDeviceManagementGates() {
 	Api.DeviceAnchors = verify.NewDeviceAnchorLookup(client, url)
 	Api.BatchValidator = verify.NewBatchValidator(client, url)
 	Api.GroupTargetResolver = verify.NewGroupResolver(client, url)
+	// Solar campaign triggers read each device's installed position from the same owner, on a
+	// client of their own: location:installed:read is newer than the authorities above, and a
+	// user-management replica of the previous release refuses to mint a token naming it. Sharing
+	// the client would turn that refusal, during a rolling upgrade, into failed command
+	// validation; on its own client it fails only solar planning, which says so and retries.
+	siteClient := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
+		[]string{string(auth.DeviceRead), string(auth.LocationInstalledRead)})
+	Api.SiteResolver = verify.NewSiteResolver(siteClient, url)
 	// The maintenance-window gate shares the validator's coordinates and its fate: with no
 	// device-management endpoint there is nobody to ask, and the branch above has already
 	// returned and said so.
@@ -530,7 +540,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// collaborator). Group targeting is the exception and fails closed: a group that
 			// cannot be resolved must not silently become an empty fleet write.
 			wireDeviceManagementGates()
-			return nil
+			// The campaign scheduler needs only the Api, so it is built here rather than in
+			// the NATS callback: it reaches the database and device-management, never the broker.
+			CampaignScheduler = processor.NewCampaignScheduler(Microservice, Api, core.NewNoOpLifecycleCallbacks())
+			return CampaignScheduler.Initialize(ctx)
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
@@ -575,11 +588,21 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	return RosterConsumer.Start(ctx)
+	if err := RosterConsumer.Start(ctx); err != nil {
+		return err
+	}
+	// Last: a pass creates batches, which hand commands to the processor started above.
+	return CampaignScheduler.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// The scheduler first: it creates commands for the processor stopped below.
+	if CampaignScheduler != nil {
+		if err := CampaignScheduler.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	// The roster consumer first: it can resume a device, which dispatches through the
 	// processor stopped below.
 	if RosterConsumer != nil {
@@ -615,6 +638,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if CampaignScheduler != nil {
+		if err := CampaignScheduler.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if RosterConsumer != nil {
 		if err := RosterConsumer.Terminate(ctx); err != nil {
 			return err

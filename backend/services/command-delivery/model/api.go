@@ -209,6 +209,10 @@ type Api struct {
 	// Nil makes a group target FAIL rather than resolve to nothing: an empty batch would
 	// report success for a fleet write that reached nobody.
 	GroupTargetResolver GroupTargetResolver
+	// SiteResolver, when set, reads devices' installed locations for solar campaign
+	// triggers. Nil makes a campaign with a solar trigger fail to plan, loudly: guessing a
+	// location would dim lights at an invented dusk.
+	SiteResolver SiteResolver
 	// HeldCeilingResolver, when set, supplies the per-tenant held-command ceiling.
 	// Nil (the wiring not yet configured, or a unit test) falls back to
 	// DefaultHeldCommandCeiling below — never to "unbounded".

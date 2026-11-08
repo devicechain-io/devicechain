@@ -306,3 +306,12 @@ func resolveLocal(zone *time.Location, year int, month time.Month, day, hour, mi
 		return matches[1]
 	}
 }
+
+// ResolveLocal turns a wall-clock time in zone into an instant under this package's
+// daylight-saving rules: a time in a spring-forward gap resolves to the instant the clock
+// jumps, and a time that occurs twice resolves to its first occurrence. It is exported so
+// every schedule in the platform (the dispatch window gate, the campaign scheduler) agrees
+// on the two ambiguous days a year instead of each re-deciding them.
+func ResolveLocal(zone *time.Location, year int, month time.Month, day, hour, minute int) time.Time {
+	return resolveLocal(zone, year, month, day, hour, minute)
+}

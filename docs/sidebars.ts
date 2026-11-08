@@ -202,6 +202,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'guides/sending-commands',
             'guides/commanding-a-fleet',
+            'guides/scheduling-a-fleet',
             'guides/maintenance-windows',
             'guides/signing-updates',
             'guides/building-an-updatable-device',

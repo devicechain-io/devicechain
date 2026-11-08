@@ -44,5 +44,6 @@ var (
 		NewCommandScopeAnchorsSchema(),
 		NewDeviceTimeIndexSchema(),
 		NewCommandDeliveryEvidenceSchema(),
+		NewCampaignsSchema(),
 	}
 )
