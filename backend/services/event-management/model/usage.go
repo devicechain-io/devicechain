@@ -255,14 +255,44 @@ func (a *Api) PruneUsageWorkingTables(ctx context.Context, cutoff time.Time) err
 }
 
 // tenantUsageRow is the scan target of a usage read.
+//
+// It is also the live shape of tenant_usage_daily, and with the two types below it names this
+// area's usage tables as TENANT-SCOPED to the data-access guards (backend/tools/rdbguard), which
+// derive that set from model types carrying a tenant field. The migration does not read them: it
+// declares its own DDL.
 type tenantUsageRow struct {
-	Day            time.Time
+	TenantId       string    `gorm:"primaryKey;size:128"`
+	Day            time.Time `gorm:"primaryKey;type:date"`
 	EventsIngested int64
 	DevicesActive  int
 	DevicesPeak    int
 	DeviceHours    int64
 	RolledUpAt     time.Time
 }
+
+// TableName names the table tenantUsageRow is the shape of.
+func (tenantUsageRow) TableName() string { return "tenant_usage_daily" }
+
+// tenantUsageHourRow is the live shape of tenant_usage_hourly.
+type tenantUsageHourRow struct {
+	TenantId string    `gorm:"primaryKey;size:128"`
+	Hour     time.Time `gorm:"primaryKey"`
+	Events   int64
+	Devices  int
+}
+
+// TableName names the table tenantUsageHourRow is the shape of.
+func (tenantUsageHourRow) TableName() string { return "tenant_usage_hourly" }
+
+// tenantUsageDeviceRow is the live shape of tenant_usage_devices.
+type tenantUsageDeviceRow struct {
+	TenantId    string    `gorm:"primaryKey;size:128"`
+	Day         time.Time `gorm:"primaryKey;type:date"`
+	DeviceToken string    `gorm:"primaryKey;size:128"`
+}
+
+// TableName names the table tenantUsageDeviceRow is the shape of.
+func (tenantUsageDeviceRow) TableName() string { return "tenant_usage_devices" }
 
 // TenantUsage returns one tenant's usage for each UTC day from..to inclusive, oldest first, with a
 // zero-valued entry for every day that has no record.

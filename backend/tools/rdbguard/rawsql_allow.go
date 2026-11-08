@@ -86,6 +86,20 @@ var rawSQLAllowList = []siteEntry{
 			"No count can mix two tenants; the two-tenant integration test (usage_integration_test.go) reuses " +
 			"one device token across tenants to prove it",
 	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "Api.PruneUsageWorkingTables", Count: 2,
+		Why: "deletes the usage rollup's WORKING rows (tenant_usage_hourly, tenant_usage_devices) of every " +
+			"tenant for days older than a cutoff, on purpose and under a system context: retention by time, " +
+			"not a read or write of any one tenant's data. The predicate is the hour/day alone and is bound; " +
+			"the per-tenant record (tenant_usage_daily) is never touched",
+	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "Api.TenantUsage", Count: 1,
+		Why: "the instance admin plane's read of ONE tenant's usage record, under a system context (the " +
+			"/admin/graphql caller is an identity, not a tenant member, so there is no tenant in context for " +
+			"the callback to inject). The tenant is bound explicitly as WHERE tenant_id = ?, the function " +
+			"refuses an empty tenant, and the statement reads no other table",
+	},
 
 	// --- tenant-write ---
 	{
