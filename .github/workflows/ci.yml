@@ -2774,8 +2774,9 @@ jobs:
       # Provider plugins come from GitHub release assets via the registry redirect, which
       # has had outages (504). Cache the plugin directory (keyed on every .tf, since the
       # provider pins live there and no lock files are committed) and retry each init.
-      - name: Cache OpenTofu providers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore OpenTofu providers
+        id: tofu-plugins
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/tofu-plugins
           key: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/**/*.tf') }}
@@ -2926,6 +2927,16 @@ jobs:
       - name: broker version skew
         run: hack/check-broker-version-skew.sh
         working-directory: .
+
+      # Saved even when a later init failed: each provider is installed into the cache
+      # atomically, so what is there is whole, and keeping it lets the re-run skip the
+      # providers that did download instead of hitting the outage for all of them again.
+      - name: Save OpenTofu providers
+        if: always() && steps.tofu-plugins.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tofu-plugins
+          key: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/**/*.tf') }}
 
   # ---------------------------------------------------------------------------
   # Image smoke build: ko builds each service image locally (no push). This
