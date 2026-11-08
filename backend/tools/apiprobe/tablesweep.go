@@ -334,6 +334,21 @@ var tableSweepExemptions = map[string]string{
 	// an exemption on either would be reported STALE. A run with no provider named leaves
 	// them UNCOVERED, which is the intended signal: a drill that can no longer create a
 	// connection has stopped covering them.
+
+	// ---- campaign execution state -------------------------------------------
+	//
+	// The seeded campaign is created SWITCHED OFF (entities.go, "campaign"), because an
+	// enabled one fires commands at the seeded group's devices and a drill row must be inert.
+	// The stored definition is what an upgrade must keep, and it is read back through
+	// campaign; these two tables are the execution it would have produced.
+	"command-delivery.campaign_cycles": "one row per planned firing of a campaign, written only by the " +
+		"scheduler's planCampaign -> materializeCycle, which skips a campaign that is not enabled. The drill's " +
+		"campaign is created switched off so that it never commands a device, so it has no cycle to plan; " +
+		"the campaign definition itself is seeded and read back. The purge coverage gate proves the table's " +
+		"tenant column.",
+	"command-delivery.campaign_elements": "one row per device per step of a planned cycle, written " +
+		"alongside the cycle by materializeCycle. Empty for the same reason as campaign_cycles: the seeded " +
+		"campaign is switched off, so no cycle exists to expand into elements.",
 }
 
 func runTableSweep(ctx context.Context, argv []string) error {

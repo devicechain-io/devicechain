@@ -278,7 +278,7 @@ func (r *SchemaResolver) CampaignElements(ctx context.Context, args struct {
 	}
 	var after uint
 	if args.AfterId != nil && *args.AfterId != "" {
-		n, err := strconv.ParseUint(string(*args.AfterId), 10, 64)
+		n, err := strconv.ParseUint(string(*args.AfterId), 10, strconv.IntSize)
 		if err != nil {
 			return nil, fmt.Errorf("afterId %q is not a numeric id", string(*args.AfterId))
 		}
