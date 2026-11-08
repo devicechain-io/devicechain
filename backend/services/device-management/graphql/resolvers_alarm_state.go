@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -38,6 +39,12 @@ type AlarmResolver struct {
 	M model.Alarm
 	S *SchemaResolver
 	C context.Context
+
+	// disposition is the current cycle's label when the resolver was built by a write that has
+	// it in hand (setAlarmDisposition), so the field is answered without a read. dispositionKnown
+	// says the value is authoritative; otherwise Disposition reads it.
+	disposition      *model.AlarmDisposition
+	dispositionKnown bool
 }
 
 func (r *AlarmResolver) Id() gql.ID {
@@ -99,6 +106,80 @@ func (r *AlarmResolver) AcknowledgedTime() *string { return nullTimeStr(r.M.Ackn
 func (r *AlarmResolver) AcknowledgedBy() *string { return util.NullStr(r.M.AcknowledgedBy) }
 
 func (r *AlarmResolver) LastValue() *float64 { return nullFloat(r.M.LastValue) }
+
+// Disposition resolves the label of the alarm's current cycle, lazily: the read runs only when a
+// client selects the field. A lookup failure is a field error, never a null that would read as
+// "unlabelled".
+func (r *AlarmResolver) Disposition(ctx context.Context) (*AlarmDispositionResolver, error) {
+	label := r.disposition
+	if !r.dispositionKnown {
+		found, err := r.S.GetApi(ctx).AlarmDispositionOf(ctx, &r.M)
+		if err != nil {
+			return nil, err
+		}
+		label = found
+	}
+	if label == nil {
+		return nil, nil
+	}
+	return &AlarmDispositionResolver{M: *label, S: r.S}, nil
+}
+
+// -------------------------
+// Alarm disposition resolver
+// -------------------------
+
+type AlarmDispositionResolver struct {
+	M model.AlarmDisposition
+	S *SchemaResolver
+}
+
+func (r *AlarmDispositionResolver) AlarmId() gql.ID { return gql.ID(fmt.Sprint(r.M.AlarmId)) }
+
+// Alarm resolves the labelled alarm by id, under the caller's own read: null when the caller
+// cannot see it.
+func (r *AlarmDispositionResolver) Alarm(ctx context.Context) (*AlarmResolver, error) {
+	found, err := r.S.GetApi(ctx).AlarmsById(ctx, []uint{r.M.AlarmId})
+	if err != nil {
+		return nil, err
+	}
+	if len(found) == 0 {
+		return nil, nil
+	}
+	return &AlarmResolver{M: *found[0], S: r.S, C: ctx}, nil
+}
+
+func (r *AlarmDispositionResolver) RaisedTime() string {
+	return r.M.RaisedTime.Format(time.RFC3339Nano)
+}
+
+func (r *AlarmDispositionResolver) Disposition() string { return r.M.Disposition }
+
+func (r *AlarmDispositionResolver) Note() *string { return util.NullStr(r.M.Note) }
+
+func (r *AlarmDispositionResolver) RecordedBy() *string { return util.NullStr(r.M.RecordedBy) }
+
+func (r *AlarmDispositionResolver) RecordedTime() string {
+	return r.M.RecordedTime.Format(time.RFC3339Nano)
+}
+
+type AlarmDispositionSearchResultsResolver struct {
+	M model.AlarmDispositionSearchResults
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *AlarmDispositionSearchResultsResolver) Results() []*AlarmDispositionResolver {
+	resolvers := make([]*AlarmDispositionResolver, 0, len(r.M.Results))
+	for _, current := range r.M.Results {
+		resolvers = append(resolvers, &AlarmDispositionResolver{M: current, S: r.S})
+	}
+	return resolvers
+}
+
+func (r *AlarmDispositionSearchResultsResolver) Pagination() *SearchResultsPaginationResolver {
+	return &SearchResultsPaginationResolver{M: r.M.Pagination, S: r.S, C: r.C}
+}
 
 // ---------------------------
 // Alarm search results resolver

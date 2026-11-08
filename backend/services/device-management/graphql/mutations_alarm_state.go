@@ -112,3 +112,31 @@ func (r *SchemaResolver) ClearAlarm(ctx context.Context, args struct {
 	}
 	return &AlarmResolver{M: *updated, S: r, C: ctx}, nil
 }
+
+// Label one cycle of an alarm with an operator's verdict. Same authority as acknowledge, and the
+// same accountability rule: the labelling identity is the authenticated subject, never a value
+// the caller supplies. A scoped caller passes the authority check and is refused at the store
+// (the label's upsert is never open to one), which answers FORBIDDEN.
+func (r *SchemaResolver) SetAlarmDisposition(ctx context.Context, args struct {
+	Token       string
+	Disposition string
+	Note        *string
+	RaisedTime  *string
+}) (*AlarmResolver, error) {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite); err != nil {
+		return nil, err
+	}
+
+	var by *string
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.Username != "" {
+		by = &claims.Username
+	}
+
+	alarm, label, err := r.GetApi(ctx).SetAlarmDisposition(ctx, model.AlarmDispositionRequest{
+		Token: args.Token, Disposition: args.Disposition, Note: args.Note, RaisedTime: args.RaisedTime,
+	}, by)
+	if err != nil {
+		return nil, err
+	}
+	return &AlarmResolver{M: *alarm, S: r, C: ctx, disposition: label, dispositionKnown: true}, nil
+}
