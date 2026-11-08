@@ -113,10 +113,33 @@ func run() int {
 		"write the run's expected per-device aggregates (count and hash sum) to this path, for the aggregate identity oracle (dc-loadtest-aggoracle) to check against the event store")
 	startAtFlag := flag.String("start-at", envOr("DC_LOADTEST_START_AT", ""),
 		"hold the drive until this RFC3339 instant, after provisioning, so N harnesses on N pods start their steady windows together (dc-loadtest-multi merge checks the alignment)")
+	target := flag.String("target", envOr("DC_LOADTEST_TARGET", ""),
+		"rehearse ANY MQTT broker instead of a DeviceChain gateway: mqtt://host:1883 or mqtts://host:8883. Needs --credentials; no handshake. The verdict reads delivery back through a subscriber tap on the target (PUBACKed vs delivered) and says so")
+	credentials := flag.String("credentials", envOr("DC_LOADTEST_CREDENTIALS", ""),
+		"with --target: the bring-your-own credential CSV, one row per device (columns: device, client_id, token, username, password, cert_file, key_file, topic)")
+	topicTemplate := flag.String("topic-template", envOr("DC_LOADTEST_TOPIC_TEMPLATE", mqttload.DefaultTopicTemplate),
+		"with --target: each device's publish topic, {device} replaced by its name (a credential row's own topic wins)")
+	tapTarget := flag.String("tap-target", envOr("DC_LOADTEST_TAP_TARGET", ""),
+		"with --target: where the tap subscribes, when that is not the --target address (the drop-proxy negative control publishes through the proxy and taps the real broker)")
+	tapTopic := flag.String("tap-topic", envOr("DC_LOADTEST_TAP_TOPIC", ""),
+		"with --target: the tap's subscription filter (default: the topic template with {device} as a single-level wildcard)")
+	tapClientID := flag.String("tap-client-id", envOr("DC_LOADTEST_TAP_CLIENT_ID", ""), "with --target: the tap's client id (default: unique per run)")
+	tapUsername := flag.String("tap-username", envOr("DC_LOADTEST_TAP_USERNAME", ""), "with --target: the tap's username")
+	tapPasswordFile := flag.String("tap-password-file", envOr("DC_LOADTEST_TAP_PASSWORD_FILE", ""),
+		"with --target: file holding the tap's password (a password is never taken from the command line); DC_LOADTEST_TAP_PASSWORD also works")
+	baselinePath := flag.String("baseline", envOr("DC_LOADTEST_BASELINE", ""),
+		"with --target: an earlier PASSing JSON report to compare the PUBACK p99 with (see --max-p99-regression)")
+	maxRegression := flag.Float64("max-p99-regression", envFloatOr("DC_LOADTEST_MAX_P99_REGRESSION", 0),
+		"with --target and --baseline: fail the run when the PUBACK p99 grows by more than this share of the baseline's (0.25 = 25%; 0 = report only)")
 	flag.Parse()
 
-	if *handshakePath == "" {
-		log.Error().Msg("--handshake (or DC_SIM_HANDSHAKE) is required")
+	if *target != "" {
+		if *handshakePath != "" {
+			log.Error().Msg("--target and --handshake contradict each other: a target is not a DeviceChain platform")
+			return loadtest.ExitError
+		}
+	} else if *handshakePath == "" {
+		log.Error().Msg("--handshake (or DC_SIM_HANDSHAKE) is required, or --target for a broker that is not DeviceChain")
 		return loadtest.ExitError
 	}
 	if *noTLS && flagSet("tls") && *useTLS {
@@ -125,17 +148,21 @@ func run() int {
 	}
 	tlsOn := *useTLS && !*noTLS
 
-	hs, err := sim.LoadHandshake(*handshakePath)
-	if err != nil {
-		log.Error().Err(err).Msg("load handshake")
-		return loadtest.ExitError
-	}
+	var hs *sim.Handshake
 	manifestId := *manifest
-	if manifestId == "" {
-		manifestId = hs.ManifestId
-	}
-	if manifestId == "" {
-		manifestId = "devicepulse"
+	if *target == "" {
+		var err error
+		hs, err = sim.LoadHandshake(*handshakePath)
+		if err != nil {
+			log.Error().Err(err).Msg("load handshake")
+			return loadtest.ExitError
+		}
+		if manifestId == "" {
+			manifestId = hs.ManifestId
+		}
+		if manifestId == "" {
+			manifestId = "devicepulse"
+		}
 	}
 
 	var steady *loadtest.SteadyMarker
@@ -150,7 +177,7 @@ func run() int {
 	profile := loadtest.MQTTProfile{
 		AggregateLedger: *aggregateLedger, StartAt: startAt,
 		Steady:   steady,
-		Manifest: manifestId, Seed: hs.Seed, Devices: *devices,
+		Manifest: manifestId, Seed: seedOf(hs), Devices: *devices,
 		Rate: *rate, Duration: *duration, MetricKey: *metric, PadBytes: *padBytes,
 		MQTT: mqttload.Config{
 			Broker: *broker, TLS: tlsOn, TLSInsecure: *tlsInsecure,
@@ -170,11 +197,28 @@ func run() int {
 	ctx, cancel, stop := stopsig.Notify(context.Background())
 	defer cancel()
 
-	log.Info().Str("tenant", hs.Tenant).Str("manifest", manifestId).Int("devices", *devices).
-		Float64("rate", *rate).Dur("duration", *duration).Int("qos", *qos).Bool("tls", tlsOn).
-		Msg("mqtt load-test starting")
-
-	report, err := loadtest.RunMQTT(ctx, hs, profile)
+	var report *loadtest.MQTTReport
+	if *target != "" {
+		tp, terr := targetProfile(profile, targetFlags{
+			target: *target, credentials: *credentials, topicTemplate: *topicTemplate, tapTarget: *tapTarget,
+			tapTopic: *tapTopic, tapClientID: *tapClientID, tapUsername: *tapUsername, tapPasswordFile: *tapPasswordFile,
+			baseline: *baselinePath, maxRegression: *maxRegression,
+			tlsFlagSet: flagSet("tls") || flagSet("no-tls"), tlsOn: tlsOn,
+			tlsInsecureSet: flagSet("tls-insecure"), tlsInsecure: *tlsInsecure, mqttBrokerSet: *broker != "",
+		})
+		if terr != nil {
+			log.Error().Err(terr).Msg("--target")
+			return loadtest.ExitError
+		}
+		log.Info().Str("target", *target).Int("devices", len(tp.Credentials)).Float64("rate", *rate).Dur("duration", *duration).
+			Int("qos", *qos).Msg("mqtt rehearsal starting")
+		report, err = loadtest.RunTarget(ctx, tp)
+	} else {
+		log.Info().Str("tenant", hs.Tenant).Str("manifest", manifestId).Int("devices", *devices).
+			Float64("rate", *rate).Dur("duration", *duration).Int("qos", *qos).Bool("tls", tlsOn).
+			Msg("mqtt load-test starting")
+		report, err = loadtest.RunMQTT(ctx, hs, profile)
+	}
 	if err != nil {
 		if code, ok := stop.ExitCode(); ok {
 			log.Warn().Err(err).Int("exit", code).Msg("mqtt load-test stopped by a signal: no verdict")
