@@ -1930,3 +1930,9 @@ reinician los pods de ese servicio.
   despliega la pila de monitoreo, y sus indicadores (flags).
 - **[Despliegue y operador](./kubernetes-operator.md)** — cómo el chart genera
   las cargas de trabajo por servicio con sus sondas de salud.
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::

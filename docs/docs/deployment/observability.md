@@ -1839,3 +1839,9 @@ Only that service's pods restart.
   that deploys the monitoring stack, and its flags.
 - **[Deployment & Operator](./kubernetes-operator.md)** — how the chart renders
   per-service workloads with their health probes.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

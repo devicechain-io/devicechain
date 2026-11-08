@@ -68,3 +68,9 @@ DeviceChain 正在积极开发中。这些文档页面会标明各项能力是**
 ## 许可证 {#license}
 
 Apache License 2.0。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](./quickstart/first-device.md)
+
+:::
