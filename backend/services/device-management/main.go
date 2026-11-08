@@ -438,7 +438,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 		// A certificate revocation sweeps a device's sessions twice; the second must outlast an
 		// admission that was in flight at the first (the callout lookup timeout plus the broker's
 		// own authorization timeout). Refused at startup rather than run with no real re-sweep.
-		api.RevocationResweepAfter = model.DefaultRevocationResweepAfter
+		api.RevocationResweepAfter = cfg.Callout.Revocation.ResweepAfterDuration()
 		if err := model.ValidateRevocationResweepAfter(api.RevocationResweepAfter, processor.DefaultCalloutLookupTimeout); err != nil {
 			return nil, nil, err
 		}

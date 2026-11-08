@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math/big"
 	"slices"
@@ -70,6 +71,20 @@ func (f *revKickFixture) revokeFp(anchor string, fp string) (*DeviceRevokedCerti
 	return f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: anchor, FingerprintSha256: &fp})
 }
 
+// queueDelta queues the kicks of a delta the way a writer of its kind does: a manual entry writes the
+// marker, and a serial delta (a CRL's, which production stashes and joins in SQL) is targeted here and
+// its per-device rows written directly, so the targeting stays covered whatever the delta carries.
+func (f *revKickFixture) queueDelta(tx *gorm.DB, anchorId uint, d RevocationDelta, whole bool) error {
+	if len(d.Serials) == 0 {
+		return f.api.queueRevocationKicksOnTx(tx, "acme", anchorId, d, whole)
+	}
+	tokens, _, err := revocationKickTargets(tx, "acme", anchorId, d, whole)
+	if err != nil {
+		return err
+	}
+	return f.api.queueRevocationKickRowsOnTx(tx, "acme", anchorId, tokens)
+}
+
 // seam runs a revocation writer's three calls with a delta of its own: what a CRL upload does.
 func (f *revKickFixture) seam(anchor string, d RevocationDelta) error {
 	f.t.Helper()
@@ -77,7 +92,7 @@ func (f *revKickFixture) seam(anchor string, d RevocationDelta) error {
 	require.NoError(f.t, err)
 	whole := f.api.prepareRevocationKicks(f.ctx, "acme", anchor)
 	require.NoError(f.t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := f.api.queueRevocationKicksOnTx(tx, "acme", a.ID, d, whole)
+		err := f.queueDelta(tx, a.ID, d, whole)
 		return err
 	}))
 	return f.api.endRevokedSessions(f.ctx, "acme", a.ID)
@@ -367,7 +382,7 @@ func TestTheLegacyReconcilerIsBoundedAndAnIncompleteOneWidensTheKick(t *testing.
 	serial, _ := x509trust.SerialHex(ca.leaf(t, "nobody").cert.SerialNumber)
 	nobody := RevocationDelta{Serials: []x509trust.IssuerSerial{{Issuer: x509trust.IssuerID{Key: "k", Name: "n"}, Serial: serial}}}
 	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := f.api.queueRevocationKicksOnTx(tx, "acme", a.ID, nobody, whole)
+		err := f.queueDelta(tx, a.ID, nobody, whole)
 		return err
 	}))
 	require.NoError(t, f.api.endRevokedSessions(f.ctx, "acme", a.ID))
@@ -613,8 +628,8 @@ func TestARequeueDuringTheFirstSweepIsNotSettledByIt(t *testing.T) {
 	requeue.hook = func() {
 		// While the broker is being asked: another revocation of the same anchor queues the device.
 		require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-			_, err := f.api.queueRevocationKicksOnTx(tx, "acme", a.ID, RevocationDelta{Fingerprints: []string{fp}}, true)
-			return err
+			// The expansion of that revocation's marker writes exactly this row.
+			return f.api.queueRevocationKickRowsOnTx(tx, "acme", a.ID, []string{"dev-1"})
 		}))
 	}
 	var once atomic.Bool
@@ -700,10 +715,14 @@ func TestRevokingACaByPemIsAnchorWideEvenWhenNoLinkNamesIt(t *testing.T) {
 	f.resetCalls()
 
 	// The control, on a CA of the same kind: by fingerprint alone nothing says it is a CA and no
-	// link names it, so nobody is asked.
+	// link names it, so nobody is asked, and the call does NOT claim the sessions ended: the
+	// credentials of an upgraded instance carry legacy links (no issuer key), so which sessions the
+	// fingerprint affects cannot be told.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredentialChainLink{}).Where("trust_anchor_id = ?", a.ID).
+		Update("issuer_key", nil).Error)
 	other := newPki(t, ca, pkiOpts{cn: "Line 2", ca: true})
 	_, err := f.revokeFp("maker", x509trust.Fingerprint(other.cert))
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
 	assert.Empty(t, f.kicked())
 
 	pemText := inter.pem()
@@ -828,4 +847,81 @@ func TestRepeatingARevocationThatPredatesItsKickDebtQueuesItOnce(t *testing.T) {
 	_, err = f.revokeFp("maker", fp)
 	require.NoError(t, err)
 	assert.Empty(t, f.kicked(), "a further repeat does not queue it again")
+}
+
+// 🔴 A FINGERPRINT-ONLY REVOKE THAT CANNOT IDENTIFY SESSIONS IS NOT "ENDED", AND A PEM REPEAT WIDENS.
+// The state an upgrade leaves (depth-0 legacy links, no issuer key): the intermediate's fingerprint
+// names no link, so nobody is asked. The call says ErrSessionsNotEnded (sessionsEnded: false), and
+// repeating it with the intermediate's PEM, though the entry's debt is already queued, kicks the anchor.
+func TestFingerprintRevokeOfIntermediateIsNotReportedEndedAndPemRepeatWidens(t *testing.T) {
+	f := newRevKickFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	a := f.anchor("maker", ca)
+	inter := newPki(t, ca, pkiOpts{cn: "Line", ca: true})
+	f.pin("maker", "dev-1", inter.leaf(t, "SN-1"), inter)
+	f.pin("maker", "dev-2", ca.leaf(t, "SN-2"))
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("trust_anchor_id = ? AND depth >= 1", a.ID).Delete(&DeviceCredentialChainLink{}).Error)
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredentialChainLink{}).Where("trust_anchor_id = ?", a.ID).
+		Update("issuer_key", nil).Error)
+	f.resetCalls()
+
+	_, err := f.revokeFp("maker", x509trust.Fingerprint(inter.cert))
+	require.ErrorIs(t, err, ErrSessionsNotEnded, "no session could be identified: the answer is not 'ended'")
+	ended, other := SessionsEndedOf(err)
+	require.NoError(t, other)
+	assert.False(t, ended)
+	assert.Empty(t, f.kicked())
+
+	pemText := inter.pem()
+	entry, err := f.api.RevokeDeviceCertificate(f.ctx, &DeviceCertificateRevokeRequest{AnchorToken: "maker", CertificatePem: &pemText})
+	require.NoError(t, err, "the PEM names a CA: anchor-wide, and confirmed")
+	require.NotNil(t, entry.KickQueuedAt, "the first call had already queued the entry's debt")
+	assert.Equal(t, []string{"dev-1", "dev-2"}, f.kicked(), "the repeat widened to the whole anchor")
+}
+
+// A fingerprint that a link names is identified: the control that the honest answer is not simply
+// always 'not ended' on an upgraded instance.
+func TestFingerprintRevokeOfALinkedLeafIsStillReportedEnded(t *testing.T) {
+	f := newRevKickFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	a := f.anchor("maker", ca)
+	leaf := ca.leaf(t, "SN-1")
+	f.pin("maker", "dev-1", leaf)
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredentialChainLink{}).Where("trust_anchor_id = ?", a.ID).
+		Update("issuer_key", nil).Error)
+	f.resetCalls()
+	_, err := f.revokeFp("maker", x509trust.Fingerprint(leaf.cert))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"dev-1"}, f.kicked())
+}
+
+// 🔴 A MARKER LISTING THAT FAILS IS NOT "NOTHING OWED".
+func TestFailedMarkerListingIsNotReportedEnded(t *testing.T) {
+	f := newRevKickFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	f.anchor("maker", ca)
+	leaf := ca.leaf(t, "SN-1")
+	f.pin("maker", "dev-1", leaf)
+	db := f.api.RDB.DB(f.ctx)
+	name := "test:fail-marker-listing"
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register(name, func(d *gorm.DB) {
+		if d.Statement.Table == "pending_revocation_expansions" {
+			_ = d.AddError(errors.New("listing unavailable"))
+		}
+	}))
+	defer func() { require.NoError(t, db.Callback().Query().Remove(name)) }()
+	_, err := f.revokeFp("maker", x509trust.Fingerprint(leaf.cert))
+	require.ErrorIs(t, err, ErrSessionsNotEnded)
+}
+
+// With no legacy credential (every path was recorded in full), a fingerprint that names nothing
+// affects no session, and saying so is honest: the call reports ended.
+func TestFingerprintRevokeOfAnUnknownCertWithFullLinksIsReportedEnded(t *testing.T) {
+	f := newRevKickFixture(t)
+	ca := newRootCA(t, "Maker Root")
+	f.anchor("maker", ca)
+	f.pin("maker", "dev-1", ca.leaf(t, "SN-1"))
+	other := newPki(t, ca, pkiOpts{cn: "Line 2", ca: true})
+	_, err := f.revokeFp("maker", x509trust.Fingerprint(other.cert))
+	require.NoError(t, err)
 }

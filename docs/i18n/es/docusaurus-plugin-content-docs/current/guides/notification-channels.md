@@ -5,7 +5,7 @@ title: Configuración de Canales de Notificación
 
 # Configuración de Canales de Notificación
 
-Las notificaciones llevan una **alarma** levantada la última milla, hasta una persona. Cuando las acciones de una regla de detección levantan una alarma, una **política** por inquilino la enruta por severidad a los **canales** que configures: correo electrónico por SMTP, o un webhook. Las políticas añaden limitación de frecuencia (throttling) y **escalado** de las alarmas no reconocidas.
+Las notificaciones llevan una **alarma** levantada la última milla, hasta una persona. Cuando las acciones de una regla de detección levantan una alarma, una **política** por inquilino la enruta por severidad a los **canales** que configures: correo electrónico por SMTP, un webhook, o un canal nativo de Slack, Microsoft Teams o PagerDuty. Las políticas añaden limitación de frecuencia (throttling) y **escalado** de las alarmas no reconocidas.
 
 Esta ruta de máquina a humano está deliberadamente separada de los **[conectores de salida](../concepts/outbound-connectors.md)** de máquina a máquina. Los conectores llevan payloads a *sistemas*; las notificaciones llevan alertas a *personas*, con destinatarios y enrutamiento por severidad. Para saber cómo se levantan las alarmas en primer lugar, consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md).
 
@@ -17,7 +17,7 @@ Disponible. Gestionas los canales y las políticas a través de la API GraphQL d
 
 ## Canales
 
-Un **canal** es un endpoint de entrega que configura tu inquilino: una instancia de un **tipo** de canal, más su configuración de conexión. Consulta `notificationChannelTypes` para ver los tipos que define la plataforma. Hoy `smtp` y `webhook` se entregan con adaptadores funcionales; el indicador `available` de cada tipo dice si su adaptador ya está disponible.
+Un **canal** es un endpoint de entrega que configura tu inquilino: una instancia de un **tipo** de canal, más su configuración de conexión. Consulta `notificationChannelTypes` para ver los tipos que define la plataforma. Hoy `smtp`, `webhook`, `slack`, `teams` y `pagerduty` se entregan con adaptadores funcionales; el indicador `available` de cada tipo dice si su adaptador ya está disponible.
 
 Un canal divide su configuración en dos:
 
@@ -84,7 +84,81 @@ mutation {
 }
 ```
 
-Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`.
+Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [canal de Slack](#create-a-slack-channel) nativo de abajo da formato al mensaje por ti y es la mejor opción.
+
+### Canales nativos de Slack, Teams y PagerDuty {#native-channels}
+
+Los tres tipos nativos usan el formato propio de cada servicio en lugar de un cuerpo JSON genérico. Comparten tres reglas:
+
+- **La credencial es el `secret`.** En Slack y Teams es la URL del webhook (que ya es una credencial, así que se almacena cifrada y nunca se devuelve, y no va en `config`); en PagerDuty es la clave de enrutamiento de Events API v2. No hay ajuste `auth`. Un canal nativo sin secreto se rechaza al guardarlo, y una entrega a uno que no lo tiene se rechaza en el primer intento y no se reintenta; se cuenta con `reason="credential"`.
+- **`config` es opcional y estricto.** Una clave desconocida se rechaza al guardar el canal, de modo que un ajuste mal escrito no se ignora en silencio. `linkBaseUrl` es la dirección de tu consola; si se establece, el mensaje incluye un botón o enlace **Abrir alarmas** a `<linkBaseUrl>/alarms`.
+- **La entrega pasa por la misma protección de salida que un webhook.** Un destino en una dirección privada, de bucle local o de metadatos de nube se rechaza y no se reintenta (`reason="egress"`), y las excepciones de salida de la instancia se aplican igual que en un webhook. Los `recipients` de una regla se ignoran: el webhook o la clave de enrutamiento deciden adónde va el mensaje.
+
+Cada mensaje indica la alarma, su severidad, su estado, el dispositivo de origen, la métrica y el valor que la levantó, y cuándo se levantó. Mientras una alarma está abierta y sin reconocer, una indicación dice que hay que reconocerla en la consola para detener más notificaciones; una alarma cerrada o reconocida omite la indicación.
+
+### Crear un canal de Slack {#create-a-slack-channel}
+
+Un canal de Slack publica un mensaje Block Kit en la URL de un webhook entrante de Slack: un encabezado, una cuadrícula con los campos de la alarma, la indicación de reconocimiento y un botón opcional **Abrir alarmas**. La barra de color del mensaje sigue la severidad (rojo para `CRITICAL`, naranja para `MAJOR`, ámbar para `MINOR` y `WARNING`, gris para `INDETERMINATE`), y pasa a verde cuando la alarma se cierra y a azul cuando se reconoce. El texto de la alarma se escapa para que no pueda inyectar una mención o un enlace de Slack.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-slack",
+    name: "Slack de operaciones",
+    channelType: "slack",
+    config: "{\"linkBaseUrl\":\"https://console.example.com\"}",
+    secret: "https://hooks.slack.com/services/T000/B000/XXXXXXXX",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+El secreto debe ser una URL `https`.
+
+### Crear un canal de Microsoft Teams {#create-a-microsoft-teams-channel}
+
+Un canal de Teams publica una Adaptive Card en la URL del webhook de un flujo de **Workflows** (Power Automate) de Teams que usa el desencadenador *Cuando se recibe una solicitud de webhook de Teams* y publica la tarjeta en un chat o canal. Los webhooks de conector de Office 365, ya retirados, no son compatibles. La tarjeta lleva los mismos datos que el mensaje de Slack, con el título coloreado según la severidad, y una acción **Abrir alarmas** si se establece `linkBaseUrl`.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "ops-teams",
+    channelType: "teams",
+    secret: "https://prod-00.westus.logic.azure.com:443/workflows/...",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### Crear un canal de PagerDuty {#create-a-pagerduty-channel}
+
+Un canal de PagerDuty envía eventos de Events API v2 y asigna el ciclo de vida de la alarma al del incidente. Cada evento lleva `dedup_key` con el token de la alarma, de modo que toda la vida de una alarma es un solo incidente:
+
+| Evento de la alarma | Acción de PagerDuty |
+| --- | --- |
+| levantada, escalada, desescalada o renotificada por el escalado de una política | `trigger` (una repetición sobre un incidente abierto lo actualiza en lugar de abrir otro) |
+| reconocida | `acknowledge` |
+| cerrada | `resolve` |
+
+La severidad de la alarma se asigna a la de PagerDuty: `CRITICAL` a `critical`, `MAJOR` a `error`, `MINOR` y `WARNING` a `warning`, cualquier otra a `info`. Para que la política resuelva incidentes, enruta las transiciones de cierre y reconocimiento por el mismo canal que el levantamiento.
+
+`config` admite `region` (`us`, el valor por defecto, o `eu`, que selecciona `events.eu.pagerduty.com`), `source` (el origen del evento; `devicechain` por defecto) y `linkBaseUrl`.
+
+```graphql
+mutation {
+  createNotificationChannel(request: {
+    token: "oncall-pagerduty",
+    channelType: "pagerduty",
+    config: "{\"region\":\"eu\",\"source\":\"plant-3\"}",
+    secret: "<routing key>",
+    enabled: true
+  }) { token channelType hasSecret enabled }
+}
+```
+
+### En la consola {#channels-in-the-console}
+
+**Canales de notificación**, junto a **Políticas de notificación** en la barra lateral, lista, crea, edita y elimina canales de todos los tipos con un formulario para cada uno. El campo de credencial es de solo escritura: en un canal existente indica que hay una credencial almacenada, y dejarlo vacío la conserva.
 
 ## Políticas
 

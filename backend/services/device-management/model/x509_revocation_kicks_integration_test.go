@@ -92,10 +92,11 @@ func TestRevocationKickPostgres(t *testing.T) {
 
 	// Re-queued while waiting out the re-sweep: the first sweep is due again (not_before reset).
 	require.NoError(t, f.api.RDB.DB(f.ctx).Transaction(func(tx *gorm.DB) error {
-		_, qerr := f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
+		qerr := f.api.queueRevocationKicksOnTx(tx, f.tenant, f.anchor.ID,
 			RevocationDelta{Fingerprints: []string{x509trust.Fingerprint(inter.cert)}}, true)
 		return qerr
 	}))
+	require.NoError(t, f.expand(), "the marker is expanded outside the lock")
 	for _, r := range rows() {
 		assert.Nil(t, r.NotBefore, "a requeued debt's first sweep is due at once")
 	}

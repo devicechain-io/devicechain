@@ -34,6 +34,7 @@ import { parseDashboardDefinition, SyntheticDataSource } from '@devicechain/dash
 import i18n from 'i18next';
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { ToastProvider } from '@/components/ui/toast';
@@ -113,6 +114,13 @@ const ANSWERS: Record<string, unknown> = {
       ok: true, ignored: false, section: 'telemetry', readings: [{ key: 'temperature', value: '-18.5' }], skipped: [], error: null, cost: 21,
       vectors: [{ name: 'room sensor', ok: true, error: null, cost: 21 }], uplinks: 0,
     },
+  },
+  PayloadDecoderHealth: { payloadDecoderHealth: { decoded: 1284503, ignored: 1204, failed: 37, suppressed: 112 } },
+  PayloadDecoderSamples: {
+    payloadDecoderSamples: [
+      { id: '41', profileVersion: 3, createdAt: '2026-12-28T22:58:58Z', deviceToken: 'room-sensor-with-a-long-device-token-0042', reason: 'missing_input', error: 'decode_failed: missing_input: sections[0].outputs[1].expr: frame is 3 bytes, expression reads byte 4' },
+      { id: '40', profileVersion: 3, createdAt: '2026-12-28T22:50:01Z', deviceToken: 'room-sensor-7', reason: 'invalid_output', error: 'decode_failed: invalid_output: temperature' },
+    ],
   },
   Integrations: { integrations: { results: [{ token: 'ttn', name: 'The Things Network', type: 'TTS_V3' }], pagination: { totalRecords: 1 } } },
   DeviceTypes: {
@@ -233,7 +241,9 @@ async function main() {
   createRoot(document.getElementById('root')!).render(
     <ToastProvider>
       <ConfirmProvider>
-        <Ready>{page}</Ready>
+        <MemoryRouter>
+          <Ready>{page}</Ready>
+        </MemoryRouter>
       </ConfirmProvider>
     </ToastProvider>,
   );
