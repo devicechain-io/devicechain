@@ -499,3 +499,48 @@ func TestAPassStopsAtTheTenantBudgetAndTheNextCarriesOn(t *testing.T) {
 		t.Fatalf("%d commands after the next pass, want both campaigns'", n)
 	}
 }
+
+// Review round. A firing tokened before a switch-off is not released by switching the campaign
+// back on: the restart boundary holds for claims as for pending work.
+func TestReEnablingDoesNotReleaseATokenedClaimFromBefore(t *testing.T) {
+	api := newCampaignTestApi(t)
+	ctx := tenantCtx()
+	claimedAt := seedTokenedClaims(t, api, []string{"a"}, false)
+	setClock(api, claimedAt.Add(10*time.Second))
+	if _, err := api.SetCampaignEnabled(ctx, "nightly", false); err != nil {
+		t.Fatal(err)
+	}
+	setClock(api, claimedAt.Add(20*time.Second))
+	if _, err := api.SetCampaignEnabled(ctx, "nightly", true); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, api, claimedAt.Add(campaignClaimStale+time.Second), "recover") // inside the lateness bound
+	if n := commandsFor(t, api, "a"); n != 0 {
+		t.Fatalf("a firing claimed before the switch-off was sent after the switch-on (%d)", n)
+	}
+	if e := elementOf(t, api, "nightly", "a"); e.Status != string(ElementSkipped) || e.Reason.String != SkipWhileDisabled {
+		t.Fatalf("element = %s/%s, want SKIPPED/DISABLED", e.Status, e.Reason.String)
+	}
+}
+
+// Review round. A dead replica's stale claim of an earlier firing, beside the newest firing,
+// is superseded too: recovery must not turn an outage into a burst of two.
+func TestAStaleClaimOfAnOlderFiringIsSuperseded(t *testing.T) {
+	api := newCampaignTestApi(t)
+	ctx := tenantCtx()
+	api.GroupTargetResolver = &pagingResolver{members: []string{"a"}}
+	if _, err := api.CreateCampaign(ctx, hourlyRequest("hourly")); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, api, at("2026-06-21T21:59:00Z"), "plan")
+	c, _ := api.campaignByToken(ctx, "hourly")
+	dead := at("2026-06-21T22:00:10Z")
+	if err := api.RDB.DB(ctx).Model(&CampaignElement{}).Where("campaign_id = ? AND due_at <= ?", c.ID, dead).
+		Updates(map[string]any{"status": string(ElementClaimed), "claimed_by": "dead", "claimed_at": dead}).Error; err != nil {
+		t.Fatal(err)
+	}
+	tick(t, api, at("2026-06-22T02:00:30Z"), "back")
+	if n := commandsFor(t, api, "a"); n != 1 {
+		t.Fatalf("%d commands after recovering a stale claim beside the newest firing, want 1", n)
+	}
+}

@@ -47,10 +47,12 @@ CREATE INDEX "idx_command-delivery_commands_device_token" ON "command-delivery".
 CREATE INDEX "idx_command-delivery_commands_status" ON "command-delivery".commands USING btree (status);
 CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".commands USING btree (token);
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_campaign_cycles_created ON "command-delivery".campaign_cycles USING btree (tenant_id, created_at);
 CREATE INDEX idx_campaign_elements_batch ON "command-delivery".campaign_elements USING btree (tenant_id, batch_token) WHERE (batch_token IS NOT NULL);
 CREATE INDEX idx_campaign_elements_claimed ON "command-delivery".campaign_elements USING btree (tenant_id, claimed_at) WHERE ((status)::text = 'CLAIMED'::text);
 CREATE INDEX idx_campaign_elements_cycle ON "command-delivery".campaign_elements USING btree (tenant_id, cycle_id, id);
 CREATE INDEX idx_campaign_elements_due ON "command-delivery".campaign_elements USING btree (tenant_id, due_at) WHERE ((status)::text = 'PENDING'::text);
+CREATE INDEX idx_campaign_elements_due_campaign ON "command-delivery".campaign_elements USING btree (tenant_id, campaign_id, due_at) WHERE ((status)::text = 'PENDING'::text);
 CREATE INDEX idx_command_batches_retry_of ON "command-delivery".command_batches USING btree (tenant_id, retry_of) WHERE (retry_of IS NOT NULL);
 CREATE INDEX idx_commands_batch_token ON "command-delivery".commands USING btree (tenant_id, batch_token) WHERE ((batch_token IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_commands_device_time ON "command-delivery".commands USING btree (tenant_id, device_token, COALESCE(sent_time, queued_time)) WHERE (deleted_at IS NULL);
@@ -136,7 +138,8 @@ CREATE TABLE "command-delivery".campaign_cycles (
  day text,
  at timestamp with time zone,
  group_version integer,
- resolved bigint NOT NULL
+ resolved bigint NOT NULL,
+ membership_checked_at timestamp with time zone
 );
 CREATE TABLE "command-delivery".campaign_elements (
  id bigint NOT NULL,
@@ -170,7 +173,8 @@ CREATE TABLE "command-delivery".campaigns (
  max_lateness_seconds bigint NOT NULL,
  expires_in_seconds bigint NOT NULL,
  planned_through timestamp with time zone,
- last_error character varying(512)
+ last_error character varying(512),
+ enabled_at timestamp with time zone
 );
 CREATE TABLE "command-delivery".command_batches (
  id bigint NOT NULL,

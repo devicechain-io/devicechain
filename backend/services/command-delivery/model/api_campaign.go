@@ -366,7 +366,7 @@ func (api *Api) SetCampaignEnabled(ctx context.Context, token string, enabled bo
 		// Only an off-to-on change moves enabled_at: switching on a campaign that is already on
 		// must not skip what is due right now.
 		now := api.campaignClock()
-		res := db.Model(&Campaign{}).Where("id = ? AND enabled = ?", c.ID, false).
+		res := db.Model(c).Where("id = ? AND enabled = ?", c.ID, false).
 			Updates(map[string]any{"enabled": true, "enabled_at": now})
 		if res.Error != nil {
 			return nil, res.Error
@@ -374,7 +374,14 @@ func (api *Api) SetCampaignEnabled(ctx context.Context, token string, enabled bo
 		if res.RowsAffected > 0 {
 			c.EnabledAt = sql.NullTime{Time: now, Valid: true}
 		}
-	} else if err := db.Model(&Campaign{}).Where("id = ?", c.ID).Update("enabled", false).Error; err != nil {
+	} else if err := db.Transaction(func(tx *gorm.DB) error {
+		// Under the tenant batch lock, for the reason DeleteCampaign gives: once this returns, no
+		// batch of this campaign can still be created.
+		if err := lockTenantForBatch(ctx, tx); err != nil {
+			return err
+		}
+		return tx.Model(c).Where("id = ?", c.ID).Update("enabled", false).Error
+	}); err != nil {
 		return nil, err
 	}
 	c.Enabled = enabled
@@ -398,6 +405,12 @@ func (api *Api) DeleteCampaign(ctx context.Context, token string) error {
 	}
 	now := api.campaignClock()
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Under the tenant batch lock, so a batch being created for this campaign either
+		// committed before the delete (and its claims settle from it) or sees the campaign gone
+		// when it takes the lock: a command cannot be created after this call returns.
+		if err := lockTenantForBatch(ctx, tx); err != nil {
+			return err
+		}
 		if err := tx.Model(&CampaignElement{}).
 			Where("campaign_id = ? AND (status = ? OR (status = ? AND batch_token IS NULL))",
 				c.ID, string(ElementPending), string(ElementClaimed)).
@@ -406,7 +419,7 @@ func (api *Api) DeleteCampaign(ctx context.Context, token string) error {
 		}
 		// Stamped from the scheduler's clock, like every other campaign instant, because the
 		// pruner removes the row once deleted_at is past the retention.
-		return tx.Model(&Campaign{}).Where("id = ?", c.ID).Update("deleted_at", now).Error
+		return tx.Model(c).Where("id = ?", c.ID).Update("deleted_at", now).Error
 	})
 }
 
@@ -589,7 +602,7 @@ func (api *Api) planOrRecord(ctx context.Context, c *Campaign, now time.Time) er
 		return api.recordCampaignError(ctx, c, err)
 	}
 	if c.LastError.Valid {
-		return api.RDB.DB(ctx).Model(&Campaign{}).Where("id = ?", c.ID).
+		return api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).
 			Update("last_error", sql.NullString{}).Error
 	}
 	return nil
@@ -600,7 +613,7 @@ func (api *Api) recordCampaignError(ctx context.Context, c *Campaign, cause erro
 	if len(msg) > 500 {
 		msg = msg[:500]
 	}
-	_ = api.RDB.DB(ctx).Model(&Campaign{}).Where("id = ?", c.ID).
+	_ = api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).
 		Update("last_error", sql.NullString{String: msg, Valid: true}).Error
 	return cause
 }
@@ -639,7 +652,7 @@ func (api *Api) planCampaign(ctx context.Context, c *Campaign, trigger *schedule
 		}
 	}
 	// Forward only: a replica that planned the same window a moment later changes nothing.
-	return api.RDB.DB(ctx).Model(&Campaign{}).
+	return api.RDB.DB(ctx).Model(c).
 		Where("id = ? AND (planned_through IS NULL OR planned_through < ?)", c.ID, horizon).
 		Update("planned_through", horizon).Error
 }
@@ -775,8 +788,11 @@ func (api *Api) expireLateElements(ctx context.Context, campaigns []*Campaign, n
 		if !c.Enabled || !c.EnabledAt.Valid || c.EnabledAt.Time.Before(now.Add(-MaxCampaignLateness)) {
 			continue
 		}
+		// A tokenless claim left from before the switch-off counts too: it has no batch and can
+		// get none once it is not CLAIMED.
 		if err := db.Model(&CampaignElement{}).
-			Where("campaign_id = ? AND status = ? AND due_at < ?", c.ID, string(ElementPending), c.EnabledAt.Time).
+			Where("campaign_id = ? AND due_at < ? AND (status = ? OR (status = ? AND batch_token IS NULL AND claimed_at < ?))",
+				c.ID, c.EnabledAt.Time, string(ElementPending), string(ElementClaimed), stale).
 			Updates(map[string]any{"status": string(ElementSkipped), "reason": SkipWhileDisabled, "updated_at": now}).Error; err != nil {
 			return err
 		}
@@ -887,7 +903,7 @@ func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 		return errors.Join(append(errs, err)...)
 	}
 	for _, token := range sortedKeys(lateTokens) {
-		if err := api.settleTokenedClaims(ctx, c.ID, token, SkipMissed, &cutoff, now); err != nil {
+		if err := api.settleTokenedClaims(ctx, c.ID, token, SkipMissed, dueBefore(cutoff), now); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -903,6 +919,16 @@ func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 		return errors.Join(append(errs, err)...)
 	case !live.Enabled:
 		return errors.Join(errs...)
+	}
+
+	// The restart boundary and the burst rule hold for claims as for pending work: a claim
+	// left over from before the campaign was last switched on is DISABLED, and of several
+	// claims for one device and step only the newest is sent.
+	if err := api.settleClaimsBeforeEnable(ctx, &live, claimed, now); err != nil {
+		return errors.Join(append(errs, err)...)
+	}
+	if err := api.supersedeOlderClaims(ctx, c.ID, claimed, now); err != nil {
+		return errors.Join(append(errs, err)...)
 	}
 
 	claimedIDs := make([]uint, 0, len(claimed))
@@ -954,6 +980,14 @@ func (api *Api) fireCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 	return errors.Join(errs...)
 }
 
+func dueBefore(t time.Time) func(*gorm.DB) *gorm.DB {
+	return func(q *gorm.DB) *gorm.DB { return q.Where("due_at < ?", t) }
+}
+
+func idsIn(ids []uint) func(*gorm.DB) *gorm.DB {
+	return func(q *gorm.DB) *gorm.DB { return q.Where("id IN ?", ids) }
+}
+
 func sortedKeys(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -961,6 +995,76 @@ func sortedKeys(m map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// settleClaimsBeforeEnable settles, as DISABLED, claims due before the campaign was last
+// switched on: a firing tokened or claimed before a switch-off is not released by switching the
+// campaign back on. A tokened one goes through the batch lock like every tokened settle, so one
+// whose batch was in fact created is recorded from it.
+func (api *Api) settleClaimsBeforeEnable(ctx context.Context, live *Campaign, claimed []CampaignElement, now time.Time) error {
+	if !live.EnabledAt.Valid {
+		return nil
+	}
+	var tokenless []uint
+	tokens := map[string]struct{}{}
+	for _, e := range claimed {
+		if !e.DueAt.Before(live.EnabledAt.Time) {
+			continue
+		}
+		if e.BatchToken.Valid {
+			tokens[e.BatchToken.String] = struct{}{}
+		} else {
+			tokenless = append(tokenless, e.ID)
+		}
+	}
+	if err := api.settleTokenless(ctx, tokenless, SkipWhileDisabled, now); err != nil {
+		return err
+	}
+	for _, token := range sortedKeys(tokens) {
+		if err := api.settleTokenedClaims(ctx, live.ID, token, SkipWhileDisabled, dueBefore(live.EnabledAt.Time), now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// supersedeOlderClaims applies the burst rule to what a pass holds: of several claims for one
+// device and one step (a dead replica's stale claim of an earlier firing beside a fresh claim of
+// the newest), only the newest is sent and the rest are SUPERSEDED. A tokened one is settled
+// under the batch lock, so one whose batch was in fact created is recorded from it instead.
+func (api *Api) supersedeOlderClaims(ctx context.Context, campaignID uint, claimed []CampaignElement, now time.Time) error {
+	type key struct {
+		device string
+		step   int
+	}
+	newest := map[key]CampaignElement{}
+	for _, e := range claimed {
+		k := key{e.DeviceToken, e.Step}
+		if n, ok := newest[k]; !ok || e.DueAt.After(n.DueAt) || (e.DueAt.Equal(n.DueAt) && e.ID > n.ID) {
+			newest[k] = e
+		}
+	}
+	var tokenless []uint
+	byToken := map[string][]uint{}
+	for _, e := range claimed {
+		if newest[key{e.DeviceToken, e.Step}].ID == e.ID {
+			continue
+		}
+		if e.BatchToken.Valid {
+			byToken[e.BatchToken.String] = append(byToken[e.BatchToken.String], e.ID)
+		} else {
+			tokenless = append(tokenless, e.ID)
+		}
+	}
+	if err := api.settleTokenless(ctx, tokenless, SkipSuperseded, now); err != nil {
+		return err
+	}
+	for token, ids := range byToken {
+		if err := api.settleTokenedClaims(ctx, campaignID, token, SkipSuperseded, idsIn(ids), now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // supersedeOlderFirings collapses what is due for one device and one step to the newest firing.
@@ -1051,7 +1155,7 @@ func (api *Api) recheckDueMembership(ctx context.Context, c *Campaign, now time.
 				break
 			}
 		}
-		if err := db.Model(&CampaignCycle{}).Where("id = ? AND membership_checked_at IS NULL", cycleID).
+		if err := db.Model(&CampaignCycle{ID: cycleID}).Where("id = ? AND membership_checked_at IS NULL", cycleID).
 			Update("membership_checked_at", checkedAt).Error; err != nil {
 			return unchecked, err
 		}
@@ -1132,10 +1236,10 @@ func (api *Api) settleTokenless(ctx context.Context, ids []uint, reason string, 
 // Under it, either the batch is committed (and is settled from), or the creating pass takes the
 // lock after this settle, finds its claims no longer CLAIMED, and creates nothing.
 //
-// reason empty leaves a batch-less claim alone; cutoff, when set, limits the settle to the
-// members due before it.
+// reason empty leaves a batch-less claim alone; narrow, when set, limits a batch-less settle
+// to some of the token's members (those due before a cutoff, or named ones).
 func (api *Api) settleTokenedClaims(ctx context.Context, campaignID uint, token, reason string,
-	cutoff *time.Time, now time.Time) error {
+	narrow func(*gorm.DB) *gorm.DB, now time.Time) error {
 	var batch CommandBatch
 	found := false
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -1151,8 +1255,8 @@ func (api *Api) settleTokenedClaims(ctx context.Context, campaignID uint, token,
 		}
 		q := tx.Model(&CampaignElement{}).
 			Where("campaign_id = ? AND batch_token = ? AND status = ?", campaignID, token, string(ElementClaimed))
-		if cutoff != nil {
-			q = q.Where("due_at < ?", *cutoff)
+		if narrow != nil {
+			q = narrow(q)
 		}
 		return q.Updates(map[string]any{"status": string(ElementSkipped), "reason": reason, "updated_at": now}).Error
 	})
@@ -1265,6 +1369,15 @@ func (api *Api) dispatchCampaignBatch(ctx context.Context, c *Campaign, step Cam
 			return errCampaignGone
 		case !live.Enabled:
 			return errCampaignOff
+		}
+		// Switched off and on again since these were claimed: what is due before the switch-on
+		// is not this batch's to send (the next pass settles it as DISABLED).
+		if live.EnabledAt.Valid {
+			for _, m := range members {
+				if m.DueAt.Before(live.EnabledAt.Time) {
+					return errCampaignOff
+				}
+			}
 		}
 		var still int64
 		if err := tx.Model(&CampaignElement{}).Where("campaign_id = ? AND batch_token = ? AND status = ?",
