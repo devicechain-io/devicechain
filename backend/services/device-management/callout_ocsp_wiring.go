@@ -9,7 +9,6 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/processor"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/x509trust/ocspclient"
 	"github.com/rs/zerolog/log"
@@ -45,10 +44,9 @@ func newOcspClient(cfg config.OcspConfiguration, infra mscfg.InfrastructureConfi
 // wireCalloutOcsp attaches the OCSP check to the auth callout. With the master switch off nothing
 // is built that could dial: the responder runs ENFORCE_KNOWN anchors as OFF and refuses
 // REQUIRE_CURRENT ones.
-func wireCalloutOcsp(resp *processor.CalloutResponder, ms *core.Microservice, cfg *config.DeviceManagementConfiguration,
+func wireCalloutOcsp(resp *processor.CalloutResponder, metrics *processor.OcspMetrics, cfg *config.DeviceManagementConfiguration,
 	infra mscfg.InfrastructureConfiguration) error {
 	oc := cfg.Callout.Ocsp
-	metrics := processor.NewOcspMetrics(ms)
 	if !oc.Enabled {
 		resp.WithOcsp(false, nil, metrics)
 		log.Info().Msg("OCSP is switched off (deviceManagement.callout.ocsp.enabled): no responder is ever asked; " +

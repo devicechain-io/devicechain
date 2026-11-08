@@ -118,6 +118,9 @@ var (
 	// IssuerPinMetrics are the issuer pin's series, built once on the initialize path with the
 	// rest (registering on the start path would panic on a second start).
 	IssuerPinMetrics *processor.IssuerPinMetrics
+	// OcspMetrics are the OCSP check's series, built once on the initialize path: the start path
+	// may run again after a failed start, and a second registration would panic.
+	OcspMetrics *processor.OcspMetrics
 
 	// OwnershipDrain publishes the device ownership facts writes queue in their own
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
@@ -252,6 +255,7 @@ func buildMetrics() {
 	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
 	CalloutMetrics = processor.NewCalloutMetrics(Microservice)
 	IssuerPinMetrics = processor.NewIssuerPinMetrics(Microservice)
+	OcspMetrics = processor.NewOcspMetrics(Microservice)
 	buildTrustAnchorExpiryGauge()
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
@@ -1170,7 +1174,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 		// The OCSP check of a certificate connect, for the anchors that ask for it. Off instance-wide
 		// unless the fixed configuration turns it on.
-		if err = wireCalloutOcsp(CalloutResponder, Microservice, Configuration, infra); err != nil {
+		if err = wireCalloutOcsp(CalloutResponder, OcspMetrics, Configuration, infra); err != nil {
 			return err
 		}
 		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
