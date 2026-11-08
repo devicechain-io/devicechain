@@ -304,7 +304,7 @@ func (api *Api) SetCampaignEnabled(ctx context.Context, token string, enabled bo
 	if err != nil {
 		return nil, err
 	}
-	if err := api.RDB.DB(ctx).Model(&Campaign{}).Where("id = ?", c.ID).Update("enabled", enabled).Error; err != nil {
+	if err := api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).Update("enabled", enabled).Error; err != nil {
 		return nil, err
 	}
 	c.Enabled = enabled
@@ -359,6 +359,9 @@ func (api *Api) TickCampaigns(ctx context.Context, now time.Time, pass string) e
 	// Every tenant that has a campaign or any campaign history: a tenant whose last campaign
 	// was switched off or deleted still has pending work to expire and history to prune.
 	var withCampaigns, withHistory []string
+	// 🔑 THE SYSTEM CONTEXT ONLY ENUMERATES TENANTS. It reads two DISTINCT tenant_id lists and
+	// nothing else; every campaign, cycle and element of a tenant is then read and written under
+	// core.WithTenant below, so the tenant predicate applies to all of the actual work.
 	sys := api.RDB.DB(core.WithSystemContext(ctx))
 	if err := sys.Unscoped().Model(&Campaign{}).Distinct().Pluck("tenant_id", &withCampaigns).Error; err != nil {
 		return fmt.Errorf("listing tenants with campaigns: %w", err)
@@ -414,7 +417,7 @@ func (api *Api) tickCampaign(ctx context.Context, c *Campaign, now time.Time, pa
 	if err := api.planCampaign(ctx, c, trigger, steps, now); err != nil {
 		errs = append(errs, api.recordCampaignError(ctx, c, err))
 	} else if c.LastError.Valid {
-		if uerr := api.RDB.DB(ctx).Model(&Campaign{}).Where("id = ?", c.ID).
+		if uerr := api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).
 			Update("last_error", sql.NullString{}).Error; uerr != nil {
 			errs = append(errs, uerr)
 		}
@@ -471,7 +474,7 @@ func (api *Api) recordCampaignError(ctx context.Context, c *Campaign, cause erro
 	if len(msg) > 500 {
 		msg = msg[:500]
 	}
-	_ = api.RDB.DB(ctx).Model(&Campaign{}).Where("id = ?", c.ID).
+	_ = api.RDB.DB(ctx).Model(c).Where("id = ?", c.ID).
 		Update("last_error", sql.NullString{String: msg, Valid: true}).Error
 	return cause
 }
@@ -511,7 +514,7 @@ func (api *Api) planCampaign(ctx context.Context, c *Campaign, trigger *schedule
 		}
 	}
 	// Forward only: a replica that planned the same window a moment later changes nothing.
-	return api.RDB.DB(ctx).Model(&Campaign{}).
+	return api.RDB.DB(ctx).Model(c).
 		Where("id = ? AND (planned_through IS NULL OR planned_through < ?)", c.ID, horizon).
 		Update("planned_through", horizon).Error
 }
