@@ -83,9 +83,10 @@ stream_max_msgs="${DC_CONF_RIG_STREAM_MAX_MSGS:-300}"
 results_out="${DC_CONF_RIG_RESULTS:-$repo_root/hack/conformance/results.json}"
 # Pinned by digest. Bump by hand.
 mosquitto_image="eclipse-mosquitto:2@sha256:860aeb5d63ce509508f6dcfb2bc8a1c1dd2bc60555b562b45ce90e52d8dabb0f"
-curl_image="${DC_CONF_RIG_CURL_IMAGE:-curlimages/curl:8.10.1}"
-client_image="dc-conformance-client:local"
-leshan_image="dc-conformance-leshan:local"
+curl_image="${DC_CONF_RIG_CURL_IMAGE:-curlimages/curl:8.10.1@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b}"
+# Built from this tree by `run` (build_clients), never pulled: a local name with no registry and no tag.
+client_image="dc-conformance-client"
+leshan_image="dc-conformance-leshan"
 exe="$(go env GOEXE)"
 dcctl="$repo_root/backend/cli/build/dcctl$exe"
 
