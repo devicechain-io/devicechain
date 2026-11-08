@@ -11,7 +11,7 @@ import (
 
 // TestValidConnectorType covers the registered vocabulary boundary.
 func TestValidConnectorType(t *testing.T) {
-	for _, ok := range []string{"mqtt", "kafka", "aws_sns", "aws_sqs", "gcp_pubsub"} {
+	for _, ok := range []string{"mqtt", "kafka", "aws_sns", "aws_sqs", "gcp_pubsub", "lorawan_downlink"} {
 		assert.True(t, ValidConnectorType(ok), "%q should be valid", ok)
 	}
 	for _, bad := range []string{"", "MQTT", "http", "amqp", "carrier_pigeon"} {
@@ -21,5 +21,5 @@ func TestValidConnectorType(t *testing.T) {
 
 // TestConnectorTypesSorted returns the full vocabulary, sorted.
 func TestConnectorTypesSorted(t *testing.T) {
-	assert.Equal(t, []string{"aws_sns", "aws_sqs", "gcp_pubsub", "kafka", "mqtt"}, ConnectorTypes())
+	assert.Equal(t, []string{"aws_sns", "aws_sqs", "gcp_pubsub", "kafka", "lorawan_downlink", "mqtt"}, ConnectorTypes())
 }

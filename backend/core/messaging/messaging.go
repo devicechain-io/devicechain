@@ -788,6 +788,7 @@ func DeviceEventsWildcard(instanceId string) string {
 const (
 	SegmentGateways  = streams.SegmentGateways
 	SegmentNotices   = streams.SegmentNotices
+	SegmentAccepts   = streams.SegmentAccepts
 	SegmentResponses = streams.SegmentResponses
 	SegmentReports   = streams.SegmentReports
 	SegmentCommands  = streams.SegmentCommands
@@ -840,6 +841,21 @@ func GatewayNoticesSubject(instanceId, tenant, gateway string) string {
 // which the one area that publishes notices is granted: "{instance}.*.gateways.*.notices".
 func GatewayNoticesWildcard(instanceId string) string {
 	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentGateways, SegmentNotices)
+}
+
+// GatewayAcceptsSubject is the subject the platform tells a gateway which of its events it has
+// durably accepted on: "{instance}.{tenant}.gateways.{gateway}.accepts". It is a subject of
+// its own, not a shape on the notices subject, because a gateway agent that predates it reads
+// every message on its notices subject as a refusal: an acceptance sent there would be counted
+// as one. The gateway is granted a subscription to its own and nothing else.
+func GatewayAcceptsSubject(instanceId, tenant, gateway string) string {
+	return fmt.Sprintf("%s.%s.%s.%s.%s", instanceId, tenant, SegmentGateways, gateway, SegmentAccepts)
+}
+
+// GatewayAcceptsWildcard is the pattern over every gateway's accepts subject in an instance,
+// which the one area that publishes acceptances is granted: "{instance}.*.gateways.*.accepts".
+func GatewayAcceptsWildcard(instanceId string) string {
+	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentGateways, SegmentAccepts)
 }
 
 // DeviceEventsSubjects is every subject the device-events capture stream stores: a device's

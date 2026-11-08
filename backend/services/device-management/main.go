@@ -1047,8 +1047,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					// The cached decorator is offered alongside the plain api so the profile
 					// publish/rollback mutations can invalidate the shared ingest cache they
 					// share with the processor (ADR-045 slice c); all other resolvers use Api.
-					graphql.ContextCachedApiKey: CachedApi,
-					gqlcore.ContextNatsKey:      Svc.Nats,
+					graphql.ContextCachedApiKey:      CachedApi,
+					graphql.ContextDeviceAuthModeKey: Configuration.DeviceAuthMode,
+					gqlcore.ContextNatsKey:           Svc.Nats,
 				}
 			},
 		},

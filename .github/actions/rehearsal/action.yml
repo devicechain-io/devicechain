@@ -1,0 +1,126 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fleet rehearsal: drive a fleet of devices at an MQTT broker you name and fail the job on a LOSS.
+#
+# The broker acknowledges (PUBACKs) a QoS 1 publish; this action then reads back, through a
+# subscriber tap on the same broker, whether the message was delivered. A PUBACKed message that
+# never arrives is a LOSS and fails the job (exit 3); a PUBACK p99 that grew past the allowed
+# share of a baseline report fails it too. Exit codes follow dc-loadtest-mqtt: 0 held, 1 an
+# invariant failed, 2 no verdict could be reached, 3 PUBACKed events were lost.
+#
+# WHAT THE VERDICT IS NOT. It measures broker-to-subscriber loss on one QoS 1 subscriber. It does
+# not see what any pipeline behind the broker does with a message afterward.
+#
+# This action lives in the repository and is used by path (uses: ./.github/actions/rehearsal, or
+# pinned by commit SHA from another repository). It is not published to any marketplace.
+name: Fleet rehearsal
+description: Rehearse an MQTT broker with a bring-your-own device fleet and fail on PUBACKed-but-undelivered messages.
+inputs:
+  target:
+    description: Broker to rehearse, mqtt://host:1883 or mqtts://host:8883.
+    required: true
+  credentials:
+    description: Path to the bring-your-own credential CSV (columns device, client_id, token, username, password, cert_file, key_file, topic).
+    required: true
+  rate:
+    description: Total events per second across the fleet.
+    default: "200"
+  duration:
+    description: How long to publish (a Go duration, for example 60s).
+    default: "60s"
+  qos:
+    description: MQTT QoS, 1 for the PUBACK verdict.
+    default: "1"
+  topic-template:
+    description: Each device's publish topic, with {device} replaced by its name.
+    default: "devices/{device}/events"
+  tap-target:
+    description: Where the tap subscribes, when that is not the target (mqtt:// or mqtts://).
+    default: ""
+  tap-username:
+    description: The tap's username, when the broker requires one.
+    default: ""
+  tap-password:
+    description: The tap's password. Pass it from a secret; it is handed to the tool by environment, never on a command line.
+    default: ""
+  tls-insecure:
+    description: Skip verification of the broker's certificate (an mqtts target with a private CA).
+    default: "false"
+  baseline:
+    description: Path to an earlier passing JSON report to compare the PUBACK p99 with.
+    default: ""
+  max-p99-regression:
+    description: With a baseline, fail when the PUBACK p99 grows by more than this share of the baseline's (0.25 is 25 percent).
+    default: "0"
+  report:
+    description: Where to write the JSON report.
+    default: "rehearsal-report.json"
+  binary:
+    description: A prebuilt dc-loadtest-mqtt to run instead of building it from this repository.
+    default: ""
+outputs:
+  exit-code:
+    description: The tool's exit code (0 held, 1 failed, 2 no verdict, 3 loss).
+    value: ${{ steps.run.outputs.exit-code }}
+  report:
+    description: Path of the JSON report.
+    value: ${{ inputs.report }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      if: inputs.binary == ''
+      with:
+        go-version-file: go.work
+        cache: false
+    - name: Build dc-loadtest-mqtt
+      if: inputs.binary == ''
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../../backend/sims/dc-simulator
+      run: go build -o "$RUNNER_TEMP/dc-loadtest-mqtt" ./cmd/loadtest-mqtt
+    - name: Rehearse
+      id: run
+      shell: bash
+      env:
+        # Inputs reach the script as environment, never interpolated into it.
+        IN_BINARY: ${{ inputs.binary }}
+        IN_TARGET: ${{ inputs.target }}
+        IN_CREDENTIALS: ${{ inputs.credentials }}
+        IN_RATE: ${{ inputs.rate }}
+        IN_DURATION: ${{ inputs.duration }}
+        IN_QOS: ${{ inputs.qos }}
+        IN_TOPIC: ${{ inputs.topic-template }}
+        IN_TAP_TARGET: ${{ inputs.tap-target }}
+        IN_TAP_USERNAME: ${{ inputs.tap-username }}
+        IN_INSECURE: ${{ inputs.tls-insecure }}
+        IN_BASELINE: ${{ inputs.baseline }}
+        IN_MAX_REGRESSION: ${{ inputs.max-p99-regression }}
+        IN_REPORT: ${{ inputs.report }}
+        DC_LOADTEST_TAP_PASSWORD: ${{ inputs.tap-password }}
+      run: |
+        # The runner starts bash with -e; the tool's non-zero exit is the verdict, not a crash, and
+        # its code must be captured, exported and explained before the step fails.
+        set +e
+        set -uo pipefail
+        bin="${IN_BINARY:-$RUNNER_TEMP/dc-loadtest-mqtt}"
+        args=(--target "$IN_TARGET" --credentials "$IN_CREDENTIALS"
+              --rate "$IN_RATE" --duration "$IN_DURATION" --qos "$IN_QOS"
+              --topic-template "$IN_TOPIC" --identity full --report "$IN_REPORT")
+        [ -z "$IN_TAP_TARGET" ] || args+=(--tap-target "$IN_TAP_TARGET")
+        [ -z "$IN_TAP_USERNAME" ] || args+=(--tap-username "$IN_TAP_USERNAME")
+        [ "$IN_INSECURE" != "true" ] || args+=(--tls-insecure)
+        if [ -n "$IN_BASELINE" ]; then
+          args+=(--baseline "$IN_BASELINE" --max-p99-regression "$IN_MAX_REGRESSION")
+        fi
+        "$bin" "${args[@]}"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        case "$code" in
+          0) echo "::notice title=Fleet rehearsal::held: every PUBACKed message was delivered to the tap" ;;
+          1) echo "::error title=Fleet rehearsal::an invariant failed (see the report)" ;;
+          2) echo "::error title=Fleet rehearsal::no verdict could be reached (bad input, unreachable broker, or an aborted run)" ;;
+          3) echo "::error title=Fleet rehearsal::LOSS: the broker PUBACKed messages that were never delivered" ;;
+          *) echo "::error title=Fleet rehearsal::unexpected exit code $code" ;;
+        esac
+        exit "$code"

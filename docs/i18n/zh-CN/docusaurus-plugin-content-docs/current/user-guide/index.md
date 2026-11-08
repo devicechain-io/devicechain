@@ -46,3 +46,9 @@ title: 用户指南
 | 21 | [审计](./audit.md) | 租户审计日志、筛选和导出。 |
 | 22 | [租户设置](./tenant-settings.md) | 品牌、地图和语言。 |
 | 23 | [实例管理](./administering-the-instance.md) | 租户、删除、层级、身份、角色、身份提供商、AI 提供商、实例审计和设置。 |
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

@@ -59,3 +59,9 @@ title: 租户层级与服务组合
 - [治理与配额](./governance.md)：层级提供的上限。
 - [AI 辅助编写](./ai-authoring.md)：层级组合的 AI 模型使用资格。
 - [多租户](./multi-tenancy.md)：租户如何建模和隔离。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

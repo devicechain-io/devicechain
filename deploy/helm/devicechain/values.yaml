@@ -1702,8 +1702,9 @@ functionalAreas:
       #       maxGraphqlCrlBytes: 2097152 # the CRL the GraphQL mutation takes (DER bytes), 64 KiB to
       #                             # 2 MiB; larger lists use the streaming upload.
       #       maxConcurrentWrites: 1 # CRL uploads one replica works on at once, 1 to 8.
-      #       resweepAfter: 10s # how long after a revocation ends sessions it ends them again, to catch
-      #                             # a device being admitted at that instant; above 8s, up to 5m.
+      #       resweepAfter: 10s # how long after a revocation ends sessions the second pass falls due, to
+      #                             # catch a device being admitted at that instant; it runs on the next
+      #                             # 30 s session-kick retry, so 10-40 s at the default. Above 8s, up to 5m.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

@@ -159,10 +159,20 @@ func TestNewGuardPrimedFromASuffixDecidesLikeTheLiveOne(t *testing.T) {
 	}
 }
 
+// The bounds below are properties of a table built with ONE hash mix. mixSeed is drawn per process
+// (so homes cannot be ground offline), which made this test's table layout, and so its mean, differ
+// on every run: at n=5000 (a ~5.5k-slot table, where the mean over a few thousand runs is noisy) the
+// mean slots per miss has median 5.8 but a tail that crosses 8 on about 1 run in 100, which is how
+// it failed on unrelated CI runs. The test is not timing-sensitive; it was seed-sensitive. It now
+// pins mixSeed per case, so every run builds the same tables and asserts the same numbers, with the
+// bounds unchanged.
 func TestProbeLengthsAtTheMaximumLoadAreBounded(t *testing.T) {
+	savedSeed := mixSeed
+	t.Cleanup(func() { mixSeed = savedSeed })
 	for _, n := range []int{5_000, 100_000, 600_000} {
 		for seed := int64(1); seed <= 3; seed++ {
 			rng := rand.New(rand.NewSource(seed))
+			mixSeed = uint64(seed) * 0x9e3779b97f4a7c15
 			s := &generation{}
 			// Fill to the load ceiling: the worst a table is ever read at.
 			s.slots = make([]uint64, slotsFor(n, maxLoadPercent))

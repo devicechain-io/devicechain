@@ -174,6 +174,10 @@ type GatewayJetStreamSource struct {
 	// capture stream; see UseMessageStore.
 	fromStore bool
 
+	// feedback tells a gateway which of its events were durably accepted, or shed at the
+	// tenant's ceiling (see UseGatewayFeedback). nil sends nothing.
+	feedback GatewayFeedback
+
 	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
 	// the errors stop clearing. It carries the microservice a give-up is reported to, so
 	// it is built in the constructor rather than lazily. Nil-safe by construction: a
@@ -631,7 +635,11 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		meterAt = es.meter(tenant, msg.AppendTime)
 	}
 	redelivery := msg.NumDelivered > 1
+	settle, shed := es.answers(msg, tenant, es.settler(msg, tenant))
 	if es.allow != nil && !es.allow(es.Id, tenant, meterAt, redelivery, OriginAuthenticated) {
+		// The broker PUBACKed this message, so a gateway believes it stored. Tell it the
+		// platform shed it, so it keeps the event and offers it again.
+		es.noticeShed(msg, tenant)
 		ackDrop(msg, "refused at the tenant ingest gate")
 		return
 	}
@@ -676,7 +684,8 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		assertion:  assertedByCaptureBroker(msg),
-		done:       es.settleAndForget(es.settler(msg, tenant), beatRef),
+		done:       es.settleAndForget(settle, beatRef),
+		shed:       shed,
 	}
 }
 

@@ -87,6 +87,9 @@ export interface ActionRow {
   headers?: string;
   bodyTemplate?: string;
   secretRef?: string;
+  // Optional handle of a webhook signing secret: the call then carries Standard Webhooks
+  // signature headers. Held here so a signed rule authored over the API survives a form save.
+  signingSecretRef?: string;
   connectorRef?: string;
   payloadTemplate?: string;
   // Milliseconds, as typed. Shared by httpCall + publish; empty ⇒ the dispatcher default.
@@ -287,6 +290,7 @@ function buildAction(a: ActionRow): Record<string, unknown> {
     if (headers) h.headers = headers;
     if ((a.bodyTemplate ?? '').trim()) h.bodyTemplate = a.bodyTemplate;
     if ((a.secretRef ?? '').trim()) h.secretRef = (a.secretRef ?? '').trim();
+    if ((a.signingSecretRef ?? '').trim()) h.signingSecretRef = (a.signingSecretRef ?? '').trim();
     const ms = intOrZero(a.timeoutMs ?? '');
     if (ms) h.timeoutMs = ms;
     return withGuard({ type: 'httpCall', httpCall: h });
@@ -469,7 +473,7 @@ export function parseDefinition(raw: string): ParsedDefinition | null {
       return {
         type: 'httpCall', alarmKey: '', command: '', payload: '',
         url: str(h.url), method: str(h.method), headers: formatHeaders(h.headers),
-        bodyTemplate: str(h.bodyTemplate), secretRef: str(h.secretRef), timeoutMs: numStr(h.timeoutMs),
+        bodyTemplate: str(h.bodyTemplate), secretRef: str(h.secretRef), signingSecretRef: str(h.signingSecretRef), timeoutMs: numStr(h.timeoutMs),
         guard: str(act.guard) || undefined,
       };
     }

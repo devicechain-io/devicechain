@@ -148,6 +148,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamdurablelostunread"
             summary: "a consumer lost messages it never read"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} stepped past messages that were removed before it read them, so they were never processed. If a tenant was being deleted, this is expected: the deletion purged messages the consumer had not reached yet. Otherwise the stream was full and discarding its oldest messages while this consumer was behind: either the stream's ceiling is too small for the traffic, or the consumer is slower than its producer. JetStreamDurableFallingBehind and JetStreamDurableUnreadNearFull, which watch this consumer's backlog, tell the two apart."
         # A durable that has stopped reading while the stream discards the messages
@@ -164,6 +165,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamdurablestalledbehindstream"
             summary: "a consumer that stopped reading is losing messages it has not read"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has been handed no messages for at least two minutes, and the stream has already discarded {{ "{{ $value }}" }} messages ahead of it. They will never be delivered. The consuming service is running, since it reports this, but its consumer is not reading: look for message handling stuck on a dependency such as the database, or pods waiting to become ready. If that cannot be fixed quickly, raise the stream's ceiling so it stops discarding."
         # A durable that has stayed behind its stream: it is reading, and losing nothing
@@ -200,6 +202,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamdurablefallingbehind"
             summary: "a consumer has stayed more than 10000 messages behind its stream for 15 minutes"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} has had more than 10000 messages waiting for it for the last 15 minutes ({{ "{{ $value }}" }} now). Whatever that service produces from the stream is that far behind: for device-state, a device's live state lags its stored events. Compare the consumer's rate with the stream's: if the service is keeping pace but not catching up, give it capacity (for device-state, its projection settings and its database); if it has stopped, JetStreamDurableStalledBehindStream and the service's logs say why. If the stream fills first, messages the consumer has not reached will be lost, except where the stream applies backpressure (inbound-events for device-management, resolved-events for event-management): there new events are refused instead (JetStreamIngestBackpressureEngaged)."
         # A stream declared as a SINK is near its ceiling: the failed-message records
@@ -263,6 +266,7 @@ spec:
             severity: info
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamstreamnearfull"
             summary: "A stream of records nothing processes is near its ceiling"
             description: "Stream {{ "{{ $labels.stream }}" }} is over 80% of its ceiling. It holds records for an operator, not messages a service processes, so nothing has read what it holds, and once it is full it discards its oldest records to make room. On failed-decode and connector-dispatch.dead those are the records of messages that failed; on max-deliveries they are notices not yet turned into dead letters (MaxDeliveryRecordsWaiting); on dead-letters, the letters themselves, which fires only while user-management, which stores them, does not report reading them, so check that user-management is running; on failed-events, the records of events the platform refused, which fires only while event-management, which indexes them, does not report reading them, so check that event-management is running. Find what is filling it and fix that: a decoder rejecting a device's payloads, a connector whose destination refuses every send, or (on failed-events) a reader that is down while events keep failing to resolve or store. Raise the stream's ceiling only if the records must be kept for longer."
         # A consumer's UNREAD backlog is over 80% of what its stream can hold. When it
@@ -305,6 +309,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamdurableunreadnearfull"
             summary: "A consumer is close to losing messages it has not read"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet read {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. Once its unread backlog reaches the stream's ceiling, the stream discards its oldest messages to make room, and this consumer will never process the ones it had not reached (JetStreamDurableLostUnread). New messages are still accepted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
         # The device-events capture stream will be full within ten minutes at the rate its
@@ -334,6 +339,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamcapturebacklogwilloverflow"
             summary: "MQTT events the broker has already acknowledged are about to be lost"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet forwarded {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
         # The early tier of the rule above: the same capture backlog on course to fill within
@@ -357,6 +363,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamcapturebackloggrowing"
             summary: "MQTT events waiting to be forwarded are piling up faster than they leave"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet forwarded {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold, and at the rate that backlog grew over the last five minutes the stream will be full within twenty. This is the early warning for JetStreamCaptureBacklogWillOverflow, which fires when ten minutes remain. Every event in the backlog was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. Add event-sources replicas now, each of which brings its own publish window, and look at event-sources CPU and at devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"}; if JetStreamIngestBackpressureEngaged is firing, the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume."
         # The capture stream changed LEADER while events were arriving. Unlike every other
@@ -390,6 +397,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamcaptureleaderchanged"
             summary: "The MQTT capture stream changed leader while devices were publishing"
             description: "Stream {{ "{{ $labels.stream }}" }} changed leader within the last 15 minutes while events were arriving. While a stream has no leader, which lasts several seconds, the broker's MQTT gateway still acknowledges device QoS 1 publishes into it and stores them nowhere, and nothing counts them: JetStreamDurableLostUnread does not fire for this loss, so MQTT events published during the change may have been acknowledged to their devices and lost. In a 12,000 events per second test one such step-down lost about five seconds of events. Look in the broker logs for 'Leader falling behind, stepping down': that is a leader whose node is overloaded, so check the broker's node CPU and whether the capture leader shares a node with the inbound-events leader. A planned broker restart moves leaders too and may lose events the same way, so schedule one at low traffic. This is a known limitation of MQTT ingest, described with the MQTT transport in the documentation."
         # A reader the broker does not filter for (the device-events capture's: its durable is
@@ -405,6 +413,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreaderforeigndropped"
             summary: "The device capture reader dropped messages that no device published"
             description: "Durable {{ "{{ $labels.durable }}" }} on stream {{ "{{ $labels.stream }}" }} was handed messages stored under a subject it does not read, and dropped them without passing them on: {{ "{{ $value }}" }} in the last 15 minutes. Its broker-side consumer reads the whole stream unfiltered, so the reader itself keeps only the subjects devices publish telemetry on. Device publishes never land there under another subject, so a dropped message was put into the stream some other way, most likely by a push consumer on another stream whose delivery subject is a device telemetry subject. Nothing was forwarded and no device event is missing, but whoever can create such a consumer is writing into device intake: look for push consumers with a device telemetry delivery subject (nats consumer ls on each stream) and at which login created them. The reader logs the subject and sequence of the first message it drops."
         # A gating consumer's UNREAD backlog is over 75% of what its stream can hold. At
@@ -426,6 +435,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamunreadbacklognearfull"
             summary: "A consumer's unread backlog is near its stream's ceiling"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold. At 90% the platform stops accepting new events on that stream, for every tenant, rather than discard events this consumer has not read: HTTP devices are answered 503 with a Retry-After, MQTT devices' events wait in the capture stream, and Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. Find out why the consumer is slow: its service's logs, its database, and JetStreamDurableFallingBehind. If the traffic has outgrown the stream, raise the stream's ceiling (and the JetStream volume with it)."
         # The outage runway is being used up. inbound-events and resolved-events (the streams
@@ -465,6 +475,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamoutagerunwayshort"
             summary: "An event stream's outage runway is running out"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet processed {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold, and at the rate that backlog grew over the last five minutes the platform will stop accepting new events on the stream, for every tenant, within twenty (it does so at 90%). When infrastructure.nats.streamDesignRate is set, the stream is sized to hold streamRunwayMinutes of events at that many events a second while a consumer or the database is down, and this is that time being used; when it is not set, the stream holds only what streamMaxBytes allows. Find out why the consumer is behind: its service is not running or is crash-looping, its database is unavailable or slow (EventStoreRefusingWrites, ConsumerHoldingForDatabase), or the traffic has outgrown the design rate. If it has, raise streamDesignRate together with the JetStream volume: set instance.config.infrastructure.nats.streamDesignRate in a values file and run dcctl upgrade <provider> <instance> --values <file>."
         # The gate is closed: the stream's writers are refusing new events. Evaluated at
@@ -477,6 +488,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamingestbackpressureengaged"
             summary: "The platform is refusing new events so as not to lose unread ones"
             description: "Stream {{ "{{ $labels.stream }}" }} is refusing new events, for every tenant: a consumer's unread backlog reached 90% of the stream's ceiling, the events it has already processed that the full stream still holds ahead of its unread ones would be discarded within 30 seconds at the rate the stream is discarding them, or a service writing to it could not measure that backlog for 30 seconds. HTTP devices are answered 503 with a Retry-After and should retry. Events from MQTT devices were already acknowledged by the broker and wait in the capture stream, which discards its oldest once it is full (JetStreamDurableLostUnread). Sparkplug and LwM2M readings, and events from an external MQTT broker, are dropped and counted. JetStreamUnreadBacklogNearFull names the consumer that is behind; when it is quiet, it is the second case, and jetstream_backpressure_history_runway_seconds and the writing service's log name the consumer. If neither names a consumer, the writing service may not be reaching the broker at all: look in its log for \"Disconnected from NATS\" or a write to the NATS server that \"made no progress\", and for BrokerConnectionDiedSilently; the refusal then lifts once it has reconnected. The refusal lifts once the backlog is below 80% and, if the history was the cause, once that history would last a minute or the consumer has read everything."
         # A service gave up a broker connection that had died WITHOUT being closed: the
@@ -500,6 +512,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#brokerconnectiondiedsilently"
             summary: "A service's connection to the message broker died without being closed"
             description: "{{ "{{ $labels.job }}" }} gave up a connection to the message broker {{ "{{ $value | humanizeDuration }}" }} ago, because the server had stopped answering without closing it, and reconnected. A machine that stops or restarts abruptly, a network partition, or a broker server that stopped reading looks like this. Until it gave the connection up, for up to 40 seconds, and then reconnected, that service could neither publish nor receive: if it is event-sources, HTTP ingest was refused or timed out. nats_connection_dead_total says how often, and whether pings or a stalled write detected it. Check whether a node was lost or restarted: kubectl get nodes, and the cloud provider's VM events, because Kubernetes records nothing for a machine that restarts within its node grace period (roughly 40 to 50 seconds). Run dcctl ha verify. Repeats for the same job with no node event point at the network between that service and the broker."
         # A capacity-bounded reader held a message past its AckWait. Selected by name
@@ -515,6 +528,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#readerheldmessagepastackwait"
             summary: "A service held a message past its acknowledgement window, so it was redelivered"
             description: "The reader for durable {{`{{ $labels.durable }}`}} held a message longer than the broker waits for an acknowledgement, so the broker handed it out again. stage=worker: a send was still running when that happened, so the message may have been sent twice -- look for a slow or unresponsive destination behind this service. stage=buffer: the reader dropped a message it had fetched but not yet handed to a worker, and the broker's redelivery is handled instead; nothing was sent twice, but the service is not keeping up."
         - alert: MaxDeliveryRecordsWaiting
@@ -532,6 +546,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#maxdeliveryrecordswaiting"
             summary: "Messages that ran out of delivery attempts are waiting to be recorded"
             description: "{{`{{ $value }}`}} notice(s) of messages whose every delivery attempt ran out have been waiting on {{`{{ $labels.stream }}`}} for 15 minutes without being turned into dead letters. Each service records its own; one that is down or crash-looping records late, so first check that every service is running and look in its logs for errors from the max-delivery recorder. A notice that stays after every service is healthy names a consumer no running service reads any more (a reader removed by an upgrade); it will not be recorded, and can be deleted from the stream."
         # A consumer declared REPLAY-COVERED ran out of deliveries. Such a consumer acks a
@@ -551,6 +566,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#replaycovereddeliveriesexhausted"
             summary: "A consumer ran out of delivery attempts because it could not save its checkpoint"
             description: "{{`{{ $value }}`}} message(s) on {{`{{ $labels.stream }}`}} ran out of delivery attempts to {{`{{ $labels.job }}`}} in the last 15 minutes. This consumer re-reads the stream from its own saved checkpoint, so nothing has been lost and no dead letter is written, but its checkpoint has not been saved for longer than the broker keeps redelivering: look for the service's database or broker connection failing. While it is running it keeps what it has read in memory and saves it when the checkpoint succeeds. If it restarts first, it re-reads the stream from the last saved checkpoint, and a message the stream has already discarded cannot be re-read (JetStreamDurableUnreadNearFull warns before that)."
         # The event store cannot take writes. event-management HOLDS the events its database
@@ -569,6 +585,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#eventstorerefusingwrites"
             summary: "The event store is refusing writes; events are being held, not stored"
             description: "event-management is holding {{ "{{ $value }}" }} events its database refused. They are not lost: they stay unacknowledged in the message broker and are stored once the database accepts writes again. Nothing new is being stored meanwhile, and the longer this lasts the larger the backlog behind it; once the backlog fills 90% of the resolved-events stream the platform refuses new events (JetStreamIngestBackpressureEngaged), and MQTT events the broker has already acknowledged wait in the capture stream, which discards its oldest once full. The usual cause is a full volume: check DatabaseVolumeCritical and the event-store claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the dc-tsdb Cluster; online where the storage class allows it) or lower the event retention. Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
         # The same condition for every OTHER consumer that writes to a database (core/storehold):
@@ -586,6 +603,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#consumerholdingfordatabase"
             summary: "A service is holding messages because its database refuses writes"
             description: "{{ "{{ $labels.job }}" }} is holding {{ "{{ $value }}" }} message(s) in its {{ "{{ $labels.consumer }}" }} consumer that its database refused. They are not lost: they stay unacknowledged in the message broker and are processed once the database accepts writes again. That consumer is not making progress meanwhile, so what it does is delayed: device events resolved, alarm edges applied, commands answered, notifications sent or update reports recorded, depending on the consumer. The usual cause is a full volume: check DatabaseVolumeCritical and the service's database claim (kubectl get pvc, and the database pod's log for 'No space left on device'), and expand it (spec.storage.size on the Cluster; online where the storage class allows it). Otherwise look for a read-only primary or an exhausted connection limit. Avoid restarting the service while this fires: a shutdown releases what it is holding and each restart uses one of the five deliveries a message has, so repeated restarts can still exhaust them."
         # The event-management consumer is behind AND getting further behind. The existing
@@ -607,6 +625,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#eventpersistbackloggrowing"
             summary: "Events are arriving faster than the event store persists them"
             description: "Durable {{ "{{ $labels.durable }}" }} has {{ "{{ $value }}" }} events waiting and the backlog has grown steadily for ten minutes. Either the event store is down or refusing writes (EventStoreRefusingWrites, DatabaseVolumeCritical), or ingest is outrunning persistence: compare the batch-size histogram on the persistence dashboard and the database's CPU and IOPS, and raise persistence.writers or persistence.maxBatch. At 90% of the resolved-events ceiling new events are refused (JetStreamIngestBackpressureEngaged) rather than discarded."
 {{- end }}

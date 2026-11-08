@@ -97,6 +97,10 @@ func applyInfra(ctx context.Context, st *State) (err error) {
 	if err := publishBrokerCertificateExpiry(ctx, typed, dyn, st); err != nil {
 		return err
 	}
+	// Where the cluster's alerts go, so the operator can report AlertsRouted.
+	if err := publishAlertRouting(ctx, typed, dyn, st); err != nil {
+		return err
+	}
 
 	// 🔴 THIS INSTANCE'S OWN LOGIN AND DATABASE, BEFORE ITS OWN INFRASTRUCTURE: the
 	// refusals it can raise — a database by this name that some other identity owns, or

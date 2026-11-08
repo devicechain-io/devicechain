@@ -350,6 +350,11 @@ type HTTPCallAction struct {
 	// SecretRef is an optional ADR-059 secret handle (a core/secrets ref Name) presented as the
 	// auth header at dispatch. Never the cleartext. Empty ⇒ an unauthenticated call.
 	SecretRef string `json:"secretRef,omitempty"`
+	// SigningSecretRef is an optional handle naming a webhook signing secret (minted by the
+	// connectors service's generateWebhookSigningSecret). When set the call carries Standard
+	// Webhooks webhook-id / webhook-timestamp / webhook-signature headers; empty ⇒ unsigned.
+	// Never the key itself.
+	SigningSecretRef string `json:"signingSecretRef,omitempty"`
 	// TimeoutMs bounds the outbound call. 0 ⇒ the dispatcher default; capped at MaxActionTimeoutMs.
 	TimeoutMs int `json:"timeoutMs,omitempty"`
 }

@@ -264,14 +264,54 @@ Un cambio en una integración es rápido pero no instantáneo en el endpoint, qu
 
 ## Comandos a dispositivos de integración {#commands}
 
-Un dispositivo que informa a través de una integración no tiene una conexión con DeviceChain por la que enviarle un comando, y la versión 1 no tiene downlink hacia la API de un servidor de red. Un comando a un dispositivo así **se acepta cuando lo emites** y luego **falla en el siguiente barrido de entrega** con `COMMAND_TRANSPORT_UNSUPPORTED`, porque la plataforma reconoce el transporte y no tiene forma de entregar por él. No espera en la cola hasta caducar.
+Un dispositivo que informa a través de una integración no tiene una conexión con DeviceChain por la que enviarle un comando. Salvo que el [downlink LoRaWAN](#lorawan-downlink) esté activado en tu instalación, un comando a un dispositivo así **se acepta cuando lo emites** y luego **falla en el siguiente barrido de entrega** con `COMMAND_TRANSPORT_UNSUPPORTED`, porque la plataforma reconoce el transporte y no tiene forma de entregar por él. No espera en la cola hasta caducar.
 
 Conviene conocer dos casos:
 
 - Un dispositivo que además se conecta por MQTT se juzga por el último transporte por el que informó. Mientras su último informe fue a través de la integración, sus comandos fallan; cuando informa por MQTT, se entregan.
 - Un dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan como de costumbre, y caducan sin respuesta, hasta que informa por primera vez.
 
-Para un dispositivo que debe recibir comandos, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
+Para un dispositivo que debe recibir comandos y no está detrás de un servidor de red ChirpStack v4, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
+
+## Downlink LoRaWAN (ChirpStack v4) {#lorawan-downlink}
+
+Una instalación que ejecuta los conectores de salida con el downlink activado (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; el chart de Helm hace entonces que la entrega de comandos despache estos comandos, y rechaza una copia de esa marca puesta a mano) envía un comando a un dispositivo detrás de un servidor de red ChirpStack v4 poniendo un downlink en la cola de ese servidor. Nada cambia en una instalación que lo deja desactivado.
+
+**1. Vincula la integración a su servidor de red.** Crea y publica un conector de tipo `lorawan_downlink`:
+
+```json
+{
+  "networkServer": "chirpstack_v4",
+  "baseUrl": "https://chirpstack.example.com",
+  "integration": "my-integration-token"
+}
+```
+
+`integration` es el token de la integración de entrada cuyos dispositivos atiende este servidor. El **secreto** del conector es una clave de API de ChirpStack con permiso para encolar downlinks (la API REST de ChirpStack v4, servida por su componente `chirpstack-rest-api`); se guarda cifrado y no se vuelve a mostrar. Solo un conector publicado puede nombrar una integración: con ninguno, o con dos, un comando se rechaza en lugar de enviarse. Como todo conector, la llamada a `baseUrl` pasa por la política de salida de la plataforma, así que un servidor en una dirección privada necesita una autorización del operador.
+
+**2. Define el comando.** Da al perfil del tipo de dispositivo un comando con estos parámetros:
+
+| Parámetro | Significado |
+| --- | --- |
+| `fPort` | El puerto de aplicación LoRaWAN, de 1 a 223. Obligatorio. |
+| `hex` o `base64` | La carga útil de la aplicación, en hexadecimal o en base64 estándar con relleno. Indica exactamente uno. Como máximo 242 bytes. |
+| `confirmed` | Aún no disponible. Un comando que lo establece se rechaza, no se envía sin confirmar. |
+
+Cualquier otro nombre de parámetro se rechaza.
+
+**3. Envíalo.** El dispositivo debe tener un [alias](#aliases) `lorawan.deveui`: el DevEUI se lee del dispositivo, nunca del comando. El comando sale por la integración por la que el dispositivo **informó por última vez**.
+
+**Qué significa el resultado.** `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. Los demás resultados:
+
+| Qué ocurrió | Resultado |
+| --- | --- |
+| Un parámetro no es válido, el dispositivo no tiene DevEUI, la integración no tiene vínculo (o tiene dos), el comando caducó, o el inquilino superó su techo de llamadas de salida | `FAILED`, no entregado. Es seguro volver a enviarlo. |
+| El servidor de red lo rechazó (un 4xx: clave de API incorrecta, dispositivo desconocido, carga demasiado grande para la velocidad de datos actual del dispositivo) o no se pudo alcanzar antes de enviar nada | `FAILED`, no entregado. El motivo nombra la respuesta del servidor. |
+| La petición se envió y el servidor falló o no respondió (un 5xx, un tiempo de espera) | El resultado es **desconocido**: el downlink puede estar en cola, y enviarlo de nuevo puede enviarlo dos veces. |
+
+Consulta la métrica `lpwan_downlinks_total` por resultado para ver dónde se detienen los comandos.
+
+**Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
 
 ## Qué puede hacer un token de integración {#trust}
 
@@ -289,7 +329,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Downlink.** No se pueden enviar comandos a un dispositivo a través de un servidor de red. Consulta [Comandos a dispositivos de integración](#commands).
+- **Downlink hacia The Things Stack y remitentes genéricos, downlinks confirmados y codificadores de carga útil.** El [downlink LoRaWAN](#lorawan-downlink) cubre solo ChirpStack v4 y cargas útiles en bruto. Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.

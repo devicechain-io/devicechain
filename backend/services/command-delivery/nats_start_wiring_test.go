@@ -148,6 +148,7 @@ func TestTheSparkplugCapabilityAndImpactResolverReachTheProcessor(t *testing.T) 
 	for _, enabled := range []bool{true, false} {
 		mgr := startNatsWiringFixture(t)
 		Configuration.SparkplugCommands = enabled
+		Configuration.LpwanDownlink = enabled
 		stub := &impactStub{}
 		Api.CommandImpacts = stub
 
@@ -157,6 +158,8 @@ func TestTheSparkplugCapabilityAndImpactResolverReachTheProcessor(t *testing.T) 
 		require.NotNil(t, CommandDeliveryProcessor)
 		require.Equal(t, enabled, CommandDeliveryProcessor.SparkplugCommands,
 			"the configured sparkplugCommands flag did not reach the processor (enabled=%v)", enabled)
+		require.Equal(t, enabled, CommandDeliveryProcessor.LpwanDownlink,
+			"the configured lpwanDownlink flag did not reach the processor (enabled=%v)", enabled)
 		require.Same(t, stub, CommandDeliveryProcessor.CommandImpacts,
 			"the Api's impact resolver was not bound to the processor")
 	}

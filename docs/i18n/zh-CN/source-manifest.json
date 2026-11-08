@@ -123,8 +123,8 @@
       "translationSha256": "ba14f69de868c9f9bd20a714b9f61e45c10ee1b84f7f25f09094a421bdc70a92"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "a20654591d0ce01bd810a74d2bbc449f2ea03734d26890340f97c06ca003839d",
-      "translationSha256": "471b23bef84864cc1e9f072fba4059976289c87ca6453e983fd23618ca07f968"
+      "sourceSha256": "a0f2c648d70bcfd79b8eabb2ae1b05df72e4c1c8f71d13850fb8f9661e00813b",
+      "translationSha256": "7e3ac96bcc2ea0ede8e4bc0bb8d45bb6efbdd8c72490bfca51d7beb5326d23a4"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "bfa7aa18888aecb4d5975a786b45170a144f5cdd2a4ac2824c1aca3bf7f58388",
@@ -147,8 +147,8 @@
       "translationSha256": "ebba6d1ee6c28b49bf925a1c71188cf103b377d1996a3a6a2c57cc9f742c78d0"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "fe174f82a7f1c5d9aa53ef5f58c014faef0c1d562d19f580a93554be96e9a4a7",
-      "translationSha256": "2c84ddb6b90a96961feb0a1c81bfc3d33f8e0c7d695f1b98f6af6581f83e956a"
+      "sourceSha256": "ded9ff90a396990de66cb55ea038e4248bbbc88ee9127bd6c524d8a9a1e60ec6",
+      "translationSha256": "1d3c190cc8e1419e40e3aa44c85ce637fb5a4b9eeb763d0e15177a143d3e9a07"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",
@@ -287,8 +287,8 @@
       "translationSha256": "745fb949ccf105936209fdec705d1e5c73893e0fbc36125d181f17debb98b83e"
     },
     "reference/device-protocol.md": {
-      "sourceSha256": "6b62cc22f5c8dded5d19c17ade1707a351c99edef61900c272861b69b9ff4619",
-      "translationSha256": "858b1986e34e2a4c68d52d9f263932fd3384d8fab25380551ef9e48a993a8427"
+      "sourceSha256": "9a43388c44aafd506a157a417953cf261e185aee026fa3263ac640a49578c091",
+      "translationSha256": "641b9d84b76bf9b7c7923bf36fefcdb095ac1ef1ff660b7975bf1368ee30a303"
     },
     "reference/graphql-api.md": {
       "sourceSha256": "7065199ec043ecb34044c4fda42d72bb4970fca15cb95654ce37703afa8d7b2d",

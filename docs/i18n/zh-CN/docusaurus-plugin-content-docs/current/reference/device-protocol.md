@@ -67,10 +67,12 @@ Schema 表达不了的内容：
 | --- | --- | --- |
 | 网关后设备的[事件](#device-event) | 网关 → 平台 | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
 | 事件被拒绝的通知 | 平台 → 网关 | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+| 平台已持有事件的接受确认 | 平台 → 网关 | `{instanceId}/{tenant}/gateways/{gatewayToken}/accepts` |
 
-- 网关只被授权在**自己的**令牌下发布（`devices/` 之后可以是任意子设备令牌），并且只订阅自己的通知。它不能在其他网关或其他租户的命名空间中发布，也不能在子设备自己的主题上发布。无论网关代表多少台设备，授权的大小都相同，并且每台设备都持有该授权，因此给网关分配第一台设备不需要重连。
+- 网关只被授权在**自己的**令牌下发布（`devices/` 之后可以是任意子设备令牌），并且只订阅自己的通知和接受确认。它不能在其他网关或其他租户的命名空间中发布，也不能在子设备自己的主题上发布。无论网关代表多少台设备，授权的大小都相同，并且每台设备都持有该授权，因此给网关分配第一台设备不需要重连。
 - 只有当主题中指明的设备存在、**已分配给该网关**，并且网关已启用时，平台才接受事件。否则平台以原因 `NotGatewayChild`（见[下文](#rejections-after-acceptance)）拒绝事件，并向网关发送通知。无论哪种情况，消息代理都会确认该发布，因为 MQTT 3.1.1 无法拒绝发布。
 - 身份由主题加分配决定，正文不携带身份：此命名空间上携带 `credentialType`、`credentialId` 或 `credentialSecret` 的事件会被拒绝，正文 `device` 指向其他设备的事件也会被拒绝。事件归属于子设备，已解析的事件还会携带网关的令牌。
+- 通知为 `{"altId", "device", "reason"}`。除 `not_gateway_child` 外，原因 `over_ceiling` 表示平台收到了事件，但因租户超过摄取上限而丢弃；该事件未被存储，可以放心重发。接受确认为 `{"altIds": [...]}`：已持久保存在平台流上的事件的幂等键，批量发送。两者都是尽力而为，不带载荷。网关删除已缓冲的事件时，应依据接受确认，而不是消息代理的确认；从未收到接受确认的网关会以同一 `altId` 重发该事件，平台只会存储一次。
 - 通知是一个 JSON 对象：`{"altId": "...", "device": "...", "reason": "not_gateway_child"}`。它不带载荷，也不存储，因此发送时离线的网关收不到。拒绝的记录是 `failed-events` 流。
 - 授权还覆盖该命名空间下的 `responses` 和 `reports`，以及订阅 `commands` 和 `desired`，但目前没有任何组件读取或发送它们。请只发布**事件**。
 
@@ -328,9 +330,11 @@ POST /api/device-management/provisioning/{tenant}/register
 | --- | --- | --- | --- |
 | 路径或主题中的实例 id 不是本实例的 | `404` | broker 拒绝该发布：设备未被授权使用该主题 | — |
 | 路径中的租户不是有效令牌 | `400` | broker 拒绝该发布 | — |
+| 路径中的租户不存在 | `401`，与凭据错误的响应相同 | broker 拒绝该连接 | `total_http_ingest_refused`，`reason="unknown_tenant"` |
+| 正文中的凭据无法通过认证：未知、已过期、密钥错误、属于另一台设备，或在实例要求凭据时缺失 | `401`，始终是 `{"error":"unauthorized"}` | 设备连接时由 broker 判定 | `total_http_ingest_refused`，`reason="bad_credential"` |
 | 租户超出其接入上限（按消息数或按读数） | `429`，带 `Retry-After: 1` | 先确认，然后**丢弃** | `total_msg_rate_limited`、`total_msg_reading_limited` |
 | 正文无法读取，或超过 1 MiB | `400` | — | — |
-| 正文无法解码：不是 JSON、未知或仅限平台的 `eventType`（`StateChange`、`CommandInvocation`、`CommandResponse`）、值的 JSON 类型错误、没有条目、空条目、位置字段缺失或超出范围、告警缺少 `type` 或 `level` 大于 2147483647 | `400`，正文中给出原因 | 先确认，然后转入 `failed-decode` 流 | `total_msg_failed_decode` |
+| 正文无法解码：不是 JSON、未知或仅限平台的 `eventType`（`StateChange`、`CommandInvocation`、`CommandResponse`）、值的 JSON 类型错误、没有条目、空条目、位置字段缺失或超出范围、告警缺少 `type` 或 `level` 大于 2147483647 | 正文不是 JSON 时为 `400`；否则为 `400`，给出原因以及指向正文中该值的 [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) | 先确认，然后转入 `failed-decode` 流 | `total_msg_failed_decode` |
 | 时间戳不是 RFC 3339、等于 `0001-01-01T00:00:00Z`，或早于 366 天以上 | `400`，并指出字段 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_invalid_event_time` |
 | 超过 256 个读数 | `400`，给出数量和上限 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_too_many_readings` |
 | 正文中的 `device` 不是主题中的设备 | — | 转入 `failed-decode` | `total_msg_failed_decode` |
@@ -338,7 +342,7 @@ POST /api/device-management/provisioning/{tenant}/register
 | 平台正在施加[背压](../deployment/observability.md#ingest-backpressure) | `503`，**带** `Retry-After`：未存储，请重新发送 | 不会被拒绝：它在捕获流中等待；只有该流写满时，最早捕获的消息才会被丢弃 | |
 | 无法构建事件的消息：它携带的凭据无法密封，或事件无法编码 | `500`：未存储，重新发送会以同样方式失败 | 被丢弃 | `total_msg_build_dropped`，按 `cause` |
 | 事件无法交给处理链路 | `503`，**不带** `Retry-After`：可能已被存储，因此重发会存储两次，除非携带 [`altId`](#altid) | — | |
-| 已接受 | `202` | `PUBACK`（QoS 1） | |
+| 已接受 | `202`，带 `X-DC-Event-Id` 回执响应头 | `PUBACK`（QoS 1） | |
 
 `400` 是终态：同一请求总会得到同样的答复。入口处的拒绝会拒绝**整条消息**，包括其中的所有其他条目。
 

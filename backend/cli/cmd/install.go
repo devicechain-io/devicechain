@@ -23,6 +23,7 @@ var (
 	installSize              string
 	installNoTLS             bool
 	installNoMonitoring      bool
+	installAlerts            alertFlags
 	installNoCNPG            bool
 	installAllowLegacyDb     bool
 	installBackupCredentials string
@@ -167,6 +168,14 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 	if err != nil {
 		return bootstrap.InstallOptions{}, err
 	}
+	alerts, err := installAlerts.request()
+	if err != nil {
+		return bootstrap.InstallOptions{}, err
+	}
+	if alerts.Given() && installNoMonitoring {
+		return bootstrap.InstallOptions{}, fmt.Errorf("the --alert-* flags route the monitoring stack's alerts, and this install " +
+			"runs none (--no-monitoring, or --compact, which leaves it out unless --no-monitoring=false). Drop them, or install the monitoring stack")
+	}
 	return bootstrap.InstallOptions{
 		Options: bootstrap.Options{
 			KubeContext:          installKubeContext,
@@ -197,6 +206,7 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		RemoveLegacyIngress: installRemoveLegacy,
 		AWSNLB:              installAWSNLB,
 		MQTTGateway:         mqttGatewayFlag(installMQTTGatewayGiven, installMQTTGateway),
+		AlertRouting:        alerts,
 	}, nil
 }
 
@@ -366,6 +376,7 @@ func init() {
 	installCmd.Flags().StringVar(&installSize, "size", "", sizeInstallUsage)
 	installCmd.Flags().BoolVar(&installNoTLS, "no-tls", false, "with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both")
 	installCmd.Flags().BoolVar(&installNoMonitoring, "no-monitoring", false, "skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts")
+	installAlerts.register(installCmd)
 	installCmd.Flags().BoolVar(&installNoCNPG, "no-cnpg", false, "skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created")
 	installCmd.Flags().BoolVar(&installAllowLegacyDb, "allow-legacy-db-removal", false,
 		"proceed even though this cluster still runs the pre-CloudNativePG relational StatefulSet "+

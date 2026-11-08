@@ -59,3 +59,9 @@ Los niveles de inquilino son una capacidad familiar y esperada para cualquiera q
 - [Gobernanza y cuotas](./governance.md): los límites que suministra un nivel.
 - [Autoría asistida por IA](./ai-authoring.md): el derecho de uso de modelos de IA que empaqueta un nivel.
 - [Multitenencia](./multi-tenancy.md): cómo se modelan y se aíslan los inquilinos.
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::

@@ -150,6 +150,30 @@ func TestByteIdentity(t *testing.T) {
 			},
 		},
 		{
+			name: "httpCall with a signing handle",
+			canvas: canvas(
+				[]Node{
+					src("s"),
+					{ID: "c", Type: NodeThreshold, Config: cfg(map[string]interface{}{
+						"name": "hot", "severity": "warning",
+						"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30}},
+					})},
+					{ID: "a", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "httpCall", "url": "https://example.com/hook", "signingSecretRef": "hooks/prod",
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "a:in"},
+			),
+			want: rules.Rule{
+				Name: "hot", Type: rules.TypeThreshold, Severity: rules.SeverityWarning,
+				When: rules.Condition{Metric: "tempC", Op: rules.OpGt, Threshold: f64(30)},
+				Actions: []rules.Action{{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{
+					URL: "https://example.com/hook", SigningSecretRef: "hooks/prod",
+				}}},
+			},
+		},
+		{
 			name: "threshold + publish to connector (ADR-060)",
 			canvas: canvas(
 				[]Node{
@@ -502,6 +526,48 @@ func TestRejects(t *testing.T) {
 					src("s"), th("c", "a"),
 					{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
 						"action": "raiseAlarm", "expiresAfter": "15m",
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "act:in"},
+			),
+			wantNodeID: "act",
+		},
+		{
+			name: "raiseAlarm carries httpCall's signingSecretRef",
+			def: canvas(
+				[]Node{
+					src("s"), th("c", "a"),
+					{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "raiseAlarm", "signingSecretRef": "hooks/prod",
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "act:in"},
+			),
+			wantNodeID: "act",
+		},
+		{
+			name: "sendCommand carries httpCall's signingSecretRef",
+			def: canvas(
+				[]Node{
+					src("s"), th("c", "a"),
+					{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "sendCommand", "command": "reboot", "signingSecretRef": "hooks/prod",
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "act:in"},
+			),
+			wantNodeID: "act",
+		},
+		{
+			name: "publish carries httpCall's signingSecretRef",
+			def: canvas(
+				[]Node{
+					src("s"), th("c", "a"),
+					{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "publish", "connectorRef": "pager", "signingSecretRef": "hooks/prod",
 					})},
 				},
 				Edge{From: "s:out", To: "c:in"},

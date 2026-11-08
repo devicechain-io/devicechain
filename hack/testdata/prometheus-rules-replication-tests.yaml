@@ -155,6 +155,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamnotreplicatedasconfigured"
               summary: "JetStream stream or bucket is not replicated as configured"
               description: "devicechain_resolved-events has fewer replicas than this instance is configured for. This instance is NOT highly available for that stream. Both halves of the toggle must agree: instance.config.infrastructure.nats.streamReplicas sets the replica count, and the NATS server cluster (tofu var.ha / nats_cluster_replicas) must be large enough to host it. NOTE this does NOT clear on its own once peers arrive: the replica lift runs only when a service starts and ensures its streams, and a lift that failed mid-scale (JSClusterNoPeersError) is warned and not retried. Once the cluster is whole, restart the affected Deployments to re-run the lift."
 
@@ -184,6 +185,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicapeersdegraded"
               summary: "JetStream replica peers are offline"
               description: "devicechain_resolved-events reports more replicas than it has online RAFT peers: a copy is offline or missing. It is labelled replicated but is not: losing the leader may lose data or availability. Check NATS pod health and placement -- three replicas across pods that share one node survive zero node losses."
 
@@ -234,6 +236,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicapeerslagging"
               summary: "A JetStream replica has not caught up"
               description: "devicechain_resolved-events has had at least one online replica that was not caught up at any check for the last 30 minutes. Short lag under heavy load is normal and does not raise this. A copy this far behind cannot take over without losing recent messages. Check the NATS pods for CPU or disk pressure; it clears once every copy has been caught up at least once in a 15-minute window."
 
@@ -262,6 +265,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicapeersdegraded"
               summary: "JetStream replica peers are offline"
               description: "devicechain_resolved-events reports more replicas than it has online RAFT peers: a copy is offline or missing. It is labelled replicated but is not: losing the leader may lose data or availability. Check NATS pod health and placement -- three replicas across pods that share one node survive zero node losses."
 
@@ -317,6 +321,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamleasebucketnotreplicated"
               summary: "The partition-lease bucket is not replicated"
               description: "KV_devicechain_dc_leases holds the partition-ownership leases that decide which pod may write. On an instance configured for HA it must be replicated: at one replica, losing its node does not just lose the leases, it blocks every standby's Acquire and the lease-fenced failover cannot happen at all. Do not claim lease-fenced HA while this is firing."
 
@@ -369,6 +374,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamclusterunused"
               summary: "The NATS broker is clustered but nothing on it is replicated"
               description: "This instance is connected to a CLUSTERED NATS broker while every stream and KV bucket is configured for a single replica, so it is paying for a multi-server cluster and surviving zero node losses. Both halves of the toggle have to move together: the server count is OpenTofu's (var.ha / nats_cluster_replicas) and the replica factor is the chart's (instance.config.infrastructure.nats.streamReplicas). `dcctl install --ha` sets both from one value. If the single-server topology is what you intended, scale the NATS cluster back down rather than leaving it running unused."
       # A single-replica lease bucket on an instance configured for one replica is not
@@ -410,6 +416,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
               summary: "A service can no longer read a JetStream stream's replication state"
               description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
       # The rules it stands in for are silent on that stream, which is the point.
@@ -446,6 +453,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
               summary: "A service can no longer read a JetStream stream's replication state"
               description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
 
@@ -544,6 +552,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
               summary: "A service can no longer read a JetStream stream's replication state"
               description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
           - exp_labels:
@@ -554,6 +563,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
               summary: "A service can no longer read a JetStream stream's replication state"
               description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of devicechain_resolved-events earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
           - exp_labels:
@@ -564,6 +574,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
               summary: "A service can no longer read a JetStream stream's replication state"
               description: "dc-device-management-5c4f-ccccc (devicechain/device-management) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
 
@@ -593,6 +604,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
               summary: "A service can no longer read a JetStream stream's replication state"
               description: "dc-event-processing-6b7d-aaaaa (devicechain/event-processing) reported the replication of KV_devicechain_dc_leases earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery."
       - eval_time: 6h11m

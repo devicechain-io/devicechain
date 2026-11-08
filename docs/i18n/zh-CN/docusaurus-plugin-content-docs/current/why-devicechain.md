@@ -58,3 +58,9 @@ DeviceChain 是一个采用 Apache 2.0 许可的物联网平台,运行在 Kubern
 - [快速入门:你的第一台设备](./quickstart/first-device.md)在你的机器上运行一个实例。
 - [架构概览](./concepts/architecture-at-a-glance.md)展示消息如何在平台中流转,[架构](./concepts/architecture.md)列出每个组件。
 - [获取帮助](./getting-help.md)说明在哪里提问,或报告本页遗漏的内容。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](./quickstart/first-device.md)
+
+:::

@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/integration"
 
 	"github.com/devicechain-io/dc-event-sources/config"
+	"github.com/devicechain-io/dc-event-sources/credcheck"
 	"github.com/devicechain-io/dc-event-sources/graphql"
 	"github.com/devicechain-io/dc-event-sources/model"
 	processor "github.com/devicechain-io/dc-event-sources/processor"
@@ -290,6 +291,19 @@ var (
 	// event stored nowhere.
 	BuildDroppedCounter *prometheus.CounterVec
 
+	// IngestRefusedCounter counts the requests HTTP /events refused synchronously with a 401, by
+	// source and reason (processor.RefusedUnknownTenant, processor.RefusedCredential). The sender
+	// is told one thing for both; the operator is told which.
+	IngestRefusedCounter *prometheus.CounterVec
+	// CredentialCheckCounter counts the credential check's calls to device-management by outcome
+	// (accepted, rejected, error), and CredentialCheckSkippedCounter the checks not made by reason
+	// (busy, held, probing, table_full): each skipped check is a request accepted unchecked.
+	CredentialCheckCounter        *prometheus.CounterVec
+	CredentialCheckSkippedCounter *prometheus.CounterVec
+	// TenantDirectory answers whether a tenant is known not to exist, from the same cache the
+	// ingest ceiling is resolved through. nil when user-management is not configured.
+	TenantDirectory *governance.TenantLimitResolver
+
 	// ShedAcknowledgedCounter counts messages shed at the per-tenant ingest ceiling from an MQTT
 	// source, every one of which the device (or the operator's broker) had ALREADY been told
 	// arrived: a PUBACK is sent before this service reads the message, and a shed message is
@@ -418,6 +432,30 @@ func initializeMetrics() {
 			"no tenant, no transit key, a credential that could not be sealed, or a marshal failure. "+
 			"HTTP answers 500 for each; no transport stores them",
 		[]string{"source", "cause"})
+	IngestRefusedCounter = Microservice.NewCounterVec(
+		"total_http_ingest_refused",
+		"Count of HTTP /events requests refused synchronously with a 401, by reason: the tenant in the path "+
+			"does not exist, or the credential in the body does not authenticate. The sender sees one answer "+
+			"for both",
+		[]string{"source", "reason"})
+	CredentialCheckCounter = Microservice.NewCounterVec(
+		"total_http_credential_checks",
+		"Count of calls the HTTP credential check made to device-management, by outcome. A device posting "+
+			"with a verdict already remembered makes no call",
+		[]string{"outcome"})
+	CredentialCheckSkippedCounter = Microservice.NewCounterVec(
+		"total_http_credential_checks_skipped",
+		"Count of HTTP credential checks not made, by reason: the in-flight bound (busy), the credential "+
+			"is held off after repeated failures (held), another check of the same credential is in flight "+
+			"(probing), or the failure table is full (table_full). The "+
+			"request is accepted unchecked and device-management decides, as it always did",
+		[]string{"reason"})
+	for _, outcome := range []string{"accepted", "rejected", "error"} {
+		CredentialCheckCounter.WithLabelValues(outcome)
+	}
+	for _, reason := range []string{"busy", "held", "probing", "table_full"} {
+		CredentialCheckSkippedCounter.WithLabelValues(reason)
+	}
 	ShedAcknowledgedCounter = Microservice.NewCounterVec(
 		"total_msg_shed_acknowledged",
 		"Count of messages from an MQTT source shed at the per-tenant ingest ceiling after the device had "+
@@ -594,6 +632,64 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 	return route
 }
 
+// buildIngestChecks builds the synchronous refusals HTTP /events makes before it answers 202:
+// 401 for a tenant that does not exist and for a credential that will not authenticate.
+//
+// Each half is built only when what it needs is configured, and each fails open: with no
+// user-management there is no authority on which tenants exist, and with no device-management
+// there is nobody to ask about a credential, so the door is then exactly what it was.
+func buildIngestChecks() *processor.IngestChecks {
+	checks := &processor.IngestChecks{
+		Refused: func(source, reason string) {
+			if IngestRefusedCounter != nil {
+				IngestRefusedCounter.WithLabelValues(source, reason).Inc()
+			}
+		},
+	}
+	if dir := TenantDirectory; dir != nil {
+		checks.TenantUnknown = func(ctx context.Context, tenant string) bool {
+			// A warm answer is a cache read. Only a tenant never seen before waits, and then
+			// for at most the budget: the timer is made for that request alone.
+			switch dir.Existence(tenant) {
+			case governance.ExistenceNone:
+				return true
+			case governance.ExistenceKnown:
+				return false
+			}
+			wctx, cancel := context.WithTimeout(ctx, processor.TenantWaitBudget)
+			defer cancel()
+			return dir.AwaitExistence(wctx, tenant) == governance.ExistenceNone
+		}
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 ||
+		infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("Service secret or user-management or device-management endpoint not configured - " +
+			"HTTP /events will not check a device credential before it answers 202.")
+		return checks
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	verifier, err := credcheck.New(credcheck.NewDM(client, dmURL), credcheck.Config{
+		OnCall: func(outcome string) {
+			if CredentialCheckCounter != nil {
+				CredentialCheckCounter.WithLabelValues(outcome).Inc()
+			}
+		},
+		OnSkip: func(reason string) {
+			if CredentialCheckSkippedCounter != nil {
+				CredentialCheckSkippedCounter.WithLabelValues(reason).Inc()
+			}
+		},
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build the HTTP credential check - /events will not check a credential before it answers 202.")
+		return checks
+	}
+	checks.Credential = verifier
+	return checks
+}
+
 // contentionLevel is the effective ADR-063 shed level. At GA it is just the operator
 // manual floor (the composite L = max(auto, manual) collapses to manual because the
 // auto controller is deferred). A function so the deferred runtime signal can slot in
@@ -682,6 +778,7 @@ func buildRateLimiter() {
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
+	TenantDirectory = resolver
 	ShedPriorityResolver = governance.NewShedPriorityResolver(client, umURL)
 	// Both limiters share the ceiling resolver, so a tenant's ADR-023 override applies
 	// to their live traffic and their backlog alike — the ceiling is the same, only the
@@ -890,6 +987,7 @@ func buildEventSources() error {
 					return err
 				}
 			}
+			http.UseIngestChecks(buildIngestChecks())
 			created = append(created, http)
 		default:
 			return fmt.Errorf("unknown event source type: %s", source.Type)
@@ -1442,7 +1540,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// which runs before the manager drains the connection. InboundEventsWriter above
 	// stays for HTTP and the presence tap, which publish synchronously; the two do
 	// not share a JetStream context, since the ordered writer builds its own.
+	startGatewayFeedback(nmgr)
 	if GatewaySource != nil {
+		GatewaySource.UseGatewayFeedback(GatewayAnswers)
 		GatewaySource.SetReader(capture)
 		pipeline, err := newGatewayWriter(nmgr)
 		if err != nil {
@@ -1686,6 +1786,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	stopGatewayFeedback()
 	// Stop the presence tap before the sources: it holds its own broker connection and
 	// its own goroutines, and a reconciliation pass mid-shutdown would emit into a
 	// writer that is about to close.

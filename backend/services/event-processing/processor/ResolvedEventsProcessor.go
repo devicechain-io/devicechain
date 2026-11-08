@@ -1555,6 +1555,13 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
 	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
+	if v := engine.RestoredFrontier(); v < detectcore.FrontierVersion {
+		// Written before the frontier was clamped to broker append time: a device clock that ran ahead may have
+		// carried it up to the resolver's future-skew bound past real time. It only moves forward, so it
+		// corrects itself once real time catches up; say so rather than leave an early absence unexplained.
+		log.Warn().Str("partition", rp.cfg.PartitionId).Int("frontierVersion", v).Int("current", detectcore.FrontierVersion).
+			Msg("Restored a DETECT snapshot whose watermark predates the append-time clamp; it may run ahead of real time until time catches up.")
+	}
 	return nil
 }
 

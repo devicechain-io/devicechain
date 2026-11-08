@@ -264,14 +264,54 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 发给集成设备的命令 {#commands}
 
-通过集成上报的设备没有到 DeviceChain 的连接，无法向其下发命令，第 1 版也没有通向网络服务器 API 的下行。发给这类设备的命令**在你下发时会被接受**，然后在**下一次投递扫描时失败**，错误为 `COMMAND_TRANSPORT_UNSUPPORTED`，因为平台识别该传输，却无法通过它投递。它不会一直排队到过期。
+通过集成上报的设备没有到 DeviceChain 的连接，无法向其下发命令。除非你的安装启用了 [LoRaWAN 下行](#lorawan-downlink)，否则发给这类设备的命令**在你下发时会被接受**，然后在**下一次投递扫描时失败**，错误为 `COMMAND_TRANSPORT_UNSUPPORTED`，因为平台识别该传输，却无法通过它投递。它不会一直排队到过期。
 
 有两种情况值得了解：
 
 - 同时通过 MQTT 连接的设备，按它最近一次上报所用的传输来判断。最近一次通过集成上报时，其命令会失败；改为通过 MQTT 上报之后，命令即可投递。
 - 从未上报过的设备没有记录的传输，因此它的命令会照常下发，并因无人应答而过期，直到它首次上报为止。
 
-对必须接收命令的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
+对必须接收命令、且不在 ChirpStack v4 网络服务器后面的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
+
+## LoRaWAN 下行（ChirpStack v4）{#lorawan-downlink}
+
+当安装启用了出站连接器的下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`；此时 Helm chart 会让命令投递服务派发这些命令，并拒绝手工设置的该标志副本），向 ChirpStack v4 网络服务器后面的设备发送命令时，会在该服务器上排入一条下行。未启用的安装不受任何影响。
+
+**1. 把集成关联到它的网络服务器。** 创建并发布一个类型为 `lorawan_downlink` 的连接器：
+
+```json
+{
+  "networkServer": "chirpstack_v4",
+  "baseUrl": "https://chirpstack.example.com",
+  "integration": "my-integration-token"
+}
+```
+
+`integration` 是该服务器所服务设备所属的入站集成的令牌。连接器的**密钥**是一个允许排入下行的 ChirpStack API 密钥（ChirpStack v4 的 REST API，由其 `chirpstack-rest-api` 组件提供）；它加密存储，之后不再显示。同一集成只能被一个已发布的连接器指向：没有或有两个时，命令会被拒绝而不是发出。与所有连接器一样，对 `baseUrl` 的调用要经过平台的出站策略，因此位于私有地址的服务器需要运维人员放行。
+
+**2. 定义命令。** 在设备类型的配置中添加一个带有以下参数的命令：
+
+| 参数 | 含义 |
+| --- | --- |
+| `fPort` | LoRaWAN 应用端口，1 到 223。必填。 |
+| `hex` 或 `base64` | 应用负载，十六进制或带填充的标准 base64。二者给出且仅给出一个。最多 242 字节。 |
+| `confirmed` | 暂不可用。设置它的命令会被拒绝，而不会以未确认方式发出。 |
+
+任何其他参数名都会被拒绝。
+
+**3. 发送。** 设备必须带有 `lorawan.deveui` [别名](#aliases)：DevEUI 取自设备，绝不取自命令。命令经由设备**最近一次上报所用**的集成发出。
+
+**结果的含义。** `SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。其他结果：
+
+| 发生了什么 | 结果 |
+| --- | --- |
+| 参数无效、设备没有 DevEUI、集成没有关联（或有两个）、命令已过期，或租户超出出站调用上限 | `FAILED`，未投递。可以放心重发。 |
+| 网络服务器拒绝了它（4xx：API 密钥错误、设备未知、负载对设备当前数据速率过大），或在发出任何内容之前无法连接 | `FAILED`，未投递。原因会指明服务器的回应。 |
+| 请求已发出，但服务器出错或没有应答（5xx、超时） | 结果**未知**：下行可能已入队，再次发送可能会发出两次。 |
+
+按结果查看 `lpwan_downlinks_total` 指标，可以看到命令在哪一步停下。
+
+**在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
 
 ## 集成令牌能做什么 {#trust}
 
@@ -289,7 +329,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 第 1 版不包含 {#not-supported}
 
-- **下行。**无法通过网络服务器向设备下发命令。参见[发给集成设备的命令](#commands)。
+- **面向 The Things Stack 与通用发送方的下行、确认下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)只覆盖 ChirpStack v4 和原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。

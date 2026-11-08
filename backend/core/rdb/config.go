@@ -29,6 +29,11 @@ type PostgresConfig struct {
 	// whose broker transport ADR-025 already hardened. Turning it ON is a
 	// separate decision from making it POSSIBLE; this is the latter.
 	SslMode string `json:"sslMode"`
+
+	// Shards is the FIXED list of shard databases beyond the manager's own (shard group 0).
+	// Absent or empty - the default - means sharding is unconfigured and nothing about the
+	// connection changes. See ShardConfig and validateShards.
+	Shards []ShardConfig `json:"shards,omitempty"`
 }
 
 // DefaultSslMode is `prefer`, and that is a decision rather than an inherited
@@ -135,6 +140,10 @@ func convertToPostgresConfig(rdb config.DatastoreConfiguration) (*PostgresConfig
 		return nil, err
 	}
 	pgconf.SslMode = mode
+
+	if err := validateShards(pgconf); err != nil {
+		return nil, err
+	}
 
 	return pgconf, nil
 }
