@@ -27,7 +27,7 @@ why() { printf '      - %s\n' "$*"; bad=1; }
 chk_publish() {
   bad=0
   ((R_RC == 0)) || why "client: the publish was not accepted (exit $R_RC)"
-  ((R_STORED == 1)) || why "store: the measurement was not stored"
+  [[ "$R_STORED" == 1 ]] || why "store: the measurement was not stored (stored=$R_STORED)"
   ((R_COUNTER >= 1)) || why "counters: the platform counted no inbound message"
   return "$bad"
 }
@@ -44,7 +44,7 @@ chk_command() {
 chk_http_202() {
   bad=0
   [[ "$R_CODE" == 202 ]] || why "http: answered '$R_CODE', not 202"
-  ((R_STORED == 1)) || why "store: the measurement was not stored"
+  [[ "$R_STORED" == 1 ]] || why "store: the measurement was not stored (stored=$R_STORED)"
   ((R_COUNTER >= 1)) || why "counters: the platform counted no inbound message"
   return "$bad"
 }
@@ -57,7 +57,7 @@ chk_http_refusal() {
   bad=0
   [[ "$R_CODE" == "$1" ]] || why "http: answered '$R_CODE', not $1"
   [[ "$R_RETRY" =~ ^[0-9]+$ ]] || why "http: Retry-After is '$R_RETRY', not a number of seconds"
-  ((R_STORED == 0)) || why "store: the refused event was stored"
+  [[ "$R_STORED" == 0 ]] || why "store: the refused event was stored, or the store could not be asked (stored=$R_STORED)"
   ((R_COUNTER >= 1)) || why "counters: the platform counted no refusal"
   return "$bad"
 }
@@ -75,8 +75,8 @@ chk_presence() {
 # changed value can only arrive as a notification, so both must be in the store.
 chk_observe() {
   bad=0
-  ((R_INITIAL == 1)) || why "store: the client's initial value was not stored"
-  ((R_CHANGED == 1)) || why "store: no changed value (a notification) was stored"
+  [[ "$R_INITIAL" == 1 ]] || why "store: the client's initial value was not stored (stored=$R_INITIAL)"
+  [[ "$R_CHANGED" == 1 ]] || why "store: no changed value (a notification) was stored (stored=$R_CHANGED)"
   return "$bad"
 }
 
@@ -128,13 +128,13 @@ chk_harvest_tlv_unread() {
 chk_tlv_limit() {
   bad=0
   [[ "$R_ACTIVE" == true ]] || why "device-state: the TLV-only client is not connected"
-  ((R_COUNT == 0)) || why "store: $R_COUNT reading(s) were stored for a client that cannot produce SenML; the limitation no longer holds"
+  [[ "$R_COUNT" == 0 ]] || why "store: $R_COUNT reading(s) were stored for a client that cannot produce SenML; the limitation no longer holds"
   return "$bad"
 }
 
 chk_sp_data() {
   bad=0
-  ((R_STORED == 1)) || why "store: the data value was not stored under the metric the birth gave that alias"
+  [[ "$R_STORED" == 1 ]] || why "store: the data value was not stored under the metric the birth gave that alias (stored=$R_STORED)"
   return "$bad"
 }
 
@@ -409,27 +409,47 @@ EOY
 # Reading the store
 # ---------------------------------------------------------------------------
 
-# stored <device token> prints the device's stored measurements as a JSON array of {name,value}.
+# stored <device token> prints ALL the device's stored measurements as a JSON array of {name,value},
+# page by page (the 503 check fills a stream of 300, more than one page), and returns non-zero when the
+# store could not be asked: a query that failed is not an empty store, and must never read as one.
 stored() {
-  emq 'query($c:EventSearchCriteria!){measurementEvents(criteria:$c){results{deviceToken name value}}}' \
-    "$(jq -n --arg d "$1" '{c:{pageNumber:1,pageSize:200,deviceToken:$d}}')" 2>/dev/null | jq -c '[.measurementEvents.results[]? | {name, value}]'
+  local page=1 r got n all='[]'
+  while ((page <= 25)); do
+    r="$(emq 'query($c:EventSearchCriteria!){measurementEvents(criteria:$c){results{deviceToken name value}}}' \
+      "$(jq -n --arg d "$1" --argjson p "$page" '{c:{pageNumber:$p,pageSize:200,deviceToken:$d}}')" 2>/dev/null)" || return 1
+    got="$(jq -e -c '.measurementEvents.results | map({name, value})' <<<"$r" 2>/dev/null)" || return 1
+    all="$(jq -c --argjson g "$got" '. + $g' <<<"$all")"
+    n="$(jq 'length' <<<"$got")"
+    ((n == 200)) || break
+    page=$((page + 1))
+  done
+  printf '%s' "$all"
 }
 # has_value <device token> <value> [name] prints 1 if a stored measurement of the device (optionally with
-# that name) has that value.
+# that name) has that value, 0 if none has, and x if the store could not be asked.
 has_value() {
   local s
-  s="$(stored "$1")" || { echo 0; return; }
-  [[ -n "$s" ]] || { echo 0; return; }
+  s="$(stored "$1")" || { echo x; return; }
   jq -r --argjson v "$2" --arg n "${3:-}" '[.[] | select(($n == "" or .name == $n) and ((.value - $v) | fabs) < 0.0001)] | length | if . > 0 then 1 else 0 end' <<<"$s"
 }
-wait_value() { # <device> <value> <seconds> [name]
-  local deadline=$((SECONDS + $3))
+wait_value() { # <device> <value> <seconds> [name]: 1, or what the last attempt said (0, or x)
+  local deadline=$((SECONDS + $3)) last=x
   while ((SECONDS < deadline)); do
-    [[ "$(has_value "$1" "$2" "${4:-}")" == 1 ]] && { echo 1; return; }
+    last="$(has_value "$1" "$2" "${4:-}")"
+    [[ "$last" == 1 ]] && { echo 1; return; }
     sleep 2
   done
-  echo 0
+  echo "$last"
 }
+# stored_names <device token>: the distinct names of its stored measurements, for a check's evidence line.
+stored_names() {
+  local s
+  s="$(stored "$1")" || { echo "(the store could not be asked)"; return 0; }
+  jq -r '[.[].name] | unique | join(",")' <<<"$s"
+}
+# known <value> <what>: a control judged on a store read must have had the store answer; a read that
+# failed would turn the control red for a reason that is not the defect.
+known() { [[ "$1" != x ]] || fail "$2: the event store could not be asked, so the control cannot be judged"; }
 
 # device_state <external id> sets D_TOKEN D_ACTIVE D_PRESENCE (empty when the device does not exist).
 D_TOKEN="" D_ACTIVE="" D_PRESENCE=""
@@ -662,7 +682,7 @@ ceiling_refusals() {
 }
 
 step_http_429() {
-  local i v resp c0 c1 code="" retry="" refused=""
+  local i v resp c0 c1 code="" retry="" refused="" admitted=""
   tenant_token="$rl_token"
   c0="$(ceiling_refusals)"
   for i in 1 2 3 4 5 6 7 8; do
@@ -671,12 +691,15 @@ step_http_429() {
     code="${resp%% *}"; retry="${resp#* }"
     note "attempt $i: $v -> $code${retry:+ (Retry-After $retry)}"
     if [[ "$code" == 429 ]]; then refused="$v"; break; fi
+    [[ "$code" != 202 ]] || admitted="$v"
   done
   [[ -n "$refused" ]] || fail "the rate-limited tenant was never answered 429 in 8 posts"
   sleep 8
   reset_record
   R_CODE="$code"; R_RETRY="$retry"
   R_STORED="$(has_value "$rl_dev" "$refused")"
+  # The absence is evidence only next to a presence: the posts admitted before the refusal are there.
+  [[ "$(has_value "$rl_dev" "$admitted")" == 1 ]] || R_STORED="x (an admitted post is not in the store either)"
   c1="$(ceiling_refusals)"
   R_COUNTER=$((c1 - c0))
   record_check http-429 chk_http_429 "over-ceiling POST answered $R_CODE Retry-After $R_RETRY, refused value stored=$R_STORED, refusal counter +$R_COUNTER"
@@ -756,13 +779,16 @@ step_lwm2m() {
   changed=0
   local deadline=$((SECONDS + 90)) s
   while ((SECONDS < deadline)); do
-    s="$(stored "$tok")"
-    changed="$(jq -r '[.[] | select(.value > 100)] | length | if . > 0 then 1 else 0 end' <<<"${s:-[]}")"
+    if s="$(stored "$tok")"; then
+      changed="$(jq -r '[.[] | select(.value > 100)] | length | if . > 0 then 1 else 0 end' <<<"$s")"
+    else
+      changed=x
+    fi
     [[ "$changed" == 1 ]] && break
     sleep 3
   done
   reset_record; R_INITIAL="$initial"; R_CHANGED="$changed"
-  record_check lwm2m-observe chk_observe "stored for $tok: initial 21.5 present=$initial, a notified (changed) value present=$changed; names: $(jq -r '[.[].name] | unique | join(",")' <<<"$(stored "$tok")")"
+  record_check lwm2m-observe chk_observe "stored for $tok: initial 21.5 present=$initial, a notified (changed) value present=$changed; names: $(stored_names "$tok")"
 
   # Read
   issue_command "$tok" lwm2m.read '{"path":"/3/0/0"}' 60
@@ -806,17 +832,21 @@ step_lwm2m() {
   wait_active "$lw_tlv_identity" 90 || true
   device_state "$lw_tlv_identity"
   ttok="$D_TOKEN"
+  # An empty token would ask the store for every device's readings, so it is refused here.
+  [[ -n "$ttok" ]] || fail "no device for $lw_tlv_identity; the limit check and N3 cannot be judged"
   # Long enough for an Observe refused at registration to have been followed by every retry the platform
   # makes, and for the client's value to have changed several times.
   sleep 45
   local tstored
-  tstored="$(stored "$ttok")"
+  # Zero readings is the limitation holding only if the store answered; a failed read is not zero.
+  tstored="$(stored "$ttok")" || fail "the event store could not be asked for $ttok; the limit check and N3 cannot be judged"
   reset_record
-  R_ACTIVE="$D_ACTIVE"; R_COUNT="$(jq -r 'length' <<<"${tstored:-[]}")"
+  R_ACTIVE="$D_ACTIVE"; R_COUNT="$(jq -r 'length' <<<"$tstored")"
   record_check lwm2m-tlv-only-no-telemetry chk_tlv_limit "TLV-only client: device $ttok active=$R_ACTIVE, readings stored=$R_COUNT (the limitation holds when 0)"
   reset_record
   R_INITIAL="$(has_value "$ttok" 21.5)"
-  R_CHANGED="$(jq -r '[.[]? | select(.value > 100)] | length | if . > 0 then 1 else 0 end' <<<"${tstored:-[]}")"
+  known "$R_INITIAL" "N3"
+  R_CHANGED="$(jq -r '[.[]? | select(.value > 100)] | length | if . > 0 then 1 else 0 end' <<<"$tstored")"
   record_control N3-lwm2m-tlv-only lwm2m-observe chk_observe "TLV-only client: initial stored=$R_INITIAL, notified value stored=$R_CHANGED"
   client_rm "$tcli"
 }
@@ -847,7 +877,7 @@ step_sparkplug() {
   # The birth carries 21.5; the data carries 22.5, 23.5, 24.5 by alias, so only the data can supply them.
   reset_record
   R_STORED="$(wait_value "$tok" 24.5 90 temperature)"
-  record_check sparkplug-data chk_sp_data "Tahu NDATA by alias: temperature=24.5 stored=$R_STORED; names: $(jq -r '[.[].name] | unique | join(",")' <<<"$(stored "$tok")")"
+  record_check sparkplug-data chk_sp_data "Tahu NDATA by alias: temperature=24.5 stored=$R_STORED; names: $(stored_names "$tok")"
   client_rm "$n"
 
   # N2: the same node publishing its data one alias off.
@@ -856,10 +886,16 @@ step_sparkplug() {
   wait_active "conf/n2" 90 || true
   device_state "conf/n2"
   tok2="$D_TOKEN"
-  sleep 15
+  [[ -n "$tok2" ]] || fail "no device for conf/n2; N2 cannot be judged"
+  # The defect must have REACHED the platform: the misaddressed value is stored under the neighbouring
+  # metric. Without that, temperature missing would also be what a node that sent nothing looks like.
+  local neighbour
+  neighbour="$(wait_value "$tok2" 24.5 60 humidity)"
+  [[ "$neighbour" == 1 ]] || fail "N2: the off-by-one data never reached the store as humidity=24.5 (got $neighbour); the control cannot be judged"
   reset_record
   R_STORED="$(has_value "$tok2" 24.5 temperature)"
-  record_control N2-decoder-off-by-one sparkplug-data chk_sp_data "NDATA one alias off: temperature=24.5 stored=$R_STORED (humidity 24.5 stored=$(has_value "$tok2" 24.5 humidity))"
+  known "$R_STORED" "N2"
+  record_control N2-decoder-off-by-one sparkplug-data chk_sp_data "NDATA one alias off: temperature=24.5 stored=$R_STORED (humidity 24.5 stored=$neighbour)"
   client_rm "$n2"
 }
 
