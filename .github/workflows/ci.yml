@@ -402,6 +402,25 @@ jobs:
       # is backend/k8s for both, literally: the Makefile that holds the version,
       # and `make envtest`, live there, so both modules exercise one API server
       # version.
+      # The asset tarball comes from a GitHub release, which has had outages (504). The
+      # directory is cached by version + OS and the download is retried; the kube-apiserver/etcd
+      # check below runs AFTER the restore, so a stale or partial cache fails the step rather
+      # than passing silently (setup-envtest also re-verifies the archive checksum on use).
+      - name: Read the envtest version
+        id: envtest-version
+        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        working-directory: backend/k8s
+        run: |
+          version="$(sed -n 's/^ENVTEST_K8S_VERSION[[:space:]]*=[[:space:]]*//p' Makefile | tr -d '[:space:]')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the envtest assets
+        if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/dc-envtest
+          key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ steps.envtest-version.outputs.version }}
+
       - name: envtest binaries
         if: matrix.module == 'backend/k8s' || matrix.module == 'backend/cli'
         working-directory: backend/k8s
@@ -417,7 +436,7 @@ jobs:
             exit 1
           fi
           make envtest
-          assets="$(bin/setup-envtest use "$version" -p path)"
+          assets="$(../../hack/ci-retry.sh bin/setup-envtest use "$version" --bin-dir "$HOME/.cache/dc-envtest" -p path)"
           if [ ! -x "$assets/kube-apiserver" ] || [ ! -x "$assets/etcd" ]; then
             echo "::error::setup-envtest reported $assets but it holds no kube-apiserver/etcd; the API-server suites would fail for the wrong reason"
             exit 1
@@ -2752,6 +2771,22 @@ jobs:
           # alone — that is how the skew came back.
           tofu_version: 1.9.1
 
+      # Provider plugins come from GitHub release assets via the registry redirect, which
+      # has had outages (504). Cache the plugin directory (keyed on every .tf, since the
+      # provider pins live there and no lock files are committed) and retry each init.
+      - name: Restore OpenTofu providers
+        id: tofu-plugins
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tofu-plugins
+          key: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/**/*.tf') }}
+          restore-keys: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Point OpenTofu at the plugin cache
+        run: |
+          mkdir -p "$HOME/.cache/tofu-plugins"
+          echo "TF_PLUGIN_CACHE_DIR=$HOME/.cache/tofu-plugins" >> "$GITHUB_ENV"
+
       - name: tofu fmt
         run: tofu fmt -check -recursive
 
@@ -2782,7 +2817,7 @@ jobs:
           hack/tofu-roots.sh | sed 's/^/  discovered root: /'
           hack/tofu-roots.sh | while IFS= read -r root; do
             echo "::group::$root"
-            ( cd "$root" && tofu init -backend=false && tofu validate )
+            ( cd "$root" && "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false && tofu validate )
             echo "::endgroup::"
           done
 
@@ -2795,7 +2830,7 @@ jobs:
         run: |
           set -euo pipefail
           tofu fmt -check -recursive
-          tofu init -backend=false
+          "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
           tofu validate
 
       # The plan's shape, rather than its syntax: two pools, the database one
@@ -2821,7 +2856,7 @@ jobs:
         run: |
           set -euo pipefail
           tofu fmt -check -recursive
-          tofu init -backend=false
+          "$GITHUB_WORKSPACE/hack/ci-retry.sh" tofu init -backend=false
           tofu validate
           tofu test -no-color | tee "$RUNNER_TEMP/playground-tftest.log"
           grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/playground-tftest.log"
@@ -2892,6 +2927,16 @@ jobs:
       - name: broker version skew
         run: hack/check-broker-version-skew.sh
         working-directory: .
+
+      # Saved even when a later init failed: each provider is installed into the cache
+      # atomically, so what is there is whole, and keeping it lets the re-run skip the
+      # providers that did download instead of hitting the outage for all of them again.
+      - name: Save OpenTofu providers
+        if: always() && steps.tofu-plugins.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/tofu-plugins
+          key: tofu-plugins-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('deploy/**/*.tf') }}
 
   # ---------------------------------------------------------------------------
   # Image smoke build: ko builds each service image locally (no push). This
