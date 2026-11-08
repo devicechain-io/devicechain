@@ -76,6 +76,16 @@ jobs:
       - name: release manifest publisher self-test
         run: hack/publish-release-manifest.sh --self-test
 
+      # The evidence-pack generator and the OpenVEX generator, each against inputs it must refuse:
+      # a stale, missing, failing, future-dated or edited rig result, an empty SBOM or VEX document,
+      # a tampered or smuggled pack member, and a govulncheck report from a scan that never completed.
+      - name: evidence pack and OpenVEX generator self-tests
+        run: |
+          hack/evidence-pack.sh --self-test
+          hack/vex-from-govulncheck.sh --self-test
+          hack/check-evidence-pack-workflow.sh --self-test
+          hack/check-evidence-pack-workflow.sh
+
       # Proves the coverage check can fail before its green run is used as evidence.
       - name: dependabot module-coverage self-test
         run: hack/check-dependabot-modules.sh --self-test
@@ -825,6 +835,21 @@ jobs:
       - name: no bcrypt compare outside the credential primitive
         run: hack/check-credential-compare.sh
 
+      # Two red lines on what an AI agent can be made to do, enforced as parsed, tree-wide
+      # properties. Declarative-only: no tenant code runtime (a script interpreter or a
+      # WebAssembly runtime) may appear in any go.mod, go.sum, go.work or Go import, and the
+      # allowance list is empty. Constant remediation: the text an error gives an agent is a
+      # string literal or a constant, never formatted from runtime data. The self-test
+      # plants a goja import, requirement, replace target and checksum line, the other
+      # runtimes, and a Sprintf, a concatenation and a variable in a remediation, and requires
+      # each to be named by file and line; it also requires clean shapes to pass and unusable
+      # inputs (an empty tree, a file that does not parse) to exit 2.
+      - name: red-lines guard self-test
+        run: hack/check-redlines.sh --self-test
+
+      - name: no tenant code runtime, constant agent remediation text
+        run: hack/check-redlines.sh
+
       # Proves this checker can fail too, and does it BEFORE the green run below is
       # read as evidence. It plants 21 evasion shapes across all three phase rules —
       # each one a module that really type-checks against a miniature framework of
@@ -1531,6 +1556,17 @@ jobs:
 
       - name: Every shipped alert is documented, in every locale
         run: hack/check-docs-alert-coverage.sh
+
+      # An alert that reaches a person at 3 a.m. has to say what to do. Every rule carries a
+      # runbook_url that lands on its entry in the published alert runbook, and the runbook (in
+      # every locale) is generated from the rules, so neither can drift from the other. The
+      # self-test plants each defect alone: a rule with no link, a link at the wrong anchor, a
+      # stale page, a missing translation, an alert with no entry, and no rules at all.
+      - name: Alert runbook guard self-test
+        run: hack/check-alert-runbooks.sh --self-test
+
+      - name: Every shipped alert links to its runbook entry
+        run: hack/check-alert-runbooks.sh
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
@@ -2774,6 +2810,21 @@ jobs:
           set -euo pipefail
           tofu test -no-color | tee "$RUNNER_TEMP/gke-tftest.log"
           grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/gke-tftest.log"
+
+      # The hosted playground's root (deploy/playground) is a sibling of deploy/gke for the
+      # same reason: it creates a cluster, dcctl does not ship it, and hack/tofu-roots.sh
+      # lists only what dcctl embeds. Its test suite holds the plan's shape (one spot pool,
+      # the budget alert, the reset wired to the driver's day boundary) against mocked
+      # providers. The pass count is required to be non-zero for the reason given above.
+      - name: tofu fmt, init, validate and test deploy/playground
+        working-directory: deploy/playground
+        run: |
+          set -euo pipefail
+          tofu fmt -check -recursive
+          tofu init -backend=false
+          tofu validate
+          tofu test -no-color | tee "$RUNNER_TEMP/playground-tftest.log"
+          grep -Eq '^Success! [1-9][0-9]* passed, 0 failed\.$' "$RUNNER_TEMP/playground-tftest.log"
 
       # The wait that ends the apply has a self-test against a scripted gcloud: it must
       # wait through RECONCILING and fail on a timeout, an always-failing gcloud and a

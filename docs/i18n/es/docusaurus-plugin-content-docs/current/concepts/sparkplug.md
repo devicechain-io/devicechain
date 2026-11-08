@@ -135,3 +135,9 @@ Sparkplug B no define actualización de firmware, así que las [actualizaciones 
 ## Operación {#running-it}
 
 Como una única réplica es propietaria de la conexión al broker, la ingesta de Sparkplug tiene algunas propiedades operativas que conviene conocer antes de depender de ella en producción: qué cuesta un relevo, por qué un dispositivo puede quedarse mostrando en línea y qué te están diciendo los contadores de descartes. [Cómo operar los servicios de borde](../deployment/edge-services.md) las cubre.
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::

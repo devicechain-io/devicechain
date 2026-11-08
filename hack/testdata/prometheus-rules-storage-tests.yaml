@@ -100,6 +100,7 @@ tests:
               namespace: dc-system
               persistentvolumeclaim: dc-rdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingup"
               description: >-
                 dc-rdb-1 is over 75% full. Database storage on this platform does not come back on
                 its own: several tables are append-only by design and nothing prunes them — the audit journal, device
@@ -160,6 +161,7 @@ tests:
               namespace: dc-system
               persistentvolumeclaim: dc-rdb-1-wal
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumealmostfull"
               description: >-
                 dc-rdb-1-wal is over 85% full. A PostgreSQL volume that fills does not slow down, it
                 stops the database, and failing over does not rescue it: every replica holds the same
@@ -184,6 +186,7 @@ tests:
               namespace: dc-system
               persistentvolumeclaim: dc-rdb-1-wal
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingup"
               description: >-
                 dc-rdb-1-wal is over 75% full. Database storage on this platform does not come back
                 on its own: several tables are append-only by design and nothing prunes them — the audit journal, device
@@ -241,6 +244,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumealmostfull"
               description: >-
                 dc-tsdb-1 is over 85% full. A PostgreSQL volume that fills does not slow down, it
                 stops the database, and failing over does not rescue it: every replica holds the same
@@ -379,6 +383,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingfast"
               summary: "An event-store volume will be full within the hour at its current rate"
               description: >-
                 dc-tsdb-1 is more than half full and filling fast enough to run out of space within
@@ -395,6 +400,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-2
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingfast"
               summary: "An event-store volume will be full within the hour at its current rate"
               description: >-
                 dc-tsdb-2 is more than half full and filling fast enough to run out of space within
@@ -411,6 +417,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-3
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingfast"
               summary: "An event-store volume will be full within the hour at its current rate"
               description: >-
                 dc-tsdb-3 is more than half full and filling fast enough to run out of space within
@@ -499,6 +506,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingfast"
               summary: "An event-store volume will be full within the hour at its current rate"
               description: >-
                 dc-tsdb-1 is more than half full and filling fast enough to run out of space within
@@ -540,6 +548,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillswithinday"
               summary: "An event-store volume will be full within a day at its current rate"
               description: "dc-tsdb-1 is on course to run out of space within 24 hours at the rate it has filled over the last two. When it fills, PostgreSQL stops and the platform can no longer store events. Events are held in the message broker meanwhile and new ingest is refused once the broker's backlog limit is reached, but a store that stays stopped for longer than the broker can hold loses data (see EventStoreRefusingWrites). Act now, with a day in hand: grow the volume (spec.storage.size on the Cluster; the volume expands online where the storage class allows it), shorten the data retention, or check that compression is acting (an uncompressed row is about 600 bytes). Size it against stored rows, which calculated metrics multiply by (1 + the formulas that apply to the profile)."
       # Expanded at 70m: capacity quadruples and most of it is free, so it clears.
@@ -608,6 +617,7 @@ tests:
               namespace: dci-devicechain
               persistentvolumeclaim: dc-tsdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumecritical"
               summary: "A database volume is over 95% full"
               description: "dc-tsdb-1 is over 95% full. PostgreSQL stops writing when it fills, and CloudNativePG does not fail over a full disk. Grow the volume now (spec.storage.size, or spec.walStorage.size for a -wal claim; the expansion is online where the storage class supports it), or free space by lowering the event data retention. On a dc-tsdb claim, events the store cannot take are held in the message broker (EventStoreRefusingWrites) and ingest backs off, but that buffer is finite."
       - eval_time: 22m

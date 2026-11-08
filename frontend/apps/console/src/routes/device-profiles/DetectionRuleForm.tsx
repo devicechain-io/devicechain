@@ -1214,6 +1214,14 @@ export function DetectionRuleForm({
                       placeholder={t('inspectorSecretHandlePlaceholder')}
                     />
                   </FormField>
+                  <FormField label={t('inspectorSigningHandleLabel')} htmlFor={`dr-http-signing-${i}`} description={t('inspectorSigningHandleDescription')}>
+                    <Input
+                      id={`dr-http-signing-${i}`}
+                      value={a.signingSecretRef ?? ''}
+                      onChange={(e) => setActionAt(i, { signingSecretRef: e.target.value })}
+                      placeholder={t('inspectorSigningHandlePlaceholder')}
+                    />
+                  </FormField>
                   <TimeoutField id={`dr-http-timeout-${i}`} value={a.timeoutMs ?? ''} onChange={(v) => setActionAt(i, { timeoutMs: v })} />
                 </div>
               ) : a.type === 'publish' ? (
@@ -1403,6 +1411,8 @@ export function outboundHint(t: TFunction, act: ActionRow): string | null {
     if (bad != null) return t('ruleHintHeaderMalformed', { line: bad });
     const handle = (act.secretRef ?? '').trim();
     if (handle && !validSecretHandle(handle)) return t('ruleHintSecretHandleInvalid');
+    const signing = (act.signingSecretRef ?? '').trim();
+    if (signing && !validSecretHandle(signing)) return t('ruleHintSecretHandleInvalid');
   }
   if (act.type === 'publish' && !(act.connectorRef ?? '').trim()) return t('ruleHintConnectorRequired');
   if (act.type === 'httpCall' || act.type === 'publish') {

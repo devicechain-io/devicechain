@@ -160,6 +160,8 @@ mutation {
 
 **Notification Channels**, next to **Notification Policies** in the sidebar, lists, creates, edits and deletes channels of every type with a form for each. The credential box is write-only: on an existing channel it shows that a credential is stored, and leaving it empty keeps it.
 
+A webhook channel can also **sign** its deliveries so the receiver can verify them. It is off unless you ask for it, by adding `"signing":true` to the channel's `config` once you have generated a signing secret for it. A channel set to sign that holds no secret is refused, not sent unsigned, and counted with `reason="signing"`. See [Signing Outbound Webhooks](signed-webhooks.md).
+
 ## Policies
 
 A **policy** decides which raised alarms are delivered, to whom, and through which channels. It carries a set of **rules**. Each rule maps:

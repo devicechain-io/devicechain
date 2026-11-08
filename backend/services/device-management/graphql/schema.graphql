@@ -5109,6 +5109,26 @@ type Query {
         secret: String!
     ): Integration
     """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. The ingest door's one question about an event's credential: would the
+    credential its body carries authenticate under the device authentication policy the
+    event resolver applies? True when it would (or when the policy asks for none); false only for
+    an authentication failure, with no word on which: an unknown credential, an expired one, a
+    wrong secret, another device's credential and a missing one the policy requires are one
+    answer. A database failure is an error, never false. The caller MUST throttle failures per
+    credential: unlike the resolver's, this verdict reaches the sender.
+    """
+    checkDeviceCredential(
+        """The device token the event names, or empty."""
+        device: String!
+        """The credential type the event presents (for example MQTT_BASIC), or empty."""
+        credentialType: String!
+        """The credential id the event presents, or empty."""
+        credentialId: String!
+        """The credential secret the event presents, or null."""
+        secret: String
+    ): Boolean!
+    """
     The sender-named devices an integration has seen that the tenant has no device in scope
     for, most recently seen first. Requires device:read.
     """

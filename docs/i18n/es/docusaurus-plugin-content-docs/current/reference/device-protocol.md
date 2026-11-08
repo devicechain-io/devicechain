@@ -67,10 +67,12 @@ Una pasarela (el [agente de borde](../deployment/edge-services.md#gateway-identi
 | --- | --- | --- |
 | [Evento](#device-event) de un dispositivo tras la pasarela | pasarela → plataforma | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
 | Aviso de que se rechazó un evento | plataforma → pasarela | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+| Aceptación de eventos que la plataforma ya tiene | plataforma → pasarela | `{instanceId}/{tenant}/gateways/{gatewayToken}/accepts` |
 
-- Una pasarela está autorizada a publicar solo bajo su token **propio**, con cualquier token hijo tras `devices/`, y a suscribirse solo a sus propios avisos. No puede publicar en el espacio de nombres de otra pasarela ni de otro tenant, ni en el topic propio de un hijo. La concesión tiene el mismo tamaño sea cual sea el número de dispositivos que representa la pasarela, y la tiene cada dispositivo, así que asignar un primer dispositivo a una pasarela no requiere reconexión.
+- Una pasarela está autorizada a publicar solo bajo su token **propio**, con cualquier token hijo tras `devices/`, y a suscribirse solo a sus propios avisos y aceptaciones. No puede publicar en el espacio de nombres de otra pasarela ni de otro tenant, ni en el topic propio de un hijo. La concesión tiene el mismo tamaño sea cual sea el número de dispositivos que representa la pasarela, y la tiene cada dispositivo, así que asignar un primer dispositivo a una pasarela no requiere reconexión.
 - La plataforma acepta un evento solo si el dispositivo nombrado en el topic existe, está **asignado a esa pasarela** y la pasarela está habilitada. En caso contrario rechaza el evento con el motivo `NotGatewayChild` ([más abajo](#rejections-after-acceptance)) y envía un aviso a la pasarela. El broker confirma la publicación en ambos casos, porque MQTT 3.1.1 no puede rechazar una.
 - La identidad es el topic más la asignación. El cuerpo no lleva ninguna: se rechaza un evento de este espacio de nombres que lleve `credentialType`, `credentialId` o `credentialSecret`, y también un `device` del cuerpo que nombre a otro dispositivo. El evento se atribuye al hijo, y el evento resuelto lleva además el token de la pasarela.
+- Un aviso es `{"altId", "device", "reason"}`. Además de `not_gateway_child`, el motivo `over_ceiling` significa que la plataforma recibió el evento y lo descartó porque el tenant superaba su límite de ingesta; el evento no se almacenó y se puede enviar de nuevo sin riesgo. Una aceptación es `{"altIds": [...]}`: las claves de idempotencia de los eventos que ya están almacenados de forma duradera en un stream de la plataforma, agrupadas. Ambos son de mejor esfuerzo y no llevan carga. Una pasarela que elimina un evento almacenado debe hacerlo con la aceptación, no con la confirmación del broker; la que nunca la recibe reenvía el evento con el mismo `altId`, y la plataforma lo almacena una sola vez.
 - Un aviso es un objeto JSON, `{"altId": "...", "device": "...", "reason": "not_gateway_child"}`. No lleva carga y no se almacena, así que una pasarela que estaba desconectada cuando se envió no lo recibe. El registro de un rechazo es el flujo `failed-events`.
 - La concesión también cubre `responses` y `reports` bajo el espacio de nombres y la suscripción a `commands` y `desired`, pero nada los lee ni los envía todavía. Publica solo **eventos**.
 
@@ -328,9 +330,11 @@ Lo comprueba `event-sources` al recibir y decodificar el mensaje.
 | --- | --- | --- | --- |
 | El id de instancia de la ruta o del topic no es el de esta instancia | `404` | El broker rechaza la publicación: el dispositivo no está autorizado en ese topic | — |
 | El tenant de la ruta no es un token válido | `400` | El broker rechaza la publicación | — |
+| El tenant de la ruta no existe | `401`, la misma respuesta que ante una credencial incorrecta | El broker rechaza la conexión | `total_http_ingest_refused`, `reason="unknown_tenant"` |
+| La credencial del cuerpo no se autentica: desconocida, caducada, secreto equivocado, de otro dispositivo, o ausente donde la instancia la exige | `401`, siempre `{"error":"unauthorized"}` | Se juzga en el broker cuando el dispositivo se conecta | `total_http_ingest_refused`, `reason="bad_credential"` |
 | El tenant supera su límite de ingesta, por mensajes o por lecturas | `429` con `Retry-After: 1` | Se confirma y después **se descarta** | `total_msg_rate_limited`, `total_msg_reading_limited` |
 | El cuerpo no se puede leer o supera 1 MiB | `400` | — | — |
-| El cuerpo no se decodifica: no es JSON, un `eventType` desconocido o exclusivo de la plataforma (`StateChange`, `CommandInvocation`, `CommandResponse`), un valor del tipo JSON equivocado, ninguna entrada, una entrada vacía, un campo de ubicación ausente o fuera de rango, una alerta sin `type` o con un `level` mayor que 2147483647 | `400`, con el motivo en el cuerpo | Se confirma y después se envía al stream `failed-decode` | `total_msg_failed_decode` |
+| El cuerpo no se decodifica: no es JSON, un `eventType` desconocido o exclusivo de la plataforma (`StateChange`, `CommandInvocation`, `CommandResponse`), un valor del tipo JSON equivocado, ninguna entrada, una entrada vacía, un campo de ubicación ausente o fuera de rango, una alerta sin `type` o con un `level` mayor que 2147483647 | `400`, con el motivo y un [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) al valor del cuerpo | Se confirma y después se envía al stream `failed-decode` | `total_msg_failed_decode` |
 | Una marca de tiempo que no es RFC 3339, es `0001-01-01T00:00:00Z` o tiene más de 366 días | `400`, nombrando el campo | Se envía a `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
 | Más de 256 lecturas | `400`, indicando el número y el límite | Se envía a `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
 | El `device` del cuerpo no es el dispositivo del topic | — | Se envía a `failed-decode` | `total_msg_failed_decode` |
@@ -338,7 +342,7 @@ Lo comprueba `event-sources` al recibir y decodificar el mensaje.
 | La plataforma está aplicando [contrapresión](../deployment/observability.md#ingest-backpressure) | `503` **con** `Retry-After`: no se almacenó, envíalo de nuevo | No se rechaza: espera en el stream de captura; los mensajes capturados más antiguos solo se descartan si ese stream se llena | |
 | No se pudo construir el mensaje del evento: una credencial que presentó no se pudo sellar, o el evento no se pudo codificar | `500`: no se almacena, y reenviarlo falla igual | Descartado | `total_msg_build_dropped`, por `cause` |
 | El evento no se pudo entregar a la cadena de proceso | `503` **sin** `Retry-After`: puede haberse almacenado, así que reenviarlo lo almacena dos veces salvo que lleve un [`altId`](#altid) | — | |
-| Aceptado | `202` | `PUBACK` (QoS 1) | |
+| Aceptado | `202`, con una cabecera de recibo `X-DC-Event-Id` | `PUBACK` (QoS 1) | |
 
 Un `400` es definitivo: la misma petición recibe la misma respuesta. Un rechazo en la entrada rechaza el **mensaje entero**, incluidas todas las demás entradas que contenga.
 

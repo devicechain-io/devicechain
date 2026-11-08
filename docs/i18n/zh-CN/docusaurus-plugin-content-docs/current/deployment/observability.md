@@ -104,6 +104,49 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 
 从早期版本的监控栈升级到此版本，会跨越 Prometheus 的一个主版本（2 到 3）和 Grafana 的一个主版本（11 到 13）。Prometheus、Alertmanager 和 Grafana 各重启一次；Grafana 管理员登录、其 `ClusterIP` Service 以及每个实例的仪表盘文件夹保持不变。使用持久卷的集群会保留 Prometheus 已存储的指标；本地集群只把指标保存在节点磁盘上，升级后从空开始。
 
+## 将告警路由给真人 {#alert-routing}
+
+平台附带的告警规则会监视数据丢失、卡住的消费者、失败的备份以及即将过期的证书。规则只有在触发时有人收到通知才有意义，而开箱即用时没有人会收到：Alertmanager 启动时使用的接收器会丢弃所有告警。处于这种状态的实例会报告出来：`dcctl instances list` 会在它旁边显示 `ALERTS NOT ROUTED`，实例的 `AlertsRouted` 状态条件为 `False`。该条件不会使实例变为未就绪。
+
+可以在安装时给 Alertmanager 配置接收器，也可以之后在任意实例上配置：
+
+```bash
+# Webhook：兼容 Slack 的中继、PagerDuty、Opsgenie 以及大多数事件管理工具都接受。
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+
+# 电子邮件。密码从文件读取，不会留在 shell 历史记录中。
+dcctl install local \
+  --alert-email oncall@example.com --alert-email backup@example.com \
+  --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
+  --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
+
+# 之后修改，无需改动集群的前置组件。
+dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/services/T000/B000/YYYY
+```
+
+- **所有告警都会发送**，包括 `critical`、`warning` 和 `info`。同一告警、同一命名空间下，`critical` 会抑制 `warning`。
+- **URL 和 SMTP 密码保存在 Secret 中**（`monitoring` 命名空间里的 `dc-alertmanager-config`），而不是你本机的基础设施状态里。实例只记录存在哪几种接收器。
+- **只要指定任意一个 `--alert-*` 参数，就会重新声明全部路由。**单独使用 `--alert-email` 会移除之前设置的 webhook。不带任何 `--alert-*` 参数的运行会保持路由不变，因此为了修改其他内容而重新运行 `dcctl install` 不会撤销它。`--clear-alert-routing` 用于移除路由。
+- **`dcctl upgrade` 只能修改已由 `dcctl install` 准备好的集群。**由早期版本安装的集群需要先运行一次 `dcctl install`，使用与之前相同的参数再加上告警参数。它会就地应用集群前置组件。
+- **没有监控栈就没有路由。**使用 `--no-monitoring` 时，实例不会渲染告警规则，`--alert-*` 参数会被拒绝。
+
+### 得知告警系统本身已停止工作
+
+如果 Alertmanager 宕机，或无法连接其接收器，就不会有任何告警送达，而没有告警的集群看上去与健康的集群毫无区别。`Watchdog` 告警正是为此而设：它按设计始终处于触发状态。把它发送到死人开关（dead-man's-switch）服务（Healthchecks、Dead Man's Snitch、Cronitor），当心跳停止时由该服务通知你：
+
+```bash
+dcctl install local --alert-webhook https://hooks.example.com/... \
+  --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
+```
+
+Watchdog 每分钟发送一次到它专用的接收器，绝不会发送到真人阅读的接收器。不指定 `--alert-watchdog-webhook` 时它会被丢弃，`AlertsRouted` 条件会说明告警链路一旦静默将无人察觉。
+
+### Webhook 和电子邮件之外的接收器
+
+`--alert-config <文件>` 原样使用你自己的 Alertmanager 配置。Slack、PagerDuty、Opsgenie 或 Teams 接收器，以及按标签路由，都可以用它。它不能与其他 `--alert-*` 参数同时使用。`dcctl` 会检查文件能否解析、每条路由是否指向文件中定义的接收器，以及是否有接收器真正会投递到某处，但不会发送测试消息，也不是 Alertmanager 自己的解析器：请先对该文件运行 `amtool check-config`，因为拒绝某份配置的 Alertmanager 会继续使用上一份配置运行。请在你的文件内路由 `Watchdog` 告警：当某条路由选中 `alertname = "Watchdog"` 且其接收器会投递时，`dcctl` 会将其计为已路由。
+
+每条告警都带有 `runbook_url`，会打开其在[告警手册](./alert-runbook.md)中的条目，因此通知可以直接链接到它的含义以及该怎么处理。
+
 ## 登录 Grafana {#signing-in-to-grafana}
 
 Grafana 使用自己的**管理员登录**。Grafana 没有与 DeviceChain 登录集成：无论是 DeviceChain 密码，还是已连接的身份提供商（参见[单点登录](../concepts/single-sign-on.md)），都不能用来登录 Grafana。
@@ -1021,3 +1064,9 @@ Deployment 转发只到**一个** Pod。多副本时按名称选择目标：`kub
 
 - **[初始化实例](./bootstrap.md#install)**：部署监控栈的 `dcctl install` 及标志。
 - **[部署与 Operator](./kubernetes-operator.md)**：chart 如何生成带健康探针的逐服务工作负载。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

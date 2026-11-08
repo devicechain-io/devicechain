@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,17 @@ type Broker struct {
 	Duplicate func(n int64) bool
 	// Authorize, when set, decides whether a CONNECT is admitted (username, password, client id).
 	Authorize func(username, password, clientID string) bool
+	// Fanout, when true, delivers every event the broker KEEPS to the connections subscribed to a
+	// filter that matches its topic ("+" and "#" wildcards), like a real broker. An event it
+	// acknowledges without keeping (AckOnly) is delivered to nobody, which is the loss a
+	// subscriber-side read-back must see.
+	Fanout bool
+	// RefuseSubscribe makes the broker answer every SUBSCRIBE with the refusal code 0x80, as a
+	// broker does for a user its ACL does not let read the topic.
+	RefuseSubscribe bool
+	// GrantQoS0 makes the broker grant QoS 0 to every subscription whatever was asked, as a broker
+	// that caps subscriber QoS does.
+	GrantQoS0 bool
 	// OnPublish, when set, sees every PUBLISH the broker reads, before it is acknowledged. It runs
 	// on the publishing connection's goroutine and may call Deliver. It is how a test plays the
 	// platform: read a device's report, answer on the device's desired topic.
@@ -160,8 +172,27 @@ func (s *session) write(p packets.ControlPacket) error {
 func (s *session) subscribed(topic string) bool {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	_, ok := s.subs[topic]
-	return ok
+	for filter := range s.subs {
+		if filter == topic || topicMatches(filter, topic) {
+			return true
+		}
+	}
+	return false
+}
+
+// topicMatches reports whether an MQTT subscription filter covers a topic name: "+" is one
+// level and a trailing "#" is every level below.
+func topicMatches(filter, topic string) bool {
+	f, t := strings.Split(filter, "/"), strings.Split(topic, "/")
+	for i, l := range f {
+		if l == "#" {
+			return i == len(f)-1
+		}
+		if i >= len(t) || (l != "+" && l != t[i]) {
+			return false
+		}
+	}
+	return len(f) == len(t)
 }
 
 // Deliver publishes payload to every connection subscribed to exactly topic (no wildcards) and
@@ -292,8 +323,16 @@ func (b *Broker) serve(conn net.Conn) {
 			sa.MessageID = p.MessageID
 			sess.smu.Lock()
 			for i, t := range p.Topics {
+				if b.RefuseSubscribe {
+					sa.ReturnCodes = append(sa.ReturnCodes, 0x80)
+					continue
+				}
 				sess.subs[t] = struct{}{}
-				sa.ReturnCodes = append(sa.ReturnCodes, p.Qoss[i])
+				granted := p.Qoss[i]
+				if b.GrantQoS0 {
+					granted = 0
+				}
+				sa.ReturnCodes = append(sa.ReturnCodes, granted)
 			}
 			sess.smu.Unlock()
 			if sess.write(sa) != nil {
@@ -310,6 +349,9 @@ func (b *Broker) serve(conn net.Conn) {
 }
 
 func (b *Broker) keep(c *packets.ConnectPacket, p *packets.PublishPacket) {
+	if b.Fanout {
+		defer b.Deliver(p.TopicName, p.Payload)
+	}
 	var body struct {
 		Device       string `json:"device"`
 		OccurredTime string `json:"occurredTime"`

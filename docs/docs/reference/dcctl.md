@@ -30,6 +30,7 @@ dcctl [command]
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
 * [dcctl preflight](#dcctl-preflight)	 - Check local prerequisites for installing a cluster
 * [dcctl presence](#dcctl-presence)	 - Inspect and repair device presence
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
@@ -1041,33 +1042,42 @@ dcctl install <provider> [flags]
 ### Options
 
 ```
-      --allow-legacy-db-removal          proceed even though this cluster still runs the pre-CloudNativePG relational StatefulSet (dc-postgresql). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — applying with it set destroys that StatefulSet and brings up an empty database on the same hostname
-      --aws-nlb string                   EKS: which ingress controllers' LoadBalancer Services get an AWS Network Load Balancer (service.beta.kubernetes.io/aws-load-balancer-type: nlb) instead of the Classic one a plain Service gets: traefik, nginx, all, or none (turns it off). Only a Network Load Balancer passes the client's address through, which the per-source rate limits and the trusted-proxy rule depend on. Left off, each controller's Service keeps what it has. A value that CHANGES an existing Service replaces its load balancer and so changes the hostname clients resolve: repoint DNS afterwards (the install says so). traefik alone leaves ingress-nginx's Service as it is, for a cluster mid-cutover
-      --backup-credentials-file string   send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the cluster provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. Keep the file readable only by you
-      --backup-snapshot-class string     take each database's daily base backup as a CSI volume snapshot with this VolumeSnapshotClass instead of a full copy in the backup store. A full copy still goes to the store weekly, WAL archiving is unchanged, and restores still read the store. The class must exist, use deletionPolicy Delete, and belong to the driver that provisions the database volumes. Every instance on the cluster follows it
-      --build                            developer path: ko-build the operator image from this source checkout and push it to a local registry, instead of pulling a published one. Builds ONLY the operator; the service images are an instance's and are built by dcctl bootstrap --build
-      --cluster string                   local provider: the kind cluster to create or use (default "devicechain")
-      --compact                          small-footprint preset for the cluster and every instance on it: smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and — unless --no-tls=false — no cert-manager and therefore no database backups. Instances on a compact cluster keep the default profile or a smaller one
-      --database-node-selector strings   run the databases only on nodes with this label, as key=value (repeatable; every label must match). Applies to the relational store and to the event store of every instance bootstrapped on the cluster. Refused when too few schedulable nodes match
-      --database-toleration strings      let the databases run on nodes with this taint, written as kubectl taint writes it: key=value:Effect, or key:Effect for any value (repeatable). Needs --database-node-selector
-      --dev                              local-developer preset: --build --yes (builds the operator image from this source checkout); rejects contradictory flags
-      --dry-run                          print what would happen without applying changes
-      --ha                               a replicated relational store (3 CloudNativePG instances, synchronous), and every instance bootstrapped on this cluster HA too: a 3-server NATS cluster with replicated streams and a replicated event store. Needs at least 3 schedulable nodes; database volumes are sized per instance
-  -h, --help                             help for install
-      --kube-context string              install into this existing cluster instead of a local kind cluster (never created or deleted by dcctl)
-      --max-connections int              the relational store's connection budget (default 700 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances
-      --mqtt-gateway                     open TCP 8883 on the ingress controller (Traefik) so an instance can serve MQTT over TLS to devices outside the cluster through its Gateway (dcctl bootstrap|upgrade --mqtt-exposure gateway). It publishes a NEW port on the controller's load balancer, so it is off unless asked for. The broker terminates TLS itself; the controller passes the connection through by SNI. Left off, the install keeps whatever the controller's Service has; --mqtt-gateway=false closes it
-      --no-cnpg                          skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created
-      --no-monitoring                    skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
-      --no-tls                           with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both
-      --registry string                  pull the operator image from this registry (default: the published registry, or the local one with --build)
-      --remove-legacy-ingress            remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply
-      --restore-rdb-at string            stop the relational store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a bad migration, a mistaken delete — so pick a moment strictly before the damage. Needs --restore-rdb-from
-      --restore-rdb-from string          disaster recovery: recover the RELATIONAL store from this archive path (the serverName inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. 🔴 Only takes effect when the store is CREATED — recover by installing into a cluster whose relational store is not there, not by re-running against a live one
-      --size string                      cluster size: base (the default) or compact, which is the same as --compact. The perf sizes are chosen per instance with dcctl bootstrap --size
-      --skip-preflight                   skip the local-system preflight checks
-      --version string                   install the operator at this released tag (default: the release this dcctl was built for). This is the CLUSTER's version — the instances on it carry their own
-  -y, --yes                              assume yes for prompts
+      --alert-config string               use this Alertmanager configuration file as it is, for receivers beyond webhook and email (Slack, PagerDuty, OpsGenie, Teams...). It replaces what --alert-webhook and --alert-email would build, so route the Watchdog alert inside it; dcctl checks that it parses and that every route names a receiver it defines
+      --alert-email strings               send alerts to this address (repeatable). Needs --alert-smtp-host and --alert-smtp-from
+      --alert-smtp-from string            sender address for --alert-email
+      --alert-smtp-host string            SMTP server for --alert-email, as host:port (for example smtp.example.com:587)
+      --alert-smtp-password-file string   read the SMTP password from this file, so it never appears in the process list or shell history
+      --alert-smtp-user string            SMTP user for --alert-email. Needs --alert-smtp-password-file
+      --alert-watchdog-webhook string     send the always-firing Watchdog alert to this URL, every minute, so a dead-man's-switch service (Healthchecks, Dead Man's Snitch, Cronitor) tells you when the alerting pipeline itself goes silent. Without it a broken Alertmanager looks exactly like a healthy, quiet cluster
+      --alert-webhook string              send alerts to this webhook URL (Alertmanager's webhook format, which Slack-compatible relays, PagerDuty, Opsgenie and most incident tools accept). Every alert the platform raises is dropped without a receiver. The URL is a credential and is kept in a Secret, never in the infrastructure state. Naming any --alert-* flag restates ALL the routing
+      --allow-legacy-db-removal           proceed even though this cluster still runs the pre-CloudNativePG relational StatefulSet (dc-postgresql). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — applying with it set destroys that StatefulSet and brings up an empty database on the same hostname
+      --aws-nlb string                    EKS: which ingress controllers' LoadBalancer Services get an AWS Network Load Balancer (service.beta.kubernetes.io/aws-load-balancer-type: nlb) instead of the Classic one a plain Service gets: traefik, nginx, all, or none (turns it off). Only a Network Load Balancer passes the client's address through, which the per-source rate limits and the trusted-proxy rule depend on. Left off, each controller's Service keeps what it has. A value that CHANGES an existing Service replaces its load balancer and so changes the hostname clients resolve: repoint DNS afterwards (the install says so). traefik alone leaves ingress-nginx's Service as it is, for a cluster mid-cutover
+      --backup-credentials-file string    send database backups to an object store you already own, described by this JSON file: {endpointUrl, bucketRdb, bucketTsdb, accessKeyId, secretAccessKey}. Without it the cluster provisions its own in-cluster store, which lives in the same failure domain as the databases it backs up. Keep the file readable only by you
+      --backup-snapshot-class string      take each database's daily base backup as a CSI volume snapshot with this VolumeSnapshotClass instead of a full copy in the backup store. A full copy still goes to the store weekly, WAL archiving is unchanged, and restores still read the store. The class must exist, use deletionPolicy Delete, and belong to the driver that provisions the database volumes. Every instance on the cluster follows it
+      --build                             developer path: ko-build the operator image from this source checkout and push it to a local registry, instead of pulling a published one. Builds ONLY the operator; the service images are an instance's and are built by dcctl bootstrap --build
+      --clear-alert-routing               remove the alert routing: alerts go back to no receiver and the instance reports ALERTS NOT ROUTED
+      --cluster string                    local provider: the kind cluster to create or use (default "devicechain")
+      --compact                           small-footprint preset for the cluster and every instance on it: smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and — unless --no-tls=false — no cert-manager and therefore no database backups. Instances on a compact cluster keep the default profile or a smaller one
+      --database-node-selector strings    run the databases only on nodes with this label, as key=value (repeatable; every label must match). Applies to the relational store and to the event store of every instance bootstrapped on the cluster. Refused when too few schedulable nodes match
+      --database-toleration strings       let the databases run on nodes with this taint, written as kubectl taint writes it: key=value:Effect, or key:Effect for any value (repeatable). Needs --database-node-selector
+      --dev                               local-developer preset: --build --yes (builds the operator image from this source checkout); rejects contradictory flags
+      --dry-run                           print what would happen without applying changes
+      --ha                                a replicated relational store (3 CloudNativePG instances, synchronous), and every instance bootstrapped on this cluster HA too: a 3-server NATS cluster with replicated streams and a replicated event store. Needs at least 3 schedulable nodes; database volumes are sized per instance
+  -h, --help                              help for install
+      --kube-context string               install into this existing cluster instead of a local kind cluster (never created or deleted by dcctl)
+      --max-connections int               the relational store's connection budget (default 700 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances
+      --mqtt-gateway                      open TCP 8883 on the ingress controller (Traefik) so an instance can serve MQTT over TLS to devices outside the cluster through its Gateway (dcctl bootstrap|upgrade --mqtt-exposure gateway). It publishes a NEW port on the controller's load balancer, so it is off unless asked for. The broker terminates TLS itself; the controller passes the connection through by SNI. Left off, the install keeps whatever the controller's Service has; --mqtt-gateway=false closes it
+      --no-cnpg                           skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created
+      --no-monitoring                     skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
+      --no-tls                            with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both
+      --registry string                   pull the operator image from this registry (default: the published registry, or the local one with --build)
+      --remove-legacy-ingress             remove ingress-nginx from a cluster that still runs it. An install otherwise leaves it serving and installs Traefik beside it. Refused while any Ingress object in the cluster still names its class (each instance must first be moved with 'dcctl upgrade --drop-legacy-ingress'); on a local cluster Traefik takes the node's ports 80 and 443 in the same apply
+      --restore-rdb-at string             stop the relational store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a bad migration, a mistaken delete — so pick a moment strictly before the damage. Needs --restore-rdb-from
+      --restore-rdb-from string           disaster recovery: recover the RELATIONAL store from this archive path (the serverName inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. 🔴 Only takes effect when the store is CREATED — recover by installing into a cluster whose relational store is not there, not by re-running against a live one
+      --size string                       cluster size: base (the default) or compact, which is the same as --compact. The perf sizes are chosen per instance with dcctl bootstrap --size
+      --skip-preflight                    skip the local-system preflight checks
+      --version string                    install the operator at this released tag (default: the release this dcctl was built for). This is the CLUSTER's version — the instances on it carry their own
+  -y, --yes                               assume yes for prompts
 ```
 
 ### SEE ALSO
@@ -1385,6 +1395,203 @@ dcctl presence demote [flags]
 ### SEE ALSO
 
 * [dcctl presence](#dcctl-presence)	 - Inspect and repair device presence
+
+## dcctl product {#dcctl-product}
+
+Export, plan and apply a tenant's product as files (preview)
+
+### Synopsis
+
+Promote a tenant's product through git: export it to a directory of files, review a change
+as a plan, and apply the files to the same or another tenant.
+
+The product is the device types, device profiles (metrics, calculated metrics, payload
+decoders with their test vectors, typed commands, detection rules and canvas graphs),
+dashboards, outbound connectors and inbound integrations. Everything is read and written over
+the same tenant GraphQL the console uses, as the identity you sign in with, so the server
+authorizes every call; this command checks no permission itself.
+
+This command tree is PREVIEW: the bundle format (apiVersion product.devicechain.io/v1alpha1)
+is new and may change in a later minor release.
+
+SECRETS ARE HANDLES, NEVER VALUES. The platform never reveals a stored connector credential or
+an integration's bearer token, so an export cannot contain one. A connector's credential is
+named by a handle (credential: \{handle: env:NAME\}) that apply resolves from the environment.
+Every bundle is also scanned for values shaped like a secret, and one that holds any is refused.
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for product
+      --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to read or change (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl product apply](#dcctl-product-apply)	 - Make the tenant hold the bundle, then publish
+* [dcctl product export](#dcctl-product-export)	 - Write the tenant's product to a directory
+* [dcctl product plan](#dcctl-product-plan)	 - Show what applying a bundle would change, without changing it
+
+## dcctl product apply {#dcctl-product-apply}
+
+Make the tenant hold the bundle, then publish
+
+### Synopsis
+
+Make the tenant hold the bundle in \<dir>: an idempotent upsert by token, converging drafts
+and then publishing what changed. Running it twice is the same as running it once, and a run
+that fails part-way is finished by running it again.
+
+Order: connectors, profiles (with their definitions), device types, integrations, dashboards.
+
+Concurrency: connector and dashboard writes are conditional on the version stamp read when the
+plan was made, so an edit made by someone else in between is refused rather than overwritten.
+Device types, profiles and their definitions, and integrations carry no such stamp, so a
+concurrent edit to those is last-writer-wins.
+
+Publishing: a profile, connector or dashboard is published when this run changed it, when it
+was never published, or when its published version is seen to differ from the bundle. A
+profile's rules and position declaration cannot be read back from a published version, so a
+change to them made by a run that did not publish (--no-publish, or a failure after the draft
+was written) is finished with --republish.
+
+Credentials: a connector's credential is sent only to a connector that has none, from the
+environment variable its handle names; --rotate-secrets sends it to every connector. A new
+inbound integration gets a server-generated bearer token that this command does not capture;
+rotate it to issue one.
+
+```
+dcctl product apply <dir> [flags]
+```
+
+### Options
+
+```
+      --allow-suspected-secrets   proceed although the bundle holds values shaped like a secret
+  -h, --help                      help for apply
+      --no-publish                converge drafts and stop; do not publish
+      --republish                 publish every profile, connector and dashboard in the bundle even if nothing seems to have changed
+      --rotate-secrets            send every connector credential whose handle is set, not only to connectors without one
+      --yes                       apply without printing the plan first
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to read or change (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+
+## dcctl product export {#dcctl-product-export}
+
+Write the tenant's product to a directory
+
+### Synopsis
+
+Write the tenant's product to \<dir> as a product.yaml and one file per resource.
+
+\<dir> must be empty, absent, or already a bundle (it holds a product.yaml), in which case the
+files of resources that no longer exist are removed. Exporting twice with nothing changed in
+between writes the same bytes both times.
+
+What is exported is the DRAFT of each profile, connector and dashboard; apply publishes it
+again. Device-type maintenance windows, dynamic groups and customers are NOT part of the
+bundle: a device type or rule that names one carries its token as a reference, which must
+already exist where the bundle is applied.
+
+An opt-in area this instance does not serve (outbound connectors) is skipped with a warning
+unless you name it in --kinds.
+
+```
+dcctl product export <dir> [flags]
+```
+
+### Options
+
+```
+  -h, --help          help for export
+      --name string   label for the product, written to product.yaml (default: the existing bundle's)
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to read or change (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+
+## dcctl product plan {#dcctl-product-plan}
+
+Show what applying a bundle would change, without changing it
+
+### Synopsis
+
+Read the tenant and print what 'apply' would do to make it hold the bundle in \<dir>.
+Nothing is written.
+
+A line starts with + (create), ~ (update), - (delete) or ^ (publish). Deletes happen only to
+the metric, command and rule definitions UNDER a profile the bundle carries; a device type,
+profile, integration, connector or dashboard that is in the tenant and not in the bundle is
+left alone and reported as a note.
+
+Against a tenant that already holds the bundle the plan reports no changes. Use
+--fail-on-changes to make that an exit status, for drift detection in CI.
+
+```
+dcctl product plan <dir> [flags]
+```
+
+### Options
+
+```
+      --allow-suspected-secrets   proceed although the bundle holds values shaped like a secret
+      --fail-on-changes           exit non-zero when the plan has changes
+  -h, --help                      help for plan
+      --no-publish                converge drafts and stop; do not publish
+      --republish                 publish every profile, connector and dashboard in the bundle even if nothing seems to have changed
+      --rotate-secrets            send every connector credential whose handle is set, not only to connectors without one
+```
+
+### Options inherited from parent commands
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+      --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant to read or change (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
 
 ## dcctl resgen {#dcctl-resgen}
 
@@ -2056,8 +2263,17 @@ dcctl upgrade <provider> <instance> [flags]
 ### Options
 
 ```
+      --alert-config string                     use this Alertmanager configuration file as it is, for receivers beyond webhook and email (Slack, PagerDuty, OpsGenie, Teams...). It replaces what --alert-webhook and --alert-email would build, so route the Watchdog alert inside it; dcctl checks that it parses and that every route names a receiver it defines
+      --alert-email strings                     send alerts to this address (repeatable). Needs --alert-smtp-host and --alert-smtp-from
+      --alert-smtp-from string                  sender address for --alert-email
+      --alert-smtp-host string                  SMTP server for --alert-email, as host:port (for example smtp.example.com:587)
+      --alert-smtp-password-file string         read the SMTP password from this file, so it never appears in the process list or shell history
+      --alert-smtp-user string                  SMTP user for --alert-email. Needs --alert-smtp-password-file
+      --alert-watchdog-webhook string           send the always-firing Watchdog alert to this URL, every minute, so a dead-man's-switch service (Healthchecks, Dead Man's Snitch, Cronitor) tells you when the alerting pipeline itself goes silent. Without it a broken Alertmanager looks exactly like a healthy, quiet cluster
+      --alert-webhook string                    send alerts to this webhook URL (Alertmanager's webhook format, which Slack-compatible relays, PagerDuty, Opsgenie and most incident tools accept). Every alert the platform raises is dropped without a receiver. The URL is a credential and is kept in a Secret, never in the infrastructure state. Naming any --alert-* flag restates ALL the routing
       --allow-envelope-downgrade                move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service
       --broker-max-connections int              cap the platform broker's simultaneous client connections (nats-server max_connections), devices and platform clients alike. It bounds a connection flood against the MQTT port when that is exposed (--mqtt-exposure): every connection costs a TLS handshake and, for a device, an authentication round trip. Size it above your fleet with headroom for a reconnect storm; devices past it are refused. 0 returns to the server's own limit, which is also what an instance that never set it has. Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted
+      --clear-alert-routing                     remove the alert routing: alerts go back to no receiver and the instance reports ALERTS NOT ROUTED
       --drop-legacy-ingress                     stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class
       --dry-run                                 print what would happen without changing anything
       --escrow-file string                      where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on

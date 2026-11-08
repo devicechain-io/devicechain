@@ -257,6 +257,17 @@ type CommandDeliveryConfiguration struct {
 	// feature, byte for byte: a Sparkplug command fails within seconds, naming the platform.
 	// The adapter, not this flag, refuses a command to a source that is not itself enabled.
 	SparkplugCommands bool
+
+	// LpwanDownlink says that the outbound-connectors LPWAN downlink adapter is enabled, so a
+	// command to a device that reports through an inbound integration (a LoRaWAN network server)
+	// is dispatched to the adapter instead of failed on sight with COMMAND_TRANSPORT_UNSUPPORTED.
+	//
+	// 🔴 NOBODY AUTHORS IT, for the reason SparkplugCommands is not authored: the chart sets it to
+	// true exactly when outbound-connectors is among the enabled areas with lpwanDownlink.enabled,
+	// so it cannot say "deliverable" while no adapter runs. Absent is false, the behaviour that
+	// predates the feature byte for byte. The adapter, not this flag, refuses a command whose
+	// integration has no network-server link.
+	LpwanDownlink bool
 }
 
 // NewCommandDeliveryConfiguration creates the default command delivery configuration.

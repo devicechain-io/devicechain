@@ -328,3 +328,24 @@ func appendField(dst, f []byte) []byte {
 	dst = append(dst, lenbuf[:]...)
 	return append(dst, f...)
 }
+
+// WithLock implements Locker. It opens a transaction, takes a Postgres transaction-scoped
+// advisory lock keyed on (tenant, key), and hands fn a view of this store bound to that
+// transaction. The lock is released at commit or rollback, so a crashed replica cannot strand it.
+// On a database without advisory locks (the in-memory SQLite the unit tests use) the transaction
+// still scopes the writes, but there is no cross-connection exclusion: that is a test-only
+// backend, and production is Postgres.
+func (s *gormStore) WithLock(ctx context.Context, tenant, key string, fn func(SecretStore) error) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", fmt.Sprintf("secrets:%d:%s:%s", len(tenant), tenant, key)).Error; err != nil {
+				return fmt.Errorf("secrets: take lock: %w", err)
+			}
+		}
+		view, err := BindTx(s, tx)
+		if err != nil {
+			return err
+		}
+		return fn(view)
+	})
+}

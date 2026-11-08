@@ -9,7 +9,7 @@ package core
 // has to be sorted again. A section that is empty in every shard is taken from the first, so a
 // nil section stays nil and an empty one stays empty, exactly as one engine writes it.
 func mergeSnapshots(parts []snapshot) snapshot {
-	m := snapshot{Watermark: parts[0].Watermark, LastSeq: parts[0].LastSeq}
+	m := snapshot{Frontier: parts[0].Frontier, Watermark: parts[0].Watermark, LastSeq: parts[0].LastSeq}
 	m.Active = mergeSection(parts, func(s *snapshot) []snapRun { return s.Active }, func(a, b *snapRun) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Breaks = mergeSection(parts, func(s *snapshot) []snapBreak { return s.Breaks }, func(a, b *snapBreak) bool { return ruleSeriesLess(a.Rule, a.Series, b.Rule, b.Series) })
 	m.Timers = mergeSection(parts, func(s *snapshot) []snapTimer { return s.Timers }, func(a, b *snapTimer) bool {

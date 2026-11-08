@@ -313,3 +313,20 @@ func TestSparkplugCommandsDefaultsOffAndLoadsWhenSet(t *testing.T) {
 	assert.Error(t, core.LoadConfiguration([]byte(`{"sparkplugCommand": true}`), typo),
 		"a misspelled key must be refused, not read as off")
 }
+
+// LpwanDownlink is derived by the chart, never authored, and absent means OFF: the behaviour that
+// predates the adapter, in which a command to a device behind an inbound integration fails on sight.
+func TestLpwanDownlinkDefaultsOffAndLoadsWhenSet(t *testing.T) {
+	absent := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(``), absent))
+	assert.False(t, absent.LpwanDownlink)
+
+	set := &CommandDeliveryConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"lpwanDownlink": true}`), set))
+	assert.True(t, set.LpwanDownlink, "the key the chart renders must reach the field")
+	assert.NoError(t, set.Validate())
+
+	typo := &CommandDeliveryConfiguration{}
+	assert.Error(t, core.LoadConfiguration([]byte(`{"lpwanDownlinks": true}`), typo),
+		"a misspelled key must be refused, not read as off")
+}

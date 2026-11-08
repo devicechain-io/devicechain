@@ -67,9 +67,11 @@ A gateway (the [edge agent](../deployment/edge-services.md#gateway-identity) is 
 | --- | --- | --- |
 | [Event](#device-event) for a device behind the gateway | gateway → platform | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
 | Notice that an event was refused | platform → gateway | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+| Acceptance of events the platform now holds | platform → gateway | `{instanceId}/{tenant}/gateways/{gatewayToken}/accepts` |
 
-- A gateway is authorized to publish only under its **own** token, with any child token after `devices/`, and to subscribe only to its own notices. It cannot publish in another gateway's or another tenant's namespace, or on a child's own topic. The grant is the same size however many devices the gateway fronts, and every device holds it, so assigning a first device to a gateway needs no reconnect.
+- A gateway is authorized to publish only under its **own** token, with any child token after `devices/`, and to subscribe only to its own notices and acceptances. It cannot publish in another gateway's or another tenant's namespace, or on a child's own topic. The grant is the same size however many devices the gateway fronts, and every device holds it, so assigning a first device to a gateway needs no reconnect.
 - The platform accepts an event only if the device named in the topic exists, is **assigned to that gateway**, and the gateway is enabled. Otherwise it refuses the event with the reason `NotGatewayChild` ([below](#rejections-after-acceptance)) and sends the gateway a notice. The broker acknowledges the publish either way, because MQTT 3.1.1 cannot refuse one.
+- A notice is `{"altId", "device", "reason"}`. Besides `not_gateway_child`, the reason `over_ceiling` means the platform received the event and shed it because the tenant was over its ingest ceiling; the event was not stored and is safe to send again. An acceptance is `{"altIds": [...]}`: the idempotency keys of events now durably held on a platform stream, batched. Both are best effort and carry no payload. A gateway that deletes a buffered event should do so on the acceptance, not on the broker's acknowledgement; one that never receives it re-sends the event under the same `altId`, and the platform stores it once.
 - Identity is the topic plus the assignment. The body carries none: an event on this namespace that carries `credentialType`, `credentialId` or `credentialSecret` is refused, and so is a body `device` that names another device. The event is attributed to the child, and the resolved event carries the gateway's token as well.
 - A notice is a JSON object, `{"altId": "...", "device": "...", "reason": "not_gateway_child"}`. It carries no payload and is not stored, so a gateway that was offline when it was sent misses it. The record of a refusal is the `failed-events` stream.
 - The grant also covers `responses` and `reports` under the namespace and subscribing to `commands` and `desired`, but nothing reads or sends them yet. Publish **events** only.
@@ -328,9 +330,11 @@ Checked by `event-sources` when the message is received and decoded.
 | --- | --- | --- | --- |
 | Instance id in the path or topic is not this instance's | `404` | The broker refuses the publish: the device is not authorized for that topic | — |
 | Tenant in the path is not a valid token | `400` | The broker refuses the publish | — |
+| The tenant in the path does not exist | `401`, the same answer as a bad credential | The broker refuses the connection | `total_http_ingest_refused`, `reason="unknown_tenant"` |
+| The credential in the body will not authenticate: unknown, expired, the wrong secret, another device's, or missing where the instance requires one | `401`, always `{"error":"unauthorized"}` | Judged at the broker when the device connects | `total_http_ingest_refused`, `reason="bad_credential"` |
 | Tenant is over its ingest ceiling, by messages or by readings | `429` with `Retry-After: 1` | Acknowledged, then **dropped** | `total_msg_rate_limited`, `total_msg_reading_limited` |
 | Body cannot be read, or is over 1 MiB | `400` | — | — |
-| Body does not decode: not JSON, an unknown or platform-only `eventType` (`StateChange`, `CommandInvocation`, `CommandResponse`), a value of the wrong JSON type, no entries, an empty entry, a missing or out-of-range location field, an alert with no `type` or with a `level` over 2147483647 | `400`, with the reason in the body | Acknowledged, then routed to the `failed-decode` stream | `total_msg_failed_decode` |
+| Body does not decode: not JSON, an unknown or platform-only `eventType` (`StateChange`, `CommandInvocation`, `CommandResponse`), a value of the wrong JSON type, no entries, an empty entry, a missing or out-of-range location field, an alert with no `type` or with a `level` over 2147483647 | `400`, with the reason and a [JSON Pointer](https://www.rfc-editor.org/rfc/rfc6901) to the value in the body | Acknowledged, then routed to the `failed-decode` stream | `total_msg_failed_decode` |
 | A timestamp that is not RFC 3339, is `0001-01-01T00:00:00Z`, or is more than 366 days old | `400`, naming the field | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
 | More than 256 readings | `400`, naming the count and the limit | Routed to `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
 | The body's `device` is not the device in the topic | — | Routed to `failed-decode` | `total_msg_failed_decode` |
@@ -338,7 +342,7 @@ Checked by `event-sources` when the message is received and decoded.
 | The platform is applying [backpressure](../deployment/observability.md#ingest-backpressure) | `503` **with** `Retry-After`: not stored, send it again | Not refused: it waits in the capture stream; the oldest captured messages are discarded only if that stream fills | |
 | The event's message could not be built: a credential it presented could not be sealed, or the event could not be encoded | `500`: not stored, and sending it again fails the same way | Dropped | `total_msg_build_dropped`, by `cause` |
 | The event could not be handed to the pipeline | `503` **without** `Retry-After`: it may have been stored, so a resend stores it twice unless it carries an [`altId`](#altid) | — | |
-| Accepted | `202` | `PUBACK` (QoS 1) | |
+| Accepted | `202`, with an `X-DC-Event-Id` receipt header | `PUBACK` (QoS 1) | |
 
 A `400` is terminal: the same request gets the same answer. A refusal at the door refuses the **whole message**, including every other entry in it.
 

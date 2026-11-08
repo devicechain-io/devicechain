@@ -59,3 +59,9 @@ Tenant tiers are a familiar, expected capability for anyone packaging a multi-te
 - [Governance & Quotas](./governance.md): the ceilings a tier supplies.
 - [AI-Assisted Authoring](./ai-authoring.md): the AI model entitlement a tier packages.
 - [Multi-Tenancy](./multi-tenancy.md): how tenants are modeled and isolated.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

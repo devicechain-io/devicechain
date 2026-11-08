@@ -547,6 +547,10 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"device-management.checkDeviceCredential": "it asks whether a device credential would authenticate, for " +
+		"the HTTP ingest door, and is served on the service plane only (a user token is refused), so the " +
+		"sweep, which runs as a tenant administrator, has no standing to call it and no credential to " +
+		"present; the credential rows are read back through the device and its credentials",
 	"user-management.mfaStatus": "it reads the signed-in person's own second-factor status and takes an " +
 		"IDENTITY token, which is the result of a login this sweep does not make (it runs as a tenant " +
 		"administrator with an access token), so there is no value to supply; the factor's rows are " +
@@ -572,6 +576,10 @@ var sweepExemptions = map[string]string{
 	"update-management.artifactSigner": "a signer is addressed by a token the platform derives from its " +
 		"public key, so the sweep has no value to supply; the artifact-signer entity reads the SAME " +
 		"door back by the token its receipt recorded, and artifactSigners is swept",
+	"outbound-connectors.webhookSigningSecret": "it reports whether a signing handle has a key and whether a " +
+		"rotation is open; the handle is a name the tenant chooses when it creates the secret, so the sweep " +
+		"has no value to supply, and the status holds no secret value (the key is shown once and is never " +
+		"readable again), so there is no stored shape for the drill to read back through it",
 	"device-management.previewSelector": "an authoring preview: it evaluates a selector expression " +
 		"the CALLER writes, so there is no stored row for the drill to reach through it",
 	"device-management.testMetricFormula": "an authoring preview: it evaluates a formula and a sample " +

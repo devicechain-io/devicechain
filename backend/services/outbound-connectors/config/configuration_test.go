@@ -106,3 +106,20 @@ func TestDispatchBacklogIsRejected(t *testing.T) {
 		t.Fatalf("maxConcurrentSends = %d, want 4", ok.MaxConcurrentSends)
 	}
 }
+
+// The downlink switch loads from the key the chart reads, is off when absent, and a misspelling is
+// refused rather than read as off.
+func TestLpwanDownlinkLoads(t *testing.T) {
+	absent := &OutboundConnectorsConfiguration{}
+	if err := core.LoadConfiguration([]byte(``), absent); err != nil || absent.LpwanDownlink.Enabled {
+		t.Fatalf("absent: err=%v enabled=%v, want off", err, absent.LpwanDownlink.Enabled)
+	}
+	on := &OutboundConnectorsConfiguration{}
+	if err := core.LoadConfiguration([]byte(`{"lpwanDownlink":{"enabled":true}}`), on); err != nil || !on.LpwanDownlink.Enabled {
+		t.Fatalf("set: err=%v enabled=%v, want on", err, on.LpwanDownlink.Enabled)
+	}
+	typo := &OutboundConnectorsConfiguration{}
+	if err := core.LoadConfiguration([]byte(`{"lpwanDownlink":{"enable":true}}`), typo); err == nil {
+		t.Fatal("a misspelled key must be refused, not read as off")
+	}
+}
