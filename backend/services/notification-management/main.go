@@ -42,7 +42,10 @@ var (
 	Notifier              *processor.PolicyNotifier
 	NotificationProcessor *processor.NotificationProcessor
 	RetentionSweeper      *processor.RetentionSweeper
-	EscalationScheduler   *processor.EscalationScheduler
+	// AttemptLedger writes the delivery ledger off the delivery path; shutdown waits for
+	// its in-flight rows before the database closes.
+	AttemptLedger       *processor.AttemptLedger
+	EscalationScheduler *processor.EscalationScheduler
 
 	// NotifyMetrics is built ONCE, in the initialize phase, and shared by every
 	// NotificationProcessor the NATS manager's oncreate callback builds. See
@@ -265,13 +268,18 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// The scheduler's release path writes state after a page; hold that write through a
 			// store outage rather than dropping it.
 			Notifier.Hold = storehold.New(Microservice, "deferral-release", storehold.RDBProbe(RdbManager))
+			// Every delivery attempt is recorded in the delivery ledger, best-effort and off the
+			// delivery path: a ledger write can never delay or block a page.
+			AttemptLedger = processor.NewAttemptLedger(Api, NotifyMetrics.LedgerWrites())
+			Notifier.Ledger = AttemptLedger
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
 			// the notification state stays bounded (ADR-017 N.C). A negative interval disables
 			// it (the table then grows unbounded — operator opt-out only).
 			if Configuration.RetentionSweepSeconds >= 0 {
-				RetentionSweeper = processor.NewRetentionSweeper(Microservice, Api,
-					Configuration.StateRetention(), Configuration.RetentionSweepInterval(),
+				RetentionSweeper = processor.NewRetentionSweeperWithLedger(Microservice, Api,
+					Configuration.StateRetention(), Configuration.AttemptRetention(),
+					Configuration.RetentionSweepInterval(),
 					core.NewNoOpLifecycleCallbacks())
 				if err := RetentionSweeper.Initialize(ctx); err != nil {
 					return err
@@ -355,6 +363,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := NotificationProcessor.Stop(ctx); err != nil {
 		return err
 	}
+	// Every sender is stopped, so no new ledger rows can arrive; let the ones in flight land
+	// before the database closes. Each is bounded by its own write timeout.
+	AttemptLedger.Wait()
 	// GraphQL, then NATS, then Rdb. Nothing in this service's GraphQL plane touches the
 	// broker today — policy and delivery-record resolvers read the database, and the alarm
 	// consumer that does read the broker is stopped above — so this is the platform's one

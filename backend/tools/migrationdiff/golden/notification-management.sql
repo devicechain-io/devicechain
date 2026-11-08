@@ -1,4 +1,5 @@
 ALTER SEQUENCE "notification-management".audit_events_id_seq OWNED BY "notification-management".audit_events.id;
+ALTER SEQUENCE "notification-management".notification_attempts_id_seq OWNED BY "notification-management".notification_attempts.id;
 ALTER SEQUENCE "notification-management".notification_channels_id_seq OWNED BY "notification-management".notification_channels.id;
 ALTER SEQUENCE "notification-management".notification_deferrals_id_seq OWNED BY "notification-management".notification_deferrals.id;
 ALTER SEQUENCE "notification-management".notification_policies_id_seq OWNED BY "notification-management".notification_policies.id;
@@ -8,6 +9,9 @@ ALTER SEQUENCE "notification-management".secrets_id_seq OWNED BY "notification-m
 ALTER TABLE ONLY "notification-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"notification-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "notification-management".notification_attempts
+ ADD CONSTRAINT notification_attempts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "notification-management".notification_attempts ALTER COLUMN id SET DEFAULT nextval('"notification-management".notification_attempts_id_seq'::regclass);
 ALTER TABLE ONLY "notification-management".notification_channels
  ADD CONSTRAINT notification_channels_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".notification_channels ALTER COLUMN id SET DEFAULT nextval('"notification-management".notification_channels_id_seq'::regclass);
@@ -30,6 +34,7 @@ ALTER TABLE ONLY "notification-management".purged_tenants
 ALTER TABLE ONLY "notification-management".secrets
  ADD CONSTRAINT secrets_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".secrets ALTER COLUMN id SET DEFAULT nextval('"notification-management".secrets_id_seq'::regclass);
+CREATE INDEX "idx_notification-management_notification_attempts_tenant_id" ON "notification-management".notification_attempts USING btree (tenant_id);
 CREATE INDEX "idx_notification-management_notification_channels_channel_type" ON "notification-management".notification_channels USING btree (channel_type);
 CREATE INDEX "idx_notification-management_notification_channels_deleted_at" ON "notification-management".notification_channels USING btree (deleted_at);
 CREATE INDEX "idx_notification-management_notification_channels_tenant_id" ON "notification-management".notification_channels USING btree (tenant_id);
@@ -53,8 +58,17 @@ CREATE INDEX "idx_notification-management_secrets_name" ON "notification-managem
 CREATE INDEX "idx_notification-management_secrets_scope" ON "notification-management".secrets USING btree (scope);
 CREATE INDEX "idx_notification-management_secrets_tenant_id" ON "notification-management".secrets USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "notification-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX ix_notification_attempts_tenant_alarm ON "notification-management".notification_attempts USING btree (tenant_id, alarm_token, created_at DESC);
+CREATE INDEX ix_notification_attempts_tenant_channel ON "notification-management".notification_attempts USING btree (tenant_id, channel_token, created_at DESC, id DESC);
+CREATE INDEX ix_notification_attempts_tenant_time ON "notification-management".notification_attempts USING btree (tenant_id, created_at DESC, id DESC);
 CREATE SCHEMA "notification-management";
 CREATE SEQUENCE "notification-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "notification-management".notification_attempts_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -111,6 +125,24 @@ CREATE TABLE "notification-management".audit_events (
  session_id text,
  on_behalf_of text,
  proposal text
+);
+CREATE TABLE "notification-management".notification_attempts (
+ id bigint NOT NULL,
+ created_at timestamp with time zone NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ alarm_token character varying(128) NOT NULL,
+ trigger_kind character varying(32) NOT NULL,
+ policy_token character varying(128),
+ channel_token character varying(128) NOT NULL,
+ channel_type character varying(32) NOT NULL,
+ recipients jsonb,
+ subject_hash character varying(64),
+ status character varying(32) NOT NULL,
+ attempt bigint DEFAULT 0 NOT NULL,
+ max_attempts bigint DEFAULT 0 NOT NULL,
+ latency_millis bigint,
+ error_code character varying(32),
+ error_message character varying(512)
 );
 CREATE TABLE "notification-management".notification_channels (
  id bigint NOT NULL,

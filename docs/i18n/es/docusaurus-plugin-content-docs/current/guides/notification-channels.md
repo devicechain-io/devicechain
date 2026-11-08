@@ -299,11 +299,47 @@ El contador `devicechain_notificationmanagement_quiet_hours_total` cuenta lo que
 
 En la consola, las horas de silencio se editan en la página **Supervisión → Políticas de notificación**; consulta [Políticas de notificación](../user-guide/notification-policies.md).
 
+## Registro de entregas {#delivery-ledger}
+
+Cada intento de enviar la notificación de una alarma por un canal queda registrado en el **registro de entregas** del inquilino, de modo que «¿se avisó realmente de esta alarma, a quién y, si no, por qué?» tiene respuesta. Consúltalo con `notificationAttempts` (requiere `notification:read`):
+
+```graphql
+query {
+  notificationAttempts(criteria: { pageNumber: 1, pageSize: 20, alarmToken: "<token de la alarma>" }) {
+    results {
+      attemptedAt trigger policyToken channelToken recipients
+      status attempt maxAttempts latencyMillis errorCode errorMessage
+    }
+  }
+}
+```
+
+Cada registro es un intento, del más reciente al más antiguo. Un canal con tres intentos permitidos que falla dos veces y luego entrega deja tres registros: `FAILED` (intento 1), `FAILED` (intento 2) y `SENT` (intento 3). Filtra por `alarmToken`, `channelToken` o `status`.
+
+| `status` | Significado |
+| --- | --- |
+| `SENT` | El canal aceptó la notificación. |
+| `FAILED` | Un fallo que un reintento podría resolver: un tiempo de espera agotado, un código de error, una conexión rechazada. |
+| `REFUSED` | Rechazado de forma definitiva, así que no hubo reintento: el destino es uno al que el tráfico saliente no puede llegar (`EGRESS_BLOCKED`), o la configuración de credenciales del canal se rechaza (`CREDENTIAL_REFUSED`). |
+| `NOT_ATTEMPTED` | Planificado pero nunca intentado: no se pudo leer el secreto de entrega del canal (`SECRET_UNAVAILABLE`), o el tiempo disponible para las entregas de la alarma se agotó antes de llegar a este canal (`BUDGET_SPENT`). |
+
+`trigger` indica qué causó la entrega: `ALARM` (un cambio de estado de la alarma), `ESCALATION` (se volvió a notificar una alarma no reconocida) o `QUIET_HOURS_RELEASE` (se envió una notificación retenida por las horas de silencio al terminar el periodo). Versiones posteriores pueden añadir valores de `status`, `trigger` y `errorCode`, así que trata uno que no reconozcas como informativo.
+
+`errorMessage` es el texto de error del proveedor con cada URL sustituida por `<url>`, porque la URL de un webhook de Slack o Teams es en sí una credencial, y el registro lo puede leer cualquiera con `notification:read`. El mensaje en sí no se guarda: `subjectHash` (un SHA-256 de la línea de asunto) muestra si dos intentos llevaron el mismo.
+
+Cada canal informa además de `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, leído del registro. `consecutiveFailures` cuenta los intentos fallidos y rechazados desde la última entrega correcta del canal. Los registros `NOT_ATTEMPTED` no cuentan contra el canal, porque describen algo que la plataforma no hizo.
+
+Dos propiedades a tener en cuenta:
+
+- **El registro nunca retrasa una notificación.** Los registros se escriben después del intento y fuera de la ruta de entrega. Si la base de datos no puede aceptar un registro, este se descarta y se cuenta en `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (o `outcome="dropped"` cuando ya hay demasiadas escrituras en espera). Un registro demuestra que hubo un intento; la ausencia de un registro no demuestra que no lo hubo.
+- **Los destinatarios son datos personales.** Los registros se eliminan pasados 30 días, o pasado `AttemptRetentionSeconds` en la configuración de notification-management. También se borran con el inquilino cuando este se elimina.
+
 ## Verificar la ruta de extremo a extremo
 
 1. **Crea un canal** (como arriba). Confirma `enabled: true` en el resultado, y que `hasSecret` es `true` para un canal SMTP con usuario o un webhook que declara `bearer` o `header`, y `false` para un webhook que declara `none`.
 2. **Crea una política** cuyas reglas mapeen las severidades que te interesan a ese canal.
 3. **Levanta una alarma real.** Dispara una regla de detección en un dispositivo de prueba (consulta [Procesamiento de Eventos y Alarmas](../concepts/event-processing.md)) y confirma que llega el correo o la llamada al webhook.
 4. **Inspecciona el estado de entrega.** El servicio mantiene un registro de solo lectura por alarma de lo que ha hecho. Consulta `notificationStatesByAlarmToken(alarmTokens: [...])`, o busca con `notificationStates`. Revisa `firstNotifiedAt` y `notifyCount` y, una vez que la alarma ha permanecido sin reconocer más allá de la ventana de escalado, `escalationLevel`.
+5. **Lee el registro de entregas.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lista cada intento de la alarma con su resultado. Un registro `FAILED` o `REFUSED` lleva `errorCode` y el `errorMessage` del proveedor; consulta [Registro de entregas](#delivery-ledger).
 
 Reconocer o despejar la alarma detiene el escalado adicional. El registro de estado guarda `acknowledgedAt`/`clearedAt` junto con el historial de notificaciones. Si la alarma se despeja y su condición vuelve a darse, la plataforma reabre la misma alarma y su registro de estado empieza de nuevo para el nuevo ciclo: el escalado vuelve a funcionar hasta que ese ciclo se reconozca o se despeje.

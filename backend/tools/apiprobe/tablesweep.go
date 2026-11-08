@@ -211,6 +211,11 @@ var tableSweepExemptions = map[string]string{
 		"inside a quiet stretch, and the row is deleted when it is released. No alarm is raised in a " +
 		"drill that sends no telemetry (see device-management.alarms), so nothing is held. The policy's " +
 		"quiet-hours configuration itself lives on notification_policies, which the seed covers.",
+	"notification-management.notification_attempts": "the delivery ledger: one row per attempt to send " +
+		"an ALARM's notification through a channel. The only writer is the policy notifier's " +
+		"AttemptLedger, after it tries a channel for an alarm state change, an escalation or a quiet-hours " +
+		"release. No alarm is raised in a drill that sends no telemetry (see device-management.alarms), " +
+		"so nothing is attempted and nothing is recorded.",
 	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
 		"FIRES. No telemetry, no fire, no row.",
 
