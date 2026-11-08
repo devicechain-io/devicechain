@@ -547,6 +547,10 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"device-management.checkDeviceCredential": "it asks whether a device credential would authenticate, for " +
+		"the HTTP ingest door, and is served on the service plane only (a user token is refused), so the " +
+		"sweep, which runs as a tenant administrator, has no standing to call it and no credential to " +
+		"present; the credential rows are read back through the device and its credentials",
 	"user-management.mfaStatus": "it reads the signed-in person's own second-factor status and takes an " +
 		"IDENTITY token, which is the result of a login this sweep does not make (it runs as a tenant " +
 		"administrator with an access token), so there is no value to supply; the factor's rows are " +

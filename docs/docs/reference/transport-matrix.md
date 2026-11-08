@@ -126,8 +126,9 @@ operator has switched that on; see [Connecting devices from outside the cluster]
 A `POST` endpoint for the same JSON event body. Simple, and one-way.
 
 - **Subscribe ●** — `POST /{instanceId}/{tenant}/events` returns:
-  - `202` once the event is stored in the platform's inbound stream;
-  - `400` on a body it cannot decode or a syntactically invalid tenant;
+  - `202` once the event is stored in the platform's inbound stream, with an `X-DC-Event-Id` receipt header;
+  - `401` when the tenant in the path does not exist or the credential in the body will not authenticate (one answer for both);
+  - `400` on a body that is not JSON or is JSON the platform refuses (the latter with a JSON Pointer to the offending value in the JSON body), or a syntactically invalid tenant;
   - `404` when the instance id in the path is wrong;
   - `429` when the tenant is over its ingest ceiling, counted in readings. This is checked before
     backpressure, so a tenant over its own ceiling gets `429`, never the backpressure `503`;
@@ -143,8 +144,8 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   failed after the stream had stored the event, a retry stores it twice, unless the event carries an
   `altId` and an `occurredTime` (see
   [quality of service](../guides/connecting-a-device.md#quality-of-service)). A `429` also means the
-  event was not accepted; it carries a `Retry-After` header, so back off and retry. `202`, `400`
-  and `404` are terminal for that request.
+  event was not accepted; it carries a `Retry-After` header, so back off and retry. `202`, `400`,
+  `401` and `404` are terminal for that request.
 - **Write ○ / Read ○** — **there is no downlink at all.** A device that reaches the platform only
   over HTTP cannot be commanded. This is less a gap awaiting a fix than the shape of the
   integration: give a device that must receive commands an MQTT connection as well.

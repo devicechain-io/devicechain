@@ -86,6 +86,9 @@ type HttpEventSource struct {
 	// integrations is the inbound-integration route (http_integration.go), set by
 	// UseIntegrations before the source starts. nil answers 503 on that route.
 	integrations *IntegrationRoute
+	// checks are the synchronous refusals /events makes before it answers 202 (see
+	// IngestChecks), set by UseIngestChecks before the source starts. nil makes none.
+	checks *IngestChecks
 }
 
 // Create a new HTTP event source based on the given configuration. instanceId is
@@ -171,8 +174,11 @@ func (es *HttpEventSource) handler() http.Handler {
 }
 
 // handleEvent decodes a single posted event and forwards it to the shared
-// publish path. It returns 202 once the event is stored in the inbound stream, 400
-// when the body cannot be decoded, 429 when the tenant is over its ingest ceiling
+// publish path. It returns 202 once the event is stored in the inbound stream (with an
+// X-DC-Event-Id receipt), 400 when the body is not JSON or is JSON the platform
+// refuses (the latter names the value by a JSON Pointer in a JSON body), 401 when the tenant does not exist or the
+// credential in the body will not authenticate (one answer for both, see IngestChecks),
+// 429 when the tenant is over its ingest ceiling
 // (in messages before decode, or in readings after it), and 503 when it was not
 // accepted: with a Retry-After when the pipeline refused it under backpressure (a
 // reader is far behind; the event was certainly not stored), and without one when
@@ -185,6 +191,7 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing tenant in path", http.StatusBadRequest)
 		return
 	}
+	eventId := newEventId()
 	// A syntactically invalid tenant is knowable at request time and can never be
 	// published to a valid subject, so reject it synchronously with a 400 rather
 	// than accept (202) an event the async publish path will only drop. Mirrors the
@@ -228,7 +235,24 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	event, payload, err := es.Decoder.Decode(body, time.Time{})
 	if err != nil {
 		es.failed(es.Id, tenant, body, err)
-		http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
+		// Not JSON at all: nothing in it can be pointed at, so it is a plain-text 400.
+		// JSON that is well formed and says something the platform refuses is still a 400, with a JSON body
+		// that names the value (an RFC 6901 pointer), so the sender can fix the field rather than guess.
+		if IsMalformedJSON(err) {
+			http.Error(w, fmt.Sprintf("unable to decode event: %v", err), http.StatusBadRequest)
+			return
+		}
+		writeUnprocessable(w, eventId, err)
+		return
+	}
+
+	// The synchronous refusals, after the decode and before anything is charged or published: a
+	// tenant that does not exist and a credential that will not authenticate are answered by the
+	// SAME 401. The tenant check sits after the decode so a malformed body is answered the same
+	// for every tenant, and the unknown-tenant answer does not arrive measurably before the others.
+	if es.checks != nil && es.checks.refusedTenant(r.Context(), tenant) {
+		es.checks.count(es.Id, tenant, event.Device, RefusedUnknownTenant)
+		writeUnauthorized(w)
 		return
 	}
 
@@ -237,6 +261,15 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	if !es.readings(es.Id, tenant, time.Time{}, false, OriginUntrusted, readingsOf(payload)) {
 		w.Header().Set("Retry-After", "1")
 		http.Error(w, "ingest rate limit exceeded for tenant (counted in readings)", http.StatusTooManyRequests)
+		return
+	}
+
+	// The credential, once the request is known to be within its tenant's own ceiling: a flood of
+	// wrong credentials is metered by that ceiling and never spends the check's bounded budget
+	// on traffic the tenant was not allowed to send.
+	if es.checks != nil && es.checks.refusedCredential(r.Context(), tenant, event) {
+		es.checks.count(es.Id, tenant, event.Device, RefusedCredential)
+		writeUnauthorized(w)
 		return
 	}
 
@@ -268,6 +301,11 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "unable to accept event: downstream unavailable", http.StatusServiceUnavailable)
 		return
+	}
+	// 202 carries the receipt the platform minted for this request, so a sender (or its support
+	// ticket) can quote it.
+	if eventId != "" {
+		w.Header().Set(EventIdHeader, eventId)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
