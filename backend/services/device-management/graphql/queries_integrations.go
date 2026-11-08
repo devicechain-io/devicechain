@@ -91,6 +91,32 @@ func (r *SchemaResolver) IntegrationDecoder(ctx context.Context, args struct {
 	return &IntegrationDecoderPlanResolver{M: answer}, nil
 }
 
+// Whether a device's type has a payload decoder (service plane), for a device that publishes its
+// own payload. The credential the device presented is authenticated FIRST, and every failure to
+// authenticate is the same null, so the question says nothing about which devices exist or which
+// types carry a decoder to a caller without the device's credential.
+func (r *SchemaResolver) DeviceDecoder(ctx context.Context, args struct {
+	DeviceToken      string
+	CredentialType   string
+	CredentialId     string
+	CredentialSecret *string
+}) (*DeviceDecoderPlanResolver, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	var api model.DeviceManagementApi = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		api = capi
+	}
+	answer, err := model.DeviceDecoder(ctx, api, args.DeviceToken, &model.PresentedCredential{
+		CredentialType: args.CredentialType, CredentialId: args.CredentialId, Secret: args.CredentialSecret,
+	})
+	if err != nil || answer == nil {
+		return nil, err
+	}
+	return &DeviceDecoderPlanResolver{IntegrationDecoderPlanResolver{M: answer}}, nil
+}
+
 // The sender-named devices an integration has seen that the tenant has no device in scope for.
 func (r *SchemaResolver) UnregisteredIntegrationDevices(ctx context.Context, args struct {
 	Criteria model.UnregisteredDeviceSearchCriteria

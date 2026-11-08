@@ -135,6 +135,13 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     """
     maintenanceWindow: MaintenanceWindow
     """
+    How the devices of this type receive their commands. PUBLISH, or null, is the default: the
+    command is published to the device's subject and delivered by the transport the device is
+    connected on. HTTP_PULL holds the type's commands until the device asks for them with an
+    authenticated GET to its commands endpoint.
+    """
+    commandChannel: String
+    """
     Manufacturer of the devices of this type: free text, up to 128 characters. facetValues
     lists the values already in use.
     """
@@ -1082,6 +1089,16 @@ type CommandDispatchHold {
     dispatchAfter: String!
     """When the opening closes, as an RFC 3339 timestamp. The command may not be sent at or after it."""
     dispatchUntil: String!
+}
+
+"""What the HTTP command endpoints learn about a device that proved its access token."""
+type CommandChannelAccess {
+    """Token of the device the access token belongs to."""
+    deviceToken: String!
+    """Token of the device's type."""
+    deviceTypeToken: String!
+    """The type's command channel: PUBLISH, HTTP_PULL, or null for the default (PUBLISH)."""
+    commandChannel: String
 }
 
 """
@@ -2228,6 +2245,12 @@ input DeviceTypeCreateRequest {
     manufacturer: String
     """Model of the devices of this type, up to 128 characters."""
     model: String
+    """
+    Command channel of the type: PUBLISH or HTTP_PULL, or omit it (or send an empty value) for
+    the default channel, which behaves as PUBLISH. Any other value fails the request with
+    INVALID_VALUE.
+    """
+    commandChannel: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
@@ -2274,6 +2297,12 @@ input DeviceTypeUpdateRequest {
     manufacturer: String
     """New model, or null to clear it."""
     model: String
+    """
+    New command channel: PUBLISH or HTTP_PULL, or null (or an empty value) to return the type
+    to the default channel, which behaves as PUBLISH. Any other value fails the whole update
+    with INVALID_VALUE.
+    """
+    commandChannel: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
@@ -3510,6 +3539,16 @@ type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & Metadat
     stale of them.
     """
     revocationStatus: RevocationStatus!
+    """
+    Whether, and how strictly, a certificate's status is also asked of its issuer's online OCSP
+    responder when a device connects. OFF (the default) asks nothing and sends no request.
+    """
+    ocspMode: CertificateOcspMode!
+    """
+    The responder every OCSP request for this anchor goes to, in place of each certificate's own
+    Authority Information Access entry. Null when the certificates' own entries are used.
+    """
+    ocspResponderUrl: String
 }
 
 """Data required to create a trust anchor."""
@@ -3562,6 +3601,17 @@ input DeviceTrustAnchorUpdateRequest {
     list.
     """
     revocationStaleGrace: String
+    """
+    Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+    while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+    it, and needs ocspResponderUrl.
+    """
+    ocspMode: CertificateOcspMode
+    """
+    An http or https URL, without credentials, that replaces each certificate's own responder.
+    Null clears it. The address it resolves to must be one the instance's egress policy allows.
+    """
+    ocspResponderUrl: String
 }
 
 """How an anchor treats the completeness of its revocation lists."""
@@ -3569,6 +3619,26 @@ enum CertificateRevocationMode {
     """A listed certificate is refused; an issuer with no list, or a stale one, is allowed."""
     ENTRIES
     """A listed certificate is refused, and so is one whose issuer has no current list."""
+    REQUIRE_CURRENT
+}
+
+"""
+How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+revoked is always refused (a verified revoked answer for any certificate on any verified path
+wins); the modes differ in what an answer that could not be had means.
+"""
+enum CertificateOcspMode {
+    """No responder is asked. The default for every anchor."""
+    OFF
+    """
+    A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+    refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+    """
+    ENFORCE_KNOWN
+    """
+    A revoked answer refuses, and so does a certificate whose status could not be confirmed
+    current. A responder outage refuses new connects once cached answers expire.
+    """
     REQUIRE_CURRENT
 }
 
@@ -3920,6 +3990,22 @@ type IntegrationDecoderPlan {
     parsesJson: Boolean!
     """Whether the decoder reads the network server's decoded object, parsed and priced by size."""
     parsesDecoded: Boolean!
+    """The profile version the answer is for, as "{profile}@{version}"; empty when there is no decoder."""
+    profileVersionToken: String!
+}
+
+"""What the ingest path needs to know about the payload decoder of a device's type."""
+type DeviceDecoderPlan {
+    """Whether the active published version declares a decoder, usable or not."""
+    present: Boolean!
+    """The input an uplink must carry for the decoder to run; null when there is no decoder."""
+    input: PayloadDecoderInput
+    """The most readings one decode produces; 0 when there is no decoder this build can run."""
+    maxReadings: Int!
+    """The part of the static worst-case cost that does not depend on the size of the uplink."""
+    composedCost: Int!
+    """Whether the decoder reads the JSON body, parsed and priced by size."""
+    parsesJson: Boolean!
     """The profile version the answer is for, as "{profile}@{version}"; empty when there is no decoder."""
     profileVersionToken: String!
 }
@@ -5168,6 +5254,28 @@ type Query {
     ): IntegrationDecoderPlan
     """
     Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. What the ingest path needs to know about the payload decoder of the
+    device with this token, for a device that publishes its own payload: whether the active
+    published version of its type's profile declares one, which input it reads, and the figures
+    the ingest charge is built from. The credential the device presented is authenticated
+    first, and the answer is null for every failure to do so (nothing presented, an unknown,
+    disabled or expired credential, a wrong secret, a credential that belongs to another device,
+    a device that does not exist): those are indistinguishable from one another and say nothing
+    about whether a decoder is attached. A device that authenticates and whose type has no decoder
+    is present: false.
+    """
+    deviceDecoder(
+        """Token of the device the uplink is addressed to."""
+        deviceToken: String!
+        """Type of the credential the device presented (ACCESS_TOKEN, MQTT_BASIC)."""
+        credentialType: String!
+        """The credential id the device presented (for an access token, the token)."""
+        credentialId: String!
+        """The secret the device presented, for a credential type that carries one."""
+        credentialSecret: String
+    ): DeviceDecoderPlan
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
     user's access token. Proves a bearer token belongs to the integration with this token.
     Returns the integration when it does, and null for every failure: no such integration and
     a wrong token are indistinguishable. A switched-off integration whose token matches is
@@ -5323,6 +5431,25 @@ type Query {
         """
         alreadyHeld: Boolean
     ): CommandDispatchSchedule!
+    """
+    Which of the named devices take their commands over HTTP_PULL: the ones that exist, are
+    enabled, and whose device type has commandChannel HTTP_PULL. A device that does not exist
+    or is disabled is simply absent from the answer. Requires device:read.
+    """
+    commandPullDevices(
+        """Tokens of the devices to ask about, at most 2000."""
+        deviceTokens: [String!]!
+    ): [String!]!
+    """
+    Service plane. Proves a device's access token for the HTTP command endpoints and says which
+    device it belongs to. Null when the token is unknown, revoked or expired, or the device is
+    disabled: one answer for all of them. Reads the database on every call, so a revocation
+    takes effect on the next request. Requires a service token with device:read.
+    """
+    authenticateCommandChannel(
+        """The device's access token."""
+        credentialId: String!
+    ): CommandChannelAccess
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!

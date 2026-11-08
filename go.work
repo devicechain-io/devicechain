@@ -73,6 +73,8 @@ use (
 	./backend/tools/rdbguard
 	./backend/tools/redlines
 	./backend/tools/subconfirm
+	./backend/tools/transportmatrix
+	./backend/tools/vocabgen
 	./deploy
 	./examples/ota-device
 )

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The third-party-library MQTT clients of the transport conformance rig (hack/conformance-rig.sh):
+  Eclipse Paho (MQTT 3.1.1) for the platform broker, and Eclipse Tahu (Sparkplug B) for an edge node.
+  Both are implementations somebody else wrote and maintains, which is the point: the rig must not
+  agree with the platform merely because both were written by the same hand. NOT part of the Go
+  workspace or any Go build.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.devicechain.conformance</groupId>
+  <artifactId>conformance-client</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <name>DeviceChain transport conformance clients</name>
+
+  <properties>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <paho.version>1.2.5</paho.version>
+    <tahu.version>1.0.18</tahu.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+      <version>${paho.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.tahu</groupId>
+      <artifactId>tahu-core</artifactId>
+      <version>${tahu.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>1.7.36</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>conformance-client</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.4.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>io.devicechain.conformance.Main</mainClass>
+                </transformer>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>META-INF/MANIFEST.MF</exclude>
+                    <exclude>META-INF/versions/**</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -166,6 +166,25 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+/**
+ * How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+ * revoked is always refused (a verified revoked answer for any certificate on any verified path
+ * wins); the modes differ in what an answer that could not be had means.
+ */
+export type CertificateOcspMode =
+  /**
+   * A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+   * refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+   */
+  | 'ENFORCE_KNOWN'
+  /** No responder is asked. The default for every anchor. */
+  | 'OFF'
+  /**
+   * A revoked answer refuses, and so does a certificate whose status could not be confirmed
+   * current. A responder outage refuses new connects once cached answers expire.
+   */
+  | 'REQUIRE_CURRENT';
+
 /** How an anchor treats the completeness of its revocation lists. */
 export type CertificateRevocationMode =
   /** A listed certificate is refused; an issuer with no list, or a stale one, is allowed. */
@@ -743,6 +762,17 @@ export type DeviceTrustAnchorUpdateRequest = {
   /** Human-readable name. Null clears it. */
   name?: string | null | undefined;
   /**
+   * Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+   * while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+   * it, and needs ocspResponderUrl.
+   */
+  ocspMode?: CertificateOcspMode | null | undefined;
+  /**
+   * An http or https URL, without credentials, that replaces each certificate's own responder.
+   * Null clears it. The address it resolves to must be one the instance's egress policy allows.
+   */
+  ocspResponderUrl?: string | null | undefined;
+  /**
    * Required and unclearable. Switching to REQUIRE_CURRENT is refused while the anchor holds no
    * current revocation list, or a registered certificate under it was issued by a CA that has none:
    * the switch would refuse every such device.
@@ -762,6 +792,12 @@ export type DeviceTypeCreateRequest = {
   backgroundColor?: string | null | undefined;
   /** Border colour, up to 32 characters. */
   borderColor?: string | null | undefined;
+  /**
+   * Command channel of the type: PUBLISH or HTTP_PULL, or omit it (or send an empty value) for
+   * the default channel, which behaves as PUBLISH. Any other value fails the request with
+   * INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
   /** Foreground (text) colour, up to 32 characters. */
@@ -817,6 +853,12 @@ export type DeviceTypeUpdateRequest = {
   backgroundColor?: string | null | undefined;
   /** New border colour, or null to clear it. */
   borderColor?: string | null | undefined;
+  /**
+   * New command channel: PUBLISH or HTTP_PULL, or null (or an empty value) to return the type
+   * to the default channel, which behaves as PUBLISH. Any other value fails the whole update
+   * with INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;
   /** New foreground colour, or null to clear it. */
@@ -1367,6 +1409,13 @@ export type AcknowledgeAlarmMutationVariables = Exact<{
 
 
 export type AcknowledgeAlarmMutation = { acknowledgeAlarm: { id: string } };
+
+export type AcknowledgeAlarmsMutationVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AcknowledgeAlarmsMutation = { acknowledgeAlarms: { acknowledged: Array<{ token: string }>, refusals: Array<{ token: string, code: string, reason: string }> } };
 
 export type ClearAlarmMutationVariables = Exact<{
   token: string;
@@ -2673,6 +2722,20 @@ export const AcknowledgeAlarmDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcknowledgeAlarmMutation, AcknowledgeAlarmMutationVariables>;
+export const AcknowledgeAlarmsDocument = new TypedDocumentString(`
+    mutation AcknowledgeAlarms($tokens: [String!]!) {
+  acknowledgeAlarms(tokens: $tokens) {
+    acknowledged {
+      token
+    }
+    refusals {
+      token
+      code
+      reason
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AcknowledgeAlarmsMutation, AcknowledgeAlarmsMutationVariables>;
 export const ClearAlarmDocument = new TypedDocumentString(`
     mutation ClearAlarm($token: String!) {
   clearAlarm(token: $token) {

@@ -568,6 +568,7 @@ func deviceTypeFamily() putest.Family[*Api] {
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
 				ProfileToken: strp(profileSeed), MaintenanceWindowToken: strp("mw-a"),
 				Manufacturer: strp(manufacturerSeed), Model: strp(modelSeed),
+				CommandChannel: strp(CommandChannelHTTPPull),
 			}); err != nil {
 				t.Fatalf("seed device type: %v", err)
 			}
@@ -578,6 +579,7 @@ func deviceTypeFamily() putest.Family[*Api] {
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 			got["manufacturer"] = nullStr(e.Manufacturer)
 			got["model"] = nullStr(e.ModelName)
+			got["commandChannel"] = nullStr(e.CommandChannel)
 			got["maintenanceWindowToken"] = nullMarker
 			if e.MaintenanceWindowId != nil {
 				windows, werr := api.MaintenanceWindowsById(ctx, []uint{*e.MaintenanceWindowId})
@@ -616,6 +618,8 @@ func deviceTypeFamily() putest.Family[*Api] {
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Manufacturer }),
 			putest.OptionalStringField("model", modelSeed, "B-2000",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.Model }),
+			putest.OptionalStringField("commandChannel", CommandChannelHTTPPull, CommandChannelPublish,
+				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.CommandChannel }),
 			// NULLABLE, unlike every other reference in this file: detaching a profile is
 			// a state a device type can legitimately be in.
 			putest.OptionalStringField("profileToken", profileSeed, "profile-b",

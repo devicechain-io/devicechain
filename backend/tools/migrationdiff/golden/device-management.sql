@@ -1088,7 +1088,9 @@ CREATE TABLE "device-management".device_trust_anchors (
  enabled boolean NOT NULL,
  revocation_mode character varying(32),
  revocation_stale_grace bigint,
- revocation_rows bigint
+ revocation_rows bigint,
+ ocsp_mode character varying(32),
+ ocsp_responder_url character varying(2048)
 );
 CREATE TABLE "device-management".device_types (
  id bigint NOT NULL,
@@ -1108,7 +1110,8 @@ CREATE TABLE "device-management".device_types (
  profile_id bigint,
  manufacturer character varying(128),
  model character varying(128),
- maintenance_window_id bigint
+ maintenance_window_id bigint,
+ command_channel character varying(32)
 );
 CREATE TABLE "device-management".devices (
  id bigint NOT NULL,

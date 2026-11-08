@@ -8,7 +8,11 @@ title: Transport Capability Matrix
 This page shows what each transport does today, in each direction, and names the gaps.
 
 :::info The code is the source of truth
-This page is maintained by hand against the implementation, not generated, so it can fall behind.
+The prose on this page is maintained by hand against the implementation, so it can fall behind. The
+symbols in the device-transport table and in the LwM2M operations table are different: they are
+generated from a conformance suite that drives a real instance with clients somebody else wrote
+(Eclipse Paho, Eclipse Leshan, Eclipse Tahu and curl), and every filled circle in them names checks
+that passed against a recent build, each shown to fail on a planted defect first.
 Where it and your instance disagree, your instance is right. Every claim below was read from the
 service that implements it, not from a design document; anything that could not be established that
 way is marked as such rather than filled in. A cell that overstates what the platform does is a bug
@@ -45,6 +49,8 @@ device transport, so **None** there is always a real answer to a real question.
 ## Device transports
 
 How devices reach the platform, and how the platform reaches back.
+
+{/* conformance:table device-transports */}
 
 | Transport | Read | Write | Subscribe |
 | --- | :---: | :---: | :---: |
@@ -333,14 +339,16 @@ For constrained devices over CoAP/UDP with DTLS.
 
 #### LwM2M operations in detail
 
+{/* conformance:table lwm2m-operations */}
+
 | Operation | | Notes |
 | --- | :---: | --- |
-| Read | ◐ | CoAP GET; a response over 8 KiB is silently truncated and still reported successful |
+| Read | ◐ | CoAP GET; the body is returned as the device sent it, in the device's own content format (base64 when it is not text, as TLV is); a response over 8 KiB is silently truncated and still reported successful |
 | Write | ◐ | Single scalar resource, replace only |
 | Execute | ● | With or without arguments. A raw Execute of the Device object's Factory Reset resource (`/3/0/5`) is refused with `COMMAND_DESTRUCTIVE_REFUSED`; a confirmed named operation is planned |
 | Reboot (`lwm2m.reboot`) | ● | A named command that Executes the Device object's Reboot resource; takes no parameters |
-| Read device information (`lwm2m.readDeviceInfo`) | ● | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have |
-| Device-information harvest | ● | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry |
+| Read device information (`lwm2m.readDeviceInfo`) | ◐ | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have. Only text/plain answers are decoded: a device that answers a single-resource read in TLV, as Eclipse Leshan does by default, has every resource listed as missing and the command fails |
+| Device-information harvest | ◐ | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry. Only text/plain answers are decoded, so nothing is recorded for a device that answers in TLV |
 | Observe | ◐ | SenML-JSON only; numeric resources only; fixed object allowlist; 32 per registration |
 | Discover | ○ | Not implemented |
 | Create | ○ | Not implemented |

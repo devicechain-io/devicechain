@@ -86,6 +86,12 @@ type HttpEventSource struct {
 	// integrations is the inbound-integration route (http_integration.go), set by
 	// UseIntegrations before the source starts. nil answers 503 on that route.
 	integrations *IntegrationRoute
+	// deviceUplinks is the device's own-payload route (http_device_uplink.go), set by
+	// UseDeviceUplinks before the source starts. nil means the route does not exist.
+	deviceUplinks *DeviceUplinkRoute
+	// commandPull is the HTTP command pull (http_command_pull.go), set by UseCommandPull before
+	// the source starts. nil answers 503 on its routes.
+	commandPull *CommandPullRoute
 	// checks are the synchronous refusals /events makes before it answers 202 (see
 	// IngestChecks), set by UseIngestChecks before the source starts. nil makes none.
 	checks *IngestChecks
@@ -153,6 +159,11 @@ func (es *HttpEventSource) handler() http.Handler {
 	// (ADR-006); the ServeMux only matches a non-empty segment, so a missing tenant
 	// — or an event addressed to a different instance — 404s.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/events", es.InstanceId), es.handleEvent)
+	// A device's own binary or vendor-JSON payload, read by the decoder on its type's profile. Only
+	// registered when enabled, so /events and every other route are untouched.
+	if es.deviceUplinks != nil {
+		mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{token}/uplink", es.InstanceId), es.handleDeviceUplink)
+	}
 	// The inbound integrations (a LoRaWAN network server or a webhook): authenticated by the
 	// integration's bearer token, read by its registered type. See http_integration.go.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}", es.InstanceId), es.handleIntegration)
@@ -166,6 +177,10 @@ func (es *HttpEventSource) handler() http.Handler {
 	// front end does not forward /events, so nothing else is reachable without the instance.
 	// An instance literally named "integrations" would make /integrations/{tenant}/events
 	// ambiguous with it, so it keeps only the qualified form.
+	// The HTTP command pull: how a device on the HTTP_PULL command channel receives commands.
+	mux.HandleFunc(fmt.Sprintf("GET /%s/{tenant}/devices/{device}/commands", es.InstanceId), es.handleCommandPoll)
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{device}/commands/{command}/ack", es.InstanceId), es.handleCommandAck)
+	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{device}/commands/{command}/response", es.InstanceId), es.handleCommandResponse)
 	if es.InstanceId != "integrations" {
 		mux.HandleFunc("POST /integrations/{tenant}/{integration}", es.handleIntegration)
 		mux.HandleFunc("POST /integrations/{tenant}/{integration}/{messageType}", es.handleIntegration)
@@ -363,6 +378,9 @@ func (es *HttpEventSource) Start(ctx context.Context) error {
 // over HTTP that stopped arriving.
 func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 	tracker := es.newConnTracker()
+	if es.commandPull != nil {
+		es.commandPull.begin()
+	}
 	server := core.NewHttpServerForHandlerWithOptions(int32(es.Port), tracker.wrap(es.handler()), core.HttpServerOptions{
 		ReadHeaderTimeout: es.Ingest.HeaderTimeout(),
 		// 🔴 ReadTimeout IS SET HERE AND NOWHERE ELSE IN THE TREE, because this listener
@@ -389,6 +407,9 @@ func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 		ConnContext: tracker.connContext,
 	})
 	if err := server.Start(); err != nil {
+		if es.commandPull != nil {
+			es.commandPull.end()
+		}
 		return fmt.Errorf("unable to start http event source %q: %w", es.Id, err)
 	}
 	es.server = server
@@ -423,6 +444,11 @@ func (es *HttpEventSource) ExecuteStop(ctx context.Context) error {
 	server := es.server
 	if server == nil {
 		return nil
+	}
+	// Held command polls are released first: Shutdown waits for every handler, and a poll would
+	// otherwise keep a stopping source alive for the whole of its wait.
+	if es.commandPull != nil {
+		es.commandPull.end()
 	}
 	tracker := es.tracker
 	es.server, es.tracker = nil, nil

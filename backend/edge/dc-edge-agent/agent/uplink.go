@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +58,13 @@ type Uplink struct {
 	// publishes on; onNotice receives each one. Both are set before Run.
 	noticesTopic string
 	onNotice     func(messaging.GatewayNotice)
+
+	// onCommand, when set (the downlink is enabled), receives each command the platform
+	// routes to one of this gateway's children, with the child named by the SUBJECT the
+	// broker's grant confined to this gateway. It returns true once the command is durable on
+	// this box; only then is the MQTT message acknowledged to the broker. Set before Run; nil
+	// leaves the uplink exactly as it was before the downlink existed.
+	onCommand func(child string, payload []byte) bool
 
 	// acceptsTopic is the MQTT topic the platform tells this gateway which events it durably
 	// accepted on; onAccept receives each acceptance's keys. Subscribed only when the agent
@@ -139,13 +147,30 @@ func NewUplink(cfg config.UplinkConfiguration, instanceId string, log *slog.Logg
 // and the gateway's own token (a gateway is not its own child; the platform refuses it
 // too, and refusing it here keeps it out of the cloud and lets the caller keep it).
 func (up *Uplink) EventTopic(child string) (string, error) {
+	return up.childTopic(child, messaging.SegmentEvents)
+}
+
+// ResponseTopic is the sibling constructor for the downlink's answers: a child's response to
+// a command, in this gateway's namespace, under the same child-token discipline as EventTopic.
+func (up *Uplink) ResponseTopic(child string) (string, error) {
+	return up.childTopic(child, messaging.SegmentResponses)
+}
+
+// childTopic is the one place a gateway-namespace topic is built.
+func (up *Uplink) childTopic(child, leaf string) (string, error) {
 	if err := core.ValidateToken(child); err != nil {
 		return "", fmt.Errorf("not a child device token: %w", err)
 	}
 	if child == up.gateway {
 		return "", ErrGatewayAddressedItself
 	}
-	return messaging.SubjectToMqttTopic(messaging.GatewayEventsSubject(up.instanceID, up.tenant, up.gateway, child)), nil
+	return messaging.SubjectToMqttTopic(messaging.GatewayDeviceSubject(up.instanceID, up.tenant, up.gateway, child, leaf)), nil
+}
+
+// commandsFilter is the MQTT filter covering every child's commands in this gateway's
+// namespace; the broker's grant (constant-size, wildcarded) is what permits it.
+func (up *Uplink) commandsFilter() string {
+	return messaging.SubjectToMqttTopic(messaging.GatewayLeafWildcard(up.instanceID, up.tenant, up.gateway, messaging.SegmentCommands))
 }
 
 // ErrGatewayAddressedItself is returned by EventTopic for the gateway's own token.
@@ -170,6 +195,20 @@ func (up *Uplink) clientOptions() *mqtt.ClientOptions {
 	opts.SetConnectRetry(false)
 	opts.SetConnectTimeout(up.connectTimeout)
 	opts.SetCleanSession(true)
+	// KNOWN LIMIT. The session is clean on purpose: the client id is the gateway device's
+	// presence identity, and a persistent session would change what the broker means by that
+	// device being online. The cost is on commands: a QoS 1 delivery whose acknowledgement is
+	// still withheld when the connection drops (the agent crashed between receiving it and
+	// storing it) is discarded by the broker and is not redelivered. The agent then holds
+	// neither the command nor a ledger entry, so nothing is actuated and nothing is said; the
+	// platform sees a dispatched command that no one answered and ends it as timed out, and a
+	// re-dispatch arrives as a fresh message that is accepted normally.
+	// (TestWithheldAckOnCleanSessionIsNotRedelivered pins this.)
+	if up.onCommand != nil {
+		// A command is acknowledged to the broker only once it is durable here, so paho must
+		// not acknowledge it when the handler returns.
+		opts.SetAutoAckDisabled(true)
+	}
 	return opts
 }
 
@@ -224,6 +263,15 @@ func (up *Uplink) connectOnce(ctx context.Context) error {
 	if err := messaging.SubscribeMqttConfirmed(client, up.noticesTopic, 0, up.handleNotice, uplinkSubscribeTimeout); err != nil {
 		client.Disconnect(0)
 		return fmt.Errorf("subscribe to gateway notices: %w (does the platform grant this gateway device its notices subject? the broker and the platform must both be upgraded before an agent uses the gateway uplink)", err)
+	}
+	if up.onCommand != nil {
+		// QoS 1 and confirmed, for the same reason as the notices: a refused subscription is
+		// reported by paho as success, and a gateway that cannot hear its commands would look
+		// healthy while every command to its children timed out.
+		if err := messaging.SubscribeMqttConfirmed(client, up.commandsFilter(), 1, up.handleCommand, uplinkSubscribeTimeout); err != nil {
+			client.Disconnect(0)
+			return fmt.Errorf("subscribe to gateway commands: %w (is the platform upgraded to route gateway commands, and does the broker grant this gateway its commands subject?)", err)
+		}
 	}
 	// An agent that retires on acceptance and cannot hear acceptances would resend every event
 	// forever, so a refused subscription fails the connect for the same reason the notices do.
@@ -294,6 +342,22 @@ func (up *Uplink) handleNotice(_ mqtt.Client, m mqtt.Message) {
 	}
 	if up.onNotice != nil {
 		up.onNotice(n)
+	}
+}
+
+// handleCommand takes one command off the cloud broker. The child comes from the topic, never
+// the body; a topic that is not this gateway's own commands shape is acknowledged and
+// ignored (it can only be a broker misconfiguration, and redelivering it would help nobody).
+func (up *Uplink) handleCommand(_ mqtt.Client, m mqtt.Message) {
+	subject := strings.ReplaceAll(m.Topic(), "/", ".")
+	gateway, child, ok := messaging.ParseGatewayChildSubject(subject, messaging.SegmentCommands)
+	if !ok || gateway != up.gateway || core.ValidateToken(child) != nil {
+		up.log.Warn("ignoring a command on an unexpected topic", "topic", m.Topic())
+		m.Ack()
+		return
+	}
+	if up.onCommand(child, m.Payload()) {
+		m.Ack()
 	}
 }
 
