@@ -213,6 +213,12 @@ type CommandDeliveryProcessor struct {
 	// stamped. Read by the sweep, the nudge and the hold reconciler alike, which must agree.
 	SparkplugCommands bool
 
+	// LpwanDownlink is the deployment's derived flag that the outbound-connectors LPWAN downlink
+	// adapter is enabled: a command to a device that reports through an inbound integration is then
+	// dispatched (stamped with its integration) instead of failed on sight. Chart-derived, never
+	// authored.
+	LpwanDownlink bool
+
 	// CommandImpacts resolves a command's impact for the impact stamp (see dispatchHeaders).
 	// MAY BE NIL, which leaves the stamp off; the adapter fails closed on an absent stamp.
 	CommandImpacts model.CommandImpactResolver
@@ -587,7 +593,7 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 		// device the projection has never seen, a device whose chunk of the read failed,
 		// and an instance with no gate wired at all. All three must deliver.
 		state := states[cmd.DeviceToken]
-		switch presence.Decide(state, cproc.SparkplugCommands) {
+		switch presence.Decide(state, cproc.capabilities()) {
 		case presence.Hold:
 			cproc.holdCommand(tenantCtx, cmd)
 		case presence.Undeliverable:
@@ -1455,4 +1461,10 @@ func (cproc *CommandDeliveryProcessor) deadLetterResponse(ctx context.Context, m
 		return
 	}
 	incr(cproc.ResponsesDeadLettered, 1)
+}
+
+// capabilities is which optional command paths this deployment has, the one value every presence
+// verdict is decided with (the sweep and the hold reconciler must agree).
+func (cproc *CommandDeliveryProcessor) capabilities() presence.Capabilities {
+	return presence.Capabilities{Sparkplug: cproc.SparkplugCommands, Lpwan: cproc.LpwanDownlink}
 }

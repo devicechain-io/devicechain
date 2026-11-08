@@ -364,7 +364,10 @@ never connects to DeviceChain.
   `IntegrationUndecodedHigh` report both.
   A [payload decoder](../guides/payload-decoders.md) written on the device profile can decode the raw
   frame in the platform instead; it decodes live uplinks from v1.2.
-- **Write ○ / Read ○** — there is no downlink. A command issued to a device that last reported
+- **Write ○ / Read ○** — there is no downlink unless an installation switches on the
+  [LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink), which queues a command
+  on a ChirpStack v4 network server (it reports that the server accepted the downlink, not that the
+  device received it). Without it, a command issued to a device that last reported
   through an integration **is accepted, and then fails** at the next delivery sweep with
   `COMMAND_TRANSPORT_UNSUPPORTED`, instead of waiting until it expires. The failure is final. A
   device that has never reported has no recorded transport, so its commands are dispatched, and
