@@ -56,6 +56,23 @@ These can change in a minor release. When they do, the release notes and that re
 - Metric names and alert names
 - The MCP tool catalog (tool names, inputs and result shapes)
 
+### Preview: may change in a minor release, for a limited time {#preview-interfaces}
+
+A new served surface can spend its first minor release in a **preview** tier before it is covered by
+the promise above. A surface in the preview tier says so where you read about it, in its reference or
+guide page and, for a GraphQL operation, in its description. While a surface is in preview it can change
+incompatibly in a minor release; when it does, that release's section in
+[Releases & Upgrades](./releases-and-upgrades.md) says what changed and what to do. A surface stays in
+preview for at most two minor releases; by the end of the second it is promoted, and covered like
+everything else. An incompatible change to a preview surface is not exempt from the project's
+compatibility checks: it is declared there as an intended break, the same way as any other, so no
+preview change ships unnoticed. A file format in the preview tier carries a version, such as
+`v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
+
+Today the preview tier holds the rule tests: the `evaluateRules` operation of the event-processing API,
+the scenario and test file formats, and the `dcctl test` command that reads them. See
+[Testing your rules](../guides/testing-your-rules.md).
+
 ## Supported upgrade paths {#upgrade-paths}
 
 - **Within a minor** (`1.4.0` to `1.4.3`) and **to the next minor** (`1.4.x` to `1.5.0`) are the supported paths.
