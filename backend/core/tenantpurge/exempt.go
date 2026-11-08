@@ -208,6 +208,15 @@ var exemptions = []Exemption{
 			"ai_provider_tenant_grants, which carries a tenant column and is swept.",
 	},
 
+	// ---- event-management: the usage rollup's own bookkeeping ----------------
+	{
+		Schema: "event-management", Name: "tenant_usage_ledger", Class: ClassExempt,
+		Reason: "records which UTC hours of each day the usage rollup has computed, for ALL tenants " +
+			"at once (one row per day, a bitmask of hours). It names no tenant and holds no " +
+			"tenant's figures; those are in tenant_usage_daily/_hourly/_devices, which carry a " +
+			"tenant column and are swept.",
+	},
+
 	// ---- event-processing: the DETECT engine's own state --------------------
 	{
 		Schema: "event-processing", Name: "detect_snapshots", Class: ClassExternal, Store: "detect",

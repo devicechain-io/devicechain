@@ -1,0 +1,70 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+#
+# Event Management ADMIN GraphQL Schema
+#
+# The INSTANCE-scoped, operator-facing usage record. Served at /admin/graphql behind an
+# IDENTITY token, in the system context across tenants - the same shape user-management's
+# and ai-inference's admin planes use. A tenant access token cannot authenticate here.
+#
+# The record reports and never enforces: nothing on this plane limits, throttles or bills
+# anyone. It exists so an operator can see what each tenant used, and so a self-hoster can
+# feed their own billing.
+#
+# Descriptions: a """string""" above an element is its PUBLIC description - served by
+# introspection, read by every GraphQL tool, published on the docs site - and may not
+# cite a decision record. A # comment is a maintainer note.
+
+schema {
+    query: Query
+}
+
+type Query {
+    """
+    One tenant's usage for each UTC calendar day from `from` to `to`, both inclusive, oldest
+    first. Every day in the range is returned: a day on which the tenant had no events reads
+    zero, and `complete` says whether the day has been fully measured and its figures are
+    final. A day in progress is brought up to date as each UTC hour closes, so its figures
+    lag by up to an hour. At most 366 days per request. Requires the tenant:read authority.
+    """
+    tenantUsage(
+        "The tenant's token."
+        tenant: String!
+        "First day, as YYYY-MM-DD (UTC)."
+        from: String!
+        "Last day, as YYYY-MM-DD (UTC)."
+        to: String!
+    ): [TenantUsageDay!]!
+}
+
+"""
+One tenant's usage on one UTC calendar day, measured from the events the event store holds.
+Devices that are registered but silent are not counted.
+"""
+type TenantUsageDay {
+    "The tenant's token."
+    tenant: String!
+    "The day, as YYYY-MM-DD (UTC)."
+    day: String!
+    """
+    Events stored for the tenant with an event time on this day, as a whole number. One per event, not per
+    reading; a redelivered duplicate is stored once and counted once.
+    """
+    eventsIngested: Float!
+    "Distinct devices that produced at least one event on this day."
+    devicesActive: Int!
+    "The largest number of distinct devices active in any single UTC hour of the day."
+    devicesPeak: Int!
+    """
+    The mean of the day's 24 hourly distinct-device counts. An hour with no events, or one
+    that has not happened yet, counts as zero.
+    """
+    devicesAvg: Float!
+    """
+    True once every hour of the day has been measured after it ended, so the figures are
+    final. A day still in progress, or one not (or never) fully measured, is false: a zero
+    on such a day means not yet measured, not nothing used.
+    """
+    complete: Boolean!
+}

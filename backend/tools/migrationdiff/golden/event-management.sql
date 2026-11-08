@@ -12,6 +12,12 @@ ALTER TABLE ONLY "event-management".events
  ADD CONSTRAINT events_pkey PRIMARY KEY (tenant_id, occurred_time, event_id);
 ALTER TABLE ONLY "event-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "event-management".tenant_usage_daily
+ ADD CONSTRAINT tenant_usage_daily_pkey PRIMARY KEY (tenant_id, day);
+ALTER TABLE ONLY "event-management".tenant_usage_devices
+ ADD CONSTRAINT tenant_usage_devices_pkey PRIMARY KEY (tenant_id, day, device_token);
+ALTER TABLE ONLY "event-management".tenant_usage_hourly
+ ADD CONSTRAINT tenant_usage_hourly_pkey PRIMARY KEY (tenant_id, hour);
 CREATE FUNCTION analytics.reader_tenant() RETURNS text
  LANGUAGE sql STABLE
  AS $$
@@ -185,6 +191,26 @@ CREATE TABLE "event-management".state_change_events (
  state character varying(16) NOT NULL,
  reason text,
  session_id bigint DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_daily (
+ tenant_id character varying(128) NOT NULL,
+ day date NOT NULL,
+ events_ingested bigint DEFAULT 0 NOT NULL,
+ devices_active integer DEFAULT 0 NOT NULL,
+ devices_peak integer DEFAULT 0 NOT NULL,
+ device_hours bigint DEFAULT 0 NOT NULL,
+ rolled_up_at timestamp with time zone NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_devices (
+ tenant_id character varying(128) NOT NULL,
+ day date NOT NULL,
+ device_token character varying(128) NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_hourly (
+ tenant_id character varying(128) NOT NULL,
+ hour timestamp with time zone NOT NULL,
+ events bigint DEFAULT 0 NOT NULL,
+ devices integer DEFAULT 0 NOT NULL
 );
 CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON "event-management".events USING btree (tenant_id, device_token, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
 CREATE UNIQUE INDEX uix_calculated_backfills_tenant_active ON "event-management".calculated_backfills USING btree (tenant_id) WHERE (status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text]));
