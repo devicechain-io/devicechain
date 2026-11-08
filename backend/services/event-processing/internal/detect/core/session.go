@@ -25,7 +25,10 @@ func (e *Engine) applySession(ev Event, r Rule) {
 		return
 	}
 	if !ev.Time.Add(r.Gap).After(e.wm.now) {
-		return // beyond lateness: its session has already closed — don't fold it into the next one
+		// Beyond lateness: its session has already closed — don't fold it into the next one. It is
+		// a matching sample the engine did not use, so it is counted.
+		e.lateSamples++
+		return
 	}
 	pa := e.session[ev.Key]
 	if pa == nil {

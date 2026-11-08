@@ -21,6 +21,8 @@ package rdbguard
 //   - tenant-write: the column-array insert, the one raw statement that WRITES tenant
 //     rows. Its text is built from the model's schema, and its tenant is bound from the
 //     context after the checks a gorm Create runs; see core/rdb/insert_columns.go.
+//   - metering: the usage rollup, which aggregates every tenant's events into per-tenant rows
+//     under a system context, grouping and keying by tenant_id at every step.
 var rawSQLAllowList = []siteEntry{
 	// --- not-sql ---
 	{
@@ -71,6 +73,32 @@ var rawSQLAllowList = []siteEntry{
 			"per policy statement (each call to the exec closure counts as a site). The retention " +
 			"policy deletes every tenant's rows by age, by operator opt-in; it is table-level " +
 			"configuration with no tenant predicate by design",
+	},
+
+	// --- metering ---
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,
+		Why: "the usage rollup reads EVERY tenant's events for one hour on purpose, under a system context, " +
+			"and writes per-tenant rows: the hour statement GROUPs BY tenant_id and inserts the device set " +
+			"keyed (tenant_id, day, device_token), the day derivation groups the hourly rows by tenant_id and " +
+			"counts the device set through an explicit d.tenant_id = h.tenant_id, and the two clears delete " +
+			"by hour or day (plus a tenant_id correlation) to replace what is recomputed. Each statement is " +
+			"constant text with only the hour, day, floor and clock bound, and the hour statement skips any " +
+			"tenant whose erasure fence stands. No count can mix two tenants; the two-tenant integration test " +
+			"(usage_integration_test.go) reuses one device token across tenants to prove it",
+	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "initUsageState", Count: 1,
+		Why: "reads the TimescaleDB chunk catalog (timescaledb_information.chunks) for the newest compressed " +
+			"chunk of the events hypertable; 'events' appears only as the catalog's hypertable_name literal, " +
+			"and the statement reads no event row and no tenant's data",
+	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "Api.PruneUsageWorkingTables", Count: 2,
+		Why: "deletes the usage rollup's WORKING rows (tenant_usage_hourly, tenant_usage_devices) of every " +
+			"tenant for days older than a cutoff, on purpose and under a system context: retention by time, " +
+			"not a read or write of any one tenant's data. The predicate is the hour/day alone and is bound; " +
+			"the per-tenant record (tenant_usage_daily) is never touched",
 	},
 
 	// --- tenant-write ---

@@ -173,7 +173,7 @@ func TestDeliverAllStopsWhenTheBudgetIsSpent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(tenantScoped(), 150*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	tally := n.deliverAll(ctx, deliveries, &RenderedNotification{}, "a1")
+	tally := n.deliverAll(ctx, deliveries, &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
 	elapsed := time.Since(start)
 
 	if ba.calls != 1 {
@@ -200,7 +200,7 @@ func TestDeliverAllDeliversEveryChannelWithinBudget(t *testing.T) {
 		{channel: enabledChannel("smtp-2", model.ChannelTypeSMTP), recipients: []string{"b@x.com"}},
 	}
 
-	tally := n.deliverAll(tenantScoped(), deliveries, &RenderedNotification{}, "a1")
+	tally := n.deliverAll(tenantScoped(), deliveries, &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
 	if tally.delivered != 2 || tally.unattempted != 0 {
 		t.Fatalf("tally = %+v, want both channels delivered and none unattempted", tally)
 	}
@@ -221,7 +221,7 @@ func TestASecretStoreErrorCountsAsAFailedChannel(t *testing.T) {
 		{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP), recipients: []string{"a@x.com"}},
 	}
 
-	tally := n.deliverAll(tenantScoped(), deliveries, &RenderedNotification{}, "a1")
+	tally := n.deliverAll(tenantScoped(), deliveries, &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
 	if tally.failed != 1 || tally.delivered != 0 || tally.refused != 0 {
 		t.Fatalf("tally = %+v, want the unresolvable channel counted as failed", tally)
 	}

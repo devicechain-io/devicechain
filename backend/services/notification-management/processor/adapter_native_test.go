@@ -571,3 +571,33 @@ func TestTeamsTransportErrorNeverContainsTheWebhookURL(t *testing.T) {
 		t.Fatalf("transport error leaked the secret URL (or succeeded): %v", err)
 	}
 }
+
+// 🔴 A NON-2xx BODY CAN ECHO THE SECRET WITHOUT ITS SCHEME. A Slack or Teams webhook's
+// credential is its URL path (and a Workflows URL's is its sig= query), PagerDuty's is a
+// routing key in the body, and none of them is presented as a header, so nothing used to
+// suppress the response body from the error. An endpoint answering "Cannot POST
+// /services/T/B/XXXX" put the secret path into the error, which the delivery ledger then
+// stored for every notification:read holder; the URL scrub cannot see it, because there is
+// no scheme in front of it and it is not the whole URL.
+func TestANativeChannelErrorNeverCarriesTheResponseBody(t *testing.T) {
+	const secretPath = "/services/T000/B000/ECHOEDSECRET"
+	f := newProviderFake(t, 404, "Cannot POST "+secretPath+"?sig=ECHOEDSIG")
+	slack := &slackAdapter{client: f.srv.Client()}
+	err := slack.Deliver(context.Background(), channelWith("s", model.ChannelTypeSlack, ""), f.srv.URL+secretPath, nil, rendered("RAISED"))
+	if err == nil {
+		t.Fatal("a 404 must fail the delivery")
+	}
+	if strings.Contains(err.Error(), "ECHOEDSECRET") || strings.Contains(err.Error(), "ECHOEDSIG") {
+		t.Fatalf("the reflected response body leaked the secret into the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Fatalf("the status must survive the suppression: %v", err)
+	}
+
+	pd := newProviderFake(t, 400, `{"message":"bad routing_key ECHOEDKEY"}`)
+	a := &pagerDutyAdapter{client: pd.srv.Client(), endpoint: pd.srv.URL}
+	err = a.Deliver(context.Background(), channelWith("pd", model.ChannelTypePagerDuty, ""), "ECHOEDKEY", nil, rendered("RAISED"))
+	if err == nil || strings.Contains(err.Error(), "ECHOEDKEY") {
+		t.Fatalf("PagerDuty's reflected routing key leaked (or the call succeeded): %v", err)
+	}
+}

@@ -299,11 +299,48 @@ The counter `devicechain_notificationmanagement_quiet_hours_total` counts what q
 
 In the console, quiet hours are edited on the **Monitor → Notification Policies** page; see [Notification policies](../user-guide/notification-policies.md).
 
+## Delivery ledger {#delivery-ledger}
+
+Every attempt to send an alarm's notification through a channel is recorded in the tenant's **delivery ledger**, so "was this alarm actually paged, to whom, and why not?" has an answer. Query it with `notificationAttempts` (requires `notification:read`):
+
+```graphql
+query {
+  notificationAttempts(criteria: { pageNumber: 1, pageSize: 20, alarmToken: "<alarm token>" }) {
+    results {
+      attemptedAt trigger policyToken channelToken recipients
+      status attempt maxAttempts latencyMillis errorCode errorMessage
+    }
+  }
+}
+```
+
+Each record is one try, newest first. A channel allowed three tries that failed twice and then delivered leaves three records: `FAILED` (attempt 1), `FAILED` (attempt 2) and `SENT` (attempt 3). Filter by `alarmToken`, `channelToken` or `status`, and by time with `since` and `until` (RFC 3339).
+
+| `status` | Meaning |
+| --- | --- |
+| `SENT` | The channel accepted the notification. |
+| `FAILED` | A failure a retry might fix: a timeout, an error status, a refused connection. |
+| `REFUSED` | Refused for good, so no retry followed: the destination is one outbound traffic may not reach (`EGRESS_BLOCKED`), or the channel's credential configuration is refused (`CREDENTIAL_REFUSED`). |
+| `NOT_ATTEMPTED` | Planned but never tried: the channel's delivery secret could not be read (`SECRET_UNAVAILABLE`), or the time allowed for the alarm's deliveries ran out before this channel (`BUDGET_SPENT`). |
+
+`trigger` says what caused the delivery: `ALARM` (an alarm state change), `ESCALATION` (an unacknowledged alarm was re-notified) or `QUIET_HOURS_RELEASE` (a notification held by quiet hours was sent when the quiet period ended). New `status`, `trigger` and `errorCode` values may be added in later releases, so treat one you do not recognise as informational.
+
+`errorMessage` is the provider's error text with every URL replaced by `<url>`, because a Slack or Teams webhook URL is itself a credential, and the ledger is readable by anyone with `notification:read`. The message itself is not stored: `subjectHash` (a SHA-256 of the subject line) shows whether two attempts carried the same one.
+
+Each channel also reports `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, read from the ledger. `consecutiveFailures` counts the failed and refused attempts since the channel last delivered. `NOT_ATTEMPTED` records do not count against a channel, since they describe something the platform did not do, and neither does a `FAILED` record with `errorCode: BUDGET_SPENT`: the time allowed for all of the alarm's deliveries ran out while that attempt was in flight, so the platform cut it short. `deliveryHealth` is null for a caller without `notification:read`, such as a channel returned by a mutation to a caller who may write but not read.
+
+Two properties to keep in mind:
+
+- **The ledger never delays a notification.** Records are written after the attempt and off the delivery path. If the database cannot take a record, the record is dropped and counted on `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (or `outcome="dropped"` when too many writes are already waiting). A record proves an attempt was made; a missing record does not prove one was not.
+- **Recipients are personal data.** Records are deleted after 7 days (the same window as resolved notification state), or after `AttemptRetentionSeconds` in the notification-management configuration. They are also erased with the tenant when it is deleted.
+- **Size it before raising the retention.** The ledger holds one record per attempt: roughly the alarm transitions notified, times the channels each one reaches, times the tries per channel, plus escalations. A tenant paging 10,000 times a day through 3 channels keeps about 210,000 records at the 7-day default, and every record carries its recipient list.
+
 ## Verify the path end to end
 
 1. **Create a channel** (as above). Confirm `enabled: true` on the result, and that `hasSecret` is `true` for an SMTP channel with a username or a webhook declaring `bearer` or `header`, and `false` for a webhook declaring `none`.
 2. **Create a policy** whose rules map the severities you care about to that channel.
 3. **Raise a real alarm.** Trip a detection rule on a test device (see [Event Processing & Alarms](../concepts/event-processing.md)) and confirm the email or webhook call arrives.
 4. **Inspect delivery state.** The service keeps a read-only per-alarm record of what it has done. Query `notificationStatesByAlarmToken(alarmTokens: [...])`, or search with `notificationStates`. Check `firstNotifiedAt` and `notifyCount`, and, once the alarm has sat unacknowledged past the escalation window, `escalationLevel`.
+5. **Read the delivery ledger.** `notificationAttempts(criteria: {pageNumber: 1, pageSize: 20, alarmToken: "..."})` lists every attempt for the alarm with its outcome. A `FAILED` or `REFUSED` record carries `errorCode` and the provider's `errorMessage`; see [Delivery ledger](#delivery-ledger).
 
 Acknowledging or clearing the alarm stops further escalation. The state row records `acknowledgedAt`/`clearedAt` alongside the notification history. If the alarm clears and its condition returns, the platform re-opens the same alarm, and its state row starts over for the new cycle: escalation runs again until that cycle is acknowledged or cleared.

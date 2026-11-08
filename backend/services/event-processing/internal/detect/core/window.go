@@ -341,7 +341,13 @@ func (e *Engine) applyAggregate(ev Event, r Rule) {
 	start := ev.Time.Truncate(r.Window)
 	end := start.Add(r.Window)
 	if !end.After(e.wm.now) {
-		return // window already closed past the lateness bound: drop the late event
+		// The window already closed past the lateness bound: drop the late event. A MATCHING one is
+		// a sample the engine received and did not use, so it is counted like the sliding kinds'
+		// late samples (foldsIn); a non-matching one only ages a pane and is not.
+		if ev.Match {
+			e.lateSamples++
+		}
+		return
 	}
 	pk := paneKey{Rule: r.ID, Series: ev.Key.Series, Start: start.UnixNano()}
 	pa, ok := e.panes[pk]

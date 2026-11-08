@@ -176,6 +176,9 @@ inglés. La vista previa es una guía, no una garantía: reproduce
 desde un arranque en frío, así que una regla que espera un silencio largo se previsualiza con menos
 precisión.
 
+Para comprobar una regla con eventos que tú describes en lugar del historial, incluida una regla que espera días de silencio,
+consulta [Probar tus reglas](../guides/testing-your-rules.md).
+
 ## Estado de reglas y detecciones en vivo
 
 La pestaña **Estado de reglas** responde a «¿funciona mi regla?» para la versión activa publicada del

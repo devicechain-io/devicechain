@@ -204,7 +204,7 @@ PASS  the read-only customer user cannot send a command (refused: FORBIDDEN)
 | 章节 | 增加什么 | 前提条件 | 默认是否开启？ | 从这里开始 |
 | --- | --- | --- | --- | --- |
 | 接入与自注册 | 设备用共享的预配密钥自我介绍，并自行生成凭据，而不是事先创建。 | 一个预配配置文件（**Connect → Provisioning Profiles**）。设备通过实例的 API 入口以 HTTPS 注册，所以需要有到达它的路由。 | 该能力属于标准安装。在你创建预配配置文件之前，不会注册任何设备。 | [设备自注册](../guides/device-self-registration.md) |
-| X.509 客户端证书 | 设备用证书向代理认证，证书可以固定到某个设备，也可以通过在首次连接时注册设备的 CA 获得信任。 | `openssl` 和一个你信任的 CA（指南会生成一个一次性的）。仅限 MQTT；吊销列表是上传的，没有 OCSP。仓库中的 `examples/x509-device` 会跑完整个流程。 | 无需开启。只有当你添加信任锚或固定证书之后，信任才存在。 | [使用证书连接](../guides/device-x509.md) |
+| X.509 客户端证书 | 设备用证书向代理认证，证书可以固定到某个设备，也可以通过在首次连接时注册设备的 CA 获得信任。 | `openssl` 和一个你信任的 CA（指南会生成一个一次性的）。仅限 MQTT；吊销列表是上传的；按信任锚配置的可选 OCSP 检查默认关闭。仓库中的 `examples/x509-device` 会跑完整个流程。 | 无需开启。只有当你添加信任锚或固定证书之后，信任才存在。 | [使用证书连接](../guides/device-x509.md) |
 | 双因素认证 | 密码登录时使用验证器应用中的验证码，可用于单个账户，或由租户强制要求。 | 每个人的验证器应用；所有节点的时钟正确。 | 内置且**不强制**：每个人在 **Account security** 中自行开启，租户管理员可以强制要求。 | [双因素认证](../guides/two-factor-authentication.md) |
 | 设备配置 | 由配置文件声明的共享属性构建的期望配置，带修订版本以及已应用或已拒绝的报告，下发到设备。 | 在配置文件上声明键并发布。设备必须使用 MQTT；只支持 HTTP 的设备无法使用该通道。 | 所有安装均可用。在配置文件声明键之前，设备不会收到任何内容。 | [连接设备](../guides/connecting-a-device.md#reserved-device-topics) |
 | 已签名的空中升级 | 制品目录、签名者、已签名的分配和发布，每次尝试都会被跟踪，直到设备证明新版本已在运行。 | 用于存放制品内容的对象存储（共享卷或 S3）、一个已注册的签名者，以及一个遵循更新协议的 MQTT 设备。参考设备是 `examples/ota-device`。 | 包含在 `default` 配置档中。`telemetry` 和 `ingest-only` 配置档不包含它，没有对象存储的实例会以 `OBJECT_STORE_NOT_CONFIGURED` 拒绝制品。 | [空中升级](../concepts/over-the-air-updates.md)和[为更新签名](../guides/signing-updates.md) |
