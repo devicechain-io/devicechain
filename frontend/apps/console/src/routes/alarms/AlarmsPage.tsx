@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority } from '@devicechain/client';
-import { formatValue } from '@devicechain/widget-sdk';
 import { useAuth } from '@/auth/AuthProvider';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useAlarmStream, type AlarmStreamStatus } from '@/lib/hooks/use-alarm-stream';
 import {
   acknowledgeAlarm,
+  acknowledgeAlarms,
   clearAlarm,
   listAlarms,
   type Alarm,
@@ -22,6 +23,9 @@ import { ExportCsvButton } from '@/components/ExportCsvButton';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
+import { Checkbox } from '@/components/ui/checkbox';
+import { useMetricUnits } from '@/lib/hooks/use-metric-units';
+import { OriginatorLink, formatAlarmValue, originatorLabel } from './alarmDisplay';
 import { useToast } from '@/components/ui/toast';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -39,6 +43,10 @@ import {
 import { AlarmEventTypeBadge, AlarmSeverityBadge, AlarmStatusBadge } from './badges';
 
 const pageSize = 25;
+// The query parameters the filters ride on.
+const STATE_PARAM = 'state';
+const SEVERITY_PARAM = 'severity';
+const ACK_PARAM = 'ack';
 const EXPORT_STEM = 'alarms';
 
 // Options carry a `labelKey` into the `alarms` catalog (ADR-066), resolved with t()
@@ -82,14 +90,6 @@ function LiveIndicator({ status }: { status: AlarmStreamStatus }) {
   );
 }
 
-// The originator is addressed by (type, id); originatorToken resolves it to a
-// friendly token for a device (ADR-013). Fall back to a "type #id" reference when
-// unresolved (a non-device originator, or one since deleted).
-function originatorLabel(a: Alarm | AlarmEvent): string {
-  if (a.originatorToken) return a.originatorToken;
-  return `${a.originatorType} #${a.originatorId}`;
-}
-
 export default function AlarmsPage() {
   const { t } = useTranslation('alarms');
   const { claims } = useAuth();
@@ -102,21 +102,44 @@ export default function AlarmsPage() {
   const ackOptions = ACK_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
 
   const [pageNumber, setPageNumber] = useState(1);
-  const [state, setState] = useState('');
-  const [severity, setSeverity] = useState('');
-  const [ack, setAck] = useState('');
+  // The filters live in the address, so the home page can link here narrowed to a severity and
+  // Back, Forward and a shared link all land on the same list. A value that is not one of the
+  // choices reads as no filter.
+  const [params, setParams] = useSearchParams();
+  const fromAddress = (key: string, choices: string[]) => {
+    const v = params.get(key) ?? '';
+    return choices.includes(v) ? v : '';
+  };
+  const state = fromAddress(STATE_PARAM, STATE_OPTIONS.map((o) => o.value));
+  const severity = fromAddress(SEVERITY_PARAM, SEVERITY_OPTIONS.map((o) => o.value));
+  const ack = fromAddress(ACK_PARAM, ACK_OPTIONS.map((o) => o.value));
+  const setFilter = (key: string) => (value: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace: true },
+    );
   const [version, reload] = useReload();
   // In-flight ack/clear actions, keyed `${token}:${action}` — a Set so one row's
   // action never disables another's, and a button spins only for its own action.
   const [acting, setActing] = useState<ReadonlySet<string>>(() => new Set());
   const inFlight = useRef<Set<string>>(new Set());
   const [lastEvent, setLastEvent] = useState<AlarmEvent | null>(null);
+  // The alarms ticked for a bulk acknowledge, by token. Cleared whenever the list under them
+  // changes (a filter, a page, an action), so a tick never outlives the row it was made on.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const acknowledged = ack === '' ? undefined : ack === 'true';
 
   // Reset to the first page whenever a filter changes so the view never lands on an
   // out-of-range page.
   useEffect(() => setPageNumber(1), [state, severity, ack]);
+  useEffect(() => setSelected(new Set()), [state, severity, ack, pageNumber]);
 
   const { data, loading, error } = useQuery(
     () =>
@@ -202,6 +225,28 @@ export default function AlarmsPage() {
     }
   };
 
+  // Only an active, unacknowledged alarm offers acknowledging; the rest are not selectable.
+  const canAcknowledge = (a: Alarm) => a.state === 'ACTIVE' && !a.acknowledged;
+
+  const acknowledgeSelected = async () => {
+    if (bulkBusy || chosen.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const outcome = await acknowledgeAlarms(chosen);
+      if (outcome.refusals.length > 0) {
+        toast(t('bulkAcknowledgedPartly', { count: outcome.acknowledged, refused: outcome.refusals.length }), 'error');
+      } else {
+        toast(t('bulkAcknowledged', { count: outcome.acknowledged }));
+      }
+      setSelected(new Set());
+      reload();
+    } catch (err) {
+      toast(errMessage(err), 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // Wire values for the enums (stable for a spreadsheet filter), ISO-8601 for times.
   const exportColumns: CsvColumn<Alarm>[] = [
     { header: t('common:colToken'), value: (a) => a.token },
@@ -217,6 +262,29 @@ export default function AlarmsPage() {
   ];
 
   const results: Alarm[] = data?.results ?? [];
+  const unitOf = useMetricUnits(results.map((a) => (a.originatorType.toLowerCase() === 'device' ? a.originatorToken : null)));
+  const selectable = results.filter(canAcknowledge);
+  // What the bar acts on is the ticks that still belong to an acknowledgeable row: a live
+  // refresh may have acknowledged, cleared or dropped a ticked alarm since it was ticked.
+  const chosen = selectable.filter((a) => selected.has(a.token)).map((a) => a.token);
+  // A tick whose row has left the refreshed list is forgotten, not held in reserve: were the alarm
+  // to come back on a later refresh it would rejoin a bulk acknowledge nobody asked it to join.
+  useEffect(() => {
+    setSelected((s) => {
+      const keep = new Set(chosen);
+      return keep.size === s.size ? s : keep;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+  const allSelected = selectable.length > 0 && selectable.every((a) => selected.has(a.token));
+  const toggleAll = (on: boolean) => setSelected(on ? new Set(selectable.map((a) => a.token)) : new Set());
+  const toggleOne = (token: string, on: boolean) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (on) n.add(token);
+      else n.delete(token);
+      return n;
+    });
   // Keep the table mounted through a background reconcile: useQuery preserves the
   // prior data while re-fetching, so gate the full-screen states on data absence, not
   // the loading flag — otherwise every live event or poll would blink the list to a
@@ -245,21 +313,21 @@ export default function AlarmsPage() {
             className="h-9 w-36"
             placeholder={t('allStates')}
             value={state}
-            onChange={setState}
+            onChange={setFilter(STATE_PARAM)}
             options={stateOptions}
           />
           <Combobox
             className="h-9 w-40"
             placeholder={t('allSeverities')}
             value={severity}
-            onChange={setSeverity}
+            onChange={setFilter(SEVERITY_PARAM)}
             options={severityOptions}
           />
           <Combobox
             className="h-9 w-44"
             placeholder={t('anyAck')}
             value={ack}
-            onChange={setAck}
+            onChange={setFilter(ACK_PARAM)}
             options={ackOptions}
           />
           <ExportCsvButton
@@ -287,8 +355,28 @@ export default function AlarmsPage() {
         <EmptyState description={t('empty')} />
       ) : (
         <>
+          {canWrite && chosen.length > 0 && (
+            <div className="mb-3 flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+              <Button size="sm" loading={bulkBusy} onClick={acknowledgeSelected} data-shot="alarm-bulk-acknowledge">
+                {t('acknowledgeSelected', { count: chosen.length })}
+              </Button>
+              <Button variant="ghost" size="sm" disabled={bulkBusy} onClick={() => setSelected(new Set())}>
+                {t('clearSelection')}
+              </Button>
+            </div>
+          )}
           <DataTable>
             <DataTableHead>
+              {canWrite && (
+                <DataTableHeaderCell className="w-8">
+                  <Checkbox
+                    checked={allSelected}
+                    disabled={selectable.length === 0 || bulkBusy}
+                    onCheckedChange={(v) => toggleAll(v === true)}
+                    aria-label={t('selectAllAcknowledgeable')}
+                  />
+                </DataTableHeaderCell>
+              )}
               <DataTableHeaderCell>{t('colSeverity')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('colOriginator')}</DataTableHeaderCell>
@@ -304,6 +392,16 @@ export default function AlarmsPage() {
             <DataTableBody>
               {results.map((a) => (
                 <DataTableRow key={a.id}>
+                  {canWrite && (
+                    <DataTableCell>
+                      <Checkbox
+                        checked={selected.has(a.token)}
+                        disabled={!canAcknowledge(a) || bulkBusy}
+                        onCheckedChange={(v) => toggleOne(a.token, v === true)}
+                        aria-label={t('selectAlarm', { alarm: a.alarmKey })}
+                      />
+                    </DataTableCell>
+                  )}
                   <DataTableCell>
                     <AlarmSeverityBadge severity={a.severity} />
                   </DataTableCell>
@@ -311,7 +409,7 @@ export default function AlarmsPage() {
                     <AlarmStatusBadge state={a.state} acknowledged={a.acknowledged} />
                   </DataTableCell>
                   <DataTableCell className="font-mono text-xs text-foreground">
-                    {originatorLabel(a)}
+                    <OriginatorLink alarm={a} />
                   </DataTableCell>
                   <DataTableCell>
                     <div className="font-medium text-foreground">{a.alarmKey}</div>
@@ -320,8 +418,9 @@ export default function AlarmsPage() {
                   <DataTableCell className="text-right tabular-nums text-foreground">
                     {/* The dashboard formatter, so an alarm reads like the metric does on a card:
                         a metric definition declares a unit but no precision, so the default
-                        rounding applies (the CSV export above keeps the exact value). */}
-                    {formatValue(a.lastValue)}
+                        rounding applies (the CSV export above keeps the exact value). The unit is
+                        the one the device's profile declares for the metric, when it can be read. */}
+                    {formatAlarmValue(a.lastValue, unitOf(a.originatorToken, a.metricKey))}
                   </DataTableCell>
                   <DataTableCell className="whitespace-nowrap text-muted-foreground">
                     {formatTime(a.raisedTime)}

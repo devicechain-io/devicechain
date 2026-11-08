@@ -71,6 +71,9 @@ type CalloutConfiguration struct {
 	// Revocation bounds the X.509 revocation store: the CRLs an operator may upload and how many
 	// are written at once.
 	Revocation RevocationConfiguration
+
+	// Ocsp bounds the OCSP check of a certificate connect (off instance-wide by default).
+	Ocsp OcspConfiguration
 }
 
 // ApplyDefaults fills what the document left out.
@@ -88,6 +91,7 @@ func (c *CalloutConfiguration) ApplyDefaults() {
 		c.IssuerPinGatherWindow = DefaultCalloutIssuerPinGatherWindow.String()
 	}
 	c.Revocation.ApplyDefaults()
+	c.Ocsp.ApplyDefaults()
 }
 
 // IssuerPinRefreshDuration, IssuerPinMinRefreshDuration and IssuerPinGatherWindowDuration are the
@@ -125,5 +129,8 @@ func (c CalloutConfiguration) Validate() error {
 		return fmt.Errorf("callout.issuerPinGatherWindow must be a duration between %s and %s, got %q",
 			MinCalloutIssuerPinGatherWindow, MaxCalloutIssuerPinGatherWindow, c.IssuerPinGatherWindow)
 	}
-	return c.Revocation.Validate()
+	if err := c.Revocation.Validate(); err != nil {
+		return err
+	}
+	return c.Ocsp.Validate()
 }
