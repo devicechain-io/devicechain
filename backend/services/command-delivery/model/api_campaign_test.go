@@ -75,7 +75,11 @@ func newCampaignTestApi(t *testing.T) *Api {
 			t.Fatal(err)
 		}
 	}
-	return NewApi(&rdb.RdbManager{Database: db})
+	api := NewApi(&rdb.RdbManager{Database: db})
+	// Campaigns are created before the first tick of a test unless the test says otherwise.
+	created := at("2026-06-01T00:00:00Z")
+	api.campaignNow = func() time.Time { return created }
+	return api
 }
 
 func strp(s string) *string { return &s }
@@ -110,6 +114,7 @@ func at(s string) time.Time {
 
 func tick(t *testing.T, api *Api, now time.Time, pass string) {
 	t.Helper()
+	api.campaignNow = func() time.Time { return now }
 	if err := api.TickCampaigns(context.Background(), now, pass); err != nil {
 		t.Fatalf("tick %s: %v", pass, err)
 	}

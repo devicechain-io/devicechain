@@ -249,6 +249,7 @@ func (api *Api) CreateCampaign(ctx context.Context, req *CampaignCreateRequest) 
 		return nil, rejected(RejectTokenInUse, "a campaign with token %q already exists", req.Token)
 	}
 	c := &Campaign{
+		Model:              gorm.Model{CreatedAt: api.campaignClock()},
 		TokenReference:     rdb.TokenReference{Token: req.Token},
 		Enabled:            req.Enabled == nil || *req.Enabled,
 		Trigger:            trigger,
@@ -260,6 +261,9 @@ func (api *Api) CreateCampaign(ctx context.Context, req *CampaignCreateRequest) 
 	}
 	if req.Name != nil {
 		c.Name = *req.Name
+	}
+	if campaignCreateHook != nil {
+		campaignCreateHook()
 	}
 	if err := api.RDB.DB(ctx).Create(c).Error; err != nil {
 		return nil, err
@@ -331,6 +335,14 @@ func (api *Api) DeleteCampaign(ctx context.Context, token string) error {
 		}
 		return tx.Delete(&Campaign{}, c.ID).Error
 	})
+}
+
+// campaignClock is the scheduler's clock: time.Now unless a test has set one.
+func (api *Api) campaignClock() time.Time {
+	if api.campaignNow != nil {
+		return api.campaignNow()
+	}
+	return time.Now()
 }
 
 // SkipCancelled marks planned elements a deleted campaign never sent.
@@ -555,7 +567,7 @@ func (api *Api) materializeCycle(ctx context.Context, c *Campaign, trigger *sche
 		GroupVersion: targets.groupVersion,
 		Resolved:     len(targets.deviceTokens),
 	}
-	now := time.Now()
+	now := api.campaignClock()
 	elements := make([]CampaignElement, 0, len(targets.deviceTokens)*len(steps))
 	for _, device := range targets.deviceTokens {
 		var fire schedule.Fire
@@ -625,6 +637,15 @@ var campaignClaimHook func()
 // it fences, tokens and creates batches: the window in which another replica can finish,
 // re-token or cancel them. Nil in the service; a test is the other replica.
 var campaignClaimedHook func()
+
+// campaignDispatchHook runs just before a pass creates a batch for tokened claims: the window
+// in which a campaign can be deleted or switched off, or its claims settled, by someone else.
+// Nil in the service; a test is that someone.
+var campaignDispatchHook func()
+
+// campaignCreateHook runs between CreateCampaign's token probe and its insert, where a
+// concurrent create of the same token can land. Nil in the service.
+var campaignCreateHook func()
 
 // fireDueElements claims what is due and turns it into batches.
 func (api *Api) fireDueElements(ctx context.Context, c *Campaign, steps []CampaignStep, now time.Time, pass string) error {
@@ -845,6 +866,9 @@ func (api *Api) dispatchCampaignBatch(ctx context.Context, c *Campaign, step Cam
 	if step.Payload != "" {
 		p := step.Payload
 		req.Payload = &p
+	}
+	if campaignDispatchHook != nil {
+		campaignDispatchHook()
 	}
 	batch, err := api.CreateCommandBatch(ctx, req)
 	if err != nil {
