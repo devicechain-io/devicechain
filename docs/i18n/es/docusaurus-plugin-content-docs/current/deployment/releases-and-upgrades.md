@@ -795,6 +795,279 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres versiones menores más recientes se documentan por completo, de la más nueva a la más antigua.
 
+### v1.3.0 — los comandos llegan a dispositivos HTTP y LoRaWAN, y cada entrega deja constancia {#v130-upgrade}
+
+`v1.3.0` es una actualización in situ desde `v1.2.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Durante la actualización se ejecutan diez migraciones añadidas (cinco en `device-management`, dos en `command-delivery`, dos en `event-management` y una en `notification-management`), y el diario de auditoría de cada área gana cuatro columnas que admiten nulos; agregan tablas, columnas que admiten nulos e índices, y no cambian ninguna fila existente. Consulta [Cambios de esquema y vuelta atrás](#v130-going-back). Ejecuta `dcctl install` antes de actualizar la instancia, como arriba: además pasa Alertmanager a la configuración de enrutamiento que escribe `dcctl` (consulta [Las alertas llegan a una persona](#v130-alert-routing)). Si vienes de `v1.1.0`, lee primero las [notas de `v1.2.0`](#v120-upgrade) y sigúelas con `--version v1.3.0`.
+
+**[FREEZE: recount the migrations above. Ten assumes every entry marked PENDING below has merged; the three already on `main` are two in `device-management` (`20261113100000`, `20261114120000`) and one in `command-delivery` (`20261114120100`), plus the audit journal's columns.]**
+
+```bash
+dcctl install local --version v1.3.0
+dcctl upgrade local devicechain --version v1.3.0 --dry-run
+dcctl upgrade local devicechain --version v1.3.0
+```
+
+Se aplica la [política de versiones y actualización](./versioning-policy.md). Esta versión amplía las interfaces cubiertas (nuevas consultas, mutaciones, campos y valores de enumeración GraphQL; nuevas rutas HTTP para dispositivos; nuevas banderas y comandos de `dcctl`; un nuevo tipo en el SDK de C#) y no elimina ninguna. Tres cosas de la propia política son nuevas en esta versión:
+
+- **Un nivel de vista previa.** Una superficie nueva puede pasar sus primeras versiones menores en [vista previa](./versioning-policy.md), donde todavía puede cambiar en una versión menor; las notas de la versión dicen entonces qué cambió y qué hacer. En esta versión las superficies en vista previa son las pruebas de reglas (la operación `evaluateRules` de la API de event-processing, los formatos de archivo de escenario y de prueba, y `dcctl test`) y `dcctl product export`, `plan` y `apply` con su formato de paquete (`product.devicechain.io/v1alpha1`). Puedes construir sobre ellas, y cualquier cambio se anunciará aquí.
+- **El catálogo de herramientas MCP no está cubierto.** Los nombres de las herramientas, sus entradas y la forma de sus resultados pueden cambiar en una versión menor, y esta los cambia: consulta [Los resultados de las herramientas MCP indican su procedencia](#v130-mcp-provenance).
+- **Valores de Helm.** Los valores que esta versión añade o cambia no están cubiertos por la política de compatibilidad, y esta sección es donde una versión menor lo indica. Cada valor nuevo está desactivado, o conserva el comportamiento de `v1.2.0`, por defecto.
+
+Novedades:
+
+- **Los comandos llegan a dispositivos que no mantienen una conexión.** Un dispositivo que solo habla HTTP recoge sus comandos con un sondeo largo, confirma la recepción y responde. Un dispositivo detrás de un servidor de red ChirpStack v4 recibe su comando como un downlink LoRaWAN. Cada comando registra ahora cómo se observó su entrega, en todos los transportes. Consulta [Comandos por HTTP y constancia de entrega](#v130-http-command-pull) y [Downlink LoRaWAN](#v130-lorawan-downlink).
+- **Las alertas llegan a una persona.** `dcctl install` y `dcctl upgrade` envían las alertas de la propia plataforma a un webhook, a una dirección de correo o a una configuración propia; un receptor de hombre muerto avisa cuando el propio sistema de alertas se calla; cada alerta enlaza con una entrada de la guía de alertas; y una instancia que no envía sus alertas a ningún sitio lo dice. Consulta [Las alertas llegan a una persona](#v130-alert-routing).
+- **Los webhooks salientes se pueden firmar,** según la especificación abierta Standard Webhooks, para la acción de regla `httpCall` y para los canales de notificación webhook. Consulta [Webhooks salientes firmados](#v130-signed-webhooks).
+- **El endpoint HTTP de eventos dice la verdad antes.** Un inquilino desconocido o una credencial que no se autentica se responden con `401` de inmediato, el `400` de un documento rechazado señala el campo culpable y un evento aceptado lleva un recibo. Consulta [El endpoint HTTP de eventos responde 401](#v130-http-events-401).
+- **Un dispositivo puede enviar su propia carga útil para el decodificador de su perfil,** en una nueva ruta opcional. Consulta [La carga útil propia de un dispositivo, decodificada](#v130-device-uplinks).
+- **Las conexiones con certificado se pueden comprobar con OCSP,** por ancla de confianza, desactivado por defecto. Consulta [OCSP para conexiones con certificado](#v130-ocsp).
+- **El producto de un inquilino se puede guardar como archivos** con `dcctl product export`, `plan` y `apply` (vista previa). Consulta [Producto como código](#v130-product-as-code).
+- **Las reglas de detección se pueden probar con pruebas unitarias** con `dcctl test` y la consulta `evaluateRules` (vista previa). **[PENDING #2336]** Consulta [Pruebas de reglas](#v130-rule-tests).
+- **Se registra el uso diario de eventos de cada inquilino,** y el operador puede leerlo. **[PENDING #2324]** Consulta [Uso de eventos por inquilino](#v130-usage-metering).
+- **Las campañas envían comandos según un calendario:** cron, fechas de calendario, festivos y la salida o la puesta del sol en la posición instalada de cada dispositivo. **[PENDING #2327, #2326]** Consulta [Campañas](#v130-campaigns) y [Posición instalada](#v130-installed-position).
+- **Se registran las entregas de notificaciones,** una fila por intento, con el estado de cada canal. **[PENDING #2330]** Consulta [El registro de entregas de notificaciones](#v130-delivery-ledger).
+- **Clasificación de alarmas en la consola:** las alarmas enlazan con su dispositivo y muestran unidades, se pueden reconocer varias a la vez, un dispositivo tiene una pestaña de Alarmas y la página de inicio cuenta las alarmas y los dispositivos en línea. Los operadores también pueden anotar qué resultó ser una alarma. Consulta [La consola busca dispositivos y clasifica alarmas](#v130-console) y **[PENDING #2332]** [Disposiciones de alarmas](#v130-alarm-dispositions).
+- **Términos de vocabulario en el modelo nativo:** los tipos de dispositivo, activo, área y cliente, los tipos de relación y las métricas pueden llevar términos de Brick, SAREF, Smart Data Models y NGSI-LD. **[PENDING #2337]** Consulta [Vínculos semánticos](#v130-semantic-bindings).
+- **Los resultados de las herramientas MCP marcan como datos el texto escrito por dispositivos y usuarios,** bajo un miembro `untrusted` con su procedencia. Consulta [Los resultados de las herramientas MCP indican su procedencia](#v130-mcp-provenance).
+
+#### Antes de actualizar {#v130-before-you-upgrade}
+
+Lo que exige actuar, en el orden en que hacerlo:
+
+- **[FREEZE DECISION] Decide the token-audience default.** The `v1.2.0` notes said that `v1.3` refuses, by default, tokens bound to a resource the instance does not serve. This build still defaults to `observe` (`TokenAudienceReleaseDefault` in `backend/core/config/tokenaudience.go`), and no change to `enforce` is merged. Either land that change before the freeze and say so here, or say here that the default stays `observe` in `v1.3.0` and give the new schedule. Remove this item once decided.
+- **Si enrutaste las alertas editando a mano el Secret del propio Alertmanager, pasa antes esa configuración a `dcctl install --alert-config <archivo>`.** Desde esta versión Alertmanager lee el Secret `dc-alertmanager-config` que escribe `dcctl`, así que una configuración editada a mano deja de leerse cuando ejecutas `dcctl install`. Un clúster instalado con una versión anterior también necesita un `dcctl install` antes de que `dcctl upgrade` acepte las banderas `--alert-*`. Consulta [Las alertas llegan a una persona](#v130-alert-routing).
+- **Ten en cuenta que `POST /{instanceId}/{tenant}/events` responde ahora `401` a un inquilino desconocido o a una credencial que no se autentica.** Estas solicitudes se respondían con `202` y luego se rechazaban, así que sus eventos nunca se almacenaban. Un dispositivo que recibe `401` necesita que se corrija el nombre del inquilino o su credencial; un dispositivo cuyos eventos se almacenan no ve ningún cambio. Durante la actualización gradual, los pods antiguos siguen respondiendo `202` a estas solicitudes. Consulta [El endpoint HTTP de eventos responde 401](#v130-http-events-401).
+- **Activa el modo OCSP de un ancla de confianza solo cuando la actualización gradual haya terminado.** Mientras no todas las réplicas de `device-management` ejecuten esta versión, las antiguas no comprueban OCSP, así que un certificado que una réplica rechaza podría ser admitido por otra. Consulta [OCSP para conexiones con certificado](#v130-ocsp).
+- **Activa también las demás funciones opcionales nuevas solo cuando termine el despliegue.** Todas están desactivadas por defecto y por el mismo motivo: un pod de `v1.2.0` que sigue en marcha no las conoce.
+  - Pon el `commandChannel` de un tipo de dispositivo en `HTTP_PULL` solo cuando todas las réplicas de todos los servicios estén actualizadas; un `command-delivery` anterior publica los comandos de ese dispositivo donde nadie los lee, y caducan.
+  - Activa `httpIngest.deviceUplinks` solo cuando todas las réplicas de `device-management` estén actualizadas; una anterior rechaza el uplink después de que se respondiera `202`.
+  - Activa la firma de webhooks (`signingSecretRef` en una acción `httpCall`, `"signing": true` en un canal webhook) solo cuando todas las réplicas de `outbound-connectors` y `notification-management` estén actualizadas; una anterior entrega sin firmar.
+  - **[PENDING #2327]** Crea las campañas con disparadores de salida o puesta del sol después del despliegue: una réplica de `user-management` de `v1.2.0` se niega a emitir el token que lee las posiciones instaladas, así que la planificación solar informa de un error y lo reintenta hasta que esa réplica desaparece.
+- **Mueve cualquier identificador de credencial Bearer de `httpCall` que empiece por `webhook-signing/`.** Ese espacio de nombres queda reservado para los secretos de firma, y una regla que nombre un identificador así se rechaza al publicarla. Consulta [Webhooks salientes firmados](#v130-signed-webhooks).
+- **Actualiza los clientes MCP que leen texto libre del resultado de una herramienta.** El nombre, la descripción y el identificador externo de un dispositivo, el nombre y la unidad de una métrica, la clave de una alarma y el nombre y el error de un comando están ahora bajo `untrusted`, como `{ "value": ..., "source": ... }`. El catálogo de herramientas MCP no es una interfaz cubierta, así que esto llega en una versión menor. Consulta [Los resultados de las herramientas MCP indican su procedencia](#v130-mcp-provenance).
+- **[PENDING #2336] Espera que `devicechain_eventprocessing_detect_late_samples_total` marque más.** Las lecturas tardías que descarta una ventana fija cerrada o una sesión cerrada ahora se cuentan, como ya se contaban las de los demás tipos de regla; hasta ahora se descartaban sin dejar rastro. Los resultados de la detección no cambian. Vuelve a ajustar la referencia de un panel o una alerta que hayas calibrado con el ritmo anterior. Consulta [Pruebas de reglas](#v130-rule-tests).
+- **[PENDING #2337] Publica los perfiles y tipos de activo con vínculos semánticos después del despliegue.** Durante la ventana gradual, un pod antiguo que atiende la publicación escribe una instantánea sin los vínculos. El borrador los conserva, y la siguiente publicación desde un pod actualizado los fija. Consulta [Vínculos semánticos](#v130-semantic-bindings).
+- **[PENDING #2324] Espera que la migración de `event-management` tarde más en un almacén de eventos grande.** Construye un índice sobre la tabla de eventos fragmento a fragmento. Consulta [Uso de eventos por inquilino](#v130-usage-metering).
+- **Añade las nuevas alertas y métricas a tu enrutamiento y tus paneles.** `devicechain_usermanagement_service_token_checks_total` es nueva ([detalles](#v130-service-token-ceiling)), igual que las series OCSP de las conexiones con certificado y **[PENDING #2330]** `devicechain_notificationmanagement_ledger_writes_total`.
+- **No hay que hacer nada por el resto de esta versión.** Todos los demás cambios son aditivos o están desactivados por defecto. Esta versión no declara nada obsoleto; sigue vigente lo declarado obsoleto en `v1.2.0` para una solicitud `client_credentials` que indica un `resource` sin un `scope`.
+
+Autoridades nuevas:
+
+- **`usage:read`** **[PENDING #2324]** es una autoridad de nivel de sistema. Lee el uso de eventos de cada inquilino en la API de administración de event-management. El rol integrado `superuser` tiene `*` y por tanto la tiene; concédela a otro rol de sistema para que ese rol pueda leer el uso. Ningún rol de inquilino puede tenerla.
+- **`location:installed:read`** **[PENDING #2326]** es una autoridad de nivel de inquilino. Lee la posición instalada de un dispositivo o de un activo y nada más. `location:read` la implica, así que un rol que ya tiene `location:read` (y `tenant-admin`, que tiene `*`) no necesita cambios. No forma parte de la base del rol de lectura: a un rol que deba ver las posiciones instaladas pero no la ubicación en vivo de los dispositivos se le concede solo `location:installed:read`.
+
+Valores de Helm nuevos, cada uno desactivado o sin cambios por defecto:
+
+| Valor | Por defecto | Qué hace |
+| --- | --- | --- |
+| `functionalAreas.device-management.config.callout.ocsp.enabled` | `false` | El interruptor de la instancia para OCSP. Desactivado, no se consulta a ningún respondedor; consulta [OCSP](#v130-ocsp) para las demás claves `ocsp.*`. |
+| `functionalAreas.device-management.config.callout.ocsp.allowRequireCurrent` | `false` | Permite que un ancla use `REQUIRE_CURRENT`. |
+| `functionalAreas.event-sources.config.httpIngest.deviceUplinks` | `false` | Sirve `POST /{instanceId}/{tenant}/devices/{token}/uplink`. |
+| `functionalAreas.event-sources.config.httpIngest.maxCommandPollsPerTenant` | `256` | Sondeos de comandos HTTP retenidos por inquilino y por réplica; uno más se responde con `429`. No aparece en el `values.yaml` del chart; fíjalo si necesitas otro límite. |
+| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | Envía comandos a dispositivos LoRaWAN a través de su servidor de red. |
+
+#### Las alertas llegan a una persona {#v130-alert-routing}
+
+Cada regla de alerta que incluye el chart lleva ahora un `runbook_url` que abre su entrada en la nueva [Guía de alertas](./alert-runbook.md). Nada más de una regla cambia: nombres, expresiones, duraciones `for` y etiquetas son los mismos.
+
+`dcctl install` y `dcctl upgrade` aceptan `--alert-webhook`, `--alert-email` (con `--alert-smtp-host`, `--alert-smtp-from`, `--alert-smtp-user` y `--alert-smtp-password-file`), `--alert-config`, `--alert-watchdog-webhook` y `--clear-alert-routing`. Alertmanager lee ahora su configuración del Secret `dc-alertmanager-config` del namespace `monitoring`, que `dcctl install` escribe antes de aplicar la pila de monitoreo. Volver a ejecutar `dcctl install` sin ninguna bandera `--alert-*` conserva el enrutamiento existente, y una primera instalación sin ellas escribe una configuración sin receptor, que es el comportamiento de las versiones anteriores. Indicar cualquier bandera `--alert-*` vuelve a declarar todo el enrutamiento. Con `--alert-watchdog-webhook`, la alerta `Watchdog`, que está siempre activa, va a ese receptor cada minuto, así que su silencio te dice que las alertas se han detenido.
+
+Una instancia indica si alguien escucha en su nueva condición `AlertsRouted`, y `dcctl instances list` muestra `ALERTS NOT ROUTED` para una que no envía sus alertas a ningún sitio. La condición nunca hace que la instancia deje de estar lista.
+
+Vuelve a ejecutar `dcctl install` una vez en un clúster instalado con una versión anterior antes de usar las banderas con `dcctl upgrade`; en caso contrario `dcctl upgrade` las rechaza, porque el Alertmanager anterior no lee ningún Secret nuestro. `dcctl` comprueba `--alert-config` en busca de los errores que dejarían las alertas sin enrutar, pero no es el analizador del propio Alertmanager: ejecuta antes `amtool check-config` sobre el archivo. Consulta [Enrutar las alertas a una persona](./observability.md#alert-routing).
+
+#### Comandos por HTTP y constancia de entrega {#v130-http-command-pull}
+
+Un dispositivo que solo habla HTTP, como un sensor de batería que se despierta, informa y vuelve a dormir, ahora puede recibir comandos. Pon el `commandChannel` de su tipo de dispositivo en `HTTP_PULL`, y sus comandos esperan a que el dispositivo los pida:
+
+- `GET /{instanceId}/{tenant}/devices/{device}/commands?wait=0..30` retiene la solicitud hasta `wait` segundos (25 por defecto) hasta que haya un comando pendiente;
+- `POST .../commands/{command}/ack` confirma la recepción, antes de que el dispositivo actúe;
+- `POST .../commands/{command}/response` responde.
+
+El dispositivo presenta su token de acceso en cada solicitud. Un tipo de dispositivo sin canal, o con `PUBLISH`, recibe sus comandos exactamente igual que antes. Un comando para un dispositivo que sondea puede llevar `deliveryMode: ONEWAY` (lo completa su confirmación) y puede fijar `maxAttempts`; para cualquier otro dispositivo esas opciones se rechazan con `DELIVERY_OPTION_NOT_APPLICABLE`. Cada réplica de `event-sources` retiene como máximo `httpIngest.maxCommandPollsPerTenant` sondeos de un inquilino (256 por defecto) y responde `429` por encima. El SDK de C# tiene un nuevo `HttpCommandPuller`.
+
+Cada comando registra ahora la constancia de su entrega: `deliveredTime` y `deliveryEvidence` (`DEVICE_ACK` para la confirmación de un dispositivo que sondea, `DEVICE_RESPONSE` para una respuesta en cualquier transporte). No se añade ningún estado de comando. Consulta [Dispositivos que recogen sus comandos por HTTP](../concepts/commands.md#http-command-pull).
+
+- **Actívalo después del despliegue.** Actualiza primero `device-management`, y pon `HTTP_PULL` solo cuando todas las réplicas de todos los servicios ejecuten esta versión. Una réplica de `command-delivery` ya actualizada mientras `device-management` todavía no lo está retiene los comandos de todos los dispositivos por los que pregunta, y los libera cuando `device-management` responde, así que los dispositivos normales sufren un retraso durante el solapamiento, nunca se envían al sitio equivocado.
+- **La nueva ruta no se expone a través del ingress del chart,** igual que `/events`.
+
+#### Downlink LoRaWAN {#v130-lorawan-downlink}
+
+Un comando para un dispositivo que informa a través de una integración entrante se puede enviar ahora al dispositivo como un downlink LoRaWAN, encolado en su servidor de red ChirpStack v4. Esta primera versión acepta cargas útiles `hex` o `base64` en bruto y envía downlinks sin confirmación; `confirmed: true` se rechaza, nunca se rebaja. El enlace es un conector publicado del nuevo tipo `lorawan_downlink`, y la clave de API de ChirpStack es el secreto sellado del conector. El éxito significa que el servidor de red encoló el downlink, no que el dispositivo lo recibiera.
+
+Está desactivado salvo que `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` sea `true`; entonces el chart hace que `command-delivery` despache estos comandos, y rechaza una copia de esa bandera fijada a mano. La consulta `connectorTypes` lista un valor más. La primera vez que se activa, un comando despachado en los segundos anteriores a que arranque el adaptador caduca. Consulta [Downlink LoRaWAN](../guides/inbound-integrations.md#lorawan-downlink).
+
+#### Webhooks salientes firmados {#v130-signed-webhooks}
+
+La acción de regla `httpCall` y el canal de notificación webhook pueden firmar lo que envían, según la especificación abierta Standard Webhooks. Una entrega firmada lleva `webhook-id`, `webhook-timestamp` y `webhook-signature`; el cuerpo no cambia, y una entrega sin firmar es exactamente la de antes. La plataforma genera el secreto de firma, que se muestra una sola vez y nunca vuelve a poder leerse, y se puede rotar con un solapamiento durante el cual las entregas llevan las dos firmas. Una entrega que debería firmarse y no puede se rechaza, nunca se envía sin firmar. Consulta [Firmar los webhooks salientes](../guides/signed-webhooks.md).
+
+- **Activa la firma después del despliegue.** Una réplica anterior de `outbound-connectors` o de `notification-management` ignora `signingSecretRef` y `signing`, y entrega sin firmar.
+- **`webhook-signing/` queda reservado.** Una regla cuyo identificador de credencial Bearer esté bajo él se rechaza al publicarla; mueve antes el identificador.
+- **Un secreto nuevo tarda hasta un minuto en llegar a todas las entregas `httpCall`,** porque el servicio de conectores guarda los secretos en caché.
+
+#### El endpoint HTTP de eventos responde 401 {#v130-http-events-401}
+
+`POST /{instanceId}/{tenant}/events` respondía `202 Accepted` a solicitudes que nunca podían almacenarse: un nombre de inquilino con una errata o una credencial que no se autenticaba. Se rechazaban después, y al dispositivo se le había dicho que sus datos estaban a salvo. Ahora se rechazan en la entrada:
+
+- **`401`** para un inquilino desconocido y para una credencial que no se autentica (desconocida, caducada, con un secreto erróneo, de otro dispositivo, o ausente donde la instancia la exige). Todas las causas reciben el mismo estado, las mismas cabeceras y el mismo cuerpo, `{"error":"unauthorized"}`, así que el endpoint no revela qué inquilinos ni qué dispositivos existen. Los operadores distinguen las causas en `total_http_ingest_refused{source,reason}` y en una línea de registro muestreada.
+- **`400` sigue siendo `400`** para una carga útil mal formada. Un cuerpo que es JSON válido pero se rechaza lleva ahora un cuerpo JSON cuyos `errors` señalan cada valor culpable con un JSON Pointer; `message` es la frase que siempre llevó el cuerpo de texto plano. Un cuerpo que no es JSON conserva su `400` en texto plano.
+- **`X-DC-Event-Id`** en un `202`, y en el `400` de un documento rechazado, es un recibo de la solicitud.
+
+La comprobación falla en abierto: si los servicios a los que pregunta están lentos o no responden, la solicitud se acepta como antes y se juzga después. Una credencial que falla cinco veces seguidas deja de consultarse durante un tiempo (1 segundo, que se duplica hasta 60), así que el `401` no sirve para adivinar secretos. La respuesta en caché no es una autoridad: `device-management` sigue autenticando cada evento, así que una credencial recién desactivada se acepta en la entrada durante 30 segundos como mucho y después se rechaza como antes. Los rechazos en la entrada se cuentan y se registran, pero no son registros de eventos fallidos.
+
+#### La carga útil propia de un dispositivo, decodificada {#v130-device-uplinks}
+
+Un dispositivo que envía una carga útil binaria o un JSON propio del fabricante, en lugar del documento de evento de DeviceChain, puede publicarla en `POST /{instanceId}/{tenant}/devices/{token}/uplink`, y la lee el decodificador de carga útil del perfil de su tipo de dispositivo. El dispositivo presenta su propia credencial en las cabeceras `X-DeviceChain-Credential-*`, y se comprueba antes que nada: quien no la tiene recibe un único `401`, exista o no el dispositivo y tenga o no decodificador. La decodificación, su presupuesto, su estado y sus muestras son los mismos que usa la ruta de las integraciones entrantes. Un tipo de dispositivo sin decodificador se responde con `422`.
+
+La ruta está desactivada salvo que `functionalAreas.event-sources.config.httpIngest.deviceUplinks` sea `true`. Actívala solo cuando todas las réplicas de `device-management` ejecuten esta versión: una réplica anterior rechaza ese uplink y lo registra como evento fallido después de que al dispositivo se le respondiera `202`.
+
+#### OCSP para conexiones con certificado {#v130-ocsp}
+
+Un ancla de confianza puede ahora preguntar al respondedor OCSP de la autoridad de certificación si un certificado sigue siendo válido, como segunda fuente de revocación junto a las [listas de revocación](../concepts/device-certificates.md#revocation) que subes. Está desactivado en todas partes por defecto: el interruptor de la instancia `functionalAreas.device-management.config.callout.ocsp.enabled` es `false`, y el nuevo `ocspMode` de cada ancla es `OFF`.
+
+- **`ENFORCE_KNOWN`** rechaza un certificado que el respondedor declara revocado y admite uno cuyo estado no puede conocer.
+- **`REQUIRE_CURRENT`** rechaza cualquier certificado cuyo estado no puede confirmar. Además necesita `callout.ocsp.allowRequireCurrent: true` y una URL de respondedor en el ancla (`ocspResponderUrl`).
+- **Lo que cuesta.** OCSP se ejecuta solo después de que hayan pasado las comprobaciones de cadena, caducidad, lista de revocación y revocación manual, así que un certificado ya rechazado no cuesta ninguna consulta. Las respuestas buenas se guardan en caché; una respuesta de revocado rechaza la conexión y nunca se guarda. Las demás claves bajo `callout.ocsp` (`fetchDeadline`, `maxInFlight`, `maxAge`, `failureTtl`, `cacheEntries`, `maxResponderHostsPerTenant`) acotan las consultas, y sus valores por defecto están en el `values.yaml` del chart.
+- **Lo que todavía no hace.** Una respuesta de revocado rechaza cada conexión, pero no se almacena como revocación ni termina las sesiones ya abiertas; para eso, sube una lista o revoca el certificado.
+- **Resultados y métricas nuevos.** `callout_x509_total` gana los resultados `ocsp_revoked` y `ocsp_unavailable`, y cinco series `x509_ocsp_*` nuevas informan de las consultas, la caché, el cortocircuito y las conexiones admitidas sin respuesta.
+
+**Cambia las anclas a `ENFORCE_KNOWN` o `REQUIRE_CURRENT` solo cuando la actualización gradual haya terminado.** Hasta entonces, las réplicas antiguas no comprueban OCSP, así que un certificado que una réplica rechaza podría ser admitido por otra. Con el interruptor de la instancia desactivado, un ancla en `REQUIRE_CURRENT` rechaza las nuevas conexiones con certificado, y la API se niega a activar un ancla.
+
+#### Los resultados de las herramientas MCP indican su procedencia {#v130-mcp-provenance}
+
+El catálogo de herramientas MCP (nombres de herramientas, entradas y forma de los resultados) no está cubierto por la promesa de compatibilidad. La [política de versiones](./versioning-policy.md) lo incluye ahora entre lo que puede cambiar en una versión menor, y esta versión lo cambia.
+
+Cada herramienta de lectura mantiene los tokens y los valores calculados por la plataforma en el nivel superior y pasa el texto libre a `untrusted`, como `{ "value": ..., "source": ... }`, donde `source` es `device-reported`, `operator` o `agent`. Los campos que se mueven son el `name`, la `description` y el `externalId` de un dispositivo, el `name` y la `unit` de una métrica, el `alarmKey` de una alarma, y el `name` y el `error` de un comando. Un cliente que los lea debe leerlos ahí. Las clases que contiene un resultado se listan en `_meta["io.devicechain/provenance"]`, y la descripción de cada herramienta dice que el texto bajo `untrusted` son datos, nunca instrucciones. Consulta [Lo que ve un asistente](../concepts/mcp.md#what-an-assistant-sees).
+
+También es nuevo, y aditivo: los tokens de acceso OAuth llevan un claim `sid` (la sesión de la concesión), el diario de auditoría registra el `client_id` y la sesión del token que hizo cada cambio, y la línea del registro de auditoría de MCP pasa a `schema: 2`, que añade `scopes`.
+
+#### Se observa el techo de autoridad de los tokens de servicio {#v130-service-token-ceiling}
+
+El endpoint que emite tokens de servicio comprueba ahora cada solicitud contra las autoridades que su llamante debería necesitar, y cuenta el veredicto en `devicechain_usermanagement_service_token_checks_total{caller,verdict}`. No rechaza nada y emite exactamente igual que antes. Un ritmo distinto de cero de `over_ceiling`, `wildcard` o `unknown_caller` señala un llamante que una versión posterior que aplique el techo rechazaría; hoy no se espera ninguno.
+
+#### Producto como código (vista previa) {#v130-product-as-code}
+
+`dcctl product export <dir>` escribe el producto de un inquilino como archivos: tipos de dispositivo, perfiles con sus métricas, métricas calculadas, decodificadores de carga útil con sus vectores de prueba, comandos, reglas de detección y grafos del lienzo, paneles, conectores e integraciones. `dcctl product plan <dir>` muestra lo que cambiaría aplicar los archivos y no escribe nada (`--fail-on-changes` convierte la deriva en un código de salida), y `dcctl product apply <dir>` hace converger el inquilino con los archivos y publica lo que cambió. Los secretos nunca aparecen en un paquete: un conector nombra su credencial por identificador (`env:NAME`), y cada paquete se examina en busca de valores con aspecto de secreto. Solo se toca lo que nombra el paquete.
+
+Es una superficie en **vista previa**: el árbol de comandos y el formato de paquete (`product.devicechain.io/v1alpha1`) pueden cambiar en una versión menor, y `dcctl` rechaza una versión de paquete que no conoce. Se ejecuta por completo en `dcctl`, a través de las API de inquilino publicadas, así que nada cambia en el servidor. Consulta [Producto como código](../guides/product-as-code.md).
+
+#### Pruebas de reglas (vista previa) {#v130-rule-tests}
+
+**[PENDING #2336 — drop this subsection, its "What is new" line, its "Before you upgrade" item and the preview-tier mention of the rule tests if it has not merged at the freeze.]**
+
+`dcctl test <dir|archivo>` ejecuta pruebas unitarias deterministas de las reglas de detección. Un `scenario.yaml` describe dispositivos y sus lecturas (constantes, un paseo aleatorio acotado, un calendario por escalones, o un archivo CSV o NDJSON) con fallos (huecos, duplicados, reordenaciones, ventanas sin conexión) y una semilla, y los archivos `*.test.yaml` dicen lo que debe ocurrir: una alarma activada o despejada dentro de un plazo, nunca activada, un comando o un webhook solicitado, etc. `dcctl test` imprime un informe, puede escribir XML JUnit (`--junit`) y sale con `0` cuando se cumplieron todas las expectativas, `1` cuando falló una y `2` cuando algo no se pudo juzgar. Una ejecución que no puede responder nunca sale en verde.
+
+Usa una consulta nueva, `evaluateRules` (API de inquilino de event-processing, `device:read`), que ejecuta las reglas publicadas de un perfil, o un borrador, sobre los eventos de la solicitud, en tiempo de evento con la tolerancia de retraso de producción, y devuelve las transiciones, las acciones que solicitarían y por qué un resultado es parcial. No ejecuta nada y no toca ningún flujo. Los formatos de archivo (`devicechain.io/ruletest/v1alpha1`), la consulta y el comando están en el nivel de **vista previa**.
+
+- **`devicechain_eventprocessing_detect_late_samples_total` marca más.** Las lecturas tardías que descarta una ventana fija cerrada o una sesión cerrada ahora se cuentan, como las de los demás tipos de regla. Las detecciones no cambian; un panel o una alerta calibrados con el ritmo anterior necesitan una nueva referencia.
+
+#### Uso de eventos por inquilino {#v130-usage-metering}
+
+**[PENDING #2324 — drop this subsection, its lines above and its migrations if it has not merged at the freeze.]**
+
+`event-management` guarda un registro diario de lo que usó cada inquilino: los eventos que ingirió y los dispositivos que los enviaron (distintos, el máximo en una hora y la media horaria). Un operador lo lee con la consulta `tenantEventUsage(tenant, from, to)` en el nuevo endpoint `/admin/graphql` de `event-management`, de ámbito de instancia, que requiere un token de identidad con `usage:read`. El registro informa del uso y no impone nada.
+
+- **Los eventos se cuentan el día en que se recibieron,** no el día con el que están fechados, así que una lectura tardía o recuperada nunca revisa un día terminado, y un duplicado reentregado se cuenta una vez.
+- **Una hora es definitiva 10 minutos después de cerrarse,** y una hora definitiva no se reescribe nunca. Un día figura como `complete` cuando sus 24 horas son definitivas. Por eso, **un evento almacenado más de 10 minutos después del final de la hora en que se recibió no se cuenta.**
+- **El registro empieza el día UTC en que se ejecuta por primera vez el servicio actualizado.** Los días anteriores figuran como no completos. Los eventos recibidos después de la actualización pero fechados dentro de fragmentos que ya estaban comprimidos en ese momento no se cuentan.
+- **La actualización construye un índice sobre la tabla de eventos** fragmento a fragmento, así que no bloquea las escrituras de toda la tabla, pero en un almacén grande la migración de `event-management` tarda más de lo habitual.
+
+#### Campañas {#v130-campaigns}
+
+**[PENDING #2327 — drop this subsection and its lines above if it has not merged at the freeze. It depends on #2326.]**
+
+Una campaña envía una serie de comandos, con una espera entre pasos, a los dispositivos de un grupo de entidades según un calendario: una expresión cron en una zona horaria con nombre, fechas y horas de calendario, o la salida o la puesta del sol más un desfase, calculadas para cada dispositivo a partir de su [posición instalada](#v130-installed-position). Los festivos suprimen un disparo; nunca lo mueven. Los cambios de horario de verano siguen una sola regla: una hora que cae en el salto de primavera se dispara en el salto, y una hora repetida se dispara una vez. Cada disparo se sigue por dispositivo (planificado, enviado, omitido con un motivo, fallido), y `retryCampaignFailed` vuelve a enviar solo los fallidos. Los comandos pasan por la ruta habitual de lotes, así que las ventanas de mantenimiento se siguen aplicando. Todas las réplicas ejecutan el planificador, y la base de datos decide cuál envía cada comando, así que nada se envía dos veces.
+
+- **Una campaña no se puede editar.** Bórrala y vuelve a crearla; una campaña recreada no envía nada que venciera antes de crearse.
+- **Los destinos son grupos.** Usa un grupo dinámico para seleccionar los dispositivos de un área.
+- **Los disparadores solares necesitan que termine el despliegue.** Mientras quede alguna réplica de `user-management` de `v1.2.0`, la planificación de un disparo de salida o puesta del sol informa de un error y lo reintenta.
+
+#### Posición instalada {#v130-installed-position}
+
+**[PENDING #2326 — drop this subsection and its lines above if it has not merged at the freeze.]**
+
+Un dispositivo o un activo que no se mueve, como una farola, una plaza de aparcamiento o un armario, puede tener ahora una posición instalada: `setInstalledPosition` y `clearInstalledPosition` (`device:write`), las columnas opcionales `installedLatitude`, `installedLongitude`, `installedElevation` e `installedAccuracy` de una importación de flota, y el campo `installedPosition` de `Device` y `Asset`. Leerla requiere la nueva `location:installed:read`, que `location:read` implica. Nunca recurre a una posición que haya informado el dispositivo. `positionWithheld`, en cada dispositivo y activo, le dice a quien llama que no puede ver la posición, sin revelar si existe. Un área puede nombrar su geocerca de límite (`boundaryFenceToken`); una geocerca que nombra un área no se puede borrar.
+
+#### El registro de entregas de notificaciones {#v130-delivery-ledger}
+
+**[PENDING #2330 — drop this subsection and its lines above if it has not merged at the freeze.]**
+
+Cada intento de enviar la notificación de una alarma por un canal escribe ahora una fila: qué lo desencadenó, la política, el canal, los destinatarios, el resultado (`SENT`, `FAILED`, `REFUSED` o `NOT_ATTEMPTED`), el número de intento, la latencia y un código de error clasificado. Se lee con `notificationAttempts` (`notification:read`); `NotificationChannel.deliveryHealth` da el último éxito, el último fallo y los fallos consecutivos de cada canal. Las URL de entrega, que pueden ser credenciales en sí mismas, nunca se almacenan. Las filas se conservan 7 días.
+
+El registro nunca retrasa un aviso: las filas se escriben en segundo plano desde una cola acotada, y una cola llena descarta la fila y la cuenta en `devicechain_notificationmanagement_ledger_writes_total{outcome}`. Así, una fila demuestra que hubo un intento; una fila que falta no demuestra nada.
+
+#### Disposiciones de alarmas {#v130-alarm-dispositions}
+
+**[PENDING #2332 — drop this subsection and its lines above if it has not merged at the freeze.]**
+
+`setAlarmDisposition` etiqueta el ciclo actual de una alarma como `TRUE_POSITIVE`, `FALSE_POSITIVE` o `EXPECTED`, con una nota opcional (`alarm:write`). Una etiqueta pertenece a un ciclo: cuando la alarma vuelve a activarse, el nuevo ciclo empieza sin etiqueta y los ciclos anteriores conservan la suya. `Alarm.disposition` lee la etiqueta del ciclo actual, y `alarmDispositions` lista todos los ciclos etiquetados. Etiquetar no cambia nada más de la alarma. Un miembro limitado a clientes lee las etiquetas de los ciclos que podía ver y no puede escribir ninguna.
+
+#### Vínculos semánticos {#v130-semantic-bindings}
+
+**[PENDING #2337 — drop this subsection and its lines above if it has not merged at the freeze.]**
+
+Un inquilino puede vincular términos de un vocabulario al modelo que ya tiene: `semanticTypes` en los tipos de dispositivo, activo, área y cliente, `semanticPredicate` y `semanticInverse` en los tipos de relación, y `semanticProperty` y `semanticPointClass` en las métricas. Los vocabularios incluidos son Brick 1.4.4, SAREF 4.1.1 con SAREF4CITY y SAREF4BLDG, los Smart Data Models de alumbrado público, aparcamiento y medio ambiente, y los términos básicos de NGSI-LD. Un inquilino activa los que usa, y puede añadir prefijos propios, con `setSemanticContext` (`device:write`). Cada término se comprueba en existencia y tipo, se almacena como IRI completo, y se rechaza con `INVALID_ARGUMENT` nombrando el término; un cambio de contexto que dejaría sin explicar un vínculo almacenado se rechaza con `SEMANTIC_CONTEXT_IN_USE`. `thingModel(includeSemanticTypes: true)` añade los vínculos al Thing Model; por defecto su salida no cambia.
+
+- **Durante la ventana gradual,** un pod antiguo que publica un perfil o un tipo de activo escribe una instantánea sin los vínculos. El borrador los conserva, y la siguiente publicación desde un pod actualizado los fija.
+
+#### La consola busca dispositivos y clasifica alarmas {#v130-console}
+
+La búsqueda de dispositivos y la de tipos de dispositivo aceptan un nuevo argumento opcional cada una, `nameContains`: una coincidencia de subcadena sin distinguir mayúsculas en el nombre o el token, donde `%` y `_` se toman literalmente y un texto en blanco coincide con todo. Un cliente que no lo envía obtiene los mismos resultados que antes. En la consola, la lista de dispositivos tiene una búsqueda por nombre y un filtro por tipo de dispositivo, ambos guardados en la dirección de la página, y los selectores de tipo de los formularios de dispositivo, creación en lote, importación y perfil de aprovisionamiento buscan en el servidor mientras escribes, en lugar de leer los primeros 1.000 tipos.
+
+La lista de alarmas enlaza cada alarma con su dispositivo, muestra los valores con la unidad que declara el perfil del dispositivo, reconoce varias alarmas seleccionadas en una sola solicitud y guarda sus filtros en la dirección de la página. Un dispositivo tiene una pestaña de Alarmas, y la página de inicio cuenta las alarmas activas por severidad y los dispositivos en línea y fuera de línea. Son cambios solo de la consola.
+
+#### El reloj adelantado de un dispositivo ya no mueve la detección de otros inquilinos {#v130-detect-watermark}
+
+La detección mantiene un único reloj lógico para toda la instancia, y antes seguía el tiempo de evento más reciente que había visto. La plataforma acepta tiempos de evento hasta cinco minutos por delante del reloj del servidor, de modo que un solo dispositivo con el reloj adelantado podía llevar ese reloj compartido por delante del tiempo real. Entonces los temporizadores de ausencia de todos los inquilinos se disparaban antes de tiempo y las lecturas con ventana de dispositivos con el reloj correcto se descartaban por tardías. Desde esta versión, un mensaje mueve el reloj compartido como máximo hasta el momento en que el broker lo almacenó, más la tolerancia de retraso configurada. El evento conserva su propio tiempo, por lo que sus lecturas se siguen ventaneando y ordenando en los instantes que informó el dispositivo, y la vista previa de repetición aplica el mismo límite.
+
+- **Los resultados de detección cambian solo en el caso que estaba mal.** Un dispositivo cuyo reloj está dentro de la tolerancia del reloj del broker (5 segundos por defecto) se comporta como antes. Con un reloj más adelantado, las alarmas de ausencia de los demás dispositivos se disparan ahora en su plazo real, y los temporizadores del dispositivo adelantado esperan a que el tiempo real los alcance.
+- **Las instantáneas llevan una versión del reloj.** Una instantánea de detección escrita por esta versión la registra, y restaurar una instantánea anterior sigue funcionando. En los primeros momentos tras la actualización, el reloj restaurado puede seguir tan adelantado como estaba; se corrige solo cuando el tiempo real lo alcanza, y el servicio registra una advertencia al restaurar una instantánea así. Durante una actualización gradual, un pod de la versión anterior que tome el relevo escribe instantáneas sin la versión y la ignora al leer, así que no hay que hacer nada.
+- **No cubre el caso contrario.** Un dispositivo que sube lecturas antiguas (almacenar y reenviar) todavía puede ver cómo las reglas con ventana las descartan por tardías, porque el reloj compartido ya avanzó. Los relojes por dispositivo no forman parte de esta versión.
+
+#### Agentes de borde {#v130-edge}
+
+No hay que hacer nada; ambas cosas están desactivadas por defecto y no cambian nada hasta que se configura un agente para ellas.
+
+- **Un agente puede conservar un evento hasta que la plataforma lo haya aceptado.** Con `uplink.retireOn: accept`, el agente borra un evento almacenado solo cuando la plataforma informa de que lo aceptó de forma duradera, y lo vuelve a ofrecer si la plataforma lo descartó por superar el límite de ingesta del inquilino. El valor por defecto, `puback`, se comporta como antes. Actualiza la plataforma antes de pasar un agente a `accept`: un agente en ese modo no puede conectarse a una plataforma anterior, y el error de conexión nombra `uplink.retireOn`. Cuando su cola local se acerca a su presupuesto, un agente también puede descartar eventos almacenados por clase de prioridad (`local.priority.*`). Consulta [Retirar eventos cuando la plataforma los acepta](./edge-services.md#retire-on-accept).
+- **La parte del agente del downlink de comandos a dispositivos situados detrás de él** se entrega con `commands.enabled` desactivado. La plataforma todavía no enruta comandos de pasarela, así que no tiene efecto en esta versión.
+
+#### Documentación, hosts de ejemplo y notas para agentes {#v130-docs-hosts}
+
+La documentación de los SDK de .NET y Unity y el comentario de documentación de `DeviceChainClient.Origin` usaban `demo.devicechain.io` como host de ejemplo, que no se resuelve; ahora usan `devicechain.example.com`. El SDK no tiene un host por defecto, así que no cambia ningún comportamiento. Una página nueva, [API de dispositivos de un vistazo](../reference/device-apis.md), da un comando para cada forma en que un dispositivo llega a la plataforma, y los paquetes `@devicechain/client` y `@devicechain/widget-sdk` y el SDK de .NET incluyen cada uno un `AGENTS.md` para agentes de programación. Una página nueva, [Proceso de seguridad](./security-process.md), describe cómo se tratan las vulnerabilidades (el objetivo para acusar recibo y clasificar es ahora de 24 horas) y qué publica cada versión.
+
+#### Otros cambios en esta versión {#v130-other-changes}
+
+No hay que hacer nada.
+
+- **LwM2M: información del dispositivo de los dispositivos que responden en TLV.** `lwm2m.readDeviceInfo` y la recogida de información del dispositivo al registrarse solo leían respuestas en texto plano, así que de un cliente que responde en LwM2M TLV a una lectura de un solo recurso, como hace Eclipse Leshan, no se registraba nada. Las respuestas TLV se decodifican ahora.
+- **La [matriz de transportes](../reference/transport-matrix.md) se genera a partir de una ejecución de conformidad** en la que clientes de terceros (Eclipse Paho, curl, Eclipse Leshan y Eclipse Tahu) manejaron una instancia real, y cada celda se juzga por lo que almacenó la plataforma.
+- **`dcctl install` ya no exige el comando `helm`.** El chart se instala con la biblioteca de Helm dentro de `dcctl`; `tofu` (o `terraform`) sigue siendo necesario.
+- **`dcctl bootstrap --values` ya no falla en una instancia nueva** con "changed while the values overlay was being recorded". Una escritura de estado del operador movía la versión de la instancia mientras tanto; `dcctl` ahora reintenta cuando solo se movió el estado, y sigue rechazando cuando cambió cualquier otra cosa. Lo mismo vale para el registro del front end y del interruptor de sobres de eventos.
+
+#### Cambios de esquema y vuelta atrás {#v130-going-back}
+
+Se añaden las siguientes migraciones. Cada columna nueva admite nulos y cada tabla nueva empieza vacía, así que un servicio de `v1.2.0` que se ejecute contra el esquema nuevo escribe filas que todavía puede almacenar.
+
+- **OCSP en las anclas de confianza** (`device-management`, migración `20261113100000`). Dos columnas que admiten nulos en `device_trust_anchors`: `ocsp_mode` y `ocsp_responder_url`. Un modo vacío se lee como `OFF`.
+- **Canal de comandos HTTP** (`device-management`, migración `20261114120000`). Una columna que admite nulos, `command_channel` en `device_types`. Vacía se lee como `PUBLISH`.
+- **Constancia de entrega** (`command-delivery`, migración `20261114120100`). Cinco columnas que admiten nulos en `commands`: `delivered_time`, `delivery_evidence`, `delivery_mode`, `max_attempts` y `delivery_attempts`.
+- **Identidad en el diario de auditoría** (todas las áreas). La tabla del diario de auditoría `audit_events`, que cada área guarda junto a sus propias tablas, gana cuatro columnas que admiten nulos: `client_id`, `session_id`, `on_behalf_of` y `proposal`. Se añaden al arrancar, como siempre se ha creado la propia tabla, y no mediante una migración numerada.
+- **[PENDING #2324] Uso de eventos** (`event-management`, migraciones `20261107000000` y `20261108000000`). Cinco tablas nuevas, `tenant_usage_daily`, `tenant_usage_hourly`, `tenant_usage_devices`, `tenant_usage_ledger` y `tenant_usage_state`, y un índice BRIN sobre `events.processed_time`, construido fragmento a fragmento.
+- **[PENDING #2330] Registro de entregas de notificaciones** (`notification-management`, migración `20261108000100`). Una tabla nueva, `notification_attempts`, con tres índices.
+- **[PENDING #2326] Posición instalada** (`device-management`, migración `20261112120000`). Seis columnas que admiten nulos en `devices` y en `assets` (`installed_lat`, `installed_lon`, `installed_elev`, `installed_accuracy`, `installed_source` e `installed_updated_at`), una en `areas` (`boundary_fence_token`) y un índice parcial sobre ella.
+- **[PENDING #2332] Disposiciones de alarmas** (`device-management`, migración `20261114090000`). Una tabla nueva, `alarm_dispositions`, cuyas filas se eliminan con su alarma.
+- **[PENDING #2327] Campañas** (`command-delivery`, migración `20261116120000`). Tres tablas nuevas, `campaigns`, `campaign_cycles` y `campaign_elements`, con sus índices.
+- **[PENDING #2337] Vínculos semánticos** (`device-management`, migración `20261120120000`). Columnas que admiten nulos para los vínculos en las tablas de tipos, tipos de relación y métricas, y una tabla nueva, `semantic_contexts`.
+
+**No hay que deshacer nada en ninguna base de datos para volver a `v1.2.0`:** las tablas, columnas e índices nuevos se quedan y los servicios de `v1.2.0` los ignoran. Antes de volver atrás, devuelve el modo OCSP de cada ancla de confianza a `OFF` y el `commandChannel` de cada tipo de dispositivo a `PUBLISH`, y desactiva `httpIngest.deviceUplinks`, `lpwanDownlink.enabled` y la firma de webhooks, porque `v1.2.0` no los conoce. Avanza cuando puedas: una actualización fallida se arregla volviendo a ejecutar `dcctl upgrade`.
+
+#### Problemas conocidos {#v130-known-issues}
+
+- **La confirmación MQTT en modo de fallo cerrado está desactivada por defecto,** como en `v1.2.0`. La página del [transporte MQTT](../reference/transport-matrix.md#mqtt--the-platform-broker) indica los límites medidos con ella desactivada y activada.
+- **Un cambio en la configuración del broker sigue desconectando a los dispositivos que admitió el callout de autenticación,** hasta que la biblioteca del broker incluya la corrección de origen. Una renovación de certificado no lo hace.
+- **`eventSources.ingestMetering: lagCredit` sigue sin estar disponible,** y se rechaza al arrancar; consulta [Medición de la ingesta](#v120-ingest-metering).
+- **OCSP todavía no almacena lo que averigua ni termina las sesiones abiertas,** como se describe en [OCSP para conexiones con certificado](#v130-ocsp).
+
 ### v1.2.0 — decodificadores de carga útil que escribe cada inquilino, y una revocación que cierra sesiones {#v120-upgrade}
 
 `v1.2.0` es una actualización in situ desde `v1.1.0`: `dcctl install` para el clúster y después un `dcctl upgrade` por cada instancia, como se describe [para v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/i18n/es/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v0170-upgrade). Pasa a `dcctl install` los ajustes con los que se instaló el clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Durante la actualización se ejecutan ocho migraciones añadidas (cuatro en `device-management`, tres en `device-state` y una en `user-management`); agregan tablas, columnas que admiten nulos y parámetros de almacenamiento, y dos reparan una columna de `device_states`. Consulta [Cambios de esquema y vuelta atrás](#v120-going-back). El nuevo campo `spec.size` de `Instance` se entrega con el operador, que `dcctl install` actualiza, así que ejecútalo antes de actualizar la instancia, como se indica arriba. Si vienes de `v1.0.0`, lee primero las [notas de `v1.1.0`](#v110-upgrade) y sigúelas con `--version v1.2.0`.
@@ -1011,14 +1284,6 @@ El endpoint HTTP de eventos (`POST /{instanceId}/{tenant}/events`) respondía `2
 - **Un cliente que reintenta toda respuesta distinta de `202` no debe reintentar un `500` de este endpoint:** la misma petición falla igual. `503` (con o sin `Retry-After`) y `429` conservan su significado.
 - **Un contador nuevo, `total_msg_build_dropped{source,cause}`,** cuenta estos descartes en todos los transportes, con `cause` igual a `no_tenant`, `no_transit_key`, `seal_failed` o `marshal_failed`. Se exporta a 0 para cada fuente configurada. Cualquier valor mayor que 0 es un evento que no se almacenó.
 - Los endpoints de integración conservan su `202` documentado cuando se descarta un mensaje.
-
-#### El reloj adelantado de un dispositivo ya no mueve la detección de otros inquilinos {#v120-detect-watermark}
-
-La detección mantiene un único reloj lógico para toda la instancia, y antes seguía el tiempo de evento más reciente que había visto. La plataforma acepta tiempos de evento hasta cinco minutos por delante del reloj del servidor, de modo que un solo dispositivo con el reloj adelantado podía llevar ese reloj compartido por delante del tiempo real. Entonces los temporizadores de ausencia de todos los inquilinos se disparaban antes de tiempo y las lecturas con ventana de dispositivos con el reloj correcto se descartaban por tardías. Desde esta versión, un mensaje mueve el reloj compartido como máximo hasta el momento en que el broker lo almacenó, más la tolerancia de retraso configurada. El evento conserva su propio tiempo, por lo que sus lecturas se siguen ventaneando y ordenando en los instantes que informó el dispositivo, y la vista previa de repetición aplica el mismo límite.
-
-- **Los resultados de detección cambian solo en el caso que estaba mal.** Un dispositivo cuyo reloj está dentro de la tolerancia del reloj del broker (5 segundos por defecto) se comporta como antes. Con un reloj más adelantado, las alarmas de ausencia de los demás dispositivos se disparan ahora en su plazo real, y los temporizadores del dispositivo adelantado esperan a que el tiempo real los alcance.
-- **Las instantáneas llevan una versión del reloj.** Una instantánea de detección escrita por esta versión la registra, y restaurar una instantánea anterior sigue funcionando. En los primeros momentos tras la actualización, el reloj restaurado puede seguir tan adelantado como estaba; se corrige solo cuando el tiempo real lo alcanza, y el servicio registra una advertencia al restaurar una instantánea así. Durante una actualización gradual, un pod de la versión anterior que tome el relevo escribe instantáneas sin la versión y la ignora al leer, así que no hay que hacer nada.
-- **No cubre el caso contrario.** Un dispositivo que sube lecturas antiguas (almacenar y reenviar) todavía puede ver cómo las reglas con ventana las descartan por tardías, porque el reloj compartido ya avanzó. Los relojes por dispositivo no forman parte de esta versión.
 
 #### Preajustes de tamaño {#v120-size-presets}
 
