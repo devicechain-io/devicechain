@@ -37,6 +37,14 @@ var scopedRefusals = map[string]string{
 	"pullCommands":               `mutation { pullCommands(deviceToken: "device-1") { token } }`,
 	"acknowledgeCommandDelivery": `mutation { acknowledgeCommandDelivery(token: "c", deviceToken: "device-1") }`,
 	"respondToPulledCommand":     `mutation { respondToPulledCommand(token: "c", deviceToken: "device-1", success: true) }`,
+	"campaign":                   `query { campaign(token: "c") { token } }`,
+	"campaigns":                  `query { campaigns { token } }`,
+	"campaignCycles":             `query { campaignCycles(campaignToken: "c") { key } }`,
+	"campaignElements":           `query { campaignElements(campaignToken: "c", cycleKey: "d2026-06-21") { id } }`,
+	"createCampaign":             `mutation { createCampaign(request: {token: "c", trigger: "{}", steps: [{type: "COMMAND", name: "dim"}], groupToken: "g"}) { campaign { token } } }`,
+	"setCampaignEnabled":         `mutation { setCampaignEnabled(token: "c", enabled: false) { token } }`,
+	"deleteCampaign":             `mutation { deleteCampaign(token: "c") }`,
+	"retryCampaignFailed":        `mutation { retryCampaignFailed(campaignToken: "c", cycleKey: "d2026-06-21", includeUnknown: false) { retried } }`,
 }
 
 // rootFields reads the Query and Mutation field names straight from the served SDL, so an
