@@ -1956,7 +1956,9 @@ type AlarmDisposition {
 Criteria for listing alarm disposition labels. Every facet is optional and they AND together.
 """
 input AlarmDispositionSearchCriteria {
+    """The page to return, starting at 1."""
     pageNumber: Int!
+    """How many labels a page holds."""
     pageSize: Int!
     """Only the labelled cycles of this alarm, by its token. An unknown token finds nothing."""
     alarmToken: String
@@ -1973,7 +1975,9 @@ input AlarmDispositionSearchCriteria {
 
 """One page of alarm disposition labels, newest cycle first."""
 type AlarmDispositionSearchResults {
+    """The labels on this page."""
     results: [AlarmDisposition!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -4958,7 +4962,10 @@ type Query {
     Requires alarm:read; a member whose access is limited to some customers reads the labels of
     the cycles raised under its customers.
     """
-    alarmDispositions(criteria: AlarmDispositionSearchCriteria!): AlarmDispositionSearchResults!
+    alarmDispositions(
+        """The facets the listed labels must match, and the page to return."""
+        criteria: AlarmDispositionSearchCriteria!
+    ): AlarmDispositionSearchResults!
     """
     Counts the alarms matching the criteria per originating device type and severity, in one
     read, for a view that groups alarms by type. Only alarms on devices the caller can read are
