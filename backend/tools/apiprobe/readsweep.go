@@ -538,6 +538,9 @@ var sweepTokenArgs = map[string]string{
 	// The seeded rollout's targets: a join of its frozen target rows to the attempts their
 	// assignments name, which the rollout's own read-back does not select.
 	"update-management.updateRolloutTargets.token": "update-rollout",
+	// The seeded campaign's cycles: it is created switched off, so the list is empty, and the
+	// read still has to decode the campaign it names after an upgrade.
+	"command-delivery.campaignCycles.campaignToken": "campaign",
 }
 
 // sweepExemptions names the served doors this sweep will NOT call, and why.
@@ -551,6 +554,10 @@ var sweepExemptions = map[string]string{
 		"the HTTP ingest door, and is served on the service plane only (a user token is refused), so the " +
 		"sweep, which runs as a tenant administrator, has no standing to call it and no credential to " +
 		"present; the credential rows are read back through the device and its credentials",
+	"command-delivery.campaignElements": "it pages one CYCLE's elements and requires that cycle's key, and " +
+		"the seeded campaign is created switched off so that a drill never commands a device: it has no " +
+		"cycle, so there is no key to supply; the campaign itself is read back through campaign and its " +
+		"(empty) cycle list through campaignCycles",
 	"user-management.mfaStatus": "it reads the signed-in person's own second-factor status and takes an " +
 		"IDENTITY token, which is the result of a login this sweep does not make (it runs as a tenant " +
 		"administrator with an access token), so there is no value to supply; the factor's rows are " +
