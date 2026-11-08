@@ -658,6 +658,7 @@ const (
 const (
 	SegmentGateways  = "gateways"
 	SegmentNotices   = "notices"
+	SegmentAccepts   = "accepts"
 	SegmentResponses = "responses"
 	SegmentReports   = "reports"
 	SegmentCommands  = "commands"

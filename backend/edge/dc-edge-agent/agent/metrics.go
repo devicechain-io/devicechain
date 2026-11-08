@@ -39,6 +39,10 @@ type edgeMetrics struct {
 	// the agent increments it beside its own atomic total (see Agent.refuse).
 	refused *prometheus.CounterVec
 
+	// shed counts buffered events the agent deleted on purpose to keep the spool under its
+	// threshold, by priority class (safety is never shed, so its series stays at 0).
+	shed *prometheus.CounterVec
+
 	// Set on the sample tick from StreamInfo().State.
 	spoolUsedBytes        prometheus.Gauge
 	spoolLimitBytes       prometheus.Gauge
@@ -93,6 +97,21 @@ func newEdgeMetrics(a *Agent) *edgeMetrics {
 		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "refused_total",
 		Help: "Events refused for this gateway, by reason: the platform told the gateway it would not accept an event (not_gateway_child: the device is not assigned to this gateway, or does not exist), or the agent would not forward it (gateway_self, invalid_device_token). Refused events are kept in the local dead-letter file while the agent still holds them.",
 	}, []string{"reason"})
+	m.shed = auto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "shed_total",
+		Help: "Buffered events deleted on purpose to keep the spool under its shed threshold, by priority class. The safety class is never shed.",
+	}, []string{"class"})
+	for _, c := range classNames {
+		m.shed.WithLabelValues(c)
+	}
+	counterFunc("accepted_total", "Events the platform said it durably accepted (retireOn accept).", func() float64 { return float64(a.accepted.Load()) })
+	counterFunc("over_ceiling_total", "Events the platform shed at the tenant's ingest ceiling; each was kept in the spool and offered again (retireOn accept).", func() float64 { return float64(a.overCeiling.Load()) })
+	counterFunc("unaccepted_total", "Events not accepted within the accept timeout and offered again (retireOn accept).", func() float64 { return float64(a.unaccepted.Load()) })
+	counterFunc("keyless_retired_total", "Events with no idempotency key (payload not a JSON object) retired on PUBACK in accept mode, because the platform cannot acknowledge them.", func() float64 { return float64(a.keylessRetired.Load()) })
+	auto.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "awaiting_accept",
+		Help: "Events published and awaiting the platform's acceptance (retireOn accept).",
+	}, func() float64 { return float64(a.pending.len()) })
 	// Create every series now so a scrape shows 0 rather than nothing: an absent series cannot
 	// be alerted on with rate().
 	for _, reason := range knownRefusalReasons {

@@ -71,6 +71,7 @@ const (
 // knownRefusalReasons is every value of the refused_total reason label.
 var knownRefusalReasons = []string{
 	messaging.GatewayNoticeReasonNotGatewayChild,
+	messaging.GatewayNoticeReasonOverCeiling,
 	refusalGatewaySelf,
 	refusalInvalidToken,
 	refusalOther,

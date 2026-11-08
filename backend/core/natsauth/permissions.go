@@ -140,6 +140,10 @@ const (
 	// gatewayNoticeArea tells a gateway that a publish it made for a child was refused (the
 	// resolver's NotGatewayChild verdict): a core publish on the gateway's own notices subject.
 	gatewayNoticeArea = "device-management"
+	// gatewayAcceptArea tells a gateway which of its events the platform has durably accepted
+	// (the capture reader's settle), or shed at the tenant's ceiling: a core publish on the
+	// gateway's own accepts and notices subjects.
+	gatewayAcceptArea = "event-sources"
 	// tenantPurgeArea erases a deleted tenant's data across every stream and bucket.
 	tenantPurgeArea = "user-management"
 )
@@ -327,6 +331,10 @@ func controlGrant(g *grant, instance, area string) {
 		g.subscribe(AuthCalloutRequestSubject)
 	}
 	if area == gatewayNoticeArea {
+		g.publish(messaging.GatewayNoticesWildcard(instance))
+	}
+	if area == gatewayAcceptArea {
+		g.publish(messaging.GatewayAcceptsWildcard(instance))
 		g.publish(messaging.GatewayNoticesWildcard(instance))
 	}
 	if area == detectPurgeResponderArea {

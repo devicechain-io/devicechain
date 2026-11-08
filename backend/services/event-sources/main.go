@@ -1540,7 +1540,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// which runs before the manager drains the connection. InboundEventsWriter above
 	// stays for HTTP and the presence tap, which publish synchronously; the two do
 	// not share a JetStream context, since the ordered writer builds its own.
+	startGatewayFeedback(nmgr)
 	if GatewaySource != nil {
+		GatewaySource.UseGatewayFeedback(GatewayAnswers)
 		GatewaySource.SetReader(capture)
 		pipeline, err := newGatewayWriter(nmgr)
 		if err != nil {
@@ -1784,6 +1786,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	stopGatewayFeedback()
 	// Stop the presence tap before the sources: it holds its own broker connection and
 	// its own goroutines, and a reconciliation pass mid-shutdown would emit into a
 	// writer that is about to close.
