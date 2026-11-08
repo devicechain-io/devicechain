@@ -123,8 +123,8 @@
       "translationSha256": "8de322b0207c419fc6820b048f9f1fd7d1b075c5fd6d5ffe7c726b56a6ca2535"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "a20654591d0ce01bd810a74d2bbc449f2ea03734d26890340f97c06ca003839d",
-      "translationSha256": "4916292db300197d6e31457a0efd21fe04d9aa61685ca7ae873481c27dbfcb57"
+      "sourceSha256": "a0f2c648d70bcfd79b8eabb2ae1b05df72e4c1c8f71d13850fb8f9661e00813b",
+      "translationSha256": "d006cd9928f68b0b2d72c174c3824f151388ceb8bc99a70be1013049de627c59"
     },
     "deployment/grafana-boards.md": {
       "sourceSha256": "bfa7aa18888aecb4d5975a786b45170a144f5cdd2a4ac2824c1aca3bf7f58388",
@@ -287,8 +287,8 @@
       "translationSha256": "fde146e9bf0a1ed5e406a653f9d24bb68b59ee7a93a36a1c82414425d5960d97"
     },
     "reference/device-protocol.md": {
-      "sourceSha256": "6b62cc22f5c8dded5d19c17ade1707a351c99edef61900c272861b69b9ff4619",
-      "translationSha256": "184660920d9e82d2039c7e7de44e2c6cc2b1c0e35acdb03006cae4eaeacdb82b"
+      "sourceSha256": "9a43388c44aafd506a157a417953cf261e185aee026fa3263ac640a49578c091",
+      "translationSha256": "4221a1c9e1bf1a518f47c15ecdfb6dcbfdc7bd1c7a209fa63699828871910383"
     },
     "reference/graphql-api.md": {
       "sourceSha256": "7065199ec043ecb34044c4fda42d72bb4970fca15cb95654ce37703afa8d7b2d",

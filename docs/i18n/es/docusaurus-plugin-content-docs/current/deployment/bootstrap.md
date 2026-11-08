@@ -19,8 +19,8 @@ dcctl bootstrap local my-instance
 de Helm y los manifiestos del operador están todos incrustados en él, así que nunca necesitas
 un checkout del árbol de código fuente ni `git` para desplegar.
 
-Lo que no lleva son sus propias herramientas. `install` y `bootstrap` ejecutan `kubectl`,
-`helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y además `docker` y `kind` cuando
+Lo que no lleva son sus propias herramientas. `install` y `bootstrap` ejecutan `kubectl`
+y `tofu` (o `terraform`) como binarios en tu `PATH`, y además `docker` y `kind` cuando
 dcctl gestiona el propio clúster (el proveedor `local`) y `docker` cuando construye imágenes
 (`--build`). Ambos comandos comprueban que estén las que necesita la ejecución antes de empezar
 y se detienen si falta alguna, así que instálalas primero. La lista completa está en
@@ -752,7 +752,7 @@ Las alertas de las instantáneas se describen en
   [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
   y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
   falla al cargar la configuración de la infraestructura.
-- **`kubectl` y `helm`** en tu `PATH`, y **`docker`** y **`kind`** para el proveedor `local`. La
+- **`kubectl`** en tu `PATH`, y **`docker`** y **`kind`** para el proveedor `local`. La
   comprobación previa falla si falta alguno de los que necesita la ejecución. Docker solo hace
   falta para un clúster local de kind o para `--build`: una instalación en un clúster que nombras
   con `--kube-context`, a partir de imágenes publicadas, no lo comprueba ni lo usa. Donde hace

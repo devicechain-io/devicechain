@@ -2194,6 +2194,11 @@ input DeviceTypeSearchCriteria {
     pageNumber: Int!
     """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """
+    Return only device types whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed type is found by its token). Blank matches all.
+    """
+    nameContains: String
 }
 
 """One page of device types matching a search."""
@@ -2584,6 +2589,11 @@ input DeviceSearchCriteria {
     pageSize: Int!
     """Return only devices of the device type with this token. An unknown token matches nothing."""
     deviceType: String
+    """
+    Return only devices whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed device is found by its token). Blank matches all.
+    """
+    nameContains: String
     """
     Return only devices that hold a credential issued by the provisioning profile with this
     token, revoked ones included. An unknown token matches nothing.
@@ -5070,6 +5080,26 @@ type Query {
         """The bearer token the sender presented."""
         secret: String!
     ): Integration
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. The ingest door's one question about an event's credential: would the
+    credential its body carries authenticate under the device authentication policy the
+    event resolver applies? True when it would (or when the policy asks for none); false only for
+    an authentication failure, with no word on which: an unknown credential, an expired one, a
+    wrong secret, another device's credential and a missing one the policy requires are one
+    answer. A database failure is an error, never false. The caller MUST throttle failures per
+    credential: unlike the resolver's, this verdict reaches the sender.
+    """
+    checkDeviceCredential(
+        """The device token the event names, or empty."""
+        device: String!
+        """The credential type the event presents (for example MQTT_BASIC), or empty."""
+        credentialType: String!
+        """The credential id the event presents, or empty."""
+        credentialId: String!
+        """The credential secret the event presents, or null."""
+        secret: String
+    ): Boolean!
     """
     The sender-named devices an integration has seen that the tenant has no device in scope
     for, most recently seen first. Requires device:read.

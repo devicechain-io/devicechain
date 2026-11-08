@@ -145,6 +145,7 @@ tests:
               type: Ready
               reason: ClusterIsNotReady
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusternotready"
               summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
               description: >-
                 dc-rdb in namespace dc-system reports Ready=False (ClusterIsNotReady). THIS BLOCKS
@@ -162,6 +163,7 @@ tests:
               type: Ready
               reason: ClusterIsNotReady
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusternotready"
               summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
               description: >-
                 dc-tsdb in namespace dci-devicechain reports Ready=False (ClusterIsNotReady). THIS BLOCKS
@@ -181,6 +183,7 @@ tests:
               namespace: cnpg-system
               deployment: plugin-barman-cloud
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcontrolplaneunavailable"
               summary: "A CloudNativePG control-plane deployment has no available replicas"
               description: >-
                 plugin-barman-cloud in namespace cnpg-system has zero available replicas. With the
@@ -395,6 +398,7 @@ tests:
               namespace: dc-system
               cluster: dc-rdb
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusterunusable"
               summary: "A PostgreSQL instance is not answering its own metrics collector"
               description: >-
                 At least one instance of dc-rdb in namespace dc-system cannot be queried by its
@@ -419,6 +423,7 @@ tests:
               namespace: dc-system
               cluster: dc-rdb
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusterunusable"
               summary: "A PostgreSQL instance is not answering its own metrics collector"
               description: >-
                 At least one instance of dc-rdb in namespace dc-system cannot be queried by its
@@ -533,6 +538,7 @@ tests:
               namespace: dc-system
               type: Ready
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusterstateunobserved"
               summary: "No CloudNativePG Cluster conditions are being collected"
               description: >-
                 Nothing is reporting PostgreSQL Cluster conditions in namespace dc-system, so the
@@ -550,6 +556,7 @@ tests:
               namespace: dci-devicechain
               type: Ready
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusterstateunobserved"
               summary: "No CloudNativePG Cluster conditions are being collected"
               description: >-
                 Nothing is reporting PostgreSQL Cluster conditions in namespace dci-devicechain, so the
@@ -619,6 +626,7 @@ tests:
               namespace: cnpg-system
               deployment: cnpg-cloudnative-pg
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcontrolplaneunavailable"
               summary: "A CloudNativePG control-plane deployment has no available replicas"
               description: >-
                 cnpg-cloudnative-pg in namespace cnpg-system has zero available replicas. With the
@@ -663,6 +671,7 @@ tests:
               devicechain_instance: devicechain
               namespace: dci-devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcollectorabsent"
               summary: "No CloudNativePG metrics collector is being scraped"
               description: "Nothing is reporting cnpg_collector_up in namespace dci-devicechain, so whether the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good — and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and selects its pods; Prometheus can read the namespace; and the instance pods are running and serving :9187."
 
@@ -682,6 +691,7 @@ tests:
               devicechain_instance: devicechain
               namespace: dc-system
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcollectorabsent"
               summary: "No CloudNativePG metrics collector is being scraped"
               description: "Nothing is reporting cnpg_collector_up in namespace dc-system, so whether the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good — and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and selects its pods; Prometheus can read the namespace; and the instance pods are running and serving :9187."
           - exp_labels:
@@ -689,6 +699,7 @@ tests:
               devicechain_instance: devicechain
               namespace: dci-devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcollectorabsent"
               summary: "No CloudNativePG metrics collector is being scraped"
               description: "Nothing is reporting cnpg_collector_up in namespace dci-devicechain, so whether the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good — and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and selects its pods; Prometheus can read the namespace; and the instance pods are running and serving :9187."
 

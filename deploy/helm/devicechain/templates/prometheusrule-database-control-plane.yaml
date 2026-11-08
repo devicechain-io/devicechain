@@ -134,6 +134,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusternotready"
             summary: "A PostgreSQL Cluster has not been Ready for 15 minutes"
             description: >-
               {{ "{{ $labels.cluster }}" }} in namespace {{ "{{ $labels.namespace }}" }} reports
@@ -171,6 +172,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcontrolplaneunavailable"
             summary: "A CloudNativePG control-plane deployment has no available replicas"
             description: >-
               {{ "{{ $labels.deployment }}" }} in namespace {{ "{{ $labels.namespace }}" }} has zero
@@ -300,6 +302,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusterunusable"
             summary: "A PostgreSQL instance is not answering its own metrics collector"
             description: >-
               At least one instance of {{ "{{ $labels.cluster }}" }} in namespace
@@ -340,6 +343,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgcollectorabsent"
             summary: "No CloudNativePG metrics collector is being scraped"
             description: >-
               Nothing is reporting cnpg_collector_up in namespace {{ "{{ $labels.namespace }}" }}, so whether
@@ -364,6 +368,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#cnpgclusterstateunobserved"
             summary: "No CloudNativePG Cluster conditions are being collected"
             description: >-
               Nothing is reporting PostgreSQL Cluster conditions in namespace {{ "{{ $labels.namespace }}" }}, so the

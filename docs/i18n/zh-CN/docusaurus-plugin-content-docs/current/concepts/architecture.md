@@ -120,3 +120,9 @@ Operator 假定基础设施已经存在，负责 `Instance` 生命周期，而�
 - `update-management` 上的更新制品上传（`PUT /updates/artifacts/{token}/content`）和下载（`GET /updates/download/{artifact}`）端点
 - `user-management` 上的租户徽标上传与下载端点（`/branding/logo`）
 - `user-management` 上供服务获取短期服务令牌的端点（`/auth/service-token`），在同一内部端口上提供，从不经过 Ingress
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

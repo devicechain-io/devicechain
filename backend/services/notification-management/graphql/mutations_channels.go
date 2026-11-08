@@ -60,6 +60,62 @@ func (r *SchemaResolver) RenameNotificationChannel(ctx context.Context, args str
 	return &NotificationChannelResolver{M: *renamed, S: r, C: ctx}, nil
 }
 
+// GenerateNotificationChannelSigningSecret mints a webhook channel's signing key and reveals it once.
+func (r *SchemaResolver) GenerateNotificationChannelSigningSecret(ctx context.Context, args struct {
+	Token string
+}) (*IssuedChannelSigningSecretResolver, error) {
+	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
+		return nil, err
+	}
+	issued, err := r.GetApi(ctx).GenerateChannelSigningSecret(ctx, args.Token)
+	if err != nil {
+		return nil, err
+	}
+	return &IssuedChannelSigningSecretResolver{M: *issued}, nil
+}
+
+// RotateNotificationChannelSigningSecret installs a new key and reveals it once; the old one keeps signing.
+func (r *SchemaResolver) RotateNotificationChannelSigningSecret(ctx context.Context, args struct {
+	Token string
+}) (*IssuedChannelSigningSecretResolver, error) {
+	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
+		return nil, err
+	}
+	issued, err := r.GetApi(ctx).RotateChannelSigningSecret(ctx, args.Token)
+	if err != nil {
+		return nil, err
+	}
+	return &IssuedChannelSigningSecretResolver{M: *issued}, nil
+}
+
+// EndNotificationChannelSigningRotation drops the previous key.
+func (r *SchemaResolver) EndNotificationChannelSigningRotation(ctx context.Context, args struct {
+	Token string
+}) (*NotificationChannelResolver, error) {
+	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
+		return nil, err
+	}
+	ch, err := r.GetApi(ctx).EndChannelSigningRotation(ctx, args.Token)
+	if err != nil {
+		return nil, err
+	}
+	return &NotificationChannelResolver{M: *ch, S: r, C: ctx}, nil
+}
+
+// DeleteNotificationChannelSigningSecret removes both keys.
+func (r *SchemaResolver) DeleteNotificationChannelSigningSecret(ctx context.Context, args struct {
+	Token string
+}) (*NotificationChannelResolver, error) {
+	if err := auth.Authorize(ctx, auth.NotificationWrite); err != nil {
+		return nil, err
+	}
+	ch, err := r.GetApi(ctx).DeleteChannelSigningSecret(ctx, args.Token)
+	if err != nil {
+		return nil, err
+	}
+	return &NotificationChannelResolver{M: *ch, S: r, C: ctx}, nil
+}
+
 // DeleteNotificationChannel hard-deletes a delivery channel by token. It fails if
 // the channel is still referenced by a policy rule.
 func (r *SchemaResolver) DeleteNotificationChannel(ctx context.Context, args struct {

@@ -106,6 +106,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#payloaddecoderfailureshigh"
               summary: "payload decoders are failing more than 5% of the uplinks they decode"
               description: "Over the last 15 minutes more than one in twenty uplinks run through a payload decoder failed to decode. A decoder that is wrong for a device fails on every uplink from it, so this usually means a decoder was published with a mistake, or a device type started sending frames its decoder does not expect. The failures are failed-events records with the reason DECODE_FAILED, and the profile's decoder health shows the last error and keeps recent failing uplinks to replay in the test panel. The result label of devicechain_devicemanagement_resolve_decode_total says which kind of failure it is."
 
@@ -128,6 +129,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#payloaddecoderfailureshigh"
               summary: "payload decoders are failing more than 5% of the uplinks they decode"
               description: "Over the last 15 minutes more than one in twenty uplinks run through a payload decoder failed to decode. A decoder that is wrong for a device fails on every uplink from it, so this usually means a decoder was published with a mistake, or a device type started sending frames its decoder does not expect. The failures are failed-events records with the reason DECODE_FAILED, and the profile's decoder health shows the last error and keeps recent failing uplinks to replay in the test panel. The result label of devicechain_devicemanagement_resolve_decode_total says which kind of failure it is."
       - eval_time: 59m
@@ -154,6 +156,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#payloaddecodersuppressing"
               summary: "payload decode failures are being counted but no longer recorded in failed-events"
               description: "A payload decoder is failing so often that device-management has spent the budget of failed-events records for its device type (a burst of 20, refilled 10 a minute, on each replica): more than 50 failures were counted and not recorded in the last 10 minutes. Nothing is lost silently: the count is in the profile's decoder health as suppressed, and the first failures of the window are recorded with the uplink. Fix or unpublish the decoder; the budget refills by itself once it stops failing."
       - eval_time: 70m

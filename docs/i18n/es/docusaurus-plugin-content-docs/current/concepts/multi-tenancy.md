@@ -48,3 +48,9 @@ El inquilino de la ruta de API se toma de la afirmación de inquilino del JWT RS
 :::note Estado
 El alcance de inquilino en tiempo de ejecución en la ruta de datos se aplica hoy. Una consulta con alcance de inquilino sin inquilino se rechaza.
 :::
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::

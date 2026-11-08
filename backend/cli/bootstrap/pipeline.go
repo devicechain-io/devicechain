@@ -138,6 +138,9 @@ type State struct {
 	// is on: every path that never runs the detection (bootstrap, upgrade, a State built by hand, a
 	// detection error) lands on the noisy side, never the silent one.
 	UnscrapedControlPlane []string
+	// AlertRouting is the alert-routing flags of `dcctl install` or `dcctl upgrade`. The zero
+	// value asks for nothing, which keeps whatever routing the cluster already has.
+	AlertRouting AlertRoutingRequest
 	// NoCNPG records that the cluster was installed WITHOUT the CloudNativePG
 	// operator and its backup plugin (ADR-020 A2). Set and read back the same way
 	// as NoMonitoring; on the instance side it goes into the declaration and decides

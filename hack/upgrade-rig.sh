@@ -2535,7 +2535,7 @@ cmd_control_verify() {
   # nothing was ever deleted. It re-reads through verify's own query, so "armed"
   # means "verify will now fail".
   "$apiprobe" tamper --receipt "$receipt" --mode delete \
-    --server "$api_server" --scheme "$api_scheme" ||
+    --server "$api_server" --scheme "$api_scheme" --auth-window "$(verify_auth_window)" ||
     fail "the delete control could not be ARMED (apiprobe exit $?). Nothing was proved
 in either direction: this is the rig failing to set up its own control, not a
 finding about the platform."
@@ -2547,7 +2547,7 @@ finding about the platform."
   # DIFFERENT code can tell "the probe reads rows and compares them" apart from
   # "the probe reports absence no matter what". The two together are the claim.
   "$apiprobe" tamper --receipt "$receipt" --mode modify \
-    --server "$api_server" --scheme "$api_scheme" ||
+    --server "$api_server" --scheme "$api_scheme" --auth-window "$(verify_auth_window)" ||
     fail "the modify control could not be ARMED (apiprobe exit $?). Nothing was proved
 in either direction."
   expect_verify_to_fail "$APIPROBE_EXIT_MISMATCH" "CHANGED-FIELD"

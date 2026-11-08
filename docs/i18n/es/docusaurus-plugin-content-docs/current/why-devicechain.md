@@ -58,3 +58,9 @@ Esta lista está aquí para que descubras estas cosas antes de adoptar DeviceCha
 - [Inicio rápido: tu primer dispositivo](./quickstart/first-device.md) ejecuta una instancia en tu máquina.
 - [Arquitectura de un vistazo](./concepts/architecture-at-a-glance.md) muestra cómo se mueve un mensaje por la plataforma, y [Arquitectura](./concepts/architecture.md) enumera cada componente.
 - [Obtener ayuda](./getting-help.md) indica dónde hacer una pregunta o informar de una carencia en esta página.
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](./quickstart/first-device.md)
+
+:::

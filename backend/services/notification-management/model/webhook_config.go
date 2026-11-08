@@ -36,6 +36,11 @@ type WebhookConfig struct {
 	Auth       WebhookAuth       `json:"auth"`
 	AuthHeader string            `json:"authHeader"`
 	AuthScheme string            `json:"authScheme"`
+	// Signing turns on Standard Webhooks signing for this channel's deliveries. It is off unless
+	// set, and an unsigned channel delivers exactly as before. Setting it is a promise the
+	// receiver relies on, so delivery refuses (never sends unsigned) when the channel holds no
+	// signing key; mint one with generateNotificationChannelSigningSecret.
+	Signing bool `json:"signing"`
 }
 
 // ParseWebhookConfig unmarshals and validates a webhook channel's config; token names the
@@ -83,6 +88,11 @@ func ParseWebhookConfig(token string, config *string) (*WebhookConfig, error) {
 	// check existed.
 	if err := cfg.HTTPAuth().Validate(); err != nil {
 		return nil, fmt.Errorf("webhook channel %q has an invalid auth configuration: %w", token, err)
+	}
+	if cfg.Signing {
+		if err := httpsink.CheckSigningAuth(cfg.HTTPAuth()); err != nil {
+			return nil, fmt.Errorf("webhook channel %q: %w", token, err)
+		}
 	}
 	return cfg, nil
 }

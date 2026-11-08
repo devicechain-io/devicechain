@@ -36,6 +36,21 @@ type diffEvent struct {
 	occurred time.Time
 }
 
+// diffStored is the broker append time every message of a corpus is delivered with: after the newest
+// event in it. The shared frontier is clamped to a message's append time, so a message stored
+// BEFORE its events occurred would be testing the clamp, not the batching these files hold equal
+// to single messages; the clamp has its own tests. One instant for every message and both shapes
+// keeps what a message's receipt reads as the same however the events are grouped.
+func diffStored(corpus []diffEvent) time.Time {
+	var at time.Time
+	for _, e := range corpus {
+		if e.occurred.After(at) {
+			at = e.occurred
+		}
+	}
+	return at
+}
+
 func diffCorpus(n int) []diffEvent {
 	rng := rand.New(rand.NewSource(20261103))
 	devices := []string{"d1", "d2", "d3", "d4"}
@@ -101,6 +116,7 @@ func deliver(t *testing.T, corpus []diffEvent, k int) ([]byte, *derivedCapture) 
 	w := &derivedCapture{}
 	rp := stampingProcessor(t, diffRegistry(t), w)
 	ack := &fakeAck{}
+	stored := diffStored(corpus)
 	if k == 0 {
 		for i, e := range corpus {
 			b, err := resolvedevent.MarshalResolvedEvent(diffResolved(t, e))
@@ -109,7 +125,7 @@ func deliver(t *testing.T, corpus []diffEvent, k int) ([]byte, *derivedCapture) 
 			}
 			m := messaging.NewConsumedMessage("dc.acme.resolved-events", b, 0, nil, ack)
 			m.StreamSeq = uint64(i + 1)
-			m.AppendTime = e.occurred
+			m.AppendTime = stored
 			rp.handle(m)
 		}
 	} else {
@@ -137,7 +153,7 @@ func deliver(t *testing.T, corpus []diffEvent, k int) ([]byte, *derivedCapture) 
 				map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}, ack)
 			// An envelope is ONE message of the stream: the sequences are 1, 2, 3, ... as ever.
 			m.StreamSeq = uint64(start/k + 1)
-			m.AppendTime = corpus[start].occurred
+			m.AppendTime = stored
 			rp.handle(m)
 		}
 	}
@@ -212,7 +228,7 @@ func TestAPoisonMemberIsSkippedAloneAndTheEnvelopeIsHandled(t *testing.T) {
 		}
 		m := messaging.NewConsumedMessage("dc.acme.resolved-events", msg, 0,
 			map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}, &fakeAck{})
-		m.StreamSeq, m.AppendTime = 1, corpus[0].occurred
+		m.StreamSeq, m.AppendTime = 1, diffStored(corpus)
 		return m
 	}
 	rp := stampingProcessor(t, diffRegistry(t), &derivedCapture{})
@@ -265,7 +281,7 @@ func TestAnEnvelopeAppliedTwiceIsAppliedOnce(t *testing.T) {
 	mk := func() messaging.Message {
 		m := messaging.NewConsumedMessage("dc.acme.resolved-events", msg, 0,
 			map[string]string{eventenvelope.HeaderName: eventenvelope.HeaderValue}, &fakeAck{})
-		m.StreamSeq, m.AppendTime = 1, corpus[0].occurred
+		m.StreamSeq, m.AppendTime = 1, diffStored(corpus)
 		return m
 	}
 	w := &derivedCapture{}

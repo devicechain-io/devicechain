@@ -37,6 +37,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#safetygatedisabled"
             summary: "A safety gate is switched off in a running service"
             description: "For at least 5 minutes, {{ "{{ $labels.job }}" }} has run with its {{ "{{ $labels.gate }}" }} safety gate OFF because the configuration it needs is absent (the service secret, or the endpoint of the service the gate consults). Work the gate exists to refuse is being let through: tenant_lifecycle admits work for deleted tenants, presence lets commands to absent devices be published and dropped, rule_validation lets uncompilable detection rules publish and be skipped at load. The service logged a WARN at startup naming what is missing. Restore the missing configuration and restart the service."
 {{- end }}

@@ -17,20 +17,20 @@ Calcula alrededor de media hora, la mayor parte esperando al arranque inicial.
 <YouTubeLite id="fWnVhI7icOk" title="Instala DeviceChain en un portátil y envía la primera lectura de un dispositivo" />
 
 :::note Qué da por supuesto esta página
-Necesitas `dcctl` más cinco herramientas en tu `PATH`: `docker`, `kubectl`, `helm`,
+Necesitas `dcctl` más cuatro herramientas en tu `PATH`: `docker`, `kubectl`,
 [`kind`](https://kind.sigs.k8s.io/) y [OpenTofu](https://opentofu.org/) (el binario `tofu`;
-`terraform` también sirve). No necesitas un clúster de antemano. Los detalles, y por qué `helm` está
-en la lista, están más abajo en [Requisitos previos](#prerequisites).
+`terraform` también sirve). No necesitas un clúster de antemano. Los detalles están
+más abajo en [Requisitos previos](#prerequisites).
 :::
 
 ## Requisitos previos {#prerequisites}
 
 `dcctl install` y `dcctl bootstrap` ejecutan primero cada uno una comprobación previa, y se
-**detienen** si falta alguna de las cinco herramientas. Una carencia te cuesta los diez primeros
+**detienen** si falta alguna de las cuatro herramientas. Una carencia te cuesta los diez primeros
 segundos y no diez minutos.
 
-- `helm` es obligatorio. `dcctl` lleva el chart dentro y lo instala con la biblioteca Go de Helm en
-  vez de con el comando, pero la comprobación previa busca el binario igualmente.
+- No necesitas el comando `helm`. `dcctl` lleva el chart dentro y lo instala con la biblioteca Go de
+  Helm, y la comprobación previa no busca el binario.
 - `ko` y `cloud-provider-kind` son solo advertencias. `ko` hace falta únicamente para compilar
   imágenes desde el código (`--build`).
 - No hace falta un clúster de antemano. `dcctl install local` busca un clúster de kind llamado

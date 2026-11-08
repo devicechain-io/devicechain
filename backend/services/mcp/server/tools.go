@@ -67,13 +67,34 @@ type ListDevicesInput struct {
 	DeviceType string `json:"deviceType,omitempty" jsonschema:"optional device-type token to filter by"`
 }
 
-// DeviceSummary is one device in the list_devices output.
+// DeviceSummary is one device in the list_devices output. The token and device-type token are
+// entity identifiers and stay addressable at the top level; the name, description and external
+// id are text a device, an integration or an operator chose, so they sit under Untrusted.
 type DeviceSummary struct {
-	Token       string `json:"token"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	ExternalId  string `json:"externalId,omitempty"`
-	DeviceType  string `json:"deviceType,omitempty"`
+	Token      string           `json:"token" prov:"id"`
+	DeviceType string           `json:"deviceType,omitempty" prov:"id"`
+	Untrusted  *DeviceUntrusted `json:"untrusted,omitempty"`
+}
+
+// DeviceUntrusted is the free text of a device. Who writes a device name is not settled (a
+// self-registering device may, an operator may), so each is classed by the least trusting
+// answer: device-reported.
+type DeviceUntrusted struct {
+	Name        *Marked `json:"name,omitempty" prov:"device-reported"`
+	Description *Marked `json:"description,omitempty" prov:"device-reported"`
+	ExternalId  *Marked `json:"externalId,omitempty" prov:"device-reported"`
+}
+
+func newDeviceSummary(token, name, description, externalID, deviceType string) DeviceSummary {
+	u := &DeviceUntrusted{
+		Name:        mark(SourceDevice, name),
+		Description: mark(SourceDevice, description),
+		ExternalId:  mark(SourceDevice, externalID),
+	}
+	if u.Name == nil && u.Description == nil && u.ExternalId == nil {
+		u = nil
+	}
+	return DeviceSummary{Token: token, DeviceType: deviceType, Untrusted: u}
 }
 
 // ListDevicesOutput is the list_devices tool output.
@@ -126,10 +147,7 @@ func (t *Tools) ListDevices(ctx context.Context, req *mcp.CallToolRequest, in Li
 
 	out := ListDevicesOutput{TotalRecords: resp.Devices.Pagination.TotalRecords}
 	for _, d := range resp.Devices.Results {
-		out.Devices = append(out.Devices, DeviceSummary{
-			Token: d.Token, Name: d.Name, Description: d.Description,
-			ExternalId: d.ExternalId, DeviceType: d.DeviceType.Token,
-		})
+		out.Devices = append(out.Devices, newDeviceSummary(d.Token, d.Name, d.Description, d.ExternalId, d.DeviceType.Token))
 	}
-	return nil, out, nil
+	return provenanceResult(out), out, nil
 }

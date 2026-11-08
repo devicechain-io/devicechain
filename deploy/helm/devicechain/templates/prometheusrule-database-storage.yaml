@@ -129,6 +129,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingup"
             summary: "A database volume is over 75% full"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is over 75% full. Database storage on this
@@ -172,6 +173,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumealmostfull"
             summary: "A database volume is almost full"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is over 85% full. A PostgreSQL volume that
@@ -224,6 +226,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillingfast"
             summary: "An event-store volume will be full within the hour at its current rate"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is more than half full and filling fast enough
@@ -265,6 +268,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumefillswithinday"
             summary: "An event-store volume will be full within a day at its current rate"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is on course to run out of space within
@@ -293,6 +297,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasevolumecritical"
             summary: "A database volume is over 95% full"
             description: >-
               {{ "{{ $labels.persistentvolumeclaim }}" }} is over 95% full. PostgreSQL stops

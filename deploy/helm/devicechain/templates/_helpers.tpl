@@ -386,6 +386,59 @@ true
 {{- end -}}
 
 {{/*
+devicechain.lpwanDownlinkEnabled renders "true" when the outbound-connectors area turns the LoRaWAN
+command downlink on (functionalAreas.outbound-connectors.config.lpwanDownlink.enabled), and "" otherwise.
+It is the one place that fact is read, so the flag command-delivery receives and the refusals below
+cannot disagree about it. Keys are matched without regard to case, as the service decodes them.
+
+It fails the render, rather than leaving the pod to find out, when the downlink is on but
+  - enabled is not a boolean (a string "true" would be refused by the service at start), or
+  - outbound-connectors is not among the enabled areas (the flag would then say commands are
+    deliverable while nothing reads them), or
+  - command-delivery or device-management is not among the enabled areas (the adapter claims and
+    answers each command through the first and reads the device's DevEUI from the second), or
+  - infrastructure.commandDelivery or infrastructure.deviceManagement has no hostname or port.
+*/}}
+{{- define "devicechain.lpwanDownlinkEnabled" -}}
+{{- $areas := splitList "," (include "devicechain.enabledAreas" .) -}}
+{{- $cfg := get (get (.Values.functionalAreas | default dict) "outbound-connectors" | default dict) "config" | default dict -}}
+{{- $on := false -}}
+{{- range $k, $block := $cfg -}}
+{{- if eq (lower $k) "lpwandownlink" -}}
+{{- range $bk, $bv := ($block | default dict) -}}
+{{- if eq (lower $bk) "enabled" -}}
+{{- if not (kindIs "bool" $bv) -}}
+{{- fail (printf "functionalAreas.outbound-connectors.config.lpwanDownlink.enabled must be true or false (got %v)" $bv) -}}
+{{- end -}}
+{{- if $bv -}}{{- $on = true -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $on -}}
+{{- if not (has "outbound-connectors" $areas) -}}
+{{- fail "functionalAreas.outbound-connectors.config.lpwanDownlink.enabled is set, but outbound-connectors is not an enabled area, so nothing would send the downlinks. Enable the area or turn the downlink off." -}}
+{{- end -}}
+{{- if not (has "command-delivery" $areas) -}}
+{{- fail "the LoRaWAN command downlink is enabled, which needs command-delivery: the adapter claims and answers every command through it. Enable the area or turn the downlink off." -}}
+{{- end -}}
+{{- if not (has "device-management" $areas) -}}
+{{- fail "the LoRaWAN command downlink is enabled, which needs device-management: the adapter reads each device's DevEUI from it. Enable the area or turn the downlink off." -}}
+{{- end -}}
+{{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
+{{- $cd := ($infra.commandDelivery | default dict) -}}
+{{- if or (not $cd.hostname) (not $cd.port) -}}
+{{- fail "the LoRaWAN command downlink is enabled, but instance.config.infrastructure.commandDelivery has no hostname and port, so outbound-connectors could not reach command-delivery. Restore the chart default or turn the downlink off." -}}
+{{- end -}}
+{{- $dm := ($infra.deviceManagement | default dict) -}}
+{{- if or (not $dm.hostname) (not $dm.port) -}}
+{{- fail "the LoRaWAN command downlink is enabled, but instance.config.infrastructure.deviceManagement has no hostname and port, so outbound-connectors could not reach device-management. Restore the chart default or turn the downlink off." -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 devicechain.commandDeliveryMergedConfig is the config command-delivery actually receives, as JSON:
 the operator's explicit value with sparkplugCommands set to true exactly when
 devicechain.sparkplugCommandsEnabled says some source sends commands. Nobody authors that key. A
@@ -403,8 +456,16 @@ themselves, and every later template would see the edit.
 {{- fail "functionalAreas.command-delivery.config.sparkplugCommands is derived by the chart from the Sparkplug sources' commands.enabled and cannot be set by hand. Set commands.enabled on the source in functionalAreas.sparkplug-ingest.config.sources instead." -}}
 {{- end -}}
 {{- end -}}
+{{- range $k, $_ := $cfg -}}
+{{- if eq (lower $k) "lpwandownlink" -}}
+{{- fail "functionalAreas.command-delivery.config.lpwanDownlink is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled and cannot be set by hand. Set lpwanDownlink.enabled on the outbound-connectors area instead." -}}
+{{- end -}}
+{{- end -}}
 {{- if include "devicechain.sparkplugCommandsEnabled" . -}}
 {{- $_ := set $cfg "sparkplugCommands" true -}}
+{{- end -}}
+{{- if include "devicechain.lpwanDownlinkEnabled" . -}}
+{{- $_ := set $cfg "lpwanDownlink" true -}}
 {{- end -}}
 {{- $cfg | toJson -}}
 {{- end -}}
@@ -419,6 +480,7 @@ exact same source. Takes the root context.
 {{- /* Evaluated here, not only where command-delivery's config is built: the refusals inside it
        are about command-delivery being ABSENT, and that branch never runs then. */ -}}
 {{- $_ := include "devicechain.sparkplugCommandsEnabled" $root -}}
+{{- $_ := include "devicechain.lpwanDownlinkEnabled" $root -}}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" $root) }}
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 {{- $cfg := get $areaCfg "config" | default dict }}

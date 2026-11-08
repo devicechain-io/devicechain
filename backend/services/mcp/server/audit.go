@@ -46,8 +46,14 @@ import (
 const (
 	auditField         = "audit"
 	auditKindToolCall  = "mcp_tool_call"
-	auditSchemaVersion = 1
+	auditSchemaVersion = 2
 )
+
+// Schema 2 is a SUPERSET of schema 1: it adds `scopes`, the OAuth scopes the verified token
+// was granted, and changes nothing else. Two more members are RESERVED for the day an action
+// exists and are written by nothing yet: `proposal` (the token of the proposal a call was made
+// under) and `verdict` (what the gate decided). A log pipeline that selects on "audit" and
+// parses the members it knows keeps working across the bump.
 
 // Outcomes recorded on the line. They are the three things a tools/call can come back as,
 // told apart by what the client receives, not by why:
@@ -124,6 +130,7 @@ func writeToolCallRecord(req *mcp.CallToolRequest, registered map[string]bool, r
 		Str("tenant", id.tenant).
 		Str("actor", id.actor).
 		Str("client_id", id.clientID).
+		Strs("scopes", id.scopes).
 		Bool("sudo", id.sudo).
 		Str("tool", tool).
 		Str("args_sha256", argumentsDigest(args)).
@@ -135,7 +142,10 @@ func writeToolCallRecord(req *mcp.CallToolRequest, registered map[string]bool, r
 // auditIdentity is who made a call, as the verified token says — never as the client says.
 type auditIdentity struct {
 	tenant, actor, clientID string
-	sudo                    bool
+	// scopes are the OAuth scopes the verified token was granted. Never nil, so the member is
+	// always an array on the line.
+	scopes []string
+	sudo   bool
 }
 
 // auditIdentityOf reads the caller from the TokenInfo the bearer middleware attached. A
@@ -144,10 +154,10 @@ type auditIdentity struct {
 // a sign that it did not, which is exactly what an audit trail is for.
 func auditIdentityOf(req *mcp.CallToolRequest) auditIdentity {
 	if req.Extra == nil || req.Extra.TokenInfo == nil || req.Extra.TokenInfo.Extra == nil {
-		return auditIdentity{}
+		return auditIdentity{scopes: []string{}}
 	}
 	x := req.Extra.TokenInfo.Extra
-	id := auditIdentity{}
+	id := auditIdentity{scopes: append([]string{}, req.Extra.TokenInfo.Scopes...)}
 	id.tenant, _ = x[extraTenantKey].(string)
 	id.actor, _ = x[extraActorKey].(string)
 	id.clientID, _ = x[extraClientKey].(string)

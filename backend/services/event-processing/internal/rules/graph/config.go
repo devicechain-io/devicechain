@@ -376,6 +376,8 @@ type actionConfig struct {
 	Headers      map[string]string `json:"headers,omitempty"`
 	BodyTemplate string            `json:"bodyTemplate,omitempty"`
 	SecretRef    string            `json:"secretRef,omitempty"`
+	// SigningSecretRef signs the call (Standard Webhooks) with the named keyring handle.
+	SigningSecretRef string `json:"signingSecretRef,omitempty"`
 	// publish (ADR-060 Tier 2) — a registered, versioned Connector by token.
 	ConnectorRef    string `json:"connectorRef,omitempty"`
 	PayloadTemplate string `json:"payloadTemplate,omitempty"`
@@ -398,15 +400,15 @@ func (c actionConfig) checkVariant() error {
 		switch rules.ActionType(c.Action) {
 		case rules.ActionRaiseAlarm:
 			return set(c.Command) || set(c.Payload) || set(c.ExpiresAfter) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
-				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
+				set(c.BodyTemplate) || set(c.SecretRef) || set(c.SigningSecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
 		case rules.ActionSendCommand:
 			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
-				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
+				set(c.BodyTemplate) || set(c.SecretRef) || set(c.SigningSecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
 		case rules.ActionHTTPCall:
 			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.ExpiresAfter) || set(c.ConnectorRef) || set(c.PayloadTemplate)
 		case rules.ActionPublish:
 			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.ExpiresAfter) || set(c.URL) || set(c.Method) ||
-				len(c.Headers) > 0 || set(c.BodyTemplate) || set(c.SecretRef)
+				len(c.Headers) > 0 || set(c.BodyTemplate) || set(c.SecretRef) || set(c.SigningSecretRef)
 		default:
 			return false // unknown action: buildAction's default returns the "unknown action" error
 		}
@@ -439,12 +441,13 @@ func buildAction(n Node) (rules.Action, error) {
 		return rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: c.Command, Payload: c.Payload, ExpiresAfter: c.ExpiresAfter}}, nil
 	case rules.ActionHTTPCall:
 		return rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{
-			URL:          c.URL,
-			Method:       c.Method,
-			Headers:      c.Headers,
-			BodyTemplate: c.BodyTemplate,
-			SecretRef:    c.SecretRef,
-			TimeoutMs:    c.TimeoutMs,
+			URL:              c.URL,
+			Method:           c.Method,
+			Headers:          c.Headers,
+			BodyTemplate:     c.BodyTemplate,
+			SecretRef:        c.SecretRef,
+			SigningSecretRef: c.SigningSecretRef,
+			TimeoutMs:        c.TimeoutMs,
 		}}, nil
 	case rules.ActionPublish:
 		return rules.Action{Type: rules.ActionPublish, Publish: &rules.PublishAction{

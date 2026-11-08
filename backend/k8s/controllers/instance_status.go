@@ -99,12 +99,15 @@ func computeStatus(instance *corev1beta1.Instance, deployments []appsv1.Deployme
 	rollout := rolloutComplete(instance.Spec.ImageVersion, running, areas, byName)
 	cert, _ := certificateVerdict(instance, now)
 	ready := summarize(available, rollout, cert)
+	// Never folded into ready: see ConditionAlertsRouted.
+	alerts := alertRoutingVerdict(instance)
 
 	for _, c := range []metav1.Condition{
 		{Type: corev1beta1.ConditionReady, Status: ready.Status, Reason: ready.Reason, Message: ready.Message},
 		{Type: corev1beta1.ConditionWorkloadsAvailable, Status: available.Status, Reason: available.Reason, Message: available.Message},
 		{Type: corev1beta1.ConditionRolloutComplete, Status: rollout.Status, Reason: rollout.Reason, Message: rollout.Message},
 		{Type: corev1beta1.ConditionBrokerCertificateValid, Status: cert.Status, Reason: cert.Reason, Message: cert.Message},
+		{Type: corev1beta1.ConditionAlertsRouted, Status: alerts.Status, Reason: alerts.Reason, Message: alerts.Message},
 	} {
 		c.ObservedGeneration = instance.Generation
 		meta.SetStatusCondition(&status.Conditions, c)

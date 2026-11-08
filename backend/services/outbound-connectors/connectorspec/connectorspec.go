@@ -36,8 +36,8 @@ import (
 var ErrUnsupportedType = errors.New("connector type has no publish client in this build")
 
 // Target is a fully-validated publish destination plus its credential. It is sealed:
-// exactly MQTTTarget, KafkaTarget, SNSTarget and SQSTarget implement it, and the publish
-// package switches over those four.
+// exactly MQTTTarget, KafkaTarget, SNSTarget, SQSTarget and LoRaWANDownlinkTarget implement it; the
+// publish package switches over the first four, and refuses the fifth (the downlink adapter sends it).
 type Target interface{ isTarget() }
 
 // builder parses and validates one connector type's config. It returns a Target without
@@ -57,6 +57,9 @@ var builders = map[string]builder{
 	"kafka":   {parse: parseKafka, secret: withKafkaSecret},
 	"aws_sns": {parse: parseSNS, secret: withSNSSecret},
 	"aws_sqs": {parse: parseSQS, secret: withSQSSecret},
+	// lorawan_downlink links an inbound integration to its network server's downlink API. It is
+	// executed by the downlink adapter, never by the REACT publish sender.
+	LoRaWANDownlinkType: {parse: parseLoRaWANDownlink, secret: withLoRaWANDownlinkSecret},
 	// gcp_pubsub has no delivery implementation in this build. When it ships it will
 	// authenticate with a credential stored on the connector, as the AWS targets do,
 	// never with the pod's ambient identity.

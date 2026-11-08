@@ -28,7 +28,7 @@ public sealed class DeviceChainClient : IAsyncDisposable
     private readonly ConcurrentDictionary<Area, GraphQlWsClient> _subscriptions = new();
     private volatile bool _disposed;
 
-    /// <summary>The platform origin (e.g. https://demo.devicechain.io).</summary>
+    /// <summary>The platform origin (e.g. https://devicechain.example.com).</summary>
     public Uri Origin { get; }
 
     /// <summary>The two-tier auth state machine (login → selectTenant → refresh).</summary>

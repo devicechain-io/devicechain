@@ -106,7 +106,11 @@ CREATE TABLE "notification-management".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "notification-management".notification_channels (
  id bigint NOT NULL,

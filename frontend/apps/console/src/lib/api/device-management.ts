@@ -142,6 +142,8 @@ export async function listDevices(opts: {
   pageNumber: number;
   pageSize: number;
   deviceType?: string;
+  /** Only devices whose name or token contains this text, ignoring case. Blank is no filter. */
+  nameContains?: string;
   /** Only devices holding a credential this provisioning profile issued (unscoped callers). */
   provisioningProfile?: string;
   /** Only devices earmarked for this provisioning profile (unscoped callers). */
@@ -152,6 +154,7 @@ export async function listDevices(opts: {
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
       deviceType: opts.deviceType ?? null,
+      ...(opts.nameContains?.trim() ? { nameContains: opts.nameContains.trim() } : {}),
       // Omitted, not null, when unset: a scoped caller's request must not name the fields at all.
       ...(opts.provisioningProfile ? { provisioningProfile: opts.provisioningProfile } : {}),
       ...(opts.expectedProvisioningProfile
@@ -466,11 +469,14 @@ const DEVICE_TYPES = graphql(`
 export async function listDeviceTypes(opts: {
   pageNumber: number;
   pageSize: number;
+  /** Only device types whose name or token contains this text, ignoring case. Blank is no filter. */
+  nameContains?: string;
 }): Promise<DeviceTypeSearchResults> {
   const data = await gql('device-management', DEVICE_TYPES, {
     criteria: {
       pageNumber: opts.pageNumber,
       pageSize: opts.pageSize,
+      ...(opts.nameContains?.trim() ? { nameContains: opts.nameContains.trim() } : {}),
     },
   });
   return data.deviceTypes;

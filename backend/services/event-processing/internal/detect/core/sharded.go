@@ -274,6 +274,9 @@ func (s *Sharded) DrainLateSamples() uint64 {
 // Watermark is the shared frontier. Every shard holds the same one; Snapshot fails if they do not.
 func (s *Sharded) Watermark() time.Time { return s.shards[0].Watermark() }
 
+// RestoredFrontier is the FrontierVersion of the snapshot the engine was restored from.
+func (s *Sharded) RestoredFrontier() int { return s.shards[0].RestoredFrontier() }
+
 // LastSeq is the shared position. Every shard holds the same one; Snapshot fails if they do not.
 func (s *Sharded) LastSeq() uint64 { return s.shards[0].LastSeq() }
 
@@ -385,7 +388,7 @@ func restoreSharded(k int, salt uint32, rules []Rule, allowedLateness time.Durat
 	}
 	parts := make([]snapshot, k)
 	for i := range parts {
-		parts[i] = snapshot{Watermark: snap.Watermark, LastSeq: snap.LastSeq}
+		parts[i] = snapshot{Frontier: snap.Frontier, Watermark: snap.Watermark, LastSeq: snap.LastSeq}
 	}
 	splitBy(snap.Active, k, salt, func(x snapRun) (string, string) { return x.Rule, x.Series }, func(i int, x snapRun) { parts[i].Active = append(parts[i].Active, x) })
 	splitBy(snap.Breaks, k, salt, func(x snapBreak) (string, string) { return x.Rule, x.Series }, func(i int, x snapBreak) { parts[i].Breaks = append(parts[i].Breaks, x) })

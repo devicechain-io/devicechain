@@ -110,3 +110,9 @@ This list is here so that you find these things out before you adopt DeviceChain
 - [Architecture at a glance](./concepts/architecture-at-a-glance.md) shows how a message moves
   through the platform, and [Architecture](./concepts/architecture.md) lists every component.
 - [Getting help](./getting-help.md) says where to ask a question or report a gap on this page.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](./quickstart/first-device.md)
+
+:::

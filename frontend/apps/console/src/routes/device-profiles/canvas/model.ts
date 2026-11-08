@@ -175,6 +175,8 @@ export interface ActionConfig {
   headers?: Record<string, string>;
   bodyTemplate?: string;
   secretRef?: string;
+  // Optional webhook signing handle (Standard Webhooks); empty ⇒ unsigned.
+  signingSecretRef?: string;
   // publish (ADR-060 Tier 2) — a registered Connector by token; payloadTemplate/CEL.
   connectorRef?: string;
   payloadTemplate?: string;

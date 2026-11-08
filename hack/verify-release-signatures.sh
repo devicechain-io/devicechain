@@ -38,6 +38,8 @@
 #   --skip-provenance       do not run `gh attestation verify` (explicit, never implicit)
 #   --with-chart            with --image, verify the chart too (otherwise --image skips it)
 #   --skip-chart            do not verify the chart
+#   --list-images           print the release image names, one per line, and exit (the evidence
+#                           pack builds its per-image SBOM list from this, so there is one list)
 #
 # Needs: cosign >= 3, jq, and (unless --skip-provenance) an authenticated gh.
 #
@@ -235,6 +237,8 @@ tag=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --self-test) self_test; exit $? ;;
+    --list-images) printf '%s
+' "${RELEASE_IMAGES[@]}"; exit 0 ;;
     --registry) REGISTRY="${2:?}"; shift 2 ;;
     --repo) REPO="${2:?}"; shift 2 ;;
     --workflow) WORKFLOW="${2:?}"; shift 2 ;;

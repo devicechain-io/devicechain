@@ -102,7 +102,7 @@ func TestConcurrentShardsDoNotOutliveTheirEngine(t *testing.T) {
 	}
 	rp.handle(shardedMessage(t, 1))
 	rp.checkpoint(ctx)
-	if got := shardGoroutines(); got != 4 {
+	if got := settledShardGoroutines(4); got != 4 {
 		t.Fatalf("expected one engine's four shard goroutines, found %d", got)
 	}
 
@@ -113,11 +113,11 @@ func TestConcurrentShardsDoNotOutliveTheirEngine(t *testing.T) {
 		rp.handle(shardedMessage(t, uint64(2+i)))
 		rp.checkpoint(ctx)
 	}
-	if got := shardGoroutines(); got != 4 {
+	if got := settledShardGoroutines(4); got != 4 {
 		t.Fatalf("%d shard goroutines after 6 term rebuilds, want the current engine's 4: shards of replaced engines are still running", got)
 	}
 	rp.closeDetector()
-	if got := shardGoroutines(); got != 0 {
+	if got := settledShardGoroutines(0); got != 0 {
 		t.Fatalf("%d shard goroutines after the term ended", got)
 	}
 	// The engine still answers after its term ended, synchronously.
@@ -253,6 +253,22 @@ func benchReplayDrain(b *testing.B, msgs []messaging.Message, k, every int) {
 		b.ReportMetric(float64(len(msgs))/el.Seconds(), "messages/s")
 		b.StopTimer()
 		rp.closeDetector()
+	}
+}
+
+// settledShardGoroutines is shardGoroutines once it has reached want, or what it still reads after
+// ten seconds. A shard's WaitGroup is released by a defer, so Close returns while the goroutine is
+// still unwinding and still in a stack dump: a count taken the instant a Close returns (this test's,
+// or the previous test's cleanup) can be one engine's worth too high. Waiting for the count to settle
+// is observing an exit, not papering over a leak: a goroutine that never exits fails after the deadline.
+func settledShardGoroutines(want int) int {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n := shardGoroutines()
+		if n == want || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 

@@ -111,6 +111,12 @@ type HTTPCallDispatch struct {
 	Method    string            `json:"method,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	SecretRef string            `json:"secretRef,omitempty"`
+	// SigningSecretRef, if set, names a webhook signing secret (a handle in the connectors service's
+	// signing keyring) the call is signed with per the Standard Webhooks specification. Like
+	// SecretRef it is only a handle: the key never rides the wire. Empty means an unsigned call, the
+	// behaviour before signing existed. A handle naming no stored key is terminal at the connectors
+	// service; the call is never sent unsigned in its place.
+	SigningSecretRef string `json:"signingSecretRef,omitempty"`
 	// TimeoutMs bounds the outbound call (0 ⇒ the connectors service's default). The publish gate
 	// already bounded it to rules.MaxActionTimeoutMs.
 	TimeoutMs int `json:"timeoutMs,omitempty"`

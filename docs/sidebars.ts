@@ -211,7 +211,7 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'Alerts',
           collapsed: false,
-          items: ['guides/notification-channels'],
+          items: ['guides/notification-channels', 'guides/signed-webhooks'],
         },
         {
           type: 'category',
@@ -291,6 +291,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/observability',
+            'deployment/alert-runbook',
             'deployment/grafana-boards',
             'deployment/metrics-reference',
             'deployment/tuning-an-instance',
@@ -310,6 +311,7 @@ const sidebars: SidebarsConfig = {
             'deployment/releases-and-upgrades',
             'deployment/versioning-policy',
             'deployment/verifying-releases',
+            'deployment/security-process',
             // The label's translations live under `sidebar.docs.link.All releases on GitHub`.
             {
               type: 'link',

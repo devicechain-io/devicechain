@@ -348,3 +348,60 @@ type sortableWidget struct{ widget }
 
 func (sortableWidget) TableName() string    { return "widgets" }
 func (sortableWidget) DefaultOrder() string { return "widgets.id" }
+
+// The callback-level guard (a live handle carrying the wrong tenant) must refuse a Row() read
+// with an error, not hand back a nil *sql.Row whose Scan panics. The refusal is the specific
+// ErrWrongShard, not a generic one.
+func TestAWrongShardRowReadReturnsAnErrorNotAPanic(t *testing.T) {
+	m, home, g1 := shardFixture(t)
+	enable(t, m, mapResolver{"a": 0, "b": 1}, g1)
+
+	for name, h := range map[string]*gorm.DB{
+		"shard handle, tenant of group 0": g1.WithContext(tenantCtxOf("a")),
+		"home handle, tenant of group 1":  home.WithContext(tenantCtxOf("b")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var n int
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("Row().Scan panicked: %v", r)
+					}
+				}()
+				err = h.Model(&widget{}).Select("count(*)").Row().Scan(&n)
+			}()
+			if !errors.Is(err, ErrWrongShard) {
+				t.Fatalf("want ErrWrongShard, got %v", err)
+			}
+		})
+	}
+}
+
+// A refused Row() read on a handle inside a transaction must leave the transaction's pool in
+// place, so the transaction can still be rolled back and its connection released.
+func TestARefusedRowReadLeavesTheTransactionRollbackable(t *testing.T) {
+	m, home, g1 := shardFixture(t)
+	sqlDB, err := home.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	enable(t, m, mapResolver{"a": 0, "b": 1}, g1)
+
+	tx := home.WithContext(tenantCtxOf("b")).Begin()
+	if tx.Error != nil {
+		t.Fatal(tx.Error)
+	}
+	q := tx.Model(&widget{}).Select("count(*)")
+	var n int
+	if err := q.Row().Scan(&n); !errors.Is(err, ErrWrongShard) {
+		t.Fatalf("want ErrWrongShard, got %v", err)
+	}
+	if err := q.Rollback().Error; err != nil {
+		t.Fatalf("rollback after a refused row read: %v", err)
+	}
+	if in := sqlDB.Stats().InUse; in != 0 {
+		t.Fatalf("%d home connection(s) still in use after the rollback", in)
+	}
+}

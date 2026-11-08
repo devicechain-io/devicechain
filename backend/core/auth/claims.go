@@ -108,6 +108,11 @@ type Claims struct {
 	// every sign-in of an identity. It names nothing but a random value; only the issuing
 	// service looks it up, whenever one of those tokens is exchanged. A token without it
 	// is refused rather than treated as an older kind.
+	//
+	// OAuth ACCESS tokens carry it too (WithSessionID), so the audit journal and a gate can
+	// name the grant a data-plane call descends from. There it is a CORRELATION, not a
+	// check: nothing looks it up on the data plane, and an access token without one (minted
+	// before the claim existed) is read as "session unknown", never as a match (SameSession).
 	SessionID SessionID `json:"sid,omitempty"`
 	// Amr (the "amr" claim, RFC 8176) records how the sign-in this token descends from
 	// authenticated: ["pwd"], ["pwd","otp","mfa"] or ["pwd","mfa"] (a recovery code). It

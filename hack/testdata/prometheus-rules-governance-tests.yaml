@@ -93,6 +93,7 @@ tests:
               job: devicechain/event-sources
               dimension: ingest
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tenantsmeteredatplatformdefault"
               summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
               description: "For at least 15 minutes, devicechain/event-sources has admitted ingest traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
 
@@ -137,6 +138,7 @@ tests:
               job: devicechain/outbound-connectors
               dimension: outbound
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tenantsmeteredatplatformdefault"
               summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
               description: "For at least 15 minutes, devicechain/outbound-connectors has admitted outbound traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
 
@@ -191,6 +193,7 @@ tests:
               job: devicechain/ai-inference
               dimension: ai-inference
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tenantsmeteredatplatformdefault"
               summary: "A service cannot read tenant ceilings from user-management and is metering tenants at the platform default"
               description: "For at least 15 minutes, devicechain/ai-inference has admitted ai-inference traffic for tenants whose ceilings it could not read because user-management was unreachable or failing, so it metered them at its platform default. For a tenant whose tier sets a lower ceiling, that admits more than the tier allows. Check user-management's health and this service's logs for 'Failed to refresh per-tenant setting'. Tenants whose ceilings were read before the problem started keep their last-known values. Traffic for tenant names user-management does not know is counted separately (cause=unknown-tenant) and does not fire this alert."
       - eval_time: 41m
@@ -216,6 +219,7 @@ tests:
               devicechain_instance: devicechain
               job: devicechain/event-sources
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ratelimiteroverflowinuse"
               summary: "HTTP ingest is receiving traffic for more unconfirmed tenant names than it keeps separate allowances for"
               description: "devicechain/event-sources has had more than 1024 unconfirmed tenant names active at once, so every further name shares one allowance. Almost always this means something is posting to many invented tenant paths on the HTTP ingest port. Legitimate tenants that have been confirmed, and every MQTT, NATS and LwM2M tenant, keep their own allowance. Find the source of the requests on the HTTP ingest port."
 
@@ -260,6 +264,7 @@ tests:
               job: devicechain/event-processing
               source: append
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ratemeteringclockfallback"
               summary: "Outbound actions are being metered on a fallback clock"
               description: "For at least an hour, devicechain/event-processing has metered outbound actions on the append clock because they carried no trigger time. The detection engine has stopped stamping trigger times, so actions are metered on broker or arrival time and a catch-up after a restart can be shed as a flood again. An upgrade's in-flight backlog clears well inside the hour. Check that event-processing and outbound-connectors run the same release."
 
@@ -299,6 +304,7 @@ tests:
               job: devicechain/event-processing
               action: httpCall
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#reactshedlettersoverbudget"
               summary: "Outbound connector actions shed at the source are being summarised rather than recorded one by one"
               description: "For at least 10 minutes, devicechain/event-processing has shed httpCall actions faster than its dead-letter budget records them, so the excess is counted and summarised in one dead letter per tenant per minute instead of recorded individually. A tenant is well over its outbound ceiling. Find it with `dcctl dead-letters` (reason shed) and check its rules, or raise its outboundCallsPerSecond / outboundBurst if the traffic is legitimate."
 
@@ -362,6 +368,7 @@ tests:
               job: devicechain/outbound-connectors
               action: httpCall
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#connectordispatchratelimited"
               summary: "The connectors service is shedding outbound actions the detection engine admitted"
               description: "For at least 15 minutes, devicechain/outbound-connectors has shed httpCall dispatches for being over their tenant's outbound rate. The detection engine meters the same ceiling on the same timeline and sheds over-quota actions before dispatching them, so these were admitted at one end and refused at the other: the two ends disagree about the ceiling. The usual cause is the platform default configured differently for event-processing and outbound-connectors (outboundCallsPerSecond and outboundBurst must match), or one of them metering at the default because it cannot read tenant ceilings (see TenantsMeteredAtPlatformDefault), or sends that are failing and being retried, since every retry is metered again here and only once at the source. Each shed dispatch is dead-lettered with reason rate_limited; inspect them with `dcctl dead-letters`."
 

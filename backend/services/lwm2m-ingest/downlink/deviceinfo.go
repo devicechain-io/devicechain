@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/devicechain-io/dc-lwm2m-ingest/decode"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
@@ -65,19 +66,25 @@ const (
 type infoResource struct {
 	Key  string
 	Path string
+	// ID is the resource ID (the last segment of Path); a TLV answer must be for this resource.
+	ID   uint16
 	Kind infoKind
 }
+
+// deviceInfoInstance is the Device object's instance: Object 3 is single-instance, and every path
+// below is under /3/0. A TLV answer wrapped in any other instance is not the one asked about.
+const deviceInfoInstance uint16 = 0
 
 // deviceInfoResources is the supported set, in the order it is read. Manufacturer, Model Number,
 // Serial Number and Firmware Version are Object 3's mandatory-or-common identity resources; Battery
 // Level is optional and absent on mains-powered devices, which is an ordinary outcome and not a
 // fault.
 var deviceInfoResources = []infoResource{
-	{Key: "manufacturer", Path: "/3/0/0", Kind: infoString},
-	{Key: "modelNumber", Path: "/3/0/1", Kind: infoString},
-	{Key: "serialNumber", Path: "/3/0/2", Kind: infoString},
-	{Key: "firmwareVersion", Path: "/3/0/3", Kind: infoString},
-	{Key: "batteryLevel", Path: "/3/0/9", Kind: infoPercent},
+	{Key: "manufacturer", Path: "/3/0/0", ID: 0, Kind: infoString},
+	{Key: "modelNumber", Path: "/3/0/1", ID: 1, Kind: infoString},
+	{Key: "serialNumber", Path: "/3/0/2", ID: 2, Kind: infoString},
+	{Key: "firmwareVersion", Path: "/3/0/3", ID: 3, Kind: infoString},
+	{Key: "batteryLevel", Path: "/3/0/9", ID: 9, Kind: infoPercent},
 }
 
 // InfoMissing names one resource that was not harvested and why.
@@ -111,13 +118,15 @@ func infoValueType(key string) string {
 
 // ReadDeviceInfo reads each supported Object 3 resource with its own single-resource GET. One
 // attempt per resource, each bounded by perRead; a resource the device does not have (4.04), will
-// not give (4.01/4.03/4.05) or returns in a format this slice does not decode is RECORDED in Missing
+// not give (4.01/4.03/4.05) or returns in a format this slice does not decode (text/plain and TLV
+// are decoded) is RECORDED in Missing
 // and skipped, never retried and never an error. The first transport failure (timeout, dead
 // socket) stops the read: a device that is not answering is not asked four more times.
 //
 // No Accept option is sent, for the reason lwm2m.read sends none: a conformant 1.0 client answers
 // 4.06 to a format it does not implement, and the single-resource text/plain answer is what every
-// client gives.
+// client gives. The answer is decoded in the format it says it carries: Eclipse Leshan, for one,
+// answers a single-resource Read with no Accept in TLV rather than text/plain.
 func ReadDeviceInfo(ctx context.Context, conn mux.Conn, perRead time.Duration) DeviceInfo {
 	info := DeviceInfo{Values: map[string]string{}}
 	for i, res := range deviceInfoResources {
@@ -163,25 +172,69 @@ func readInfoResource(ctx context.Context, conn mux.Conn, res infoResource, perR
 	if !isSuccess(resp.Code()) {
 		return "", describeInfoCode(resp.Code()), false
 	}
-	if cf, cfErr := resp.ContentFormat(); cfErr == nil && cf != message.TextPlain {
-		return "", fmt.Sprintf("unsupported content format %d (only text/plain is decoded)", cf), false
-	}
 	body, err := resp.ReadBody()
 	if err != nil {
 		return "", "response body was unreadable", false
 	}
+	// Follow the format the answer actually carries. No Content-Format option is read as text/plain,
+	// as it always was; Leshan answers this Read in TLV; anything else is named, never guessed at.
+	cf, cfErr := resp.ContentFormat()
+	switch {
+	case cfErr != nil || cf == message.TextPlain:
+		return infoFromText(res, body)
+	case cf == message.AppLwm2mTLV:
+		return infoFromTLV(res, body)
+	default:
+		return "", fmt.Sprintf("unsupported content format %d (text/plain and TLV are decoded)", cf), false
+	}
+}
+
+// infoFromText reads a text/plain value.
+func infoFromText(res infoResource, body []byte) (val, reason string, transport bool) {
 	text, ok := sanitizeInfoText(body)
 	if !ok {
 		return "", "empty or non-text value", false
 	}
 	if res.Kind == infoPercent {
 		n, err := strconv.ParseFloat(text, 64)
-		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > 100 || n != math.Trunc(n) {
-			return "", "value is not an integer percentage (0-100)", false
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+			return "", errNotPercent, false
 		}
-		return strconv.FormatInt(int64(n), 10), "", false
+		return percentValue(int64(n))
 	}
 	return text, "", false
+}
+
+// infoFromTLV reads a TLV (11542) answer to a single-resource Read: a string resource is its value
+// bytes as UTF-8, an integer resource a 1/2/4/8-byte big-endian integer. A document that does not
+// decode, or does not carry exactly one value for THIS resource, is a reason, never a value.
+func infoFromTLV(res infoResource, body []byte) (val, reason string, transport bool) {
+	v, err := decode.TLVResourceValue(body, deviceInfoInstance, res.ID)
+	if err != nil {
+		return "", "TLV not decoded: " + strings.TrimPrefix(err.Error(), "lwm2m: "), false
+	}
+	if res.Kind == infoPercent {
+		n, err := decode.TLVInteger(v)
+		if err != nil {
+			return "", errNotPercent + " in TLV: " + strings.TrimPrefix(err.Error(), "lwm2m: "), false
+		}
+		return percentValue(n)
+	}
+	text, ok := sanitizeInfoText(v)
+	if !ok {
+		return "", "empty or non-text value", false
+	}
+	return text, "", false
+}
+
+const errNotPercent = "value is not an integer percentage (0-100)"
+
+// percentValue range-checks a battery level.
+func percentValue(n int64) (val, reason string, transport bool) {
+	if n < 0 || n > 100 {
+		return "", errNotPercent, false
+	}
+	return strconv.FormatInt(n, 10), "", false
 }
 
 // describeInfoCode phrases a non-2.xx answer for the Missing record.
