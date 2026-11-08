@@ -6,8 +6,10 @@ package model
 import (
 	"database/sql"
 	"errors"
+	"strings"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -36,7 +38,10 @@ type DeviceTypeCreateRequest struct {
 	// already in use (FacetValues), with explicit curation left for later.
 	Manufacturer *string
 	Model        *string
-	Metadata     *string
+	// CommandChannel opts the type's devices into a command channel other than the default
+	// (see CommandChannelHTTPPull). Omitted or empty leaves the type on today's behaviour.
+	CommandChannel *string
+	Metadata       *string
 }
 
 // DeviceTypeUpdateRequest is the PARTIAL-update counterpart of
@@ -81,6 +86,9 @@ type DeviceTypeUpdateRequest struct {
 	MaintenanceWindowToken dcgraphql.OptionalString
 	Manufacturer           dcgraphql.OptionalString
 	Model                  dcgraphql.OptionalString
+	// CommandChannel re-points the type's command channel. Omitted keeps it, null (or blank)
+	// returns the type to the default, an unknown value is refused.
+	CommandChannel dcgraphql.OptionalString
 	// Metadata is an opaque JSON string in the schema, not a map, so it replaces
 	// wholesale when sent and clears on null. There is no per-key merge to choose
 	// between: the API has never been able to address an individual key.
@@ -117,6 +125,13 @@ type DeviceType struct {
 	// ModelName is the device model facet; the Go field avoids colliding with the
 	// embedded gorm.Model, the DB column + GraphQL field stay "model".
 	ModelName sql.NullString `gorm:"column:model;size:128;index"`
+
+	// CommandChannel is NULL or CommandChannelPublish for a type on the default command path (a
+	// command is published to the device's subject and delivered by the transport that device is
+	// connected on), and CommandChannelHTTPPull for a type whose devices fetch their commands over
+	// HTTP. Nullable with no default on purpose: NULL is what every existing type holds, and it
+	// must keep meaning "today's behaviour" for a replica that has not been told about the column.
+	CommandChannel sql.NullString `gorm:"size:32"`
 
 	Devices []Device
 	// The metric/command/alarm definitions moved onto DeviceProfile in ADR-045
@@ -591,4 +606,37 @@ type DeviceCredentialSearchCriteria struct {
 type DeviceCredentialSearchResults struct {
 	Results    []DeviceCredential
 	Pagination rdb.SearchResultsPagination
+}
+
+// The command channels. The strings are served (the type's commandChannel field) and so frozen on
+// release.
+//
+//   - CommandChannelPublish is the default: a command is published to the device's subject and
+//     delivered by whichever transport the device is connected on. A type holds NULL or this
+//     value to say so, and the two behave identically; the explicit value exists so a client can
+//     state the default rather than only omit it.
+//   - CommandChannelHTTPPull is for a device that fetches its commands with an authenticated HTTP
+//     long poll instead of holding a connection the platform can publish to.
+const (
+	CommandChannelPublish  = "PUBLISH"
+	CommandChannelHTTPPull = "HTTP_PULL"
+)
+
+// ErrInvalidCommandChannel is returned for a command channel value this build does not define.
+var ErrInvalidCommandChannel = integrity.NewRefusal(integrity.ClassInvalid,
+	"commandChannel must be PUBLISH or HTTP_PULL, or null for the default channel")
+
+// normalizeCommandChannel maps a requested command channel onto its stored form: a blank value
+// is the default channel (NULL), PUBLISH and HTTP_PULL are themselves, and anything else is
+// refused rather than stored, because an unknown channel would read as the default everywhere it
+// is consumed.
+func normalizeCommandChannel(requested *string) (sql.NullString, error) {
+	if requested == nil || strings.TrimSpace(*requested) == "" {
+		return sql.NullString{}, nil
+	}
+	switch strings.TrimSpace(*requested) {
+	case CommandChannelPublish, CommandChannelHTTPPull:
+		return sql.NullString{String: strings.TrimSpace(*requested), Valid: true}, nil
+	}
+	return sql.NullString{}, ErrInvalidCommandChannel
 }

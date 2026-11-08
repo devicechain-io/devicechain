@@ -46,6 +46,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/ai-inference/model/api.go": {"Api.AIProviders", "Api.sys"},
 	"backend/services/command-delivery/processor/CommandDeliveryProcessor.go": {
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
+		"CommandDeliveryProcessor.failUnacknowledgedPulls",
 	},
 	"backend/services/update-management/model/api_updates.go":                {"Api.SweepDeadlines"},
 	"backend/services/update-management/model/api_rollouts.go":               {"Api.AdvanceRollouts"},
