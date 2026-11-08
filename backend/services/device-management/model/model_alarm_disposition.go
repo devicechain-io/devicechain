@@ -80,6 +80,12 @@ type AlarmDisposition struct {
 	AlarmId uint `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:2"`
 	// RaisedTime is the cycle: the alarm's raised_time when it was labelled.
 	RaisedTime time.Time `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:3"`
+	// AlarmToken is the alarm's token, copied when the label is written. The listing filters by
+	// it on this table, under this table's scope rule, so a member who could see a labelled cycle
+	// finds it by the alarm's token even after the alarm's current cycle was raised for another
+	// customer. Resolving the token through the alarm would apply the alarm's CURRENT stamp
+	// instead. An alarm's token never changes.
+	AlarmToken string `gorm:"not null;size:255"`
 
 	Disposition  string         `gorm:"not null;size:32"` // one of AlarmDispositionLabel
 	Note         sql.NullString // why, in the labeller's words

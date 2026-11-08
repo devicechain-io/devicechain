@@ -11,7 +11,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -88,6 +87,7 @@ func (api *Api) SetAlarmDisposition(ctx context.Context, req AlarmDispositionReq
 	row := &AlarmDisposition{
 		AlarmId:      alarm.ID,
 		RaisedTime:   alarm.RaisedTime,
+		AlarmToken:   alarm.Token,
 		Disposition:  req.Disposition,
 		Note:         note,
 		RecordedBy:   rdb.NullStrOf(by),
@@ -127,7 +127,6 @@ func (api *Api) AlarmDispositionOf(ctx context.Context, alarm *Alarm) (*AlarmDis
 // AlarmDispositions lists labels, newest cycle first. It is the read a backtest scores against:
 // every labelled cycle, including the ones before an alarm's current cycle.
 func (api *Api) AlarmDispositions(ctx context.Context, criteria AlarmDispositionSearchCriteria) (*AlarmDispositionSearchResults, error) {
-	empty := &AlarmDispositionSearchResults{Results: make([]AlarmDisposition, 0)}
 	if criteria.Disposition != nil {
 		if err := validDispositionLabel(*criteria.Disposition); err != nil {
 			return nil, err
@@ -141,22 +140,11 @@ func (api *Api) AlarmDispositions(ctx context.Context, criteria AlarmDisposition
 	if err != nil {
 		return nil, err
 	}
-	var alarmId *uint
-	if criteria.AlarmToken != nil {
-		id, found, err := api.alarmIdForLabels(ctx, *criteria.AlarmToken)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			return empty, nil
-		}
-		alarmId = &id
-	}
-
 	results := make([]AlarmDisposition, 0)
 	db, pag := api.RDB.ListOf(ctx, &AlarmDisposition{}, func(q *gorm.DB) *gorm.DB {
-		if alarmId != nil {
-			q = q.Where("alarm_dispositions.alarm_id = ?", *alarmId)
+		// By the token copied onto the label, not through the alarm: see AlarmDisposition.AlarmToken.
+		if criteria.AlarmToken != nil {
+			q = q.Where("alarm_dispositions.alarm_token = ?", *criteria.AlarmToken)
 		}
 		if criteria.Disposition != nil {
 			q = q.Where("alarm_dispositions.disposition = ?", *criteria.Disposition)
@@ -174,29 +162,4 @@ func (api *Api) AlarmDispositions(ctx context.Context, criteria AlarmDisposition
 		return nil, db.Error
 	}
 	return &AlarmDispositionSearchResults{Results: results, Pagination: pag}, nil
-}
-
-// alarmIdForLabels resolves an alarm token to its id for the label listing's alarm facet, within
-// the caller's tenant but NOT under the caller's alarm scope.
-//
-// 🔑 The alarm's scope stamp is its CURRENT cycle's, and a label is visible by the stamp of the
-// cycle it labels. A member who could see an earlier cycle (raised while the device was its
-// customer's) still reads that cycle's label, so filtering by the alarm's token must not answer
-// "nothing" just because the alarm has since been raised for another customer. What keeps the
-// member inside its own labels is the listing's own scope predicate on alarm_dispositions; the id
-// resolved here is only a filter on that already-scoped read, and is never served.
-func (api *Api) alarmIdForLabels(ctx context.Context, token string) (uint, bool, error) {
-	tenant, ok := core.TenantFromContext(ctx)
-	if !ok {
-		return 0, false, core.ErrNoTenant
-	}
-	var ids []uint
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Model(&Alarm{}).
-		Where("tenant_id = ? AND token = ?", tenant, token).Limit(1).Pluck("id", &ids).Error; err != nil {
-		return 0, false, err
-	}
-	if len(ids) == 0 {
-		return 0, false, nil
-	}
-	return ids[0], true, nil
 }

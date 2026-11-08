@@ -375,6 +375,7 @@ CREATE INDEX "idx_device-management_provisioning_profiles_deleted_at" ON "device
 CREATE INDEX "idx_device-management_provisioning_profiles_device_type_id" ON "device-management".provisioning_profiles USING btree (device_type_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-management".provisioning_profiles USING btree (tenant_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-management".provisioning_profiles USING btree (token);
+CREATE INDEX idx_alarm_dispositions_tenant_alarm_token ON "device-management".alarm_dispositions USING btree (tenant_id, alarm_token);
 CREATE INDEX idx_alarm_dispositions_tenant_raised ON "device-management".alarm_dispositions USING btree (tenant_id, raised_time);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
@@ -700,6 +701,7 @@ CREATE TABLE "device-management".alarm_dispositions (
  tenant_id character varying(128) NOT NULL,
  alarm_id bigint NOT NULL,
  raised_time timestamp with time zone NOT NULL,
+ alarm_token character varying(255) NOT NULL,
  disposition character varying(32) NOT NULL,
  note text,
  recorded_by text,

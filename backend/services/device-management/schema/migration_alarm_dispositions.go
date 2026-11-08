@@ -26,7 +26,10 @@ import (
 //
 // (tenant_id, alarm_id, raised_time) is unique: one label per cycle, replaced in place by a
 // relabel. It leads with tenant_id, so it is also the tenant index and the column carries no
-// index of its own. (tenant_id, raised_time) serves the newest-cycle-first listing.
+// index of its own. (tenant_id, raised_time) serves the newest-cycle-first listing, and
+// (tenant_id, alarm_token) the listing's alarm facet. alarm_token is copied from the alarm when the
+// label is written, so the facet is judged by the label's own scope stamp rather than through the
+// alarm, whose stamp is its current cycle's.
 //
 // The alarm foreign key cascades, so a label goes when its alarm goes (the entity delete removes
 // an entity's alarms). It is added by hand below, not declared as a relation field: a relation
@@ -39,10 +42,11 @@ type alarmDisposition struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	TenantId string `gorm:"not null;size:128;uniqueIndex:uix_alarm_dispositions_cycle,priority:1;index:idx_alarm_dispositions_tenant_raised,priority:1"`
+	TenantId string `gorm:"not null;size:128;uniqueIndex:uix_alarm_dispositions_cycle,priority:1;index:idx_alarm_dispositions_tenant_raised,priority:1;index:idx_alarm_dispositions_tenant_alarm_token,priority:1"`
 
 	AlarmId    uint      `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:2"`
 	RaisedTime time.Time `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:3;index:idx_alarm_dispositions_tenant_raised,priority:2"`
+	AlarmToken string    `gorm:"not null;size:255;index:idx_alarm_dispositions_tenant_alarm_token,priority:2"`
 
 	Disposition  string `gorm:"not null;size:32"`
 	Note         sql.NullString
