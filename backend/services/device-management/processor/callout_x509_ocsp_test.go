@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust/ocspclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ocsp"
@@ -534,4 +537,37 @@ func TestOcspRevokedOnACrlDroppedPathStillRefuses(t *testing.T) {
 	got, refusal := resp.applyOcsp(context.Background(), "acme", anchor, all, survivor)
 	require.Empty(t, refusal)
 	require.NotNil(t, got)
+}
+
+// REVIEW NIT. The reason a REQUIRE_CURRENT refusal is logged with is the FIRST unanswered target in
+// path order (the leaf here), every time: never whichever one a map iteration happens to visit.
+func TestOcspUnavailableLogsTheLeafsReasonFirst(t *testing.T) {
+	root := newTestCert(t, nil, certOpts{cn: "Maker Root", ca: true})
+	inter := newTestCert(t, root, certOpts{cn: "Line A", ca: true})
+	leaf := newTestCert(t, inter, certOpts{cn: "SN-1"})
+	v := &x509trust.Verified{Leaf: leaf.cert, Chains: [][]*x509.Certificate{{leaf.cert, inter.cert, root.cert}}}
+	v.Chain = v.Chains[0]
+	script := &scriptedOcsp{by: func(tg x509trust.OCSPTarget) (x509trust.OCSPOutcome, ocspclient.Reason) {
+		if tg.Cert == leaf.cert {
+			return x509trust.OCSPNoAnswer, ocspclient.ReasonTimeout
+		}
+		return x509trust.OCSPNoAnswer, ocspclient.ReasonBreakerOpen
+	}}
+	anchor := &model.DeviceTrustAnchor{}
+	anchor.OcspMode.String, anchor.OcspMode.Valid = string(x509trust.OCSPRequireCurrent), true
+
+	var buf bytes.Buffer
+	saved := log.Logger
+	log.Logger = zerolog.New(&buf)
+	defer func() { log.Logger = saved }()
+	for i := 0; i < 40; i++ {
+		resp := (&CalloutResponder{now: time.Now}).WithOcsp(true, script, nil)
+		_, refusal := resp.applyOcsp(context.Background(), "acme", anchor, v, v)
+		require.Equal(t, x509ResultOcspUnavailable, refusal)
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 40)
+	for _, l := range lines {
+		require.Contains(t, l, `"reason":"timeout"`, "logged reason must be the leaf's")
+	}
 }

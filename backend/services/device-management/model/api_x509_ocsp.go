@@ -48,7 +48,7 @@ func (a *DeviceTrustAnchor) OcspModeOf() (x509trust.OCSPMode, error) {
 	return "", fmt.Errorf("trust anchor %q stores the unknown OCSP mode %q", a.Token, a.OcspMode.String)
 }
 
-// OcspResponderUrlOf is the anchor's operator-set responder URL, "" when it has none (each
+// OcspResponderUrlOf is the anchor's own (tenant-set) responder URL, "" when it has none (each
 // certificate's own Authority Information Access entry is used).
 func (a *DeviceTrustAnchor) OcspResponderUrlOf() string {
 	if !a.OcspResponderUrl.Valid {
@@ -95,7 +95,9 @@ func validateOcspResponderUrl(raw string) error {
 // off (nothing would be checked, and the anchor page would say otherwise). REQUIRE_CURRENT, whose
 // contract is to refuse what it cannot confirm, is refused unless the instance allows it, and
 // needs a responder URL the anchor itself names: with only certificates' own entries there is no
-// way, at this point, to know a responder exists for them.
+// way, at this point, to know a responder exists for them. The responder URL is TENANT-set (this
+// is the tenant data plane, device-write permission) and is dialled with the same reach as the
+// tenant's webhooks: the instance egress guard, operator allow list included.
 func (api *Api) applyOcspSettings(locked *DeviceTrustAnchor, request *DeviceTrustAnchorUpdateRequest) error {
 	if !request.OcspMode.Set && !request.OcspResponderUrl.Set {
 		return nil

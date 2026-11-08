@@ -16,9 +16,11 @@ import (
 
 // newOcspClient builds the responder client over the instance's tenant-egress boundary.
 //
-// TWO guards, deliberately. A responder an anchor's OPERATOR names (the per-anchor override) is
-// dialled through the instance guard, so a destination the operator allowed for the egress
-// boundary (an in-cluster relay, a /32) is reachable by that anchor. A responder URL read from a
+// TWO guards, deliberately. A responder the anchor itself names (ocspResponderUrl, which the
+// TENANT sets through updateDeviceTrustAnchor with the device-write permission) is dialled through
+// the instance guard: it has exactly the reach of a tenant's webhook, so a destination the operator
+// allowed for the egress boundary (an in-cluster relay, a /32) is reachable by it, as it is by any
+// tenant webhook. A responder URL read from a
 // CERTIFICATE (its Authority Information Access entry) is chosen by whoever runs the tenant's CA,
 // and the operator's allow list is process-wide: through the same guard it would let any tenant's
 // certificate reach an address the operator allowed for something else. So AIA fetches go through

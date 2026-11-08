@@ -1722,10 +1722,10 @@ functionalAreas:
       #       cacheEntries: 100000  # good answers one replica holds, 1000 to 1000000.
       #       maxResponderHostsPerTenant: 16 # distinct responder hosts a tenant's certificates may name
       #                             # (an anchor's own ocspResponderUrl is not counted), 1 to 256.
-      #                             # Responder addresses go through the same egress boundary as webhooks;
-      #                             # a responder named by a certificate never reaches an address the
-      #                             # operator allowed (egress.allowedDestinations), only an anchor's own
-      #                             # ocspResponderUrl does.
+      #                             # An anchor's ocspResponderUrl is set by the TENANT and has the same
+      #                             # reach as the tenant's webhooks (the egress boundary, including
+      #                             # egress.allowedDestinations). A responder named by a certificate
+      #                             # never reaches an address in egress.allowedDestinations.
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

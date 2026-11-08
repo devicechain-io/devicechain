@@ -59,7 +59,7 @@ type DeviceTrustAnchor struct {
 	// OcspMode is the anchor's OCSP mode (x509trust.OCSPMode): NULL reads as OFF, and a stored
 	// value outside the vocabulary is refused, never defaulted (OcspModeOf).
 	OcspMode sql.NullString `gorm:"size:32"`
-	// OcspResponderUrl is the operator-set responder that replaces each certificate's own
+	// OcspResponderUrl is the tenant-set responder that replaces each certificate's own
 	// Authority Information Access entry; NULL means use the certificate's.
 	OcspResponderUrl sql.NullString `gorm:"size:2048"`
 }

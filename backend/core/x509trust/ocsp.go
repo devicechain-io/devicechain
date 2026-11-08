@@ -385,6 +385,9 @@ func VerifyOCSPResponse(raw []byte, cert, issuer *x509.Certificate, now time.Tim
 	if rest, err := asn1.Unmarshal(outer.Response.Response, &basic); err != nil || len(rest) != 0 {
 		return nil, ocspRefuse(OCSPMalformed, "basic response does not parse")
 	}
+	if basic.TBS.Version != 0 {
+		return nil, ocspRefuse(OCSPMalformed, "response data version %d (only v1 is defined)", basic.TBS.Version)
+	}
 
 	// The one single response for this certificate.
 	var single *ocspSingleASN1

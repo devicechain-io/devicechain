@@ -183,7 +183,7 @@ func (c *CalloutResponder) applyOcsp(ctx context.Context, tenant string, anchor 
 		case x509trust.ReasonRevoked:
 			return nil, x509ResultOcspRevoked
 		case x509trust.ReasonRevocationUnknown:
-			c.logOcspUnavailable(tenant, anchor, out)
+			c.logOcspUnavailable(tenant, anchor, all, out)
 			return nil, x509ResultOcspUnavailable
 		default:
 			c.logAuthFailure(tenant, err)
@@ -204,9 +204,9 @@ func (c *CalloutResponder) applyOcsp(ctx context.Context, tenant string, anchor 
 	return decision.Survivor, ""
 }
 
-func (c *CalloutResponder) logOcspUnavailable(tenant string, anchor *model.DeviceTrustAnchor, out ocspclient.Outcome) {
+func (c *CalloutResponder) logOcspUnavailable(tenant string, anchor *model.DeviceTrustAnchor, all *x509trust.Verified, out ocspclient.Outcome) {
 	if ok, held := c.ocsp.failOpenLog.allow(c.now()); ok {
-		log.Warn().Str("tenant", tenant).Str("anchor", anchor.Token).Str("reason", string(firstOcspReasonOf(out))).Int("heldBack", held).
+		log.Warn().Str("tenant", tenant).Str("anchor", anchor.Token).Str("reason", string(firstOcspReason(all, out))).Int("heldBack", held).
 			Msg("Auth-callout refused a certificate connect: the anchor requires a current OCSP answer and none could be had.")
 	}
 }
@@ -219,11 +219,4 @@ func firstOcspReason(v *x509trust.Verified, out ocspclient.Outcome) ocspclient.R
 		}
 	}
 	return ocspclient.ReasonNoResponder
-}
-
-func firstOcspReasonOf(out ocspclient.Outcome) ocspclient.Reason {
-	for _, r := range out.Reasons {
-		return r
-	}
-	return ocspclient.ReasonNone
 }

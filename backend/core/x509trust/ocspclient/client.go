@@ -25,6 +25,7 @@ package ocspclient
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -149,8 +150,10 @@ type Client struct {
 	mu       sync.Mutex
 	inflight int
 	perTen   map[string]int
-	cache    map[cacheKey]cached
-	perTenC  map[string]int // cache entries held, by tenant
+	// cache holds good answers: each element's Value is a *cacheEntry, in its tenant's lru list
+	// (front = least recently used), so eviction is O(1) within a tenant.
+	cache    map[cacheKey]*list.Element
+	lru      map[string]*list.List
 	negative map[cacheKey]negEntry
 	breakers map[breakerKey]*breaker
 	hosts    map[string]map[string]time.Time
@@ -163,14 +166,31 @@ type cacheKey struct {
 	serial         string
 }
 
-type cached struct{ until time.Time }
+type cacheEntry struct {
+	key   cacheKey
+	until time.Time
+}
+
+// maxBreakers bounds the breaker map, whatever keys appear: past it a new endpoint's failure is
+// not recorded, which costs a fetch and never a wait.
+const maxBreakers = 4096
+
+// sweepPerStore is how many of the victim tenant's least-recently-used answers one store looks
+// at for expiry before evicting: expired answers are swept a few at a time, never all at once.
+const sweepPerStore = 8
+
+// fullBudgetSlack is how far short of FetchDeadline a fetch's remaining time may be and still
+// count as having had the full deadline (the time spent getting from Check to the dial).
+const fullBudgetSlack = 50 * time.Millisecond
 
 type negEntry struct {
 	until  time.Time
 	reason Reason
 }
 
-type breakerKey struct{ tenant, anchor, url string }
+// breakerKey is one tenant's anchor's view of one responder ENDPOINT (scheme and host): the many
+// paths a host serves share one breaker, and the map's size is bounded by hosts, not URLs.
+type breakerKey struct{ tenant, anchor, host string }
 
 type breaker struct {
 	failures int
@@ -179,7 +199,8 @@ type breaker struct {
 	probing  bool
 }
 
-// New builds a client. override is used for operator-set per-anchor URLs, aia for URLs read from
+// New builds a client. override is used for the tenant-set per-anchor URLs (the reach of a tenant
+// webhook), aia for URLs read from
 // certificates; both MUST be built over a guarded transport (NewHTTPClient(guard.Transport())),
 // and aia over a guard with no operator allow list. A nil doer refuses every fetch it would make.
 func New(cfg Config, override, aia HTTPDoer, hooks Hooks) *Client {
@@ -201,8 +222,8 @@ func New(cfg Config, override, aia HTTPDoer, hooks Hooks) *Client {
 	return &Client{
 		cfg: cfg, override: override, aia: aia, hooks: hooks,
 		perTen:   map[string]int{},
-		cache:    map[cacheKey]cached{},
-		perTenC:  map[string]int{},
+		cache:    map[cacheKey]*list.Element{},
+		lru:      map[string]*list.List{},
 		negative: map[cacheKey]negEntry{},
 		breakers: map[breakerKey]*breaker{},
 		hosts:    map[string]map[string]time.Time{},
@@ -217,7 +238,8 @@ type Request struct {
 	Tenant string
 	// Anchor identifies the trust anchor (its id), part of every key.
 	Anchor string
-	// OverrideURL is the anchor's operator-set responder; empty means each certificate's AIA.
+	// OverrideURL is the anchor's own responder, set by the tenant on the anchor; empty means each
+	// certificate's AIA.
 	OverrideURL string
 	Targets     []Target
 }
@@ -299,11 +321,14 @@ func (c *Client) checkOne(ctx context.Context, req Request, t Target) (*x509trus
 	}
 	now := c.cfg.Now()
 	c.mu.Lock()
-	if e, hit := c.cache[key]; hit {
+	if el, hit := c.cache[key]; hit {
+		e := el.Value.(*cacheEntry)
 		if now.Before(e.until) {
+			c.lru[key.tenant].MoveToBack(el)
+			until := e.until
 			c.mu.Unlock()
 			c.observeCache(true)
-			return &x509trust.OCSPAnswer{Status: x509trust.OCSPStatusGood, ValidUntil: e.until}, ReasonNone
+			return &x509trust.OCSPAnswer{Status: x509trust.OCSPStatusGood, ValidUntil: until}, ReasonNone
 		}
 		c.evict(key)
 	}
@@ -321,10 +346,20 @@ func (c *Client) checkOne(ctx context.Context, req Request, t Target) (*x509trus
 	if c.cfg.FetchDeadline <= 0 {
 		return nil, ReasonCacheOnly
 	}
-	// One fetch per key, however many connects ask. Waiters wait only as long as their own context.
+	// A connect whose budget is already spent does not dial at all: there is no time for an answer
+	// to arrive in, and a fetch started now would only fail and be blamed on the responder.
+	if ctx.Err() != nil {
+		return nil, ReasonTimeout
+	}
+	// One fetch per key, however many connects ask. The fetch runs on its OWN full deadline,
+	// detached from whichever waiter started it: a waiter that leaves early stops waiting, but the
+	// answer still arrives and is cached for the next connect. Waiters wait only as long as their
+	// own context.
 	ch := c.flight.DoChan(fmt.Sprintf("%q|%q|%s|%s|%s", key.tenant, key.anchor, key.issuer.Key, key.issuer.Name, key.serial),
 		func() (any, error) {
-			ans, reason := c.fetch(ctx, req, t, key)
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.cfg.FetchDeadline)
+			defer cancel()
+			ans, reason := c.fetch(fctx, req, t, key)
 			return fetched{ans, reason}, nil
 		})
 	select {
@@ -368,7 +403,14 @@ func (c *Client) fetch(ctx context.Context, req Request, t Target, key cacheKey)
 	if err != nil {
 		return nil, ReasonUnsigned
 	}
-	bk := breakerKey{tenant: req.Tenant, anchor: req.Anchor, url: target}
+	bk := breakerKey{tenant: req.Tenant, anchor: req.Anchor, host: u.Scheme + "://" + u.Host}
+	// Whether this fetch had the whole FetchDeadline to work with. Only then is its timeout the
+	// responder's fault and counted toward the breaker; a fetch cut short by a caller's deadline
+	// says nothing about the responder.
+	full := true
+	if dl, ok := ctx.Deadline(); ok {
+		full = time.Until(dl) >= c.cfg.FetchDeadline-fullBudgetSlack
+	}
 
 	now := c.cfg.Now()
 	if reason := c.admit(req.Tenant, u.Host, fromAIA, bk, now); reason != ReasonNone {
@@ -385,7 +427,13 @@ func (c *Client) fetch(ctx context.Context, req Request, t Target, key cacheKey)
 	c.release(req.Tenant)
 
 	if reason != ReasonNone {
-		c.endpointResult(bk, false)
+		if reason != ReasonTimeout || full || ctx.Err() == nil {
+			c.endpointResult(bk, false)
+		} else {
+			c.mu.Lock()
+			c.unprobe(bk)
+			c.mu.Unlock()
+		}
 		c.observeFetch(time.Since(started), false)
 		return nil, reason
 	}
@@ -486,8 +534,11 @@ func (c *Client) endpointResult(bk breakerKey, ok bool) {
 		return
 	}
 	if b == nil {
-		if len(c.breakers) > sweepOver {
+		if len(c.breakers) >= maxBreakers {
 			c.sweepBreakers()
+			if len(c.breakers) >= maxBreakers {
+				return // bounded: this endpoint's failure goes unrecorded, a fetch and never a wait
+			}
 		}
 		b = &breaker{}
 		c.breakers[bk] = b
@@ -511,52 +562,71 @@ func (c *Client) sweepBreakers() {
 	}
 }
 
-// store caches a good answer. When the cache is full it first drops expired answers, and then
-// evicts from the tenant holding the MOST answers (the storing tenant on a tie): a tenant cycling
-// certificates evicts its own answers once it is the largest holder, and never pushes a smaller
-// tenant's warm answers out.
+// store caches a good answer. When the cache is full it evicts from the tenant holding the MOST
+// answers (the storing tenant on a tie), least recently used first, after sweeping up to
+// sweepPerStore of that tenant's oldest answers for expiry: a tenant cycling certificates evicts
+// its own answers once it is the largest holder, and never pushes a smaller tenant's warm answers
+// out. Eviction is O(1) per answer plus O(tenants) to pick the tenant; nothing walks the cache.
 func (c *Client) store(key cacheKey, until time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, have := c.cache[key]; !have && len(c.cache) >= c.cfg.CacheEntries {
+	if el, have := c.cache[key]; have {
+		el.Value.(*cacheEntry).until = until
+		c.lru[key.tenant].MoveToBack(el)
+		return
+	}
+	if len(c.cache) >= c.cfg.CacheEntries {
 		now := c.cfg.Now()
-		for k, e := range c.cache {
-			if !now.Before(e.until) {
-				c.evict(k)
+		victim, most := key.tenant, 0
+		if l := c.lru[key.tenant]; l != nil {
+			most = l.Len()
+		}
+		for t, l := range c.lru {
+			if l.Len() > most {
+				victim, most = t, l.Len()
 			}
 		}
-		for len(c.cache) >= c.cfg.CacheEntries {
-			victim, most := key.tenant, c.perTenC[key.tenant]
-			for t, n := range c.perTenC {
-				if n > most {
-					victim, most = t, n
+		if l := c.lru[victim]; l != nil {
+			swept := false
+			el := l.Front()
+			for i := 0; i < sweepPerStore && el != nil; i++ {
+				next := el.Next()
+				if e := el.Value.(*cacheEntry); !now.Before(e.until) {
+					c.evict(e.key)
+					swept = true
 				}
+				el = next
 			}
-			if most == 0 {
-				break
-			}
-			for k := range c.cache {
-				if k.tenant == victim {
-					c.evict(k)
-					break
+			if !swept {
+				if front := l.Front(); front != nil {
+					c.evict(front.Value.(*cacheEntry).key)
 				}
 			}
 		}
+		if len(c.cache) >= c.cfg.CacheEntries {
+			return // never overfill
+		}
 	}
-	if _, have := c.cache[key]; !have {
-		c.perTenC[key.tenant]++
+	l := c.lru[key.tenant]
+	if l == nil {
+		l = list.New()
+		c.lru[key.tenant] = l
 	}
-	c.cache[key] = cached{until: until}
+	c.cache[key] = l.PushBack(&cacheEntry{key: key, until: until})
 }
 
 // evict removes one cached answer. Held under c.mu.
 func (c *Client) evict(k cacheKey) {
-	if _, have := c.cache[k]; !have {
+	el, have := c.cache[k]
+	if !have {
 		return
 	}
 	delete(c.cache, k)
-	if c.perTenC[k.tenant]--; c.perTenC[k.tenant] <= 0 {
-		delete(c.perTenC, k.tenant)
+	if l := c.lru[k.tenant]; l != nil {
+		l.Remove(el)
+		if l.Len() == 0 {
+			delete(c.lru, k.tenant)
+		}
 	}
 }
 

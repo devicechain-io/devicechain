@@ -14,7 +14,7 @@ import (
 //
 //   - ocsp_mode: OFF, ENFORCE_KNOWN or REQUIRE_CURRENT. NULL reads as OFF, which is every anchor
 //     that predates this migration, so an anchor that does nothing new behaves exactly as before.
-//   - ocsp_responder_url: the operator-set responder that replaces each certificate's own
+//   - ocsp_responder_url: the tenant-set responder that replaces each certificate's own
 //     Authority Information Access entry. NULL means "use the certificate's".
 //
 // # Nullable, no default, no backfill

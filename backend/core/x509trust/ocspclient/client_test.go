@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -571,7 +572,7 @@ func TestHostBudgetBoundsAIAOnly(t *testing.T) {
 	if c.Check(context.Background(), req("t2", tgt(b, root))).Results[tgt(b, root).Key()] != x509trust.OCSPGood {
 		t.Fatal("the budget is not per tenant")
 	}
-	// the operator-set override is not counted against it
+	// the anchor's own (tenant-set) override is not counted against it
 	r := req("t1", tgt(b, root))
 	r.OverrideURL = s3.URL
 	b2 := mk(t, root, "b2", false)
@@ -662,7 +663,10 @@ func TestCacheEvictionNeverStarvesASmallerTenant(t *testing.T) {
 		t.Fatalf("the victim's answers were evicted by another tenant (%d refetches)", got)
 	}
 	c.mu.Lock()
-	n, noisy := len(c.cache), c.perTenC["noisy"]
+	n, noisy := len(c.cache), 0
+	if l := c.lru["noisy"]; l != nil {
+		noisy = l.Len()
+	}
 	c.mu.Unlock()
 	if n > 6 || noisy != 4 {
 		t.Fatalf("cache %d entries (bound 6), noisy holds %d (want 4)", n, noisy)
@@ -727,5 +731,103 @@ func TestGoodThatLapsesDuringTheCheckIsNotGood(t *testing.T) {
 	out := c.Check(context.Background(), req("t1", tgt(a, root), tgt(b, root)))
 	if out.Results[tgt(a, root).Key()] == x509trust.OCSPGood || out.Reasons[tgt(a, root).Key()] != ReasonStale {
 		t.Fatalf("a lapsed during the check but was reported %v / %q", out.Results[tgt(a, root).Key()], out.Reasons[tgt(a, root).Key()])
+	}
+}
+
+// REVIEW MEDIUM-1. A connect whose budget is already spent must not dial, and its truncated
+// "timeout" is not the responder's fault: it never counts toward the breaker. One connect here
+// spends its budget on a slow responder, then checks three more certificates under the spent
+// budget (the shape of registration on first connect followed by the grant).
+func TestASpentConnectBudgetNeverOpensTheBreaker(t *testing.T) {
+	clk := &clock{t: base}
+	root := mk(t, nil, "root", true)
+	srv := newResponder(t, clk, root)
+	srv.delay = 3 * time.Second
+	var opened atomic.Int64
+	c := newClient(clk, Config{FetchDeadline: 150 * time.Millisecond}, Hooks{BreakerOpened: func() { opened.Add(1) }})
+	ctx := WithConnectBudget(context.Background())
+	for i := 0; i < 4; i++ {
+		leaf := mk(t, root, "leaf", false, srv.URL)
+		c.Check(ctx, req("t1", tgt(leaf, root)))
+	}
+	time.Sleep(300 * time.Millisecond) // let the one real fetch finish timing out
+	if n := opened.Load(); n != 0 {
+		t.Fatalf("the breaker opened (%d) on timeouts the connect budget caused", n)
+	}
+	if h := srv.hits.Load(); h != 1 {
+		t.Fatalf("responder was asked %d times; only the first check had budget to fetch", h)
+	}
+}
+
+// REVIEW MEDIUM-2. The shared fetch does not run under its first waiter's context: a waiter that
+// leaves early stops waiting, but the fetch finishes on its own deadline and its answer is cached.
+func TestALateAnswerIsCachedAfterItsFirstWaiterLeft(t *testing.T) {
+	clk := &clock{t: base}
+	root := mk(t, nil, "root", true)
+	srv := newResponder(t, clk, root)
+	srv.delay = 250 * time.Millisecond
+	leaf := mk(t, root, "leaf", false, srv.URL)
+	c := newClient(clk, Config{FetchDeadline: 2 * time.Second}, Hooks{})
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if out := c.Check(short, req("t1", tgt(leaf, root))); out.Reasons[tgt(leaf, root).Key()] != ReasonTimeout {
+		t.Fatalf("the impatient waiter should time out: %+v", out)
+	}
+	time.Sleep(500 * time.Millisecond)
+	out := c.Check(context.Background(), req("t1", tgt(leaf, root)))
+	if out.Results[tgt(leaf, root).Key()] != x509trust.OCSPGood {
+		t.Fatalf("want good: %+v", out)
+	}
+	if h := srv.hits.Load(); h != 1 {
+		t.Fatalf("responder asked %d times; the first fetch's answer should have been cached", h)
+	}
+}
+
+// REVIEW LOW-1. Eviction is least-recently-used within the largest tenant: an answer that is
+// being used survives a stream of new answers from its own tenant.
+func TestCacheEvictsTheLeastRecentlyUsed(t *testing.T) {
+	clk := &clock{t: base}
+	root := mk(t, nil, "root", true)
+	srv := newResponder(t, clk, root)
+	c := newClient(clk, Config{CacheEntries: 20}, Hooks{})
+	hot := mk(t, root, "hot", false, srv.URL)
+	c.Check(context.Background(), req("t1", tgt(hot, root)))
+	for i := 0; i < 200; i++ {
+		c.Check(context.Background(), req("t1", tgt(mk(t, root, "n", false, srv.URL), root)))
+		c.Check(context.Background(), req("t1", tgt(hot, root))) // keep it in use
+	}
+	// one fetch for hot, one for each new certificate: hot was never fetched again
+	if h := srv.hits.Load(); h != 201 {
+		t.Fatalf("responder asked %d times, want 201: the answer in constant use was evicted %d times", h, h-201)
+	}
+}
+
+// REVIEW LOW-2. The breaker is per responder HOST: failures spread over many paths of one host
+// open it, and the breaker map has a hard bound however many keys appear.
+func TestBreakerIsPerHostAndBounded(t *testing.T) {
+	clk := &clock{t: base}
+	root := mk(t, nil, "root", true)
+	srv := newResponder(t, clk, root)
+	srv.mangle = func(w http.ResponseWriter, _ []byte) bool { http.Error(w, "down", 503); return true }
+	var opened atomic.Int64
+	c := newClient(clk, Config{}, Hooks{BreakerOpened: func() { opened.Add(1) }})
+	leaf := mk(t, root, "leaf", false)
+	for i := 0; i < breakerThreshold; i++ {
+		r := req("t1", tgt(leaf, root))
+		r.OverrideURL = srv.URL + "/p" + strconv.Itoa(i)
+		c.Check(context.Background(), r)
+		clk.advance(2 * certFailureTTL) // past the per-certificate negative entry
+	}
+	if opened.Load() != 1 {
+		t.Fatalf("failures on %d paths of one host opened the breaker %d times, want 1", breakerThreshold, opened.Load())
+	}
+	for i := 0; i < 3*4096; i++ {
+		c.endpointResult(breakerKey{tenant: "t1", anchor: strconv.Itoa(i)}, false)
+	}
+	c.mu.Lock()
+	n := len(c.breakers)
+	c.mu.Unlock()
+	if n > 4096 {
+		t.Fatalf("breaker map holds %d entries", n)
 	}
 }

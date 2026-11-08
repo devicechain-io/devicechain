@@ -39,6 +39,7 @@ type ocspBuild struct {
 	noNext      bool
 	critical    bool
 	criticalTop bool
+	version     int
 	extraSingle []ocspSingleASN1
 	respStatus  ocsp.ResponseStatus
 	tamper      bool
@@ -133,6 +134,7 @@ func (b ocspBuild) der(t testing.TB) []byte {
 	if b.responderID != nil {
 		tbs.RawResponderID = *b.responderID
 	}
+	tbs.Version = b.version
 	if b.criticalTop {
 		tbs.ResponseExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{1, 2, 3, 5}, Critical: true, Value: []byte{5, 0}}}
 	}
@@ -363,6 +365,7 @@ func TestVerifyOCSPResponse_Refusals(t *testing.T) {
 		}, OCSPMalformed},
 		{"critical single extension", func(b *ocspBuild) { b.critical = true }, OCSPMalformed},
 		{"critical response extension", func(b *ocspBuild) { b.criticalTop = true }, OCSPMalformed},
+		{"response data version other than v1", func(b *ocspBuild) { b.version = 1 }, OCSPMalformed},
 		{"responder error status", func(b *ocspBuild) { b.respStatus = ocsp.TryLater }, OCSPNotSuccessful},
 		{"a second single response for the same certificate", func(b *ocspBuild) {
 			b.extraSingle = []ocspSingleASN1{{
