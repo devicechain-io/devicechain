@@ -206,6 +206,11 @@ var tableSweepExemptions = map[string]string{
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
+	"device-management.alarm_dispositions": "an operator's label on one alarm cycle, written by " +
+		"setAlarmDisposition on an alarm that exists. No alarm is raised in a drill that sends no " +
+		"telemetry (see device-management.alarms), so there is nothing to label, and labelling a hand-made " +
+		"alarm would assert the row rather than the path that produces it. The label's write, reads, " +
+		"scope and alarm cascade are proved by device-management's own model, wire and Postgres tests.",
 	"notification-management.notification_deferrals": "a page HELD by a policy's quiet hours. The only " +
 		"writer is DeferNotifications, called by the policy notifier when an ALARM state change arrives " +
 		"inside a quiet stretch, and the row is deleted when it is released. No alarm is raised in a " +
