@@ -83,10 +83,10 @@ func TestImportStoresInstalledPositionsAndRejectsBadRowsOneByOne(t *testing.T) {
 		byToken[d.Token] = d
 	}
 	require.Len(t, byToken, 2, "the out-of-range row must not have created a device")
-	require.InDelta(t, 40.7128, byToken["lamp-1"].InstalledLat.Float64, 1e-9)
-	require.Equal(t, InstalledSourceImport, byToken["lamp-1"].InstalledSource.String)
-	require.True(t, byToken["lamp-1"].InstalledUpdatedAt.Valid)
-	require.False(t, byToken["lamp-4"].InstalledLat.Valid, "a row that states no position stores none")
+	require.InDelta(t, 40.7128, *byToken["lamp-1"].InstalledLat, 1e-9)
+	require.Equal(t, InstalledSourceImport, *byToken["lamp-1"].InstalledSource)
+	require.True(t, byToken["lamp-1"].InstalledUpdatedAt != nil)
+	require.False(t, byToken["lamp-4"].InstalledLat != nil, "a row that states no position stores none")
 }
 
 func TestImportReRunComparesTheInstalledPositionOnlyForACallerWhoMayReadIt(t *testing.T) {
@@ -104,7 +104,7 @@ func TestImportReRunComparesTheInstalledPositionOnlyForACallerWhoMayReadIt(t *te
 	diff := mustImport(t, api, holder, row(41), DeviceImportModeNone, false)
 	require.Equal(t, int32(1), diff.Conflict, outcomes(diff))
 	d, _ := api.DevicesByToken(holder, []string{"lamp-1"})
-	require.InDelta(t, 40.7128, d[0].InstalledLat.Float64, 1e-9)
+	require.InDelta(t, 40.7128, *d[0].InstalledLat, 1e-9)
 
 	// 🔴 A writer who may not read positions gets the SAME answer whether its guess is right or
 	// wrong, so a re-run is no oracle for a coordinate.
@@ -153,7 +153,7 @@ func TestImportReRunIsIdempotentForAHalfwayCoordinate(t *testing.T) {
 	again := mustImport(t, api, holder, rows, DeviceImportModeNone, false)
 	require.Equal(t, int32(1), again.Exists, outcomes(again))
 	d, _ := api.DevicesByToken(holder, []string{"lamp-h"})
-	require.Equal(t, 40.0000001, d[0].InstalledLat.Float64)
+	require.Equal(t, 40.0000001, *d[0].InstalledLat)
 }
 
 // The range check runs on the value that would be STORED, after rounding to the column's scale:

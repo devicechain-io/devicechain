@@ -4,7 +4,6 @@
 package model
 
 import (
-	"database/sql"
 	"fmt"
 	"math"
 	"math/big"
@@ -49,13 +48,19 @@ var ErrInvalidInstalledPosition = integrity.NewRefusal(integrity.ClassInvalid,
 //
 // Nullable, no default: NULL is "no installed position". The pair latitude/longitude is written and
 // cleared together; the other fields may be NULL beside a position.
+//
+// 🔑 POINTERS WITH omitempty, NOT sql.Null*. The device row is cached JSON-encoded and charged by
+// its encoded length against the per-device cache's byte bound (TestDeviceByTokenEntryCost...). An
+// sql.Null* encodes as {"Float64":0,"Valid":false} even when NULL, which made every device pay for
+// six absent columns; a nil pointer with omitempty encodes as nothing, so a device with no
+// installed position costs exactly what it did before the columns existed.
 type InstalledPosition struct {
-	InstalledLat       sql.NullFloat64 `gorm:"column:installed_lat;type:decimal(10,8);<-:false"`
-	InstalledLon       sql.NullFloat64 `gorm:"column:installed_lon;type:decimal(11,8);<-:false"`
-	InstalledElev      sql.NullFloat64 `gorm:"column:installed_elev;type:decimal(12,4);<-:false"`
-	InstalledAccuracy  sql.NullFloat64 `gorm:"column:installed_accuracy;type:decimal(12,4);<-:false"`
-	InstalledSource    sql.NullString  `gorm:"column:installed_source;<-:false"`
-	InstalledUpdatedAt sql.NullTime    `gorm:"column:installed_updated_at;<-:false"`
+	InstalledLat       *float64   `gorm:"column:installed_lat;type:decimal(10,8);<-:false" json:",omitempty"`
+	InstalledLon       *float64   `gorm:"column:installed_lon;type:decimal(11,8);<-:false" json:",omitempty"`
+	InstalledElev      *float64   `gorm:"column:installed_elev;type:decimal(12,4);<-:false" json:",omitempty"`
+	InstalledAccuracy  *float64   `gorm:"column:installed_accuracy;type:decimal(12,4);<-:false" json:",omitempty"`
+	InstalledSource    *string    `gorm:"column:installed_source;<-:false" json:",omitempty"`
+	InstalledUpdatedAt *time.Time `gorm:"column:installed_updated_at;<-:false" json:",omitempty"`
 }
 
 // InstalledPositionInput is what an operator, an import row or a tool supplies.
@@ -71,12 +76,12 @@ type InstalledPositionInput struct {
 // Position returns the stored installed position as a geo.Position, and false when there is none.
 // A row holding only one of the pair is treated as having none: half a coordinate is not a place.
 func (p InstalledPosition) Position() (geo.Position, bool) {
-	if !p.InstalledLat.Valid || !p.InstalledLon.Valid {
+	if p.InstalledLat == nil || p.InstalledLon == nil {
 		return geo.Position{}, false
 	}
-	out := geo.Position{Lat: p.InstalledLat.Float64, Lon: p.InstalledLon.Float64}
-	if p.InstalledElev.Valid {
-		out.Elevation, out.HasElevation = p.InstalledElev.Float64, true
+	out := geo.Position{Lat: *p.InstalledLat, Lon: *p.InstalledLon}
+	if p.InstalledElev != nil {
+		out.Elevation, out.HasElevation = *p.InstalledElev, true
 	}
 	return out, true
 }
@@ -171,19 +176,15 @@ func (in InstalledPositionInput) rounded() InstalledPositionInput {
 // holds device:write but no authority to read positions.
 func (in InstalledPositionInput) written(source string, now time.Time) *InstalledPosition {
 	in = in.rounded()
-	p := &InstalledPosition{
-		InstalledLat:       sql.NullFloat64{Float64: in.Latitude, Valid: true},
-		InstalledLon:       sql.NullFloat64{Float64: in.Longitude, Valid: true},
-		InstalledSource:    sql.NullString{String: source, Valid: true},
-		InstalledUpdatedAt: sql.NullTime{Time: now, Valid: true},
+	lat, lon := in.Latitude, in.Longitude
+	return &InstalledPosition{
+		InstalledLat:       &lat,
+		InstalledLon:       &lon,
+		InstalledElev:      in.Elevation, // rounded returned fresh copies
+		InstalledAccuracy:  in.Accuracy,
+		InstalledSource:    &source,
+		InstalledUpdatedAt: &now,
 	}
-	if in.Elevation != nil {
-		p.InstalledElev = sql.NullFloat64{Float64: *in.Elevation, Valid: true}
-	}
-	if in.Accuracy != nil {
-		p.InstalledAccuracy = sql.NullFloat64{Float64: *in.Accuracy, Valid: true}
-	}
-	return p
 }
 
 // installedColumns is the column set one write names, rounded to the columns' scales. A clear

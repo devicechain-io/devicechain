@@ -201,14 +201,14 @@ func TestAScopedMemberCannotReadOrSetPositionsOutOfScope(t *testing.T) {
 	}
 	// Neither touched globex's pump.
 	untouched, _ := f.api.DevicesByToken(f.operator(), []string{"globex-pump"})
-	if untouched[0].InstalledLat.Float64 != 1 {
+	if *untouched[0].InstalledLat != 1 {
 		t.Fatalf("an out-of-scope write landed: %v", untouched[0].InstalledPosition)
 	}
 	// Within scope the member still may not WRITE: scoped members read, and the refusal is named.
 	if got := serve(t, member, set, map[string]any{"f": "DEVICE", "t": "acme-pump"}); codeOf(got) != "FORBIDDEN" {
 		t.Fatalf("set in scope by a scoped member: %v, want FORBIDDEN", got.errs)
 	}
-	if kept, _ := f.api.DevicesByToken(f.operator(), []string{"acme-pump"}); kept[0].InstalledLat.Float64 != 3 {
+	if kept, _ := f.api.DevicesByToken(f.operator(), []string{"acme-pump"}); *kept[0].InstalledLat != 3 {
 		t.Fatalf("a scoped member's write landed: %v", kept[0].InstalledPosition)
 	}
 	// And an asset outside the scope is NOT_FOUND too.
@@ -240,7 +240,7 @@ func TestLatitude91IsRefusedBeforeAnythingIsStored(t *testing.T) {
 		}
 	}
 	d, _ := f.api.DevicesByToken(op, []string{"acme-pump"})
-	if d[0].InstalledLat.Valid {
+	if d[0].InstalledLat != nil {
 		t.Fatalf("a refused position was stored: %v", d[0].InstalledPosition)
 	}
 	// An unknown source is refused too, at the schema (enum) and by the model.
@@ -299,14 +299,14 @@ func TestAnEditThatLoadedTheRowBeforeASetDoesNotRevertThePosition(t *testing.T) 
 		t.Fatalf("stale save: %v", err)
 	}
 	fresh, _ := f.api.DevicesByToken(op, []string{"acme-pump"})
-	if !fresh[0].InstalledLat.Valid || fresh[0].InstalledLat.Float64 != 7 {
+	if fresh[0].InstalledLat == nil || *fresh[0].InstalledLat != 7 {
 		t.Fatalf("a stale whole-row save reverted the installed position: %v", fresh[0].InstalledPosition)
 	}
 	if got := serve(t, op, `mutation { updateDevice(token: "acme-pump", request: {name: "renamed"}) { token } }`, nil); len(got.errs) != 0 {
 		t.Fatalf("update: %v", got.errs)
 	}
 	fresh, _ = f.api.DevicesByToken(op, []string{"acme-pump"})
-	if fresh[0].InstalledLat.Float64 != 7 {
+	if *fresh[0].InstalledLat != 7 {
 		t.Fatalf("UpdateDevice reverted the installed position: %v", fresh[0].InstalledPosition)
 	}
 }

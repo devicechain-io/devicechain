@@ -18,31 +18,18 @@ type InstalledPositionResolver struct {
 	M model.InstalledPosition
 }
 
-func (r *InstalledPositionResolver) Latitude() float64  { return r.M.InstalledLat.Float64 }
-func (r *InstalledPositionResolver) Longitude() float64 { return r.M.InstalledLon.Float64 }
-func (r *InstalledPositionResolver) Elevation() *float64 {
-	if !r.M.InstalledElev.Valid {
-		return nil
-	}
-	return &r.M.InstalledElev.Float64
-}
-func (r *InstalledPositionResolver) Accuracy() *float64 {
-	if !r.M.InstalledAccuracy.Valid {
-		return nil
-	}
-	return &r.M.InstalledAccuracy.Float64
-}
-func (r *InstalledPositionResolver) Source() *string {
-	if !r.M.InstalledSource.Valid {
-		return nil
-	}
-	return &r.M.InstalledSource.String
-}
+// Latitude and Longitude are only ever resolved for a position that has both (installedPositionOf
+// and the set mutation guarantee it), so the pointers are not nil here.
+func (r *InstalledPositionResolver) Latitude() float64   { return *r.M.InstalledLat }
+func (r *InstalledPositionResolver) Longitude() float64  { return *r.M.InstalledLon }
+func (r *InstalledPositionResolver) Elevation() *float64 { return r.M.InstalledElev }
+func (r *InstalledPositionResolver) Accuracy() *float64  { return r.M.InstalledAccuracy }
+func (r *InstalledPositionResolver) Source() *string     { return r.M.InstalledSource }
 func (r *InstalledPositionResolver) UpdatedAt() *string {
-	if !r.M.InstalledUpdatedAt.Valid {
+	if r.M.InstalledUpdatedAt == nil {
 		return nil
 	}
-	return util.FormatTime(r.M.InstalledUpdatedAt.Time)
+	return util.FormatTime(*r.M.InstalledUpdatedAt)
 }
 
 // installedPositionOf is the ONE function both Device.installedPosition and Asset.installedPosition

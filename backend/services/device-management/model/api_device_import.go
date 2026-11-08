@@ -6,7 +6,6 @@ package model
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -316,14 +315,11 @@ func installedPositionOfRow(row *DeviceImportRow) (*InstalledPositionInput, erro
 // sameDecimal compares an incoming value with a stored one at the column's scale, so a coordinate
 // that was rounded on the way in is not reported as different from itself. Both sides go through
 // roundToScale, the rounding every write applies, so the comparison and the storage agree.
-func sameDecimal(stored sql.NullFloat64, incoming *float64, scale int) bool {
-	if incoming == nil {
-		return !stored.Valid
+func sameDecimal(stored, incoming *float64, scale int) bool {
+	if incoming == nil || stored == nil {
+		return incoming == nil && stored == nil
 	}
-	if !stored.Valid {
-		return false
-	}
-	return roundToScale(stored.Float64, scale) == roundToScale(*incoming, scale)
+	return roundToScale(*stored, scale) == roundToScale(*incoming, scale)
 }
 
 // installedPositionDiffers reports whether the row's installed position differs from the stored

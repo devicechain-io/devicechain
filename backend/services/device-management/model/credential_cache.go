@@ -48,8 +48,8 @@ const CredentialCacheMaxEntries = 262144
 // metadata credentialEntrySize counts: the entry struct, its list element, its slot in
 // each of the two maps at their emptiest, and its key's place in the device index.
 // TestCredentialEntryOverheadCoversTheStructs holds it at or above that arithmetic,
-// computed from the running Go's own struct sizes. (It was 1024 until the device row gained its
-// installed position, six nullable columns the entry's copy of the row carries.)
+// computed from the running Go's own struct sizes. (It was 1024 until the device row the entry
+// copies grew past it: the installed-position columns are six more pointer fields.)
 const credentialEntryOverhead = 1280
 
 // credentialKey is the hash of what a device presented. The raw identity is never a map
@@ -432,6 +432,7 @@ func credentialEntrySize(e *credentialEntry) int {
 func cloneDevice(d *Device) Device {
 	c := *d
 	c.DeviceType = nil
+	c.InstalledPosition = d.InstalledPosition.clone()
 	if d.Metadata != nil {
 		m := datatypes.JSON(bytes.Clone(*d.Metadata))
 		c.Metadata = &m
