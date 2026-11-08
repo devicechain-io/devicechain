@@ -8,7 +8,12 @@ title: Matriz de capacidades por transporte
 Esta página muestra qué hace hoy cada transporte, en cada dirección, y nombra las carencias.
 
 :::info El código es la fuente de verdad
-Esta página se mantiene a mano contra la implementación, no se genera, así que puede quedarse atrás.
+El texto de esta página se mantiene a mano contra la implementación, así que puede quedarse atrás. Los
+símbolos de la tabla de transportes de dispositivo y de la tabla de operaciones LwM2M son distintos: se
+generan a partir de una suite de conformidad que ejerce una instancia real con clientes escritos por
+terceros (Eclipse Paho, Eclipse Leshan, Eclipse Tahu y curl), y cada círculo lleno de ellas nombra
+comprobaciones que pasaron contra una compilación reciente, cada una de las cuales antes se demostró que
+falla ante un defecto introducido a propósito.
 Cuando ella y tu instancia discrepen, tu instancia tiene razón. Cada afirmación de más abajo se leyó
 del servicio que la implementa, no de un documento de diseño; todo lo que no pudo establecerse así
 aparece marcado como tal en lugar de rellenado. Una celda que exagera lo que hace la plataforma es un
@@ -47,6 +52,8 @@ pregunta real.
 ## Transportes de dispositivo
 
 Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vuelta.
+
+{/* conformance:table device-transports */}
 
 | Transporte | Lectura | Escritura | Suscripción |
 | --- | :---: | :---: | :---: |
@@ -354,14 +361,16 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
 
 #### Operaciones LwM2M en detalle
 
+{/* conformance:table lwm2m-operations */}
+
 | Operación | | Notas |
 | --- | :---: | --- |
-| Read | ◐ | GET de CoAP; una respuesta de más de 8 KiB se trunca en silencio y se sigue reportando como correcta |
+| Read | ◐ | GET de CoAP; el cuerpo se devuelve tal como lo envió el dispositivo, en su propio formato de contenido (en base64 cuando no es texto, como ocurre con TLV); una respuesta de más de 8 KiB se trunca en silencio y se sigue reportando como correcta |
 | Write | ◐ | Un único recurso escalar, solo reemplazo |
 | Execute | ● | Con o sin argumentos. Un Execute sin procesar del recurso Factory Reset del objeto Device (`/3/0/5`) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`; está prevista una operación con nombre y confirmación |
 | Reboot (`lwm2m.reboot`) | ● | Un comando con nombre que ejecuta (Execute) el recurso Reboot del objeto Device; no recibe parámetros |
-| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ● | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía |
-| Recolección de información del dispositivo | ● | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría |
+| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ◐ | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía. Solo se decodifican respuestas text/plain: un dispositivo que responde en TLV a la lectura de un único recurso, como hace Eclipse Leshan por defecto, ve todos sus recursos listados como ausentes y el comando falla |
+| Recolección de información del dispositivo | ◐ | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría. Solo se decodifican respuestas text/plain, así que no se guarda nada de un dispositivo que responde en TLV |
 | Observe | ◐ | Solo SenML-JSON; solo recursos numéricos; lista de objetos fija; 32 por registro |
 | Discover | ○ | No implementado |
 | Create | ○ | No implementado |
