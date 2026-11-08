@@ -523,7 +523,7 @@ step_setup() {
   [[ -n "$pw" ]] || fail "Secret $namespace/dci-$instance-superuser holds no superuser password"
   admin_token="$(login "superuser@devicechain.local" "$pw")"
   [[ -n "$admin_token" && "$admin_token" != null ]] || fail "could not sign in as the superuser"
-  member_password="$(openssl rand -base64 24 | tr -d '/+=')Aa1"
+  member_password="$(rand_b64 24 | tr -d '/+=')Aa1"
 
   main_token="$(provision_tenant "$tenant" '{}')"
   [[ -n "$main_token" ]] || fail "no access token for tenant $tenant (it may exist already: run 'down' and 'up' for a clean instance)"
@@ -535,14 +535,14 @@ step_setup() {
 
   tenant_token="$main_token"
   make_profile_and_type
-  mq_secret="$work/secret-mqtt"; openssl rand -hex 24 | tr -d '\n' >"$mq_secret"
-  http_secret="$work/secret-http"; openssl rand -hex 24 | tr -d '\n' >"$http_secret"
+  mq_secret="$work/secret-mqtt"; rand_hex 24 >"$mq_secret"
+  http_secret="$work/secret-http"; rand_hex 24 >"$http_secret"
   make_device "$mq_dev" MQTT_BASIC "$mq_secret"
   make_device "$http_dev" ACCESS_TOKEN "$http_secret"
 
   tenant_token="$rl_token"
   make_profile_and_type
-  rl_secret="$work/secret-rl"; openssl rand -hex 24 | tr -d '\n' >"$rl_secret"
+  rl_secret="$work/secret-rl"; rand_hex 24 >"$rl_secret"
   make_device "$rl_dev" ACCESS_TOKEN "$rl_secret"
   tenant_token="$main_token"
 

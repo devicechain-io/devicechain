@@ -124,6 +124,11 @@ red() { printf '\033[1;33m    RED (as designed) %s\033[0m\n' "$*"; }
 fail() { printf '\n\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 warn() { printf '\n\033[1;33mWARN: %s\033[0m\n' "$*" >&2; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required but not on PATH"; }
+# openssl on Windows ends its output with CRLF, and stripping only the newline keeps the CR: a secret
+# with a stray carriage return in it is a different secret, and Paho refuses to send one as an MQTT
+# password ("Invalid UTF-8 char: [d]").
+rand_hex() { openssl rand -hex "$1" | tr -d '\r\n'; }
+rand_b64() { openssl rand -base64 "$1" | tr -d '\r\n'; }
 redact() { sed -u -E 's/^([[:space:]]*password:[[:space:]]*).+$/\1[redacted]/'; }
 
 # jq on Windows writes CRLF unless told not to, and "true\r" is not "true". -b is that switch.
@@ -192,8 +197,8 @@ EOK
 # Secret dcctl writes; they authenticate nothing but this rig's instance.
 write_lwm2m_identities() {
   local f="$1" psk_a psk_b
-  psk_a="$(openssl rand -base64 24 | tr -d '\n')"
-  psk_b="$(openssl rand -base64 24 | tr -d '\n')"
+  psk_a="$(rand_b64 24)"
+  psk_b="$(rand_b64 24)"
   jq -n --arg ta "$tenant" --arg ty "$dtype" --arg pa "$psk_a" --arg pb "$psk_b" '[
     {identity:"conf-lwm2m-a", psk:$pa, tenant:$ta, externalId:"conf-lwm2m-a", deviceTypeToken:$ty, autoRegister:true},
     {identity:"conf-lwm2m-tlv", psk:$pb, tenant:$ta, externalId:"conf-lwm2m-tlv", deviceTypeToken:$ty, autoRegister:true}]' >"$f"
@@ -235,10 +240,25 @@ instance:
         streamMaxMsgs: $stream_max_msgs
 EOV
   say "bootstrapping $instance on the DEFAULT profile, with lwm2m-ingest and sparkplug-ingest added"
-  "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host "$host" --build --version "$tag" \
-    --lwm2m-identities "$(winpath "$state_dir/lwm2m-identities.json")" \
-    --sparkplug-source "$(winpath "$state_dir/sparkplug-source.json")" \
-    --values "$(winpath "$state_dir/values.yaml")" 2>&1 | redact
+  # A fresh bootstrap given --values records the overlay on the declaration with a compare-and-swap of
+  # a read taken just after declaring it, and the operator's first status write on the new declaration
+  # can land in between: dcctl then stops with "changed while the values overlay was being recorded".
+  # The declaration is in place by then and a second bootstrap carries on from it, so the rig tries once
+  # more for exactly that message and for nothing else.
+  local attempt rc
+  for attempt in 1 2; do
+    rc=0
+    "$dcctl" bootstrap local "$instance" --yes --no-escrow --cluster "$cluster" --host "$host" --build --version "$tag" \
+      --lwm2m-identities "$(winpath "$state_dir/lwm2m-identities.json")" \
+      --sparkplug-source "$(winpath "$state_dir/sparkplug-source.json")" \
+      --values "$(winpath "$state_dir/values.yaml")" 2>&1 | redact | tee "$rig_tmp/bootstrap.log" || rc=$?
+    ((rc != 0)) || break
+    if ((attempt == 1)) && grep -q 'changed while the values overlay was being recorded' "$rig_tmp/bootstrap.log"; then
+      warn "dcctl bootstrap raced the operator's first status write while recording the values overlay; bootstrapping again"
+      continue
+    fi
+    fail "dcctl bootstrap exited with status $rc"
+  done
   say "UP COMPLETE: run 'hack/conformance-rig.sh run'"
 }
 
