@@ -104,23 +104,24 @@ func TestTLVResourceValue(t *testing.T) {
 		"single-instance multiple": {0x87, 0x03, 0x45, 0x00, '1', '.', '0', '.', '0'},
 	}
 	for name, b := range ok {
-		v, err := TLVResourceValue(b, 3)
+		v, err := TLVResourceValue(b, 0, 3)
 		require.NoError(t, err, name)
 		assert.Equal(t, []byte("1.0.0"), v, name)
 	}
 	notSingle := map[string][]byte{
-		"other resource":       {0xC1, 0x04, 0x01},
-		"two entries":          {0xC1, 0x03, 0x01, 0xC1, 0x04, 0x01},
-		"two instances":        {0x86, 0x03, 0x41, 0x00, 0x01, 0x41, 0x01, 0x02},
-		"empty multiple":       {0x80, 0x03},
-		"bare instance":        {0x41, 0x03, 0x01},
-		"empty object":         {0x00, 0x00},
-		"instance of other id": {0x03, 0x00, 0xC1, 0x04, 0x01},
+		"other resource":        {0xC1, 0x04, 0x01},
+		"two entries":           {0xC1, 0x03, 0x01, 0xC1, 0x04, 0x01},
+		"two instances":         {0x86, 0x03, 0x41, 0x00, 0x01, 0x41, 0x01, 0x02},
+		"empty multiple":        {0x80, 0x03},
+		"bare instance":         {0x41, 0x03, 0x01},
+		"empty object":          {0x00, 0x00},
+		"instance of other id":  {0x03, 0x00, 0xC1, 0x04, 0x01},
+		"other object instance": {0x07, 0x01, 0xC5, 0x03, '1', '.', '0', '.', '0'},
 	}
 	for name, b := range notSingle {
-		_, err := TLVResourceValue(b, 3)
+		_, err := TLVResourceValue(b, 0, 3)
 		assert.ErrorIs(t, err, ErrNotSingleTLVValue, name)
 	}
-	_, err := TLVResourceValue([]byte{0xC5, 0x03, '1'}, 3)
+	_, err := TLVResourceValue([]byte{0xC5, 0x03, '1'}, 0, 3)
 	assert.ErrorIs(t, err, ErrMalformedTLV)
 }

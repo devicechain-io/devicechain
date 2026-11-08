@@ -71,6 +71,10 @@ type infoResource struct {
 	Kind infoKind
 }
 
+// deviceInfoInstance is the Device object's instance: Object 3 is single-instance, and every path
+// below is under /3/0. A TLV answer wrapped in any other instance is not the one asked about.
+const deviceInfoInstance uint16 = 0
+
 // deviceInfoResources is the supported set, in the order it is read. Manufacturer, Model Number,
 // Serial Number and Firmware Version are Object 3's mandatory-or-common identity resources; Battery
 // Level is optional and absent on mains-powered devices, which is an ordinary outcome and not a
@@ -205,7 +209,7 @@ func infoFromText(res infoResource, body []byte) (val, reason string, transport 
 // bytes as UTF-8, an integer resource a 1/2/4/8-byte big-endian integer. A document that does not
 // decode, or does not carry exactly one value for THIS resource, is a reason, never a value.
 func infoFromTLV(res infoResource, body []byte) (val, reason string, transport bool) {
-	v, err := decode.TLVResourceValue(body, res.ID)
+	v, err := decode.TLVResourceValue(body, deviceInfoInstance, res.ID)
 	if err != nil {
 		return "", "TLV not decoded: " + strings.TrimPrefix(err.Error(), "lwm2m: "), false
 	}

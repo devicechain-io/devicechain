@@ -183,3 +183,14 @@ func keyForPath(path string) string {
 	}
 	return ""
 }
+
+// A value wrapped in an Object Instance other than /3/0 is not the resource that was asked about.
+func TestReadDeviceInfoRejectsTLVForAnotherInstance(t *testing.T) {
+	// 0x07 = Object Instance 1, inline length 7; it wraps C5 00 "Acme!".
+	body := "\x07\x01" + "\xC5\x00" + "Acme!"
+	info := ReadDeviceInfo(context.Background(), &infoConn{replies: map[string]infoReply{
+		"/3/0/0": {code: codes.Content, body: body, cf: tlvFormat()},
+	}}, time.Second)
+	assert.NotContains(t, info.Values, "manufacturer")
+	assert.Contains(t, reasonFor(info, "manufacturer"), "object instance 1")
+}

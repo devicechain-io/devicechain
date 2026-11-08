@@ -162,22 +162,25 @@ func TLVInteger(v []byte) (int64, error) {
 // exactly one value for the resource asked about.
 var ErrNotSingleTLVValue = errors.New("lwm2m: TLV does not carry a single value for the resource")
 
-// TLVResourceValue decodes the answer to a Read of ONE resource (/o/i/r) and returns its value
-// bytes. It accepts what conformant clients send for that Read:
+// TLVResourceValue decodes the answer to a Read of ONE resource (/o/instanceID/resourceID) and
+// returns its value bytes. It accepts what conformant clients send for that Read:
 //
 //   - a Resource-with-Value entry for resourceID (what Leshan sends);
-//   - the same wrapped in its Object Instance entry;
+//   - the same wrapped in the Object Instance entry for instanceID;
 //   - a Multiple Resource entry for resourceID holding exactly one Resource Instance.
 //
-// A multiple resource with zero or several instances, an entry for a different resource, or more
-// than one top-level entry is ErrNotSingleTLVValue: picking one of several values would be inventing
-// the answer. Bytes that do not decode are ErrMalformedTLV.
-func TLVResourceValue(b []byte, resourceID uint16) ([]byte, error) {
+// A multiple resource with zero or several instances, an entry for a different resource or object
+// instance, or more than one top-level entry is ErrNotSingleTLVValue: picking one of several values
+// would be inventing the answer. Bytes that do not decode are ErrMalformedTLV.
+func TLVResourceValue(b []byte, instanceID, resourceID uint16) ([]byte, error) {
 	entries, err := DecodeTLV(b)
 	if err != nil {
 		return nil, err
 	}
 	if len(entries) == 1 && entries[0].Kind == TLVObjectInstance {
+		if entries[0].ID != instanceID {
+			return nil, fmt.Errorf("%w: the answer is for object instance %d, not %d", ErrNotSingleTLVValue, entries[0].ID, instanceID)
+		}
 		entries = entries[0].Children
 	}
 	if len(entries) != 1 {
