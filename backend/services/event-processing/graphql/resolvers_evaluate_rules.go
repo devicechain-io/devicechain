@@ -42,6 +42,7 @@ type evaluateMeasurementInput struct {
 type evaluateLimitsInput struct {
 	MaxEvents  *int32
 	MaxIntents *int32
+	MaxEdges   *int32
 }
 
 const (
@@ -51,6 +52,43 @@ const (
 	// draftRuleToken names a ruleDefinition draft in the result.
 	draftRuleToken = "draft"
 )
+
+// Refusal reasons (EvaluateRefusalReason). Each is also the code of the refusal's diagnostic, so a
+// client that reads only diagnostics can still tell them apart.
+const (
+	refusalBusy            = "BUSY"
+	refusalTimeout         = "TIMEOUT"
+	refusalLimitExceeded   = "LIMIT_EXCEEDED"
+	refusalInvalidInput    = "INVALID_INPUT"
+	refusalRuleRejected    = "RULE_REJECTED"
+	refusalNoPublished     = "NO_PUBLISHED_VERSION"
+	refusalNoRules         = "NO_RULES"
+	refusalAllRulesSkipped = "ALL_RULES_SKIPPED"
+
+	skipReasonGroupScoped   = "GROUP_SCOPED"
+	skipReasonCorrelation   = "CORRELATION"
+	diagnosticMetricMissing = "METRIC_NOT_SUPPLIED"
+
+	// maxConcurrentEvaluations bounds the evaluations running in this process, all tenants together.
+	maxConcurrentEvaluations = 3
+)
+
+// evaluationSlots bounds the evaluations running in this PROCESS, whatever their tenants. The
+// per-tenant preview gate keeps one tenant from taking every slot; this keeps many tenants together
+// from taking the CPU live DETECT runs on. A request that finds no slot is refused as BUSY at once
+// rather than queued, so a burst cannot pile up goroutines behind it.
+var evaluationSlots = make(chan struct{}, maxConcurrentEvaluations)
+
+func acquireEvaluationSlot() bool {
+	select {
+	case evaluationSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func releaseEvaluationSlot() { <-evaluationSlots }
 
 // EvaluateRules runs a profile's rules over the events in the request and reports the edges they
 // derive and the REACT intents those edges would request, executing none of them. It is the
@@ -62,6 +100,10 @@ const (
 // authorization, the same tenant scope taken from the request's context. What differs is the
 // input (events in the request, not a stream) and the clock (an exact advance to a named instant,
 // not a window ending now), and the bound (a size cap, not 24 hours).
+//
+// 🔴 A RUN THAT EVALUATED NOTHING IS NEVER A SUCCESS. Every way of evaluating nothing (no rule, no
+// event, no free slot, out of time) is a refusal with ok false and a typed reason, because an empty
+// success reports no edges and every neverRaised expectation would pass on it.
 //
 // 🔴 THE PUBLISHED RULES ARE READ FROM THE TENANT'S OWN ROWS UNDER THE CALLER'S TENANT SCOPE.
 // DetectRuleStore.LoadByProfileVersion is a tenant-scoped read like every other, so a caller
@@ -80,17 +122,17 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 	// Cheap structural checks first: they refuse a malformed request before any rule is read or
 	// compiled.
 	if in.ProfileToken == "" {
-		return failedEvaluation("a profileToken is required"), nil
+		return refused(refusalInvalidInput, "a profileToken is required"), nil
 	}
 	events, advanceTo, diag := parseEvaluationEvents(in)
 	if diag != "" {
-		return failedEvaluation(diag), nil
+		return refused(refusalInvalidInput, diag), nil
 	}
 
 	var (
 		ruleSet  []evaluate.Rule
 		version  string
-		skipped  []string
+		skipped  []skippedRule
 		warnings []graph.Diagnostic
 	)
 	switch in.RuleSet {
@@ -98,14 +140,14 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 		var diags []graph.Diagnostic
 		ruleSet, warnings, diags = draftEvaluationRules(in)
 		if len(diags) > 0 {
-			return failedEvaluationDiags(diags...), nil
+			return refusedDiags(refusalRuleRejected, diags...), nil
 		}
 		// A draft is evaluated over events the request supplies, so the profile need not be
 		// published: the version only has to be the one the events are stamped with.
 		version = in.ProfileToken + "@draft"
 	case ruleSetPublished:
 		if in.Graph != nil && *in.Graph != "" || in.RuleDefinition != nil && *in.RuleDefinition != "" {
-			return failedEvaluation("graph and ruleDefinition are for ruleSet DRAFT; to evaluate a draft, set ruleSet to DRAFT"), nil
+			return refused(refusalInvalidInput, "graph and ruleDefinition are for ruleSet DRAFT; to evaluate a draft, set ruleSet to DRAFT"), nil
 		}
 		if r.Profiles == nil || r.DetectRules == nil {
 			return nil, fmt.Errorf("evaluation of published rules is unavailable: the rule projection is not configured")
@@ -115,7 +157,7 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 			return nil, err
 		}
 		if !found || active.ActiveVersionToken == "" {
-			return failedEvaluation(fmt.Sprintf("profile %q has no published version, so it has no published rules; "+
+			return refused(refusalNoPublished, fmt.Sprintf("profile %q has no published version, so it has no published rules; "+
 				"evaluate a draft with ruleSet DRAFT, or publish the profile", in.ProfileToken)), nil
 		}
 		version = active.ActiveVersionToken
@@ -125,29 +167,32 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 		}
 		for _, row := range rows {
 			if row.EntityGroupToken != "" {
-				skipped = append(skipped, fmt.Sprintf("%s: scoped to the group %s@%d, and an evaluated event carries no group memberships",
-					row.RuleToken, row.EntityGroupToken, row.EntityGroupVersion))
+				group := fmt.Sprintf("%s@%d", row.EntityGroupToken, row.EntityGroupVersion)
+				skipped = append(skipped, skippedRule{rule: row.RuleToken, reason: skipReasonGroupScoped, group: group,
+					message: fmt.Sprintf("%s: scoped to the group %s, and an evaluated event carries no group memberships", row.RuleToken, group)})
 				continue
 			}
 			def, err := rules.Decode([]byte(row.Definition))
 			if err != nil {
-				return failedEvaluation(fmt.Sprintf("published rule %q does not decode: %v", row.RuleToken, err)), nil
+				return refused(refusalRuleRejected, fmt.Sprintf("published rule %q does not decode: %v", row.RuleToken, err)), nil
+			}
+			if def.Type == rules.TypeCorrelation {
+				skipped = append(skipped, skippedRule{rule: row.RuleToken, reason: skipReasonCorrelation,
+					message: fmt.Sprintf("%s: correlates devices under an anchor, and an evaluated event carries no anchor memberships", row.RuleToken)})
+				continue
 			}
 			ruleSet = append(ruleSet, evaluate.Rule{Token: row.RuleToken, Def: def})
 		}
-		// Nothing to evaluate is a REFUSAL (ok false), not an empty success: an evaluation of no
-		// rules reports no edges, and a neverRaised or count 0 expectation would pass on it.
 		if len(ruleSet) == 0 {
-			note := fmt.Sprintf("profile %q has no published rules to evaluate", in.ProfileToken)
+			res := refused(refusalNoRules, fmt.Sprintf("profile %q has no published rules to evaluate", in.ProfileToken))
 			if len(skipped) > 0 {
-				note = fmt.Sprintf("every published rule of profile %q was skipped", in.ProfileToken)
+				res = refused(refusalAllRulesSkipped, fmt.Sprintf("every published rule of profile %q was skipped", in.ProfileToken))
 			}
-			res := failedEvaluation(note)
 			res.skipped = skipped
 			return res, nil
 		}
 	default:
-		return failedEvaluation(fmt.Sprintf("ruleSet must be PUBLISHED or DRAFT, not %q", in.RuleSet)), nil
+		return refused(refusalInvalidInput, fmt.Sprintf("ruleSet must be PUBLISHED or DRAFT, not %q", in.RuleSet)), nil
 	}
 
 	params := evaluate.Params{
@@ -157,32 +202,39 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 		Events:         events,
 		AdvanceTo:      advanceTo,
 		AppliedGuard:   r.AppliedGuard,
+		Lateness:       r.EvaluationLateness,
 	}
 	if in.Limits != nil {
-		if in.Limits.MaxEvents != nil {
-			params.MaxEvents = int(*in.Limits.MaxEvents)
-		}
-		if in.Limits.MaxIntents != nil {
-			params.MaxIntents = int(*in.Limits.MaxIntents)
-		}
-		if params.MaxEvents < 0 || params.MaxIntents < 0 {
-			return failedEvaluation("limits must not be negative"), nil
+		for _, l := range []struct {
+			in  *int32
+			out *int
+		}{{in.Limits.MaxEvents, &params.MaxEvents}, {in.Limits.MaxIntents, &params.MaxIntents}, {in.Limits.MaxEdges, &params.MaxEdges}} {
+			if l.in == nil {
+				continue
+			}
+			if *l.in < 0 {
+				return refused(refusalInvalidInput, "limits must not be negative"), nil
+			}
+			*l.out = int(*l.in)
 		}
 	}
 
 	// The preview's per-tenant concurrency gate, shared on purpose: an evaluation and a preview are
 	// both bounded replays of the same detection core, and a tenant's allowance of that work is one
-	// number, not one per door.
-	//
-	// Busy is a REFUSAL (ok false), not an empty success: an evaluation that ran nothing reports no
-	// edges, and a test of neverRaised or count 0 would pass on it. Contention must not turn a
-	// CI run green.
+	// number, not one per door. Then the process-wide evaluation bound.
+	const busy = "the maximum number of previews and evaluations are already running; try again in a moment"
 	if !globalPreviewGate.acquire(tenant) {
-		res := failedEvaluation("the maximum number of previews and evaluations are already running for this tenant; try again in a moment")
+		res := refused(refusalBusy, busy)
 		res.skipped = skipped
 		return res, nil
 	}
 	defer globalPreviewGate.release(tenant)
+	if !acquireEvaluationSlot() {
+		res := refused(refusalBusy, busy)
+		res.skipped = skipped
+		return res, nil
+	}
+	defer releaseEvaluationSlot()
 
 	runCtx, cancel := context.WithTimeout(ctx, previewBudget(ctx))
 	defer cancel()
@@ -194,21 +246,26 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 		var inputErr *evaluate.InputError
 		switch {
 		case errors.As(err, &ruleErr):
-			return failedEvaluationDiags(graph.Diagnostic{Severity: "error", Message: ruleErr.Error()}), nil
-		case errors.As(err, &limitErr), errors.As(err, &inputErr):
-			return failedEvaluation(err.Error()), nil
+			return refusedDiags(refusalRuleRejected, graph.Diagnostic{Severity: "error", Message: ruleErr.Error()}), nil
+		case errors.As(err, &limitErr):
+			return refused(refusalLimitExceeded, err.Error()), nil
+		case errors.As(err, &inputErr):
+			return refused(refusalInvalidInput, err.Error()), nil
 		case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
 			// Our own budget ran out, not the caller's: a result that stops partway is not an
 			// answer a test can judge, so this is a refusal with the way out in it.
-			return failedEvaluation("the evaluation ran out of time before it finished; send fewer events"), nil
+			return refused(refusalTimeout, "the evaluation ran out of time before it finished; send fewer events"), nil
 		}
 		log.Warn().Err(err).Str("profile", in.ProfileToken).Msg("Rule evaluation failed")
 		return nil, err
 	}
-	out.Skipped = skipped
 	res := newEvaluationResult(out, int32(time.Since(startedAt).Milliseconds()))
+	res.skipped = skipped
 	for _, d := range warnings {
 		res.diags = append(res.diags, newCanvasDiagnostic(d))
+	}
+	for _, w := range out.Warnings {
+		res.diags = append(res.diags, newCanvasDiagnostic(graph.Diagnostic{Severity: "warning", Code: diagnosticMetricMissing, Message: w}))
 	}
 	return res, nil
 }
@@ -216,6 +273,9 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 // parseEvaluationEvents turns the request's events into the evaluator's, with the first problem as a
 // message ("" when there is none).
 func parseEvaluationEvents(in evaluateRulesInput) ([]evaluate.Event, time.Time, string) {
+	if len(in.Events) == 0 {
+		return nil, time.Time{}, "no events were sent: an evaluation of no events can never fail an expectation"
+	}
 	if len(in.Events) > evaluate.HardMaxEvents {
 		return nil, time.Time{}, fmt.Sprintf("%d events were sent, above the maximum of %d", len(in.Events), evaluate.HardMaxEvents)
 	}
@@ -286,24 +346,47 @@ func draftEvaluationRules(in evaluateRulesInput) ([]evaluate.Rule, []graph.Diagn
 
 // ── Resolvers ──────────────────────────────────────────────────────────────
 
+// skippedRule is a published rule the evaluation did not run.
+type skippedRule struct {
+	rule, reason, group, message string
+}
+
+// SkippedRuleResolver resolves one SkippedRule.
+type SkippedRuleResolver struct{ s skippedRule }
+
+func (r *SkippedRuleResolver) Rule() string    { return r.s.rule }
+func (r *SkippedRuleResolver) Reason() string  { return r.s.reason }
+func (r *SkippedRuleResolver) Group() *string  { return strPtr(r.s.group) }
+func (r *SkippedRuleResolver) Message() string { return r.s.message }
+
+// EvaluateDegradationResolver resolves one reason a result is partial.
+type EvaluateDegradationResolver struct{ d evaluate.Degradation }
+
+func (r *EvaluateDegradationResolver) Reason() string { return r.d.Reason }
+func (r *EvaluateDegradationResolver) Count() int32   { return int32(r.d.Count) }
+
 // EvaluateRulesResultResolver resolves an evaluation outcome.
 type EvaluateRulesResultResolver struct {
-	ok       bool
-	edges    []*EvaluatedEdgeResolver
-	intents  []*EvaluatedIntentResolver
-	stats    EvaluateStatsResolver
-	skipped  []string
-	degraded *string
-	diags    []*CanvasDiagnosticResolver
+	ok           bool
+	refusal      *string
+	evaluated    []string
+	edges        []*EvaluatedEdgeResolver
+	intents      []*EvaluatedIntentResolver
+	stats        EvaluateStatsResolver
+	skipped      []skippedRule
+	degradations []evaluate.Degradation
+	degraded     *string
+	diags        []*CanvasDiagnosticResolver
 }
 
 func newEvaluationResult(out evaluate.Result, wallMs int32) *EvaluateRulesResultResolver {
 	res := &EvaluateRulesResultResolver{
-		ok:      true,
-		edges:   make([]*EvaluatedEdgeResolver, 0, len(out.Edges)),
-		intents: make([]*EvaluatedIntentResolver, 0, len(out.Intents)),
-		skipped: append([]string{}, out.Skipped...),
-		diags:   []*CanvasDiagnosticResolver{},
+		ok:           true,
+		evaluated:    append([]string{}, out.Evaluated...),
+		edges:        make([]*EvaluatedEdgeResolver, 0, len(out.Edges)),
+		intents:      make([]*EvaluatedIntentResolver, 0, len(out.Intents)),
+		degradations: append([]evaluate.Degradation{}, out.Degradations...),
+		diags:        []*CanvasDiagnosticResolver{},
 		stats: EvaluateStatsResolver{
 			eventsFed: int32(out.Stats.EventsFed), eventsDropped: int32(out.Stats.EventsDropped),
 			evalErrors: int32(out.Stats.EvalErrors), lateReadings: int32(out.Stats.LateReadings),
@@ -324,33 +407,62 @@ func newEvaluationResult(out evaluate.Result, wallMs int32) *EvaluateRulesResult
 	return res
 }
 
-func failedEvaluation(msg string) *EvaluateRulesResultResolver {
-	return failedEvaluationDiags(graph.Diagnostic{Severity: "error", Message: msg})
+// refused is an evaluation that did not run, with its reason and the message that says why.
+func refused(reason, msg string) *EvaluateRulesResultResolver {
+	return refusedDiags(reason, graph.Diagnostic{Severity: "error", Message: msg})
 }
 
-func failedEvaluationDiags(diags ...graph.Diagnostic) *EvaluateRulesResultResolver {
+func refusedDiags(reason string, diags ...graph.Diagnostic) *EvaluateRulesResultResolver {
 	res := newEvaluationResult(evaluate.Result{}, 0)
 	res.ok = false
+	res.refusal = &reason
 	for _, d := range diags {
+		if d.Code == "" {
+			d.Code = reason
+		}
 		res.diags = append(res.diags, newCanvasDiagnostic(d))
 	}
 	return res
 }
 
-func (r *EvaluateRulesResultResolver) Ok() bool                                 { return r.ok }
-func (r *EvaluateRulesResultResolver) Edges() []*EvaluatedEdgeResolver          { return r.edges }
-func (r *EvaluateRulesResultResolver) Intents() []*EvaluatedIntentResolver      { return r.intents }
-func (r *EvaluateRulesResultResolver) Stats() *EvaluateStatsResolver            { return &r.stats }
-func (r *EvaluateRulesResultResolver) SkippedRules() []string                   { return r.skipped }
+func (r *EvaluateRulesResultResolver) Ok() bool                            { return r.ok }
+func (r *EvaluateRulesResultResolver) Refusal() *string                    { return r.refusal }
+func (r *EvaluateRulesResultResolver) EvaluatedRules() []string            { return r.evaluated }
+func (r *EvaluateRulesResultResolver) Edges() []*EvaluatedEdgeResolver     { return r.edges }
+func (r *EvaluateRulesResultResolver) Intents() []*EvaluatedIntentResolver { return r.intents }
+func (r *EvaluateRulesResultResolver) Stats() *EvaluateStatsResolver       { return &r.stats }
+func (r *EvaluateRulesResultResolver) SkippedRules() []*SkippedRuleResolver {
+	out := make([]*SkippedRuleResolver, len(r.skipped))
+	for i, s := range r.skipped {
+		out[i] = &SkippedRuleResolver{s: s}
+	}
+	return out
+}
+func (r *EvaluateRulesResultResolver) Degradations() []*EvaluateDegradationResolver {
+	out := make([]*EvaluateDegradationResolver, len(r.degradations))
+	for i, d := range r.degradations {
+		out[i] = &EvaluateDegradationResolver{d: d}
+	}
+	return out
+}
 func (r *EvaluateRulesResultResolver) Degraded() *string                        { return r.degraded }
 func (r *EvaluateRulesResultResolver) Diagnostics() []*CanvasDiagnosticResolver { return r.diags }
 
-// signalOf maps an edge's direction to the vocabulary previewRule already uses.
+// signalOf maps an edge's direction to the EvaluatedSignal enum.
 func signalOf(raise bool) string {
 	if raise {
-		return "raised"
+		return "RAISED"
 	}
-	return "resolved"
+	return "RESOLVED"
+}
+
+// evaluatedIntentKinds maps the evaluator's intent kinds to the EvaluatedIntentKind enum.
+var evaluatedIntentKinds = map[string]string{
+	evaluate.KindRaiseAlarm:  "RAISE_ALARM",
+	evaluate.KindClearAlarm:  "CLEAR_ALARM",
+	evaluate.KindSendCommand: "SEND_COMMAND",
+	evaluate.KindHTTPCall:    "HTTP_CALL",
+	evaluate.KindPublish:     "PUBLISH",
 }
 
 func evalTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
@@ -386,12 +498,21 @@ func (r *EvaluatedIntentResolver) OccurredAt() string { return evalTime(r.in.At)
 func (r *EvaluatedIntentResolver) Series() string     { return r.in.Series }
 func (r *EvaluatedIntentResolver) Rule() string       { return r.in.RuleToken }
 func (r *EvaluatedIntentResolver) Signal() string     { return signalOf(r.in.Raise) }
-func (r *EvaluatedIntentResolver) Kind() string       { return r.in.Kind }
-func (r *EvaluatedIntentResolver) Token() string      { return r.in.Token }
-func (r *EvaluatedIntentResolver) AlarmKey() *string  { return strPtr(r.in.AlarmKey) }
-func (r *EvaluatedIntentResolver) Severity() *string  { return strPtr(r.in.Severity) }
-func (r *EvaluatedIntentResolver) Value() *float64    { return r.in.Value }
-func (r *EvaluatedIntentResolver) Command() *string   { return strPtr(r.in.Command) }
+
+// Kind is the EvaluatedIntentKind. An intent kind the map does not know is a build defect (a new
+// REACT action with no enum value); it is reported as a GraphQL error rather than mislabelled.
+func (r *EvaluatedIntentResolver) Kind() (string, error) {
+	k, ok := evaluatedIntentKinds[r.in.Kind]
+	if !ok {
+		return "", fmt.Errorf("intent kind %q has no EvaluatedIntentKind value", r.in.Kind)
+	}
+	return k, nil
+}
+func (r *EvaluatedIntentResolver) Token() string     { return r.in.Token }
+func (r *EvaluatedIntentResolver) AlarmKey() *string { return strPtr(r.in.AlarmKey) }
+func (r *EvaluatedIntentResolver) Severity() *string { return strPtr(r.in.Severity) }
+func (r *EvaluatedIntentResolver) Value() *float64   { return r.in.Value }
+func (r *EvaluatedIntentResolver) Command() *string  { return strPtr(r.in.Command) }
 func (r *EvaluatedIntentResolver) Payload() *string {
 	if r.in.Kind != evaluate.KindSendCommand {
 		return nil

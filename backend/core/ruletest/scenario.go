@@ -352,6 +352,9 @@ func (s *Scenario) Validate() error {
 			return fmt.Errorf("devices[%d]: device %q is listed twice", i, d.Token)
 		}
 		seen[d.Token] = true
+		if len(d.Streams) == 0 {
+			return fmt.Errorf("devices[%d]: device %q has no streams, so it reports nothing; give it a stream or remove it", i, d.Token)
+		}
 		for j, st := range d.Streams {
 			if err := st.validate(s.Duration.D()); err != nil {
 				return fmt.Errorf("devices[%d] (%s) streams[%d]: %w", i, d.Token, j, err)
@@ -400,6 +403,9 @@ func (st Stream) validate(total time.Duration) error {
 	}
 	if st.From < 0 || (st.Until != nil && *st.Until <= st.From) {
 		return errors.New("from must not be negative and until must be after from")
+	}
+	if st.From.D() >= total {
+		return fmt.Errorf("from must be before the scenario's duration %s: a stream that starts at or after the end reports nothing", total)
 	}
 	if st.Until != nil && st.Until.D() > total {
 		return fmt.Errorf("until %s is past the scenario's duration %s", st.Until.D(), total)
@@ -546,6 +552,9 @@ func (s *Scenario) Generate(read FileReader) (*Generated, error) {
 	out := make([]Event, len(events))
 	for i, k := range idx {
 		out[i] = events[k]
+	}
+	if len(out) == 0 {
+		return nil, errors.New("the scenario generates no events (its faults remove every reading): a run over no events can never fail")
 	}
 	if len(out) > MaxEvents {
 		return nil, fmt.Errorf("the scenario generates %d events, above the maximum of %d; lengthen `every` or shorten `duration`", len(out), MaxEvents)

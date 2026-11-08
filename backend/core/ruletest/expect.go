@@ -33,6 +33,10 @@ type Expect struct {
 	NeverRaised *EdgeExpect   `yaml:"neverRaised"`
 	Intent      *IntentExpect `yaml:"intent"`
 	NeverIntent *IntentExpect `yaml:"neverIntent"`
+	// AllowDegraded lets a neverRaised, neverIntent or count expectation be judged on a partial
+	// result. Without it such an expectation is an error on a partial result: a result that dropped
+	// late readings or truncated intents cannot prove that something did NOT happen, or how often.
+	AllowDegraded bool `yaml:"allowDegraded"`
 }
 
 // Window bounds when an expectation looks, as offsets from the scenario start: from After to
@@ -183,18 +187,36 @@ type Intent struct {
 	Body      string
 }
 
+// Degradation is one reason the server gave for a partial result, with a count.
+type Degradation struct {
+	Reason string
+	Count  int
+}
+
 // Result is what an evaluation returned.
 type Result struct {
 	Edges   []Edge
 	Intents []Intent
-	// Degraded is the server's note that the result is partial; it is shown with a failure.
+	// Evaluated is the token of every rule the evaluation ran. An expectation that names a rule
+	// not in it cannot be judged: it is an error, never a pass.
+	Evaluated []string
+	// Skipped maps a rule the server did not run to the reason it gave.
+	Skipped map[string]string
+	// Degradations are the reasons the result is partial. A partial result makes a neverRaised,
+	// neverIntent or count expectation inconclusive unless it sets allowDegraded.
+	Degradations []Degradation
+	// Degraded is the server's sentence describing the degradations; it is shown with a failure.
 	Degraded string
 }
 
-// Outcome is the verdict on one expectation.
+// partial reports whether the server said the result is incomplete.
+func (r Result) partial() bool { return len(r.Degradations) > 0 || r.Degraded != "" }
+
+// Outcome is the verdict on one expectation: passed, failed, or errored (it could not be judged).
 type Outcome struct {
 	Name    string
 	Passed  bool
+	Errored bool
 	Message string
 }
 
@@ -202,20 +224,90 @@ type Outcome struct {
 // its length, which anchor each expectation's window.
 func Judge(f *TestFile, res Result, start time.Time, duration time.Duration) []Outcome {
 	out := make([]Outcome, 0, len(f.Expect))
+	evaluated := map[string]bool{}
+	for _, r := range res.Evaluated {
+		evaluated[r] = true
+	}
 	for i, e := range f.Expect {
 		o := e.judge(res, start, duration)
+		if msg := e.unjudgeable(res, evaluated); msg != "" {
+			o = Outcome{Name: o.Name, Errored: true, Message: msg}
+		}
 		if o.Name == "" {
 			o.Name = fmt.Sprintf("expect[%d]", i)
 		}
 		if e.Name != "" {
 			o.Name = e.Name
 		}
-		if !o.Passed && res.Degraded != "" {
+		if !o.Passed && !o.Errored && res.Degraded != "" {
 			o.Message += " (the evaluation reported: " + res.Degraded + ")"
 		}
 		out = append(out, o)
 	}
 	return out
+}
+
+// rule returns the rule the expectation names ("" for any rule).
+func (e Expect) rule() string {
+	switch {
+	case e.Raised != nil:
+		return e.Raised.Rule
+	case e.Cleared != nil:
+		return e.Cleared.Rule
+	case e.NeverRaised != nil:
+		return e.NeverRaised.Rule
+	case e.Intent != nil:
+		return e.Intent.Rule
+	case e.NeverIntent != nil:
+		return e.NeverIntent.Rule
+	}
+	return ""
+}
+
+// negativeOrCounted reports whether the expectation claims an absence or an exact number, which a
+// partial result cannot establish.
+func (e Expect) negativeOrCounted() bool {
+	switch {
+	case e.NeverRaised != nil, e.NeverIntent != nil:
+		return true
+	case e.Raised != nil:
+		return e.Raised.Count != nil
+	case e.Cleared != nil:
+		return e.Cleared.Count != nil
+	case e.Intent != nil:
+		return e.Intent.Count != nil
+	}
+	return false
+}
+
+// unjudgeable returns why the expectation cannot be judged against res, or "" when it can. It is an
+// ERROR, not a failure, because the rule under test was not shown to be wrong: the run could not
+// answer the question.
+func (e Expect) unjudgeable(res Result, evaluated map[string]bool) string {
+	if r := e.rule(); r != "" && !evaluated[r] {
+		if why, ok := res.Skipped[r]; ok {
+			return fmt.Sprintf("rule %s was skipped by the evaluation, so this expectation cannot be judged: %s", r, why)
+		}
+		ran := append([]string(nil), res.Evaluated...)
+		if len(ran) == 0 {
+			return fmt.Sprintf("rule %s was not evaluated: the evaluation ran no rules", r)
+		}
+		return fmt.Sprintf("rule %s was not evaluated, so this expectation cannot be judged; the rules evaluated were: %s",
+			r, strings.Join(ran, ", "))
+	}
+	if res.partial() && e.negativeOrCounted() && !e.AllowDegraded {
+		why := res.Degraded
+		if why == "" {
+			var parts []string
+			for _, d := range res.Degradations {
+				parts = append(parts, fmt.Sprintf("%s (%d)", d.Reason, d.Count))
+			}
+			why = strings.Join(parts, ", ")
+		}
+		return "inconclusive: the evaluation's result is partial, so it cannot show that something did not happen or how often (" +
+			why + "); fix the scenario, or set allowDegraded: true on this expectation to judge it anyway"
+	}
+	return ""
 }
 
 func (w Window) bounds(start time.Time, duration time.Duration) (time.Time, time.Time) {

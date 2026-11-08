@@ -75,7 +75,15 @@ FAIL  tests/boiler.test.yaml: the fan is started
 2 passed, 1 failed, 0 errored
 ```
 
-El código de salida es `0` cuando todas las expectativas se cumplieron y distinto de cero cuando una falló, cuando no se pudo leer un archivo o cuando la plataforma rechazó el escenario. Un directorio sin ningún archivo `*.test.yaml` es un error, porque una ejecución que no comprueba nada no debe pasar. Para conservar el resultado para un sistema de CI, añade `--junit report.xml`.
+Cada expectativa se informa como superada, fallida o con error, y el código de salida indica qué tipo de resultado tuvo la ejecución:
+
+| Código | Significado |
+| --- | --- |
+| `0` | Todas las expectativas se cumplieron. |
+| `1` | Al menos una expectativa se juzgó y no se cumplió, y nada dio error. |
+| `2` | Algo no se pudo juzgar: un archivo no se cargó, la plataforma rechazó la evaluación, falló el inicio de sesión o la red, o una expectativa no fue concluyente (consulta [Resultados que no se pueden juzgar](#cannot-judge)). |
+
+Un directorio sin ningún archivo `*.test.yaml` es un error, porque una ejecución que no comprueba nada no debe pasar. Para conservar el resultado para un sistema de CI, añade `--junit report.xml`; cuando los archivos no se pueden cargar en absoluto, el informe contiene igualmente un caso con error que explica por qué. Para que la contraseña no quede en el historial del shell, define `DCCTL_PASSWORD` en lugar de pasar `--password`.
 
 ## Qué reglas se prueban {#which-rules}
 
@@ -143,7 +151,7 @@ Un fallo cambia cómo llegan los eventos a la plataforma, no lo que midió el di
 
 La diferencia entre `gap` y `offline` importa: un hueco prueba qué hace una regla cuando faltan datos, y una ventana sin conexión prueba qué hace cuando los datos llegan tarde.
 
-Los eventos se entregan al motor en el orden en que se entregan. El motor trata un evento tardío como lo hace en producción y, cuando tiene que descartar una lectura que llegó demasiado por detrás de las demás, el resultado lo dice y una expectativa fallida repite la nota.
+Los eventos se entregan al motor en el orden en que se entregan. El motor trata un evento tardío como lo hace en producción: mantiene su reloj por detrás del evento más reciente con el mismo margen de retraso que usa la detección en vivo de la instancia, así que una lectura que llega desordenada dentro de ese margen se usa, y una que llega más tarde se descarta. Cuando se descarta una lectura, el resultado lo dice y se marca como parcial (consulta [Resultados que no se pueden juzgar](#cannot-judge)).
 
 ## Escribir una prueba {#test-file}
 
@@ -157,9 +165,9 @@ Un archivo de prueba tiene un `apiVersion` y `kind: RuleTest`, un `name` opciona
 | `intent` | Al menos un efecto secundario coincidente se solicita en la ventana. |
 | `neverIntent` | Ningún efecto secundario coincidente se solicita en la ventana. |
 
-Todo bloque admite un `name` opcional, que lo etiqueta en el informe y en JUnit. Todo esto acota lo que cuenta como coincidencia, y un campo omitido coincide con cualquier cosa:
+Todo bloque admite un `name` opcional, que lo etiqueta en el informe y en JUnit, y un `allowDegraded` opcional (consulta [Resultados que no se pueden juzgar](#cannot-judge)). Todo esto acota lo que cuenta como coincidencia, y un campo omitido coincide con cualquier cosa:
 
-- `rule` y `device` seleccionan la regla y el dispositivo.
+- `rule` y `device` seleccionan la regla y el dispositivo. Un `device` debe ser uno que el escenario define; si no, el archivo de prueba se rechaza al leerlo.
 - `after` y `within` dan la ventana como desplazamientos desde el `start` del escenario: de `after` a `after + within`, inclusive en ambos extremos. Omite `within` para llegar hasta el final del escenario.
 - `count` (en `raised`, `cleared`, `intent`) exige exactamente ese número de coincidencias en lugar de al menos una.
 
@@ -175,6 +183,15 @@ Un bloque `intent` también puede comparar lo que dice el efecto secundario:
 
 Un comando, un webhook y un mensaje publicado se solicitan solo en una transición activada; una alarma se despeja en la transición resuelta de una regla que la activa.
 
+## Resultados que no se pueden juzgar {#cannot-judge}
+
+Hay preguntas que una evaluación no puede responder, y `dcctl test` informa esas expectativas como errores, nunca como superadas:
+
+- **Una regla que no se evaluó.** El resultado enumera las reglas que ejecutó la plataforma. Una expectativa que nombra cualquier otra regla, ya sea mal escrita u omitida (consulta [Qué no modela](#limits)), es un error que indica qué reglas sí se ejecutaron. Sin esto, `neverRaised: { rule: hott }` pasaría para siempre.
+- **Una ausencia o un recuento sobre un resultado parcial.** Un resultado es parcial cuando hubo lecturas que llegaron demasiado tarde para usarse, un predicado de regla falló en algunos eventos, un límite truncó las transiciones o las intenciones, la plataforma omitió una acción porque la acción almacenada de la regla no se podía llevar a cabo, o una regla lee atributos de dispositivo. Un resultado parcial puede seguir demostrando que algo ocurrió, así que `raised`, `cleared` e `intent` sin `count` se juzgan como siempre. No puede demostrar que algo *no* ocurrió, ni cuántas veces ocurrió, así que `neverRaised`, `neverIntent` y cualquier bloque con `count` se informan como no concluyentes. Corrige el escenario o define `allowDegraded: true` en ese bloque para juzgarlo de todos modos.
+
+Una ejecución en la que no se evaluó nada se rechaza directamente: sin eventos, sin ninguna regla que evaluar, sin un hueco de evaluación libre en la plataforma, o una evaluación que se quedó sin tiempo. Cuando la plataforma está ocupada, `dcctl test` espera y reintenta unas cuantas veces antes de informar el error.
+
 ## Pruebas que pueden fallar {#tests-that-can-fail}
 
 Una prueba no vale nada hasta que la has visto fallar. Cuando una prueba pasa, introduce a propósito un defecto en la regla y comprueba que la expectativa que lo nombra se pone en rojo: cambia un umbral, escribe mal la clave de un comando, invierte una comparación. Si un defecto cambia la regla y ninguna expectativa lo nota, la prueba no comprueba lo que creías. El conjunto de defectos plantados con el que se prueba la propia plataforma usa exactamente este método: un escenario, seis expectativas con nombre y cinco defectos deliberados, cada uno de los cuales debe hacer fallar las expectativas que lo nombran y ninguna otra.
@@ -187,22 +204,24 @@ Las ventanas son donde las pruebas suelen ser demasiado laxas. `raised: { device
 
 ```bash
 dcctl test ./tests \
-  --tenant acme --email ci@example.com --password "$DC_PASSWORD" \
+  --tenant acme --email ci@example.com \
   --server platform.example.com --tls \
   --junit report.xml
 ```
 
-Da a la identidad lo mínimo que necesita: `device:read` en el tenant. Si la cuenta usa autenticación de dos factores, consulta `--otp` en la [referencia de comandos](../reference/dcctl.md#dcctl-test).
+Define la contraseña en la variable de entorno `DCCTL_PASSWORD` desde el almacén de secretos de tu sistema de CI. Da a la identidad lo mínimo que necesita: `device:read` en el tenant. Si la cuenta usa autenticación de dos factores, consulta `--otp` en la [referencia de comandos](../reference/dcctl.md#dcctl-test).
 
 ## Qué no modela {#limits}
 
 Una evaluación es exacta con las reglas y honesta sobre lo que deja fuera.
 
-- **Atributos de dispositivo.** Un umbral que lee un atributo de dispositivo nunca coincide, porque aquí ningún dispositivo tiene atributos. Es la misma aproximación que hace la vista previa con historial.
-- **Reglas con alcance de grupo.** Una regla publicada con alcance a un grupo de entidades se omite y se nombra como advertencia, porque un evento generado no lleva pertenencias a grupos. Un borrador no puede tener alcance de grupo. Cuando no queda ninguna regla publicada que evaluar, porque el perfil no tiene ninguna o todas tienen alcance de grupo, la ejecución se rechaza en lugar de darse por superada: una ejecución que no evaluó nada cumpliría cualquier expectativa `neverRaised`. Por la misma razón, una ejecución rechazada porque ya hay demasiadas evaluaciones en curso para el tenant es un error; vuelva a ejecutarla.
+- **Atributos de dispositivo.** Una regla que lee un atributo de dispositivo se evalúa sin él, porque aquí ningún dispositivo tiene atributos, y el resultado se marca como parcial para que un `neverRaised` sobre ella no sea concluyente en lugar de pasar en silencio.
+- **Reglas con alcance de grupo.** Una regla publicada con alcance a un grupo de entidades se omite y se nombra como advertencia, porque un evento generado no lleva pertenencias a grupos. Un borrador no puede tener alcance de grupo.
+- **Reglas de correlación.** Una regla publicada que correlaciona dispositivos bajo un área u otro ancla se omite, y una en borrador se rechaza, porque un evento generado no lleva pertenencias a anclas.
 - **Reglas de geovalla.** Una regla que prueba la pertenencia a una geovalla se rechaza, porque los eventos no llevan posición.
+- **Métricas que ningún evento lleva.** Una regla que vigila una métrica que ningún evento del escenario informa solo puede quedarse en silencio; el resultado incluye una advertencia que la nombra.
 - **Comandos y conectores.** Una intención es lo que la regla pide. Si el comando existe en el dispositivo, o el conector existe en el tenant, se comprueba donde se envía la solicitud, no aquí.
-- **Límites.** Una evaluación admite como máximo 250 000 eventos y, por defecto, un cuerpo de solicitud de 4 MiB; un escenario que supere cualquiera de los dos se rechaza antes de evaluar nada, con los ajustes que lo hicieron grande. Comparte el límite de concurrencia por tenant de la vista previa con historial, así que un tenant no puede ejecutar evaluaciones ilimitadas a la vez.
+- **Límites.** Una evaluación admite como máximo 250 000 eventos y 256 reglas, y el cuerpo de la solicitud está limitado por el límite de cuerpo GraphQL de la instancia; un escenario que supere cualquiera de ellos se rechaza, con el motivo. Comparte el límite de concurrencia por tenant de la vista previa con historial, y la plataforma ejecuta solo unas pocas evaluaciones a la vez entre todos los tenants, así que las evaluaciones no pueden desplazar a la detección en vivo.
 
 ## Determinismo {#determinism}
 

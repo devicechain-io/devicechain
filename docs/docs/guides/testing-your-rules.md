@@ -75,7 +75,15 @@ FAIL  tests/boiler.test.yaml: the fan is started
 2 passed, 1 failed, 0 errored
 ```
 
-The exit status is `0` when every expectation held and non-zero when one failed, when a file could not be read, or when the platform rejected the scenario. A directory with no `*.test.yaml` file is an error, because a run that checks nothing must not pass. To keep the result for a CI system, add `--junit report.xml`.
+Each expectation is reported as passed, failed or errored, and the exit status says which kind of result the run was:
+
+| Status | Meaning |
+| --- | --- |
+| `0` | Every expectation held. |
+| `1` | At least one expectation was judged and did not hold, and nothing errored. |
+| `2` | Something could not be judged: a file did not load, the platform refused the evaluation, sign-in or the network failed, or an expectation was inconclusive (see [Results that cannot be judged](#cannot-judge)). |
+
+A directory with no `*.test.yaml` file is an error, because a run that checks nothing must not pass. To keep the result for a CI system, add `--junit report.xml`; when the files cannot be loaded at all, the report still holds one errored case that says why. To keep the password out of the shell history, set `DCCTL_PASSWORD` instead of passing `--password`.
 
 ## Which rules are tested {#which-rules}
 
@@ -143,7 +151,7 @@ A fault changes how events reach the platform, not what the device measured. A f
 
 The difference between `gap` and `offline` matters: a gap tests what a rule does when data is missing, and an offline window tests what it does when the data arrives late.
 
-Events are handed to the engine in the order they are delivered. The engine treats a late event as it does in production, and when it has to decline a reading that arrived too far behind the others, the result says so, and a failing expectation repeats the note.
+Events are handed to the engine in the order they are delivered. The engine treats a late event as it does in production: it holds its clock behind the newest event by the same lateness the instance's live detection uses, so a reading that arrives out of order within that allowance is used, and one that arrives later is declined. When a reading is declined, the result says so and is marked partial (see [Results that cannot be judged](#cannot-judge)).
 
 ## Writing a test {#test-file}
 
@@ -157,9 +165,9 @@ A test file has an `apiVersion` and `kind: RuleTest`, an optional `name`, an opt
 | `intent` | At least one matching side effect is requested in the window. |
 | `neverIntent` | No matching side effect is requested in the window. |
 
-Every block takes an optional `name`, which labels it in the report and in JUnit. All of these narrow what counts as a match, and an omitted field matches anything:
+Every block takes an optional `name`, which labels it in the report and in JUnit, and an optional `allowDegraded` (see [Results that cannot be judged](#cannot-judge)). All of these narrow what counts as a match, and an omitted field matches anything:
 
-- `rule` and `device` select the rule and the device.
+- `rule` and `device` select the rule and the device. A `device` must be one the scenario defines, or the test file is refused when it is read.
 - `after` and `within` give the window as offsets from the scenario's `start`: from `after` to `after + within`, inclusive at both ends. Leave out `within` to run to the end of the scenario.
 - `count` (on `raised`, `cleared`, `intent`) requires exactly that many matches instead of at least one.
 
@@ -175,6 +183,15 @@ An `intent` block can also match what the side effect says:
 
 A command, a webhook and a published message are requested on a raised edge only; an alarm is cleared on the resolved edge of a rule that raises it.
 
+## Results that cannot be judged {#cannot-judge}
+
+Some questions an evaluation cannot answer, and `dcctl test` reports those expectations as errors, never as passes:
+
+- **A rule that was not evaluated.** The result lists the rules the platform ran. An expectation that names any other rule, whether misspelled or skipped (see [What it does not model](#limits)), is an error that says which rules did run. Without this, `neverRaised: { rule: hott }` would pass forever.
+- **An absence or a count on a partial result.** A result is partial when readings arrived too late to be used, a rule predicate failed on some events, a limit truncated the edges or intents, the platform skipped an action because the rule's stored action could not be carried out, or a rule reads device attributes. A partial result can still show that something happened, so `raised`, `cleared` and `intent` without a `count` are judged as usual. It cannot show that something did *not* happen, or how many times it did, so `neverRaised`, `neverIntent` and any block with a `count` are reported as inconclusive. Fix the scenario, or set `allowDegraded: true` on that block to judge it anyway.
+
+A run in which nothing was evaluated is refused outright: no events, no rule to evaluate, no free evaluation slot on the platform, or an evaluation that ran out of time. When the platform is busy, `dcctl test` waits and retries a few times before it reports the error.
+
 ## Tests that can fail {#tests-that-can-fail}
 
 A test is worth nothing until you have seen it fail. After a test passes, plant a defect in the rule on purpose and check that the expectation that names it goes red: change a threshold, misspell a command key, invert a comparison. If a defect changes the rule and no expectation notices, the test is not checking what you thought. The planted-defect pack the platform itself ships with uses exactly this method: one scenario, six named expectations, and five deliberate defects, each of which must fail the expectations that name it and no others.
@@ -187,22 +204,24 @@ Windows are where tests are most often too loose. `raised: { device: boiler-1 }`
 
 ```bash
 dcctl test ./tests \
-  --tenant acme --email ci@example.com --password "$DC_PASSWORD" \
+  --tenant acme --email ci@example.com \
   --server platform.example.com --tls \
   --junit report.xml
 ```
 
-Give the identity the least it needs: `device:read` on the tenant. If the account uses two-factor authentication, see `--otp` in the [command reference](../reference/dcctl.md#dcctl-test).
+Set the password in the `DCCTL_PASSWORD` environment variable from your CI system's secret store. Give the identity the least it needs: `device:read` on the tenant. If the account uses two-factor authentication, see `--otp` in the [command reference](../reference/dcctl.md#dcctl-test).
 
 ## What it does not model {#limits}
 
 An evaluation is exact about the rules and honest about what it leaves out.
 
-- **Device attributes.** A threshold that reads a device attribute never matches, because no device has attributes here. This is the same approximation the replay preview makes.
-- **Group-scoped rules.** A published rule scoped to an entity group is skipped, and named as a warning, because a generated event carries no group memberships. A draft cannot be group-scoped. When no published rule is left to evaluate, because the profile has none or every one is group-scoped, the run is refused rather than reported as a pass: a run that evaluated nothing would satisfy every `neverRaised` expectation. A run refused because too many evaluations are already running for the tenant is an error for the same reason; run it again.
+- **Device attributes.** A rule that reads a device attribute is evaluated without it, because no device has attributes here, and the result is marked partial so that a `neverRaised` on it is inconclusive rather than a quiet pass.
+- **Group-scoped rules.** A published rule scoped to an entity group is skipped, and named as a warning, because a generated event carries no group memberships. A draft cannot be group-scoped.
+- **Correlation rules.** A published rule that correlates devices under an area or another anchor is skipped, and a draft one is refused, because a generated event carries no anchor memberships.
 - **Geofence rules.** A rule that tests geofence containment is refused, because the events carry no position.
+- **Metrics no event carries.** A rule that watches a metric none of the scenario's events report can only stay silent; the result carries a warning naming it.
 - **Commands and connectors.** An intent is what the rule asks for. Whether the command exists on the device, or the connector exists in the tenant, is checked where the request is sent, not here.
-- **Limits.** One evaluation takes at most 250,000 events, and a request body of 4 MiB by default; a scenario over either is refused before anything is evaluated, with the settings that made it large. It shares the replay preview's per-tenant concurrency limit, so a tenant cannot run unlimited evaluations at once.
+- **Limits.** One evaluation takes at most 250,000 events and 256 rules, and the request body is limited by the instance's GraphQL body limit; a scenario over any of them is refused, with the reason. It shares the replay preview's per-tenant concurrency limit, and the platform runs only a few evaluations at once across all tenants, so evaluations cannot crowd out live detection.
 
 ## Determinism {#determinism}
 

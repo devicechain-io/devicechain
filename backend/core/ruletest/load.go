@@ -136,8 +136,39 @@ func loadSuite(path string, plan *Plan) *Suite {
 	}
 	if l := plan.Scenarios[scenarioPath]; l.Err != nil {
 		s.Err = fmt.Errorf("%s: %w", path, l.Err)
+	} else if err := checkDevices(tf, l.Scenario); err != nil {
+		s.Err = fmt.Errorf("%s: %w", path, err)
 	}
 	return s
+}
+
+// checkDevices refuses an expectation that names a device its scenario does not define. Such an
+// expectation tests a typo, not a rule: a neverRaised on it is vacuously true and a raised on it is
+// certainly false, whatever the rule does.
+func checkDevices(tf *TestFile, sc *Scenario) error {
+	defined := map[string]bool{}
+	for _, d := range sc.Devices {
+		defined[d.Token] = true
+	}
+	for i, e := range tf.Expect {
+		var device string
+		switch {
+		case e.Raised != nil:
+			device = e.Raised.Device
+		case e.Cleared != nil:
+			device = e.Cleared.Device
+		case e.NeverRaised != nil:
+			device = e.NeverRaised.Device
+		case e.Intent != nil:
+			device = e.Intent.Device
+		case e.NeverIntent != nil:
+			device = e.NeverIntent.Device
+		}
+		if device != "" && !defined[device] {
+			return fmt.Errorf("expect[%d]: device %q is not in the scenario", i, device)
+		}
+	}
+	return nil
 }
 
 func loadScenario(path string) *Loaded {

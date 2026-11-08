@@ -26,6 +26,7 @@ func judge(t *testing.T, body string, res Result) []Outcome {
 }
 
 var fixture = Result{
+	Evaluated: []string{"hot", "cold"},
 	Edges: []Edge{
 		{At: at(30), Series: "d1", Rule: "hot", Kind: "threshold", Raise: true},
 		{At: at(50), Series: "d1", Rule: "hot", Kind: "threshold", Raise: false},
@@ -134,7 +135,7 @@ func TestIntentMatching(t *testing.T) {
 }
 
 func TestEmptyPayloadEqualsAnEmptyObject(t *testing.T) {
-	res := Result{Intents: []Intent{{At: at(1), Series: "d", Rule: "r", Kind: "sendCommand", Command: "reboot", Payload: ""}}}
+	res := Result{Evaluated: []string{"r"}, Intents: []Intent{{At: at(1), Series: "d", Rule: "r", Kind: "sendCommand", Command: "reboot", Payload: ""}}}
 	got := judge(t, `
   - intent: {command: reboot, payload: {}}
   - intent: {command: reboot, payload: {force: true}}
@@ -188,11 +189,11 @@ func TestFailureMessagesSayWhatWasFound(t *testing.T) {
 	if !strings.Contains(empty[0].Message, "no intent at all") {
 		t.Errorf("empty msg = %q", empty[0].Message)
 	}
-	deg := Judge(parseTest(t, "  - raised: {rule: cold}\n"), Result{Degraded: "3 readings arrived too far behind"}, start, time.Hour)
+	deg := Judge(parseTest(t, "  - raised: {rule: cold}\n"), Result{Evaluated: []string{"cold"}, Degraded: "3 readings arrived too far behind"}, start, time.Hour)
 	if !strings.Contains(deg[0].Message, "the evaluation reported: 3 readings") {
 		t.Errorf("degraded msg = %q", deg[0].Message)
 	}
-	ok := Judge(parseTest(t, "  - neverRaised: {rule: cold}\n"), Result{Degraded: "x"}, start, time.Hour)
+	ok := Judge(parseTest(t, "  - neverRaised: {rule: cold}\n    allowDegraded: true\n"), Result{Evaluated: []string{"cold"}, Degraded: "x"}, start, time.Hour)
 	if !ok[0].Passed || ok[0].Message != "" {
 		t.Errorf("a passing expectation must not carry the degraded note: %+v", ok[0])
 	}

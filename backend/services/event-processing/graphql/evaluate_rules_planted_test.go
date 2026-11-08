@@ -106,17 +106,20 @@ func runPlanted(t *testing.T, rule string) []ruletest.Outcome {
 	if !got.Ok {
 		t.Fatalf("the evaluation was rejected: %+v", got.Diagnostics)
 	}
-	var res ruletest.Result
+	res := ruletest.Result{Evaluated: got.EvaluatedRules}
 	if got.Degraded != nil {
 		res.Degraded = *got.Degraded
 	}
+	for _, d := range got.Degradations {
+		res.Degradations = append(res.Degradations, ruletest.Degradation{Reason: d.Reason, Count: d.Count})
+	}
 	for _, e := range got.Edges {
 		at, _ := time.Parse(time.RFC3339Nano, e.OccurredAt)
-		res.Edges = append(res.Edges, ruletest.Edge{At: at, Series: e.Series, Rule: e.Rule, Kind: e.Kind, Raise: e.Signal == "raised"})
+		res.Edges = append(res.Edges, ruletest.Edge{At: at, Series: e.Series, Rule: e.Rule, Kind: e.Kind, Raise: e.Signal == "RAISED"})
 	}
 	for _, i := range got.Intents {
 		at, _ := time.Parse(time.RFC3339Nano, i.OccurredAt)
-		in := ruletest.Intent{At: at, Series: i.Series, Rule: i.Rule, Raise: i.Signal == "raised", Kind: i.Kind}
+		in := ruletest.Intent{At: at, Series: i.Series, Rule: i.Rule, Raise: i.Signal == "RAISED", Kind: wireIntentKinds[i.Kind]}
 		if i.AlarmKey != nil {
 			in.AlarmKey = *i.AlarmKey
 		}
@@ -208,4 +211,10 @@ func TestPlantedDefectsEachFailTheirNamedExpectations(t *testing.T) {
 			}
 		})
 	}
+}
+
+// wireIntentKinds maps the served EvaluatedIntentKind to the test file's vocabulary, as dcctl does.
+var wireIntentKinds = map[string]string{
+	"RAISE_ALARM": "raiseAlarm", "CLEAR_ALARM": "clearAlarm", "SEND_COMMAND": "sendCommand",
+	"HTTP_CALL": "httpCall", "PUBLISH": "publish",
 }

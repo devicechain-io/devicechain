@@ -24,9 +24,12 @@ import (
 const evalQuery = `query($input: EvaluateRulesInput!) {
   evaluateRules(input: $input) {
     ok
+    refusal
+    evaluatedRules
     degraded
-    skippedRules
-    diagnostics { severity message nodeId }
+    degradations { reason count }
+    skippedRules { rule reason group message }
+    diagnostics { severity message nodeId code }
     stats { eventsFed eventsDropped evalErrors lateReadings rulesEvaluated edgeCount intentCount wallMs }
     edges { occurredAt series rule kind severity signal value }
     intents { occurredAt series rule signal kind token alarmKey severity value command payload expiresAt connector url method body timeoutMs }
@@ -34,13 +37,25 @@ const evalQuery = `query($input: EvaluateRulesInput!) {
 }`
 
 type evalWire struct {
-	Ok           bool     `json:"ok"`
-	Degraded     *string  `json:"degraded"`
-	SkippedRules []string `json:"skippedRules"`
-	Diagnostics  []struct {
+	Ok             bool     `json:"ok"`
+	Refusal        *string  `json:"refusal"`
+	EvaluatedRules []string `json:"evaluatedRules"`
+	Degraded       *string  `json:"degraded"`
+	Degradations   []struct {
+		Reason string `json:"reason"`
+		Count  int    `json:"count"`
+	} `json:"degradations"`
+	SkippedRules []struct {
+		Rule    string  `json:"rule"`
+		Reason  string  `json:"reason"`
+		Group   *string `json:"group"`
+		Message string  `json:"message"`
+	} `json:"skippedRules"`
+	Diagnostics []struct {
 		Severity string  `json:"severity"`
 		Message  string  `json:"message"`
 		NodeID   *string `json:"nodeId"`
+		Code     *string `json:"code"`
 	} `json:"diagnostics"`
 	Stats struct {
 		EventsFed, EventsDropped, EvalErrors, LateReadings, RulesEvaluated, EdgeCount, IntentCount, WallMs int
@@ -119,26 +134,27 @@ func TestEvaluateDraftThroughTheServedSchema(t *testing.T) {
 	if errs != nil {
 		t.Fatalf("errors: %v", errs)
 	}
-	if !got.Ok || got.Degraded != nil || len(got.SkippedRules) != 0 {
+	if !got.Ok || got.Refusal != nil || got.Degraded != nil || len(got.Degradations) != 0 || len(got.SkippedRules) != 0 ||
+		len(got.EvaluatedRules) != 1 || got.EvaluatedRules[0] != "draft" {
 		t.Fatalf("result = %+v", got)
 	}
-	if len(got.Edges) != 2 || got.Edges[0].Signal != "raised" || got.Edges[0].Rule != "draft" || got.Edges[0].Series != "d1" ||
+	if len(got.Edges) != 2 || got.Edges[0].Signal != "RAISED" || got.Edges[0].Rule != "draft" || got.Edges[0].Series != "d1" ||
 		got.Edges[0].Kind != "threshold" || *got.Edges[0].Severity != "critical" || *got.Edges[0].Value != 90 ||
-		got.Edges[0].OccurredAt != "2026-03-01T00:01:00Z" || got.Edges[1].Signal != "resolved" || got.Edges[1].Value != nil {
+		got.Edges[0].OccurredAt != "2026-03-01T00:01:00Z" || got.Edges[1].Signal != "RESOLVED" || got.Edges[1].Value != nil {
 		t.Fatalf("edges = %+v", got.Edges)
 	}
 	if len(got.Intents) != 3 {
 		t.Fatalf("intents = %+v, want raise, command, clear", got.Intents)
 	}
 	ra, cmd, clr := got.Intents[0], got.Intents[1], got.Intents[2]
-	if ra.Kind != "raiseAlarm" || *ra.AlarmKey != "overheat" || *ra.Severity != "critical" || *ra.Value != 90 || ra.Signal != "raised" {
+	if ra.Kind != "RAISE_ALARM" || *ra.AlarmKey != "overheat" || *ra.Severity != "critical" || *ra.Value != 90 || ra.Signal != "RAISED" {
 		t.Fatalf("raise = %+v", ra)
 	}
-	if cmd.Kind != "sendCommand" || *cmd.Command != "set-fan" || *cmd.Payload != `{"speed":3}` ||
+	if cmd.Kind != "SEND_COMMAND" || *cmd.Command != "set-fan" || *cmd.Payload != `{"speed":3}` ||
 		*cmd.ExpiresAt != "2026-03-01T00:16:00Z" || cmd.Body != nil || cmd.TimeoutMs != nil {
 		t.Fatalf("command = %+v", cmd)
 	}
-	if clr.Kind != "clearAlarm" || clr.Signal != "resolved" || *clr.AlarmKey != "overheat" || clr.Token == ra.Token {
+	if clr.Kind != "CLEAR_ALARM" || clr.Signal != "RESOLVED" || *clr.AlarmKey != "overheat" || clr.Token == ra.Token {
 		t.Fatalf("clear = %+v", clr)
 	}
 	if got.Stats.EventsFed != 3 || got.Stats.EdgeCount != 2 || got.Stats.IntentCount != 3 || got.Stats.RulesEvaluated != 1 {
@@ -166,7 +182,7 @@ func TestEvaluateDraftGraph(t *testing.T) {
 	if !got.Ok {
 		t.Fatalf("the canvas was rejected: %+v", got.Diagnostics)
 	}
-	if len(got.Edges) != 1 || got.Edges[0].Rule != "hotcond" || len(got.Intents) != 1 || got.Intents[0].Kind != "raiseAlarm" {
+	if len(got.Edges) != 1 || got.Edges[0].Rule != "hotcond" || len(got.Intents) != 1 || got.Intents[0].Kind != "RAISE_ALARM" {
 		t.Fatalf("edges=%+v intents=%+v, want the condition node named as the rule", got.Edges, got.Intents)
 	}
 }
@@ -175,26 +191,29 @@ func TestEvaluateRefusals(t *testing.T) {
 	s := evalSchema(t, &SchemaResolver{})
 	ev := evEvent("d1", evT0, "temperature", 90)
 	cases := map[string]struct {
-		mut  func(map[string]any)
-		want string
+		mut    func(map[string]any)
+		want   string
+		reason string
 	}{
-		"no profile":        {func(m map[string]any) { m["profileToken"] = "" }, "profileToken is required"},
-		"no draft":          {func(m map[string]any) { delete(m, "ruleDefinition") }, "exactly one of graph and ruleDefinition"},
-		"both drafts":       {func(m map[string]any) { m["graph"] = "{}" }, "exactly one of graph and ruleDefinition"},
-		"bad definition":    {func(m map[string]any) { m["ruleDefinition"] = "{" }, "unexpected"},
-		"uncompilable rule": {func(m map[string]any) { m["ruleDefinition"] = `{"name":"x","type":"threshold","when":{"metric":"t"}}` }, `rule "draft"`},
+		"no profile":        {func(m map[string]any) { m["profileToken"] = "" }, "profileToken is required", "INVALID_INPUT"},
+		"no draft":          {func(m map[string]any) { delete(m, "ruleDefinition") }, "exactly one of graph and ruleDefinition", "RULE_REJECTED"},
+		"both drafts":       {func(m map[string]any) { m["graph"] = "{}" }, "exactly one of graph and ruleDefinition", "RULE_REJECTED"},
+		"bad definition":    {func(m map[string]any) { m["ruleDefinition"] = "{" }, "unexpected", "RULE_REJECTED"},
+		"uncompilable rule": {func(m map[string]any) { m["ruleDefinition"] = `{"name":"x","type":"threshold","when":{"metric":"t"}}` }, `rule "draft"`, "RULE_REJECTED"},
 		"bad time": {func(m map[string]any) {
 			m["events"] = []any{evEvent("d", evT0, "t", 1), map[string]any{"deviceToken": "d", "occurredAt": "yesterday", "measurements": []any{map[string]any{"name": "t", "value": 1}}}}
-		}, "events[1]: invalid occurredAt"},
-		"bad advance":    {func(m map[string]any) { m["advanceTo"] = "soon" }, "invalid advanceTo"},
-		"advance before": {func(m map[string]any) { m["advanceTo"] = evT0.Add(-time.Hour).Format(time.RFC3339) }, "before the last event"},
+		}, "events[1]: invalid occurredAt", "INVALID_INPUT"},
+		"bad advance":    {func(m map[string]any) { m["advanceTo"] = "soon" }, "invalid advanceTo", "INVALID_INPUT"},
+		"advance before": {func(m map[string]any) { m["advanceTo"] = evT0.Add(-time.Hour).Format(time.RFC3339) }, "before the last event", "INVALID_INPUT"},
 		"no readings": {func(m map[string]any) {
 			m["events"] = []any{map[string]any{"deviceToken": "d", "occurredAt": evT0.Format(time.RFC3339), "measurements": []any{}}}
-		}, "no readings"},
-		"event limit":     {func(m map[string]any) { m["limits"] = map[string]any{"maxEvents": 1}; m["events"] = []any{ev, ev} }, "above the limit of 1"},
-		"limit ceiling":   {func(m map[string]any) { m["limits"] = map[string]any{"maxEvents": 999999999} }, "above the maximum"},
-		"negative limit":  {func(m map[string]any) { m["limits"] = map[string]any{"maxIntents": -1} }, "must not be negative"},
-		"published+draft": {func(m map[string]any) { m["ruleSet"] = "PUBLISHED" }, "are for ruleSet DRAFT"},
+		}, "no readings", "INVALID_INPUT"},
+		"no events":       {func(m map[string]any) { m["events"] = []any{} }, "no events were sent", "INVALID_INPUT"},
+		"event limit":     {func(m map[string]any) { m["limits"] = map[string]any{"maxEvents": 1}; m["events"] = []any{ev, ev} }, "above the limit of 1", "LIMIT_EXCEEDED"},
+		"limit ceiling":   {func(m map[string]any) { m["limits"] = map[string]any{"maxEvents": 999999999} }, "above the maximum", "LIMIT_EXCEEDED"},
+		"edge ceiling":    {func(m map[string]any) { m["limits"] = map[string]any{"maxEdges": 999999999} }, "edge limit", "LIMIT_EXCEEDED"},
+		"negative limit":  {func(m map[string]any) { m["limits"] = map[string]any{"maxIntents": -1} }, "must not be negative", "INVALID_INPUT"},
+		"published+draft": {func(m map[string]any) { m["ruleSet"] = "PUBLISHED" }, "are for ruleSet DRAFT", "INVALID_INPUT"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -210,6 +229,12 @@ func TestEvaluateRefusals(t *testing.T) {
 			}
 			if got.Ok || !strings.Contains(strings.Join(msgs, "|"), c.want) {
 				t.Fatalf("ok=%v diagnostics=%v, want a rejection containing %q", got.Ok, msgs, c.want)
+			}
+			if got.Refusal == nil || *got.Refusal != c.reason {
+				t.Fatalf("refusal = %v, want %s", got.Refusal, c.reason)
+			}
+			if d := got.Diagnostics[0]; d.Code == nil || *d.Code != c.reason {
+				t.Fatalf("diagnostic code = %v, want %s", d.Code, c.reason)
 			}
 			if len(got.Edges) != 0 || len(got.Intents) != 0 {
 				t.Fatalf("a rejected request must derive nothing: %+v", got)
@@ -290,8 +315,13 @@ func TestEvaluatePublishedRules(t *testing.T) {
 	if !got.Ok || len(got.Edges) != 1 || got.Edges[0].Rule != "hot" {
 		t.Fatalf("edges = %+v, want the tenant's own rule only", got.Edges)
 	}
-	if len(got.SkippedRules) != 1 || !strings.HasPrefix(got.SkippedRules[0], "grouped: scoped to the group north@2") {
-		t.Fatalf("skippedRules = %v", got.SkippedRules)
+	if len(got.SkippedRules) != 1 || got.SkippedRules[0].Rule != "grouped" || got.SkippedRules[0].Reason != "GROUP_SCOPED" ||
+		got.SkippedRules[0].Group == nil || *got.SkippedRules[0].Group != "north@2" ||
+		!strings.HasPrefix(got.SkippedRules[0].Message, "grouped: scoped to the group north@2") {
+		t.Fatalf("skippedRules = %+v", got.SkippedRules)
+	}
+	if len(got.EvaluatedRules) != 1 || got.EvaluatedRules[0] != "hot" {
+		t.Fatalf("evaluatedRules = %v, want the one rule that ran", got.EvaluatedRules)
 	}
 	if got.Stats.RulesEvaluated != 1 {
 		t.Fatalf("stats = %+v", got.Stats)
@@ -309,7 +339,7 @@ func TestEvaluatePublishedRules(t *testing.T) {
 	evPublish(t, rs, ps, "acme", "scoped", "1", model.DetectRule{RuleToken: "g", Definition: hotDefinition, EntityGroupToken: "n", EntityGroupVersion: 1})
 	in["profileToken"] = "scoped"
 	got, _ = evExec(t, s, previewCtx(auth.DeviceRead), in)
-	if got.Ok || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "every published rule") || len(got.SkippedRules) != 1 {
+	if got.Ok || *got.Refusal != "ALL_RULES_SKIPPED" || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "every published rule") || len(got.SkippedRules) != 1 {
 		t.Fatalf("all skipped: %+v", got)
 	}
 
@@ -317,7 +347,7 @@ func TestEvaluatePublishedRules(t *testing.T) {
 	evPublish(t, rs, ps, "acme", "bare", "1")
 	in["profileToken"] = "bare"
 	got, _ = evExec(t, s, previewCtx(auth.DeviceRead), in)
-	if got.Ok || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "no published rules") {
+	if got.Ok || *got.Refusal != "NO_RULES" || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "no published rules") {
 		t.Fatalf("no rules: %+v", got)
 	}
 }
@@ -343,7 +373,7 @@ func TestEvaluateSharesThePreviewConcurrencyGate(t *testing.T) {
 	if errs != nil {
 		t.Fatalf("errors: %v", errs)
 	}
-	if got.Ok || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "already running") || len(got.Edges) != 0 {
+	if got.Ok || got.Refusal == nil || *got.Refusal != "BUSY" || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "already running") || len(got.Edges) != 0 {
 		t.Fatalf("got %+v, want a refusal (ok false)", got)
 	}
 	for i := 0; i < maxConcurrentPreviewsPerTenant; i++ {
@@ -386,5 +416,52 @@ func TestEvaluateReportsEmptyPayloadAndConnectorFields(t *testing.T) {
 	p := got.Intents[2]
 	if *p.Connector != "plant" || *p.Body != "hot" || *p.TimeoutMs != 0 {
 		t.Fatalf("publish = %+v", p)
+	}
+}
+
+// Evaluations across ALL tenants share a small process-wide bound: with it full, a tenant whose own
+// preview slots are free is still refused as BUSY.
+func TestEvaluateHasAProcessWideBound(t *testing.T) {
+	s := evalSchema(t, &SchemaResolver{})
+	for i := 0; i < maxConcurrentEvaluations; i++ {
+		if !acquireEvaluationSlot() {
+			t.Fatal("could not take a slot")
+		}
+	}
+	got, errs := evExec(t, s, previewCtx(auth.DeviceRead), evDraft(hotDefinition, evEvent("d1", evT0, "temperature", 90)))
+	for i := 0; i < maxConcurrentEvaluations; i++ {
+		releaseEvaluationSlot()
+	}
+	if errs != nil || got.Ok || got.Refusal == nil || *got.Refusal != "BUSY" {
+		t.Fatalf("errs=%v got=%+v, want BUSY while the process-wide bound is full", errs, got)
+	}
+	globalPreviewGate.mu.Lock()
+	inUse := globalPreviewGate.inUse["acme"]
+	globalPreviewGate.mu.Unlock()
+	if inUse != 0 {
+		t.Fatalf("the tenant's preview slot was not given back on a process-wide refusal: %d", inUse)
+	}
+	if got, _ := evExec(t, s, previewCtx(auth.DeviceRead), evDraft(hotDefinition, evEvent("d1", evT0, "temperature", 90))); !got.Ok {
+		t.Fatalf("got %+v once the bound is free", got)
+	}
+}
+
+// The resolver hands the evaluator live's lateness: the reviewer's out-of-order reproduction
+// detects through the served schema when the service is configured with live's default.
+func TestEvaluateUsesTheServicesLateness(t *testing.T) {
+	def := `{"name":"avg","type":"aggregate","windowMode":"tumbling","severity":"minor","metric":"temperature",
+	  "agg":"avg","op":"gt","threshold":50,"window":"1m0s"}`
+	in := evDraft(def,
+		evEvent("d1", evT0, "temperature", 10),
+		evEvent("d1", evT0.Add(62*time.Second), "temperature", 10),
+		evEvent("d1", evT0.Add(59*time.Second), "temperature", 500))
+	in["advanceTo"] = evT0.Add(3 * time.Minute).Format(time.RFC3339)
+	got, errs := evExec(t, evalSchema(t, &SchemaResolver{EvaluationLateness: 5 * time.Second}), previewCtx(auth.DeviceRead), in)
+	if errs != nil || !got.Ok || len(got.Edges) == 0 || got.Edges[0].Signal != "RAISED" {
+		t.Fatalf("errs=%v got=%+v, want the late 500 used and the pane raised", errs, got)
+	}
+	got, _ = evExec(t, evalSchema(t, &SchemaResolver{}), previewCtx(auth.DeviceRead), in)
+	if len(got.Edges) != 0 || len(got.Degradations) != 1 || got.Degradations[0].Reason != "LATE_READINGS" {
+		t.Fatalf("got %+v with no lateness, want no edge and a LATE_READINGS degradation", got)
 	}
 }

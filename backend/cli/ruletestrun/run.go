@@ -17,10 +17,10 @@ package ruletestrun
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/ruletest"
+	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
 // Client is the GraphQL seam. *userclient.TenantSession satisfies it, which is what carries the
@@ -36,16 +37,16 @@ type Client interface {
 	Query(ctx context.Context, baseURL, query string, variables map[string]any, out any) error
 }
 
-// defaultBodyLimit is the server's default request-body ceiling (DC_GRAPHQL_MAX_BODY_BYTES).
-const defaultBodyLimit = 4 << 20
-
-// bodyHeadroom is left under the limit for the query text and the JSON envelope around the variables.
-const bodyHeadroom = 64 << 10
-
 const evaluateQuery = `query($input:EvaluateRulesInput!){evaluateRules(input:$input){` +
-	`ok degraded skippedRules diagnostics{severity message nodeId} ` +
+	`ok refusal evaluatedRules degraded degradations{reason count} ` +
+	`skippedRules{rule reason group message} diagnostics{severity message nodeId code} ` +
 	`edges{occurredAt series rule kind signal} ` +
 	`intents{occurredAt series rule signal kind alarmKey command payload connector url body}}}`
+
+// busyBackoff is how long a run waits before each retry of an evaluation the server refused as
+// BUSY. The server refuses rather than queues, so the client is where the waiting belongs; a run
+// that is still refused after the last wait reports the refusal as an error.
+var busyBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
 
 // Options configures a run.
 type Options struct {
@@ -53,13 +54,26 @@ type Options struct {
 	Endpoint string
 	// Out receives the progress report. Nil discards it.
 	Out io.Writer
+	// Wait waits d or until ctx is done, returning ctx's error then. Nil waits on a timer; a test
+	// substitutes one that records the waits without taking them.
+	Wait func(ctx context.Context, d time.Duration) error
 }
 
 type wireResult struct {
-	Ok           bool     `json:"ok"`
-	Degraded     *string  `json:"degraded"`
-	SkippedRules []string `json:"skippedRules"`
-	Diagnostics  []struct {
+	Ok             bool     `json:"ok"`
+	Refusal        *string  `json:"refusal"`
+	EvaluatedRules []string `json:"evaluatedRules"`
+	Degraded       *string  `json:"degraded"`
+	Degradations   []struct {
+		Reason string `json:"reason"`
+		Count  int    `json:"count"`
+	} `json:"degradations"`
+	SkippedRules []struct {
+		Rule    string `json:"rule"`
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+	} `json:"skippedRules"`
+	Diagnostics []struct {
 		Severity string  `json:"severity"`
 		Message  string  `json:"message"`
 		NodeID   *string `json:"nodeId"`
@@ -126,7 +140,10 @@ func Run(ctx context.Context, plan *ruletest.Plan, opt Options) ([]ruletest.Case
 		}
 		l := plan.Scenarios[p]
 		started := time.Now()
-		ev := evaluate(ctx, opt, l)
+		ev := evaluateWithRetry(ctx, opt, l, out)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		ev.took = time.Since(started)
 		evals[p] = ev
 		if ev.err == nil {
@@ -134,6 +151,9 @@ func Run(ctx context.Context, plan *ruletest.Plan, opt Options) ([]ruletest.Case
 				len(l.Events.Events), len(ev.result.Edges), len(ev.result.Intents), ev.took.Round(time.Millisecond))
 			for _, s := range ev.skipped {
 				fmt.Fprintf(out, "  warning: a published rule was not evaluated: %s\n", s)
+			}
+			if ev.result.Degraded != "" {
+				fmt.Fprintf(out, "  warning: the result is partial: %s\n", ev.result.Degraded)
 			}
 		}
 	}
@@ -153,9 +173,13 @@ func Run(ctx context.Context, plan *ruletest.Plan, opt Options) ([]ruletest.Case
 			l := plan.Scenarios[s.ScenarioPath]
 			for _, o := range ruletest.Judge(s.Test, ev.result, l.Scenario.Start, l.Scenario.Duration.D()) {
 				c := ruletest.Case{Suite: s.Name, Name: o.Name, Took: ev.took}
-				if o.Passed {
+				switch {
+				case o.Errored:
+					c.Error = o.Message
+					fmt.Fprintf(out, "ERROR %s: %s\n        %s\n", s.Name, o.Name, o.Message)
+				case o.Passed:
 					fmt.Fprintf(out, "PASS  %s: %s\n", s.Name, o.Name)
-				} else {
+				default:
 					c.Failure = o.Message
 					fmt.Fprintf(out, "FAIL  %s: %s\n        %s\n", s.Name, o.Name, o.Message)
 				}
@@ -179,6 +203,38 @@ func Summary(cases []ruletest.Case) (passed, failed, errored int) {
 		}
 	}
 	return
+}
+
+// errBusy marks an evaluation the server refused as BUSY, the one refusal worth retrying.
+var errBusy = errors.New("busy")
+
+// evaluateWithRetry evaluates a scenario, waiting and retrying while the server is BUSY.
+func evaluateWithRetry(ctx context.Context, opt Options, l *ruletest.Loaded, out io.Writer) *evaluated {
+	wait := opt.Wait
+	if wait == nil {
+		wait = func(ctx context.Context, d time.Duration) error {
+			t := time.NewTimer(d)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	ev := evaluate(ctx, opt, l)
+	for _, d := range busyBackoff {
+		if !errors.Is(ev.err, errBusy) {
+			return ev
+		}
+		fmt.Fprintf(out, "the platform is busy evaluating; retrying %s in %s\n", l.Path, d)
+		if err := wait(ctx, d); err != nil {
+			return &evaluated{err: err}
+		}
+		ev = evaluate(ctx, opt, l)
+	}
+	return ev
 }
 
 func evaluate(ctx context.Context, opt Options, l *ruletest.Loaded) *evaluated {
@@ -205,23 +261,24 @@ func evaluate(ctx context.Context, opt Options, l *ruletest.Loaded) *evaluated {
 		}
 	}
 	vars := map[string]any{"input": input}
-	body, err := json.Marshal(vars)
-	if err != nil {
-		return &evaluated{err: err}
-	}
-	if len(body) > defaultBodyLimit-bodyHeadroom {
-		return &evaluated{err: fmt.Errorf("scenario %s generates %d events, a request of %d bytes, which is over the %d the server accepts "+
-			"by default (DC_GRAPHQL_MAX_BODY_BYTES); lengthen `every` or shorten `duration`, or split the scenario",
-			l.Path, len(events), len(body), defaultBodyLimit)}
-	}
 
+	// The server's request-body limit decides what is too large, not a copy of its default here:
+	// an operator who raised DC_GRAPHQL_MAX_BODY_BYTES gets the larger scenarios they allowed.
 	var resp struct {
-		Eval wireResult `json:"evaluateRules"`
+		Eval *wireResult `json:"evaluateRules"`
 	}
 	if err := opt.Client.Query(ctx, opt.Endpoint, evaluateQuery, vars, &resp); err != nil {
+		var se *userclient.StatusError
+		if errors.As(err, &se) && se.StatusCode == http.StatusRequestEntityTooLarge {
+			return &evaluated{err: fmt.Errorf("scenario %s generates %d events, a request larger than the server accepts "+
+				"(DC_GRAPHQL_MAX_BODY_BYTES); lengthen `every` or shorten `duration`, or split the scenario", l.Path, len(events))}
+		}
 		return &evaluated{err: fmt.Errorf("evaluating %s: %w", l.Path, err)}
 	}
-	w := resp.Eval
+	if resp.Eval == nil {
+		return &evaluated{err: fmt.Errorf("evaluating %s: the platform returned no result", l.Path)}
+	}
+	w := *resp.Eval
 	if !w.Ok {
 		var msgs []string
 		for _, d := range w.Diagnostics {
@@ -231,13 +288,39 @@ func evaluate(ctx context.Context, opt Options, l *ruletest.Loaded) *evaluated {
 			}
 			msgs = append(msgs, m)
 		}
-		return &evaluated{err: fmt.Errorf("the platform rejected scenario %s: %s", l.Path, strings.Join(msgs, "; "))}
+		err := fmt.Errorf("the platform rejected scenario %s: %s", l.Path, strings.Join(msgs, "; "))
+		if w.Refusal != nil && *w.Refusal == "BUSY" {
+			err = fmt.Errorf("%w: %w", errBusy, err)
+		}
+		return &evaluated{err: err}
 	}
 	res, err := toResult(w)
 	if err != nil {
 		return &evaluated{err: fmt.Errorf("evaluating %s: %w", l.Path, err)}
 	}
-	return &evaluated{result: res, skipped: w.SkippedRules}
+	var skipped []string
+	for _, s := range w.SkippedRules {
+		skipped = append(skipped, s.Message)
+	}
+	return &evaluated{result: res, skipped: skipped}
+}
+
+// intentKinds maps the served EvaluatedIntentKind to the test file's vocabulary.
+var intentKinds = map[string]string{
+	"RAISE_ALARM": "raiseAlarm", "CLEAR_ALARM": "clearAlarm", "SEND_COMMAND": "sendCommand",
+	"HTTP_CALL": "httpCall", "PUBLISH": "publish",
+}
+
+// raised maps the served EvaluatedSignal to an edge direction, refusing a value it does not know
+// rather than reading it as "resolved".
+func raised(signal string) (bool, error) {
+	switch signal {
+	case "RAISED":
+		return true, nil
+	case "RESOLVED":
+		return false, nil
+	}
+	return false, fmt.Errorf("the platform returned a signal %q this dcctl does not know", signal)
 }
 
 func toResult(w wireResult) (ruletest.Result, error) {
@@ -245,37 +328,50 @@ func toResult(w wireResult) (ruletest.Result, error) {
 	if w.Degraded != nil {
 		res.Degraded = *w.Degraded
 	}
+	res.Evaluated = append(res.Evaluated, w.EvaluatedRules...)
+	for _, d := range w.Degradations {
+		res.Degradations = append(res.Degradations, ruletest.Degradation{Reason: d.Reason, Count: d.Count})
+	}
+	if len(w.SkippedRules) > 0 {
+		res.Skipped = map[string]string{}
+		for _, s := range w.SkippedRules {
+			res.Skipped[s.Rule] = s.Message
+		}
+	}
 	parse := func(s string) (time.Time, error) { return time.Parse(time.RFC3339Nano, s) }
 	for _, e := range w.Edges {
 		at, err := parse(e.OccurredAt)
 		if err != nil {
 			return res, fmt.Errorf("the platform returned an edge time %q that is not RFC 3339", e.OccurredAt)
 		}
-		res.Edges = append(res.Edges, ruletest.Edge{At: at, Series: e.Series, Rule: e.Rule, Kind: e.Kind, Raise: e.Signal == "raised"})
+		up, err := raised(e.Signal)
+		if err != nil {
+			return res, err
+		}
+		res.Edges = append(res.Edges, ruletest.Edge{At: at, Series: e.Series, Rule: e.Rule, Kind: e.Kind, Raise: up})
 	}
 	for _, i := range w.Intents {
 		at, err := parse(i.OccurredAt)
 		if err != nil {
 			return res, fmt.Errorf("the platform returned an intent time %q that is not RFC 3339", i.OccurredAt)
 		}
-		in := ruletest.Intent{At: at, Series: i.Series, Rule: i.Rule, Raise: i.Signal == "raised", Kind: i.Kind}
-		if i.AlarmKey != nil {
-			in.AlarmKey = *i.AlarmKey
+		up, err := raised(i.Signal)
+		if err != nil {
+			return res, err
 		}
-		if i.Command != nil {
-			in.Command = *i.Command
+		kind, ok := intentKinds[i.Kind]
+		if !ok {
+			return res, fmt.Errorf("the platform returned an intent kind %q this dcctl does not know", i.Kind)
 		}
-		if i.Payload != nil {
-			in.Payload = *i.Payload
-		}
-		if i.Connector != nil {
-			in.Connector = *i.Connector
-		}
-		if i.URL != nil {
-			in.URL = *i.URL
-		}
-		if i.Body != nil {
-			in.Body = *i.Body
+		in := ruletest.Intent{At: at, Series: i.Series, Rule: i.Rule, Raise: up, Kind: kind}
+		for _, f := range []struct {
+			src *string
+			dst *string
+		}{{i.AlarmKey, &in.AlarmKey}, {i.Command, &in.Command}, {i.Payload, &in.Payload},
+			{i.Connector, &in.Connector}, {i.URL, &in.URL}, {i.Body, &in.Body}} {
+			if f.src != nil {
+				*f.dst = *f.src
+			}
 		}
 		res.Intents = append(res.Intents, in)
 	}
@@ -295,8 +391,48 @@ func WriteJUnit(path string, cases []ruletest.Case) error {
 	return f.Close()
 }
 
-// ErrFailed is returned by the command when any expectation failed or any suite errored.
+// Exit statuses of `dcctl test`.
+const (
+	// ExitFailed: an expectation was judged and did not hold.
+	ExitFailed = 1
+	// ExitErrored: something could not be judged (a file did not load, the platform refused the
+	// evaluation, sign-in or the network failed, an expectation was inconclusive).
+	ExitErrored = 2
+)
+
+// ExitError is an error that carries the process exit status `dcctl` exits with.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Unwrap() error { return e.Err }
+
+// ExitCode is the status the process exits with.
+func (e *ExitError) ExitCode() int { return e.Code }
+
+// ErrFailed is the error behind ExitFailed.
 var ErrFailed = errors.New("tests failed")
+
+// ErrErrored is the error behind ExitErrored.
+var ErrErrored = errors.New("tests could not be run")
+
+// Outcome is the error `dcctl test` returns for a summary: nil when everything held, exit status 2
+// when anything errored (an error outranks a failure, because the run did not finish its
+// question), and exit status 1 when an expectation failed.
+func Outcome(failed, errored int) error {
+	switch {
+	case errored > 0:
+		return &ExitError{Code: ExitErrored, Err: ErrErrored}
+	case failed > 0:
+		return &ExitError{Code: ExitFailed, Err: ErrFailed}
+	}
+	return nil
+}
+
+// Errored wraps err as an exit status 2 error: the tests could not be run.
+func Errored(err error) error { return &ExitError{Code: ExitErrored, Err: err} }
 
 // Describe renders the one-line summary.
 func Describe(passed, failed, errored int) string {

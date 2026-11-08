@@ -62,9 +62,12 @@ cubierta por la promesa anterior. Una superficie en vista previa lo dice donde s
 página de referencia o de guía y, en una operación de GraphQL, en su descripción. Mientras una superficie
 está en vista previa puede cambiar de forma incompatible en una versión menor; cuando lo hace, la sección
 de esa versión en [Versiones y actualizaciones](./releases-and-upgrades.md) dice qué cambió y qué hacer.
-Después de esa versión menor, o se promueve y queda cubierta como todo lo demás, o sigue en vista previa y
-lo vuelve a decir. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una
-herramienta que no conoce la versión rechaza el archivo en lugar de adivinar.
+Una superficie permanece en vista previa como máximo durante dos versiones menores; al terminar la segunda
+se promueve y queda cubierta como todo lo demás. Un cambio incompatible en una superficie en vista previa
+no queda exento de las comprobaciones de compatibilidad del proyecto: se declara allí como una ruptura
+intencionada, igual que cualquier otra, de modo que ningún cambio en vista previa se publica sin que se
+note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
+conoce la versión rechaza el archivo en lugar de adivinar.
 
 Hoy el nivel de vista previa contiene las pruebas de reglas: la operación `evaluateRules` de la API de
 event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test` que los lee.

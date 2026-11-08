@@ -2153,13 +2153,26 @@ The scenario evaluates the profile's PUBLISHED rules, or a DRAFT given as a rule
 canvas graph file, so a rule can be tested before it is published.
 
 The result is a report on standard output, optionally JUnit XML (--junit) for CI, and an exit
-status: 0 when every expectation held, non-zero when one failed or a file could not be run. A
-directory with no test file is an error, because a run that checks nothing must not pass.
+status:
+
+```
+  0  every expectation held
+  1  an expectation was judged and did not hold
+  2  something could not be judged: a file did not load, the platform refused the evaluation,
+     sign-in or the network failed, or an expectation was inconclusive (it names a rule that
+     was not evaluated, or it claims an absence or a count on a partial result)
+```
+
+A directory with no test file is an error, because a run that checks nothing must not pass. An
+expectation about a rule the evaluation did not run is an error, never a pass. When the platform
+is busy, dcctl waits and retries a few times before reporting it.
 
 The file formats are in the preview tier (apiVersion devicechain.io/ruletest/v1alpha1) and may
 change in a minor release, with the change in the release notes.
 
-The server authorizes the evaluation as the identity you sign in with (device:read).
+The server authorizes the evaluation as the identity you sign in with (device:read). The password
+may be given in the DCCTL_PASSWORD environment variable instead of --password, which keeps it out
+of the shell history and the process list.
 
 ```
 dcctl test <path> [flags]
@@ -2172,7 +2185,7 @@ dcctl test <path> [flags]
   -h, --help              help for test
       --junit string      also write the results as JUnit XML to this file
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
-      --password string   password for the identity (required)
+      --password string   password for the identity (required unless DCCTL_PASSWORD is set)
   -s, --server string     instance host for platform API calls (default "localhost")
   -t, --tenant string     tenant whose rules are tested (required)
       --tls               use https for platform endpoints

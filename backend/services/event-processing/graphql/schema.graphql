@@ -127,19 +127,27 @@ type Query {
     returns the same answer, and it touches no live stream, so it cannot move the live watermark
     or disturb live detection.
 
-    What it does not model: device attributes (a threshold that reads one never matches, as in a
-    preview), group-scoped published rules (skipped and named in skippedRules, because an event
-    here carries no group memberships), geofence rules (refused), and whether a command exists on
-    the device or a connector exists in the tenant (the intent is what the rule asks for).
+    The engine holds its clock behind the newest event by the same lateness live detection uses, so
+    a reading delivered out of order is used or declined exactly as live would use or decline it.
 
-    The size of the request replaces the preview's 24-hour window as the bound. It shares the
-    preview's per-tenant concurrency limit. Requires device:read. Preview tier: this operation
-    may change incompatibly in a minor release until it is promoted.
+    What it does not model: device attributes (a rule that reads one is evaluated without them and
+    the result is marked degraded with ATTRIBUTE_REFERENCES), group-scoped published rules (skipped
+    and listed in skippedRules, because an event here carries no group memberships), correlation
+    rules (skipped when published and refused in a draft, because an event here carries no anchor
+    memberships), geofence rules (refused), and whether a command exists on the device or a connector exists in the tenant (the
+    intent is what the rule asks for).
+
+    A run that evaluates nothing is never a success: no events, no rule to evaluate, no free slot
+    or no time left is a refusal (ok false, with the reason in refusal). The size of the request
+    replaces the preview's 24-hour window as the bound. It shares the preview's per-tenant
+    concurrency limit, and the service runs at most a few evaluations at once. Requires
+    device:read. Preview tier: this operation may change incompatibly in a minor release until it
+    is promoted.
     """
     evaluateRules(
         """The profile, the rule set, the events to evaluate and the limits."""
         input: EvaluateRulesInput!
-    ): EvaluateRulesResult!
+    ): EvaluateRulesResult
 }
 
 type Mutation {
@@ -425,15 +433,121 @@ input EvaluateLimitsInput {
     are still returned; the intents past the limit are not, and the result says so in degraded.
     """
     maxIntents: Int
+    """
+    The most edges the result records; 50000 when omitted, and at most 250000. Edges past the
+    limit, and their intents, are not recorded, and the result is marked degraded with EDGE_LIMIT.
+    """
+    maxEdges: Int
+}
+
+"""Why an evaluation was refused."""
+enum EvaluateRefusalReason {
+    """Too many previews and evaluations are already running; try again shortly."""
+    BUSY
+    """The evaluation ran out of time before it finished; send fewer events."""
+    TIMEOUT
+    """A limit was exceeded, for example too many events or rules."""
+    LIMIT_EXCEEDED
+    """The request is malformed, for example it has no events or an invalid timestamp."""
+    INVALID_INPUT
+    """A rule does not compile, or a draft graph does not lower to rules."""
+    RULE_REJECTED
+    """The profile has no published version, so it has no published rules."""
+    NO_PUBLISHED_VERSION
+    """The profile's published version has no detection rules."""
+    NO_RULES
+    """Every published rule was skipped (see skippedRules), so nothing was evaluated."""
+    ALL_RULES_SKIPPED
+}
+
+"""Why an evaluation result is partial."""
+enum EvaluateDegradationReason {
+    """Readings arrived too far behind the others to be used."""
+    LATE_READINGS
+    """A rule predicate could not be evaluated on some events."""
+    EVAL_ERRORS
+    """Intents past the intent limit were not recorded."""
+    INTENT_LIMIT
+    """Edges past the edge limit, and their intents, were not recorded."""
+    EDGE_LIMIT
+    """A detection could not be turned into a derived event and was dropped."""
+    UNATTRIBUTED_DETECTIONS
+    """
+    An action was skipped because the rule's stored action could not be carried out (a guard,
+    payload template or alarm-key template that failed, or an invalid setting).
+    """
+    ACTION_DROPPED
+    """A rule reads device attributes, which an evaluation does not supply."""
+    ATTRIBUTE_REFERENCES
+}
+
+"""One reason an evaluation result is partial."""
+type EvaluateDegradation {
+    """The reason."""
+    reason: EvaluateDegradationReason!
+    """How many readings, edges, intents, actions or rules it affected."""
+    count: Int!
+}
+
+"""Why a published rule was not evaluated."""
+enum EvaluateSkipReason {
+    """The rule is scoped to an entity group, and an evaluated event carries no group memberships."""
+    GROUP_SCOPED
+    """
+    The rule correlates devices under an anchor (an area, for example), and an evaluated event
+    carries no anchor memberships.
+    """
+    CORRELATION
+}
+
+"""A published rule an evaluation did not run."""
+type SkippedRule {
+    """Token of the rule."""
+    rule: String!
+    """Why it was not run."""
+    reason: EvaluateSkipReason!
+    """For GROUP_SCOPED, the group as token@version."""
+    group: String
+    """A sentence saying why."""
+    message: String!
+}
+
+"""The direction of an evaluated edge."""
+enum EvaluatedSignal {
+    """The condition became true."""
+    RAISED
+    """The condition ceased."""
+    RESOLVED
+}
+
+"""The kind of side effect an evaluated intent requests."""
+enum EvaluatedIntentKind {
+    """Raise or escalate an alarm."""
+    RAISE_ALARM
+    """Clear the rule's contribution to an alarm."""
+    CLEAR_ALARM
+    """Send a command to the device."""
+    SEND_COMMAND
+    """Call a webhook."""
+    HTTP_CALL
+    """Publish a message through a connector."""
+    PUBLISH
 }
 
 """The outcome of an evaluation."""
 type EvaluateRulesResult {
     """
     True when the rules compiled and the evaluation ran, even if it derived nothing. False when
-    the request or a rule was rejected; the reasons are in diagnostics.
+    the evaluation did not run; the reason is in refusal and the details in diagnostics.
     """
     ok: Boolean!
+    """When ok is false, why the evaluation was refused. Null when it ran."""
+    refusal: EvaluateRefusalReason
+    """
+    The tokens of the rules the evaluation ran: published rule tokens, a graph's condition node
+    ids, or "draft". An expectation about a rule not in this list cannot be judged.
+    """
+    evaluatedRules: [String!]!
     """
     The edges the rules derived, ordered by time, then device, then rule, with raised before
     resolved at the same instant.
@@ -449,16 +563,18 @@ type EvaluateRulesResult {
     """
     Published rules the evaluation did not run, each with the reason. Empty when every rule ran.
     """
-    skippedRules: [String!]!
+    skippedRules: [SkippedRule!]!
     """
-    Why the result is partial: readings arrived too far behind the others to be used, a rule
-    predicate failed on some events, or the intent limit was reached. Null for a complete result.
+    Each reason the result is partial, with a count. Empty for a complete result. A partial result
+    cannot prove that something did NOT happen.
     """
+    degradations: [EvaluateDegradation!]!
+    """The degradations as one sentence for a person to read. Null for a complete result."""
     degraded: String
     """
-    When ok is false, the reasons the request or a rule was rejected (including a profile with no
-    rule to evaluate, and too many evaluations already running for the tenant: a run that evaluated
-    nothing is never reported as a success); otherwise advisory warnings.
+    When ok is false, the reasons the evaluation was refused, each with the refusal reason as its
+    code; otherwise advisory warnings, for example METRIC_NOT_SUPPLIED for a rule whose metric no
+    supplied event carries.
     """
     diagnostics: [CanvasDiagnostic!]!
 }
@@ -478,8 +594,8 @@ type EvaluatedEdge {
     kind: String!
     """The rule's severity, when it declares one."""
     severity: String
-    """Either "raised" (the condition became true) or "resolved" (it ceased)."""
-    signal: String!
+    """Whether the condition became true or ceased."""
+    signal: EvaluatedSignal!
     """
     The reading or computed value the edge is about, when it has one. Null for a resolved edge and
     for a silence-driven one.
@@ -495,14 +611,13 @@ type EvaluatedIntent {
     series: String!
     """Token of the rule that derived the edge."""
     rule: String!
-    """Either "raised" or "resolved": the edge that causes the intent."""
-    signal: String!
+    """The direction of the edge that causes the intent."""
+    signal: EvaluatedSignal!
     """
-    What is requested: raiseAlarm, clearAlarm, sendCommand, httpCall or publish. A sendCommand,
-    httpCall or publish is requested on a raised edge only; a clearAlarm on the resolved edge of a
-    rule that raises an alarm.
+    What is requested. SEND_COMMAND, HTTP_CALL and PUBLISH are requested on a raised edge only;
+    CLEAR_ALARM on the resolved edge of a rule that raises an alarm.
     """
-    kind: String!
+    kind: EvaluatedIntentKind!
     """The idempotency token the request would carry."""
     token: String!
     """For raiseAlarm and clearAlarm, the alarm key the alarm is filed under."""

@@ -28,7 +28,12 @@
 // rules and events produce the same edges and intents, byte for byte, on any machine at any hour.
 // The two places a wall clock could leak in are both pinned: a derived event's TriggeredAt is the
 // virtual instant of the input that caused the detection, and a command's expiry is measured from
-// the detection's own instant (react.Dispatcher.SetClock) instead of from time.Now.
+// the detection's own instant (react.WithClock) instead of from time.Now.
+//
+// LATENESS. The engine holds its frontier Params.Lateness behind the newest event, exactly as live
+// DETECT holds its watermark the configured WatermarkLatenessSeconds behind: a reading delivered out
+// of order inside that budget is folded in, and one beyond it is declined and counted. A run with a
+// different lateness than live would pass a test that live fails, or the reverse.
 //
 // 🔴 WHAT IT DOES NOT MODEL, said here so a green test is not read as more than it is. It resolves
 // no device attributes (a dynamic threshold reads none, as in the preview), it has no device
@@ -46,6 +51,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
@@ -54,6 +60,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -69,7 +76,39 @@ const (
 	HardMaxIntents = 250_000
 	// MaxMetricsPerEvent bounds the readings one supplied event carries.
 	MaxMetricsPerEvent = 256
+	// DefaultMaxEdges is how many edges one run keeps when the caller names no limit.
+	DefaultMaxEdges = 50_000
+	// HardMaxEdges is the most a caller may raise the edge limit to.
+	HardMaxEdges = 250_000
+	// MaxRules is the most rules one run evaluates.
+	MaxRules = 256
 )
+
+// Degradation reasons: why a result is partial. Each is counted in Result.Degradations.
+const (
+	// DegradedLateReadings: readings arrived too far behind the others to be used.
+	DegradedLateReadings = "LATE_READINGS"
+	// DegradedEvalErrors: a rule predicate failed on some events.
+	DegradedEvalErrors = "EVAL_ERRORS"
+	// DegradedIntentLimit: intents past the intent limit were not recorded.
+	DegradedIntentLimit = "INTENT_LIMIT"
+	// DegradedEdgeLimit: edges past the edge limit were not recorded.
+	DegradedEdgeLimit = "EDGE_LIMIT"
+	// DegradedUnattributed: a detection could not be turned into a derived event.
+	DegradedUnattributed = "UNATTRIBUTED_DETECTIONS"
+	// DegradedActionDropped: REACT skipped an action fail-closed (a guard, template or alarm-key
+	// template that failed, an invalid stored setting, a missing payload variant).
+	DegradedActionDropped = "ACTION_DROPPED"
+	// DegradedAttributeReferences: a rule reads device attributes, which an evaluation does not
+	// supply, so its predicate is judged against attributes that are absent.
+	DegradedAttributeReferences = "ATTRIBUTE_REFERENCES"
+)
+
+// Degradation is one reason a result is partial, with how many times it happened.
+type Degradation struct {
+	Reason string
+	Count  int
+}
 
 // Rule is one rule to evaluate: the token it is filed under (what the edges and intents name it by)
 // and its authored definition. The definition's own ID is ignored; the run composes the id.
@@ -110,6 +149,11 @@ type Params struct {
 	// its hard ceiling.
 	MaxEvents  int
 	MaxIntents int
+	// MaxEdges is the caller's edge limit; zero means the default, and it may not exceed HardMaxEdges.
+	MaxEdges int
+	// Lateness is how far the engine's frontier is held behind the newest event: the live
+	// service's configured watermark lateness, so out-of-order delivery is judged as live judges it.
+	Lateness time.Duration
 	// AppliedGuard applies the live duplicate-event guard (on exactly when event envelopes are on),
 	// so a duplicate is dropped here when it would be dropped there.
 	AppliedGuard bool
@@ -181,11 +225,16 @@ type Result struct {
 	Edges   []Edge
 	Intents []Intent
 	Stats   Stats
-	// Skipped names each rule the CALLER chose not to hand to the run, and why; Run itself
-	// evaluates every rule it is given, so it leaves this empty.
-	Skipped []string
-	// Degraded is non-empty when the result is partial for a reason the author should know.
+	// Evaluated is the token of every rule the run evaluated, in the order given.
+	Evaluated []string
+	// Degradations names each reason the result is partial, with a count, in a fixed order.
+	// Empty for a complete result.
+	Degradations []Degradation
+	// Degraded is the same as Degradations, as one human-readable sentence; empty when complete.
 	Degraded string
+	// Warnings are advisory notes about the input, for example a rule whose metric no supplied
+	// event carries (it can only stay silent).
+	Warnings []string
 }
 
 // RuleError is a rule that does not compile. The caller maps it to a diagnostic.
@@ -207,13 +256,38 @@ type InputError struct{ Msg string }
 
 func (e *InputError) Error() string { return e.Msg }
 
+// newDetector builds the engine a run evaluates in: the single-threaded Engine, which is what live
+// runs with one shard (the default). A test substitutes the sharded concurrent engine live runs
+// with more shards, to show the two give the same result.
+var newDetector = func(cores []core.Rule, lateness time.Duration) core.Detector {
+	return core.NewEngine(cores, lateness)
+}
+
 // ErrNoRules is returned when the run was given nothing to evaluate.
 var ErrNoRules = &InputError{Msg: "there are no rules to evaluate"}
+
+// ErrNoEvents is returned when the run was given no event to evaluate.
+var ErrNoEvents = &InputError{Msg: "there are no events to evaluate: a run over no events can never fail an expectation"}
+
+// ErrNothingFed is returned when every supplied event was dropped before the engine saw it.
+var ErrNothingFed = &InputError{Msg: "every event was dropped as a duplicate before the rules saw it, so nothing was evaluated"}
 
 // Run evaluates p. It returns a typed error (RuleError, LimitError, InputError) for input it
 // refuses and a plain error only for a cancelled context.
 func Run(ctx context.Context, p Params) (Result, error) {
-	maxEvents, maxIntents := p.MaxEvents, p.MaxIntents
+	maxEvents, maxIntents, maxEdges := p.MaxEvents, p.MaxIntents, p.MaxEdges
+	if maxEdges <= 0 {
+		maxEdges = DefaultMaxEdges
+	}
+	if maxEdges > HardMaxEdges {
+		return Result{}, &LimitError{Msg: fmt.Sprintf("the edge limit %d is above the maximum of %d", maxEdges, HardMaxEdges)}
+	}
+	if len(p.Rules) > MaxRules {
+		return Result{}, &LimitError{Msg: fmt.Sprintf("%d rules were given, above the maximum of %d for one evaluation", len(p.Rules), MaxRules)}
+	}
+	if p.Lateness < 0 {
+		return Result{}, &InputError{Msg: "lateness must not be negative"}
+	}
 	if maxEvents <= 0 {
 		maxEvents = DefaultMaxEvents
 	}
@@ -234,6 +308,11 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	}
 	if len(p.Rules) == 0 {
 		return Result{}, ErrNoRules
+	}
+	// No events is a refusal, not an empty success: a run over nothing derives no edge, and every
+	// neverRaised expectation would pass on it.
+	if len(p.Events) == 0 {
+		return Result{}, ErrNoEvents
 	}
 	if err := validateEvents(p.Events); err != nil {
 		return Result{}, err
@@ -258,19 +337,27 @@ func Run(ctx context.Context, p Params) (Result, error) {
 		return Result{}, err
 	}
 	reg := runtime.NewRuleRegistry(scoped)
-	engine := core.NewEngine(reg.Cores(), 0)
+	engine := newDetector(reg.Cores(), p.Lateness)
 	pub := runtime.NewPublisher(nil, reg, nopRuntimeMetrics{})
 	rec := &recorder{}
-	disp := react.NewDispatcher(defResolver(defs), rec, alarmSink{rec}, connectorSink{rec}, nil, nopReactMetrics{})
+	run := &runState{pub: pub, rec: rec, maxIntents: maxIntents, maxEdges: maxEdges, drops: map[string]int{}}
+	run.disp = react.NewDispatcher(defResolver(defs), rec, alarmSink{rec}, connectorSink{rec}, nil, nopReactMetrics{},
+		react.WithClock(func() time.Time { return run.clock }),
+		// Quiet: a tenant's malformed rule is reported in the result, not logged once per edge.
+		react.WithLogger(zerolog.Nop()),
+		react.WithDropObserver(func(reason string) { run.drops[reason]++ }))
 
 	var applied *runtime.AppliedGuard
 	if p.AppliedGuard {
 		applied = runtime.NewAppliedGuard(0, 0)
 	}
 
-	run := &runState{pub: pub, disp: disp, rec: rec, maxIntents: maxIntents}
 	res := Result{}
 	res.Stats.RulesEvaluated = len(scoped)
+	for _, r := range p.Rules {
+		res.Evaluated = append(res.Evaluated, r.Token)
+	}
+	attrRules := inputWarnings(p, scoped, &res)
 
 	for i, e := range p.Events {
 		if i%256 == 0 {
@@ -297,25 +384,37 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	// a reading only once the frontier is strictly past it, and advancing to the instant exactly
 	// would replay the last reading and never decide it. A timer due in the nanosecond stamps its
 	// edge after advanceTo, which the filter below drops.
+	if res.Stats.EventsFed == 0 {
+		return Result{}, ErrNothingFed
+	}
+
 	engine.Advance(advanceTo.Add(time.Nanosecond))
 	run.collect(engine.Drain(), advanceTo)
 
-	if n := engine.DrainLateSamples(); n > 0 {
-		res.Stats.LateReadings = int(n)
-		res.Degraded = joinReasons(res.Degraded, fmt.Sprintf(
-			"%d reading(s) arrived too far behind the other readings to be used by the rule; firings may be incomplete", n))
+	res.Stats.LateReadings = int(engine.DrainLateSamples())
+	degrade := func(reason string, n int, text string) {
+		if n <= 0 {
+			return
+		}
+		res.Degradations = append(res.Degradations, Degradation{Reason: reason, Count: n})
+		res.Degraded = joinReasons(res.Degraded, text)
 	}
-	if res.Stats.EvalErrors > 0 {
-		res.Degraded = joinReasons(res.Degraded, "some events could not be evaluated (a rule predicate error); firings may be incomplete")
+	degrade(DegradedLateReadings, res.Stats.LateReadings, fmt.Sprintf(
+		"%d reading(s) arrived too far behind the other readings to be used by the rule; firings may be incomplete", res.Stats.LateReadings))
+	degrade(DegradedEvalErrors, res.Stats.EvalErrors,
+		"some events could not be evaluated (a rule predicate error); firings may be incomplete")
+	degrade(DegradedIntentLimit, run.intentsDropped, fmt.Sprintf(
+		"the intent limit of %d was reached; %d later intent(s) were not recorded", maxIntents, run.intentsDropped))
+	degrade(DegradedEdgeLimit, run.edgesDropped, fmt.Sprintf(
+		"the edge limit of %d was reached; %d later edge(s) and their intents were not recorded", maxEdges, run.edgesDropped))
+	degrade(DegradedUnattributed, run.unattributed, fmt.Sprintf(
+		"%d detection(s) could not be turned into a derived event and were dropped", run.unattributed))
+	if n := sumDrops(run.drops); n > 0 {
+		degrade(DegradedActionDropped, n, fmt.Sprintf(
+			"%d action(s) were skipped because the rule's stored action could not be carried out (%s)", n, describeDrops(run.drops)))
 	}
-	if run.intentsDropped > 0 {
-		res.Degraded = joinReasons(res.Degraded, fmt.Sprintf(
-			"the intent limit of %d was reached; %d later intent(s) were not recorded", maxIntents, run.intentsDropped))
-	}
-	if run.unattributed > 0 {
-		res.Degraded = joinReasons(res.Degraded, fmt.Sprintf(
-			"%d detection(s) could not be turned into a derived event and were dropped", run.unattributed))
-	}
+	degrade(DegradedAttributeReferences, len(attrRules), fmt.Sprintf(
+		"rule(s) %s read device attributes, which an evaluation does not supply; their firings may differ from live", joinTokens(attrRules)))
 
 	// Deterministic order, then flatten: an edge's intents ride with it.
 	sort.SliceStable(run.dets, func(i, j int) bool { return edgeLess(run.dets[i].edge, run.dets[j].edge) })
@@ -420,6 +519,10 @@ func compileAll(p Params) ([]runtime.ScopedRule, map[string]rules.Rule, error) {
 		if err != nil {
 			return nil, nil, &RuleError{Token: r.Token, Err: err}
 		}
+		if compiled.KeyedByAnchor() {
+			return nil, nil, &RuleError{Token: r.Token, Err: errors.New(
+				"the rule correlates devices under an anchor, which needs the devices' anchor memberships that an evaluation does not supply")}
+		}
 		if compiled.RequiresPosition {
 			return nil, nil, &RuleError{Token: r.Token, Err: errors.New(
 				"the rule tests geofence containment, which needs a position and a fence set that an evaluation does not supply")}
@@ -443,8 +546,14 @@ type runState struct {
 	maxIntents     int
 	intents        int
 	intentsDropped int
+	maxEdges       int
+	edgesDropped   int
 	unattributed   int
 	dets           []detection
+	// clock is the instant the dispatcher measures a command's expiry from, moved per detection.
+	clock time.Time
+	// drops counts the actions REACT skipped fail-closed, by reason.
+	drops map[string]int
 }
 
 // collect turns drained detections into edges and the intents they cause. triggeredAt is the
@@ -461,6 +570,10 @@ func (s *runState) collect(dets []core.Detection, triggeredAt time.Time) {
 			s.unattributed++
 			continue
 		}
+		if len(s.dets) >= s.maxEdges {
+			s.edgesDropped++
+			continue
+		}
 		_, token, _ := runtime.ProfileAndRuleToken(det.RuleID)
 		edge := Edge{
 			At: det.At, Series: det.Series, RuleToken: token, Kind: de.Kind, Severity: de.Severity,
@@ -472,8 +585,7 @@ func (s *runState) collect(dets []core.Detection, triggeredAt time.Time) {
 		// window that closes) it is the deadline, which is when the live engine fires it. Measuring
 		// from triggeredAt instead would date a timer edge collected by the final advance from the
 		// END of the scenario, so lengthening a scenario would move a command's expiry.
-		at := det.At
-		s.disp.SetClock(func() time.Time { return at })
+		s.clock = det.At
 		s.disp.Dispatch(context.Background(), de)
 		intents := s.rec.take()
 		kept := intents[:0]
@@ -487,4 +599,74 @@ func (s *runState) collect(dets []core.Detection, triggeredAt time.Time) {
 		}
 		s.dets = append(s.dets, detection{edge: edge, intents: kept})
 	}
+}
+
+// inputWarnings records, for each rule, what about the supplied input makes its answer less than it
+// looks: a rule whose watched metric no event carries can only stay silent (a warning), and a rule
+// that reads device attributes is judged without them (a degradation, returned for the caller).
+func inputWarnings(p Params, scoped []runtime.ScopedRule, res *Result) []string {
+	carried := map[string]bool{}
+	for _, e := range p.Events {
+		for _, m := range e.Metrics {
+			carried[m.Name] = true
+		}
+	}
+	var attrRules []string
+	for i, sr := range scoped {
+		token := p.Rules[i].Token
+		c := sr.Compiled
+		if c.Predicate != nil && c.Predicate.ReferencesAttributes() {
+			attrRules = append(attrRules, token)
+		}
+		var watched []string
+		for _, m := range append([]string{c.ValueMetric, c.GateMetric}, c.FeedMetrics...) {
+			if m != "" {
+				watched = append(watched, m)
+			}
+		}
+		if len(watched) == 0 {
+			continue
+		}
+		any := false
+		for _, m := range watched {
+			if carried[m] {
+				any = true
+				break
+			}
+		}
+		if !any {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"rule %q watches %s, which no supplied event carries, so it cannot fire", token, strings.Join(watched, ", ")))
+		}
+	}
+	return attrRules
+}
+
+func sumDrops(m map[string]int) int {
+	n := 0
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
+
+func describeDrops(m map[string]int) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s: %d", k, m[k])
+	}
+	return strings.Join(parts, ", ")
+}
+
+func joinTokens(tokens []string) string {
+	q := make([]string, len(tokens))
+	for i, t := range tokens {
+		q[i] = strconv.Quote(t)
+	}
+	return strings.Join(q, ", ")
 }

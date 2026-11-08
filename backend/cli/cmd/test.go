@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/ruletest"
@@ -45,13 +46,24 @@ The scenario evaluates the profile's PUBLISHED rules, or a DRAFT given as a rule
 canvas graph file, so a rule can be tested before it is published.
 
 The result is a report on standard output, optionally JUnit XML (--junit) for CI, and an exit
-status: 0 when every expectation held, non-zero when one failed or a file could not be run. A
-directory with no test file is an error, because a run that checks nothing must not pass.
+status:
+
+  0  every expectation held
+  1  an expectation was judged and did not hold
+  2  something could not be judged: a file did not load, the platform refused the evaluation,
+     sign-in or the network failed, or an expectation was inconclusive (it names a rule that
+     was not evaluated, or it claims an absence or a count on a partial result)
+
+A directory with no test file is an error, because a run that checks nothing must not pass. An
+expectation about a rule the evaluation did not run is an error, never a pass. When the platform
+is busy, dcctl waits and retries a few times before reporting it.
 
 The file formats are in the preview tier (apiVersion devicechain.io/ruletest/v1alpha1) and may
 change in a minor release, with the change in the release notes.
 
-The server authorizes the evaluation as the identity you sign in with (device:read).`,
+The server authorizes the evaluation as the identity you sign in with (device:read). The password
+may be given in the DCCTL_PASSWORD environment variable instead of --password, which keeps it out
+of the shell history and the process list.`,
 	Args:         cobra.ExactArgs(1),
 	RunE:         runTest,
 	SilenceUsage: true,
@@ -62,46 +74,57 @@ func init() {
 	testCmd.Flags().StringP("server", "s", "localhost", "instance host for platform API calls")
 	testCmd.Flags().Bool("tls", false, "use https for platform endpoints")
 	testCmd.Flags().StringVar(&testEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
-	testCmd.Flags().StringVar(&testPassword, "password", "", "password for the identity (required)")
+	testCmd.Flags().StringVar(&testPassword, "password", "", "password for the identity (required unless DCCTL_PASSWORD is set)")
 	testCmd.Flags().String("otp", "", otpFlagHelp)
 	testCmd.Flags().String("junit", "", "also write the results as JUnit XML to this file")
 	rootCmd.AddCommand(testCmd)
 }
 
+// passwordEnv is the environment variable `dcctl test` reads the password from when --password is
+// not given.
+const passwordEnv = "DCCTL_PASSWORD"
+
 func runTest(cmd *cobra.Command, args []string) error {
 	server, _ := cmd.Flags().GetString("server")
 	tls, _ := cmd.Flags().GetBool("tls")
 	junit, _ := cmd.Flags().GetString("junit")
-	if strings.TrimSpace(testTenant) == "" {
-		return fmt.Errorf("--tenant is required: rules are per-tenant, and there is no default")
+	password := testPassword
+	if password == "" {
+		password = os.Getenv(passwordEnv)
 	}
-	if strings.TrimSpace(testEmail) == "" || strings.TrimSpace(testPassword) == "" {
-		return fmt.Errorf("--email and --password are required: the evaluation is authorized as the identity that runs it")
+	if strings.TrimSpace(testTenant) == "" {
+		return ruletestrun.Errored(fmt.Errorf("--tenant is required: rules are per-tenant, and there is no default"))
+	}
+	if strings.TrimSpace(testEmail) == "" || strings.TrimSpace(password) == "" {
+		return ruletestrun.Errored(fmt.Errorf("--email and --password (or %s) are required: the evaluation is authorized as the identity that runs it", passwordEnv))
 	}
 	// Read and validate every file before signing in: a typo in a test file should cost no
 	// round trip.
 	plan, err := ruletest.Load(args[0])
 	if err != nil {
-		return err
+		// A CI job that reads the JUnit report sees the failure there too, not a missing file.
+		if junit != "" {
+			if werr := ruletestrun.WriteJUnit(junit, []ruletest.Case{{Suite: args[0], Name: "load", Error: err.Error()}}); werr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "writing the JUnit report: %v\n", werr)
+			}
+		}
+		return ruletestrun.Errored(err)
 	}
 	endpoints := sim.ResolveEndpoints(server, "", "", tls)
-	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, testEmail, testPassword, testTenant).
+	session := userclient.NewTenantSession(nil, endpoints.UserGraphQL, testEmail, password, testTenant).
 		WithOTP(otpFunc(otpFlag(cmd)))
 	cases, err := ruletestrun.Run(cmd.Context(), plan, ruletestrun.Options{
 		Client: session, Endpoint: endpoints.EventProcessingGraphQL, Out: cmd.OutOrStdout(),
 	})
 	if err != nil {
-		return err
+		return ruletestrun.Errored(err)
 	}
 	if junit != "" {
 		if err := ruletestrun.WriteJUnit(junit, cases); err != nil {
-			return fmt.Errorf("writing the JUnit report: %w", err)
+			return ruletestrun.Errored(fmt.Errorf("writing the JUnit report: %w", err))
 		}
 	}
 	passed, failed, errored := ruletestrun.Summary(cases)
 	fmt.Fprintln(cmd.OutOrStdout(), ruletestrun.Describe(passed, failed, errored))
-	if failed > 0 || errored > 0 {
-		return ruletestrun.ErrFailed
-	}
-	return nil
+	return ruletestrun.Outcome(failed, errored)
 }
