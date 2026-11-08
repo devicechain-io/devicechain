@@ -135,3 +135,9 @@ Sparkplug B defines no firmware update, so DeviceChain's [over-the-air updates](
 ## Operations {#running-it}
 
 Because a single replica owns the broker connection, Sparkplug ingestion has a few operational properties to understand before you depend on it in production: what a changeover costs, why a device can be left showing online, and what the drop counters are telling you. [Running the Edge Services](../deployment/edge-services.md) covers them.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

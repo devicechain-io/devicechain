@@ -1021,3 +1021,9 @@ Deployment 转发只到**一个** Pod。多副本时按名称选择目标：`kub
 
 - **[初始化实例](./bootstrap.md#install)**：部署监控栈的 `dcctl install` 及标志。
 - **[部署与 Operator](./kubernetes-operator.md)**：chart 如何生成带健康探针的逐服务工作负载。
+
+:::tip 动手试试
+
+**约 30 分钟，跑通你的第一台设备.** 在本地安装 DeviceChain，连接一台模拟设备，并查看它的遥测数据如何到达。 [开始快速入门 →](../quickstart/first-device.md)
+
+:::

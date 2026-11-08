@@ -120,3 +120,9 @@ Los otros son:
 - los endpoints de subida (`PUT /updates/artifacts/{token}/content`) y descarga (`GET /updates/download/{artifact}`) de artefactos de actualización en `update-management`
 - el endpoint de subida y descarga del logotipo del inquilino (`/branding/logo`) en `user-management`
 - el endpoint donde los servicios obtienen su token de servicio de corta duración (`/auth/service-token`) en `user-management`, servido en ese mismo puerto interno y nunca a través del ingress
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::
