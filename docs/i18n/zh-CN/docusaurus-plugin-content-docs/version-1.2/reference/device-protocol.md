@@ -1,0 +1,373 @@
+---
+sidebar_position: 5
+title: 设备协议参考
+---
+
+# 设备协议参考 {#device-protocol-reference}
+
+本页是设备通过 MQTT 和 HTTP 与 DeviceChain 交换的每一种消息的参考：设备发送的事件、设备接收的命令，以及设备回送的响应。本页列出每个字段、平台拒绝一条消息时会发生什么，以及在哪里能看到这次拒绝。如需分步说明，请先阅读[连接设备](../guides/connecting-a-device.md)。
+
+LwM2M 和 Sparkplug B 设备不使用这些消息。它们的协议网关会将其转换为平台的内部格式；请参阅 [LwM2M 接入](../concepts/lwm2m.md)和 [Sparkplug-B 接入](../concepts/sparkplug.md)。
+
+## 机器可读的 Schema {#schemas}
+
+本页的每种消息都以 JSON Schema（draft 2020-12）形式发布。可用它们校验固件输出，或生成类型：
+
+| Schema | 描述 |
+| --- | --- |
+| [`device-event.schema.json`](pathname:///schema/device/device-event.schema.json) | 设备发送的[事件信封](#device-event) |
+| [`measurement-payload.schema.json`](pathname:///schema/device/measurement-payload.schema.json) | [`Measurement`](#measurement-payload) 事件的载荷 |
+| [`location-payload.schema.json`](pathname:///schema/device/location-payload.schema.json) | [`Location`](#location-payload) 事件的载荷 |
+| [`alert-payload.schema.json`](pathname:///schema/device/alert-payload.schema.json) | [`Alert`](#alert-payload) 事件的载荷 |
+| [`new-relationship-payload.schema.json`](pathname:///schema/device/new-relationship-payload.schema.json) | [`NewRelationship`](#new-relationship-payload) 事件的载荷 |
+| [`command-delivery.schema.json`](pathname:///schema/device/command-delivery.schema.json) | 平台下发给设备的[命令](#command-delivery) |
+| [`command-response.schema.json`](pathname:///schema/device/command-response.schema.json) | 设备回送的[响应](#command-response) |
+
+同一份列表（使用绝对 URL）位于 [`/schema/index.json`](pathname:///schema/index.json) 的 `deviceProtocol` 下。信封 Schema 通过相对 URL 引用各载荷 Schema，因此按 URL 加载它的校验器会自行解析这些引用。
+
+这些 Schema 与解码这些消息的代码一同提交到代码库中；如果某个字段在一侧被重命名、新增或删除而另一侧没有，测试会让平台构建失败。
+
+Schema 表达不了的内容：
+
+- **未知成员会被忽略，而不是被拒绝。** 拼错的可选字段（把 `altId` 写成 `altID` 没问题，写成 `alt_id` 则不行）会被静默丢弃，而不是被拒绝。在本地校验时额外加上 `additionalProperties: false`，可以在测试中发现这类问题。
+- **"必填"描述的是设备必须发送的内容，而不是平台在入口处会拒绝的全部情形。** 大多数必填字段都会被强制执行，见[拒绝表](#rejections)。以下几项不会：
+  - 当凭据认证了事件时，`device` 可以缺失；事件归属于该凭据所属的设备。
+  - 缺少 `payload`，或缺少 `relationshipType`、`targetType` 或 `target` 的 `NewRelationship` 事件会被接受（HTTP `202`）：每个缺失的值都按空字符串读取，随后事件在解析时失败，并以原因 `ApiCallFailed` 进入死信。
+  - 在命令响应中，缺少 `success` 按 `false` 处理，命令结束为 `FAILED`；缺少 `commandToken` 则不对应任何命令，重试后以原因 `exhausted` 进入死信。
+
+## 版本 {#versioning}
+
+消息中没有版本字段。契约就是随你所用版本的文档发布的 Schema 所描述的内容，且 Schema 与解码其消息的代码在同一个版本中变更。在 v1.0.0 之前，任何版本都可能改变契约，因此请比较你当前运行的版本与目标版本之间的 Schema。
+
+## 主题与端点 {#topics}
+
+平台 broker 是 NATS 内置的 MQTT 服务器。MQTT 主题与平台读取的 NATS subject 是同一个名称，只是 `/` 写作 `.`：
+
+| 消息 | 方向 | MQTT 主题 | NATS subject |
+| --- | --- | --- | --- |
+| [事件](#device-event) | 设备 → 平台 | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
+| [命令下发](#command-delivery) | 平台 → 设备 | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
+| [命令响应](#command-response) | 设备 → 平台 | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
+| [配置](../guides/connecting-a-device.md#reserved-device-topics)与[更新](../guides/connecting-a-device.md#over-the-air-updates)消息 | 平台 → 设备 | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
+| 配置与更新报告 | 设备 → 平台 | `{instanceId}/{tenant}/device-reports/{deviceToken}` | `{instanceId}.{tenant}.device-reports.{deviceToken}` |
+
+- 设备只被授权在带有**自身**设备令牌的主题上发布和订阅。它无法读取其他设备的命令，也无法冒充其他设备发布。
+- **设备通过 MQTT 连接，而不是直接使用 NATS。** 设备凭据只授权 MQTT 连接：出示设备凭据的普通 NATS 客户端在连接时即被拒绝。subject 一列是运维人员在 NATS 工具中看到的名称，而不是第二条接入途径。连接设置（client id、`{tenant}:{credentialId}` 用户名、TLS）见[连接设置](../guides/connecting-a-device.md#connection-settings)。
+- 以 QoS 0 发布事件，或以 QoS 1 发布并携带 [`altId`](#device-event)。QoS 2 发布默认被拒绝，且 broker 会关闭连接；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
+
+尚无凭据的设备通过 HTTPS 向 `POST /api/device-management/provisioning/{tenant}/register` [自行注册](#self-registration)。这是与事件接入分开的端点，由 `device-management` 提供。
+
+通过 **HTTP**，设备只能发送事件。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
+
+### 网关命名空间 {#gateway-namespace}
+
+网关（[边缘代理](../deployment/edge-services.md#gateway-identity)就是一个）是代表其他设备发布消息的设备。它在自己的命名空间中发布：
+
+| 消息 | 方向 | MQTT 主题 |
+| --- | --- | --- |
+| 网关后设备的[事件](#device-event) | 网关 → 平台 | `{instanceId}/{tenant}/gateways/{gatewayToken}/devices/{deviceToken}/events` |
+| 事件被拒绝的通知 | 平台 → 网关 | `{instanceId}/{tenant}/gateways/{gatewayToken}/notices` |
+
+- 网关只被授权在**自己的**令牌下发布（`devices/` 之后可以是任意子设备令牌），并且只订阅自己的通知。它不能在其他网关或其他租户的命名空间中发布，也不能在子设备自己的主题上发布。无论网关代表多少台设备，授权的大小都相同，并且每台设备都持有该授权，因此给网关分配第一台设备不需要重连。
+- 只有当主题中指明的设备存在、**已分配给该网关**，并且网关已启用时，平台才接受事件。否则平台以原因 `NotGatewayChild`（见[下文](#rejections-after-acceptance)）拒绝事件，并向网关发送通知。无论哪种情况，消息代理都会确认该发布，因为 MQTT 3.1.1 无法拒绝发布。
+- 身份由主题加分配决定，正文不携带身份：此命名空间上携带 `credentialType`、`credentialId` 或 `credentialSecret` 的事件会被拒绝，正文 `device` 指向其他设备的事件也会被拒绝。事件归属于子设备，已解析的事件还会携带网关的令牌。
+- 通知是一个 JSON 对象：`{"altId": "...", "device": "...", "reason": "not_gateway_child"}`。它不带载荷，也不存储，因此发送时离线的网关收不到。拒绝的记录是 `failed-events` 流。
+- 授权还覆盖该命名空间下的 `responses` 和 `reports`，以及订阅 `commands` 和 `desired`，但目前没有任何组件读取或发送它们。请只发布**事件**。
+
+## 设备事件 {#device-event}
+
+每条 MQTT 消息或每个 HTTP 请求一个 JSON 对象。一条消息就是一个事件。
+
+| 字段 | 类型 | 必填 | 含义 | 示例 |
+| --- | --- | --- | --- | --- |
+| `device` | string | 是¹ | 发送事件的设备令牌。在 MQTT 上必须等于主题中的 `{deviceToken}`。当凭据认证该事件时，它必须是该凭据所属的设备。 | `"sensor-001"` |
+| `eventType` | string | 是 | `Measurement`、`Location`、`Alert` 或 `NewRelationship`，区分大小写。决定载荷结构。 | `"Measurement"` |
+| `payload` | object | 是 | 事件内容。其结构取决于 `eventType`；见[载荷](#payloads)。 | `{"entries":[…]}` |
+| `occurredTime` | string，RFC 3339 | 否 | 事件发生的时间。省略时，以平台收到消息的时间作为事件时间。 | `"2026-08-09T12:00:00.125Z"` |
+| `altId` | string | 否 | 由设备选定的幂等键：携带相同 `altId` **和**相同信封 `occurredTime` 的重复投递事件会被跳过。目前按租户而非按设备匹配，这是一个已知限制；见[下文](#altid)。 | `"sensor-001-4417"` |
+| `relationship` | string | 否 | 会被接受并沿处理链路传递，但**不会被使用**。无论此字段为何值，平台都会在事件上记录该设备所有被跟踪的关系。不要依赖它。 | — |
+| `credentialType` | string | HTTP：见下文。MQTT：不要带 | `ACCESS_TOKEN` 或 `MQTT_BASIC`。与 `credentialId` 一起认证该事件。 | `"ACCESS_TOKEN"` |
+| `credentialId` | string | HTTP：见下文。MQTT：不要带 | 对 `ACCESS_TOKEN` 而言就是令牌本身。对 `MQTT_BASIC` 而言是用户名，不带 MQTT 连接所用的 `{tenant}:` 前缀。 | `"5f98…98b2"` |
+| `credentialSecret` | string | HTTP，仅 `MQTT_BASIC`。MQTT：不要带 | `MQTT_BASIC` 的密码。 | |
+
+¹ 每个事件都应发送 `device`。严格来说，当凭据认证了该事件时，平台容忍其缺失，并将事件归属于该凭据所属的设备。
+
+**通过 MQTT 时的凭据。** 不要发送。在平台的 MQTT 消息代理上，设备在连接时完成认证，主题已经指明设备，因此 `credentialType`、`credentialId` 和 `credentialSecret` 必须缺省：携带其中任何一个的事件会被拒绝（参见[拒绝表](#rejections-at-the-door)）。请把这样做过的设备的凭据视为已暴露并轮换。由您自己运维、作为外部 MQTT 源接入的消息代理不会为平台认证设备，因此来自它的事件仍像 HTTP 一样携带凭据。
+
+**通过 HTTP 时的凭据。** 默认的设备认证模式是 `required`：没有凭据的事件会被拒绝（见[拒绝表](#rejections)）。只有在配置为 `optional` 或 `disabled` 的实例上才可以省略凭据。只有当 `credentialType` 和非空的 `credentialId` 同时存在时，平台才会读取凭据。见[设备凭据](../guides/device-credentials.md)。
+
+**时间戳。** 每个 `occurredTime`，无论在信封上还是在条目上，都是 RFC 3339 格式。平台会拒绝不符合该格式的值、等于 `0001-01-01T00:00:00Z` 的值（保留用于表示"未报告时间"），以及早于平台收到消息时刻超过 **366 天**的值。远远超前于平台时钟的时间会被按上限存储，而不是被拒绝；见[超前的时钟](../guides/connecting-a-device.md#clocks-that-run-ahead)。
+
+### `altId` 与重复 {#altid}
+
+至少一次投递（MQTT QoS 1、在 `503` 之后重试 HTTP 请求）可能把一个事件投递两次。没有 `altId` 时，两份副本都会被存储。有 `altId` 时，第二份会被跳过：
+
+- 匹配同时基于 `altId` **和**信封的 `occurredTime`。条目上的 `occurredTime` 不计入匹配。
+- 请在信封上发送 `occurredTime`。没有它，每份副本都以到达时间为准，两个时间不同，两份都会被存储。
+- 目前按租户而非按设备进行匹配；见下方的限制说明。
+- 与已有事件 `altId` 和 `occurredTime` 都相同的第二个事件即使内容不同也会被跳过。
+
+:::caution 已知限制
+目前重复检测是按**租户**基于（`altId`，`occurredTime`）进行的，而不是按设备，因此两台设备在同一时刻发送相同的 `altId` 会发生冲突，其中一个事件会被跳过。这是一个缺陷，修复正在进行中。在修复发布之前，请让该值在整个设备群中唯一，例如以设备令牌作为前缀。
+:::
+
+### 载荷 {#payloads}
+
+`Measurement`、`Location` 和 `Alert` 载荷把内容包装在 `entries` 数组中。一个条目是某一时刻的一次读数，每个条目都可以携带自己的 `occurredTime`；没有的条目沿用信封上的时间。没有条目的载荷，或把内容直接放在 `payload` 下的载荷，都会被拒绝。
+
+一个事件**最多携带 256 个读数**，两种传输方式都一样。一个读数是一个测量键，或一个位置条目或告警条目。超过上限的消息会被整体拒绝，绝不会被截断。
+
+#### Measurement {#measurement-payload}
+
+| 字段 | 类型 | 必填 | 含义 | 示例 |
+| --- | --- | --- | --- | --- |
+| `entries` | array | 是 | 样本。至少一个。 | |
+| `entries[].measurements` | string → **string** 的对象 | 是 | 指标名到值的映射。每个值都是 JSON **字符串**：`"21.5"`，而不是 `21.5`。不带引号的数字会导致整条消息失败。至少一个指标。 | `{"temperature":"21.5"}` |
+| `entries[].occurredTime` | string，RFC 3339 | 否 | 该样本的时刻。 | |
+
+#### Location {#location-payload}
+
+每个位置字段都是 JSON **字符串**，包括数值字段。每个值都必须能解析为其范围内的有限数值。
+
+| 字段 | 类型 | 必填 | 含义 | 范围 |
+| --- | --- | --- | --- | --- |
+| `entries` | array | 是 | 定位点。至少一个。 | |
+| `entries[].latitude` | string | 是 | WGS84 十进制度 | −90 到 90 |
+| `entries[].longitude` | string | 是 | WGS84 十进制度 | −180 到 180 |
+| `entries[].elevation` | string | 否 | 高于 WGS84 **椭球面**的米数，而非高于平均海平面 | 绝对值 ≤ 99999999 |
+| `entries[].accuracy` | string | 否 | 水平精度，米 | 0 到 99999999 |
+| `entries[].speed` | string | 否 | 米每秒 | 0 到 99999999 |
+| `entries[].heading` | string | 否 | 自真北起顺时针的度数 | 0 到 360（不含 360）；359.99995 及以上会被拒绝 |
+| `entries[].occurredTime` | string，RFC 3339 | 否 | 该定位点的时刻 | |
+
+#### Alert {#alert-payload}
+
+| 字段 | 类型 | 必填 | 含义 | 示例 |
+| --- | --- | --- | --- | --- |
+| `entries` | array | 是 | 告警。至少一个。 | |
+| `entries[].type` | string | 是 | 通知策略、规则和控制台筛选器用来路由的分类。为空会被拒绝。 | `"overheat"` |
+| `entries[].level` | **integer** | 否 | 严重程度，0 到 2147483647 之间不带引号的 JSON 整数。带引号的级别会导致整条消息失败。省略时为 0。 | `5` |
+| `entries[].message` | string | 否 | 供人阅读的文本。 | `"coolant over limit"` |
+| `entries[].source` | string | 否 | 设备上产生该告警的部件。 | `"ecu"` |
+| `entries[].occurredTime` | string，RFC 3339 | 否 | 该告警的时刻。 | |
+
+#### NewRelationship {#new-relationship-payload}
+
+从发送事件的设备到同一租户中另一实体创建一条关系。此载荷没有 `entries` 数组，且三个键按确切名称读取，因此大小写有影响。缺失的键在解码消息时不会被拒绝：它按空字符串读取，随后事件会像下文所述情形一样在解析时失败。
+
+| 字段 | 类型 | 必填 | 含义 | 示例 |
+| --- | --- | --- | --- | --- |
+| `relationshipType` | string | 是 | 关系类型的令牌：租户中定义的类型，或平台的保留类型之一（首次使用时自动创建）。 | `"member"` |
+| `targetType` | string | 是 | `device`、`asset`、`area`、`customer` 或 `group`。 | `"group"` |
+| `target` | string | 是 | 目标实体的令牌。 | `"building-7-sensors"` |
+
+平台无法创建的关系（未知的目标类型、不存在的目标、未知的关系类型）不会被创建。与任何无法解析的事件一样，它会被重试，然后进入死信。
+
+## 命令下发 {#command-delivery}
+
+设备在其 `device-commands` 主题上收到的内容，命令每派发一次就收到一次。下发是**仅实时**的：命令发布时未连接并订阅的设备收不到它，平台也无从得知。见[接收命令](../guides/connecting-a-device.md#receiving-commands)。
+
+| 字段 | 类型 | 总是存在 | 含义 | 示例 |
+| --- | --- | --- | --- | --- |
+| `token` | string | 是 | **命令的**令牌。它标识命令，而不是设备。在响应中以 `commandToken` 回送。 | `"6f1c0f8e-…"` |
+| `deviceToken` | string | 是 | 命令的目标设备：总是命令所到达主题对应的设备。 | `"sensor-001"` |
+| `name` | string | 是 | 命令键。当设备的配置文件声明了命令词汇表时，为其中已发布的命令之一。 | `"reboot"` |
+| `dispatchNonce` | string | 是 | 标识该命令的这一次派发。它是不透明的：不要解析它。在响应中原样回送。如果同一命令再次到达，请使用最近一次下发中的 nonce 作答。 | `"0f6f4a2c-…"` |
+| `payload` | 任意 JSON 值 | 否 | 命令的参数，与下达时完全一致。如果配置文件为该命令声明了参数 Schema，则已经过校验。命令下达时没有参数则不出现。 | `{"delaySeconds":5}` |
+
+## 命令响应 {#command-response}
+
+设备在其 `command-responses` 主题上发布的内容，用于结束一条命令。平台从**主题**中获取响应设备，从不从正文中获取。
+
+| 字段 | 类型 | 必填 | 含义 | 示例 |
+| --- | --- | --- | --- | --- |
+| `commandToken` | string | 是 | 所响应的那次下发中的 `token`：命令的令牌，而不是设备的令牌。 | `"6f1c0f8e-…"` |
+| `dispatchNonce` | string | 是 | 所响应的那次下发中的 `dispatchNonce`。 | `"0f6f4a2c-…"` |
+| `success` | boolean | 是 | `true` 将命令结束为 `SUCCESSFUL`，`false` 结束为 `FAILED`。省略时按 `false` 处理。 | `true` |
+| `payload` | 任意 JSON 值 | 否 | 命令的结果数据，随命令存储并由 API 返回。字符串按其文本存储；对象、数组、数字或布尔值则按发送时的原样作为该 JSON 值存储，因此设备可以直接返回结构化数据。省略或为 `null` 时，命令没有响应载荷。 | `"rebooting in 5s"` 或 `{"level":3}` |
+| `error` | string | 否 | 命令失败的原因。仅在 `success` 为 `false` 时存储；为 `true` 时被忽略。 | `"actuator jammed"` |
+| `reach` | string | 否 | 供代表设备应答的网关或协议适配器使用；设备自己报告结果时省略。仅在 `success` 为 `false` 时读取。`"UNANSWERED"`：命令已发到链路上但没有任何回应，因此落为 `TIMEOUT`。`"UNSENT"`：适配器在命令到达设备之前就拒绝了它，因此落为 `FAILED` 并记为从未送达。省略时，失败即设备自己的回答。无法识别的值按 `"UNANSWERED"` 处理。 | `"UNANSWERED"` |
+
+```json
+{"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}
+```
+
+## 自注册 {#self-registration}
+
+尚无凭据的设备可以通过 HTTPS 自行注册，使用来自[自动注册配置（provisioning profile）](../guides/device-self-registration.md)的整个设备群共用的**预配密钥与密文**。设备自己生成凭据并只发送一次，平台返回设备令牌和 MQTT 客户端 ID。平台只保存凭据的摘要，任何响应都不包含密文。
+
+```text
+POST /api/device-management/provisioning/{tenant}/register
+```
+
+- **仅限 HTTPS。**请求正文中携带预配密文。不存在使用密文的 MQTT 注册。持有客户端证书的设备可以在首次通过 MQTT 连接时，由[证书配置](../guides/device-x509.md#registration)为其注册；证书配置没有注册密文，也不使用此端点。
+- **需要实例的 API Ingress**，它把 `/api/<area>` 路由到各服务并去掉前缀。`ingress.enabled: false` 时该路由没有公开路径。[`dcctl device register`](./dcctl.md#dcctl-device-register) 与其他命令使用相同的 `--server` 主机。
+- **没有 `Authorization` 请求头。**正文中的预配密钥和密文就是认证。
+
+### 请求 {#self-registration-request}
+
+`Content-Type: application/json`，最大 **8 KiB**。Schema 未定义的字段会被拒绝，因此拼错的字段会失败，而不是让设备在缺少该字段的情况下完成注册。
+
+```json
+{
+  "provisionKey": "acme-sensors-2026",
+  "provisionSecret": "<创建或轮换配置时只显示一次>",
+  "externalId": "SN-000123",
+  "credentialSecret": "<设备自己的凭据，22 到 256 个 base64url 字符>",
+  "name": "optional",
+  "metadata": { "optional": "object" }
+}
+```
+
+| 字段 | 必填 | 规则 |
+| --- | :---: | --- |
+| `provisionKey`、`provisionSecret` | 是 | 各 1 到 256 字节。密文是服务器为该配置生成的那一个。 |
+| `externalId` | 是 | 设备的序列号或其他 ID，1 到 256 个字符。平台依靠它找到设备。 |
+| `credentialSecret` | 是 | 设备自己的凭据内容，会成为它的访问令牌。**base64url**（字母、数字、`-` 和 `_`，无填充），**22 到 256 个字符**。生成 32 个随机字节并编码（43 个字符）。 |
+| `name` | 否 | 最多 128 个字符。仅在本次请求创建设备时使用。 |
+| `metadata` | 否 | 一个 JSON 对象。仅在本次请求创建设备时使用。 |
+
+**在设备上生成凭据，并在发送请求之前先保存它。**平台无法把它还给你。这样，响应丢失的请求可以用相同内容安全重试：它会被识别为重放并返回 `200`，而不是被当作第二台设备拒绝。
+
+### 响应 {#self-registration-response}
+
+请求创建了设备时返回 `201`，采用已有设备或识别为重放时返回 `200`。三种情况的正文相同，且不含任何密文：
+
+```json
+{
+  "outcome": "CREATED",
+  "tenant": "acme",
+  "deviceToken": "pv-SN-000123-06e08144e3e8",
+  "externalId": "SN-000123",
+  "credentialType": "ACCESS_TOKEN",
+  "mqtt": { "clientId": "<instanceId>:acme:pv-SN-000123-06e08144e3e8" }
+}
+```
+
+| `outcome` | 状态 | 含义 |
+| --- | :---: | --- |
+| `CREATED` | `201` | 设备原先不存在。配置（策略 `ALLOW_NEW`）创建了它，设备类型为配置的设备类型，并为该配置预指定，同时附带凭据。设备令牌由外部 ID 派生，以 `pv-` 开头。 |
+| `ADOPTED` | `200` | 设备原先已存在、已为该配置预指定且没有凭据。它获得了这份凭据。 |
+| `REPLAYED` | `200` | 设备已持有该配置的凭据，且请求给出的内容相同。没有写入任何内容。 |
+
+使用响应中的客户端 ID，以及 MQTT 用户名 `{tenant}:{credentialSecret}`（无密码）连接，见[连接设置](../guides/connecting-a-device.md#connection-settings)。响应不会重复凭据。
+
+### 什么决定响应 {#self-registration-decision}
+
+每一次拒绝都在写入任何内容之前决定。对平台已知的设备，按以下步骤依次判断，第一个匹配的就是答案：
+
+| 步骤 | 条件 | 答案 |
+| :---: | --- | --- |
+| 1 | 设备已禁用。 | `403 DEVICE_DISABLED` |
+| 2 | 其设备类型不是配置的设备类型。 | `409 DEVICE_TYPE_MISMATCH` |
+| 3 | 它没有为该配置预指定。 | `409 DEVICE_NOT_EARMARKED` |
+| 4 | 该配置在其上的凭据已被禁用或已过期。 | `409 ALREADY_PROVISIONED`，消息为 “the device's credential was revoked; an operator must reset its provisioning” |
+| 5 | 它持有该配置有效的凭据，且内容一致。 | `200 REPLAYED` |
+| 6 | 它持有该配置有效的凭据但内容不同，或持有任何其他凭据。 | `409 ALREADY_PROVISIONED` |
+| 7 | 它没有凭据，且配置已注册的设备数已达其 `maxDevices`。 | `422 LIMIT_EXCEEDED` |
+| 8 | 其他情况。 | `200 ADOPTED` |
+
+平台不认识的设备（没有任何有效设备使用该 `externalId`）：在策略 `ALLOW_NEW` 下会被创建（达到上限时返回 `422 LIMIT_EXCEEDED`），在 `CHECK_PRE_PROVISIONED` 下以 `404 DEVICE_NOT_REGISTERED` 拒绝。两种策略都不会采用未为该配置预指定的设备：运维人员创建的设备只会被有人指向它的配置接管，这就是[预指定](../guides/device-self-registration.md#earmarking)。
+
+### 错误 {#self-registration-errors}
+
+错误响应为 `{ "code": "...", "message": "..." }`。错误码集合是封闭的。`429`，以及因容量不足的 `503`，还会携带以秒为单位的 `Retry-After`。消息从不包含密文，也从不说明认证的哪一部分失败。
+
+| 状态 | `code` | 何时 |
+| :---: | --- | --- |
+| `400` | `INVALID_VALUE` | 路径中的租户不是有效令牌；正文不是单个 JSON 对象，或带有未定义的字段；字段超出范围（消息会指出字段，但绝不给出其值）。 |
+| `401` | `PROVISIONING_FAILED` | 预配密钥或密文无效。**所有原因都是同一个答案**：未知租户、未知密钥、错误的密文、已禁用或已过期的配置、其密文从未由服务器生成的配置（见[轮换它](../guides/device-self-registration.md#rotate-required)），以及正在删除的租户。 |
+| `403` | `DEVICE_DISABLED` | 上述步骤 1。 |
+| `404` | `DEVICE_NOT_REGISTERED` | `CHECK_PRE_PROVISIONED` 下的未知设备。 |
+| `408` | `INVALID_VALUE` | 正文未在读取期限内到达（默认 10 秒）。连接会被关闭。 |
+| `409` | `DEVICE_NOT_EARMARKED`、`DEVICE_TYPE_MISMATCH`、`ALREADY_PROVISIONED` | 上述步骤 3、2，以及 4 或 6。 |
+| `409` | `DEVICE_TOKEN_COLLISION` | 由该外部 ID 派生的设备令牌被另一台设备持有。需要运维人员处理。 |
+| `413` | `INVALID_VALUE` | 正文超过 8 KiB。 |
+| `422` | `LIMIT_EXCEEDED` | 配置已注册的设备数已达其 `maxDevices`。 |
+| `429` | `RATE_LIMITED` | 某个限制已用尽：来源地址的配额，或租户每秒注册数。`Retry-After` 说明要等待多久。 |
+| `500` | `PROVISIONING_MISCONFIGURED` | 该配置无法注册任何设备：其设备类型已删除，或其策略不是平台已知的策略。需要运维人员修复配置。 |
+| `500` | `PROVISIONING_UNAVAILABLE` | 内部故障。注册未完成；请稍后重试。 |
+| `501` | `CREDENTIAL_TYPE_UNSUPPORTED` | 配置要签发的凭据类型，此构建无法签发。终态；绝不会回退到另一种类型。 |
+| `503` | `PROVISIONING_UNAVAILABLE` | 副本繁忙（带 `Retry-After`），或实例没有用于校验预配密文的密钥（不带）。 |
+
+### 限制 {#self-registration-limits}
+
+这些限制使尚未认证的一方无法让服务付出超过请求价值的开销，也使一次工厂批量注册不会淹没租户的其余部分。按生效顺序：
+
+1. **正文期限。**正文必须在 10 秒内到达（`provisioning.readDeadline`，最大 1 分钟）。仍在发送正文的请求只占用它自己的连接。
+2. **大小上限与解析。**8 KiB，并且正文先被读取和校验，之后请求才计入下面的任何限制。
+3. **并发请求上限**：每个副本 64 个（`provisioning.maxInFlight`），超出则返回带 `Retry-After` 的 `503`。
+4. **按来源的配额**：每个客户端地址、每个副本，突发 60 个请求，之后每秒一个（`provisioning.sourceBurst`、`provisioning.sourceEvery`）。IPv6 客户端按 /64 计数。成功过的来源不享有豁免。只有在告知服务应信任哪些代理时，该地址才是真实客户端的地址：见[客户端地址与受信任代理](../deployment/bootstrap.md#trusted-proxies)。
+5. **每租户上限**，仅在预配密钥和密文被接受之后才计入：默认突发 500，每秒 20 次注册，与其他[治理](../concepts/governance.md)上限一样，通过租户的[层级与覆盖](../concepts/tenant-tiers.md)解析。缺失或无法获取的设置意味着平台默认值，绝不是无限制。
+6. **每个配置的上限**：由运维人员设置的 `maxDevices`。未设置时，配置没有上限。
+
+对预配密文没有猜测次数限制，因为它无法被猜出：它是 256 位随机数，以常数时间比较，未知密钥与错误密文花费相同的工作量。持续大量的 `401` 会触发[告警](../deployment/observability.md#self-registration-alerts)。
+
+### 重试约定 {#self-registration-retry}
+
+在第一次发送之前保存凭据，并在每次重试时都出示**同一份凭据**。
+
+| 响应 | 怎么做 |
+| --- | --- |
+| `429`，或带 `Retry-After` 的 `503` | 等待 `Retry-After` 再加上其 0 到 100% 的随机额外时间，然后重试。 |
+| 网络错误、超时、`408`、`502`、`504`、不带 `Retry-After` 的 `503`，或带 `PROVISIONING_UNAVAILABLE` 的 `500` | 从 1 秒到 5 分钟指数退避，并使用完全抖动，然后重试。 |
+| `400`、`413` | 停止。请求有误；这是固件缺陷。 |
+| `401`、`403`、`404`、`409`、`422`、`501`，以及带 `PROVISIONING_MISCONFIGURED` 的 `500` | 停止并上报。重试无法改变答案，需要运维人员处理。 |
+
+抖动很重要：一起上电并同步重试的设备群会再次同时到达。[`dcctl device register`](./dcctl.md#dcctl-device-register) 实现了这一约定，是固件作者的参考。
+
+## 拒绝与错误 {#rejections}
+
+平台不接受的消息会怎样，取决于它在哪里被拒绝以及使用哪种传输方式。HTTP 会响应请求，因此设备能在入口处得知拒绝。MQTT 在 broker 捕获消息后立即确认发布（`PUBACK`），这发生在**解码之前**，因此 MQTT 设备永远不会收到通知：broker 之后的任何拒绝只有运维人员能看到。在默认设置下，捕获流更换主节点期间被确认的 QoS 1 发布也可能丢失，既包括捕获流更换主节点期间，也包括持续负载下接入落后、该流写满时；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
+
+### 入口处 {#rejections-at-the-door}
+
+由 `event-sources` 在接收和解码消息时检查。
+
+| 情形 | HTTP | MQTT | 运维人员在哪里看到 |
+| --- | --- | --- | --- |
+| 路径或主题中的实例 id 不是本实例的 | `404` | broker 拒绝该发布：设备未被授权使用该主题 | — |
+| 路径中的租户不是有效令牌 | `400` | broker 拒绝该发布 | — |
+| 租户超出其接入上限（按消息数或按读数） | `429`，带 `Retry-After: 1` | 先确认，然后**丢弃** | `total_msg_rate_limited`、`total_msg_reading_limited` |
+| 正文无法读取，或超过 1 MiB | `400` | — | — |
+| 正文无法解码：不是 JSON、未知或仅限平台的 `eventType`（`StateChange`、`CommandInvocation`、`CommandResponse`）、值的 JSON 类型错误、没有条目、空条目、位置字段缺失或超出范围、告警缺少 `type` 或 `level` 大于 2147483647 | `400`，正文中给出原因 | 先确认，然后转入 `failed-decode` 流 | `total_msg_failed_decode` |
+| 时间戳不是 RFC 3339、等于 `0001-01-01T00:00:00Z`，或早于 366 天以上 | `400`，并指出字段 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_invalid_event_time` |
+| 超过 256 个读数 | `400`，给出数量和上限 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_too_many_readings` |
+| 正文中的 `device` 不是主题中的设备 | — | 转入 `failed-decode` | `total_msg_failed_decode` |
+| 正文携带 `credentialType`、`credentialId` 或 `credentialSecret`，且在平台 MQTT 消息代理上 | — | 转入 `failed-decode`（已脱敏） | `total_msg_failed_decode`、`total_msg_credential_in_mqtt_body` |
+| 平台正在施加[背压](../deployment/observability.md#ingest-backpressure) | `503`，**带** `Retry-After`：未存储，请重新发送 | 不会被拒绝：它在捕获流中等待；只有该流写满时，最早捕获的消息才会被丢弃 | |
+| 无法构建事件的消息：它携带的凭据无法密封，或事件无法编码 | `500`：未存储，重新发送会以同样方式失败 | 被丢弃 | `total_msg_build_dropped`，按 `cause` |
+| 事件无法交给处理链路 | `503`，**不带** `Retry-After`：可能已被存储，因此重发会存储两次，除非携带 [`altId`](#altid) | — | |
+| 已接受 | `202` | `PUBACK`（QoS 1） | |
+
+`400` 是终态：同一请求总会得到同样的答复。入口处的拒绝会拒绝**整条消息**，包括其中的所有其他条目。
+
+### 接受之后 {#rejections-after-acceptance}
+
+被接受的事件（`202`，或已被 broker 捕获）随后由 `device-management` 解析，它会认证设备并把事件关联到该设备。这些拒绝在两种传输方式上相同，且不会通知任何设备。事件会被重试，然后以下列原因之一记录到 `failed-events` 流：
+
+| 原因 | 起因 |
+| --- | --- |
+| `Unauthenticated` | 设备认证为 `required` 时没有凭据；凭据认证失败；或正文中的 `device` 不是该凭据所属的设备。 |
+| `DeviceNotFound` | 未使用凭据，且 `device` 令牌未在租户中注册。 |
+| `Invalid` | 事件早于 366 天以上，或无法按其类型解释。 |
+| `ApiCallFailed` | 解析所需的某次查询或写入失败，包括平台无法创建的 [`NewRelationship`](#new-relationship-payload)。 |
+| `NotGatewayChild` | 网关为未分配给它的设备或不存在的设备发布了事件，或网关已停用。不会重试：在第一次投递时即记录。 |
+
+被拒绝的事件会一直重试到第五次投递，因此如果设备在此期间完成注册，或数据库已恢复，事件仍会被存储。例外是过旧而无法存储的事件，它在第一次投递时就被记录，因为任何重试都无法改变它的时间。
+
+### 命令响应 {#rejections-command-responses}
+
+无论使用哪种传输方式，命令响应都不会得到回复。它的去向如下：
+
+| 响应 | 结果 |
+| --- | --- |
+| 对应该设备拥有的命令，且带有其当前派发的 `dispatchNonce` | 命令结束为 `SUCCESSFUL` 或 `FAILED`。 |
+| 响应一条已经结束的命令 | 被忽略；命令保持原有结果。 |
+| 无法解码：不是 JSON，或字段类型错误，例如 `success` 带引号 | 不会被结算；以原因 `unprocessable` 记录在 `dead-letters` 流上，并注明响应的设备。命令保持 `SENT` 直至超时，除非设备再次正确响应。 |
+| 没有 `dispatchNonce` | 不结束命令；以原因 `unprocessable` 记录到 `dead-letters` 流。 |
+| 带有命令已经弃用的那次派发的 `dispatchNonce` | 不结束命令；以原因 `unprocessable` 进入死信。 |
+| `commandToken` 不对应任何命令（最常见的是误发了设备自己的令牌） | 重试到第五次投递，然后以原因 `exhausted` 进入死信。 |
+| 命令属于另一台设备 | 被拒绝：记录日志并计数，不记入该命令，也不进入死信。 |
+
+无人响应的命令会一直保持 `SENT`，直到过期将其变为 `TIMEOUT`。见[为何需要 nonce](../guides/connecting-a-device.md#why-the-nonce-is-required)。
