@@ -18,6 +18,8 @@ ALTER TABLE ONLY "event-management".tenant_usage_devices
  ADD CONSTRAINT tenant_usage_devices_pkey PRIMARY KEY (tenant_id, day, device_token);
 ALTER TABLE ONLY "event-management".tenant_usage_hourly
  ADD CONSTRAINT tenant_usage_hourly_pkey PRIMARY KEY (tenant_id, hour);
+ALTER TABLE ONLY "event-management".tenant_usage_ledger
+ ADD CONSTRAINT tenant_usage_ledger_pkey PRIMARY KEY (day);
 CREATE FUNCTION analytics.reader_tenant() RETURNS text
  LANGUAGE sql STABLE
  AS $$
@@ -211,6 +213,11 @@ CREATE TABLE "event-management".tenant_usage_hourly (
  hour timestamp with time zone NOT NULL,
  events bigint DEFAULT 0 NOT NULL,
  devices integer DEFAULT 0 NOT NULL
+);
+CREATE TABLE "event-management".tenant_usage_ledger (
+ day date NOT NULL,
+ hours integer DEFAULT 0 NOT NULL,
+ updated_at timestamp with time zone NOT NULL
 );
 CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON "event-management".events USING btree (tenant_id, device_token, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
 CREATE UNIQUE INDEX uix_calculated_backfills_tenant_active ON "event-management".calculated_backfills USING btree (tenant_id) WHERE (status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text]));
