@@ -3,10 +3,12 @@ Alerting rules for the token-audience check.
 
 WHY THIS GROUP EXISTS. Every API plane now checks the `aud` of the access token it is shown
 against the area it serves (and against the registered MCP resource, for calls MCP forwards).
-In this release the check only OBSERVES: a request whose audience belongs to another plane is
-counted `would_reject`, logged, and served. The next minor refuses those requests. This alert
-is how an operator finds out, while it is still harmless, that some client is sending tokens
-bound to the wrong resource, so the client can be fixed before the refusal.
+From v1.3 the check ENFORCES by default and refuses those requests (verdict `rejected`). An
+instance that sets tokenAudience.enforcement to observe keeps the v1.2 behaviour: such a
+request is counted `would_reject`, logged, and served. This alert is how that operator finds
+out, while it is still harmless, that some client is sending tokens bound to the wrong
+resource, so the client can be fixed before the observe setting is removed. Under enforce it
+stays silent, because nothing is counted `would_reject`.
 
 THE ALERT IS `info`, NOT A PAGE. Nothing is failing. It fires once, after a sustained hour of
 would-reject traffic, and it clears by itself once the client is corrected. It carries no tenant
@@ -20,12 +22,13 @@ without editing this file.
 THE AUTHORIZATION-SERVER TWIN, OAuthResourceWouldReject, watches
 devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}: a client asked the
 authorization server for a token bound to a resource this instance does not serve (or, at the
-authorization endpoint, a malformed or repeated one). It is served today and refused by the next
-minor release. Same shape, same reasoning, same absence of a tenant label: the counter is
+authorization endpoint, a malformed or repeated one). It is served only under an explicit
+observe; enforce, the default, refuses it. Same shape, same reasoning, same absence of a tenant label: the counter is
 recorded for the client, not the tenant, and the log line names the client_id and the grant.
 It reads the one series by its full name, because only user-management registers it.
 
-This alert is removed or rewritten against `rejected` when the check starts refusing.
+Under enforce, the refusals are on the same counters with verdict="rejected"; they are not
+alerted on, because a refused client sees its own 401 or invalid_target.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -54,8 +57,8 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tokenaudiencewouldreject"
-            summary: "A client is sending tokens that the next minor release will refuse"
-            description: "For at least an hour, {{ "{{ $labels.job }}" }} has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
+            summary: "A client is sending tokens that enforce mode would refuse"
+            description: "For at least an hour, {{ "{{ $labels.job }}" }} has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served only because this instance sets tokenAudience.enforcement to observe, and are counted as would_reject. Enforce mode, the default, refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls before the observe setting is removed. See the upgrade notes for v1.3."
 
         - alert: OAuthResourceWouldReject
           expr: sum by (job) (rate(devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject", namespace="{{ $ns }}"}[1h])) > 0
@@ -66,5 +69,5 @@ spec:
           annotations:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#oauthresourcewouldreject"
             summary: "A client is asking for tokens bound to a resource this instance does not serve"
-            description: "For at least an hour, {{ "{{ $labels.job }}" }} has been receiving token or authorization requests that name a resource this instance does not serve. They are being served today and counted as would_reject. The next minor release refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for the release that introduced the check."
+            description: "For at least an hour, {{ "{{ $labels.job }}" }} has been receiving token or authorization requests that name a resource this instance does not serve. They are being served only because this instance sets tokenAudience.enforcement to observe, and are counted as would_reject. Enforce mode, the default, refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for v1.3."
 {{- end }}

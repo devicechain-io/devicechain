@@ -543,12 +543,12 @@ instance:
       # loopback origin, so a plain-http ingress on a real host has no area audiences) and
       # mcpResources (mcp's resolved resourceUrl, when mcp is deployed) from the ingress and the
       # enabled areas, and refuses to render if either is set here. The operator's keys:
-      #   enforcement: observe | enforce            (unset = the release default, observe)
+      #   enforcement: observe | enforce            (unset = the release default, enforce)
       #   unscopedClientCredentials: observe          (enforce is refused until the next major release)
       #   externalResources: [https://api.example.com]   (resource servers outside the platform)
       # Under instance.existingSecret the chart does not write the document, so the supplier
       # writes the keys they need, and dcctl checks that mcpResources lists mcp's resourceUrl (a warning
-      # while enforcement is observe or unset, a refusal under enforce).
+      # while enforcement is observe, a refusal under enforce or unset).
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint

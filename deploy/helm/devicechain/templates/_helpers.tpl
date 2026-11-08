@@ -706,12 +706,14 @@ devicechain.enabledAreas (`$known`).
 {{- end -}}
 
 {{/*
-devicechain.tokenAudienceEnforced renders "true" when the operator set
-tokenAudience.enforcement to enforce, else nothing.
+devicechain.tokenAudienceEnforced renders "true" when the token-audience check refuses: when
+tokenAudience.enforcement is enforce OR unset (the release default is enforce), else nothing.
+Only an explicit observe turns it off. It mirrors config.TokenAudienceReleaseDefault, which a
+dcctl render test pins.
 */}}
 {{- define "devicechain.tokenAudienceEnforced" -}}
 {{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
-{{- if eq (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "enforce" -}}true{{- end -}}
+{{- if ne (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "observe" -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -725,8 +727,8 @@ the tokenAudience fields additionally require a lowercase scheme and host (which
 resourceUrl does not), and an mcp override that is a platform area's identifier
 (<areaBaseUrl>/<area>) collides with the area set. Leaving it out keeps a value that starts
 today from becoming a crash loop. In observe mode the consequence is only that mcp's calls are
-counted as carrying an unregistered audience; once enforcement is on they would be refused, so
-under enforce the render FAILS instead of dropping the entry silently.
+counted as carrying an unregistered audience; under enforce (the default) they would be refused,
+so the render FAILS instead of dropping the entry silently.
 */}}
 {{- define "devicechain.tokenAudienceMcpResources" -}}
 {{- $out := list -}}
@@ -744,7 +746,7 @@ uppercase one from a comparison of its fields). */ -}}
 {{- if and (eq $head (lower $head)) (not $clash) -}}
 {{- $out = append $out $v -}}
 {{- else if include "devicechain.tokenAudienceEnforced" . -}}
-{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while tokenAudience.enforcement is enforce, so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set enforcement to observe." $v $base) -}}
+{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while token audiences are enforced (the default), so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set instance.config.infrastructure.tokenAudience.enforcement to observe." $v $base) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

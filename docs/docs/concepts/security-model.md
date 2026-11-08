@@ -104,11 +104,11 @@ Two checks use the audience. They are defence in depth: a token's authorities ar
 
 ### The allowlist {#token-audience-allowlist}
 
-These are the resources the authorization server binds a token to, and the audiences an API accepts, once enforcement is on. Under `observe`, anything else is counted and logged but served:
+These are the resources the authorization server binds a token to, and the audiences an API accepts, under `enforce`, the default. Under `observe`, anything else is counted and logged but served:
 
 - **The MCP server**, when it is deployed: its resource URL, `<origin>/api/mcp`.
 - **Each area's API**, at `<origin>/api/<area>` for every area except `mcp`, for example `https://iot.example.com/api/device-management`.
-- **External resources**, which are the entries you list under `externalResources`. Use one for a service of your own, outside DeviceChain, that validates DeviceChain tokens with the published key set (`/oauth/jwks`) and asks for tokens bound to itself. The authorization server issues such a token, but **no DeviceChain API accepts it once enforcement is on**, and neither does the authorization server's `userinfo` endpoint.
+- **External resources**, which are the entries you list under `externalResources`. Use one for a service of your own, outside DeviceChain, that validates DeviceChain tokens with the published key set (`/oauth/jwks`) and asks for tokens bound to itself. The authorization server issues such a token, but **no DeviceChain API accepts it under `enforce`**, and neither does the authorization server's `userinfo` endpoint.
 
 Matching is byte for byte. There is no case folding and no trailing-slash handling, so `https://IoT.example.com/api/mcp` is not `https://iot.example.com/api/mcp`. The configuration therefore accepts only one spelling of each identifier, and a client has to send exactly that spelling.
 
@@ -125,13 +125,25 @@ Matching is byte for byte. There is no case folding and no trailing-slash handli
 | A `resource` on a code or refresh request that differs from the one the grant is bound to | Counted and logged; served | `invalid_target`; a refresh token is not spent |
 | An API | Counted as `would_reject` and logged; served | `401`, the same answer as for an invalid token |
 
-`observe` is the default in `v1.2`. `v1.3` makes `enforce` the default and keeps `observe` as an opt-out for that one minor. `v1.4` removes the opt-out: a service refuses to start with `observe` in the document, and the chart rejects it. See the [upgrade notes](../deployment/releases-and-upgrades.md#v120-token-audience).
+`enforce` is the default from `v1.3`; `v1.2` defaulted to `observe`. Setting `enforcement: observe` keeps the `v1.2` behaviour for this one minor, as an opt-out. `v1.4` removes the opt-out: a service refuses to start with `observe` in the document, and the chart rejects it.
+
+To opt out, set the key in your Helm values, or in a `dcctl` [values overlay](../deployment/tuning-an-instance.md#tunable), and upgrade. Set it before you upgrade to `v1.3` if you want no pod to enforce during the roll:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tokenAudience:
+        enforcement: observe
+```
+
+On an instance whose configuration you write yourself (`instance.existingSecret`), put `"enforcement": "observe"` in the document's `infrastructure.tokenAudience` block instead. See the [upgrade notes](../deployment/releases-and-upgrades.md#v120-token-audience).
 
 A token that names no resource is accepted by every area's API, in both modes. A client that never sends `resource` is not affected by either check.
 
 ### Reading the counters {#token-audience-reading}
 
-Run `observe` first and watch the counters: a `would_reject` series that never moves means switching to `enforce` changes nothing for your clients. The series, the two alerts and how to find the client behind a count are in [Token audience checks](../deployment/observability.md#token-audience-checks).
+Under `enforce`, a refused request is counted with the verdict `rejected`. If you are not sure what your clients send, run `observe` first and watch the counters: a `would_reject` series that never moves means `enforce` changes nothing for your clients. The series, the two alerts and how to find the client behind a count are in [Token audience checks](../deployment/observability.md#token-audience-checks).
 
 ### Configuration {#token-audience-config}
 
@@ -139,7 +151,7 @@ The policy is instance configuration under `infrastructure.tokenAudience`, in th
 
 | Key | Written by | Value |
 | --- | --- | --- |
-| `enforcement` | You | `observe`, `enforce`, or unset. Unset is the release default, `observe` in `v1.2`. It governs both checks together. |
+| `enforcement` | You | `observe`, `enforce`, or unset. Unset is the release default, `enforce` from `v1.3` (`observe` in `v1.2`). It governs both checks together. |
 | `unscopedClientCredentials` | You | Unset or `observe`. `enforce` is refused at startup in this release, because the rule it would switch on does not refuse anything yet. See [Service accounts](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
 | `externalResources` | You | A list of at most 8 resource identifiers outside the platform. |
 | `areaBaseUrl` | The chart | `<origin>/api`, from the ingress host. Set only when the origin is https, or a plain-http loopback host such as `localhost`. An ingress without TLS on any other host has no area resources, just as it has no authorization server. |
@@ -166,7 +178,7 @@ On an instance whose configuration you write yourself (`instance.existingSecret`
 }
 ```
 
-Without it the area resources are unknown and `mcp` is not registered, so every call the MCP server forwards is counted as a would-be refusal. `dcctl upgrade` warns about the missing MCP entry, and refuses under `enforce`.
+Without it the area resources are unknown and `mcp` is not registered. Under `enforce`, the default, `mcp` then refuses to start and every call it forwards would be refused; under `observe` those calls are counted as would-be refusals. `dcctl upgrade` refuses a document that omits the MCP entry, and only warns when `enforcement` is `observe`.
 
 ## Two-factor authentication {#two-factor}
 

@@ -115,7 +115,7 @@ The tenant's own single sign-on requirement applies to people, not to service ac
 
 Without `resource`, the token is bound to nothing and the platform's APIs accept it, with all the authorities of the account's roles, or the ceiling of the `scope` you send. That is the right token for an integration that calls the platform's APIs. The MCP server does not accept it, because it requires a token bound to itself.
 
-With `resource`, the token names that resource as its audience. Once enforcement is on, the authorization server binds a token only to a resource it serves: the MCP server, an area's API at `<origin>/api/<area>`, or an address the operator listed as an external resource. See [Token audience](../concepts/security-model.md#token-audience). An API accepts a token that is bound to nothing, to that API's own area, or to the MCP server. It refuses a token bound to anything else, and until enforcement is on it counts and logs that.
+With `resource`, the token names that resource as its audience. Under `enforce`, the default from `v1.3`, the authorization server binds a token only to a resource it serves: the MCP server, an area's API at `<origin>/api/<area>`, or an address the operator listed as an external resource. See [Token audience](../concepts/security-model.md#token-audience). An API accepts a token that is bound to nothing, to that API's own area, or to the MCP server. It refuses a token bound to anything else. On an instance that sets `enforcement: observe`, both checks count and log instead of refusing.
 
 Ask for a resource only when something other than the platform checks the audience, such as a service of your own that validates the token with the instance's published key set, and **always send a `scope` with it**:
 
@@ -129,7 +129,7 @@ curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
 
 A request with a `resource` and no `scope` is **deprecated**. It still succeeds and the token carries every authority of the account's roles. The platform counts it in `devicechain_usermanagement_oauth_unscoped_client_credentials_total` and writes a warning that names your client, and the next major release refuses it with `invalid_scope`. A scoped token carries only the scope's read authorities. An integration that has to write should leave out the `resource` and get an unbound token.
 
-A request whose `resource` the instance does not serve is counted and logged in this release, and refused from `v1.3` with `invalid_target`. At the token endpoint, a request with more than one `resource`, or one that is not an absolute `https` URL (`http` is accepted only for `localhost`, `127.0.0.1` and `::1`), is refused today.
+A request whose `resource` the instance does not serve is refused with `invalid_target`, from `v1.3`. On an instance that sets `enforcement: observe` it is counted and logged, and served. At the token endpoint, a request with more than one `resource`, or one that is not an absolute `https` URL (`http` is accepted only for `localhost`, `127.0.0.1` and `::1`), is refused today.
 
 ## Rotating a secret {#rotating-a-secret}
 

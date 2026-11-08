@@ -84,7 +84,7 @@ curl -s -X POST https://dc.example.com/api/device-management/graphql \
 
 不带 `resource` 时，令牌不绑定任何资源，平台的各 API 都接受它，并带有该账号各角色的全部权限，或你所发送 `scope` 的上限。对于调用平台 API 的集成，这就是合适的令牌。MCP 服务器不接受它，因为 MCP 服务器要求令牌绑定到它自己。
 
-带 `resource` 时，令牌会把该资源写为受众。启用强制执行后，授权服务器只会把令牌绑定到它所提供的资源：MCP 服务器、位于 `<origin>/api/<区域>` 的某个区域的 API，或运维人员列为外部资源的地址。参见[令牌受众](../concepts/security-model.md#token-audience)。API 接受未绑定的令牌、绑定到该 API 自身区域的令牌或绑定到 MCP 服务器的令牌，拒绝绑定到其他任何资源的令牌；在启用强制执行之前，只会统计并记录日志。
+带 `resource` 时，令牌会把该资源写为受众。在 `enforce`（从 `v1.3` 起的默认值）下，授权服务器只会把令牌绑定到它所提供的资源：MCP 服务器、位于 `<origin>/api/<区域>` 的某个区域的 API，或运维人员列为外部资源的地址。参见[令牌受众](../concepts/security-model.md#token-audience)。API 接受未绑定的令牌、绑定到该 API 自身区域的令牌或绑定到 MCP 服务器的令牌，拒绝绑定到其他任何资源的令牌。在设置了 `enforcement: observe` 的实例上，两项检查只统计并记录日志，而不拒绝。
 
 只有当平台之外的某个对象会检查受众时才申请资源，例如你自己的服务用该实例公开的密钥集验证令牌；并且**申请资源时始终同时发送 `scope`**：
 
@@ -98,7 +98,7 @@ curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
 
 指定了 `resource` 却没有 `scope` 的请求已被**弃用**。它仍然成功，令牌带有该账号各角色的全部权限。平台会把它计入 `devicechain_usermanagement_oauth_unscoped_client_credentials_total`，并写一条指明你的客户端的警告，下一个主版本将以 `invalid_scope` 拒绝它。带 scope 的令牌只带有该 scope 的读取权限。需要写入的集成应省略 `resource`，改用未绑定的令牌。
 
-`resource` 为实例不提供的资源的请求，在本版本中会被统计并记录日志，从 `v1.3` 起以 `invalid_target` 拒绝。在令牌端点，带有多个 `resource` 或其中之一不是绝对 `https` URL 的请求（仅 `localhost`、`127.0.0.1` 和 `::1` 允许 `http`），现在就会被拒绝。
+`resource` 为实例不提供的资源的请求，从 `v1.3` 起以 `invalid_target` 拒绝。在设置了 `enforcement: observe` 的实例上，它会被统计并记录日志，并照常处理。在令牌端点，带有多个 `resource` 或其中之一不是绝对 `https` URL 的请求（仅 `localhost`、`127.0.0.1` 和 `::1` 允许 `http`），现在就会被拒绝。
 
 ## 轮换密钥 {#rotating-a-secret}
 

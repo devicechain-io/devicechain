@@ -95,11 +95,13 @@ func TestChartRefusesExternalResourcesThatCollideWithDerivedOnes(t *testing.T) {
 
 // An mcp override that cannot be registered is left out under observe, with the consequence
 // confined to a counter, and FAILS the render under enforce, where the consequence is every
-// forwarded call refused. A name that merely resembles an area is not a clash.
+// forwarded call refused. Unset enforcement is enforce (the release default), so it fails too.
+// A name that merely resembles an area is not a clash.
 func TestUnregisterableMcpOverrideIsDroppedInObserveAndFailsUnderEnforce(t *testing.T) {
 	t.Parallel()
 	ch := chartForTest(t)
 	enforce := map[string]interface{}{"enforcement": "enforce"}
+	observe := map[string]interface{}{"enforcement": "observe"}
 
 	for _, tc := range []struct {
 		name     string
@@ -110,7 +112,7 @@ func TestUnregisterableMcpOverrideIsDroppedInObserveAndFailsUnderEnforce(t *test
 		{"a mixed-case host", nil, "https://MCP.example.com/api/mcp"},
 	} {
 		t.Run(tc.name+"/observe", func(t *testing.T) {
-			raw, err := renderInstanceConfigDocument(t.Context(), ch, tokenAudienceValues(tc.ingress, "full", tc.override, nil))
+			raw, err := renderInstanceConfigDocument(t.Context(), ch, tokenAudienceValues(tc.ingress, "full", tc.override, observe))
 			if err != nil {
 				t.Fatalf("observe refused an override the services would have simply not registered: %v", err)
 			}
@@ -122,15 +124,21 @@ func TestUnregisterableMcpOverrideIsDroppedInObserveAndFailsUnderEnforce(t *test
 				t.Errorf("mcpResources = %v, want the unregisterable entry left out", cfg.Infrastructure.TokenAudience.McpResources)
 			}
 		})
-		t.Run(tc.name+"/enforce", func(t *testing.T) {
-			_, err := renderChartClientSide(t.Context(), ch, tokenAudienceValues(tc.ingress, "full", tc.override, enforce))
-			if err == nil {
-				t.Fatal("enforce rendered an instance whose MCP calls would all be refused")
-			}
-			if !strings.Contains(err.Error(), "lowercase") || strings.Contains(strings.ToLower(err.Error()), "adr-") {
-				t.Errorf("the refusal is not the clear one: %v", err)
-			}
-		})
+		for _, mode := range []struct {
+			name string
+			ta   map[string]interface{}
+		}{{"enforce", enforce}, {"unset (the default, enforce)", nil}, {"empty (the default, enforce)", map[string]interface{}{"enforcement": ""}}} {
+			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
+				_, err := renderChartClientSide(t.Context(), ch, tokenAudienceValues(tc.ingress, "full", tc.override, mode.ta))
+				if err == nil {
+					t.Fatal("rendered an enforcing instance whose MCP calls would all be refused")
+				}
+				if !strings.Contains(err.Error(), "lowercase") || !strings.Contains(err.Error(), "enforcement to observe") ||
+					strings.Contains(strings.ToLower(err.Error()), "adr-") {
+					t.Errorf("the refusal is not the clear one: %v", err)
+				}
+			})
+		}
 	}
 
 	// A single segment that is not an area name is kept.

@@ -171,12 +171,12 @@ MCP 服务器将各客户端协议会话保存在创建会话的 Pod 内存中�
 
 ## 令牌受众 {#token-audience}
 
-[客户端应指向哪里](#where-to-point-a-client)中的地址就是该服务器的**资源标识符**。客户端为它申请的令牌会把这个地址写为受众，启用强制执行后，授权服务器只会把令牌绑定到实例允许列表中的地址。平台 API 要接受这个服务器转发的调用，同一个地址也必须已注册，因为这些调用带有 MCP 绑定。允许列表以及观察与强制执行两种模式，见[令牌受众](./security-model.md#token-audience)。
+[客户端应指向哪里](#where-to-point-a-client)中的地址就是该服务器的**资源标识符**。客户端为它申请的令牌会把这个地址写为受众，在默认的 `enforce` 下，授权服务器只会把令牌绑定到实例允许列表中的地址。平台 API 要接受这个服务器转发的调用，同一个地址也必须已注册，因为这些调用带有 MCP 绑定。允许列表以及观察与强制执行两种模式，见[令牌受众](./security-model.md#token-audience)。
 
 - **chart 会注册它。** 它把服务器的 `resourceUrl` 写入 `infrastructure.tokenAudience.mcpResources`，你无需操作。
-- **服务器在启动时检查。** 如果它的 `resourceUrl` 不在该列表中，它每次启动都会记录一条 Error，并把 `devicechain_mcp_token_audience_registered` 报告为 0（服务仍继续运行），它转发的每个调用都会被计为本应拒绝的请求。启用强制执行后，它会拒绝启动并指明该键。在你自己编写配置（`instance.existingSecret`）且没有 `tokenAudience` 配置块的实例上，该仪表会一直为 0，直到你添加该配置块。
-- **地址的 scheme 和主机要写成小写。** 比较是逐字节的。你手工设置的 `resourceUrl` 如果 scheme 或主机含有大写字母，就不会被接受进列表，所以请在强制执行之前把它改成小写。
-- **客户端必须把同一个地址作为 `resource` 发送。** 不发送或发送其他值的客户端，要么得到没有绑定到该服务器的令牌，要么在启用强制执行后被拒绝。
+- **服务器在启动时检查。** 如果它的 `resourceUrl` 不在该列表中，它会把 `devicechain_mcp_token_audience_registered` 报告为 0。在默认的 `enforce` 下，它会拒绝启动并指明该键。在 `observe` 下，它每次启动都会记录一条 Error 并继续运行，它转发的每个调用都会被计为本应拒绝的请求。在你自己编写配置（`instance.existingSecret`）且没有 `tokenAudience` 配置块的实例上，该仪表会一直为 0，直到你添加该配置块。
+- **地址的 scheme 和主机要写成小写。** 比较是逐字节的。你手工设置的 `resourceUrl` 如果 scheme 或主机含有大写字母，就不会被接受进列表，在 `enforce` 下 chart 会拒绝渲染它，所以请把它改成小写。
+- **客户端必须把同一个地址作为 `resource` 发送。** 不发送或发送其他值的客户端，要么得到没有绑定到该服务器的令牌，要么在 `enforce` 下被拒绝。
 
 ## 限制与边界 {#limits-and-boundaries}
 

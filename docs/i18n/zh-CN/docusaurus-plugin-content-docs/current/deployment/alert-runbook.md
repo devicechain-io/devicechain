@@ -1151,15 +1151,15 @@ Nothing is reporting whether tenant deletions are progressing
 
 A client is asking for tokens bound to a resource this instance does not serve
 
-**含义与处理方式.** For at least an hour, ‹job› has been receiving token or authorization requests that name a resource this instance does not serve. They are being served today and counted as would_reject. The next minor release refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for the release that introduced the check.
+**含义与处理方式.** For at least an hour, ‹job› has been receiving token or authorization requests that name a resource this instance does not serve. They are being served only because this instance sets tokenAudience.enforcement to observe, and are counted as would_reject. Enforce mode, the default, refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for v1.3.
 
 ### TokenAudienceWouldReject {#tokenaudiencewouldreject}
 
 **严重程度:** `info` · **规则组:** `devicechain.token-audience`
 
-A client is sending tokens that the next minor release will refuse
+A client is sending tokens that enforce mode would refuse
 
-**含义与处理方式.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check.
+**含义与处理方式.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served only because this instance sets tokenAudience.enforcement to observe, and are counted as would_reject. Enforce mode, the default, refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls before the observe setting is removed. See the upgrade notes for v1.3.
 
 ## `devicechain.update-management`
 
