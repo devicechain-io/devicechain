@@ -92,6 +92,9 @@ type InstallOptions struct {
 	// MQTTGateway is `dcctl install --mqtt-gateway`: nil when not given (keep what the controller's
 	// Service has), otherwise whether Traefik listens on 8883 for MQTT over TLS. See mqttGatewayPlan.
 	MQTTGateway *bool
+	// AlertRouting is where the Alertmanager sends alerts: --alert-webhook, --alert-email,
+	// --alert-config and --clear-alert-routing. Settled and validated in the command layer.
+	AlertRouting AlertRoutingRequest
 }
 
 // Install prepares a cluster for instances: it creates or names the cluster, applies
@@ -293,6 +296,13 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 	if err := writeClusterSecrets(ctx, typed, st); err != nil {
 		return err
 	}
+	// 🔴 BEFORE THE APPLY: the monitoring stack is told to read this Secret by name, and an
+	// Alertmanager whose configuration Secret is missing does not start.
+	if monitoringEnabled(st) {
+		if _, err := settleAlertRouting(ctx, typed, st.AlertRouting); err != nil {
+			return fmt.Errorf("settling the Alertmanager's routing: %w", err)
+		}
+	}
 	if err := markInstallApplying(ctx, typed, st.ClusterUID, st.DcctlVersion, time.Now); err != nil {
 		return err
 	}
@@ -331,6 +341,16 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return err
 	}); err != nil {
 		return err
+	}
+	if monitoringEnabled(st) {
+		// Read again from the cluster, not taken from the settle step above: a second dcctl
+		// run can have changed the routing during this apply. Best effort: the cluster is
+		// built, and an instance not patched now is patched by its next upgrade.
+		published, perrs := publishAlertRoutingToCluster(ctx, st.KubeContext)
+		fmt.Printf("  %s %s\n", color.WhiteString("Alert routing:"), SayAlertRouting(published))
+		for _, perr := range perrs {
+			fmt.Printf("  %s %v\n", color.YellowString("warning:"), perr)
+		}
 	}
 
 	// 🔴 THE BASE IDENTITY BEFORE THE RECORD. Every instance's login is created as it, so
@@ -460,6 +480,7 @@ func installState(binding ClusterBinding, provider string, opts InstallOptions) 
 		RemoveLegacyIngress: opts.RemoveLegacyIngress,
 		AWSNLB:              opts.AWSNLB,
 		MQTTGateway:         opts.MQTTGateway,
+		AlertRouting:        opts.AlertRouting,
 		Values:              map[string]string{},
 	}
 }

@@ -87,6 +87,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgresnorecentsnapshotbackup"
             summary: "No database snapshot backup has completed in 36 hours"
             description: >-
               The {{ "{{ $labels.cluster }}" }} database in {{ "{{ $labels.namespace }}" }} has
@@ -112,6 +113,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasesnapshotpruningstalled"
             summary: "Database snapshot backups are not being pruned"
             description: >-
               The DeviceChain operator has not finished pruning the volume snapshots of ScheduledBackup
@@ -132,6 +134,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#databasesnapshotbackupsunobserved"
             summary: "Database snapshot backups are on, but nothing is reporting on them"
             description: >-
               This instance's databases take their daily base backups as volume snapshots, but no

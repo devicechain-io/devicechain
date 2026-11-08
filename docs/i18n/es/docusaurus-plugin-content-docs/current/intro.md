@@ -68,3 +68,9 @@ DeviceChain está en desarrollo activo. Las páginas de esta documentación indi
 ## Licencia
 
 Apache License 2.0.
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](./quickstart/first-device.md)
+
+:::

@@ -69,7 +69,7 @@ Un payload `Measurement`, `Location` o `Alert` envuelve su contenido en un arreg
 - Los valores de medición y todos los campos de `Location` son **cadenas JSON** (`"21.5"`, no `21.5`).
 - El `level` de una alerta es un **entero JSON sin comillas** de 0 a 2147483647.
 
-Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` y una publicación MQTT va a la cola de mensajes fallidos.
+Ambas reglas se aplican. Un payload sin entradas, una entrada vacía, un valor del tipo JSON equivocado (un número sin comillas donde se espera una cadena, o un `level` de alerta entre comillas) o un `level` de alerta fuera de ese rango se rechaza en lugar de aceptarse en silencio: HTTP responde `400` con el valor señalado por un JSON Pointer y una publicación MQTT va a la cola de mensajes fallidos.
 
 Una entrada es una lectura, tomada en un instante. Una entrada puede llevar su propio `occurredTime`. Ese es el instante con el que la lectura se almacena, se grafica, se evalúa y se devuelve, de modo que un dispositivo que acumula lecturas mientras está sin conexión puede subir una serie acumulada (hasta el límite descrito más abajo) y conservar el historial que realmente registró.
 
@@ -283,10 +283,18 @@ Publica con QoS 0, o con QoS 1 con `altId` y `occurredTime`. Un operador que rea
 
 `event-sources` también acepta eventos por HTTP en el puerto **8081**. El id de instancia y el inquilino se toman de la ruta `/{instanceId}/{tenant}/events`, siguiendo la convención del topic MQTT; el dispositivo y su credencial viajan en el cuerpo.
 
-- `POST` devuelve **202 Accepted** una vez que el evento está en cola.
+- `POST` devuelve **202 Accepted** una vez que el evento está en cola, con una cabecera `X-DC-Event-Id`: un recibo de la petición, para citarlo al preguntar por ella. Identifica la petición, no el evento almacenado, cuyo id aún no existe.
+- Devuelve **401 Unauthorized** cuando el inquilino de la ruta no existe, o la credencial del cuerpo no se autentica (es desconocida, ha caducado, tiene un secreto equivocado, pertenece a otro dispositivo que el nombrado, o falta donde la instancia la exige). El cuerpo es siempre `{"error":"unauthorized"}`, igual para toda causa, de modo que el endpoint no sirve para averiguar qué inquilinos o ids de credencial existen; el contador `total_http_ingest_refused` del operador indica cuál fue. No se almacenó nada y reenviar la misma petición da la misma respuesta. Consulte [por qué no aparecen mis datos](./why-isnt-my-data-showing-up.md).
 - Devuelve **429 Too Many Requests** si el inquilino supera su techo de ingesta HTTP, contado en lecturas, así que un mensaje que lleva muchas lecturas cuesta más que uno que lleva una sola. La ruta MQTT descarta los mensajes que exceden el límite en lugar de responder.
-- Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o decodificarse, o el inquilino de la
+- Devuelve **400 Bad Request** cuando el cuerpo no puede leerse o no es JSON, o el inquilino de la
   ruta no es un token válido. Enviar de nuevo la misma petición recibe la misma respuesta.
+- Devuelve **400 Bad Request** cuando el cuerpo es JSON pero dice algo que la plataforma rechaza: un `eventType` desconocido, un payload sin entradas, una entrada vacía, una marca de tiempo que no es RFC 3339, más de 256 lecturas. El cuerpo nombra el valor para que pueda corregir el campo:
+
+  ```json
+  {"error":"unprocessable_event","message":"unable to decode event: ...","eventId":"9f2c…","errors":[{"pointer":"/payload/entries/1/measurements","detail":"measurement entry 1 carries no measurements"}]}
+  ```
+
+  `pointer` es un JSON Pointer ([RFC 6901](https://www.rfc-editor.org/rfc/rfc6901)) dentro del cuerpo enviado, y uno vacío significa el documento entero. No se almacenó nada y reenviar la misma petición da la misma respuesta.
 - Devuelve **500 Internal Server Error** cuando el evento se descartó antes de poder ponerlo en cola porque no se pudo construir su mensaje (una credencial que presentó no se pudo sellar, o el evento no se pudo codificar). No se almacenó nada y reenviar la misma petición da la misma respuesta, así que no la reintente; la causa está en el registro de `event-sources`, y `total_msg_build_dropped` lo cuenta por causa.
 - Devuelve **503 Service Unavailable** cuando el evento no se aceptó. Con una cabecera
   `Retry-After`, la plataforma está rechazando eventos nuevos

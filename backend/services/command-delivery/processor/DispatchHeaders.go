@@ -24,6 +24,10 @@ type routing struct {
 	// transport is the transport the device's projected source names, empty when the projection
 	// held no row for it (or no gate is wired) OR when the source is not one the platform mints.
 	transport transport.Name
+	// source is the device's whole projected source, kept only for an inbound integration (whose
+	// qualifier is the integration's token, which the LPWAN adapter needs to find the network-server
+	// link). Empty for every other transport.
+	source string
 }
 
 // routingOf reduces a device's presence state to its routing.
@@ -37,6 +41,9 @@ func routingOf(known bool, source string) routing {
 		return routing{}
 	}
 	if t := transport.Of(source); transport.IsMinted(t) {
+		if t == transport.Integration {
+			return routing{transport: t, source: source}
+		}
 		return routing{transport: t}
 	}
 	return routing{}
@@ -121,7 +128,7 @@ func (cproc *CommandDeliveryProcessor) resolveImpacts(ctx context.Context, batch
 	seen := map[impactKey]bool{}
 	for _, cmd := range batch.commands {
 		state := states[cmd.DeviceToken]
-		if presence.Decide(state, true) != presence.Dispatch ||
+		if presence.Decide(state, presence.Capabilities{Sparkplug: true}) != presence.Dispatch ||
 			routingOf(state.Known, state.Source).transport != transport.Sparkplug {
 			continue
 		}
@@ -171,6 +178,8 @@ func (cproc *CommandDeliveryProcessor) impactDeadline() time.Duration {
 // command of every transport is a wire change nobody asked for. That is what "behaviour
 // unchanged when nothing is enabled" has to mean at the byte level.
 //
+//   - With only the LPWAN downlink on, headers are stamped for an inbound-integration device alone
+//     (Dc-Transport, Dc-Source, Dc-Command-Expires); every other transport keeps the unstamped message.
 //   - Dc-Transport is stamped whenever the device is on a transport the platform mints. It is
 //     routing only; it authorizes nothing, and an absent header means unknown, not "not yours".
 //   - Dc-Command-Impact is stamped only for a Sparkplug device, from the cache resolveImpacts
@@ -181,10 +190,19 @@ func (cproc *CommandDeliveryProcessor) impactDeadline() time.Duration {
 //
 // It returns nil when there is nothing to stamp, so the message keeps a nil Headers map.
 func (cproc *CommandDeliveryProcessor) dispatchHeaders(cmd *model.Command, route routing) map[string]string {
-	if !cproc.SparkplugCommands || route.transport == "" {
+	lpwan := cproc.LpwanDownlink && route.transport == transport.Integration
+	if route.transport == "" || (!cproc.SparkplugCommands && !lpwan) {
 		return nil
 	}
 	headers := map[string]string{cmddownlink.HeaderTransport: string(route.transport)}
+	if lpwan {
+		// Routing only: which inbound integration the device last reported through. It authorizes
+		// nothing; the adapter resolves the network-server link from it and fails closed on its absence.
+		headers[cmddownlink.HeaderSource] = route.source
+		if cmd.ExpiresAt.Valid {
+			headers[cmddownlink.HeaderCommandExpires] = cmd.ExpiresAt.Time.UTC().Format(time.RFC3339)
+		}
+	}
 	if route.transport == transport.Sparkplug {
 		key := impactKey{tenant: cmd.TenantId, device: cmd.DeviceToken, command: cmd.Name}
 		if impact, ok := cproc.impacts.get(key); ok {

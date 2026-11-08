@@ -57,6 +57,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updatedownloadsnotconfigured"
               summary: 'Devices are asking for update downloads and none can be granted'
               description: 'Devices have been asking for a download for at least 15 minutes and update-management refused every request because updates.downloadBaseUrl is not configured, so no assigned update can be fetched. The key is derived from the ingress host when it is left unset; it is empty when it was set to an empty string or the instance has no ingress. Set functionalAreas.update-management.config.updates.downloadBaseUrl to the public URL devices reach the service at, and the pending assignments proceed at the next retry of each device. If downloads are deliberately off, cancel the assignments instead: a device keeps asking for as long as one is current.'
 
@@ -79,6 +80,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updatedownloadsnotconfigured"
               summary: 'Devices are asking for update downloads and none can be granted'
               description: 'Devices have been asking for a download for at least 15 minutes and update-management refused every request because updates.downloadBaseUrl is not configured, so no assigned update can be fetched. The key is derived from the ingress host when it is left unset; it is empty when it was set to an empty string or the instance has no ingress. Set functionalAreas.update-management.config.updates.downloadBaseUrl to the public URL devices reach the service at, and the pending assignments proceed at the next retry of each device. If downloads are deliberately off, cancel the assignments instead: a device keeps asking for as long as one is current.'
 
@@ -156,6 +158,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updatereportsmostlyrefused"
               summary: 'More than a quarter of device update reports are being refused by the state machine'
               description: 'For 15 minutes, over a quarter of the update progress reports devices send have been refused for a reason other than being duplicate, stale or late: a digest that is not the target''s, the wrong component, a sequence going backwards, a conflicting or malformed report. That is a device-side bug, usually one firmware build misreporting across a whole fleet. Read devicechain_updatemanagement_update_reports_total by verdict to see which refusal dominates, then the update-management log, which names the device and the attempt. Pause the rollout feeding that fleet while you look.'
 
@@ -268,6 +271,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updaterolloutstepsfailing"
               summary: 'Group rollouts are failing to advance'
               description: 'The rollout driver has been failing steps for at least 15 minutes and leaving them for the next pass, so group rollouts are not dispatching to new devices even though they read as running. The causes are a database error during a step, an unreadable compatible-profiles document on the artifact, or device-management being unreachable or not configured for update-management. The stage label of the counter tells a failed step from a failed query for the running rollouts. The update-management log names the failing step.'
 
@@ -325,6 +329,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updateattemptsgoingunknown"
               summary: 'A burst of devices went quiet in the middle of an update'
               description: 'Five or more update attempts in the last 30 minutes were moved to UNKNOWN because the device stopped reporting during installation or reboot. The update may or may not have been applied. A few are routine; a burst means devices are failing together, often on a faulty image. The threshold of five is an absolute count: edit the rule to suit the size of the fleet. Pause the rollout, check whether the affected devices report again (their inventory resolves the attempt) and, for any that never do, decide with abandonUnknownUpdate.'
       - eval_time: 30m
@@ -334,6 +339,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#updateattemptsgoingunknown"
               summary: 'A burst of devices went quiet in the middle of an update'
               description: 'Five or more update attempts in the last 30 minutes were moved to UNKNOWN because the device stopped reporting during installation or reboot. The update may or may not have been applied. A few are routine; a burst means devices are failing together, often on a faulty image. The threshold of five is an absolute count: edit the rule to suit the size of the fleet. Pause the rollout, check whether the affected devices report again (their inventory resolves the attempt) and, for any that never do, decide with abandonUnknownUpdate.'
       - eval_time: 50m

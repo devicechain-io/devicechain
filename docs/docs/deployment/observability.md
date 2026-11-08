@@ -211,6 +211,72 @@ once; the Grafana admin login, its `ClusterIP` Service and the per-instance dash
 are unchanged. Prometheus keeps its stored metrics on a cluster with a persistent volume, and
 starts empty on a local cluster, which keeps them on the node's disk only.
 
+## Routing alerts to a person {#alert-routing}
+
+The platform ships alert rules that watch for lost data, stuck consumers, failing backups and
+expiring certificates. A rule only matters if someone is told when it fires, and out of the box
+nobody is: Alertmanager starts with a receiver that drops every alert. An instance in that state
+reports it. `dcctl instances list` shows `ALERTS NOT ROUTED` beside it, and the instance's
+`AlertsRouted` condition is `False`. The condition does not make the instance unready.
+
+Give Alertmanager a receiver when you install, or later on any instance:
+
+```bash
+# A webhook: Slack-compatible relays, PagerDuty, Opsgenie and most incident tools accept one.
+dcctl install local --alert-webhook https://hooks.example.com/services/T000/B000/XXXX
+
+# Email. The password is read from a file so it never lands in your shell history.
+dcctl install local \
+  --alert-email oncall@example.com --alert-email backup@example.com \
+  --alert-smtp-host smtp.example.com:587 --alert-smtp-from alerts@example.com \
+  --alert-smtp-user alerts --alert-smtp-password-file ~/.secrets/smtp-password
+
+# Change it later without touching the cluster prerequisites.
+dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/services/T000/B000/YYYY
+```
+
+- **Every alert is sent**, `critical`, `warning` and `info`. A `critical` alert silences the
+  `warning` for the same alert and namespace.
+- **The URLs and the SMTP password are kept in a Secret** (`dc-alertmanager-config`, in the
+  `monitoring` namespace), not in the infrastructure state on your machine. The instance only
+  records which kinds of receiver exist.
+- **Naming any `--alert-*` flag restates all of the routing.** `--alert-email` on its own removes
+  a webhook set earlier. A run with no `--alert-*` flag leaves the routing as it is, so re-running
+  `dcctl install` to change something else does not undo it. `--clear-alert-routing` removes it.
+- **`dcctl upgrade` can only change a cluster that `dcctl install` has set up.** A cluster
+  installed by an earlier release has to run `dcctl install` once, with the same flags as before
+  plus the alert flags. It applies the cluster prerequisites in place.
+- **There is no routing without the monitoring stack.** With `--no-monitoring` the instance renders
+  no alert rules, and the `--alert-*` flags are refused.
+
+### Knowing when alerting itself has stopped
+
+If Alertmanager is down, or cannot reach its receiver, no alert arrives, and a cluster with no
+alerts looks exactly like a healthy one. The `Watchdog` alert exists for this. It fires all the
+time, by design. Send it to a dead-man's-switch service (Healthchecks, Dead Man's Snitch,
+Cronitor) that alerts you when the pings stop:
+
+```bash
+dcctl install local --alert-webhook https://hooks.example.com/... \
+  --alert-watchdog-webhook https://hc-ping.example.com/your-check-uuid
+```
+
+The Watchdog is sent to its own receiver once a minute and never to the receiver a person reads.
+Without `--alert-watchdog-webhook` it is dropped, and the `AlertsRouted` condition says that a
+silent alerting pipeline would go unnoticed.
+
+### Receivers beyond webhook and email
+
+`--alert-config <file>` uses your own Alertmanager configuration as it is. Use it for Slack,
+PagerDuty, Opsgenie or Teams receivers, or for routing by label. It cannot be combined with the
+other `--alert-*` flags. `dcctl` checks that the file parses, that every route names a receiver the
+file defines, and whether some receiver delivers anywhere. It does not send a test message, and it is not Alertmanager's own parser: run `amtool check-config` on the file first, because an Alertmanager that rejects a configuration keeps running on the one before it.
+Route the `Watchdog` alert inside your file: `dcctl` counts it as routed when a route selects
+`alertname = "Watchdog"` and its receiver delivers.
+
+Every alert carries a `runbook_url` that opens its entry in the [Alert Runbook](./alert-runbook.md),
+so a notification links straight to what it means and what to do about it.
+
 ## Signing in to Grafana
 
 Grafana uses its own **admin login**. Grafana is not integrated with DeviceChain
@@ -1839,3 +1905,9 @@ Only that service's pods restart.
   that deploys the monitoring stack, and its flags.
 - **[Deployment & Operator](./kubernetes-operator.md)** — how the chart renders
   per-service workloads with their health probes.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

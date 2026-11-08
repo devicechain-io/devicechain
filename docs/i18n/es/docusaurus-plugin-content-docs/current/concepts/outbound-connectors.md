@@ -32,6 +32,8 @@ El selector de acciones del generador de formularios ofrece las cuatro acciones.
 
 La autenticación es opcional y usa un **manejador de secreto**. El token se guarda en el **almacén de secretos** y se presenta en el momento del envío como un encabezado `Authorization: Bearer <token>`. El nombre del encabezado y el esquema no son configurables, así que por esta vía no puedes autenticarte ante un receptor que espera un encabezado de clave de API personalizado. Si la acción nombra un manejador pero no hay ningún secreto guardado con él, la llamada nunca se envía sin su credencial: se registra una vez en la cola de mensajes no entregados con el resultado `invalid` y no se reintenta. Nada la vuelve a reproducir, así que la llamada de ese disparo no se hace; corrige el manejador de secreto de la acción para que los disparos posteriores se autentiquen.
 
+Un `httpCall` también puede **firmarse**, para que el receptor verifique que la solicitud viene de DeviceChain y no fue alterada. Nombra un secreto de firma en el `signingSecretRef` de la acción y la llamada lleva los encabezados `webhook-id`, `webhook-timestamp` y `webhook-signature` de la especificación Standard Webhooks. Está desactivado salvo que lo definas. Consulta [Firma de Webhooks de Salida](../guides/signed-webhooks.md).
+
 La entrega de webhooks está reforzada de estas maneras:
 
 - Se niega a seguir redirecciones, de modo que un endpoint externo no puede desviar la solicitud a otro sitio con un `3xx`.

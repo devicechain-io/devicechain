@@ -103,6 +103,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestleadercountnotone"
               summary: "LwM2M ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 0 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
       - eval_time: 5m
@@ -112,6 +113,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestleadercountnotone"
               summary: "LwM2M ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 0 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
       - eval_time: 3m
@@ -121,6 +123,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestleadercountnotone"
               summary: "Sparkplug ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 0 sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
       - eval_time: 5m
@@ -130,6 +133,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestleadercountnotone"
               summary: "Sparkplug ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 0 sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
 
@@ -152,6 +156,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestleadercountnotone"
               summary: "LwM2M ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 2 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
       - eval_time: 10m
@@ -161,6 +166,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestleadercountnotone"
               summary: "Sparkplug ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 2 sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
 
@@ -205,6 +211,7 @@ tests:
               namespace: dci-devicechain
               pod: pod-a
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestleadernotserving"
               summary: "The LwM2M ingest leader holds the lease but is not serving"
               description: "For at least 5 minutes, pod-a has held the LwM2M leadership lease while its CoAP/DTLS read loop is not running. It is stuck building its term (typically reading the asserted-active devices from device-state), and it keeps the lease, so no standby can take over. No LwM2M device is being served. Check this pod's log around 'Acquired LwM2M leadership' and restart it so a standby can acquire."
 
@@ -233,6 +240,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestdroppingdata"
               summary: "Sparkplug ingest is abandoning accepted messages"
               description: "For at least 10 minutes, sparkplug-ingest has been abandoning accepted messages: their samples or presence transitions were dropped after the retry budget was spent (device-management or the message broker unreachable), at once under backpressure, or on shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. Check device-management and the platform's message broker, and the sparkplug-ingest log for 'Dropping Sparkplug samples'."
 
@@ -260,6 +268,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestdroppingdata"
               summary: "Sparkplug ingest is abandoning accepted messages"
               description: "For at least 10 minutes, sparkplug-ingest has been abandoning accepted messages: their samples or presence transitions were dropped after the retry budget was spent (device-management or the message broker unreachable), at once under backpressure, or on shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. Check device-management and the platform's message broker, and the sparkplug-ingest log for 'Dropping Sparkplug samples'."
 
@@ -276,6 +285,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestbrokerunreachable"
               summary: "Sparkplug ingest cannot connect to a configured broker"
               description: "For at least 10 minutes, sparkplug-ingest has been failing to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. A bad host, a rejected credential or a broker outage all raise this; the sparkplug-ingest log names the source and the reason."
 
@@ -303,6 +313,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestbrokerunreachable"
               summary: "Sparkplug ingest cannot connect to a configured broker"
               description: "For at least 10 minutes, sparkplug-ingest has been failing to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. A bad host, a rejected credential or a broker outage all raise this; the sparkplug-ingest log names the source and the reason."
 
@@ -319,6 +330,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestdroppingnotifications"
               summary: "LwM2M ingest is dropping Notify samples"
               description: "For at least 10 minutes, lwm2m-ingest has been dropping the samples of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path (the next Notify supersedes), so a device that reports rarely loses its reading. Check the platform's message broker and the inbound-events stream's backlog, and the lwm2m-ingest log."
 
@@ -346,6 +358,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestdroppingnotifications"
               summary: "LwM2M ingest is dropping Notify samples"
               description: "For at least 10 minutes, lwm2m-ingest has been dropping the samples of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path (the next Notify supersedes), so a device that reports rarely loses its reading. Check the platform's message broker and the inbound-events stream's backlog, and the lwm2m-ingest log."
 
@@ -362,6 +375,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestsubscriptionrefused"
               summary: "A Sparkplug source's broker refused a group subscription"
               description: "For at least 5 minutes, a Sparkplug source has been abandoned and retried because its broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. While any group is refused the source ingests none of its groups and never announces ONLINE. Check the broker's access rules for the source's credential against the groups configured for it."
 
@@ -402,6 +416,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandsunconfirmed"
               summary: "Sparkplug commands are being published but not confirmed"
               description: "For at least 15 minutes, more than 90% of the Sparkplug commands sparkplug-ingest published in the last 30 minutes (at least 20 of them) ended without the node reporting the requested value. Sparkplug has no command acknowledgement, so this is how a command path that does not work looks: the customer broker may be dropping the publishes (check the source credential may publish on the NCMD and DCMD topics), the nodes may be ignoring a host that is not their primary (commands.hostRole), or the confirm window may be shorter than the nodes' reporting delay (commands.confirmWindowSeconds). Commands are recorded as TIMEOUT, not as failed."
 
@@ -474,6 +489,7 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandbreakeropen"
               summary: "Sparkplug commands to a source were paused"
               description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
 
@@ -493,6 +509,7 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandbreakeropen"
               summary: "Sparkplug commands to a source were paused"
               description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
 
@@ -512,6 +529,7 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandbreakeropen"
               summary: "Sparkplug commands to a source were paused"
               description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
 
@@ -537,6 +555,7 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandbreakeropen"
               summary: "Sparkplug commands to a source were paused"
               description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
       - eval_time: 45m
@@ -560,6 +579,7 @@ tests:
               tenant: acme
               source: acme/plant-a
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandbreakeropen"
               summary: "Sparkplug commands to a source were paused"
               description: "In the last 20 minutes the command circuit breaker for source acme/plant-a (tenant acme) opened. It opens when the customer broker drops sparkplug-ingest's session right after a command is published, which almost always means the source's credential may not publish on spBv1.0/<group>/NCMD/+ and spBv1.0/<group>/DCMD/+/+. While it is open, commands to that source fail at once as not delivered; telemetry from the source is not affected. Grant the publish permission on the broker. This alert resolves 20 minutes after the last time the breaker opened, whether or not it has closed: after its pause it is half-open and closes only when the next command is published without a disconnect."
 
@@ -580,6 +600,7 @@ tests:
               devicechain_instance: devicechain
               result: claim_failed
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandresponsesfailing"
               summary: "Sparkplug commands are failing inside the platform"
               description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result claim_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
 
@@ -599,6 +620,7 @@ tests:
               devicechain_instance: devicechain
               result: park_failed
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandresponsesfailing"
               summary: "Sparkplug commands are failing inside the platform"
               description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result park_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
 
@@ -618,6 +640,7 @@ tests:
               devicechain_instance: devicechain
               result: publish_failed
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandresponsesfailing"
               summary: "Sparkplug commands are failing inside the platform"
               description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result publish_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
 
@@ -637,6 +660,7 @@ tests:
               devicechain_instance: devicechain
               result: kv_failed
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandresponsesfailing"
               summary: "Sparkplug commands are failing inside the platform"
               description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result kv_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
 
@@ -656,6 +680,7 @@ tests:
               devicechain_instance: devicechain
               result: response_failed
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugcommandresponsesfailing"
               summary: "Sparkplug commands are failing inside the platform"
               description: "For at least 5 minutes, sparkplug-ingest has been counting commands it could not carry through, with result response_failed: claim_failed, park_failed and response_failed mean command-delivery could not be reached or refused the call (the command stays SENT or is never answered until its lifetime ends); kv_failed means the store of commands awaiting confirmation could not be written, so the command was not published; publish_failed means a publish may or may not have reached the node. Check command-delivery and the message broker, and the sparkplug-ingest log."
 
@@ -738,6 +763,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#sparkplugingestleadermetricabsent"
               summary: "Sparkplug ingest has pods available but exports no leader series"
               description: "For at least 5 minutes, the sparkplug-ingest deployment has had pod(s) available while no replica exports devicechain_sparkplugingest_is_leader, so whether the transport is being read cannot be known: SparkplugIngestLeaderCountNotOne reads an empty sum as healthy and cannot fire. The usual causes are a broken scrape (a ServiceMonitor or PodMonitor change, a network policy, a metrics port or TLS change) or a build without the metric. Check the scrape target for sparkplug-ingest in Prometheus, then the pods' /metrics, before reading the logs. This does not fire for an area that is not deployed or has no pod available (InstanceAreaUnavailable covers that)."
       - eval_time: 20m
@@ -801,6 +827,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestleadercountnotone"
               summary: "LwM2M ingest is not served by exactly one replica"
               description: "For at least 2 minutes, 2 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
 
@@ -832,5 +859,6 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#lwm2mingestleadermetricabsent"
               summary: "LwM2M ingest has pods available but exports no leader series"
               description: "For at least 5 minutes, the lwm2m-ingest deployment has had pod(s) available while no replica exports devicechain_lwm2mingest_is_leader, so whether the transport is being read cannot be known: Lwm2mIngestLeaderCountNotOne reads an empty sum as healthy and cannot fire. The usual causes are a broken scrape (a ServiceMonitor or PodMonitor change, a network policy, a metrics port or TLS change) or a build without the metric. Check the scrape target for lwm2m-ingest in Prometheus, then the pods' /metrics, before reading the logs. This does not fire for an area that is not deployed or has no pod available (InstanceAreaUnavailable covers that)."

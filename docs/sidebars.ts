@@ -211,7 +211,7 @@ const sidebars: SidebarsConfig = {
           type: 'category',
           label: 'Alerts',
           collapsed: false,
-          items: ['guides/notification-channels'],
+          items: ['guides/notification-channels', 'guides/signed-webhooks'],
         },
         {
           type: 'category',
@@ -291,6 +291,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/observability',
+            'deployment/alert-runbook',
             'deployment/grafana-boards',
             'deployment/metrics-reference',
             'deployment/tuning-an-instance',

@@ -18,7 +18,7 @@ dcctl bootstrap local my-instance
 operator manifests are all embedded in it, so you never need a checkout of the source tree
 or `git` to deploy.
 
-It does not carry its own tools. `install` and `bootstrap` drive `kubectl`, `helm` and `tofu`
+It does not carry its own tools. `install` and `bootstrap` drive `kubectl` and `tofu`
 (or `terraform`) as binaries on your `PATH`, plus `docker` and `kind` when dcctl runs the cluster
 itself (the `local` provider) and `docker` when it builds images (`--build`). Both commands check
 for the ones the run needs before they start and stop if one is missing, so install them first. The full list is under [Prerequisites](#prerequisites).
@@ -690,7 +690,7 @@ The alerts for snapshots are described under
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
   and the rest of your environment, up front. The preflight does not check its version; an older
   one fails when it loads the infrastructure configuration.
-- **`kubectl` and `helm`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
+- **`kubectl`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
   provider. The preflight check fails if any the run needs is missing. Docker is needed only for a
   local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,
   from published images, does not check for it or use it. Where it is needed, its daemon must

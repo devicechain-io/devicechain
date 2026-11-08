@@ -589,6 +589,16 @@ const (
 	// exists to say. Unknown never gates, so an instance dcctl has not yet
 	// published for is not reported broken for it.
 	ConditionBrokerCertificateValid = "BrokerCertificateValid"
+	// ConditionAlertsRouted says whether the alerts this instance's rules raise reach a
+	// human. False (reason AlertsNotRouted, message beginning "ALERTS NOT ROUTED") when
+	// the Alertmanager's only receiver is the null receiver that drops them; True once
+	// dcctl published a receiver; Unknown when monitoring is off (no rules are rendered)
+	// or nothing has published the routing.
+	//
+	// 🔴 IT NEVER GATES Ready. The instance is serving whether or not anyone would be
+	// told if it stopped, and an instance reported unready for want of a webhook would
+	// train readers to ignore Ready. It is a warning that stays until it is fixed.
+	ConditionAlertsRouted = "AlertsRouted"
 )
 
 // The reasons the operator writes. These names are API: adding one is minor,
@@ -638,6 +648,22 @@ const (
 	// ReasonCertificateUnreadable is BrokerCertificateValid=Unknown: an expiry
 	// annotation is present but is not an RFC 3339 time.
 	ReasonCertificateUnreadable = "CertificateUnreadable"
+
+	// ReasonAlertsRouted is AlertsRouted=True: a receiver reaches a human.
+	ReasonAlertsRouted = "AlertsRouted"
+	// ReasonAlertsNotRouted is AlertsRouted=False: no receiver is configured, so every
+	// alert goes to the null receiver. Run dcctl install or upgrade with --alert-webhook,
+	// --alert-email or --alert-config.
+	ReasonAlertsNotRouted = "AlertsNotRouted"
+	// ReasonAlertRoutingNotPublished is AlertsRouted=Unknown: no routing annotation is
+	// present (an instance last touched by a dcctl from before alert routing existed).
+	ReasonAlertRoutingNotPublished = "AlertRoutingNotPublished"
+	// ReasonAlertRoutingUnreadable is AlertsRouted=Unknown: the annotation is present
+	// but is not a value this operator understands.
+	ReasonAlertRoutingUnreadable = "AlertRoutingUnreadable"
+	// ReasonMonitoringDisabled is AlertsRouted=Unknown: the instance has no monitoring
+	// stack, so no alert rules are rendered and there is nothing to route.
+	ReasonMonitoringDisabled = "MonitoringDisabled"
 )
 
 //+kubebuilder:object:root=true

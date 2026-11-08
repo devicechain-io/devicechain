@@ -118,3 +118,9 @@ El volumen descartado se expone como una métrica operativa. Un operador ve a un
 - **[Multitenencia](./multi-tenancy.md)**: la mitad de la corrección, un aislamiento de datos que rechaza las consultas sin alcance en la misma instancia compartida.
 - **[Conectores salientes](./outbound-connectors.md#governance)**: cómo se aplica la gobernanza de egreso a los webhooks y las publicaciones a brokers.
 - **[Niveles de inquilino](./tenant-tiers.md)**: la entidad de empaquetado que suministra los techos por defecto de un inquilino.
+
+:::tip Pruébalo
+
+**Tu primer dispositivo en unos 30 minutos.** Instala DeviceChain en local, conecta un dispositivo simulado y observa cómo llega su telemetría. [Empezar el inicio rápido →](../quickstart/first-device.md)
+
+:::

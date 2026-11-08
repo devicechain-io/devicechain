@@ -182,6 +182,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Whether a Sparkplug command is dispatched or failed on sight. Set here for the reason the
 	// lines above are; the chart derives it from the rendered Sparkplug sources.
 	CommandDeliveryProcessor.SparkplugCommands = Configuration.SparkplugCommands
+	CommandDeliveryProcessor.LpwanDownlink = Configuration.LpwanDownlink
 
 	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
 	// queue, whose workers dispatch that device's backlog through the same gates the sweep

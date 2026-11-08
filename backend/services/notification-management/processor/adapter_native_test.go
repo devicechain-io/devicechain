@@ -494,7 +494,7 @@ func TestPagerDutyRejectsNon2xx(t *testing.T) {
 // carries the egress sentinel the dispatcher treats as terminal.
 func TestNativeAdaptersDialThroughTheEgressGuard(t *testing.T) {
 	f := newProviderFake(t, 200, "ok")
-	reg := newAdapterRegistry(egress.NewGuard(nil))
+	reg := newAdapterRegistry(egress.NewGuard(nil), nil)
 	for _, tc := range []struct {
 		typ    string
 		secret string
@@ -513,7 +513,7 @@ func TestNativeAdaptersDialThroughTheEgressGuard(t *testing.T) {
 }
 
 func TestRegistryHasAnAdapterForEveryAvailableChannelType(t *testing.T) {
-	reg := newAdapterRegistry(nil)
+	reg := newAdapterRegistry(nil, nil)
 	for _, ct := range model.SupportedChannelTypes {
 		if _, ok := reg[ct.Id]; ct.Available && !ok {
 			t.Errorf("channel type %q is marked available but has no adapter", ct.Id)

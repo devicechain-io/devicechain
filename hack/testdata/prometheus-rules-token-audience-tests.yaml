@@ -38,6 +38,7 @@ tests:
               devicechain_instance: devicechain
               job: devicechain/event-sources
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tokenaudiencewouldreject"
               summary: "A client is sending tokens that the next minor release will refuse"
               description: "For at least an hour, devicechain/event-sources has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
 
@@ -127,6 +128,7 @@ tests:
               devicechain_instance: devicechain
               job: devicechain/mcp
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tokenaudiencewouldreject"
               summary: "A client is sending tokens that the next minor release will refuse"
               description: "For at least an hour, devicechain/mcp has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
           - exp_labels:
@@ -134,6 +136,7 @@ tests:
               devicechain_instance: devicechain
               job: devicechain/user-management
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#tokenaudiencewouldreject"
               summary: "A client is sending tokens that the next minor release will refuse"
               description: "For at least an hour, devicechain/user-management has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check."
 
@@ -159,6 +162,7 @@ tests:
               devicechain_instance: devicechain
               job: devicechain/user-management
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#oauthresourcewouldreject"
               summary: "A client is asking for tokens bound to a resource this instance does not serve"
               description: "For at least an hour, devicechain/user-management has been receiving token or authorization requests that name a resource this instance does not serve. They are being served today and counted as would_reject. The next minor release refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for the release that introduced the check."
 

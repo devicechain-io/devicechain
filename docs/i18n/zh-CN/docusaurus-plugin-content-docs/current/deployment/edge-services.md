@@ -502,6 +502,39 @@ topic write spBv1.0/plant-a/DCMD/+/+
 **其他载荷形状原样转发，采用至少一次投递**，不稳定连接后的重连可能投递两次。边缘代理后使用非 JSON 解码器时，应让读数处理容忍重复。
 :::
 
+### 以平台的接受确认来清除事件 {#retire-on-accept}
+
+默认情况下，云端消息代理确认发布后，代理（agent）就会从其 spool 中删除该事件。这个确认只说明消息代理收下了消息，别无其他：MQTT 3.1.1 没有给消息代理提供拒绝消息的方式。消息代理确认之后，平台仍可能丢弃该事件，最常见的原因是租户超过了摄取上限；而按确认就清除事件的代理，此时已经删掉了唯一的副本。
+
+把 `uplink.retireOn` 设为 `accept` 后，代理会把每个事件保留在 spool 中，直到平台表示已持有它：
+
+- 事件在平台流上持久存储后，平台会发送一条指明该事件幂等键的**接受确认（acceptance）**。随后代理将其从 spool 中移除。
+- 如果平台因租户摄取上限而丢弃事件，会通知代理。代理在 `refused_total{reason="over_ceiling"}` 中计数，保留该事件，并在短暂延迟后再次提供。由于事件本身没有问题，不会写入死信文件。
+- 如果平台永久拒绝该事件（设备未分配给网关），代理会像以前一样把它写入死信文件，并从 spool 中移除。
+- 如果在 `uplink.acceptTimeoutSeconds` 内没有收到任何答复，spool 会以同一幂等键再次提供该事件，JSON 事件会合并到平台已持有的副本中。
+
+因此，丢失一次答复只会多花一次重发，绝不会丢事件。该模式的代价是排空更慢：事件在 spool 中要多停留一个往返时间加上平台的摄取时间，在卫星链路上，这一差别可以在 `awaiting_accept` 中看到。
+
+:::caution 只在会发送接受确认的平台上启用
+对于不发送接受确认的平台，永远不会有事件被接受，spool 因此永远排不空，每个事件都会每隔 `uplink.acceptTimeoutSeconds` 重发一次。代理连接时会订阅自己的接受确认；如果平台拒绝该订阅，连接会失败，并给出指明此设置的错误。请先升级平台，再升级代理。会发送接受确认的平台与按确认清除事件的代理仍可一起工作，因此不存在必须同时切换的时间点。
+:::
+
+等待接受确认的事件与其他事件一样，计入 `local.spoolMaxBytes`。
+
+#### 按优先级类别丢弃 {#priority-classes}
+
+超出预算的 spool 必须丢掉一些东西。它自身的环形缓冲区无论事件是什么都会丢弃最旧的，因此一次长时间中断可能丢掉早期的告警，却保留后来的杂音。设置 `local.priority.rules` 后，代理会先有意地丢弃。每条规则把令牌匹配某个 glob 的本地设备归入一个类别，第一个匹配的规则生效：
+
+| 类别 | 含义 |
+|---|---|
+| `safety` | 代理绝不丢弃。 |
+| `standard` | 不匹配任何规则的所有事件。在 `bulk` 之后丢弃。 |
+| `bulk` | 丢失代价很低的原始高频数据。最先丢弃。 |
+
+当 spool 超过其预算的 `local.priority.shedAtFraction`（默认 `0.9`）时，代理会删除已缓冲的事件，先删 `bulk`，同一类别内先删最旧的，直到回落到 `local.priority.shedToFraction`（`0.8`）以下。以这种方式丢弃的每个事件都计入 `shed_total{class}`，因此丢弃从来不是无声的。
+
+“绝不”有一个边界，那就是预算。如果仅 `safety` 事件就填满了 spool，或者到达速度超过代理释放空间的速度，底层的环形缓冲区仍会驱逐任何类别中最旧的事件，这种损失只会体现在 `dropped_total` 中。`shedAtFraction` 之上的余量使这种情况不太可能发生，但并非不可能。请按最长一次中断期间的 `safety` 流量来确定 spool 的大小。
+
 ### 部署代理之前 {#before-you-deploy-an-agent}
 
 - **不配置凭据时，本地 MQTT 监听开放。** 设置 `local.username` 和 `local.passwordEnv` 以要求凭据。开放是受信任局域网中的有效选择，代理启动时会明确警告，使选择可见。无论哪种，都只是网络访问控制，不是逐设备身份；明文 MQTT 会在局域网中明文传送密码。
@@ -523,6 +556,10 @@ topic write spBv1.0/plant-a/DCMD/+/+
 | `uplink.passwordEnv` | — | 必填。保存凭据密钥的环境变量。 |
 | `uplink.connectTimeoutSeconds` | `30` | 单次上行连接尝试时间上限。 |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | 链路中断期间重连退避边界。 |
+| `uplink.retireOn` | `puback` | 什么会把事件从 spool 中移除：`puback`（消息代理确认了发布）或 `accept`（平台表示已持久持有该事件）。参见[以平台的接受确认来清除事件](#retire-on-accept)。 |
+| `uplink.acceptTimeoutSeconds` | `120` | 使用 `retireOn: accept` 时，等待平台答复多久后再次提供该事件。请设为大于链路往返时间加平台摄取时间。 |
+| `local.priority.rules` | 无 | 按设备令牌 glob 划分的优先级类别：`safety`、`standard`、`bulk`。参见[按优先级类别丢弃](#priority-classes)。 |
+| `local.priority.shedAtFraction` / `local.priority.shedToFraction` | `0.9` / `0.8` | 开始丢弃时的 spool 填充比例，以及停止丢弃时的填充比例。 |
 
 ## 应监控什么 {#what-to-watch}
 
@@ -633,7 +670,11 @@ Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带十条告警规则，见[随�
 | `malformed_total` | 无法转发而被丢弃的事件，避免阻塞后续队列。 |
 | `tenant_mismatched_total` | 指向 `uplink.tenant` 之外租户的设备发布。它们不会缓冲或转发。 |
 | `body_credentials_stripped_total` | 转发前从事件正文中移除的凭据成员数。设备应停止发送它们。 |
-| `refused_total{reason}` | **为该网关被拒绝的事件。** `not_gateway_child`：平台因事件所属设备未分配给该网关或不存在而拒绝它。`gateway_self` 和 `invalid_device_token`：代理不愿发送。`other`：此版本代理不认识的原因。任何增长都需要关注；参见[网关身份](#gateway-identity)。 |
+| `refused_total{reason}` | **为该网关被拒绝的事件。** `not_gateway_child`：平台因事件所属设备未分配给该网关或不存在而拒绝它。`gateway_self` 和 `invalid_device_token`：代理不愿发送。`over_ceiling`：平台因租户摄取上限丢弃了该事件。`other`：此版本代理不认识的原因。任何增长都需要关注；参见[网关身份](#gateway-identity)。 |
+| `accepted_total` / `awaiting_accept` | 使用 `retireOn: accept` 时：平台表示已持有的事件数，以及已发布但仍在等待其答复的事件数。`awaiting_accept` 持续上升而 `accepted_total` 不增长，说明平台没有发送接受确认。 |
+| `over_ceiling_total` / `unaccepted_total` | 使用 `retireOn: accept` 时：平台因租户摄取上限丢弃的事件数（每个都被保留并再次提供），以及因未及时收到答复而再次提供的事件数。 |
+| `keyless_retired_total` | 使用 `retireOn: accept` 时：载荷不是 JSON 对象的事件数。它们没有幂等键，平台无法对其确认；代理在消息代理确认发布时清除它们，并在此计数。 |
+| `shed_total{class}` | 代理为保持在丢弃阈值之下而有意删除的已缓冲事件数。`safety` 保持为 0。 |
 | `refused_kept_total` / `refused_unmatched_total` | 写入 `refused-events.jsonl` 的被拒绝事件数 / 其事件已不在本机保留的拒绝数（平台的 `failed-events` 记录中有它）。 |
 | `uplink_inflight` | 等待确认的发布数，最多 64。积压排空期间保持在 64 是正常的。 |
 | `local_auth_enabled` | 0 表示现场 MQTT 监听不要求凭据。 |

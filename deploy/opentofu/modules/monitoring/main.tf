@@ -154,6 +154,12 @@ variable "unscraped_control_plane" {
   }
 }
 
+variable "alertmanager_config_secret" {
+  description = "Name of the Secret in this module's namespace holding the Alertmanager configuration, under key alertmanager.yaml. Written by dcctl before the apply -- this module is told where to look, never what the value is, so no receiver URL or SMTP password reaches the infrastructure state, and `dcctl upgrade` can change a receiver without an apply. The Alertmanager does not start while the Secret is missing, so a cluster applied without dcctl must create it first."
+  type        = string
+  default     = "dc-alertmanager-config"
+}
+
 variable "grafana_admin_secret" {
   description = "Name of the Secret in this module's namespace holding the Grafana break-glass admin login, under keys admin-user / admin-password. Written by dcctl before the apply -- this module is told where to look, never what the value is, so no dashboard credential reaches the infrastructure state."
   type        = string
@@ -435,11 +441,15 @@ locals {
       }, local.prometheus_retention, local.prometheus_storage)
     }
 
-    # Alertmanager runs but its DEFAULT null receiver drops alerts — routing them to
-    # DeviceChain notifications / a real receiver is a follow-up slice.
+    # The Alertmanager reads its configuration from a Secret dcctl writes, so the receivers
+    # (webhook, email, or an operator's own configuration) are set with `dcctl install` or
+    # `dcctl upgrade` and can change without an apply. Without a receiver the Secret holds the
+    # stack's default null receiver, which drops every alert; dcctl says so and the instance's
+    # AlertsRouted condition is False.
     alertmanager = {
       alertmanagerSpec = {
-        resources = { requests = { cpu = "50m", memory = "100Mi" } }
+        configSecret = var.alertmanager_config_secret
+        resources    = { requests = { cpu = "50m", memory = "100Mi" } }
       }
     }
 

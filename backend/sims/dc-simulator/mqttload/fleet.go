@@ -96,14 +96,27 @@ func NewFleet(cfg Config, devices []sim.DeviceInstance) (*Fleet, error) {
 		if _, dup := f.byToken[d.Token]; dup {
 			return nil, fmt.Errorf("device %q appears twice: two sessions cannot share a client id", d.Token)
 		}
-		s, err := f.newSession(i, d)
+		clientID, err := messaging.DeviceClientID(f.cfg.InstanceId, f.cfg.Tenant, d.Token)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("device %q: %w", d.Token, err)
 		}
+		s := f.newSession(i, d, sessionIdentity{
+			clientID: clientID,
+			username: fmt.Sprintf("%s:%s", f.cfg.Tenant, d.CredentialId),
+			topic:    messaging.SubjectToMqttTopic(messaging.DeviceEventsSubject(f.cfg.InstanceId, f.cfg.Tenant, d.Token)),
+		})
 		f.sessions = append(f.sessions, s)
 		f.byToken[d.Token] = s
 	}
 	return f, nil
+}
+
+// sessionIdentity is how one session presents itself to the broker: the CONNECT's client id,
+// username and password, the topic it publishes to, and, for a client-certificate device, the
+// certificate it offers in the TLS handshake.
+type sessionIdentity struct {
+	clientID, username, password, topic string
+	cert                                *tls.Certificate
 }
 
 // Broker is the address the fleet dials, with the scheme the TLS flag selected.
@@ -126,22 +139,20 @@ func (f *Fleet) TLSVersions() map[string]int64 {
 	return out
 }
 
-func (f *Fleet) newSession(idx int, d sim.DeviceInstance) (*session, error) {
-	clientID, err := messaging.DeviceClientID(f.cfg.InstanceId, f.cfg.Tenant, d.Token)
-	if err != nil {
-		return nil, fmt.Errorf("device %q: %w", d.Token, err)
-	}
+func (f *Fleet) newSession(idx int, d sim.DeviceInstance, id sessionIdentity) *session {
 	s := &session{
 		f: f, dev: d, idx: idx,
-		topic: messaging.SubjectToMqttTopic(messaging.DeviceEventsSubject(f.cfg.InstanceId, f.cfg.Tenant, d.Token)),
+		topic: id.topic,
 		store: mqttack.NewStore(),
 		lost:  make(chan struct{}, 1),
 	}
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(f.broker)
-	opts.SetClientID(clientID)
-	opts.SetUsername(fmt.Sprintf("%s:%s", f.cfg.Tenant, d.CredentialId))
-	opts.SetPassword("")
+	opts.SetClientID(id.clientID)
+	if id.username != "" {
+		opts.SetUsername(id.username)
+	}
+	opts.SetPassword(id.password)
 	opts.SetCleanSession(f.cfg.CleanSession)
 	opts.SetStore(s.store)
 	opts.SetKeepAlive(f.cfg.KeepAlive)
@@ -155,7 +166,11 @@ func (f *Fleet) newSession(idx int, d sim.DeviceInstance) (*session, error) {
 	opts.SetOrderMatters(false)
 	opts.SetCustomOpenConnectionFn(f.dial)
 	if f.cfg.TLS {
-		opts.SetTLSConfig(f.tlsConfig(s.dev.Token))
+		tc := f.tlsConfig(s.dev.Token)
+		if id.cert != nil {
+			tc.Certificates = []tls.Certificate{*id.cert}
+		}
+		opts.SetTLSConfig(tc)
 	}
 	opts.SetOnConnectHandler(func(mqtt.Client) {
 		s.up.Store(true)
@@ -175,7 +190,7 @@ func (f *Fleet) newSession(idx int, d sim.DeviceInstance) (*session, error) {
 		}
 	})
 	s.client = mqtt.NewClient(opts)
-	return s, nil
+	return s
 }
 
 func (f *Fleet) tlsConfig(deviceToken string) *tls.Config {

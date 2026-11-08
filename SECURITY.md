@@ -66,6 +66,20 @@ chmod +x verify-release-signatures.sh
 is checked, the `cosign` commands to verify a single image by hand, and what a signature does
 and does not tell you.
 
+## Evidence for security reviews
+
+For a vendor security questionnaire, a release candidate can carry a dated **evidence pack**
+(`hack/evidence-pack.sh`): a CycloneDX SBOM per image, an OpenVEX document stating which known
+advisories in our dependencies are reachable and which are not (generated from `govulncheck`'s
+call-graph analysis, not written by hand), the release signature and provenance verification
+output, the CodeQL and Scorecard state, and the results of the high-availability, disaster-recovery,
+X.509 and OTA validation rigs, each with the date it finished and the commit it ran at. The pack
+is hashed into a manifest and signed with cosign. A rig result older than its freshness window
+(30 days by default) stops the pack from being built.
+
+The pack states what was run and when. It is not a certification, and it makes no claim of
+conformance to any standard.
+
 ## Scope
 
 This policy covers the DeviceChain source in this repository and the artifacts built from it

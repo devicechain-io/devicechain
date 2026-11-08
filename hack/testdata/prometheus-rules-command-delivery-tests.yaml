@@ -90,6 +90,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandclaimsstranded"
               summary: "Commands are stranded in SENT and may time out against innocent devices"
               description: >-
                 At least one command was left reading SENT after both its publish and its release
@@ -111,6 +112,7 @@ tests:
               severity: critical
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandclaimsstranded"
               summary: "Commands are stranded in SENT and may time out against innocent devices"
               description: >-
                 At least one command was left reading SENT after both its publish and its release
@@ -207,6 +209,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandpresencereaderrors"
               summary: "The command presence gate is failing open"
               description: >-
                 The dispatch sweep cannot read the presence projection, and the gate fails OPEN by
@@ -262,6 +265,7 @@ tests:
               severity: warning
               devicechain_instance: devicechain
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#commandbatchreserverefusals"
               summary: "The delivery-machinery reserve is refusing fleet writes the tenant's ceiling would have admitted"
               description: >-
                 Fleet writes are being refused that WOULD have fitted against the tenant's own

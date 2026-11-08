@@ -86,7 +86,9 @@ func (c *connectorClient) Dispatch(ctx context.Context, req react.ConnectorReque
 			Method:    h.Method,
 			Headers:   h.Headers,
 			SecretRef: h.SecretRef,
-			TimeoutMs: h.TimeoutMs,
+			// Signed delivery is the author's choice and rides the wire as a handle only.
+			SigningSecretRef: h.SigningSecretRef,
+			TimeoutMs:        h.TimeoutMs,
 		}
 	case rules.ActionPublish:
 		p := req.Action.Publish

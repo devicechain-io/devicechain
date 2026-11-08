@@ -52,3 +52,9 @@ Chapters are published as they are completed.
 | 21 | [Audit](./audit.md) | The tenant audit journal, filters and export. |
 | 22 | [Tenant settings](./tenant-settings.md) | Branding, map and language. |
 | 23 | [Administering the instance](./administering-the-instance.md) | Tenants, deletions, tiers, identities, roles, identity providers, AI providers, instance audit and settings. |
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

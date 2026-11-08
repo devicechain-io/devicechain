@@ -68,3 +68,9 @@ DeviceChain is under active development. Pages in these docs mark whether a capa
 ## License
 
 Apache License 2.0.
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](./quickstart/first-device.md)
+
+:::

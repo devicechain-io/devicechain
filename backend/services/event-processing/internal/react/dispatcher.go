@@ -1018,7 +1018,7 @@ func actionContentKey(a rules.Action) string {
 		// before C2b, so there is no pre-existing token format to preserve (unlike the frozen
 		// sendCommand/raiseAlarm segments above).
 		h := a.HTTPCall
-		return "httpCall\x00" + h.URL + "\x00" + rules.MethodOrPost(h.Method) + "\x00" + h.BodyTemplate + "\x00" + h.SecretRef + "\x00" + rules.HeaderKey(h.Headers) + guardSeg
+		return "httpCall\x00" + h.URL + "\x00" + rules.MethodOrPost(h.Method) + "\x00" + h.BodyTemplate + "\x00" + h.SecretRef + "\x00" + rules.HeaderKey(h.Headers) + rules.SigningKeySeg(h.SigningSecretRef) + guardSeg
 	case rules.ActionPublish:
 		if a.Publish == nil {
 			return string(a.Type)

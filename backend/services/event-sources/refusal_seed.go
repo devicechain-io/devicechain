@@ -33,6 +33,9 @@ func seedRefusalCounters(sourceIDs []string) {
 		for _, cause := range []string{buildDropNoTenant, buildDropNoTransitKey, buildDropSealFailed, buildDropMarshal} {
 			BuildDroppedCounter.WithLabelValues(source, cause)
 		}
+		for _, reason := range []string{processor.RefusedUnknownTenant, processor.RefusedCredential} {
+			IngestRefusedCounter.WithLabelValues(source, reason)
+		}
 		for class := governance.ShedBestEffort; class <= governance.ShedGold; class++ {
 			RateLimitedCounter.WithLabelValues(source, class.String())
 			ReadingLimitedCounter.WithLabelValues(source, class.String())

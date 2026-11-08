@@ -120,3 +120,9 @@ The others are:
 - the update-artifact upload (`PUT /updates/artifacts/{token}/content`) and download (`GET /updates/download/{artifact}`) endpoints on `update-management`
 - the tenant logo upload and download endpoint (`/branding/logo`) on `user-management`
 - the endpoint where services obtain their short-lived service token (`/auth/service-token`) on `user-management`, served on the same internal port and never through the ingress
+
+:::tip Try it
+
+**First device in about 30 minutes.** Install DeviceChain locally, connect a simulated device and watch its telemetry arrive. [Start the quickstart →](../quickstart/first-device.md)
+
+:::

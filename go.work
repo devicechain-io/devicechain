@@ -68,8 +68,10 @@ use (
 	./backend/tools/migrationdiff
 	./backend/tools/muxguard
 	./backend/tools/phaseguard
+	./backend/tools/playground
 	./backend/tools/promqlguard
 	./backend/tools/rdbguard
+	./backend/tools/redlines
 	./backend/tools/subconfirm
 	./deploy
 	./examples/ota-device

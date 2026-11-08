@@ -38,15 +38,15 @@ func TestAPullDeviceIsHeldWhateverIsKnownOfIt(t *testing.T) {
 		"asserted live":   {Known: true, Asserted: true, Active: true, Source: mqttSource},
 	} {
 		s.PullChannel = true
-		if got := Decide(s, false); got != Hold {
+		if got := Decide(s, Capabilities{}); got != Hold {
 			t.Errorf("%s: pull device verdict = %v, want Hold", name, got)
 		}
-		if got := Decide(s, true); got != Hold {
+		if got := Decide(s, Capabilities{Sparkplug: true}); got != Hold {
 			t.Errorf("%s (sparkplug commands on): pull device verdict = %v, want Hold", name, got)
 		}
 		s.PullChannel = false
 		if name == "unknown" || name == "known and live" || name == "known and quiet" || name == "asserted live" {
-			if got := Decide(s, false); got != Dispatch {
+			if got := Decide(s, Capabilities{}); got != Dispatch {
 				t.Errorf("%s: a device off the pull channel changed verdict: %v, want Dispatch", name, got)
 			}
 		}
@@ -73,7 +73,7 @@ func TestWithPullChannelsMarksOnlyThePullDevices(t *testing.T) {
 	if !got["a"].Known || got["a"].Source != mqttSource {
 		t.Errorf("the projection's own fields were lost: %+v", got["a"])
 	}
-	if Decide(got["c"], false) != Hold {
+	if Decide(got["c"], Capabilities{}) != Hold {
 		t.Errorf("a pull device with no presence row must be held")
 	}
 }
@@ -88,8 +88,8 @@ func TestWithPullChannelsHoldsEverythingWhenItCannotAsk(t *testing.T) {
 		t.Fatalf("err = %v, want the resolver's", err)
 	}
 	for _, d := range []string{"a", "b"} {
-		if Decide(got[d], false) != Hold {
-			t.Errorf("%s: an undecided device must be held, got %v", d, Decide(got[d], false))
+		if Decide(got[d], Capabilities{}) != Hold {
+			t.Errorf("%s: an undecided device must be held, got %v", d, Decide(got[d], Capabilities{}))
 		}
 	}
 	if Resolved(got, "b", err) != true {
@@ -113,9 +113,9 @@ func TestWithPullChannelsLayersOverNoProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if Decide(got["a"], false) != Hold || Decide(got["z"], false) != Dispatch {
+	if Decide(got["a"], Capabilities{}) != Hold || Decide(got["z"], Capabilities{}) != Dispatch {
 		t.Errorf("a pull device must hold and any other must dispatch with no projection: %v %v",
-			Decide(got["a"], false), Decide(got["z"], false))
+			Decide(got["a"], Capabilities{}), Decide(got["z"], Capabilities{}))
 	}
 }
 
