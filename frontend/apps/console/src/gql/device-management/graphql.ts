@@ -1380,6 +1380,13 @@ export type AcknowledgeAlarmMutationVariables = Exact<{
 
 export type AcknowledgeAlarmMutation = { acknowledgeAlarm: { id: string } };
 
+export type AcknowledgeAlarmsMutationVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AcknowledgeAlarmsMutation = { acknowledgeAlarms: { acknowledged: Array<{ token: string }>, refusals: Array<{ token: string, code: string, reason: string }> } };
+
 export type ClearAlarmMutationVariables = Exact<{
   token: string;
 }>;
@@ -2685,6 +2692,20 @@ export const AcknowledgeAlarmDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcknowledgeAlarmMutation, AcknowledgeAlarmMutationVariables>;
+export const AcknowledgeAlarmsDocument = new TypedDocumentString(`
+    mutation AcknowledgeAlarms($tokens: [String!]!) {
+  acknowledgeAlarms(tokens: $tokens) {
+    acknowledged {
+      token
+    }
+    refusals {
+      token
+      code
+      reason
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AcknowledgeAlarmsMutation, AcknowledgeAlarmsMutationVariables>;
 export const ClearAlarmDocument = new TypedDocumentString(`
     mutation ClearAlarm($token: String!) {
   clearAlarm(token: $token) {
