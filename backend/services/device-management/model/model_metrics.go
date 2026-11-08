@@ -85,6 +85,20 @@ type MetricDefinition struct {
 	// classifier) a stable provenance marker: every row ever stored under a calculated
 	// definition was computed, in every version of the profile.
 	Expression sql.NullString
+
+	// SemanticProperty is the quantity or property this metric observes, as an EXPANDED IRI
+	// of an OBSERVABLE_PROPERTY term (for example a SAREF Temperature). It is independent of
+	// Descriptor, which is unchanged. SemanticPointClass is the Brick point class the series
+	// is, as an expanded IRI of a CLASS that is a brick:Point.
+	//
+	// 🔴 BOTH ARE POINTERS WITH omitempty, AND THAT IS LOAD-BEARING. A published profile
+	// version freezes this struct whole (ProfileSnapshot.Metrics has no json tags), so a
+	// plain field would write a "SemanticProperty": null key into every snapshot published
+	// from now on and change what a re-serialised old snapshot says. A struct type such as
+	// sql.NullString cannot be omitted at all (omitempty does not apply to a struct), which
+	// is why these are not NullStrings like their neighbours.
+	SemanticProperty   *string `json:",omitempty"`
+	SemanticPointClass *string `json:",omitempty"`
 }
 
 // Calculated reports whether the metric is computed from a formula rather than reported
@@ -116,6 +130,11 @@ type MetricDefinitionCreateRequest struct {
 	// instead of reported by devices. Omitted (nil) makes it measured. Which one it is
 	// cannot change after creation.
 	Expression *string
+	// SemanticProperty binds the metric to an OBSERVABLE_PROPERTY term of an enabled pack
+	// (or a custom prefix); SemanticPointClass to a Brick point class (a CLASS that is a
+	// brick:Point, from the enabled brick pack). Stored as expanded IRIs.
+	SemanticProperty   *string
+	SemanticPointClass *string
 }
 
 // A PARTIAL update to a metric definition: omit a field to leave the stored value
@@ -162,6 +181,10 @@ type MetricDefinitionUpdateRequest struct {
 	// clearing it would turn the metric into a measured one. On a measured metric an
 	// explicit null asks for what it already is and is accepted.
 	Expression dcgraphql.OptionalString
+	// SemanticProperty and SemanticPointClass: omitted leaves the binding, null clears it, a
+	// term sets it. See the create request for what a term must be.
+	SemanticProperty   dcgraphql.OptionalString
+	SemanticPointClass dcgraphql.OptionalString
 }
 
 // Search criteria for locating metric definitions.

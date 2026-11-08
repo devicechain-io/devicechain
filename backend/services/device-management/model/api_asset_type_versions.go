@@ -5,10 +5,12 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -86,6 +88,17 @@ func (api *Api) PublishAssetType(ctx context.Context, token string,
 		Description:    rdb.NullStrOf(description),
 		PropertySchema: *assetType.PropertySchema,
 		PublishedBy:    publishedBy,
+		// The binding is frozen beside the contract, with the vocabulary versions it was
+		// validated against, so it rolls back with it.
+		SemanticTypes: assetType.SemanticTypes,
+	}
+	if versions := semanticPackVersionsFor(assetType.SemanticTypes); versions != nil {
+		raw, err := json.Marshal(versions)
+		if err != nil {
+			return nil, err
+		}
+		frozen := datatypes.JSON(raw)
+		version.SemanticPackVersions = &frozen
 	}
 	// Insert the version and advance the active pointer atomically: a pointer update
 	// that failed after the insert would leave an orphan version and assets validating
@@ -139,18 +152,23 @@ func (api *Api) RollbackAssetType(ctx context.Context, token string, version int
 		return nil, err
 	}
 
-	var count int64
-	if err := api.RDB.DB(ctx).Model(&AssetTypeVersion{}).
-		Where("asset_type_id = ? AND version = ?", assetType.ID, version).
-		Count(&count).Error; err != nil {
+	target, err := api.assetTypeVersionByNumber(ctx, assetType.ID, version)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: asset type %q has no version %d", gorm.ErrRecordNotFound, token, version)
+		}
 		return nil, err
 	}
-	if count == 0 {
-		return nil, fmt.Errorf("%w: asset type %q has no version %d", gorm.ErrRecordNotFound, token, version)
+	// The type's semantic binding goes back to what that version froze, so it rolls back
+	// with the contract it was published beside. A version published before the layer
+	// existed froze none, and restores none. A binding whose vocabulary the tenant has
+	// since stopped enabling is refused rather than restored as an orphan.
+	if err := api.restoreSemanticTypes(ctx, target.SemanticTypes); err != nil {
+		return nil, err
 	}
 
 	res := api.RDB.DB(ctx).Model(assetType).Where("id = ?", assetType.ID).
-		Update("active_version", version)
+		Updates(map[string]any{"active_version": version, "semantic_types": target.SemanticTypes})
 	if res.Error != nil {
 		return nil, res.Error
 	}

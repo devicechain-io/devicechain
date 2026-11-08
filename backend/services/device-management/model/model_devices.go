@@ -42,6 +42,11 @@ type DeviceTypeCreateRequest struct {
 	// (see CommandChannelHTTPPull). Omitted or empty leaves the type on today's behaviour.
 	CommandChannel *string
 	Metadata       *string
+	// SemanticTypes are the classes an entity of this type is, as CURIEs or full IRIs
+	// (for example sdm-streetlighting:Streetlight). Each must be a CLASS of a vocabulary pack
+	// the tenant has enabled, or of a custom prefix it declared; at most MaxSemanticTypes.
+	// Stored as expanded IRIs. Omitted binds nothing.
+	SemanticTypes *[]string
 }
 
 // DeviceTypeUpdateRequest is the PARTIAL-update counterpart of
@@ -93,6 +98,9 @@ type DeviceTypeUpdateRequest struct {
 	// wholesale when sent and clears on null. There is no per-key merge to choose
 	// between: the API has never been able to address an individual key.
 	Metadata dcgraphql.OptionalString
+	// SemanticTypes replaces the bound classes: omitted leaves them, null (or an empty list)
+	// clears them, a list sets them. See the create request for what a term must be.
+	SemanticTypes dcgraphql.OptionalStringList
 }
 
 // Represents a device type — the taxonomy/identity of a device (name, appearance,
@@ -132,6 +140,10 @@ type DeviceType struct {
 	// HTTP. Nullable with no default on purpose: NULL is what every existing type holds, and it
 	// must keep meaning "today's behaviour" for a replica that has not been told about the column.
 	CommandChannel sql.NullString `gorm:"size:32"`
+	// SemanticTypes are the classes this type is, as EXPANDED IRIs (SetSemanticContext's
+	// vocabulary packs and custom prefixes decide what is accepted). NULL binds nothing, which
+	// is the true state of every type that predates the layer.
+	SemanticTypes rdb.Anchors `gorm:"type:text[]"`
 
 	Devices []Device
 	// The metric/command/alarm definitions moved onto DeviceProfile in ADR-045

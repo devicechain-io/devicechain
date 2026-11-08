@@ -80,6 +80,7 @@ func cloneDeviceTypeValue(in DeviceType) DeviceType {
 	out := in
 	out.Metadata = cloneJSONPtr(in.Metadata)
 	out.ProfileId = clonePtr(in.ProfileId)
+	out.SemanticTypes = cloneSlice(in.SemanticTypes)
 	if in.Profile != nil {
 		out.Profile = cloneDeviceProfile(in.Profile)
 	}

@@ -24,6 +24,10 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	predicate, inverse, err := api.bindPredicateOnCreate(ctx, request.SemanticPredicate, request.SemanticInverse)
+	if err != nil {
+		return nil, err
+	}
 	created := &EntityRelationshipType{
 		TokenReference: rdb.TokenReference{Token: request.Token},
 		NamedEntity: rdb.NamedEntity{
@@ -32,6 +36,9 @@ func (api *Api) CreateEntityRelationshipType(ctx context.Context,
 		},
 		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
 		Tracked:        request.Tracked,
+
+		SemanticPredicate: predicate,
+		SemanticInverse:   inverse,
 	}
 	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
 		return nil, err
@@ -70,6 +77,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
+	updated.SemanticPredicate, updated.SemanticInverse, err = api.bindPredicateOnUpdate(ctx,
+		request.SemanticPredicate, request.SemanticInverse, updated.SemanticPredicate, updated.SemanticInverse)
+	if err != nil {
+		return nil, err
+	}
 	flipped := tracked != updated.Tracked
 	updated.Tracked = tracked
 	if flipped {

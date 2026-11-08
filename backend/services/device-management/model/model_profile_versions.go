@@ -108,4 +108,10 @@ type ProfileSnapshot struct {
 	// An older pod ignores the key (parsing is lenient), so it flattens; that is the rollout
 	// behaviour the carrier subject exists to make safe.
 	Decoder json.RawMessage `json:"decoder,omitempty"`
+	// SemanticPackVersions is {pack id: version} for the vocabularies the metrics'
+	// semantic bindings were validated against when this version was published. Absent when
+	// no metric is bound, which is also the correct reading of every snapshot published
+	// before the layer existed: the key is simply not there, so those snapshots decode
+	// to nil and re-serialise unchanged.
+	SemanticPackVersions map[string]string `json:"semanticPackVersions,omitempty"`
 }

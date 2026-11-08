@@ -4,6 +4,8 @@
 package model
 
 import (
+	"database/sql"
+
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -19,6 +21,12 @@ type EntityRelationshipType struct {
 	rdb.NamedEntity
 	rdb.MetadataEntity
 	Tracked bool
+
+	// SemanticPredicate is the vocabulary predicate this relationship is, as an EXPANDED IRI
+	// (for example https://brickschema.org/schema/Brick#feeds), and SemanticInverse is its
+	// inverse. NULL binds nothing.
+	SemanticPredicate sql.NullString
+	SemanticInverse   sql.NullString
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, with
@@ -36,6 +44,12 @@ type EntityRelationshipTypeCreateRequest struct {
 	Description *string
 	Metadata    *string
 	Tracked     bool
+	// SemanticPredicate binds the relationship to a PREDICATE of an enabled vocabulary pack
+	// (or a custom prefix). SemanticInverse is its inverse: omitted, it defaults to the one
+	// the pack declares for the predicate (nothing when the pack declares none), and the
+	// stored value is the resolved one. An inverse without a predicate is refused.
+	SemanticPredicate *string
+	SemanticInverse   *string
 }
 
 // A PARTIAL update to an entity relationship type: omit a field to leave the stored
@@ -56,6 +70,12 @@ type EntityRelationshipTypeUpdateRequest struct {
 	// writing it would stop denormalizing the type's relationships onto events while
 	// reporting success.
 	Tracked dcgraphql.OptionalBool
+	// SemanticPredicate: omitted leaves it, null clears it (and the inverse with it), a term
+	// sets it. SemanticInverse: omitted keeps the stored inverse, or re-derives the pack's
+	// declared one when the predicate changed; null clears it; a term sets it. An inverse is
+	// refused while no predicate is bound.
+	SemanticPredicate dcgraphql.OptionalString
+	SemanticInverse   dcgraphql.OptionalString
 }
 
 // Search criteria for locating entity relationship types.

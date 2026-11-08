@@ -44,6 +44,7 @@ ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-ma
 ALTER SEQUENCE "device-management".profile_decoder_healths_id_seq OWNED BY "device-management".profile_decoder_healths.id;
 ALTER SEQUENCE "device-management".profile_decoder_samples_id_seq OWNED BY "device-management".profile_decoder_samples.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
+ALTER SEQUENCE "device-management".semantic_contexts_id_seq OWNED BY "device-management".semantic_contexts.id;
 ALTER TABLE ONLY "device-management".alarms
  ADD CONSTRAINT alarms_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".alarms ALTER COLUMN id SET DEFAULT nextval('"device-management".alarms_id_seq'::regclass);
@@ -254,6 +255,9 @@ ALTER TABLE ONLY "device-management".provisioning_profiles
 ALTER TABLE ONLY "device-management".provisioning_profiles ALTER COLUMN id SET DEFAULT nextval('"device-management".provisioning_profiles_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
+ALTER TABLE ONLY "device-management".semantic_contexts
+ ADD CONSTRAINT semantic_contexts_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".semantic_contexts ALTER COLUMN id SET DEFAULT nextval('"device-management".semantic_contexts_id_seq'::regclass);
 CREATE INDEX "idx_device-management_alarms_deleted_at" ON "device-management".alarms USING btree (deleted_at);
 CREATE INDEX "idx_device-management_alarms_tenant_id" ON "device-management".alarms USING btree (tenant_id);
 CREATE INDEX "idx_device-management_alarms_token" ON "device-management".alarms USING btree (token);
@@ -369,6 +373,8 @@ CREATE INDEX "idx_device-management_provisioning_profiles_deleted_at" ON "device
 CREATE INDEX "idx_device-management_provisioning_profiles_device_type_id" ON "device-management".provisioning_profiles USING btree (device_type_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-management".provisioning_profiles USING btree (tenant_id);
 CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-management".provisioning_profiles USING btree (token);
+CREATE INDEX "idx_device-management_semantic_contexts_deleted_at" ON "device-management".semantic_contexts USING btree (deleted_at);
+CREATE INDEX "idx_device-management_semantic_contexts_tenant_id" ON "device-management".semantic_contexts USING btree (tenant_id);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_device_credentials_provisioning_profile ON "device-management".device_credentials USING btree (provisioning_profile_id) WHERE (provisioning_profile_id IS NOT NULL);
@@ -680,6 +686,12 @@ CREATE SEQUENCE "device-management".provisioning_profiles_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "device-management".semantic_contexts_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE TABLE "device-management".alarms (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -718,7 +730,8 @@ CREATE TABLE "device-management".area_types (
  background_color character varying(32),
  foreground_color character varying(32),
  border_color character varying(32),
- metadata jsonb
+ metadata jsonb,
+ semantic_types text[]
 );
 CREATE TABLE "device-management".areas (
  id bigint NOT NULL,
@@ -743,7 +756,9 @@ CREATE TABLE "device-management".asset_type_versions (
  label character varying(128),
  description character varying(1024),
  property_schema jsonb NOT NULL,
- published_by character varying(256)
+ published_by character varying(256),
+ semantic_types text[],
+ semantic_pack_versions jsonb
 );
 CREATE TABLE "device-management".asset_types (
  id bigint NOT NULL,
@@ -761,7 +776,8 @@ CREATE TABLE "device-management".asset_types (
  border_color character varying(32),
  metadata jsonb,
  property_schema jsonb,
- active_version integer
+ active_version integer,
+ semantic_types text[]
 );
 CREATE TABLE "device-management".assets (
  id bigint NOT NULL,
@@ -821,7 +837,8 @@ CREATE TABLE "device-management".customer_types (
  background_color character varying(32),
  foreground_color character varying(32),
  border_color character varying(32),
- metadata jsonb
+ metadata jsonb,
+ semantic_types text[]
 );
 CREATE TABLE "device-management".customers (
  id bigint NOT NULL,
@@ -1080,7 +1097,8 @@ CREATE TABLE "device-management".device_types (
  manufacturer character varying(128),
  model character varying(128),
  maintenance_window_id bigint,
- command_channel character varying(32)
+ command_channel character varying(32),
+ semantic_types text[]
 );
 CREATE TABLE "device-management".devices (
  id bigint NOT NULL,
@@ -1184,7 +1202,9 @@ CREATE TABLE "device-management".entity_relationship_types (
  name character varying(128),
  description character varying(1024),
  metadata jsonb,
- tracked boolean DEFAULT false NOT NULL
+ tracked boolean DEFAULT false NOT NULL,
+ semantic_predicate text,
+ semantic_inverse text
 );
 CREATE TABLE "device-management".entity_relationships (
  id bigint NOT NULL,
@@ -1326,7 +1346,9 @@ CREATE TABLE "device-management".metric_definitions (
  enum jsonb,
  descriptor text,
  device_profile_id bigint NOT NULL,
- expression text
+ expression text,
+ semantic_property text,
+ semantic_point_class text
 );
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,
@@ -1422,6 +1444,16 @@ CREATE TABLE "device-management".purged_tenants (
  planted_at timestamp with time zone NOT NULL,
  completed_at timestamp with time zone
 );
+CREATE TABLE "device-management".semantic_contexts (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ enabled_packs text[] NOT NULL,
+ custom_prefixes jsonb NOT NULL,
+ pack_versions jsonb NOT NULL
+);
 CREATE UNIQUE INDEX idx_command_definition_profile_key ON "device-management".command_definitions USING btree (device_profile_id, command_key);
 CREATE UNIQUE INDEX idx_device_claim_device ON "device-management".device_claims USING btree (device_id);
 CREATE UNIQUE INDEX idx_device_credential_lookup ON "device-management".device_credentials USING btree (tenant_id, credential_type, credential_id) WHERE (deleted_at IS NULL);
@@ -1471,3 +1503,4 @@ CREATE UNIQUE INDEX uix_metric_definitions_tenant_token ON "device-management".m
 CREATE UNIQUE INDEX uix_profile_decoder_healths_window ON "device-management".profile_decoder_healths USING btree (tenant_id, device_profile_id, profile_version, window_start, replica);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_provision_key ON "device-management".provisioning_profiles USING btree (tenant_id, provision_key) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON "device-management".semantic_contexts USING btree (tenant_id) WHERE (deleted_at IS NULL);
