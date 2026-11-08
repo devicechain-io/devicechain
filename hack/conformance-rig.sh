@@ -2,6 +2,9 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
+# Many variables below are read only by hack/conformance/steps.sh, which this script sources.
+# shellcheck disable=SC2034
+#
 # The transport CONFORMANCE rig: third-party clients drive a real instance, and the results are what
 # docs/docs/reference/transport-matrix.md renders its cells from.
 #

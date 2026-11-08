@@ -1,6 +1,10 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
+# Sourced by hack/conformance-rig.sh, which assigns the variables this file reads (SC2154) and reads
+# the ones it assigns (SC2034).
+# shellcheck shell=bash disable=SC2034,SC2154
+#
 # The checkers, controls and steps of hack/conformance-rig.sh. SOURCED by it, never run alone: it uses
 # the rig's helpers (say, pass, fail, k, dk, jq) and variables (instance, tenant, node_ip, ...).
 #
@@ -246,7 +250,6 @@ offline_controls() {
 # API helpers
 # ---------------------------------------------------------------------------
 
-origin="https://$host"
 api="https://$host:$https_port"
 um="$api/api/user-management"
 dm="$api/api/device-management"
@@ -520,8 +523,8 @@ client_logs() { dk logs "$1" 2>/dev/null | grep -a '^DCCONF \|^DCINTEROP ' || tr
 client_wait_event() { # <container> <event> <seconds>
   local deadline=$((SECONDS + $3))
   while ((SECONDS < deadline)); do
-    client_logs "$1" | grep -aq "\"event\":\"$2\"" && return 0
-    [[ "$(dk inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" == true ]] || { client_logs "$1" | grep -aq "\"event\":\"$2\"" && return 0; return 1; }
+    grep -aq "\"event\":\"$2\"" <<<"$(client_logs "$1")" && return 0
+    [[ "$(dk inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" == true ]] || { grep -aq "\"event\":\"$2\"" <<<"$(client_logs "$1")" && return 0; return 1; }
     sleep 1
   done
   return 1
@@ -707,7 +710,7 @@ step_http_429() {
 }
 
 step_http_503() {
-  local replicas posts out code="" retry="" refused="" first="" c0 c1 i v
+  local replicas out code="" retry="" refused="" first="" c0 c1 i v
   tenant_token="$main_token"
   c0="$(svc_counter event-sources total_msg_backpressured)"
   replicas="$(k -n "$namespace" get deploy device-management -o jsonpath='{.spec.replicas}')"
@@ -728,8 +731,9 @@ step_http_503() {
       v="$(awk -v f="$first" -v i="$i" "BEGIN{printf \"%.2f\", f + i/100}")"
       r="$(curl -s -i --max-time 10 -X POST "http://'"$node_ip:$http_node_port/$instance/$tenant"'/events" -H "Content-Type: application/json" \
         -d "{\"device\":\"'"$http_dev"'\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"'"$http_dev"'\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$v\"}}]}}" | tr -d "\r")"
-      code="$(echo "$r" | head -1 | cut -d" " -f2)"
-      if [ "$code" = 503 ]; then echo "REFUSED $v $code $(echo "$r" | awk "tolower(\$1)==\"retry-after:\" {print \$2}")"; exit 0; fi
+      code="$(echo "$r" | sed -n 1p | cut -d" " -f2)"
+      ra="$(echo "$r" | awk "tolower(\$1)==\"retry-after:\" {print \$2}")"
+      if [ "$code" = 503 ]; then echo "REFUSED $v $code $ra"; exit 0; fi
       i=$((i + 1))
     done
     echo "NEVER-REFUSED $i"
@@ -857,7 +861,7 @@ sp_node() { # <node> <alias offset> -> starts a Tahu node, waits until it has se
   local node="$1" off="$2" name
   name="$(client_bg "$client_image" --scenario sparkplug-node --url "tcp://$node_ip:$broker_node_port" --client-id "conf-$node" \
     --group conf --node "$node" --alias-offset "$off" --hold true --wait-state 120)"
-  client_wait_event "$name" done 150 || { client_logs "$name" >&2; client_rm "$name"; fail "the Tahu node $node did not finish publishing"; }
+  client_wait_event "$name" "done" 150 || { client_logs "$name" >&2; client_rm "$name"; fail "the Tahu node $node did not finish publishing"; }
   printf '%s' "$name"
 }
 
