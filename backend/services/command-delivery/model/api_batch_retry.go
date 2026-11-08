@@ -42,12 +42,21 @@ type CommandBatchRetryRequest struct {
 	AllowPartial   bool
 	ExpiresAt      *string
 	Metadata       *string
+
+	// provenRefused is in-process evidence, never set from the API: devices the caller KNOWS the
+	// original batch refused, from its own per-device record of that batch. It stands in for the
+	// batch's refusal sample, which keeps at most a hundred per code, when proving a device with
+	// no command row was a member. Only the campaign retry sets it, from elements it recorded as
+	// REFUSED by that very batch; every other eligibility check (the retry family's coverage
+	// among them) applies unchanged.
+	provenRefused map[string]bool
 }
 
 // retryPlan is the context decideCommandBatch needs to create a retry rather than a fresh batch.
 type retryPlan struct {
 	original       *CommandBatch
 	includeUnknown bool
+	provenRefused  map[string]bool
 }
 
 // RetryCommandBatch re-issues the original batch's command to a subset of its devices that did
@@ -105,7 +114,8 @@ func (api *Api) decideRetry(ctx context.Context, request *CommandBatchRetryReque
 		payload = &text
 	}
 	devices := dedupeBatchTokens(request.DeviceTokens)
-	plan := &retryPlan{original: original, includeUnknown: request.IncludeUnknown}
+	plan := &retryPlan{original: original, includeUnknown: request.IncludeUnknown,
+		provenRefused: request.provenRefused}
 	// Cheap, indexed, and ahead of the remote gate: a request naming the wrong devices is
 	// refused before anything is asked of device-management.
 	if err := api.checkRetryEligibility(api.RDB.DB(ctx), plan, devices); err != nil {
@@ -120,7 +130,7 @@ func (api *Api) decideRetry(ctx context.Context, request *CommandBatchRetryReque
 		DeviceTokens: &devices,
 		AllowPartial: request.AllowPartial,
 	}
-	return api.decideCommandBatch(ctx, create, acct, plan)
+	return api.decideCommandBatch(ctx, create, acct, plan, nil)
 }
 
 // retryTargetState is one device's standing in the original batch.
@@ -165,6 +175,11 @@ func (api *Api) checkRetryEligibility(db *gorm.DB, plan *retryPlan, devices []st
 	refusedOK, err := completeRefusals(plan.original)
 	if err != nil {
 		return err
+	}
+	for device, proven := range plan.provenRefused {
+		if proven {
+			refusedOK[device] = true
+		}
 	}
 
 	// Devices another batch of the same retry family already covers: live, or successful.

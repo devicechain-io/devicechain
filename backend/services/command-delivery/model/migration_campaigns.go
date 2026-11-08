@@ -45,6 +45,7 @@ type campaign struct {
 
 	PlannedThrough sql.NullTime
 	LastError      sql.NullString `gorm:"size:512"`
+	EnabledAt      sql.NullTime
 }
 
 type campaignCycle struct {
@@ -58,8 +59,9 @@ type campaignCycle struct {
 	Day        sql.NullString
 	At         sql.NullTime
 
-	GroupVersion sql.NullInt32
-	Resolved     int `gorm:"not null"`
+	GroupVersion        sql.NullInt32
+	Resolved            int `gorm:"not null"`
+	MembershipCheckedAt sql.NullTime
 }
 
 type campaignElement struct {
@@ -94,10 +96,16 @@ type campaignElement struct {
 //   - uix_campaign_cycles_key is what makes planning idempotent across replicas: two replicas
 //     that both plan a cycle collide here and exactly one wins.
 //   - uix_campaign_elements_device is the same guard one level down.
-//   - idx_campaign_elements_due serves the claim, which only ever reads PENDING rows, so it is
-//     partial on status and stays as small as what is still to do.
+//   - idx_campaign_elements_due serves a tenant's pass finding which campaigns have work due: a
+//     range over due_at of the tenant's PENDING rows only. Partial on status, so it stays as
+//     small as what is still to do.
+//   - idx_campaign_elements_due_campaign serves one campaign's claim, coalescing and membership
+//     re-check, which read that campaign's PENDING rows in due order. Partial for the same reason.
 //   - idx_campaign_elements_claimed serves the recovery of a dead replica's claims.
 //   - idx_campaign_elements_batch serves tracking from a batch token.
+//   - idx_campaign_elements_cycle serves paging a cycle's elements, and the pruner deleting a
+//     retired cycle's finished elements.
+//   - idx_campaign_cycles_created serves the pruner finding the cycles past retention.
 //
 // Every statement is individually re-runnable (IF NOT EXISTS): migrations run with
 // UseTransaction:false, so a half-applied migration replays from the top on the next boot.
@@ -117,12 +125,16 @@ func NewCampaignsSchema() *gormigrate.Migration {
 					`ON "command-delivery".campaign_elements (tenant_id, cycle_id, step, device_token);`,
 				`CREATE INDEX IF NOT EXISTS idx_campaign_elements_due ` +
 					`ON "command-delivery".campaign_elements (tenant_id, due_at) WHERE status = 'PENDING';`,
+				`CREATE INDEX IF NOT EXISTS idx_campaign_elements_due_campaign ` +
+					`ON "command-delivery".campaign_elements (tenant_id, campaign_id, due_at) WHERE status = 'PENDING';`,
 				`CREATE INDEX IF NOT EXISTS idx_campaign_elements_claimed ` +
 					`ON "command-delivery".campaign_elements (tenant_id, claimed_at) WHERE status = 'CLAIMED';`,
 				`CREATE INDEX IF NOT EXISTS idx_campaign_elements_batch ` +
 					`ON "command-delivery".campaign_elements (tenant_id, batch_token) WHERE batch_token IS NOT NULL;`,
 				`CREATE INDEX IF NOT EXISTS idx_campaign_elements_cycle ` +
 					`ON "command-delivery".campaign_elements (tenant_id, cycle_id, id);`,
+				`CREATE INDEX IF NOT EXISTS idx_campaign_cycles_created ` +
+					`ON "command-delivery".campaign_cycles (tenant_id, created_at);`,
 			} {
 				if err := tx.Exec(ddl).Error; err != nil {
 					return err

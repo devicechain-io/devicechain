@@ -899,7 +899,9 @@ type CancelDeviceCommandsResult {
 """
 A scheduled, tracked fan-out of command steps to the devices of an entity group. It is a
 definition: each time its trigger fires it plans a cycle, and a cycle holds one element per
-device per step, so which devices did not receive a command, and why, is a query.
+device per step, so which devices did not receive a command, and why, is a query. A campaign is
+not edited in place: to change one, delete it and create it again. The new campaign sends
+nothing that fell due before it was created.
 """
 type Campaign {
     """Server-assigned numeric identifier, as a string."""
@@ -912,7 +914,10 @@ type Campaign {
     token: String!
     """Human-readable name; null when none is set."""
     name: String
-    """False when the campaign is switched off: it plans and sends nothing."""
+    """
+    False when the campaign is switched off: it plans and sends nothing. Switched back on, it
+    does not send what fell due while it was off.
+    """
     enabled: Boolean!
     """
     The trigger as a JSON document: kind (CRON, CALENDAR or SOLAR), zone, and the fields of
@@ -963,7 +968,7 @@ input CampaignStepInput {
 input CampaignCreateRequest {
     """Identifier for the campaign, unique within the tenant."""
     token: String!
-    """Human-readable name. Optional."""
+    """Human-readable name, at most 128 characters. Optional."""
     name: String
     """
     The trigger, as a JSON document. kind CRON: {"kind":"CRON","zone":"Europe/Berlin","cron":"30 18 * * *"}.
@@ -974,7 +979,7 @@ input CampaignCreateRequest {
     trigger: String!
     """The steps, one to ten."""
     steps: [CampaignStepInput!]!
-    """Token of the entity group to target."""
+    """Token of the entity group to target, at most 128 characters."""
     groupToken: String!
     """GROUP, or omitted."""
     targetKind: String
@@ -1023,7 +1028,10 @@ type CampaignCycleCounts {
     dispatched: Int!
     """Not admitted by the command batch (vocabulary, ceiling, maintenance window...)."""
     refused: Int!
-    """Never commanded: NO_SITE, POLAR_DAY, POLAR_NIGHT, MISSED or CANCELLED."""
+    """
+    Never commanded: NO_SITE, POLAR_DAY, POLAR_NIGHT, MISSED, CANCELLED, PREDATES_CAMPAIGN,
+    DISABLED, SUPERSEDED or NOT_IN_GROUP.
+    """
     skipped: Int!
     """Commands that succeeded."""
     succeeded: Int!
@@ -1049,7 +1057,14 @@ type CampaignElement {
     dueAt: String!
     """PENDING, CLAIMED, DISPATCHED, REFUSED or SKIPPED."""
     status: String!
-    """Why the element is REFUSED or SKIPPED."""
+    """
+    Why the element is REFUSED (the batch's refusal code) or SKIPPED: NO_SITE, POLAR_DAY or
+    POLAR_NIGHT (no event to fire at), MISSED (not sent within maxLatenessSeconds), CANCELLED (the
+    campaign was deleted), PREDATES_CAMPAIGN (due before the campaign was created), DISABLED (due
+    while the campaign was switched off), SUPERSEDED (a newer firing of the same step for the same
+    device was due at the same time, and only the newest was sent) or NOT_IN_GROUP (the device had
+    left the group when the cycle fell due).
+    """
     reason: String
     """Token of the batch that carried the command; null before it is sent."""
     batchToken: String
@@ -1191,7 +1206,10 @@ type Query {
         campaignToken: String!
         """Key of the cycle."""
         cycleKey: String!
-        """Only elements in this status. Optional."""
+        """
+        Only elements in this status: PENDING, CLAIMED, DISPATCHED, REFUSED or SKIPPED. Optional;
+        any other value is refused.
+        """
         status: String
         """Return elements after this id. Optional."""
         afterId: ID
@@ -1491,7 +1509,9 @@ type Mutation {
     ): Campaign!
     """
     Deletes a campaign and cancels the commands it had planned but not sent. Commands already
-    created are untouched. Requires command:write and device:read.
+    created are untouched, and an element whose batch was being sent is recorded from that batch,
+    not as cancelled. There is no update: to change a campaign, delete it and create it again.
+    Requires command:write and device:read.
     """
     deleteCampaign(
         """Token of the campaign."""

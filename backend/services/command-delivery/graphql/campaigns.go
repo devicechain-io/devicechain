@@ -69,16 +69,18 @@ func (r *CampaignResolver) LastError() *string {
 	return &r.M.LastError.String
 }
 
-func (r *CampaignResolver) Steps() []*CampaignStepResolver {
+// Steps fails rather than answering an empty list for a stored step list it cannot read: an
+// empty list is a plausible answer (a campaign that sends nothing) and would hide the fault.
+func (r *CampaignResolver) Steps() ([]*CampaignStepResolver, error) {
 	steps, err := model.DecodeSteps(r.M.Steps)
 	if err != nil {
-		return []*CampaignStepResolver{}
+		return nil, fmt.Errorf("campaign %q has an unreadable step list", r.M.Token)
 	}
 	out := make([]*CampaignStepResolver, 0, len(steps))
 	for _, s := range steps {
 		out = append(out, &CampaignStepResolver{M: s})
 	}
-	return out
+	return out, nil
 }
 
 // CampaignStepResolver resolves a CampaignStep.

@@ -74,9 +74,24 @@ type BatchEnqueueValidator interface {
 // request for a stated, fixable reason. A plain error means the batch could not be DECIDED.
 func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCreateRequest) (*CommandBatch, error) {
 	acct := batchAccounting{targetKind: requestTargetKindLabel(request)}
-	created, err := api.decideCommandBatch(ctx, request, &acct, nil)
+	created, err := api.decideCommandBatch(ctx, request, &acct, nil, nil)
 	api.recordBatchOutcome(&acct, err)
 	return created, err
+}
+
+// batchOptions are what an IN-PROCESS caller (the campaign scheduler) may add to a batch
+// decision. Nothing on the served API reaches them.
+type batchOptions struct {
+	// fence runs under the tenant batch lock, inside the creating transaction, before anything
+	// is written. An error aborts the batch and is returned as it is. It is how the scheduler
+	// proves, against everyone else who takes the same lock, that the work it is about to send
+	// is still its to send.
+	fence func(tx *gorm.DB) error
+	// refusals, when set, receives the COMPLETE per-device refusal list of a batch this call
+	// created. The stored record keeps at most a hundred per code; an in-process caller that
+	// tracks every device needs every refusal. Left untouched on a replay, whose refusals this
+	// call did not decide.
+	refusals *[]BatchDeviceRefusal
 }
 
 // batchAccounting is what the metrics need at the point the answer is known.
@@ -187,7 +202,7 @@ func rejectionCodeOf(err error) (RejectionCode, bool) {
 }
 
 func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCreateRequest,
-	acct *batchAccounting, retry *retryPlan) (*CommandBatch, error) {
+	acct *batchAccounting, retry *retryPlan, opts *batchOptions) (*CommandBatch, error) {
 	existing, replay, err := api.liveBatchByToken(ctx, request.Token)
 	if err != nil {
 		return nil, err
@@ -319,6 +334,12 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		if err := lockTenantForBatch(ctx, tx); err != nil {
 			return err
 		}
+		if opts != nil && opts.fence != nil {
+			if err := opts.fence(tx); err != nil {
+				verdict = err
+				return err
+			}
+		}
 		// A retry re-proves its targets under the lock: a late device response can have moved a
 		// command since the check before the remote gate, and the cost of that race must be a
 		// rejection, never a resend.
@@ -434,6 +455,9 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			return nil, err
 		}
 		return existing, nil
+	}
+	if opts != nil && opts.refusals != nil {
+		*opts.refusals = refusals
 	}
 	return created, nil
 }

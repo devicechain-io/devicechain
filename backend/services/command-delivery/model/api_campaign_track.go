@@ -5,8 +5,10 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 )
@@ -91,64 +93,66 @@ func (api *Api) CampaignCycleSummary(ctx context.Context, campaignToken, cycleKe
 		}
 	}
 
-	// The commands of this cycle's batches, counted once each by device. Walked per batch
-	// token so one query is bounded by one batch, never by the fleet.
-	var batches []string
+	// The commands of this cycle's batches, counted once each by device, AGGREGATED IN THE
+	// DATABASE: a cycle over a large fleet is that many commands, and a summary must not load
+	// them. One grouped query per batch token, so each is bounded by one batch's index range.
+	var batches, retryBatches []string
 	if err := db.Model(&CampaignElement{}).Where("cycle_id = ? AND batch_token IS NOT NULL", cy.ID).
 		Distinct().Pluck("batch_token", &batches).Error; err != nil {
 		return nil, err
 	}
-	var retried []CampaignElement
-	if err := db.Where("cycle_id = ? AND retry_batch_token IS NOT NULL", cy.ID).Find(&retried).Error; err != nil {
+	if err := db.Model(&CampaignElement{}).Where("cycle_id = ? AND retry_batch_token IS NOT NULL", cy.ID).
+		Distinct().Pluck("retry_batch_token", &retryBatches).Error; err != nil {
 		return nil, err
 	}
-	supersededBy := map[string]string{} // "batch|device" -> retry batch
-	retryBatches := map[string]struct{}{}
-	for _, e := range retried {
-		supersededBy[e.BatchToken.String+"|"+e.DeviceToken] = e.RetryBatchToken.String
-		retryBatches[e.RetryBatchToken.String] = struct{}{}
-	}
 	sort.Strings(batches)
+	sort.Strings(retryBatches)
+	now := time.Now()
 	for _, b := range batches {
-		if err := api.countBatchCommands(ctx, b, counts, func(device string) bool {
-			_, gone := supersededBy[b+"|"+device]
-			return gone
-		}); err != nil {
+		// A device whose element was handed to a retry is counted by the retry's command.
+		if err := api.countBatchCommands(ctx, b, cy.ID, true, now, counts); err != nil {
 			return nil, err
 		}
 	}
-	for rb := range retryBatches {
-		if err := api.countBatchCommands(ctx, rb, counts, nil); err != nil {
+	for _, rb := range retryBatches {
+		if err := api.countBatchCommands(ctx, rb, cy.ID, false, now, counts); err != nil {
 			return nil, err
 		}
 	}
 	return counts, nil
 }
 
-func (api *Api) countBatchCommands(ctx context.Context, batchToken string, counts *CampaignCycleCounts,
-	skip func(device string) bool) error {
-	var rows []Command
-	if err := api.RDB.DB(ctx).Select("device_token", "status", "outcome", "dispatch_after").
-		Where("batch_token = ?", batchToken).Find(&rows).Error; err != nil {
+func (api *Api) countBatchCommands(ctx context.Context, batchToken string, cycleID uint, skipRetried bool,
+	now time.Time, counts *CampaignCycleCounts) error {
+	var rows []struct {
+		Status  string
+		Outcome sql.NullString
+		N       int
+		Waiting int
+	}
+	q := api.RDB.DB(ctx).Model(&Command{}).
+		Select("status, outcome, COUNT(*) AS n, "+
+			"SUM(CASE WHEN dispatch_after IS NOT NULL AND dispatch_after > ? THEN 1 ELSE 0 END) AS waiting", now).
+		Where("batch_token = ?", batchToken)
+	if skipRetried {
+		q = q.Where(`NOT EXISTS (SELECT 1 FROM campaign_elements e WHERE e.tenant_id = commands.tenant_id
+			AND e.cycle_id = ? AND e.batch_token = commands.batch_token AND e.device_token = commands.device_token
+			AND e.retry_batch_token IS NOT NULL)`, cycleID)
+	}
+	if err := q.Group("status, outcome").Scan(&rows).Error; err != nil {
 		return err
 	}
-	now := time.Now()
 	for _, r := range rows {
-		if skip != nil && skip(r.DeviceToken) {
-			continue
-		}
 		switch {
 		case !CommandStatus(r.Status).Terminal():
-			counts.InFlight++
-			if r.DispatchAfter.Valid && r.DispatchAfter.Time.After(now) {
-				counts.Waiting++
-			}
+			counts.InFlight += r.N
+			counts.Waiting += r.Waiting
 		case CommandOutcome(r.Outcome.String) == OutcomeSucceeded:
-			counts.Succeeded++
+			counts.Succeeded += r.N
 		case CommandOutcome(r.Outcome.String) == OutcomeUnknown:
-			counts.Unknown++
+			counts.Unknown += r.N
 		default:
-			counts.Failed++
+			counts.Failed += r.N
 		}
 	}
 	return nil
@@ -176,6 +180,10 @@ func (api *Api) CampaignElements(ctx context.Context, campaignToken, cycleKey, s
 	}
 	if limit < 1 || limit > 1000 {
 		limit = 200
+	}
+	if status != "" && !slices.Contains(CampaignElementStatuses, CampaignElementStatus(status)) {
+		return nil, rejected(RejectCampaignFieldInvalid,
+			"status %q is not one of PENDING, CLAIMED, DISPATCHED, REFUSED or SKIPPED", status)
 	}
 	q := api.RDB.DB(ctx).Where("cycle_id = ? AND id > ?", cy.ID, afterId)
 	if status != "" {
@@ -283,16 +291,12 @@ func (api *Api) retryCampaignBatch(ctx context.Context, batchToken string, cy *C
 		Order("id ASC").Find(&elements).Error; err != nil {
 		return err
 	}
-	original, found, err := api.liveBatchByToken(ctx, batchToken)
+	_, found, err := api.liveBatchByToken(ctx, batchToken)
 	if err != nil {
 		return err
 	}
 	if !found {
 		return nil
-	}
-	refusalsKnown, err := completeRefusals(original)
-	if err != nil {
-		return err
 	}
 	var cmds []Command
 	if err := api.RDB.DB(ctx).Select("device_token", "status", "outcome").
@@ -306,17 +310,20 @@ func (api *Api) retryCampaignBatch(ctx context.Context, batchToken string, cy *C
 
 	var devices []string
 	retriable := map[string]CampaignElement{}
+	proven := map[string]bool{}
 	for _, e := range elements {
 		switch CampaignElementStatus(e.Status) {
 		case ElementRefused:
-			// Only a refusal the batch's record holds completely: RetryCommandBatch admits a
-			// refused device only on that evidence, and naming one it cannot prove fails the
-			// whole retry. KNOWN LIMIT: past 100 refusals of one code the record is a sample,
-			// so those elements stay REFUSED and are not offered here.
-			if refusalsKnown[e.DeviceToken] {
-				devices = append(devices, e.DeviceToken)
-				retriable[e.DeviceToken] = e
+			// The element IS the evidence that this batch was asked for the device and did not
+			// admit it: it was settled REFUSED from this very batch. That is what the batch
+			// record's refusal sample proves for at most a hundred devices a code; the element
+			// proves it for every one, so the retry is handed it as provenRefused.
+			if _, hasCommand := byDevice[e.DeviceToken]; hasCommand {
+				continue
 			}
+			devices = append(devices, e.DeviceToken)
+			retriable[e.DeviceToken] = e
+			proven[e.DeviceToken] = true
 		case ElementDispatched:
 			cmd, ok := byDevice[e.DeviceToken]
 			if !ok {
@@ -351,7 +358,7 @@ func (api *Api) retryCampaignBatch(ctx context.Context, batchToken string, cy *C
 	retryToken := fmt.Sprintf("%s-r%d", batchToken, len(prior)+1)
 	retry, err := api.RetryCommandBatch(ctx, &CommandBatchRetryRequest{
 		Token: retryToken, Of: batchToken, DeviceTokens: devices,
-		IncludeUnknown: includeUnknown, AllowPartial: true,
+		IncludeUnknown: includeUnknown, AllowPartial: true, provenRefused: proven,
 	})
 	if err != nil {
 		return err

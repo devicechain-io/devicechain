@@ -57,12 +57,24 @@ codes a single command is refused with.
 | Field | Meaning |
 | --- | --- |
 | `token` | Unique within the tenant. |
+| `name` | Optional, at most 128 characters. |
 | `trigger` | A JSON document, described below. |
 | `steps` | One to ten steps. A step is `COMMAND` with a `name`, an optional JSON `payload`, and `delaySeconds` from 0 to 86400 after the trigger. |
-| `groupToken` | The entity group to target. A dynamic group can select the devices of an area. |
+| `groupToken` | The entity group to target, at most 128 characters. A dynamic group can select the devices of an area. |
 | `maxLatenessSeconds` | How late a planned command may still be sent, 1 to 86400. Default 900. |
 | `expiresInSeconds` | The time-to-live of each command, 1 to 604800, counted from when it is created. Default 3600. It is how long a command may wait for an unreachable device or a maintenance window, so it can outlast `maxLatenessSeconds`, which bounds when the scheduler sends, not when a device receives. Set it short if a late delivery is worse than none. |
 | `enabled` | Whether it starts on. Default true. |
+
+A new campaign sends nothing that fell due before it was created. A solar plan starts at the previous
+local midnight so that a fixture far to the west still gets its evening, and anything in that span
+that is already past is recorded as `SKIPPED` with the reason `PREDATES_CAMPAIGN`, never sent.
+
+### Changing a campaign {#changing-a-campaign}
+
+There is no update operation in this release. To change a campaign's trigger, steps, target or
+bounds, delete it and create it again; the token is free again once the old campaign is deleted.
+Because the new campaign sends nothing that fell due before it was created, recreating one shortly
+after its dusk does not dim the lights a second time.
 
 An `ARTIFACT` step type is part of the vocabulary but is not executed by this release; it is refused
 with `CAMPAIGN_STEP_UNSUPPORTED` rather than ignored. To roll out an update on a schedule, use a
@@ -166,8 +178,16 @@ within `maxLatenessSeconds` (an outage, or the campaign was switched off) is mar
 the reason `MISSED`. A dim command sent at midnight is worse than none, so a campaign never catches
 up.
 
-Switching a campaign off stops planning and sending. Deleting it cancels everything planned and not
-yet sent, as `SKIPPED` with the reason `CANCELLED`; commands already created are untouched.
+Nor does it send a backlog. When several firings of the same step are due for the same device at
+once (an hourly campaign with a long lateness bound, after an outage), only the newest is sent and
+the older ones are recorded as `SKIPPED` with the reason `SUPERSEDED`. A device gets one command,
+not one per missed hour.
+
+Switching a campaign off stops planning and sending. Switching it back on starts from that moment:
+whatever fell due while it was off is recorded as `SKIPPED` with the reason `DISABLED`, not sent.
+Deleting a campaign cancels everything planned and not yet sent, as `SKIPPED` with the reason
+`CANCELLED`; commands already created are untouched, and an element whose command was being sent
+as the campaign was deleted is recorded from that command, not as cancelled.
 
 The tenant's [undelivered-command ceiling](./commanding-a-fleet.md) still applies. If a very large
 fleet falls due in the same instant, devices beyond the ceiling are recorded as `REFUSED` with
@@ -223,7 +243,12 @@ An element is retried once. If the retry itself fails, retry that batch from the
 ## Limits {#limits}
 
 - A cycle plans at most 100,000 devices.
-- A cycle's devices are the group's members when the cycle is planned, up to 36 hours before it fires. A device added to the group later joins the next cycle.
+- A cycle's devices are the group's members when the cycle is planned, up to 36 hours before it
+  fires. When the cycle first falls due the group is read again, and a device that has left it since
+  is recorded as `SKIPPED` with the reason `NOT_IN_GROUP` instead of being commanded. If the group
+  cannot be read at that moment, the cycle is not sent until it can be (and is `MISSED` if that takes
+  longer than the lateness bound). A device **added** to the group after the cycle was planned is not
+  added to it; it joins the next cycle planned.
 - Finished cycles and their elements are kept for 30 days.
 - A target is an entity group. Targeting an area directly is not supported; use a dynamic group that
   selects the area's devices.

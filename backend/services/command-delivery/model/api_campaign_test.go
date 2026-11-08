@@ -571,7 +571,7 @@ func TestHistoryIsPrunedButWorkNeverIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The still-pending second night is old enough by the clock but is work, not history.
-	if err := api.pruneCampaignHistory(ctx, old); err != nil {
+	if err := api.PruneCampaignHistory(context.Background(), old); err != nil {
 		t.Fatal(err)
 	}
 	var left []CampaignElement
@@ -858,11 +858,19 @@ func TestADisabledCampaignsPendingWorkStillGoesStaleAndItsHistoryIsPruned(t *tes
 		t.Fatal(err)
 	}
 	api.RDB.DB(ctx).Model(&CampaignCycle{}).Where("1 = 1").Update("created_at", at("2026-06-21T22:00:00Z"))
-	tick(t, api, at("2026-06-22T06:00:00Z").Add(CampaignHistoryRetention+48*time.Hour), "much-later")
+	if err := api.PruneCampaignHistory(context.Background(), at("2026-06-22T06:00:00Z").Add(CampaignHistoryRetention+48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	var left int64
 	api.RDB.DB(ctx).Model(&CampaignCycle{}).Count(&left)
 	if left != 0 {
 		t.Fatalf("%d cycles of a deleted campaign survive past retention", left)
+	}
+	// And the deleted campaign itself is gone for good, so its tenant leaves the tick.
+	var rows int64
+	api.RDB.DB(ctx).Unscoped().Model(&Campaign{}).Count(&rows)
+	if rows != 0 {
+		t.Fatalf("%d deleted campaign rows survive past retention", rows)
 	}
 }
 

@@ -59,12 +59,24 @@ nombre de comando con los que se rechaza un comando individual.
 | Campo | Significado |
 | --- | --- |
 | `token` | Único dentro del tenant. |
+| `name` | Opcional, como máximo 128 caracteres. |
 | `trigger` | Un documento JSON, descrito más abajo. |
 | `steps` | De uno a diez pasos. Un paso es `COMMAND` con un `name`, una `payload` JSON opcional y `delaySeconds` de 0 a 86400 tras el disparador. |
-| `groupToken` | El grupo de entidades objetivo. Un grupo dinámico puede seleccionar los dispositivos de un área. |
+| `groupToken` | El grupo de entidades objetivo, como máximo 128 caracteres. Un grupo dinámico puede seleccionar los dispositivos de un área. |
 | `maxLatenessSeconds` | Cuánto puede retrasarse todavía el envío de un comando planificado, de 1 a 86400. Por defecto 900. |
 | `expiresInSeconds` | El tiempo de vida de cada comando, de 1 a 604800, contado desde que se crea. Por defecto 3600. Es cuánto puede esperar un comando a un dispositivo inalcanzable o a una ventana de mantenimiento, así que puede durar más que `maxLatenessSeconds`, que limita cuándo envía el planificador, no cuándo recibe un dispositivo. Defínelo corto si una entrega tardía es peor que ninguna. |
 | `enabled` | Si empieza activa. Por defecto true. |
+
+Una campaña nueva no envía nada que venciera antes de crearse. Un plan solar empieza en la medianoche
+local anterior para que un punto de luz muy al oeste reciba igualmente su tarde, y lo que en ese
+intervalo ya ha pasado se registra como `SKIPPED` con el motivo `PREDATES_CAMPAIGN`, nunca se envía.
+
+### Cambiar una campaña {#changing-a-campaign}
+
+Esta versión no tiene operación de actualización. Para cambiar el disparador, los pasos, el objetivo
+o los límites de una campaña, elimínala y vuelve a crearla; el token queda libre en cuanto se elimina
+la campaña anterior. Como la nueva campaña no envía nada que venciera antes de crearse, recrearla
+poco después del anochecer no vuelve a atenuar las luces.
 
 El tipo de paso `ARTIFACT` forma parte del vocabulario pero esta versión no lo ejecuta; se rechaza
 con `CAMPAIGN_STEP_UNSUPPORTED` en lugar de ignorarse. Para desplegar una actualización según un
@@ -174,8 +186,16 @@ dentro de `maxLatenessSeconds` (una caída, o la campaña estaba desactivada) se
 el motivo `MISSED`. Un comando de atenuación enviado a medianoche es peor que ninguno, así que una
 campaña nunca se pone al día.
 
-Desactivar una campaña detiene la planificación y el envío. Eliminarla cancela todo lo planificado y
-aún no enviado, como `SKIPPED` con el motivo `CANCELLED`; los comandos ya creados no se tocan.
+Tampoco envía un atraso acumulado. Cuando varias activaciones del mismo paso vencen a la vez para el
+mismo dispositivo (una campaña horaria con un límite de retraso largo, tras una caída), solo se envía
+la más reciente y las anteriores se registran como `SKIPPED` con el motivo `SUPERSEDED`. Un
+dispositivo recibe un comando, no uno por cada hora perdida.
+
+Desactivar una campaña detiene la planificación y el envío. Volver a activarla empieza desde ese
+momento: lo que venció mientras estaba desactivada se registra como `SKIPPED` con el motivo
+`DISABLED`, no se envía. Eliminarla cancela todo lo planificado y aún no enviado, como `SKIPPED` con
+el motivo `CANCELLED`; los comandos ya creados no se tocan, y un elemento cuyo comando se estaba
+enviando cuando se eliminó la campaña se registra a partir de ese comando, no como cancelado.
 
 El [tope de comandos sin entregar](./commanding-a-fleet.md) del tenant sigue aplicándose. Si una flota
 muy grande vence en el mismo instante, los dispositivos que superan el tope se registran como
@@ -233,7 +253,13 @@ Un elemento se reintenta una vez. Si el propio reintento falla, reintenta ese lo
 ## Límites {#limits}
 
 - Un ciclo planifica como máximo 100 000 dispositivos.
-- Los dispositivos de un ciclo son los miembros del grupo en el momento en que se planifica el ciclo, hasta 36 horas antes de que se active. Un dispositivo añadido después al grupo se incorpora al ciclo siguiente.
+- Los dispositivos de un ciclo son los miembros del grupo en el momento en que se planifica el ciclo,
+  hasta 36 horas antes de que se active. Cuando el ciclo vence por primera vez se vuelve a leer el
+  grupo, y un dispositivo que lo haya abandonado desde entonces se registra como `SKIPPED` con el
+  motivo `NOT_IN_GROUP` en lugar de recibir el comando. Si en ese momento no se puede leer el grupo,
+  el ciclo no se envía hasta que se pueda (y queda `MISSED` si tarda más que el límite de retraso). Un
+  dispositivo **añadido** al grupo después de planificarse el ciclo no se añade a él; se incorpora al
+  siguiente ciclo que se planifique.
 - Los ciclos terminados y sus elementos se conservan durante 30 días.
 - Un objetivo es un grupo de entidades. No se admite apuntar directamente a un área; usa un grupo
   dinámico que seleccione los dispositivos del área.

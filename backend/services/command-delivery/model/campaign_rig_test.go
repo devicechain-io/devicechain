@@ -86,12 +86,16 @@ func runRig(t *testing.T, mirror bool) rigResult {
 		}
 	}
 	start := first.Add(-30 * time.Minute).Truncate(time.Minute)
+	// The scheduler's clock follows the simulated evening: a claim is stamped from it, and the
+	// claim instant is what this rig judges early or late.
+	setClock(api, start)
 	if err := api.TickCampaigns(context.Background(), start, "plan"); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 	pass := 0
 	for now := start; now.Before(last.Add(30 * time.Minute)); now = now.Add(rigTick) {
 		pass++
+		setClock(api, now)
 		if err := api.TickCampaigns(context.Background(), now, fmt.Sprintf("p%d", pass)); err != nil {
 			t.Fatalf("tick %s: %v", now, err)
 		}
