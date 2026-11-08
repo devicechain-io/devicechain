@@ -23,7 +23,9 @@ import (
 //     installed position and a reported fix of the same place round-trip at the same precision.
 //  2. areas gains boundary_fence_token: the token of the geofence that bounds the area. It names
 //     a fence by token and carries no foreign key, like the other same-service references here;
-//     the reader answers loudly when the named fence is gone.
+//     the reader answers loudly when the named fence is gone. A partial index on
+//     (tenant_id, boundary_fence_token) serves the "does an area name this fence" check that
+//     refuses deleting a fence an area names.
 //
 // 🔴 NO CELL COLUMN. The spatial index lands with the spatial queries; adding the column here
 // would ship a column nothing writes and a reader would take its NULL for "outside every cell".
@@ -49,8 +51,14 @@ func NewInstalledPositionSchema() *gormigrate.Migration {
 					return err
 				}
 			}
-			return tx.Exec(`ALTER TABLE "device-management"."areas" ` +
-				`ADD COLUMN IF NOT EXISTS boundary_fence_token text;`).Error
+			if err := tx.Exec(`ALTER TABLE "device-management"."areas" ` +
+				`ADD COLUMN IF NOT EXISTS boundary_fence_token text;`).Error; err != nil {
+				return err
+			}
+			// Deleting a fence asks whether any area of the tenant names it (DeleteGeoFence refuses
+			// while one does), so that lookup is indexed. Partial: most areas name no fence.
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_areas_boundary_fence ON "device-management"."areas" ` +
+				`(tenant_id, boundary_fence_token) WHERE boundary_fence_token IS NOT NULL;`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return errors.New("the installed-position migration cannot be rolled back: dropping the columns " +

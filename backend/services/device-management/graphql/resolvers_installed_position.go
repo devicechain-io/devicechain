@@ -5,39 +5,13 @@ package graphql
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
-	"github.com/devicechain-io/dc-microservice/geo"
-	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
-
-// ContextReportedFixSourceKey carries the ReportedFixSource that Device.effectivePosition reads a
-// device's latest reported fix from. device-management does not store reported positions (the
-// device-state area does), so the effective rule needs a reader the service is wired with.
-const ContextReportedFixSourceKey = gqlcore.ContextKey("reported-fix-source")
-
-// ReportedFixSource reads a device's latest REPORTED fix and says how old a fix may be and still
-// count as fresh for the effective rule. It runs under the caller's own context, so a source that
-// calls another area does so under the caller's token, never a service's.
-type ReportedFixSource interface {
-	ReportedFix(ctx context.Context, deviceToken string) (fix *geo.Fix, freshness time.Duration, err error)
-}
-
-// ErrNoReportedFixSource is what Device.effectivePosition answers for a device whose profile
-// declares that it reports its position, when this build has no reader for reported fixes.
-//
-// 🔴 IT IS AN ERROR AND NOT THE INSTALLED POSITION. The effective rule prefers a fresh reported
-// fix; answering the installed position when the reader is missing would be a plausible value that
-// is wrong exactly when the device is moving, and nothing at the call site would show it.
-var ErrNoReportedFixSource = errors.New("effectivePosition is not available for a device that reports " +
-	"its position: this build has no reader for reported positions. Use installedPosition, or latestLocation " +
-	"on the device-state area")
 
 // InstalledPositionResolver resolves an installed position.
 type InstalledPositionResolver struct {
@@ -78,7 +52,9 @@ func (r *InstalledPositionResolver) UpdatedAt() *string {
 // without location:installed:read (or location:read, which implies it) gets null, and so does a
 // caller with it on an entity that has no position; the withheld marker is a separate field,
 // answered from the authority alone, so the payload does not say which of the two null is.
-// This function never receives a reported fix, so it cannot return one.
+// This function never receives a reported fix, so it cannot return one. (A position that may be a
+// live fix, and so needs location:read, belongs to a later slice that wires a reader for reported
+// fixes; it is deliberately not served here.)
 func installedPositionOf(ctx context.Context, p model.InstalledPosition) *InstalledPositionResolver {
 	if !auth.CanReadInstalledPosition(ctx) {
 		return nil
@@ -105,65 +81,6 @@ func (r *AssetResolver) InstalledPosition(ctx context.Context) *InstalledPositio
 }
 
 func (r *AssetResolver) PositionWithheld(ctx context.Context) bool { return positionWithheld(ctx) }
-
-// EffectivePositionResolver resolves the position the effective rule chose, with its source.
-type EffectivePositionResolver struct {
-	P   geo.Position
-	Src geo.Source
-}
-
-func (r *EffectivePositionResolver) Latitude() float64  { return r.P.Lat }
-func (r *EffectivePositionResolver) Longitude() float64 { return r.P.Lon }
-func (r *EffectivePositionResolver) Elevation() *float64 {
-	if !r.P.HasElevation {
-		return nil
-	}
-	return &r.P.Elevation
-}
-func (r *EffectivePositionResolver) Source() string { return r.Src.String() }
-
-// EffectivePosition is the position a map should draw for the device: its latest reported fix when
-// its profile declares a position and the fix is fresh, else its installed position.
-//
-// 🔴 IT NEEDS location:read, THE AUTHORITY FOR A LIVE FIX. location:installed:read does not
-// satisfy it, because the effective rule can hand back a reported fix; a caller holding only the
-// installed authority reads installedPosition instead, and is never offered the effective rule.
-// A caller without it gets FORBIDDEN, not a withheld marker: refusing is what keeps a caller that
-// is not allowed to see live positions from probing for them.
-func (r *DeviceResolver) EffectivePosition(ctx context.Context) (*EffectivePositionResolver, error) {
-	if _, err := auth.AuthorizeScoped(ctx, auth.LocationRead); err != nil {
-		return nil, err
-	}
-	// The query time is captured once, so the freshness comparison cannot straddle a clock tick.
-	at := time.Now()
-
-	var installed *geo.Position
-	if p, ok := r.M.InstalledPosition.Position(); ok {
-		installed = &p
-	}
-
-	var fix *geo.Fix
-	var freshness time.Duration
-	capability, err := r.S.GetApi(ctx).DeviceLocationDeclaration(ctx, r.M.Token)
-	if err != nil {
-		return nil, err
-	}
-	if capability.Declared() {
-		src, _ := ctx.Value(ContextReportedFixSourceKey).(ReportedFixSource)
-		if src == nil {
-			return nil, ErrNoReportedFixSource
-		}
-		if fix, freshness, err = src.ReportedFix(ctx, r.M.Token); err != nil {
-			return nil, fmt.Errorf("reading the reported position: %w", err)
-		}
-	}
-
-	pos, source, ok := geo.Effective(fix, freshness, installed, at, geo.ModeEffective)
-	if !ok {
-		return nil, nil
-	}
-	return &EffectivePositionResolver{P: pos, Src: source}, nil
-}
 
 // BoundaryFence is the geofence that bounds the area, or null when none does.
 //

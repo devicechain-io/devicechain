@@ -155,3 +155,26 @@ func TestImportReRunIsIdempotentForAHalfwayCoordinate(t *testing.T) {
 	d, _ := api.DevicesByToken(holder, []string{"lamp-h"})
 	require.Equal(t, 40.0000001, d[0].InstalledLat.Float64)
 }
+
+// The range check runs on the value that would be STORED, after rounding to the column's scale:
+// 99999999.99995 is below 1e8 as typed, but rounds to 100000000.0000, which numeric(12,4) cannot
+// hold. Checked before rounding it would pass validation and fail at the database instead.
+func TestTheRangeCheckRunsOnTheRoundedValue(t *testing.T) {
+	api := &Api{} // no store: a check that reached the database would dereference nil
+	ctx := context.Background()
+	for _, c := range []struct {
+		name string
+		in   InstalledPositionInput
+	}{
+		{"elevation that rounds to 1e8", InstalledPositionInput{Elevation: f64(99999999.99995)}},
+		{"negative elevation that rounds to -1e8", InstalledPositionInput{Elevation: f64(-99999999.99995)}},
+		{"accuracy that rounds to 1e8", InstalledPositionInput{Accuracy: f64(99999999.99995)}},
+	} {
+		_, err := api.SetInstalledPosition(ctx, "DEVICE", "d1", c.in)
+		require.True(t, errors.Is(err, ErrInvalidInstalledPosition), "%s: %v", c.name, err)
+	}
+	// The counterweight: the largest value that rounds inside the column is accepted by the check.
+	in := InstalledPositionInput{Elevation: f64(99999999.99994)}
+	_, err := in.validate()
+	require.NoError(t, err)
+}

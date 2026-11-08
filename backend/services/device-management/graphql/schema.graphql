@@ -2376,21 +2376,13 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     """
     installedPosition: InstalledPosition
     """
-    True for every device a caller without location:installed:read (or location:read) reads,
-    whether or not the device has an installed position, and false for every device a caller
-    with it reads. It depends on the caller alone, so it does not reveal whether a position
-    exists.
+    Whether installedPosition is withheld from this caller. It concerns the INSTALLED position
+    only, not any position the device reports. True for every device a caller without
+    location:installed:read (or location:read) reads, whether or not the device has an installed
+    position, and false for every device a caller with it reads. It depends on the caller alone,
+    so it does not reveal whether a position exists.
     """
     positionWithheld: Boolean!
-    """
-    The position to draw for the device: its latest reported position when its profile
-    declares one and the fix is fresh, otherwise its installed position, with the source
-    named. Needs location:read; location:installed:read alone is refused with FORBIDDEN,
-    because this can return a live position. For a device whose profile declares that it
-    reports its position, a build with no reader for reported positions answers an error
-    rather than the installed position.
-    """
-    effectivePosition: EffectivePosition
 }
 
 """Where an installed position came from."""
@@ -2443,18 +2435,6 @@ input InstalledPositionInput {
     accuracy: Float
     """How the position was obtained. MANUAL when omitted."""
     source: InstalledPositionSource
-}
-
-"""The position chosen for a device by the effective rule."""
-type EffectivePosition {
-    """Degrees north, -90 to 90."""
-    latitude: Float!
-    """Degrees east, -180 to 180."""
-    longitude: Float!
-    """Metres above the WGS84 ellipsoid, or null when the chosen position has none."""
-    elevation: Float
-    """REPORTED when the position is the device's fresh reported fix, INSTALLED otherwise."""
-    source: String!
 }
 
 """
@@ -2664,9 +2644,16 @@ input DeviceImportRow {
     installedLatitude: Float
     """Degrees east where the device was installed, -180 to 180. See installedLatitude."""
     installedLongitude: Float
-    """Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude."""
+    """
+    Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. When a
+    device that already exists is compared, an omitted elevation compares as NONE: a row that
+    leaves it out, against a device whose stored position has one, is a CONFLICT.
+    """
     installedElevation: Float
-    """Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude."""
+    """
+    Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude.
+    Like installedElevation, an omitted accuracy compares as none against a device that exists.
+    """
     installedAccuracy: Float
     """ACCESS_TOKEN or MQTT_BASIC. FACTORY_CREDENTIALS mode only."""
     credentialType: String
@@ -4178,8 +4165,9 @@ type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & En
     """
     installedPosition: InstalledPosition
     """
-    True for every asset a caller without location:installed:read (or location:read) reads,
-    whether or not the asset has an installed position. It depends on the caller alone.
+    Whether installedPosition is withheld from this caller; it concerns the installed position
+    only. True for every asset a caller without location:installed:read (or location:read)
+    reads, whether or not the asset has an installed position. It depends on the caller alone.
     """
     positionWithheld: Boolean!
 }

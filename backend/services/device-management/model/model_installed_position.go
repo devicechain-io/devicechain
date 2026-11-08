@@ -85,6 +85,14 @@ func (p InstalledPosition) Position() (geo.Position, bool) {
 // is not finite (or an accuracy below zero), and an unknown source. It returns the normalized
 // source. The check runs before the database is touched.
 func (in InstalledPositionInput) validate() (string, error) {
+	source := InstalledSourceManual
+	if in.Source != nil {
+		source = strings.ToUpper(strings.TrimSpace(*in.Source))
+	}
+	// The range is checked on the value that will be STORED, rounded to the column's scale: an
+	// elevation of 99999999.99995 is in range as typed but rounds to 1e8, which numeric(12,4)
+	// cannot hold. (rounded leaves NaN and the infinities as they are, so they are still refused.)
+	in = in.rounded()
 	pos := geo.Position{Lat: in.Latitude, Lon: in.Longitude}
 	if err := pos.Validate(); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidInstalledPosition, err)
@@ -94,10 +102,6 @@ func (in InstalledPositionInput) validate() (string, error) {
 	}
 	if in.Accuracy != nil && (math.IsNaN(*in.Accuracy) || math.IsInf(*in.Accuracy, 0) || *in.Accuracy < 0 || *in.Accuracy >= 1e8) {
 		return "", fmt.Errorf("%w: accuracy must be a finite, non-negative number of metres", ErrInvalidInstalledPosition)
-	}
-	source := InstalledSourceManual
-	if in.Source != nil {
-		source = strings.ToUpper(strings.TrimSpace(*in.Source))
 	}
 	switch source {
 	case InstalledSourceSurvey, InstalledSourceImport, InstalledSourceManual, InstalledSourceInferred:

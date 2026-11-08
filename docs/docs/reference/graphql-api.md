@@ -74,8 +74,7 @@ authorities do not line up with intuition:
 - A fixed asset's installed position (`Device.installedPosition`, `Asset.installedPosition`) requires
   `location:installed:read`, which `location:read` includes. It is installation data and never falls back to
   a position the device reported. A caller without either authority reads `positionWithheld: true` on every
-  device and asset, whether or not it has a position. `Device.effectivePosition`, which can return a live
-  fix, requires `location:read`. Setting and clearing an installed position (`setInstalledPosition`,
+  device and asset, whether or not it has a position; the flag concerns the installed position only. Setting and clearing an installed position (`setInstalledPosition`,
   `clearInstalledPosition`) require `device:write`, and a member limited to part of the tenant may not write one.
 - `demoteAssertedPresence` requires `state:demote`, which is neither of those. No role names it by
   default; only a role holding the `*` super-authority, such as the seeded `tenant-admin` role, has

@@ -566,9 +566,16 @@ export type DeviceImportRow = {
   deviceTypeToken: string;
   /** Optional business identifier, up to 256 characters. Checked for conflicts; never the key. */
   externalId?: string | null | undefined;
-  /** Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude. */
+  /**
+   * Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude.
+   * Like installedElevation, an omitted accuracy compares as none against a device that exists.
+   */
   installedAccuracy?: number | null | undefined;
-  /** Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. */
+  /**
+   * Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude. When a
+   * device that already exists is compared, an omitted elevation compares as NONE: a row that
+   * leaves it out, against a device whose stored position has one, is a CONFLICT.
+   */
   installedElevation?: number | null | undefined;
   /**
    * Degrees north where the device was installed, for a device that is fixed in place. Given

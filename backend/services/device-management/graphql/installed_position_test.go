@@ -6,14 +6,13 @@ package graphql
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/geo"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -66,45 +65,23 @@ func codeOf(s served) string {
 	return code
 }
 
-// fixedReports is a ReportedFixSource that always has a fresh fix 5 km from the installed point.
-type fixedReports struct {
-	fix       *geo.Fix
-	freshness time.Duration
-}
-
-func (f fixedReports) ReportedFix(context.Context, string) (*geo.Fix, time.Duration, error) {
-	return f.fix, f.freshness, nil
-}
-
 const devicePositionQuery = `query($t: [String!]!) { devicesByToken(tokens: $t) {
   token positionWithheld installedPosition { latitude longitude elevation accuracy source updatedAt } } }`
 
-// 🔴 THE ACCEPTANCE TEST. A caller holding ONLY location:installed:read, on a device that has an
-// installed position AND reports a fresh fix, is handed the installed position and nothing else:
-// installedPosition never falls back to the reported fix, and effectivePosition, the rule that
-// would, is FORBIDDEN to it.
-//
-// Negative controls (run): make installedPositionOf return the effective position when a reported
-// source is wired and the installed-only assertion goes red; make EffectivePosition accept
-// LocationInstalledRead and the FORBIDDEN assertion goes red.
+// 🔴 THE ACCEPTANCE TEST. A caller holding ONLY location:installed:read, on a device that declares
+// it reports its position and has an installed position, is handed the installed position and
+// nothing else. device-management holds no reported fix to fall back to, and the schema serves no
+// field that would choose one: a position that can be a live fix belongs to the slice that wires a
+// reader for reported fixes, under location:read.
 func TestInstalledOnlyCallerSeesTheInstalledPositionNeverALiveFix(t *testing.T) {
 	f := newScopeFixture(t)
 	migrateDetection(t, f)
-	f.install(t, "DEVICE", "acme-pump", 40.7128, -74.0060)
-	// The device reports its position, and has a fresh fix far from where it was installed.
+	// The device declares that it reports its position, and is installed somewhere fixed.
 	seedDevice(t, f.operator(), "tracker-1", "tracker", &model.LocationDeclaration{})
 	publishProfile(t, f.operator(), "tracker")
 	f.install(t, "DEVICE", "tracker-1", 40.7128, -74.0060)
 
-	live := fixedReports{
-		fix:       &geo.Fix{Position: geo.Position{Lat: 40.76, Lon: -74.0}, At: time.Now()},
-		freshness: time.Hour,
-	}
-	withSource := func(ctx context.Context) context.Context {
-		return context.WithValue(ctx, ContextReportedFixSourceKey, ReportedFixSource(live))
-	}
-
-	installedOnly := withSource(f.caller(auth.DeviceRead, auth.LocationInstalledRead))
+	installedOnly := f.caller(auth.DeviceRead, auth.LocationInstalledRead)
 	got := serve(t, installedOnly, devicePositionQuery, map[string]any{"t": []any{"tracker-1"}})
 	if len(got.errs) != 0 {
 		t.Fatalf("installedPosition errored for the installed-only caller: %v", got.errs)
@@ -112,75 +89,24 @@ func TestInstalledOnlyCallerSeesTheInstalledPositionNeverALiveFix(t *testing.T) 
 	dev := got.data["devicesByToken"].([]any)[0].(map[string]any)
 	pos, _ := dev["installedPosition"].(map[string]any)
 	if pos == nil || pos["latitude"] != 40.7128 || pos["longitude"] != -74.006 {
-		t.Fatalf("the installed-only caller was not handed the installed position: %v (a live fix would be 40.76)", dev)
+		t.Fatalf("the installed-only caller was not handed the installed position: %v", dev)
 	}
 	if dev["positionWithheld"] != false {
 		t.Fatalf("positionWithheld = %v for a caller holding the authority", dev["positionWithheld"])
 	}
 
-	eff := serve(t, installedOnly, `query($t: [String!]!) { devicesByToken(tokens: $t) { effectivePosition { latitude source } } }`,
+	// The schema serves no field that could hand this caller a live fix.
+	live := serve(t, installedOnly, `query($t: [String!]!) { devicesByToken(tokens: $t) { effectivePosition { latitude } } }`,
 		map[string]any{"t": []any{"tracker-1"}})
-	if codeOf(eff) != "FORBIDDEN" {
-		t.Fatalf("effectivePosition for an installed-only caller: %v, want FORBIDDEN", eff.errs)
+	if len(live.errs) == 0 {
+		t.Fatal("effectivePosition is served; it belongs to the slice that wires a reported-fix reader")
 	}
 
-	// The counterweight: with location:read the effective rule serves the live fix, so the
-	// FORBIDDEN above is the authority and not a broken rule.
-	full := withSource(f.caller(auth.DeviceRead, auth.LocationRead))
-	ok := serve(t, full, `query($t: [String!]!) { devicesByToken(tokens: $t) { effectivePosition { latitude source } } }`,
-		map[string]any{"t": []any{"tracker-1"}})
-	if len(ok.errs) != 0 {
-		t.Fatalf("effectivePosition for a location:read caller: %v", ok.errs)
-	}
-	e := ok.data["devicesByToken"].([]any)[0].(map[string]any)["effectivePosition"].(map[string]any)
-	if e["source"] != "REPORTED" || e["latitude"] != 40.76 {
-		t.Fatalf("a fresh fix must win the effective rule for location:read: %v", e)
-	}
 	// And location:read implies the installed authority: it reads installedPosition too.
+	full := f.caller(auth.DeviceRead, auth.LocationRead)
 	both := serve(t, full, devicePositionQuery, map[string]any{"t": []any{"tracker-1"}})
 	if p := both.data["devicesByToken"].([]any)[0].(map[string]any)["installedPosition"]; p == nil {
 		t.Fatal("location:read did not imply location:installed:read")
-	}
-}
-
-func TestEffectivePositionFallsBackToInstalledWhenThereIsNothingFreshToPrefer(t *testing.T) {
-	f := newScopeFixture(t)
-	migrateDetection(t, f)
-	seedDevice(t, f.operator(), "tracker-2", "tracker2", &model.LocationDeclaration{})
-	publishProfile(t, f.operator(), "tracker2")
-	f.install(t, "DEVICE", "tracker-2", 10, 20)
-	ask := func(ctx context.Context) served {
-		return serve(t, ctx, `{ devicesByToken(tokens: ["tracker-2"]) { effectivePosition { latitude source } } }`, nil)
-	}
-	base := f.caller(auth.DeviceRead, auth.LocationRead)
-
-	// A reader is wired but the fix is stale: the installed position answers, with its source.
-	stale := context.WithValue(base, ContextReportedFixSourceKey, ReportedFixSource(fixedReports{
-		fix: &geo.Fix{Position: geo.Position{Lat: 1, Lon: 1}, At: time.Now().Add(-48 * time.Hour)}, freshness: time.Hour}))
-	got := ask(stale)
-	if len(got.errs) != 0 {
-		t.Fatalf("stale fix: %v", got.errs)
-	}
-	e := got.data["devicesByToken"].([]any)[0].(map[string]any)["effectivePosition"].(map[string]any)
-	if e["source"] != "INSTALLED" || e["latitude"] != 10.0 {
-		t.Fatalf("a stale fix must not win: %v", e)
-	}
-
-	// 🔴 No reader wired, and the device reports its position: an ERROR, never the installed
-	// position, which would be a plausible wrong answer for a device that is moving.
-	if s := ask(base); !strings.Contains(strings.Join(errMessages(s), " "), "no reader for reported positions") {
-		t.Fatalf("a declared device with no reported-fix reader answered %v / %v", s.data, s.errs)
-	}
-
-	// A device that does not report its position can only have the installed one.
-	f.install(t, "DEVICE", "acme-pump", 5, 6)
-	fixed := serve(t, base, `{ devicesByToken(tokens: ["acme-pump"]) { effectivePosition { latitude source } } }`, nil)
-	if len(fixed.errs) != 0 {
-		t.Fatalf("fixed device: %v", fixed.errs)
-	}
-	e = fixed.data["devicesByToken"].([]any)[0].(map[string]any)["effectivePosition"].(map[string]any)
-	if e["source"] != "INSTALLED" || e["latitude"] != 5.0 {
-		t.Fatalf("fixed device effective position: %v", e)
 	}
 }
 
@@ -427,11 +353,51 @@ func TestAnAreaBoundaryNamesAFenceThatExists(t *testing.T) {
 	if got := serve(t, op, read, nil); got.data["areasByToken"].([]any)[0].(map[string]any)["boundaryFence"] == nil {
 		t.Fatal("an edit that omitted the boundary cleared it")
 	}
-	// A deleted fence is an error on read, not "no boundary".
-	if _, err := f.api.DeleteGeoFence(op, "campus"); err != nil {
-		t.Fatalf("delete fence: %v", err)
+}
+
+// 🔴 A fence an area names cannot be deleted: the delete is REFUSED (REFERENCE_VIOLATION) while the
+// link stands, so a link never dangles, and a fence recreated under the same token can never be
+// picked up by an area that once named a fence of that token. Only after the link is removed may
+// the fence go, and its successor binds nothing.
+func TestAFenceAnAreaNamesCannotBeDeletedOrSilentlyRebound(t *testing.T) {
+	f := newScopeFixture(t)
+	if err := f.db.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&model.GeoFence{}, &model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{}); err != nil {
+		t.Fatalf("migrate fences: %v", err)
 	}
-	if got := serve(t, op, read, nil); len(got.errs) == 0 {
-		t.Fatalf("a dangling boundary read as no boundary: %v", got.data)
+	op := f.operator()
+	box := func(x float64) string {
+		return fmt.Sprintf(`{"kind":"POLYGON_2D","geometry":{"type":"Polygon","coordinates":[[[%[1]v,0],[%[1]v,1],[%[2]v,1],[%[2]v,0],[%[1]v,0]]]}}`, x, x+1)
+	}
+	if _, err := f.api.CreateGeoFence(op, &model.GeoFenceCreateRequest{Token: "campus", Geometry: box(0)}); err != nil {
+		t.Fatalf("fence: %v", err)
+	}
+	if got := serve(t, op, `mutation { updateArea(token: "floor-acme", request: {boundaryFenceToken: "campus"}) { token } }`, nil); len(got.errs) != 0 {
+		t.Fatalf("link: %v", got.errs)
+	}
+
+	// Deleting the named fence is refused, and nothing is deleted.
+	del := serve(t, op, `mutation { deleteGeoFence(token: "campus") }`, nil)
+	if codeOf(del) != "REFERENCE_VIOLATION" {
+		t.Fatalf("deleting a fence an area names: %v / %v, want REFERENCE_VIOLATION", del.data, del.errs)
+	}
+	if fences, _ := f.api.GeoFencesByToken(op, []string{"campus"}); len(fences) != 1 {
+		t.Fatal("the refused delete removed the fence")
+	}
+	const read = `{ areasByToken(tokens: ["floor-acme"]) { boundaryFence { token } } }`
+	if got := serve(t, op, read, nil); len(got.errs) != 0 {
+		t.Fatalf("the link was left dangling: %v", got.errs)
+	}
+
+	// Remove the link, and the fence may go; recreating its token binds no area.
+	serve(t, op, `mutation { updateArea(token: "floor-acme", request: {boundaryFenceToken: null}) { token } }`, nil)
+	if ok, err := f.api.DeleteGeoFence(op, "campus"); err != nil || !ok {
+		t.Fatalf("delete of an unreferenced fence: %v %v", ok, err)
+	}
+	if _, err := f.api.CreateGeoFence(op, &model.GeoFenceCreateRequest{Token: "campus", Geometry: box(50)}); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	if got := serve(t, op, read, nil); len(got.errs) != 0 ||
+		got.data["areasByToken"].([]any)[0].(map[string]any)["boundaryFence"] != nil {
+		t.Fatalf("a recreated fence was bound to an area that no longer names it: %v %v", got.data, got.errs)
 	}
 }

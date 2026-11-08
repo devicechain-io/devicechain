@@ -81,7 +81,8 @@ type DeviceImportRow struct {
 	// InstalledLatitude and InstalledLongitude are where the device was installed, for a device that
 	// is fixed in place. Both or neither: half a coordinate makes the row INVALID, as does a value
 	// outside the WGS84 range. The position is stored with source IMPORT. InstalledElevation and
-	// InstalledAccuracy are optional beside a position.
+	// InstalledAccuracy are optional beside a position; against a device that exists, an omitted
+	// one compares as NONE, so it differs from a stored value (see installedPositionDiffers).
 	InstalledLatitude  *float64
 	InstalledLongitude *float64
 	InstalledElevation *float64

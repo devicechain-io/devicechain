@@ -10,6 +10,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Create a new area type.
@@ -145,14 +146,19 @@ func (api *Api) CreateArea(ctx context.Context, request *AreaCreateRequest) (*Ar
 		AreaType: atmatches[0],
 	}
 	if request.BoundaryFenceToken != nil {
-		if err := api.requireGeoFence(ctx, *request.BoundaryFenceToken); err != nil {
-			return nil, err
-		}
 		created.BoundaryFenceToken = rdb.NullStrOf(request.BoundaryFenceToken)
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	// The fence is checked and the area written in ONE transaction holding the fence's row lock,
+	// so a concurrent delete of the fence cannot slip between them (see DeleteGeoFence).
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if created.BoundaryFenceToken.Valid {
+			if err := lockGeoFenceOnTx(tx, created.BoundaryFenceToken.String); err != nil {
+				return err
+			}
+		}
+		return tx.Create(created).Error
+	}); err != nil {
+		return nil, err
 	}
 	return created, nil
 }
@@ -208,19 +214,25 @@ func (api *Api) UpdateArea(ctx context.Context, token string, request *AreaUpdat
 	}
 	updated.Metadata = metadataJSON
 
-	// The link is checked BEFORE anything is written, like the type hop above.
+	// A NEW link is checked, and the area written, in one transaction holding the fence's row lock
+	// (see DeleteGeoFence); an unknown fence refuses the whole update.
+	linkTo := ""
 	if proposed := request.BoundaryFenceToken.ApplyToNullString(updated.BoundaryFenceToken); proposed != updated.BoundaryFenceToken {
 		if proposed.Valid {
-			if err := api.requireGeoFence(ctx, proposed.String); err != nil {
-				return nil, err
-			}
+			linkTo = proposed.String
 		}
 		updated.BoundaryFenceToken = proposed
 	}
 
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if linkTo != "" {
+			if err := lockGeoFenceOnTx(tx, linkTo); err != nil {
+				return err
+			}
+		}
+		return tx.Save(updated).Error
+	}); err != nil {
+		return nil, err
 	}
 	return updated, nil
 }
@@ -261,14 +273,17 @@ func (api *Api) Areas(ctx context.Context, criteria AreaSearchCriteria) (*AreaSe
 	}, nil
 }
 
-// requireGeoFence refuses an area boundary that names no fence: a link to nothing would read back
-// as "this area has a boundary" and then fail where it is used.
-func (api *Api) requireGeoFence(ctx context.Context, token string) error {
-	fences, err := api.GeoFencesByToken(ctx, []string{token})
-	if err != nil {
-		return err
+// lockGeoFenceOnTx refuses an area boundary that names no fence (a link to nothing would read back
+// as "this area has a boundary" and then fail where it is used), and holds the fence's row lock for
+// the rest of tx. DeleteGeoFence takes the same lock before it looks for areas naming the fence, so
+// the check and the area write cannot be split by a delete.
+func lockGeoFenceOnTx(tx *gorm.DB, token string) error {
+	var fence GeoFence
+	res := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", token).Limit(1).Find(&fence)
+	if res.Error != nil {
+		return res.Error
 	}
-	if len(fences) == 0 {
+	if res.RowsAffected == 0 {
 		return fmt.Errorf("%w: boundaryFenceToken %q names no geofence", gorm.ErrRecordNotFound, token)
 	}
 	return nil
