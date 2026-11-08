@@ -156,6 +156,8 @@ DeviceChain.Sdk.Mqtt.MqttDeviceSession.State.get -> DeviceChain.Sdk.Mqtt.MqttSes
 DeviceChain.Sdk.Mqtt.MqttDeviceSession.StateChanged -> System.Action<DeviceChain.Sdk.Mqtt.MqttSessionState>?
 DeviceChain.Sdk.Mqtt.MqttSessionOptions
 DeviceChain.Sdk.Mqtt.MqttSessionOptions.BrokerUri.get -> System.Uri!
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ClientCertificate.get -> DeviceChain.Sdk.Transport.MqttClientCertificate?
+DeviceChain.Sdk.Mqtt.MqttSessionOptions.ClientCertificate.set -> void
 DeviceChain.Sdk.Mqtt.MqttSessionOptions.ClientIdDiscriminator.get -> string?
 DeviceChain.Sdk.Mqtt.MqttSessionOptions.ClientIdDiscriminator.set -> void
 DeviceChain.Sdk.Mqtt.MqttSessionOptions.CommandHistorySize.get -> int
@@ -264,12 +266,24 @@ DeviceChain.Sdk.Transport.IWebSocketConnection.ReceiveAsync(System.Threading.Can
 DeviceChain.Sdk.Transport.IWebSocketConnection.SendTextAsync(byte[]! utf8Payload, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 DeviceChain.Sdk.Transport.IWebSocketFactory
 DeviceChain.Sdk.Transport.IWebSocketFactory.Create() -> DeviceChain.Sdk.Transport.IWebSocketConnection!
+DeviceChain.Sdk.Transport.MqttClientCertificate
+DeviceChain.Sdk.Transport.MqttClientCertificate.Certificate.get -> System.Security.Cryptography.X509Certificates.X509Certificate2!
+DeviceChain.Sdk.Transport.MqttClientCertificate.Dispose() -> void
+DeviceChain.Sdk.Transport.MqttClientCertificate.IsExpired(System.DateTimeOffset now) -> bool
+DeviceChain.Sdk.Transport.MqttClientCertificate.NotAfter.get -> System.DateTimeOffset
+DeviceChain.Sdk.Transport.MqttClientCertificate.NotBefore.get -> System.DateTimeOffset
+DeviceChain.Sdk.Transport.MqttClientCertificate.Subject.get -> string!
+DeviceChain.Sdk.Transport.MqttClientCertificateException
+DeviceChain.Sdk.Transport.MqttClientCertificateException.MqttClientCertificateException(string! message) -> void
+DeviceChain.Sdk.Transport.MqttClientCertificateException.MqttClientCertificateException(string! message, System.Exception? innerException) -> void
 DeviceChain.Sdk.Transport.MqttConnectOptions
 DeviceChain.Sdk.Transport.MqttConnectOptions.AddressFamily.get -> System.Net.Sockets.AddressFamily
 DeviceChain.Sdk.Transport.MqttConnectOptions.AddressFamily.set -> void
 DeviceChain.Sdk.Transport.MqttConnectOptions.BrokerUri.get -> System.Uri!
 DeviceChain.Sdk.Transport.MqttConnectOptions.CleanSession.get -> bool
 DeviceChain.Sdk.Transport.MqttConnectOptions.CleanSession.set -> void
+DeviceChain.Sdk.Transport.MqttConnectOptions.ClientCertificate.get -> DeviceChain.Sdk.Transport.MqttClientCertificate?
+DeviceChain.Sdk.Transport.MqttConnectOptions.ClientCertificate.set -> void
 DeviceChain.Sdk.Transport.MqttConnectOptions.ClientId.get -> string!
 DeviceChain.Sdk.Transport.MqttConnectOptions.KeepAlive.get -> System.TimeSpan
 DeviceChain.Sdk.Transport.MqttConnectOptions.KeepAlive.set -> void
@@ -343,9 +357,16 @@ static DeviceChain.Sdk.Mqtt.DevicePlane.ConnectUsername(string! tenant, string! 
 static DeviceChain.Sdk.Mqtt.DevicePlane.DeviceClientId(string! instanceId, string! tenant, string! deviceToken, string? discriminator = null) -> string!
 static DeviceChain.Sdk.Mqtt.DevicePlane.EventsTopic(string! instanceId, string! tenant, string! deviceToken) -> string!
 static DeviceChain.Sdk.Mqtt.DevicePlane.IsValidToken(string? token) -> bool
+static DeviceChain.Sdk.Mqtt.DevicePlane.X509ConnectUsername(string! tenant) -> string!
 static DeviceChain.Sdk.Transport.HttpRetryAfter.Parse(string? value, System.DateTimeOffset now) -> System.TimeSpan?
+static DeviceChain.Sdk.Transport.MqttClientCertificate.FromCertificate(System.Security.Cryptography.X509Certificates.X509Certificate2! certificate) -> DeviceChain.Sdk.Transport.MqttClientCertificate!
+static DeviceChain.Sdk.Transport.MqttClientCertificate.FromPem(string! certificatePem, string! privateKeyPem, string? keyPassword = null) -> DeviceChain.Sdk.Transport.MqttClientCertificate!
+static DeviceChain.Sdk.Transport.MqttClientCertificate.FromPemFiles(string! certificatePath, string! privateKeyPath, string? keyPassword = null) -> DeviceChain.Sdk.Transport.MqttClientCertificate!
+static DeviceChain.Sdk.Transport.MqttClientCertificate.FromPfx(byte[]! pfx, string? password = null) -> DeviceChain.Sdk.Transport.MqttClientCertificate!
+static DeviceChain.Sdk.Transport.MqttClientCertificate.FromPfxFile(string! path, string? password = null) -> DeviceChain.Sdk.Transport.MqttClientCertificate!
 static DeviceChain.Sdk.Transport.MqttTrust.DangerouslyAcceptAnyServerCertificate() -> DeviceChain.Sdk.Transport.MqttTrust!
 static DeviceChain.Sdk.Transport.MqttTrust.PinnedCa(byte[]! certificate) -> DeviceChain.Sdk.Transport.MqttTrust!
+static DeviceChain.Sdk.Transport.MqttTrust.PinnedCaFromFile(string! path) -> DeviceChain.Sdk.Transport.MqttTrust!
 static DeviceChain.Sdk.Transport.MqttTrust.SystemRoots.get -> DeviceChain.Sdk.Transport.MqttTrust!
 static DeviceChain.Sdk.Transport.WebSocketMessage.OfClose(int? code, string? reason) -> DeviceChain.Sdk.Transport.WebSocketMessage
 static DeviceChain.Sdk.Transport.WebSocketMessage.OfText(string! text) -> DeviceChain.Sdk.Transport.WebSocketMessage

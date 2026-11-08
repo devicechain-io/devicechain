@@ -74,9 +74,10 @@ type RevocationConfiguration struct {
 	// once; the REST upload refuses the next with 503 and Retry-After, a GraphQL mutation waits
 	// its turn. 1 to 8, default 1.
 	MaxConcurrentWrites int
-	// ResweepAfter is how long after the first sweep a certificate revocation's session kick is
-	// repeated, as a Go duration, to catch a device that was being admitted at the instant of the
-	// revocation. Up to 5m, default 10s. It must also exceed the callout lookup timeout plus the
+	// ResweepAfter is how long after the first sweep a certificate revocation's session kick falls
+	// due again, as a Go duration, to catch a device that was being admitted at the instant of the
+	// revocation. The session-kick drain runs it on its next 30 s pass, so the second sweep lands
+	// up to 30 s after this (10 to 40 s at the default). Up to 5m, default 10s. It must also exceed the callout lookup timeout plus the
 	// broker's 5 s authorization timeout; device-management refuses to start otherwise.
 	ResweepAfter string
 }
