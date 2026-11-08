@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -314,7 +313,8 @@ func installedPositionOfRow(row *DeviceImportRow) (*InstalledPositionInput, erro
 }
 
 // sameDecimal compares an incoming value with a stored one at the column's scale, so a coordinate
-// that was rounded on the way in is not reported as different from itself.
+// that was rounded on the way in is not reported as different from itself. Both sides go through
+// roundToScale, the rounding every write applies, so the comparison and the storage agree.
 func sameDecimal(stored sql.NullFloat64, incoming *float64, scale int) bool {
 	if incoming == nil {
 		return !stored.Valid
@@ -322,8 +322,7 @@ func sameDecimal(stored sql.NullFloat64, incoming *float64, scale int) bool {
 	if !stored.Valid {
 		return false
 	}
-	pow := math.Pow10(scale)
-	return math.Round(stored.Float64*pow) == math.Round(*incoming*pow)
+	return roundToScale(stored.Float64, scale) == roundToScale(*incoming, scale)
 }
 
 // installedPositionDiffers reports whether the row's installed position differs from the stored
@@ -334,8 +333,8 @@ func installedPositionDiffers(d *Device, in *InstalledPositionInput) bool {
 	}
 	p := d.InstalledPosition
 	lat, lon := in.Latitude, in.Longitude
-	return !sameDecimal(p.InstalledLat, &lat, 8) || !sameDecimal(p.InstalledLon, &lon, 8) ||
-		!sameDecimal(p.InstalledElev, in.Elevation, 4) || !sameDecimal(p.InstalledAccuracy, in.Accuracy, 4)
+	return !sameDecimal(p.InstalledLat, &lat, coordinateScale) || !sameDecimal(p.InstalledLon, &lon, coordinateScale) ||
+		!sameDecimal(p.InstalledElev, in.Elevation, metresScale) || !sameDecimal(p.InstalledAccuracy, in.Accuracy, metresScale)
 }
 
 const (

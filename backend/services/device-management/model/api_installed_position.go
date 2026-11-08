@@ -46,7 +46,12 @@ func (api *Api) SetInstalledPosition(ctx context.Context, family, token string, 
 	if err != nil {
 		return nil, err
 	}
-	return api.writeInstalledColumns(ctx, family, token, in.installedColumns(source, time.Now().UTC().Truncate(time.Microsecond)))
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := api.writeInstalledColumns(ctx, family, token, in.installedColumns(source, now)); err != nil {
+		return nil, err
+	}
+	// The answer is what THIS call wrote, never a reread (see written).
+	return in.written(source, now), nil
 }
 
 // ClearInstalledPosition removes the installed position. Clearing an entity that has none is not an
@@ -56,54 +61,42 @@ func (api *Api) ClearInstalledPosition(ctx context.Context, family, token string
 	if err != nil {
 		return err
 	}
-	_, err = api.writeInstalledColumns(ctx, family, token, clearedInstalledColumns())
-	return err
+	return api.writeInstalledColumns(ctx, family, token, clearedInstalledColumns())
 }
 
-func (api *Api) writeInstalledColumns(ctx context.Context, family, token string, cols map[string]any) (*InstalledPosition, error) {
+func (api *Api) writeInstalledColumns(ctx context.Context, family, token string, cols map[string]any) error {
 	switch family {
 	case PositionFamilyDevice:
 		found, err := api.DevicesByToken(ctx, []string{token})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(found) == 0 {
-			return nil, gorm.ErrRecordNotFound
+			return gorm.ErrRecordNotFound
 		}
 		d := found[0]
 		if err := refuseScopedWrite(ctx); err != nil {
-			return nil, err
+			return err
 		}
 		if err := writeInstalledOnTx(api.RDB.DB(ctx), &Device{}, d.ID, cols); err != nil {
-			return nil, err
+			return err
 		}
 		api.evictDeviceCredentials(ctx, d.TenantId, d.ID)
 		api.evictDeviceByToken(ctx, d.Token)
-		reread, err := api.DevicesById(ctx, []uint{d.ID})
-		if err != nil || len(reread) == 0 {
-			return nil, firstErr(err, gorm.ErrRecordNotFound)
-		}
-		return &reread[0].InstalledPosition, nil
+		return nil
 	case PositionFamilyAsset:
 		found, err := api.AssetsByToken(ctx, []string{token})
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if len(found) == 0 {
-			return nil, gorm.ErrRecordNotFound
+			return gorm.ErrRecordNotFound
 		}
 		a := found[0]
 		if err := refuseScopedWrite(ctx); err != nil {
-			return nil, err
+			return err
 		}
-		if err := writeInstalledOnTx(api.RDB.DB(ctx), &Asset{}, a.ID, cols); err != nil {
-			return nil, err
-		}
-		reread, err := api.AssetsById(ctx, []uint{a.ID})
-		if err != nil || len(reread) == 0 {
-			return nil, firstErr(err, gorm.ErrRecordNotFound)
-		}
-		return &reread[0].InstalledPosition, nil
+		return writeInstalledOnTx(api.RDB.DB(ctx), &Asset{}, a.ID, cols)
 	}
 	panic("writeInstalledColumns: family " + family + " was not parsed")
 }
@@ -146,11 +139,4 @@ func writeInstalledOnTx(tx *gorm.DB, model any, id uint, cols map[string]any) er
 		return gorm.ErrRecordNotFound
 	}
 	return nil
-}
-
-func firstErr(a, b error) error {
-	if a != nil {
-		return a
-	}
-	return b
 }

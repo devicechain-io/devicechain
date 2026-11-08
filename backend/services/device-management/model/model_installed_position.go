@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -111,8 +113,79 @@ func derefString(s *string) string {
 	return *s
 }
 
-// installedColumns is the column set one write names. A clear writes every one as NULL.
+// The scales of the installed columns: decimal(10,8)/decimal(11,8) for the coordinates and
+// decimal(12,4) for elevation and accuracy.
+const (
+	coordinateScale = 8
+	metresScale     = 4
+)
+
+// roundToScale rounds x to scale decimal places the way Postgres rounds a value into a numeric
+// column: from the float's shortest decimal spelling, half away from zero, in exact decimal
+// arithmetic. Multiplying the float by 10^scale and calling math.Round is NOT the same thing:
+// 40.000000095 is stored as 40.00000010, but 40.000000095*1e8 is 4000000009.4999995 in binary
+// and rounds down. Every value is rounded HERE before it is written, so what is stored, what a
+// write answers and what an import re-run compares are the one value.
+func roundToScale(x float64, scale int) float64 {
+	r, ok := new(big.Rat).SetString(strconv.FormatFloat(x, 'f', -1, 64))
+	if !ok {
+		return x // not reached for a finite x, and validate refuses the others
+	}
+	pow := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+	r.Mul(r, new(big.Rat).SetInt(pow))
+	q, m := new(big.Int).QuoRem(r.Num(), r.Denom(), new(big.Int))
+	// Half away from zero: twice the remainder reaching the denominator moves q one step out.
+	if new(big.Int).Mul(new(big.Int).Abs(m), big.NewInt(2)).Cmp(r.Denom()) >= 0 {
+		if r.Sign() < 0 {
+			q.Sub(q, big.NewInt(1))
+		} else {
+			q.Add(q, big.NewInt(1))
+		}
+	}
+	out, _ := new(big.Rat).SetFrac(q, pow).Float64()
+	return out
+}
+
+// rounded returns the input with every value rounded to its column's scale.
+func (in InstalledPositionInput) rounded() InstalledPositionInput {
+	out := in
+	out.Latitude = roundToScale(in.Latitude, coordinateScale)
+	out.Longitude = roundToScale(in.Longitude, coordinateScale)
+	if in.Elevation != nil {
+		v := roundToScale(*in.Elevation, metresScale)
+		out.Elevation = &v
+	}
+	if in.Accuracy != nil {
+		v := roundToScale(*in.Accuracy, metresScale)
+		out.Accuracy = &v
+	}
+	return out
+}
+
+// written is the stored position a write of in produces, built from what was written rather than
+// read back: a reread after the commit could return ANOTHER writer's position to a caller that
+// holds device:write but no authority to read positions.
+func (in InstalledPositionInput) written(source string, now time.Time) *InstalledPosition {
+	in = in.rounded()
+	p := &InstalledPosition{
+		InstalledLat:       sql.NullFloat64{Float64: in.Latitude, Valid: true},
+		InstalledLon:       sql.NullFloat64{Float64: in.Longitude, Valid: true},
+		InstalledSource:    sql.NullString{String: source, Valid: true},
+		InstalledUpdatedAt: sql.NullTime{Time: now, Valid: true},
+	}
+	if in.Elevation != nil {
+		p.InstalledElev = sql.NullFloat64{Float64: *in.Elevation, Valid: true}
+	}
+	if in.Accuracy != nil {
+		p.InstalledAccuracy = sql.NullFloat64{Float64: *in.Accuracy, Valid: true}
+	}
+	return p
+}
+
+// installedColumns is the column set one write names, rounded to the columns' scales. A clear
+// writes every one as NULL.
 func (in InstalledPositionInput) installedColumns(source string, now time.Time) map[string]any {
+	in = in.rounded()
 	cols := map[string]any{
 		"installed_lat":        in.Latitude,
 		"installed_lon":        in.Longitude,
