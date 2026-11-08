@@ -98,6 +98,9 @@ type CalloutResponder struct {
 	// plaintextLog rate-limits the warning for a request that arrived unencrypted while an
 	// xkey is configured.
 	plaintextLog rateLimitedLog
+	// ocsp is the OCSP check of a certificate connect (WithOcsp). Nil runs every anchor as though
+	// the instance switch were off.
+	ocsp *ocspCheck
 	// misconfiguredLog rate-limits the warning for a stored credential that can never
 	// authenticate. A restore next to the wrong root key makes that EVERY MQTT_BASIC
 	// device, each reconnecting on its own backoff; the counter sees every one.

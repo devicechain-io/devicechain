@@ -33,6 +33,7 @@ func wireRevocation(api *model.Api, cfg *config.DeviceManagementConfiguration, m
 	if err := api.SetRevocationLimits(revocationLimitsOf(cfg.Callout.Revocation)); err != nil {
 		return err
 	}
+	api.SetOcspPolicy(model.OcspPolicy{Enabled: cfg.Callout.Ocsp.Enabled, AllowRequireCurrent: cfg.Callout.Ocsp.AllowRequireCurrent})
 	h := revocationupload.New(api, ms.Readiness.Validator, ms.Readiness.AudiencePolicy, provisioningTenantGate(infra))
 	revocationupload.Register(ms.Mux(), h)
 	lim := api.RevocationLimits()

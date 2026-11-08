@@ -1168,6 +1168,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		if err = wireCalloutCertificateRegistration(CalloutResponder, Api, Configuration, infra); err != nil {
 			return err
 		}
+		// The OCSP check of a certificate connect, for the anchors that ask for it. Off instance-wide
+		// unless the fixed configuration turns it on.
+		if err = wireCalloutOcsp(CalloutResponder, Microservice, Configuration, infra); err != nil {
+			return err
+		}
 		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
 		// message store closes the connections it refuses, and their reconnects would land here.
 		// Above the store's high-water mark every device connect is refused at once instead, so

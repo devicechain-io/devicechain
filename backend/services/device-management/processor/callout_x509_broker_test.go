@@ -76,6 +76,8 @@ type certOpts struct {
 	notAfter  time.Time
 	notBefore time.Time
 	server    bool
+	// ocsp is the certificate's Authority Information Access OCSP responder URLs.
+	ocsp []string
 }
 
 var x509TestSerial atomic.Int64
@@ -96,6 +98,7 @@ func newTestCert(t testing.TB, parent *testCert, o certOpts) *testCert {
 		Subject:      pkix.Name{CommonName: o.cn},
 		NotBefore:    o.notBefore,
 		NotAfter:     o.notAfter,
+		OCSPServer:   o.ocsp,
 	}
 	switch {
 	case o.ca:
