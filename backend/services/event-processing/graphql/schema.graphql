@@ -110,6 +110,36 @@ type Query {
         """The draft rule, the profile and the time window to replay."""
         input: PreviewRuleInput!
     ): PreviewResult!
+
+    """
+    Tests a profile's detection rules against events you supply, in event time, and reports what
+    they would do. It returns the edges the rules derive (each raised or resolved) and, for each
+    edge, the side effects the rules' action chains would request: the alarm raise or clear, the
+    command with its key and arguments, and the webhook or published message with its rendered
+    body. Nothing is executed: no alarm is raised, no command enqueued, no request sent.
+
+    The rules are either the profile's PUBLISHED rules or a DRAFT given as a canvas graph or a
+    rule definition. The events are the ones in the request, handed to the detection engine in the
+    order given, which is the order of delivery: list an event after one with a later time and it
+    arrives late. After the last event the engine's clock is moved to advanceTo, which is how a
+    rule that waits for silence is decided without waiting: a rule that fires after seven days of
+    silence is tested by advancing seven days. The run reads no clock, so the same request always
+    returns the same answer, and it touches no live stream, so it cannot move the live watermark
+    or disturb live detection.
+
+    What it does not model: device attributes (a threshold that reads one never matches, as in a
+    preview), group-scoped published rules (skipped and named in skippedRules, because an event
+    here carries no group memberships), geofence rules (refused), and whether a command exists on
+    the device or a connector exists in the tenant (the intent is what the rule asks for).
+
+    The size of the request replaces the preview's 24-hour window as the bound. It shares the
+    preview's per-tenant concurrency limit. Requires device:read. Preview tier: this operation
+    may change incompatibly in a minor release until it is promoted.
+    """
+    evaluateRules(
+        """The profile, the rule set, the events to evaluate and the limits."""
+        input: EvaluateRulesInput!
+    ): EvaluateRulesResult!
 }
 
 type Mutation {
@@ -321,6 +351,206 @@ input PreviewMetricInput {
     """Largest value a calculated metric may take; a result above it produces no value."""
     maxValue: Float
 }
+
+"""Which rules an evaluation runs."""
+enum EvaluateRuleSet {
+    """The profile's currently published detection rules."""
+    PUBLISHED
+    """
+    A draft given in the request as a canvas graph or a rule definition. The profile need not be
+    published.
+    """
+    DRAFT
+}
+
+"""Input to evaluateRules."""
+input EvaluateRulesInput {
+    """Token of the device profile whose rules are evaluated."""
+    profileToken: String!
+    """Whether to run the profile's PUBLISHED rules or the DRAFT given in this request."""
+    ruleSet: EvaluateRuleSet!
+    """
+    For ruleSet DRAFT, a canvas definition serialized to a string. Give exactly one of graph and
+    ruleDefinition. A graph may hold several detection rules; each is evaluated and named by its
+    condition node's id. Rejected for PUBLISHED, so a mistake is not silent.
+    """
+    graph: String
+    """
+    For ruleSet DRAFT, a rule definition as a JSON document serialized to a string. The rule is
+    named "draft" in the result.
+    """
+    ruleDefinition: String
+    """
+    The events, in the order they are delivered to the engine. An event listed after one with a
+    later occurredAt is delivered late.
+    """
+    events: [EvaluateEventInput!]!
+    """
+    The instant the engine's clock is moved to after the last event, as an RFC 3339 timestamp:
+    what decides a timer-driven rule (silence, a held duration, a closing window). Defaults to the
+    last event's time. Must not be before it.
+    """
+    advanceTo: String
+    """Limits on the size of the run. Omit for the defaults."""
+    limits: EvaluateLimitsInput
+}
+
+"""One measurement event to evaluate."""
+input EvaluateEventInput {
+    """Token of the device that reports the readings. It is the series the rules key on."""
+    deviceToken: String!
+    """When the readings occurred, as an RFC 3339 timestamp."""
+    occurredAt: String!
+    """The readings, one per metric. At least one."""
+    measurements: [EvaluateMeasurementInput!]!
+}
+
+"""One reading of an evaluated event."""
+input EvaluateMeasurementInput {
+    """The metric key, as a rule's condition names it."""
+    name: String!
+    """The reading."""
+    value: Float!
+}
+
+"""Limits on one evaluation. Each is capped by a fixed maximum."""
+input EvaluateLimitsInput {
+    """
+    The most events the request may carry; 100000 when omitted, and at most 250000. A request over
+    the limit is refused before any work is done.
+    """
+    maxEvents: Int
+    """
+    The most intents the result records; 50000 when omitted, and at most 250000. Edges beyond it
+    are still returned; the intents past the limit are not, and the result says so in degraded.
+    """
+    maxIntents: Int
+}
+
+"""The outcome of an evaluation."""
+type EvaluateRulesResult {
+    """
+    True when the rules compiled and the evaluation ran, even if it derived nothing. False when
+    the request or a rule was rejected; the reasons are in diagnostics.
+    """
+    ok: Boolean!
+    """
+    The edges the rules derived, ordered by time, then device, then rule, with raised before
+    resolved at the same instant.
+    """
+    edges: [EvaluatedEdge!]!
+    """
+    The side effects the edges would cause, in the order of the edges that cause them and within
+    an edge in the rule's action order. Requested, never executed.
+    """
+    intents: [EvaluatedIntent!]!
+    """Counters for the run."""
+    stats: EvaluateStats!
+    """
+    Published rules the evaluation did not run, each with the reason. Empty when every rule ran.
+    """
+    skippedRules: [String!]!
+    """
+    Why the result is partial: readings arrived too far behind the others to be used, a rule
+    predicate failed on some events, the intent limit was reached, the profile has no published
+    rules, or too many evaluations are already running for the tenant. Null for a complete result.
+    """
+    degraded: String
+    """
+    When ok is false, the reasons the request or a rule was rejected; otherwise advisory warnings.
+    """
+    diagnostics: [CanvasDiagnostic!]!
+}
+
+"""One transition a rule derived."""
+type EvaluatedEdge {
+    """Event time of the edge, as an RFC 3339 timestamp with nanoseconds."""
+    occurredAt: String!
+    """Token of the device the edge is for."""
+    series: String!
+    """
+    Token of the rule that derived it: the published rule's token, a graph's condition node id, or
+    "draft".
+    """
+    rule: String!
+    """The rule's type, for example threshold or absence."""
+    kind: String!
+    """The rule's severity, when it declares one."""
+    severity: String
+    """Either "raised" (the condition became true) or "resolved" (it ceased)."""
+    signal: String!
+    """
+    The reading or computed value the edge is about, when it has one. Null for a resolved edge and
+    for a silence-driven one.
+    """
+    value: Float
+}
+
+"""A side effect an edge would have caused. Requested by the rules; never executed."""
+type EvaluatedIntent {
+    """Event time of the edge that causes it, as an RFC 3339 timestamp with nanoseconds."""
+    occurredAt: String!
+    """Token of the device the edge is for."""
+    series: String!
+    """Token of the rule that derived the edge."""
+    rule: String!
+    """Either "raised" or "resolved": the edge that causes the intent."""
+    signal: String!
+    """
+    What is requested: raiseAlarm, clearAlarm, sendCommand, httpCall or publish. A sendCommand,
+    httpCall or publish is requested on a raised edge only; a clearAlarm on the resolved edge of a
+    rule that raises an alarm.
+    """
+    kind: String!
+    """The idempotency token the request would carry."""
+    token: String!
+    """For raiseAlarm and clearAlarm, the alarm key the alarm is filed under."""
+    alarmKey: String
+    """For raiseAlarm and clearAlarm, the alarm's severity tier."""
+    severity: String
+    """For raiseAlarm, the value the alarm is stamped with, when the edge has one."""
+    value: Float
+    """For sendCommand, the command key sent to the device."""
+    command: String
+    """For sendCommand, the command's argument object as the rule authored it."""
+    payload: String
+    """
+    For sendCommand with an expiry, when the command would expire, measured from the edge, as an
+    RFC 3339 timestamp.
+    """
+    expiresAt: String
+    """For publish, the token of the connector the message goes through."""
+    connector: String
+    """For httpCall, the endpoint called."""
+    url: String
+    """For httpCall, the HTTP method."""
+    method: String
+    """For httpCall and publish, the body or message the rule's template rendered."""
+    body: String
+    """For httpCall and publish, the action's timeout in milliseconds; 0 means the default."""
+    timeoutMs: Int
+}
+
+"""Counters for one evaluation."""
+type EvaluateStats {
+    """Events handed to the detection engine."""
+    eventsFed: Int!
+    """Events the duplicate guard dropped before the engine saw them."""
+    eventsDropped: Int!
+    """Events a rule predicate could not evaluate."""
+    evalErrors: Int!
+    """Readings the engine declined because they arrived too far behind the others."""
+    lateReadings: Int!
+    """Rules that ran."""
+    rulesEvaluated: Int!
+    """Edges derived."""
+    edgeCount: Int!
+    """Intents recorded."""
+    intentCount: Int!
+    """Wall-clock milliseconds the evaluation took."""
+    wallMs: Int!
+}
+
 
 """The outcome of a replay preview."""
 # The outcome of a replay preview.

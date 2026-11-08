@@ -408,6 +408,14 @@ func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink
 	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics, now: time.Now}
 }
 
+// SetClock replaces the clock a command's expiry is measured from (time.Now by default). It exists
+// for the one caller that dispatches into recording sinks in VIRTUAL time, the rule evaluator
+// (internal/evaluate), where an expiry computed from the wall clock would differ on every run and a
+// test of "the command expires in 15m" could never be repeated. Call it before the first Dispatch:
+// the field is read without a lock, which is safe because nothing dispatches concurrently with
+// construction.
+func (d *Dispatcher) SetClock(now func() time.Time) { d.now = now }
+
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
 // it redeliver (Retry). It resolves the rule that fired and attempts EVERY action, in list order,
 // whatever happened to the others. A sink failure is recorded in Result.Failed and does not stop the

@@ -39,6 +39,7 @@ dcctl [command]
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
 * [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
+* [dcctl test](#dcctl-test)	 - Run rule unit tests against a tenant's detection rules (preview)
 * [dcctl upgrade](#dcctl-upgrade)	 - Move a live instance onto a released version
 * [dcctl version](#dcctl-version)	 - Get version info
 
@@ -2123,6 +2124,63 @@ dcctl tenant-deletion status <token> [flags]
 ### SEE ALSO
 
 * [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
+
+## dcctl test {#dcctl-test}
+
+Run rule unit tests against a tenant's detection rules (preview)
+
+### Synopsis
+
+Run rule unit tests: check what a tenant's detection rules would do over events you describe,
+without waiting for them to happen and without touching live traffic.
+
+\<path> is a directory, searched for *.test.yaml files, or one test file. Each test file runs a
+scenario (scenario.yaml in the same directory unless the file names another) and checks the
+result against its expect blocks. A scenario says what happens: devices, the readings each
+reports (a constant, a bounded random walk, a step schedule, or a recorded CSV or NDJSON series),
+and the faults delivery suffers (a gap, duplicates, reordering, an offline window), all from a
+seed, so a failing run fails the same way every time. A test file says what should follow:
+which alarms are raised or cleared, within what time, which never are, and which side effect
+(a command, a webhook, a published message) is requested.
+
+The platform evaluates the rules, not dcctl: the same detection engine and the same REACT
+rendering that run them in production, in event time, over exactly the events the scenario
+generates. A rule that waits seven days is tested by advancing seven days, which takes
+milliseconds. Nothing is executed: an intent in the result is what a rule ASKS for. No alarm is
+raised, no command sent, no request made, and live detection is not touched.
+
+The scenario evaluates the profile's PUBLISHED rules, or a DRAFT given as a rule definition or a
+canvas graph file, so a rule can be tested before it is published.
+
+The result is a report on standard output, optionally JUnit XML (--junit) for CI, and an exit
+status: 0 when every expectation held, non-zero when one failed or a file could not be run. A
+directory with no test file is an error, because a run that checks nothing must not pass.
+
+The file formats are in the preview tier (apiVersion devicechain.io/ruletest/v1alpha1) and may
+change in a minor release, with the change in the release notes.
+
+The server authorizes the evaluation as the identity you sign in with (device:read).
+
+```
+dcctl test <path> [flags]
+```
+
+### Options
+
+```
+      --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -h, --help              help for test
+      --junit string      also write the results as JUnit XML to this file
+      --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+      --password string   password for the identity (required)
+  -s, --server string     instance host for platform API calls (default "localhost")
+  -t, --tenant string     tenant whose rules are tested (required)
+      --tls               use https for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
 
 ## dcctl upgrade {#dcctl-upgrade}
 
