@@ -25,6 +25,7 @@ func journalPlan(t *testing.T) *Plan {
 		col("main", "audit_events", "tenant_id", "text"),
 		col("main", "audit_events", "actor", "text"),
 		col("main", "audit_events", "entity_label", "text"),
+		col("main", "audit_events", "on_behalf_of", "text"),
 		col("main", "audit_events", "operation", "text"),
 	}, nil)
 }
@@ -32,11 +33,11 @@ func journalPlan(t *testing.T) *Plan {
 func seedJournal(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Exec(`CREATE TABLE audit_events (
-		id INTEGER PRIMARY KEY, tenant_id TEXT, actor TEXT, entity_label TEXT, operation TEXT)`).Error)
-	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, operation)
-		VALUES (1,'acme','jane@acme.example','jane-doe','create'),
-		       (2,'acme','system','sensor-001','delete'),
-		       (3,'globex','sam@globex.example','sam-smith','create')`).Error)
+		id INTEGER PRIMARY KEY, tenant_id TEXT, actor TEXT, entity_label TEXT, on_behalf_of TEXT, operation TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, on_behalf_of, operation)
+		VALUES (1,'acme','jane@acme.example','jane-doe','proposer@acme.example','create'),
+		       (2,'acme','system','sensor-001',NULL,'delete'),
+		       (3,'globex','sam@globex.example','sam-smith','other@globex.example','create')`).Error)
 }
 
 // 🔴 THE ROWS SURVIVE AND THE PEOPLE DO NOT. Both halves are the decision: sweeping the
@@ -50,7 +51,7 @@ func TestAJournalRowIsKeptAndItsIdentifiersDestroyed(t *testing.T) {
 	entry := plan.index()[Table{Schema: "main", Name: "audit_events"}]
 	require.Equal(t, ClassRedacted, entry.Class,
 		"a tenant column made it direct, so the sweep would have deleted the evidence")
-	require.Equal(t, []string{"actor", "entity_label"}, entry.Redact)
+	require.Equal(t, []string{"actor", "entity_label", "on_behalf_of"}, entry.Redact)
 
 	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
@@ -72,7 +73,7 @@ func TestAJournalRowIsKeptAndItsIdentifiersDestroyed(t *testing.T) {
 
 	var named int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events
-		WHERE tenant_id = ? AND (actor <> '' OR entity_label <> '')`, key).Scan(&named).Error)
+		WHERE tenant_id = ? AND (actor <> '' OR entity_label <> '' OR on_behalf_of <> '')`, key).Scan(&named).Error)
 	assert.Zero(t, named, "a purged tenant's people are still named in the retained journal")
 
 	// What survives is the shape of the activity, which is what the row is evidence of.
@@ -195,7 +196,7 @@ func TestTheJournalIsRedactedInEverySchema(t *testing.T) {
 	for _, schema := range []string{"user-management", "event-processing", "an-area-added-later"} {
 		r, ok := redactionFor(Table{Schema: schema, Name: "audit_events"})
 		require.Truef(t, ok, "the journal is not redacted in %q, so it is swept there", schema)
-		assert.Equal(t, []string{"actor", "entity_label"}, r.Columns,
+		assert.Equal(t, []string{"actor", "entity_label", "on_behalf_of"}, r.Columns,
 			"a redaction covering one of the two channels is worse than none")
 		assert.NotEmpty(t, r.Reason)
 	}
@@ -213,6 +214,7 @@ func TestARedactionMustNameEveryColumnThatCanIdentify(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, journal.Columns, "actor")
 	assert.Contains(t, journal.Columns, "entity_label")
+	assert.Contains(t, journal.Columns, "on_behalf_of")
 }
 
 // 🔴 THE COLUMNS ARE WRITTEN EMPTY, NOT NULL, and the difference is not cosmetic. Every
@@ -430,4 +432,26 @@ func TestAZeroEpochIsRefused(t *testing.T) {
 	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = 'acme' AND actor <> ''`).
 		Scan(&named).Error)
 	assert.Equal(t, int64(2), named, "a refused sweep touched the journal")
+}
+
+// 🔴 on_behalf_of NAMES A PERSON (the proposer an approver acted for), so a purge empties it
+// beside actor and entity_label. The column is
+// nullable and mostly NULL, so the test seeds a populated row and a NULL one.
+func TestOnBehalfOfIsRedacted(t *testing.T) {
+	db := sqliteDB(t)
+	seedJournal(t, db)
+	plan := journalPlan(t)
+
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err)
+
+	key := RetainedTenant("acme", testEpoch)
+	var named int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events
+		WHERE tenant_id = ? AND on_behalf_of IS NOT NULL AND on_behalf_of <> ''`, key).Scan(&named).Error)
+	assert.Zero(t, named, "a purged tenant's proposer is still named in the retained journal")
+
+	var other string
+	require.NoError(t, db.Raw(`SELECT on_behalf_of FROM audit_events WHERE id = 3`).Scan(&other).Error)
+	assert.Equal(t, "other@globex.example", other, "another tenant's row was redacted")
 }

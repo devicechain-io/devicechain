@@ -57,14 +57,14 @@ type QueryLocationsInput struct {
 // zero there would claim a stationary device pointing due north rather than a device
 // that said nothing. Omitted-when-absent keeps that distinction on the wire.
 type LocationEvent struct {
-	DeviceToken  string   `json:"deviceToken"`
+	DeviceToken  string   `json:"deviceToken" prov:"id"`
 	Latitude     *float64 `json:"latitude,omitempty"`
 	Longitude    *float64 `json:"longitude,omitempty"`
 	Elevation    *float64 `json:"elevation,omitempty"`
 	Accuracy     *float64 `json:"accuracy,omitempty"`
 	Speed        *float64 `json:"speed,omitempty"`
 	Heading      *float64 `json:"heading,omitempty"`
-	OccurredTime string   `json:"occurredTime,omitempty"`
+	OccurredTime string   `json:"occurredTime,omitempty" prov:"platform"`
 }
 
 type QueryLocationsOutput struct {
@@ -110,8 +110,9 @@ func (t *Tools) QueryLocations(ctx context.Context, req *mcp.CallToolRequest, in
 		map[string]any{"criteria": criteria}, &resp); err != nil {
 		return nil, QueryLocationsOutput{}, err
 	}
-	return nil, QueryLocationsOutput{
+	out := QueryLocationsOutput{
 		Locations:    resp.LocationEvents.Results,
 		TotalRecords: resp.LocationEvents.Pagination.TotalRecords,
-	}, nil
+	}
+	return provenanceResult(out), out, nil
 }

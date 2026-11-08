@@ -204,7 +204,8 @@ func TestAToolCalledOverTheWireReachesTheUpstreamAsTheCaller(t *testing.T) {
 	if out.TotalRecords != 1 || len(out.Devices) != 1 {
 		t.Fatalf("unexpected result: %+v", out)
 	}
-	if d := out.Devices[0]; d.Token != "d1" || d.DeviceType != "truck" || d.ExternalId != "VIN1" {
+	if d := out.Devices[0]; d.Token != "d1" || d.DeviceType != "truck" ||
+		d.Untrusted == nil || d.Untrusted.ExternalId == nil || d.Untrusted.ExternalId.Value != "VIN1" {
 		t.Errorf("unexpected device: %+v", d)
 	}
 }

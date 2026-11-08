@@ -66,7 +66,11 @@ CREATE TABLE "event-management".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "event-management".calculated_backfills (
  id bigint NOT NULL,

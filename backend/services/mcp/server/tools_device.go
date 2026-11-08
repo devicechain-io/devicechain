@@ -54,12 +54,9 @@ func (t *Tools) GetDevice(ctx context.Context, req *mcp.CallToolRequest, in GetD
 	}
 	out := GetDeviceOutput{}
 	for _, d := range resp.DevicesByToken {
-		out.Devices = append(out.Devices, DeviceSummary{
-			Token: d.Token, Name: d.Name, Description: d.Description,
-			ExternalId: d.ExternalId, DeviceType: d.DeviceType.Token,
-		})
+		out.Devices = append(out.Devices, newDeviceSummary(d.Token, d.Name, d.Description, d.ExternalId, d.DeviceType.Token))
 	}
-	return nil, out, nil
+	return provenanceResult(out), out, nil
 }
 
 // ---- get_device_state ----
@@ -69,11 +66,11 @@ type GetDeviceStateInput struct {
 }
 
 type DeviceStateSummary struct {
-	DeviceToken        string `json:"deviceToken"`
+	DeviceToken        string `json:"deviceToken" prov:"id"`
 	Active             bool   `json:"active"`
-	LastConnectTime    string `json:"lastConnectTime,omitempty"`
-	LastDisconnectTime string `json:"lastDisconnectTime,omitempty"`
-	LastActivityTime   string `json:"lastActivityTime,omitempty"`
+	LastConnectTime    string `json:"lastConnectTime,omitempty" prov:"platform"`
+	LastDisconnectTime string `json:"lastDisconnectTime,omitempty" prov:"platform"`
+	LastActivityTime   string `json:"lastActivityTime,omitempty" prov:"platform"`
 	InactivityTimeout  int    `json:"inactivityTimeout"`
 	// PresenceSource says where Active came from: ASSERTED (a transport reported the
 	// device's connection state directly) or INFERRED (derived from data arriving, or
@@ -85,7 +82,7 @@ type DeviceStateSummary struct {
 	// source, and that must not be indistinguishable from a device the platform told
 	// us nothing about. Omitting the key would make "we did not ask" and "the state is
 	// inferred" look identical to a reader that only sees the emitted JSON.
-	PresenceSource string `json:"presenceSource"`
+	PresenceSource string `json:"presenceSource" prov:"platform"`
 }
 
 type GetDeviceStateOutput struct {
@@ -113,7 +110,8 @@ func (t *Tools) GetDeviceState(ctx context.Context, req *mcp.CallToolRequest, in
 	if err := t.gql.Query(ctx, getDeviceStateQuery, token, map[string]any{"deviceTokens": in.DeviceTokens}, &resp); err != nil {
 		return nil, GetDeviceStateOutput{}, err
 	}
-	return nil, GetDeviceStateOutput{States: resp.DeviceStatesByDeviceToken}, nil
+	out := GetDeviceStateOutput{States: resp.DeviceStatesByDeviceToken}
+	return provenanceResult(out), out, nil
 }
 
 // ---- get_latest_measurements ----
@@ -123,11 +121,26 @@ type GetLatestMeasurementsInput struct {
 }
 
 type LatestMeasurement struct {
-	Name         string   `json:"name"`
 	Value        *float64 `json:"value,omitempty"`
-	Unit         string   `json:"unit,omitempty"`
-	DataType     string   `json:"dataType,omitempty"`
-	OccurredTime string   `json:"occurredTime"`
+	DataType     string   `json:"dataType,omitempty" prov:"platform"`
+	OccurredTime string   `json:"occurredTime" prov:"platform"`
+	// Untrusted holds the metric name and unit: both come from what the device reports, so
+	// they are text a device chose.
+	Untrusted *MeasurementUntrusted `json:"untrusted,omitempty"`
+}
+
+// MeasurementUntrusted is the text of a measurement a device wrote.
+type MeasurementUntrusted struct {
+	Name *Marked `json:"name,omitempty" prov:"device-reported"`
+	Unit *Marked `json:"unit,omitempty" prov:"device-reported"`
+}
+
+func newMeasurementUntrusted(name, unit string) *MeasurementUntrusted {
+	u := &MeasurementUntrusted{Name: mark(SourceDevice, name), Unit: mark(SourceDevice, unit)}
+	if u.Name == nil && u.Unit == nil {
+		return nil
+	}
+	return u
 }
 
 type GetLatestMeasurementsOutput struct {
@@ -150,12 +163,25 @@ func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequ
 		return nil, GetLatestMeasurementsOutput{}, fmt.Errorf("deviceToken is required")
 	}
 	var resp struct {
-		LatestMeasurements []LatestMeasurement `json:"latestMeasurements"`
+		LatestMeasurements []struct {
+			Name         string   `json:"name"`
+			Value        *float64 `json:"value"`
+			Unit         string   `json:"unit"`
+			DataType     string   `json:"dataType"`
+			OccurredTime string   `json:"occurredTime"`
+		} `json:"latestMeasurements"`
 	}
 	if err := t.gql.Query(ctx, latestMeasurementsQuery, token, map[string]any{"deviceToken": in.DeviceToken}, &resp); err != nil {
 		return nil, GetLatestMeasurementsOutput{}, err
 	}
-	return nil, GetLatestMeasurementsOutput{Measurements: resp.LatestMeasurements}, nil
+	out := GetLatestMeasurementsOutput{Measurements: []LatestMeasurement{}}
+	for _, m := range resp.LatestMeasurements {
+		out.Measurements = append(out.Measurements, LatestMeasurement{
+			Value: m.Value, DataType: m.DataType, OccurredTime: m.OccurredTime,
+			Untrusted: newMeasurementUntrusted(m.Name, m.Unit),
+		})
+	}
+	return provenanceResult(out), out, nil
 }
 
 // ---- get_device_capabilities ----
@@ -164,27 +190,55 @@ type GetDeviceCapabilitiesInput struct {
 	DeviceToken string `json:"deviceToken" jsonschema:"the device token whose capability definitions to read"`
 }
 
+// MetricCapability is one metric the device profile defines. The key, name and unit are
+// authored by a tenant operator, so they sit under Untrusted.
 type MetricCapability struct {
-	MetricKey string `json:"metricKey"`
-	Name      string `json:"name,omitempty"`
-	Unit      string `json:"unit,omitempty"`
-	DataType  string `json:"dataType,omitempty"`
+	DataType  string                `json:"dataType,omitempty" prov:"platform"`
+	Untrusted *MetricCapabilityText `json:"untrusted,omitempty"`
 }
 
+// MetricCapabilityText is the operator-authored text of a metric definition.
+type MetricCapabilityText struct {
+	MetricKey *Marked `json:"metricKey,omitempty" prov:"operator"`
+	Name      *Marked `json:"name,omitempty" prov:"operator"`
+	Unit      *Marked `json:"unit,omitempty" prov:"operator"`
+}
+
+// CommandCapability is one command in the device published vocabulary. Its key, name,
+// description and parameter schema are operator-authored.
 type CommandCapability struct {
-	CommandKey string `json:"commandKey"`
-	Name       string `json:"name,omitempty"`
-	// Description and ParameterSchema come from the published definition, so an agent
-	// can describe what a command does and what arguments it takes without a second
-	// lookup against the profile.
-	Description     string `json:"description,omitempty"`
-	ParameterSchema string `json:"parameterSchema,omitempty"`
+	Untrusted *CommandCapabilityText `json:"untrusted,omitempty"`
+}
+
+// CommandCapabilityText is the operator-authored text of a command definition. The description
+// and parameter schema come from the published definition, so an agent can describe what a
+// command does and what arguments it takes without a second lookup against the profile.
+type CommandCapabilityText struct {
+	CommandKey      *Marked `json:"commandKey,omitempty" prov:"operator"`
+	Name            *Marked `json:"name,omitempty" prov:"operator"`
+	Description     *Marked `json:"description,omitempty" prov:"operator"`
+	ParameterSchema *Marked `json:"parameterSchema,omitempty" prov:"operator"`
+}
+
+// metricDefinitionRaw and commandDefinitionRaw are the shapes the downstream query returns.
+type metricDefinitionRaw struct {
+	MetricKey string `json:"metricKey"`
+	Name      string `json:"name"`
+	Unit      string `json:"unit"`
+	DataType  string `json:"dataType"`
+}
+
+type commandDefinitionRaw struct {
+	CommandKey      string `json:"commandKey"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	ParameterSchema string `json:"parameterSchema"`
 }
 
 type GetDeviceCapabilitiesOutput struct {
-	DeviceToken   string             `json:"deviceToken"`
-	DeviceType    string             `json:"deviceType,omitempty"`
-	Profile       string             `json:"profile,omitempty"`
+	DeviceToken   string             `json:"deviceToken" prov:"id"`
+	DeviceType    string             `json:"deviceType,omitempty" prov:"id"`
+	Profile       string             `json:"profile,omitempty" prov:"id"`
 	ActiveVersion *int               `json:"activeVersion,omitempty"`
 	Metrics       []MetricCapability `json:"metrics"`
 	// Commands is the device's PUBLISHED command vocabulary — what it actually
@@ -246,15 +300,15 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 			DeviceType struct {
 				Token   string `json:"token"`
 				Profile *struct {
-					Token             string             `json:"token"`
-					ActiveVersion     *int               `json:"activeVersion"`
-					MetricDefinitions []MetricCapability `json:"metricDefinitions"`
+					Token             string                `json:"token"`
+					ActiveVersion     *int                  `json:"activeVersion"`
+					MetricDefinitions []metricDefinitionRaw `json:"metricDefinitions"`
 				} `json:"profile"`
 			} `json:"deviceType"`
 		} `json:"devicesByToken"`
 		DeviceCommandVocabulary *struct {
-			Constrained bool                `json:"constrained"`
-			Commands    []CommandCapability `json:"commands"`
+			Constrained bool                   `json:"constrained"`
+			Commands    []commandDefinitionRaw `json:"commands"`
 		} `json:"deviceCommandVocabulary"`
 	}
 	vars := map[string]any{"tokens": []string{in.DeviceToken}, "deviceToken": in.DeviceToken}
@@ -274,7 +328,16 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 	if p := d.DeviceType.Profile; p != nil {
 		out.Profile = p.Token
 		out.ActiveVersion = p.ActiveVersion
-		out.Metrics = p.MetricDefinitions
+		for _, m := range p.MetricDefinitions {
+			out.Metrics = append(out.Metrics, MetricCapability{
+				DataType: m.DataType,
+				Untrusted: &MetricCapabilityText{
+					MetricKey: mark(SourceOperator, m.MetricKey),
+					Name:      mark(SourceOperator, m.Name),
+					Unit:      mark(SourceOperator, m.Unit),
+				},
+			})
+		}
 	}
 	// A null vocabulary means device-management could not resolve the token. The device
 	// read above already succeeded, so this is a race (deleted mid-query) rather than a
@@ -282,11 +345,16 @@ func (t *Tools) GetDeviceCapabilities(ctx context.Context, req *mcp.CallToolRequ
 	// gate would say about a device it cannot find.
 	if v := resp.DeviceCommandVocabulary; v != nil {
 		out.CommandsConstrained = v.Constrained
-		if v.Commands != nil {
-			out.Commands = v.Commands
+		for _, c := range v.Commands {
+			out.Commands = append(out.Commands, CommandCapability{Untrusted: &CommandCapabilityText{
+				CommandKey:      mark(SourceOperator, c.CommandKey),
+				Name:            mark(SourceOperator, c.Name),
+				Description:     mark(SourceOperator, c.Description),
+				ParameterSchema: mark(SourceOperator, c.ParameterSchema),
+			}})
 		}
 	}
-	return nil, out, nil
+	return provenanceResult(out), out, nil
 }
 
 // requireTokens validates a multi-token input: non-empty, within the fan-out cap,

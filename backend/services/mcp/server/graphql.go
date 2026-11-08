@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -78,6 +79,40 @@ func newDocument(area, text string) document {
 	return d
 }
 
+// maxErrorTextRunes bounds how much of a downstream error message reaches the model.
+const maxErrorTextRunes = 300
+
+// markedErrorText renders a downstream GraphQL error message as DATA.
+//
+// 🔴 A TOOL ERROR IS PLAIN TEXT TO THE MODEL, AND A GRAPHQL MESSAGE CAN ECHO TENANT TEXT. A
+// resolver that says `device "<name>" is not allowed` has copied a string a device or operator
+// chose into the one place the `untrusted` envelope did not reach. So the message is never
+// returned bare: it is cleaned of control characters, bounded, and wrapped in the same
+// envelope a successful result uses, as JSON the model can parse as a value rather than read
+// as prose. The least trusting source class is used because the message's origin is unknown.
+func markedErrorText(msg string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range msg {
+		if n >= maxErrorTextRunes {
+			b.WriteString("…")
+			break
+		}
+		if r < 0x20 || r == 0x7f {
+			r = ' '
+		}
+		b.WriteRune(r)
+		n++
+	}
+	out, err := json.Marshal(map[string]any{"untrusted": map[string]any{
+		"message": Marked{Value: b.String(), Source: SourceDevice},
+	}})
+	if err != nil {
+		return `{"untrusted":{}}`
+	}
+	return string(out)
+}
+
 // Query executes a GraphQL document against its area's endpoint, forwarding the
 // caller's bearer token, and unmarshals the `data` field into out. A transport
 // failure, a non-2xx status, or any GraphQL `errors` entry is returned as an error
@@ -127,7 +162,7 @@ func (c *GraphQLClient) Query(ctx context.Context, doc document, token string, v
 		return fmt.Errorf("decoding %s graphql response: %w", area, err)
 	}
 	if len(envelope.Errors) > 0 {
-		return fmt.Errorf("%s graphql error: %s", area, envelope.Errors[0].Message)
+		return fmt.Errorf("%s graphql error: %s", area, markedErrorText(envelope.Errors[0].Message))
 	}
 	if out != nil && len(envelope.Data) > 0 {
 		if err := json.Unmarshal(envelope.Data, out); err != nil {
