@@ -86,6 +86,9 @@ type HttpEventSource struct {
 	// integrations is the inbound-integration route (http_integration.go), set by
 	// UseIntegrations before the source starts. nil answers 503 on that route.
 	integrations *IntegrationRoute
+	// deviceUplinks is the device's own-payload route (http_device_uplink.go), set by
+	// UseDeviceUplinks before the source starts. nil means the route does not exist.
+	deviceUplinks *DeviceUplinkRoute
 	// commandPull is the HTTP command pull (http_command_pull.go), set by UseCommandPull before
 	// the source starts. nil answers 503 on its routes.
 	commandPull *CommandPullRoute
@@ -156,6 +159,11 @@ func (es *HttpEventSource) handler() http.Handler {
 	// (ADR-006); the ServeMux only matches a non-empty segment, so a missing tenant
 	// — or an event addressed to a different instance — 404s.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/events", es.InstanceId), es.handleEvent)
+	// A device's own binary or vendor-JSON payload, read by the decoder on its type's profile. Only
+	// registered when enabled, so /events and every other route are untouched.
+	if es.deviceUplinks != nil {
+		mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/devices/{token}/uplink", es.InstanceId), es.handleDeviceUplink)
+	}
 	// The inbound integrations (a LoRaWAN network server or a webhook): authenticated by the
 	// integration's bearer token, read by its registered type. See http_integration.go.
 	mux.HandleFunc(fmt.Sprintf("POST /%s/{tenant}/integrations/{integration}", es.InstanceId), es.handleIntegration)

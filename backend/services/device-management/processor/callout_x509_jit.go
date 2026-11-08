@@ -233,6 +233,12 @@ func (c *CalloutResponder) unknownX509Pin(ctx context.Context, req jwt.Authoriza
 	// refuses it refuses the registration. An ENTRIES anchor with nothing recorded costs no query.
 	for _, m := range usable {
 		survivor, refusal := c.applyRevocation(ctx, tenant, m.cand.Anchor, m.verified)
+		if refusal == "" {
+			// And OCSP, for the anchors that ask for it (OFF returns at once): a certificate its CA
+			// says is revoked is never registered either. grantX509 asks again after the read-back,
+			// from the cache.
+			survivor, refusal = c.applyOcsp(ctx, tenant, m.cand.Anchor, m.verified, survivor)
+		}
 		if refusal != "" {
 			log.Debug().Str("tenant", tenant).Str("host", host).Str("result", refusal).
 				Msg("Auth-callout refused a certificate registration on revocation.")

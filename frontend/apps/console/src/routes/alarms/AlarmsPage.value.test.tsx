@@ -6,6 +6,7 @@
 // transport and the live feed are faked.
 import '@/i18n/config';
 import { cleanup, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/auth/AuthProvider', () => ({
@@ -48,11 +49,15 @@ import AlarmsPage from './AlarmsPage';
 afterEach(cleanup);
 
 const valueCell = (key: string) =>
-  screen.getByText(key).closest('tr')!.querySelectorAll('td')[4]?.textContent;
+  screen.getByText(key).closest('tr')!.querySelectorAll('td')[5]?.textContent;
 
 describe('AlarmsPage value column', () => {
   it('rounds the value like a metric on a dashboard card', async () => {
-    render(<AlarmsPage />);
+    render(
+      <MemoryRouter>
+        <AlarmsPage />
+      </MemoryRouter>,
+    );
     await screen.findByText('key-a');
     expect(valueCell('key-a')).toBe('16.246');
     // Under 1 keeps significant digits instead of rounding to nothing.

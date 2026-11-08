@@ -47,6 +47,7 @@ import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
 import { DeviceConfigurationPanel } from '@/routes/devices/DeviceConfigurationPanel';
 import { DeviceUpdatesPanel } from '@/routes/devices/DeviceUpdatesPanel';
 import { DeviceProvisioningPanel } from '@/routes/devices/DeviceProvisioningPanel';
+import { DeviceAlarmsPanel } from '@/routes/devices/DeviceAlarmsPanel';
 import { DroppedMeasurementsNotice, DroppedMeasurementsTable } from '@/routes/devices/DroppedMeasurements';
 import { mayWrite } from '@/lib/scope';
 import { useUpdateAccess } from '@/lib/updateAuthority';
@@ -78,6 +79,8 @@ export default function DeviceDetailPage() {
   const scoped = isScoped(claims);
   // A customer user holding command:write may send to their devices but not cancel a command.
   const canSend = hasAuthority(claims, 'command:write');
+  // The Alarms tab lists what was raised on this device; alarm:read is what the list needs.
+  const canReadAlarms = hasAuthority(claims, 'alarm:read');
   // The Updates tab belongs to an opt-in area: shown only once the area is KNOWN to be deployed
   // and the caller may read it (fail closed while discovery is pending), so it never appears
   // on an instance without update-management or 403s a caller without artifact:read.
@@ -180,6 +183,7 @@ export default function DeviceDetailPage() {
           {!scoped && <TabsTrigger value="facets">{t('facets:panelTab')}</TabsTrigger>}
           <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
+          {canReadAlarms && <TabsTrigger value="alarms">{t('tabAlarms')}</TabsTrigger>}
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
           {!scoped && <TabsTrigger value="configuration">{t('tabConfiguration')}</TabsTrigger>}
           {updates.present && updates.canRead && (
@@ -270,6 +274,13 @@ export default function DeviceDetailPage() {
             <DeviceEventsPanel deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
+        {canReadAlarms && (
+          <TabsContent value="alarms">
+            <SectionPanel>
+              <DeviceAlarmsPanel key={device.token} deviceToken={device.token} />
+            </SectionPanel>
+          </TabsContent>
+        )}
         <TabsContent value="commands">
           <SectionPanel>
             <DeviceCommandsPanel deviceToken={device.token} canIssue={canSend} canCancel={canSend && !scoped} />

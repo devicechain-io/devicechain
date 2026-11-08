@@ -1,0 +1,109 @@
+{
+  "checks": [
+    {"id": "mqtt-qos0-publish", "title": "A Paho MQTT 3.1.1 client publishes at QoS 0 to its own events topic and the measurement is stored with the value sent"},
+    {"id": "mqtt-qos1-publish", "title": "A Paho MQTT 3.1.1 client publishes at QoS 1, the broker acknowledges it, and the measurement is stored with the value sent"},
+    {"id": "mqtt-command-subscription", "title": "A command issued to a device with a live subscription on its command topic reaches that device, and the device's response settles the command as SUCCESSFUL"},
+    {"id": "http-202", "title": "POST /{instance}/{tenant}/events with a valid event answers 202 and the measurement is stored"},
+    {"id": "http-429", "title": "A tenant over its ingest ceiling is answered 429 with a Retry-After header and the refused event is not stored"},
+    {"id": "http-503-retry-after", "title": "While the platform applies backpressure, an event is answered 503 with a Retry-After header and is not stored"},
+    {"id": "lwm2m-register", "title": "An Eclipse Leshan client registers over DTLS-PSK, the device is created, and its presence reads connected"},
+    {"id": "lwm2m-observe", "title": "The platform observes the Leshan client's temperature object and the notified values are stored as measurements"},
+    {"id": "lwm2m-read", "title": "A lwm2m.read command reads the Leshan client's Device manufacturer and returns the value the client holds, in the content format the client answered with"},
+    {"id": "lwm2m-write", "title": "A lwm2m.write command changes the Leshan client's time zone, and a read afterwards returns the value written"},
+    {"id": "lwm2m-execute", "title": "A lwm2m.execute command of the Device object's Reboot resource is answered by the Leshan client and settles as SUCCESSFUL"},
+    {"id": "lwm2m-reboot", "title": "The named lwm2m.reboot command is answered by the Leshan client and settles as SUCCESSFUL"},
+    {"id": "lwm2m-device-info-tlv-unread", "title": "Against Eclipse Leshan, which answers a single-resource Read that carries no Accept option in TLV, the named lwm2m.readDeviceInfo command reads no resource and fails, naming the content format it does not decode"},
+    {"id": "lwm2m-harvest-tlv-unread", "title": "Against the same client, the registration-time harvest records no manufacturer client attribute"},
+    {"id": "lwm2m-tlv-only-no-telemetry", "title": "A LwM2M 1.0-style client that can encode TLV but not SenML registers and shows as connected, and no telemetry is stored for it"},
+    {"id": "sparkplug-birth", "title": "A Tahu edge node's NBIRTH registers the node as a device and its presence reads connected"},
+    {"id": "sparkplug-data", "title": "A Tahu edge node's NDATA, addressed by alias, is stored under the metric the birth gave that alias, with the value sent"}
+  ],
+  "controls": [
+    {"id": "N1-dropped-command-subscription", "check": "mqtt-command-subscription", "kind": "planted",
+     "defect": "The device connects and authenticates but never subscribes to its command topic; the command must not settle"},
+    {"id": "N2-decoder-off-by-one", "check": "sparkplug-data", "kind": "planted",
+     "defect": "The node's NDATA addresses the alias one past the one the birth gave temperature, so a decoder that resolves aliases attributes the value to the neighbouring metric"},
+    {"id": "N3-lwm2m-tlv-only", "check": "lwm2m-observe", "kind": "planted",
+     "defect": "The Leshan client can encode TLV but not SenML, so the platform's Observe is refused and no telemetry can reach the store; the observe check must go red"},
+    {"id": "R-mqtt-qos0", "check": "mqtt-qos0-publish", "kind": "record",
+     "defect": "A record in which the client reports a publish but nothing was stored"},
+    {"id": "R-mqtt-qos1", "check": "mqtt-qos1-publish", "kind": "record",
+     "defect": "A record in which the broker never acknowledged the publish, though a value is stored"},
+    {"id": "R-http-202", "check": "http-202", "kind": "record",
+     "defect": "A record in which the request was answered 400"},
+    {"id": "R-http-429", "check": "http-429", "kind": "record",
+     "defect": "A record in which the request was accepted with 202 and stored"},
+    {"id": "R-http-503", "check": "http-503-retry-after", "kind": "record",
+     "defect": "A record in which the 503 carries no Retry-After header"},
+    {"id": "R-lwm2m-register", "check": "lwm2m-register", "kind": "record",
+     "defect": "A record in which the device exists but its presence reads disconnected"},
+    {"id": "R-lwm2m-observe", "check": "lwm2m-observe", "kind": "record",
+     "defect": "A record in which a different value than the client notified is stored"},
+    {"id": "R-lwm2m-read", "check": "lwm2m-read", "kind": "record",
+     "defect": "A record in which the command failed"},
+    {"id": "R-lwm2m-write", "check": "lwm2m-write", "kind": "record",
+     "defect": "A record in which the command succeeded but a read afterwards returns the old value"},
+    {"id": "R-lwm2m-execute", "check": "lwm2m-execute", "kind": "record",
+     "defect": "A record in which the command failed"},
+    {"id": "R-lwm2m-reboot", "check": "lwm2m-reboot", "kind": "record",
+     "defect": "A record in which the command timed out"},
+    {"id": "R-lwm2m-device-info", "check": "lwm2m-device-info-tlv-unread", "kind": "record",
+     "defect": "A record in which the command succeeded with the manufacturer the client holds, so the limitation no longer holds"},
+    {"id": "R-lwm2m-harvest", "check": "lwm2m-harvest-tlv-unread", "kind": "record",
+     "defect": "A record in which the manufacturer the client holds was recorded as a client attribute, so the limitation no longer holds"},
+    {"id": "R-lwm2m-tlv-limit", "check": "lwm2m-tlv-only-no-telemetry", "kind": "record",
+     "defect": "A record in which telemetry from the TLV-only client was stored, so the limitation no longer holds"},
+    {"id": "R-sparkplug-birth", "check": "sparkplug-birth", "kind": "record",
+     "defect": "A record in which no device was registered"}
+  ],
+  "tables": [
+    {
+      "id": "device-transports",
+      "firstCell": 1,
+      "rows": [
+        {"key": "mqtt-platform", "cells": [
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "◐", "evidence": ["mqtt-command-subscription"]},
+          {"symbol": "◐", "evidence": ["mqtt-qos0-publish", "mqtt-qos1-publish"]}]},
+        {"key": "http", "cells": [
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "●", "evidence": ["http-202", "http-429", "http-503-retry-after"]}]},
+        {"key": "mqtt-external", "cells": [
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "◐", "basis": "prose"}]},
+        {"key": "sparkplug", "cells": [
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "◐", "basis": "prose"},
+          {"symbol": "◐", "evidence": ["sparkplug-birth", "sparkplug-data"]}]},
+        {"key": "lwm2m", "cells": [
+          {"symbol": "◐", "evidence": ["lwm2m-read"]},
+          {"symbol": "◐", "evidence": ["lwm2m-write"]},
+          {"symbol": "◐", "evidence": ["lwm2m-register", "lwm2m-observe"], "limits": ["lwm2m-tlv-only-no-telemetry"]}]},
+        {"key": "inbound-integrations", "cells": [
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "○", "basis": "prose"},
+          {"symbol": "◐", "basis": "prose"}]}
+      ]
+    },
+    {
+      "id": "lwm2m-operations",
+      "firstCell": 1,
+      "rows": [
+        {"key": "read", "cells": [{"symbol": "◐", "evidence": ["lwm2m-read"]}]},
+        {"key": "write", "cells": [{"symbol": "◐", "evidence": ["lwm2m-write"]}]},
+        {"key": "execute", "cells": [{"symbol": "●", "evidence": ["lwm2m-execute"]}]},
+        {"key": "reboot", "cells": [{"symbol": "●", "evidence": ["lwm2m-reboot"]}]},
+        {"key": "read-device-info", "cells": [{"symbol": "◐", "basis": "prose", "limits": ["lwm2m-device-info-tlv-unread"]}]},
+        {"key": "device-info-harvest", "cells": [{"symbol": "◐", "basis": "prose", "limits": ["lwm2m-harvest-tlv-unread"]}]},
+        {"key": "observe", "cells": [{"symbol": "◐", "evidence": ["lwm2m-observe"], "limits": ["lwm2m-tlv-only-no-telemetry"]}]},
+        {"key": "discover", "cells": [{"symbol": "○", "basis": "prose"}]},
+        {"key": "create", "cells": [{"symbol": "○", "basis": "prose"}]},
+        {"key": "delete", "cells": [{"symbol": "○", "basis": "prose"}]},
+        {"key": "write-attributes", "cells": [{"symbol": "○", "basis": "prose"}]},
+        {"key": "bootstrap", "cells": [{"symbol": "○", "basis": "prose"}]}
+      ]
+    }
+  ]
+}
