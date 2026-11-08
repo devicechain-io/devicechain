@@ -131,3 +131,35 @@ func TestAlarmDispositionGoesWithItsAlarm(t *testing.T) {
 	require.Len(t, left, 1)
 	require.Equal(t, r.alarm(t, "globex-hot").ID, left[0].AlarmId)
 }
+
+// A member keeps reading the label of a cycle it could see after the alarm's NEXT cycle was raised
+// for another customer, and that includes filtering the listing by the alarm's token: the token
+// facet must not answer by the alarm's current stamp. The next cycle is written as the raise path
+// writes one after the device changed hands: a new raised time and the new owner's stamp.
+func TestAlarmDispositionTokenFilterFollowsTheLabelledCycle(t *testing.T) {
+	r := newScopeAlarmRig(t)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	r.raise(t, "acme-pump", "acme-hot", t0)
+	alarm := r.alarm(t, "acme-hot")
+	_, _, err := r.api.SetAlarmDisposition(r.operator, AlarmDispositionRequest{
+		Token: alarm.Token, Disposition: string(AlarmDispositionTruePositive)}, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, r.api.RDB.DB(core.WithSystemContext(context.Background())).Exec(
+		`UPDATE "device-management".alarms SET raised_time = ?, scope_anchors = ARRAY['customer:globex'] WHERE id = ?`,
+		t0.Add(time.Hour), alarm.ID).Error)
+
+	acme := r.member("customer:acme")
+	require.Len(t, r.dispositions(t, acme), 1, "the member lost the label of a cycle it could see")
+	byToken, err := r.api.AlarmDispositions(acme, AlarmDispositionSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, AlarmToken: &alarm.Token})
+	require.NoError(t, err)
+	require.Len(t, byToken.Results, 1, "filtering by the alarm's token hid a label the member can read")
+
+	// Negative control: globex, which owns the alarm's current cycle, never saw the labelled one.
+	globex := r.member("customer:globex")
+	byToken, err = r.api.AlarmDispositions(globex, AlarmDispositionSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, AlarmToken: &alarm.Token})
+	require.NoError(t, err)
+	require.Empty(t, byToken.Results)
+}
