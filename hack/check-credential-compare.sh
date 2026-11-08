@@ -80,6 +80,8 @@ EXEMPTIONS=(
   "backend/core/webhooksig.Verify@hmac.Equal=not a credential check: it is the verifier published for webhook receivers (and used by tests), comparing a signature a receiver was sent against one it computes with its own secret, in a receiver's process; no platform principal is being authenticated and there is no attempt to back off"
 
   "backend/tools/drdrill.classify@subtle.ConstantTimeCompare=test instrument: the restore drill checks a decrypted plaintext against the one it seeded itself"
+
+  "backend/edge/dc-edge-agent/agent.Agent.sealed@subtle.ConstantTimeCompare=not a guessable credential check: the seal is a random per-box token, minted into the agent's own store directory, that tells a message the agent published from one a local MQTT client wrote to the same subject. It is not an account password, there is no principal to back off, and a wrong seal is refused and counted, never admitted"
 )
 
 TMP="$(mktemp -d)"
