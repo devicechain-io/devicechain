@@ -99,10 +99,11 @@ func TestSpecValidate(t *testing.T) {
 		"filled with a limit":   {func(s *Spec) { s.Tables[0].Rows[0].Cells[2].Limits = []string{"lim"} }, "no limitation"},
 		"partial no basis":      {func(s *Spec) { s.Tables[0].Rows[1].Cells[1].Basis = "" }, "basis"},
 		"partial both":          {func(s *Spec) { s.Tables[0].Rows[0].Cells[1].Basis = "prose" }, "does not also rest on prose"},
-		"limit without proof": {func(s *Spec) {
+		"limit without basis": {func(s *Spec) {
 			c := &s.Tables[0].Rows[1].Cells[1]
+			c.Basis = ""
 			c.Limits = []string{"lim"}
-		}, "limit checks without evidence"},
+		}, `must say basis "prose"`},
 		"none with evidence": {func(s *Spec) { s.Tables[0].Rows[1].Cells[2].Evidence = []string{"a"} }, "no evidence to cite"},
 		"none without basis": {func(s *Spec) { s.Tables[0].Rows[1].Cells[2].Basis = "" }, "must say basis"},
 		"basis unknown":      {func(s *Spec) { s.Tables[0].Rows[1].Cells[1].Basis = "vibes" }, "not recognised"},
@@ -255,6 +256,23 @@ func TestParseResultsIsStrict(t *testing.T) {
 	}
 	if _, err := ParseResults([]byte(`{`)); err == nil {
 		t.Fatal("garbage was accepted")
+	}
+}
+
+// A half-filled circle on prose may name a limit: the working part is the page's word, the gap is
+// tested, and the cell goes stale the moment the gap closes.
+func TestProsePartialWithALimit(t *testing.T) {
+	s := miniSpec()
+	s.Tables[0].Rows[1].Cells[1].Limits = []string{"lim"}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("a prose half-filled circle with a limit was refused: %v", err)
+	}
+	if err := CheckCells(s, map[string]bool{"a": true, "b": true, "lim": true}); err != nil {
+		t.Fatalf("a holding limitation was refused: %v", err)
+	}
+	err := CheckCells(s, map[string]bool{"a": true, "b": true})
+	if err == nil || !strings.Contains(err.Error(), "row r2") || !strings.Contains(err.Error(), "no longer observes") {
+		t.Fatalf("a gone limitation on a prose cell was not reported: %v", err)
 	}
 }
 

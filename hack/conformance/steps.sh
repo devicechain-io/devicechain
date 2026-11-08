@@ -80,31 +80,46 @@ chk_observe() {
   return "$bad"
 }
 
+# body_text <payload>: a lwm2m.read answer as the platform returned it, then the printable runs of its
+# base64 decoding. The platform hands a Read body back verbatim in the device's own content format, as
+# base64 when it is not text: Eclipse Leshan answers a single-resource Read in TLV, so "DeviceChain"
+# arrives as the base64 of c8 00 0b followed by the eleven bytes of the string.
+body_text() {
+  local p="$1"
+  p="${p#\"}"; p="${p%\"}"
+  printf '%s\n' "$p"
+  printf '%s' "$p" | base64 -d 2>/dev/null | LC_ALL=C tr -c '[:print:]' ' ' || true
+}
+
 chk_read() {
   chk_command || true
-  [[ -n "$R_WANT" && "$R_PAYLOAD" == *"$R_WANT"* ]] || why "command: the response does not hold '$R_WANT' (got '$R_PAYLOAD')"
+  [[ -n "$R_WANT" && "$(body_text "$R_PAYLOAD")" == *"$R_WANT"* ]] || why "command: the response does not hold '$R_WANT' (got '$R_PAYLOAD')"
   return "$bad"
 }
 
 chk_write() {
   chk_command || true
-  [[ -n "$R_WANT" && "$R_READBACK" == *"$R_WANT"* ]] || why "device: a read afterwards returns '$R_READBACK', not the '$R_WANT' written"
+  [[ -n "$R_WANT" && "$(body_text "$R_READBACK")" == *"$R_WANT"* ]] || why "device: a read afterwards returns '$R_READBACK', not the '$R_WANT' written"
   return "$bad"
 }
 
-chk_info() {
+# chk_info_tlv_unread: the limitation HOLDS. The device-information reader decodes text/plain only, so
+# against a client that answers a single-resource Read in TLV it reads nothing: the command fails and
+# names the format. Green means the gap is still there (the matrix says so); red means it has closed.
+chk_info_tlv_unread() {
   bad=0
-  [[ "$R_STATUS" == SUCCESSFUL ]] || why "command: status is '$R_STATUS', not SUCCESSFUL"
-  [[ "$(jq -r '.manufacturer // empty' <<<"$R_PAYLOAD" 2>/dev/null)" == "$R_WANT" ]] ||
-    why "command: manufacturer in the answer is not '$R_WANT' (got '${R_PAYLOAD:0:120}')"
-  [[ "$(jq -r '(.missing // []) | length' <<<"$R_PAYLOAD" 2>/dev/null)" -ge 1 ]] ||
-    why "command: the answer lists no missing resource, but the client does not hold the firmware version"
+  [[ "$R_STATUS" == FAILED ]] || why "command: status is '$R_STATUS', not FAILED; the limitation no longer holds"
+  [[ "$R_PAYLOAD" == *"unsupported content format"* ]] ||
+    why "command: the answer does not name a content format it could not decode (got '${R_PAYLOAD:0:120}')"
   return "$bad"
 }
 
-chk_harvest() {
+# chk_harvest_tlv_unread: the limitation HOLDS for the registration-time harvest, which uses the same
+# reader. An absence proves something only if the store was actually asked, so the query must answer.
+chk_harvest_tlv_unread() {
   bad=0
-  [[ "$R_ATTR" == "$R_WANT" ]] || why "store: client attribute manufacturer is '$R_ATTR', not '$R_WANT'"
+  ((R_QUERIED == 1)) || why "store: the client-attribute query did not answer, so an absence proves nothing"
+  [[ -z "$R_ATTR" ]] || why "store: client attribute manufacturer was recorded as '$R_ATTR'; the limitation no longer holds"
   return "$bad"
 }
 
@@ -165,7 +180,7 @@ record_control() {
 # A fabricated record: every field is reset, then the arguments set the ones that matter.
 reset_record() {
   R_RC=0 R_STORED=0 R_COUNTER=0 R_CODE="" R_RETRY="" R_STATUS="" R_OUTCOME="" R_PAYLOAD="" R_WANT=""
-  R_READBACK="" R_EXISTS=0 R_ACTIVE="" R_PRESENCE="" R_INITIAL=0 R_CHANGED=0 R_COUNT=0 R_ATTR=""
+  R_READBACK="" R_EXISTS=0 R_ACTIVE="" R_PRESENCE="" R_INITIAL=0 R_CHANGED=0 R_COUNT=0 R_ATTR="" R_QUERIED=0
 }
 
 # ---------------------------------------------------------------------------
@@ -202,6 +217,7 @@ offline_controls() {
   reset_record; R_INITIAL=1 R_CHANGED=0; record_control R-lwm2m-observe lwm2m-observe chk_observe "only the initial value was stored; a different value than the one notified"
 
   reset_record; R_STATUS=SUCCESSFUL R_OUTCOME=SUCCEEDED R_PAYLOAD="DeviceChain" R_WANT=DeviceChain; expect_green "read" chk_read
+  reset_record; R_STATUS=SUCCESSFUL R_OUTCOME=SUCCEEDED R_PAYLOAD='"yAALRGV2aWNlQ2hhaW4="' R_WANT=DeviceChain; expect_green "read (TLV, base64)" chk_read
   reset_record; R_STATUS=FAILED R_OUTCOME=REJECTED R_PAYLOAD="" R_WANT=DeviceChain; record_control R-lwm2m-read lwm2m-read chk_read "the command failed"
   reset_record; R_STATUS=SUCCESSFUL R_OUTCOME=SUCCEEDED R_READBACK="Europe/Zurich" R_WANT="Europe/Zurich"; expect_green "write" chk_write
   reset_record; R_STATUS=SUCCESSFUL R_OUTCOME=SUCCEEDED R_READBACK="Etc/UTC" R_WANT="Europe/Zurich"; record_control R-lwm2m-write lwm2m-write chk_write "the command succeeded but a read afterwards returns the old value"
@@ -209,11 +225,14 @@ offline_controls() {
   reset_record; R_STATUS=FAILED R_OUTCOME=REJECTED; record_control R-lwm2m-execute lwm2m-execute chk_command "the command failed"
   reset_record; R_STATUS=TIMEOUT R_OUTCOME=UNKNOWN; record_control R-lwm2m-reboot lwm2m-reboot chk_command "the command timed out"
 
-  reset_record; R_STATUS=SUCCESSFUL R_WANT=DeviceChain R_PAYLOAD='{"manufacturer":"DeviceChain","missing":[{"resource":"firmwareVersion"}]}'; expect_green "info" chk_info
-  reset_record; R_STATUS=SUCCESSFUL R_WANT=DeviceChain R_PAYLOAD='{"manufacturer":"Someone Else","missing":[{"resource":"firmwareVersion"}]}'; record_control R-lwm2m-device-info lwm2m-device-info chk_info "the answer holds a different manufacturer than the client holds"
+  reset_record; R_STATUS=FAILED R_PAYLOAD="no Device-object resource could be read: manufacturer: unsupported content format 11542 (only text/plain is decoded)"
+  expect_green "info (TLV unread)" chk_info_tlv_unread
+  reset_record; R_STATUS=SUCCESSFUL R_PAYLOAD='{"manufacturer":"DeviceChain","missing":[{"resource":"firmwareVersion"}]}'
+  record_control R-lwm2m-device-info lwm2m-device-info-tlv-unread chk_info_tlv_unread "the command succeeded with the manufacturer the client holds"
 
-  reset_record; R_ATTR=DeviceChain R_WANT=DeviceChain; expect_green "harvest" chk_harvest
-  reset_record; R_ATTR="" R_WANT=DeviceChain; record_control R-lwm2m-harvest lwm2m-device-info-harvest chk_harvest "no client attribute was recorded"
+  reset_record; R_QUERIED=1 R_ATTR=""; expect_green "harvest (TLV unread)" chk_harvest_tlv_unread
+  reset_record; R_QUERIED=1 R_ATTR=DeviceChain
+  record_control R-lwm2m-harvest lwm2m-harvest-tlv-unread chk_harvest_tlv_unread "the manufacturer the client holds was recorded as a client attribute"
 
   reset_record; R_ACTIVE=true R_COUNT=0; expect_green "tlv limit" chk_tlv_limit
   reset_record; R_ACTIVE=true R_COUNT=3; record_control R-lwm2m-tlv-limit lwm2m-tlv-only-no-telemetry chk_tlv_limit "telemetry from the TLV-only client was stored, so the limitation no longer holds"
@@ -581,7 +600,10 @@ mqtt_publish_check() { # <qos>
 
 mqtt_command_check() { # <subscribe true|false> -> record the command's fate
   local subscribe="$1" name
-  mapfile -t base < <(paho_args ":sub")
+  # The PLAIN client id: presence follows the device's plain session only (a ":suffix" connection never
+  # asserts it), and the publish connections above have closed, so on a suffixed id the device reads as
+  # away and its command is HELD, which is the platform working as documented and not what is under test.
+  mapfile -t base < <(paho_args "")
   name="$(client_bg "$client_image" --scenario mqtt-command "${base[@]}" \
     --topic "$instance/$tenant/device-commands/$mq_dev" --respond-topic "$instance/$tenant/command-responses/$mq_dev" \
     --subscribe "$subscribe" --respond true --wait 120)"
@@ -614,7 +636,7 @@ curl_run() { # runs curl in a container on the kind network, args as for curl
 http_post() {
   local out
   out="$(curl_run -s -i --max-time 20 -X POST "http://$node_ip:$http_node_port/$instance/$1/events" -H 'Content-Type: application/json' \
-    -d "{\"device\":\"$2\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"$2\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$4\"}}]}}" 2>&1 | tr -d '\r')" || true
+    -d "{\"device\":\"$2\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"$2\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$4\"}}]}}" 2>/dev/null | tr -d '\r')" || true
   printf '%s %s' "$(awk 'NR==1 {print $2}' <<<"$out")" "$(awk 'tolower($1)=="retry-after:" {print $2}' <<<"$out")"
 }
 
@@ -632,10 +654,17 @@ step_http_202() {
   record_check http-202 chk_http_202 "POST of $v answered $R_CODE, stored=$R_STORED, event-sources counted +$R_COUNTER"
 }
 
+# ceiling_refusals: the requests event-sources shed at a tenant's ingest ceiling, at either stage. A
+# request is metered before it is decoded (total_msg_rate_limited) and its readings after it is
+# (total_msg_reading_limited), and either answers 429.
+ceiling_refusals() {
+  echo $(($(svc_counter event-sources total_msg_rate_limited) + $(svc_counter event-sources total_msg_reading_limited)))
+}
+
 step_http_429() {
   local i v resp c0 c1 code="" retry="" refused=""
   tenant_token="$rl_token"
-  c0="$(svc_counter event-sources total_msg_reading_limited)"
+  c0="$(ceiling_refusals)"
   for i in 1 2 3 4 5 6 7 8; do
     v="$(next_value)"
     resp="$(http_post "$rl_tenant" "$rl_dev" "$rl_secret" "$v")"
@@ -648,7 +677,7 @@ step_http_429() {
   reset_record
   R_CODE="$code"; R_RETRY="$retry"
   R_STORED="$(has_value "$rl_dev" "$refused")"
-  c1="$(svc_counter event-sources total_msg_reading_limited)"
+  c1="$(ceiling_refusals)"
   R_COUNTER=$((c1 - c0))
   record_check http-429 chk_http_429 "over-ceiling POST answered $R_CODE Retry-After $R_RETRY, refused value stored=$R_STORED, refusal counter +$R_COUNTER"
   tenant_token="$main_token"
@@ -751,19 +780,23 @@ step_lwm2m() {
   issue_command "$tok" lwm2m.reboot '{}' 60
   record_check lwm2m-reboot chk_command "lwm2m.reboot settled $R_STATUS/$R_OUTCOME"
   issue_command "$tok" lwm2m.readDeviceInfo '{}' 60
-  R_WANT=DeviceChain
-  record_check lwm2m-device-info chk_info "lwm2m.readDeviceInfo settled $R_STATUS with '${R_PAYLOAD:0:90}'"
-  # Harvest: recorded at registration, independent of the commands above.
-  local attr="" a
-  deadline=$((SECONDS + 90))
+  record_check lwm2m-device-info-tlv-unread chk_info_tlv_unread "lwm2m.readDeviceInfo settled $R_STATUS with '${R_PAYLOAD:0:120}'"
+  # Harvest: recorded at registration, independent of the commands above. By now the registration is
+  # minutes old, past the harvest and its one retry; the store is asked until the wait ends, so a late
+  # attribute is still seen.
+  local attr="" queried=0 a r
+  deadline=$((SECONDS + 60))
   while ((SECONDS < deadline)); do
-    a="$(dmq 'query($c:EntityAttributeSearchCriteria!){entityAttributes(criteria:$c){results{attrKey value}}}' \
-      "$(jq -n --arg d "$tok" '{c:{pageNumber:1,pageSize:50,entityType:"DEVICE",entity:$d,scope:"CLIENT"}}')" 2>/dev/null | jq -r '[.entityAttributes.results[]? | select(.attrKey == "manufacturer")][0].value // empty')"
-    [[ -n "$a" ]] && { attr="$a"; break; }
+    if r="$(dmq 'query($c:EntityAttributeSearchCriteria!){entityAttributes(criteria:$c){results{attrKey value}}}' \
+      "$(jq -n --arg d "$tok" '{c:{pageNumber:1,pageSize:50,entityType:"device",entity:$d,scope:"CLIENT"}}')")"; then
+      queried=1
+      a="$(jq -r '[.entityAttributes.results[]? | select(.attrKey == "manufacturer")][0].value // empty' <<<"$r")"
+      [[ -n "$a" ]] && { attr="$a"; break; }
+    fi
     sleep 3
   done
-  reset_record; R_ATTR="$attr"; R_WANT=DeviceChain
-  record_check lwm2m-device-info-harvest chk_harvest "client attribute manufacturer recorded as '$attr'"
+  reset_record; R_ATTR="$attr"; R_QUERIED="$queried"
+  record_check lwm2m-harvest-tlv-unread chk_harvest_tlv_unread "client attribute query answered=$queried; manufacturer recorded as '$attr'"
   client_rm "$cli"
 
   # N3 and the limit check, from one client: it can encode TLV and not SenML.
@@ -868,6 +901,8 @@ build_clients() {
   say "building the client images (Paho and Tahu; Leshan from this tree)"
   dk build -q -t "$client_image" "$(winpath "$repo_root/hack/conformance/client")" >/dev/null || fail "could not build the Paho/Tahu client image"
   dk build -q -t "$leshan_image" "$(winpath "$repo_root/backend/services/lwm2m-ingest/interop/leshan-client")" >/dev/null || fail "could not build the Leshan client image"
+  # Pulled up front: a pull during a check prints "Unable to find image ..." where the status line goes.
+  dk pull -q "$curl_image" >/dev/null || fail "could not pull $curl_image"
 }
 
 cmd_run() {

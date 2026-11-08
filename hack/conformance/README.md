@@ -25,6 +25,12 @@ builds it from this tree.
 | Leshan | register, observe, read, write, execute, the named reboot and device-information commands, the registration-time harvest | `device-state`, the event store, the command record, the device's client attributes |
 | Tahu | a node's birth and data, by alias | `device-state` and the event store |
 
+Two Leshan checks are **limit** checks: they pass while a known gap still holds. The device-information
+reader (the named `lwm2m.readDeviceInfo` command and the registration-time harvest) decodes text/plain
+only, and Leshan answers a single-resource Read that carries no Accept option in TLV, so against Leshan
+both read nothing. The matrix shows those two cells half-filled for that reason, and the day the reader
+decodes TLV the limit checks go red and the renderer refuses until the cells are revisited.
+
 A client's own account of what it did is never the evidence. A client that lies, or does nothing, cannot
 manufacture a pass.
 

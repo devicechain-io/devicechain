@@ -342,12 +342,12 @@ For constrained devices over CoAP/UDP with DTLS.
 
 | Operation | | Notes |
 | --- | :---: | --- |
-| Read | ◐ | CoAP GET; a response over 8 KiB is silently truncated and still reported successful |
+| Read | ◐ | CoAP GET; the body is returned as the device sent it, in the device's own content format (base64 when it is not text, as TLV is); a response over 8 KiB is silently truncated and still reported successful |
 | Write | ◐ | Single scalar resource, replace only |
 | Execute | ● | With or without arguments. A raw Execute of the Device object's Factory Reset resource (`/3/0/5`) is refused with `COMMAND_DESTRUCTIVE_REFUSED`; a confirmed named operation is planned |
 | Reboot (`lwm2m.reboot`) | ● | A named command that Executes the Device object's Reboot resource; takes no parameters |
-| Read device information (`lwm2m.readDeviceInfo`) | ● | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have |
-| Device-information harvest | ● | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry |
+| Read device information (`lwm2m.readDeviceInfo`) | ● | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have. Only text/plain answers are decoded: a device that answers a single-resource read in TLV, as Eclipse Leshan does by default, has every resource listed as missing and the command fails |
+| Device-information harvest | ● | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry. Only text/plain answers are decoded, so nothing is recorded for a device that answers in TLV |
 | Observe | ◐ | SenML-JSON only; numeric resources only; fixed object allowlist; 32 per registration |
 | Discover | ○ | Not implemented |
 | Create | ○ | Not implemented |

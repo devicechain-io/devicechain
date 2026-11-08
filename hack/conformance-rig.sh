@@ -74,7 +74,8 @@ broker_node_port=31884 # the operator-owned broker (hack/conformance/mosquitto.y
 http_node_port=31881   # a NodePort the rig adds in front of event-sources' plain HTTP port
 lwm2m_node_port=31684  # a NodePort the rig adds in front of lwm2m-ingest's CoAPS port
 # The ingest stream ceiling. Small on purpose: HTTP's 503 is the platform refusing events when the
-# consumer's unread backlog reaches 90% of what the stream holds, and the check has to reach that.
+# consumer's unread backlog reaches 90% of what the stream holds, and the check has to reach that. It
+# holds only with the streams' time-based sizing off (streamDesignRate 0 in the values below).
 stream_max_msgs="${DC_CONF_RIG_STREAM_MAX_MSGS:-300}"
 results_out="${DC_CONF_RIG_RESULTS:-$repo_root/hack/conformance/results.json}"
 # Pinned by digest. Bump by hand.
@@ -238,6 +239,11 @@ instance:
     infrastructure:
       nats:
         streamMaxMsgs: $stream_max_msgs
+        # dcctl sizes the event streams by time (design rate x runway), and a stream sized by time
+        # has its message ceiling raised to what the runway holds: 900,000 on the default profile,
+        # which no check reaches. A design rate of 0 turns that sizing off, so the ceiling above is
+        # the one the inbound stream is created with.
+        streamDesignRate: 0
 EOV
   say "bootstrapping $instance on the DEFAULT profile, with lwm2m-ingest and sparkplug-ingest added"
   # A fresh bootstrap given --values records the overlay on the declaration with a compare-and-swap of

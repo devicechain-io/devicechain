@@ -86,7 +86,9 @@ type RowDef struct {
 //     "prose": the limitation and the working part are then described by the page and not tested.
 //   - Limits are checks that PASS while the stated limitation still holds (for example, "a LwM2M 1.0
 //     client yields no telemetry"). If one fails, the limitation is gone and the cell is stale, so
-//     rendering is refused until a human revisits it.
+//     rendering is refused until a human revisits it. A half-filled circle on prose may name limits
+//     too: its working part is the page's word, but its gap is tested, so the cell still goes stale
+//     when the gap closes.
 //   - Basis is "prose" for a cell the rig does not test, and is required for any cell that is not filled
 //     and has no evidence, so an untested cell is a visible decision rather than an omission.
 type Cell struct {
@@ -220,9 +222,8 @@ func (c Cell) validate(checks map[string]bool) error {
 		if len(c.Evidence) > 0 && c.Basis != "" {
 			return fmt.Errorf("a cell with evidence does not also rest on prose")
 		}
-		if len(c.Limits) > 0 && len(c.Evidence) == 0 {
-			return fmt.Errorf("limit checks without evidence for the part that works")
-		}
+		// Limits with no evidence are allowed here only because the basis rule above already demanded
+		// "prose": the working part is then the page's word and the gap is the rig's.
 	case None, NA:
 		if len(c.Evidence) > 0 || len(c.Limits) > 0 {
 			return fmt.Errorf("an empty cell has no evidence to cite")
