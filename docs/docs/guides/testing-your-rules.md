@@ -199,7 +199,7 @@ Give the identity the least it needs: `device:read` on the tenant. If the accoun
 An evaluation is exact about the rules and honest about what it leaves out.
 
 - **Device attributes.** A threshold that reads a device attribute never matches, because no device has attributes here. This is the same approximation the replay preview makes.
-- **Group-scoped rules.** A published rule scoped to an entity group is skipped, and named as a warning, because a generated event carries no group memberships. A draft cannot be group-scoped.
+- **Group-scoped rules.** A published rule scoped to an entity group is skipped, and named as a warning, because a generated event carries no group memberships. A draft cannot be group-scoped. When no published rule is left to evaluate, because the profile has none or every one is group-scoped, the run is refused rather than reported as a pass: a run that evaluated nothing would satisfy every `neverRaised` expectation. A run refused because too many evaluations are already running for the tenant is an error for the same reason; run it again.
 - **Geofence rules.** A rule that tests geofence containment is refused, because the events carry no position.
 - **Commands and connectors.** An intent is what the rule asks for. Whether the command exists on the device, or the connector exists in the tenant, is checked where the request is sent, not here.
 - **Limits.** One evaluation takes at most 250,000 events, and a request body of 4 MiB by default; a scenario over either is refused before anything is evaluated, with the settings that made it large. It shares the replay preview's per-tenant concurrency limit, so a tenant cannot run unlimited evaluations at once.
