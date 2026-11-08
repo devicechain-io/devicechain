@@ -172,7 +172,7 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 		if e.ReadInput != "" {
 			readVars = map[string]any{"c": e.ReadVars}
 		}
-		if e.ReadAll {
+		if e.ReadAll || e.Singleton {
 			readVars = map[string]any{}
 		}
 		if errs := schema.ValidateWithVariables(e.readDoc(), readVars); len(errs) > 0 {

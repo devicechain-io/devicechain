@@ -175,7 +175,7 @@ func readRow(ctx context.Context, q querier, url string, e entity, token string,
 	if e.ReadInput != "" {
 		readVars = map[string]any{"c": e.ReadVars}
 	}
-	if e.ReadAll {
+	if e.ReadAll || e.Singleton {
 		// No argument, so no variable: the document declares none.
 		readVars = map[string]any{}
 	}
@@ -244,7 +244,7 @@ func readObject(e entity, envelope map[string]json.RawMessage, token string, wri
 	// A Publish read decodes as a LIST, like the default: xVersions returns
 	// [XVersion!]! newest-first, so found[0] is the version just published. It is only
 	// the QUERY that resembles a Single read, not the response.
-	if e.Single {
+	if e.Single || e.Singleton {
 		if isJSONNull(raw) {
 			return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and %s now returns null for that token",
 				e.Name, token, e.Read)

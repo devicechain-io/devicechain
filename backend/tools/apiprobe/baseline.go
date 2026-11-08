@@ -226,7 +226,7 @@ func (b *baseline) supports(e entity) (bool, string) {
 		}
 		return true, ""
 	}
-	if e.ReadAll {
+	if e.ReadAll || e.Singleton {
 		// An argument-less read is matched on the query's existence alone: there is no
 		// argument to spell, which is the whole of its shape.
 		if !rootFieldTakes(s, "mutation", e.Mutation, e.arg()) {

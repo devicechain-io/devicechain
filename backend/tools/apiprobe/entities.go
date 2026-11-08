@@ -103,6 +103,13 @@ type entity struct {
 	// variables at all, because declaring a $token nothing uses is a validation error.
 	ReadAll bool
 
+	// Singleton marks a read that takes NO argument and returns ONE nullable object: the
+	// tenant's own configuration record, of which there is at most one per tenant
+	// (semanticContext). It renders as `read{…}` like ReadAll, and absence is a null as
+	// for Single. The row has no token, so the entity supplies its receipt key through
+	// TokenFrom.
+	Singleton bool
+
 	// ReadArg overrides the argument name of a Single read. Empty means "token";
 	// deviceClaim is keyed by `deviceToken`.
 	ReadArg string
@@ -256,7 +263,7 @@ func (e entity) readDoc() string {
 		// to detect a changed row.
 		return "query($c:" + e.ReadInput + "){" + e.Read + "(criteria:$c){results{" + e.Fields + "}}}"
 	}
-	if e.ReadAll {
+	if e.ReadAll || e.Singleton {
 		return "query{" + e.Read + "{" + e.Fields + "}}"
 	}
 	if e.Publish {
@@ -432,6 +439,34 @@ var entities = []entity{
 		},
 	},
 
+	{
+		// The tenant's semantic context, so the semantic_contexts table has a row the drill
+		// can watch across an upgrade. One per tenant and addressed by no token, so it is
+		// read back with the argument-less semanticContext (Singleton) and keyed on the
+		// receipt by name. Selecting packVersions asserts the versions recorded when the
+		// context was set survive an upgrade that ships newer packs: they are what was
+		// validated against, not what the running build ships.
+		//
+		// A SKIPPABLE LEAF: it carries the Requires of the semantic layer, so a baseline
+		// that predates it skips the row, and nothing records its token.
+		Name:      "semantic-context",
+		Area:      "device-management",
+		Mutation:  "setSemanticContext",
+		Input:     "SemanticContextRequest!",
+		Read:      "semanticContext",
+		Singleton: true,
+		Requires:  []string{"SemanticContextRequest.enabledPacks"},
+		Fields:    "enabledPacks customPrefixes{prefix namespace} packVersions{pack version}",
+		TokenFrom: func(s *state) string { return s.tok("semantic-context") },
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				// Sorted, as the context serves them.
+				"enabledPacks": []any{"BRICK", "SDM_STREETLIGHTING"},
+				"customPrefixes": []any{map[string]any{
+					"prefix": "apiprobe", "namespace": "https://apiprobe.example/ontology#"}},
+			}}
+		},
+	},
 	{
 		// A weekly maintenance window, so the maintenance_windows table has a row the drill
 		// can watch across an upgrade (the table sweep fails on a tenant-scoped table
