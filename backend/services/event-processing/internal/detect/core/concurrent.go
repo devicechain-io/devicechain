@@ -584,6 +584,11 @@ func (c *ConcurrentSharded) Watermark() time.Time {
 	return directResult(c, func() time.Time { return c.s.Watermark() })
 }
 
+// RestoredFrontier is Sharded.RestoredFrontier, at a barrier.
+func (c *ConcurrentSharded) RestoredFrontier() int {
+	return directResult(c, func() int { return c.s.RestoredFrontier() })
+}
+
 // HasPendingWork is Sharded.HasPendingWork, at a barrier.
 func (c *ConcurrentSharded) HasPendingWork() bool {
 	return directResult(c, func() bool { return c.s.HasPendingWork() })

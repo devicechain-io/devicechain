@@ -56,6 +56,11 @@ type goldenSeed struct {
 	Mid      int    `json:"mid"`        // message index of the mid-run snapshot
 	MidSnap  string `json:"midSnap"`    // gzip+hex of the mid snapshot (first goldenSnapshotSeeds only)
 	MidHash  string `json:"midSnapSha"` // sha256 of the mid snapshot (every seed)
+	// OldTail is, for the seeds that carry MidSnap, the tail hash the PRE-CHANGE engine recorded when
+	// it continued from that snapshot. MidSnap is that engine's literal snapshot (it has no frontier
+	// version), so restoring it must re-serialize byte for byte and continue to this hash; TailHash
+	// is the current engine's own tail from its own mid snapshot.
+	OldTail string `json:"oldTailHash,omitempty"`
 }
 
 type goldenDoc struct {
@@ -339,6 +344,7 @@ func TestTimersWindowsGolden(t *testing.T) {
 	for _, want := range d.Seeds {
 		got := computeSeed(t, want.Seed)
 		got.MidSnap, want.MidSnap = "", "" // compared by hash; the bytes are the restore test's input
+		want.OldTail = ""                  // the restore test's expectation, not an output of this run
 		if got != want {
 			t.Fatalf("seed %d diverges from the recorded engine:\n got  %+v\n want %+v", want.Seed, got, want)
 		}
@@ -379,7 +385,7 @@ func TestTimersWindowsOldSnapshotRestores(t *testing.T) {
 		if !bytes.Equal(again, old) {
 			t.Fatalf("seed %d: restoring the old snapshot and re-snapshotting changes its bytes", g.Seed)
 		}
-		if got := diffRun(t, e, msgs, g.Mid, -1, 0, rules); got.hash != g.TailHash {
+		if got := diffRun(t, e, msgs, g.Mid, -1, 0, rules); got.hash != g.OldTail {
 			t.Fatalf("seed %d: restored from the old snapshot, the tail diverges from the old engine's", g.Seed)
 		}
 	}

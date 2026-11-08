@@ -236,6 +236,7 @@ type Detection struct {
 type Engine struct {
 	rules    map[string]Rule
 	wheel    *timerWheel
+	frontier int                            // FrontierVersion this engine's frontier is derived under (0: restored from a pre-clamp snapshot)
 	wm       watermark                      // logical clock: bounded-out-of-order event-time frontier
 	lastSeq  uint64                         // seq of the last event whose effect is in the state
 	runs     map[SeriesKey]durState         // Duration: the open run or the kept break (duration.go)
@@ -348,6 +349,7 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		rules:         m,
 		wheel:         newTimerWheel(),
 		wm:            watermark{lateness: allowedLateness},
+		frontier:      FrontierVersion,
 		runs:          map[SeriesKey]durState{},
 		sliding:       map[SeriesKey][]time.Time{},
 		panes:         map[paneKey]*paneAgg{},
@@ -950,6 +952,13 @@ func (e *Engine) LastSeq() uint64 { return e.lastSeq }
 // time vs wall clock) without deserializing the snapshot payload.
 func (e *Engine) Watermark() time.Time { return e.wm.now }
 
+// RestoredFrontier is the FrontierVersion the engine's frontier is currently derived under: the
+// current version for an engine built fresh, 0 for one restored from a snapshot written before the
+// clamp existed. Below FrontierVersion the watermark may be ahead of the append-time bound; the
+// engine moves to FrontierVersion by itself the first time a clamped message carries the frontier
+// past the restored value, after which every instant in it is bounded by a broker append time.
+func (e *Engine) RestoredFrontier() int { return e.frontier }
+
 // ProcessEvent applies one event: advance the watermark, fire any timers the advance
 // made due (as of the pre-event state), then apply the event's effect.
 func (e *Engine) ProcessEvent(ev Event) {
@@ -1023,7 +1032,7 @@ func (e *Engine) ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event
 	}
 	e.msgFloor = e.wm.now
 	e.msgRedelivered = r.redelivered()
-	e.advance(t)
+	e.advanceClamped(t, r)
 	for i := range evs {
 		e.apply(evs[i])
 	}
@@ -1051,7 +1060,7 @@ func (e *Engine) ProcessReceivedMember(seq uint64, t time.Time, r Receipt, evs [
 	}
 	e.msgFloor = e.wm.now
 	e.msgRedelivered = r.redelivered()
-	e.advance(t)
+	e.advanceClamped(t, r)
 	for i := range evs {
 		e.apply(evs[i])
 	}
@@ -1066,6 +1075,50 @@ func (e *Engine) ProcessReceivedMember(seq uint64, t time.Time, r Receipt, evs [
 // consumed state without emitting), so the caller can persist a wall-clock advance whose
 // effect must survive a restart to keep replay identical (ADR-051 slice 4c).
 func (e *Engine) Advance(w time.Time) bool { return e.advance(w) }
+
+// FrontierVersion identifies how the watermark in a snapshot was derived. Version 1 clamps each
+// message's contribution to the frontier to its broker append time (frontierInstant); a snapshot
+// without the field (version 0) was written by an engine that did not, so its frontier may sit up
+// to the resolver's future-skew bound ahead of where a clamped engine would have put it. The
+// engine restores either, and the frontier only ever moves forward, so a version 0 frontier
+// corrects itself once real time catches up; the version is carried so the runtime can say so.
+const FrontierVersion = 1
+
+// frontierInstant is the instant a message contributes to the shared frontier: its event time,
+// but never more than lateness past the moment the broker stored it. The frontier is shared by
+// every tenant and only moves forward, so a single device whose clock runs ahead (the resolver
+// admits up to minutes of skew) would otherwise carry it past every other tenant's deadlines,
+// firing their absence timers early and refusing their windowed samples as late. With the clamp
+// the frontier is at most the broker append time (t - lateness <= stored), which a device cannot
+// choose.
+//
+// The clamp bounds only the frontier's contribution. The event keeps its own time, so a fast
+// device's samples are still windowed and ordered at the instants it reported.
+//
+// A zero Stored (an unknown receipt: the bare ProcessResolved/ProcessEvent entry points) is not
+// clamped; the live loop and the replay preview always carry the append time. The append time is
+// part of the log, so replay derives the same frontier sequence as the live run.
+func (e *Engine) frontierInstant(t time.Time, r Receipt) time.Time {
+	if r.Stored.IsZero() {
+		return t
+	}
+	if limit := r.Stored.Add(e.wm.lateness); t.After(limit) {
+		return limit
+	}
+	return t
+}
+
+// advanceClamped folds a message's clamped instant into the frontier. A frontier restored from a
+// pre-clamp snapshot (frontier 0) may sit ahead of real time; the first time a clamped message
+// moves it forward, the new value is bounded by an append time, so it is derived under the
+// current version and the snapshot says so.
+func (e *Engine) advanceClamped(t time.Time, r Receipt) {
+	before := e.wm.now
+	e.advance(e.frontierInstant(t, r))
+	if e.frontier < FrontierVersion && !r.Stored.IsZero() && e.wm.now.After(before) {
+		e.frontier = FrontierVersion
+	}
+}
 
 // advance folds a timestamp into the watermark, fires every timer the new frontier made
 // due, closes every pane it made due, and applies every held sample it is now past,
@@ -1424,6 +1477,9 @@ type snapPresence struct {
 }
 
 type snapshot struct {
+	// Frontier is the FrontierVersion of the engine that wrote the snapshot; absent (0) in one
+	// written before the frontier was clamped to append time.
+	Frontier  int            `json:"frontier,omitempty"`
 	Watermark time.Time      `json:"watermark"`
 	LastSeq   uint64         `json:"lastSeq"`
 	Active    []snapRun      `json:"active"`
@@ -1504,6 +1560,7 @@ func (e *Engine) snapshotState() snapshot {
 		return presenceCursors[i].Series < presenceCursors[j].Series
 	})
 	return snapshot{
+		Frontier:  e.frontier,
 		Watermark: e.wm.now,
 		LastSeq:   e.lastSeq,
 		Active:    active,
@@ -1540,6 +1597,7 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 func restoreState(rules []Rule, allowedLateness time.Duration, s snapshot) *Engine {
 	e := NewEngine(rules, allowedLateness)
 	e.wm.now = s.Watermark
+	e.frontier = s.Frontier
 	e.lastSeq = s.LastSeq
 	e.wheel = restoreTimerWheel(s.Timers, s.Gens)
 	e.restoreWindows(s.Sliding, s.Panes)

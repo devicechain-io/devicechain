@@ -967,6 +967,14 @@ The HTTP event endpoint (`POST /{instanceId}/{tenant}/events`) answered `202 Acc
 - **A new counter, `total_msg_build_dropped{source,cause}`,** counts these drops on every transport, with `cause` one of `no_tenant`, `no_transit_key`, `seal_failed` and `marshal_failed`. It is exported at 0 for each configured source. Any value above 0 is an event that was not stored.
 - The integration endpoints keep their documented `202` when a message is shed.
 
+#### A device clock that runs ahead no longer moves other tenants' detection {#v120-detect-watermark}
+
+Detection keeps one logical clock for the whole instance, and it used to follow the newest event time it had seen. The platform accepts event times up to five minutes ahead of the server clock, so one device with a fast clock could carry that shared clock ahead of real time. Every tenant's absence timers then fired early, and windowed readings from devices with correct clocks were dropped as late. From this release a message moves the shared clock no further than the time the broker stored it, plus the configured lateness. The event keeps its own time, so its readings are still windowed and ordered at the instants the device reported, and the replay preview applies the same bound.
+
+- **Detection results change only in the case that was wrong.** A device whose clock is within the lateness of the broker's (5 seconds by default) behaves as before. For a device running further ahead, other devices' absence alarms now fire at their true deadline, and a fast device's own timers wait for real time to reach them.
+- **Snapshots carry a frontier version.** A detection snapshot written by this release records it, and restoring an earlier snapshot still works. In the first moments after the upgrade the restored clock can still be as far ahead as it was; it corrects itself as real time catches up, and the service logs a warning when it restores such a snapshot. During a rolling upgrade, a pod of the previous release that takes over writes snapshots without the version and ignores it when reading, so nothing needs doing.
+- **This does not cover the opposite case.** A device that uploads old readings (store and forward) can still have them dropped as late by windowed rules, because the shared clock has moved on. Per-device clocks are not part of this release.
+
 #### Size presets {#v120-size-presets}
 
 `dcctl bootstrap` has a new `--size` option, and `dcctl install` accepts `--size base` and `--size compact`. Nothing changes unless you pass it: an instance without a size renders byte for byte what it rendered before this change, and `--compact` works exactly as before.
