@@ -16,8 +16,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func counterValue(t *testing.T, c prometheus.Counter) float64 {
@@ -163,10 +161,7 @@ func TestClipBoundsSenderText(t *testing.T) {
 
 // What the warning carries of sender-chosen text is bounded, and the line names the verdict.
 func TestServiceCeilingWarningIsBounded(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
+	logs := logSink.Capture(t)
 
 	obs := NewServiceCeilingObserver(nil, "usermanagement")
 	many := make([]string, 0, 40)
@@ -174,7 +169,7 @@ func TestServiceCeilingWarningIsBounded(t *testing.T) {
 		many = append(many, fmt.Sprintf("x:%d", i))
 	}
 	obs.Observe(strings.Repeat("s", 500), many)
-	line := buf.String()
+	line := logs.String()
 	if !strings.Contains(line, "unknown_caller") {
 		t.Fatalf("the warning does not name the verdict: %s", line)
 	}
@@ -185,25 +180,22 @@ func TestServiceCeilingWarningIsBounded(t *testing.T) {
 		t.Fatalf("offending authorities are not capped at %d: %s", ceilingLogMaxAuthorities, line)
 	}
 
-	buf.Reset()
+	before := len(logs.String())
 	obs.Observe("event-management", []string{"device:read"})
-	if buf.Len() != 0 {
-		t.Fatalf("a within-ceiling request logged: %s", buf.String())
+	if after := logs.String(); len(after) != before {
+		t.Fatalf("a within-ceiling request logged: %s", after[before:])
 	}
 }
 
 // A hostile loop through Observe produces a bounded number of log lines, not one per request.
 func TestServiceCeilingObserveLimitsItsOwnLogging(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
+	logs := logSink.Capture(t)
 
 	obs := NewServiceCeilingObserver(nil, "usermanagement")
 	for i := 0; i < 200; i++ {
 		obs.Observe("mallory", []string{"*"})
 	}
-	if lines := strings.Count(buf.String(), "\n"); lines != ceilingLogBurst {
+	if lines := strings.Count(logs.String(), "\n"); lines != ceilingLogBurst {
 		t.Fatalf("200 refused-in-future requests wrote %d log lines; want %d", lines, ceilingLogBurst)
 	}
 }
