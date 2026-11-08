@@ -24,7 +24,9 @@
 
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# `pwd -W` (Git Bash on Windows) gives D:/... rather than /d/...: the paths below reach a Go program, and
+# MSYS rewrites only an argument that is a path, not each entry of the comma-separated -docs list.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
 mod="$root/backend/tools/transportmatrix"
 spec="$root/hack/conformance/matrix.json"
 results="$root/hack/conformance/results.json"
@@ -40,7 +42,7 @@ docs_csv="$(IFS=,; echo "${docs[*]}")"
 
 self_test() {
   local tmp
-  tmp="$(mktemp -d)"
+  tmp="$(cd "$(mktemp -d)" && { pwd -W 2>/dev/null || pwd; })"
   trap 'rm -rf "$tmp"' RETURN
   cp "$spec" "$tmp/matrix.json"
   cp "$results" "$tmp/results.json"
