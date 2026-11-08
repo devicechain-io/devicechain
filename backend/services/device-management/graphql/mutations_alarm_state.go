@@ -118,10 +118,10 @@ func (r *SchemaResolver) ClearAlarm(ctx context.Context, args struct {
 // the caller supplies. A scoped caller passes the authority check and is refused at the store
 // (the label's upsert is never open to one), which answers FORBIDDEN.
 func (r *SchemaResolver) SetAlarmDisposition(ctx context.Context, args struct {
-	Token       string
-	Disposition string
-	Note        *string
-	RaisedTime  *string
+	Token      string
+	Label      string
+	Note       *string
+	RaisedTime *string
 }) (*AlarmResolver, error) {
 	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite); err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func (r *SchemaResolver) SetAlarmDisposition(ctx context.Context, args struct {
 	}
 
 	alarm, label, err := r.GetApi(ctx).SetAlarmDisposition(ctx, model.AlarmDispositionRequest{
-		Token: args.Token, Disposition: args.Disposition, Note: args.Note, RaisedTime: args.RaisedTime,
+		Token: args.Token, Disposition: args.Label, Note: args.Note, RaisedTime: args.RaisedTime,
 	}, by)
 	if err != nil {
 		return nil, err

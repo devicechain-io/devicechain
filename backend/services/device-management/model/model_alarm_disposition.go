@@ -77,7 +77,9 @@ type AlarmDisposition struct {
 	TenantId string `gorm:"not null;size:128;uniqueIndex:uix_alarm_dispositions_cycle,priority:1"`
 
 	// AlarmId is the alarm row the labelled cycle belongs to.
-	AlarmId uint `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:2"`
+	// Its own index serves the alarm foreign key's ON DELETE CASCADE, which otherwise scans the
+	// whole table for every alarm deleted.
+	AlarmId uint `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:2;index:idx_alarm_dispositions_alarm"`
 	// RaisedTime is the cycle: the alarm's raised_time when it was labelled.
 	RaisedTime time.Time `gorm:"not null;uniqueIndex:uix_alarm_dispositions_cycle,priority:3"`
 	// AlarmToken is the alarm's token, copied when the label is written. The listing filters by
@@ -125,9 +127,10 @@ type AlarmDispositionSearchCriteria struct {
 	rdb.Pagination
 	// AlarmToken restricts to the cycles of one alarm. An unknown token finds nothing.
 	AlarmToken *string
-	// Disposition restricts to one label. A value outside the vocabulary is an error, not an
-	// empty answer, so a misspelt filter cannot read as "nothing was labelled that way".
-	Disposition *string
+	// Label restricts to one label. A value outside the vocabulary is an error, not an empty
+	// answer, so a misspelt filter cannot read as "nothing was labelled that way". (The served
+	// schema types it as an enum, so GraphQL refuses one first; this check is the API's own.)
+	Label *string
 	// StartTime and EndTime (RFC 3339, inclusive) bound the labelled cycles' raised time.
 	StartTime *string
 	EndTime   *string

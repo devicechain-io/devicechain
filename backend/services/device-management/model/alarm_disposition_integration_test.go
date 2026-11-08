@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func (r scopeAlarmRig) dispositionCount(t *testing.T) int64 {
@@ -162,4 +163,24 @@ func TestAlarmDispositionTokenFilterFollowsTheLabelledCycle(t *testing.T) {
 		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, AlarmToken: &alarm.Token})
 	require.NoError(t, err)
 	require.Empty(t, byToken.Results)
+}
+
+// The alarm was deleted between the label's read of it and the label's write: the foreign key
+// refuses the insert (SQLSTATE 23503). That is the alarm not existing, and it answers as an unknown
+// token does, NOT_FOUND, rather than as a reference violation about a record the caller named
+// correctly a moment ago.
+func TestAlarmDispositionOnAnAlarmDeletedMidWriteIsNotFound(t *testing.T) {
+	r := newScopeAlarmRig(t)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	r.raise(t, "acme-pump", "acme-hot", t0)
+	alarm := r.alarm(t, "acme-hot")
+	require.NoError(t, r.api.RDB.DB(core.WithSystemContext(context.Background())).Exec(
+		`DELETE FROM "device-management".alarms WHERE id = ?`, alarm.ID).Error)
+
+	err := r.api.writeAlarmDisposition(r.operator, &AlarmDisposition{
+		AlarmId: alarm.ID, RaisedTime: alarm.RaisedTime, AlarmToken: alarm.Token,
+		Disposition: string(AlarmDispositionTruePositive), RecordedTime: time.Now().UTC(),
+		ScopeAnchors: alarm.ScopeAnchors})
+	require.True(t, errors.Is(err, gorm.ErrRecordNotFound), "want not-found, got %v", err)
+	require.EqualValues(t, 0, r.dispositionCount(t))
 }

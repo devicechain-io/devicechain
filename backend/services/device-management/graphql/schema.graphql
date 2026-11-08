@@ -1915,22 +1915,48 @@ type Alarm implements Model & TokenReference & MetadataEntity {
     lastValue: Float
     metadata: String
     """
-    The disposition label of this alarm's current cycle (see setAlarmDisposition), or null
-    when nobody has labelled it. A label belongs to the cycle it was written on: when the alarm
-    is raised again, the new cycle starts unlabelled and the earlier label stays with the
-    earlier cycle, where alarmDispositions still finds it.
+    The disposition of this alarm's current cycle (see setAlarmDisposition), or null when
+    nobody has labelled it. A disposition belongs to the cycle it was written on: when the
+    alarm is raised again, the new cycle starts unlabelled and the earlier disposition stays
+    with the earlier cycle, where alarmDispositions still finds it. A cycle is named by its
+    raisedTime, so two cycles of one alarm raised at the same instant share one disposition.
     """
     disposition: AlarmDisposition
 }
 
 """
+An operator's verdict on one alarm cycle. New values may be added in a later release; a client
+should treat a value it does not know as unhandled rather than as any of these.
+"""
+enum AlarmDispositionLabel {
+    """The condition was real and needed attention."""
+    TRUE_POSITIVE
+    """
+    The condition was not real, for example a bad reading, a fouled sensor or a threshold set
+    wrong. A different rule should not have raised it.
+    """
+    FALSE_POSITIVE
+    """
+    The condition was real but expected and needed no action, such as planned maintenance or a
+    commissioning test.
+    """
+    EXPECTED
+}
+
+"""
 An operator's verdict on one alarm cycle: was the condition real, and did it need anyone? It
 is ground truth for measuring a rule, not for operating one. A cycle is one raise of an alarm,
-named by the raisedTime the alarm had when it was labelled.
+named by the raisedTime the alarm had when it was labelled, so two cycles of one alarm raised
+at the same instant share one disposition.
 """
 type AlarmDisposition {
     """The alarm the labelled cycle belongs to, by its id."""
     alarmId: ID!
+    """
+    The alarm the labelled cycle belongs to, by its token. Always served, even when the caller
+    can no longer read the alarm itself (see alarm).
+    """
+    alarmToken: String!
     """
     The alarm itself, or null when the caller cannot read it any more (a member whose access
     is limited to some customers, after the alarm was raised again for another customer).
@@ -1939,11 +1965,10 @@ type AlarmDisposition {
     """The labelled cycle: the alarm's raisedTime when the label was written."""
     raisedTime: String!
     """
-    TRUE_POSITIVE (the condition was real and needed attention), FALSE_POSITIVE (it was not
-    real: a rule or sensor problem) or EXPECTED (real, but expected and needing no action, such
-    as planned maintenance). A closed vocabulary.
+    The verdict. New values may be added in a later release; treat a value you do not know as
+    unhandled.
     """
-    disposition: String!
+    label: AlarmDispositionLabel!
     """Why, in the labeller's words. Null when no note was given."""
     note: String
     """The authenticated subject that last wrote the label, recorded server-side."""
@@ -1963,10 +1988,10 @@ input AlarmDispositionSearchCriteria {
     """Only the labelled cycles of this alarm, by its token. An unknown token finds nothing."""
     alarmToken: String
     """
-    Only this label: TRUE_POSITIVE, FALSE_POSITIVE or EXPECTED. Any other value is an error
-    (INVALID_VALUE), not an empty answer.
+    Only cycles with this label. A value that is not an AlarmDispositionLabel is refused when
+    the request is validated, so a misspelt filter never reads as an empty answer.
     """
-    disposition: String
+    label: AlarmDispositionLabel
     """Only cycles raised at or after this instant (inclusive), as an RFC 3339 timestamp."""
     startTime: String
     """Only cycles raised at or before this instant (inclusive), as an RFC 3339 timestamp."""
@@ -5605,10 +5630,13 @@ type Mutation {
     # Clear a raised alarm (manual operator override).
     clearAlarm(token: String!): Alarm!
     """
-    Labels one cycle of an alarm with an operator's verdict (see AlarmDisposition) and returns
-    the alarm. It changes nothing else about the alarm and emits no alarm event; labelling a
-    cleared alarm is the ordinary case. Labelling a cycle again replaces its label. The
-    labelling identity is the authenticated subject, recorded server-side.
+    Labels the CURRENT cycle of an alarm with an operator's verdict (see AlarmDisposition) and
+    returns the alarm. Only the current cycle can be labelled: once the alarm is raised again,
+    the earlier cycle's disposition can be read but no longer written. Labelling changes nothing
+    else about the alarm and emits no alarm event; labelling a cleared alarm is the ordinary
+    case. Labelling a cycle again replaces its disposition. The labelling identity is the
+    authenticated subject, recorded server-side. An alarm deleted while the label is being
+    written answers NOT_FOUND, as an unknown token does.
 
     Requires alarm:write. A member whose access is limited to some customers cannot label
     (FORBIDDEN): labels are ground truth for the tenant's rules.
@@ -5616,8 +5644,11 @@ type Mutation {
     setAlarmDisposition(
         """The alarm, by its token."""
         token: String!
-        """TRUE_POSITIVE, FALSE_POSITIVE or EXPECTED. Any other value is INVALID_VALUE."""
-        disposition: String!
+        """
+        The verdict. A value that is not an AlarmDispositionLabel is refused when the request
+        is validated.
+        """
+        label: AlarmDispositionLabel!
         """Why, at most 1000 characters. Empty or omitted is no note."""
         note: String
         """

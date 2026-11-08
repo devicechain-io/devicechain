@@ -252,7 +252,7 @@ func TestAlarmDispositionsAreTenantIsolatedAndFiltered(t *testing.T) {
 	require.Len(t, r.list(t, "A", AlarmDispositionSearchCriteria{}), 3)
 
 	fp := string(AlarmDispositionFalsePositive)
-	require.Len(t, r.list(t, "A", AlarmDispositionSearchCriteria{Disposition: &fp}), 2)
+	require.Len(t, r.list(t, "A", AlarmDispositionSearchCriteria{Label: &fp}), 2)
 	require.Len(t, r.list(t, "A", AlarmDispositionSearchCriteria{AlarmToken: ptr("a2")}), 1)
 	require.Empty(t, r.list(t, "A", AlarmDispositionSearchCriteria{AlarmToken: ptr("b1")}),
 		"another tenant's alarm token found labels")
@@ -265,7 +265,7 @@ func TestAlarmDispositionsAreTenantIsolatedAndFiltered(t *testing.T) {
 	require.Equal(t, fp, inRange[0].Disposition)
 
 	_, err = r.api.AlarmDispositions(a, AlarmDispositionSearchCriteria{
-		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, Disposition: ptr("false_positive")})
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, Label: ptr("false_positive")})
 	require.ErrorIs(t, err, ErrInvalidAlarmDisposition, "a misspelt filter must not read as an empty answer")
 	_, err = r.api.AlarmDispositions(a, AlarmDispositionSearchCriteria{
 		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, StartTime: ptr("last week")})

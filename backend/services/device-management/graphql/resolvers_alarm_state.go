@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -132,6 +133,40 @@ func (r *AlarmResolver) Disposition(ctx context.Context) (*AlarmDispositionResol
 type AlarmDispositionResolver struct {
 	M model.AlarmDisposition
 	S *SchemaResolver
+
+	// page, when set, is the listing page this label came from: its alarms are read once for the
+	// whole page rather than once per label. Nil for a label resolved on its own.
+	page *dispositionPageAlarms
+}
+
+// dispositionPageAlarms reads the alarms of one listing page in ONE AlarmsById call, the first
+// time any label on the page asks for its alarm, and shares the answer with the rest. The read is
+// the caller's own, so an alarm the caller cannot see is absent and its labels answer null.
+type dispositionPageAlarms struct {
+	ids   []uint
+	once  sync.Once
+	byId  map[uint]*model.Alarm
+	err   error
+	reads int // AlarmsById calls made, for the test that pins one per page
+}
+
+func (p *dispositionPageAlarms) get(ctx context.Context, s *SchemaResolver, id uint) (*model.Alarm, error) {
+	p.once.Do(func() {
+		p.reads++
+		found, err := s.GetApi(ctx).AlarmsById(ctx, p.ids)
+		if err != nil {
+			p.err = err
+			return
+		}
+		p.byId = make(map[uint]*model.Alarm, len(found))
+		for _, a := range found {
+			p.byId[a.ID] = a
+		}
+	})
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.byId[id], nil
 }
 
 func (r *AlarmDispositionResolver) AlarmId() gql.ID { return gql.ID(fmt.Sprint(r.M.AlarmId)) }
@@ -139,21 +174,26 @@ func (r *AlarmDispositionResolver) AlarmId() gql.ID { return gql.ID(fmt.Sprint(r
 // Alarm resolves the labelled alarm by id, under the caller's own read: null when the caller
 // cannot see it.
 func (r *AlarmDispositionResolver) Alarm(ctx context.Context) (*AlarmResolver, error) {
-	found, err := r.S.GetApi(ctx).AlarmsById(ctx, []uint{r.M.AlarmId})
-	if err != nil {
+	page := r.page
+	if page == nil {
+		page = &dispositionPageAlarms{ids: []uint{r.M.AlarmId}}
+	}
+	alarm, err := page.get(ctx, r.S, r.M.AlarmId)
+	if err != nil || alarm == nil {
 		return nil, err
 	}
-	if len(found) == 0 {
-		return nil, nil
-	}
-	return &AlarmResolver{M: *found[0], S: r.S, C: ctx}, nil
+	return &AlarmResolver{M: *alarm, S: r.S, C: ctx}, nil
 }
 
 func (r *AlarmDispositionResolver) RaisedTime() string {
 	return r.M.RaisedTime.Format(time.RFC3339Nano)
 }
 
-func (r *AlarmDispositionResolver) Disposition() string { return r.M.Disposition }
+// Label is the verdict, served as the AlarmDispositionLabel enum (graphql-go serves an enum from a
+// string). Only vocabulary values are ever written, so a stored value is always a member.
+func (r *AlarmDispositionResolver) Label() string { return r.M.Disposition }
+
+func (r *AlarmDispositionResolver) AlarmToken() string { return r.M.AlarmToken }
 
 func (r *AlarmDispositionResolver) Note() *string { return util.NullStr(r.M.Note) }
 
@@ -167,12 +207,26 @@ type AlarmDispositionSearchResultsResolver struct {
 	M model.AlarmDispositionSearchResults
 	S *SchemaResolver
 	C context.Context
+
+	pageOnce sync.Once
+	page     *dispositionPageAlarms
 }
 
 func (r *AlarmDispositionSearchResultsResolver) Results() []*AlarmDispositionResolver {
+	r.pageOnce.Do(func() {
+		ids := make([]uint, 0, len(r.M.Results))
+		seen := make(map[uint]bool, len(r.M.Results))
+		for _, current := range r.M.Results {
+			if !seen[current.AlarmId] {
+				seen[current.AlarmId] = true
+				ids = append(ids, current.AlarmId)
+			}
+		}
+		r.page = &dispositionPageAlarms{ids: ids}
+	})
 	resolvers := make([]*AlarmDispositionResolver, 0, len(r.M.Results))
 	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &AlarmDispositionResolver{M: current, S: r.S})
+		resolvers = append(resolvers, &AlarmDispositionResolver{M: current, S: r.S, page: r.page})
 	}
 	return resolvers
 }

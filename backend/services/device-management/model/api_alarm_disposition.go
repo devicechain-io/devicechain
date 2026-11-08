@@ -94,19 +94,30 @@ func (api *Api) SetAlarmDisposition(ctx context.Context, req AlarmDispositionReq
 		RecordedTime: now,
 		ScopeAnchors: alarm.ScopeAnchors,
 	}
-	// One row per cycle. The conflict target names the tenant column, so the tenant guard's
-	// update arm needs no review marker. scope_anchors is rewritten with the rest: it is the
-	// alarm's stamp for this cycle, and the alarm's stamp is the authority on who may see it.
-	err = api.RDB.DB(ctx).Clauses(clause.OnConflict{
+	if err := api.writeAlarmDisposition(ctx, row); err != nil {
+		return nil, nil, err
+	}
+	return alarm, row, nil
+}
+
+// writeAlarmDisposition upserts one cycle's label.
+//
+// One row per cycle. The conflict target names the tenant column, so the tenant guard's update
+// arm needs no review marker. scope_anchors is rewritten with the rest: it is the alarm's stamp
+// for this cycle, and the alarm's stamp is the authority on who may see it.
+func (api *Api) writeAlarmDisposition(ctx context.Context, row *AlarmDisposition) error {
+	err := api.RDB.DB(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "tenant_id"}, {Name: "alarm_id"}, {Name: "raised_time"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"disposition", "note", "recorded_by", "recorded_time", "scope_anchors", "updated_at",
 		}),
 	}).Create(row).Error
-	if err != nil {
-		return nil, nil, err
+	// The alarm was deleted between the caller's read of it and this write: the foreign key
+	// refused the insert. That is the alarm not existing, so it answers as an unknown token does.
+	if class, ok := integrity.Refused(err); ok && class == integrity.ClassReference {
+		return fmt.Errorf("%w: the alarm was deleted while it was being labelled", gorm.ErrRecordNotFound)
 	}
-	return alarm, row, nil
+	return err
 }
 
 // AlarmDispositionOf returns the label of the alarm's CURRENT cycle, or nil when that cycle is
@@ -127,8 +138,8 @@ func (api *Api) AlarmDispositionOf(ctx context.Context, alarm *Alarm) (*AlarmDis
 // AlarmDispositions lists labels, newest cycle first. It is the read a backtest scores against:
 // every labelled cycle, including the ones before an alarm's current cycle.
 func (api *Api) AlarmDispositions(ctx context.Context, criteria AlarmDispositionSearchCriteria) (*AlarmDispositionSearchResults, error) {
-	if criteria.Disposition != nil {
-		if err := validDispositionLabel(*criteria.Disposition); err != nil {
+	if criteria.Label != nil {
+		if err := validDispositionLabel(*criteria.Label); err != nil {
 			return nil, err
 		}
 	}
@@ -146,8 +157,8 @@ func (api *Api) AlarmDispositions(ctx context.Context, criteria AlarmDisposition
 		if criteria.AlarmToken != nil {
 			q = q.Where("alarm_dispositions.alarm_token = ?", *criteria.AlarmToken)
 		}
-		if criteria.Disposition != nil {
-			q = q.Where("alarm_dispositions.disposition = ?", *criteria.Disposition)
+		if criteria.Label != nil {
+			q = q.Where("alarm_dispositions.disposition = ?", *criteria.Label)
 		}
 		if start != nil {
 			q = q.Where("alarm_dispositions.raised_time >= ?", *start)
