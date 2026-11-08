@@ -23,8 +23,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/x509trust/ocspclient"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ocsp"
@@ -556,16 +554,18 @@ func TestOcspUnavailableLogsTheLeafsReasonFirst(t *testing.T) {
 	anchor := &model.DeviceTrustAnchor{}
 	anchor.OcspMode.String, anchor.OcspMode.Valid = string(x509trust.OCSPRequireCurrent), true
 
-	var buf bytes.Buffer
-	saved := log.Logger
-	log.Logger = zerolog.New(&buf)
-	defer func() { log.Logger = saved }()
+	logs := captureWarnings(t) // the shared sink: never swap the global logger
 	for i := 0; i < 40; i++ {
 		resp := (&CalloutResponder{now: time.Now}).WithOcsp(true, script, nil)
 		_, refusal := resp.applyOcsp(context.Background(), "acme", anchor, v, v)
 		require.Equal(t, x509ResultOcspUnavailable, refusal)
 	}
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	var lines []string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, "requires a current OCSP answer and none could be had") {
+			lines = append(lines, l)
+		}
+	}
 	require.Len(t, lines, 40)
 	for _, l := range lines {
 		require.Contains(t, l, `"reason":"timeout"`, "logged reason must be the leaf's")
