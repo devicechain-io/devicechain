@@ -345,3 +345,19 @@ func TestSafeJoin(t *testing.T) {
 		}
 	}
 }
+
+// An oversized stream is refused before it is generated: `every: 1ns` over two hours would be
+// seven trillion samples, and allocating them first would exhaust memory before the limit spoke.
+func TestOversizedStreamIsRefusedBeforeGeneration(t *testing.T) {
+	y := strings.Replace(baseScenario, "every: 10m", "every: 1ns", 1)
+	done := make(chan error, 1)
+	go func() { _, err := mustScenario(t, y).Generate(nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "every") {
+			t.Fatalf("err = %v, want a refusal naming `every`", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Generate did not refuse an oversized stream before generating it")
+	}
+}

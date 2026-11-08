@@ -452,12 +452,13 @@ type EvaluateRulesResult {
     skippedRules: [String!]!
     """
     Why the result is partial: readings arrived too far behind the others to be used, a rule
-    predicate failed on some events, the intent limit was reached, the profile has no published
-    rules, or too many evaluations are already running for the tenant. Null for a complete result.
+    predicate failed on some events, or the intent limit was reached. Null for a complete result.
     """
     degraded: String
     """
-    When ok is false, the reasons the request or a rule was rejected; otherwise advisory warnings.
+    When ok is false, the reasons the request or a rule was rejected (including a profile with no
+    rule to evaluate, and too many evaluations already running for the tenant: a run that evaluated
+    nothing is never reported as a success); otherwise advisory warnings.
     """
     diagnostics: [CanvasDiagnostic!]!
 }

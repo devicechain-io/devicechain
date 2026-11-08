@@ -286,3 +286,37 @@ func TestJUnit(t *testing.T) {
 		t.Fatal("Passed is wrong")
 	}
 }
+
+// A playback stream honours its from and until like a generated one: `until` is how a recorded
+// device goes quiet, and a row after it must not be sent.
+func TestPlaybackHonoursFromAndUntil(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "rec.csv", "at,value\n0m,10\n20m,20\n40m,30\n60m,40\n90m,50\n")
+	write(t, dir, "scenario.yaml", `
+apiVersion: devicechain.io/ruletest/v1alpha1
+kind: Scenario
+profile: boiler
+start: 2026-01-01T00:00:00Z
+duration: 2h
+devices:
+  - token: d1
+    streams:
+      - {metric: temperature, from: 20m, until: 1h, playback: {file: rec.csv}}
+`)
+	write(t, dir, "t.test.yaml", okTest)
+	plan, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := plan.Scenarios[plan.Suites[0].ScenarioPath]
+	if l.Err != nil {
+		t.Fatal(l.Err)
+	}
+	var got []string
+	for _, e := range l.Events.Events {
+		got = append(got, e.At.Sub(start).String())
+	}
+	if want := "20m0s,40m0s,1h0m0s"; strings.Join(got, ",") != want {
+		t.Fatalf("events at %v, want %s (the rows inside [from, until], both ends included)", got, want)
+	}
+}

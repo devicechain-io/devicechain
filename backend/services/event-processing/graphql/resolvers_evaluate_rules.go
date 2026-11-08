@@ -135,12 +135,14 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 			}
 			ruleSet = append(ruleSet, evaluate.Rule{Token: row.RuleToken, Def: def})
 		}
+		// Nothing to evaluate is a REFUSAL (ok false), not an empty success: an evaluation of no
+		// rules reports no edges, and a neverRaised or count 0 expectation would pass on it.
 		if len(ruleSet) == 0 {
 			note := fmt.Sprintf("profile %q has no published rules to evaluate", in.ProfileToken)
 			if len(skipped) > 0 {
 				note = fmt.Sprintf("every published rule of profile %q was skipped", in.ProfileToken)
 			}
-			res := emptyEvaluation(note)
+			res := failedEvaluation(note)
 			res.skipped = skipped
 			return res, nil
 		}
@@ -171,8 +173,12 @@ func (r *SchemaResolver) EvaluateRules(ctx context.Context, args struct{ Input e
 	// The preview's per-tenant concurrency gate, shared on purpose: an evaluation and a preview are
 	// both bounded replays of the same detection core, and a tenant's allowance of that work is one
 	// number, not one per door.
+	//
+	// Busy is a REFUSAL (ok false), not an empty success: an evaluation that ran nothing reports no
+	// edges, and a test of neverRaised or count 0 would pass on it. Contention must not turn a
+	// CI run green.
 	if !globalPreviewGate.acquire(tenant) {
-		res := emptyEvaluation("the maximum number of previews and evaluations are already running for this tenant; try again in a moment")
+		res := failedEvaluation("the maximum number of previews and evaluations are already running for this tenant; try again in a moment")
 		res.skipped = skipped
 		return res, nil
 	}
@@ -315,12 +321,6 @@ func newEvaluationResult(out evaluate.Result, wallMs int32) *EvaluateRulesResult
 		d := out.Degraded
 		res.degraded = &d
 	}
-	return res
-}
-
-// emptyEvaluation is a successful evaluation that ran nothing, with the reason.
-func emptyEvaluation(reason string) *EvaluateRulesResultResolver {
-	res := newEvaluationResult(evaluate.Result{Degraded: reason}, 0)
 	return res
 }
 

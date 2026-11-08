@@ -304,11 +304,12 @@ func TestEvaluatePublishedRules(t *testing.T) {
 		t.Fatalf("unpublished: %+v", got)
 	}
 
-	// A published profile whose every rule is group-scoped runs nothing and says why, with ok.
+	// A published profile whose every rule is group-scoped runs nothing: a refusal that names the
+	// skipped rules, never an empty success a neverRaised expectation would pass on.
 	evPublish(t, rs, ps, "acme", "scoped", "1", model.DetectRule{RuleToken: "g", Definition: hotDefinition, EntityGroupToken: "n", EntityGroupVersion: 1})
 	in["profileToken"] = "scoped"
 	got, _ = evExec(t, s, previewCtx(auth.DeviceRead), in)
-	if !got.Ok || got.Degraded == nil || !strings.Contains(*got.Degraded, "every published rule") || len(got.SkippedRules) != 1 {
+	if got.Ok || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "every published rule") || len(got.SkippedRules) != 1 {
 		t.Fatalf("all skipped: %+v", got)
 	}
 
@@ -316,7 +317,7 @@ func TestEvaluatePublishedRules(t *testing.T) {
 	evPublish(t, rs, ps, "acme", "bare", "1")
 	in["profileToken"] = "bare"
 	got, _ = evExec(t, s, previewCtx(auth.DeviceRead), in)
-	if !got.Ok || got.Degraded == nil || !strings.Contains(*got.Degraded, "no published rules") {
+	if got.Ok || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "no published rules") {
 		t.Fatalf("no rules: %+v", got)
 	}
 }
@@ -329,8 +330,8 @@ func TestEvaluatePublishedWithoutTheProjectionIsAnError(t *testing.T) {
 	}
 }
 
-// An evaluation takes one of the tenant's preview slots, and is refused with a degraded result
-// when they are all in use, the same as a preview.
+// An evaluation takes one of the tenant's preview slots, and is REFUSED (ok false) when they are
+// all in use: an empty success would let a neverRaised expectation pass on a run that never ran.
 func TestEvaluateSharesThePreviewConcurrencyGate(t *testing.T) {
 	s := evalSchema(t, &SchemaResolver{})
 	for i := 0; i < maxConcurrentPreviewsPerTenant; i++ {
@@ -342,8 +343,8 @@ func TestEvaluateSharesThePreviewConcurrencyGate(t *testing.T) {
 	if errs != nil {
 		t.Fatalf("errors: %v", errs)
 	}
-	if !got.Ok || got.Degraded == nil || !strings.Contains(*got.Degraded, "already running") || len(got.Edges) != 0 {
-		t.Fatalf("got %+v, want a degraded refusal", got)
+	if got.Ok || len(got.Diagnostics) != 1 || !strings.Contains(got.Diagnostics[0].Message, "already running") || len(got.Edges) != 0 {
+		t.Fatalf("got %+v, want a refusal (ok false)", got)
 	}
 	for i := 0; i < maxConcurrentPreviewsPerTenant; i++ {
 		globalPreviewGate.release("acme")

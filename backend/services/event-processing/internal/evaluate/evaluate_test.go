@@ -403,3 +403,23 @@ func TestTheLastReadingIsDecidedByTheAdvance(t *testing.T) {
 		t.Fatalf("edges = %+v, want the jump at the last reading to raise", res.Edges)
 	}
 }
+
+// A timer edge's command expires a fixed time after the EDGE, wherever the scenario ends: the
+// final advance collects the edge, but its expiry is measured from the deadline, as the live
+// engine fires it, so lengthening a scenario never moves an expiry.
+func TestTimerEdgeCommandExpiryIsMeasuredFromTheEdge(t *testing.T) {
+	r := absenceRule(time.Hour)
+	r.Def.Actions = []rules.Action{{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{
+		Command: "reboot", ExpiresAfter: "15m"}}}
+	for _, end := range []time.Duration{2 * time.Hour, 5 * time.Hour} {
+		p := params([]Rule{r}, []Event{reading("d1", t0, "temperature", 1)})
+		p.AdvanceTo = t0.Add(end)
+		res := mustRun(t, p)
+		if len(res.Intents) != 1 || res.Intents[0].ExpiresAt == nil {
+			t.Fatalf("end +%s: intents = %+v, want one command with an expiry", end, res.Intents)
+		}
+		if want := t0.Add(time.Hour + 15*time.Minute); !res.Intents[0].ExpiresAt.Equal(want) {
+			t.Fatalf("end +%s: expiresAt = %v, want the edge (t0+1h) + 15m = %v", end, res.Intents[0].ExpiresAt, want)
+		}
+	}
+}

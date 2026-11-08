@@ -570,13 +570,32 @@ func (st Stream) generate(s *Scenario, device string, idx int, read FileReader) 
 	if st.Until != nil {
 		until = st.Until.D()
 	}
+	// Refuse an oversized series before generating it, not after: a stream of `every: 1ns` over
+	// hours would otherwise allocate every sample before the scenario's limit could refuse it.
+	if st.Playback == nil && st.Every > 0 {
+		if n := int64((until-from)/st.Every.D()) + 1; n > MaxEvents*4 {
+			return nil, fmt.Errorf("the stream generates %d readings, more than %d; lengthen `every` or shorten `duration`", n, MaxEvents*4)
+		}
+	}
 	var out []sample
 	add := func(off time.Duration, v float64) {
 		out = append(out, sample{device: device, metric: st.Metric, at: s.Start.Add(off), value: v})
 	}
 	switch {
 	case st.Playback != nil:
-		return st.playback(s, device, read)
+		// A recorded series honours the stream's bounds like a generated one, so `until` makes a
+		// played-back device go quiet: the rows outside [from, until] are not sent.
+		rows, err := st.playback(s, device, read)
+		if err != nil {
+			return nil, err
+		}
+		lo, hi := s.Start.Add(from), s.Start.Add(until)
+		for _, r := range rows {
+			if !r.at.Before(lo) && !r.at.After(hi) {
+				out = append(out, r)
+			}
+		}
+		return out, nil
 	case st.Constant != nil:
 		for off := from; off <= until; off += st.Every.D() {
 			add(off, *st.Constant)

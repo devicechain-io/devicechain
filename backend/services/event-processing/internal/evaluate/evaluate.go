@@ -28,7 +28,7 @@
 // rules and events produce the same edges and intents, byte for byte, on any machine at any hour.
 // The two places a wall clock could leak in are both pinned: a derived event's TriggeredAt is the
 // virtual instant of the input that caused the detection, and a command's expiry is measured from
-// that instant (react.Dispatcher.SetClock) instead of from time.Now.
+// the detection's own instant (react.Dispatcher.SetClock) instead of from time.Now.
 //
 // 🔴 WHAT IT DOES NOT MODEL, said here so a green test is not read as more than it is. It resolves
 // no device attributes (a dynamic threshold reads none, as in the preview), it has no device
@@ -467,7 +467,13 @@ func (s *runState) collect(dets []core.Detection, triggeredAt time.Time) {
 			Raise: det.Edge == core.EdgeRaised, Value: det.Value, HasValue: det.HasValue && det.Edge == core.EdgeRaised,
 		}
 		s.rec.begin(edge)
-		s.disp.SetClock(func() time.Time { return triggeredAt })
+		// A command's expiry is measured from the detection's own instant. For an edge a reading
+		// decides, that is the reading's instant (triggeredAt); for a timer edge (an absence, a
+		// window that closes) it is the deadline, which is when the live engine fires it. Measuring
+		// from triggeredAt instead would date a timer edge collected by the final advance from the
+		// END of the scenario, so lengthening a scenario would move a command's expiry.
+		at := det.At
+		s.disp.SetClock(func() time.Time { return at })
 		s.disp.Dispatch(context.Background(), de)
 		intents := s.rec.take()
 		kept := intents[:0]
