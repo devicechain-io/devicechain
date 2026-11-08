@@ -3449,6 +3449,16 @@ type DeviceTrustAnchor implements Model & TokenReference & NamedEntity & Metadat
     stale of them.
     """
     revocationStatus: RevocationStatus!
+    """
+    Whether, and how strictly, a certificate's status is also asked of its issuer's online OCSP
+    responder when a device connects. OFF (the default) asks nothing and sends no request.
+    """
+    ocspMode: CertificateOcspMode!
+    """
+    The responder every OCSP request for this anchor goes to, in place of each certificate's own
+    Authority Information Access entry. Null when the certificates' own entries are used.
+    """
+    ocspResponderUrl: String
 }
 
 """Data required to create a trust anchor."""
@@ -3501,6 +3511,17 @@ input DeviceTrustAnchorUpdateRequest {
     list.
     """
     revocationStaleGrace: String
+    """
+    Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+    while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+    it, and needs ocspResponderUrl.
+    """
+    ocspMode: CertificateOcspMode
+    """
+    An http or https URL, without credentials, that replaces each certificate's own responder.
+    Null clears it. The address it resolves to must be one the instance's egress policy allows.
+    """
+    ocspResponderUrl: String
 }
 
 """How an anchor treats the completeness of its revocation lists."""
@@ -3508,6 +3529,26 @@ enum CertificateRevocationMode {
     """A listed certificate is refused; an issuer with no list, or a stale one, is allowed."""
     ENTRIES
     """A listed certificate is refused, and so is one whose issuer has no current list."""
+    REQUIRE_CURRENT
+}
+
+"""
+How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+revoked is always refused (a verified revoked answer for any certificate on any verified path
+wins); the modes differ in what an answer that could not be had means.
+"""
+enum CertificateOcspMode {
+    """No responder is asked. The default for every anchor."""
+    OFF
+    """
+    A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+    refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+    """
+    ENFORCE_KNOWN
+    """
+    A revoked answer refuses, and so does a certificate whose status could not be confirmed
+    current. A responder outage refuses new connects once cached answers expire.
+    """
     REQUIRE_CURRENT
 }
 

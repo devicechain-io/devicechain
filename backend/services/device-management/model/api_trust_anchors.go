@@ -272,6 +272,9 @@ func (api *Api) UpdateDeviceTrustAnchor(ctx context.Context, token string, reque
 		if err := api.applyRevocationSettings(tx, locked, request); err != nil {
 			return err
 		}
+		if err := api.applyOcspSettings(locked, request); err != nil {
+			return err
+		}
 		locked.Name = request.Name.ApplyToNullString(locked.Name)
 		locked.Description = request.Description.ApplyToNullString(locked.Description)
 		locked.Metadata = metadataJSON

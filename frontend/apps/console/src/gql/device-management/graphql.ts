@@ -166,6 +166,25 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+/**
+ * How an anchor uses its issuers' OCSP responders at connect. A certificate a responder says is
+ * revoked is always refused (a verified revoked answer for any certificate on any verified path
+ * wins); the modes differ in what an answer that could not be had means.
+ */
+export type CertificateOcspMode =
+  /**
+   * A revoked answer refuses; a status that could not be learned (a timeout, an unreachable or
+   * refused responder, an unusable answer) is ADMITTED and counted. Availability over completeness.
+   */
+  | 'ENFORCE_KNOWN'
+  /** No responder is asked. The default for every anchor. */
+  | 'OFF'
+  /**
+   * A revoked answer refuses, and so does a certificate whose status could not be confirmed
+   * current. A responder outage refuses new connects once cached answers expire.
+   */
+  | 'REQUIRE_CURRENT';
+
 /** How an anchor treats the completeness of its revocation lists. */
 export type CertificateRevocationMode =
   /** A listed certificate is refused; an issuer with no list, or a stale one, is allowed. */
@@ -742,6 +761,17 @@ export type DeviceTrustAnchorUpdateRequest = {
   metadata?: string | null | undefined;
   /** Human-readable name. Null clears it. */
   name?: string | null | undefined;
+  /**
+   * Required and unclearable. OFF asks no responder. ENFORCE_KNOWN and REQUIRE_CURRENT are refused
+   * while the instance's OCSP switch is off; REQUIRE_CURRENT is refused unless the instance allows
+   * it, and needs ocspResponderUrl.
+   */
+  ocspMode?: CertificateOcspMode | null | undefined;
+  /**
+   * An http or https URL, without credentials, that replaces each certificate's own responder.
+   * Null clears it. The address it resolves to must be one the instance's egress policy allows.
+   */
+  ocspResponderUrl?: string | null | undefined;
   /**
    * Required and unclearable. Switching to REQUIRE_CURRENT is refused while the anchor holds no
    * current revocation list, or a registered certificate under it was issued by a CA that has none:

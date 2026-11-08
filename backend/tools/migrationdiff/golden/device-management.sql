@@ -1059,7 +1059,9 @@ CREATE TABLE "device-management".device_trust_anchors (
  enabled boolean NOT NULL,
  revocation_mode character varying(32),
  revocation_stale_grace bigint,
- revocation_rows bigint
+ revocation_rows bigint,
+ ocsp_mode character varying(32),
+ ocsp_responder_url character varying(2048)
 );
 CREATE TABLE "device-management".device_types (
  id bigint NOT NULL,
