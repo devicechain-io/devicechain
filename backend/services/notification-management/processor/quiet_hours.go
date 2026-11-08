@@ -271,7 +271,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
-	tally := n.deliverAll(rctx, deliveries, renderNotification(&event), alarm)
+	tally := n.deliverAll(rctx, deliveries, renderNotification(&event), alarm, model.AttemptTriggerQuietHoursRelease)
 	if tally.delivered > 0 {
 		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietReleased, len(claimed))

@@ -99,6 +99,30 @@ type NotificationChannel {
     enabled: Boolean!
     """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
     metadata: String
+    """
+    The channel's recent delivery record, read from the delivery ledger: when it last
+    delivered, when it last failed, and how many attempts have failed since. Records leave
+    the ledger after its retention period, so a channel that has sent nothing for that long
+    reads as never having sent. Null, with an error, for a caller without notification:read
+    (a channel returned by a mutation to a writer who cannot read) or when the ledger cannot
+    be read; the rest of the channel is returned either way.
+    """
+    deliveryHealth: NotificationChannelHealth
+}
+
+"""A channel's recent delivery record, read from the delivery ledger."""
+type NotificationChannelHealth {
+    """When an attempt through the channel last succeeded, as an RFC 3339 timestamp; null if none is recorded."""
+    lastSuccessAt: String
+    """When an attempt through the channel last failed or was refused, as an RFC 3339 timestamp; null if none is recorded."""
+    lastFailureAt: String
+    """
+    Number of attempts that failed or were refused since the channel last delivered (or
+    since the oldest recorded attempt, if it never has). Each retry counts, so one alarm
+    whose three tries all failed adds 3. Attempts the platform never made (NOT_ATTEMPTED)
+    or cut short (errorCode BUDGET_SPENT) do not count against the channel.
+    """
+    consecutiveFailures: Int!
 }
 
 """
@@ -614,6 +638,19 @@ type Query {
         """Filters and paging."""
         criteria: NotificationStateSearchCriteria!
     ): NotificationStateSearchResults!
+
+    # The delivery ledger (read-only).
+    """
+    Searches the delivery ledger, newest first: one record per attempt to send an alarm's
+    notification through a channel, with its outcome. Records are kept for a retention
+    period (7 days by default). The ledger is best-effort: it never delays a
+    notification, so a record proves an attempt was made, but a missing record does not
+    prove one was not. Requires notification:read.
+    """
+    notificationAttempts(
+        """Filters and paging."""
+        criteria: NotificationAttemptSearchCriteria!
+    ): NotificationAttemptSearchResults!
 }
 
 """
@@ -773,4 +810,91 @@ type Mutation {
 schema {
     query: Query
     mutation: Mutation
+}
+
+"""One attempt to send an alarm's notification through a channel, from the delivery ledger."""
+type NotificationAttempt {
+    """Server-assigned identifier of this record."""
+    id: ID!
+    """When the attempt started, as an RFC 3339 timestamp."""
+    attemptedAt: String!
+    """Token of the alarm the notification was about."""
+    alarmToken: String!
+    """
+    What caused the delivery: ALARM (an alarm state change), ESCALATION (an open alarm was
+    re-notified) or QUIET_HOURS_RELEASE (a notification held by quiet hours was sent when
+    the quiet period ended). New values may be added; treat an unknown one as informational.
+    """
+    trigger: String!
+    """
+    Token of the policy whose rule planned the delivery, or null if unknown. When two
+    policies route to the same channel and recipients the notification is sent once, and
+    the first policy is recorded.
+    """
+    policyToken: String
+    """Token of the channel. Kept by token so the record survives the channel being deleted."""
+    channelToken: String!
+    """The channel's type at the time of the attempt, such as smtp or webhook."""
+    channelType: String!
+    """The recipients the attempt was addressed to; empty for a channel type that has none."""
+    recipients: [String!]!
+    """
+    Hex SHA-256 of the notification's subject line, so two attempts can be shown to have
+    carried the same message without the ledger storing the message.
+    """
+    subjectHash: String
+    """
+    The outcome: SENT (the channel accepted it), FAILED (a failure a retry might fix),
+    REFUSED (refused terminally, so no retry followed: a destination outbound traffic may
+    not reach, or a refused credential configuration) or NOT_ATTEMPTED (planned but never
+    tried: the channel's delivery secret could not be read, or the time allowed for the
+    alarm's deliveries ran out first). New values may be added; treat an unknown one as
+    not delivered.
+    """
+    status: String!
+    """This try's number, starting at 1; 0 for NOT_ATTEMPTED."""
+    attempt: Int!
+    """How many tries the channel was allowed for this delivery."""
+    maxAttempts: Int!
+    """How long the channel took to accept or fail the attempt, in milliseconds; null if no call was made."""
+    latencyMillis: Int
+    """
+    Why the attempt did not succeed; null when it did: EGRESS_BLOCKED, CREDENTIAL_REFUSED,
+    TIMEOUT (the channel did not answer within its own per-attempt time), DELIVERY_ERROR,
+    SECRET_UNAVAILABLE or BUDGET_SPENT (the time allowed for all of the alarm's deliveries
+    ran out; on a FAILED record, while this attempt was in flight). BUDGET_SPENT does not
+    count against the channel's deliveryHealth. New values may be added.
+    """
+    errorCode: String
+    """
+    The provider's error text, with any URL replaced by <url> (a webhook URL can carry a
+    credential) and cut to 512 bytes; null when the attempt succeeded.
+    """
+    errorMessage: String
+}
+
+"""Filters and paging for the delivery ledger. Every filter is optional."""
+input NotificationAttemptSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
+    pageNumber: Int!
+    """Records per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Return only attempts about this alarm."""
+    alarmToken: String
+    """Return only attempts through this channel."""
+    channelToken: String
+    """Return only attempts with this status, such as FAILED."""
+    status: String
+    """Return only attempts made at or after this RFC 3339 timestamp. A value that does not parse fails the request."""
+    since: String
+    """Return only attempts made before this RFC 3339 timestamp. A value that does not parse fails the request."""
+    until: String
+}
+
+"""A page of delivery-ledger records."""
+type NotificationAttemptSearchResults {
+    """The records on this page, newest first."""
+    results: [NotificationAttempt!]!
+    """Position of this page within the full result set."""
+    pagination: SearchResultsPagination!
 }
