@@ -610,9 +610,9 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 	var access auth.IssuedToken
 	var err error
 	if g.anchors.IsScoped() && !g.su {
-		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString(), amrOptions(g.amr)...)
+		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString(), accessMintOptions(g)...)
 	} else {
-		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString(), amrOptions(g.amr)...)
+		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString(), accessMintOptions(g)...)
 	}
 	if err != nil {
 		return nil, errServer(err.Error())
@@ -631,6 +631,18 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 		Scope:        g.accessScope,
 		ExpiresIn:    expiresInSeconds(access.ExpiresAt, time.Now()),
 	}, nil
+}
+
+// accessMintOptions are the claims an OAuth ACCESS token carries beyond its scope: the sign-in's
+// amr and the sid of the grant session it descends from.
+//
+// 🔴 THE SID IS WHAT LETS A JOURNAL ROW OR A GATE NAME THE GRANT. The refresh token has always
+// carried it; the access token, which is the one that reaches the data plane, did not. It is
+// additive: a validator that has never heard of the claim ignores it, and a token without it
+// (one minted before the claim existed) is read as "session unknown", never as a match
+// (auth.SameSession).
+func accessMintOptions(g scopedGrant) []auth.MintOption {
+	return append(amrOptions(g.amr), auth.WithSessionID(g.sid))
 }
 
 // expiresInSeconds is the OAuth expires_in of an access token: the seconds from now until

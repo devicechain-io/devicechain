@@ -1,0 +1,1227 @@
+---
+sidebar_position: 1
+title: API de GraphQL
+---
+
+# API de GraphQL
+
+Todo servicio de DeviceChain que expone una API externa lo hace a través de **GraphQL**. Esta página
+enumera los endpoints, cómo obtener los esquemas, las convenciones que sigue toda mutación y los
+límites a los que se somete cada solicitud.
+
+:::note Estado
+Desde la v1.0.0 los esquemas publicados siguen la [política de versionado](../deployment/versioning-policy.md):
+una versión menor solo añade y marca con `@deprecated` lo que deja obsoleto, y las eliminaciones esperan
+a una versión mayor. Los archivos de esquema publicados son la referencia autoritativa. La introspección está deshabilitada por defecto (consulta
+[Explorar el esquema](#exploring-the-schema)).
+:::
+
+## Descargar los esquemas {#download-the-schemas}
+
+Todos los esquemas se publican aquí, generados a partir de los archivos que los servicios analizan al
+arrancar:
+
+| | |
+|---|---|
+| **Páginas de referencia** | [Referencia de los esquemas GraphQL](/reference/graphql/): una página por esquema, con cada consulta, mutación, suscripción y tipo, y su descripción |
+| **Índice** | [`/schema/index.json`](pathname:///schema/index.json) — cada área, su plano de autenticación, su endpoint y su archivo de esquema |
+| **Esquemas** | `/schema/<area>.graphql`, más `-admin` y `-settings` para las dos áreas que sirven esos planos |
+
+Empieza por el índice. Nombra el plano de autenticación en el que reside cada esquema, y el token que
+acepta ese plano, para todas las áreas en un solo sitio. Cada archivo de esquema publicado abre
+además con un comentario que nombra su propio plano, su endpoint y su token. El plano importa porque
+una mutación de administración ofrecida a quien desarrolla sobre un inquilino es una llamada que
+nunca podrá autorizar.
+
+Los archivos se sirven como texto plano con CORS permisivo, así que puedes obtenerlos directamente:
+
+```bash
+curl -s https://docs.devicechain.io/schema/index.json | jq '.areas[] | {area, endpoint}'
+curl -s https://docs.devicechain.io/schema/device-management.graphql
+```
+
+## Endpoints {#endpoints}
+
+El ingress enruta `/api/<area>/graphql` a cada servicio de área funcional y quita el prefijo, de modo
+que la solicitud llega al `/graphql` propio de ese servicio. Por tanto, todos los endpoints siguientes
+son `https://<tu-host>/api/<area>/graphql`:
+
+| Área | Cubre |
+|---|---|
+| `user-management` | autenticación — `login`, `selectTenant`, `refresh` — y la vista de gobernanza del propio inquilino |
+| `device-management` | dispositivos, tipos de dispositivo, perfiles, activos, áreas, clientes, grupos, relaciones, alarmas, credenciales, autoría de reglas de detección |
+| `event-management` | consultas de eventos de series temporales — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements`, además de `calculatedEvents`, que previsualiza la fórmula en borrador de una métrica calculada sobre las lecturas almacenadas de un dispositivo |
+| `device-state` | último estado conocido en vivo — `latestMeasurements`, `latestLocation`, `deviceStates` — más `demoteAssertedPresence`, que devuelve los dispositivos afirmados de una fuente de eventos a presencia inferida |
+| `command-delivery` | envío de comandos — `createCommand`, `cancelCommand`, lotes para toda la flota (`createCommandBatch`, `cancelCommandBatch`), historial de comandos |
+| `event-processing` | validación de reglas de detección, vista previa de reproducción, salud de reglas |
+| `dashboard-management` | CRUD y versionado de paneles |
+| `outbound-connectors` | CRUD de conectores de salida por inquilino |
+| `notification-management` | canales y políticas de notificación |
+| `ai-inference` | una única llamada, `inferRuleCandidate`, que respalda la autoría de reglas en lenguaje natural — presente solo cuando el servicio opcional de inferencia está habilitado |
+
+Otros tres endpoints residen en un **plano de token de identidad separado**, no en el plano de
+inquilino. Están autorizados para el superusuario o el operador:
+
+| Endpoint | Cubre |
+|---|---|
+| `/api/user-management/admin/graphql` | la API de administración de instancia — directorio de identidades, membresías, catálogo de roles, registro de inquilinos y niveles |
+| `/api/user-management/settings/graphql` | ajustes de instancia |
+| `/api/ai-inference/admin/graphql` | proveedores de inferencia registrados por el operador |
+
+La autorización en los servicios del plano de datos está **basada en capacidades**: cada resolver
+comprueba una autoridad específica (por ejemplo, `device:write`) que lleva el token de inquilino del
+llamador. Algunas autoridades no coinciden con la intuición:
+
+- Leer credenciales de dispositivo requiere `device:write`, no `device:read`.
+- `latestLocation` requiere `location:read`, mientras que sus hermanas en `device-state` requieren
+  `state:read`.
+- `demoteAssertedPresence` requiere `state:demote`, que no es ninguna de las dos. Ningún rol la
+  nombra por defecto; solo un rol que tenga la superautoridad `*`, como el rol `tenant-admin`
+  sembrado, la tiene sin una concesión explícita. Es lo único fuera del canal de eventos que escribe
+  la proyección de estado en vivo, y una sola llamada alcanza los dispositivos de una fuente de
+  eventos entera.
+
+`sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
+fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
+posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
+`update-management` también está enrutado: su API es el catálogo de artefactos (`createArtifact`,
+`artifact`, `artifacts`, `retireArtifact`) y la asignación de un artefacto disponible a un
+dispositivo (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`) o, como despliegue con límite, a un
+grupo de dispositivos (`createUpdateRollout`, `startUpdateRollout`, `pauseUpdateRollout`, `resumeUpdateRollout`,
+`abortUpdateRollout`, `updateRollout`, `updateRollouts`, `updateRolloutTargets`). Una asignación
+lleva un intento de actualización cuyo estado pasa de `QUEUED` por `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING`
+y `REBOOTING` hasta `UPDATED`, o a `FAILED`, `TIMED_OUT`, `UNKNOWN` o `CANCELLED`; `UPDATED` solo se alcanza
+cuando el dispositivo informa de que la versión de destino está en ejecución, con un nuevo arranque cuando
+la actualización lo requiere. Asignar un artefacto que ningún firmante activo ha firmado se rechaza salvo que la instancia
+active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManagementInfo`. Los firmantes son
+claves públicas que se registran con `registerArtifactSigner` y se revocan con `revokeArtifactSigner` (ambas
+requieren `artifact:trust`); `addArtifactSignature` adjunta una firma que se verifica contra el digest del
+artefacto. Una actualización que queda en `UNKNOWN` (el dispositivo calló durante la
+instalación o el reinicio) bloquea una nueva asignación de ese componente hasta que el dispositivo informe de lo que ejecuta;
+si nunca lo hará, `abandonUnknownUpdate(assignmentToken, reason)` la cierra como `CANCELLED` con su motivo registrado,
+deja constancia del cambio a su nombre y avisa al dispositivo. No averigua qué ejecuta el dispositivo, que puede estar en
+cualquiera de las dos versiones, así que compruebe su inventario antes de dar por buena una u otra. [Actualizaciones over-the-air](../concepts/over-the-air-updates.md) describe el ciclo de vida y los ajustes. El contenido del artefacto no viaja por GraphQL:
+se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
+de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
+`ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. En el front end
+Gateway, que usa una instalación nueva, lo hace en su lugar la propia instalación del controlador: Traefik transmite el
+cuerpo sin límite y el servicio aplica el suyo. Con
+cualquier otro controlador de ingress, fije lo mismo en esa ruta: para ingress-nginx,
+`nginx.ingress.kubernetes.io/proxy-body-size` igual o superior a su artefacto más grande, y
+`nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Sin lo segundo, nginx lee todo el cuerpo a disco
+antes de que el servicio vea la petición, de modo que el token no se comprueba hasta que ha llegado la imagen
+entera.
+
+Un dispositivo descarga un artefacto asignado desde `GET /api/update-management/updates/download/{artifact}?cap=...`.
+La petición no lleva ninguna credencial del inquilino: `cap` es una capacidad que la plataforma envió al
+dispositivo por su sesión MQTT autenticada, que nombra un artefacto para un dispositivo bajo una asignación y
+caduca en menos de quince minutos. Un dispositivo que necesite más tiempo la pide de nuevo y recibe una capacidad
+nueva para el mismo artefacto. Como `cap` va en la cadena de consulta, el chart publica esta ruta en un Ingress propio con el
+registro de accesos de ingress-nginx desactivado; con cualquier otro controlador de ingress, asegúrese de que la cadena de
+consulta de `/api/update-management/updates/download/` no se escriba en un registro de accesos. El endpoint responde a las peticiones `Range` con `206`, de modo que una descarga
+interrumpida continúa donde se detuvo, y rechaza una capacidad falsificada, caducada o que ya no está vigente antes
+de leer nada del artefacto. La URL pública a la que se envía a un dispositivo es `updates.downloadBaseUrl`. Si no la
+fija, el chart la deriva del host del ingress de la instancia como `<origen>/api/update-management`; una instancia
+sin ingress y sin valor no tiene base, y entonces ningún dispositivo puede recibir una capacidad.
+`updateManagementInfo.downloadsConfigured` indica si hay una base definida. Fijar el valor como cadena vacía desactiva
+las descargas.
+
+### Suscripciones por WebSocket {#subscriptions-over-websocket}
+
+Un servicio que ofrece suscripciones de GraphQL también acepta un WebSocket en su endpoint de
+GraphQL. El cliente debe negociar el subprotocolo `graphql-transport-ws` y enviar su token de acceso
+en la carga de `connection_init`, como `{"Authorization": "Bearer <token>"}` o
+`{"token": "<token>"}`. El token se comprueba una sola vez, al abrir la conexión.
+
+- **El WebSocket ejecuta suscripciones y nada más.** Una consulta o una mutación enviada por él se
+  rechaza con el error `only subscription operations are accepted over a WebSocket; send queries and
+  mutations over HTTP`, y no se ejecuta nada. Envía las consultas y las mutaciones como peticiones
+  HTTP.
+- **La conexión se cierra con el código `4401` cuando caduca su token de acceso.** Para mantener un
+  flujo, abre una conexión nueva con un token nuevo y vuelve a suscribirte. `@devicechain/client` lo
+  hace una vez por su cuenta: cuando una conexión que había establecido se cierra con `4401`, se
+  reconecta con un token recién resuelto, vuelve a suscribirse e informa de la reconexión a tu
+  receptor como `connected(true)`. El SDK de .NET lanza el cierre desde `SubscribeAsync` como una
+  excepción que nombra el código; vuelve a suscribirte para continuar.
+- **Un servicio sin suscripciones rechaza la actualización a WebSocket** con HTTP 400 (`this service
+  offers no GraphQL subscriptions`).
+
+Una suscripción que el servidor no puede leer recibe un error de sintaxis, y un documento que nombra
+una operación que no contiene recibe su propio error. Ambos se aplican solo a esa operación, y la
+conexión sigue abierta.
+
+## Consultar eventos {#querying-events}
+
+event-management expone consultas de lectura sobre el historial de eventos persistido. Cada una toma
+un criterio de búsqueda — dispositivo, tipos de evento, un rango de tiempo de ocurrencia, un anclaje
+de relación (`{type, token}`) y paginación — y devuelve resultados paginados:
+
+```graphql
+query {
+  measurementEvents(criteria: {
+    pageNumber: 1, pageSize: 50,
+    deviceToken: "sensor-001",
+    startTime: "2026-06-01T00:00:00Z",
+    endTime: "2026-06-24T00:00:00Z",
+    anchor: { type: "customer", token: "acme-corp" }
+  }) {
+    results { deviceToken occurredTime name value }
+    pagination { totalRecords }
+  }
+}
+```
+
+- Las entidades se nombran por token en todo momento, incluido dentro del anclaje.
+- Ambos límites de tiempo son inclusivos y filtran por `occurredTime`: el instante en que el
+  dispositivo reportó, no el instante en que la plataforma lo almacenó.
+- Los resultados vuelven del más reciente al más antiguo.
+- La paginación empieza en 1.
+
+Todas las consultas de eventos están **acotadas por inquilino automáticamente**: los resultados se
+limitan al inquilino del llamador, y una consulta sin un inquilino resuelto se rechaza.
+
+El `processedTime` de un evento es cuándo la plataforma lo **recibió**. Para MQTT en el broker de la
+plataforma, es cuándo el broker guardó el mensaje, que tras una caída de `event-sources` puede ser
+bastante anterior a cuando se procesó el evento. Para otros transportes, es cuándo el servicio de
+ingesta tomó el evento.
+
+**`measurementEvents` no filtra por nombre de medición.** Su criterio no tiene un campo `name`, así
+que «solo las lecturas de temperatura de este dispositivo» no es directamente expresable. Filtra del
+lado del cliente sobre `results[].name`, o usa `bucketedMeasurements`, que sí toma un `name` y
+devuelve intervalos temporales:
+
+```graphql
+query {
+  bucketedMeasurements(criteria: {
+    deviceToken: "sensor-001",
+    name: "temperature",
+    startTime: "2026-06-01T00:00:00Z",
+    endTime: "2026-06-24T00:00:00Z",
+    intervalSeconds: 300
+  }) { bucketStart name avg min max sum count }
+}
+```
+
+:::caution A `bucketedMeasurements` le faltan las lecturas rellenadas con mucho retraso
+Una lectura **escrita ahora pero fechada más de 30 días en el pasado** (por su propio `occurredTime`,
+que controla el dispositivo) la devuelve `measurementEvents` de inmediato, pero `bucketedMeasurements`
+solo la muestra tras el siguiente barrido, normalmente en aproximadamente una hora. Esto solo alcanza a un dispositivo que estuvo almacenando más de un mes, o a uno
+cuyo reloj se desvía otro tanto. Consulta
+[Lecturas rellenadas y la preagregación](#backfilled-readings-and-the-rollup).
+:::
+
+### Lecturas rellenadas y la preagregación {#backfilled-readings-and-the-rollup}
+
+Una lectura por intervalos cuyo `intervalSeconds` es un múltiplo entero de 60 y que no lleva filtro de
+anclaje se sirve desde una preagregación, no desde las lecturas en bruto. La preagregación se
+mantiene al día sobre una **ventana móvil de 30 días**, cada minuto. Todo lo anterior se materializó
+una sola vez, cuando se creó la base de datos, y vuelve a refrescarse mediante un barrido que se
+ejecuta cada hora (y unos minutos después de un reinicio), un fragmento de historial cada vez, desde la lectura más antigua que la plataforma
+conserva (o acepta) hasta esa ventana.
+
+Una lectura escrita ahora pero fechada más de 30 días atrás se almacena de inmediato, así que
+`measurementEvents` la devuelve, pero `bucketedMeasurements` solo la muestra tras el siguiente
+barrido, normalmente en aproximadamente una hora. Tres cosas lo retrasan. Un relleno de métricas
+calculadas en curso retiene la preagregación, y el barrido reintenta cada cinco minutos hasta que
+queda libre. Una instancia cuyo pool de conexiones del almacén de eventos no tiene ninguna conexión
+libre no ejecuta el barrido en absoluto (el servicio lo registra al arrancar), de modo que esas
+lecturas no aparecen hasta ampliar el pool. Y un fragmento que sigue fallando al refrescarse se omite
+y se reintenta tras una espera creciente; `devicechain_eventmanagement_calc_backfill_rollup_tail_windows_skipped_total{reason}`
+los cuenta. Una lectura fechada dentro de los últimos 30 días se recoge en un minuto. Una
+lectura fechada más de un año atrás se rechaza al llegar. Los intervalos de menos de un minuto y las
+lecturas acotadas por anclaje se sirven desde las lecturas en bruto y no se ven afectados.
+
+## Explorar el esquema {#exploring-the-schema}
+
+**La introspección está deshabilitada por defecto.** Un despliegue de producción que no configura
+nada no expone ninguna superficie de introspección. Si apuntas un cliente de GraphQL a un endpoint
+esperando que se autodocumente, la consulta de introspección se rechaza.
+
+Eso deja dos formas de leer el esquema.
+
+**Los archivos de esquema publicados**, listados en [Descargar los esquemas](#download-the-schemas).
+Es la vía fiable: no necesita una instancia en ejecución ni un token, lo que más importa mientras
+todavía estás evaluando DeviceChain. Los archivos se generan a partir de las fuentes de esquema de
+cada servicio en cada build de la documentación, así que no pueden divergir de los esquemas que los
+servicios analizan. También puedes leer las fuentes versionadas en el repositorio. Todas son archivos
+`.graphql` nombrados según el endpoint que las sirve: `schema.graphql` para la API de inquilino, más
+`admin_schema.graphql` y `settings_schema.graphql` en las áreas que además sirven una API con token
+de identidad.
+
+**Introspección en una instancia de desarrollo.** Configura `DC_GRAPHQL_DEV_TOOLS=true` en el
+servicio para habilitarla. Hazlo solo en una instancia de desarrollo; está deshabilitada por defecto
+de forma deliberada. Cualquier valor que no se interprete como booleano se trata como deshabilitado
+en lugar de adivinarse. Con ella habilitada, la consulta habitual funciona:
+
+```graphql
+query {
+  __schema {
+    types { name kind }
+  }
+}
+```
+
+Habilitar las herramientas de desarrollo sirve además un **explorador GraphiQL** en `/graphiql` en
+cada servicio. A través del ingress eso es `/api/<area>/graphiql`; en un port-forward directo contra
+el pod es `/graphiql`. El explorador envía al endpoint por el que se llegó a él, así que funciona en
+las tres rutas: ingress, port-forward y el proxy de desarrollo de la consola. Antes de la `v0.12.0`
+la página cargaba y luego fallaba en cada consulta que enviaba, porque apuntaba a una ruta que ningún
+servicio sirve.
+
+## Convenciones {#conventions}
+
+- Las entidades se direccionan mediante un **token** legible por humanos, además de un id interno.
+- Las consultas de listado toman una entrada de criterio de búsqueda con paginación.
+- Las mutaciones siguen un patrón de nomenclatura `create* / update* / delete*`.
+
+### Cuánto del registro escribe una actualización {#an-update-replaces-the-whole-record}
+
+**Toda mutación `update*` es una actualización parcial, y solo hay un contrato.** Cada una toma un
+`*UpdateRequest` propio, nunca la entrada de su hermana `create*`, y cada una distingue tres estados
+en lugar de dos:
+
+| Qué envías para un campo | Qué le ocurre al valor almacenado |
+| --- | --- |
+| Nada — el campo está ausente | Se deja tal cual |
+| Un `null` explícito | Se limpia |
+| Un valor | Se establece a ese valor |
+
+Los **campos** concretos sí pueden desviarse: una referencia obligatoria que se niega a limpiarse, un
+secreto de solo escritura, un campo que no está en la entrada de actualización en absoluto. Están
+enumerados en [Dónde no rige el comportamiento por defecto](#where-the-default-does-not-hold). Léelo
+antes de automatizar nada.
+
+Un renombrado es solo un renombrado:
+
+```graphql
+# Cambia el nombre. La descripción, el externalId, los metadatos y el tipo del
+# dispositivo quedan exactamente como estaban, porque no se menciona ninguno.
+mutation {
+  updateDevice(token: "sensor-001", request: { name: "Cold store probe" }) {
+    token
+    name
+  }
+}
+```
+
+**Envía solo lo que quieras cambiar.** Leer el registro y reenviarlo entero es el hábito que enseña
+una API de reemplazo completo, y aquí es el equivocado. Da más trabajo, amplía la ventana en la que
+pisas una edición concurrente y, en un campo `secret` de solo escritura, es directamente
+destructivo — consulta [el aviso de más abajo](#where-the-default-does-not-hold).
+
+Una actualización parcial reduce los conflictos de concurrencia sin eliminarlos. Dos escritores que
+tocan campos distintos ya no se pisan, pero dos que tocan el mismo campo sí. `updateDashboard`,
+`updateConnector`, `updateAiProvider` y `updateNotificationPolicy` aceptan un `expectedUpdatedAt`
+opcional y rechazan la escritura si la marca de tiempo almacenada se ha movido desde que la leíste.
+Envía el `updatedAt` que leíste por última vez, u omítelo para que gane la última escritura. El
+`updatedAt` que devuelve una respuesta `create*` no sirve para esto: vuelve a leer el registro
+primero, o la primera actualización protegida puede rechazarse como obsoleta aunque nadie lo haya
+cambiado.
+
+#### El argumento `token` nombra el registro {#the-token-argument-names-the-record}
+
+Toda `update*` nombra el registro mediante un **argumento**, nunca mediante el payload, y **ese
+argumento decide qué registro se escribe.** En todas salvo dos es `token: String!`; `updateRole`
+toma además `scope: String!`, y nombra el rol por ámbito y token a la vez. `updateOauthClient` toma
+`clientId: String!` en su lugar, y `updateProfile` no toma ningún localizador, porque el registro que
+edita es la identidad con la sesión iniciada.
+
+El payload no lleva token. En toda [actualización parcial](#which-mutations-are-partial-updates), la
+entrada no tiene campo `token`, así que un token de payload que no coincida con el argumento no es
+representable: el esquema lo rechaza.
+
+Otros dos comportamientos existían antes y han desaparecido:
+
+- Un token de payload que debía coincidir con el argumento: se rechazaba si no coincidía y se leía
+  como «sin especificar» si venía vacío. Sus dos últimas mutaciones se han convertido.
+- Un token de payload que nombraba el nuevo token del registro, que es como se renombraban un
+  perfil, un conector, un proveedor y un canal de notificación. Los cuatro tienen ya una
+  [mutación de renombrado propia](#renaming-a-record), y con ello ha desaparecido la última entrada
+  de actualización de la plataforma que llevaba un token.
+
+Ahora todas las actualizaciones coinciden en dos cosas: un token de payload ya no puede **dejar en
+blanco** un registro, y nunca puede hacer que la mutación escriba un registro distinto del que nombra
+`token:`.
+
+#### Renombrar un registro {#renaming-a-record}
+
+Cuatro registros se renombraban enviando un token distinto dentro del payload de una actualización de
+reemplazo completo. Cada uno tiene ahora una mutación propia, donde el nuevo token solo puede
+significar una cosa:
+
+```graphql
+renameDeviceProfile(token: String!, newToken: String!): DeviceProfile!
+renameConnector(token: String!, newToken: String!): Connector!
+renameAiProvider(token: String!, newToken: String!): AiProvider!
+renameNotificationChannel(token: String!, newToken: String!): NotificationChannel!
+```
+
+Las cuatro siguen un mismo contrato:
+
+- Un `newToken` en blanco (vacío o solo espacios) se rechaza, porque dejaría un registro vivo sin
+  nada que lo direccione.
+- Renombrar un registro al token que ya tiene es un éxito idempotente que devuelve el registro, así
+  que reintentar tras un fallo parcial es seguro.
+- Un token que ya tiene otro registro de esa clase se rechaza por su nombre, con `extensions.code`
+  igual a `CONFLICT`, tanto si el rechazo viene de la búsqueda como de un renombrado concurrente que
+  llegó antes. Consulta [Un valor que debe ser único](#unique-values).
+- La autoridad requerida es la que exige la actualización correspondiente: renombrar es editar el
+  registro, no un acto de otra naturaleza.
+
+Cada uno de estos renombrados siempre fue intencionado, porque lo que depende del registro se indexa
+por su id interno y no por su token. Eso incluye el secreto de entrega de un canal y el id de canal
+que guardan las reglas de una política, la credencial de un conector, y la clave de API de un
+proveedor junto con sus concesiones por nivel y la asignación de modelo de cada inquilino. Un
+renombrado no deja huérfano a ninguno.
+
+Dos cosas sí se mueven con un renombrado; revisa ambas antes de lanzar uno:
+
+- Las acciones de una regla nombran su conector por token, así que las reglas que apunten a un
+  conector renombrado hay que reapuntarlas.
+- `renameDeviceProfile` rechaza el renombrado por completo una vez que el perfil ha sido publicado o
+  adoptado por un tipo de dispositivo, porque a partir de ahí las reglas publicadas y los inventarios
+  de dispositivos lo nombran por token.
+
+`updateNotificationPolicy` no necesitó mutación de renombrado: nada se indexa por el token de una
+política, así que una política se mueve creando la nueva y borrando la antigua.
+
+**El token de un geocerco es inmutable.** `updateGeoFence` reconciliaba antes dos tokens y rechazaba
+una discrepancia. Su entrada ya no lleva token, así que ninguna petición puede pedir un renombrado.
+El motivo no ha cambiado: las reglas de detección nombran los geocercos por token dentro de
+expresiones compiladas que este servicio no puede reescribir, así que un renombrado dejaría a todas
+ellas sin nombrar nada mientras la mutación devuelve éxito. Si necesitas un geocerco con otro token,
+**crea primero el nuevo y borra después el antiguo**. Hacerlo al revés puede hacerte perder el margen
+de posiciones que tienes heredado y dejar el geocerco sin poder recrearse.
+
+:::note[Esto ha cambiado]
+Antes de esta versión, el manejo de tokens en las actualizaciones no era ni uniforme ni seguro, y
+ambos fallos devolvían éxito. Consulta [Cómo cambió el manejo de tokens](#how-token-handling-changed).
+:::
+
+##### Cómo cambió el manejo de tokens {#how-token-handling-changed}
+
+La mayoría de las mutaciones `update*` localizaban el registro por el token del payload e ignoraban
+el argumento por completo. Una petición que nombraba una entidad en `token:` y otra en
+`request.token` actualizaba en silencio la segunda y la devolvía. Las demás respetaban el argumento
+pero luego escribían el token del payload sobre el almacenado, así que el payload seguía moviendo el
+registro. Un token de payload vacío, que `token: String!` permite (`""` es una cadena no nula
+válida), dejaba en blanco el token del registro y una fila viva sin nada que la direccione.
+
+Un cliente que dependía de que el payload nombrase el registro recibe ahora un error en lugar de
+escribir la fila equivocada. Un cliente que envía `token: ""` en una actualización recibe ahora un
+error en ambos casos, donde antes destruía la identidad del registro: las mutaciones de renombrado lo
+rechazan, y en una actualización parcial lo rechaza el esquema, porque la entrada no tiene campo
+`token` donde enviarlo. Un tercer grupo de mutaciones *ignoraba* antes un token vacío (esa era la
+regla «debe coincidir»); todas se han convertido.
+
+### Dónde no rige el comportamiento por defecto {#where-the-default-does-not-hold}
+
+Estas son las excepciones a nivel de campo de la API que sirve esta versión. Las dos últimas filas
+describen una clase de campo y dan ejemplos en lugar de enumerar cada uno; el comentario de cada
+campo en el [esquema publicado](#download-the-schemas) dice si se puede limpiar. Un campo que no es
+una excepción sigue los tres estados de arriba: ausente lo deja tal cual, `null` lo limpia, un valor
+lo establece.
+
+| Campo | Qué ocurre al omitirlo |
+| --- | --- |
+| `secret` en `updateNotificationChannel`, `updateConnector`, `updateAiProvider` | **Se conserva.** Un valor lo rota; `null` — o una cadena vacía — lo borra. No puedes leer un secreto de vuelta, así que omitirlo es como se dice «deja la credencial como está». Un canal de notificación cuya configuración de webhook declara `bearer` o `header` rechaza quedarse sin él |
+| `config` en `updateTenantTier` | **Se conserva.** Limpiar los ajustes de un nivel recalcula el precio de cada inquilino en él, así que no se alcanza por omisión — envía `null` o `{}` para limpiarlo |
+| `selector` en `updateEntityGroup` | **Se conserva** al omitirlo. A diferencia de la mayoría de campos de una actualización parcial, no se puede *limpiar*: `null` se rechaza, porque un grupo dinámico sin selector no coincide con nada y no se puede reparar. A un grupo estático se le rechaza un selector sin más |
+| `definition` en `updateDashboard` | **Se conserva** al omitirlo, que es como se renombra un panel sin reenviar su documento. Igual que `selector` arriba, no se puede *limpiar*: `null` se rechaza, porque un panel sin definición no es nada. Una definición malformada rechaza la actualización completa, así que un renombrado enviado con ella tampoco se aplica |
+| `credentialType` en `updateProvisioningProfile` | **No está en la entrada de actualización.** Hoy el aprovisionamiento solo puede emitir un tipo de credencial, así que el campo únicamente repetiría lo almacenado. Antes cualquier actualización que lo omitiera lo *restablecía* a `ACCESS_TOKEN` |
+| `activeVersion` en un perfil de dispositivo o un grupo de entidades | Nada: aquí no es escribible en absoluto, y solo se mueve con publicar y revertir |
+| `memberType` / `membershipMode` en `updateEntityGroup` | **No están en la entrada de actualización.** Ambos son identidad, así que un cambio no es representable en lugar de rechazarse |
+| Las [anulaciones de gobernanza](../concepts/governance.md) de un inquilino en `updateTenant` | **Se conservan.** Enviar `null` elimina la anulación, lo que significa **heredar el nivel y luego el valor por defecto de la plataforma**: nunca cero, y nunca «ilimitado» |
+| Un campo sin el que el registro no puede existir — por ejemplo `type` y `config` en `updateConnector`; `kind`, `model` y `enabled` en `updateAiProvider`; `channelType` y `enabled` en `updateNotificationChannel`; `enabled` en `updateNotificationPolicy`; `tierToken` en `updateTenant`; `redirectUris` y `scopes` en `updateOauthClient`; y las referencias y campos obligatorios enumerados en [Campos que conviene conocer](#two-fields-on-converted-mutations) | **Se conserva** al omitirlo. Un `null` explícito se rechaza en lugar de limpiarlo |
+| Un campo que se valida junto con otro — por ejemplo `endpoint` en `updateAiProvider`, y `entityGroupToken` / `entityGroupVersion` en `updateDetectionRule` | **Se conserva** al omitirlo. Un `null` lo limpia solo si el registro sigue siendo válido con lo que contiene el otro campo: `endpoint: null` se rechaza para una clase de proveedor sin dirección por defecto, y limpiar una mitad del ámbito de grupo de una regla sin la otra se rechaza |
+
+:::danger Una cadena vacía no significa «deja esto como está»
+En todos los campos `secret` de solo escritura, **`""` borra la credencial almacenada**, y la mutación
+devuelve éxito. (La única excepción es un canal de notificación cuya configuración de webhook declara
+`bearer` o `header`: ahí se rechaza la actualización entera.) Un cliente que rellena todos los campos borra una credencial que nunca quiso tocar, y
+un conector cuya credencial ha desaparecido falla la autenticación en cada envío saliente. **Deja el
+campo fuera.** Consulta [Secretos y cadenas vacías](#secrets-and-empty-strings).
+:::
+
+#### Secretos y cadenas vacías {#secrets-and-empty-strings}
+
+No puedes leer un secreto de vuelta, así que no hay nada que reenviar; la respuesta de la API es que
+omitirlo lo conserva. «Leer el registro, cambiar una cosa y reenviarlo todo» es el hábito que enseña
+una API de reemplazo completo, y los clientes escritos contra una lo siguen haciendo. Rellenar todos
+los campos significa enviar `secret: ""` para una credencial que nunca quisiste tocar, lo que la
+borra.
+
+`null` también borra la credencial. Eso no es una excepción sino el significado habitual de un null
+en la plataforma: un null limpia el campo que nombra. La inversión que estos campos llevaban antes,
+donde null conservaba y solo `""` borraba, ha desaparecido.
+
+#### El texto se recorta; las credenciales no {#text-and-credentials}
+
+Un nombre, una descripción y el texto visible similar — el nombre o el apellido de una persona, un
+icono, una unidad, el color de un nivel — se guardan sin sus espacios iniciales y finales, y un
+valor vacío o formado solo por espacios lo limpia, así que se lee de vuelta como `null`. Eso ocurre
+igual al crear que al actualizar, así que reenviar un valor que has leído no es un cambio para nada
+guardado bajo esta regla. Un valor que una versión anterior guardó con espacios alrededor, como el
+nombre de una persona, se recorta la primera vez que una actualización nombra ese campo. El texto
+estructurado, como `metadata`, la `config` de un canal o la `definition` de un panel, no se
+recorta.
+
+El `credentialValue` de una credencial de dispositivo tampoco se recorta: se guarda exactamente
+como lo envías, espacios incluidos, porque un dispositivo presenta su contraseña byte a byte. Solo
+un `credentialValue` vacío, o un `null` explícito al actualizar, no guarda ninguna contraseña, y una
+credencial sin contraseña no puede autenticarse.
+
+### Qué mutaciones son actualizaciones parciales {#which-mutations-are-partial-updates}
+
+**Todas.** La conversión llegó área por área y ya está completa. Esta sección recoge lo que cambió en
+cada área, porque un cliente escrito contra el comportamiento antiguo necesita saberlo.
+
+**device-management.** Toda `update*` toma un `*UpdateRequest` propio:
+
+`updateDeviceType` · `updateDevice` · `updateAssetType` · `updateAsset` · `updateCustomerType` ·
+`updateCustomer` · `updateAreaType` · `updateArea` · `updateMetricDefinition` ·
+`updateCommandDefinition` · `updateDetectionRule` · `updateGeoFence` · `updateEntityGroup` ·
+`updateDeviceCredential` · `updateProvisioningProfile` · `updateEntityRelationshipType` ·
+`updateDeviceProfile` · `updateIntegration`
+
+**Conectores salientes e inferencia de IA.** Cada área convirtió su única actualización:
+`updateConnector` y `updateAiProvider`. Todos los canales de renombrado que llevaban los tokens de
+payload de esas áreas se trasladaron a una [mutación de renombrado propia](#renaming-a-record) en
+lugar de eliminarse. Ambas conservan un `expectedUpdatedAt` opcional. En ellas, `type`/`config` y
+`kind`/`endpoint` respectivamente se validan como un par contra los valores que tendrá el registro.
+Nombrar uno del par vuelve a comprobar el otro almacenado, y un cambio que dejaría el registro
+inutilizable se rechaza al escribir y no en el primer uso.
+
+**notification-management.** Ambas mutaciones `update*` se han convertido: `updateNotificationChannel`
+y `updateNotificationPolicy`. Tres cosas de la política conviene saberlas antes de enviar una:
+
+- **`rules` es opcional, y omitirlo deja el conjunto de reglas exactamente como está** — las mismas
+  filas, no una copia reconstruida. Antes era obligatorio y cada actualización reemplazaba el conjunto
+  entero, así que una edición que solo cambiaba un nombre destruía y recreaba cada regla, y una
+  edición que dejaba `rules` fuera vaciaba la política y devolvía éxito. El reemplazo completo sigue
+  disponible: envía la lista. Enviar `null` o `[]` vacía el conjunto de reglas; para una lista son la
+  misma petición escrita de dos formas.
+- **`deviceTypeToken` no está en la entrada de actualización.** Un valor no vacío se rechaza al
+  escribir, porque el despachador omite una política acotada a un tipo de dispositivo, así que
+  aceptarlo devolvería éxito sobre una política que no entrega nada. Eso dejaba al campo sin ninguna
+  petición aceptable más allá de una operación nula. Sigue en la entrada de creación, donde el rechazo
+  se explica solo.
+- **Acepta un `expectedUpdatedAt` opcional.** Envía el `updatedAt` que leíste por última vez, o el
+  que devolvió una actualización, y la actualización se rechaza, sin escribir nada, si alguien ha
+  cambiado la política desde entonces, reglas incluidas. Si lo omites, gana la última escritura, como
+  hasta ahora.
+
+**dashboard-management.** `updateDashboard` toma un `DashboardUpdateRequest` y no lleva token alguno.
+Su única particularidad es `definition`: el campo es anulable para poder *omitirse*, que es como se
+renombra un panel sin reenviar su documento entero, pero un `null` explícito sobre él se rechaza,
+porque un panel sin definición no es nada. Conserva su precondición opcional `expectedUpdatedAt`. Una
+actualización que no nombra ningún campo no escribe nada (ni siquiera `updatedAt`), aunque una
+precondición obsoleta sobre ella se sigue rechazando como escritura obsoleta (sin
+`extensions.code`).
+
+**user-management.** Toda `update*` toma también una petición propia:
+
+`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile` ·
+`updateTenantRole`
+
+**Esa es toda la superficie de actualización.** Ninguna mutación `update*` toma en ningún sitio la
+entrada de su hermana `create*`, así que esta página ya no incluye una lista con la que contrastar
+una mutación. Versiones anteriores sí, dos veces: primero un listado de las áreas sin convertir, y
+después una regla que decía que la firma era la autoridad porque coexistían dos contratos. Ambas
+quedaron obsoletas cuando caducó su premisa. Lo que las sustituye son los
+[tres estados](#an-update-replaces-the-whole-record) y las
+[excepciones a nivel de campo](#where-the-default-does-not-hold), que describen toda la API.
+
+:::caution[Consulta el esquema para saber qué declara cada entrada]
+Un solo contrato no significa que toda entrada acepte todo campo. Algunos campos faltan a propósito
+en su `*UpdateRequest`, y otros aceptan un valor pero rechazan un `null`. El
+[esquema que descargaste](#download-the-schemas) es la autoridad para lo primero; la
+[tabla de excepciones](#where-the-default-does-not-hold), junto con el comentario de esquema de cada
+campo, cubre lo segundo. Consulta
+[Qué puede expresar una entrada de actualización](#what-an-update-input-can-express).
+:::
+
+#### Qué puede expresar una entrada de actualización {#what-an-update-input-can-express}
+
+Lo que una actualización *puede* expresar es lo que declara su `*UpdateRequest`. Algunos campos están
+ausentes a propósito — `deviceTypeToken` en `updateNotificationPolicy`, `memberType` en
+`updateEntityGroup`, `credentialType` en `updateProvisioningProfile` — porque ninguna petición para
+ellos se aceptaría. Otros aceptan un valor pero rechazan un `null`; la
+[tabla de excepciones](#where-the-default-does-not-hold) los describe, y el comentario de esquema de
+cada uno lo indica. Ninguno de los dos casos es una pregunta sobre qué contrato rige la mutación,
+porque solo hay uno.
+
+:::note[Esto cambió en user-management]
+Cuatro actualizaciones de user-management escribían antes todos los campos que declaraba su entrada.
+Consulta [Cambios en user-management](#user-management-changes) antes de volver a ejecutar un cliente
+antiguo, empezando por `updateTenant`.
+:::
+
+#### Cambios en user-management {#user-management-changes}
+
+`updateRole`, `updateTenant`, `updateTenantTier` y `updateOauthClient` escribían todos los campos que
+declaraba su entrada, así que una petición que solo nombraba `name` dejaba el resto en blanco y
+devolvía el registro vaciado. Revisa primero `updateTenant`: omitir una anulación de gobernanza la
+**borraba**, así que renombrar un inquilino eliminaba todos los techos que un operador hubiera
+fijado. Ahora omitir una la deja tal cual, y solo un `null` explícito la elimina.
+
+`tierToken` en `updateTenant` pasó a ser opcional. Omitirlo mantiene al inquilino en su nivel actual;
+un `null` explícito se rechaza, porque todo inquilino tiene un nivel.
+
+`authorities`, `redirectUris` y `scopes` pasaron a ser listas anulables (`[String!]`, no
+`[String!]!`), así que ya tienen estado ausente:
+
+- Omitir una la deja tal cual.
+- Enviar una lista la sustituye entera.
+- `null` y `[]` significan ambos «vacía».
+
+Las autoridades de un rol se pueden vaciar, porque un rol que no concede nada es algo que puedes
+crear. Las URI de redirección y los ámbitos de un cliente OAuth no: una lista de redirección vacía no
+coincide con nada, así que el cliente jamás podría completar una autorización.
+
+`updateProfile` toma ahora `request: ProfileUpdateRequest!` en lugar de argumentos sueltos
+`firstName` / `lastName`. Escribe solo los nombres que envías. Un nombre se recorta como el resto
+del texto visible, y `""`, un valor formado solo por espacios o `null` lo limpian, así que se lee
+de vuelta como `null`.
+
+#### Campos que conviene conocer en las mutaciones convertidas {#two-fields-on-converted-mutations}
+
+- **Una referencia obligatoria no se puede limpiar.** El `assetTypeToken` de `updateAsset`, y sus
+  equivalentes en dispositivos, clientes y áreas, reapuntan la entidad cuando envías uno y la dejan
+  tal cual cuando no. Un `null` explícito se rechaza, porque «sin tipo» no es un estado en el que
+  esas entidades puedan estar. Un token desconocido también se rechaza, y el rechazo es total: no se
+  escribe nada.
+- **El `profileToken` de `updateDeviceType` *sí* se puede limpiar**, porque un tipo de dispositivo
+  sin [perfil de dispositivo](../concepts/domain-model.md) es algo real. Bajo la antigua forma de
+  reemplazo completo, omitirlo al renombrar un tipo **desvinculaba el perfil**, lo que dejaba sin
+  declarar en silencio la posición de cada dispositivo construido sobre ese tipo y devolvía éxito.
+  Omitirlo ahora conserva el perfil actual; `null`, o un token vacío, lo desvincula. El
+  `entityGroupToken` opcional de una regla de detección también se puede limpiar, pero solo como
+  pareja: envía `null` tanto para `entityGroupToken` como para `entityGroupVersion`. Limpiar uno y
+  dejar el otro establecido se rechaza, porque un ámbito necesita ambos.
+- **Un campo obligatorio tampoco se puede limpiar, aunque no sea una referencia.** El `dataType` de
+  una métrica, el `credentialType` y el `enabled` de una credencial, la `definition` y el `enabled`
+  de una regla, la `geometry` de un geocerco, la `provisionKey` de un perfil de
+  aprovisionamiento: envía un valor para cambiarlo, omítelo para dejarlo tal cual, y un `null`
+  explícito se rechaza. El fallo que esto evita es invisible: convertir `enabled: null` en `false`
+  desactivaría una credencial o aparcaría una regla y devolvería éxito, y `false` es un valor que
+  podrías haber enviado legítimamente.
+- **Omitir un secreto ahora lo conserva.** El `credentialValue` de `updateDeviceCredential` quedaba en
+  blanco con cualquier actualización que no lo repitiera, lo que dejaba sin conexión al dispositivo en
+  su siguiente conexión, con un `200` en la edición que lo rompió. El secreto de un perfil de
+  aprovisionamiento no lo puede cambiar ninguna actualización: `updateProvisioningProfile` no tiene
+  campo de secreto, y `rotateProvisioningProfileSecret` es la única forma de reemplazarlo.
+
+`metadata` se reemplaza por completo cuando lo envías, y se limpia con `null`. Es una cadena JSON
+opaca en el esquema, no un mapa, así que no hay fusión clave a clave que elegir: la API nunca ha
+podido direccionar una clave individual.
+
+## Perfiles de aprovisionamiento {#provisioning-profiles}
+
+Las operaciones de perfiles de aprovisionamiento pertenecen al [autorregistro de dispositivos](../guides/device-self-registration.md). Las mutaciones requieren `device:write` y las consultas `device:read`; se rechaza a quien llama con una membresía restringida a un cliente en todas ellas.
+
+| Operación | Qué hace |
+| --- | --- |
+| `createProvisioningProfile` | Crea un perfil y devuelve `{ profile, issuedSecret }`. En un perfil con secreto, el servidor genera el secreto (43 caracteres, 256 bits) y esta respuesta es el único lugar donde aparece: la plataforma almacena un resumen. La petición no tiene `provisionSecret`. Un perfil de certificado, que nombra un ancla de confianza, no tiene secreto y `issuedSecret` es `null`. `maxDevices` (al menos 1, u omitido para no tener tope) limita cuántos dispositivos registra el perfil. |
+| `rotateProvisioningProfileSecret(token)` | Reemplaza el secreto y devuelve el nuevo una sola vez. El anterior deja de funcionar al instante, sin solapamiento. Los dispositivos registrados no se ven afectados. También es lo que pone en servicio un perfil creado antes de que el servidor generara secretos. Un perfil de certificado no tiene secreto, así que rotarlo se rechaza. |
+| `updateProvisioningProfile` | Una actualización parcial. No tiene campo de secreto. `maxDevices` se puede fijar, o limpiar con `null`. |
+| `revokeProvisionedDevices(profileToken)` | Deshabilita todas las credenciales que emitió el perfil, cierra las sesiones activas de esos dispositivos y devuelve cuántas deshabilitó. |
+| `resetDeviceProvisioning(deviceToken)` | Elimina las credenciales que el autorregistro emitió a un dispositivo y cierra sus sesiones. El dispositivo conserva su reserva, así que puede registrarse de nuevo. |
+| `deleteProvisioningProfile(token)` | Se rechaza (`REFERENCE_VIOLATION`) mientras algún dispositivo conserve una credencial que emitió el perfil, incluidas las revocadas. |
+
+En cuanto a los tipos, `ProvisioningProfile` gana `maxDevices`, `provisionedDeviceCount` y `secretIssued` (falso hasta que el servidor ha generado el secreto, que es cuando el perfil está en **Requiere rotación**; un perfil de certificado no tiene secreto, así que siempre es falso). Un dispositivo gana `expectedProvisioningProfile`, su reserva, y una credencial gana `provisioningProfile`. `createDevice` e `importDevices` aceptan `provisioningProfileToken` para reservar un dispositivo, y `DeviceSearchCriteria` acepta `provisioningProfile` y `expectedProvisioningProfile`. El endpoint en sí es HTTP simple y se describe en la [referencia del protocolo de dispositivo](./device-protocol.md#self-registration).
+
+## Integraciones de entrada {#integrations}
+
+Las operaciones de integración pertenecen a las [integraciones de entrada](../guides/inbound-integrations.md). Las mutaciones requieren `device:write` y las consultas `device:read`; un llamador cuya membresía está limitada a un cliente se rechaza en todas ellas.
+
+| Operación | Qué hace |
+| --- | --- |
+| `createIntegration` | Crea una integración y devuelve `{ integration, issuedToken }`. El servidor genera el token bearer (43 caracteres, 256 bits) y esta respuesta es el único lugar donde aparece: la plataforma almacena un resumen con clave. La solicitud no tiene un campo propio para el secreto. Se rechaza (`LIMIT_EXCEEDED`) cuando el inquilino ya tiene tantas integraciones como permite su nivel. |
+| `rotateIntegrationToken(token)` | Reemplaza el token bearer y devuelve el nuevo una sola vez. El anterior deja de funcionar al instante, sin solapamiento. |
+| `updateIntegration(token, request)` | Una actualización parcial. No se pueden cambiar ni el token ni el `type`. `deviceTypeTokens` reemplaza el alcance y necesita al menos un tipo; `generic` se rechaza en los tipos de servidor de red. |
+| `deleteIntegration(token)` | Elimina la integración y devuelve si existía. Los alias de los dispositivos permanecen. Un tipo de dispositivo que una integración tiene en su alcance no se puede eliminar (`REFERENCE_VIOLATION`). |
+| `integration(token)`, `integrations(criteria)` | Lee una integración, o busca por `type`, `enabled` o `deviceType` en el alcance. El token bearer nunca se devuelve. |
+| `unregisteredIntegrationDevices(criteria)` | Los identificadores que recibió una integración y que ningún dispositivo de su alcance lleva, del visto más recientemente al más antiguo. |
+| `clearUnregisteredIntegrationDevices(integration)` | Vacía esa lista y devuelve cuántas filas eliminó. |
+
+En cuanto a los tipos, `Integration` incluye `undecodedCount`, `lastUndecodedAt`, `lastUndecodedSample` y `lastAuthFailureAt`. Un dispositivo gana `aliases`, una lista de `{scheme, value}`, y `DeviceCreateRequest`, `DeviceUpdateRequest` y las filas de `importDevices` aceptan `aliases`. En una actualización la lista reemplaza los alias del dispositivo, y `null` o una lista vacía los elimina. `DeviceSearchCriteria` acepta `alias`. Un valor se normaliza según su esquema al escribirlo, así que un DevEUI se guarda en mayúsculas, y uno mal formado se rechaza con `INVALID_VALUE`.
+
+`integrationAuth`, `resolveIntegrationDevice` y `recordIntegrationUndecoded` son para el servicio de ingesta. Aceptan solo un token de servicio y se rechazan para el token de acceso de un usuario.
+
+## Validación de entrada {#input-validation}
+
+**Un campo de entrada que el esquema no define se rechaza.** Enviar un campo no declarado hace fallar
+toda la solicitud con un error que nombra el campo infractor y sugiere el campo declarado que
+probablemente querías decir:
+
+```json
+{
+  "errors": [{
+    "message": "Variable \"request\" has invalid value.\nField \"deviceProfileToken\" is not defined by type \"DeviceTypeCreateRequest\". Did you mean \"profileToken\"?"
+  }]
+}
+```
+
+Esto se cumple tanto si el valor se escribe como un literal en la consulta como si se suministra
+mediante una variable.
+
+Importa más que una simple comprobación de erratas. Un campo descartado en silencio es
+indistinguible de uno que sí se aplicó: la mutación devuelve éxito y obtienes una entidad
+parcialmente configurada sin nada que indique que faltó un valor. Rechazarlo es lo que hace que una
+respuesta de éxito signifique que se entendió toda la entrada.
+
+### Qué puede contener un token {#what-a-token-may-contain}
+
+Todo token de entidad, y todo id de inquilino, debe coincidir con:
+
+```
+^[A-Za-z0-9][A-Za-z0-9_-]*$
+```
+
+Es decir: letras (en mayúscula o minúscula), dígitos, guiones y guiones bajos, empezando por una letra
+o un dígito, y un máximo de 128 caracteres. Cualquier otra cosa se rechaza al escribir, tanto al
+crear *como* al actualizar, antes de almacenar nada.
+
+Es una regla de seguridad más que un estilo de la casa, y por eso es así de estrecha. Un token se
+inserta en espacios de nombres de infraestructura: un id de inquilino pasa a ser un segmento de un
+asunto de NATS que se recupera partiendo por `.`, y un token de dispositivo pasa a ser un segmento de
+un tópico MQTT. Un `.` desplaza los segmentos del asunto, y `*`, `>`, `+` y `#` inyectan comodines que
+coinciden **entre inquilinos**. Las mayúsculas se permiten deliberadamente, porque los
+identificadores que emiten las máquinas, como números de serie y VIN, suelen ir en mayúsculas.
+
+Los identificadores a los que un integrador recurre primero son precisamente los que esto rechaza:
+`sensor.001`, una dirección MAC `AA:BB:CC:DD:EE:FF`, `plant/line-2`, cualquier cosa con un espacio.
+**Ponlos en `externalId`.** Es opaco, no tiene restricciones de formato y es único dentro de un
+inquilino cuando está presente. Dale a la entidad un token que elijas tú y conserva junto a él el
+identificador propio del dispositivo.
+
+La consola acuña los tokens por ti a partir de una plantilla por tipo de entidad, así que allí esto
+rara vez aparece. Es en la API y en el aprovisionamiento por script donde muerde primero.
+
+### Un valor que debe ser único {#unique-values}
+
+Algunos valores deben ser únicos: un token dentro de su inquilino, el `externalId` de un
+dispositivo, una clave de comando dentro de un perfil, el correo de una identidad, una sola
+membresía por identidad e inquilino. Una creación, actualización o renombrado que repetiría uno se
+rechaza, y el error lleva `extensions.code` igual a `CONFLICT`:
+
+```json
+{
+  "errors": [{
+    "message": "the request conflicts with an existing record: a value that must be unique is already in use",
+    "path": ["createDeviceType"],
+    "extensions": { "code": "CONFLICT" }
+  }]
+}
+```
+
+Decide por el código, no por el mensaje. Cuando el servicio tiene algo más que decir, el mensaje es
+su propia frase, por ejemplo al renombrar a un token que ya está en uso, y el código es el mismo. El
+texto propio de la base de datos sobre la colisión se sustituye por la frase de arriba, así que el
+mensaje no nombra ningún índice ni columna de la base de datos. La frase propia de un servicio
+puede repetir el token que enviaste.
+
+`CONFLICT` significa que la escritura chocó con un valor que debe ser único. Suele ser un valor que
+enviaste, pero puede ser uno que el servidor asigna durante la escritura, como el siguiente número
+de versión cuando dos publicaciones del mismo registro se ejecutan a la vez, y entonces un reintento
+funciona. Por eso el código no significa por sí solo que el registro que pediste ya exista. Solo lo
+significa cuando el único valor único en juego es tuyo, como el token de un inquilino que estás
+creando.
+
+Algunos rechazos parecen similares y no llevan `CONFLICT`:
+
+- Un guardado rechazado porque el registro cambió desde que lo leíste ("modified by another writer;
+  reload and try again") es una escritura obsoleta, no un duplicado.
+- El token de un inquilino eliminado queda reservado hasta que termina la eliminación. Crear un
+  inquilino con él se rechaza sin `CONFLICT`, porque el token no lo tiene un inquilino que puedas
+  usar.
+- Crear un comando con un token que ya está en uso no se rechaza: recibes el comando original.
+  Consulta [Emite un comando](../guides/sending-commands.md#issue-it).
+- Eliminar un registro al que otros registros todavía se refieren lleva `REFERENCE_VIOLATION`.
+  Consulta [Una referencia o un valor que se rechaza](#reference-and-invalid-values).
+
+### Una referencia o un valor que se rechaza {#reference-and-invalid-values}
+
+Otros dos rechazos se responden de la misma forma, cada uno con su propio código.
+
+`REFERENCE_VIOLATION` significa que la escritura se rechazó por cómo se refieren unos registros a
+otros. Eliminar un registro al que otros registros todavía se refieren se rechaza así: por ejemplo
+un perfil de dispositivo que un tipo de dispositivo todavía usa, un tipo de dispositivo que sus
+dispositivos todavía usan, un nivel de inquilino en el que todavía hay inquilinos, un inquilino que
+todavía tiene membresías, un proveedor de IA que todavía tiene concesiones o un canal de
+notificación que una regla de política todavía nombra. El mensaje es la propia frase del servicio,
+que dice qué se refiere todavía al registro y puede repetir el token que enviaste:
+
+    entity is still referenced and cannot be deleted: 1 device type(s) reference device profile "rover"
+
+Elimina o reasigna lo que todavía se refiere al registro y vuelve a intentarlo.
+
+Cuando rechaza la escritura la base de datos y no la propia comprobación del servicio, el mensaje
+es:
+
+    the request refers to a record that does not exist, or removes one that other records still refer to
+
+Eso puede ocurrir cuando los registros cambian entre la comprobación y la escritura, por ejemplo
+cuando un registro al que se refiere tu escritura se elimina mientras la escritura se ejecuta.
+Vuelve a cargar y a intentarlo: entonces recibes la respuesta propia del servicio, o la escritura
+funciona. Si la misma solicitud sigue recibiendo esta respuesta, algo que no puedes ver a través de
+la API todavía se refiere al registro. Infórmalo con la hora de la solicitud; el servidor registra
+qué referencia la rechazó.
+
+Una escritura que nombra un registro que no existe la rechaza normalmente la búsqueda propia del
+servicio antes de la escritura, con [`NOT_FOUND`](#not-found) y no con este código. Solo lleva
+`REFERENCE_VIOLATION` cuando ese registro se eliminó mientras la escritura se ejecutaba.
+
+`INVALID_VALUE` significa que un valor de la solicitud no está permitido en el registro y el
+servicio no lo detectó antes de la escritura. El mensaje es:
+
+    the request contains a value this record does not allow
+
+Cambia el valor. Enviar la misma solicitud otra vez normalmente da la misma respuesta.
+
+En ambos casos se sustituye el texto propio de la base de datos, así que estas dos frases no
+nombran ninguna tabla, columna ni restricción, ni repiten ninguno de los valores que enviaste.
+Ninguno de los dos códigos es `CONFLICT`, así que el código que trata `CONFLICT` como "el registro
+ya existe" no los trata como un éxito. Un rechazo en el que intervienen a la vez un valor que debe
+ser único y uno de estos lleva `REFERENCE_VIOLATION` o `INVALID_VALUE`, nunca `CONFLICT`, y su
+mensaje usa la frase de ese código en lugar de la de un valor que ya está en uso.
+
+### Un registro que no existe {#not-found}
+
+Una operación que se rechaza porque el registro que nombra no existe, o no existe en tu tenant,
+lleva `extensions.code` con el valor `NOT_FOUND`:
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+Decide según el código, no según el mensaje, al que un servicio puede anteponer lo que estaba
+haciendo. Algunas operaciones responden a un registro que falta con un código propio que dice qué
+falta, como `ARTIFACT_NOT_FOUND`, y esas conservan su propio código.
+
+### Una operación que no puedes realizar {#forbidden}
+
+Una operación que se rechaza porque no puedes realizarla lleva `extensions.code` con el valor
+`FORBIDDEN`. Tu token es válido, pero no tiene la autoridad que la operación requiere:
+
+```json
+{
+  "errors": [{
+    "message": "forbidden: missing required authority",
+    "path": ["deleteDevice"],
+    "extensions": { "code": "FORBIDDEN" }
+  }]
+}
+```
+
+Una solicitud sin un token válido no recibe esta respuesta. Un token no válido o caducado se
+rechaza con HTTP 401 antes de que se ejecute ninguna operación. Sin ningún token, una operación que
+lo necesita falla con un mensaje que empieza por `unauthenticated` y sin código.
+
+Un rechazo tiene prioridad sobre cualquier otra respuesta a la misma operación. Si no puedes
+realizar una operación, recibes `FORBIDDEN` aunque el registro que nombra no exista, de modo que la
+respuesta nunca te dice si el registro existe. Algunos rechazos añaden `extensions.reason` para
+decir por qué. Decide según `code` y trata `reason` como un detalle: un `FORBIDDEN` sin motivo sigue
+siendo un rechazo.
+
+### Cuando tu acceso se limita a algunos clientes {#limited-access}
+
+El acceso de un miembro de un tenant puede limitarse a algunos de los clientes del tenant. Un
+dispositivo pertenece a un cliente mediante una relación rastreada con él, como la relación
+integrada `assigned` que escribe `claimDevice` cuando no indicas `relationshipType`. Un miembro con
+acceso limitado puede llamar a estas operaciones, y cada una responde solo con lo que pertenece a
+esos clientes:
+
+| Operación | Lo que ve un miembro con acceso limitado |
+| --- | --- |
+| `devices`, `devicesById`, `devicesByToken`, `devicesByExternalId` | Los dispositivos que los clientes poseen ahora. Un dispositivo que pasa a otro cliente sale de la lista de inmediato. |
+| `customers`, `customersById`, `customersByToken` | Solo los registros de sus propios clientes. |
+| `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Las alarmas generadas mientras el dispositivo pertenecía a uno de los clientes. |
+| `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | Las mismas alarmas. |
+| `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Los eventos registrados mientras el dispositivo pertenecía a uno de los clientes. Un cliente conserva el historial del tiempo en que poseyó un dispositivo y no ve el historial anterior. |
+| `deviceStates`, `deviceStatesByDeviceToken`, `deviceStatesByExternalId`, `latestMeasurements`, `droppedMeasurements`, `latestLocation`, `latestLocations` | El estado en vivo, las lecturas más recientes y la última posición conocida de los dispositivos que los clientes poseen ahora. Cuando un dispositivo pasa a otro cliente, su estado en vivo pasa con él, sin esperar a que el dispositivo vuelva a informar. `latestLocation` y `latestLocations` requieren además `location:read`, que el conjunto básico de solo lectura no incluye. |
+| Tipos de dispositivo, perfiles de dispositivo y sus versiones, definiciones de métricas y comandos, tipos de cliente | Todo, porque es configuración. Se puede leer pero no modificar. |
+
+Un registro que el miembro no puede ver se responde exactamente igual que uno que no existe: se
+omite de una lista, o la operación responde `NOT_FOUND`. Una suscripción `measurementStream` para un
+dispositivo ajeno a sus clientes se acepta y no entrega nada. Cualquier otra operación responde
+`FORBIDDEN` con `extensions.reason` igual a `SCOPE_UNSUPPORTED`.
+
+Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no es visible para un
+miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
+registran sus clientes solo a partir de esta versión. El estado en vivo de un dispositivo anterior a
+esta versión se vuelve visible cuando el dispositivo vuelve a informar o cambia de propietario. Una
+alarma conserva los clientes con los que se generó, así que un cliente que vende un dispositivo
+sigue viendo las alarmas generadas mientras lo poseía, incluida una que siga activa.
+
+Como estos registros nombran a un cliente por su token, el token de un cliente eliminado queda
+retirado: ningún otro cliente del tenant puede usarlo, porque los miembros del cliente nuevo verían
+como propios las alarmas, los comandos, las asignaciones de actualización, los paneles compartidos
+y el historial de eventos del cliente eliminado. `createCustomer` con un token retirado responde
+`INVALID_VALUE`, y el mensaje indica que el token está retirado. Elige otro token. Un token solo se
+libera cuando se elimina el tenant completo. Un cliente que todavía existe con ese token responde
+`CONFLICT`, como antes.
+
+### Cuando tu acceso se limita a un grupo {#limited-to-a-group}
+
+El acceso de un miembro también puede limitarse a un grupo de entidades, o a grupos y clientes a la
+vez. El grupo debe ser un ámbito de acceso: un grupo dinámico de dispositivos publicado que alguien
+con `device:write` ha convertido en uno con `setEntityGroupAccessScope`. Un tenant puede tener como
+máximo 32. Un grupo que no es un ámbito de acceso no le da nada a un miembro limitado a él.
+
+Un miembro limitado a un grupo ve los dispositivos del grupo en su versión activa, y solo mientras
+están en él. La pertenencia sigue a los atributos compartidos de los dispositivos, así que un
+dispositivo cuyos atributos lo llevan al grupo aparece sin que nadie edite al miembro, y uno que sale
+desaparece. Publicar una versión nueva del grupo, o volver a una anterior, cambia el conjunto de la
+misma manera. Las operaciones de la tabla anterior responden para un grupo como para un cliente: los
+eventos, las alarmas, los comandos y las asignaciones de actualización registrados mientras el
+dispositivo estaba en el grupo siguen visibles, y el estado en vivo sigue al dispositivo.
+`entityGroupsByToken` responde con los grupos propios del miembro, y con ningún otro, para que un
+cliente pueda nombrar aquello a lo que está limitado; los `members` y `versions` de un grupo se le
+rechazan.
+
+Un panel puede compartirse con un grupo de ámbito de acceso igual que con un cliente:
+`shareDashboard` acepta `{ kind: GROUP, token: "..." }` junto a los clientes, y un miembro limitado
+al grupo lo ve entonces en la lista y lo abre. Todo grupo nombrado debe existir en el inquilino y ser
+un ámbito de acceso. Uno que no existe y uno que existe pero no es un ámbito de acceso responden
+ambos `NOT_FOUND` con el mismo mensaje, y nada cambia. Una compartición con un grupo que más tarde
+deja de ser un ámbito de acceso se conserva.
+
+El token de un grupo eliminado queda retirado igual que el de un cliente, porque el acceso de los
+miembros y estos registros nombran al grupo por su token. `createEntityGroup` con un token retirado
+responde `INVALID_VALUE`.
+
+### Rechazos al administrar un tenant {#tenant-administration-refusals}
+
+Los administradores de un tenant gestionan sus miembros, invitaciones y roles a través de la API de
+tenant de user-management (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberAccess`, `setMemberEnabled`,
+`removeMember`, `createTenantRole`, `updateTenantRole`, `deleteTenantRole` y las demás). Esas
+operaciones rechazan con códigos propios, para que un cliente conozca el motivo sin leer el mensaje:
+
+| `extensions.code` | Significado |
+| --- | --- |
+| `ESCALATION` | El cambio concedería una autoridad que tú no tienes: un rol que defines o asignas solo puede llevar autoridades que tienes, un rol de tenant solo puede llevar autoridades de tenant, y no puedes cambiar a un miembro que tiene algo que tú no tienes. |
+| `SELF_MODIFICATION` | El cambio es sobre tu propia membresía. Nadie cambia sus propios roles, alcance o estado, ni se elimina a sí mismo, con esta API. |
+| `LAST_ADMIN` | El cambio dejaría al tenant sin ningún miembro habilitado que vea todo el tenant y pueda gestionar miembros. |
+| `MANAGED_BY_IDP` | La membresía la gestiona el proveedor de identidad del tenant y solo puede cambiar allí. |
+| `READ_ONLY` | El rol pertenece al operador de la instancia. Se puede asignar en tu tenant, pero tu tenant no puede cambiarlo. |
+| `INVALID_INVITATION` | El código de invitación no se puede usar. Un solo código cubre todos los motivos (desconocido, caducado, revocado, ya usado o presentado por alguien a quien no se emitió), de modo que no se puede averiguar cuál. |
+
+Un miembro cuyo acceso está limitado a algunos de los clientes del tenant recibe `FORBIDDEN` con el
+motivo `SCOPE_UNSUPPORTED` en todas estas operaciones. Preguntar por un miembro de otro tenant
+responde `NOT_FOUND`, exactamente como para una dirección sin cuenta.
+
+Un cambio en un miembro, incluido quitarle algo (reducir su alcance, retirarle una autoridad,
+deshabilitarlo o eliminarlo), surte efecto en la siguiente actualización de su token: en un plazo de
+15 minutos, o de 5 minutos para un acceso limitado a algunos clientes. Cada actualización lee la
+membresía tal como está en ese momento, así que el siguiente token de acceso lleva la concesión más
+reducida, y la actualización de un miembro deshabilitado o eliminado se rechaza para tu tenant. Un
+token de acceso ya emitido sigue funcionando hasta que caduca. Las sesiones del miembro en otros
+tenants no se ven afectadas.
+
+## Iniciar sesión con autenticación en dos pasos {#two-factor-sign-in}
+
+Una cuenta con [autenticación en dos pasos](../guides/two-factor-authentication.md) no recibe un token de `login`. Cuando la contraseña es correcta, `login` falla con el código de error `MFA_CHALLENGE`, que lleva un desafío en `extensions`, y no se emite nada hasta que el cliente envía un código a `verifyMfa`. **Un cliente que solo gestiona un `login` correcto ahora falla para estas cuentas**, con un error, y nunca recibe un token que no debería tener.
+
+```json
+{
+  "errors": [{
+    "message": "a second factor is required to finish signing in; send the challenge and a code to verifyMfa",
+    "path": ["login"],
+    "extensions": {
+      "code": "MFA_CHALLENGE",
+      "challenge": "...",
+      "expiresAt": "2026-10-27T12:05:00Z",
+      "methods": ["TOTP", "RECOVERY_CODE"]
+    }
+  }],
+  "data": null
+}
+```
+
+```graphql
+mutation Verify($challenge: String!, $code: String!) {
+  verifyMfa(challenge: $challenge, code: $code) {
+    identityToken
+    memberships { tenant }
+  }
+}
+```
+
+`verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
+
+Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:
+
+| Operación | Qué hace |
+|---|---|
+| `mfaStatus` | Si el factor está activado, cuándo se configuró y cuántos códigos de recuperación quedan. |
+| `beginTotpEnrollment` | Inicia la configuración: devuelve el URI `otpauth://` y la clave. Exige la contraseña. |
+| `confirmTotpEnrollment` | Demuestra que la aplicación tiene la clave, activa el factor, devuelve diez códigos de recuperación **una sola vez** y un inicio de sesión nuevo (`auth`). Al activarlo terminan todas las sesiones de la cuenta, la de quien llama incluida: el token de identidad enviado deja de funcionar, así que continúa con el `auth` devuelto. |
+| `regenerateRecoveryCodes` | Sustituye los códigos. Exige la contraseña y un código. |
+| `disableTotp` | Desactiva el factor y termina todas las sesiones, incluida la del llamante. Exige la contraseña y un código. |
+| `setTenantMfaRequired` | Exige el factor a los inicios de sesión con contraseña de un inquilino. En el plano del inquilino exige `member:write` y no puede bajar del mínimo del nivel. En la API de administración nombra al inquilino. |
+| `resetIdentityMfa` | API de administración. Elimina el factor de una identidad. Pide `newPassword` mientras haya códigos incorrectos pendientes. |
+
+`Membership.mfaRequired` y el `mfaEnabled` de la lista de miembros indican al cliente qué esperar. Un inicio de sesión en un inquilino que exige el factor se rechaza con uno de los códigos de error siguientes.
+
+### Los códigos de error {#two-factor-error-codes}
+
+El conjunto es cerrado. Un código incorrecto, un código repetido y un código rechazado por un bloqueo reciben la misma respuesta, "invalid code", sin código propio, de modo que la respuesta no es un oráculo.
+
+| `extensions.code` | Dónde | Significado |
+|---|---|---|
+| `MFA_CHALLENGE` | `login` | La contraseña era correcta y hace falta un código. El desafío va en `extensions`. |
+| `MFA_CHALLENGE_EXPIRED` | `verifyMfa` | El desafío es desconocido, ha caducado, se ha agotado o lo dejó obsoleto un cambio de contraseña. Inicia sesión de nuevo. |
+| `MFA_REQUIRED` | `selectTenant`, renovación | El inquilino exige un segundo factor, este inicio de sesión no lo usó y la cuenta tiene uno. Inicia sesión de nuevo e introduce el código. |
+| `MFA_ENROLLMENT_REQUIRED` | `selectTenant`, renovación | Lo mismo, y la cuenta no tiene ninguno. Configúralo primero con `beginTotpEnrollment`. |
+| `MFA_ALREADY_ENROLLED` | `beginTotpEnrollment` | Ya hay un factor activado. Desactívalo primero. |
+| `MFA_NOT_ENROLLED` | `regenerateRecoveryCodes`, `disableTotp` | No hay ningún factor. |
+| `MFA_RESET_NEEDS_PASSWORD` | `resetIdentityMfa` (API de administración) | La cuenta tiene códigos incorrectos pendientes; envía `newPassword` con el restablecimiento. |
+
+El error por demasiados intentos no lleva código, igual que la [espera entre intentos](#sign-in-backoff). `verifyMfa`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` gastan cada una una de las [comprobaciones de credenciales](#credential-checks-per-request) de la petición, y la contraseña y el código juntos cuentan como una. `mfaStatus`, `setTenantMfaRequired` y `resetIdentityMfa` no gastan ninguna. El SDK de C# informa del desafío como `MfaRequiredException`; consulta [Autenticación en dos pasos](../guides/two-factor-authentication.md#csharp).
+
+## Límites de las solicitudes {#request-limits}
+
+Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,
+antes de ejecutar nada de ella. Las excepciones son el límite de tiempo de ejecución, que cancela el trabajo ya en curso cuando vence el plazo, y el límite de comprobaciones de credenciales, que
+se aplica mientras la solicitud se ejecuta (consulta
+[Comprobaciones de credenciales por petición](#credential-checks-per-request)).
+
+Los límites son los mismos en todos los servicios, y puedes cambiar cada uno por servicio con la
+variable de entorno indicada. Un valor ausente, que no es un número o menor que 1 vuelve al valor por
+defecto: ninguno puede desactivarse.
+
+| Límite | Por defecto | Variable | Qué se rechaza |
+| --- | --- | --- | --- |
+| Cuerpo de la solicitud | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | Todo el cuerpo HTTP, variables incluidas. Se responde con HTTP 400. |
+| Tiempo de ejecución | 60 segundos | `DC_GRAPHQL_EXEC_TIMEOUT` (segundos enteros) | Una consulta o mutación que sigue ejecutándose al llegar al plazo se cancela, junto con la sentencia de base de datos en curso; la respuesta incluye un error. No se aplica a las suscripciones. El cliente también debe entregar el cuerpo de la solicitud en 30 segundos. |
+| Longitud de la consulta | 100.000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | La cadena de la consulta en sí. |
+| Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
+| Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
+| Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
+| Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña de una misma petición que superan este número (consulta [más abajo](#credential-checks-per-request)). |
+
+Salvo con el límite del cuerpo, el de tiempo de ejecución y el de comprobaciones de credenciales, una solicitud rechazada recibe
+HTTP 200 con una sola entrada en `errors`, sin `data` y sin haber ejecutado nada. Una solicitud cancelada al vencer el plazo de ejecución ya había empezado, así que la respuesta lleva un error por el trabajo interrumpido. El límite de
+comprobaciones de credenciales rechaza solo las comprobaciones que lo superan, cada una con su propio
+error, y el resto de la solicitud se ejecuta. El rechazo por campos raíz lleva `extensions.code` con
+el valor `TOO_MANY_ROOT_FIELDS`:
+
+```json
+{
+  "errors": [{
+    "message": "mutation (anonymous) selects 6 root fields; the maximum is 5",
+    "extensions": { "code": "TOO_MANY_ROOT_FIELDS" }
+  }]
+}
+```
+
+**Los campos raíz se cuentan por clave de respuesta:**
+
+- Cada alias cuenta como un campo propio.
+- Los campos a los que se llega a través de un fragmento cuentan como si estuvieran escritos
+  directamente.
+- Repetir la misma clave cuenta como un solo campo.
+- `@skip` e `@include` no se evalúan, así que un campo condicional cuenta tanto si se ejecuta como si
+  no.
+- Se cuentan todas las operaciones del documento, no solo la que selecciona `operationName`.
+- La regla se aplica tanto por WebSocket como por HTTP.
+
+El límite de mutaciones es el estricto porque los campos de una mutación se ejecutan uno tras otro.
+Sin él, una sola solicitud podría llevar cientos de copias con alias de una mutación costosa. La
+consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían un solo campo de
+mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de
+primer nivel; los alias de un campo anidado no se cuentan.
+
+### Límites de tamaño en listas, entradas y agregaciones {#size-bounds}
+
+Aparte de los límites de forma de la solicitud, algunas lecturas y entradas tienen un límite de
+tamaño. Una solicitud que lo supera se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`. No se
+trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela de nuevo. Los tamaños se cuentan en bytes, no en caracteres.
+
+| Límite | Valor | Se aplica a |
+| --- | --- | --- |
+| Clave de atributo | 128 B | `attrKey` de `setEntityAttribute`. |
+| Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |
+| Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
+| Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
+| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduzca con `limit` (al menos 1) y pagine con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
+| Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
+| Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
+| Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
+| Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulte [Enviar comandos](../guides/sending-commands.md)). |
+| Destinatarios por regla de notificación | 100 | La lista `recipients` de una regla de una política de notificación. |
+| URI de redirección de cliente OAuth | 16 entradas, 2048 B cada una | `redirectUris` de `createOauthClient` y `updateOauthClient`. |
+| Ámbitos de cliente OAuth | 16 entradas, 64 B cada una | `scopes` de `createOauthClient` y `updateOauthClient`. |
+| Niveles de inquilino | 100 niveles, 128 B por token | El catálogo de niveles (`createTenantTier` rechaza un nivel 101) y `orderedTokens` de `reorderTenantTiers`, que debe nombrar todos los niveles. |
+| Listas de roles y autoridades de administración | 100 entradas | `authorities` de `createRole` y `updateRole`; `systemRoles` de `createIdentity`; `roleTokens` de `setSystemRoles`, `addMembership` y `setMembershipRoles`. |
+| Contraseña | 72 B | `password` de `createIdentity` y `setPassword`: una contraseña más larga se rechaza en lugar de truncarse en silencio. |
+
+`bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
+
+La gramática de tokens limita una clave de comando a 128 bytes, que es también el nombre de comando
+más largo que se puede encolar.
+
+### Solo sintaxis de GraphQL {#graphql-syntax-only}
+
+**Los documentos deben usar la sintaxis propia de GraphQL.** Un documento que contenga cualquiera de
+lo siguiente se rechaza con un error de sintaxis, y no se ejecuta nada:
+
+- Un comentario `//` o `/* */`. Usa `#` para los comentarios.
+- Una cadena entre comillas invertidas, o un carácter entre comillas simples.
+- Una cadena de bloque cuyo `"""` de cierre sigue directamente a una barra invertida (el escape
+  `\"""`). Ese escape es GraphQL válido, pero el servidor nunca lo ha leído como lo define la
+  especificación, así que envía ese texto en una variable.
+- Una cadena seguida directamente de una comilla, como `"x""y"`. GraphQL la lee como dos cadenas
+  contiguas, y el servidor la leía como el comienzo de una cadena de bloque. Solo `"""` abre una
+  cadena de bloque.
+
+La misma regla se aplica por WebSocket, donde una suscripción que el servidor no puede leer recibe el
+error de sintaxis en lugar del [mensaje de que solo se aceptan
+suscripciones](#subscriptions-over-websocket).
+
+### Techos de cantidad en device-management {#device-management-count-ceilings}
+
+Dos colecciones se leen completas, así que cada una tiene un techo sobre cuántos miembros puede
+contener. Una escritura que llevaría una colección por encima de su techo se rechaza con
+`extensions.code` igual a `LIMIT_EXCEEDED`, y no se guarda nada. Las lecturas nunca se truncan: un
+propietario que ya supera un techo conserva todas sus filas y cada lectura las devuelve todas.
+Borrar filas vuelve a dejar espacio.
+
+| Techo | Límite | Se aplica a |
+| --- | --- | --- |
+| Relaciones rastreadas por dispositivo | 256 | Relaciones de un tipo de relación rastreado cuyo origen es un dispositivo, en `createEntityRelationship`, `createEntityRelationships` y `claimDevice`, y en `updateEntityRelationshipType` cuando pone `tracked` en verdadero y eso dejaría a algún dispositivo por encima del techo. Una llamada a `createEntityRelationships` admite como máximo 1.000 relaciones. La resolución de eventos lee todas las relaciones rastreadas de un dispositivo en cada evento. |
+| Definiciones por perfil de dispositivo | 1.000 por tipo | Definiciones de métricas, definiciones de comandos y reglas de detección, cada una contada por separado, en `createMetricDefinition`, `createCommandDefinition` y `createDetectionRule`. |
+
+El servicio exporta `devicechain_devicemanagement_tracked_relationships_per_device` (se observa cada
+vez que el conjunto rastreado de un dispositivo se carga desde la base de datos) y
+`devicechain_devicemanagement_profile_children` (con la etiqueta `kind`: `metric`, `command` o `rule`)
+como histogramas de los tamaños que lee, para que pueda ver cuánto se acercan los datos reales a un techo.
+
+### Comprobaciones de credenciales por petición {#credential-checks-per-request}
+
+En una petición solo se puede comprobar un número limitado de contraseñas, se escriba como se
+escriba: una por defecto. Los campos `login` hasta ese número se evalúan con normalidad. Cualquier
+otro `login` en la misma petición, como otro alias, no se evalúa: no se comprueba la contraseña, no
+se busca nada y no se registra nada en el registro de auditoría. Recibe su propio error en lugar de un
+veredicto sobre la contraseña, y los demás campos de la petición siguen devolviendo sus datos:
+
+```json
+{
+  "errors": [{
+    "message": "this request has already made its credential checks; send one sign-in per request",
+    "path": ["a2"],
+    "extensions": { "code": "TOO_MANY_CREDENTIAL_CHECKS" }
+  }]
+}
+```
+
+No depende de cómo esté escrito el documento, así que se mantiene incluso para un documento que
+supere el límite de campos raíz. El rechazo ocurre antes de mirar la dirección de correo, así que es
+el mismo exista o no una cuenta. Todos los clientes que incluye DeviceChain envían un solo inicio de
+sesión por petición, así que a ninguno le afecta.
+
+`DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` aumenta el número por servicio; como los demás límites, no se
+puede desactivar. Los rechazos se cuentan en `devicechain_usermanagement_credential_checks_total` con
+`outcome="request_budget"`.
+
+### Espera entre intentos de inicio de sesión {#sign-in-backoff}
+
+Los inicios de sesión con contraseña fallidos hacen más lentos los siguientes intentos sobre la misma
+dirección de correo. Esto se aplica a `login` y al formulario de inicio de sesión de OAuth.
+
+- Los cinco primeros intentos fallidos sobre una dirección se evalúan de inmediato.
+- A partir de ahí, la dirección espera 1 segundo antes de que se evalúe su siguiente intento, luego
+  2, luego 4, duplicándose hasta 5 minutos.
+- Un inicio de sesión correcto reinicia la cuenta, y también 10 minutos sin actividad después del
+  último intento evaluado.
+
+La cuenta pertenece a la dirección escrita, exista o no una cuenta con ella, así que la espera no
+revela qué direcciones están registradas. La comparten todas las réplicas del servicio.
+
+:::warning Quien conozca una dirección puede dejar fuera a su dueño
+Mientras alguien siga enviando contraseñas incorrectas para una dirección, a su dueño se le rechaza
+por espera incluso con la contraseña correcta. Termina cuando esa persona se detiene: tras como mucho
+una espera de hasta 5 minutos, el dueño puede volver a iniciar sesión. Consulta
+[Retener una dirección en la espera](#holding-an-address-at-the-backoff).
+:::
+
+#### Retener una dirección en la espera {#holding-an-address-at-the-backoff}
+
+La cuenta se lleva por dirección, no por dirección y ubicación de red, para que un atacante no pueda
+obtener un margen nuevo repartiendo los intentos entre muchas máquinas. El precio es que cualquiera
+que conozca una dirección de correo puede seguir enviando contraseñas incorrectas para ella. Mientras
+lo haga, cada turno de evaluación es suyo, y al dueño se le rechaza por espera incluso con la
+contraseña correcta. No es un bloqueo permanente. La métrica
+`devicechain_usermanagement_credential_checks_total`, con `outcome="throttled"`, muestra cuándo se
+está reteniendo una cuenta de esta forma.
+
+#### Secretos de cliente OAuth {#oauth-client-secrets}
+
+**Los secretos de cliente OAuth no se ralentizan.** Los secretos de cliente creados por la API de
+administración son 256 bits aleatorios, que ningún número de intentos encontrará, y un ID de cliente
+es público: aparece en cada URL de autorización. Una espera sobre los secretos de cliente no los
+protegería. Permitiría a cualquiera retener en la espera a un cliente confidencial, y con él cada
+inicio de sesión que pasa por ese cliente. Un cliente que siembres desde la configuración debe tener
+un secreto igual de fuerte. Los clientes públicos no tienen secreto.
+
+#### Intentos durante la espera {#attempts-during-the-wait}
+
+Un intento hecho durante la espera no se evalúa en absoluto: no se comprueba la contraseña y no se
+registra nada en el registro de auditoría. Se informa como un error propio y no como una contraseña
+incorrecta, porque la contraseña bien podría ser correcta:
+
+```json
+{
+  "errors": [{
+    "message": "too many failed sign-in attempts; try again in 8 seconds",
+    "path": ["login"],
+    "extensions": { "code": "THROTTLED", "retryAfterSeconds": 8 }
+  }]
+}
+```
+
+Si el servicio no puede llegar al almacén que guarda estas cuentas, se niega a comprobar contraseñas
+en lugar de comprobarlas sin contar. El error de `login` lleva entonces `extensions.code` con el
+valor `UNAVAILABLE`. Trátalo como una caída del servicio, no como una credencial rechazada. El
+endpoint de tokens de OAuth no usa el almacén, así que la autenticación de clientes sigue
+funcionando.
+
+#### Cuando el almacén de intentos está lleno {#when-the-attempt-store-is-full}
+
+El almacén tiene un tamaño fijo, y cada dirección que se prueba ocupa un lugar en él durante 10
+minutos, exista o no una cuenta con ella. Quien envíe inicios de sesión para suficientes direcciones
+distintas puede llenarlo.
+
+Cuando está lleno, el inicio de sesión sigue funcionando. Las contraseñas se siguen comprobando y
+respondiendo con normalidad, pero los nuevos fallos no se cuentan, así que las direcciones que no
+estaban ya esperando no se ralentizan hasta que caduquen entradas antiguas. Una dirección que ya está
+esperando sigue esperando, pero solo hasta que termine esa espera, que dura como mucho 5 minutos. A
+partir de ahí sus fallos tampoco se cuentan, así que una cuenta que esté siendo atacada mientras el
+almacén está lleno no queda protegida por la espera.
+
+Es deliberado. Rechazar todos los inicios de sesión permitiría a cualquiera que pueda llenar el
+almacén dejar fuera de la instancia a todos los usuarios. Los intentos de adivinar siguen limitados
+por el tope de campos por petición y por el coste de cada comprobación de contraseña.
+
+Cada intento comprobado así se cuenta en `devicechain_usermanagement_credential_checks_total` con
+`outcome="store_full"`. Si las reglas de alerta del chart están habilitadas, la alerta
+`CredentialAttemptStoreFull` se dispara cuando hay alguno. El registro de user-management muestra
+también una advertencia, como mucho una vez por minuto, mientras dure.
+
+Cuando se dispare la alerta, lo más probable es que alguien esté probando muchas direcciones:
+
+1. Averigua de dónde viene el tráfico de inicio de sesión y bloquéalo antes de que llegue.
+2. Si el tráfico es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`. Ese
+   tamaño se aplica a todos los buckets de estado, así que comprueba que el volumen de JetStream
+   tiene espacio para el aumento.
+
+Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se
+estabilicen.

@@ -1,9 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Layers, Upload, X } from 'lucide-react';
+import { Plus, Layers, Search, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -26,6 +26,9 @@ import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority, isScoped } from '@devicechain/client';
 import { getDeviceEarmarks, listProvisioningProfiles, type ProfileRef } from '@/lib/api/provisioning';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
+import { AsyncCombobox } from '@/components/ui/async-combobox';
+import { Input } from '@/components/ui/input';
+import { resolveDeviceType, searchDeviceTypes } from '@/lib/api/pickers';
 import { FormDrawer } from '@/components/registry';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { NEW_ALIAS_PARAM, NEW_TYPE_PARAM, rowFromParam } from '@/routes/devices/deviceAliases';
@@ -44,6 +47,11 @@ const pageSize = 20;
 // The URL parameters (and criteria fields) the provisioning filters ride on.
 const REGISTERED_PARAM = 'provisioningProfile';
 const EXPECTED_PARAM = 'expectedProvisioningProfile';
+// The search box and the device-type filter ride the URL too, so a filtered list can be linked
+// to and survives a reload.
+const SEARCH_PARAM = 'q';
+const TYPE_PARAM = 'type';
+const SEARCH_DEBOUNCE_MS = 300;
 const EXPORT_STEM = 'devices';
 // The import maps columns and lists per-row outcomes, so its drawer is wider than a form's.
 const IMPORT_DRAWER_WIDTH = 'sm:max-w-2xl';
@@ -108,11 +116,34 @@ export default function DevicesPage() {
   const canWrite = !scoped && hasAuthority(claims, 'device:write');
   const provisioningProfile = scoped ? '' : (params.get(REGISTERED_PARAM) ?? '');
   const expectedProvisioningProfile = scoped ? '' : (params.get(EXPECTED_PARAM) ?? '');
-  const filtered = provisioningProfile !== '' || expectedProvisioningProfile !== '';
-  const setFilter = (key: typeof REGISTERED_PARAM | typeof EXPECTED_PARAM, value: string) => {
-    const next = new URLSearchParams(params);
+  const nameContains = params.get(SEARCH_PARAM) ?? '';
+  const deviceType = params.get(TYPE_PARAM) ?? '';
+  const filtered =
+    provisioningProfile !== '' || expectedProvisioningProfile !== '' || nameContains.trim() !== '' || deviceType !== '';
+  // The box types freely; the URL (and so the query) follows after a pause.
+  const [searchText, setSearchText] = useState(nameContains);
+  const latestParams = useRef(params);
+  latestParams.current = params;
+  useEffect(() => {
+    if (searchText === nameContains) return;
+    const timer = setTimeout(() => {
+      setFilter(SEARCH_PARAM, searchText);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchText]);
+  // The URL changed from outside (back button, clear): the box follows it.
+  useEffect(() => {
+    setSearchText(nameContains);
+  }, [nameContains]);
+  const setFilter = (key: typeof REGISTERED_PARAM | typeof EXPECTED_PARAM | typeof SEARCH_PARAM | typeof TYPE_PARAM, value: string) => {
+    // The newest address, not the one this render closed over: the search box calls this after
+    // its pause, by which time another filter may have been picked, and writing the older
+    // parameters back would silently undo that pick.
+    const next = new URLSearchParams(latestParams.current);
     if (value) next.set(key, value);
     else next.delete(key);
+    latestParams.current = next;
     setParams(next, { replace: true });
     setPageNumber(1);
   };
@@ -121,10 +152,12 @@ export default function DevicesPage() {
       listDevices({
         pageNumber,
         pageSize,
+        nameContains: nameContains || undefined,
+        deviceType: deviceType || undefined,
         provisioningProfile: provisioningProfile || undefined,
         expectedProvisioningProfile: expectedProvisioningProfile || undefined,
       }),
-    [pageNumber, version, provisioningProfile, expectedProvisioningProfile],
+    [pageNumber, version, nameContains, deviceType, provisioningProfile, expectedProvisioningProfile],
   );
   const { data: profileList } = useQuery(
     () => (scoped ? Promise.resolve(null) : listProvisioningProfiles({ pageNumber: 1, pageSize: 1000 })),
@@ -173,7 +206,16 @@ export default function DevicesPage() {
           <ExportCsvButton
             fileStem={EXPORT_STEM}
             columns={exportColumns}
-            fetchPage={(pageNumber, pageSize) => listDevices({ pageNumber, pageSize })}
+            fetchPage={(pageNumber, pageSize) =>
+              listDevices({
+                pageNumber,
+                pageSize,
+                nameContains: nameContains || undefined,
+                deviceType: deviceType || undefined,
+                provisioningProfile: provisioningProfile || undefined,
+                expectedProvisioningProfile: expectedProvisioningProfile || undefined,
+              })
+            }
           />
           {canWrite && (
             <>
@@ -233,8 +275,38 @@ export default function DevicesPage() {
           }}
         />
       </FormDrawer>
-      {!scoped && profileOptions.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-end gap-4" data-shot="device-provisioning-filters">
+      <div className="mb-4 flex flex-wrap items-end gap-4" data-shot="device-filters">
+        <div className="w-64">
+          <label htmlFor="dev-search" className="mb-1 block text-xs font-medium text-muted-foreground">
+            {t('searchLabel')}
+          </label>
+          <div className="relative">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              id="dev-search"
+              type="search"
+              className="pl-9"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder={t('searchPlaceholder')}
+            />
+          </div>
+        </div>
+        <div className="w-64">
+          <label htmlFor="dev-filter-type" className="mb-1 block text-xs font-medium text-muted-foreground">
+            {t('filterDeviceType')}
+          </label>
+          <AsyncCombobox
+            id="dev-filter-type"
+            value={deviceType}
+            onChange={(v) => setFilter(TYPE_PARAM, v)}
+            search={searchDeviceTypes}
+            resolve={resolveDeviceType}
+            placeholder={t('filterAnyType')}
+          />
+        </div>
+        {!scoped && profileOptions.length > 0 && (
+          <>
           <div className="w-64">
             <label htmlFor="dev-filter-registered" className="mb-1 block text-xs font-medium text-muted-foreground">
               {t('filterRegisteredBy')}
@@ -259,20 +331,21 @@ export default function DevicesPage() {
               placeholder={t('filterAnyProfile')}
             />
           </div>
-          {filtered && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setParams(new URLSearchParams(), { replace: true });
-                setPageNumber(1);
-              }}
-            >
-              <X size={14} /> {t('filterClear')}
-            </Button>
-          )}
-        </div>
-      )}
+          </>
+        )}
+        {filtered && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setParams(new URLSearchParams(), { replace: true });
+              setPageNumber(1);
+            }}
+          >
+            <X size={14} /> {t('filterClear')}
+          </Button>
+        )}
+      </div>
       {loading ? (
         <LoadingState description={t('loading')} />
       ) : error ? (

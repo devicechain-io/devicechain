@@ -45,6 +45,10 @@ type provWiring struct {
 
 // wireProvisioning builds the service's globals for the endpoint and wires it. withKeys false
 // builds the Api without the enrollment keys, as an instance with no root key would.
+// provisioningTenantsSeed, when set before wireProvisioning, is the limiter the endpoint is wired
+// with instead of the platform-default one (consumed once).
+var provisioningTenantsSeed *core.TenantRateLimiter
+
 func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfiguration), withKeys bool, infra ...func(*core.Microservice)) *provWiring {
 	t.Helper()
 	prevMs, prevCfg, prevApi, prevMetrics, prevGates, prevTenants := Microservice, Configuration, Api, ProvisioningMetrics, safetyGates, ProvisioningTenants
@@ -54,6 +58,9 @@ func wireProvisioning(t *testing.T, mutate func(*config.DeviceManagementConfigur
 	// The shared limiter is built on first use, so a test that wires with its own configuration
 	// starts without the previous test's.
 	ProvisioningTenants = nil
+	if seed := provisioningTenantsSeed; seed != nil {
+		ProvisioningTenants, provisioningTenantsSeed = seed, nil
+	}
 
 	Microservice = &core.Microservice{InstanceId: "inst1", FunctionalArea: "device-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
@@ -294,6 +301,10 @@ func TestAnEmptyTrustedProxyListIsWarnedAbout(t *testing.T) {
 // limiter for the endpoint and another for the callout would give a tenant two allowances. This
 // spends the published limiter's allowance directly and shows the endpoint refuse as a result.
 func TestTheEndpointChargesThePublishedTenantLimiter(t *testing.T) {
+	// A limiter that does not refill within the test. The platform default refills a token every
+	// 50ms, so a drained bucket could hand the next request one back while it was in flight and
+	// the 429 below turned into a 201 on a slow runner.
+	provisioningTenantsSeed = core.NewTenantRateLimiter(core.StaticCeiling(1e-9, 500))
 	w := wireProvisioning(t, nil, true)
 	require.NotNil(t, ProvisioningTenants, "wiring the endpoint did not publish its tenant limiter")
 

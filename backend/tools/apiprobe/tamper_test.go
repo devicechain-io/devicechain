@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
 // stubQuerier answers one canned response per call, in order, so the arming
@@ -431,5 +433,69 @@ func TestRecordedNamedFindsOnlyWhatTheReceiptCarries(t *testing.T) {
 	}
 	if _, ok := recordedNamed(rec, "dashboard"); ok {
 		t.Error("recordedNamed found an entity the receipt does not carry")
+	}
+}
+
+// scriptedSession is a signed-in session whose sign-in and reads are scripted.
+type scriptedSession struct {
+	signIn    error
+	responses *[]string
+	docs      *[]string
+}
+
+func (s *scriptedSession) AccessToken(context.Context) (string, error) { return "tok", s.signIn }
+func (s *scriptedSession) Query(_ context.Context, _, query string, _ map[string]any, out any) error {
+	*s.docs = append(*s.docs, query)
+	resp := (*s.responses)[0]
+	*s.responses = (*s.responses)[1:]
+	return json.Unmarshal([]byte(resp), out)
+}
+
+// tamper must authenticate the way verify does: through the rotation-tolerant
+// session and --auth-window. It once held a bare session, so a sign-in the platform
+// refused after a rollout failed it at once while verify signed in fine.
+func TestTamperRetriesARefusedSignInLikeVerify(t *testing.T) {
+	tm := mustTamper(t, tamperDelete)
+	dir := t.TempDir()
+	receipt := dir + "/receipt.json"
+	if err := writeReceipt(receipt, Receipt{
+		Tenant:   "apiprobe",
+		Identity: Credential{Email: "a@b.c", Password: "pw"},
+		Entities: []Recorded{{Name: tm.Entity, Token: "t", Object: raw(`{"token":"t"}`)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(window string) (error, int, string) {
+		responses := []string{`{"` + tm.Mutation + `":true}`, `{"assetsByToken":[]}`}
+		var docs []string
+		opened := 0
+		var out strings.Builder
+		err := tamperTo(context.Background(),
+			[]string{"--receipt", receipt, "--mode", tamperDelete, "--auth-window", window}, &out,
+			func(c *connection, id Credential) signedInQuerier {
+				opened++
+				if id.Email != "a@b.c" || c.tenant != "apiprobe" {
+					t.Errorf("signed in as %q on tenant %q, not the receipt's identity", id.Email, c.tenant)
+				}
+				s := &scriptedSession{responses: &responses, docs: &docs}
+				if opened == 1 {
+					s.signIn = &userclient.GraphQLError{URL: "u", Messages: []string{"invalid credentials"}}
+				}
+				return s
+			})
+		return err, opened, out.String()
+	}
+
+	// A zero window is verify's default too: the first refused sign-in is final.
+	if err, _, _ := run("0s"); err == nil {
+		t.Error("a refused sign-in passed with no retry window")
+	}
+	err, opened, out := run("5s")
+	if err != nil {
+		t.Fatalf("tamper did not ride out a refused sign-in inside its window: %v", err)
+	}
+	if opened != 2 || !strings.Contains(out, "signing in again") {
+		t.Errorf("opened %d sessions, output %q; want a second sign-in announced", opened, out)
 	}
 }

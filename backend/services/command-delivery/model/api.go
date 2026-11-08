@@ -264,6 +264,10 @@ type Api struct {
 	// fleet write of 50,000 devices issues NO nudges — see the comment there, which is the
 	// standing record of a property that could otherwise change silently.
 	Nudger CommandNudger
+	// PullChannels, when set, says which devices take their commands over HTTP_PULL. Nil means
+	// none does, which is the behaviour before the channel existed: a command that names a
+	// delivery option is then refused, because nothing could honour it.
+	PullChannels PullChannelResolver
 }
 
 // NewApi creates a new API instance.
@@ -379,6 +383,9 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	if err := validateCommandInputBounds(request.Name, request.Payload, request.Metadata); err != nil {
 		return nil, err
 	}
+	if err := validateDeliveryOptions(request.DeliveryMode, request.MaxAttempts); err != nil {
+		return nil, err
+	}
 	if request.Payload != nil && !json.Valid([]byte(*request.Payload)) {
 		return nil, rejected(RejectPayloadNotJSON, "command payload is not valid JSON")
 	}
@@ -473,6 +480,13 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	if err != nil {
 		return nil, err
 	}
+	// Delivery options mean something only on the HTTP pull channel; a device elsewhere is
+	// refused rather than given a command that silently ignores them.
+	if request.DeliveryMode != nil || request.MaxAttempts != nil {
+		if err := api.requirePullChannel(ctx, request.DeviceToken); err != nil {
+			return nil, err
+		}
+	}
 
 	// 🔴 CODED, NOT BARE, EVEN THOUGH THE GUARD ABOVE MAKES THESE UNREACHABLE TODAY. Every
 	// client-fault refusal in this service carries a RejectionCode so rejectionCodeOf and
@@ -506,6 +520,12 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		// not name) stays NULL, and an owner-less device is stamped empty — both invisible to
 		// every scoped member, and told apart by whoever reads the row.
 		ScopeAnchors: rdb.Anchors(anchors),
+	}
+	if request.DeliveryMode != nil {
+		created.DeliveryMode = sql.NullString{String: strings.TrimSpace(*request.DeliveryMode), Valid: true}
+	}
+	if request.MaxAttempts != nil {
+		created.MaxAttempts = sql.NullInt32{Int32: *request.MaxAttempts, Valid: true}
 	}
 	if hold != nil {
 		stampHold(created, *hold)
@@ -2079,6 +2099,15 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispa
 		// previously produced a JSON column write Postgres refused, stranding the command in
 		// SENT while the sweep retried the same doomed UPDATE every minute.
 		"response_payload": rdb.JSONTextOf(payload),
+	}
+	// 🔴 AN ANSWER IS EVIDENCE OF DELIVERY ON EVERY TRANSPORT, and it is recorded here once, for all
+	// of them: a device that answered had the command. COALESCE keeps the first piece of evidence,
+	// so an acknowledgement that came earlier is never replaced by the answer. A failure the
+	// reporting transport says never reached the device (ReachUnsent) or got no answer
+	// (ReachUnanswered) is not evidence of anything and stamps nothing.
+	if success || reach == ReachAnswered {
+		updates["delivered_time"] = gorm.Expr("COALESCE(delivered_time, ?)", time.Now())
+		updates["delivery_evidence"] = gorm.Expr("COALESCE(delivery_evidence, ?)", EvidenceDeviceResponse)
 	}
 	switch {
 	case success:

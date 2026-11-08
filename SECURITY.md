@@ -27,14 +27,20 @@ by a small team, and a hard report can take longer.
 
 | Step | Target |
 | --- | --- |
-| Acknowledge your report | within 3 business days |
-| Initial assessment (valid? severity? affected versions?) | within 7 days |
+| Acknowledge and triage your report (read it, reproduce or reject it, make a first severity call) | within 24 hours, every day of the week |
+| Full assessment (valid? severity? affected versions?) | within 7 days |
 | Fix released, by severity | Critical: 14 days. High: 30 days. Medium: 90 days. Low: the next scheduled release |
 | Advisory published | with the fix, crediting you unless you ask us not to |
 
 We aim to keep you informed as we go, and to tell you if a target will be missed, and why. We
 ask for a reasonable opportunity to release a fix before any public disclosure (coordinated
 disclosure), and will seek to agree a disclosure date with you; the default is the day the fix ships.
+
+A report of a vulnerability that is being actively exploited is handled on the clock the EU Cyber
+Resilience Act sets, not the one in this table; see
+[Security process](https://docs.devicechain.io/deployment/security-process).
+
+The machine-readable contact is [`security.txt`](https://docs.devicechain.io/.well-known/security.txt).
 
 ## Supported versions
 

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/command-pull-response.schema.json",
+  "title": "DeviceChain command pull response",
+  "description": "The JSON a device posts to POST /{instanceId}/{tenant}/devices/{deviceToken}/commands/{commandToken}/response to report the outcome of a command it pulled on the HTTP_PULL command channel. The request carries the device's access token in an Authorization: Bearer header; the device and the command come from the URL, and no dispatch nonce is needed. A body that is not JSON, or whose success is missing or not a boolean, is refused with 400 and nothing is recorded. 204 means the outcome was recorded (or was already recorded); 404 means the command is not this device's; 409 means the command is not awaiting an answer.",
+  "type": "object",
+  "properties": {
+    "success": {
+      "type": "boolean",
+      "description": "true settles the command as SUCCESSFUL, false as FAILED. Required: unlike the MQTT response, an omitted value is refused rather than read as false."
+    },
+    "payload": {
+      "description": "The command's result data: any JSON value. A string is stored as its text; any other value is stored as its JSON text. Omitted or null, the command has no response payload."
+    },
+    "error": {
+      "type": "string",
+      "description": "Why the command failed. Stored only when success is false."
+    }
+  },
+  "required": ["success"],
+  "examples": [
+    { "success": true, "payload": { "relay": "on" } },
+    { "success": true },
+    { "success": false, "error": "actuator jammed" }
+  ]
+}

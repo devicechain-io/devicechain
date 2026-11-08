@@ -6,7 +6,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -127,17 +129,26 @@ type Catalog struct {
 	// and risk metadata as register stamped them, before the SDK filled in schemas.
 	// It is what closes the last gap in the name-based ratchet; see AlteredTools.
 	decls map[string]*mcp.Tool
+	// outputs is the Go type each tool returns, recorded by register so the provenance ratchet
+	// walks the types the server actually serves rather than a list kept beside them.
+	outputs map[string]reflect.Type
 }
 
 // NewCatalog builds an empty catalog.
 func NewCatalog() *Catalog {
-	return &Catalog{risks: map[string]ToolRisk{}, decls: map[string]*mcp.Tool{}}
+	return &Catalog{risks: map[string]ToolRisk{}, decls: map[string]*mcp.Tool{}, outputs: map[string]reflect.Type{}}
 }
 
 // Declared returns the listing a tool was registered with.
 func (c *Catalog) Declared(name string) (*mcp.Tool, bool) {
 	d, ok := c.decls[name]
 	return d, ok
+}
+
+// Output returns the type a tool returns, for the provenance ratchet.
+func (c *Catalog) Output(name string) (reflect.Type, bool) {
+	t, ok := c.outputs[name]
+	return t, ok
 }
 
 // Risk returns a tool's declaration.
@@ -178,6 +189,13 @@ func register[In, Out any](s *mcp.Server, c *Catalog, tool *mcp.Tool, risk ToolR
 			"silently replace the first", tool.Name))
 	}
 	c.risks[tool.Name] = risk
+	c.outputs[tool.Name] = reflect.TypeFor[Out]()
+
+	// Every description carries the untrusted-text contract, appended HERE so that a tool cannot
+	// leave it out, and only once so a description that already says it is not told twice.
+	if !strings.Contains(tool.Description, untrustedNotice) {
+		tool.Description = strings.TrimRight(tool.Description, " ") + " " + untrustedNotice
+	}
 
 	// Every tool on this server is a read, and both hints are true of all of them: nothing
 	// here modifies anything, and calling one twice returns the same answer rather than

@@ -82,7 +82,11 @@ CREATE TABLE "command-delivery".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "command-delivery".command_batches (
  id bigint NOT NULL,
@@ -136,7 +140,12 @@ CREATE TABLE "command-delivery".commands (
  dispatch_after timestamp with time zone,
  dispatch_until timestamp with time zone,
  window_token character varying(128),
- scope_anchors text[]
+ scope_anchors text[],
+ delivered_time timestamp with time zone,
+ delivery_evidence character varying(32),
+ delivery_mode character varying(16),
+ max_attempts integer,
+ delivery_attempts integer
 );
 CREATE TABLE "command-delivery".device_gate_syncs (
  id bigint NOT NULL,

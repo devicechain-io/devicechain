@@ -78,7 +78,7 @@ func TestAFullTermEndsItsShardsAndPublishesTheSameBytesAtAnyShardCount(t *testin
 				w := &valueCapture{}
 				rp := b.liveShardedTerm(t, k, w)
 				if k > 1 {
-					require.Equal(t, k, shardGoroutines(), "the term's engine should be running %d shards", k)
+					require.Equal(t, k, settledShardGoroutines(k), "the term's engine should be running %d shards", k)
 				}
 				for i := uint64(1); i <= 200; i++ {
 					rp.handle(shardedMessage(t, i))
@@ -92,7 +92,7 @@ func TestAFullTermEndsItsShardsAndPublishesTheSameBytesAtAnyShardCount(t *testin
 					rp.supWG.Wait()
 				}
 				b.leaderExits()
-				require.Zero(t, shardGoroutines(), "shard goroutines outlived the ended term (k=%d)", k)
+				require.Zero(t, settledShardGoroutines(0), "shard goroutines outlived the ended term (k=%d)", k)
 				return w.laneOrdered()
 			}
 			control := run(1)
@@ -109,9 +109,9 @@ func TestAnUnleasedStopEndsTheShards(t *testing.T) {
 	for i := uint64(1); i <= 20; i++ {
 		rp.handle(shardedMessage(t, i))
 	}
-	require.Equal(t, 4, shardGoroutines())
+	require.Equal(t, 4, settledShardGoroutines(4))
 	require.NoError(t, rp.ExecuteStop(context.Background()))
-	require.Zero(t, shardGoroutines(), "ExecuteStop left shard goroutines running")
+	require.Zero(t, settledShardGoroutines(0), "ExecuteStop left shard goroutines running")
 }
 
 // Two rules on one device that fire on the same message are published to that device's lane in the

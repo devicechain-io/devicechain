@@ -165,6 +165,34 @@ type AuditEvent struct {
 	// two columns emptied for a purged tenant — see the type doc.
 	EntityLabel  string
 	RowsAffected int64
+
+	// ClientId is the OAuth client the acting token was minted for (the "client_id"
+	// claim), so a change made by an agent client is distinguishable from the same
+	// person's console change. NULL for a console token, a system operation and every
+	// auth-event row.
+	//
+	// 🔴 FOR A PUBLIC CLIENT IT IS A LABEL THE CLIENT CHOSE, NOT AN AUTHENTICATED
+	// IDENTITY: only a confidential client proves it. The journal records what the token
+	// said, which is the most it can know.
+	ClientId *string
+	// SessionId is the sign-in session the acting token descends from (the "sid" claim),
+	// which ties a row to the grant that produced it. NULL when the token carries none —
+	// every console token, and every OAuth token minted before the claim existed. A NULL
+	// here means "unknown", never "the same session as another NULL row".
+	//
+	// It is an opaque random value and names no person on its own, but it correlates every
+	// row one sign-in produced, so it is retained and not redacted: it is evidence of the
+	// activity, the same as the table and the operation, which a purge keeps.
+	SessionId *string
+	// OnBehalfOf is the principal an actor acted for — the proposer, when the actor is an
+	// approver. RESERVED: nothing writes it yet, and it is NULL on every row until the
+	// proposal gate exists. It NAMES A PERSON (an email), so a tenant purge empties it
+	// beside Actor and EntityLabel (core/tenantpurge), and it is listed there already so
+	// the first writer cannot ship ahead of the redaction.
+	OnBehalfOf *string
+	// Proposal is the token of the proposal an effect was executed under. RESERVED: NULL on
+	// every row until the proposal gate exists. It is a server-generated token, not text.
+	Proposal *string
 }
 
 // auditSchemaName is the gorm schema (struct) name used by the recursion guard so
@@ -311,6 +339,7 @@ func auditCallback(operation string) func(*gorm.DB) {
 			EntityLabel:  auditLabel(db),
 			RowsAffected: db.Statement.RowsAffected,
 		}
+		row.ClientId, row.SessionId = auditAgentIdentity(db)
 
 		// Write the audit row on a fresh session that shares this statement's
 		// connection (and thus its transaction), carrying the same context so the
@@ -358,6 +387,29 @@ func auditActor(db *gorm.DB) string {
 		return "system"
 	}
 	return ""
+}
+
+// auditAgentIdentity reads the OAuth client and the grant session off the acting token's
+// claims, each nil when the claim is absent.
+//
+// 🔴 EACH COMES FROM ITS OWN CLAIM. client_id is Claims.ClientId and the session is
+// Claims.SessionID; stamping one from the other would make every row name a session that is
+// really a client, and the journal would still look fully populated. Claims are the ONLY
+// source: a WithAuditActor context has a name but no token, and records neither.
+func auditAgentIdentity(db *gorm.DB) (clientID, sessionID *string) {
+	claims, ok := auth.ClaimsFromContext(db.Statement.Context)
+	if !ok || claims == nil {
+		return nil, nil
+	}
+	if claims.ClientId != "" {
+		c := claims.ClientId
+		clientID = &c
+	}
+	if claims.SessionID != "" {
+		s := string(claims.SessionID)
+		sessionID = &s
+	}
+	return clientID, sessionID
 }
 
 // auditTenant returns the acting tenant from context, or "" when none is present

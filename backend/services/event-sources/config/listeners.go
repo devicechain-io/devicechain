@@ -40,6 +40,12 @@ const (
 	// it: a constrained device on a slow link sends a small body slowly, and the point
 	// of the bound is to end an unbounded hold, not to police throughput.
 	DefaultHttpRequestTimeoutSeconds = 60
+
+	// DefaultMaxCommandPollsPerTenant is how many HTTP command polls (GET .../commands with a
+	// wait) one tenant may hold open at once on one replica. Each held poll is a connection and
+	// a goroutine that asks the platform for the device's commands every couple of seconds, so
+	// the cap is what stops one tenant's fleet of long polls from taking the listener.
+	DefaultMaxCommandPollsPerTenant = 256
 )
 
 // HttpIngest configures the DEVICE-FACING HTTP listeners — every event source of type
@@ -69,6 +75,10 @@ type HttpIngest struct {
 	// be lost. Set it only after every device-management replica runs a release that reads the
 	// device-uplink event. With it off the route does not exist (404), exactly as before the route did.
 	DeviceUplinks bool
+	// MaxCommandPollsPerTenant caps the held HTTP command polls per tenant per replica; one
+	// over the cap is answered 429. Defaults to DefaultMaxCommandPollsPerTenant, and a
+	// non-positive value falls back to it, so the cap can be moved but never removed.
+	MaxCommandPollsPerTenant int
 }
 
 // HeaderTimeout and RequestTimeout render the configured seconds as durations, applying
@@ -77,6 +87,14 @@ type HttpIngest struct {
 // mean "no bound at all" and is the state they exist to end.
 func (h HttpIngest) HeaderTimeout() time.Duration {
 	return secondsOr(h.HeaderTimeoutSeconds, DefaultHttpHeaderTimeoutSeconds)
+}
+
+// CommandPollCap is the effective per-tenant cap on held command polls.
+func (h HttpIngest) CommandPollCap() int {
+	if h.MaxCommandPollsPerTenant > 0 {
+		return h.MaxCommandPollsPerTenant
+	}
+	return DefaultMaxCommandPollsPerTenant
 }
 
 func (h HttpIngest) RequestTimeout() time.Duration {

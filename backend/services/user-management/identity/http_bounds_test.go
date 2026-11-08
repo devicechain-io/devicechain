@@ -105,7 +105,7 @@ func TestStalledBodyIsAnsweredAtTheDeadline(t *testing.T) {
 			stalled(http.MethodPost, UserinfoPath, "Authorization: Bearer x\r\n")},
 		{"service-token", ServiceTokenHandler(func() string { return "s" }, func(string, []string) (auth.IssuedToken, error) {
 			return auth.IssuedToken{}, nil
-		}), stalled(http.MethodPost, auth.ServiceTokenPath, auth.ServiceSecretHeader+": s\r\n")},
+		}, nil), stalled(http.MethodPost, auth.ServiceTokenPath, auth.ServiceSecretHeader+": s\r\n")},
 		{"metadata", mux, stalled(http.MethodGet, MetadataPath, "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

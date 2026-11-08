@@ -91,6 +91,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 	if err != nil {
 		return nil, err
 	}
+	commandChannel, err := normalizeCommandChannel(request.CommandChannel)
+	if err != nil {
+		return nil, err
+	}
 	created := &DeviceType{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -113,6 +117,7 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 		MaintenanceWindowId: windowId,
 		Manufacturer:        rdb.NullStrOf(request.Manufacturer),
 		ModelName:           rdb.NullStrOf(request.Model),
+		CommandChannel:      commandChannel,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -163,6 +168,14 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 		}
 	}
 
+	commandChannel := found.CommandChannel
+	if request.CommandChannel.Set {
+		commandChannel, err = normalizeCommandChannel(request.CommandChannel.Value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	found.Name = request.Name.ApplyToNullString(found.Name)
 	found.Description = request.Description.ApplyToNullString(found.Description)
 	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
@@ -182,6 +195,7 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	found.MaintenanceWindow = nil
 	found.Manufacturer = request.Manufacturer.ApplyToNullString(found.Manufacturer)
 	found.ModelName = request.Model.ApplyToNullString(found.ModelName)
+	found.CommandChannel = commandChannel
 
 	repointed := !uintPtrEqual(oldProfileId, profileId)
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -242,7 +256,9 @@ func (api *Api) DeviceTypesByToken(ctx context.Context, tokens []string) ([]*Dev
 // Search for device types that meet criteria.
 func (api *Api) DeviceTypes(ctx context.Context, criteria DeviceTypeSearchCriteria) (*DeviceTypeSearchResults, error) {
 	results := make([]DeviceType, 0)
-	db, pag := api.RDB.ListOf(ctx, &DeviceType{}, nil, criteria.Pagination)
+	db, pag := api.RDB.ListOf(ctx, &DeviceType{}, func(result *gorm.DB) *gorm.DB {
+		return whereNameContains(result, "device_types", criteria.NameContains)
+	}, criteria.Pagination)
 	db.Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
@@ -965,6 +981,22 @@ func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) (
 	return found, nil
 }
 
+// whereNameContains narrows a list to rows whose name or token contains the text, ignoring
+// case. The token is searched as well because a name is optional: an unnamed row is shown
+// (and so looked for) by its token. A blank or absent filter is no filter. The text is escaped,
+// so % and _ match themselves rather than every row.
+func whereNameContains(db *gorm.DB, table string, text *string) *gorm.DB {
+	if text == nil {
+		return db
+	}
+	needle := strings.TrimSpace(*text)
+	if needle == "" {
+		return db
+	}
+	like := "%" + likeEscaper.Replace(strings.ToLower(needle)) + "%"
+	return db.Where("(LOWER("+table+".name) LIKE ? ESCAPE '\\' OR LOWER("+table+".token) LIKE ? ESCAPE '\\')", like, like)
+}
+
 // Search for devices that meet criteria.
 func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*DeviceSearchResults, error) {
 	var aliasSearch *DeviceAliasInput
@@ -977,6 +1009,7 @@ func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*De
 	}
 	results := make([]Device, 0)
 	db, pag := api.RDB.ListOf(ctx, &Device{}, func(result *gorm.DB) *gorm.DB {
+		result = whereNameContains(result, "devices", criteria.NameContains)
 		if criteria.DeviceType != nil {
 			result = result.Where("device_type_id = (?)",
 				api.RDB.DB(ctx).Model(&DeviceType{}).Select("id").Where("token = ?", criteria.DeviceType))

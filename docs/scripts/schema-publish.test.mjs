@@ -509,6 +509,7 @@ test('the device contract is published by name, verbatim, under device/', () => 
   for (const name of [
     'device-event', 'measurement-payload', 'location-payload', 'alert-payload',
     'new-relationship-payload', 'command-delivery', 'command-response',
+    'command-pull', 'command-pull-response',
   ]) {
     const published = artifacts.find((a) => a.name === `device/${name}.schema.json`);
     assert.ok(published, `device/${name}.schema.json is not published`);

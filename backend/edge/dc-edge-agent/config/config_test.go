@@ -191,3 +191,38 @@ func TestLeftoverAgentIdIsRefusedNamingItsReplacement(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandsDownlinkIsOffByDefaultWithBoundedDefaults(t *testing.T) {
+	c := validConfig()
+	c.ApplyDefaults()
+	if c.Commands.Enabled {
+		t.Error("the command downlink must be opt-in")
+	}
+	if c.Commands.MaxAgeSeconds != DefaultCommandMaxAgeSeconds || c.Commands.RetryDelaySeconds != DefaultCommandRetryDelaySec ||
+		c.Commands.InboxMaxBytes != DefaultCommandStreamBytes || c.Commands.ResponsesMaxBytes != DefaultCommandStreamBytes {
+		t.Errorf("defaults = %+v", c.Commands)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("defaults do not validate: %v", err)
+	}
+}
+
+func TestCommandsRejectsOutOfRangeSettings(t *testing.T) {
+	cases := map[string]func(*Configuration){
+		"maxAge above the ceiling":  func(c *Configuration) { c.Commands.MaxAgeSeconds = MaxCommandMaxAgeSeconds + 1 },
+		"negative maxAge":           func(c *Configuration) { c.Commands.MaxAgeSeconds = -1 },
+		"inbox below the floor":     func(c *Configuration) { c.Commands.InboxMaxBytes = MinCommandStreamBytes - 1 },
+		"inbox above the ceiling":   func(c *Configuration) { c.Commands.InboxMaxBytes = MaxCommandStreamBytes + 1 },
+		"responses below the floor": func(c *Configuration) { c.Commands.ResponsesMaxBytes = 1 },
+		"negative retry delay":      func(c *Configuration) { c.Commands.RetryDelaySeconds = -1 },
+	}
+	for name, mutate := range cases {
+		c := validConfig()
+		c.Commands.Enabled = true
+		c.ApplyDefaults()
+		mutate(&c)
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "commands.") {
+			t.Errorf("%s: Validate = %v, want a commands.* error", name, err)
+		}
+	}
+}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/golang/geo/s1"
 	"github.com/golang/geo/s2"
 
 	"github.com/devicechain-io/dc-microservice/geo"
@@ -39,6 +38,10 @@ import (
 type polygon2D struct {
 	exterior *boundedLoop
 	holes    []*boundedLoop
+	// poly is the same rings as core/geo's Polygon. Containment is ITS predicate, not a copy of it:
+	// the spatial engine answers containment through the very same method, so an indexed answer and
+	// this evaluator's cannot disagree.
+	poly *geo.Polygon
 }
 
 // boundedLoop is one compiled ring together with the structure that makes the BOUNDARY test
@@ -86,22 +89,17 @@ type boundedLoop struct {
 // The consequence of the threshold is that a small ring carries no second index, which also keeps
 // the geometry cache's per-vertex cost proxy honest for the ten-to-forty-vertex fences real sites
 // are drawn with — those are the overwhelming majority, and they were never the ones that hurt.
-const indexedBoundaryMinVertices = 48
+const indexedBoundaryMinVertices = geo.IndexedBoundaryMinVertices
 
-// newBoundedLoop pairs a validated loop with its edge index, building the index only for rings
-// large enough to profit from it.
+// newBoundedLoop pairs a validated loop with its edge index. core/geo owns when the index is
+// worth building (geo.IndexedBoundaryMinVertices) and builds it eagerly, so a ring is immutable.
 func newBoundedLoop(loop *s2.Loop) *boundedLoop {
-	bl := &boundedLoop{loop: loop}
-	if loop.NumVertices() >= indexedBoundaryMinVertices {
-		bl.edges = s2.NewShapeIndex()
-		bl.edges.Add(loop)
-		// Build now, so that the first concurrent reader is not the one that builds it — the
-		// same obligation prebuildIndex discharges for the loop's own index, discharged here
-		// where it cannot be forgotten.
-		bl.edges.Build()
-	}
-	return bl
+	r := geo.NewRing(loop)
+	return &boundedLoop{loop: r.Loop, edges: r.Edges}
 }
+
+// ring is the core/geo view of the same loop and index.
+func (bl *boundedLoop) ring() geo.Ring { return geo.Ring{Loop: bl.loop, Edges: bl.edges} }
 
 // geoJSONGeometry is the minimal RFC 7946 geometry object this package reads.
 type geoJSONGeometry struct {
@@ -148,6 +146,10 @@ func compilePolygon2D(raw json.RawMessage) (geometry, error) {
 		}
 		p.holes = append(p.holes, loop)
 	}
+	p.poly = &geo.Polygon{Exterior: p.exterior.ring()}
+	for _, h := range p.holes {
+		p.poly.Holes = append(p.poly.Holes, h.ring())
+	}
 	return p, nil
 }
 
@@ -182,19 +184,7 @@ func (p *polygon2D) contains(pos Position) (bool, error) {
 	if !pos.valid() {
 		return false, fmt.Errorf("the reported position is not a finite coordinate")
 	}
-	pt := pointOf(pos.Lat, pos.Lon)
-	if !inLoop(p.exterior, pt) {
-		return false, nil
-	}
-	for _, hole := range p.holes {
-		// Strictly inside a hole ⇒ outside the fence. `inLoop` is boundary-INCLUSIVE, so the
-		// exclusion has to be the strict test: on a hole's ring the point is on the fence's
-		// boundary, which the convention places inside.
-		if hole.loop.ContainsPoint(pt) && !onLoopBoundary(hole, pt) {
-			return false, nil
-		}
-	}
-	return true, nil
+	return p.poly.ContainsPoint(pointOf(pos.Lat, pos.Lon)), nil
 }
 
 // loops is every compiled ring of the polygon: the exterior first, then each hole.
@@ -256,77 +246,17 @@ func (p *polygon2D) prebuildIndex() {
 	}
 }
 
-// inLoop is the boundary-INCLUSIVE point-in-loop test: s2's exact interior predicate, widened by
-// an explicit on-the-ring test so the answer does not depend on which edge the point sits on.
-// The boundary pass runs only when the interior test says no.
-func inLoop(bl *boundedLoop, pt s2.Point) bool {
-	if bl.loop.ContainsPoint(pt) {
-		return true
-	}
-	return onLoopBoundary(bl, pt)
-}
+// inLoop is the boundary-INCLUSIVE point-in-loop test; see geo.InRing.
+func inLoop(bl *boundedLoop, pt s2.Point) bool { return geo.InRing(bl.ring(), pt) }
 
-// onLoopBoundary reports whether the point lies on one of the loop's geodesic edges, within
-// BoundaryToleranceRadians.
-//
-// 🔴 THIS IS THE HOT PATH OF THE WHOLE CONTAINMENT LAYER, AND IT USED TO BE THE SLOWEST THING IN
-// IT. It is reached on every OUTSIDE answer — which is what a device is for nearly every fence it
-// is not in — and, for a fence with holes, on every answer INSIDE a hole. Its scan is O(edges) of
-// spherical point-to-segment distance, so before the two filters below, one inFence call on a
-// device outside a fence at the 512-position authoring ceiling measured 23.7µs, and 174µs at 4096
-// positions. Both filters exist because that cost is paid per location event, per fence a rule
-// names, and the tolerance it is spent deciding is BoundaryToleranceRadians — about 6mm.
-//
-// 🔴 THE TWO FILTERS ARE NOT REDUNDANT AND NEITHER SUBSUMES THE OTHER, which is the thing to
-// understand before deleting one of them:
-//
-//   - The bounding-rectangle reject answers the FAR case in constant time. A point outside the
-//     ring's bound expanded by the tolerance cannot be within the tolerance of any of its edges,
-//     so no scan is needed. Measured: 23.7µs → 348ns at 512 positions.
-//   - It buys NOTHING in the near case. A ring's bounding rectangle has corners the ring does not
-//     reach, so a point inside the bound and outside the ring — a device driving around a site,
-//     the case a real fence actually sees — falls straight through it to the same full scan it
-//     always was. Measured, and held there by BenchmarkBoundaryPaths' outside-in-bound case,
-//     which is that filter's negative control: 24.4µs at 512 positions, unchanged.
-//
-// The edge index is what bounds the near case, and it is sub-linear rather than merely faster:
-// 1.9µs at 512 positions and 2.2µs at 4096, against 24.4µs and 179.6µs scanned.
-//
-// 🔴 IncludeInteriors(false) IS LOAD-BEARING, NOT TIDINESS. A loop added to a ShapeIndex is a
-// TWO-DIMENSIONAL shape, so with interiors included the query would measure distance to the
-// loop's REGION and answer zero for every point inside it. This function is asked about points
-// inside a hole (see contains), and every one of them would then report "on the boundary" — which
-// inverts the hole exclusion and makes a donut a solid disc. TestContainsWithHole is what fails.
-func onLoopBoundary(bl *boundedLoop, pt s2.Point) bool {
-	tolerance := s1.Angle(BoundaryToleranceRadians)
-	if bl.loop.RectBound().DistanceToLatLng(s2.LatLngFromPoint(pt)) > tolerance {
-		return false
-	}
-	if bl.edges == nil {
-		return scanLoopBoundary(bl.loop, pt)
-	}
-	q := s2.NewClosestEdgeQuery(bl.edges, s2.NewClosestEdgeQueryOptions().
-		MaxResults(1).
-		DistanceLimit(s1.ChordAngleFromAngle(tolerance)).
-		IncludeInteriors(false))
-	return len(q.FindEdges(s2.NewMinDistanceToPointTarget(pt))) > 0
-}
+// onLoopBoundary reports whether the point lies on one of the loop's edges within
+// BoundaryToleranceRadians; see geo.OnBoundary, which carries the reasoning (the far-case bound
+// filter, the edge index, and why IncludeInteriors(false) is load-bearing).
+func onLoopBoundary(bl *boundedLoop, pt s2.Point) bool { return geo.OnBoundary(bl.ring(), pt) }
 
-// scanLoopBoundary is the unindexed boundary test: every edge, in order. It is what a ring below
-// indexedBoundaryMinVertices uses, and it is kept as its own function rather than inlined so that
-// BenchmarkBoundaryPaths can time it against the indexed path at the SAME ring sizes — which is
-// the only way that threshold can be a measurement rather than a guess.
-func scanLoopBoundary(loop *s2.Loop, pt s2.Point) bool {
-	n := loop.NumVertices()
-	for i := 0; i < n; i++ {
-		a := loop.Vertex(i)
-		b := loop.Vertex((i + 1) % n)
-		if s2.DistanceFromSegment(pt, a, b) <= s1.Angle(BoundaryToleranceRadians) {
-			return true
-		}
-	}
-	return false
-}
+// scanLoopBoundary is the unindexed boundary test; see geo.ScanBoundary. It stays addressable here
+// so BenchmarkBoundaryPaths can time it against the indexed path at the same ring sizes.
+func scanLoopBoundary(loop *s2.Loop, pt s2.Point) bool { return geo.ScanBoundary(loop, pt) }
 
 // pointOf converts WGS84 decimal degrees to a point on the unit sphere.
 //

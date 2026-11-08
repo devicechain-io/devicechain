@@ -81,6 +81,8 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	RejectMetadataTooLarge:            {},
 	RejectNameTooLong:                 {},
 	RejectExpiresAtInvalid:            {},
+	RejectDeliveryOptionInvalid:       {},
+	RejectDeliveryOptionNotApplicable: {},
 	RejectHeldCeilingExceeded:         {},
 	RejectUnclassified:                {},
 	RejectBatchTargetAmbiguous:        {},

@@ -9,8 +9,6 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/fatih/color"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -107,43 +105,30 @@ func precheckValuesOverlay(ctx context.Context, st *State) error {
 }
 
 // recordValuesOverlay writes the run's overlay onto the declaration (or removes the
-// annotation when it is empty). A compare-and-swap, like every declaration write.
+// annotation when it is empty). A compare-and-swap, like every declaration write -- one
+// that an operator status write does not lose (updateInstanceMetadata).
 func recordValuesOverlay(ctx context.Context, dyn dynamic.Interface, instance string, overlay map[string]interface{}) error {
-	inst, err := readInstanceCR(ctx, dyn, instance)
-	if err != nil {
-		return err
-	}
-	if inst == nil {
-		return fmt.Errorf("the declaration for instance %q disappeared before the values overlay could be recorded; "+
-			"re-run to start from a clean read", instance)
-	}
-	if len(overlay) == 0 {
-		if _, had := inst.Annotations[AnnotationValuesOverlay]; !had {
-			return nil
-		}
-		delete(inst.Annotations, AnnotationValuesOverlay)
-	} else {
-		enc, err := encodeValuesOverlay(overlay)
-		if err != nil {
+	var enc string
+	if len(overlay) > 0 {
+		var err error
+		if enc, err = encodeValuesOverlay(overlay); err != nil {
 			return err
+		}
+	}
+	return updateInstanceMetadata(ctx, dyn, instance, "the values overlay", func(inst *dcv1beta1.Instance) (bool, error) {
+		if len(overlay) == 0 {
+			if _, had := inst.Annotations[AnnotationValuesOverlay]; !had {
+				return false, nil
+			}
+			delete(inst.Annotations, AnnotationValuesOverlay)
+			return true, nil
 		}
 		if inst.Annotations == nil {
 			inst.Annotations = map[string]string{}
 		}
 		inst.Annotations[AnnotationValuesOverlay] = enc
-	}
-	obj, err := instanceToUnstructured(inst)
-	if err != nil {
-		return err
-	}
-	if _, err := dyn.Resource(instanceGVR).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
-		if apierrors.IsConflict(err) {
-			return fmt.Errorf("the declaration for instance %q changed while the values overlay was being recorded; "+
-				"something else is editing it -- re-run once you know what", instance)
-		}
-		return fmt.Errorf("recording the values overlay on instance %q: %w", instance, err)
-	}
-	return nil
+		return true, nil
+	})
 }
 
 // recordValuesOverlayFor is the bootstrap path's entry: it builds its own client, and is a

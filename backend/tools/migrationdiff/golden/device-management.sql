@@ -786,7 +786,11 @@ CREATE TABLE "device-management".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "device-management".command_definitions (
  id bigint NOT NULL,
@@ -1075,7 +1079,8 @@ CREATE TABLE "device-management".device_types (
  profile_id bigint,
  manufacturer character varying(128),
  model character varying(128),
- maintenance_window_id bigint
+ maintenance_window_id bigint,
+ command_channel character varying(32)
 );
 CREATE TABLE "device-management".devices (
  id bigint NOT NULL,

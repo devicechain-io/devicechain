@@ -120,6 +120,12 @@ export type CommandBatchSearchCriteria = {
 
 /** Fields for issuing a command to one device. */
 export type CommandCreateRequest = {
+  /**
+   * ONEWAY for a command the device acknowledges and does not answer. Accepted only for a device
+   * whose type has the HTTP_PULL command channel; otherwise the request is refused with
+   * DELIVERY_OPTION_NOT_APPLICABLE (or DELIVERY_OPTION_INVALID for any other value). Optional.
+   */
+  deliveryMode?: string | null | undefined;
   /** Token of the device to command. */
   deviceToken: string;
   /**
@@ -127,6 +133,12 @@ export type CommandCreateRequest = {
    * the platform's default time-to-live applies.
    */
   expiresAt?: string | null | undefined;
+  /**
+   * The most times the HTTP pull channel hands the command out before giving up on its
+   * acknowledgement, 1 to 10. Accepted only for a device on the HTTP_PULL channel, like
+   * deliveryMode. Optional; the platform default is 3.
+   */
+  maxAttempts?: number | null | undefined;
   /**
    * Free-form metadata as a JSON document serialized to a string. Must be valid JSON. At most
    * 65536 bytes (METADATA_TOO_LARGE). Optional.

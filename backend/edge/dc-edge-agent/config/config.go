@@ -37,7 +37,44 @@ type Configuration struct {
 
 	// Uplink configures the cloud-facing MQTT connection the agent forwards to.
 	Uplink UplinkConfiguration `json:"uplink"`
+
+	// Commands configures the cloud-to-device downlink (commands for the devices behind this
+	// agent). Absent or disabled, the agent subscribes to nothing, creates no command stream
+	// and behaves exactly as it did before the downlink existed.
+	Commands CommandsConfiguration `json:"commands"`
 }
+
+// CommandsConfiguration is the opt-in command downlink.
+type CommandsConfiguration struct {
+	// Enabled turns the downlink on. Default false. Enable it only after the platform routes
+	// gateway commands: an agent that subscribes earlier simply receives nothing.
+	Enabled bool `json:"enabled"`
+
+	// MaxAgeSeconds bounds how long a received command may wait for local delivery before the
+	// agent expires it and reports it UNSENT. A command envelope that carries its own
+	// expiresAt is held to the earlier of the two. Defaults to 3600.
+	MaxAgeSeconds int `json:"maxAgeSeconds"`
+
+	// InboxMaxBytes and ResponsesMaxBytes bound the two durable command streams. A full inbox
+	// REFUSES new commands (an actuation is never evicted to make room). Default 64 MiB each,
+	// floor 1 MiB.
+	InboxMaxBytes     int64 `json:"inboxMaxBytes"`
+	ResponsesMaxBytes int64 `json:"responsesMaxBytes"`
+
+	// RetryDelaySeconds is how long a command waits before the next local delivery attempt
+	// after the local broker refused or failed one. Defaults to 5.
+	RetryDelaySeconds int `json:"retryDelaySeconds"`
+}
+
+// Command downlink defaults and bounds.
+const (
+	DefaultCommandMaxAgeSeconds       = 3600
+	MaxCommandMaxAgeSeconds           = 7 * 24 * 3600
+	DefaultCommandStreamBytes   int64 = 64 * 1024 * 1024
+	MinCommandStreamBytes       int64 = 1024 * 1024
+	MaxCommandStreamBytes       int64 = 8 * 1024 * 1024 * 1024
+	DefaultCommandRetryDelaySec       = 5
+)
 
 // LocalConfiguration is the device-facing side: an embedded nats-server MQTT
 // gateway that terminates the golden path byte-identically (ADR-006), backed by a
@@ -223,6 +260,18 @@ func (c *Configuration) ApplyDefaults() {
 		def := DefaultMetricsPort
 		c.Local.MetricsPort = &def
 	}
+	if c.Commands.MaxAgeSeconds == 0 {
+		c.Commands.MaxAgeSeconds = DefaultCommandMaxAgeSeconds
+	}
+	if c.Commands.InboxMaxBytes == 0 {
+		c.Commands.InboxMaxBytes = DefaultCommandStreamBytes
+	}
+	if c.Commands.ResponsesMaxBytes == 0 {
+		c.Commands.ResponsesMaxBytes = DefaultCommandStreamBytes
+	}
+	if c.Commands.RetryDelaySeconds == 0 {
+		c.Commands.RetryDelaySeconds = DefaultCommandRetryDelaySec
+	}
 	if c.Uplink.ConnectTimeoutSeconds == 0 {
 		c.Uplink.ConnectTimeoutSeconds = 30
 	}
@@ -293,6 +342,9 @@ func (c *Configuration) Validate() error {
 		return fmt.Errorf("local.username and local.passwordEnv must be set together (or both omitted to leave the local MQTT listener open)")
 	}
 	if err := c.Uplink.validateIdentity(); err != nil {
+		return err
+	}
+	if err := c.Commands.validate(); err != nil {
 		return err
 	}
 	if c.Uplink.BrokerURL == "" {
@@ -386,6 +438,23 @@ func (u *UplinkConfiguration) validateIdentity() error {
 	prefix := u.Tenant + ":"
 	if !strings.HasPrefix(u.Username, prefix) || len(u.Username) == len(prefix) {
 		return fmt.Errorf("uplink.username %q must be %q followed by the gateway credential's id: the broker reads the tenant from the part before the colon, so a bare name is refused at CONNECT", u.Username, prefix+"<credentialId>")
+	}
+	return nil
+}
+
+// validate bounds the downlink settings whether or not it is enabled, so a typo in a
+// disabled block is found when it is written rather than when someone switches it on.
+func (cc *CommandsConfiguration) validate() error {
+	if cc.MaxAgeSeconds < 1 || cc.MaxAgeSeconds > MaxCommandMaxAgeSeconds {
+		return fmt.Errorf("commands.maxAgeSeconds %d out of range 1..%d", cc.MaxAgeSeconds, MaxCommandMaxAgeSeconds)
+	}
+	for name, v := range map[string]int64{"commands.inboxMaxBytes": cc.InboxMaxBytes, "commands.responsesMaxBytes": cc.ResponsesMaxBytes} {
+		if v < MinCommandStreamBytes || v > MaxCommandStreamBytes {
+			return fmt.Errorf("%s %d out of range %d..%d", name, v, MinCommandStreamBytes, MaxCommandStreamBytes)
+		}
+	}
+	if cc.RetryDelaySeconds < 1 {
+		return fmt.Errorf("commands.retryDelaySeconds must be >= 1")
 	}
 	return nil
 }

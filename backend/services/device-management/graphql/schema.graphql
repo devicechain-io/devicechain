@@ -135,6 +135,13 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     """
     maintenanceWindow: MaintenanceWindow
     """
+    How the devices of this type receive their commands. PUBLISH, or null, is the default: the
+    command is published to the device's subject and delivered by the transport the device is
+    connected on. HTTP_PULL holds the type's commands until the device asks for them with an
+    authenticated GET to its commands endpoint.
+    """
+    commandChannel: String
+    """
     Manufacturer of the devices of this type: free text, up to 128 characters. facetValues
     lists the values already in use.
     """
@@ -1082,6 +1089,16 @@ type CommandDispatchHold {
     dispatchAfter: String!
     """When the opening closes, as an RFC 3339 timestamp. The command may not be sent at or after it."""
     dispatchUntil: String!
+}
+
+"""What the HTTP command endpoints learn about a device that proved its access token."""
+type CommandChannelAccess {
+    """Token of the device the access token belongs to."""
+    deviceToken: String!
+    """Token of the device's type."""
+    deviceTypeToken: String!
+    """The type's command channel: PUBLISH, HTTP_PULL, or null for the default (PUBLISH)."""
+    commandChannel: String
 }
 
 """
@@ -2138,6 +2155,12 @@ input DeviceTypeCreateRequest {
     manufacturer: String
     """Model of the devices of this type, up to 128 characters."""
     model: String
+    """
+    Command channel of the type: PUBLISH or HTTP_PULL, or omit it (or send an empty value) for
+    the default channel, which behaves as PUBLISH. Any other value fails the request with
+    INVALID_VALUE.
+    """
+    commandChannel: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
@@ -2184,6 +2207,12 @@ input DeviceTypeUpdateRequest {
     manufacturer: String
     """New model, or null to clear it."""
     model: String
+    """
+    New command channel: PUBLISH or HTTP_PULL, or null (or an empty value) to return the type
+    to the default channel, which behaves as PUBLISH. Any other value fails the whole update
+    with INVALID_VALUE.
+    """
+    commandChannel: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
@@ -2194,6 +2223,11 @@ input DeviceTypeSearchCriteria {
     pageNumber: Int!
     """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """
+    Return only device types whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed type is found by its token). Blank matches all.
+    """
+    nameContains: String
 }
 
 """One page of device types matching a search."""
@@ -2584,6 +2618,11 @@ input DeviceSearchCriteria {
     pageSize: Int!
     """Return only devices of the device type with this token. An unknown token matches nothing."""
     deviceType: String
+    """
+    Return only devices whose name or token contains this text, ignoring case (a name is
+    optional, so an unnamed device is found by its token). Blank matches all.
+    """
+    nameContains: String
     """
     Return only devices that hold a credential issued by the provisioning profile with this
     token, revoked ones included. An unknown token matches nothing.
@@ -5251,6 +5290,25 @@ type Query {
         """
         alreadyHeld: Boolean
     ): CommandDispatchSchedule!
+    """
+    Which of the named devices take their commands over HTTP_PULL: the ones that exist, are
+    enabled, and whose device type has commandChannel HTTP_PULL. A device that does not exist
+    or is disabled is simply absent from the answer. Requires device:read.
+    """
+    commandPullDevices(
+        """Tokens of the devices to ask about, at most 2000."""
+        deviceTokens: [String!]!
+    ): [String!]!
+    """
+    Service plane. Proves a device's access token for the HTTP command endpoints and says which
+    device it belongs to. Null when the token is unknown, revoked or expired, or the device is
+    disabled: one answer for all of them. Reads the database on every call, so a revocation
+    takes effect on the next request. Requires a service token with device:read.
+    """
+    authenticateCommandChannel(
+        """The device's access token."""
+        credentialId: String!
+    ): CommandChannelAccess
 
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!

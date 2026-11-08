@@ -242,16 +242,65 @@ fails the build, and a new `devicechain_edge_*` metric fails it until a panel re
   device on the LAN that can publish for a sibling can still impersonate it to the platform:
   that is exactly what the local gate is for. Enabling auth on a live site is a breaking change for connected
   devices; sequence it (see [RUNBOOK.md](RUNBOOK.md#4-secure)).
-- **`responses` and `reports` are not forwarded yet.** The platform grants the gateway the
-  `responses` and `reports` leaves of its namespace, but nothing captures them until commands
-  to children are routed. The agent publishes **events only**.
-- **Commands do not reach children yet.** The agent subscribes to notices only; the
-  downlink (`commands`, `desired`) comes with command routing to children.
+- **`reports` are not forwarded yet.** The platform grants the gateway the `reports` leaf of its
+  namespace, but nothing captures it. The agent publishes events, and (with the command
+  downlink on) command responses.
+- **Commands reach children only with the downlink on, and only once the platform routes them.**
+  See [Command downlink](#command-downlink). `desired` is not delivered yet.
 - **The plain NATS client port is unbound** (`DontListen`) so the MQTT gateway is the
   only exposed surface — this is enforced and tested, not incidental.
 - **A config `instanceId` typo forwards nothing.** The agent only captures/forwards
   its configured instance namespace. A mismatch is **counted and logged** (not a
   silent success), and surfaced as `devicechain_edge_instance_mismatched_total`.
+
+## Command downlink
+
+Opt-in (`commands.enabled`, default off; off, the agent behaves exactly as before and exports no
+command series). A cloud command for a device behind this agent arrives on the gateway's own
+namespace (`{instance}/{tenant}/gateways/{gateway}/devices/{child}/commands`), is delivered to the
+child on its ordinary golden command topic (`{instance}/{tenant}/device-commands/{child}`, the
+platform's bytes unchanged), and the child's answer on its golden response topic
+(`{instance}/{tenant}/command-responses/{child}`) goes back on
+`.../gateways/{gateway}/devices/{child}/responses`. A child therefore behaves identically behind
+the agent or on the cloud broker.
+
+```
+cloud ─commands─▶ uplink ─▶ INBOX (durable) ─▶ ledger claim ─▶ local MQTT adapter ─▶ child
+cloud ◀─responses─ uplink ◀─ RESPONSES (durable) ◀──────────────── child answer
+```
+
+What it guarantees:
+
+- **Durable before acknowledged.** The cloud's MQTT message is acknowledged only once the command is
+  in the on-disk inbox (`edge-command-inbox`). A restart keeps queued commands.
+- **At most once to the device.** A ledger (`edge-command-ledger`, 14-day TTL) is moved
+  `accepted -> delivering -> delivered` *before* and *after* the local publish. A repeat of a
+  command token, or a re-dispatch with a new nonce, never reaches the child twice. A publish whose
+  outcome is unknown is **not** retried; an agent that died mid-publish reports the command
+  `UNANSWERED` (it may have been acted on) rather than sending it again.
+- **Expiry.** A command is held to the earlier of its envelope `expiresAt` (optional, additive) and
+  `commands.maxAgeSeconds` from acceptance, fixed once. A command still waiting at its deadline is
+  never delivered; the cloud is told `UNSENT`. A device that must not act late should enforce
+  `expiresAt` itself: a child with a persistent local session can still receive a command that was
+  handed to the local broker before the deadline.
+- **Nothing is evicted to make room.** A full inbox refuses the command durably (a tombstone plus an
+  `UNSENT` answer) instead of dropping an older one. The response stream is a bounded ring
+  (`DiscardOld`, like the telemetry spool); evictions are counted.
+- **Answers are checked.** An answer is forwarded only for a command the agent handed to that
+  child, quoting the nonce the agent delivered; the agent then restamps it with the cloud's current
+  dispatch nonce. Anything else (another device's command, an unknown command, a wrong nonce, a
+  second answer) is refused and counted. This guards against a buggy device, **not** a hostile
+  one: local authentication is one shared secret, so any admitted local client can impersonate any
+  child.
+
+Metrics (when enabled): `commands_received_total`, `commands_delivered_total`,
+`commands_expired_total`, `commands_duplicate_total`, `commands_refused_total{reason}`,
+`command_responses_forwarded_total`, `command_responses_refused_total{reason}`,
+`command_responses_dropped_total`, `command_inbox_depth`.
+
+Enable it only after the platform routes gateway commands: an agent that subscribes earlier simply
+receives nothing. Switching it off later leaves the streams and ledger on disk untouched; delete
+`edge-command-*` from the store deliberately if you want them gone.
 
 ## Configuration
 
@@ -311,6 +360,12 @@ Typed and fail-closed: unknown/invalid keys are rejected at startup. JSON:
   `passwordEnv` names an environment variable holding the password (a projected Secret,
   never cleartext); a configured username with an empty resolved password **fails the agent
   closed**. See [RUNBOOK.md](RUNBOOK.md#4-secure) before enabling on a live site.
+
+- `commands.enabled` turns the [command downlink](#command-downlink) on (default `false`).
+  `commands.maxAgeSeconds` (default 3600, max 604800) bounds how long a command may wait for
+  local delivery; `commands.inboxMaxBytes` / `commands.responsesMaxBytes` (default 64 MiB each,
+  floor 1 MiB) bound the two durable streams; `commands.retryDelaySeconds` (default 5) paces
+  retries after a local delivery that failed before anything was sent.
 
 ## Run
 

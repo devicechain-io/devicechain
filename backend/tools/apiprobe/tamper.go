@@ -7,7 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"time"
 )
 
 // tamper is the upgrade rig's NEGATIVE CONTROL, expressed as data.
@@ -178,9 +181,21 @@ func (t tamper) partialInput() bool {
 }
 
 func runTamper(ctx context.Context, argv []string) error {
+	return tamperTo(ctx, argv, os.Stdout, nil)
+}
+
+// tamperTo is runTamper with its report written to out and, for a test, the session
+// source replaced. A nil newSession signs in as the receipt's identity exactly as
+// verify does.
+func tamperTo(ctx context.Context, argv []string, out io.Writer, newSession func(c *connection, id Credential) signedInQuerier) error {
 	fs := flagSetFor("tamper")
 	var c connection
 	c.bind(fs)
+	var window time.Duration
+	fs.DurationVar(&window, "auth-window", 0,
+		"retry budget, measured from the start of tamper, for a read refused with 401 or a sign-in the "+
+			"platform refused; each retry signs in again. Takes the same value as verify's --auth-window, so "+
+			"both authenticate the same way. 0 (the default) retries nothing")
 	var receipt, mode string
 	fs.StringVar(&receipt, "receipt", "", "path to the receipt seed wrote (required)")
 	fs.StringVar(&mode, "mode", "", "the damage to do: "+tamperModes()+" (required)")
@@ -202,7 +217,17 @@ func runTamper(ctx context.Context, argv []string) error {
 	// Same reason verify does it: the receipt names the tenant, and tampering
 	// with the wrong one would arm nothing while reporting that it had.
 	c.tenant = rec.Tenant
-	session := c.session(rec.Identity)
+	if window < 0 {
+		return failWith(exitSetup, "--auth-window %s is negative; 0 is how to allow no retries", window)
+	}
+	if newSession == nil {
+		newSession = func(c *connection, id Credential) signedInQuerier { return c.session(id) }
+	}
+	// The SAME session verify reads through. tamper used to hold a bare
+	// TenantSession, so a sign-in the platform refused right after a rollout that
+	// re-mints the signing key failed here at once, while verify, which retries it
+	// inside its --auth-window, signed in fine against the same instance.
+	session := newRotationTolerant(func() signedInQuerier { return newSession(&c, rec.Identity) }, window, out)
 
 	e, ok := entityNamed(t.Entity)
 	if !ok {

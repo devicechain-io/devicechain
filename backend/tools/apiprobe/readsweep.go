@@ -558,6 +558,10 @@ var sweepExemptions = map[string]string{
 	"device-management.integrationAuth": "it authenticates a bearer token the platform showed once, at " +
 		"creation, and stores only a digest of, so the sweep has no value to supply; the integration " +
 		"entity reads the stored row back through integration",
+	"device-management.authenticateCommandChannel": "it authenticates a device's access token on behalf of " +
+		"the HTTP command endpoints; the token is a secret the platform showed once and stores only a " +
+		"digest of, so the sweep has no value to supply; the device and its credentials are read back " +
+		"through their own entities",
 	"device-management.integrationDecoder": "it answers the ingest path's question about a device type's " +
 		"decoder for an integration, authenticated with the bearer token the platform showed once and " +
 		"stores only a digest of, so the sweep has no value to supply; the decoder itself is read back " +
