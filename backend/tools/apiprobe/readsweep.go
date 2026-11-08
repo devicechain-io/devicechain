@@ -568,6 +568,10 @@ var sweepExemptions = map[string]string{
 	"update-management.artifactSigner": "a signer is addressed by a token the platform derives from its " +
 		"public key, so the sweep has no value to supply; the artifact-signer entity reads the SAME " +
 		"door back by the token its receipt recorded, and artifactSigners is swept",
+	"outbound-connectors.webhookSigningSecret": "it reports whether a signing handle has a key and whether a " +
+		"rotation is open; the handle is a name the tenant chooses when it creates the secret, so the sweep " +
+		"has no value to supply, and the status holds no secret value (the key is shown once and is never " +
+		"readable again), so there is no stored shape for the drill to read back through it",
 	"device-management.previewSelector": "an authoring preview: it evaluates a selector expression " +
 		"the CALLER writes, so there is no stored row for the drill to reach through it",
 	"device-management.testMetricFormula": "an authoring preview: it evaluates a formula and a sample " +

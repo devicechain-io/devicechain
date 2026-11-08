@@ -91,6 +91,7 @@ interface WireAction {
     headers?: Record<string, string>;
     bodyTemplate?: string;
     secretRef?: string;
+    signingSecretRef?: string;
     timeoutMs?: number;
   };
   publish?: { connectorRef?: string; payloadTemplate?: string; timeoutMs?: number };
@@ -211,6 +212,7 @@ function actionConfig(a: WireAction): ActionConfig | null {
     if (h.headers && Object.keys(h.headers).length > 0) cfg.headers = h.headers;
     if (h.bodyTemplate) cfg.bodyTemplate = h.bodyTemplate;
     if (h.secretRef) cfg.secretRef = h.secretRef;
+    if (h.signingSecretRef) cfg.signingSecretRef = h.signingSecretRef;
     if (h.timeoutMs) cfg.timeoutMs = h.timeoutMs;
     return cfg;
   }

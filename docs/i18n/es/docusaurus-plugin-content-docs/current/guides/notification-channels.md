@@ -160,6 +160,8 @@ mutation {
 
 **Canales de notificación**, junto a **Políticas de notificación** en la barra lateral, lista, crea, edita y elimina canales de todos los tipos con un formulario para cada uno. El campo de credencial es de solo escritura: en un canal existente indica que hay una credencial almacenada, y dejarlo vacío la conserva.
 
+Un canal webhook también puede **firmar** sus entregas para que el receptor pueda verificarlas. Está desactivado salvo que lo pidas, añadiendo `"signing":true` al `config` del canal una vez que le hayas generado un secreto de firma. Un canal configurado para firmar que no tiene secreto se rechaza, no se envía sin firma, y se cuenta con `reason="signing"`. Consulta [Firma de Webhooks de Salida](signed-webhooks.md).
+
 ## Políticas
 
 Una **política** decide qué alarmas levantadas se entregan, a quién y a través de qué canales. Lleva un conjunto de **reglas**. Cada regla mapea:
