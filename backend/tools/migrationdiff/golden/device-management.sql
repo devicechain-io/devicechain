@@ -730,7 +730,8 @@ CREATE TABLE "device-management".areas (
  name character varying(128),
  description character varying(1024),
  metadata jsonb,
- area_type_id bigint
+ area_type_id bigint,
+ boundary_fence_token text
 );
 CREATE TABLE "device-management".asset_type_versions (
  id bigint NOT NULL,
@@ -774,7 +775,13 @@ CREATE TABLE "device-management".assets (
  description character varying(1024),
  metadata jsonb,
  asset_type_id bigint,
- properties jsonb
+ properties jsonb,
+ installed_lat numeric(10,8),
+ installed_lon numeric(11,8),
+ installed_elev numeric(12,4),
+ installed_accuracy numeric(12,4),
+ installed_source text,
+ installed_updated_at timestamp with time zone
 );
 CREATE TABLE "device-management".audit_events (
  id bigint NOT NULL,
@@ -1097,7 +1104,13 @@ CREATE TABLE "device-management".devices (
  expected_since timestamp with time zone,
  disabled_at timestamp with time zone,
  gateway_id bigint,
- expected_provisioning_profile_id bigint
+ expected_provisioning_profile_id bigint,
+ installed_lat numeric(10,8),
+ installed_lon numeric(11,8),
+ installed_elev numeric(12,4),
+ installed_accuracy numeric(12,4),
+ installed_source text,
+ installed_updated_at timestamp with time zone
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,

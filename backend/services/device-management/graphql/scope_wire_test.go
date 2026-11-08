@@ -161,6 +161,17 @@ func (f scopeFixture) member(anchors ...string) context.Context {
 		ScopeAnchors: anchors})
 }
 
+// sweepMember is member plus location:read, the caller the isolation sweeps run as. The sweep
+// selects every field, and a member without location:read is refused Device.effectivePosition
+// (FORBIDDEN, by design), which would turn every device read into a refusal and hide the reads
+// the sweep exists to check. Holding it also puts the position fields themselves under the sweep.
+func (f scopeFixture) sweepMember(anchors ...string) context.Context {
+	return f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: scopeTenant,
+		Authorities: []string{string(auth.DeviceRead), string(auth.AlarmRead), string(auth.AlarmWrite),
+			string(auth.EventRead), string(auth.LocationRead)},
+		ScopeAnchors: anchors})
+}
+
 func (f scopeFixture) withClaims(c *auth.Claims) context.Context {
 	ctx := auth.WithClaims(core.WithTenant(context.Background(), c.Tenant), c)
 	return context.WithValue(ctx, gqlcore.ContextApiKey, f.api)

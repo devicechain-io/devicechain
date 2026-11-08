@@ -48,8 +48,9 @@ const CredentialCacheMaxEntries = 262144
 // metadata credentialEntrySize counts: the entry struct, its list element, its slot in
 // each of the two maps at their emptiest, and its key's place in the device index.
 // TestCredentialEntryOverheadCoversTheStructs holds it at or above that arithmetic,
-// computed from the running Go's own struct sizes.
-const credentialEntryOverhead = 1024
+// computed from the running Go's own struct sizes. (It was 1024 until the device row gained its
+// installed position, six nullable columns the entry's copy of the row carries.)
+const credentialEntryOverhead = 1280
 
 // credentialKey is the hash of what a device presented. The raw identity is never a map
 // key and is not stored at all: the id of an ACCESS_TOKEN IS the bearer secret.

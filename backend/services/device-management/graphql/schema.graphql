@@ -2368,6 +2368,84 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     aliases are not shown to it.
     """
     aliases: [DeviceAlias!]
+    """
+    Where the device was installed, for a device that is fixed in place. Needs
+    location:installed:read (location:read includes it). Null for a caller without it, and
+    null when no position was recorded. This is installation data only: it never falls back to
+    a position the device reported, even when the device also reports GPS.
+    """
+    installedPosition: InstalledPosition
+    """
+    True for every device a caller without location:installed:read (or location:read) reads,
+    whether or not the device has an installed position, and false for every device a caller
+    with it reads. It depends on the caller alone, so it does not reveal whether a position
+    exists.
+    """
+    positionWithheld: Boolean!
+    """
+    The position to draw for the device: its latest reported position when its profile
+    declares one and the fix is fresh, otherwise its installed position, with the source
+    named. Needs location:read; location:installed:read alone is refused with FORBIDDEN,
+    because this can return a live position. For a device whose profile declares that it
+    reports its position, a build with no reader for reported positions answers an error
+    rather than the installed position.
+    """
+    effectivePosition: EffectivePosition
+}
+
+"""Where an installed position came from."""
+enum InstalledPositionSource {
+    SURVEY
+    IMPORT
+    MANUAL
+    INFERRED
+}
+
+"""The entity kinds a position can be installed on."""
+enum PositionFamily {
+    DEVICE
+    ASSET
+}
+
+"""
+Where a fixed asset was installed: WGS84 decimal degrees, elevation and accuracy in metres.
+"""
+type InstalledPosition {
+    """Degrees north, -90 to 90."""
+    latitude: Float!
+    """Degrees east, -180 to 180."""
+    longitude: Float!
+    """Metres above the WGS84 ellipsoid, or null when not recorded."""
+    elevation: Float
+    """Horizontal accuracy in metres, or null when not recorded."""
+    accuracy: Float
+    """How the position was obtained."""
+    source: InstalledPositionSource
+    """When the position was recorded, as an RFC 3339 timestamp."""
+    updatedAt: String
+}
+
+"""The position an operator, an import or a survey tool records."""
+input InstalledPositionInput {
+    """Degrees north. Values outside -90 to 90, and values that are not numbers, are refused."""
+    latitude: Float!
+    """Degrees east. Values outside -180 to 180, and values that are not numbers, are refused."""
+    longitude: Float!
+    """Metres above the WGS84 ellipsoid."""
+    elevation: Float
+    """Horizontal accuracy in metres. Not negative."""
+    accuracy: Float
+    """How the position was obtained. MANUAL when omitted."""
+    source: InstalledPositionSource
+}
+
+"""The position chosen for a device by the effective rule."""
+type EffectivePosition {
+    latitude: Float!
+    longitude: Float!
+    elevation: Float
+    """REPORTED when the position is the device's fresh reported fix, INSTALLED otherwise."""
+    source: String!
 }
 
 """
@@ -2567,6 +2645,20 @@ input DeviceImportRow {
     that already exists with a different alias set makes the row a CONFLICT.
     """
     aliases: [DeviceAliasInput!]
+    """
+    Degrees north where the device was installed, for a device that is fixed in place. Given
+    together with installedLongitude or not at all. A value outside -90 to 90 makes the row
+    INVALID. The position is stored with source IMPORT. A device that already exists makes the
+    row a CONFLICT when its stored position differs, and always for a caller without
+    location:installed:read, which is never told whether the position matches.
+    """
+    installedLatitude: Float
+    """Degrees east where the device was installed, -180 to 180. See installedLatitude."""
+    installedLongitude: Float
+    """Metres above the WGS84 ellipsoid. Needs installedLatitude and installedLongitude."""
+    installedElevation: Float
+    """Horizontal accuracy in metres, not negative. Needs installedLatitude and installedLongitude."""
+    installedAccuracy: Float
     """ACCESS_TOKEN or MQTT_BASIC. FACTORY_CREDENTIALS mode only."""
     credentialType: String
     """The id the device presents (the access token itself, or the MQTT username). FACTORY_CREDENTIALS mode only."""
@@ -4071,6 +4163,16 @@ type Asset implements Model & TokenReference & NamedEntity & MetadataEntity & En
     # The asset's property document: a JSON object whose keys are the properties its
     # type's published contract declares. Null when the asset carries none.
     properties: String
+    """
+    Where the asset was installed. Needs location:installed:read (location:read includes it).
+    Null for a caller without it, and null when no position was recorded.
+    """
+    installedPosition: InstalledPosition
+    """
+    True for every asset a caller without location:installed:read (or location:read) reads,
+    whether or not the asset has an installed position. It depends on the caller alone.
+    """
+    positionWithheld: Boolean!
 }
 
 # Data required to create an asset.
@@ -4315,6 +4417,11 @@ type Area implements Model & TokenReference & NamedEntity & MetadataEntity & Ent
     description: String
     areaType: AreaType!
     metadata: String
+    """
+    The geofence that bounds the area, or null when none does. Null for a caller limited to part
+    of the tenant. Answers an error, not null, when the linked fence has been deleted.
+    """
+    boundaryFence: GeoFence
 }
 
 # Data required to create an area.
@@ -4324,6 +4431,8 @@ input AreaCreateRequest {
     description: String
     areaTypeToken: String!
     metadata: String
+    """The token of the geofence that bounds the area. It must name an existing fence."""
+    boundaryFenceToken: String
 }
 
 # A PARTIAL update to an area: omit a field to leave it alone, send null to clear
@@ -4342,6 +4451,11 @@ input AreaUpdateRequest {
     # token is refused too, and the refusal is total — nothing is written.
     areaTypeToken: String
     metadata: String
+    """
+    Links the area to the geofence that bounds it: omit to keep the link, send null to remove
+    it, send a token to set it. The token must name an existing fence.
+    """
+    boundaryFenceToken: String
 }
 
 # Criteria used when searching for areas.
@@ -6047,6 +6161,17 @@ type Mutation {
     updateArea(token: String!, request: AreaUpdateRequest!): Area!
     # Delete an area and its relationship edges.
     deleteArea(token: String!): Boolean!
+    """
+    Records where a device or an asset was installed. Needs device:write. The position is
+    refused, before anything is stored, when it is not a finite WGS84 coordinate. An entity
+    outside the caller's scope is NOT_FOUND.
+    """
+    setInstalledPosition(family: PositionFamily!, token: String!, position: InstalledPositionInput!): InstalledPosition!
+    """
+    Removes the installed position of a device or an asset. Needs device:write. Clearing an
+    entity that has none succeeds.
+    """
+    clearInstalledPosition(family: PositionFamily!, token: String!): Boolean!
 }
 
 # A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It
