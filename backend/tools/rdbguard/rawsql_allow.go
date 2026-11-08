@@ -21,6 +21,8 @@ package rdbguard
 //   - tenant-write: the column-array insert, the one raw statement that WRITES tenant
 //     rows. Its text is built from the model's schema, and its tenant is bound from the
 //     context after the checks a gorm Create runs; see core/rdb/insert_columns.go.
+//   - metering: the usage rollup, which aggregates every tenant's events into per-tenant rows
+//     under a system context, grouping and keying by tenant_id at every step.
 var rawSQLAllowList = []siteEntry{
 	// --- not-sql ---
 	{
@@ -71,6 +73,18 @@ var rawSQLAllowList = []siteEntry{
 			"per policy statement (each call to the exec closure counts as a site). The retention " +
 			"policy deletes every tenant's rows by age, by operator opt-in; it is table-level " +
 			"configuration with no tenant predicate by design",
+	},
+
+	// --- metering ---
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "Api.RollupUsageHours", Count: 3,
+		Why: "the usage rollup reads EVERY tenant's events for one hour on purpose, under a system context, " +
+			"and writes per-tenant rows: the hourly upsert GROUPs BY tenant_id, the device-set insert selects " +
+			"tenant_id with each device and keys its conflict on (tenant_id, day, device_token), and the daily " +
+			"derivation groups the hourly rows by tenant_id and counts the device set through an explicit " +
+			"d.tenant_id = h.tenant_id. Each statement is constant text with only the hour, day and clock bound. " +
+			"No count can mix two tenants; the two-tenant integration test (usage_integration_test.go) reuses " +
+			"one device token across tenants to prove it",
 	},
 
 	// --- tenant-write ---
