@@ -69,7 +69,7 @@ var (
 	// correct, for readings the platform accepted dated that far back. It runs whether or not the
 	// calculated-metric backfill does.
 	RollupTail *backfill.TailSweeper
-	// UsageRollup keeps the per-tenant daily usage record current (see model.TenantUsageDay).
+	// UsageRollup keeps the per-tenant daily usage record current (see model.TenantEventUsageDay).
 	UsageRollup *processor.UsageRollupSweep
 )
 
@@ -260,7 +260,8 @@ func wireRollupTail(ctx context.Context) error {
 // wireUsage builds the usage rollup sweep and registers the admin plane that serves its record.
 //
 // The admin handler is the instance-scoped /admin/graphql endpoint: it validates IDENTITY-tier
-// tokens only and runs in the system context, so a tenant access token cannot reach it.
+// tokens only, so a tenant access token cannot reach it. It sets no tenant and no system context;
+// the usage read puts the requested tenant in its own context (model.Api.TenantEventUsage).
 func wireUsage(ctx context.Context) error {
 	UsageRollup = processor.NewUsageRollupSweep(Microservice, RdbManager, Api, processor.UsageRollupInterval,
 		core.NewNoOpLifecycleCallbacks())

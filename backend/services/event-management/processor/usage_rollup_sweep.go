@@ -9,65 +9,50 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// UsageRollupInterval is how often the usage rollup checks for a newly closed hour (and retries a
-// failed pass).
-const UsageRollupInterval = 15 * time.Minute
+// UsageRollupInterval is how often the usage rollup looks for hours that have become final.
+const UsageRollupInterval = 5 * time.Minute
 
-// usageRollupHours is how many CLOSED UTC hours a pass recomputes, ending with the hour that just
-// closed. A pass does its work once per hour boundary (the passes in between find nothing new and
-// return at once), so each hour is scanned this many times in all: once when it closes, and again
-// as a margin for events that arrive a little after their event time. The open hour is never
-// scanned, so a day's figures lag by up to an hour until it closes, and the first pass after
-// midnight closes the previous day with its final numbers.
-//
-// Beyond that margin, a pass also computes every closed hour of the last usageCatchUpHours that the
-// ledger does not record as computed (the hours a failed pass, an outage or an upgrade left
-// behind), so a run of failures delays the record but does not lose it.
-//
-// 🔴 AN HOUR IS ONLY EVER REWRITTEN WHILE IT IS THIS RECENT. Once it falls out of the margin its
-// figures are final, and that is deliberate: the raw events behind it are removed by retention,
-// and a row recomputed from a store that has since lost rows would shrink a figure someone may
-// already have billed on. The price is that an event stored more than a couple of hours after its
-// event time is not added to its hour.
-const usageRollupHours = 3
+// usageMaxHoursPerPass caps one pass. A healthy rollup finalizes one hour per hour; after an
+// outage it owes many, and the cap keeps each pass (and the lock it holds) short while it catches
+// up at this many hours per interval.
+const usageMaxHoursPerPass = 6
 
-// usageCatchUpHours is how far back a pass looks for hours the ledger says are still owed. 48 hours
-// reaches the start of the previous UTC day from any time of the current one, so an outage of up
-// to a day still closes yesterday. A day with an hour older than this left uncomputed stays
-// incomplete, which the record reports rather than hiding.
-const usageCatchUpHours = 48
-
-// usageWorkingRetention is how long the hourly rows and device sets are kept behind the record. It
-// is longer than any window the rollup rewrites, so nothing is pruned while it can still change.
+// usageWorkingRetention is how long the hourly rows and device sets are kept behind the record.
+// Every hour is final soon after it closes, so this is a wide margin; it exists so an operator
+// repairing an hour by hand still has its working rows.
 const usageWorkingRetention = 72 * time.Hour
 
 // UsageRollupSweep keeps the per-tenant daily usage record current.
 //
-// It runs on every replica but only one does the work at a time: the pass holds a try-lock on the
-// database, and a replica that finds it held declines (core.ErrPassSkipped), so two replicas never
-// compute the same hours at once. The computation is an idempotent upsert, so a replica that did get
-// in after a peer finished only rewrites the same numbers.
+// It runs on every replica but only one does the work at a time: the pass holds a SESSION
+// advisory lock and does all its work on the lock's own connection, so the work ends if the lock
+// does (a terminated backend cannot leave a second worker running), and a replica that finds the
+// lock held declines (core.ErrPassSkipped). Where to resume is not remembered in memory: the next
+// owed hour is persisted (tenant_usage_state) and read under the lock, so whichever replica gets
+// the lock carries on from the same place, and each hour is computed once.
 type UsageRollupSweep struct {
 	*core.PeriodicTask
 
-	rdb *rdb.RdbManager
-	api usageRoller
-	now func() time.Time
-	// doneHour is the start of the open hour when this replica's last successful pass ran: a pass
-	// in the same hour has no newly closed hour to compute. Only the sweep's goroutine touches it.
-	doneHour time.Time
+	lock usageLocker
+	api  usageRoller
+	now  func() time.Time
 }
 
 // usageRoller is what the sweep needs from the API.
 type usageRoller interface {
-	RollupUsageHours(ctx context.Context, from, to, now time.Time) (int64, error)
-	FirstUsageHourOwed(ctx context.Context, from, before time.Time) (time.Time, bool, error)
+	RollupUsagePass(ctx context.Context, db *gorm.DB, now time.Time, maxHours int) (int, error)
 	PruneUsageWorkingTables(ctx context.Context, cutoff time.Time) error
+}
+
+// usageLocker is the session lock the pass runs under (rdb.RdbManager.TryAdvisoryLockSession).
+type usageLocker interface {
+	TryAdvisoryLockSession(ctx context.Context, key int64, fn func(db *gorm.DB) error) (bool, error)
 }
 
 // usageRollupLock names the database lock that keeps a pass to one replica.
@@ -76,15 +61,15 @@ const usageRollupLock = "event-management/usage-rollup"
 // NewUsageRollupSweep builds the sweep.
 func NewUsageRollupSweep(ms *core.Microservice, rdbm *rdb.RdbManager, api usageRoller,
 	interval time.Duration, callbacks core.LifecycleCallbacks) *UsageRollupSweep {
-	s := &UsageRollupSweep{rdb: rdbm, api: api, now: time.Now}
+	s := &UsageRollupSweep{lock: rdbm, api: api, now: time.Now}
 	s.PeriodicTask = core.NewPeriodicTask(ms.FunctionalArea, "usage-rollup", interval, s.RunOnce, callbacks)
 	return s
 }
 
-// RunOnce recomputes the days the sweep still owns, oldest first.
+// RunOnce finalizes the hours the rollup owes, under the lock.
 func (s *UsageRollupSweep) RunOnce(ctx context.Context) error {
-	ran, err := s.rdb.TryAdvisoryLock(ctx, rdb.AdvisoryLockKey(usageRollupLock), func() error {
-		return s.rollup(ctx)
+	ran, err := s.lock.TryAdvisoryLockSession(ctx, rdb.AdvisoryLockKey(usageRollupLock), func(db *gorm.DB) error {
+		return s.rollup(ctx, db)
 	})
 	if err != nil {
 		return err
@@ -95,31 +80,17 @@ func (s *UsageRollupSweep) RunOnce(ctx context.Context) error {
 	return nil
 }
 
-// rollup recomputes the hours the sweep still owns, oldest first, then prunes the working rows of
-// days long final. A failure is reported so it is visible rather than a quietly stale record; the
-// next pass redoes it, since every write is an idempotent recompute.
-func (s *UsageRollupSweep) rollup(ctx context.Context) error {
+// rollup finalizes owed hours, then prunes the working rows of days long final. A failure is
+// reported so it is visible rather than a quietly stale record; the next pass resumes at the hour
+// that failed.
+func (s *UsageRollupSweep) rollup(ctx context.Context, db *gorm.DB) error {
 	now := s.now().UTC()
-	open := now.Truncate(time.Hour)
-	if open.Equal(s.doneHour) {
-		return nil
-	}
-	from := open.Add(-time.Duration(usageRollupHours) * time.Hour)
-	owed, ok, err := s.api.FirstUsageHourOwed(ctx, open.Add(-time.Duration(usageCatchUpHours)*time.Hour), open)
+	n, err := s.api.RollupUsagePass(ctx, db, now, usageMaxHoursPerPass)
 	if err != nil {
+		log.Error().Err(err).Int("finalized", n).Msg("Usage rollup failed; it resumes at the failed hour on the next pass.")
 		return fmt.Errorf("usage rollup: %w", err)
 	}
-	if ok && owed.Before(from) {
-		from = owed
-	}
-	to := open.Add(-time.Hour)
-	rows, err := s.api.RollupUsageHours(ctx, from, to, now)
-	if err != nil {
-		log.Error().Err(err).Time("from", from).Msg("Usage rollup failed; it is retried on the next pass.")
-		return fmt.Errorf("usage rollup: %w", err)
-	}
-	s.doneHour = open
-	log.Debug().Time("from", from).Time("to", to).Int64("rows", rows).Msg("Usage rolled up.")
+	log.Debug().Int("finalized", n).Msg("Usage rolled up.")
 	if err := s.api.PruneUsageWorkingTables(ctx, now.Add(-usageWorkingRetention)); err != nil {
 		return fmt.Errorf("usage rollup: %w", err)
 	}

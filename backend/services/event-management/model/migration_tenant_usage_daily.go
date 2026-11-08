@@ -12,14 +12,14 @@ import (
 
 // tenantUsageDailyDDL is this migration's own snapshot of the per-tenant daily usage record: the
 // statements that create the table, written as literals. Nothing here reads the baseline, a live
-// model or another migration, so the live TenantUsageDay struct can change without rewriting what a
+// model or another migration, so the live TenantEventUsageDay struct can change without rewriting what a
 // fresh install builds; a later change to the table is a new migration.
 //
-// What a daily row is. One tenant and one UTC calendar day: how many events the event store holds
-// for it that day (events_ingested), how many distinct devices produced them (devices_active), the
-// busiest hour's distinct devices (devices_peak) and the sum of every hour's distinct devices
-// (device_hours, which divided by 24 is the day's average devices per hour). rolled_up_at is when
-// the row was last computed; a day is complete once that is at or after the day's end.
+// What a daily row is. One tenant and one UTC calendar day: its event count (events_ingested),
+// distinct devices (devices_active), the busiest hour's distinct devices (devices_peak) and the
+// sum of every hour's distinct devices (device_hours, which divided by 24 is the day's average
+// devices per hour). rolled_up_at is when the row was last computed. What each figure counts, and
+// by which clock, is the live model's to say (model.TenantEventUsageDay), not this snapshot's.
 //
 // The daily row is DERIVED from two working tables, so that a pass only ever scans the hours that
 // can still change instead of the whole day: tenant_usage_hourly holds one row per tenant per UTC
@@ -27,12 +27,10 @@ import (
 // tenant had on a day, which is what a day's distinct-device count cannot be summed from hours.
 // Both are pruned by the rollup once their day is final; the daily row is kept.
 //
-// tenant_usage_ledger records which hours of each day the rollup has computed, as a 24-bit mask
-// (bit h set once hour h was computed after it closed), for all tenants at once. It is what makes
-// a day "complete": a day is final only when every one of its hours was computed, so a day the
-// rollup missed (an outage longer than its catch-up window) reads as not complete rather than as
-// a confident zero. It also tells the rollup which hours it still owes after an outage. It names
-// no tenant, so it is registered with the tenant purge as exempt.
+// tenant_usage_ledger records which hours of each day are final, as a 24-bit mask, for all tenants
+// at once. It is what makes a day "complete": a day is final only when every one of its hours is,
+// so a day the rollup never measured reads as not complete rather than as a confident zero. It
+// names no tenant, so it is registered with the tenant purge as exempt.
 //
 // Plain tables, not hypertables: they hold a row per tenant per day (or hour, or active device),
 // are written by upserts on their primary keys, and the daily one must OUTLIVE the event retention
@@ -74,7 +72,7 @@ var tenantUsageDailyDDL = []string{
 }
 
 // NewTenantUsageDailySchema adds the per-tenant daily usage record (and its two working tables) the usage rollup writes and the
-// admin plane's tenantUsage query reads.
+// admin plane's tenantEventUsage query reads.
 //
 // It is inert until the rollup runs: no seed rows, nothing written.
 func NewTenantUsageDailySchema() *gormigrate.Migration {

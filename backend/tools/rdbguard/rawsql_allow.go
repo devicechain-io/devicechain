@@ -77,14 +77,21 @@ var rawSQLAllowList = []siteEntry{
 
 	// --- metering ---
 	{
-		Path: "backend/services/event-management/model/usage.go", Func: "Api.RollupUsageHours", Count: 3,
+		Path: "backend/services/event-management/model/usage.go", Func: "rollupHour", Count: 4,
 		Why: "the usage rollup reads EVERY tenant's events for one hour on purpose, under a system context, " +
-			"and writes per-tenant rows: the hourly upsert GROUPs BY tenant_id, the device-set insert selects " +
-			"tenant_id with each device and keys its conflict on (tenant_id, day, device_token), and the daily " +
-			"derivation groups the hourly rows by tenant_id and counts the device set through an explicit " +
-			"d.tenant_id = h.tenant_id. Each statement is constant text with only the hour, day and clock bound. " +
-			"No count can mix two tenants; the two-tenant integration test (usage_integration_test.go) reuses " +
-			"one device token across tenants to prove it",
+			"and writes per-tenant rows: the hour statement GROUPs BY tenant_id and inserts the device set " +
+			"keyed (tenant_id, day, device_token), the day derivation groups the hourly rows by tenant_id and " +
+			"counts the device set through an explicit d.tenant_id = h.tenant_id, and the two clears delete " +
+			"by hour or day (plus a tenant_id correlation) to replace what is recomputed. Each statement is " +
+			"constant text with only the hour, day, floor and clock bound, and the hour statement skips any " +
+			"tenant whose erasure fence stands. No count can mix two tenants; the two-tenant integration test " +
+			"(usage_integration_test.go) reuses one device token across tenants to prove it",
+	},
+	{
+		Path: "backend/services/event-management/model/usage.go", Func: "initUsageState", Count: 1,
+		Why: "reads the TimescaleDB chunk catalog (timescaledb_information.chunks) for the newest compressed " +
+			"chunk of the events hypertable; 'events' appears only as the catalog's hypertable_name literal, " +
+			"and the statement reads no event row and no tenant's data",
 	},
 	{
 		Path: "backend/services/event-management/model/usage.go", Func: "Api.PruneUsageWorkingTables", Count: 2,
@@ -92,13 +99,6 @@ var rawSQLAllowList = []siteEntry{
 			"tenant for days older than a cutoff, on purpose and under a system context: retention by time, " +
 			"not a read or write of any one tenant's data. The predicate is the hour/day alone and is bound; " +
 			"the per-tenant record (tenant_usage_daily) is never touched",
-	},
-	{
-		Path: "backend/services/event-management/model/usage.go", Func: "Api.TenantUsage", Count: 1,
-		Why: "the instance admin plane's read of ONE tenant's usage record, under a system context (the " +
-			"/admin/graphql caller is an identity, not a tenant member, so there is no tenant in context for " +
-			"the callback to inject). The tenant is bound explicitly as WHERE tenant_id = ?, the function " +
-			"refuses an empty tenant, and the statement reads no other table",
 	},
 
 	// --- tenant-write ---

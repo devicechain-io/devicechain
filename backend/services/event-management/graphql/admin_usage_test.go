@@ -18,10 +18,10 @@ import (
 
 type fakeUsage struct {
 	gotTenant string
-	days      []model.TenantUsageDay
+	days      []model.TenantEventUsageDay
 }
 
-func (f *fakeUsage) TenantUsage(_ context.Context, tenant string, from, to time.Time) ([]model.TenantUsageDay, error) {
+func (f *fakeUsage) TenantEventUsage(_ context.Context, tenant string, from, to time.Time) ([]model.TenantEventUsageDay, error) {
 	f.gotTenant = tenant
 	return f.days, model.ValidateUsageRange(from, to)
 }
@@ -40,29 +40,29 @@ func TestAdminSchemaParses(t *testing.T) {
 	gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
 }
 
-const usageQuery = `{ tenantUsage(tenant: "acme", from: "2026-11-01", to: "2026-11-02") {
+const usageQuery = `{ tenantEventUsage(tenant: "acme", from: "2026-11-01", to: "2026-11-02") {
 	tenant day eventsIngested devicesActive devicesPeak devicesAvg complete } }`
 
-func TestTenantUsageServesTheDaysThroughTheSchema(t *testing.T) {
-	api := &fakeUsage{days: []model.TenantUsageDay{
+func TestTenantEventUsageServesTheDaysThroughTheSchema(t *testing.T) {
+	api := &fakeUsage{days: []model.TenantEventUsageDay{
 		{TenantId: "acme", Day: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), EventsIngested: 3_000_000_000, DevicesActive: 4,
 			DevicesPeak: 3, DeviceHours: 36, Complete: true},
 		{TenantId: "acme", Day: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)},
 	}}
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
-	ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeIdentity, Authorities: []string{string(auth.TenantRead)}}, api)
+	ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeIdentity, Authorities: []string{"usage:read"}}, api)
 
 	res := schema.Exec(ctx, usageQuery, "", nil)
 	require.Empty(t, res.Errors)
 	assert.Equal(t, "acme", api.gotTenant)
-	assert.JSONEq(t, `{"tenantUsage":[
+	assert.JSONEq(t, `{"tenantEventUsage":[
 		{"tenant":"acme","day":"2026-11-01","eventsIngested":3000000000,"devicesActive":4,"devicesPeak":3,"devicesAvg":1.5,"complete":true},
 		{"tenant":"acme","day":"2026-11-02","eventsIngested":0,"devicesActive":0,"devicesPeak":0,"devicesAvg":0,"complete":false}]}`,
 		string(res.Data))
 }
 
 // A tenant admin's "*" token must not read the instance's usage record: tenant:read is system-tier.
-func TestTenantUsageRefusesATenantToken(t *testing.T) {
+func TestTenantEventUsageRefusesATenantToken(t *testing.T) {
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
 	ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme", Authorities: []string{string(auth.AuthorityAll)}}, &fakeUsage{})
 	res := schema.Exec(ctx, usageQuery, "", nil)
@@ -70,20 +70,23 @@ func TestTenantUsageRefusesATenantToken(t *testing.T) {
 	assert.Contains(t, res.Errors[0].Message, "forbidden")
 }
 
-func TestTenantUsageRefusesAnIdentityWithoutTheAuthority(t *testing.T) {
+func TestTenantEventUsageRefusesAnIdentityWithoutTheAuthority(t *testing.T) {
 	schema := gql.MustParseSchema(AdminSchemaContent, &AdminResolver{})
-	ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeIdentity, Authorities: []string{string(auth.SettingsRead)}}, &fakeUsage{})
-	res := schema.Exec(ctx, usageQuery, "", nil)
-	require.NotEmpty(t, res.Errors)
+	for _, held := range []auth.Authority{auth.SettingsRead, auth.TenantRead} {
+		ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeIdentity, Authorities: []string{string(held)}}, &fakeUsage{})
+		res := schema.Exec(ctx, usageQuery, "", nil)
+		require.NotEmpty(t, res.Errors, "%s does not read the usage record: usage:read does", held)
+		assert.Contains(t, res.Errors[0].Message, "forbidden")
+	}
 }
 
-func TestTenantUsageRejectsMalformedDays(t *testing.T) {
+func TestTenantEventUsageRejectsMalformedDays(t *testing.T) {
 	r := &AdminResolver{}
-	ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeIdentity, Authorities: []string{string(auth.TenantRead)}}, &fakeUsage{})
-	_, err := r.TenantUsage(ctx, struct{ Tenant, From, To string }{"acme", "yesterday", "2026-11-02"})
+	ctx := usageCtx(&auth.Claims{TokenType: auth.TokenTypeIdentity, Authorities: []string{string(auth.UsageRead)}}, &fakeUsage{})
+	_, err := r.TenantEventUsage(ctx, struct{ Tenant, From, To string }{"acme", "yesterday", "2026-11-02"})
 	assert.ErrorContains(t, err, "from must be a day")
-	_, err = r.TenantUsage(ctx, struct{ Tenant, From, To string }{"acme", "2026-11-01", "11/02/2026"})
+	_, err = r.TenantEventUsage(ctx, struct{ Tenant, From, To string }{"acme", "2026-11-01", "11/02/2026"})
 	assert.ErrorContains(t, err, "to must be a day")
-	_, err = r.TenantUsage(ctx, struct{ Tenant, From, To string }{"acme", "2026-11-03", "2026-11-02"})
+	_, err = r.TenantEventUsage(ctx, struct{ Tenant, From, To string }{"acme", "2026-11-03", "2026-11-02"})
 	assert.ErrorIs(t, err, model.ErrUsageRange)
 }

@@ -59,18 +59,9 @@ func TestFillUsageDaysAnUnmeasuredDayIsNotComplete(t *testing.T) {
 	assert.True(t, errors.Is(ValidateUsageRange(day, day.AddDate(0, 0, -1)), ErrUsageRange))
 }
 
-func TestFirstHourOwed(t *testing.T) {
-	d := utc(2026, 11, 1, 0)
-	ledger := map[string]int64{"2026-11-01": usageFullDay &^ (1 << 22)}
-	h, ok := firstHourOwed(ledger, d, d.Add(48*time.Hour))
-	require.True(t, ok)
-	assert.Equal(t, utc(2026, 11, 1, 22), h)
-
-	ledger["2026-11-01"] = usageFullDay
-	h, ok = firstHourOwed(ledger, d, d.Add(48*time.Hour))
-	require.True(t, ok)
-	assert.Equal(t, utc(2026, 11, 2, 0), h, "the next day has no ledger row")
-
-	_, ok = firstHourOwed(ledger, d, d.Add(24*time.Hour))
-	assert.False(t, ok)
+func TestAnHourIsSettledOnlyAfterItsWindow(t *testing.T) {
+	h := utc(2026, 11, 1, 11)
+	assert.False(t, usageHourSettled(h, h.Add(time.Hour)), "just closed")
+	assert.False(t, usageHourSettled(h, h.Add(time.Hour+UsageSettle-time.Second)))
+	assert.True(t, usageHourSettled(h, h.Add(time.Hour+UsageSettle)))
 }

@@ -18,11 +18,11 @@ import (
 	"gorm.io/gorm"
 )
 
-var usageSeq byte
+var usageSeq int
 
-// usageEvent writes one base event row for a tenant. The same device token is deliberately reused
-// across tenants by the callers: a distinct-device count that keyed on the token alone would merge
-// two tenants' devices.
+// usageEvent writes one base event row for a tenant, received at the time it is dated. The same
+// device token is deliberately reused across tenants by the callers: a distinct-device count that
+// keyed on the token alone would merge two tenants' devices.
 func usageEvent(t *testing.T, db *gorm.DB, tenant, device string, at time.Time) {
 	t.Helper()
 	usageSeq++
@@ -58,19 +58,19 @@ func TestIntegrationUsageRollupIsExactAndIsolatedPerTenant(t *testing.T) {
 	// idle sends nothing at all.
 
 	now := day.AddDate(0, 0, 1).Add(2 * time.Hour)
-	rows, err := api.RollupUsageDay(ctx, day, now)
+	rows, err := api.RollupUsageHours(ctx, day, day.Add(23*time.Hour), now)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), rows, "acme's hours 10, 11 and 23 and globex's hour 10: only hours with traffic get a row")
 
-	read := func(tenant string) TenantUsageDay {
-		days, err := api.TenantUsage(ctx, tenant, day, day)
+	read := func(tenant string) TenantEventUsageDay {
+		days, err := api.TenantEventUsage(ctx, tenant, day, day)
 		require.NoError(t, err)
 		require.Len(t, days, 1)
 		return days[0]
 	}
 
 	acme := read("acme")
-	assert.Equal(t, int64(5), acme.EventsIngested, "5 events dated the day; the midnight one belongs to the next")
+	assert.Equal(t, int64(5), acme.EventsIngested, "5 events received that day; the midnight one belongs to the next")
 	assert.Equal(t, 2, acme.DevicesActive)
 	assert.Equal(t, 2, acme.DevicesPeak, "hour 10 had two distinct devices")
 	// hour 10: 2 devices, hour 11: 1, hour 23: 1.
@@ -86,31 +86,25 @@ func TestIntegrationUsageRollupIsExactAndIsolatedPerTenant(t *testing.T) {
 	// The negative control: a tenant with no traffic reads zero, and so does an unknown tenant.
 	for _, quiet := range []string{"idle", "no-such-tenant"} {
 		u := read(quiet)
-		assert.Equal(t, TenantUsageDay{TenantId: quiet, Day: day, Complete: true}, u, "%s must read zero", quiet)
+		assert.Equal(t, TenantEventUsageDay{TenantId: quiet, Day: day, Complete: true}, u, "%s must read zero", quiet)
 	}
 
 	// The next day got only acme's midnight event: it was not rolled up yet, so it reads zero.
-	next, err := api.TenantUsage(ctx, "acme", day.AddDate(0, 0, 1), day.AddDate(0, 0, 1))
+	next, err := api.TenantEventUsage(ctx, "acme", day.AddDate(0, 0, 1), day.AddDate(0, 0, 1))
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), next[0].EventsIngested)
 	assert.False(t, next[0].Complete)
 
-	// Rolling the same day up again changes nothing.
-	_, err = api.RollupUsageDay(ctx, day, now)
-	require.NoError(t, err)
-	assert.Equal(t, acme.EventsIngested, read("acme").EventsIngested)
-	assert.Equal(t, globex.EventsIngested, read("globex").EventsIngested)
-
-	// A late event for the day is picked up by the next pass and only moves its own tenant.
+	// A complete day is final: rolling it up again, even with a new row stored for it, moves
+	// nothing, for either tenant.
 	usageEvent(t, db, "acme", "dev-3", at(12, 0, 0))
-	_, err = api.RollupUsageDay(ctx, day, now.Add(time.Minute))
+	_, err = api.RollupUsageHours(ctx, day, day.Add(23*time.Hour), now.Add(time.Minute))
 	require.NoError(t, err)
-	assert.Equal(t, int64(6), read("acme").EventsIngested)
-	assert.Equal(t, 3, read("acme").DevicesActive)
-	assert.Equal(t, int64(5), read("globex").EventsIngested, "a bystander's figures do not move")
+	assert.Equal(t, acme, read("acme"))
+	assert.Equal(t, globex, read("globex"))
 
 	// The whole range comes back zero-filled, oldest first.
-	span, err := api.TenantUsage(ctx, "idle", day.AddDate(0, 0, -2), day)
+	span, err := api.TenantEventUsage(ctx, "idle", day.AddDate(0, 0, -2), day)
 	require.NoError(t, err)
 	require.Len(t, span, 3)
 	for _, d := range span {
@@ -125,61 +119,82 @@ func TestIntegrationUsageRollupIsExactAndIsolatedPerTenant(t *testing.T) {
 		(SELECT count(*) FROM "event-management".tenant_usage_devices WHERE day <= ?::date)`,
 		day.AddDate(0, 0, 1), day.Format("2006-01-02")).Scan(&working).Error)
 	assert.Zero(t, working, "the day's working rows are pruned")
-	assert.Equal(t, int64(6), read("acme").EventsIngested, "the record survives the prune")
-	assert.Equal(t, 3, read("acme").DevicesActive)
+	assert.Equal(t, acme, read("acme"), "the record survives the prune")
 }
 
-// A day built up by passes that each see only some of its hours still counts a device once for the
-// day, however many hours it was active in, and counts each device that was active only in an
-// earlier pass's hours: the day's distinct devices come from its device set, not the latest hour.
-func TestIntegrationUsageRollupAccumulatesDevicesAcrossHourlyPasses(t *testing.T) {
-	mgr := newPostgresManager(t, freshInstance(t, "usagehours"))
-	api := NewApi(mgr)
+// The sweep's pass, end to end: it starts at the beginning of the current UTC day on its first
+// run, finalizes only settled hours, at most maxHours per pass, resumes from the PERSISTED
+// watermark (so a second replica, or a restart, does not redo an hour), and counts a device once
+// per day across hours finalized by different passes.
+func TestIntegrationUsagePassResumesFromThePersistedWatermark(t *testing.T) {
+	mgr := newPostgresManager(t, freshInstance(t, "usagepass"))
 	db := systemDB(mgr)
 	ctx := context.Background()
 
 	day := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
 	h := func(n int) time.Time { return day.Add(time.Duration(n) * time.Hour) }
 	usageEvent(t, db, "acme", "dev-1", h(1).Add(time.Minute))
-	usageEvent(t, db, "acme", "dev-2", h(2).Add(time.Minute))
-	usageEvent(t, db, "acme", "dev-1", h(2).Add(2*time.Minute))
+	usageEvent(t, db, "acme", "dev-2", h(7).Add(time.Minute))
+	usageEvent(t, db, "acme", "dev-1", h(7).Add(2*time.Minute))
+	// Received the day before the rollup first ran: never scanned, so never counted.
+	usageEvent(t, db, "acme", "dev-9", day.Add(-time.Hour))
 
-	_, err := api.RollupUsageHours(ctx, h(1), h(1), h(1).Add(30*time.Minute))
-	require.NoError(t, err)
-	_, err = api.RollupUsageHours(ctx, h(2), h(2), h(2).Add(30*time.Minute))
-	require.NoError(t, err)
+	pass := func(now time.Time) int {
+		t.Helper()
+		// A fresh Api each time: nothing carries over in memory, as between replicas.
+		n, err := NewApi(mgr).RollupUsagePass(ctx, db, now, 6)
+		require.NoError(t, err)
+		return n
+	}
 
-	days, err := api.TenantUsage(ctx, "acme", day, day)
+	now := h(10).Add(15 * time.Minute)
+	assert.Equal(t, 6, pass(now), "first run: from midnight, capped at six hours")
+	assert.Equal(t, 4, pass(now), "hours 6-9; hour 9 settled at 10:10")
+	assert.Equal(t, 0, pass(now), "nothing owed: the watermark is in the database")
+	assert.Equal(t, 0, pass(h(11).Add(UsageSettle-time.Minute)), "hour 10 is not settled yet")
+
+	days, err := NewApi(mgr).TenantEventUsage(ctx, "acme", day.AddDate(0, 0, -1), day)
 	require.NoError(t, err)
-	require.Len(t, days, 1)
-	got := days[0]
+	assert.Equal(t, int64(0), days[0].EventsIngested, "the day before the first run is never scanned")
+	assert.False(t, days[0].Complete, "and never final")
+	got := days[1]
 	assert.Equal(t, int64(3), got.EventsIngested)
-	assert.Equal(t, 2, got.DevicesActive, "dev-1 and dev-2, though the last pass saw dev-1 too")
-	assert.Equal(t, 2, got.DevicesPeak, "hour 2 had both")
-	assert.Equal(t, int64(3), got.DeviceHours, "hour 1: one device, hour 2: two")
-	assert.False(t, got.Complete, "rolled up mid-day")
+	assert.Equal(t, 2, got.DevicesActive, "dev-1 in hours 1 and 7 is one device")
+	assert.Equal(t, 2, got.DevicesPeak)
+	assert.Equal(t, int64(3), got.DeviceHours, "hour 1: one device, hour 7: two")
+	assert.False(t, got.Complete, "ten of 24 hours final")
 
-	// Hours computed while still open are not marked: the day is incomplete even once they close.
-	_, err = api.RollupUsageHours(ctx, h(23), h(24), h(24).Add(5*time.Minute))
-	require.NoError(t, err)
-	days, err = api.TenantUsage(ctx, "acme", day, day)
-	require.NoError(t, err)
-	assert.False(t, days[0].Complete, "hours 1 and 2 were computed while open, hours 0 and 3-22 never")
-	owed, ok, err := api.FirstUsageHourOwed(ctx, day, h(25))
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, h(0), owed, "the ledger owes the day's first hour")
-
-	// Measuring the owed hours closes the day, with the same figures.
-	_, err = api.RollupUsageHours(ctx, h(0), h(22), h(24).Add(10*time.Minute))
-	require.NoError(t, err)
-	days, err = api.TenantUsage(ctx, "acme", day, day)
+	// Catching up after midnight finalizes the rest, a capped pass at a time.
+	late := day.AddDate(0, 0, 1).Add(UsageSettle + time.Minute)
+	total := 0
+	for i := 0; i < 5; i++ {
+		total += pass(late)
+	}
+	assert.Equal(t, 14, total)
+	days, err = NewApi(mgr).TenantEventUsage(ctx, "acme", day, day)
 	require.NoError(t, err)
 	assert.True(t, days[0].Complete)
 	assert.Equal(t, int64(3), days[0].EventsIngested)
-	assert.Equal(t, 2, days[0].DevicesActive)
-	owed, ok, err = api.FirstUsageHourOwed(ctx, day, h(25))
+}
+
+// The scan floor leaves out events DATED inside chunks that were compressed before the ingest-time
+// index existed (see usageFloorClause), and only those.
+func TestIntegrationUsageScanFloorBoundsTheRead(t *testing.T) {
+	mgr := newPostgresManager(t, freshInstance(t, "usagefloor"))
+	api := NewApi(mgr)
+	db := systemDB(mgr)
+	ctx := context.Background()
+
+	h := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	floor := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	ingestEvent(t, db, "acme", "dev-1", floor.Add(-time.Hour), h.Add(time.Minute))
+	ingestEvent(t, db, "acme", "dev-2", floor.Add(time.Hour), h.Add(time.Minute))
+	require.NoError(t, db.Exec(`INSERT INTO "event-management".tenant_usage_state (name, next_hour, scan_floor, updated_at)
+		VALUES ('hourly', ?, ?, ?)`, h, floor, h).Error)
+
+	_, err := api.RollupUsageHours(ctx, h, h, h.Add(time.Hour+UsageSettle))
 	require.NoError(t, err)
+	n, ok := hourlyEvents(t, db, "acme", h)
 	require.True(t, ok)
-	assert.Equal(t, h(24), owed, "the next day's open hour is the first owed")
+	assert.Equal(t, int64(1), n, "the event dated below the floor is left out; the one above is counted")
 }

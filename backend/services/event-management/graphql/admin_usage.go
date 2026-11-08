@@ -19,15 +19,15 @@ var AdminSchemaContent string
 
 // UsageReader is what the admin plane needs from the API: one tenant's days, zero-filled.
 type UsageReader interface {
-	TenantUsage(ctx context.Context, tenantId string, from, to time.Time) ([]model.TenantUsageDay, error)
+	TenantEventUsage(ctx context.Context, tenantId string, from, to time.Time) ([]model.TenantEventUsageDay, error)
 }
 
 // AdminResolver is the root resolver of the event-management ADMIN plane: the instance-scoped,
-// read-only per-tenant usage record. It is served on its own /admin/graphql endpoint, which
-// validates IDENTITY-tier tokens and runs in the system context across tenants.
+// read-only per-tenant event usage record. It is served on its own /admin/graphql endpoint, which
+// validates IDENTITY-tier tokens; each read names one tenant and is scoped to it.
 //
-// The endpoint is the boundary that matters; the tenant:read check below is defence in depth.
-// tenant:read is a system-tier authority, so a tenant access token cannot satisfy it even
+// The endpoint is the boundary that matters; the usage:read check below is defence in depth.
+// usage:read is a system-tier authority, so a tenant access token cannot satisfy it even
 // carrying "*".
 type AdminResolver struct{}
 
@@ -46,13 +46,13 @@ func parseUsageDay(arg, v string) (time.Time, error) {
 	return t, nil
 }
 
-// TenantUsage returns one tenant's usage for each UTC day in [from, to].
-func (r *AdminResolver) TenantUsage(ctx context.Context, args struct {
+// TenantEventUsage returns one tenant's event usage for each UTC day in [from, to].
+func (r *AdminResolver) TenantEventUsage(ctx context.Context, args struct {
 	Tenant string
 	From   string
 	To     string
-}) ([]*TenantUsageDayResolver, error) {
-	if err := auth.Authorize(ctx, auth.TenantRead); err != nil {
+}) ([]*TenantEventUsageDayResolver, error) {
+	if err := auth.Authorize(ctx, auth.UsageRead); err != nil {
 		return nil, err
 	}
 	from, err := parseUsageDay("from", args.From)
@@ -63,24 +63,24 @@ func (r *AdminResolver) TenantUsage(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	days, err := adminUsageFrom(ctx).TenantUsage(ctx, args.Tenant, from, to)
+	days, err := adminUsageFrom(ctx).TenantEventUsage(ctx, args.Tenant, from, to)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*TenantUsageDayResolver, 0, len(days))
+	out := make([]*TenantEventUsageDayResolver, 0, len(days))
 	for _, d := range days {
-		out = append(out, &TenantUsageDayResolver{d: d})
+		out = append(out, &TenantEventUsageDayResolver{d: d})
 	}
 	return out, nil
 }
 
-// TenantUsageDayResolver resolves the TenantUsageDay type.
-type TenantUsageDayResolver struct{ d model.TenantUsageDay }
+// TenantEventUsageDayResolver resolves the TenantEventUsageDay type.
+type TenantEventUsageDayResolver struct{ d model.TenantEventUsageDay }
 
-func (t *TenantUsageDayResolver) Tenant() string          { return t.d.TenantId }
-func (t *TenantUsageDayResolver) Day() string             { return t.d.Day.Format(usageDayLayout) }
-func (t *TenantUsageDayResolver) EventsIngested() float64 { return float64(t.d.EventsIngested) }
-func (t *TenantUsageDayResolver) DevicesActive() int32    { return int32(t.d.DevicesActive) }
-func (t *TenantUsageDayResolver) DevicesPeak() int32      { return int32(t.d.DevicesPeak) }
-func (t *TenantUsageDayResolver) DevicesAvg() float64     { return t.d.DevicesAvg() }
-func (t *TenantUsageDayResolver) Complete() bool          { return t.d.Complete }
+func (t *TenantEventUsageDayResolver) Tenant() string          { return t.d.TenantId }
+func (t *TenantEventUsageDayResolver) Day() string             { return t.d.Day.Format(usageDayLayout) }
+func (t *TenantEventUsageDayResolver) EventsIngested() float64 { return float64(t.d.EventsIngested) }
+func (t *TenantEventUsageDayResolver) DevicesActive() int32    { return int32(t.d.DevicesActive) }
+func (t *TenantEventUsageDayResolver) DevicesPeak() int32      { return int32(t.d.DevicesPeak) }
+func (t *TenantEventUsageDayResolver) DevicesAvg() float64     { return t.d.DevicesAvg() }
+func (t *TenantEventUsageDayResolver) Complete() bool          { return t.d.Complete }

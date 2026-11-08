@@ -216,6 +216,11 @@ var exemptions = []Exemption{
 			"tenant's figures; those are in tenant_usage_daily/_hourly/_devices, which carry a " +
 			"tenant column and are swept.",
 	},
+	{
+		Schema: "event-management", Name: "tenant_usage_state", Class: ClassExempt,
+		Reason: "the usage rollup's own watermark: one row per rollup naming the next UTC hour it " +
+			"owes. It names no tenant and holds no tenant's figures.",
+	},
 
 	// ---- event-processing: the DETECT engine's own state --------------------
 	{

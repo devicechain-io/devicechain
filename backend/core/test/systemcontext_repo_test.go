@@ -75,7 +75,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},
 	"backend/services/event-management/processor/AnchorReconciliationSweep.go": {"AnchorReconciliationSweep.runOnce"},
 	"backend/services/event-management/model/usage.go": {"Api.PruneUsageWorkingTables", "Api.RollupUsageHours",
-		"Api.TenantUsage", "Api.usageLedger"},
+		"Api.RollupUsagePass"},
 	"backend/services/event-management/processor/backfill/worker.go": {"Worker.pass"},
 	"backend/services/event-management/processor/backfill/tail.go":   {"TailSweeper.sweep"},
 	// The DETECT engine is a per-Instance singleton. At startup it holds no tenant and
