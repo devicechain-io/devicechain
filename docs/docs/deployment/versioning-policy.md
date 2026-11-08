@@ -54,6 +54,7 @@ These can change in a minor release. When they do, the release notes and that re
 
 - Helm chart values and the instance configuration document
 - Metric names and alert names
+- The MCP tool catalog (tool names, inputs and result shapes)
 
 ## Supported upgrade paths {#upgrade-paths}
 

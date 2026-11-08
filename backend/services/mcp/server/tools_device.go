@@ -124,19 +124,22 @@ type LatestMeasurement struct {
 	Value        *float64 `json:"value,omitempty"`
 	DataType     string   `json:"dataType,omitempty" prov:"platform"`
 	OccurredTime string   `json:"occurredTime" prov:"platform"`
-	// Untrusted holds the metric name and unit: both come from what the device reports, so
-	// they are text a device chose.
+	// Untrusted holds the metric name, which a device reports, and the unit, which the
+	// profile declares.
 	Untrusted *MeasurementUntrusted `json:"untrusted,omitempty"`
 }
 
-// MeasurementUntrusted is the text of a measurement a device wrote.
+// MeasurementUntrusted is the free text of a measurement: its name (device-reported) and its
+// unit (operator-declared).
 type MeasurementUntrusted struct {
 	Name *Marked `json:"name,omitempty" prov:"device-reported"`
-	Unit *Marked `json:"unit,omitempty" prov:"device-reported"`
+	// Unit is the profile's declared unit for the metric, written by an operator, which is how
+	// get_device_capabilities classifies the same value.
+	Unit *Marked `json:"unit,omitempty" prov:"operator"`
 }
 
 func newMeasurementUntrusted(name, unit string) *MeasurementUntrusted {
-	u := &MeasurementUntrusted{Name: mark(SourceDevice, name), Unit: mark(SourceDevice, unit)}
+	u := &MeasurementUntrusted{Name: mark(SourceDevice, name), Unit: mark(SourceOperator, unit)}
 	if u.Name == nil && u.Unit == nil {
 		return nil
 	}

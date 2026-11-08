@@ -45,7 +45,14 @@ var nonPlatformClasses = map[string]bool{
 // provenanceViolations walks t and returns one message per field that breaks a rule.
 func provenanceViolations(t reflect.Type) []string {
 	var out []string
-	seen := map[reflect.Type]bool{}
+	// seen is keyed by the type AND whether it is reached inside an `untrusted` member: a type
+	// first walked inside the envelope must be walked again when it is also reachable outside
+	// it, where a Marked field is a violation.
+	type visit struct {
+		t          reflect.Type
+		inEnvelope bool
+	}
+	seen := map[visit]bool{}
 	var walk func(t reflect.Type, path string, inEnvelope bool)
 	walk = func(t reflect.Type, path string, inEnvelope bool) {
 		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
@@ -65,10 +72,10 @@ func provenanceViolations(t reflect.Type) []string {
 		if t == markedType {
 			return
 		}
-		if seen[t] {
+		if seen[visit{t, inEnvelope}] {
 			return
 		}
-		seen[t] = true
+		seen[visit{t, inEnvelope}] = true
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if !f.IsExported() {

@@ -455,3 +455,57 @@ func TestOnBehalfOfIsRedacted(t *testing.T) {
 	require.NoError(t, db.Raw(`SELECT on_behalf_of FROM audit_events WHERE id = 3`).Scan(&other).Error)
 	assert.Equal(t, "other@globex.example", other, "another tenant's row was redacted")
 }
+
+// 🔴 A SCHEMA WHOSE JOURNAL PREDATES A REDACTED COLUMN IS STILL PURGED. During a rolling
+// upgrade, and for good in an opt-in area that is disabled and never migrates again, an
+// audit_events table can lack on_behalf_of. A column that does not exist holds no
+// identifier, so the redaction empties the columns that ARE there — it must not issue an
+// UPDATE naming the missing one, which fails and rolls back the whole sweep.
+func TestAJournalWithoutOnBehalfOfIsStillRedacted(t *testing.T) {
+	db := sqliteDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE audit_events (
+		id INTEGER PRIMARY KEY, tenant_id TEXT, actor TEXT, entity_label TEXT, operation TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, operation)
+		VALUES (1,'acme','jane@acme.example','jane-doe','create'),
+		       (2,'globex','sam@globex.example','sam-smith','create')`).Error)
+	plan := planOf(t, []column{
+		col("main", "audit_events", "id", "bigint"),
+		col("main", "audit_events", "tenant_id", "text"),
+		col("main", "audit_events", "actor", "text"),
+		col("main", "audit_events", "entity_label", "text"),
+		col("main", "audit_events", "operation", "text"),
+	}, nil)
+
+	entry := plan.index()[Table{Schema: "main", Name: "audit_events"}]
+	require.Equal(t, ClassRedacted, entry.Class)
+	assert.Equal(t, []string{"actor", "entity_label"}, entry.Redact,
+		"the plan names a column this schema does not have")
+
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err, "a journal without on_behalf_of failed the whole sweep")
+	require.Len(t, res.Redacted, 1)
+	assert.Equal(t, int64(1), res.Redacted[0].Rows)
+
+	var named int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = ? AND (actor <> '' OR entity_label <> '')`,
+		RetainedTenant("acme", testEpoch)).Scan(&named).Error)
+	assert.Zero(t, named)
+	var other string
+	require.NoError(t, db.Raw(`SELECT actor FROM audit_events WHERE id = 2`).Scan(&other).Error)
+	assert.Equal(t, "sam@globex.example", other)
+}
+
+// 🔴 A REDACTED TABLE CARRYING NONE OF ITS NAMED COLUMNS STILL FAILS LOUDLY. Filtering to
+// the columns present must not turn "nothing to empty" into a silent success.
+func TestAJournalWithNoRedactedColumnIsRefused(t *testing.T) {
+	db := sqliteDB(t)
+	require.NoError(t, db.Exec(`CREATE TABLE audit_events (id INTEGER PRIMARY KEY, tenant_id TEXT, operation TEXT)`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, operation) VALUES (1,'acme','create')`).Error)
+	plan := planOf(t, []column{
+		col("main", "audit_events", "id", "bigint"),
+		col("main", "audit_events", "tenant_id", "text"),
+		col("main", "audit_events", "operation", "text"),
+	}, nil)
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.Error(t, err, "a redaction with no column to empty reported success")
+}
