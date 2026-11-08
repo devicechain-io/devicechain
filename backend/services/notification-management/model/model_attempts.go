@@ -77,7 +77,7 @@ type NotificationAttempt struct {
 
 	// TenantId leads every index the migration creates on this table (by alarm, by
 	// channel, by time); the tenant-scope callback matches the field by this name.
-	TenantId string `gorm:"not null;size:128;index"`
+	TenantId string `gorm:"not null;size:128"`
 
 	// AlarmToken names the alarm the notification was about.
 	AlarmToken string `gorm:"not null;size:128"`
@@ -119,6 +119,9 @@ type NotificationAttemptSearchCriteria struct {
 	AlarmToken   *string
 	ChannelToken *string
 	Status       *string
+	// Since and Until bound the attempt time (inclusive and exclusive), as RFC 3339.
+	Since *string
+	Until *string
 }
 
 // NotificationAttemptSearchResults is a page of ledger rows.

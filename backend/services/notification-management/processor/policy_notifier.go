@@ -972,8 +972,16 @@ func (n *PolicyNotifier) deliverWithRetry(ctx context.Context, d delivery, rende
 		err := adapter.Deliver(dctx, d.channel, d.secret, d.recipients, rendered)
 		latency := time.Since(started)
 		cancel()
-		n.Ledger.record(ctx, d.attempt.row(d, attemptStatus(err), attempt, n.attempts,
-			started, latency, true, err))
+		status := attemptStatus(err)
+		ledgerErr := err
+		if status == model.AttemptStatusFailed && ctx.Err() != nil {
+			// The DISPATCH budget (ctx), not this attempt's own timeout (dctx), ended the
+			// attempt: the platform cut it short, and the ledger must not charge the
+			// channel with a timeout it did not have.
+			ledgerErr = fmt.Errorf("%w: %w", errDispatchBudgetSpent, err)
+		}
+		n.Ledger.record(ctx, d.attempt.row(d, status, attempt, n.attempts,
+			started, latency, true, ledgerErr))
 		if err == nil {
 			return deliveryOK
 		}

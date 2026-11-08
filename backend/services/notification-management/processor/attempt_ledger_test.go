@@ -97,7 +97,7 @@ func TestEveryAttemptIsALedgerRow(t *testing.T) {
 		recipients: []string{"ops@x.com"}, policy: "p1"}}
 	tally := n.deliverAll(tenantScoped(), deliveries, &RenderedNotification{Subject: "pump down"}, "a1",
 		model.AttemptTriggerEscalation)
-	n.Ledger.Wait()
+	n.Ledger.Wait(context.Background())
 
 	if tally.delivered != 1 {
 		t.Fatalf("tally = %+v, want delivered", tally)
@@ -139,7 +139,7 @@ func TestARefusedAttemptIsRecordedAsRefused(t *testing.T) {
 	if got := n.deliverWithRetry(tenantScoped(), d, &RenderedNotification{}); got != deliveryRefused {
 		t.Fatalf("deliverWithRetry = %v, want refused", got)
 	}
-	n.Ledger.Wait()
+	n.Ledger.Wait(context.Background())
 	rows := store.snapshot()
 	if len(rows) != 1 || rows[0].Status != model.AttemptStatusRefused ||
 		rows[0].ErrorCode.String != model.AttemptErrorEgressBlocked {
@@ -164,13 +164,16 @@ func TestChannelsNeverTriedAreRecorded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(tenantScoped(), 100*time.Millisecond)
 	defer cancel()
 	n.deliverAll(ctx, deliveries, &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
-	n.Ledger.Wait()
+	n.Ledger.Wait(context.Background())
 	rows := store.snapshot()
 	if len(rows) != 2 {
 		t.Fatalf("ledger = %+v, want 2 rows", rows)
 	}
-	if rows[0].Status != model.AttemptStatusFailed || rows[0].ErrorCode.String != model.AttemptErrorTimeout {
-		t.Fatalf("first row = %+v, want FAILED / TIMEOUT", rows[0])
+	// The attempt in flight when the DISPATCH budget ran out was cut by the platform, not
+	// failed by the channel: it is recorded as BUDGET_SPENT, never as the channel's TIMEOUT,
+	// so it does not count against the channel's health.
+	if rows[0].Status != model.AttemptStatusFailed || rows[0].ErrorCode.String != model.AttemptErrorBudgetSpent {
+		t.Fatalf("first row = %+v, want FAILED / BUDGET_SPENT", rows[0])
 	}
 	if rows[1].ChannelToken != "smtp-2" || rows[1].Status != model.AttemptStatusNotAttempted ||
 		rows[1].ErrorCode.String != model.AttemptErrorBudgetSpent || rows[1].LatencyMillis.Valid {
@@ -182,7 +185,7 @@ func TestChannelsNeverTriedAreRecorded(t *testing.T) {
 	n2.store = &fakeSecretStore{err: context.DeadlineExceeded}
 	n2.Ledger = NewAttemptLedger(store2, nil)
 	n2.deliverAll(tenantScoped(), deliveries[:1], &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
-	n2.Ledger.Wait()
+	n2.Ledger.Wait(context.Background())
 	if rows := store2.snapshot(); len(rows) != 1 || rows[0].ErrorCode.String != model.AttemptErrorSecretUnavailable {
 		t.Fatalf("ledger = %+v, want one NOT_ATTEMPTED / SECRET_UNAVAILABLE row", rows)
 	}
@@ -219,7 +222,7 @@ func TestAFailingLedgerNeverBlocksDelivery(t *testing.T) {
 	n2.store = &fakeSecretStore{}
 	n2.Ledger = NewAttemptLedger(failing, writes)
 	tally = n2.deliverAll(tenantScoped(), deliveries[:1], &RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
-	n2.Ledger.Wait()
+	n2.Ledger.Wait(context.Background())
 	if tally.delivered != 1 || fa2.calls != 1 {
 		t.Fatalf("tally = %+v, want delivered despite the ledger failing", tally)
 	}
@@ -261,7 +264,7 @@ func TestTheLedgerIsBoundedAndDropsRatherThanBlocks(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 	close(hung.block)
-	l.Wait()
+	l.Wait(context.Background())
 	if got := testutil.ToFloat64(writes.WithLabelValues(ledgerWritten)); got != ledgerWriters+ledgerQueueDepth {
 		t.Fatalf("written = %v, want %d", got, ledgerWriters+ledgerQueueDepth)
 	}
@@ -284,7 +287,7 @@ func TestADispatchedAlarmIsInTheLedger(t *testing.T) {
 	if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
 		t.Fatal(err)
 	}
-	n.Ledger.Wait()
+	n.Ledger.Wait(context.Background())
 	found, err := api.NotificationAttempts(ctx, model.NotificationAttemptSearchCriteria{
 		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
 	if err != nil {
@@ -320,7 +323,7 @@ func TestAPurgedTenantsLedgerRowIsRefusedNotFailed(t *testing.T) {
 	l := NewAttemptLedger(api, writes)
 	l.record(tenantScoped(), &model.NotificationAttempt{CreatedAt: time.Now(), AlarmToken: "a1",
 		Trigger: model.AttemptTriggerAlarm, ChannelToken: "c", ChannelType: "smtp", Status: model.AttemptStatusSent})
-	l.Wait()
+	l.Wait(context.Background())
 	if got := testutil.ToFloat64(writes.WithLabelValues(ledgerPurged)); got != 1 {
 		t.Fatalf("purged = %v failed = %v, want the fence's refusal counted as purged", got,
 			testutil.ToFloat64(writes.WithLabelValues(ledgerFailed)))
@@ -375,5 +378,49 @@ func TestAttemptErrorCodes(t *testing.T) {
 		if got := attemptErrorCode(c.status, c.err); got != c.want {
 			t.Fatalf("attemptErrorCode(%s, %v) = %q, want %q", c.status, c.err, got, c.want)
 		}
+	}
+}
+
+// The channel's OWN per-attempt timeout is still the channel's failure: only a cut by the
+// whole-dispatch budget is the platform's.
+func TestAChannelsOwnTimeoutIsStillATimeout(t *testing.T) {
+	store := &memoryLedgerStore{}
+	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: &stallingAdapter{hardStop: 10 * time.Second}})
+	n.attempts = 1
+	n.timeout = 50 * time.Millisecond
+	n.store = &fakeSecretStore{}
+	n.Ledger = NewAttemptLedger(store, nil)
+	n.deliverAll(tenantScoped(), []delivery{{channel: enabledChannel("smtp-1", model.ChannelTypeSMTP)}},
+		&RenderedNotification{}, "a1", model.AttemptTriggerAlarm)
+	n.Ledger.Wait(context.Background())
+	if rows := store.snapshot(); len(rows) != 1 || rows[0].ErrorCode.String != model.AttemptErrorTimeout {
+		t.Fatalf("ledger = %+v, want one TIMEOUT row", rows)
+	}
+}
+
+// 🔴 SHUTDOWN WAITS, BUT NOT FOREVER. Behind a hung database every queued row would hold
+// Wait for its own write timeout in turn, so a stop could take minutes. Wait is bounded by
+// its context (and a ceiling of its own); what it gives up on is counted as dropped.
+func TestWaitIsBoundedAndCountsWhatItAbandons(t *testing.T) {
+	hung := &memoryLedgerStore{block: make(chan struct{})}
+	defer close(hung.block)
+	writes := ledgerCounter()
+	l := NewAttemptLedger(hung, writes)
+	for i := 0; i < 10; i++ {
+		l.record(tenantScoped(), &model.NotificationAttempt{AlarmToken: "a1"})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	abandoned := l.Wait(ctx)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Wait took %v behind a hung store; it must stop at its context", elapsed)
+	}
+	if abandoned != 10 {
+		t.Fatalf("Wait reported %d abandoned rows, want 10", abandoned)
+	}
+	// The queued rows are discarded rather than written later, so they are counted once.
+	if got := testutil.ToFloat64(writes.WithLabelValues(ledgerDropped)); got < 10-ledgerWriters {
+		t.Fatalf("dropped = %v, want at least the %d rows still queued", got, 10-ledgerWriters)
 	}
 }

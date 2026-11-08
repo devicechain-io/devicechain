@@ -69,6 +69,9 @@ func postJSON(ctx context.Context, client *http.Client, target string, secretInU
 		Headers: headers,
 		Body:    raw,
 		Auth:    httpsink.Auth{Mode: httpsink.AuthNone},
+		// Every native channel carries its credential in the URL or the body, so a
+		// reflected response body could carry it too: never put the body in an error.
+		SuppressBody: true,
 	})
 	if secretInURL {
 		err = scrubSecret(err, target)

@@ -314,7 +314,7 @@ query {
 }
 ```
 
-Cada registro es un intento, del más reciente al más antiguo. Un canal con tres intentos permitidos que falla dos veces y luego entrega deja tres registros: `FAILED` (intento 1), `FAILED` (intento 2) y `SENT` (intento 3). Filtra por `alarmToken`, `channelToken` o `status`.
+Cada registro es un intento, del más reciente al más antiguo. Un canal con tres intentos permitidos que falla dos veces y luego entrega deja tres registros: `FAILED` (intento 1), `FAILED` (intento 2) y `SENT` (intento 3). Filtra por `alarmToken`, `channelToken` o `status`, y por tiempo con `since` y `until` (RFC 3339).
 
 | `status` | Significado |
 | --- | --- |
@@ -327,12 +327,13 @@ Cada registro es un intento, del más reciente al más antiguo. Un canal con tre
 
 `errorMessage` es el texto de error del proveedor con cada URL sustituida por `<url>`, porque la URL de un webhook de Slack o Teams es en sí una credencial, y el registro lo puede leer cualquiera con `notification:read`. El mensaje en sí no se guarda: `subjectHash` (un SHA-256 de la línea de asunto) muestra si dos intentos llevaron el mismo.
 
-Cada canal informa además de `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, leído del registro. `consecutiveFailures` cuenta los intentos fallidos y rechazados desde la última entrega correcta del canal. Los registros `NOT_ATTEMPTED` no cuentan contra el canal, porque describen algo que la plataforma no hizo.
+Cada canal informa además de `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, leído del registro. `consecutiveFailures` cuenta los intentos fallidos y rechazados desde la última entrega correcta del canal. Los registros `NOT_ATTEMPTED` no cuentan contra el canal, porque describen algo que la plataforma no hizo, y tampoco un registro `FAILED` con `errorCode: BUDGET_SPENT`: el tiempo disponible para todas las entregas de la alarma se agotó mientras ese intento estaba en curso, así que fue la plataforma la que lo cortó. `deliveryHealth` es null para quien no tiene `notification:read`, por ejemplo un canal que una mutación devuelve a quien puede escribir pero no leer.
 
 Dos propiedades a tener en cuenta:
 
 - **El registro nunca retrasa una notificación.** Los registros se escriben después del intento y fuera de la ruta de entrega. Si la base de datos no puede aceptar un registro, este se descarta y se cuenta en `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (o `outcome="dropped"` cuando ya hay demasiadas escrituras en espera). Un registro demuestra que hubo un intento; la ausencia de un registro no demuestra que no lo hubo.
-- **Los destinatarios son datos personales.** Los registros se eliminan pasados 30 días, o pasado `AttemptRetentionSeconds` en la configuración de notification-management. También se borran con el inquilino cuando este se elimina.
+- **Los destinatarios son datos personales.** Los registros se eliminan pasados 7 días (la misma ventana que el estado de notificación resuelto), o pasado `AttemptRetentionSeconds` en la configuración de notification-management. También se borran con el inquilino cuando este se elimina.
+- **Calcula el tamaño antes de ampliar la retención.** El registro guarda un registro por intento: aproximadamente las transiciones de alarma notificadas, por los canales a los que llega cada una, por los intentos por canal, más los escalados. Un inquilino que avisa 10.000 veces al día por 3 canales mantiene unos 210.000 registros con los 7 días predeterminados, y cada registro lleva su lista de destinatarios.
 
 ## Verificar la ruta de extremo a extremo
 

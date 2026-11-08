@@ -22,6 +22,14 @@ func (api *Api) RecordNotificationAttempt(ctx context.Context, attempt *Notifica
 // NotificationAttempts searches the caller tenant's delivery ledger, newest first.
 func (api *Api) NotificationAttempts(ctx context.Context,
 	criteria NotificationAttemptSearchCriteria) (*NotificationAttemptSearchResults, error) {
+	since, err := parseAttemptTime("since", criteria.Since)
+	if err != nil {
+		return nil, err
+	}
+	until, err := parseAttemptTime("until", criteria.Until)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]NotificationAttempt, 0)
 	db, pag := api.RDB.ListOf(ctx, &NotificationAttempt{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.AlarmToken != nil {
@@ -33,6 +41,12 @@ func (api *Api) NotificationAttempts(ctx context.Context,
 		if criteria.Status != nil {
 			result = result.Where("status = ?", *criteria.Status)
 		}
+		if since != nil {
+			result = result.Where("created_at >= ?", *since)
+		}
+		if until != nil {
+			result = result.Where("created_at < ?", *until)
+		}
 		return result
 	}, criteria.Pagination)
 	db.Find(&results)
@@ -42,11 +56,28 @@ func (api *Api) NotificationAttempts(ctx context.Context,
 	return &NotificationAttemptSearchResults{Results: results, Pagination: pag}, nil
 }
 
+// parseAttemptTime reads an optional RFC 3339 bound, refusing one that does not parse
+// rather than ignoring it (an ignored bound returns a plausible, wrong page).
+func parseAttemptTime(name string, value *string) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, *value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an RFC 3339 timestamp: %w", name, err)
+	}
+	return &t, nil
+}
+
 // failureStatuses are the ledger outcomes that count against a channel's health. A
 // NOT_ATTEMPTED row is deliberately absent: it says the PLATFORM did not reach the
 // channel (a secret store outage, a spent dispatch budget), not that the channel failed,
 // and counting it would blame an endpoint for a fault it had no part in.
 var failureStatuses = []string{AttemptStatusFailed, AttemptStatusRefused}
+
+// notBudgetCut excludes an attempt the whole-dispatch budget ended: like NOT_ATTEMPTED, it
+// says the platform stopped, not that the channel failed.
+const notBudgetCut = "(error_code IS NULL OR error_code <> ?)"
 
 // ChannelHealthByToken reads one channel's recent delivery record from the ledger: when it
 // last delivered, when it last failed, and how many attempts have failed since it last
@@ -72,7 +103,7 @@ func (api *Api) ChannelHealthByToken(ctx context.Context, channelToken string) (
 	}
 
 	var failure NotificationAttempt
-	res = base().Where("status IN ?", failureStatuses).
+	res = base().Where("status IN ?", failureStatuses).Where(notBudgetCut, AttemptErrorBudgetSpent).
 		Order("created_at DESC").Order("id DESC").Limit(1).Find(&failure)
 	if res.Error != nil {
 		return nil, fmt.Errorf("reading last failure for channel %q: %w", channelToken, res.Error)
@@ -83,7 +114,7 @@ func (api *Api) ChannelHealthByToken(ctx context.Context, channelToken string) (
 
 	// Failures since the last success. Ordered by (created_at, id) so two rows in the same
 	// instant still have a definite before and after.
-	count := base().Where("status IN ?", failureStatuses)
+	count := base().Where("status IN ?", failureStatuses).Where(notBudgetCut, AttemptErrorBudgetSpent)
 	if health.LastSuccessAt.Valid {
 		count = count.Where("(created_at > ? OR (created_at = ? AND id > ?))",
 			success.CreatedAt, success.CreatedAt, success.ID)

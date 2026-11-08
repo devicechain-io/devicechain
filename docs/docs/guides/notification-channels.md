@@ -314,7 +314,7 @@ query {
 }
 ```
 
-Each record is one try, newest first. A channel allowed three tries that failed twice and then delivered leaves three records: `FAILED` (attempt 1), `FAILED` (attempt 2) and `SENT` (attempt 3). Filter by `alarmToken`, `channelToken` or `status`.
+Each record is one try, newest first. A channel allowed three tries that failed twice and then delivered leaves three records: `FAILED` (attempt 1), `FAILED` (attempt 2) and `SENT` (attempt 3). Filter by `alarmToken`, `channelToken` or `status`, and by time with `since` and `until` (RFC 3339).
 
 | `status` | Meaning |
 | --- | --- |
@@ -327,12 +327,13 @@ Each record is one try, newest first. A channel allowed three tries that failed 
 
 `errorMessage` is the provider's error text with every URL replaced by `<url>`, because a Slack or Teams webhook URL is itself a credential, and the ledger is readable by anyone with `notification:read`. The message itself is not stored: `subjectHash` (a SHA-256 of the subject line) shows whether two attempts carried the same one.
 
-Each channel also reports `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, read from the ledger. `consecutiveFailures` counts the failed and refused attempts since the channel last delivered. `NOT_ATTEMPTED` records do not count against a channel, since they describe something the platform did not do.
+Each channel also reports `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, read from the ledger. `consecutiveFailures` counts the failed and refused attempts since the channel last delivered. `NOT_ATTEMPTED` records do not count against a channel, since they describe something the platform did not do, and neither does a `FAILED` record with `errorCode: BUDGET_SPENT`: the time allowed for all of the alarm's deliveries ran out while that attempt was in flight, so the platform cut it short. `deliveryHealth` is null for a caller without `notification:read`, such as a channel returned by a mutation to a caller who may write but not read.
 
 Two properties to keep in mind:
 
 - **The ledger never delays a notification.** Records are written after the attempt and off the delivery path. If the database cannot take a record, the record is dropped and counted on `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (or `outcome="dropped"` when too many writes are already waiting). A record proves an attempt was made; a missing record does not prove one was not.
-- **Recipients are personal data.** Records are deleted after 30 days, or after `AttemptRetentionSeconds` in the notification-management configuration. They are also erased with the tenant when it is deleted.
+- **Recipients are personal data.** Records are deleted after 7 days (the same window as resolved notification state), or after `AttemptRetentionSeconds` in the notification-management configuration. They are also erased with the tenant when it is deleted.
+- **Size it before raising the retention.** The ledger holds one record per attempt: roughly the alarm transitions notified, times the channels each one reaches, times the tries per channel, plus escalations. A tenant paging 10,000 times a day through 3 channels keeps about 210,000 records at the 7-day default, and every record carries its recipient list.
 
 ## Verify the path end to end
 

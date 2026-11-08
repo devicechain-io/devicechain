@@ -53,7 +53,7 @@ type NotificationManagementConfiguration struct {
 	// AttemptRetentionSeconds is how long a delivery-ledger row (one attempt to send a
 	// notification through a channel) is kept before the retention sweep deletes it. The
 	// ledger records recipients, which are personal data, so it is kept for a window rather
-	// than forever. Unset (0) defaults to 30d.
+	// than forever. Unset (0) defaults to 7d, the same window as resolved notification state.
 	AttemptRetentionSeconds int
 	// RetentionSweepSeconds is how often the retention sweep runs. Unset (0) defaults
 	// to hourly; a negative value disables the sweep.
@@ -87,10 +87,10 @@ func NewNotificationManagementConfiguration() *NotificationManagementConfigurati
 const (
 	defaultDeliverySeconds        = 10
 	defaultDeliveryAttempts       = 3
-	defaultStateRetentionSeconds  = 7 * 24 * 60 * 60  // 7 days
-	defaultRetentionSweepSeconds  = 60 * 60           // hourly
-	defaultAttemptRetentionSecs   = 30 * 24 * 60 * 60 // 30 days
-	defaultEscalationSweepSeconds = 60                // once a minute
+	defaultStateRetentionSeconds  = 7 * 24 * 60 * 60 // 7 days
+	defaultRetentionSweepSeconds  = 60 * 60          // hourly
+	defaultAttemptRetentionSecs   = 7 * 24 * 60 * 60 // 7 days
+	defaultEscalationSweepSeconds = 60               // once a minute
 	defaultMaxEscalations         = 5
 )
 

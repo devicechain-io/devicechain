@@ -103,9 +103,11 @@ type NotificationChannel {
     The channel's recent delivery record, read from the delivery ledger: when it last
     delivered, when it last failed, and how many attempts have failed since. Records leave
     the ledger after its retention period, so a channel that has sent nothing for that long
-    reads as never having sent. Requires notification:read.
+    reads as never having sent. Null, with an error, for a caller without notification:read
+    (a channel returned by a mutation to a writer who cannot read) or when the ledger cannot
+    be read; the rest of the channel is returned either way.
     """
-    deliveryHealth: NotificationChannelHealth!
+    deliveryHealth: NotificationChannelHealth
 }
 
 """A channel's recent delivery record, read from the delivery ledger."""
@@ -118,7 +120,7 @@ type NotificationChannelHealth {
     Number of attempts that failed or were refused since the channel last delivered (or
     since the oldest recorded attempt, if it never has). Each retry counts, so one alarm
     whose three tries all failed adds 3. Attempts the platform never made (NOT_ATTEMPTED)
-    do not count against the channel.
+    or cut short (errorCode BUDGET_SPENT) do not count against the channel.
     """
     consecutiveFailures: Int!
 }
@@ -641,7 +643,7 @@ type Query {
     """
     Searches the delivery ledger, newest first: one record per attempt to send an alarm's
     notification through a channel, with its outcome. Records are kept for a retention
-    period (30 days by default). The ledger is best-effort: it never delays a
+    period (7 days by default). The ledger is best-effort: it never delays a
     notification, so a record proves an attempt was made, but a missing record does not
     prove one was not. Requires notification:read.
     """
@@ -858,7 +860,10 @@ type NotificationAttempt {
     latencyMillis: Int
     """
     Why the attempt did not succeed; null when it did: EGRESS_BLOCKED, CREDENTIAL_REFUSED,
-    TIMEOUT, DELIVERY_ERROR, SECRET_UNAVAILABLE or BUDGET_SPENT. New values may be added.
+    TIMEOUT (the channel did not answer within its own per-attempt time), DELIVERY_ERROR,
+    SECRET_UNAVAILABLE or BUDGET_SPENT (the time allowed for all of the alarm's deliveries
+    ran out; on a FAILED record, while this attempt was in flight). BUDGET_SPENT does not
+    count against the channel's deliveryHealth. New values may be added.
     """
     errorCode: String
     """
@@ -880,6 +885,10 @@ input NotificationAttemptSearchCriteria {
     channelToken: String
     """Return only attempts with this status, such as FAILED."""
     status: String
+    """Return only attempts made at or after this RFC 3339 timestamp. A value that does not parse fails the request."""
+    since: String
+    """Return only attempts made before this RFC 3339 timestamp. A value that does not parse fails the request."""
+    until: String
 }
 
 """A page of delivery-ledger records."""

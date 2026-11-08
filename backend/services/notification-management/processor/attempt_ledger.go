@@ -15,6 +15,7 @@ import (
 	"os"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -64,6 +65,8 @@ const (
 	// counted rather than blocking the sender, because a queue in front of a store that has
 	// stopped answering only grows.
 	ledgerQueueDepth = 1024
+	// ledgerWaitCeiling bounds Wait whatever its context says.
+	ledgerWaitCeiling = 5 * time.Second
 	// maxLedgerErrorMessage caps the stored provider message, matching the column.
 	maxLedgerErrorMessage = 512
 )
@@ -87,8 +90,12 @@ type AttemptLedger struct {
 	store  attemptStore
 	queue  chan ledgerJob
 	writes *prometheus.CounterVec
-	// pending counts rows queued or being written, for Wait.
-	pending sync.WaitGroup
+	// pending counts rows queued or being written, for Wait; outstanding is the same count
+	// as a number Wait can report.
+	pending     sync.WaitGroup
+	outstanding atomic.Int64
+	// abandoned is set when Wait gives up: a writer then discards what is still queued.
+	abandoned atomic.Bool
 }
 
 // ledgerJob is one queued row and the context (tenant) it is written under.
@@ -114,10 +121,43 @@ func NewAttemptLedger(store attemptStore, writes *prometheus.CounterVec) *Attemp
 // Wait blocks until every row already handed to the ledger has been written or given up
 // on. Shutdown calls it so a clean stop does not lose the last rows; tests call it before
 // reading.
-func (l *AttemptLedger) Wait() {
-	if l != nil {
-		l.pending.Wait()
+//
+// It is bounded by ctx and by ledgerWaitCeiling, whichever ends first: behind a hung
+// database every queued row would otherwise hold it for its own write timeout in turn.
+// What is still queued when it gives up is discarded by the writers rather than written
+// later, counted as dropped and logged; it returns how many rows it abandoned.
+func (l *AttemptLedger) Wait(ctx context.Context) int {
+	if l == nil {
+		return 0
 	}
+	done := make(chan struct{})
+	go func() {
+		l.pending.Wait()
+		close(done)
+	}()
+	wctx, cancel := context.WithTimeout(ctx, ledgerWaitCeiling)
+	defer cancel()
+	select {
+	case <-done:
+		return 0
+	case <-wctx.Done():
+	}
+	l.abandoned.Store(true)
+	n := int(l.outstanding.Load())
+	// The writers may be stuck behind the store, so the queue is emptied here rather than
+	// left for them. A row a writer already holds is not counted: it may still land.
+	for drained := false; !drained; {
+		select {
+		case <-l.queue:
+			l.count(ledgerDropped)
+			l.done()
+		default:
+			drained = true
+		}
+	}
+	log.Warn().Int("rows", n).
+		Msg("Stopped waiting for the notification delivery ledger; rows still queued are dropped")
+	return n
 }
 
 func (l *AttemptLedger) count(outcome string) {
@@ -134,10 +174,11 @@ func (l *AttemptLedger) record(ctx context.Context, row *model.NotificationAttem
 		return
 	}
 	l.pending.Add(1)
+	l.outstanding.Add(1)
 	select {
 	case l.queue <- ledgerJob{ctx: context.WithoutCancel(ctx), row: row}:
 	default:
-		l.pending.Done()
+		l.done()
 		l.count(ledgerDropped)
 	}
 }
@@ -149,8 +190,18 @@ func (l *AttemptLedger) writer() {
 	}
 }
 
+// done retires one row from the pending count.
+func (l *AttemptLedger) done() {
+	l.outstanding.Add(-1)
+	l.pending.Done()
+}
+
 func (l *AttemptLedger) write(job ledgerJob) {
-	defer l.pending.Done()
+	defer l.done()
+	if l.abandoned.Load() {
+		l.count(ledgerDropped)
+		return
+	}
 	cctx, cancel := context.WithTimeout(job.ctx, ledgerWriteTimeout)
 	defer cancel()
 	err := l.store.RecordNotificationAttempt(cctx, job.row)
@@ -235,6 +286,8 @@ func attemptErrorCode(status string, err error) string {
 		return model.AttemptErrorBudgetSpent
 	}
 	switch {
+	case errors.Is(err, errDispatchBudgetSpent):
+		return model.AttemptErrorBudgetSpent
 	case errors.Is(err, egress.ErrBlocked):
 		return model.AttemptErrorEgressBlocked
 	case errors.Is(err, httpsink.ErrAuthRefused):
@@ -245,6 +298,11 @@ func attemptErrorCode(status string, err error) string {
 		return model.AttemptErrorDelivery
 	}
 }
+
+// errDispatchBudgetSpent marks an attempt the whole-dispatch budget ended, as opposed to
+// the attempt's own timeout. It never leaves the ledger: the delivery path sees the
+// adapter's error unchanged.
+var errDispatchBudgetSpent = errors.New("the dispatch budget was spent before the attempt finished")
 
 // isTimeout reports a timeout of any shape an adapter returns: the attempt's context
 // deadline (the HTTP adapters), or a socket deadline, which SMTP sets on its connection

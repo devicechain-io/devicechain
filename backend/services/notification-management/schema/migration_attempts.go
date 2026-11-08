@@ -15,10 +15,10 @@ import (
 //
 // # The DDL is literal, and that is the snapshot
 //
-// Every index leads with tenant_id, which a gorm tag cannot spell on a composite without
-// the index name tracking a Go field name; the statements below are the point-in-time
-// shape this migration owns, so the live model can change without rewriting what a fresh
-// install builds.
+// Every index leads with tenant_id, so no single-column tenant_id index is needed. A gorm
+// tag cannot spell such a composite without the index name tracking a Go field name; the
+// statements below are the point-in-time shape this migration owns, so the live model can
+// change without rewriting what a fresh install builds.
 //
 // # Re-runnability
 //
@@ -51,14 +51,14 @@ func NewNotificationAttemptsSchema() *gormigrate.Migration {
 			error_code varchar(32),
 			error_message varchar(512)
 		);`,
-		`CREATE INDEX IF NOT EXISTS "idx_notification-management_notification_attempts_tenant_id" ON ` +
-			attempts + ` (tenant_id);`,
 		`CREATE INDEX IF NOT EXISTS ix_notification_attempts_tenant_time ON ` +
 			attempts + ` (tenant_id, created_at DESC, id DESC);`,
 		`CREATE INDEX IF NOT EXISTS ix_notification_attempts_tenant_alarm ON ` +
-			attempts + ` (tenant_id, alarm_token, created_at DESC);`,
+			attempts + ` (tenant_id, alarm_token, created_at DESC, id DESC);`,
+		// Status sits before time because the channel-health reads filter on it: the last
+		// SENT, the last failure, and the failures since.
 		`CREATE INDEX IF NOT EXISTS ix_notification_attempts_tenant_channel ON ` +
-			attempts + ` (tenant_id, channel_token, created_at DESC, id DESC);`,
+			attempts + ` (tenant_id, channel_token, status, created_at DESC, id DESC);`,
 	}
 	return &gormigrate.Migration{
 		ID: "20261108000100",

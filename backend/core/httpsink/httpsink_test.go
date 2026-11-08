@@ -207,6 +207,13 @@ func TestSendSuppressesBodyOnSecret(t *testing.T) {
 		t.Fatalf("error leaked the response body: %v", err)
 	}
 
+	// A credential in the URL or the body (AuthNone, no Secret) suppresses it too when the
+	// caller says so: the endpoint can echo the path or the routing key back.
+	err = Send(context.Background(), srv.Client(), Request{URL: srv.URL, Auth: Auth{Mode: AuthNone}, SuppressBody: true})
+	if err == nil || strings.Contains(err.Error(), "leaked-secret-echo") || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("SuppressBody must keep the body out and the status in: %v", err)
+	}
+
 	// Without a secret, the body snippet is included for diagnostics.
 	err = Send(context.Background(), srv.Client(), Request{URL: srv.URL, Auth: Auth{Mode: AuthNone}})
 	if err == nil || !strings.Contains(err.Error(), "leaked-secret-echo") {

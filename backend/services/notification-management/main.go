@@ -365,7 +365,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	}
 	// Every sender is stopped, so no new ledger rows can arrive; let the ones in flight land
 	// before the database closes. Each is bounded by its own write timeout.
-	AttemptLedger.Wait()
+	AttemptLedger.Wait(ctx)
 	// GraphQL, then NATS, then Rdb. Nothing in this service's GraphQL plane touches the
 	// broker today — policy and delivery-record resolvers read the database, and the alarm
 	// consumer that does read the broker is stopped above — so this is the platform's one

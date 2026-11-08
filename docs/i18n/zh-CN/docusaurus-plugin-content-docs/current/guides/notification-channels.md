@@ -311,7 +311,7 @@ query {
 }
 ```
 
-每条记录对应一次尝试，按时间从新到旧排列。一个允许尝试三次的渠道如果失败两次后投递成功，会留下三条记录：`FAILED`（第 1 次）、`FAILED`（第 2 次）和 `SENT`（第 3 次）。可按 `alarmToken`、`channelToken` 或 `status` 过滤。
+每条记录对应一次尝试，按时间从新到旧排列。一个允许尝试三次的渠道如果失败两次后投递成功，会留下三条记录：`FAILED`（第 1 次）、`FAILED`（第 2 次）和 `SENT`（第 3 次）。可按 `alarmToken`、`channelToken` 或 `status` 过滤，也可用 `since` 和 `until`（RFC 3339）按时间过滤。
 
 | `status` | 含义 |
 | --- | --- |
@@ -324,12 +324,13 @@ query {
 
 `errorMessage` 是服务提供方的错误文本，其中所有 URL 都被替换为 `<url>`，因为 Slack 或 Teams 的 webhook URL 本身就是凭据，而任何拥有 `notification:read` 的人都能读取投递记录。通知内容本身不会被存储：`subjectHash`（主题行的 SHA-256）可用于判断两次尝试是否发送了相同的内容。
 
-每个渠道还会提供从投递记录读取的 `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`。`consecutiveFailures` 统计自该渠道上次投递成功以来失败和被拒绝的尝试次数。`NOT_ATTEMPTED` 记录不计入渠道的失败，因为它们描述的是平台没有执行的操作。
+每个渠道还会提供从投递记录读取的 `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`。`consecutiveFailures` 统计自该渠道上次投递成功以来失败和被拒绝的尝试次数。`NOT_ATTEMPTED` 记录不计入渠道的失败，因为它们描述的是平台没有执行的操作；`errorCode` 为 `BUDGET_SPENT` 的 `FAILED` 记录同样不计入：该告警所有投递的可用时间在这次尝试进行中耗尽，是平台中止了它。对于没有 `notification:read` 的调用方（例如可写但不可读的调用方在变更中拿到的渠道），`deliveryHealth` 为 null。
 
 需要注意两点：
 
 - **投递记录绝不会延迟通知。** 记录在尝试之后、在投递路径之外写入。如果数据库无法接收某条记录，该记录会被丢弃，并计入 `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}`（等待写入的记录过多时计入 `outcome="dropped"`）。有记录能证明发生过尝试；没有记录并不能证明没有尝试。
-- **收件人属于个人数据。** 记录会在 30 天后删除，或在 notification-management 配置的 `AttemptRetentionSeconds` 之后删除。删除租户时，这些记录也会随之清除。
+- **收件人属于个人数据。** 记录会在 7 天后删除（与已解决的通知状态相同的保留期），或在 notification-management 配置的 `AttemptRetentionSeconds` 之后删除。删除租户时，这些记录也会随之清除。
+- **调高保留期之前先估算规模。** 投递记录每次尝试保存一条：大致等于被通知的告警状态变化数 × 每次到达的渠道数 × 每个渠道的尝试次数，再加上升级通知。一个每天通知 10,000 次、经由 3 个渠道的租户，在默认的 7 天保留期下约保存 210,000 条记录，每条都带有收件人列表。
 
 ## 端到端验证 {#verify-the-path-end-to-end}
 

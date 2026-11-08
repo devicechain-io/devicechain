@@ -34,7 +34,6 @@ ALTER TABLE ONLY "notification-management".purged_tenants
 ALTER TABLE ONLY "notification-management".secrets
  ADD CONSTRAINT secrets_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "notification-management".secrets ALTER COLUMN id SET DEFAULT nextval('"notification-management".secrets_id_seq'::regclass);
-CREATE INDEX "idx_notification-management_notification_attempts_tenant_id" ON "notification-management".notification_attempts USING btree (tenant_id);
 CREATE INDEX "idx_notification-management_notification_channels_channel_type" ON "notification-management".notification_channels USING btree (channel_type);
 CREATE INDEX "idx_notification-management_notification_channels_deleted_at" ON "notification-management".notification_channels USING btree (deleted_at);
 CREATE INDEX "idx_notification-management_notification_channels_tenant_id" ON "notification-management".notification_channels USING btree (tenant_id);
@@ -58,8 +57,8 @@ CREATE INDEX "idx_notification-management_secrets_name" ON "notification-managem
 CREATE INDEX "idx_notification-management_secrets_scope" ON "notification-management".secrets USING btree (scope);
 CREATE INDEX "idx_notification-management_secrets_tenant_id" ON "notification-management".secrets USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "notification-management".audit_events USING btree (tenant_id, occurred_time DESC);
-CREATE INDEX ix_notification_attempts_tenant_alarm ON "notification-management".notification_attempts USING btree (tenant_id, alarm_token, created_at DESC);
-CREATE INDEX ix_notification_attempts_tenant_channel ON "notification-management".notification_attempts USING btree (tenant_id, channel_token, created_at DESC, id DESC);
+CREATE INDEX ix_notification_attempts_tenant_alarm ON "notification-management".notification_attempts USING btree (tenant_id, alarm_token, created_at DESC, id DESC);
+CREATE INDEX ix_notification_attempts_tenant_channel ON "notification-management".notification_attempts USING btree (tenant_id, channel_token, status, created_at DESC, id DESC);
 CREATE INDEX ix_notification_attempts_tenant_time ON "notification-management".notification_attempts USING btree (tenant_id, created_at DESC, id DESC);
 CREATE SCHEMA "notification-management";
 CREATE SEQUENCE "notification-management".audit_events_id_seq

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -38,6 +39,10 @@ func TestChannelHealthCountsFailuresSinceTheLastSuccess(t *testing.T) {
 	mustRecordAttempt(t, api, ctx, attemptAt("c1", AttemptStatusFailed, t0.Add(2*time.Minute)))
 	mustRecordAttempt(t, api, ctx, attemptAt("c1", AttemptStatusNotAttempted, t0.Add(3*time.Minute)))
 	mustRecordAttempt(t, api, ctx, attemptAt("c1", AttemptStatusRefused, t0.Add(4*time.Minute)))
+	// An attempt the dispatch budget cut short is the platform's, not the channel's.
+	cut := attemptAt("c1", AttemptStatusFailed, t0.Add(4*time.Minute+30*time.Second))
+	cut.ErrorCode = sql.NullString{String: AttemptErrorBudgetSpent, Valid: true}
+	mustRecordAttempt(t, api, ctx, cut)
 	mustRecordAttempt(t, api, ctx, attemptAt("c2", AttemptStatusFailed, t0.Add(5*time.Minute)))
 
 	h, err := api.ChannelHealthByToken(ctx, "c1")
@@ -51,7 +56,7 @@ func TestChannelHealthCountsFailuresSinceTheLastSuccess(t *testing.T) {
 		t.Fatalf("lastFailureAt = %v", h.LastFailureAt)
 	}
 	if h.ConsecutiveFailures != 2 {
-		t.Fatalf("consecutiveFailures = %d, want 2 (FAILED + REFUSED after the success, NOT_ATTEMPTED excluded)",
+		t.Fatalf("consecutiveFailures = %d, want 2 (FAILED + REFUSED after the success, NOT_ATTEMPTED and BUDGET_SPENT excluded)",
 			h.ConsecutiveFailures)
 	}
 
@@ -130,6 +135,24 @@ func TestLedgerFiltersAndRetention(t *testing.T) {
 		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, AlarmToken: &alarm})
 	if err != nil || len(page.Results) != 1 || page.Results[0].ChannelToken != "c2" {
 		t.Fatalf("alarm filter = %+v (err %v)", page, err)
+	}
+
+	since := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	page, err = api.NotificationAttempts(ctx, NotificationAttemptSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, Since: &since})
+	if err != nil || len(page.Results) != 2 {
+		t.Fatalf("since filter = %d rows (err %v), want the 2 recent ones", len(page.Results), err)
+	}
+	until := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	page, err = api.NotificationAttempts(ctx, NotificationAttemptSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, Until: &until})
+	if err != nil || len(page.Results) != 1 {
+		t.Fatalf("until filter = %d rows (err %v), want the old one", len(page.Results), err)
+	}
+	bad := "yesterday"
+	if _, err := api.NotificationAttempts(ctx, NotificationAttemptSearchCriteria{
+		Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, Since: &bad}); err == nil {
+		t.Fatal("an unparseable bound must fail the request, not be ignored")
 	}
 
 	removed, err := api.PruneNotificationAttempts(ctx, now.Add(-30*24*time.Hour))
