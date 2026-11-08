@@ -235,7 +235,8 @@ func (r *SchemaResolver) SetSemanticContext(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
-	request := model.SemanticContextRequest{EnabledPacks: []string{}, CustomPrefixes: args.Request.CustomPrefixes}
+	prefixes := append([]model.CustomPrefixInput{}, args.Request.CustomPrefixes...)
+	request := model.SemanticContextRequest{EnabledPacks: []string{}, CustomPrefixes: &prefixes}
 	for _, v := range args.Request.EnabledPacks {
 		id, err := semanticPackID(v)
 		if err != nil {
@@ -256,7 +257,7 @@ func (r *SchemaResolver) SetSemanticContext(ctx context.Context, args struct {
 // their SemanticPack value, which the resolver maps to pack ids.
 type semanticContextRequestInput struct {
 	EnabledPacks   []string
-	CustomPrefixes *[]model.CustomPrefixInput
+	CustomPrefixes []model.CustomPrefixInput
 }
 
 // The SemanticPack enum names a pack by its id upper-cased with '-' as '_' (sdm-parking is

@@ -13,6 +13,8 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 type memoTestKey struct{}
@@ -106,4 +108,37 @@ func TestForgetMemoRecomputes(t *testing.T) {
 		t.Fatalf("a forgotten key was not recomputed: got %d", v)
 	}
 	ForgetMemo(context.Background(), memoTestKey{}) // no memo: nothing to do, no panic
+}
+
+// One request memo holds one value PER TENANT for a key: a context re-scoped to another
+// tenant inside a request never reads the first tenant's value.
+func TestMemoizeKeepsTenantsApart(t *testing.T) {
+	ctx := WithRequestMemo(context.Background())
+	acme, globex := core.WithTenant(ctx, "acme"), core.WithTenant(ctx, "globex")
+	a, _ := Memoize(acme, memoTestKey{}, func() (string, error) { return "acme-value", nil })
+	g, _ := Memoize(globex, memoTestKey{}, func() (string, error) { return "globex-value", nil })
+	if a != "acme-value" || g != "globex-value" {
+		t.Fatalf("tenants shared a memoized value: acme=%q globex=%q", a, g)
+	}
+	ForgetMemo(acme, memoTestKey{})
+	if v, _ := Memoize(globex, memoTestKey{}, func() (string, error) { return "recomputed", nil }); v != "globex-value" {
+		t.Fatalf("forgetting acme's value forgot globex's: %q", v)
+	}
+	if v, _ := Memoize(acme, memoTestKey{}, func() (string, error) { return "recomputed", nil }); v != "recomputed" {
+		t.Fatalf("acme's forgotten value was not recomputed: %q", v)
+	}
+}
+
+// A computation that panics is memoized as an ERROR, not left half-done: later calls see
+// the error, and none of them panics or reads a zero value as if it were real.
+func TestMemoizeTurnsAPanicIntoAnError(t *testing.T) {
+	ctx := WithRequestMemo(context.Background())
+	_, err := Memoize(ctx, memoTestKey{}, func() (int, error) { panic("boom") })
+	if err == nil {
+		t.Fatal("a panicking computation returned no error")
+	}
+	v, err := Memoize(ctx, memoTestKey{}, func() (int, error) { return 7, nil })
+	if err == nil {
+		t.Fatalf("the panicked entry answered %d as if it had computed", v)
+	}
 }

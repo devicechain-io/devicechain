@@ -84,14 +84,16 @@ func TestAPreChangeSnapshotReserialisesAndRendersUnchanged(t *testing.T) {
 	}
 }
 
-// With the opt-in on, a bound metric's semantic property joins its descriptor in @type, in a
-// fixed order and without repeats; with it off the descriptor is all there is.
+// With the opt-in on, a bound metric's semantic property and point class join its descriptor
+// in @type, in the fixed order [descriptor, property, point class] and without repeats;
+// with it off the descriptor is all there is.
 func TestTheThingModelOptInAddsTheSemanticProperty(t *testing.T) {
-	api, ctx := identityApi(t, &SemanticContext{})
+	api, ctx := identityApi(t, &SemanticContext{}, &AreaType{}, &CustomerType{}, &EntityRelationshipType{})
 	enable(t, api, ctx, "brick", "sdm-streetlighting")
 	seedIdentityHistory(t, api, ctx)
 	_, err := api.UpdateMetricDefinition(ctx, "temp", &MetricDefinitionUpdateRequest{
-		SemanticProperty: dcgraphql.OptionalStringOf("brick:Dry_Bulb_Temperature")})
+		SemanticProperty:   dcgraphql.OptionalStringOf("brick:Dry_Bulb_Temperature"),
+		SemanticPointClass: dcgraphql.OptionalStringOf("brick:Zone_Air_Temperature_Sensor")})
 	require.NoError(t, err)
 	_, err = api.UpdateMetricDefinition(ctx, "humidity_raw", &MetricDefinitionUpdateRequest{
 		SemanticProperty: dcgraphql.OptionalStringOf("sdm-streetlighting:activePower")})
@@ -113,7 +115,9 @@ func TestTheThingModelOptInAddsTheSemanticProperty(t *testing.T) {
 	off, on := props(false), props(true)
 	require.Equal(t, "saref:Temperature", off["temp"]["@type"])
 	require.NotContains(t, off["humidity_raw"], "@type")
-	require.Equal(t, []any{"saref:Temperature", "https://brickschema.org/schema/Brick#Dry_Bulb_Temperature"}, on["temp"]["@type"])
+	// [descriptor, observed property, point class]: the point class is the series' rdf:type.
+	require.Equal(t, []any{"saref:Temperature", "https://brickschema.org/schema/Brick#Dry_Bulb_Temperature",
+		"https://brickschema.org/schema/Brick#Zone_Air_Temperature_Sensor"}, on["temp"]["@type"])
 	require.Equal(t, []any{"https://smartdatamodels.org/dataModel.Streetlighting/activePower"}, on["humidity_raw"]["@type"])
 	require.NotContains(t, on["mode"], "@type", "an unbound metric with no descriptor carries no @type")
 

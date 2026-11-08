@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -17,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/semantic"
 	"github.com/devicechain-io/dc-microservice/semantic/packs"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // The semantic layer's backend. Every test here runs the real write path against the real
@@ -44,6 +46,10 @@ const (
 // seedSemanticContext enables the packs the partial-update families bind from.
 func seedSemanticContext(t *testing.T, api *Api, ctx context.Context) {
 	t.Helper()
+	// Setting a context reads every binding column (refuseOrphaningContext), so the family's
+	// database needs every table that holds one, not only the family's own.
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).AutoMigrate(&DeviceType{}, &AssetType{}, &AreaType{},
+		&CustomerType{}, &EntityRelationshipType{}, &MetricDefinition{}))
 	enable(t, api, ctx, "brick", "s4city", "sdm-streetlighting")
 }
 
@@ -89,6 +95,19 @@ func requireRefusal(t *testing.T, err error, sentinel error, term string) *Seman
 		require.Equal(t, term, se.Extensions()["term"], "the refusal must name the term")
 		require.Contains(t, err.Error(), term)
 	}
+	return se
+}
+
+// requireInUse asserts err is the SEMANTIC_CONTEXT_IN_USE refusal carrying references.
+func requireInUse(t *testing.T, err error, references int) *SemanticError {
+	t.Helper()
+	require.Error(t, err)
+	var se *SemanticError
+	require.True(t, errors.As(err, &se), "want a *SemanticError, got %T: %v", err, err)
+	ext := se.Extensions()
+	require.Equal(t, CodeSemanticContextInUse, ext["code"])
+	require.Equal(t, references, ext["references"])
+	require.Equal(t, references, se.References)
 	return se
 }
 
@@ -221,9 +240,8 @@ func TestRemappingACustomPrefixDoesNotChangeAStoredBinding(t *testing.T) {
 	// Pointing the prefix at ANOTHER namespace would orphan the binding: refused.
 	_, err = api.SetSemanticContext(ctx, &SemanticContextRequest{
 		CustomPrefixes: &[]CustomPrefixInput{{Prefix: "city", Namespace: "https://other.example/#"}}})
-	se := requireRefusal(t, err, nil, "")
-	require.Contains(t, err.Error(), "cannot stop declaring")
-	require.Equal(t, 1, se.References)
+	requireInUse(t, err, 1)
+	require.Contains(t, err.Error(), "https://city.example/ontology#")
 }
 
 func TestDisablingAReferencedPackIsRefusedWithTheCount(t *testing.T) {
@@ -238,15 +256,13 @@ func TestDisablingAReferencedPackIsRefusedWithTheCount(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = api.SetSemanticContext(ctx, &SemanticContextRequest{EnabledPacks: []string{"brick"}})
-	se := requireRefusal(t, err, nil, "")
+	requireInUse(t, err, 2)
 	require.Contains(t, err.Error(), "2 binding(s)")
-	require.Equal(t, 2, se.References)
 	require.Contains(t, err.Error(), "sdm-streetlighting")
 
 	// brick is referenced by the relationship (predicate and its defaulted inverse = 2 uses).
 	_, err = api.SetSemanticContext(ctx, &SemanticContextRequest{EnabledPacks: []string{"sdm-streetlighting"}})
-	se = requireRefusal(t, err, nil, "")
-	require.Equal(t, 2, se.References)
+	requireInUse(t, err, 2)
 
 	// Unbind, then the pack can go.
 	_, err = api.UpdateDeviceType(ctx, "lamp", &DeviceTypeUpdateRequest{SemanticTypes: dcgraphql.OptionalStringList{Set: true}})
@@ -478,4 +494,53 @@ func TestAssetTypeVersionFreezesAndRollbackRestoresTheBinding(t *testing.T) {
 	requireRefusal(t, err, semantic.ErrUnknownPrefix, "")
 	require.Empty(t, typ().SemanticTypes, "a refused rollback restores nothing")
 	require.EqualValues(t, 3, typ().ActiveVersion.Int32, "and does not move the pointer")
+}
+
+// A binding the context no longer explains (left behind by a context change that raced a
+// binding write) makes the NEXT setSemanticContext refuse loudly with the true count, even
+// though that change drops nothing: every bound IRI is checked against the next context,
+// not just the packs a change drops.
+func TestAnExistingOrphanBlocksTheNextContextChange(t *testing.T) {
+	api, ctx := semanticTestApi(t)
+	enable(t, api, ctx, "brick", "s4city")
+	_, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{Token: "lamp", SemanticTypes: strs("brick:Luminaire")})
+	require.NoError(t, err)
+	_, err = api.CreateAssetType(ctx, &AssetTypeCreateRequest{Token: "meter", SemanticTypes: strs("brick:Electrical_Meter")})
+	require.NoError(t, err)
+	// Plant the orphan: the stored context stops enabling brick behind the bindings' back.
+	require.NoError(t, api.RDB.DB(ctx).Model(&SemanticContext{}).Where("1 = 1").
+		Update("enabled_packs", rdb.Anchors{"s4city"}).Error)
+
+	// Adding a pack drops nothing, and is still refused: two bindings name brick.
+	_, err = api.SetSemanticContext(ctx, &SemanticContextRequest{EnabledPacks: []string{"s4city", "saref"}})
+	se := requireInUse(t, err, 2)
+	require.Contains(t, se.Error(), `"brick"`)
+
+	// Re-enabling the vocabulary the orphans need is accepted.
+	_, err = api.SetSemanticContext(ctx, &SemanticContextRequest{EnabledPacks: []string{"brick", "s4city"}})
+	require.NoError(t, err)
+}
+
+// Two FIRST setSemanticContext calls for one tenant race to insert its one live row; the
+// loser hits the unique index and is answered CONFLICT (retry), not a raw driver error.
+func TestAConcurrentFirstSetIsAConflict(t *testing.T) {
+	api, ctx := semanticTestApi(t)
+	sys := api.RDB.Database.WithContext(core.WithSystemContext(context.Background()))
+	require.NoError(t, sys.Exec(`CREATE UNIQUE INDEX uix_semantic_contexts_tenant ON semantic_contexts (tenant_id) WHERE deleted_at IS NULL`).Error)
+	// The rival commits between this request's read (no row) and its insert.
+	const cb = "test:rival-first-set"
+	require.NoError(t, api.RDB.Database.Callback().Create().Before("gorm:create").Register(cb, func(tx *gorm.DB) {
+		if tx.Statement.Table == "semantic_contexts" {
+			tx.Session(&gorm.Session{NewDB: true}).WithContext(core.WithSystemContext(context.Background())).
+				Exec(`INSERT INTO semantic_contexts (tenant_id, enabled_packs, custom_prefixes, pack_versions) VALUES ('acme', '[]', '{}', '{}')`)
+		}
+	}))
+	t.Cleanup(func() { _ = api.RDB.Database.Callback().Create().Remove(cb) })
+
+	_, err := api.SetSemanticContext(ctx, &SemanticContextRequest{EnabledPacks: []string{"brick"}})
+	require.Error(t, err)
+	var ce *conflict.Error
+	require.True(t, errors.As(err, &ce), "want a *conflict.Error, got %T: %v", err, err)
+	require.Equal(t, conflict.Code, ce.Extensions()["code"])
+	require.Contains(t, err.Error(), "semantic context")
 }

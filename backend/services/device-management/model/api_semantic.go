@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/devicechain-io/dc-microservice/conflict"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/semantic"
@@ -151,10 +152,11 @@ func (api *Api) tenantValidatorContext(ctx context.Context) (semantic.TenantCont
 //
 // The request is checked by core/semantic (a pack this build does not ship, a custom prefix
 // that shadows a pack, an overlapping namespace, a size limit), and then against the
-// bindings that already exist: a pack the context stops enabling, or a custom namespace it
-// stops declaring, that a binding still uses is REFUSED with the number of bindings that use
-// it. Silently orphaning a binding is not an option, because a stored IRI that no enabled
-// vocabulary explains is a binding nothing can validate, display or reason over.
+// bindings that already exist: if the new context would not explain every stored binding
+// (see refuseOrphaningContext), it is REFUSED with SEMANTIC_CONTEXT_IN_USE and the number of
+// bindings it would orphan. Silently orphaning a binding is not an option, because a stored
+// IRI that no enabled vocabulary explains is a binding nothing can validate, display or
+// reason over.
 //
 // Remapping a custom prefix to the same namespace, or changing its spelling, is always
 // allowed: bindings hold the expanded IRI.
@@ -182,11 +184,7 @@ func (api *Api) SetSemanticContext(ctx context.Context, request *SemanticContext
 	if err != nil {
 		return nil, err
 	}
-	currentCustom, err := row.CustomPrefixMap()
-	if err != nil {
-		return nil, err
-	}
-	if err := api.refuseOrphaningContext(ctx, row.EnabledPacks, currentCustom, enabled, custom); err != nil {
+	if err := api.refuseOrphaningContext(ctx, next); err != nil {
 		return nil, err
 	}
 
@@ -209,66 +207,77 @@ func (api *Api) SetSemanticContext(ctx context.Context, request *SemanticContext
 	row.CustomPrefixes = datatypes.JSON(customJSON)
 	row.PackVersions = datatypes.JSON(versionsJSON)
 	// A tenant's first context is a create; the unique index on live rows makes the loser of
-	// two concurrent first sets fail rather than leave two contexts.
+	// two concurrent first sets fail rather than leave two contexts. That loss is CONFLICT:
+	// the request was sound, another one won, and reading the context and retrying resolves it.
 	if err := api.RDB.DB(ctx).Save(row).Error; err != nil {
+		if conflict.Is(err) {
+			return nil, conflict.New("another request set this tenant's semantic context at the same time; read it and retry")
+		}
 		return nil, err
 	}
-	return row, nil
+	// Answer with the row as STORED, re-read rather than the value just written: the
+	// database keeps updatedAt to the microsecond, and a response carrying the in-memory
+	// nanoseconds would differ from every later read of the same row.
+	return api.tenantSemanticContext(ctx)
 }
 
-// refuseOrphaningContext refuses a context that drops a pack or custom namespace a binding
-// still uses.
-func (api *Api) refuseOrphaningContext(ctx context.Context, curPacks []string,
-	curCustom map[string]string, nextPacks []string, nextCustom map[string]string) error {
-	dropped := map[string]string{} // namespace -> what to call it
-	for _, id := range curPacks {
-		if containsString(nextPacks, id) {
-			continue
-		}
-		for _, p := range shippedPacks() {
-			if p.ID == id {
-				dropped[p.Namespace] = fmt.Sprintf("enabling pack %q", id)
-			}
-		}
-	}
-	nextNamespaces := make(map[string]bool, len(nextCustom))
-	for _, ns := range nextCustom {
-		nextNamespaces[ns] = true
-	}
-	for prefix, ns := range curCustom {
-		if !nextNamespaces[ns] {
-			dropped[ns] = fmt.Sprintf("declaring custom namespace %q (prefix %q)", ns, prefix)
-		}
-	}
-	if len(dropped) == 0 {
-		return nil
-	}
+// refuseOrphaningContext refuses a context under which any stored binding would be
+// unexplained: a bound IRI that the NEXT context's packs and custom prefixes do not expand.
+//
+// It checks EVERY bound IRI against the next context, not just the packs or namespaces this
+// change drops. A binding write validates against the context it read, so one racing a
+// context change can commit a binding the new context no longer explains; checking only the
+// delta would let that orphan live on silently, because the next change drops nothing it
+// uses. Checked whole, any orphan, however it arose, makes the next context change a loud
+// refusal with the true count, which re-enabling the vocabulary or unbinding resolves.
+//
+// 🔴 A SMALL WINDOW REMAINS, AND THIS IS WHAT IT IS. A binding write that validated
+// against the old context and commits AFTER this check ran is not seen by it. Closing that
+// needs one tenant lock held from validation to commit across every binding write path; until
+// then, such an orphan is caught by the next setSemanticContext, never silently accepted.
+func (api *Api) refuseOrphaningContext(ctx context.Context, next semantic.TenantContext) error {
 	iris, err := api.boundIRIs(ctx)
 	if err != nil {
 		return err
 	}
-	counts := map[string]int{}
+	reg := packs.MustDefault()
+	counts := map[string]int{} // what the binding needs -> how many bindings
+	total := 0
 	for _, iri := range iris {
-		for ns := range dropped {
-			if strings.HasPrefix(iri, ns) {
-				counts[ns]++
-			}
+		if _, err := reg.Expand(iri, next); err == nil {
+			continue
 		}
+		total++
+		counts[semanticVocabularyOf(iri)]++
 	}
-	if len(counts) == 0 {
+	if total == 0 {
 		return nil
 	}
-	namespaces := make([]string, 0, len(counts))
-	for ns := range counts {
-		namespaces = append(namespaces, ns)
+	needs := make([]string, 0, len(counts))
+	for v := range counts {
+		needs = append(needs, v)
 	}
-	sort.Strings(namespaces)
-	ns := namespaces[0]
+	sort.Strings(needs)
+	parts := make([]string, 0, len(needs))
+	for _, v := range needs {
+		parts = append(parts, fmt.Sprintf("%s (%d)", v, counts[v]))
+	}
 	return &SemanticError{
-		Err: fmt.Errorf("cannot stop %s: %d binding(s) still use it; unbind them first",
-			dropped[ns], counts[ns]),
-		References: counts[ns],
+		Code: CodeSemanticContextInUse,
+		Err: fmt.Errorf("%d binding(s) would not be explained by this context; they use %s. "+
+			"Keep those vocabularies, or unbind them first", total, strings.Join(parts, ", ")),
+		References: total,
 	}
+}
+
+// semanticVocabularyOf names what a bound IRI needs from a context: the shipped pack whose namespace
+// holds it, or else the IRI itself (a custom namespace is the tenant's own, so the term is
+// the most specific thing that can be named).
+func semanticVocabularyOf(iri string) string {
+	if p, ok := packOf(iri); ok {
+		return fmt.Sprintf("pack %q", p.ID)
+	}
+	return fmt.Sprintf("%q", iri)
 }
 
 // boundIRIs lists every expanded IRI the tenant's draft model binds, one entry per use. It

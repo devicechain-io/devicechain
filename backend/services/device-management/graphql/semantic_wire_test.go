@@ -49,7 +49,7 @@ func TestSemanticBindingsOverTheWire(t *testing.T) {
 	op := f.operator()
 
 	res := serve(t, op, setSemanticContextDoc, map[string]any{"r": map[string]any{
-		"enabledPacks": []any{"SDM_STREETLIGHTING", "BRICK"}}})
+		"enabledPacks": []any{"SDM_STREETLIGHTING", "BRICK"}, "customPrefixes": []any{}}})
 	if len(res.errs) > 0 {
 		t.Fatalf("setSemanticContext: %v", res.errs)
 	}
@@ -93,7 +93,7 @@ func TestSemanticBindingsOverTheWire(t *testing.T) {
 func TestAScopedMemberReadsTheSemanticContextButCannotSetIt(t *testing.T) {
 	f := semanticFixture(t)
 	if res := serve(t, f.operator(), setSemanticContextDoc, map[string]any{"r": map[string]any{
-		"enabledPacks": []any{"BRICK"}}}); len(res.errs) > 0 {
+		"enabledPacks": []any{"BRICK"}, "customPrefixes": []any{}}}); len(res.errs) > 0 {
 		t.Fatalf("operator set: %v", res.errs)
 	}
 	// The member holds device:write too, so a refusal is the scope's, not a missing authority.
@@ -107,7 +107,7 @@ func TestAScopedMemberReadsTheSemanticContextButCannotSetIt(t *testing.T) {
 		t.Fatalf("scoped read: %s", got)
 	}
 
-	res = serve(t, member, setSemanticContextDoc, map[string]any{"r": map[string]any{"enabledPacks": []any{}}})
+	res = serve(t, member, setSemanticContextDoc, map[string]any{"r": map[string]any{"enabledPacks": []any{}, "customPrefixes": []any{}}})
 	if len(res.errs) == 0 || !isScopeRefusal(res.errs[0]) {
 		t.Fatalf("a scoped member's set was not refused by the scope: %v %v", res.data, res.errs)
 	}
@@ -215,5 +215,37 @@ func TestACurieAfterSetSemanticContextUsesTheNewPrefix(t *testing.T) {
 	got, _ := json.Marshal([]any{res.data["before"], res.data["after"]})
 	if want := `[{"semanticTypes":[{"curie":"ex:SmartBin"}]},{"semanticTypes":[{"curie":"city:SmartBin"}]}]`; string(got) != want {
 		t.Fatalf("got %s\nwant %s", got, want)
+	}
+}
+
+// The request replaces the context WHOLE, so it names its custom prefixes every time: an
+// omitted list is refused by the schema rather than read as "none".
+func TestSetSemanticContextRequiresItsCustomPrefixes(t *testing.T) {
+	f := semanticFixture(t)
+	res := serve(t, f.operator(), setSemanticContextDoc, map[string]any{"r": map[string]any{"enabledPacks": []any{"BRICK"}}})
+	if len(res.errs) == 0 {
+		t.Fatalf("a request with no customPrefixes was accepted: %v", res.data)
+	}
+	sc, err := f.api.SemanticContext(f.operator())
+	if err != nil || len(sc.EnabledPacks) != 0 {
+		t.Fatalf("a refused request changed the context: %v, %v", sc, err)
+	}
+}
+
+// setSemanticContext answers with the context as stored, so its updatedAt is the value every
+// later read returns (the upgrade drill compares the two).
+func TestSetSemanticContextAnswersTheStoredRow(t *testing.T) {
+	f := semanticFixture(t)
+	op := f.operator()
+	set := serve(t, op, `mutation($r: SemanticContextRequest!) { setSemanticContext(request: $r) { updatedAt } }`,
+		map[string]any{"r": map[string]any{"enabledPacks": []any{"BRICK"}, "customPrefixes": []any{}}})
+	read := serve(t, op, `{ semanticContext { updatedAt } }`, nil)
+	if len(set.errs)+len(read.errs) > 0 {
+		t.Fatal(set.errs, read.errs)
+	}
+	s, _ := json.Marshal(set.data["setSemanticContext"])
+	r, _ := json.Marshal(read.data["semanticContext"])
+	if string(s) != string(r) || strings.Contains(string(s), "null") {
+		t.Fatalf("set answered %s, a read answers %s", s, r)
 	}
 }

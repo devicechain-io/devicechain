@@ -429,9 +429,10 @@ type DeviceProfileVersion {
     """
     thingModel(
         """
-        When true, each property's @type becomes a list: the descriptor (when set) followed by
-        the metric's semantic property IRI (when bound), without repeats. When false, the
-        default, the document is exactly what it has always been.
+        When true, each property's @type becomes a list, in this order and without repeats: the
+        descriptor (when set), the metric's semantic property IRI and its semantic point class
+        IRI (each when bound). When false, the default, the document is exactly what it has
+        always been.
         """
         includeSemanticTypes: Boolean! = false
     ): String!
@@ -4696,8 +4697,11 @@ type SemanticPackVersion {
 input SemanticContextRequest {
     """The packs to enable. An empty list enables none."""
     enabledPacks: [SemanticPack!]!
-    """Custom prefixes for the tenant's own terms; at most 32. A prefix may not shadow a pack's, and namespaces may not overlap."""
-    customPrefixes: [CustomPrefixInput!]
+    """
+    Custom prefixes for the tenant's own terms; at most 32. An empty list declares none. A
+    prefix may not shadow a pack's, and namespaces may not overlap.
+    """
+    customPrefixes: [CustomPrefixInput!]!
 }
 
 """One custom prefix declaration."""
@@ -5553,10 +5557,13 @@ type Mutation {
     """
     Replaces the tenant's semantic context and returns it. Enabling a pack or declaring a
     custom prefix makes its terms bindable; a pack this build does not ship, a custom prefix
-    that shadows a pack's, or overlapping namespaces fail with INVALID_ARGUMENT. Dropping a
-    pack or custom namespace that a binding still uses is refused with INVALID_ARGUMENT and
-    the number of bindings that use it; unbind them first. Requires device:write, and a
-    member limited to part of the tenant is refused. Null only on an error, which says why.
+    that shadows a pack's, or overlapping namespaces fail with INVALID_ARGUMENT. A context
+    that would leave any stored binding unexplained (it stops enabling a pack, or declaring a
+    custom namespace, that a binding uses) is refused with SEMANTIC_CONTEXT_IN_USE and
+    extensions.references, the number of such bindings; keep the vocabulary or unbind them
+    first. Two first sets for one tenant at once: the loser fails with CONFLICT, and may read
+    the context and retry. Requires device:write, and a member limited to part of the tenant
+    is refused. Null only on an error, which says why.
     """
     setSemanticContext(
         """The context to store. It replaces the stored one whole."""

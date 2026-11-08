@@ -249,6 +249,20 @@ func readObject(e entity, envelope map[string]json.RawMessage, token string, wri
 			return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and %s now returns null for that token",
 				e.Name, token, e.Read)
 		}
+		if e.AbsentIfNull != "" {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				return nil, failWith(exitShape, "read %s returned a non-object under %q: %w", e.Name, e.Read, err)
+			}
+			presence, ok := fields[e.AbsentIfNull]
+			if !ok {
+				return nil, failWith(exitShape, "read %s returned no %q, which its presence is judged by", e.Name, e.AbsentIfNull)
+			}
+			if isJSONNull(presence) {
+				return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and %s now answers with a null %s (none stored)",
+					e.Name, token, e.Read, e.AbsentIfNull)
+			}
+		}
 		return raw, nil
 	}
 

@@ -110,6 +110,12 @@ type entity struct {
 	// TokenFrom.
 	Singleton bool
 
+	// AbsentIfNull names a selected field whose null means the row is ABSENT, for a
+	// Singleton read that never answers null itself: semanticContext serves an empty
+	// context, with a null updatedAt, to a tenant that has none stored. Without it a lost
+	// row would read as a changed one (MISMATCH) rather than as missing.
+	AbsentIfNull string
+
 	// ReadArg overrides the argument name of a Single read. Empty means "token";
 	// deviceClaim is keyed by `deviceToken`.
 	ReadArg string
@@ -447,17 +453,22 @@ var entities = []entity{
 		// context was set survive an upgrade that ships newer packs: they are what was
 		// validated against, not what the running build ships.
 		//
+		// 🔴 semanticContext NEVER ANSWERS NULL: a tenant with no stored context reads as an
+		// empty one whose updatedAt is null. So updatedAt is selected and AbsentIfNull judges
+		// presence by it; a lost row is reported missing, not compared as a changed one.
+		//
 		// A SKIPPABLE LEAF: it carries the Requires of the semantic layer, so a baseline
 		// that predates it skips the row, and nothing records its token.
-		Name:      "semantic-context",
-		Area:      "device-management",
-		Mutation:  "setSemanticContext",
-		Input:     "SemanticContextRequest!",
-		Read:      "semanticContext",
-		Singleton: true,
-		Requires:  []string{"SemanticContextRequest.enabledPacks"},
-		Fields:    "enabledPacks customPrefixes{prefix namespace} packVersions{pack version}",
-		TokenFrom: func(s *state) string { return s.tok("semantic-context") },
+		Name:         "semantic-context",
+		Area:         "device-management",
+		Mutation:     "setSemanticContext",
+		Input:        "SemanticContextRequest!",
+		Read:         "semanticContext",
+		Singleton:    true,
+		Requires:     []string{"SemanticContextRequest.enabledPacks"},
+		Fields:       "enabledPacks customPrefixes{prefix namespace} packVersions{pack version} updatedAt",
+		AbsentIfNull: "updatedAt",
+		TokenFrom:    func(s *state) string { return s.tok("semantic-context") },
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"req": map[string]any{
 				// Sorted, as the context serves them.

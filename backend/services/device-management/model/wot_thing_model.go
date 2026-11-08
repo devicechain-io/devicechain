@@ -84,9 +84,9 @@ func ThingModelOf(profile *DeviceProfile, version *DeviceProfileVersion) ([]byte
 // ThingModelWith is ThingModelOf with the semantic layer's opt-in. With includeSemanticTypes
 // false the output is exactly what ThingModelOf has always produced, byte for byte: a
 // property's `@type` is its Descriptor as a string, and a metric's semantic binding is not
-// mentioned. With it true, a property's `@type` becomes a list of the Descriptor (when set)
-// followed by the metric's semantic property IRI (when bound), without repeats, and a
-// property with neither carries no `@type`. The order is fixed so the same version always
+// mentioned. With it true, a property's `@type` becomes a list of the Descriptor (when set),
+// the metric's semantic property IRI and its point class IRI (each when bound), in that
+// order and without repeats, and a property with none of them carries no `@type`. The order is fixed so the same version always
 // renders the same bytes.
 func ThingModelWith(profile *DeviceProfile, version *DeviceProfileVersion, includeSemanticTypes bool) ([]byte, error) {
 	if profile == nil || version == nil {
@@ -173,13 +173,28 @@ func wotProperty(m *MetricDefinition, includeSemanticTypes bool) (map[string]any
 	}
 	prop := map[string]any{"type": typ, "readOnly": true, "observable": true}
 	if includeSemanticTypes {
+		// Fixed order [descriptor, observed property, point class], without repeats. The
+		// point class is the series' own rdf:type; the property is what it observes.
 		var types []string
-		if m.Descriptor.Valid && m.Descriptor.String != "" {
-			types = append(types, m.Descriptor.String)
+		add := func(t string) {
+			if t == "" {
+				return
+			}
+			for _, have := range types {
+				if have == t {
+					return
+				}
+			}
+			types = append(types, t)
 		}
-		if m.SemanticProperty != nil && *m.SemanticProperty != "" &&
-			(len(types) == 0 || types[0] != *m.SemanticProperty) {
-			types = append(types, *m.SemanticProperty)
+		if m.Descriptor.Valid {
+			add(m.Descriptor.String)
+		}
+		if m.SemanticProperty != nil {
+			add(*m.SemanticProperty)
+		}
+		if m.SemanticPointClass != nil {
+			add(*m.SemanticPointClass)
 		}
 		if len(types) > 0 {
 			prop["@type"] = types

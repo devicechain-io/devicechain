@@ -23,6 +23,12 @@ const MaxSemanticTypes = 8
 // term rides extensions.term when there is one.
 const CodeInvalidArgument = "INVALID_ARGUMENT"
 
+// CodeSemanticContextInUse is the extensions.code of a setSemanticContext refused because
+// bindings already stored would not be explained by the context it asked for (a pack it
+// stops enabling, a custom namespace it stops declaring). extensions.references carries how
+// many bindings; the request is well formed, and becomes acceptable once they are unbound.
+const CodeSemanticContextInUse = "SEMANTIC_CONTEXT_IN_USE"
+
 // SemanticContext is a tenant's semantic configuration (one live row per tenant): which
 // vocabulary packs it has enabled, the custom prefixes it declared for its own terms, and
 // the version of each enabled pack recorded when the context was last set.
@@ -67,8 +73,9 @@ type PackVersion struct {
 	Version string
 }
 
-// SemanticError is a refused binding or context. It carries INVALID_ARGUMENT as its code and
-// the offending term, when it has one, so a client does not have to match prose.
+// SemanticError is a refused binding or context. It carries INVALID_ARGUMENT as its code (or
+// SEMANTIC_CONTEXT_IN_USE for a context that stored bindings still need) and the offending
+// term, when it has one, so a client does not have to match prose.
 //
 // graphql-go copies a resolver error's Extensions() only by direct type assertion, so the
 // API returns this type unwrapped.
@@ -79,6 +86,8 @@ type SemanticError struct {
 	// References is how many bindings still use a pack or namespace a context change would
 	// have dropped; zero otherwise.
 	References int
+	// Code overrides the extensions.code; empty means CodeInvalidArgument.
+	Code string
 }
 
 func (e *SemanticError) Error() string {
@@ -92,7 +101,11 @@ func (e *SemanticError) Unwrap() error { return e.Err }
 
 // Extensions implements the graphql-go error extensions contract.
 func (e *SemanticError) Extensions() map[string]any {
-	ext := map[string]any{"code": CodeInvalidArgument}
+	code := e.Code
+	if code == "" {
+		code = CodeInvalidArgument
+	}
+	ext := map[string]any{"code": code}
 	var te *semantic.TermError
 	if errors.As(e.Err, &te) && te.Term != "" {
 		ext["term"] = te.Term

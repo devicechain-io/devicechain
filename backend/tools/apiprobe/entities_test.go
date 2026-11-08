@@ -510,6 +510,9 @@ var timestampFieldsThatRoundTrip = map[string]string{
 		"provisioning profile, and the platform defaults none.",
 	"cancelledAt": "null on both sides: nothing cancels a drill batch. The entry's own " +
 		"comment says so beside the selection.",
+	"updatedAt": "selected ONLY by semantic-context (TestOnlyTheSemanticContextSelectsUpdatedAt " +
+		"holds that), whose presence is judged by it: setSemanticContext answers with the row " +
+		"re-read after the write, so the response carries the stored microsecond value.",
 }
 
 var timestampLooking = regexp.MustCompile(`(?:At|Time)$`)
