@@ -3863,6 +3863,22 @@ type IntegrationDecoderPlan {
     profileVersionToken: String!
 }
 
+"""What the ingest path needs to know about the payload decoder of a device's type."""
+type DeviceDecoderPlan {
+    """Whether the active published version declares a decoder, usable or not."""
+    present: Boolean!
+    """The input an uplink must carry for the decoder to run; null when there is no decoder."""
+    input: PayloadDecoderInput
+    """The most readings one decode produces; 0 when there is no decoder this build can run."""
+    maxReadings: Int!
+    """The part of the static worst-case cost that does not depend on the size of the uplink."""
+    composedCost: Int!
+    """Whether the decoder reads the JSON body, parsed and priced by size."""
+    parsesJson: Boolean!
+    """The profile version the answer is for, as "{profile}@{version}"; empty when there is no decoder."""
+    profileVersionToken: String!
+}
+
 """The answer to resolveIntegrationDevice."""
 type IntegrationDeviceResolution {
     """What happened."""
@@ -5095,6 +5111,28 @@ type Query {
         """Token of the device type the uplink's device belongs to."""
         deviceTypeToken: String!
     ): IntegrationDecoderPlan
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. What the ingest path needs to know about the payload decoder of the
+    device with this token, for a device that publishes its own payload: whether the active
+    published version of its type's profile declares one, which input it reads, and the figures
+    the ingest charge is built from. The credential the device presented is authenticated
+    first, and the answer is null for every failure to do so (nothing presented, an unknown,
+    disabled or expired credential, a wrong secret, a credential that belongs to another device,
+    a device that does not exist): those are indistinguishable from one another and say nothing
+    about whether a decoder is attached. A device that authenticates and whose type has no decoder
+    is present: false.
+    """
+    deviceDecoder(
+        """Token of the device the uplink is addressed to."""
+        deviceToken: String!
+        """Type of the credential the device presented (ACCESS_TOKEN, MQTT_BASIC)."""
+        credentialType: String!
+        """The credential id the device presented (for an access token, the token)."""
+        credentialId: String!
+        """The secret the device presented, for a credential type that carries one."""
+        credentialSecret: String
+    ): DeviceDecoderPlan
     """
     Service-only: callable with a service token that holds device:read, and refused for any
     user's access token. Proves a bearer token belongs to the integration with this token.

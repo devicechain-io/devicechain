@@ -566,6 +566,10 @@ var sweepExemptions = map[string]string{
 		"decoder for an integration, authenticated with the bearer token the platform showed once and " +
 		"stores only a digest of, so the sweep has no value to supply; the decoder itself is read back " +
 		"through the device profile and its versions",
+	"device-management.deviceDecoder": "it answers the ingest path's question about a device's own payload " +
+		"decoder, authenticated with the credential the device presented (an access token or MQTT basic " +
+		"secret the platform showed once and stores only a digest of), so the sweep has no value to " +
+		"supply; the decoder itself is read back through the device profile and its versions",
 	"device-management.unregisteredIntegrationDevices": "it lists the sightings of ONE integration, named " +
 		"inside its criteria, which are written only by the ingest path's service-plane lookup " +
 		"(resolveIntegrationDevice, which needs the integration's bearer token), so the drill has no " +
