@@ -41,7 +41,11 @@ CREATE TABLE "event-processing".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "event-processing".detect_rules (
  rule_id character varying(512) NOT NULL,

@@ -82,7 +82,11 @@ CREATE TABLE "command-delivery".audit_events (
  operation text NOT NULL,
  entity_pk text,
  entity_label text,
- rows_affected bigint
+ rows_affected bigint,
+ client_id text,
+ session_id text,
+ on_behalf_of text,
+ proposal text
 );
 CREATE TABLE "command-delivery".command_batches (
  id bigint NOT NULL,

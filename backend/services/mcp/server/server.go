@@ -142,14 +142,14 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	c := NewCatalog()
 	register(s, c, &mcp.Tool{
 		Name:        "list_devices",
-		Description: "List the devices in the caller's tenant (paged). Returns each device's token, name, description, external id, and device-type token. Address devices by token in follow-up tools.",
+		Description: "List the devices in the caller's tenant (paged). Returns each device's token and device-type token, with its name, description and external id under `untrusted`. Address devices by token in follow-up tools.",
 	}, ToolRisk{
 		Exposure: ExposureConfiguration, Scale: ScalePage,
 		Discloses: "the full inventory of a tenant's devices, a page at a time, including any external ids that tie them to the customer's own systems",
 	}, t.ListDevices)
 	register(s, c, &mcp.Tool{
 		Name:        "get_device",
-		Description: "Look up one or more devices by token. Returns each device's token, name, description, external id, and device-type token. Unknown tokens are simply omitted from the result (not an error), so compare the returned tokens against the ones requested.",
+		Description: "Look up one or more devices by token. Returns each device's token and device-type token, with its name, description and external id under `untrusted`. Unknown tokens are simply omitted from the result (not an error), so compare the returned tokens against the ones requested.",
 	}, ToolRisk{
 		Exposure: ExposureConfiguration, Scale: ScaleAddressed,
 		Discloses: "the registry entry for devices the caller already names, and — because unknown tokens are omitted rather than refused — whether a guessed token exists",
@@ -163,14 +163,14 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.GetDeviceState)
 	register(s, c, &mcp.Tool{
 		Name:        "get_latest_measurements",
-		Description: "Read the latest (last-known) value of every metric for a device, with its unit, data type, and time. Prefer this over querying raw history for a current snapshot.",
+		Description: "Read the latest (last-known) value of every metric for a device, with its data type and time; the metric name and unit are under `untrusted`. Prefer this over querying raw history for a current snapshot.",
 	}, ToolRisk{
 		Exposure: ExposureTelemetry, Scale: ScaleAddressed,
 		Discloses: "the current value of every metric a named device reports — the tenant's live product data for that device, though only its present state and not its history",
 	}, t.GetLatestMeasurements)
 	register(s, c, &mcp.Tool{
 		Name:        "get_device_capabilities",
-		Description: "Report what a device can measure and what it can be told to do. `commands` is the device's PUBLISHED command vocabulary — the platform accepts exactly these, with `parameterSchema` describing each one's arguments. `commandsConstrained` says whether the vocabulary is enforced at all: when it is false the platform accepts ANY command key and `commands` is empty, so an empty list means the vocabulary is OPEN, not that the device takes no commands. `metrics` are the profile's DRAFT metric definitions (key, name, unit, data type) and may name metrics the device does not yet report; `activeVersion` is the published profile version the device resolves, and when it is null the profile has never been published, so treat the listed metrics as not yet active.",
+		Description: "Report what a device can measure and what it can be told to do. `commands` is the device's PUBLISHED command vocabulary — the platform accepts exactly these, with `parameterSchema` (under `untrusted`, with the key, name and description) describing each one's arguments. `commandsConstrained` says whether the vocabulary is enforced at all: when it is false the platform accepts ANY command key and `commands` is empty, so an empty list means the vocabulary is OPEN, not that the device takes no commands. `metrics` are the profile's DRAFT metric definitions (data type, with the key, name and unit under `untrusted`) and may name metrics the device does not yet report; `activeVersion` is the published profile version the device resolves, and when it is null the profile has never been published, so treat the listed metrics as not yet active.",
 	}, ToolRisk{
 		Exposure: ExposureConfiguration, Scale: ScaleAddressed,
 		Discloses: "a named device's metric definitions and its published command vocabulary — what the platform would accept being told to do to it, though this server can never issue any of it",
@@ -198,7 +198,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.QueryLocations)
 	register(s, c, &mcp.Tool{
 		Name:        "list_alarms",
-		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, key, metric, state, severity, acknowledged flag, raised/cleared times, and last value.",
+		Description: "List alarms in the caller's tenant (paged), optionally filtered by originating device token, state, severity, alarm key, or acknowledged flag. Returns each alarm's token, state, severity, acknowledged flag, raised/cleared times, and last value, with its key, metric and acknowledger under `untrusted`.",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
 		Discloses: "a tenant-wide list of what has been going wrong and where, a page at a time, including the value that raised each alarm",
@@ -212,7 +212,7 @@ func registerTools(s *mcp.Server, t *Tools) *Catalog {
 	}, t.GetAlarm)
 	register(s, c, &mcp.Tool{
 		Name:        "list_commands",
-		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, name, status, and delivery-lifecycle timestamps (payloads are omitted).",
+		Description: "List dispatched commands in the caller's tenant (paged), optionally filtered by device token or status. Returns each command's token, device, status, and delivery-lifecycle timestamps, with its name and any device error under `untrusted` (payloads are omitted).",
 	}, ToolRisk{
 		Exposure: ExposureOperational, Scale: ScalePage,
 		Discloses: "what a tenant has been telling its fleet to do and whether each instruction landed — the command names and lifecycle, though never the payloads",

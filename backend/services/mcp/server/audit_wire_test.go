@@ -116,7 +116,7 @@ func TestAToolCallWritesOneAuditRecordNamingTheCaller(t *testing.T) {
 
 	rec := onlyAuditLine(t, buf)
 	want := map[string]any{
-		"schema":    float64(1),
+		"schema":    float64(2),
 		"tenant":    "acme",
 		"actor":     "a@b.c",
 		"client_id": "claude-desktop",
@@ -130,6 +130,11 @@ func TestAToolCallWritesOneAuditRecordNamingTheCaller(t *testing.T) {
 		if rec[k] != v {
 			t.Errorf("audit record %s = %#v, want %#v; record: %v", k, rec[k], v, rec)
 		}
+	}
+	// Schema 2: the scopes the verified token was granted, as an array.
+	scopes, _ := rec["scopes"].([]any)
+	if len(scopes) != 1 || scopes[0] != "read-only" {
+		t.Errorf("audit record scopes = %#v, want [read-only]; record: %v", rec["scopes"], rec)
 	}
 	if _, ok := rec["duration_ms"].(float64); !ok {
 		t.Errorf("audit record carries no numeric duration_ms: %v", rec)

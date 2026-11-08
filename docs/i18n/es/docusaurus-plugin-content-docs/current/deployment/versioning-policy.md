@@ -53,6 +53,7 @@ Estas pueden cambiar en una versión menor. Cuando lo hacen, las notas de versi�
 
 - Los valores del chart de Helm y el documento de configuración de la instancia
 - Los nombres de métricas y de alertas
+- El catálogo de herramientas MCP (nombres de las herramientas, entradas y forma de los resultados)
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 
