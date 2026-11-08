@@ -68,6 +68,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#credentialattemptstorefull"
             summary: "Password sign-ins are being checked without their per-account backoff"
             description: "The credential-attempt store is full, so user-management is checking password sign-ins WITHOUT slowing down repeated failures on any address that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 5 minutes. Sign-in itself still works -- refusing it would let whoever filled the store lock every user out -- but guessing is now limited only by the per-request field cap and the cost of each password check. The store fills when sign-ins are sent for a very large number of distinct email addresses inside ten minutes, which almost always means someone is spraying addresses. Find where the sign-in traffic comes from (the ingress logs, and user-management's rate-limited 'credential attempt store is full' warning) and block it upstream. The store drains on its own as entries expire, ten minutes after the flood stops. If the sign-in traffic is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
 
@@ -90,6 +91,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicecredentialattemptstorefull"
             summary: "MQTT password connects are being checked without their per-username backoff"
             description: "The device credential-attempt store is full, so device-management is checking MQTT password connects WITHOUT slowing down repeated failures on any username that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 30 seconds. Connects still work -- refusing them would let whoever filled the store keep every password device off the platform -- but guessing a device's password is now limited only by how fast the broker accepts connects. Every connect, successful or not, holds an entry for ten minutes, so the store fills either when connects are sent for a very large number of distinct usernames (someone spraying usernames: find where the MQTT connects come from and block it upstream) or when a very large fleet reconnects all at once, for example after a broker restart. It drains on its own as entries expire, ten minutes after the wave stops. If the connect volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
         - alert: SsoIdpUnreachable
@@ -103,6 +105,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ssoidpunreachable"
             summary: "An identity provider cannot be reached for single sign-on"
             description: "user-management has been failing to reach the identity provider of connection {{ "{{ $labels.connection }}" }} (its token endpoint or its signing keys) for ten minutes, so people who sign in through it are being refused. Password sign-in is unaffected. The connection's endpoints are the ones recorded and approved in its discovery snapshot, and every request goes through the egress guard: check that the provider is up, that its address resolves from the cluster, and that the egress allow list (instance.config.infrastructure.egress) permits an on-premises provider's range. If the provider moved an endpoint, run refreshIdpDiscovery and approve the new snapshot."
 
@@ -117,6 +120,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ssounverifiedidentityrefused"
             summary: "Single sign-on refused a sign-in that an identity provider vouched for"
             description: "Connection {{ "{{ $labels.connection }}" }} had a sign-in refused with outcome {{ "{{ $labels.outcome }}" }}. Nobody was signed in. Each of these outcomes is the platform's own check overriding the provider: refused_unverified_email (the provider did not vouch for the address), refused_unverified_domain (the address is not in a domain asserted for this connection), refused_required_claim (the token lacks a claim the connection requires, for example the Workspace domain or the Microsoft tenant id), or refused_system_role_identity (a tenant's provider asserted an identity that holds a system role). They are usually a misconfigured connection or someone probing one, and occasionally an attempt to sign in as another person. Look at the audit journal for the asserted address, and at the provider's own sign-in log."
 
@@ -130,6 +134,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ssostatestorefull"
             summary: "Single sign-on is refusing every sign-in because its state store is full"
             description: "The single sign-on state store is full, so user-management is refusing to begin any sign-in through any identity provider (it fails closed rather than drop the protection that makes a replayed callback useless). Password sign-in still works. The store fills when an enormous number of sign-ins are begun inside ten minutes, which almost always means someone is calling beginSso in a loop: the call is public and is limited per source address and globally, but a distributed sender can still fill it. Find the traffic in the ingress logs and block it upstream; the store drains on its own ten minutes after the flood stops. If the volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
 
@@ -145,6 +150,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mfaidentitylocked"
             summary: "An account's password is in use by someone failing its second factor"
             description: "A second-factor lock armed on an account: twenty wrong authenticator codes were evaluated, each after a CORRECT password. Someone has this account's password and is guessing its code. The authenticator stays locked for at most fifteen minutes at a time (the person can still sign in with a recovery code), and a password holder can renew the lock. Find the account in the audit journal (operation mfa_locked, preceded by mfa_failed rows and mfa_challenged rows) and RESET ITS PASSWORD with setPassword: that rotates the account's session epoch, which also voids every outstanding sign-in challenge. Do not reset the second factor first -- while the password is known to someone else that would give them the account (the reset refuses without a new password for this reason). The source addresses are in the ingress logs."
 
@@ -158,6 +164,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#mfaverificationfailuressustained"
             summary: "Second-factor codes are being refused at a sustained rate"
             description: "user-management has refused more than one second-factor code every ten seconds, on average, for fifteen minutes (wrong, replayed, or refused by a lock). Each attempt follows a correct password, so this is people typing their codes wrong in large numbers (a clock-skew problem on the nodes, or an authenticator app out of sync) or someone using passwords they obtained. Check that the nodes' clocks are synchronised (authenticator codes are accepted one 30-second step either side), then look at the audit journal for mfa_failed rows grouped by account and at the ingress logs for the source addresses. An account that has locked raises MfaIdentityLocked on its own."
 {{- end }}

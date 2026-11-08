@@ -70,6 +70,7 @@ tests:
               namespace: dc-system
               pod: dc-rdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivingnotconfigured"
               summary: "A PostgreSQL cluster has no WAL archiver attached and is NOT being backed up"
               description: >-
                 dc-rdb-1 is running with archiving switched on and NO backup plugin behind it, so
@@ -178,6 +179,7 @@ tests:
               namespace: dc-system
               pod: dc-rdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgresnorecentbasebackup"
               summary: "No successful database base backup in 36 hours"
               description: >-
                 dc-rdb-1 has taken no successful base backup in 36 hours against a
@@ -255,6 +257,7 @@ tests:
               namespace: dc-system
               pod: dc-rdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivingfailing"
               summary: "PostgreSQL WAL archiving is failing"
               description: >-
                 dc-rdb-1 last FAILED to archive a WAL segment more recently than it last succeeded,
@@ -305,6 +308,7 @@ tests:
               namespace: dci-devicechain
               pod: dc-tsdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivingfailing"
               summary: "PostgreSQL WAL archiving is failing"
               description: >-
                 dc-tsdb-1 last FAILED to archive a WAL segment more recently than it last succeeded,
@@ -343,6 +347,7 @@ tests:
               namespace: dc-system
               pod: dc-rdb-1
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreshasneverarchivedwal"
               summary: "PostgreSQL has never successfully archived a WAL segment"
               description: >-
                 dc-rdb-1 has archived no WAL segment, ever. The first base backup forces a segment
@@ -375,6 +380,7 @@ tests:
               namespace: dc-system
               persistentvolumeclaim: dc-object-store-data
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#backupdestinationalmostfull"
               summary: "The backup destination is almost full"
               description: >-
                 dc-object-store-data is over 85% full. When it fills, WAL archiving starts failing —
@@ -443,6 +449,7 @@ tests:
               pod: dc-tsdb-1
               value: ready
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#postgreswalarchivebacklog"
               summary: "PostgreSQL is holding WAL it has not shipped to the backup destination"
               description: >-
                 dc-tsdb-1 has 160 WAL segments (16 MiB each) waiting to be archived. They stay on
@@ -518,6 +525,7 @@ tests:
               namespace: dc-system
               persistentvolumeclaim: dc-object-store-data
             exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#backupdestinationfillingfast"
               summary: "The backup destination will be full within the hour at its current rate"
               description: >-
                 dc-object-store-data is more than 65% full and filling fast enough to run out of

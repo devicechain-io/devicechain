@@ -55,6 +55,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamnotreplicatedasconfigured"
             summary: "JetStream stream or bucket is not replicated as configured"
             description: >-
               {{ "{{ $labels.stream }}" }} has fewer replicas than this instance is configured for.
@@ -95,6 +96,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicapeersdegraded"
             summary: "JetStream replica peers are offline"
             description: >-
               {{ "{{ $labels.stream }}" }} reports more replicas than it has online RAFT
@@ -125,6 +127,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicapeerslagging"
             summary: "A JetStream replica has not caught up"
             description: >-
               {{ "{{ $labels.stream }}" }} has had at least one online replica that was not
@@ -163,6 +166,7 @@ spec:
             severity: critical
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamleasebucketnotreplicated"
             summary: "The partition-lease bucket is not replicated"
             description: >-
               {{ "{{ $labels.stream }}" }} holds the partition-ownership leases that decide which
@@ -200,6 +204,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamclusterunused"
             summary: "The NATS broker is clustered but nothing on it is replicated"
             description: >-
               This instance is connected to a CLUSTERED NATS broker while every stream and KV
@@ -272,6 +277,7 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#jetstreamreplicationunobserved"
             summary: "A service can no longer read a JetStream stream's replication state"
             description: >-
               {{ "{{ $labels.pod }}" }} ({{ "{{ $labels.job }}" }}) reported the replication of

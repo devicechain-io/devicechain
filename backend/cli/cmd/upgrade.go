@@ -48,6 +48,11 @@ var (
 
 	upgradeIngressController string
 	upgradeDropLegacyIngress bool
+
+	// upgradeAlerts holds the alert-routing flags; upgradeAlertRequest is what RunE settled
+	// them to (files read, request validated), which upgradeOptions copies.
+	upgradeAlerts       alertFlags
+	upgradeAlertRequest bootstrap.AlertRoutingRequest
 )
 
 const (
@@ -118,6 +123,7 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 		SkipInfrastructure:   upgradeSkipInfra,
 
 		AllowEnvelopeDowngrade: upgradeAllowEnvelopeDowngrade,
+		AlertRouting:           upgradeAlertRequest,
 	}
 }
 
@@ -268,6 +274,11 @@ store), says so when it rises, and warns when the volume has less free space tha
 		if upgradeIngressController == "nginx" && upgradeDropLegacyIngress {
 			return fmt.Errorf("--drop-legacy-ingress stops rendering the Ingress objects beside the Gateway, and --ingress-controller nginx makes them the only front end; give one")
 		}
+		alertRequest, err := upgradeAlerts.request()
+		if err != nil {
+			return err
+		}
+		upgradeAlertRequest = alertRequest
 		mqttFailClosed := mqttFailClosedFlag(cmd.Flags().Changed, upgradeMqttFailClosed)
 		upgradeBrokerMaxConnectionsGiven = cmd.Flags().Changed("broker-max-connections")
 		upgradeEventStoreMaxWALGiven = cmd.Flags().Changed("event-store-max-wal-mib")
@@ -325,6 +336,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeMQTTHost, "mqtt-host", "", mqttHostUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeDropLegacyIngress, "drop-legacy-ingress", false, dropLegacyIngressUsage)
+	upgradeAlerts.register(upgradeCmd)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 
