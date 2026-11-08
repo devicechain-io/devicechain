@@ -64,6 +64,7 @@ var (
 		NewDeviceTypeCommandChannelSchema(),
 		NewRevocationExpansionMarkersSchema(),
 		NewAnchorOcspSchema(),
+		NewAlarmDispositionsSchema(),
 		NewInstalledPositionSchema(),
 	}
 )

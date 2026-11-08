@@ -136,3 +136,18 @@ func (r *SchemaResolver) Alarms(ctx context.Context, args struct {
 	}
 	return &AlarmSearchResultsResolver{M: *found, S: r, C: ctx}, nil
 }
+
+// List alarm disposition labels that match the criteria.
+func (r *SchemaResolver) AlarmDispositions(ctx context.Context, args struct {
+	Criteria model.AlarmDispositionSearchCriteria
+}) (*AlarmDispositionSearchResultsResolver, error) {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmRead); err != nil {
+		return nil, err
+	}
+
+	found, err := r.GetApi(ctx).AlarmDispositions(ctx, args.Criteria)
+	if err != nil {
+		return nil, err
+	}
+	return &AlarmDispositionSearchResultsResolver{M: *found, S: r, C: ctx}, nil
+}

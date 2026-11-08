@@ -128,6 +128,11 @@ type NotifyMetrics struct {
 	// PolicyNotifier.
 	quietHours *prometheus.CounterVec
 
+	// ledgerWrites counts delivery-ledger writes by outcome (see the ledger* constants):
+	// written, failed, dropped (in-flight cap reached) or purged (tenant deleted). Read by
+	// the AttemptLedger; LedgerWrites exposes it to the wiring.
+	ledgerWrites *prometheus.CounterVec
+
 	// RED metrics for the per-message dispatch path (E13).
 	metrics *core.ProcessorMetrics
 }
@@ -160,8 +165,17 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 				"reached no channel; the notification is dead-lettered) or superseded (a newer page "+
 				"about the alarm went out through the policy first).",
 			[]string{"outcome"}),
+		ledgerWrites: ms.NewCounterVec("ledger_writes_total",
+			"Delivery-ledger rows by outcome: written, failed (the store refused or timed out), "+
+				"dropped (too many writes in flight; never attempted) or purged (the tenant has been "+
+				"deleted). The ledger never delays a delivery, so a failed or dropped row is a "+
+				"missing record, not a missing page.",
+			[]string{"outcome"}),
 	}
 }
+
+// LedgerWrites is the delivery-ledger write counter, for NewAttemptLedger.
+func (m NotifyMetrics) LedgerWrites() *prometheus.CounterVec { return m.ledgerWrites }
 
 // NewNotificationProcessor creates a notification processor over the given reader
 // and notifier.
