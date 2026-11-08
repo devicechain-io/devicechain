@@ -28,7 +28,7 @@ check() {
   for field in Contact Canonical Policy Expires; do
     grep -q "^$field: ." "$f" || { echo "FAIL: $f has no $field field" >&2; return 1; }
   done
-  exp="$(sed -n 's/^Expires: *//p' "$f" | tr -d '\r' | head -1)"
+  exp="$(sed -n 's/^Expires: *//p' "$f" | tr -d '\r' | sed -n '1p')"
   exp_s="$(date -u -d "$exp" +%s 2>/dev/null)" || { echo "FAIL: cannot parse Expires '$exp'" >&2; return 1; }
   if [ "$exp_s" -lt $((now + MIN_DAYS * 86400)) ]; then
     echo "FAIL: $f expires $exp, less than $MIN_DAYS days away; renew it (RFC 9116 treats an expired file as absent)" >&2

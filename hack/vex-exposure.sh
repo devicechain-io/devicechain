@@ -95,8 +95,8 @@ selftest() {
   rc=0; out="$("$0" --advisory "$d/advisory-affected.json" --sbom "$d/image-a.spdx.json" --sbom "$d/image-b.spdx.json" --vex-out "$t/v.json")" || rc=$?
   echo "$out"
   [ "$rc" = 1 ] || { echo "SELF-TEST FAIL: exposure not reported (rc=$rc)" >&2; return 1; }
-  echo "$out" | grep -q '^EXPOSED image-a ' || { echo "SELF-TEST FAIL: image-a not listed" >&2; return 1; }
-  ! echo "$out" | grep -q '^EXPOSED image-b ' || { echo "SELF-TEST FAIL: unexposed image-b listed" >&2; return 1; }
+  grep -q '^EXPOSED image-a ' <<<"$out" || { echo "SELF-TEST FAIL: image-a not listed" >&2; return 1; }
+  ! grep -q '^EXPOSED image-b ' <<<"$out" || { echo "SELF-TEST FAIL: unexposed image-b listed" >&2; return 1; }
   jq -e '.statements[0].vulnerability.name=="CVE-2099-0001" and (.statements[0].products|length==1) and .statements[0].status=="under_investigation" and (.timestamp|length==20)' "$t/v.json" >/dev/null \
     || { echo "SELF-TEST FAIL: VEX entry wrong" >&2; return 1; }
   echo "== control: a fixed version must not be reported"
@@ -104,10 +104,10 @@ selftest() {
   [ "$rc" = 0 ] || { echo "SELF-TEST FAIL: fixed version reported as exposed (rc=$rc)" >&2; return 1; }
   echo "== a wildcard advisory exposes every version"
   rc=0; out="$("$0" --advisory "$d/advisory-wildcard.json" --sbom "$d/image-b.spdx.json")" || rc=$?
-  [ "$rc" = 1 ] && echo "$out" | grep -q '^EXPOSED image-b ' || { echo "SELF-TEST FAIL: wildcard advisory missed image-b (rc=$rc)" >&2; return 1; }
+  [ "$rc" = 1 ] && grep -q '^EXPOSED image-b ' <<<"$out" || { echo "SELF-TEST FAIL: wildcard advisory missed image-b (rc=$rc)" >&2; return 1; }
   echo "== a matching package with no version is exposure unknown, never clean"
   rc=0; out="$("$0" --advisory "$d/advisory-fixed-only.json" --sbom "$d/image-c.spdx.json")" || rc=$?
-  [ "$rc" = 1 ] && echo "$out" | grep -q '^EXPOSED image-c ' || { echo "SELF-TEST FAIL: versionless package reported clean (rc=$rc)" >&2; return 1; }
+  [ "$rc" = 1 ] && grep -q '^EXPOSED image-c ' <<<"$out" || { echo "SELF-TEST FAIL: versionless package reported clean (rc=$rc)" >&2; return 1; }
   echo "== negative control: an SBOM with no packages is an error, not 'clean'"
   rc=0; "$0" --advisory "$d/advisory-affected.json" --sbom "$d/empty.spdx.json" >/dev/null 2>&1 || rc=$?
   [ "$rc" = 2 ] || { echo "SELF-TEST FAIL: empty SBOM accepted (rc=$rc)" >&2; return 1; }
