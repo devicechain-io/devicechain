@@ -152,6 +152,8 @@ func usageHourStart(t time.Time) time.Time {
 // An hour is marked in the ledger only if it had closed by now: an hour computed while still open
 // can still change, and a day is complete only when all 24 of its hours were computed closed.
 func (a *Api) RollupUsageHours(ctx context.Context, from, to, now time.Time) (int64, error) {
+	// System context: the rollup aggregates EVERY tenant's events by design; each statement groups
+	// or keys by tenant_id itself (see usageHourSQL).
 	db := a.RDB.DB(core.WithSystemContext(ctx))
 	now = now.UTC()
 	var written int64
@@ -194,6 +196,7 @@ func (a *Api) usageLedger(ctx context.Context, f, e time.Time) (map[string]int64
 		Day   time.Time
 		Hours int64
 	}
+	// System context: the ledger is instance-wide bookkeeping that names no tenant.
 	err := a.RDB.DB(core.WithSystemContext(ctx)).Raw(`
 		SELECT day, hours FROM "event-management".tenant_usage_ledger
 		WHERE day >= ?::date AND day <= ?::date`, f.Format("2006-01-02"), e.Format("2006-01-02")).Scan(&rows).Error
@@ -243,6 +246,7 @@ func (a *Api) RollupUsageDay(ctx context.Context, day, now time.Time) (int64, er
 // the rollup no longer rewrites it, so the derived daily row is final by then.
 func (a *Api) PruneUsageWorkingTables(ctx context.Context, cutoff time.Time) error {
 	day := usageDayStart(cutoff) // days strictly before this one end at or before cutoff's midnight
+	// System context: retention by time across every tenant's working rows; it reads nothing.
 	db := a.RDB.DB(core.WithSystemContext(ctx))
 	if err := db.Exec(`DELETE FROM "event-management".tenant_usage_hourly WHERE hour < ?`, day).Error; err != nil {
 		return fmt.Errorf("pruning hourly usage: %w", err)
@@ -311,6 +315,8 @@ func (a *Api) TenantUsage(ctx context.Context, tenantId string, from, to time.Ti
 	}
 	f, e := usageDayStart(from), usageDayStart(to)
 	var rows []tenantUsageRow
+	// System context: the caller is the instance admin plane (an identity, not a tenant member), so
+	// there is no tenant in context; the tenant is bound explicitly below and is never empty.
 	err := a.RDB.DB(core.WithSystemContext(ctx)).Raw(`
 		SELECT day, events_ingested, devices_active, devices_peak, device_hours, rolled_up_at
 		FROM "event-management".tenant_usage_daily
