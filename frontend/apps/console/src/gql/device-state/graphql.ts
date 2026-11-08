@@ -5,6 +5,19 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /**
+ * Filter and paging for searching device states. Results are newest first (by row creation). To
+ * look up specific devices use deviceStatesByDeviceToken.
+ */
+export type DeviceStateSearchCriteria = {
+  /** Only devices whose active flag equals this value. Omit to include both. */
+  active?: boolean | null | undefined;
+  /** Page to return, starting at 1; values below 1 are treated as 1. */
+  pageNumber: number;
+  /** Results per page. Values below 1 become 100; values above 1000 are capped at 1000. */
+  pageSize: number;
+};
+
+/**
  * Why a measurement key sent by a device is discarded while the rest of its message is stored.
  * In every case the remedy is the same: declare the key as a numeric metric on the device's
  * profile to store it.
@@ -47,6 +60,13 @@ export type LatestLocationQueryVariables = Exact<{
 
 
 export type LatestLocationQuery = { latestLocation: { id: string, deviceToken: string, latitude: number | null, longitude: number | null, elevation: number | null, accuracy: number | null, speed: number | null, heading: number | null, occurredTime: string } | null };
+
+export type DeviceStateCountQueryVariables = Exact<{
+  criteria: DeviceStateSearchCriteria;
+}>;
+
+
+export type DeviceStateCountQuery = { deviceStates: { pagination: { totalRecords: number | null } } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -119,3 +139,12 @@ export const LatestLocationDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<LatestLocationQuery, LatestLocationQueryVariables>;
+export const DeviceStateCountDocument = new TypedDocumentString(`
+    query DeviceStateCount($criteria: DeviceStateSearchCriteria!) {
+  deviceStates(criteria: $criteria) {
+    pagination {
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceStateCountQuery, DeviceStateCountQueryVariables>;

@@ -151,3 +151,56 @@ func (r *CommandSearchResultsResolver) Pagination() *SearchResultsPaginationReso
 func (r *CommandResolver) Outcome() *string {
 	return util.NullStr(r.M.Outcome)
 }
+
+// DeliveredTime is when the first piece of delivery evidence was recorded; null until then.
+func (r *CommandResolver) DeliveredTime() *string {
+	if r.M.DeliveredTime.Valid {
+		return util.FormatTime(r.M.DeliveredTime.Time)
+	}
+	return nil
+}
+
+// DeliveryEvidence is what DeliveredTime rests on; null until there is any.
+func (r *CommandResolver) DeliveryEvidence() *string {
+	return util.NullStr(r.M.DeliveryEvidence)
+}
+
+// DeliveryMode is ONEWAY for a command the device only acknowledges; null otherwise.
+func (r *CommandResolver) DeliveryMode() *string {
+	return util.NullStr(r.M.DeliveryMode)
+}
+
+// MaxAttempts is the pull channel's bound on hand-outs; null for the platform default.
+func (r *CommandResolver) MaxAttempts() *int32 {
+	if r.M.MaxAttempts.Valid {
+		return &r.M.MaxAttempts.Int32
+	}
+	return nil
+}
+
+// DeliveryAttempts is how many times the pull channel has handed the command out.
+func (r *CommandResolver) DeliveryAttempts() *int32 {
+	if r.M.DeliveryAttempts.Valid {
+		return &r.M.DeliveryAttempts.Int32
+	}
+	return nil
+}
+
+// PulledCommandResolver exposes one command a pull handed to a device.
+type PulledCommandResolver struct{ M *model.PulledCommand }
+
+func (r *PulledCommandResolver) Token() string { return r.M.Command.Token }
+func (r *PulledCommandResolver) Name() string  { return r.M.Command.Name }
+func (r *PulledCommandResolver) Payload() *string {
+	return util.MetadataStr(r.M.Command.Payload)
+}
+func (r *PulledCommandResolver) DeliveryMode() *string {
+	return util.NullStr(r.M.Command.DeliveryMode)
+}
+func (r *PulledCommandResolver) Attempt() int32 { return int32(r.M.Attempt) }
+func (r *PulledCommandResolver) ExpiresAt() *string {
+	if r.M.Command.ExpiresAt.Valid {
+		return util.FormatTime(r.M.Command.ExpiresAt.Time)
+	}
+	return nil
+}

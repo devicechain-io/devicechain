@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 
+	"github.com/devicechain-io/dc-event-sources/commandpull"
 	"github.com/devicechain-io/dc-event-sources/integration"
 
 	"github.com/devicechain-io/dc-event-sources/config"
@@ -268,7 +269,15 @@ var (
 	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
 	IntegrationDecoderLookupsCounter          *prometheus.CounterVec
 	IntegrationDecoderProbeUnsupportedCounter prometheus.Counter
-	IntegrationDecoderChargedCounter          prometheus.Counter
+	// DeviceUplinkRequestsCounter and DeviceUplinkChargedCounter report the device-uplink route.
+	DeviceUplinkRequestsCounter      *prometheus.CounterVec
+	DeviceUplinkChargedCounter       prometheus.Counter
+	IntegrationDecoderChargedCounter prometheus.Counter
+
+	// CommandPullRequestsCounter and CommandPullPollersGauge are the HTTP command pull's accounting,
+	// under the same rule: no tenant and no device, both being strings a sender chose.
+	CommandPullRequestsCounter *prometheus.CounterVec
+	CommandPullPollersGauge    prometheus.Gauge
 	// integrationUndecoded batches the undecoded-uplink markers and is run from start to stop.
 	integrationUndecoded               []*integration.Undecoded
 	IntegrationUndecodedDroppedCounter prometheus.Counter
@@ -467,6 +476,7 @@ func initializeMetrics() {
 		ShedAcknowledgedCounter.WithLabelValues(source) // exported at 0, so the first shed is an increase
 	}
 	initializeIntegrationMetrics()
+	initializeCommandPullMetrics()
 	seedRefusalCounters(configuredSourceIDs())
 	initializePresenceMetrics()
 }
@@ -508,6 +518,16 @@ func initializeIntegrationMetrics() {
 	IntegrationDecoderChargedCounter = Microservice.NewCounter(
 		"integration_decoder_charged_readings_total",
 		"Count of readings charged at the reading gate for integration uplinks carried to a payload decoder")
+	DeviceUplinkRequestsCounter = Microservice.NewCounterVec(
+		"device_uplink_requests_total",
+		"Count of requests to the device-uplink route (a device's own payload, read by its type's decoder) by result",
+		[]string{"result"})
+	DeviceUplinkChargedCounter = Microservice.NewCounter(
+		"device_uplink_charged_readings_total",
+		"Count of readings charged at the reading gate for device uplinks carried to a payload decoder")
+	for _, r := range processor.DeviceUplinkResults {
+		DeviceUplinkRequestsCounter.WithLabelValues(r)
+	}
 	for _, r := range processor.IntegrationDecoderLookupResults {
 		IntegrationDecoderLookupsCounter.WithLabelValues(r)
 	}
@@ -521,6 +541,90 @@ func initializeIntegrationMetrics() {
 	}
 	for _, r := range integrationcodec.SkipReasons {
 		IntegrationFlattenSkippedCounter.WithLabelValues(r)
+	}
+}
+
+// initializeCommandPullMetrics registers the HTTP command pull's accounting and exports every
+// series at zero, so the first refusal after a restart is an increase.
+func initializeCommandPullMetrics() {
+	CommandPullRequestsCounter = Microservice.NewCounterVec(
+		"http_command_pull_requests_total",
+		"Count of requests to the HTTP command pull by operation (poll, ack, response) and result. "+
+			"unauthorized, forbidden, source_limited and poller_cap are refusals; unavailable is a "+
+			"platform failure the device is told to retry",
+		[]string{"op", "result"})
+	CommandPullPollersGauge = Microservice.NewGauge(
+		"http_command_pull_pollers",
+		"Number of HTTP command polls this replica is holding open right now, across tenants")
+	for _, op := range processor.CommandPullOps {
+		for _, r := range processor.CommandPullResults {
+			CommandPullRequestsCounter.WithLabelValues(op, r)
+		}
+	}
+}
+
+// commandPullMetrics is the route's reporting, reading the collectors when called: the route is
+// built before they are registered.
+func commandPullMetrics() processor.CommandPullMetrics {
+	return processor.CommandPullMetrics{
+		Request: func(op, result string) {
+			if CommandPullRequestsCounter != nil {
+				CommandPullRequestsCounter.WithLabelValues(op, result).Inc()
+			}
+		},
+		Pollers: func(delta int) {
+			if CommandPullPollersGauge != nil {
+				CommandPullPollersGauge.Add(float64(delta))
+			}
+		},
+	}
+}
+
+// The per-source allowance for HTTP command pull requests. Every request asks device-management to
+// prove its token, so unlike the integration route nothing is answered from memory and every
+// request is charged: a burst of 600 and one more every 20 ms (50 a second sustained) per source
+// address, which a fleet behind one NAT polling every 25 seconds does not approach, and which
+// makes guessing a 256-bit token from one address pointless.
+const (
+	commandPullSourceBurst = 600
+	commandPullSourceEvery = 20 * time.Millisecond
+	commandPullSourceKeys  = 4096
+)
+
+// buildCommandPullRoute builds the HTTP command pull over a service-token client holding
+// device:read (to prove the token) and command:claim (to hand out, acknowledge and settle
+// commands). It returns nil, with the reason logged, when device-management or command-delivery
+// cannot be reached from here: the routes then answer 503 rather than authenticating against
+// nothing.
+func buildCommandPullRoute() *processor.CommandPullRoute {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 ||
+		infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
+		log.Warn().Msg("Service secret or user-management, device-management or command-delivery endpoint not " +
+			"configured - the HTTP command pull will answer 503.")
+		return nil
+	}
+	trusted, err := infra.Http.TrustedProxyPrefixes()
+	if err != nil {
+		log.Error().Err(err).Msg("infrastructure.http.trustedProxies is invalid - the HTTP command pull will answer 503.")
+		return nil
+	}
+	sources, err := sourcelimit.New(sourcelimit.Limits{Burst: commandPullSourceBurst, Every: commandPullSourceEvery, MaxKeys: commandPullSourceKeys})
+	if err != nil {
+		log.Error().Err(err).Msg("Unable to build the HTTP command pull source limiter - the route will answer 503.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
+		[]string{string(auth.DeviceRead), string(auth.CommandClaim)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	cdURL := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
+	return &processor.CommandPullRoute{
+		Backend:             commandpull.New(client, dmURL, cdURL),
+		Sources:             sources,
+		TrustedProxies:      trusted,
+		MaxPollersPerTenant: Configuration.HttpIngest.CommandPollCap(),
+		Metrics:             commandPullMetrics(),
 	}
 }
 
@@ -630,6 +734,49 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Metrics: integrationMetrics(),
 	}
 	return route
+}
+
+// buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when the operator has
+// not turned the route on (httpIngest.deviceUplinks, off by default so a rolling upgrade cannot lose
+// an accepted uplink) or device-management cannot be reached from here. The route then does not exist.
+func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRoute {
+	if !ingest.DeviceUplinks {
+		return nil
+	}
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.DeviceManagement.Hostname == "" {
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", []string{string(auth.DeviceRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	return &processor.DeviceUplinkRoute{
+		Plans:   integration.NewDeviceDecoders(integration.NewDM(client, dmURL), integration.DeviceDecoderConfig{}),
+		Publish: onDeviceUplinkDecoded,
+		Result: func(result string) {
+			if DeviceUplinkRequestsCounter != nil {
+				DeviceUplinkRequestsCounter.WithLabelValues(result).Inc()
+			}
+		},
+		Charged: func(n int) {
+			if DeviceUplinkChargedCounter != nil {
+				DeviceUplinkChargedCounter.Add(float64(n))
+			}
+		},
+	}
+}
+
+// onDeviceUplinkDecoded publishes a device's own IntegrationUplink, synchronously, to the uplink
+// stream. It is the only device-facing publish that may carry that type: the event is stamped with
+// the source, any integration mark is cleared (a device has none), the presented credential is
+// sealed, and nothing is written to inbound-events.
+func onDeviceUplinkDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{}) error {
+	event.Source = source
+	processor.ClearIntegrationMark(event)
+	ctx, msg, ok := buildInboundMessage(source, tenant, event, payload, "")
+	if !ok {
+		return processor.ErrEventNotBuilt
+	}
+	return writeIntegrationUplink(ctx, source, msg)
 }
 
 // buildIngestChecks builds the synchronous refusals HTTP /events makes before it answers 202:
@@ -987,7 +1134,18 @@ func buildEventSources() error {
 					return err
 				}
 			}
+			if dr := buildDeviceUplinkRoute(Configuration.HttpIngest); dr != nil {
+				if err := http.UseDeviceUplinks(dr); err != nil {
+					return err
+				}
+			}
 			http.UseIngestChecks(buildIngestChecks())
+			// ... and the command pull, which answers 503 the same way.
+			if route := buildCommandPullRoute(); route != nil {
+				if err := http.UseCommandPull(route); err != nil {
+					return err
+				}
+			}
 			created = append(created, http)
 		default:
 			return fmt.Errorf("unknown event source type: %s", source.Type)

@@ -54,6 +54,9 @@ export async function listAlarms(opts: {
   state?: string;
   severity?: string;
   acknowledged?: boolean;
+  /** Only alarms raised on this one entity: both fields together, e.g. ('device', 'pump-1'). */
+  originatorType?: string;
+  originatorToken?: string;
 }): Promise<AlarmSearchResults> {
   const data = await gql('device-management', ALARMS, {
     criteria: {
@@ -62,6 +65,7 @@ export async function listAlarms(opts: {
       state: opts.state ?? null,
       severity: opts.severity ?? null,
       acknowledged: opts.acknowledged ?? null,
+      ...(opts.originatorToken ? { originatorType: opts.originatorType, originatorToken: opts.originatorToken } : {}),
     },
   });
   return data.alarms;
@@ -82,6 +86,50 @@ const ACKNOWLEDGE_ALARM = graphql(`
 
 export async function acknowledgeAlarm(token: string): Promise<void> {
   await gql('device-management', ACKNOWLEDGE_ALARM, { token });
+}
+
+const ACKNOWLEDGE_ALARMS = graphql(`
+  mutation AcknowledgeAlarms($tokens: [String!]!) {
+    acknowledgeAlarms(tokens: $tokens) {
+      acknowledged {
+        token
+      }
+      refusals {
+        token
+        code
+        reason
+      }
+    }
+  }
+`);
+
+/** The most tokens one acknowledgeAlarms request may name; more is refused outright. */
+export const ACKNOWLEDGE_BATCH_LIMIT = 2000;
+
+export interface BulkAcknowledgeOutcome {
+  /** Alarms that are now acknowledged, including any that already were. */
+  acknowledged: number;
+  /** Tokens that named no alarm, with the server's reason. */
+  refusals: { token: string; reason: string }[];
+}
+
+/**
+ * Acknowledges many alarms in one go. An empty list acknowledges nothing (the server never
+ * reads it as "all"), so nothing is sent for one. A selection past the server's per-request
+ * limit is sent in successive requests and the outcomes added up; a request that fails stops
+ * the run, and what the earlier requests did stays done.
+ */
+export async function acknowledgeAlarms(tokens: string[]): Promise<BulkAcknowledgeOutcome> {
+  const unique = [...new Set(tokens)];
+  const outcome: BulkAcknowledgeOutcome = { acknowledged: 0, refusals: [] };
+  for (let i = 0; i < unique.length; i += ACKNOWLEDGE_BATCH_LIMIT) {
+    const data = await gql('device-management', ACKNOWLEDGE_ALARMS, {
+      tokens: unique.slice(i, i + ACKNOWLEDGE_BATCH_LIMIT),
+    });
+    outcome.acknowledged += data.acknowledgeAlarms.acknowledged.length;
+    outcome.refusals.push(...data.acknowledgeAlarms.refusals.map((r) => ({ token: r.token, reason: r.reason })));
+  }
+  return outcome;
 }
 
 const CLEAR_ALARM = graphql(`

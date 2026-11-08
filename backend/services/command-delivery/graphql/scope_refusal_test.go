@@ -33,6 +33,10 @@ var scopedRefusals = map[string]string{
 	"confirmCommandDispatch": `mutation { confirmCommandDispatch(token: "c", dispatchNonce: "n") }`,
 	"parkCommand":            `mutation { parkCommand(token: "c", dispatchNonce: "n") }`,
 	"releaseHeldCommands":    `mutation { releaseHeldCommands(deviceToken: "device-1") }`,
+	// The HTTP pull channel's three operations are machine-only like the lifecycle above them.
+	"pullCommands":               `mutation { pullCommands(deviceToken: "device-1") { token } }`,
+	"acknowledgeCommandDelivery": `mutation { acknowledgeCommandDelivery(token: "c", deviceToken: "device-1") }`,
+	"respondToPulledCommand":     `mutation { respondToPulledCommand(token: "c", deviceToken: "device-1", success: true) }`,
 }
 
 // rootFields reads the Query and Mutation field names straight from the served SDL, so an

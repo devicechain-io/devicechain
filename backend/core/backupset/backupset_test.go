@@ -180,6 +180,7 @@ var creators = map[string]creator{
 	"core/messaging/mqtt_failclosed.go":     {1, "creates the gateway message store, listed in this package's gateway inventory"},
 	"core/test/jscluster.go":                {1, "test cluster helper; not an instance"},
 	"edge/dc-edge-agent/agent/agent.go":     {1, "the edge agent's local spool; an edge unit, never in the cluster"},
+	"edge/dc-edge-agent/agent/commands.go":  {2, "the edge agent's command inbox, responses and ledger; an edge unit, never in the cluster"},
 }
 
 // createMethods are the client methods that create JetStream state. A reference counts whether it is

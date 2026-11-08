@@ -149,3 +149,23 @@ export async function getLatestLocation(deviceToken: string): Promise<LatestLoca
     throw err;
   }
 }
+
+const DEVICE_STATE_COUNT = graphql(`
+  query DeviceStateCount($criteria: DeviceStateSearchCriteria!) {
+    deviceStates(criteria: $criteria) {
+      pagination {
+        totalRecords
+      }
+    }
+  }
+`);
+
+// countDeviceStates counts the device-state rows whose active flag equals `active`, reading only
+// the pagination total of a one-row page. Devices that have never reported have no row and are
+// in neither count. Requires state:read.
+export async function countDeviceStates(active: boolean): Promise<number> {
+  const data = await gql('device-state', DEVICE_STATE_COUNT, {
+    criteria: { pageNumber: 1, pageSize: 1, active },
+  });
+  return data.deviceStates.pagination.totalRecords ?? 0;
+}

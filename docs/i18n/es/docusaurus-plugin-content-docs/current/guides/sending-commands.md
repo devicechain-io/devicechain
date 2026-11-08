@@ -111,6 +111,7 @@ redacción puede cambiar.
 | `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | La cadena de carga útil o de metadatos supera los 64 KiB. | No |
 | `COMMAND_NAME_TOO_LONG` | El nombre del comando supera los 128 bytes. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` no es una marca de tiempo RFC3339. | No |
+| `DELIVERY_OPTION_INVALID` / `DELIVERY_OPTION_NOT_APPLICABLE` | `deliveryMode` o `maxAttempts` no es un valor que la plataforma conozca, o el dispositivo no está en el [canal de consulta HTTP](../concepts/commands.md#http-command-pull), el único al que se aplican. | No |
 | `TOKEN_IN_USE` | El token lo tiene un comando que no te pertenece — en la práctica, uno que la plataforma acuñó para un lote. | No — elige otro token |
 | `COMMAND_REJECTED` | Llegó un rechazo sin clasificación. | No |
 

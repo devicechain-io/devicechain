@@ -762,6 +762,12 @@ export type DeviceTypeCreateRequest = {
   backgroundColor?: string | null | undefined;
   /** Border colour, up to 32 characters. */
   borderColor?: string | null | undefined;
+  /**
+   * Command channel of the type: PUBLISH or HTTP_PULL, or omit it (or send an empty value) for
+   * the default channel, which behaves as PUBLISH. Any other value fails the request with
+   * INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
   /** Foreground (text) colour, up to 32 characters. */
@@ -817,6 +823,12 @@ export type DeviceTypeUpdateRequest = {
   backgroundColor?: string | null | undefined;
   /** New border colour, or null to clear it. */
   borderColor?: string | null | undefined;
+  /**
+   * New command channel: PUBLISH or HTTP_PULL, or null (or an empty value) to return the type
+   * to the default channel, which behaves as PUBLISH. Any other value fails the whole update
+   * with INVALID_VALUE.
+   */
+  commandChannel?: string | null | undefined;
   /** New description, or null to clear it. */
   description?: string | null | undefined;
   /** New foreground colour, or null to clear it. */
@@ -1367,6 +1379,13 @@ export type AcknowledgeAlarmMutationVariables = Exact<{
 
 
 export type AcknowledgeAlarmMutation = { acknowledgeAlarm: { id: string } };
+
+export type AcknowledgeAlarmsMutationVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type AcknowledgeAlarmsMutation = { acknowledgeAlarms: { acknowledged: Array<{ token: string }>, refusals: Array<{ token: string, code: string, reason: string }> } };
 
 export type ClearAlarmMutationVariables = Exact<{
   token: string;
@@ -2673,6 +2692,20 @@ export const AcknowledgeAlarmDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<AcknowledgeAlarmMutation, AcknowledgeAlarmMutationVariables>;
+export const AcknowledgeAlarmsDocument = new TypedDocumentString(`
+    mutation AcknowledgeAlarms($tokens: [String!]!) {
+  acknowledgeAlarms(tokens: $tokens) {
+    acknowledged {
+      token
+    }
+    refusals {
+      token
+      code
+      reason
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AcknowledgeAlarmsMutation, AcknowledgeAlarmsMutationVariables>;
 export const ClearAlarmDocument = new TypedDocumentString(`
     mutation ClearAlarm($token: String!) {
   clearAlarm(token: $token) {

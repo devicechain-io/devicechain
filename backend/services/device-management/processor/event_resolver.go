@@ -1360,9 +1360,19 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// on every device-facing publish), so one that arrives without the mark is a producer that
 	// is confused or forging. It is refused here, before any device lookup, and HandleEvent
 	// refuses it again for want of the authenticated integration the mark yields.
+	//
+	// The other producer is a device's own connection (event-sources' device uplink wire): no mark,
+	// but read from the integration-uplinks stream, which only event-sources writes. It is trusted
+	// no further than the device's own credential policy, so it may claim no other authority.
 	if unrez.EventType == eventtype.IntegrationUplink && unrez.Integration == "" && unrez.SealedIntegrationToken == nil {
-		return nil, uint(resolvedevent.FailureReason_Unauthenticated),
-			errors.New("an integration uplink must come from an authenticated integration")
+		if !fromUplinkStreamCtx(ctx) {
+			return nil, uint(resolvedevent.FailureReason_Unauthenticated),
+				errors.New("an integration uplink must come from an authenticated integration")
+		}
+		if unrez.Gateway != "" || unrez.AuthenticatedTransport || unrez.IntegrationIdentifier != "" {
+			return nil, uint(resolvedevent.FailureReason_Unauthenticated),
+				errors.New("a device's own uplink carries no other authority")
+		}
 	}
 	switch {
 	// An integration's event is decided by the integration's own authentication and device type
@@ -1519,6 +1529,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			err = rez.hold.RunCtx(rez.holdContext(ctx), msgctx, []messaging.Message{unresolved}, func(c context.Context) error {
 				var rerr error
 				c = withDelivery(c, delivery)
+				if fromUplinkStream(unresolved) {
+					c = withUplinkStream(c)
+				}
 				resolved, reason, rerr = rez.ResolveEvent(c, event)
 				return rerr
 			})
