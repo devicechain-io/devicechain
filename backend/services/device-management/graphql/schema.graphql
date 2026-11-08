@@ -2395,15 +2395,21 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
 
 """Where an installed position came from."""
 enum InstalledPositionSource {
+    """Measured on site by a survey."""
     SURVEY
+    """Read from a fleet import file."""
     IMPORT
+    """Entered by an operator."""
     MANUAL
+    """Derived from other data rather than measured."""
     INFERRED
 }
 
 """The entity kinds a position can be installed on."""
 enum PositionFamily {
+    """A device, named by its token."""
     DEVICE
+    """An asset, named by its token."""
     ASSET
 }
 
@@ -2441,8 +2447,11 @@ input InstalledPositionInput {
 
 """The position chosen for a device by the effective rule."""
 type EffectivePosition {
+    """Degrees north, -90 to 90."""
     latitude: Float!
+    """Degrees east, -180 to 180."""
     longitude: Float!
+    """Metres above the WGS84 ellipsoid, or null when the chosen position has none."""
     elevation: Float
     """REPORTED when the position is the device's fresh reported fix, INSTALLED otherwise."""
     source: String!
@@ -6166,12 +6175,24 @@ type Mutation {
     refused, before anything is stored, when it is not a finite WGS84 coordinate. An entity
     outside the caller's scope is NOT_FOUND.
     """
-    setInstalledPosition(family: PositionFamily!, token: String!, position: InstalledPositionInput!): InstalledPosition!
+    setInstalledPosition(
+        """Whether token names a device or an asset."""
+        family: PositionFamily!
+        """The token of the device or asset."""
+        token: String!
+        """The position to record."""
+        position: InstalledPositionInput!
+    ): InstalledPosition!
     """
     Removes the installed position of a device or an asset. Needs device:write. Clearing an
     entity that has none succeeds.
     """
-    clearInstalledPosition(family: PositionFamily!, token: String!): Boolean!
+    clearInstalledPosition(
+        """Whether token names a device or an asset."""
+        family: PositionFamily!
+        """The token of the device or asset."""
+        token: String!
+    ): Boolean!
 }
 
 # A single alarm state-change, pushed live to a subscriber (ADR-041 / ADR-037). It
