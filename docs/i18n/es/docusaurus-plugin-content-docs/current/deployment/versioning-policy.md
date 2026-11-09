@@ -74,8 +74,10 @@ de la API de event-processing, los formatos de archivo de escenario y de prueba,
 que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
 `dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
 Y las acciones de agentes: los alcances OAuth `act:*`, las operaciones de la política de agentes y su
-documento (formato `v1alpha1`), la consulta `agentActuationDecision` y la suspensión del operador por
-inquilino (consulta [Acciones de agentes](../concepts/mcp.md#agent-actions)). La marca `agent` de las
+documento (formato `v1alpha1`), las consultas `agentActuationDecision` y `agentExecutionDecision`, la
+suspensión del operador por inquilino y las operaciones de propuestas de agentes (`proposeAlarmAction`,
+`approveAgentProposal`, `rejectAgentProposal`, `agentProposals`, `agentProposal`) (consulta
+[Acciones de agentes](../concepts/mcp.md#agent-actions)). La marca `agent` de las
 cuentas de servicio no está en vista previa: está cubierta desde la versión que la añade.
 
 ## Rutas de actualización admitidas {#upgrade-paths}

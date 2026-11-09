@@ -93,11 +93,11 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 
 	prevMs, prevGql, prevNats, prevSvc := Microservice, GraphQLManager, NatsManager, Svc
 	prevIep, prevRac, prevCallout, prevDrc := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer
-	prevDrain, prevKickDrain := OwnershipDrain, SessionKickDrain
+	prevDrain, prevKickDrain, prevReaper := OwnershipDrain, SessionKickDrain, AgentProposalReaper
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
-		OwnershipDrain, SessionKickDrain = prevDrain, prevKickDrain
+		OwnershipDrain, SessionKickDrain, AgentProposalReaper = prevDrain, prevKickDrain, prevReaper
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -154,6 +154,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	SessionKickDrain = core.NewPeriodicTask(area, "session-kick-drain", time.Hour,
 		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
 	require.NoError(t, SessionKickDrain.Initialize(context.Background()))
+	AgentProposalReaper = core.NewPeriodicTask(area, "agent-proposal-reaper", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, AgentProposalReaper.Initialize(context.Background()))
 	// And the decode accounting, which the stopper stops and then flushes. A fresh one: an earlier test of
 	// the package may have left the global stopped.
 	prevAccountant, prevAccounting := DecodeAccountant, DecodeAccounting

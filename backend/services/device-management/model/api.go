@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/entityevent"
 	"slices"
 	"sync/atomic"
@@ -73,6 +74,11 @@ type GeoFenceCapRefusalCounter interface {
 
 type Api struct {
 	RDB *rdb.RdbManager
+
+	// AgentDecider asks user-management for the tenant's decisions on agent proposals, under the
+	// caller's own token (actiongate.CallerDecider). Nil refuses every proposal and approval with
+	// POLICY_UNAVAILABLE: without the policy nothing is decided.
+	AgentDecider actiongate.Decider
 
 	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
 	// disables it.

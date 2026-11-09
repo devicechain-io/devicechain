@@ -1022,6 +1022,72 @@ type AgentActuationDecision {
     policyVersion: Int!
     """When set, the groups every target device must belong to. Null for no group restriction."""
     groupRestriction: [String!]
+    """
+    How long a proposal made now may wait for approval, in seconds, from the policy's expiry
+    settings and never more than 24 hours. 0 when the verdict is REFUSE.
+    """
+    expiresInSeconds: Int!
+    """
+    The policy's limit on how many actions of this kind the client, and separately the person,
+    may propose per hour, or 0 when the policy sets none and the platform limit applies. The
+    owning service never lets it exceed the platform limit. 0 when the verdict is REFUSE.
+    """
+    actionsPerHour: Int!
+    """
+    Whether the client's identity is authenticated (a confidential client or an agent service
+    account) rather than a label any application can claim. False when the verdict is REFUSE.
+    """
+    clientAttested: Boolean!
+}
+
+"""
+(Preview: may change in a minor release.) What the owning service recorded about an agent's
+proposal, and who has approved it so far, for agentExecutionDecision.
+"""
+input AgentExecutionDecisionInput {
+    """The proposal's token, for correlation."""
+    proposalToken: String!
+    """The kind of action."""
+    kind: AgentActionKind!
+    """The action's impact. Defaults to NORMAL."""
+    impact: AgentActionImpact
+    """How many targets the proposal reaches."""
+    targetCount: Int!
+    """The groups the targets were chosen through, if any."""
+    groupTokens: [String!]
+    """For a command, its name."""
+    command: String
+    """The principal the proposal was made for, as recorded on it."""
+    proposerPrincipal: String!
+    """The agent client the proposal was made through, as recorded on it."""
+    proposerClient: String!
+    """The grant session the proposal was made under, when the token carried one."""
+    proposerSid: String
+    """The principals who have approved so far, including the caller when the caller is approving. At most 10."""
+    approvers: [String!]!
+}
+
+"""
+(Preview: may change in a minor release.) Whether a stored agent proposal may still go ahead, and
+under what approval rules, read now from this service's records.
+"""
+type AgentExecutionDecision {
+    """What the current policy says. Never AUTO."""
+    verdict: AgentActionVerdict!
+    """How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor."""
+    validApprovers: [String!]!
+    """Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
+    reasons: [String!]!
+    """The policy version the decision was made under, or 0 when none is published."""
+    policyVersion: Int!
+    """How recently, in seconds, an approver's second factor must have been verified."""
+    stepUpMaxAgeSeconds: Int!
+    """Whether a sign-in completed with a recovery code counts as a second factor for an approval."""
+    acceptRecoveryCodes: Boolean!
+    """Whether the person the proposal was made for may be its only approver."""
+    allowSelfConfirm: Boolean!
 }
 
 """
@@ -1220,6 +1286,17 @@ type Query {
         """For a command, its name."""
         command: String
     ): AgentActuationDecision!
+    """
+    (Preview: may change in a minor release.) Whether a stored agent proposal may still go ahead,
+    asked by the service that owns it when a person approves it. Only a person's own session
+    holding the write the action needs may ask; an agent's token is refused. It answers for the
+    original client and proposer recorded on the proposal and for every approver named, from this
+    service's records read now. An error must be treated as a refusal.
+    """
+    agentExecutionDecision(
+        """What the owning service recorded about the proposal, and who has approved it so far."""
+        input: AgentExecutionDecisionInput!
+    ): AgentExecutionDecision!
 }
 
 """

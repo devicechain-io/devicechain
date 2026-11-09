@@ -290,6 +290,9 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = core.WithTenant(ctx, tenant)
 	}
 	ctx = auth.WithClaims(ctx, claims)
+	// The token the claims were verified from, for a call made under the caller's own authority
+	// (auth.WithBearer). Never a credential this process uses for itself.
+	ctx = auth.WithBearer(ctx, token)
 	h.serveExec(w, r.WithContext(ctx))
 }
 

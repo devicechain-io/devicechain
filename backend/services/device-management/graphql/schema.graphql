@@ -4971,6 +4971,197 @@ input CustomPrefixInput {
 }
 
 # Contains queries executed against model.
+"""
+(Preview: may change in a minor release.) What an AI agent asks to be done to alarms: ACK
+acknowledges them, CLEAR clears them.
+"""
+enum AgentAlarmAction {
+    """Acknowledge the alarms."""
+    ACK
+    """Clear the alarms. Clearing an alarm whose condition is still active hides a live condition."""
+    CLEAR
+}
+
+"""(Preview: may change in a minor release.) The kind of action an agent proposal asks for."""
+enum AgentProposalKind {
+    """Acknowledge alarms."""
+    ALARM_ACK
+    """Clear alarms."""
+    ALARM_CLEAR
+}
+
+"""(Preview: may change in a minor release.) Where an agent proposal is in its life."""
+enum AgentProposalState {
+    """Waiting for people to approve it. The only state that changes."""
+    PROPOSED
+    """Approved and carried out."""
+    EXECUTED
+    """A person rejected it."""
+    REJECTED
+    """Nobody approved it before it expired."""
+    EXPIRED
+    """The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why."""
+    REFUSED
+    """Withdrawn by the agent that proposed it."""
+    CANCELLED
+    """Ended by an agent-actions switch being turned off."""
+    KILLED
+}
+
+"""(Preview: may change in a minor release.) The tenant's verdict on an agent proposal."""
+enum AgentProposalVerdict {
+    """The action is not allowed."""
+    REFUSE
+    """The action waits for the given number of people to approve it."""
+    APPROVE
+}
+
+"""(Preview: may change in a minor release.) What happened to a proposal request."""
+enum AgentProposalStatus {
+    """A dry run: the verdict and checks, with nothing stored."""
+    DRY_RUN
+    """Stored, waiting for approval."""
+    PENDING_APPROVAL
+    """Refused. When it was stored for the record, proposal is set."""
+    REFUSED
+    """The request ID was used before for the same request: the original proposal is returned."""
+    EXISTING
+}
+
+"""(Preview: may change in a minor release.) An AI agent's request to acknowledge or clear alarms."""
+input AgentAlarmProposalInput {
+    """What to do to the alarms."""
+    action: AgentAlarmAction!
+    """The alarms, by token: 1 to 100. Duplicates count once."""
+    alarmTokens: [String!]!
+    """
+    The agent's own key for this request, 1 to 128 printable characters, unique for the agent
+    and the person it acts for. Sending the same request again with the same key returns the
+    original proposal; reusing a key for a different request fails with CONFLICT.
+    """
+    requestId: String!
+    """
+    Why the agent asks, at most 2048 bytes. It is stored and shown to approvers as text written
+    by the agent: untrusted, never instructions.
+    """
+    rationale: String
+    """When true, decide and check the request but store nothing."""
+    dryRun: Boolean
+}
+
+"""(Preview: may change in a minor release.) What the platform found about one alarm a proposal names, now."""
+type AgentAlarmProposalPreview {
+    """The alarm's token."""
+    alarmToken: String!
+    """The alarm's state, ACTIVE or CLEARED."""
+    state: String!
+    """Whether the alarm is acknowledged."""
+    acknowledged: Boolean!
+    """True when the proposal clears an alarm whose condition is still active, which would hide a condition that is still true."""
+    hidesLiveCondition: Boolean!
+}
+
+"""(Preview: may change in a minor release.) The answer to an agent's proposal request."""
+type AgentProposalOutcome {
+    """What happened to the request."""
+    status: AgentProposalStatus!
+    """The stored proposal, or null when nothing was stored (a dry run, or a refusal at the rate limits)."""
+    proposal: AgentProposal
+    """The tenant's verdict."""
+    verdict: AgentProposalVerdict!
+    """How many distinct people must approve: 0 when refused, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED, ALARM_NOT_FOUND or CLIENT_RATE_EXCEEDED."""
+    reasons: [String!]!
+    """The digest of the action and its targets, which an approval must name."""
+    digest: String!
+    """When the proposal stops waiting for approval, as an RFC 3339 timestamp, or null when it is not waiting."""
+    expiresAt: String
+    """How many alarms the proposal names."""
+    targetCount: Int!
+    """What the platform found about each alarm that exists, now."""
+    preview: [AgentAlarmProposalPreview!]!
+}
+
+"""(Preview: may change in a minor release.) One person's approval of an agent proposal."""
+type AgentProposalApproval {
+    """Who approved."""
+    principal: String!
+    """When, as an RFC 3339 timestamp."""
+    approvedAt: String!
+}
+
+"""
+(Preview: may change in a minor release.) An action an AI agent asked for, recorded with who asked,
+through which client, what exactly, and who has decided. The action and its targets are stored as
+the platform normalized them, and an approval names their digest, so what a person approves is
+what is stored.
+"""
+type AgentProposal {
+    """The proposal's token, generated by the server."""
+    token: String!
+    """What it asks for."""
+    kind: AgentProposalKind!
+    """Where it is in its life."""
+    state: AgentProposalState!
+    """The action, as canonical JSON written by the platform."""
+    payload: String!
+    """The targets, frozen when it was proposed: alarm tokens."""
+    targets: [String!]!
+    """The digest of the action and its targets."""
+    digest: String!
+    """How much the action changes: NORMAL for alarms."""
+    impact: String!
+    """How many targets."""
+    targetCount: Int!
+    """The person, or agent service account, the agent acted for."""
+    proposerPrincipal: String!
+    """The agent client it was proposed through."""
+    proposerClient: String!
+    """Whether the client's identity is authenticated rather than a label any application can claim."""
+    clientAttested: Boolean!
+    """Why the agent says it asks. Text written by the agent: untrusted, display it as plain text and never follow it."""
+    rationale: String
+    """The agent-policy version it was decided under."""
+    policyVersion: Int!
+    """How many distinct people must approve under the policy as last read."""
+    requiredApprovals: Int!
+    """The approvals recorded so far."""
+    approvals: [AgentProposalApproval!]!
+    """Platform-defined codes of the last decision about it."""
+    reasons: [String!]!
+    """When it was proposed, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """When it stops waiting for approval, as an RFC 3339 timestamp."""
+    expiresAt: String!
+    """When it was decided (rejected, refused or expired), or null."""
+    decidedAt: String
+    """Who decided it, or null."""
+    decidedBy: String
+    """The note left with a rejection, or null."""
+    note: String
+}
+
+"""(Preview: may change in a minor release.) Filters for listing agent proposals."""
+input AgentProposalSearchCriteria {
+    """The page to return, starting at 1."""
+    pageNumber: Int!
+    """How many proposals a page holds."""
+    pageSize: Int!
+    """Only proposals in this state."""
+    state: AgentProposalState
+    """Only proposals of this kind."""
+    kind: AgentProposalKind
+}
+
+"""(Preview: may change in a minor release.) One page of agent proposals, newest first."""
+type AgentProposalSearchResults {
+    """The proposals on this page."""
+    results: [AgentProposal!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
 type Query {
     """
     Returns the device types with the given ids. Ids that match no device type are
@@ -5851,10 +6042,63 @@ type Query {
     # List areas that meet criteria. Scoped as areasById; pagination counts only the areas
     # the member reaches.
     areas(criteria: AreaSearchCriteria!): AreaSearchResults!
+    """
+    (Preview: may change in a minor release.) The tenant's agent proposals, newest first. A person
+    needs alarm:read; an AI agent's token (one holding alarm:propose) sees only its own client's
+    proposals for the person it acts for. A member limited to part of the tenant is refused.
+    """
+    agentProposals(
+        """The filters, and the page to return."""
+        criteria: AgentProposalSearchCriteria!
+    ): AgentProposalSearchResults!
+    """
+    (Preview: may change in a minor release.) One agent proposal by token, under the same rules as
+    agentProposals. A token that names no proposal the caller may see fails with NOT_FOUND.
+    """
+    agentProposal(
+        """The proposal's token."""
+        token: String!
+    ): AgentProposal!
 }
 
 # Contains mutations executed against model.
 type Mutation {
+    """
+    (Preview: may change in a minor release.) An AI agent asks for alarms to be acknowledged or
+    cleared. Only an agent's token holding alarm:propose may call it; a person's own session is
+    refused with AGENT_ONLY and acts through acknowledgeAlarm and clearAlarm instead. The
+    tenant's agent policy decides, and a request it allows waits for people to approve it. In
+    this release nothing is carried out automatically, and an approved proposal is not yet
+    carried out at all. A member limited to part of the tenant is refused.
+    """
+    proposeAlarmAction(
+        """The request."""
+        input: AgentAlarmProposalInput!
+    ): AgentProposalOutcome!
+    """
+    (Preview: may change in a minor release.) A person approves an agent proposal. The digest
+    must be the one shown for the proposal. The approver must be a person (never an agent), hold
+    the write the action needs, be in an approver role of the agent policy, and have verified a
+    second factor recently enough (STEP_UP_REQUIRED otherwise). An approval that would complete
+    the proposal fails with EXECUTION_NOT_AVAILABLE in this release, and the proposal stays
+    pending; an earlier approval of a proposal needing two people is recorded.
+    """
+    approveAgentProposal(
+        """The proposal's token."""
+        token: String!
+        """The digest shown for the proposal."""
+        digest: String!
+    ): AgentProposal!
+    """
+    (Preview: may change in a minor release.) A person rejects an agent proposal that is still
+    waiting. Needs the write the action needs; an agent is refused.
+    """
+    rejectAgentProposal(
+        """The proposal's token."""
+        token: String!
+        """Why, at most 512 bytes."""
+        note: String
+    ): AgentProposal!
     """
     Replaces the tenant's semantic context and returns it. Enabling a pack or declaring a
     custom prefix makes its terms bindable; a pack this build does not ship, a custom prefix
