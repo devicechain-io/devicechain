@@ -150,7 +150,7 @@ The Things Stack envía los uplinks mediante un **webhook** en una aplicación.
 3. **Configura un payload formatter** en la aplicación o en el dispositivo (el LoRaWAN Device Repository ofrece uno para muchos sensores). La plataforma guarda lo que produce el formatter; no decodifica la trama cruda. Sin uno, el uplink se [cuenta como no decodificado](#undecoded). Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`, o con su id de dispositivo como alias `tts.device-id` si elegiste **Id de dispositivo**.
 
-Un mensaje enviado a cualquier otra ruta (un join accept, una confirmación de downlink) se responde con `204` y se ignora, de modo que puedes activar otros tipos de mensaje sin cambiar nada en DeviceChain, aunque no hay motivo para hacerlo. La hora del mensaje es el `received_at` del uplink, que debe estar presente y no tener más de 366 días. La clave de deduplicación es el dispositivo, el contador de tramas y esa hora juntos, porque el contador se reinicia cuando un dispositivo vuelve a unirse.
+Un mensaje enviado a cualquier otra ruta (un join accept, una localización resuelta) se responde con `204` y se ignora, igual que un evento de downlink que no pertenece a un downlink enviado por la plataforma (véase [downlink de The Things Stack](#lorawan-downlink-tts)), de modo que puedes activar otros tipos de mensaje sin cambiar nada en DeviceChain, aunque no hay motivo para hacerlo. La hora del mensaje es el `received_at` del uplink, que debe estar presente y no tener más de 366 días. La clave de deduplicación es el dispositivo, el contador de tramas y esa hora juntos, porque el contador se reinicia cuando un dispositivo vuelve a unirse.
 
 ## JSON genérico {#generic-json}
 
@@ -332,6 +332,38 @@ Un `txack` de un downlink que solo llevaba comandos MAC no tiene elemento de col
 
 **Actualizar.** Los downlinks confirmados necesitan la nueva versión tanto de los conectores de salida como de las fuentes de eventos. Mientras los conectores de salida son nuevos y las fuentes de eventos siguen siendo antiguas, los pods antiguos responden `204` a los informes del servidor de red y los descartan, así que un downlink confirmado enviado en esa ventana se cierra como `TIMEOUT`, resultado desconocido, en su plazo. El chart los actualiza en la misma operación; para evitar la ventana, retén los comandos confirmados mientras dure.
 
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+Un vínculo con The Things Stack es un conector `lorawan_downlink` con `"networkServer": "tts_v3"` y la aplicación a la que pertenecen los dispositivos:
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+El **secreto** del conector es una clave de API con derecho a escribir el tráfico de downlink de esa aplicación. El dispositivo debe tener un [alias](#aliases) `tts.device-id`, que es el nombre por el que The Things Stack lo direcciona, en lugar de un DevEUI; se lee del dispositivo, nunca del comando. Los parámetros del comando son los mismos que para ChirpStack, y el downlink se añade al final de la cola del dispositivo.
+
+En un downlink **sin confirmar**, `SUCCEEDED` vuelve a significar que el servidor de red lo aceptó. En uno **confirmado**, la plataforma da a cada downlink un identificador propio (The Things Stack no devuelve ninguno), enviado como un correlation id que empieza por `dc:`, y cierra el comando con los eventos que The Things Stack publica para ese downlink. En el webhook de la aplicación, activa los eventos de downlink y da a cada uno su propia ruta bajo la URL de la integración, con una ruta que **empiece por `downlink`**: por ejemplo `/downlink-ack`, `/downlink-nack`, `/downlink-sent` y `/downlink-failed`.
+
+| Qué informa The Things Stack | Comando |
+| --- | --- |
+| `downlink_ack`: el dispositivo acusó la trama | `SUCCEEDED`. |
+| `downlink_nack`: el dispositivo no la acusó | `TIMEOUT`, resultado desconocido. El dispositivo pudo oír la trama y perderse su acuse, así que enviarlo de nuevo puede actuar dos veces. Véase la nota sobre reintentos más abajo. |
+| `downlink_sent`: una pasarela transmitió la trama | Se registra y el comando sigue esperando. |
+| `downlink_failed`, y el propio servidor de red nombra un descarte antes de transmitir (un downlink confirmado puesto en cola para un dispositivo multicast), sin reintento ni transmisión informada antes | `FAILED`, no entregado. Es seguro volver a enviarlo. |
+| Cualquier otro `downlink_failed` | `TIMEOUT`, resultado desconocido. La trama pudo transmitirse: véase abajo. |
+| Nada antes del plazo | `TIMEOUT`, resultado desconocido. |
+
+**Reintentos tras un nack.** Tras un `downlink_nack`, The Things Stack vuelve a poner en cola por sí mismo un downlink confirmado (hasta 8 veces más por defecto), y cada reintento es un downlink nuevo sobre el que el dispositivo puede actuar. DeviceChain cierra el comando en el primer nack, así que el dispositivo aún puede ejecutarlo después, y el acuse de un reintento llega con el comando ya cerrado y se descarta como sin correspondencia. Para mantener pequeña esa ventana, la plataforma establece `confirmed_retry.max_attempts` en 1 en cada downlink confirmado que envía (el valor más bajo que acepta The Things Stack), de modo que hay como máximo un reintento.
+
+**Por qué solo algunos `downlink_failed` son «no entregado».** El servidor de red emite `downlink_failed` cuando descarta un downlink en cola que nunca programó (los casos de la tabla) y cuando una pasarela informa de que no pudo transmitir. El Application Server también lo emite, cuando renuncia a reintentar un downlink confirmado que **sí** se transmitió (se agotan los reintentos o falla volver a ponerlo en cola). Como el evento no dice cuál de los dos es, DeviceChain responde `FAILED` solo para los errores propios del servidor de red previos a la transmisión, y nunca para un downlink informado como transmitido o reintentado; cualquier otro `downlink_failed` es `TIMEOUT`. Eso incluye una sesión desconocida, una carga demasiado grande, un downlink caducado, un fallo de programación en la pasarela (hora absoluta o rutas fijas no válidas) y el error de transmisión propio de una pasarela: si una llamada de programación a una pasarela falla de forma ambigua, el servidor de red vuelve a poner el elemento en cola sin contar un reintento ni informar de transmisión, de modo que un descarte posterior por cualquiera de esos motivos no se distingue del de un elemento que nunca se intentó. Solo el caso multicast, una propiedad estática del dispositivo, es seguro.
+
+Un informe se asocia a su comando solo por el correlation id `dc:` que puso la plataforma, y solo cuando nombra la aplicación y el dispositivo a los que se envió el downlink (y el dispositivo que resolvió la propia DeviceChain coincide), por la integración por la que se envió; los identificadores de traza propios del servidor de red no se usan nunca. Un downlink puesto en cola a mano en la consola de The Things Stack no lleva ese id, y sus eventos se ignoran. Las discrepancias y los informes sin correspondencia se cuentan y descartan como se describió arriba. Un webhook enviado a la URL base sin ruta no nombra ningún tipo de mensaje, así que sus informes se tratan como telemetría y pueden descartarse cuando el inquilino supera su techo de mensajes; da a cada tipo su propia ruta.
+
 **Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
 
 ## Qué puede hacer un token de integración {#trust}
@@ -350,7 +382,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Downlink hacia The Things Stack y remitentes genéricos, y codificadores de carga útil.** El [downlink LoRaWAN](#lorawan-downlink) cubre solo ChirpStack v4 y cargas útiles en bruto. Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
+- **Downlink hacia remitentes genéricos y codificadores de carga útil.** El [downlink LoRaWAN](#lorawan-downlink) cubre ChirpStack v4 y The Things Stack v3, y solo cargas útiles en bruto. Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.

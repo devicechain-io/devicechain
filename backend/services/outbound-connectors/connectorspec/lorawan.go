@@ -6,14 +6,19 @@ package connectorspec
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+// ttsIDShape is The Things Stack's identifier grammar for applications and end devices.
+var ttsIDShape = regexp.MustCompile(`^[a-z0-9](?:-?[a-z0-9]){2,35}$`)
 
 // The network servers a lorawan_downlink connector can name. A value here that the downlink
 // adapter has no client for is a recognized vocabulary member and not executable: it is refused at
 // dispatch as a terminal UNSENT, never sent as something else.
 const (
 	NetworkServerChirpStackV4 = "chirpstack_v4"
+	NetworkServerTTSV3        = "tts_v3"
 )
 
 // LoRaWANDownlinkType is the connector type that links an inbound integration to its network
@@ -34,6 +39,10 @@ type lorawanConfig struct {
 	BaseURL string `json:"baseUrl"`
 	// Integration is the token of the inbound integration whose devices this link serves. Required.
 	Integration string `json:"integration"`
+	// ApplicationID is The Things Stack application the devices belong to. Required for tts_v3
+	// (its downlink API is addressed by application and device id) and refused for chirpstack_v4,
+	// which has no such thing: a field that cannot mean anything must not be accepted silently.
+	ApplicationID string `json:"applicationId"`
 }
 
 // LoRaWANDownlinkTarget is a validated network-server link. It is NOT a publish destination: the
@@ -44,6 +53,8 @@ type LoRaWANDownlinkTarget struct {
 	// BaseURL has no trailing slash.
 	BaseURL     *url.URL
 	Integration string
+	// ApplicationID is the The Things Stack application id (tts_v3 only).
+	ApplicationID string
 	// APIKey is the network server's API token, in memory only.
 	APIKey string
 }
@@ -57,10 +68,17 @@ func parseLoRaWANDownlink(config []byte) (Target, error) {
 	}
 	switch c.NetworkServer {
 	case NetworkServerChirpStackV4:
+		if c.ApplicationID != "" {
+			return nil, fmt.Errorf("%s config: applicationId is only for tts_v3", LoRaWANDownlinkType)
+		}
+	case NetworkServerTTSV3:
+		if len(c.ApplicationID) > 36 || !ttsIDShape.MatchString(c.ApplicationID) {
+			return nil, fmt.Errorf("%s config: applicationId must be the The Things Stack application id (3 to 36 lower-case letters, digits and single dashes)", LoRaWANDownlinkType)
+		}
 	case "":
-		return nil, fmt.Errorf("%s config: networkServer is required (chirpstack_v4)", LoRaWANDownlinkType)
+		return nil, fmt.Errorf("%s config: networkServer is required (chirpstack_v4 or tts_v3)", LoRaWANDownlinkType)
 	default:
-		return nil, fmt.Errorf("%s config: networkServer %q is not one of chirpstack_v4", LoRaWANDownlinkType, c.NetworkServer)
+		return nil, fmt.Errorf("%s config: networkServer %q is not one of chirpstack_v4, tts_v3", LoRaWANDownlinkType, c.NetworkServer)
 	}
 	if c.Integration == "" || len(c.Integration) > maxIntegrationTokenLen ||
 		strings.ContainsAny(c.Integration, " \t\r\n:/\\") {
@@ -75,7 +93,8 @@ func parseLoRaWANDownlink(config []byte) (Target, error) {
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawPath = ""
-	return LoRaWANDownlinkTarget{NetworkServer: c.NetworkServer, BaseURL: u, Integration: c.Integration}, nil
+	return LoRaWANDownlinkTarget{NetworkServer: c.NetworkServer, BaseURL: u, Integration: c.Integration,
+		ApplicationID: c.ApplicationID}, nil
 }
 
 func withLoRaWANDownlinkSecret(t Target, secret string) (Target, error) {

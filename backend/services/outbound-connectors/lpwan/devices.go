@@ -5,7 +5,6 @@ package lpwan
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,7 +29,7 @@ const (
 	devEUICacheMax = 4096
 )
 
-type devEUIKey struct{ tenant, device string }
+type devEUIKey struct{ tenant, device, scheme string }
 
 type devEUIEntry struct {
 	eui     string
@@ -56,7 +55,17 @@ func NewServiceDevices(client cmddownlink.Querier, baseURL string) *ServiceDevic
 // DevEUI implements Devices. Only a found DevEUI is cached; "no such alias" is asked again each
 // time, so adding the alias takes effect on the next command.
 func (d *ServiceDevices) DevEUI(ctx context.Context, tenant, deviceToken string) (string, error) {
-	key := devEUIKey{tenant, deviceToken}
+	return d.alias(ctx, tenant, deviceToken, devicealias.SchemeDevEUI, ErrNoDevEUI)
+}
+
+// TTSDeviceID implements Devices: the device's tts.device-id alias, the name The Things Stack's
+// downlink API addresses it by. It is read from the device, never from the command.
+func (d *ServiceDevices) TTSDeviceID(ctx context.Context, tenant, deviceToken string) (string, error) {
+	return d.alias(ctx, tenant, deviceToken, devicealias.SchemeTTSDeviceID, ErrNoDeviceID)
+}
+
+func (d *ServiceDevices) alias(ctx context.Context, tenant, deviceToken, scheme string, absent error) (string, error) {
+	key := devEUIKey{tenant, deviceToken, scheme}
 	d.mu.Lock()
 	if e, ok := d.cache[key]; ok && d.now().Before(e.expires) {
 		d.mu.Unlock()
@@ -81,12 +90,12 @@ func (d *ServiceDevices) DevEUI(ctx context.Context, tenant, deviceToken string)
 			continue
 		}
 		for _, a := range *dev.Aliases {
-			if a.Scheme != devicealias.SchemeDevEUI {
+			if a.Scheme != scheme {
 				continue
 			}
-			eui := strings.ToUpper(a.Value)
-			if !validDevEUI(eui) {
-				return "", ErrNoDevEUI
+			eui, nerr := devicealias.Normalize(scheme, a.Value)
+			if nerr != nil || (scheme == devicealias.SchemeDevEUI && !validDevEUI(eui)) {
+				return "", absent
 			}
 			d.mu.Lock()
 			if len(d.cache) >= devEUICacheMax {
@@ -97,5 +106,5 @@ func (d *ServiceDevices) DevEUI(ctx context.Context, tenant, deviceToken string)
 			return eui, nil
 		}
 	}
-	return "", ErrNoDevEUI
+	return "", absent
 }

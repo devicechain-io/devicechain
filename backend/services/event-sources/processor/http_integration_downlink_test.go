@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/integration"
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +57,7 @@ func TestAnAckIsPublishedForTheIntegrationsDeviceStampedWithTheProvenIntegration
 	h.nothingPublished()
 	require.Equal(t, []string{"acme"}, sink.tenants, "the tenant is the one the path proved, never one in the body")
 	require.Equal(t, []cmddownlink.DownlinkReport{{
-		Integration: "cs", Kind: "ack", DevEUI: "0101010101010101",
+		Integration: "cs", Kind: "ack", DevEUI: "0101010101010101", DeviceToken: "dev-0101010101010101",
 		QueueItemID: "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11", Acknowledged: true, FCntDown: 12,
 	}}, sink.reports)
 	require.Equal(t, 1, h.count("report/published"))
@@ -218,4 +219,36 @@ func TestAFloodOfReportsIsLimitedPerTenantAndAnotherTenantsStillGetThrough(t *te
 	// Telemetry is not charged to it, nor it to telemetry.
 	require.Equal(t, http.StatusAccepted, h.up().Code)
 	require.Len(t, h.published, 1)
+}
+
+// The Things Stack posts each message type to its own path, and the body says what it is.
+func TestTheThingsStackDownlinkReportsArePublishedAndNotShedWithTelemetry(t *testing.T) {
+	h := newRouteHarness(t)
+	sink := withReportSink(h)
+	h.backend.desc = func() integrationcodec.Descriptor {
+		return integrationcodec.Descriptor{Type: integrationcodec.TTSV3, Identity: "DEV_EUI"}
+	}
+	h.allowOK.Store(false) // the tenant is over its message ceiling
+	for file, path := range map[string]string{
+		"tts/downlink_ack_dc.json":    "/downlink-ack",
+		"tts/downlink_nack_dc.json":   "/downlinknack",
+		"tts/downlink_failed_dc.json": "/downlink_failed",
+	} {
+		require.Equal(t, http.StatusAccepted, h.post(csPath+path, goodBearer, fixtureBody(t, file)).Code, file)
+	}
+	require.Len(t, sink.reports, 3)
+	kinds := map[string]int{}
+	for _, r := range sink.reports {
+		kinds[r.Kind]++
+		require.Equal(t, "app1/dev1", r.DeviceRef)
+		require.Equal(t, "dev-0004a30b001c0530", r.DeviceToken, "the device the platform resolved, not text the network server sent")
+		require.Equal(t, "dc:0123456789abcdef0123456789abcdef", r.QueueItemID)
+		require.Equal(t, "cs", r.Integration)
+	}
+	require.Equal(t, map[string]int{"ack": 2, "failed": 1}, kinds)
+
+	// A downlink the platform did not push is answered 204 and published to nothing.
+	n := len(sink.reports)
+	require.Equal(t, http.StatusNoContent, h.post(csPath+"/downlink-ack", goodBearer, fixtureBody(t, "tts/downlink_ack_foreign.json")).Code)
+	require.Len(t, sink.reports, n)
 }

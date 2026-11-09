@@ -150,7 +150,7 @@ The Things Stack 通过应用上的 **webhook** 发送上行。
 3. **在应用或设备上设置载荷格式化器（payload formatter）**（LoRaWAN Device Repository 为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，把 DevEUI 设为 `lorawan.deveui` 别名；如果选择了 **Device id**，则把设备 ID 设为 `tts.device-id` 别名。
 
-发送到其他任何路径的消息（join accept、下行确认）会返回 `204` 并被忽略，因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
+发送到其他任何路径的消息（join accept、位置解算）会返回 `204` 并被忽略，不属于平台所发下行的下行事件也一样（见 [The Things Stack 下行](#lorawan-downlink-tts)），因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
 
 ## 通用 JSON {#generic-json}
 
@@ -332,6 +332,38 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 **升级。** 确认下行需要出站连接器和事件源两者都是新版本。出站连接器已是新版本而事件源仍是旧版本期间，旧 Pod 会对网络服务器的报告返回 `204` 并丢弃，因此在这一窗口内发出的确认下行会在截止时间以 `TIMEOUT`（结果未知）结束。Chart 在同一次升级中滚动二者；要避开这一窗口，请在其持续期间暂停确认命令。
 
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+指向 The Things Stack 的关联是一个 `"networkServer": "tts_v3"` 的 `lorawan_downlink` 连接器，并带上设备所属的应用：
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+连接器的**密钥**是一个有权写入该应用下行流量的 API 密钥。设备必须带有 `tts.device-id` [别名](#aliases)（The Things Stack 用它来寻址设备），而不是 DevEUI；它取自设备，绝不取自命令。命令的参数与 ChirpStack 相同，下行会加入设备队列的末尾。
+
+对**未确认**的下行，`SUCCEEDED` 同样表示网络服务器已接受它。对**确认**的下行，平台会给每条下行一个自己的标识（The Things Stack 不返回任何标识），作为以 `dc:` 开头的 correlation id 发送，并依据 The Things Stack 为该下行发布的事件来结束命令。在应用的 webhook 中启用下行事件，并在集成 URL 下给每种事件各自的路径，路径**必须以 `downlink` 开头**：例如 `/downlink-ack`、`/downlink-nack`、`/downlink-sent` 和 `/downlink-failed`。
+
+| The Things Stack 报告 | 命令 |
+| --- | --- |
+| `downlink_ack`：设备应答了该帧 | `SUCCEEDED`。 |
+| `downlink_nack`：设备没有应答 | `TIMEOUT`，结果未知。设备可能已收到该帧而应答丢失，再次发送可能会动作两次。见下文关于重试的说明。 |
+| `downlink_sent`：网关发射了该帧 | 记录下来，命令继续等待。 |
+| `downlink_failed`，且网络服务器自己指明这是发射之前的丢弃（为多播设备排队的确认下行），此前没有重试、也没有发射报告 | `FAILED`，未投递。可以放心重发。 |
+| 其他任何 `downlink_failed` | `TIMEOUT`，结果未知。该帧可能已被发射：见下文。 |
+| 截止时间前没有任何报告 | `TIMEOUT`，结果未知。 |
+
+**nack 之后的重试。** `downlink_nack` 之后，The Things Stack 会自己把确认下行重新排队（默认最多再 8 次），每次重试都是设备可能据以动作的一条新下行。DeviceChain 在第一个 nack 就结束命令，因此设备之后仍可能执行它；重试的应答会在命令已结束后到达，并作为无对应项被丢弃。为缩小这一窗口，平台在推送的每条确认下行上把 `confirmed_retry.max_attempts` 设为 1（The Things Stack 接受的最小值），因此最多重试一次。
+
+**为什么只有部分 `downlink_failed` 是“未投递”。** 网络服务器在丢弃一条它从未调度过的排队下行（表中所列情形）时，以及网关报告无法发射时，会发出 `downlink_failed`。Application Server 在放弃重试一条**已经被发射过**的确认下行时（重试次数用尽，或重新排队失败）也会发出它。由于该事件本身并不说明是哪一种，DeviceChain 只对网络服务器自己给出的发射前错误回答 `FAILED`，对已报告发射或重试过的下行绝不这样回答；其他任何 `downlink_failed` 都是 `TIMEOUT`。这包括未知会话、负载过大、下行已过期、网关调度失败（绝对时间或固定路径无效）以及网关自身的发射错误：如果对网关的一次调度调用以模棱两可的方式失败，网络服务器会把该项重新排回队首，既不计一次重试，也不报告发射，因此之后因上述任一原因发生的丢弃，无法与一个从未尝试过的项的丢弃区分开。只有多播这一情形（设备的静态属性）是确定的。
+
+报告只通过平台设置的 `dc:` correlation id 与其命令匹配，并且只在它指明的应用和设备正是该下行所发往的（且 DeviceChain 自己解析出的设备一致）、且经由发出时所用的集成时才匹配；网络服务器自己的追踪标识绝不会被使用。在 The Things Stack 控制台中手工排入队列的下行不带这种 id，其事件会被忽略。不匹配和无对应的报告会如上所述被计数并丢弃。发送到不带路径的基础 URL 的 webhook 不指明消息类型，因此其报告按遥测处理，租户超出消息上限时可能被丢弃；请给每种类型各自的路径。
+
 **在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
 
 ## 集成令牌能做什么 {#trust}
@@ -350,7 +382,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 第 1 版不包含 {#not-supported}
 
-- **面向 The Things Stack 与通用发送方的下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)只覆盖 ChirpStack v4 和原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
+- **面向通用发送方的下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)覆盖 ChirpStack v4 与 The Things Stack v3，且只支持原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。

@@ -29,8 +29,12 @@ type Pending struct {
 	Integration string
 	// DeviceToken is the command's device (the command-responses subject names it).
 	DeviceToken string
-	// DevEUI is the device the downlink was queued for, canonical upper-case hex.
+	// DevEUI is the device the downlink was queued for, canonical upper-case hex (ChirpStack). Empty
+	// for a downlink whose device is named by DeviceRef.
 	DevEUI string
+	// DeviceRef is the device as the network server names it when a DevEUI does not (The Things Stack:
+	// "<application id>/<device id>"). Empty for ChirpStack. When set, a report must name it.
+	DeviceRef string
 	// CommandToken and DispatchNonce are the command and the CLAIM's nonce: command-delivery
 	// refuses an answer that does not quote it.
 	CommandToken  string
@@ -96,6 +100,7 @@ type LpwanPendingAck struct {
 	DeadlineAt    time.Time `gorm:"not null;index"`
 	TransmittedAt *time.Time
 	SettlingUntil *time.Time
+	DeviceRef     *string `gorm:"size:256"`
 }
 
 // DBPending is the relational PendingStore.
@@ -110,13 +115,24 @@ func (s *DBPending) db(ctx context.Context, tenant string) *gorm.DB {
 
 func fromRow(r LpwanPendingAck) Pending {
 	return Pending{ID: r.ID, Tenant: r.TenantId, Integration: r.Integration, DeviceToken: r.DeviceToken,
-		DevEUI: r.DevEUI, CommandToken: r.CommandToken, DispatchNonce: r.DispatchNonce,
+		DevEUI: r.DevEUI, DeviceRef: deref(r.DeviceRef), CommandToken: r.CommandToken, DispatchNonce: r.DispatchNonce,
 		QueueItemID: r.QueueItemID, DeadlineAt: r.DeadlineAt, TransmittedAt: r.TransmittedAt}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // Add implements PendingStore.
 func (s *DBPending) Add(ctx context.Context, p Pending) error {
-	row := LpwanPendingAck{TenantId: p.Tenant, Integration: p.Integration, DeviceToken: p.DeviceToken, DevEUI: p.DevEUI,
+	var ref *string
+	if p.DeviceRef != "" {
+		ref = &p.DeviceRef
+	}
+	row := LpwanPendingAck{TenantId: p.Tenant, Integration: p.Integration, DeviceToken: p.DeviceToken, DevEUI: p.DevEUI, DeviceRef: ref,
 		CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce, QueueItemID: p.QueueItemID,
 		DeadlineAt: p.DeadlineAt.UTC()}
 	return s.db(ctx, p.Tenant).Create(&row).Error

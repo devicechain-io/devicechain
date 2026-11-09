@@ -148,13 +148,29 @@ type DownlinkReport struct {
 	// Integration is the token of the inbound integration whose authenticated request carried the
 	// report. A pending downlink only accepts a report from the integration it was sent through.
 	Integration string `json:"integration"`
-	// Kind is "ack" (the device's confirmation, or the network server's timeout of it) or "txack"
-	// (a gateway accepted the frame for transmission).
+	// Kind is "ack" (the device's confirmation, or the network server's report that it did not
+	// confirm), "txack" (a gateway accepted the frame for transmission) or "failed" (the network
+	// server could not send it).
 	Kind string `json:"kind"`
 	// DevEUI is the report's device, canonical upper-case hex.
 	DevEUI string `json:"devEui"`
 	// QueueItemID is the network server's id for the queued downlink.
 	QueueItemID string `json:"queueItemId"`
+	// DeviceRef is the device as the network server names it when DevEUI alone does not (The Things
+	// Stack: "<application id>/<device id>"). Empty for ChirpStack.
+	DeviceRef string `json:"deviceRef,omitempty"`
+	// DeviceToken is the device token event-sources resolved the report's device to under the proven
+	// integration. Unlike every other field it is not text the network server sent: it is what the
+	// platform's own lookup answered, so a downlink is only settled by a report for the device it was
+	// sent to. Empty from an event-sources that predates it.
+	DeviceToken string `json:"deviceToken,omitempty"`
+	// Attempt, ErrorNamespace and ErrorName describe a Kind "failed" report (The Things Stack
+	// downlink_failed): the confirmed-downlink retry the failure came after (0 when the field was
+	// absent, which proto3 JSON does that for) and the network server's own name for the error. They
+	// decide whether the downlink can be said never to have been transmitted.
+	Attempt        int    `json:"attempt,omitempty"`
+	ErrorNamespace string `json:"errorNamespace,omitempty"`
+	ErrorName      string `json:"errorName,omitempty"`
 	// Acknowledged is read for Kind "ack" only.
 	Acknowledged bool  `json:"acknowledged,omitempty"`
 	FCntDown     int64 `json:"fCntDown,omitempty"`
@@ -165,4 +181,6 @@ type DownlinkReport struct {
 const (
 	DownlinkReportAck   = "ack"
 	DownlinkReportTxAck = "txack"
+	// DownlinkReportFailed: the network server could not send the downlink.
+	DownlinkReportFailed = "failed"
 )

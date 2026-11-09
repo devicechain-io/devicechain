@@ -66,3 +66,29 @@ func err2s(_ Target, err error) string {
 func TestLoRaWANDownlinkIsASupportedType(t *testing.T) {
 	require.True(t, Supported(LoRaWANDownlinkType))
 }
+
+func TestValidateTTSv3Link(t *testing.T) {
+	for _, c := range []string{
+		`{"networkServer":"tts_v3","baseUrl":"https://eu1.cloud.thethings.network","integration":"tts1","applicationId":"my-app"}`,
+		`{"networkServer":"tts_v3","baseUrl":"https://tts.example.com/","integration":"t","applicationId":"app"}`,
+	} {
+		require.NoError(t, ValidateConfig(LoRaWANDownlinkType, []byte(c)), c)
+	}
+	for name, c := range map[string]string{
+		"no applicationId":      `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i"}`,
+		"uppercase":             `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"MyApp"}`,
+		"too short":             `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"ab"}`,
+		"double dash":           `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"my--app"}`,
+		"trailing dash":         `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"my-app-"}`,
+		"path injection":        `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"a/../b"}`,
+		"dashed too long":       `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"` + strings.Repeat("a-", 18) + `a"}`,
+		"dashed 71":             `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"` + strings.Repeat("a-", 35) + `a"}`,
+		"too long":              `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"` + strings.Repeat("a", 37) + `"}`,
+		"chirpstack with appid": `{"networkServer":"chirpstack_v4","baseUrl":"https://x.io","integration":"i","applicationId":"my-app"}`,
+	} {
+		require.Error(t, ValidateConfig(LoRaWANDownlinkType, []byte(c)), name)
+	}
+	tg, err := Build(LoRaWANDownlinkType, []byte(`{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"my-app"}`), "key")
+	require.NoError(t, err)
+	require.Equal(t, "my-app", tg.(LoRaWANDownlinkTarget).ApplicationID)
+}

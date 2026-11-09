@@ -25,6 +25,9 @@ func newDBPending(t *testing.T) *DBPending {
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, schema.NewLpwanPendingAcksSchema().Migrate(db))
+	require.NoError(t, schema.NewLpwanPendingAcksDeviceRefSchema().Migrate(db))
+	// Re-runnable: replaying the appended migration is a no-op.
+	require.NoError(t, schema.NewLpwanPendingAcksDeviceRefSchema().Migrate(db))
 	return NewDBPending(&rdb.RdbManager{Database: db})
 }
 
@@ -162,4 +165,22 @@ func TestDeleteGoneRemovesALeasedRowOfThatTenantOnly(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoPending)
 	_, err = s.Lookup(ctx, "other", itemID)
 	require.NoError(t, err, "another tenant's row was deleted")
+}
+
+func TestADeviceRefRoundTripsAndAChirpStackRowHasNone(t *testing.T) {
+	s := newDBPending(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.Add(ctx, Pending{Tenant: "acme", Integration: "tts1", DeviceToken: "d", DeviceRef: "app1/dev1",
+		CommandToken: "c", DispatchNonce: "n", QueueItemID: "dc:0123456789abcdef0123456789abcdef", DeadlineAt: now}))
+	require.NoError(t, s.Add(ctx, Pending{Tenant: "acme", Integration: "cs1", DeviceToken: "d", DevEUI: "0102030405060708",
+		CommandToken: "c2", DispatchNonce: "n", QueueItemID: itemID, DeadlineAt: now}))
+	tts, err := s.Lookup(ctx, "acme", "dc:0123456789abcdef0123456789abcdef")
+	require.NoError(t, err)
+	require.Equal(t, "app1/dev1", tts.DeviceRef)
+	require.Empty(t, tts.DevEUI)
+	cs, err := s.Lookup(ctx, "acme", itemID)
+	require.NoError(t, err)
+	require.Empty(t, cs.DeviceRef)
+	require.Equal(t, "0102030405060708", cs.DevEUI)
 }

@@ -31,7 +31,9 @@ type memPending struct {
 	listErr error
 	// claimErr fails Claim; lease is each record's settle lease.
 	claimErr error
-	lease    map[uint]time.Time
+	// onClaim runs inside Claim, before it answers (a test hook for what happens in that window).
+	onClaim func()
+	lease   map[uint]time.Time
 	// heldDeleteRefused counts deletes that did not hold the lease.
 	heldDeleteRefused int
 }
@@ -91,6 +93,9 @@ func (m *memPending) Claim(_ context.Context, _ string, id uint, now time.Time, 
 	defer m.mu.Unlock()
 	if m.claimErr != nil {
 		return time.Time{}, false, m.claimErr
+	}
+	if m.onClaim != nil {
+		m.onClaim()
 	}
 	if _, ok := m.rows[id]; !ok || m.lease[id].After(now) {
 		return time.Time{}, false, nil
