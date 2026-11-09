@@ -293,6 +293,14 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			return n.resolveHeld(c, event)
 		})
 	case dmmodel.AlarmEventCleared:
+		// Announce the clear to the policies that opted in BEFORE stamping it (see
+		// notifyClear for why the order matters). A deleted tenant is told nothing, and the
+		// stamp below consults the same gate.
+		if !n.tenantDeleted(ctx) {
+			if err := n.notifyClear(ctx, event); err != nil {
+				return err
+			}
+		}
 		return n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
 			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity,
 				event.RaisedTime, event.OccurredTime); err != nil {

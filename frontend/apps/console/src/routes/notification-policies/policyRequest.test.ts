@@ -10,6 +10,7 @@ const stored = (over: Record<string, unknown> = {}) => ({
   name: 'Night' as string | null,
   description: null as string | null,
   enabled: true,
+  notifyOnClear: false,
   throttleSeconds: 300 as number | null,
   escalateAfterSeconds: null as number | null,
   maxEscalations: null as number | null,
@@ -23,6 +24,7 @@ const same: PolicyDraft = {
   name: 'Night',
   description: '',
   enabled: true,
+  notifyOnClear: false,
   throttleSeconds: '300',
   escalateAfterSeconds: '',
   maxEscalations: '',
@@ -41,6 +43,7 @@ describe('policyEditRequest', () => {
 
   it('names only what changed', () => {
     expect(policyEditRequest(stored(), { ...same, enabled: false })).toEqual({ enabled: false });
+    expect(policyEditRequest(stored(), { ...same, notifyOnClear: true })).toEqual({ notifyOnClear: true });
     expect(policyEditRequest(stored(), { ...same, throttleSeconds: '' })).toEqual({ throttleSeconds: null });
     expect(policyEditRequest(stored(), { ...same, escalateAfterSeconds: '600' })).toEqual({
       escalateAfterSeconds: 600,

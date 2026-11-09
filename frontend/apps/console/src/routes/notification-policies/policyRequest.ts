@@ -27,6 +27,8 @@ export interface PolicyDraft {
   name: string;
   description: string;
   enabled: boolean;
+  /** Also notify when an alarm the policy paged clears. */
+  notifyOnClear: boolean;
   /** Raw text of the number fields; blank means "not set". */
   throttleSeconds: string;
   escalateAfterSeconds: string;
@@ -50,6 +52,7 @@ type Stored = Pick<
   | 'name'
   | 'description'
   | 'enabled'
+  | 'notifyOnClear'
   | 'throttleSeconds'
   | 'escalateAfterSeconds'
   | 'maxEscalations'
@@ -76,6 +79,7 @@ export function policyEditRequest(entity: Stored, next: PolicyDraft): Notificati
     request.description = next.description.trim() || null;
   }
   if (next.enabled !== entity.enabled) request.enabled = next.enabled;
+  if (next.notifyOnClear !== entity.notifyOnClear) request.notifyOnClear = next.notifyOnClear;
   const throttle = parseCount(next.throttleSeconds);
   if (throttle !== undefined && throttle !== (entity.throttleSeconds ?? null)) {
     request.throttleSeconds = throttle;
@@ -117,6 +121,7 @@ export function policyCreateRequest(token: string, next: PolicyDraft): Notificat
     name: next.name.trim() || null,
     description: next.description.trim() || null,
     enabled: next.enabled,
+    notifyOnClear: next.notifyOnClear,
     throttleSeconds: parseCount(next.throttleSeconds) ?? null,
     escalateAfterSeconds: parseCount(next.escalateAfterSeconds) ?? null,
     maxEscalations: parseCount(next.maxEscalations) ?? null,

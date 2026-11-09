@@ -65,6 +65,15 @@ type NotificationPolicy struct {
 	QuietHoursSlots          *datatypes.JSON
 	QuietHoursBypassSeverity sql.NullString
 
+	// NotifyOnClear opts the policy into telling its channels when an alarm it paged CLEARS,
+	// not only when it raises. Off by default and for every policy that predates the column
+	// (the migration's DEFAULT false), which is exactly what those policies did before. The
+	// notification is the same rule routing a raise uses, matched on the severity the alarm
+	// held when it cleared; it is informational, so it is neither throttled nor held for
+	// quiet hours (a clear inside a quiet stretch is dropped, not deferred) and it does not
+	// arm escalation.
+	NotifyOnClear bool
+
 	// Rules are the policy's owned routing rules; loaded with the policy and
 	// replaced wholesale on update. The FK is the shortened PolicyId (not the GORM
 	// default NotificationPolicyID), so it is named explicitly.
@@ -120,8 +129,10 @@ type NotificationPolicyCreateRequest struct {
 	EscalateAfterSeconds *int32
 	MaxEscalations       *int32
 	Enabled              bool
-	Rules                []*NotificationRuleCreateRequest
-	Metadata             *string
+	// NotifyOnClear is optional on create: nil is false, today's behaviour.
+	NotifyOnClear *bool
+	Rules         []*NotificationRuleCreateRequest
+	Metadata      *string
 
 	// Quiet hours: timezone and slots together, or neither. See quiet_hours.go.
 	QuietHoursTimezone       *string
@@ -177,6 +188,7 @@ type NotificationPolicyUpdateRequest struct {
 	EscalateAfterSeconds dcgraphql.OptionalInt32
 	MaxEscalations       dcgraphql.OptionalInt32
 	Enabled              dcgraphql.OptionalBool
+	NotifyOnClear        dcgraphql.OptionalBool
 	Rules                OptionalNotificationRuleList
 	Metadata             dcgraphql.OptionalString
 

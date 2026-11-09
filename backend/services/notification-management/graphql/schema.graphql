@@ -323,6 +323,13 @@ type NotificationPolicy {
     maxEscalations: Int
     """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
+    """
+    True when the policy also notifies its channels when an alarm it paged clears, through
+    the same rules, matched on the severity the alarm held when it cleared. A clear is
+    informational: it is not throttled, it does not start escalation, and one that happens
+    during quiet hours is dropped rather than held.
+    """
+    notifyOnClear: Boolean!
     """The policy's routing rules."""
     rules: [NotificationRule!]!
     """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
@@ -399,6 +406,8 @@ input NotificationPolicyCreateRequest {
     maxEscalations: Int
     """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
+    """Also notify the policy's channels when an alarm it paged clears. Omit it for false, the behaviour before this option existed."""
+    notifyOnClear: Boolean
     """The policy's complete rule set; pass an empty list for a policy with no rules yet."""
     # The policy's full rule set; pass [] for a policy with no rules yet.
     rules: [NotificationRuleCreateRequest!]!
@@ -457,6 +466,8 @@ input NotificationPolicyUpdateRequest {
     maxEscalations: Int
     """Whether the policy is active. Omit it to keep the stored value; an explicit null is refused."""
     enabled: Boolean
+    """Whether the policy also notifies on clear. Omit it to keep the stored value; an explicit null is refused."""
+    notifyOnClear: Boolean
     """
     The policy's complete rule set. Omit it to leave the stored rules untouched. Send a
     list to replace all the rules with it, or send null or an empty list to remove all

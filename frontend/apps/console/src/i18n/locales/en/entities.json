@@ -350,6 +350,8 @@
   "notificationPolicyColRules": "Rules",
   "notificationPolicyColQuietHours": "Quiet hours",
   "notificationPolicyEnabledHint": "A disabled policy sends nothing.",
+  "notificationPolicyNotifyOnClear": "Notify on clear",
+  "notificationPolicyNotifyOnClearHint": "Also tell the channels when an alarm this policy paged clears.",
   "notificationPolicyThrottle": "Throttle (seconds)",
   "notificationPolicyThrottleHelp": "Minimum time between notifications about the same alarm. Leave blank for no throttle.",
   "notificationPolicyEscalateAfter": "Escalate after (seconds)",

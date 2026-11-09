@@ -191,7 +191,8 @@ CREATE TABLE "notification-management".notification_policies (
  max_escalations bigint,
  quiet_hours_timezone character varying(64),
  quiet_hours_slots jsonb,
- quiet_hours_bypass_severity character varying(16)
+ quiet_hours_bypass_severity character varying(16),
+ notify_on_clear boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "notification-management".notification_rules (
  id bigint NOT NULL,

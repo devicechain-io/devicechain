@@ -29,5 +29,6 @@ var (
 		NewQuietHoursSchema(),
 		NewNotificationStateCycleSchema(),
 		NewNotificationAttemptsSchema(),
+		NewNotifyOnClearSchema(),
 	}
 )
