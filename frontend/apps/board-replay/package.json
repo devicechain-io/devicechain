@@ -27,7 +27,7 @@
     "@devicechain/widget-sdk": "0.0.0-dev",
     "@devicechain/widgets": "0.0.0-dev",
     "echarts": "^6.0.0",
-    "i18next": "^26.7.2",
+    "i18next": "^26.5.12",
     "maplibre-gl": "^6.16.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
