@@ -111,6 +111,13 @@ func (m *Manager) ResolveAuthorizeClient(ctx context.Context, clientID, redirect
 // and that every requested scope is both a scope the AS grants and one the client
 // is registered for.
 func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams, rp *resourcePolicy) (ResourceCheck, error) {
+	return validateAuthorizeRequest(client, p, rp, false)
+}
+
+// validateAuthorizeRequest is ValidateAuthorizeRequest for an instance whose agent-actuation flag
+// is actuation: with it on, the act:* scopes are supported too. Whether THIS tenant and THIS client
+// may receive them is decided once the tenant is chosen (IssueAuthorizationCode).
+func validateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams, rp *resourcePolicy, actuation bool) (ResourceCheck, error) {
 	if p.ResponseType != "code" {
 		return ResourceCheck{}, &authorizeRedirectError{"unsupported_response_type", "only response_type=code is supported"}
 	}
@@ -128,7 +135,7 @@ func ValidateAuthorizeRequest(client *iam.OAuthClient, p AuthorizeParams, rp *re
 	if len(auth.ParseScope(p.Scope)) == 0 {
 		return ResourceCheck{}, &authorizeRedirectError{"invalid_scope", "scope is required"}
 	}
-	if !auth.ScopeSupported(p.Scope) {
+	if !auth.ScopeSupportedFor(p.Scope, actuation) {
 		return ResourceCheck{}, &authorizeRedirectError{"invalid_scope", "requested scope is not supported"}
 	}
 	if !scopesRegistered(client.Scopes, p.Scope) {
@@ -172,7 +179,7 @@ func (c ResourceCheck) authorizeError() error {
 
 // ValidateAuthorize is ValidateAuthorizeRequest over this instance's resource allowlist.
 func (m *Manager) ValidateAuthorize(client *iam.OAuthClient, p AuthorizeParams) (ResourceCheck, error) {
-	return ValidateAuthorizeRequest(client, p, m.resourcePolicy())
+	return validateAuthorizeRequest(client, p, m.resourcePolicy(), m.agentActuation)
 }
 
 // RecordAuthorizeResource counts one authorization request's resource decision. The caller
@@ -212,6 +219,14 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthC
 	id, err := m.assertTenantAccess(ctx, subject, tenant)
 	if err != nil {
 		return "", err
+	}
+	// The act:* admission, at the first point the tenant is known. It runs again at redemption and
+	// at every refresh; this one only spares the person a consent that could never be redeemed.
+	if oerr := m.admitActScopes(ctx, tenant, p.ClientID, p.Scope, isSuperuser(id), false); oerr != nil {
+		if oerr.Code == "server_error" {
+			return "", errors.New(oerr.Desc)
+		}
+		return "", &authorizeRedirectError{"invalid_scope", oerr.Desc}
 	}
 	code, err := newAuthorizationCode()
 	if err != nil {

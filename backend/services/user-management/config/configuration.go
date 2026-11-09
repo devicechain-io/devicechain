@@ -144,6 +144,21 @@ type UserManagementConfiguration struct {
 	Auth        AuthConfiguration
 	TenantPurge TenantPurgeConfiguration
 	DeadLetters DeadLettersConfiguration
+
+	// AgentActuation is the INSTANCE switch for agent actions: whether this instance's
+	// authorization server may grant act:* scopes to AI agents at all.
+	AgentActuation AgentActuationConfiguration
+}
+
+// AgentActuationConfiguration is the instance switch for agent actions.
+//
+// 🔴 OFF BY DEFAULT, AND ONLY ONE OF THREE SWITCHES. Off, the act:* scopes are not advertised, an
+// OAuth client cannot be registered for one, every request for one is refused at every mint, and
+// every agent decision is a refusal. On, a tenant must ALSO publish an agent policy that enables
+// actuation and lists the client, and the operator must not have suspended the tenant. Turn it on
+// only after a rolling upgrade has completed, so no old replica is serving.
+type AgentActuationConfiguration struct {
+	Enabled bool
 }
 
 // DeadLetterRetention is how long a stored dead letter is kept.
@@ -433,6 +448,9 @@ func validateSeedClient(sc SeedOAuthClientConfig) error {
 		return fmt.Errorf("at least one scope is required")
 	}
 	for _, s := range sc.Scopes {
+		// A seeded client is a standing operator registration: an act:* scope on one is refused
+		// here whatever the instance flag says, so agent access is always a deliberate admin-plane
+		// registration rather than a line in a deployment file.
 		if !auth.IsSupportedScope(s) {
 			return fmt.Errorf("unknown scope %q (supported: %s)", s, strings.Join(auth.SupportedScopes, ", "))
 		}

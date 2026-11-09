@@ -855,7 +855,17 @@ type ServiceAccount {
     clientId: String!
     """False when the account is disabled and cannot obtain tokens."""
     enabled: Boolean!
-    """The roles the account holds. Its tokens carry exactly these roles' authorities."""
+    """
+    True when the account runs an AI agent. Its tokens never carry a write authority: in place of
+    its roles' writes they carry the matching proposal authorities, so it can ask for an action and
+    never perform one. Set when the account is created and never changed.
+    """
+    agent: Boolean!
+    """
+    The roles the account holds. An ordinary account's tokens carry exactly these roles'
+    authorities; an agent account's carry their reads and the proposal authorities derived from
+    their writes.
+    """
     roles: [TenantRole!]!
     """The customers or groups whose devices the account is limited to. Empty for the whole tenant."""
     scope: [ScopeAnchor!]!
@@ -903,6 +913,112 @@ input ServiceAccountCreateRequest {
     scope: [ScopeAnchorInput!]
     """Days until the first secret expires: 1 to 730. Defaults to 365."""
     secretExpiresInDays: Int
+    """
+    True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
+    place of its roles' write authorities. Cannot be changed later. Defaults to false. A tenant
+    whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
+    account that holds any of them without this flag.
+    """
+    agent: Boolean
+}
+
+"""How a version of the agent policy came to be published."""
+enum AgentPolicyOrigin {
+    """The draft was published."""
+    PUBLISH
+    """An earlier version's document was published again as a new version."""
+    ROLLBACK
+    """The version in force was republished with only agent actuation turned on or off."""
+    ACTUATION
+}
+
+"""One published version of this tenant's agent policy. Versions are never changed or removed."""
+type AgentPolicyVersion {
+    """The version number. It only grows: a rollback publishes a new, higher version."""
+    version: Int!
+    """The policy document, as JSON."""
+    document: String!
+    """How this version came to be published."""
+    origin: AgentPolicyOrigin!
+    """Who published it."""
+    publishedBy: String!
+    """When it was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
+}
+
+"""
+This tenant's agent policy: whether AI agents may act in the tenant, which OAuth clients may,
+what each kind of action needs before it happens, and who may approve it. Agents can act only
+when all three of these are true: this instance allows agent actions, the operator has not
+suspended them for this tenant, and the published policy enables them.
+"""
+type AgentPolicy {
+    """The version in force, or null when none has been published (agents cannot act)."""
+    published: AgentPolicyVersion
+    """The working draft, as JSON, or null when there is none. A draft changes nothing until it is published."""
+    draft: String
+    """When the draft was last saved, as an RFC 3339 timestamp, or null."""
+    draftUpdatedAt: String
+    """Who last saved the draft, or null."""
+    draftUpdatedBy: String
+    """True when the instance operator has suspended agent actions for this tenant, whatever its policy says."""
+    operatorSuspended: Boolean!
+    """True when this instance allows agent actions at all."""
+    instanceEnabled: Boolean!
+    """True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, and the published policy enables it."""
+    actuationInEffect: Boolean!
+}
+
+"""A kind of action an AI agent may ask for."""
+enum AgentActionKind {
+    """Acknowledge an alarm."""
+    ALARM_ACK
+    """Clear an alarm."""
+    ALARM_CLEAR
+    """Send a command to one device."""
+    COMMAND_SEND
+    """Send a command to several devices."""
+    COMMAND_BATCH
+    """Change detection rules."""
+    RULE_CHANGESET
+    """Start a firmware update rollout."""
+    ROLLOUT_CREATE
+    """Add a note to a device, asset or alarm."""
+    ANNOTATION
+}
+
+"""How much an action changes the physical or logical world, as its command definition declares."""
+enum AgentActionImpact {
+    """An ordinary action."""
+    NORMAL
+    """An action that interrupts a device's normal operation."""
+    DISRUPTIVE
+    """An action that cannot be undone."""
+    DESTRUCTIVE
+}
+
+"""The outcome of an agent-action decision."""
+enum AgentActionVerdict {
+    """The action is not allowed."""
+    REFUSE
+    """The action may run without a person approving it."""
+    AUTO
+    """The action needs the given number of people to approve it."""
+    APPROVE
+}
+
+"""The tenant's verdict on an action an AI agent proposes to take."""
+type AgentActuationDecision {
+    """What the policy says."""
+    verdict: AgentActionVerdict!
+    """How many distinct people must approve: 0 for AUTO and REFUSE, otherwise 1 or 2."""
+    requiredApprovals: Int!
+    """Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED or FLOOR_TWO_PERSON."""
+    reasons: [String!]!
+    """The policy version the decision was made under, or 0 when none is published."""
+    policyVersion: Int!
+    """When set, the groups every target device must belong to. Null for no group restriction."""
+    groupRestriction: [String!]
 }
 
 """
@@ -1071,6 +1187,34 @@ type Query {
     tokens. Requires member:read.
     """
     serviceAccountTokenEndpoint: String
+    """
+    This tenant's agent policy: the version in force, the working draft, and whether agent
+    actions are in effect. Requires agent:admin.
+    """
+    agentPolicy: AgentPolicy!
+    """The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
+    agentPolicyVersions(
+        """How many versions to return: 1 to 100. Defaults to 20."""
+        limit: Int
+    ): [AgentPolicyVersion!]!
+    """
+    The tenant's verdict on an action an AI agent proposes to take, read now from the published
+    policy. The agent's client is the one in the caller's own token, never an argument, so this
+    answers only for the caller. A caller without a client (a person's console session) is always
+    refused. An error must be treated as a refusal.
+    """
+    agentActuationDecision(
+        """The kind of action."""
+        kind: AgentActionKind!
+        """The action's impact, from the command definition. Defaults to NORMAL."""
+        impact: AgentActionImpact
+        """How many devices the action would reach."""
+        targetCount: Int!
+        """The groups the targets were chosen through, if any."""
+        groupTokens: [String!]
+        """For a command, its name."""
+        command: String
+    ): AgentActuationDecision!
 }
 
 """
@@ -1643,6 +1787,42 @@ type Mutation {
         """Token of the service account."""
         token: String!
     ): Boolean!
+    """
+    Saves the working draft of this tenant's agent policy. The document is JSON; unknown keys
+    and invalid values are refused. Saving changes nothing in force. Requires agent:admin, and
+    cannot be called by an AI agent or a service account.
+    """
+    saveAgentPolicyDraft(
+        """The policy document, as JSON."""
+        document: String!
+    ): AgentPolicy!
+    """
+    Publishes the draft as the agent policy in force, as a new version. A change that loosens the
+    policy (more automatic actions, larger limits, new clients, more approvers, fewer approvals,
+    weaker sign-in requirements) needs a second factor verified within the policy's step-up age,
+    and is refused with the code STEP_UP_REQUIRED otherwise. Requires agent:admin, and cannot be
+    called by an AI agent or a service account.
+    """
+    publishAgentPolicy: AgentPolicy!
+    """
+    Publishes an earlier version's document again, as a new version. The same step-up rule as
+    publishAgentPolicy applies. Requires agent:admin, and cannot be called by an AI agent or a
+    service account.
+    """
+    rollbackAgentPolicy(
+        """The version whose document to publish again."""
+        version: Int!
+    ): AgentPolicy!
+    """
+    Turns agent actions in this tenant off or on: publishes the policy in force as a new version
+    with only that changed. Turning them off always succeeds and needs no second factor; turning
+    them back on is a loosening and needs one. Requires agent:admin, and cannot be called by an AI
+    agent or a service account.
+    """
+    setAgentActuation(
+        """False to stop agent actions; true to allow them again under the published policy."""
+        enabled: Boolean!
+    ): AgentPolicy!
 }
 
 schema {

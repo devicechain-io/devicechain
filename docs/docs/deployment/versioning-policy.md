@@ -69,10 +69,13 @@ compatibility checks: it is declared there as an intended break, the same way as
 preview change ships unnoticed. A file format in the preview tier carries a version, such as
 `v1alpha1`, and a tool that does not know the version refuses the file rather than guessing.
 
-Today the preview tier holds two surfaces. The rule tests: the `evaluateRules` operation of the
+Today the preview tier holds three surfaces. The rule tests: the `evaluateRules` operation of the
 event-processing API, the scenario and test file formats, and the `dcctl test` command that reads them
-(see [Testing your rules](../guides/testing-your-rules.md)). And product as code: `dcctl product export`,
-`plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)).
+(see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
+`plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
+agent actions: the `act:*` OAuth scopes, the agent policy operations and its document, the
+`agentActuationDecision` query, the operator's per-tenant suspension, and the `agent` flag on service
+accounts (see [Agent actions](../concepts/mcp.md#agent-actions)).
 
 ## Supported upgrade paths {#upgrade-paths}
 

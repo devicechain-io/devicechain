@@ -1,5 +1,7 @@
 ALTER SEQUENCE "user-management".audit_events_id_seq OWNED BY "user-management".audit_events.id;
 ALTER SEQUENCE "user-management".dead_letters_id_seq OWNED BY "user-management".dead_letters.id;
+ALTER SEQUENCE "user-management".iam_agent_policies_id_seq OWNED BY "user-management".iam_agent_policies.id;
+ALTER SEQUENCE "user-management".iam_agent_policy_versions_id_seq OWNED BY "user-management".iam_agent_policy_versions.id;
 ALTER SEQUENCE "user-management".iam_identities_id_seq OWNED BY "user-management".iam_identities.id;
 ALTER SEQUENCE "user-management".iam_identity_links_id_seq OWNED BY "user-management".iam_identity_links.id;
 ALTER SEQUENCE "user-management".iam_idp_connection_domains_id_seq OWNED BY "user-management".iam_idp_connection_domains.id;
@@ -26,6 +28,12 @@ ALTER TABLE ONLY "user-management".audit_events ALTER COLUMN id SET DEFAULT next
 ALTER TABLE ONLY "user-management".dead_letters
  ADD CONSTRAINT dead_letters_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".dead_letters ALTER COLUMN id SET DEFAULT nextval('"user-management".dead_letters_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_agent_policies
+ ADD CONSTRAINT iam_agent_policies_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_agent_policies ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_agent_policies_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_agent_policy_versions
+ ADD CONSTRAINT iam_agent_policy_versions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_agent_policy_versions ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_agent_policy_versions_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_identities
  ADD CONSTRAINT iam_identities_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_identities ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_identities_id_seq'::regclass);
@@ -192,6 +200,18 @@ CREATE SEQUENCE "user-management".dead_letters_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "user-management".iam_agent_policies_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_agent_policy_versions_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "user-management".iam_identities_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -347,6 +367,28 @@ CREATE TABLE "user-management".dead_letters (
  stream_seq bigint NOT NULL,
  append_time timestamp with time zone NOT NULL,
  payload bytea
+);
+CREATE TABLE "user-management".iam_agent_policies (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ draft jsonb,
+ draft_updated_at timestamp with time zone,
+ draft_updated_by character varying(256),
+ published_version bigint DEFAULT 0 NOT NULL,
+ operator_suspended boolean DEFAULT false NOT NULL,
+ suspended_at timestamp with time zone,
+ suspended_by character varying(256)
+);
+CREATE TABLE "user-management".iam_agent_policy_versions (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ version bigint NOT NULL,
+ document jsonb NOT NULL,
+ origin character varying(32) NOT NULL,
+ published_by character varying(256) NOT NULL
 );
 CREATE TABLE "user-management".iam_identities (
  id bigint NOT NULL,
@@ -528,7 +570,8 @@ CREATE TABLE "user-management".iam_service_accounts (
  client_id character varying(64) NOT NULL,
  enabled boolean NOT NULL,
  scope jsonb,
- created_by character varying(256)
+ created_by character varying(256),
+ agent boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "user-management".iam_sso_link_requests (
  id bigint NOT NULL,
@@ -672,6 +715,8 @@ CREATE TABLE "user-management".user_management_migrations (
  id character varying(255) NOT NULL
 );
 CREATE UNIQUE INDEX idx_dead_letters_stream_seq ON "user-management".dead_letters USING btree (stream_seq, append_time);
+CREATE UNIQUE INDEX idx_iam_agent_policies_tenant ON "user-management".iam_agent_policies USING btree (tenant_id);
+CREATE UNIQUE INDEX idx_iam_agent_policy_versions_tenant_version ON "user-management".iam_agent_policy_versions USING btree (tenant_id, version);
 CREATE UNIQUE INDEX idx_iam_identities_email ON "user-management".iam_identities USING btree (email);
 CREATE UNIQUE INDEX idx_iam_identity_links_connection_identity ON "user-management".iam_identity_links USING btree (connection_id, identity_id);
 CREATE UNIQUE INDEX idx_iam_identity_links_connection_subject ON "user-management".iam_identity_links USING btree (connection_id, subject);

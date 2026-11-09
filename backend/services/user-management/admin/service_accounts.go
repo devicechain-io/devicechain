@@ -86,6 +86,9 @@ type ServiceAccountInput struct {
 	RoleTokens    []string
 	Scope         []ScopeAnchorInput
 	ExpiresInDays *int32
+	// Agent flags the account as running an AI agent: its tokens carry proposal authorities
+	// derived from its roles instead of the roles' writes. Set here and never changed.
+	Agent bool
 }
 
 // MintedSecret is a secret as it is minted: the cleartext, shown once, and its row.
@@ -226,6 +229,9 @@ func (s *Service) CreateServiceAccount(ctx context.Context, in ServiceAccountInp
 		if err := requireAssignable(a, roles); err != nil {
 			return err
 		}
+		if err := requireAgentFlag(ctx, tx, caller.Tenant, in.Agent, roles); err != nil {
+			return err
+		}
 		n, err := tx.CountTenantServiceAccounts(ctx, caller.Tenant)
 		if err != nil {
 			return err
@@ -240,7 +246,7 @@ func (s *Service) CreateServiceAccount(ctx context.Context, in ServiceAccountInp
 		}
 		acct := &iam.ServiceAccount{
 			TenantId: caller.Tenant, Token: in.Token, ClientId: clientID, Enabled: true,
-			Scope: scope, CreatedBy: caller.Email, Roles: roles,
+			Scope: scope, CreatedBy: caller.Email, Roles: roles, Agent: in.Agent,
 			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description)},
 			Secrets:     []iam.ServiceAccountSecret{minted.Row},
 		}
@@ -268,6 +274,9 @@ func (s *Service) SetServiceAccountAccess(ctx context.Context, token string, rol
 			return err
 		}
 		if err := requireAssignable(a, roles); err != nil {
+			return err
+		}
+		if err := requireAgentFlag(ctx, tx, acct.TenantId, acct.Agent, roles); err != nil {
 			return err
 		}
 		return tx.SetServiceAccountAccess(ctx, acct, roles, scope)

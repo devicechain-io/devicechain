@@ -413,6 +413,15 @@ const (
 	// cannot read, list, grant, or change provider config (that is ai:admin) or touch any
 	// tenant resource.
 	AIInfer Authority = "ai:infer"
+
+	// AgentAdmin gates a tenant's AGENT POLICY: the published document that decides whether AI
+	// agents may act in the tenant at all, which clients may, what needs a person's approval, and
+	// the tenant kill switch (setAgentActuation). Tenant-tier: a tenant governs its own agents.
+	//
+	// 🔴 NO OAuth CEILING MAY EVER HOLD IT. An agent that could edit the policy that bounds it
+	// would be bounded by nothing; the act:* ceilings hold proposal authorities only, and a
+	// ratchet (TestAgentAdminNeverInActCeiling) pins that this one is never among them.
+	AgentAdmin Authority = "agent:admin"
 )
 
 // vocabulary maps every known authority to its tier. A Role may only grant
@@ -522,10 +531,13 @@ var vocabulary = map[Authority]Tiers{
 	// within a tenant, and the inference service holds no ambient authority over
 	// tenant data with it (ADR-047 confused-deputy red line).
 	AIInfer: tenant,
+	// The agent policy is a tenant's own governance of its own agents.
+	AgentAdmin: tenant,
 }
 
-// ValidAuthority reports whether s names a known authority (including the
-// super-authority "*").
+// ValidAuthority reports whether s names a known, GRANTABLE authority (including the
+// super-authority "*"). A proposal authority is known but not grantable, so it answers false:
+// no role and no service-token request may name one (see proposal.go).
 func ValidAuthority(s string) bool {
 	if Authority(s) == AuthorityAll {
 		return true
@@ -539,7 +551,13 @@ func ValidAuthority(s string) bool {
 // the bearer's tier") and for an unknown authority, so a caller must decide what an
 // untiered authority means rather than receiving a plausible default. Callers that
 // gate on the answer must fail closed when ok is false.
+//
+// A proposal authority is tenant-tier (it acts within one tenant) even though it is not in the
+// grantable vocabulary: see proposal.go.
 func TiersOf(a Authority) (Tiers, bool) {
+	if _, ok := proposalSources[a]; ok {
+		return tenant, true
+	}
 	t, ok := vocabulary[a]
 	return t, ok
 }

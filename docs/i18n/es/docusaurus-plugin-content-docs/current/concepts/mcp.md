@@ -78,6 +78,50 @@ Los tokens de entidad, como el de un dispositivo o una alarma, permanecen en el 
 Los campos que antes estaban junto a un token (el `name`, `description` y `externalId` de un dispositivo, el `name` y `unit` de una métrica, el `alarmKey` de una alarma, el `name` y `error` de un comando) ahora están bajo `untrusted` como `{ "value": ..., "source": ... }`. Actualice los clientes que los leen.
 :::
 
+## Acciones de agentes: quién puede actuar y cómo detenerlo (vista previa) {#agent-actions}
+
+DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Esta versión incluye los controles que deciden **si un asistente puede pedir actuar**. No añade ninguna herramienta de acción, y nada de lo que tiene un asistente puede cambiar algo todavía. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces).
+
+**Un asistente nunca tiene un permiso de escritura.** Cuando una persona autoriza a un asistente para un alcance de acción, el token que recibe lleva un permiso de *propuesta* en lugar del permiso de escritura de la persona: `alarm:propose` en lugar de `alarm:write`, `command:propose` en lugar de `command:write`. El permiso de propuesta se calcula a partir de lo que la persona tiene en ese momento, y se vuelve a calcular en cada renovación, así que una persona que pierde `alarm:write` le quita `alarm:propose` a su asistente en el plazo de vida de un token. Ningún rol puede conceder un permiso de propuesta, y el `*` de un superusuario nunca cuenta como tal. Toda operación existente que cambia datos comprueba el permiso de escritura, así que un token de asistente robado no puede cambiar nada, aunque se envíe directamente a la API en vez de a través del servidor MCP.
+
+**Los alcances de acción.** Cada uno es una línea distinta en la pantalla de consentimiento:
+
+| Alcance | Qué puede pedir |
+| --- | --- |
+| `act:alarms` | Reconocer o borrar alarmas. |
+| `act:commands` | Enviar comandos a dispositivos. |
+| `act:rules` | Proponer reglas de detección para que una persona las revise. |
+| `act:updates` | Proponer despliegues de firmware para que una persona los revise. |
+| `act:annotate` | Añadir notas marcadas como escritas por el asistente. |
+
+**Tres interruptores, todos apagados por defecto.** Un alcance de acción se concede solo cuando se cumplen los tres. Se comprueban de nuevo al canjear el código de autorización y en cada renovación, así que apagar cualquiera de ellos termina las sesiones de asistente existentes en su siguiente renovación:
+
+1. **La instancia.** El operador establece `agentActuation.enabled: true` en `functionalAreas.user-management.config`. Apagado, los alcances de acción no se anuncian, ningún cliente OAuth puede registrarse para uno y toda solicitud de uno se rechaza. Actívalo solo cuando una actualización haya terminado de desplegarse. Después, el operador registra los alcances de acción en cada cliente OAuth que pueda usarlos, cliente por cliente.
+2. **La anulación del operador por inquilino.** `setTenantAgentActuationSuspended` en la API de administración (requiere `tenant:write`) detiene las acciones de agentes en un inquilino diga lo que diga su propia política.
+3. **La política de agentes del inquilino.** Un administrador del inquilino con `agent:admin` publica una política que habilita la actuación y enumera los identificadores de cliente OAuth que pueden recibir alcances de acción. Sin una política publicada, los agentes no pueden actuar.
+
+La sesión de un superusuario nunca recibe un alcance de acción. Un operador que quiera que un asistente actúe en un inquilino lo hace mediante una membresía en ese inquilino, como cualquier otra persona.
+
+**La política de agentes** es un documento JSON que se guarda como borrador (`saveAgentPolicyDraft`) y se publica como una versión numerada (`publishAgentPolicy`). Las claves desconocidas y los valores no válidos se rechazan. Publicar nunca edita una versión anterior: una reversión (`rollbackAgentPolicy`) vuelve a publicar un documento anterior como una versión nueva. Un cambio que **relaja** la política (habilitarla, añadir un cliente, más acciones automáticas, límites mayores, más aprobadores, menos aprobaciones, una antigüedad de verificación más larga) necesita un segundo factor verificado dentro de la antigüedad de verificación de la política, 15 minutos por defecto, y se rechaza con `STEP_UP_REQUIRED` en caso contrario. Un inicio de sesión completado con un código de recuperación solo cuenta cuando la política lo indica. Endurecer la política no necesita verificación adicional. Cada escritura queda registrada en el diario de auditoría, y ninguna puede hacerla un asistente ni una cuenta de servicio.
+
+```json
+{
+  "actuation": "enabled",
+  "clients": ["claude-desktop"],
+  "approvers": { "roles": ["ops-lead"], "stepUpMaxAge": "15m" },
+  "tools": {
+    "alarms": { "ack": "approve", "clear": "approve" },
+    "commands": { "commands": ["setpoint"], "auto": { "impact": ["NORMAL"], "maxDevices": 5 } }
+  }
+}
+```
+
+**El interruptor de parada.** `setAgentActuation(enabled: false)` apaga las acciones de agentes en el inquilino de inmediato, publicando la política vigente con solo eso cambiado. Siempre funciona y no necesita un segundo factor. Volver a encenderlas es una relajación y lo necesita.
+
+**Pedir un veredicto.** `agentActuationDecision` devuelve el veredicto del inquilino sobre una acción que propone un asistente: `REFUSE`, `AUTO` o `APPROVE` con una o dos aprobaciones, además de los motivos y la versión de la política. El asistente es el cliente que nombra el propio token del llamante, nunca un argumento. Algunos mínimos se mantienen diga lo que diga la política: un comando destructivo, un cambio de reglas o un despliegue nunca se ejecutan sin una persona; un comando destructivo y un despliegue de más de 100 dispositivos necesitan dos personas; y una acción que necesita más aprobadores de los que tiene el inquilino se rechaza en lugar de rebajarse.
+
+**Asistentes que funcionan sin una persona.** Una cuenta de servicio puede crearse como **cuenta de agente** (`agent: true`, que no se puede cambiar después). Sus tokens llevan los permisos de lectura de sus roles y, cuando pide un alcance de acción que la política del inquilino permite para su identificador de cliente, los permisos de propuesta calculados a partir de los permisos de escritura de sus roles, nunca las escrituras mismas. Una cuenta de servicio ordinaria tiene los permisos de sus roles como antes; un asistente que funciona con una de ellas es una integración, no un agente gobernado. Un inquilino puede exigir la marca: enumerar permisos en `serviceAccounts.agentFlagRequiredFor` rechaza una cuenta ordinaria que tendría alguno de ellos.
+
 ## El modelo de seguridad
 
 MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA capacidades reales. El riesgo es que una implementación descuidada entregue a un agente una clave poderosa y de alcance amplio. El servidor de DeviceChain está diseñado para que eso no pueda ocurrir.
@@ -184,7 +228,7 @@ Algunos límites son decisiones y otros son cotas de la implementación actual. 
 
 **Deliberado, y sin previsión de cambio:**
 
-- **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance elevado *y* una confirmación humana explícita. Un asistente nunca accionará un dispositivo en silencio.
+- **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance de acción, la política de agentes del inquilino *y* la aprobación de una persona cuando la política la exige. Los controles que deciden si un asistente puede pedirlo ya existen (consulta [Acciones de agentes](#agent-actions)); todavía no hay ninguna herramienta de acción. Un asistente nunca accionará un dispositivo en silencio.
 - **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para alcanzar otro inquilino.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
 - **Ninguna credencial de servicio en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: ninguna ruta de código del servidor MCP echa mano de una credencial propia, así que un agente no tiene ninguna autoridad prestada que explotar. Toda lectura hacia abajo sale bajo el token del propio solicitante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio. Eso es fontanería de despliegue, no algo que el servidor use.)

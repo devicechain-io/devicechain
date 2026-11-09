@@ -106,7 +106,7 @@ func (s *Service) CreateOAuthClient(ctx context.Context, in OAuthClientInput) (*
 	if err := validateRedirectURIs(in.RedirectURIs); err != nil {
 		return nil, "", err
 	}
-	if err := validateClientScopes(in.Scopes); err != nil {
+	if err := validateClientScopesFor(in.Scopes, s.agentActuation); err != nil {
 		return nil, "", err
 	}
 	var secret, hash string
@@ -182,7 +182,7 @@ func (s *Service) UpdateOAuthClient(ctx context.Context, clientId string, reques
 		return nil, err
 	}
 	scopes := request.Scopes.ApplyTo(c.Scopes)
-	if err := validateClientScopes(scopes); err != nil {
+	if err := validateClientScopesFor(scopes, s.agentActuation); err != nil {
 		return nil, err
 	}
 	c.Name = request.Name.ApplyToNullString(c.Name)
@@ -290,7 +290,12 @@ func validateRedirectURIs(uris []string) error {
 // validateClientScopes requires at least one scope and rejects any the AS does not
 // grant (fail-closed) — a client cannot be registered for a scope that does not
 // exist.
-func validateClientScopes(scopes []string) error {
+func validateClientScopes(scopes []string) error { return validateClientScopesFor(scopes, false) }
+
+// validateClientScopesFor validates a client's registered scopes on an instance whose
+// agent-actuation flag is actuation. Registering an act:* scope on a client is the OPERATOR's
+// per-client opt-in to agent actions, and it is possible only while the instance flag is on.
+func validateClientScopesFor(scopes []string, actuation bool) error {
 	if len(scopes) > MaxClientScopes {
 		return limit.Exceeded("scopes", len(scopes), MaxClientScopes)
 	}
@@ -305,8 +310,8 @@ func validateClientScopes(scopes []string) error {
 			"have, or omit the field to leave them alone")
 	}
 	for _, sc := range scopes {
-		if !auth.IsSupportedScope(sc) {
-			return fmt.Errorf("unknown scope %q (supported: %s)", sc, strings.Join(auth.SupportedScopes, ", "))
+		if !auth.IsSupportedScopeFor(sc, actuation) {
+			return fmt.Errorf("unknown scope %q (supported: %s)", sc, strings.Join(auth.SupportedScopesFor(actuation), ", "))
 		}
 	}
 	return nil

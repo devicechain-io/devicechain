@@ -176,7 +176,7 @@ func (m *Manager) ResumeAuthorizeSso(ctx context.Context, code, browserSecret st
 	// page can send the client the invalid_target the redirect URI (re-resolved above, so
 	// trusted) is for, rather than a dead-end page. Nothing is counted here: the entry request
 	// counted this flow once.
-	if _, verr := ValidateAuthorizeRequest(client, p, m.resourcePolicy()); verr != nil {
+	if _, verr := m.ValidateAuthorize(client, p); verr != nil {
 		return &AuthorizeResume{Params: p, Client: client}, verr
 	}
 	ident, err := m.completeSsoRecord(ctx, rec)

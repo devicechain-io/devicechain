@@ -62,6 +62,12 @@ type AuthorizationServerMetadata struct {
 // authentication is "none" (public PKCE clients, e.g. MCP) OR client_secret_basic/
 // _post (confidential clients, e.g. a server-side app like Grafana).
 func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata {
+	return buildAuthorizationServerMetadata(issuer, auth.SupportedScopes)
+}
+
+// buildAuthorizationServerMetadata is BuildAuthorizationServerMetadata advertising scopes: the
+// act:* scopes appear only when the instance's agent-actuation flag is on (Manager.SupportedScopes).
+func buildAuthorizationServerMetadata(issuer string, scopes []string) AuthorizationServerMetadata {
 	return AuthorizationServerMetadata{
 		Issuer:                issuer,
 		AuthorizationEndpoint: issuer + AuthorizePath,
@@ -70,7 +76,7 @@ func BuildAuthorizationServerMetadata(issuer string) AuthorizationServerMetadata
 		JwksURI:               issuer + OAuthJwksPath,
 		// Copy the exported scope slice so the served document can't be skewed by a
 		// later mutation of the package-global.
-		ScopesSupported:                   append([]string(nil), auth.SupportedScopes...),
+		ScopesSupported:                   append([]string(nil), scopes...),
 		ResponseTypesSupported:            []string{"code"},
 		ResponseModesSupported:            []string{"query"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token", "client_credentials"},
@@ -109,7 +115,12 @@ func MetadataPathFor(issuer string) string {
 // client that appends rather than inserts; the conditional avoids registering one
 // pattern twice, which ServeMux panics on.
 func RegisterMetadataHandlers(mux *http.ServeMux, issuer string) {
-	h := BoundRequests(AuthorizationServerMetadataHandler(issuer), MaxSmallBodyBytes)
+	RegisterMetadataHandlersFor(mux, issuer, auth.SupportedScopes)
+}
+
+// RegisterMetadataHandlersFor is RegisterMetadataHandlers advertising scopes.
+func RegisterMetadataHandlersFor(mux *http.ServeMux, issuer string, scopes []string) {
+	h := BoundRequests(authorizationServerMetadataHandler(issuer, scopes), MaxSmallBodyBytes)
 	mux.Handle(MetadataPath, h)
 	if p := MetadataPathFor(issuer); p != MetadataPath {
 		mux.Handle(p, h)
@@ -121,7 +132,11 @@ func RegisterMetadataHandlers(mux *http.ServeMux, issuer string) {
 // always a validated absolute origin here. The document is public (unauthenticated
 // discovery) and cacheable.
 func AuthorizationServerMetadataHandler(issuer string) http.Handler {
-	body, err := json.Marshal(BuildAuthorizationServerMetadata(issuer))
+	return authorizationServerMetadataHandler(issuer, auth.SupportedScopes)
+}
+
+func authorizationServerMetadataHandler(issuer string, scopes []string) http.Handler {
+	body, err := json.Marshal(buildAuthorizationServerMetadata(issuer, scopes))
 	if err != nil {
 		// The struct has no marshaler-bearing fields, so this is unreachable today;
 		// panic rather than silently serve an empty 200 if a future field breaks it.

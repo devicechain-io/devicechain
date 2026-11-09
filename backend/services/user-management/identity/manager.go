@@ -202,6 +202,9 @@ type Manager struct {
 	// (defaultResourcePolicy), never "unchecked".
 	resources  *resourcePolicy
 	ssoLimiter beginLimiter
+	// agentActuation is the instance flag for agent actions (SetAgentActuation). False, the
+	// default, refuses every act:* scope and every agent decision on this instance.
+	agentActuation bool
 	// mfaKV holds the sign-ins waiting for their second factor (dc_mfa_challenges), apart from
 	// every other bucket. Nil means the instance cannot complete an enrolled person's sign-in,
 	// and it FAILS CLOSED: no token is minted without the factor.
@@ -1070,7 +1073,7 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // whichever of the three mints (select, refresh, OAuth) asks. A superuser is never
 // scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
 // membership whose bound cannot be read must not be minted unbounded.
-func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr []string, err error) {
+func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, amr *signIn, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
 	// sessions a superuser's break-glass still applies to). It also hands back the sign-in's
@@ -1207,7 +1210,7 @@ func unionStrings(a, b []string) []string {
 // amr is the sign-in's, read from its session record by the caller (see admitTenant). It is
 // stamped on both tokens; an empty one (a single sign-on, or a record from before amr was
 // recorded) writes no claim.
-func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool, amr []string) (*TokenPair, error) {
+func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool, amr *signIn) (*TokenPair, error) {
 	// Every enabled tenant member can view the domain objects by default (the
 	// `viewer` baseline); writes stay role-gated, as does reading a device
 	// credential (see viewerAuthorities). Superusers already hold `*`.
@@ -1222,15 +1225,15 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	var access auth.IssuedToken
 	var err error
 	if scope.IsScoped() && !sudo {
-		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amrOptions(amr)...)
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString(), amr.options()...)
 	} else {
-		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amrOptions(amr)...)
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString(), amr.options()...)
 	}
 	if err != nil {
 		return nil, err
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti, amrOptions(amr)...)
+	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti, amr.options()...)
 	if err != nil {
 		return nil, err
 	}
