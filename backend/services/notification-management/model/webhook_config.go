@@ -41,6 +41,11 @@ type WebhookConfig struct {
 	// receiver relies on, so delivery refuses (never sends unsigned) when the channel holds no
 	// signing key; mint one with generateNotificationChannelSigningSecret.
 	Signing bool `json:"signing"`
+	// LinkBaseURL is the optional console base URL (https://console.example.com). When set, the
+	// payload carries "alarmUrl" and, for an alarm whose device is known, "deviceUrl", built
+	// from it the way the Slack, Teams and PagerDuty channels build their links. It is never
+	// dialed: it only ends up in the body. Normalized without a trailing slash.
+	LinkBaseURL string `json:"linkBaseUrl"`
 }
 
 // ParseWebhookConfig unmarshals and validates a webhook channel's config; token names the
@@ -64,6 +69,11 @@ func ParseWebhookConfig(token string, config *string) (*WebhookConfig, error) {
 	if _, err := httpsink.ValidateURL(cfg.URL); err != nil {
 		return nil, fmt.Errorf("webhook channel %q has an %w", token, err)
 	}
+	base, err := normalizeLinkBase(token, ChannelTypeWebhook, cfg.LinkBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.LinkBaseURL = base
 	if cfg.Method == "" {
 		cfg.Method = http.MethodPost
 	}

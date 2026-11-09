@@ -83,7 +83,9 @@ mutation {
 
 Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 [Slack 渠道](#create-a-slack-channel)会为你排版消息，是更好的选择。
 
-Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。告警已按“已清除”存储后才补发的 `CLEARED` 通知不包含来源，因为存储的状态并不保留它。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知不包含这些字段。
+Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知（`RENOTIFIED`）和调度器拾取的延迟 `CLEARED` 通知也会在已知时包含这些设备和来源字段。升级前已发送过通知的告警，其后续此类通知会省略这些字段。
+
+可在 Webhook 通道的 `config` 中设置可选的 `linkBaseUrl`，值为控制台的 `https` 基础 URL，例如 `"linkBaseUrl":"https://console.example.com"`。此时，正文会包含 `alarmUrl`，并在告警指明其设备时包含 `deviceUrl`。未设置 `linkBaseUrl` 时，这两个键均会省略。
 
 ### 原生 Slack、Teams 和 PagerDuty 渠道 {#native-channels}
 

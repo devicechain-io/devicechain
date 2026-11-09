@@ -79,6 +79,14 @@ func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, se
 // once its targets are recorded, that an unannounced clear is now owed.
 func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity string,
 	raisedTime, at time.Time, targets []PagedTarget) (*NotificationState, error) {
+	return api.RecordPagedFrom(ctx, alarmToken, alarmKey, severity, raisedTime, at, targets, AlarmSource{})
+}
+
+// RecordPagedFrom is RecordPaged that also keeps the alarm's source (originator and device
+// facts) on the row, so a notification rendered from the row alone can name the device. An
+// empty field of src leaves the stored value alone.
+func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, severity string,
+	raisedTime, at time.Time, targets []PagedTarget, src AlarmSource) (*NotificationState, error) {
 	raised := cycleKey(raisedTime)
 	var out *NotificationState
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -96,6 +104,7 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 					NotifyCount:     1,
 					CycleRaisedAt:   raised,
 				}
+				created.applySource(src, false)
 				created.PagedTargets = mergePaged(nil, raised, targets)
 				if created.PagedTargets != nil {
 					created.PagedCycle = raised
@@ -111,6 +120,7 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 			// describes a newer cycle; nothing about this one belongs on it.
 			return nil
 		}
+		found.applySource(src, found.LastNotifiedAt.Valid && !at.After(found.LastNotifiedAt.Time))
 		found.PagedTargets = mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)
 		if len(targets) > 0 {
 			found.PagedCycle = found.CycleRaisedAt

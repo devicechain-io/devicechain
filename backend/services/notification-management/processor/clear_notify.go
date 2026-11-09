@@ -158,6 +158,7 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 			Severity: st.Severity, State: "CLEARED",
 			RaisedTime: st.CycleRaisedAt.Time, OccurredTime: st.ClearedAt.Time,
 		}
+		applyStateSource(clear, st)
 		delivered, err := n.announceClearReporting(ctx, clear, true, true)
 		if err != nil {
 			if spent(ctx.Err()) {

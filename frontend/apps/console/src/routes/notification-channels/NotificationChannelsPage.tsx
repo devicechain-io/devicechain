@@ -366,11 +366,15 @@ function ChannelForm({
             <span>{t('entities:notificationChannelClearSecret')}</span>
           </label>
         )}
-        {native && (
+        {(native || draft.channelType === 'webhook') && (
           <FormField
             label={t('entities:notificationChannelLinkBase')}
             htmlFor="nc-link"
-            description={t('entities:notificationChannelLinkBaseHelp')}
+            description={
+              draft.channelType === 'webhook'
+                ? t('entities:notificationChannelWebhookLinkBaseHelp')
+                : t('entities:notificationChannelLinkBaseHelp')
+            }
           >
             <Input
               id="nc-link"

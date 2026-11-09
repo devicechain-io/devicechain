@@ -48,7 +48,7 @@ func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.Notificatio
 		return err
 	}
 
-	body, err := json.Marshal(webhookBody(recipients, msg))
+	body, err := json.Marshal(webhookBody(recipients, msg, cfg.LinkBaseURL))
 	if err != nil {
 		return fmt.Errorf("webhook channel %q marshal payload: %w", channel.Token, err)
 	}
@@ -121,11 +121,19 @@ func (a *webhookAdapter) signingKeys(ctx context.Context, channel *model.Notific
 }
 
 // webhookBody adds the rule's recipients to the rendered payload without mutating the
-// shared RenderedNotification (the same render is delivered to several channels).
-func webhookBody(recipients []string, msg *RenderedNotification) map[string]any {
-	body := make(map[string]any, len(msg.Payload)+1)
+// shared RenderedNotification (the same render is delivered to several channels). linkBase is
+// the channel's console base URL: with it the body gains "alarmUrl" and, when the alarm names
+// its device, "deviceUrl"; without it the body is exactly the rendering's.
+func webhookBody(recipients []string, msg *RenderedNotification, linkBase string) map[string]any {
+	body := make(map[string]any, len(msg.Payload)+3)
 	for k, v := range msg.Payload {
 		body[k] = v
+	}
+	if link := alarmLink(linkBase); link != "" {
+		body["alarmUrl"] = link
+	}
+	if link := deviceLink(linkBase, msg.Alarm.DeviceToken); link != "" {
+		body["deviceUrl"] = link
 	}
 	if len(recipients) > 0 {
 		body["recipients"] = recipients

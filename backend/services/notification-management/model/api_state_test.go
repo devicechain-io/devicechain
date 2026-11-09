@@ -340,3 +340,24 @@ func mustAck(t *testing.T, api *Api, ctx context.Context, token string, at time.
 		t.Fatalf("ack %s: %v", token, err)
 	}
 }
+
+// The row keeps the newest event's device facts: an older event finishing late fills only what is
+// unknown and never puts a stale name back.
+func TestRecordedSourceIsNotRegressedByAnOlderEvent(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	t0 := time.Now().UTC().Truncate(time.Second)
+	rec := func(at time.Time, src AlarmSource) {
+		t.Helper()
+		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec(t0.Add(time.Minute), AlarmSource{DeviceName: "New name", DeviceToken: "dev-1"})
+	rec(t0, AlarmSource{DeviceName: "Old name", DeviceTypeToken: "boiler"})
+	states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"alarm-1"})
+	got := states[0].Source()
+	if got.DeviceName != "New name" || got.DeviceToken != "dev-1" || got.DeviceTypeToken != "boiler" {
+		t.Fatalf("source = %+v", got)
+	}
+}

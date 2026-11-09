@@ -288,8 +288,8 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			// describes the cycle it was raised in, and RecordNotification ignores it as stale
 			// rather than writing it into the newer cycle as that cycle's first page.
 			var err error
-			recorded, err = n.api.RecordPaged(sctx, alarm, latest.AlarmKey, latest.Severity,
-				event.RaisedTime, now, pagedTargets(tally.targets))
+			recorded, err = n.api.RecordPagedFrom(sctx, alarm, latest.AlarmKey, latest.Severity,
+				event.RaisedTime, now, pagedTargets(tally.targets), eventSource(&event))
 			return err
 		}); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).

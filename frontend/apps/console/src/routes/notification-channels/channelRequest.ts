@@ -34,7 +34,7 @@ export interface ChannelDraft {
   linkBaseUrl: string;
   region: string;
   source: string;
-  /** The config JSON, for the types without a dedicated form (smtp, webhook). */
+  /** The config JSON for smtp, or webhook settings other than linkBaseUrl. */
   rawConfig: string;
   /** Remove the stored credential (smtp and webhook only; a native channel cannot lose its credential). */
   clearSecret: boolean;
@@ -58,6 +58,20 @@ export function emptyDraft(channelType: string): ChannelDraft {
 /** The config document for a draft, or null when it carries nothing. */
 export function configOf(d: ChannelDraft): string | null {
   switch (d.channelType) {
+    case 'webhook': {
+      const raw = d.rawConfig.trim();
+      try {
+        const cfg = JSON.parse(raw || '{}') as Record<string, unknown>;
+        // Invalid raw config stays visible and is rejected by draftProblem, even on edit.
+        if (cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)) return raw;
+        delete cfg.linkBaseUrl;
+        const url = d.linkBaseUrl.trim();
+        if (url) cfg.linkBaseUrl = url;
+        return Object.keys(cfg).length > 0 || raw ? JSON.stringify(cfg) : null;
+      } catch {
+        return raw;
+      }
+    }
     case 'slack':
     case 'teams': {
       const url = d.linkBaseUrl.trim();
@@ -88,11 +102,18 @@ export function draftOf(c: NotificationChannelRecord): ChannelDraft {
   if (!c.config) return d;
   if (!isNative(c.channelType)) {
     d.rawConfig = c.config;
-    return d;
+    if (c.channelType !== 'webhook') return d;
   }
   try {
     const v = JSON.parse(c.config) as Record<string, unknown>;
     if (typeof v.linkBaseUrl === 'string') d.linkBaseUrl = v.linkBaseUrl;
+    if (c.channelType === 'webhook') {
+      if (typeof v.linkBaseUrl === 'string') {
+        delete v.linkBaseUrl;
+        d.rawConfig = Object.keys(v).length > 0 ? JSON.stringify(v, null, 2) : '';
+      }
+      return d;
+    }
     if (typeof v.region === 'string') d.region = v.region;
     if (typeof v.source === 'string') d.source = v.source;
   } catch {
