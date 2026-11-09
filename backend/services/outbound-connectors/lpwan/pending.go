@@ -55,8 +55,8 @@ const SettleLease = 45 * time.Second
 type PendingStore interface {
 	// Add records a pending downlink. The (tenant, queue item id) pair is unique.
 	Add(ctx context.Context, p Pending) error
-	// Find returns the pending downlink with the queue item id, or ErrNoPending.
-	Find(ctx context.Context, tenant, queueItemID string) (*Pending, error)
+	// Lookup returns the pending downlink with the queue item id, or ErrNoPending.
+	Lookup(ctx context.Context, tenant, queueItemID string) (*Pending, error)
 	// MarkTransmitted records the gateway's acceptance of the frame, keeping the first.
 	MarkTransmitted(ctx context.Context, tenant string, id uint, at time.Time) error
 	// Claim takes the record's settle lease for lease from now, reporting whether this caller got it.
@@ -115,8 +115,8 @@ func (s *DBPending) Add(ctx context.Context, p Pending) error {
 	return s.db(ctx, p.Tenant).Create(&row).Error
 }
 
-// Find implements PendingStore.
-func (s *DBPending) Find(ctx context.Context, tenant, queueItemID string) (*Pending, error) {
+// Lookup implements PendingStore.
+func (s *DBPending) Lookup(ctx context.Context, tenant, queueItemID string) (*Pending, error) {
 	var row LpwanPendingAck
 	err := s.db(ctx, tenant).Where("queue_item_id = ?", queueItemID).Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {

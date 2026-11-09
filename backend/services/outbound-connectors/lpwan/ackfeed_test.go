@@ -55,7 +55,7 @@ func (m *memPending) Add(_ context.Context, p Pending) error {
 	return nil
 }
 
-func (m *memPending) Find(_ context.Context, tenant, id string) (*Pending, error) {
+func (m *memPending) Lookup(_ context.Context, tenant, id string) (*Pending, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.findErr != nil {

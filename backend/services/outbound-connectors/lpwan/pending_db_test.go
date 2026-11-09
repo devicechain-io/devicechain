@@ -36,15 +36,15 @@ func TestTheStoreRoundTripsAndIsolatesTenants(t *testing.T) {
 		CommandToken: "cmd-1", DispatchNonce: "n1", QueueItemID: itemID, DeadlineAt: now.Add(time.Hour)}
 	require.NoError(t, s.Add(ctx, p))
 
-	got, err := s.Find(ctx, "acme", itemID)
+	got, err := s.Lookup(ctx, "acme", itemID)
 	require.NoError(t, err)
 	require.Equal(t, "n1", got.DispatchNonce)
 	require.Equal(t, "cmd-1", got.CommandToken)
 	require.Nil(t, got.TransmittedAt)
 
-	_, err = s.Find(ctx, "other", itemID)
+	_, err = s.Lookup(ctx, "other", itemID)
 	require.ErrorIs(t, err, ErrNoPending, "the same queue item id in another tenant is not this downlink")
-	_, err = s.Find(ctx, "acme", "6e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f22")
+	_, err = s.Lookup(ctx, "acme", "6e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f22")
 	require.ErrorIs(t, err, ErrNoPending)
 
 	// (tenant, queue item id) is unique.
@@ -57,17 +57,17 @@ func TestTheStoreRoundTripsAndIsolatesTenants(t *testing.T) {
 	first := now.Add(time.Minute)
 	require.NoError(t, s.MarkTransmitted(ctx, "acme", got.ID, first))
 	require.NoError(t, s.MarkTransmitted(ctx, "acme", got.ID, first.Add(time.Hour)))
-	got, err = s.Find(ctx, "acme", itemID)
+	got, err = s.Lookup(ctx, "acme", itemID)
 	require.NoError(t, err)
 	require.NotNil(t, got.TransmittedAt)
 	require.True(t, got.TransmittedAt.Equal(first), "the first transmission report wins")
 
 	// A delete in the wrong tenant removes nothing.
 	require.NoError(t, s.Delete(ctx, "other", got.ID))
-	_, err = s.Find(ctx, "acme", itemID)
+	_, err = s.Lookup(ctx, "acme", itemID)
 	require.NoError(t, err)
 	require.NoError(t, s.Delete(ctx, "acme", got.ID))
-	_, err = s.Find(ctx, "acme", itemID)
+	_, err = s.Lookup(ctx, "acme", itemID)
 	require.ErrorIs(t, err, ErrNoPending)
 	require.NoError(t, s.Delete(ctx, "acme", got.ID), "deleting what is gone is not an error")
 }
@@ -104,7 +104,7 @@ func TestClaimIsAtomicAndExpiresAndHidesTheRecordFromTheSweep(t *testing.T) {
 	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 	require.NoError(t, s.Add(ctx, Pending{Tenant: "acme", Integration: "cs1", DeviceToken: "d", DevEUI: "0102030405060708",
 		CommandToken: "c", DispatchNonce: "n", QueueItemID: itemID, DeadlineAt: now.Add(-time.Minute)}))
-	p, err := s.Find(ctx, "acme", itemID)
+	p, err := s.Lookup(ctx, "acme", itemID)
 	require.NoError(t, err)
 
 	won, err := s.Claim(ctx, "acme", p.ID, now, time.Minute)

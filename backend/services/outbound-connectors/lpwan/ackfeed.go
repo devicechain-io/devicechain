@@ -211,7 +211,7 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 		ack(msg)
 		return
 	}
-	p, err := f.pending.Find(ctx, tenant, rep.QueueItemID)
+	p, err := f.pending.Lookup(ctx, tenant, rep.QueueItemID)
 	switch {
 	case errors.Is(err, ErrNoPending):
 		f.unmatched(msg, tenant, rep)
