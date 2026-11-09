@@ -86,7 +86,7 @@ mutation {
 
 Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [canal de Slack](#create-a-slack-channel) nativo de abajo da formato al mensaje por ti y es la mejor opción.
 
-El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Una renotificación temporizada no las incluye.
+El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador cuando se conocen, y las horas. Una notificación `CLEARED` enviada tarde, cuando la alarma ya estaba guardada como cerrada, no incluye al originador, porque el estado guardado no lo conserva. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Una renotificación temporizada no las incluye.
 
 ### Canales nativos de Slack, Teams y PagerDuty {#native-channels}
 

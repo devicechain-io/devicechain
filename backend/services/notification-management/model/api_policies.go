@@ -61,6 +61,9 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 			QuietHoursSlots:          quiet.slots,
 			QuietHoursBypassSeverity: rdb.NullStrOf(quiet.bypass),
 		}
+		if policy.NotifyOnClear {
+			policy.NotifyOnClearSince = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		}
 		if err := tx.Create(policy).Error; err != nil {
 			return err
 		}
@@ -211,6 +214,14 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.EscalateAfterSeconds = request.EscalateAfterSeconds.ApplyToNullInt64(policy.EscalateAfterSeconds)
 		policy.MaxEscalations = request.MaxEscalations.ApplyToNullInt64(policy.MaxEscalations)
 		policy.Enabled = enabled
+		// The cut-off moves only when the option turns on, never on another edit; it is
+		// cleared when the option turns off so the next opt-in starts fresh.
+		switch {
+		case notifyOnClear && !policy.NotifyOnClear:
+			policy.NotifyOnClearSince = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		case !notifyOnClear:
+			policy.NotifyOnClearSince = sql.NullTime{}
+		}
 		policy.NotifyOnClear = notifyOnClear
 		policy.QuietHoursTimezone = rdb.NullStrOf(quiet.timezone)
 		policy.QuietHoursSlots = quiet.slots
@@ -237,6 +248,7 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 				"max_escalations":        policy.MaxEscalations,
 				"enabled":                policy.Enabled,
 				"notify_on_clear":        policy.NotifyOnClear,
+				"notify_on_clear_since":  policy.NotifyOnClearSince,
 
 				"quiet_hours_timezone":        policy.QuietHoursTimezone,
 				"quiet_hours_slots":           policy.QuietHoursSlots,
