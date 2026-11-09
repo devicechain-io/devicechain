@@ -659,6 +659,10 @@ var sweepExemptions = map[string]string{
 		"correct behaviour. It is read by the enforcing services over a service token",
 	"user-management.tenantTokens": "requires the system-tier tenant:read, for the reason tenantGovernance " +
 		"is exempt: a tenant user, even one with every tenant authority, cannot list tenants",
+	"user-management.agentActuationDecision": "answers only an AI agent's token, one that carries a " +
+		"proposal authority (which only an act:* OAuth grant or an agent service account's mint derives), " +
+		"and refuses a tenant administrator's console token by design; the policy rows it reads are swept " +
+		"through agentPolicy and seeded by the agent-policy entity",
 	"user-management.identityMemberships": "takes the IDENTITY token login returns — a credential, not a " +
 		"stored row's token — so the sweep has no value it can defend; me and members are swept",
 	"user-management.member": "addressed by email, and a missing one is a NOT_FOUND error by design; " +
