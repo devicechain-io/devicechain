@@ -154,7 +154,9 @@ func judgeInstallOrder(w installWitness, dcctlVersion, installCommand string) er
 	}
 	first := fmt.Sprintf("Run the cluster-level install first, then this again:\n\n    %s\n\n"+
 		"  The install moves the operator and its definitions, which every instance on the cluster shares; "+
-		"`dcctl upgrade` moves one instance and never moves them. Nothing has been changed.", installCommand)
+		"`dcctl upgrade` moves one instance and never moves them. Give the install the settings the cluster "+
+		"was installed with (such as --ha or --compact), which it refuses to change under a running instance. "+
+		"Nothing has been changed.", installCommand)
 	switch {
 	case !w.Found:
 		return fmt.Errorf("this cluster has no install record, so there is no telling whether `dcctl install` "+
