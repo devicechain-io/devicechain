@@ -34,7 +34,7 @@ func (a *teamsAdapter) Deliver(ctx context.Context, channel *model.NotificationC
 	if msg.Alarm.AlarmToken == "" {
 		return fmt.Errorf("teams channel %q: %w", channel.Token, errNoAlarm)
 	}
-	if err := postJSON(ctx, a.client, secret, true, nil, teamsMessage(msg, alarmLink(cfg.LinkBaseURL))); err != nil {
+	if err := postJSON(ctx, a.client, secret, true, nil, teamsMessage(msg, alarmLink(cfg.LinkBaseURL), deviceLink(cfg.LinkBaseURL, msg.Alarm.DeviceToken))); err != nil {
 		return fmt.Errorf("teams channel %q: %w", channel.Token, err)
 	}
 	return nil
@@ -59,7 +59,7 @@ func teamsAccent(a AlarmFacts) string {
 }
 
 // teamsMessage builds the Workflows envelope around the Adaptive Card.
-func teamsMessage(msg *RenderedNotification, link string) map[string]any {
+func teamsMessage(msg *RenderedNotification, link, deviceLink string) map[string]any {
 	a := msg.Alarm
 	facts := make([]map[string]any, 0, 8)
 	for _, f := range a.facts() {
@@ -83,8 +83,15 @@ func teamsMessage(msg *RenderedNotification, link string) map[string]any {
 		"version": "1.4",
 		"body":    body,
 	}
+	var actions []map[string]any
 	if link != "" {
-		card["actions"] = []map[string]any{{"type": "Action.OpenUrl", "title": "Open alarms", "url": link}}
+		actions = append(actions, map[string]any{"type": "Action.OpenUrl", "title": "Open alarms", "url": link})
+	}
+	if deviceLink != "" {
+		actions = append(actions, map[string]any{"type": "Action.OpenUrl", "title": "Open device", "url": deviceLink})
+	}
+	if len(actions) > 0 {
+		card["actions"] = actions
 	}
 	return map[string]any{
 		"type": "message",

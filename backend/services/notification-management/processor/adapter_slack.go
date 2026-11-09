@@ -36,7 +36,7 @@ func (a *slackAdapter) Deliver(ctx context.Context, channel *model.NotificationC
 	if msg.Alarm.AlarmToken == "" {
 		return fmt.Errorf("slack channel %q: %w", channel.Token, errNoAlarm)
 	}
-	if err := postJSON(ctx, a.client, secret, true, nil, slackMessage(msg, alarmLink(cfg.LinkBaseURL))); err != nil {
+	if err := postJSON(ctx, a.client, secret, true, nil, slackMessage(msg, alarmLink(cfg.LinkBaseURL), deviceLink(cfg.LinkBaseURL, msg.Alarm.DeviceToken))); err != nil {
 		return fmt.Errorf("slack channel %q: %w", channel.Token, err)
 	}
 	return nil
@@ -49,7 +49,7 @@ func slackEscape(s string) string {
 }
 
 // slackMessage builds the Block Kit body.
-func slackMessage(msg *RenderedNotification, link string) map[string]any {
+func slackMessage(msg *RenderedNotification, link, deviceLink string) map[string]any {
 	a := msg.Alarm
 	fields := make([]map[string]any, 0, 8)
 	for _, f := range a.facts() {
@@ -69,15 +69,23 @@ func slackMessage(msg *RenderedNotification, link string) map[string]any {
 			"elements": []map[string]any{{"type": "mrkdwn", "text": ackHint}},
 		})
 	}
+	var buttons []map[string]any
 	if link != "" {
-		blocks = append(blocks, map[string]any{
-			"type": "actions",
-			"elements": []map[string]any{{
-				"type": "button",
-				"text": map[string]any{"type": "plain_text", "text": "Open alarms"},
-				"url":  link,
-			}},
+		buttons = append(buttons, map[string]any{
+			"type": "button",
+			"text": map[string]any{"type": "plain_text", "text": "Open alarms"},
+			"url":  link,
 		})
+	}
+	if deviceLink != "" {
+		buttons = append(buttons, map[string]any{
+			"type": "button",
+			"text": map[string]any{"type": "plain_text", "text": "Open device"},
+			"url":  deviceLink,
+		})
+	}
+	if len(buttons) > 0 {
+		blocks = append(blocks, map[string]any{"type": "actions", "elements": buttons})
 	}
 	return map[string]any{
 		"text":        msg.Subject,
