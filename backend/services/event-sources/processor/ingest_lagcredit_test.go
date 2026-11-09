@@ -525,3 +525,73 @@ func TestTheLegacyTranscriptCannotPassWithTheLagCreditedBranchTaken(t *testing.T
 		})
 	})
 }
+
+// A DOCUMENTED RESIDUAL, pinned so it cannot change unnoticed (second review, finding P1-a). A pod with no
+// skew sample yet has nothing to tell a small backlog's age from the broker's clock offset: a delivery
+// with few messages queued behind it (NumPending at most caughtUpPending) is taken as current, so the
+// first such delivery after a stall teaches its own age as the skew and the stall earns no credit. A warm
+// pod, which learned the offset from traffic before the stall, admits the same backlog in full.
+//
+// The scenario: a 10/s, burst-20 tenant sends its burst at t=0 and then 10/s, while nothing is read for
+// 1.5 s; the 35 queued messages are then drained at once. The tenant never exceeded its ceiling. The
+// existing (legacy) gate meters these at now too, and sheds the same 15: the residual is not a regression,
+// it is the part of the stall the lag credit cannot see on a pod that has never measured its broker.
+func TestAColdPodCannotTellASmallStallFromClockSkew(t *testing.T) {
+	run := func(warm bool) int {
+		clk := &replayClock{t: viewEpoch}
+		lc := NewLagCreditIngest(LagCreditIngestConfig{
+			Ceiling: core.StaticCeiling(10, 20), Reading: core.StaticCeiling(1000, 2000), Factor: func(string) float64 { return 1 },
+			Clock: clk.now,
+		})
+		lc.view(StreamCapture).start()
+		seq := uint64(0)
+		if warm {
+			// another tenant's traffic, read as it arrives, before the stall: the offset is learned (0)
+			for i := 0; i < 5; i++ {
+				seq++
+				_, _ = lc.admit("gw", "neighbour", StreamCapture, messaging.Message{AppendTime: clk.t, StreamSeq: seq, NumDelivered: 1})
+				clk.t = clk.t.Add(10 * time.Millisecond)
+			}
+		}
+		start := clk.t
+		var stamps []time.Time
+		for i := 0; i < 20; i++ {
+			stamps = append(stamps, start)
+		}
+		for i := 1; i <= 15; i++ {
+			stamps = append(stamps, start.Add(time.Duration(i)*100*time.Millisecond))
+		}
+		clk.t = start.Add(1500 * time.Millisecond) // the stall ends; drain everything now
+		admitted := 0
+		for i, st := range stamps {
+			seq++
+			msg := messaging.Message{AppendTime: st, StreamSeq: seq, NumPending: uint64(len(stamps) - 1 - i), NumDelivered: 1}
+			if _, ok := lc.admit("gw", "acme", StreamCapture, msg); ok {
+				admitted++
+			}
+		}
+		return admitted
+	}
+	require.Equal(t, 35, run(true), "a warm pod credits the stall: the compliant tenant loses nothing")
+	require.Equal(t, 20, run(false), "the documented cold-pod residual: the stall's age is taken for skew")
+
+	// the existing gate, on the same drain: every message is younger than burst/rate (2 s), so all are
+	// metered at now in the live bucket, and the same 15 are shed
+	clk := &replayClock{t: viewEpoch.Add(1500 * time.Millisecond)}
+	live := core.NewTenantRateLimiter(core.StaticCeiling(10, 20), core.WithClock(clk.now))
+	l := func() *core.TenantRateLimiter {
+		return core.NewTenantRateLimiter(core.StaticCeiling(10, 20), core.WithClock(clk.now))
+	}
+	gate, meterAt := NewRateGate(live, l(), l(), l(), nil), newMeterAtClock(live, clk.now)
+	legacy := 0
+	for i := 0; i < 35; i++ {
+		stamp := viewEpoch
+		if i >= 20 {
+			stamp = viewEpoch.Add(time.Duration(i-19) * 100 * time.Millisecond)
+		}
+		if gate("gw", "acme", meterAt("acme", stamp), false, OriginAuthenticated) {
+			legacy++
+		}
+	}
+	require.Equal(t, 20, legacy, "legacy sheds the same messages: the residual is not a regression")
+}

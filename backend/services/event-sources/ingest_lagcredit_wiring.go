@@ -51,6 +51,29 @@ func initializeLagCreditMetrics() {
 		"append_skew_clamped_total",
 		"Count of messages read while the append-stamp skew estimate sat at its clamp (the broker's clock is more than 2s out)",
 		[]string{"stream"})
+	seedLagCreditMetrics(IngestMeteringMode)
+}
+
+// seedLagCreditMetrics exports the series the lag-credited gate's alerts read at 0, in lagCredit mode only,
+// so the first shed after a restart is an increase from 0 rather than a series born at its final value
+// (which increase() reads as no change). In legacy mode they stay empty: the gate is not running. The
+// vocabulary is bounded: three stream labels, three routes and three causes.
+func seedLagCreditMetrics(mode IngestMetering) {
+	if mode != IngestMeteringLagCredit {
+		return
+	}
+	streams := []string{"capture", "store", streamLabel("")}
+	for _, stream := range streams {
+		for _, route := range []core.IngestRoute{core.RouteFresh, core.RouteBacklog, core.RouteLive} {
+			for _, cause := range []core.IngestCause{core.CauseCeiling, core.CauseContention, core.CauseHardDrop} {
+				IngestShedCauseCounter.WithLabelValues(stream, route.String(), cause.String())
+			}
+		}
+		IngestLagCreditHistogram.WithLabelValues(stream)
+	}
+	for _, stream := range streams[:2] {
+		AppendSkewClampedCounter.WithLabelValues(stream)
+	}
 }
 
 // ingestContentionFactor is a tenant's ADR-063 contention factor for the lag-credited gate: 1 when there

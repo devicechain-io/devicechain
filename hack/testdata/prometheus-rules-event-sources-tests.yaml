@@ -770,11 +770,12 @@ tests:
           - exp_labels:
               severity: warning
               devicechain_instance: devicechain
+              pod: dc-event-sources-5d8f-aaaaa
               stream: capture
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ingestshedbeyondlagcredit"
               summary: "Messages were shed at the ingest ceiling while the platform's readers were behind"
-              description: "In the last 10 minutes, 300 messages read from stream capture were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), at a time when the platform's readers of that stream were more than a second behind. The gate grows a tenant's allowance by what its rate earns over the measured delay, up to the time its burst covers and never more than 5 seconds, so a shed here is either a platform stall longer than that or a tenant above its ceiling during a stall. Check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was), and raise event-sources to debug logging to name the tenant. If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well."
+              description: "In the last 10 minutes, 300 messages read from stream capture on pod dc-event-sources-5d8f-aaaaa were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), and in the same 10 minutes that pod measured its readers of the stream as more than a second behind. The gate grows a tenant's allowance by what its rate earns over the measured delay, up to the time its burst covers and never more than 5 seconds, so a shed here is either a platform stall longer than that or a tenant above its ceiling during a stall. Check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was), and raise event-sources to debug logging to name the tenant. If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well."
       - eval_time: 40m
         alertname: IngestShedBeyondLagCredit
         exp_alerts: []
@@ -793,6 +794,29 @@ tests:
         values: '0+100x40'
     alert_rule_test:
       - eval_time: 30m
+        alertname: IngestShedBeyondLagCredit
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Two replicas: pod b's readers were behind (credit above a second) while pod a, current, shed a
+  # tenant over its ceiling. The lag is measured per replica, so pod a's shed is not this alert's.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_ingest_shed_cause_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", stream="capture", route="fresh", cause="ceiling"}'
+        values: '0x10 300x40'
+      - series: 'devicechain_eventsources_ingest_lag_credit_seconds_count{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", stream="capture"}'
+        values: '0x10 500x40'
+      - series: 'devicechain_eventsources_ingest_lag_credit_seconds_bucket{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", stream="capture", le="1"}'
+        values: '0x10 500x40'
+      - series: 'devicechain_eventsources_ingest_shed_cause_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", stream="capture", route="fresh", cause="ceiling"}'
+        values: '0x50'
+      - series: 'devicechain_eventsources_ingest_lag_credit_seconds_count{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", stream="capture"}'
+        values: '0x10 900x40'
+      - series: 'devicechain_eventsources_ingest_lag_credit_seconds_bucket{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", stream="capture", le="1"}'
+        values: '0x10 100x40'
+    alert_rule_test:
+      - eval_time: 12m
         alertname: IngestShedBeyondLagCredit
         exp_alerts: []
 

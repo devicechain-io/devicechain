@@ -675,3 +675,34 @@ func TestMeterExpiredPhaseIsNotRevivedByANeighbourSweep(t *testing.T) {
 		require.False(t, d.Admitted, "and so the exhausted fresh bucket refuses, as it does with no neighbour")
 	}
 }
+
+// A THROTTLE STILL ADMITS THE OCCASIONAL MESSAGE. The existing gate sheds by scaling the ceiling
+// (governance.Limits.Shed), and floors the scaled burst at one, so a factor in (0,1) throttles and
+// never quietly becomes the hard drop. The contention bucket must keep that: a tenant whose burst is
+// small enough that factor x burst is below one (best-effort at 0.10 with a burst under 10, bronze at
+// 0.25 with a burst under 4) is admitted once per refill, not refused for as long as the overload lasts.
+func TestMeterContentionThrottleNeverBecomesAHardDrop(t *testing.T) {
+	for _, tc := range []struct {
+		burst  int
+		factor float64
+	}{{3, 0.25}, {9, 0.10}, {1, 0.10}} {
+		t.Run(fmt.Sprintf("burst %d at %v", tc.burst, tc.factor), func(t *testing.T) {
+			clk := &lagClock{t: simEpoch}
+			m := newTestMeter(clk, 10, tc.burst, 1)
+			admitted := 0
+			for i := 0; i < 600; i++ { // a minute of a flood at 10/s, the tenant's own rate
+				d := m.Admit(MeterRequest{Tenant: "t", N: 1, Source: 0, Stamp: clk.t, Sources: idleSources(1), Factor: tc.factor})
+				if d.Admitted {
+					admitted++
+				} else {
+					require.Equal(t, CauseContention, d.Cause)
+				}
+				clk.t = clk.t.Add(100 * time.Millisecond)
+			}
+			// the scaled rate is factor x 10/s over 60 s; the throttle admits about that many
+			want := tc.factor * 10 * 60
+			require.InDeltaf(t, want, float64(admitted), want*0.2+1,
+				"a throttle at factor %v must admit about its scaled rate, not refuse everything", tc.factor)
+		})
+	}
+}
