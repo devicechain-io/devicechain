@@ -89,6 +89,14 @@ func hydrateUpgradeState(
 		InstallCommand(provider.Name(), binding)); err != nil {
 		return nil, err
 	}
+	// 🔴 THE OPERATOR'S IDENTITY DIGESTS ITS DEFINITIONS ONLY, so a cluster still on the previous
+	// release's controller passes the check above whenever a release left the definitions alone.
+	// The install record says which dcctl last finished the cluster-level install. See
+	// upgradeorder.go.
+	if err := requireInstallOrderFor(ctx, typed, opts.DcctlVersion,
+		InstallCommand(provider.Name(), binding)); err != nil {
+		return nil, err
+	}
 
 	// 1. THE DECLARATION.
 	//
@@ -328,6 +336,13 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 		return err
 	}
 	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
+	// A newer dcctl is not pointed at an older release: that plans its chart around images it
+	// was not built for. See refuseOlderRelease.
+	if len(opts.EnableAreas) == 0 && opts.ImageVersion != "" {
+		if err := refuseOlderRelease(st.ImageVersion, DefaultImageVersion, inst.Spec.Provider, opts.Instance); err != nil {
+			return err
+		}
+	}
 
 	// `dcctl enable-area`: the requested areas join the declaration's delta here, so
 	// the resolution below — and everything downstream of it, the chart values, the

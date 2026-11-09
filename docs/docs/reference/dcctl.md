@@ -2240,6 +2240,19 @@ install command that fixes it. An operator installed by hand carries no record o
 which release put it there, and dcctl cannot tell that apart from one an older
 dcctl overwrote — so that case is allowed through with a note rather than refused.
 
+It also REFUSES, before anything is written, when the cluster-level install is older than
+this dcctl, or cannot be shown to be current for it: the operator's definitions can stay
+the same across a release while its controller changes, so the check reads the install
+record in the cluster, which names the dcctl that last finished 'dcctl install'. A
+re-run at the same version is not refused, and neither is a cluster installed by a
+newer dcctl. A dcctl built from source is not compared.
+
+And it REFUSES '--version' naming a release older than this dcctl: the chart and the
+infrastructure configuration it applies are this release's, so they would be planned
+around images that have never seen them. To go back, use the dcctl of the older release
+(its own 'upgrade --version', the documented way back). A flag-less upgrade, a tag that
+is not a release (an image you built) and this dcctl's own release are not affected.
+
 It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the
 cross-service secret and the secret-store root key. A version change here cannot
