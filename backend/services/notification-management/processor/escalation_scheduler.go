@@ -87,6 +87,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 	failedTenants := make(map[string]bool)
 	failed := func(tenant string) { failedTenants[tenant] = true }
 	partialTenants := make(map[string]bool)
+	var partialErr error
 	var lastErr error
 	var pickups []pendingPickup
 	for _, tenant := range tenants {
@@ -176,16 +177,18 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 				Msg("Escalation scheduler: announcing pending clears failed; will retry next tick")
 			if errors.Is(err, core.ErrPassPartial) {
 				// Delivered, then ran out of its budget with a backlog: keeping up, not broken.
+				// Kept apart from lastErr so it cannot disguise a hard failure as partial.
 				partialTenants[pk.tenant] = true
+				partialErr = err
 			} else {
 				failed(pk.tenant)
+				lastErr = err
 			}
-			lastErr = err
 		}
 	}
 	if len(failedTenants) == 0 && len(partialTenants) > 0 {
 		return fmt.Errorf("%d of %d tenants left clears for the next tick (last: %v): %w",
-			len(partialTenants), visited, lastErr, core.ErrPassPartial)
+			len(partialTenants), visited, partialErr, core.ErrPassPartial)
 	}
 	return core.PassResult(visited, len(failedTenants), lastErr)
 }
