@@ -103,7 +103,21 @@ func parsePolicyInput(raw string) (*agentpolicy.Document, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if err := agentpolicy.CheckCanonicalSize(b); err != nil {
+		return nil, "", agentPolicyErr(AgentPolicyInvalid, "%v", err)
+	}
 	return doc, string(b), nil
+}
+
+// policyChoice is what a publish publishes: a stored or submitted document to parse (raw), or one
+// already in hand (doc), which is never re-parsed.
+type policyChoice struct {
+	raw        string
+	doc        *agentpolicy.Document
+	origin     string
+	clearDraft bool
+	// kill marks the kill switch turning actuation OFF, which must never be refused.
+	kill bool
 }
 
 // SaveAgentPolicyDraft validates and stores the tenant's working draft. Saving a draft changes
@@ -121,11 +135,11 @@ func (m *Manager) SaveAgentPolicyDraft(ctx context.Context, claims *auth.Claims,
 
 // PublishAgentPolicyDraft makes the draft the policy in force.
 func (m *Manager) PublishAgentPolicyDraft(ctx context.Context, claims *auth.Claims) (*AgentPolicyView, error) {
-	return m.publishAgentPolicy(ctx, claims, func(head *iam.AgentPolicy, _ *iam.AgentPolicyVersion) (string, string, bool, error) {
+	return m.publishAgentPolicy(ctx, claims, func(head *iam.AgentPolicy, _ *iam.AgentPolicyVersion) (policyChoice, error) {
 		if head.Draft == nil {
-			return "", "", false, agentPolicyErr(AgentPolicyNoDraft, "there is no draft agent policy to publish")
+			return policyChoice{}, agentPolicyErr(AgentPolicyNoDraft, "there is no draft agent policy to publish")
 		}
-		return *head.Draft, iam.AgentPolicyOriginPublish, true, nil
+		return policyChoice{raw: *head.Draft, origin: iam.AgentPolicyOriginPublish, clearDraft: true}, nil
 	})
 }
 
@@ -142,8 +156,8 @@ func (m *Manager) RollbackAgentPolicy(ctx context.Context, claims *auth.Claims, 
 	if err != nil {
 		return nil, err
 	}
-	return m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, _ *iam.AgentPolicyVersion) (string, string, bool, error) {
-		return v.Document, iam.AgentPolicyOriginRollback, false, nil
+	return m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, _ *iam.AgentPolicyVersion) (policyChoice, error) {
+		return policyChoice{raw: v.Document, origin: iam.AgentPolicyOriginRollback}, nil
 	})
 }
 
@@ -164,14 +178,14 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 			return m.AgentPolicy(ctx, claims.Tenant)
 		}
 	}
-	view, err := m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, current *iam.AgentPolicyVersion) (string, string, bool, error) {
+	view, err := m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, current *iam.AgentPolicyVersion) (policyChoice, error) {
 		if current == nil {
-			return "", "", false, agentPolicyErr(AgentPolicyNoPolicy, "publish an agent policy before enabling agent actuation")
+			return policyChoice{}, agentPolicyErr(AgentPolicyNoPolicy, "publish an agent policy before enabling agent actuation")
 		}
 		doc, err := agentpolicy.ParseStored([]byte(current.Document))
 		if err != nil {
 			if enabled {
-				return "", "", false, fmt.Errorf("the agent policy in force cannot be read: %w", err)
+				return policyChoice{}, fmt.Errorf("the agent policy in force cannot be read: %w", err)
 			}
 			// 🔴 THE KILL SWITCH NEVER DEPENDS ON READING THE POLICY IT STOPS, AND NEVER DROPS
 			// THE SERVICE-ACCOUNT RULE. A document this pod cannot read (written by a newer
@@ -185,18 +199,9 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 			req, ok := agentpolicy.ExtractAgentFlagRequirement([]byte(current.Document))
 			if !ok {
 				log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read at all; agent actuation is already off, and the kill switch publishes nothing.")
-				return "", "", false, errNothingToKill
+				return policyChoice{}, errNothingToKill
 			}
-			doc = &agentpolicy.Document{}
-			var carried []string
-			for _, a := range req {
-				if a != "" && !slices.Contains(carried, a) {
-					carried = append(carried, a)
-				}
-			}
-			if len(carried) > 0 {
-				doc.ServiceAccounts = &agentpolicy.ServiceAccts{AgentFlagRequiredFor: carried}
-			}
+			doc = agentpolicy.KillDocument(req)
 			log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read; the kill switch publishes a disabled policy keeping its service-account rule.")
 		}
 		if enabled {
@@ -204,11 +209,9 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 		} else {
 			doc.Actuation = agentpolicy.ActuationDisabled
 		}
-		b, err := doc.Canonical()
-		if err != nil {
-			return "", "", false, err
-		}
-		return string(b), iam.AgentPolicyOriginActuation, false, nil
+		// The document itself is handed on, never its canonical bytes to be parsed again: the
+		// kill switch must not be refused by a size or validation check on its own output.
+		return policyChoice{doc: doc, origin: iam.AgentPolicyOriginActuation, kill: !enabled}, nil
 	})
 	if errors.Is(err, errNothingToKill) {
 		return m.AgentPolicy(ctx, claims.Tenant)
@@ -225,28 +228,43 @@ var errNothingToKill = errors.New("agent actuation is already off: the policy in
 // 🔴 THE STEP-UP IS DECIDED BY THE STRICTER OF THE TWO POLICIES. A loosening publish could
 // otherwise relax its own gate: a document that raises stepUpMaxAge to an hour, or accepts
 // recovery codes, must not be published under those relaxed terms.
-func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, pick func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error)) (*AgentPolicyView, error) {
+func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, pick func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (policyChoice, error)) (*AgentPolicyView, error) {
 	now := m.clock()
 	_, err := m.iam.PublishAgentPolicy(ctx, claims.Tenant, principalOf(claims), func(head *iam.AgentPolicy, current *iam.AgentPolicyVersion) (string, string, bool, error) {
-		raw, origin, clearDraft, err := pick(head, current)
+		choice, err := pick(head, current)
 		if err != nil {
 			return "", "", false, err
 		}
-		// A draft is what a person submitted and is held to every rule. A rollback or an actuation
-		// change republishes STORED content, whose carried-forward rule entries may name
-		// authorities this release does not know (ParseStored).
-		var next *agentpolicy.Document
-		if origin == iam.AgentPolicyOriginPublish {
-			next, err = agentpolicy.Parse([]byte(raw))
-		} else {
-			next, err = agentpolicy.ParseStored([]byte(raw))
-		}
-		if err != nil {
-			return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", err)
+		origin, clearDraft := choice.origin, choice.clearDraft
+		// A draft is what a person submitted and is held to every rule. A rollback republishes
+		// STORED content, whose carried-forward rule entries may name authorities this release
+		// does not know (ParseStored). An actuation change hands its document over already built.
+		next := choice.doc
+		if next == nil {
+			if origin == iam.AgentPolicyOriginPublish {
+				next, err = agentpolicy.Parse([]byte(choice.raw))
+			} else {
+				next, err = agentpolicy.ParseStored([]byte(choice.raw))
+			}
+			if err != nil {
+				return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", err)
+			}
 		}
 		b, err := next.Canonical()
 		if err != nil {
 			return "", "", false, err
+		}
+		if serr := agentpolicy.CheckCanonicalSize(b); serr != nil {
+			if !choice.kill {
+				return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", serr)
+			}
+			// 🔴 THE KILL SWITCH IS NEVER REFUSED. A policy whose stored form would be too large
+			// is replaced by the smallest disabled policy, carrying the service-account rule.
+			log.Warn().Err(serr).Str("tenant", claims.Tenant).Msg("The policy in force is too large to republish; the kill switch publishes a minimal disabled policy.")
+			next = agentpolicy.KillDocument(next.AgentFlagRequiredFor())
+			if b, err = next.Canonical(); err != nil {
+				return "", "", false, err
+			}
 		}
 		canonical := string(b)
 		var prev *agentpolicy.Document
@@ -270,7 +288,11 @@ func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, p
 				}
 			}
 		}
-		if loosen := agentpolicy.Loosenings(prev, next); len(loosen) > 0 {
+		// 🔴 TURNING ACTUATION OFF IS NEVER JUDGED A LOOSENING. Its document disables actuation and
+		// carries the service-account rule forward by construction, so it can authorize nothing;
+		// classifying it (against defaults, after a minimal fallback) could only ever refuse the
+		// off switch. Turning actuation back ON is judged in full.
+		if loosen := agentpolicy.Loosenings(prev, next); len(loosen) > 0 && !choice.kill {
 			if !auth.StepUpFresh(claims, stricterStepUp(prev, next), now) {
 				return "", "", false, agentPolicyErr(AgentPolicyStepUpRequired,
 					"this change loosens the agent policy (%s) and needs a second factor verified in the last %s",

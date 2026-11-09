@@ -4,6 +4,8 @@
 package agentpolicy
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -358,4 +360,82 @@ func TestParseStoredToleratesCarriedForwardAuthorities(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalid, "* is never a rule entry, stored or not")
 	_, err = ParseStored([]byte(`{"version":"v1alpha1","unknown":1}`))
 	require.ErrorIs(t, err, ErrInvalid, "everything else stays strict")
+}
+
+// Every list entry is held to the token grammar (letters, digits and . _ : -), in every list: none of
+// the characters JSON escapes into six bytes can reach a stored document.
+func TestListEntriesHeldToTheTokenGrammar(t *testing.T) {
+	lists := map[string]func(v string) string{
+		"clients":              func(v string) string { return `{"clients":[` + v + `]}` },
+		"approvers.roles":      func(v string) string { return `{"approvers":{"roles":[` + v + `]}}` },
+		"commands":             func(v string) string { return `{"tools":{"commands":{"commands":[` + v + `]}}}` },
+		"groups":               func(v string) string { return `{"tools":{"commands":{"groups":[` + v + `]}}}` },
+		"agentFlagRequiredFor": func(v string) string { return `{"serviceAccounts":{"agentFlagRequiredFor":[` + v + `]}}` },
+	}
+	bad := []string{`"a<b"`, `"a>b"`, `"a&b"`, `"a b"`, `"a/b"`, `"a*b"`, `"a\"b"`, `"a\b"`, `"é"`, `"a\u0000b"`, `"a\u2028b"`, `""`}
+	for name, wrap := range lists {
+		for _, v := range bad {
+			_, err := Parse([]byte(wrap(v)))
+			require.ErrorIs(t, err, ErrInvalid, "%s %s", name, v)
+			_, err = ParseStored([]byte(wrap(v)))
+			require.ErrorIs(t, err, ErrInvalid, "stored %s %s", name, v)
+		}
+	}
+	good := mustParse(t, `{"clients":["claude-desktop","dcsa_ABC.1"],"approvers":{"roles":["ops_lead"]},
+		"tools":{"commands":{"commands":["set-point.v2"],"groups":["floor:3"]}},
+		"serviceAccounts":{"agentFlagRequiredFor":["command:write"]}}`)
+	b, err := good.Canonical()
+	require.NoError(t, err)
+	require.NoError(t, CheckCanonicalSize(b))
+}
+
+// The kill document carries the rule verbatim and nothing else, actuation disabled.
+func TestKillDocument(t *testing.T) {
+	d := KillDocument([]string{"command:write", "future:write", "command:write", ""})
+	require.False(t, d.ActuationOn())
+	require.Equal(t, []string{"command:write", "future:write"}, d.AgentFlagRequiredFor())
+	require.Nil(t, d.Clients)
+	require.Nil(t, KillDocument(nil).ServiceAccounts)
+}
+
+// What the kill switch stores is ALWAYS readable: entries outside the grammar (and "*") are left
+// out, and however long the extracted rule, the stored form fits the limit and parses.
+func TestKillDocumentIsAlwaysReadable(t *testing.T) {
+	var rule []string
+	for i := 0; i < 2000; i++ {
+		rule = append(rule, fmt.Sprintf("r%04d:%s", i, strings.Repeat("w", 250))) // 256 characters, the most an entry may hold
+	}
+	rule = append(rule, "future/write", "a<b", "*")
+	d := KillDocument(rule)
+	b, err := d.Canonical()
+	require.NoError(t, err)
+	require.NoError(t, CheckCanonicalSize(b))
+	back, err := ParseStored(b)
+	require.NoError(t, err)
+	require.False(t, back.ActuationOn())
+	require.NotEmpty(t, back.AgentFlagRequiredFor())
+	for _, a := range back.AgentFlagRequiredFor() {
+		require.True(t, validListEntry(a), a)
+	}
+	require.Equal(t, []string{"future:write"}, KillDocument([]string{"future/write", "future:write", "*"}).AgentFlagRequiredFor())
+}
+
+// A stored document is read back through jsonb, whose text output adds whitespace: a canonical
+// document at the limit must still parse after that expansion.
+func TestStoredReadToleratesJsonbWhitespace(t *testing.T) {
+	var clients []string
+	for i := 0; i < 252; i++ {
+		clients = append(clients, fmt.Sprintf("c%03d-%s", i, strings.Repeat("x", 251)))
+	}
+	d := &Document{Actuation: ActuationDisabled, Clients: clients}
+	b, err := d.Canonical()
+	require.NoError(t, err)
+	require.NoError(t, CheckCanonicalSize(b))
+	// What PostgreSQL's jsonb output looks like: a space after every ':' and ','.
+	spaced := strings.NewReplacer(`":`, `": `, `",`, `", `).Replace(string(b))
+	require.Greater(t, len(spaced), MaxDocumentBytes, "the fixture must exceed the write limit once spaced")
+	_, err = ParseStored([]byte(spaced))
+	require.NoError(t, err)
+	_, err = Parse([]byte(spaced))
+	require.ErrorIs(t, err, ErrInvalid, "a person's submission is still held to the write limit")
 }
