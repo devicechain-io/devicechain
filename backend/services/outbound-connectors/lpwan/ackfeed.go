@@ -501,7 +501,15 @@ func (f *AckFeed) Sweep(ctx context.Context) {
 		// would fail as store_failed, once per row, every pass, and the rows would fill the batch
 		// ahead of live tenants' overdue downlinks. Nobody is left to answer, so no lease is needed.
 		if f.opts.TenantDeleted != nil && f.opts.TenantDeleted(p.Tenant) {
-			_ = f.pending.DeleteGone(ctx, p.Tenant, p.ID)
+			if err := f.pending.DeleteGone(ctx, p.Tenant, p.ID); err != nil {
+				// Not settled: the row stays and is seen again next pass, so say so.
+				if ctx.Err() == nil {
+					f.count(AckStoreFailed)
+					log.Warn().Err(err).Str("tenant", p.Tenant).
+						Msg("Could not delete a deleted tenant's pending LoRaWAN downlink; trying again next pass.")
+				}
+				continue
+			}
 			f.count(AckTenantGone)
 			continue
 		}
