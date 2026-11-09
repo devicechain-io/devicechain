@@ -47,12 +47,18 @@ type AlarmFacts struct {
 	PreviousSeverity string
 	State            string
 	Originator       string
-	MetricKey        string
-	Value            *float64
-	Acknowledged     bool
-	Escalation       int
-	RaisedTime       time.Time
-	OccurredTime     time.Time
+	// DeviceToken, DeviceName and DeviceTypeToken describe the originating device when the
+	// alarm event carried them (a producer that predates them, or an originator that is not a
+	// device, leaves them empty). Empty means unknown, never "no such device".
+	DeviceToken     string
+	DeviceName      string
+	DeviceTypeToken string
+	MetricKey       string
+	Value           *float64
+	Acknowledged    bool
+	Escalation      int
+	RaisedTime      time.Time
+	OccurredTime    time.Time
 }
 
 // renderNotification builds the default rendering of an alarm state-change event.
@@ -60,10 +66,28 @@ type AlarmFacts struct {
 func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotification {
 	verb := verbForEvent(event.EventType)
 	originator := fmt.Sprintf("%s %d", event.OriginatorType, event.OriginatorId)
-	subject := fmt.Sprintf("[%s] Alarm %s: %s on %s", event.Severity, verb, event.AlarmKey, originator)
+	// A person reads the device's name, or failing that its token, in preference to a numeric
+	// id; the id stays in the structured payload for anything that wants it.
+	shown := originator
+	switch {
+	case event.DeviceName != "":
+		shown = event.DeviceName
+	case event.DeviceToken != "":
+		shown = event.DeviceToken
+	}
+	subject := fmt.Sprintf("[%s] Alarm %s: %s on %s", event.Severity, verb, event.AlarmKey, shown)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Alarm %s %s on %s.\n\n", event.AlarmKey, verb, originator)
+	fmt.Fprintf(&b, "Alarm %s %s on %s.\n\n", event.AlarmKey, verb, shown)
+	if event.DeviceName != "" {
+		writeField(&b, "Device", event.DeviceName)
+	}
+	if event.DeviceToken != "" {
+		writeField(&b, "Device token", event.DeviceToken)
+	}
+	if event.DeviceTypeToken != "" {
+		writeField(&b, "Device type", event.DeviceTypeToken)
+	}
 	writeField(&b, "Severity", event.Severity)
 	if event.PreviousSeverity != "" {
 		writeField(&b, "Previous severity", event.PreviousSeverity)
@@ -92,6 +116,16 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 		"raisedTime":     formatTime(event.RaisedTime),
 		"occurredTime":   formatTime(event.OccurredTime),
 	}
+	// Named only when the event named them: a missing name is omitted, never invented.
+	if event.DeviceToken != "" {
+		payload["deviceToken"] = event.DeviceToken
+	}
+	if event.DeviceName != "" {
+		payload["deviceName"] = event.DeviceName
+	}
+	if event.DeviceTypeToken != "" {
+		payload["deviceTypeToken"] = event.DeviceTypeToken
+	}
 	if event.MetricKey != "" {
 		payload["metricKey"] = event.MetricKey
 	}
@@ -105,7 +139,8 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	facts := AlarmFacts{
 		EventType: event.EventType.String(), AlarmToken: event.AlarmToken, AlarmKey: event.AlarmKey,
 		Severity: event.Severity, PreviousSeverity: event.PreviousSeverity, State: event.State,
-		Originator: originator, MetricKey: event.MetricKey, Value: event.LastValue,
+		Originator: shown, DeviceToken: event.DeviceToken, DeviceName: event.DeviceName,
+		DeviceTypeToken: event.DeviceTypeToken, MetricKey: event.MetricKey, Value: event.LastValue,
 		Acknowledged: event.Acknowledged, RaisedTime: event.RaisedTime, OccurredTime: event.OccurredTime,
 	}
 	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload, Alarm: facts}

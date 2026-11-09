@@ -98,6 +98,16 @@ type AlarmStateChangeEvent struct {
 	// stream matches a member whose access is limited to some customers against, so the
 	// stream and the alarms query agree on what such a member sees (ADR-081).
 	ScopeAnchors []string
+
+	// DeviceToken, DeviceName and DeviceTypeToken describe the originating device as it was
+	// when the event was emitted, so a notification can name what raised the alarm instead of
+	// quoting a numeric id. Each is empty when the originator is not a device, the device could
+	// not be read, or it has no such value (a device's name is optional); a subscriber omits
+	// what is empty rather than inventing it. They are read at emission, not carried by the
+	// alarm row, so they never make a transition fail.
+	DeviceToken     string
+	DeviceName      string
+	DeviceTypeToken string
 }
 
 // AlarmEventPublisher publishes alarm state-change events (ADR-041). Emission is
