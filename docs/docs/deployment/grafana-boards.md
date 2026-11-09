@@ -18,6 +18,8 @@ Everything on the boards is built from the metrics the services already export (
 message-broker series the monitoring stack collects. Nothing needs to be switched on to get
 them.
 
+The pictures on this page were taken on a single-node local instance carrying a steady synthetic load from four tenants: telemetry, alarms raised and cleared by rules, and commands that devices answer. Times are in UTC; the board pictures cover 30 minutes and the outage pictures 15.
+
 ## Finding the boards {#finding-the-boards}
 
 [Open Grafana](./observability.md#reaching-grafana) and look for the folder
@@ -31,8 +33,9 @@ the overview ends with a row of links to the stage boards. The one thing you pic
 
 Every board starts with the same **Firing alerts** table. It lists the alerts that are firing
 right now for this instance and that belong to the board's stage, so a stage board is quiet
-when its stage is fine. An empty table means none are firing. The table reads the instance's
-Prometheus rules, so it stays empty if those rules are not installed. The overview lists every
+when its stage is fine. An empty table means none are firing; Grafana shows it as *No data*.
+The table reads the instance's Prometheus rules, so it stays empty if those rules are not
+installed. The overview lists every
 alert, which means an alert that no stage board matches is still visible there.
 
 ## Reading a panel {#reading-a-panel}
@@ -71,6 +74,14 @@ A panel that can fall back this way says so in its description (*"While the read
 is down this shows the message broker's own count"*). Both sources count the same messages, so the panel keeps
 one continuous line when one takes over from the other.
 
+![The events-waiting-to-be-stored panel with event-management scaled to zero: the line climbs steadily.](/img/grafana/fault-persistence-backlog.webp)
+
+*Events waiting to be stored, about two and a half minutes after `event-management`, the reader that stores events, was scaled to 0. The reader cannot report while it is down, so this line is the broker's own count of the same messages, and it climbs as events keep arriving.*
+
+![The same panel after event-management was scaled back to one replica: the line drops back to zero.](/img/grafana/recovered-persistence-backlog.webp)
+
+*The same panel once `event-management` was scaled back to 1. The backlog drains to zero within about a minute of the reader starting. The brief drop to zero before the last peak is the restarted reader taking the waiting events in flight, which the broker no longer counts as unread, before its own report is first scraped.*
+
 Nineteen panels carry the broker fallback:
 
 - **Messaging:** *Unread backlog per reader*, *Handed out, not yet acknowledged* and
@@ -104,13 +115,19 @@ Two limits are worth knowing:
   unread*, which keeps working: at 100% the stream starts discarding messages the reader has
   not seen. See [Messages a consumer never read](./observability.md#unread-loss).
 
+![The messaging board's readers group during the same outage: the unread backlog and the share of stream capacity rise together for the stopped reader.](/img/grafana/fault-messaging-readers.webp)
+
+*Messaging during the same outage, at **Readers of streams**. **Unread backlog per reader** rises for the stopped reader (the legend lists every reader; hover the line to name it), and **Share of stream capacity left unread** shows how much of the stream's limit that backlog uses: here under 1%, far from the limit.*
+
 A missing series means "not measured", never "nothing waiting". If a backlog panel is empty,
 neither source has reported: check that the broker is being scraped (Messaging, *Broker servers
 up*) and that the reader's durable exists.
 
 ## The overview {#overview-board}
 
-<!-- screenshots: G13 -->
+![The overview board under steady load: every tile under "Is everything up?" is green, and the five lines of "Events through the pipeline" lie on top of one another.](/img/grafana/overview.webp)
+
+*The overview under a steady load. Every tile under **Is everything up?** is green, and the lines in **Events through the pipeline** lie on top of one another: events received, matched to a device, stored, applied to device state and fed to rules all move at the same rate. A stage whose line falls away from the others is the stage board to open.*
 
 **Use it to answer "is everything up, and is anything being lost?" in one glance.** Start
 here, then follow the link to the stage board for whatever is not green.
@@ -151,9 +168,15 @@ the alert, because it is not an area.
 An area the instance's profile does not run has no deployment at all, so it appears in
 neither tile.
 
+![The overview while event-management is scaled to zero: the stored line drops away from the others, "Areas scaled to 0" reads 1 in blue, and "Areas with no pod available" stays at 0.](/img/grafana/fault-overview.webp)
+
+*The overview while `event-management` is scaled to 0. In **Events through the pipeline** the stored line drops away while every earlier stage keeps its rate. **Areas scaled to 0** reads 1, in blue, and **Areas with no pod available** stays at 0, because the area was stopped on purpose.*
+
 ## Ingest {#ingest-board}
 
-<!-- screenshots: G13 -->
+![The ingest board under steady load: events arrive at a steady rate and the backlog-growth line stays at zero.](/img/grafana/ingest.webp)
+
+*Ingest under the same load. Events arrive at a steady rate, and the backlog-growth line in **Arriving vs backlog growth** stays at zero, so the instance is keeping up; above zero, events are arriving faster than they are forwarded. The devices here send over HTTP, so the MQTT capture stream stays empty.*
 
 **Use it when events are not arriving, are being refused, or the MQTT path is under strain.**
 It covers the front door: what the transports accept, what they turn away, and the backlog of
@@ -177,7 +200,9 @@ credential-cache and rate-limiter alerts, and the Sparkplug and LwM2M ingest ale
 
 ## Messaging {#messaging-board}
 
-<!-- screenshots: G13 -->
+![The messaging board under steady load: the broker server tiles, its CPU, memory and client connections, and messages through the broker.](/img/grafana/messaging.webp)
+
+*Messaging under the same load: the broker servers, their CPU, memory and client connections, and the messages passing through them. When something is backed up and you do not know where, the **Readers of streams** group further down names the reader.*
 
 **Use it when something is slow or backed up and you do not yet know where.** The message
 broker connects every stage, so this board shows the shared plumbing: the broker servers, the
@@ -203,7 +228,9 @@ Alerts behind it: the [`JetStream*`](./observability.md#consumer-backlog) alerts
 
 ## Persistence and state {#persistence-board}
 
-<!-- screenshots: G13 -->
+![The persistence board under steady load: events are stored at the arrival rate, none are refused, and the events-waiting panel lies flat on zero.](/img/grafana/persistence.webp)
+
+*Persistence under the same load. **Events stored per second** matches the arrival rate on Ingest, **Events not stored** is 0, the 95th-percentile time to store one event is in tens of milliseconds, and **Events waiting to be stored** (bottom right) lies flat on zero.*
 
 **Use it when events are accepted but not showing up, or a device's live state is out of date.**
 It follows an event into the event store and the live device state, and then looks at the
@@ -230,7 +257,9 @@ the [backup-archiving](./observability.md#backup-archiving) and
 
 ## Event processing {#event-processing-board}
 
-<!-- screenshots: G13 -->
+![The event-processing board under steady load: consumer lag is zero, in-flight messages rise and fall, and the watermark lag holds steady.](/img/grafana/event-processing.webp)
+
+*Event processing while rules raise and clear alarms and send commands. **Consumer lag** is 0, and **In-flight** rises and falls as batches are handed out and acknowledged, which is normal under load. **Watermark lag** holds level; a line that keeps climbing means detection is falling behind the clock.*
 
 **Use it when rules are not firing, alarms are late, or reactions are not being carried out.**
 It watches the detection and reaction engine described in
@@ -253,7 +282,9 @@ the engine's consumer is run and scaled.
 
 ## Command delivery {#command-delivery-board}
 
-<!-- screenshots: G13 -->
+![The command-delivery board while rules send commands: every fleet-write tile reads zero and the refusal graphs are flat.](/img/grafana/command-delivery.webp)
+
+*Command delivery while rules send commands that the devices answer. Nothing wrote to a fleet in one batch during this window, so every fleet-write tile reads 0 and the refusal graphs stay flat. The commands the rules sent go through the dispatch path; the overview's *Commands given up* and *Commands that cannot be delivered* tiles read 0 for them.*
 
 **Use it when commands are not reaching devices, or fleet writes are being refused.**
 
@@ -268,11 +299,14 @@ Alerts behind it: every `Command*` alert, described in
 
 ## Delivery {#delivery-board}
 
-<!-- screenshots: G13 -->
+![The delivery board opened at the hand-off from automation rules: raise-alarm, clear-alarm and send-command actions handed to their sinks, nothing refused, and alarm notifications handled with no retries.](/img/grafana/delivery.webp)
+
+*Delivery, opened at **Hand-off from automation rules**. The rules hand raise-alarm, clear-alarm and send-command actions to their sinks, none is refused, and the alarm notifications that follow are handled with no retries. The board's first group, outbound connectors, belongs to an optional service this instance does not run, so it shows no data.*
 
 **Use it when an alarm happened but nobody was told, or when a connector or update is stuck.**
 This is the last mile, from a rule's reaction to a person or an outside system. The
-connector and software-update groups appear for the optional services that run them.
+connector and software-update groups belong to optional services: on an instance that does
+not run one, its group stays on the board and shows *No data*.
 
 | Group | What it shows |
 | --- | --- |
@@ -290,7 +324,9 @@ board. The software-update group has four: `UpdateDownloadsNotConfigured`,
 
 ## Platform {#platform-board}
 
-<!-- screenshots: G13 -->
+![The platform board under steady load: no replicas missing, no pods unready, no restarts, and every deployment's available replicas equal to what it wants.](/img/grafana/platform.webp)
+
+*Platform under the same load: no replicas missing, no pods unready, no restarts, and every deployment's available replicas equal to what it wants. **Memory in use against limit**, at the bottom, is the panel to read before changing a service's limits.*
 
 **Use it when a service looks unhealthy and you need to know whether it is the service or the
 node under it.** It is the one board that is about the processes, not the message flow.
