@@ -130,6 +130,7 @@ const ENTITY = {
   slots: JSON.stringify([{ day: 'SATURDAY', start: '02:00', durationMinutes: 120 }]),
   // A notification policy: no quiet hours, no rules (the form shows them read-only and never sends them).
   enabled: true,
+  notifyOnClear: false,
   throttleSeconds: null,
   escalateAfterSeconds: null,
   maxEscalations: null,

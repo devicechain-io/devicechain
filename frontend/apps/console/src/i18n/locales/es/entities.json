@@ -350,6 +350,8 @@
   "notificationPolicyColRules": "Reglas",
   "notificationPolicyColQuietHours": "Horas de silencio",
   "notificationPolicyEnabledHint": "Una política deshabilitada no envía nada.",
+  "notificationPolicyNotifyOnClear": "Notificar al resolverse",
+  "notificationPolicyNotifyOnClearHint": "Avisa también a los canales cuando se resuelve una alarma que esta política notificó.",
   "notificationPolicyThrottle": "Limitación (segundos)",
   "notificationPolicyThrottleHelp": "Tiempo mínimo entre notificaciones sobre la misma alarma. Déjalo en blanco para no limitar.",
   "notificationPolicyEscalateAfter": "Escalar tras (segundos)",

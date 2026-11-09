@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/x509trust"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -303,7 +304,49 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // inside the closure.
 func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent) {
 	if api.AlarmPublisher != nil {
+		api.describeAlarmDevice(ctx, event)
 		api.AlarmPublisher.PublishAlarmEvent(ctx, event)
+	}
+}
+
+// alarmDeviceLookupTimeout bounds the device read that names an alarm event.
+const alarmDeviceLookupTimeout = 500 * time.Millisecond
+
+// describeAlarmDevice names the originating device on the event (token, name, type token) so
+// a subscriber such as notification-management can show a person which device it is. It is
+// best effort and never blocks the page: the transition is already committed, so a failed read
+// publishes the event without the names rather than not at all.
+func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChangeEvent) {
+	if event.OriginatorType != string(entity.TypeDevice) || event.OriginatorId == 0 {
+		return
+	}
+	// Only the transitions that notify a person. An acknowledgement does not, and bulk
+	// acknowledgements (thousands of alarms) must not each pay a device read.
+	switch event.EventType {
+	case AlarmEventRaised, AlarmEventEscalated, AlarmEventCleared:
+	default:
+		return
+	}
+	// A short bound: naming is a courtesy to the reader, and a slow database must not hold the
+	// transition's emission.
+	rctx, cancel := context.WithTimeout(ctx, alarmDeviceLookupTimeout)
+	defer cancel()
+	devices, err := api.DevicesById(rctx, []uint{event.OriginatorId})
+	if err != nil {
+		log.Warn().Err(err).Str("alarm", event.AlarmToken).
+			Msg("Could not read the alarm's device to name it on the event; publishing it unnamed")
+		return
+	}
+	if len(devices) == 0 {
+		return
+	}
+	d := devices[0]
+	event.DeviceToken = d.Token
+	if d.Name.Valid {
+		event.DeviceName = d.Name.String
+	}
+	if d.DeviceType != nil {
+		event.DeviceTypeToken = d.DeviceType.Token
 	}
 }
 

@@ -83,6 +83,8 @@ mutation {
 
 Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 [Slack 渠道](#create-a-slack-channel)会为你排版消息，是更好的选择。
 
+Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`，以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知不包含这些字段。
+
 ### 原生 Slack、Teams 和 PagerDuty 渠道 {#native-channels}
 
 这三种原生类型使用各服务自己的格式，而不是通用的 JSON 正文。它们共享三条规则：
@@ -159,6 +161,8 @@ mutation {
 
 webhook 渠道还可以对投递**签名**，让接收方能够验证。除非你要求，否则默认关闭：为渠道生成签名密钥后，在渠道的 `config` 中加入 `"signing":true`。设置了签名却没有密钥的渠道会被拒绝而不是以未签名形式发送，并计入 `reason="signing"`。参见[为出站 Webhook 签名](signed-webhooks.md)。
 
+聊天消息和 webhook 摘要用设备名称（没有名称时用其令牌）指代设备，并列出其设备类型。当通道设置了 `linkBaseUrl` 且告警指明了其设备时，消息还会带有指向 `<linkBaseUrl>/devices/<设备令牌>` 的 **Open device** 按钮或链接；未设置 `linkBaseUrl`，或告警未指明设备时，则没有设备链接。
+
 ## 策略 {#policies}
 
 **策略**决定哪些告警投递给谁、通过哪些渠道。它携带一组**规则**，每条映射：
@@ -172,6 +176,24 @@ webhook 渠道还可以对投递**签名**，让接收方能够验证。除非�
 :::caution 策略适用于整个租户
 目前**不支持** `deviceTypeToken`，设置它的策略写入时被拒绝。请不要设置。原因见[设备类型作用域](#device-type-scoping)。
 :::
+
+### 告警清除时通知 {#notify-on-clear}
+
+默认情况下，策略只在告警触发或升级时通知其通道。在策略上设置 `notifyOnClear: true`，即可在该策略曾通知过的告警**清除**（clear）时也通知这些通道。清除通知只发往确实为该告警投递过通知、且该策略所路由的通道和接收者，与告警清除时的严重级别无关（一个以 `CRITICAL` 触发、降为 `MAJOR` 后清除的告警，会在当初通知它的通道上被解决）。其 `eventType` 为 `CLEARED`，PagerDuty 会将其映射为 resolve。该选项默认关闭，因此在此选项出现之前创建的策略行为不变。
+
+```graphql
+mutation {
+  updateNotificationPolicy(token: "ops", request: { notifyOnClear: true }) { token notifyOnClear }
+}
+```
+
+清除属于信息性通知，因此处理方式与告警通知不同：
+
+- 只发往在该周期内投递过通知的目的地。从未通知过该告警的策略（其通知被节流、因静默时段被暂存，或策略是在告警触发之后才创建的）不会发送清除通知。
+- 每个周期只发送一次，且在清除被记录之后发送，因此其后不会再有“仍未解决”的升级通知。若没有任何通道接收，会重试；一旦有通道接收，就不会重复发送。若清除在其告警的通知被记录之前就被处理，则会在该通知之后立即发送；若当时发送失败，通知调度器会在之后最长 30 分钟内的各轮中再次拾取并发送。
+- **不**受节流限制，不计入通知次数，也不会启动升级。
+- 在策略的静默时段内发生的清除会被**丢弃**而不是暂存：数小时后才发出的“已清除”只会播报过时的消息。
+- `notifyOnClear` 不能用 `null` 清除；请传 `true` 或 `false`。
 
 ### 设备类型作用域 {#device-type-scoping}
 

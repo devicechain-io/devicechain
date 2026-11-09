@@ -35,6 +35,10 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 		OccurredTime:   event.OccurredTime.Format(time.RFC3339Nano),
 		RaisedTime:     event.RaisedTime.Format(time.RFC3339Nano),
 		ScopeAnchors:   event.ScopeAnchors,
+
+		DeviceToken:     event.DeviceToken,
+		DeviceName:      event.DeviceName,
+		DeviceTypeToken: event.DeviceTypeToken,
 	}
 	if event.PreviousSeverity != "" {
 		ps := event.PreviousSeverity
@@ -79,6 +83,10 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		RaisedTime:     raised,
 		OccurredTime:   occurred,
 		ScopeAnchors:   pbevent.ScopeAnchors,
+
+		DeviceToken:     pbevent.DeviceToken,
+		DeviceName:      pbevent.DeviceName,
+		DeviceTypeToken: pbevent.DeviceTypeToken,
 	}
 	if pbevent.PreviousSeverity != nil {
 		event.PreviousSeverity = *pbevent.PreviousSeverity

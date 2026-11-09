@@ -191,7 +191,7 @@ func TestSlackEscapesTenantAuthoredText(t *testing.T) {
 	}
 	r := rendered("RAISED")
 	r.Alarm.MetricKey = "<!here>"
-	msg := slackMessage(r, "")
+	msg := slackMessage(r, "", "")
 	raw, _ := json.Marshal(msg)
 	if strings.Contains(string(raw), "<!here>") {
 		t.Fatalf("an unescaped mention reached the payload: %s", raw)
@@ -201,7 +201,7 @@ func TestSlackEscapesTenantAuthoredText(t *testing.T) {
 func TestSlackTruncatesLongHeader(t *testing.T) {
 	r := rendered("RAISED")
 	r.Alarm.AlarmKey = strings.Repeat("k", 400)
-	_, blocks := slackBlocks(t, slackMessage(r, ""))
+	_, blocks := slackBlocks(t, slackMessage(r, "", ""))
 	h := blocks[0]["text"].(map[string]any)["text"].(string)
 	if n := len([]rune(h)); n != 150 {
 		t.Fatalf("header length = %d, want exactly 150 (Slack rejects longer)", n)
@@ -367,7 +367,7 @@ func TestTeamsAccentAndOptionalParts(t *testing.T) {
 			t.Errorf("%s accent = %q, want %q", sev, got, want)
 		}
 	}
-	card := teamsMessage(rendered("CLEARED"), "")["attachments"].([]map[string]any)[0]["content"].(map[string]any)
+	card := teamsMessage(rendered("CLEARED"), "", "")["attachments"].([]map[string]any)[0]["content"].(map[string]any)
 	if _, has := card["actions"]; has {
 		t.Fatal("no link configured, so no action")
 	}
