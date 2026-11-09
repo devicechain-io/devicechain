@@ -9,9 +9,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-sources/integration"
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
+	"github.com/devicechain-io/dc-microservice/sourcelimit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,6 +43,7 @@ func (s *reportSink) publish(tenant string, r cmddownlink.DownlinkReport) error 
 func withReportSink(h *routeHarness) *reportSink {
 	s := &reportSink{}
 	h.route.PublishDownlink = s.publish
+	h.route.DownlinkLimiter = sourcelimit.Must(sourcelimit.Limits{Burst: 100000, Every: time.Millisecond, MaxKeys: 100})
 	h.route.Metrics.DownlinkReport = func(result string) { h.bump("report/" + result) }
 	return s
 }
@@ -155,4 +158,64 @@ func TestADownlinkReportIsNotShedWithTelemetryButAnUplinkIs(t *testing.T) {
 	h2.allowOK.Store(false)
 	require.Equal(t, http.StatusAccepted, h2.post(csPath+"?event=ack", goodBearer, fixtureBody(t, "chirpstack/ack.json")).Code)
 	require.Equal(t, 1, h2.count("request/CHIRPSTACK_V4/shed_accepted"))
+}
+
+// Off, a report is not even read: a body that would be refused with the feed on is answered 204 and
+// dropped, exactly as before the reports existed, and the documentation says so.
+func TestWithTheFeedOffAnAckOrTxAckIsNotReadAt_All(t *testing.T) {
+	h := newRouteHarness(t)
+	h.route.Metrics.DownlinkReport = func(result string) { h.bump("report/" + result) }
+	for _, body := range []string{fixtureBody(t, "chirpstack/ack.json"), "not json", `{}`} {
+		for _, ev := range []string{"ack", "txack"} {
+			require.Equal(t, http.StatusNoContent, h.post(csPath+"?event="+ev, goodBearer, body).Code, ev+" "+body[:min(10, len(body))])
+		}
+	}
+	require.Empty(t, h.failed, "an unread event is never reported as a failed request")
+	require.Equal(t, 6, h.count("report/not_routed"))
+	h.nothingPublished()
+}
+
+func TestATxAckWithNoQueueItemIsAnsweredA204AndCountedWhenTheFeedIsOn(t *testing.T) {
+	h := newRouteHarness(t)
+	sink := withReportSink(h)
+	body := `{"deviceInfo":{"devEui":"0101010101010101"},"fCntDown":3,"gatewayId":"0102030405060708"}`
+	require.Equal(t, http.StatusNoContent, h.post(csPath+"?event=txack", goodBearer, body).Code)
+	require.Equal(t, 1, h.count("report/untracked"))
+	require.Empty(t, sink.reports)
+	require.Empty(t, h.failed)
+	// An ack missing it is still refused.
+	require.Equal(t, http.StatusBadRequest, h.post(csPath+"?event=ack", goodBearer, body).Code)
+}
+
+func TestARouteThatCarriesReportsNeedsALimiterForThem(t *testing.T) {
+	h := newRouteHarness(t)
+	h.route.PublishDownlink = (&reportSink{}).publish
+	h.route.DownlinkLimiter = nil
+	require.Error(t, h.route.Validate())
+}
+
+// One tenant's flood of reports is limited by its own allowance and cannot evict another tenant's.
+func TestAFloodOfReportsIsLimitedPerTenantAndAnotherTenantsStillGetThrough(t *testing.T) {
+	h := newRouteHarness(t)
+	sink := withReportSink(h)
+	h.route.DownlinkLimiter = sourcelimit.Must(sourcelimit.Limits{Burst: 3, Every: time.Hour, MaxKeys: 100})
+	body := fixtureBody(t, "chirpstack/ack.json")
+	for i := 0; i < 10; i++ {
+		require.Equal(t, http.StatusAccepted, h.post(csPath+"?event=ack", goodBearer, body).Code)
+	}
+	require.Len(t, sink.reports, 3, "only the allowance reached the shared stream")
+	require.Equal(t, 7, h.count("report/rate_limited"))
+	require.Equal(t, 7, h.count("request/CHIRPSTACK_V4/shed_accepted"))
+
+	// Another tenant's allowance is its own.
+	other := "/inst-1/globex/integrations/cs"
+	for i := 0; i < 3; i++ {
+		require.Equal(t, http.StatusAccepted, h.post(other+"?event=ack", goodBearer, body).Code)
+	}
+	require.Len(t, sink.reports, 6)
+	require.Equal(t, "globex", sink.tenants[5])
+
+	// Telemetry is not charged to it, nor it to telemetry.
+	require.Equal(t, http.StatusAccepted, h.up().Code)
+	require.Len(t, h.published, 1)
 }

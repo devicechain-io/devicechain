@@ -31,9 +31,14 @@ type respWriter struct {
 	devices []string
 	envs    []cmddownlink.ResponseEnvelope
 	fail    error
+	// onWrite runs inside a publish, before it is recorded (a test hook).
+	onWrite func()
 }
 
 func (w *respWriter) WriteToDevice(_ context.Context, device string, msgs ...messaging.Message) error {
+	if w.onWrite != nil {
+		w.onWrite()
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.fail != nil {

@@ -62,14 +62,18 @@ func TestTheStoreRoundTripsAndIsolatesTenants(t *testing.T) {
 	require.NotNil(t, got.TransmittedAt)
 	require.True(t, got.TransmittedAt.Equal(first), "the first transmission report wins")
 
-	// A delete in the wrong tenant removes nothing.
-	require.NoError(t, s.Delete(ctx, "other", got.ID))
+	// A delete needs the lease: without it, or in the wrong tenant, nothing is removed.
+	tok, won, err := s.Claim(ctx, "acme", got.ID, now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, won)
+	require.NoError(t, s.Delete(ctx, "other", got.ID, tok))
+	require.NoError(t, s.Delete(ctx, "acme", got.ID, tok.Add(time.Second)))
 	_, err = s.Lookup(ctx, "acme", itemID)
 	require.NoError(t, err)
-	require.NoError(t, s.Delete(ctx, "acme", got.ID))
+	require.NoError(t, s.Delete(ctx, "acme", got.ID, tok))
 	_, err = s.Lookup(ctx, "acme", itemID)
 	require.ErrorIs(t, err, ErrNoPending)
-	require.NoError(t, s.Delete(ctx, "acme", got.ID), "deleting what is gone is not an error")
+	require.NoError(t, s.Delete(ctx, "acme", got.ID, tok), "deleting what is gone is not an error")
 }
 
 func TestExpiredIsCrossTenantAndBoundedAndOrdered(t *testing.T) {
@@ -107,23 +111,28 @@ func TestClaimIsAtomicAndExpiresAndHidesTheRecordFromTheSweep(t *testing.T) {
 	p, err := s.Lookup(ctx, "acme", itemID)
 	require.NoError(t, err)
 
-	won, err := s.Claim(ctx, "acme", p.ID, now, time.Minute)
+	tok1, won, err := s.Claim(ctx, "acme", p.ID, now, time.Minute)
 	require.NoError(t, err)
 	require.True(t, won)
-	won, err = s.Claim(ctx, "acme", p.ID, now.Add(30*time.Second), time.Minute)
+	_, won, err = s.Claim(ctx, "acme", p.ID, now.Add(30*time.Second), time.Minute)
 	require.NoError(t, err)
 	require.False(t, won, "a second settler cannot take a held record")
 	due, err := s.Expired(ctx, now.Add(30*time.Second), 10)
 	require.NoError(t, err)
 	require.Empty(t, due, "a held record is not offered to the sweep")
 
-	won, err = s.Claim(ctx, "other", p.ID, now.Add(2*time.Minute), time.Minute)
+	_, won, err = s.Claim(ctx, "other", p.ID, now.Add(2*time.Minute), time.Minute)
 	require.NoError(t, err)
 	require.False(t, won, "another tenant cannot claim it")
-	won, err = s.Claim(ctx, "acme", p.ID, now.Add(2*time.Minute), time.Minute)
+	tok2, won, err := s.Claim(ctx, "acme", p.ID, now.Add(2*time.Minute), time.Minute)
 	require.NoError(t, err)
 	require.True(t, won, "an expired lease can be taken again")
-	due, err = s.Expired(ctx, now.Add(3*time.Minute+time.Second), 10)
-	require.NoError(t, err)
-	require.Len(t, due, 1)
+
+	// The first settler, overtaken after its lease expired, deletes nothing; the holder does.
+	require.NoError(t, s.Delete(ctx, "acme", p.ID, tok1))
+	_, err = s.Lookup(ctx, "acme", itemID)
+	require.NoError(t, err, "a settler that no longer holds the lease must not delete the record")
+	require.NoError(t, s.Delete(ctx, "acme", p.ID, tok2))
+	_, err = s.Lookup(ctx, "acme", itemID)
+	require.ErrorIs(t, err, ErrNoPending)
 }

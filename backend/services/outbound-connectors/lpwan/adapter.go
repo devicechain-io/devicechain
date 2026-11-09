@@ -435,7 +435,7 @@ func (a *Adapter) awaitAck(ctx context.Context, msg messaging.Message, j *job, i
 	}
 	err := a.opts.Pending.Add(ctx, Pending{
 		Tenant: j.tenant, Integration: integration, DeviceToken: j.device, DevEUI: devEUI,
-		CommandToken: j.token, DispatchNonce: j.nonce, QueueItemID: queueID, DeadlineAt: deadline,
+		CommandToken: j.token, DispatchNonce: j.nonce, QueueItemID: strings.ToLower(queueID), DeadlineAt: deadline,
 	})
 	if err != nil {
 		a.count(ResultPendingFailed)

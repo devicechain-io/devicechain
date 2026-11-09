@@ -60,6 +60,10 @@ type Request struct {
 	MessageType string
 	// ReceivedAt is when the platform received the request.
 	ReceivedAt time.Time
+	// DownlinkReports says the route carries a network server's reports about downlinks (a ChirpStack
+	// ack or txack). Without it those events are not read at all: they are Ignored, whatever their
+	// bodies hold, exactly as they were before the reports existed.
+	DownlinkReports bool
 }
 
 // Link is the receive-link metadata a network server reports, kept only when the integration
@@ -164,6 +168,10 @@ type Result struct {
 	// ack or txack). A result holds either uplinks or downlink reports, never both. A route that
 	// does not carry downlink reports treats a result with only these as Ignored.
 	Downlinks []DownlinkEvent
+	// Untracked is set with Ignored on a downlink report that names no downlink the platform can
+	// follow (a ChirpStack txack for a MAC-command-only downlink carries no queue item id). It is
+	// counted by the route and answered 204, never refused.
+	Untracked bool
 }
 
 // The kinds of DownlinkEvent.

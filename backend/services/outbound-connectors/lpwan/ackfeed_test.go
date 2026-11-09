@@ -32,6 +32,8 @@ type memPending struct {
 	// claimErr fails Claim; lease is each record's settle lease.
 	claimErr error
 	lease    map[uint]time.Time
+	// heldDeleteRefused counts deletes that did not hold the lease.
+	heldDeleteRefused int
 }
 
 func newMemPending() *memPending {
@@ -84,24 +86,28 @@ func (m *memPending) MarkTransmitted(_ context.Context, _ string, id uint, at ti
 	return nil
 }
 
-func (m *memPending) Claim(_ context.Context, _ string, id uint, now time.Time, lease time.Duration) (bool, error) {
+func (m *memPending) Claim(_ context.Context, _ string, id uint, now time.Time, lease time.Duration) (time.Time, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.claimErr != nil {
-		return false, m.claimErr
+		return time.Time{}, false, m.claimErr
 	}
 	if _, ok := m.rows[id]; !ok || m.lease[id].After(now) {
-		return false, nil
+		return time.Time{}, false, nil
 	}
 	m.lease[id] = now.Add(lease)
-	return true, nil
+	return m.lease[id], true, nil
 }
 
-func (m *memPending) Delete(_ context.Context, _ string, id uint) error {
+func (m *memPending) Delete(_ context.Context, _ string, id uint, token time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.delErr != nil {
 		return m.delErr
+	}
+	if !m.lease[id].Equal(token) {
+		m.heldDeleteRefused++
+		return nil
 	}
 	delete(m.rows, id)
 	return nil

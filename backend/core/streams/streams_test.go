@@ -143,6 +143,17 @@ func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
 			}
 			continue
 		}
+		// The downlink-report stream is the last cap. It is created on every install, read by one
+		// optional adapter, and holds advisory reports: one lost to eviction (or never read) leaves its
+		// command to settle at its own deadline as unanswered, which is the honest answer, so nothing
+		// promised is lost. Uncapped it would reserve a Cold tier's 128 MiB on installs that never use
+		// it, and move the published sizing table.
+		if s.Suffix == LpwanDownlinkEvents {
+			if got := MaxBytesCapFor(s.Suffix); got != lpwanDownlinkEventsMaxBytesCap {
+				t.Errorf("MaxBytesCapFor(%q) = %d, want %d", s.Suffix, got, int64(lpwanDownlinkEventsMaxBytesCap))
+			}
+			continue
+		}
 		if got := MaxBytesCapFor(s.Suffix); got != 0 {
 			t.Errorf("stream %q declares a ceiling cap of %d; only the max-delivery capture should, "+
 				"since every other stream is meant to track its tier's ceiling", s.Suffix, got)

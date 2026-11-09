@@ -107,6 +107,14 @@ type ResponseWriter interface {
 // per-publish ceiling.
 func PublishResponse(w ResponseWriter, tenant, deviceToken string, env ResponseEnvelope,
 	attempts int, backoff time.Duration) error {
+	return PublishResponseContext(context.Background(), w, tenant, deviceToken, env, attempts, backoff)
+}
+
+// PublishResponseContext is PublishResponse bounded by ctx: no attempt starts once ctx is done, and
+// ctx rides the writer, so a settler that holds a lease while it answers can promise it will have
+// stopped before the lease runs out.
+func PublishResponseContext(ctx context.Context, w ResponseWriter, tenant, deviceToken string, env ResponseEnvelope,
+	attempts int, backoff time.Duration) error {
 	if attempts < 1 {
 		return fmt.Errorf("cmddownlink: publish response for command %q: attempts must be at least 1", env.CommandToken)
 	}
@@ -114,13 +122,19 @@ func PublishResponse(w ResponseWriter, tenant, deviceToken string, env ResponseE
 	if err != nil {
 		return fmt.Errorf("cmddownlink: encode response for command %q: %w", env.CommandToken, err)
 	}
-	tctx := core.WithTenant(context.Background(), tenant)
+	tctx := core.WithTenant(ctx, tenant)
 	for attempt := 0; attempt < attempts; attempt++ {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("cmddownlink: publish response for command %q: %w", env.CommandToken, cerr)
+		}
 		if err = w.WriteToDevice(tctx, deviceToken, messaging.Message{Value: data}); err == nil {
 			return nil
 		}
 		if attempt < attempts-1 {
-			time.Sleep(backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+			}
 		}
 	}
 	return fmt.Errorf("cmddownlink: publish response for command %q: %w", env.CommandToken, err)

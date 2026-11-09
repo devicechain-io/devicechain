@@ -132,7 +132,7 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
 3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，并把它的 DevEUI 设为 `lorawan.deveui` 别名。
 
-上行会被存储为读数。ChirpStack 还会把 `ack` 和 `txack` 事件发送到同一个 URL：启用了 [LoRaWAN 下行](#lorawan-downlink)的安装会读取它们来结束[确认下行](#lorawan-confirmed)；未启用时它们与其他事件（join、status）一样返回 `204` 并被忽略。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
+上行会被存储为读数。ChirpStack 还会把 `ack` 和 `txack` 事件发送到同一个 URL：启用了 [LoRaWAN 下行](#lorawan-downlink)的安装会读取它们来结束[确认下行](#lorawan-confirmed)；未启用时它们与其他事件（join、status）一样返回 `204` 并被不加读取地忽略，无论正文内容如何。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -326,7 +326,11 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 与任何等待中的下行都不匹配的报告绝不会靠猜测去匹配。它会被丢弃、写入日志，并计入 `lpwan_ack_reports_total`（没有等待该队列项时为 `unmatched`，指向另一个集成或设备时为 `mismatch`）；这两项都值得告警。每条下行（无论是否确认）都会产生 `txack`，所以针对未在等待的下行的 `txack` 计为 `tx_untracked`，属于正常情况。滚动升级期间，旧版本的 Pod 仍会把确认命令按未投递拒绝，可以放心重发。
 
-按结果查看 `lpwan_ack_reports_total`：`acknowledged`、`timed_out`、`transmitted` 和 `deadline` 即上述结果。
+按结果查看 `lpwan_ack_reports_total`：`acknowledged`、`timed_out`、`transmitted` 和 `deadline` 即上述结果。偶尔出现一次 `unmatched` 并非故障：如果报告已被回答、但消息在 broker 上的确认丢失，该报告会再次到达并发现没有任何等待项（刚刚结束它的副本会把它计为 `redelivered`）。请对持续出现的 `unmatched` 或任何 `mismatch` 告警。
+
+只携带 MAC 命令的下行的 `txack` 没有队列项，会返回 `204` 并被计数（`integration_downlink_reports_total`，结果 `untracked`）；没有队列项的 `ack` 会被以 `400` 拒绝。报告有自己的限额，与遥测分开：每个租户突发 100 条、持续每秒 20 条。超出后请求返回 `202` 并被计数（结果 `rate_limited`），它本可结束的命令在截止时间结束，因此一个租户的洪泛不会挤掉另一个租户的应答。
+
+**升级。** 确认下行需要出站连接器和事件源两者都是新版本。出站连接器已是新版本而事件源仍是旧版本期间，旧 Pod 会对网络服务器的报告返回 `204` 并丢弃，因此在这一窗口内发出的确认下行会在截止时间以 `TIMEOUT`（结果未知）结束。Chart 在同一次升级中滚动二者；要避开这一窗口，请在其持续期间暂停确认命令。
 
 **在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
 

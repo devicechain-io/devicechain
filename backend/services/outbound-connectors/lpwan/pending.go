@@ -63,9 +63,12 @@ type PendingStore interface {
 	// Exactly one of a report and the deadline sweep settles a record, so the command is never
 	// answered both SUCCESSFUL and TIMEOUT: whoever claims first publishes its outcome, and the
 	// other leaves the record alone.
-	Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (bool, error)
-	// Delete removes a settled record. Deleting one already gone is not an error.
-	Delete(ctx context.Context, tenant string, id uint) error
+	// It returns the lease's token, which Delete must present.
+	Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (token time.Time, won bool, err error)
+	// Delete removes a settled record, but only while the caller still holds the lease it took
+	// (token): a settler overtaken after its lease expired deletes nothing. Deleting one already gone
+	// is not an error.
+	Delete(ctx context.Context, tenant string, id uint, token time.Time) error
 	// Expired returns up to limit records whose deadline is at or before now and that no settler
 	// holds, across tenants.
 	Expired(ctx context.Context, now time.Time, limit int) ([]Pending, error)
@@ -137,16 +140,19 @@ func (s *DBPending) MarkTransmitted(ctx context.Context, tenant string, id uint,
 }
 
 // Claim implements PendingStore. The conditional update is the atomic step.
-func (s *DBPending) Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (bool, error) {
+func (s *DBPending) Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (time.Time, bool, error) {
+	// Microsecond precision, the database's own, so the token compares equal when it is read back.
+	token := now.Add(lease).UTC().Truncate(time.Microsecond)
 	res := s.db(ctx, tenant).Model(&LpwanPendingAck{}).
 		Where("id = ? AND (settling_until IS NULL OR settling_until <= ?)", id, now.UTC()).
-		Update("settling_until", now.Add(lease).UTC())
-	return res.RowsAffected == 1, res.Error
+		Update("settling_until", token)
+	return token, res.RowsAffected == 1, res.Error
 }
 
 // Delete implements PendingStore.
-func (s *DBPending) Delete(ctx context.Context, tenant string, id uint) error {
-	return s.db(ctx, tenant).Where("id = ?", id).Delete(&LpwanPendingAck{}).Error
+func (s *DBPending) Delete(ctx context.Context, tenant string, id uint, token time.Time) error {
+	return s.db(ctx, tenant).Where("id = ? AND settling_until = ?", id, token.UTC().Truncate(time.Microsecond)).
+		Delete(&LpwanPendingAck{}).Error
 }
 
 // Expired implements PendingStore. It is the one cross-tenant read: the sweep answers every

@@ -311,6 +311,16 @@ type EventSourcesConfiguration struct {
 	Capture        Capture
 	// ExternalMqtt carries the settings of the sources that read a broker the operator runs.
 	ExternalMqtt ExternalMqtt
+	// LpwanDownlink says the outbound-connectors LoRaWAN downlink is enabled, so the inbound
+	// integration route carries a network server's reports about downlinks (a ChirpStack ack or
+	// txack) to the adapter that settles confirmed downlinks. Off, those events are answered 204 and
+	// ignored unread, as they always were.
+	//
+	// 🔴 NOBODY AUTHORS THIS. The chart derives it from
+	// functionalAreas.outbound-connectors.config.lpwanDownlink.enabled and refuses a hand-set copy, as
+	// it does for command-delivery's flag, so the route cannot take reports nothing reads, or ignore
+	// reports something waits for.
+	LpwanDownlink bool
 }
 
 // Creates the default event sources configuration

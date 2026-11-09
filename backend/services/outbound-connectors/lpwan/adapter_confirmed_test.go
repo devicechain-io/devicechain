@@ -44,6 +44,15 @@ func TestAConfirmedDownlinkWaitsForItsAcknowledgementAndIsNotAnsweredYet(t *test
 	require.Zero(t, r.m.get(ResultQueued))
 }
 
+func TestTheQueueItemIdIsStoredLowerCaseAsTheReportArrives(t *testing.T) {
+	r, pend := newConfirmedRig(t)
+	r.send.id = "5E0A6C1E-6A1C-4F38-9D2B-0C7A2B7D9F11"
+	r.handle(t, subject, envelope(t, confirmedParams), routed())
+	for _, p := range pend.rows {
+		require.Equal(t, "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11", p.QueueItemID, "reports are lower-cased by the codec")
+	}
+}
+
 func TestAConfirmedDownlinksWaitEndsAtTheCommandsOwnExpiry(t *testing.T) {
 	r, pend := newConfirmedRig(t)
 	h := routed()

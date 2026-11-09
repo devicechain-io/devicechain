@@ -34,12 +34,13 @@ const (
 	AckDeadline      = "deadline"        // a downlink's wait ran out: the command is answered unanswered
 	AckDeadlineFault = "deadline_fault"  // an overdue downlink could not be answered this pass
 	AckContended     = "contended"       // another settler holds the record; this report is left to redeliver
+	AckRedelivered   = "redelivered"     // a report for a downlink this replica just settled: its message ack was lost, nothing to do
 )
 
 // AckResults is every ack result label, so a metric can create its children at 0.
 var AckResults = []string{
 	AckAcknowledged, AckTimedOut, AckTransmitted, AckTxUntracked, AckUnmatched, AckRetried, AckMismatch,
-	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended,
+	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended, AckRedelivered,
 }
 
 // AckMetrics counts ack feed results; a nil AckMetrics counts nothing.
@@ -62,7 +63,21 @@ type AckFeedOptions struct {
 	// ResponseAttempts and ResponseBackoff bound the local retry of the answer publish.
 	ResponseAttempts int
 	ResponseBackoff  time.Duration
+	// SettleBudget bounds the whole answer once a settler holds a record's lease. Defaults to a third
+	// of SettleLease, and must stay well under it.
+	SettleBudget time.Duration
 }
+
+// settleBudget is the most time a settler spends answering a command after it took the record's lease.
+// It is well under SettleLease, so a settler that is slow (a broker that will not take the publish)
+// has stopped before another can take the lease, and two settlers never publish different answers.
+const settleBudget = SettleLease / 3
+
+// recentSettledTTL and recentSettledMax bound the memory of downlinks this replica has just settled.
+const (
+	recentSettledTTL = 10 * time.Minute
+	recentSettledMax = 4096
+)
 
 // AckFeed settles confirmed downlinks from the network server's reports. A report reaches it on the
 // lpwan-downlink-events stream, written by event-sources only after the sender's bearer token proved
@@ -96,6 +111,13 @@ type AckFeed struct {
 	workerWG sync.WaitGroup
 	sweepWG  sync.WaitGroup
 	stopOnce sync.Once
+
+	// settled remembers the downlinks this replica answered a moment ago, so a report redelivered
+	// because its message ack was lost is recognised and not counted as an unmatched ack. It is a
+	// courtesy of this replica only: another replica may receive the redelivery and count it
+	// unmatched, which is why the documentation tells operators an occasional unmatched is not a fault.
+	settledMu sync.Mutex
+	settled   map[string]time.Time
 }
 
 // NewAckFeed builds the feed. Every collaborator except metrics is required.
@@ -122,8 +144,11 @@ func NewAckFeed(reader messaging.MessageReader, responses cmddownlink.ResponseWr
 	if opts.ResponseBackoff <= 0 {
 		opts.ResponseBackoff = 200 * time.Millisecond
 	}
+	if opts.SettleBudget <= 0 || opts.SettleBudget > SettleLease/2 {
+		opts.SettleBudget = settleBudget
+	}
 	return &AckFeed{reader: reader, responses: responses, pending: pending, metrics: metrics, opts: opts,
-		ctx: context.Background()}
+		ctx: context.Background(), settled: map[string]time.Time{}}
 }
 
 func (f *AckFeed) count(result string) {
@@ -248,7 +273,8 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 	// Exactly one settler answers the command: a report and the deadline sweep both claim the
 	// record's lease first, so a late acknowledgement cannot be answered beside a timeout. A report
 	// that loses is left to redeliver; by then the record is gone and it is dropped as unmatched.
-	if !f.claim(ctx, p) {
+	token, ok := f.claim(ctx, p)
+	if !ok {
 		return
 	}
 	env := cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce}
@@ -263,40 +289,77 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 		env.Error = strPtr("the network server reported the confirmed downlink was not acknowledged by the device in time; the device may have received it")
 		env.Payload = reasonPayload(ReasonNotAcknowledged)
 	}
-	if f.respond(ctx, p, env) {
+	if f.respond(ctx, p, env, token) {
 		f.count(result)
 		ack(msg)
 	}
 }
 
 // claim takes the record's settle lease, counting why when it cannot.
-func (f *AckFeed) claim(ctx context.Context, p *Pending) bool {
-	won, err := f.pending.Claim(ctx, p.Tenant, p.ID, f.opts.Now(), SettleLease)
+func (f *AckFeed) claim(ctx context.Context, p *Pending) (time.Time, bool) {
+	token, won, err := f.pending.Claim(ctx, p.Tenant, p.ID, f.opts.Now(), SettleLease)
 	switch {
 	case err != nil:
 		if ctx.Err() == nil {
 			f.count(AckStoreFailed)
 			log.Warn().Err(err).Str("tenant", p.Tenant).Msg("Could not claim a pending LoRaWAN downlink; leaving it to retry.")
 		}
-		return false
+		return time.Time{}, false
 	case !won:
 		f.count(AckContended)
-		return false
+		return time.Time{}, false
 	}
-	return true
+	return token, true
+}
+
+func settledKey(tenant, key string) string { return tenant + "\x00" + key }
+
+// remember notes that this replica has just settled the downlink.
+func (f *AckFeed) remember(tenant, key string) {
+	now := f.opts.Now()
+	f.settledMu.Lock()
+	defer f.settledMu.Unlock()
+	if len(f.settled) >= recentSettledMax {
+		for k, at := range f.settled {
+			if now.Sub(at) > recentSettledTTL {
+				delete(f.settled, k)
+			}
+		}
+		if len(f.settled) >= recentSettledMax {
+			f.settled = map[string]time.Time{}
+		}
+	}
+	f.settled[settledKey(tenant, key)] = now
+}
+
+// recentlySettled reports whether this replica settled the downlink within recentSettledTTL.
+func (f *AckFeed) recentlySettled(tenant, key string) bool {
+	f.settledMu.Lock()
+	defer f.settledMu.Unlock()
+	at, ok := f.settled[settledKey(tenant, key)]
+	return ok && f.opts.Now().Sub(at) <= recentSettledTTL
 }
 
 // respond publishes the answer and removes the record, reporting whether the report is settled.
 // Publishing first and deleting after means a crash between them repeats the answer, which
 // command-delivery ignores for a command already terminal; the reverse would lose it.
-func (f *AckFeed) respond(ctx context.Context, p *Pending, env cmddownlink.ResponseEnvelope) bool {
-	if err := cmddownlink.PublishResponse(f.responses, p.Tenant, p.DeviceToken, env, f.opts.ResponseAttempts, f.opts.ResponseBackoff); err != nil {
+//
+// 🔴 THE PUBLISH IS BOUNDED BY settleBudget, WELL UNDER THE LEASE, and the delete holds the lease's token.
+// A settler that took longer than the lease would be overtaken by another that answers differently (a
+// report against the sweep), and the command would settle on whichever answer arrived first, which
+// need not be the true one. Bounded, it has stopped before the lease can be taken; and if it was
+// overtaken anyway its delete removes nothing, so the overtaker's record is untouched.
+func (f *AckFeed) respond(ctx context.Context, p *Pending, env cmddownlink.ResponseEnvelope, token time.Time) bool {
+	pctx, cancel := context.WithTimeout(ctx, f.opts.SettleBudget)
+	defer cancel()
+	if err := cmddownlink.PublishResponseContext(pctx, f.responses, p.Tenant, p.DeviceToken, env, f.opts.ResponseAttempts, f.opts.ResponseBackoff); err != nil {
 		f.count(AckResponseFail)
 		log.Warn().Err(err).Str("tenant", p.Tenant).Str("command", p.CommandToken).
 			Msg("Could not publish a confirmed LoRaWAN downlink's outcome; it will be retried.")
 		return false
 	}
-	if err := f.pending.Delete(ctx, p.Tenant, p.ID); err != nil {
+	f.remember(p.Tenant, p.QueueItemID)
+	if err := f.pending.Delete(ctx, p.Tenant, p.ID, token); err != nil {
 		// Answered already; a leftover record is answered again by the sweep, which command-delivery
 		// ignores. Not worth holding the report for.
 		log.Warn().Err(err).Str("tenant", p.Tenant).Str("command", p.CommandToken).
@@ -312,6 +375,13 @@ func (f *AckFeed) respond(ctx context.Context, p *Pending, env cmddownlink.Respo
 func (f *AckFeed) unmatched(msg messaging.Message, tenant string, rep cmddownlink.DownlinkReport) {
 	if rep.Kind == cmddownlink.DownlinkReportTxAck {
 		f.count(AckTxUntracked)
+		ack(msg)
+		return
+	}
+	if f.recentlySettled(tenant, rep.QueueItemID) {
+		// This replica answered this downlink a moment ago and the report was redelivered because the
+		// message ack was lost. Nothing is wrong and nothing to settle.
+		f.count(AckRedelivered)
 		ack(msg)
 		return
 	}
@@ -341,12 +411,13 @@ func (f *AckFeed) Sweep(ctx context.Context) {
 	}
 	for i := range due {
 		p := due[i]
-		if f.opts.TenantDeleted != nil && f.opts.TenantDeleted(p.Tenant) {
-			_ = f.pending.Delete(ctx, p.Tenant, p.ID)
-			f.count(AckTenantGone)
+		token, ok := f.claim(ctx, &p)
+		if !ok {
 			continue
 		}
-		if !f.claim(ctx, &p) {
+		if f.opts.TenantDeleted != nil && f.opts.TenantDeleted(p.Tenant) {
+			_ = f.pending.Delete(ctx, p.Tenant, p.ID, token)
+			f.count(AckTenantGone)
 			continue
 		}
 		text := "the network server reported no outcome for the confirmed downlink in time; it may still be queued or may have been delivered"
@@ -355,7 +426,7 @@ func (f *AckFeed) Sweep(ctx context.Context) {
 		}
 		env := cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce,
 			Reach: cmddownlink.ReachUnanswered, Error: strPtr(text), Payload: reasonPayload(ReasonNoAcknowledgement)}
-		if f.respond(ctx, &p, env) {
+		if f.respond(ctx, &p, env, token) {
 			f.count(AckDeadline)
 		} else {
 			f.count(AckDeadlineFault)

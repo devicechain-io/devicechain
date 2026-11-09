@@ -57,6 +57,9 @@ func decodeChirpStack(d *Descriptor, r *Request) (*Result, error) {
 	switch ev := r.Query.Get("event"); ev {
 	case "up":
 	case DownlinkAck, DownlinkTxAck:
+		if !r.DownlinkReports {
+			return &Result{Ignored: true}, nil
+		}
 		return decodeChirpStackDownlink(ev, r)
 	case "":
 		return nil, malformed("the request names no event: add ?event=up, which ChirpStack's HTTP integration appends itself")
@@ -130,6 +133,10 @@ func decodeChirpStackDownlink(kind string, r *Request) (*Result, error) {
 	var ev csDownlinkEvent
 	if err := parseDocument(r.Body, &ev); err != nil {
 		return nil, err
+	}
+	if kind == DownlinkTxAck && ev.QueueItemID == "" {
+		// A downlink that carried only MAC commands has no queue item: nothing to follow.
+		return &Result{Ignored: true, Untracked: true}, nil
 	}
 	if !uuidShape.MatchString(ev.QueueItemID) {
 		return nil, malformed("the %s has no queueItemId, or it is not a UUID", kind)

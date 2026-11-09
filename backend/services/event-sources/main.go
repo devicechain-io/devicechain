@@ -750,12 +750,21 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 			}
 			return SecretTransit.SealToken(tenant, credential.IntegrationSealKind(integrationToken), bearer)
 		},
-		Publish:         onIntegrationEventDecoded,
-		PublishDownlink: onDownlinkReport,
-		Metrics:         integrationMetrics(),
+		Publish: onIntegrationEventDecoded,
+		Metrics: integrationMetrics(),
+	}
+	if Configuration != nil && Configuration.LpwanDownlink {
+		route.PublishDownlink = onDownlinkReport
+		route.DownlinkLimiter = sourcelimit.Must(downlinkReportLimits)
 	}
 	return route
 }
+
+// downlinkReportLimits is a tenant's allowance for network-server downlink reports: a burst of 100
+// and 20 a second sustained. Reports follow the commands a tenant sends to LoRaWAN devices, which a
+// device's duty cycle keeps far below telemetry rates. The limit exists so that one tenant's flood of
+// them cannot fill the shared, small stream and evict other tenants' acknowledgements.
+var downlinkReportLimits = sourcelimit.Limits{Burst: 100, Every: 50 * time.Millisecond, MaxKeys: 10000}
 
 // buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when the operator has
 // not turned the route on (httpIngest.deviceUplinks, off by default so a rolling upgrade cannot lose
