@@ -35,7 +35,7 @@ func stubOperatorCheck(t *testing.T, err error) *int {
 	// it is covered in upgradeorder_test.go.
 	prevOrder := requireInstallOrderFor
 	t.Cleanup(func() { requireInstallOrderFor = prevOrder })
-	requireInstallOrderFor = func(context.Context, kubernetes.Interface, string, string, string) error { return nil }
+	requireInstallOrderFor = func(context.Context, kubernetes.Interface, string, string) error { return nil }
 	return &calls
 }
 

@@ -350,7 +350,7 @@ the cluster, with one exception: the connection budget may be raised.`,
 		// The recorded install is what `dcctl upgrade` trusts to say which controller the cluster
 		// runs, so it must not name this dcctl for an older one. Only an explicit --version.
 		if installVersion != "" && !installBuild {
-			if err := bootstrap.RefuseOlderRelease(imageSource.Version, imageSource.Registry,
+			if err := bootstrap.RefuseForeignRelease(imageSource.Version, imageSource.Registry,
 				fmt.Sprintf("dcctl install %s --version %s", args[0], imageSource.Version)); err != nil {
 				return err
 			}

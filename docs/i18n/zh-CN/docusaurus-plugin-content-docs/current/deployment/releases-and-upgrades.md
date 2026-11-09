@@ -224,12 +224,16 @@ dcctl upgrade local devicechain --version <new-version>
 并指出需要先运行的 install 命令。它不会自行应用 Operator：
 多实例集群中，升级一个实例时这样做会悄悄连带更新其他实例的控制器。
 
-有一种情况只警告，不拒绝。`dcctl install` 会记录安装定义的发布；
-**手动**安装的 Operator 没有该记录，`dcctl` 无法区分有意手装与被旧 `dcctl` 覆盖。
-它不推翻无法观察的选择，而是打印所需 install 命令后继续。
+操作员检查有一种情况只警告，不拒绝。`dcctl install` 会给它应用的定义打上标识；
+**手动**安装的 Operator 没有该标识，`dcctl` 无法区分有意手装与被旧 `dcctl` 覆盖。
+该检查不推翻无法观察的选择，而是打印所需 install 命令后继续。
 如果你并非手动安装 Operator，应把提示视为原本会发生的拒绝，继续前先运行 `dcctl install`。
+下面的安装检查是另一项，仍然适用：`dcctl install` 从未完成的集群没有安装记录，
+其升级会被拒绝，直到运行过 `dcctl install`。
 
-**升级还会检查 install 已经运行，并拒绝回退。** Operator 的定义可以在多个发布之间保持不变而控制器已经变化，所以仅检查 Operator 无法发现 `dcctl install` 被跳过。因此 `dcctl upgrade` 还会读取集群中的安装记录（其中记有最后一次完成 `dcctl install` 的 `dcctl` 版本），并在以下情况**拒绝**：该版本早于执行升级的 `dcctl`、某次安装已开始但未完成，或集群没有可用的记录。拒绝信息会指出需要先运行的 install 命令，且不会更改任何内容。在已安装的版本上再次运行升级不会被拒绝，由更新版本的 `dcctl` 安装的集群也不会。从源码构建的 `dcctl` 不参与比较。同样，`dcctl upgrade --version <标签>` **会拒绝早于当前 `dcctl` 的发布**（`dcctl install --version` 同样如此；比已安装版本更新的发布也会被拒绝，直到你用它运行 `dcctl install`）：它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划。要回退，请使用旧发布的 `dcctl` 运行升级，它自带匹配的 chart；`--version` 等于当前 `dcctl` 的发布、来自你自己的镜像仓库（`--registry`）的标签以及不带 `--version` 的升级不受影响。这两项拒绝都没有跳过选项。
+**升级还会检查 install 已经运行，并且只升级到自身 dcctl 的发布。** Operator 的定义可以在多个发布之间保持不变而控制器已经变化，所以仅检查 Operator 无法发现 `dcctl install` 被跳过。因此 `dcctl upgrade` 还会读取集群中的安装记录（其中记有最后一次完成 `dcctl install` 的 `dcctl` 版本），并在以下情况**拒绝**：该版本早于执行升级的 `dcctl`、某次安装已开始但未完成，或集群没有可用的记录。拒绝信息会指出需要先运行的 install 命令，且不会更改任何内容。在已安装的版本上再次运行升级不会被拒绝，由更新版本的 `dcctl` 安装的集群也不会。从源码构建的 `dcctl` 不参与比较。从本发布起，用更新的补丁版本 `dcctl` 执行普通的 `dcctl upgrade` 也需要先运行 `dcctl install`。
+
+显式的 `--version` 在 `dcctl upgrade` 和 `dcctl install` 中都受同一规则约束，两个方向都是如此。**早于**当前 `dcctl` 的发布会被拒绝，因为它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划；要回退，在该发布的说明允许时，请使用旧发布的 `dcctl`。**晚于**当前 `dcctl` 的发布同样会被拒绝，用当前 `dcctl` 去安装也无济于事：安装记录记录的是执行安装的 `dcctl`，而不是传入的 `--version`。请获取新发布的 `dcctl`，用它运行 `dcctl install`，然后再升级。`--version` 等于当前 `dcctl` 的发布、来自你自己的镜像仓库（`--registry`）的标签以及不带 `--version` 的升级不受影响。这两项拒绝都没有跳过选项。
 
 需要查看会改什么时，可以先给任一命令加 `--dry-run`。
 `dcctl upgrade` 从实例记录取得目标集群，不作猜测，并明确输出该集群。

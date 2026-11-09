@@ -283,14 +283,18 @@ different release's — naming the install command to run first. It does not app
 operator itself: on a cluster holding several instances that would move every other
 instance's controller as a side effect of upgrading one, silently.
 
-There is one case it lets through with a warning rather than refusing. `dcctl install`
-records which release installed the definitions; an operator put on the cluster **by hand**
-carries no such record, and `dcctl` cannot tell a deliberate hand-install from one an older
-`dcctl` overwrote. Rather than overrule a choice it cannot see, it prints a note naming the
+There is one case the operator check lets through with a warning rather than refusing. `dcctl install`
+stamps the definitions it applies with an identity; an operator put on the cluster **by hand**
+carries none, and `dcctl` cannot tell a deliberate hand-install from one an older `dcctl`
+overwrote. Rather than overrule a choice it cannot see, that check prints a note naming the
 install command and continues. If you did not install the operator by hand, treat that note
 as the refusal it would otherwise have been and run `dcctl install` before going further.
+The install check below is separate and still applies: a cluster `dcctl install` never finished
+has no install record, so an upgrade of it is refused until `dcctl install` has run.
 
-**The upgrade also checks that the install ran, and refuses to go back.** An operator's definitions can stay the same across a release while its controller changes, so the operator check alone cannot tell that `dcctl install` was skipped. `dcctl upgrade` therefore also reads the install record in the cluster, which names the `dcctl` that last finished `dcctl install`, and **refuses** when that is older than the `dcctl` doing the upgrade, when an install started and did not finish, or when the cluster has no usable record. The refusal names the install command to run first and changes nothing. Running the upgrade again at the version that was installed is not refused, and neither is a cluster installed by a newer `dcctl`. A `dcctl` built from source is not compared. In the same way, `dcctl upgrade --version <tag>` **refuses a release older than the `dcctl` running it** (so does `dcctl install --version`, and the same goes for a release newer than the install, which is refused until you run `dcctl install` at it): its chart and infrastructure configuration are its own release's, and would be planned around images that have never seen them. To go back, run the upgrade with the `dcctl` of the older release, which carries the matching chart; `--version` equal to the running `dcctl`'s release, a tag on a registry of your own (`--registry`) and an upgrade with no `--version` are unaffected. Neither refusal has an override.
+**The upgrade also checks that the install ran, and only moves to its own dcctl's release.** An operator's definitions can stay the same across a release while its controller changes, so the operator check alone cannot tell that `dcctl install` was skipped. `dcctl upgrade` therefore also reads the install record in the cluster, which names the `dcctl` that last finished `dcctl install`, and **refuses** when that is older than the `dcctl` doing the upgrade, when an install started and did not finish, or when the cluster has no usable record. The refusal names the install command to run first and changes nothing. Running the upgrade again at the version that was installed is not refused, and neither is a cluster installed by a newer `dcctl`. A `dcctl` built from source is not compared. From this release, a plain `dcctl upgrade` with a newer patch release of `dcctl` also needs `dcctl install` first.
+
+An explicit `--version` is held to the same rule, in both directions, for `dcctl upgrade` and `dcctl install`. A release **older** than the `dcctl` running it is refused, because its chart and infrastructure configuration are its own release's and would be planned around images that have never seen them; to go back, where that release's notes allow it, use the `dcctl` of the older release. A release **newer** than the `dcctl` running it is refused as well, and installing it with this `dcctl` would not help: the install record names the `dcctl` that ran the install, not the `--version` it was given. Get the `dcctl` of the newer release, run `dcctl install` with it, then upgrade. `--version` equal to the running `dcctl`'s release, a tag on a registry of your own (`--registry`) and an upgrade with no `--version` are unaffected. Neither refusal has an override.
 
 Run either with `--dry-run` first if you want to see what it would move. `dcctl upgrade`
 takes the target cluster from the instance's own record rather than guessing, and says
