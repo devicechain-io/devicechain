@@ -250,7 +250,7 @@ func TestAuthoredDocumentMustListMcpsResource(t *testing.T) {
 	if err == nil {
 		t.Fatal("a document with no enforcement (enforce by default) omitting mcp's resource passed the pre-flight")
 	}
-	for _, want := range []string{"mcpResources", "https://iot.example.com/api/mcp", "unset", "observe"} {
+	for _, want := range []string{"mcpResources", "https://iot.example.com/api/mcp", "unset", "observe", "scheme and host must be lowercase"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not mention %q: %v", want, err)
 		}

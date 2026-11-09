@@ -508,9 +508,7 @@ dcctl bootstrap local devicechain
 
 ### v1.3.0：命令可送达 HTTP 和 LoRaWAN 设备，每次投递都留有凭据 {#v130-upgrade}
 
-`v1.3.0` 是从 `v1.2.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 五个，`command-delivery` 两个，`event-management` 两个，`notification-management` 一个），并且每个区域的审计日志各增加四个可为空的列；它们新增表、可为空的列和索引，不改动任何已有行。参见[架构变更与回退](#v130-going-back)。请按上面的顺序在升级实例之前运行 `dcctl install`：它还会让 Alertmanager 改用 `dcctl` 写入的路由配置（参见[告警送达真人](#v130-alert-routing)）。如果从 `v1.1.0` 升级，请先阅读 [`v1.2.0` 的说明](#v120-upgrade)，并在按其操作时使用 `--version v1.3.0`。
-
-**[FREEZE: recount the migrations above. Ten assumes every entry marked PENDING below has merged; the three already on `main` are two in `device-management` (`20261113100000`, `20261114120000`) and one in `command-delivery` (`20261114120100`), plus the audit journal's columns.]**
+`v1.3.0` 是从 `v1.2.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入安装集群时使用的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`，以及 `--version`。升级时会运行十个追加的迁移（`device-management` 五个，`command-delivery` 两个，`event-management` 两个，`notification-management` 一个），并且每个区域的审计日志各增加四个可为空的列；它们新增表、可为空的列和索引，不改动任何已有行。参见[架构变更与回退](#v130-going-back)。请按上面的顺序在升级实例之前运行 `dcctl install`：它还会让 Alertmanager 改用 `dcctl` 写入的路由配置（参见[告警送达真人](#v130-alert-routing)）。**令牌受众现在默认强制执行：** 升级之前请阅读[令牌受众默认强制执行](#v130-token-audience)，如果你自己编写实例配置，更要如此。如果从 `v1.1.0` 升级，请先阅读 [`v1.2.0` 的说明](#v120-upgrade)，并在按其操作时使用 `--version v1.3.0`。
 
 ```bash
 dcctl install local --version v1.3.0
@@ -520,12 +518,13 @@ dcctl upgrade local devicechain --version v1.3.0
 
 适用[版本与升级策略](./versioning-policy.md)。本版本扩充了受保护的接口（新的 GraphQL 查询、变更、字段和枚举值，新的设备 HTTP 路由，新的 `dcctl` 标志和命令，以及 C# SDK 的一个新类型），且未移除任何接口。策略本身在本版本中有三点新内容：
 
-- **预览层级。** 新提供的接口可以在最初的几个次版本中处于[预览](./versioning-policy.md)层级，在此期间仍可能在次版本中变化；届时发布说明会写明变化内容和应对方法。本版本中处于预览层级的是规则测试（event-processing API 的 `evaluateRules` 操作、场景和测试文件格式，以及 `dcctl test`），以及 `dcctl product export`、`plan`、`apply` 及其包格式（`product.devicechain.io/v1alpha1`）。可以在其上构建，任何变化都会在这里公布。
+- **预览层级。** 新提供的接口可以在最初的几个次版本中处于[预览](./versioning-policy.md#preview-interfaces)层级，在此期间仍可能在次版本中变化；届时发布说明会写明变化内容和应对方法。本版本中处于预览层级的是规则测试（event-processing API 的 `evaluateRules` 操作、场景和测试文件格式，以及 `dcctl test`），以及 `dcctl product export`、`plan`、`apply` 及其包格式（`product.devicechain.io/v1alpha1`）。可以在其上构建，任何变化都会在这里公布。
 - **MCP 工具目录不受保护。** 工具名称、输入和结果结构可以在次版本中变化，本版本就改变了它们：参见 [MCP 工具结果标明来源](#v130-mcp-provenance)。
 - **Helm 值。** 本版本新增或修改的 Helm 值不受兼容性策略保护，次版本在本节中说明这一点。每个新值默认都是关闭的，或保持 `v1.2.0` 的行为。
 
 新功能：
 
+- **令牌受众默认强制执行，** 正如 `v1.2.0` 的说明所预告。API 以 `401` 拒绝绑定到它不提供的资源的令牌，授权服务器以 `invalid_target` 拒绝为本实例不提供的资源发出的请求。未绑定任何资源的令牌（包括每一次登录和每一个服务令牌）不受影响，MCP 令牌也不受影响。参见[令牌受众默认强制执行](#v130-token-audience)。
 - **命令可以送达不保持连接的设备。** 只使用 HTTP 的设备通过长轮询获取命令、确认收到并作出应答。位于 ChirpStack v4 网络服务器之后的设备以 LoRaWAN 下行的形式收到命令。现在每条命令都会记录其投递是如何被观察到的，适用于所有传输方式。参见[通过 HTTP 获取命令与投递凭据](#v130-http-command-pull)和 [LoRaWAN 下行](#v130-lorawan-downlink)。
 - **告警送达真人。** `dcctl install` 和 `dcctl upgrade` 可以把平台自身的告警路由到 webhook、电子邮件地址或你自己的配置；死信开关接收器会在告警系统本身沉默时通知你；每条告警都链接到告警手册中的条目；告警无处可去的实例会明确报告。参见[告警送达真人](#v130-alert-routing)。
 - **出站 webhook 可以签名，** 遵循开放的 Standard Webhooks 规范，适用于 `httpCall` 规则动作和 webhook 通知渠道。参见[签名的出站 webhook](#v130-signed-webhooks)。
@@ -533,19 +532,19 @@ dcctl upgrade local devicechain --version v1.3.0
 - **设备可以把自己的载荷发给其配置文件的解码器，** 使用一个新的可选路由。参见[设备自有载荷的解码](#v130-device-uplinks)。
 - **证书连接可以用 OCSP 检查，** 按信任锚配置，默认关闭。参见[证书连接的 OCSP 检查](#v130-ocsp)。
 - **租户的产品可以保存为文件，** 使用 `dcctl product export`、`plan` 和 `apply`（预览）。参见[产品即代码](#v130-product-as-code)。
-- **检测规则可以做单元测试，** 使用 `dcctl test` 和 `evaluateRules` 查询（预览）。**[PENDING #2336]** 参见[规则测试](#v130-rule-tests)。
-- **记录每个租户每天的事件用量，** 运维人员可以读取。**[PENDING #2324]** 参见[按租户的事件用量](#v130-usage-metering)。
-- **活动按计划发送命令：** cron、日历日期、节假日，以及按每台设备自身安装位置计算的日出或日落。**[PENDING #2327, #2326]** 参见[活动](#v130-campaigns)和[安装位置](#v130-installed-position)。
-- **记录通知投递，** 每次尝试一行，并给出每个渠道的健康状况。**[PENDING #2330]** 参见[通知投递台账](#v130-delivery-ledger)。
-- **控制台中的告警分诊：** 告警链接到其设备并显示单位，可以一次确认多条，设备有“告警”标签页，首页统计告警和在线设备。运维人员还可以标注一条告警最终是什么性质。参见[控制台搜索设备并分诊告警](#v130-console)和 **[PENDING #2332]** [告警处置](#v130-alarm-dispositions)。
-- **原生模型上的词汇术语：** 设备、资产、区域和客户类型，关系类型以及指标，可以带有 Brick、SAREF、Smart Data Models 和 NGSI-LD 中的术语。**[PENDING #2337]** 参见[语义绑定](#v130-semantic-bindings)。
+- **检测规则可以做单元测试，** 使用 `dcctl test` 和 `evaluateRules` 查询（预览）。参见[规则测试](#v130-rule-tests)。
+- **记录每个租户每天的事件用量，** 运维人员可以读取。参见[按租户的事件用量](#v130-usage-metering)。
+- **活动按计划发送命令：** cron、日历日期、节假日，以及按每台设备自身安装位置计算的日出或日落。参见[活动](#v130-campaigns)和[安装位置](#v130-installed-position)。
+- **记录通知投递，** 每次尝试一行，并给出每个渠道的健康状况。参见[通知投递台账](#v130-delivery-ledger)。
+- **控制台中的告警分诊：** 告警链接到其设备并显示单位，可以一次确认多条，设备有“告警”标签页，首页统计告警和在线设备。运维人员还可以标注一条告警最终是什么性质。参见[控制台搜索设备并分诊告警](#v130-console)和 [告警处置](#v130-alarm-dispositions)。
+- **原生模型上的词汇术语：** 设备、资产、区域和客户类型，关系类型以及指标，可以带有 Brick、SAREF、Smart Data Models 和 NGSI-LD 中的术语。参见[语义绑定](#v130-semantic-bindings)。
 - **MCP 工具结果把设备和用户写入的文本标记为数据，** 放在带有来源的 `untrusted` 成员之下。参见 [MCP 工具结果标明来源](#v130-mcp-provenance)。
 
 #### 升级之前 {#v130-before-you-upgrade}
 
 需要采取的操作，按执行顺序排列：
 
-- **[FREEZE DECISION] Decide the token-audience default.** The `v1.2.0` notes said that `v1.3` refuses, by default, tokens bound to a resource the instance does not serve. This build still defaults to `observe` (`TokenAudienceReleaseDefault` in `backend/core/config/tokenaudience.go`), and no change to `enforce` is merged. Either land that change before the freeze and say so here, or say here that the default stays `observe` in `v1.3.0` and give the new schedule. Remove this item once decided.
+- **检查是否有绑定到错误资源的令牌，并决定是否在这个次版本内退出强制执行。** 令牌受众现在默认强制执行。在 `v1.2.0` 实例上，`{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 和 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}` 应为零；如果是这样，新的默认值对你的客户端没有任何影响。如果你自己提供实例配置（`instance.existingSecret`）并运行 MCP 区域，请先把 `tokenAudience` 配置块加入文档，否则 AI 代理会失去 MCP 访问。参见[令牌受众默认强制执行](#v130-token-audience)。
 - **如果你曾通过手动编辑 Alertmanager 自身的 Secret 来路由告警，请先把这份配置迁移到 `dcctl install --alert-config <文件>`。** 从本版本起，Alertmanager 读取 `dcctl` 写入的 Secret `dc-alertmanager-config`，因此运行 `dcctl install` 后，手动编辑的配置不再被读取。由早期版本安装的集群还需要先运行一次 `dcctl install`，`dcctl upgrade` 才会接受 `--alert-*` 标志。参见[告警送达真人](#v130-alert-routing)。
 - **注意 `POST /{instanceId}/{tenant}/events` 现在对未知租户或无法认证的凭据返回 `401`。** 这类请求过去会得到 `202`，随后被拒绝，因此其事件从未被存储。收到 `401` 的设备需要修正租户名称或凭据；事件正常存储的设备不受影响。滚动升级期间，旧 Pod 对这类请求仍返回 `202`。参见[HTTP 事件端点返回 401](#v130-http-events-401)。
 - **只有在滚动升级完成后，才开启信任锚的 OCSP 模式。** 在所有 `device-management` 副本都运行本版本之前，旧副本不检查 OCSP，因此一个副本拒绝的证书仍可能被另一个副本放行。参见[证书连接的 OCSP 检查](#v130-ocsp)。
@@ -553,19 +552,19 @@ dcctl upgrade local devicechain --version v1.3.0
   - 只有在所有服务的所有副本都已升级后，才把设备类型的 `commandChannel` 设为 `HTTP_PULL`；旧的 `command-delivery` 会把这类设备的命令发布到无人读取的地方，命令随后超时。
   - 只有在所有 `device-management` 副本都已升级后，才开启 `httpIngest.deviceUplinks`；旧副本会在已返回 `202` 之后拒绝该上行。
   - 只有在所有 `outbound-connectors` 和 `notification-management` 副本都已升级后，才开启 webhook 签名（`httpCall` 动作上的 `signingSecretRef`，webhook 渠道上的 `"signing": true`）；旧副本会发送未签名的请求。
-  - **[PENDING #2327]** 在发布完成后再创建带日出或日落触发器的活动：`v1.2.0` 的 `user-management` 副本拒绝签发读取安装位置的令牌，因此太阳时间规划会报告错误并重试，直到该副本消失。
+  - 在发布完成后再创建带日出或日落触发器的活动：`v1.2.0` 的 `user-management` 副本拒绝签发读取安装位置的令牌，因此太阳时间规划会报告错误并重试，直到该副本消失。
 - **迁移所有以 `webhook-signing/` 开头的 `httpCall` Bearer 凭据句柄。** 该命名空间现在保留给签名密钥，引用此类句柄的规则在发布时会被拒绝。参见[签名的出站 webhook](#v130-signed-webhooks)。
 - **更新从工具结果中读取自由文本的 MCP 客户端。** 设备的名称、描述和外部 ID，指标的名称和单位，告警的键，以及命令的名称和错误，现在都位于 `untrusted` 之下，形式为 `{ "value": ..., "source": ... }`。MCP 工具目录不是受保护的接口，因此这一变化在次版本中发布。参见 [MCP 工具结果标明来源](#v130-mcp-provenance)。
-- **[PENDING #2336] 预计 `devicechain_eventprocessing_detect_late_samples_total` 的读数会变高。** 被已关闭的滚动窗口或已关闭的会话丢弃的迟到读数现在会被计数，与其他规则类型一直以来的做法一致；此前这些丢弃不留痕迹。检测结果不变。请重新校准按旧速率调好的仪表板或告警。参见[规则测试](#v130-rule-tests)。
-- **[PENDING #2337] 在发布完成后再发布带语义绑定的配置文件和资产类型。** 在滚动窗口内，处理发布请求的旧 Pod 写出的快照不含绑定。草稿会保留它们，由已升级的 Pod 进行的下一次发布会将其固定下来。参见[语义绑定](#v130-semantic-bindings)。
-- **[PENDING #2324] 预计在大型事件存储上 `event-management` 的迁移耗时更长。** 它会逐个分块在事件表上建立索引。参见[按租户的事件用量](#v130-usage-metering)。
-- **把新的告警和指标加入你的路由和仪表板。** 新增了 `devicechain_usermanagement_service_token_checks_total`（[详情](#v130-service-token-ceiling)），以及证书连接的 OCSP 序列和 **[PENDING #2330]** `devicechain_notificationmanagement_ledger_writes_total`。
-- **本版本的其他内容无需任何操作。** 其余变更都是新增的，或默认关闭。本版本没有弃用任何内容；`v1.2.0` 中对“指定 `resource` 但未指定 `scope` 的 `client_credentials` 请求”的弃用仍然有效。
+- **预计 `devicechain_eventprocessing_detect_late_samples_total` 的读数会变高。** 被已关闭的滚动窗口或已关闭的会话丢弃的迟到读数现在会被计数，与其他规则类型一直以来的做法一致；此前这些丢弃不留痕迹。检测结果不变。请重新校准按旧速率调好的仪表板或告警。参见[规则测试](#v130-rule-tests)。
+- **在发布完成后再发布带语义绑定的配置文件和资产类型。** 在滚动窗口内，处理发布请求的旧 Pod 写出的快照不含绑定。草稿会保留它们，由已升级的 Pod 进行的下一次发布会将其固定下来。参见[语义绑定](#v130-semantic-bindings)。
+- **预计在大型事件存储上 `event-management` 的迁移耗时更长。** 它会逐个分块在事件表上建立索引。参见[按租户的事件用量](#v130-usage-metering)。
+- **把新的告警和指标加入你的路由和仪表板。** 新增了 `devicechain_usermanagement_service_token_checks_total`（[详情](#v130-service-token-ceiling)），以及证书连接的 OCSP 序列和 `devicechain_notificationmanagement_ledger_writes_total`。
+- **本版本的其他内容无需任何操作。** 其余变更都是新增的，或默认关闭。`infrastructure.tokenAudience.enforcement: observe` 仅在本版本中作为退出选项被接受，`v1.4` 会拒绝它。`v1.2.0` 中对“指定 `resource` 但未指定 `scope` 的 `client_credentials` 请求”的弃用仍然有效。
 
 新的权限：
 
-- **`usage:read`** **[PENDING #2324]** 是系统层级的权限，用于在 event-management 的管理 API 上读取每个租户的事件用量。内置的 `superuser` 角色持有 `*`，因此拥有它；把它授予其他系统角色，即可让该角色读取用量。任何租户角色都不能持有它。
-- **`location:installed:read`** **[PENDING #2326]** 是租户层级的权限，只用于读取设备或资产的安装位置。`location:read` 隐含该权限，因此已经持有 `location:read` 的角色（以及持有 `*` 的 `tenant-admin`）无需改动。它不在查看者基线中：如果某个角色应能看到安装位置、但不应看到设备的实时位置，就只授予它 `location:installed:read`。
+- **`usage:read`** 是系统层级的权限，用于在 event-management 的管理 API 上读取每个租户的事件用量。内置的 `superuser` 角色持有 `*`，因此拥有它；把它授予其他系统角色，即可让该角色读取用量。任何租户角色都不能持有它。
+- **`location:installed:read`** 是租户层级的权限，只用于读取设备或资产的安装位置。`location:read` 隐含该权限，因此已经持有 `location:read` 的角色（以及持有 `*` 的 `tenant-admin`）无需改动。它不在查看者基线中：如果某个角色应能看到安装位置、但不应看到设备的实时位置，就只授予它 `location:installed:read`。
 
 新的 Helm 值，默认都是关闭或保持不变：
 
@@ -576,6 +575,61 @@ dcctl upgrade local devicechain --version v1.3.0
 | `functionalAreas.event-sources.config.httpIngest.deviceUplinks` | `false` | 提供 `POST /{instanceId}/{tenant}/devices/{token}/uplink`。 |
 | `functionalAreas.event-sources.config.httpIngest.maxCommandPollsPerTenant` | `256` | 每个副本为每个租户保持的 HTTP 命令轮询数；超出的一个会得到 `429`。未列在 chart 的 `values.yaml` 中；需要其他上限时再设置。 |
 | `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | 通过网络服务器向 LoRaWAN 设备发送命令。 |
+
+#### 令牌受众默认强制执行 {#v130-token-audience}
+
+`v1.2.0` 的说明已预告这一点：[令牌按其资源进行检查](#v120-token-audience)中计为 `would_reject` 的情况，现在会被拒绝。未设置的 `infrastructure.tokenAudience.enforcement` 表示 `enforce`，对两项检查都适用：
+
+- **API 拒绝绑定到它不提供的资源的令牌，** 返回 `401`，与无效令牌的应答相同。区域的 API 接受未绑定任何资源的令牌、绑定到该区域的令牌，以及绑定到已注册 MCP 服务器的令牌。
+- **授权服务器拒绝为本实例不提供的资源发出的请求：** 在授权端点和 `client_credentials` 授权中返回 `invalid_target`；对于绑定到已不再提供的资源的刷新或授权码，返回 `invalid_grant`。以这种方式被拒绝的刷新令牌会被消耗掉，客户端必须重新授权。
+
+未绑定任何资源的令牌不受影响。这包括从控制台、仪表板应用、C# SDK 和 `dcctl` 进行的每一次登录，以及每一个服务令牌。MCP 令牌绑定到 MCP 服务器，而 chart 会注册该服务器，因此同样不受影响。在 `enforce` 下，拒绝会计入相同的序列，`verdict="rejected"`；两个 `info` 告警 `TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 只会在设置了 `observe` 的实例上触发。
+
+拒绝的样子：服务账号申请绑定到一个区域的令牌，却在另一个区域使用，就会在那里被拒绝。
+
+```bash
+TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials -d scope=read-only \
+  --data-urlencode "resource=https://dc.example.com/api/device-management" \
+  https://dc.example.com/api/user-management/oauth/token | jq -r .access_token)
+
+# 接受：令牌绑定到 device-management。
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
+  https://dc.example.com/api/device-management/graphql
+
+# 在 enforce 下返回 401：event-management 不接受绑定到 device-management 的令牌。
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
+  https://dc.example.com/api/event-management/graphql
+```
+
+调用多个区域的集成应省略 `resource`：未绑定的令牌被所有区域接受。参见[把令牌绑定到资源](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
+
+**升级之前，** 请在 `v1.2.0` 实例上检查是否存在强制执行会拒绝的流量：
+
+- API 计数器每个区域一个序列，其名称中的区域名不带连字符：`devicechain_devicemanagement_token_audience_checks_total`、`devicechain_eventmanagement_token_audience_checks_total` 等。用 `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 选中全部。授权服务器的计数器是 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}`。两者都应为零，两个告警也应保持安静。
+- 如果有任何一个在变化，限速的警告日志会给出客户端：区域日志中的 `Token audience is not accepted by this plane`，以及 `user-management` 日志中的 `OAuth resource is not one this instance serves`。修改该客户端发送的 `resource`：省略它，或使用本实例提供的资源。
+
+**如需在这个次版本内退出，** 请在升级之前设置 `enforcement: observe`，这样滚动升级期间没有 Pod 执行强制检查。在 Helm values 或 `dcctl` [values 覆盖文件](./tuning-an-instance.md#tunable)中，键为 `instance.config.infrastructure.tokenAudience.enforcement`。`v1.4` 会拒绝 `observe`：服务在启动时停止，chart 的 values schema 也会拒绝它。如果不退出，滚动升级期间新旧 Pod 并存，因此在几分钟内，绑定到错误资源的令牌可能被 `v1.2.0` 的副本接受，却被 `v1.3.0` 的副本拒绝。
+
+:::warning 直接使用 Helm 并配合 `instance.existingSecret` 时，除非文档列出 MCP，否则会失去 MCP 访问
+chart 不会把 `tokenAudience` 配置块写入你自己提供的配置。在 `enforce` 下，`mcp` 区域在启动时会检查其 `resourceUrl` 是否列在 `infrastructure.tokenAudience.mcpResources` 中，如果没有，它会**拒绝启动**，AI 代理因此失去 MCP 访问。`dcctl upgrade` 会在任何内容滚动之前拒绝这样的文档，但直接运行的 `helm upgrade` 无法查看你的 Secret 内部。升级之前，请把该配置块加入文档，写上你的源地址和 MCP 服务器的 `resourceUrl`（与 `mcp` 区域的配置完全一致，scheme 和主机为小写）：
+
+```json
+"infrastructure": {
+  "tokenAudience": {
+    "areaBaseUrl": "https://iot.example.com/api",
+    "mcpResources": ["https://iot.example.com/api/mcp"]
+  }
+}
+```
+
+或者在同一配置块中设置 `"enforcement": "observe"`。无论哪种方式，**都要把 `instance.existingSecretChecksum` 设置为新 `instance` 文档的 sha256**，否则不会滚动任何 Pod，所有 Pod 仍读取旧文档。
+:::
+
+- **如果你手动设置了 `functionalAreas.mcp.config.resourceUrl`**，而其 scheme 或主机含有大写字母，或者它等于某个区域自身的标识符（例如 `<origin>/api/device-management`），`helm upgrade` 现在会失败并说明原因。请把它改为小写或换一个地址，或者设置 `observe`；在 `observe` 下，chart 会把这样的值排除在列表之外，与 `v1.2.0` 相同。
+- **回退到 `v1.2.0`** 时，这方面无需任何操作：`v1.2.0` 读取同一个配置块，默认值为 `observe`。
 
 #### 告警送达真人 {#v130-alert-routing}
 
@@ -664,8 +718,6 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 规则测试（预览） {#v130-rule-tests}
 
-**[PENDING #2336 — drop this subsection, its "What is new" line, its "Before you upgrade" item and the preview-tier mention of the rule tests if it has not merged at the freeze.]**
-
 `dcctl test <dir|file>` 为检测规则运行确定性的单元测试。`scenario.yaml` 描述设备及其读数（常量、有界随机游走、阶梯计划，或 CSV/NDJSON 文件），以及故障（缺口、重复、乱序、离线窗口）和随机种子；`*.test.yaml` 文件说明必须发生的事情：在某个时长内触发或清除告警、从不触发、请求了某条命令或 webhook 等。`dcctl test` 打印报告，可以写出 JUnit XML（`--junit`），所有期望都成立时退出码为 `0`，有期望失败时为 `1`，有内容无法判定时为 `2`。无法给出答案的运行绝不会显示为通过。
 
 它驱动一个新查询 `evaluateRules`（event-processing 租户 API，`device:read`），该查询在请求中提供的事件上，以事件时间和与线上相同的迟到容忍值，运行配置文件已发布的规则或一份草稿，并返回状态跳变、它们会请求的动作，以及结果为何不完整。它不执行任何操作，也不触及任何流。文件格式（`devicechain.io/ruletest/v1alpha1`）、该查询和该命令都处于**预览**层级。
@@ -673,8 +725,6 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 - **`devicechain_eventprocessing_detect_late_samples_total` 的读数会变高。** 被已关闭的滚动窗口或已关闭的会话丢弃的迟到读数现在会被计数，与其他规则类型一致。检测结果不变；按旧速率调好的仪表板或告警需要重新校准。
 
 #### 按租户的事件用量 {#v130-usage-metering}
-
-**[PENDING #2324 — drop this subsection, its lines above and its migrations if it has not merged at the freeze.]**
 
 `event-management` 每天记录每个租户的用量：它接入的事件，以及发送这些事件的设备（去重数量、单小时峰值和每小时平均值）。运维人员通过 `event-management` 新的实例级 `/admin/graphql` 端点上的 `tenantEventUsage(tenant, from, to)` 查询读取，该端点需要持有 `usage:read` 的身份令牌。该记录只报告用量，不做任何限制。
 
@@ -685,8 +735,6 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 活动 {#v130-campaigns}
 
-**[PENDING #2327 — drop this subsection and its lines above if it has not merged at the freeze. It depends on #2326.]**
-
 活动按计划向一个实体组中的设备发送一系列命令，步骤之间可以设置延迟。计划可以是指定时区中的 cron 表达式、日历日期和时间，或者日出、日落加上偏移量，后者按每台设备的[安装位置](#v130-installed-position)分别计算。节假日会取消一次触发，但绝不会把它挪到别的日子。夏令时变化遵循同一条规则：落在春季跳变空档中的时间在跳变时刻触发，重复的那个小时只触发一次。每次触发都按设备跟踪（已计划、已发送、带原因跳过、失败），`retryCampaignFailed` 只重新发送失败的部分。命令通过常规的批量路径发送，因此维护窗口仍然生效。每个副本都运行调度器，由数据库决定哪个副本发送每条命令，因此不会重复发送。
 
 - **活动不能编辑。** 请删除后重新创建；重新创建的活动不会发送在其创建之前就已到期的内容。
@@ -695,13 +743,9 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 安装位置 {#v130-installed-position}
 
-**[PENDING #2326 — drop this subsection and its lines above if it has not merged at the freeze.]**
-
 不会移动的设备或资产，例如路灯、停车位或机柜，现在可以有安装位置：`setInstalledPosition` 和 `clearInstalledPosition`（`device:write`），设备批量导入中可选的 `installedLatitude`、`installedLongitude`、`installedElevation` 和 `installedAccuracy` 列，以及 `Device` 和 `Asset` 上的 `installedPosition` 字段。读取它需要新的 `location:installed:read`，`location:read` 隐含该权限。它绝不会退而使用设备上报的位置。每个设备和资产上的 `positionWithheld` 告诉调用方它无权查看位置，但不透露位置是否存在。区域可以指定其边界围栏（`boundaryFenceToken`）；被区域引用的围栏不能删除。
 
 #### 通知投递台账 {#v130-delivery-ledger}
-
-**[PENDING #2330 — drop this subsection and its lines above if it has not merged at the freeze.]**
 
 每次通过某个渠道发送告警通知的尝试现在都会写入一行：触发原因、策略、渠道、接收人、结果（`SENT`、`FAILED`、`REFUSED` 或 `NOT_ATTEMPTED`）、尝试序号、延迟以及分类后的错误代码。通过 `notificationAttempts`（`notification:read`）读取；`NotificationChannel.deliveryHealth` 给出每个渠道最近一次成功、最近一次失败和连续失败次数。投递 URL 本身可能就是凭据，因此绝不会被存储。记录保留 7 天。
 
@@ -709,13 +753,9 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 告警处置 {#v130-alarm-dispositions}
 
-**[PENDING #2332 — drop this subsection and its lines above if it has not merged at the freeze.]**
-
 `setAlarmDisposition` 把告警的当前周期标注为 `TRUE_POSITIVE`、`FALSE_POSITIVE` 或 `EXPECTED`，可附带备注（`alarm:write`）。标注属于某一个周期：告警再次触发时，新周期从无标注开始，之前的周期保留各自的标注。`Alarm.disposition` 读取当前周期的标注，`alarmDispositions` 列出所有已标注的周期。标注不会改变告警的其他任何方面。受客户范围限制的成员可以读取其可见周期的标注，但不能写入。
 
 #### 语义绑定 {#v130-semantic-bindings}
-
-**[PENDING #2337 — drop this subsection and its lines above if it has not merged at the freeze.]**
 
 租户可以把词汇表中的术语附加到已有的模型上：设备、资产、区域和客户类型上的 `semanticTypes`，关系类型上的 `semanticPredicate` 和 `semanticInverse`，以及指标上的 `semanticProperty` 和 `semanticPointClass`。随附的词汇表有 Brick 1.4.4、SAREF 4.1.1 及 SAREF4CITY 和 SAREF4BLDG、路灯、停车和环境领域的 Smart Data Models，以及 NGSI-LD 核心术语。租户通过 `setSemanticContext`（`device:write`）启用所用的词汇表，并可以添加自己的前缀。每个术语都会检查是否存在及其种类，以完整 IRI 存储，被拒绝时返回指明该术语的 `INVALID_ARGUMENT`；会让已存储绑定失去依据的上下文变更会以 `SEMANTIC_CONTEXT_IN_USE` 被拒绝。`thingModel(includeSemanticTypes: true)` 会把绑定加入 Thing Model；默认输出不变。
 
@@ -763,12 +803,12 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 - **HTTP 命令渠道**（`device-management`，迁移 `20261114120000`）。`device_types` 上一个可为空的列 `command_channel`。空值读作 `PUBLISH`。
 - **投递凭据**（`command-delivery`，迁移 `20261114120100`）。`commands` 上五个可为空的列：`delivered_time`、`delivery_evidence`、`delivery_mode`、`max_attempts` 和 `delivery_attempts`。
 - **审计日志中的身份**（所有区域）。每个区域在自己的表旁边保存的审计日志表 `audit_events` 新增四个可为空的列：`client_id`、`session_id`、`on_behalf_of` 和 `proposal`。它们在启动时添加，与该表本身一贯的创建方式相同，而不是通过编号迁移。
-- **[PENDING #2324] 事件用量**（`event-management`，迁移 `20261107000000` 和 `20261108000000`）。五张新表 `tenant_usage_daily`、`tenant_usage_hourly`、`tenant_usage_devices`、`tenant_usage_ledger` 和 `tenant_usage_state`，以及 `events.processed_time` 上逐块建立的 BRIN 索引。
-- **[PENDING #2330] 通知投递台账**（`notification-management`，迁移 `20261108000100`）。一张新表 `notification_attempts`，带三个索引。
-- **[PENDING #2326] 安装位置**（`device-management`，迁移 `20261112120000`）。`devices` 和 `assets` 上各六个可为空的列（`installed_lat`、`installed_lon`、`installed_elev`、`installed_accuracy`、`installed_source` 和 `installed_updated_at`），`areas` 上一个（`boundary_fence_token`）及其部分索引。
-- **[PENDING #2332] 告警处置**（`device-management`，迁移 `20261114090000`）。一张新表 `alarm_dispositions`，其行随所属告警一起删除。
-- **[PENDING #2327] 活动**（`command-delivery`，迁移 `20261116120000`）。三张新表 `campaigns`、`campaign_cycles` 和 `campaign_elements`，以及它们的索引。
-- **[PENDING #2337] 语义绑定**（`device-management`，迁移 `20261120120000`）。类型、关系类型和指标表上用于绑定的可为空列，以及一张新表 `semantic_contexts`。
+- **事件用量**（`event-management`，迁移 `20261107000000` 和 `20261108000000`）。五张新表 `tenant_usage_daily`、`tenant_usage_hourly`、`tenant_usage_devices`、`tenant_usage_ledger` 和 `tenant_usage_state`，以及 `events.processed_time` 上逐块建立的 BRIN 索引。
+- **通知投递台账**（`notification-management`，迁移 `20261108000100`）。一张新表 `notification_attempts`，带三个索引。
+- **安装位置**（`device-management`，迁移 `20261112120000`）。`devices` 和 `assets` 上各六个可为空的列（`installed_lat`、`installed_lon`、`installed_elev`、`installed_accuracy`、`installed_source` 和 `installed_updated_at`），`areas` 上一个（`boundary_fence_token`）及其部分索引。
+- **告警处置**（`device-management`，迁移 `20261114090000`）。一张新表 `alarm_dispositions`，其行随所属告警一起删除。
+- **活动**（`command-delivery`，迁移 `20261116120000`）。三张新表 `campaigns`、`campaign_cycles` 和 `campaign_elements`，以及它们的索引。
+- **语义绑定**（`device-management`，迁移 `20261120120000`）。类型、关系类型和指标表上用于绑定的可为空列，以及一张新表 `semantic_contexts`。
 
 **回退到 `v1.2.0` 时，数据库中无需撤销任何内容：** 新的表、列和索引保留原处，`v1.2.0` 的服务会忽略它们。回退之前，请把每个信任锚的 OCSP 模式改回 `OFF`，把每个设备类型的 `commandChannel` 改回 `PUBLISH`，并关闭 `httpIngest.deviceUplinks`、`lpwanDownlink.enabled` 和 webhook 签名，因为 `v1.2.0` 不认识它们。条件允许时请向前升级：升级失败可以通过再次运行 `dcctl upgrade` 来修复。
 
@@ -778,6 +818,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 - **更改代理配置仍会断开由认证调用放行的设备，** 直到代理库包含上游修复。证书续期不会。
 - **`eventSources.ingestMetering: lagCredit` 仍不可用，** 并会在启动时被拒绝；参见[接入计量](#v120-ingest-metering)。
 - **OCSP 尚不会存储其获知的结果，也不会结束已打开的会话，** 详见[证书连接的 OCSP 检查](#v130-ocsp)。
+- **在接收它的那个小时结束 10 分钟之后才存储的事件，不计入租户的用量记录，** 升级后接收、但日期落在已压缩分块中的事件也不计入。参见[按租户的事件用量](#v130-usage-metering)。
 
 ### v1.2.0：租户自行编写的载荷解码器，以及会结束会话的证书吊销 {#v120-upgrade}
 

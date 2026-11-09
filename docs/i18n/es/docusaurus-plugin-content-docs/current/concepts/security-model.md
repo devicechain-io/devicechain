@@ -138,7 +138,7 @@ instance:
         enforcement: observe
 ```
 
-En una instancia cuya configuración escribe usted mismo (`instance.existingSecret`), ponga `"enforcement": "observe"` en el bloque `infrastructure.tokenAudience` del documento. Consulte las [notas de actualización](../deployment/releases-and-upgrades.md#v120-token-audience).
+En una instancia cuya configuración escribe usted mismo (`instance.existingSecret`), ponga `"enforcement": "observe"` en el bloque `infrastructure.tokenAudience` del documento. Consulte las [notas de actualización](../deployment/releases-and-upgrades.md#v130-token-audience).
 
 Un token que no nombra ningún recurso es aceptado por la API de cualquier área, en ambos modos. Un cliente que nunca envía `resource` no se ve afectado por ninguna de las dos comprobaciones.
 

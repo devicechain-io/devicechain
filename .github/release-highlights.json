@@ -62,11 +62,11 @@
   "theme": "commands reach HTTP and LoRaWAN devices, and deliveries leave evidence",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.2.0 with `dcctl install`, then one `dcctl upgrade` per instance; the appended migrations add tables, nullable columns and indexes, and nothing is removed. Turn on OCSP, HTTP command pull, device uplinks and webhook signing only once the rollout has finished.",
+    "Upgrade in place from v1.2.0 with `dcctl install`, then one `dcctl upgrade` per instance; the appended migrations add tables, nullable columns and indexes, and nothing is removed. Token audiences are now enforced by default: check the would-reject counters first, and if you supply the instance configuration yourself, list the MCP server in it. Turn on OCSP, HTTP command pull, device uplinks and webhook signing only once the rollout has finished.",
     "Devices that only speak HTTP fetch their commands with a long poll, and devices behind a ChirpStack v4 network server get theirs as LoRaWAN downlinks. Every command records how its delivery was observed.",
     "The platform's own alerts reach a person: `dcctl` routes them to a webhook, an email address or your own Alertmanager configuration, a dead-man receiver reports when alerting goes quiet, and every alert links to a runbook entry.",
     "Outbound webhooks can be signed per the Standard Webhooks specification, the HTTP event endpoint answers 401 for an unknown tenant or a bad credential, and certificate connects can be checked with OCSP per trust anchor.",
-    "A tenant's product can be kept as files with `dcctl product export | plan | apply`, and detection rules can be unit-tested with `dcctl test`; both are in the new preview tier. [PENDING #2336 for `dcctl test`]",
+    "A tenant's product can be kept as files with `dcctl product export | plan | apply`, and detection rules can be unit-tested with `dcctl test`; both are in the new preview tier.",
     "MCP tool results now carry device- and user-written text under `untrusted`, with its source. The MCP tool catalog is not a covered interface, so MCP clients that read those fields must read them from there."
   ]
 }
