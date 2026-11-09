@@ -838,14 +838,14 @@ TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   https://dc.example.com/api/user-management/oauth/token | jq -r .access_token)
 
 # Accepted: the token is bound to device-management.
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
-  https://dc.example.com/api/device-management/graphql
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/device-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
 
 # 401 under enforce: event-management does not accept a token bound to device-management.
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
-  https://dc.example.com/api/event-management/graphql
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/event-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
 ```
 
 An integration that calls more than one area should leave out the `resource`: an unbound token is accepted by every area. See [Binding a token to a resource](../user-guide/service-accounts.md#binding-a-token-to-a-resource).

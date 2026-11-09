@@ -883,14 +883,14 @@ TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   https://dc.example.com/api/user-management/oauth/token | jq -r .access_token)
 
 # Aceptado: el token está vinculado a device-management.
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
-  https://dc.example.com/api/device-management/graphql
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/device-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
 
 # 401 con enforce: event-management no acepta un token vinculado a device-management.
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
-  https://dc.example.com/api/event-management/graphql
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/event-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
 ```
 
 Una integración que llama a más de un área debe omitir el `resource`: todas las áreas aceptan un token sin vincular. Consulta [Vincular un token a un recurso](../user-guide/service-accounts.md#binding-a-token-to-a-resource).

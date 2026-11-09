@@ -594,14 +594,14 @@ TOKEN=$(curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
   https://dc.example.com/api/user-management/oauth/token | jq -r .access_token)
 
 # 接受：令牌绑定到 device-management。
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
-  https://dc.example.com/api/device-management/graphql
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/device-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
 
 # 在 enforce 下返回 401：event-management 不接受绑定到 device-management 的令牌。
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' -d '{"query":"{ __typename }"}' \
-  https://dc.example.com/api/event-management/graphql
+curl -s -o /dev/null -w '%{http_code}\n' https://dc.example.com/api/event-management/graphql \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{ __typename }"}'
 ```
 
 调用多个区域的集成应省略 `resource`：未绑定的令牌被所有区域接受。参见[把令牌绑定到资源](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
