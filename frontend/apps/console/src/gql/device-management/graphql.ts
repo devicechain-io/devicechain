@@ -3371,7 +3371,12 @@ export const PreviewSelectorDocument = new TypedDocumentString(`
 export const DynamicGroupsDocument = new TypedDocumentString(`
     query DynamicGroups($memberType: String!) {
   entityGroups(
-    criteria: {pageNumber: 1, pageSize: 200, memberType: $memberType, membershipMode: "dynamic"}
+    criteria: {
+      pageNumber: 1
+      pageSize: 200
+      memberType: $memberType
+      membershipMode: "dynamic"
+    }
   ) {
     results {
       id
@@ -4202,7 +4207,7 @@ export const GroupNamesDocument = new TypedDocumentString(`
     `) as unknown as TypedDocumentString<GroupNamesQuery, GroupNamesQueryVariables>;
 export const DeviceGroupTargetsDocument = new TypedDocumentString(`
     query DeviceGroupTargets {
-  entityGroups(criteria: {pageNumber: 1, pageSize: 500, memberType: "device"}) {
+  entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: "device" }) {
     results {
       token
       name
@@ -4548,7 +4553,7 @@ export const DetectionRulesDocument = new TypedDocumentString(`
 export const ScopeGroupsDocument = new TypedDocumentString(`
     query ScopeGroups {
   entityGroups(
-    criteria: {pageNumber: 1, pageSize: 500, membershipMode: "dynamic"}
+    criteria: { pageNumber: 1, pageSize: 500, membershipMode: "dynamic" }
   ) {
     results {
       token
@@ -5323,7 +5328,7 @@ export const ResetDeviceProvisioningDocument = new TypedDocumentString(`
 export const EarmarkedDeviceCountDocument = new TypedDocumentString(`
     query EarmarkedDeviceCount($profile: String!) {
   devices(
-    criteria: {pageNumber: 1, pageSize: 1, expectedProvisioningProfile: $profile}
+    criteria: { pageNumber: 1, pageSize: 1, expectedProvisioningProfile: $profile }
   ) {
     pagination {
       totalRecords
@@ -5340,7 +5345,7 @@ export const DeviceProvisioningDocument = new TypedDocumentString(`
       name
     }
   }
-  deviceCredentials(criteria: {pageNumber: 1, pageSize: 100, device: $device}) {
+  deviceCredentials(criteria: { pageNumber: 1, pageSize: 100, device: $device }) {
     results {
       token
       enabled
