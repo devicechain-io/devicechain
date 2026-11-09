@@ -75,6 +75,7 @@ to some customers.`,
 
 func init() {
 	eventsCmd.PersistentFlags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(eventsCmd)
 	eventsCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	eventsCmd.PersistentFlags().StringVarP(&evTenant, "tenant", "t", "", "tenant whose events are read (required)")
 	eventsCmd.PersistentFlags().StringVar(&evEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
@@ -110,8 +111,10 @@ func parseWhen(flag, v string) (time.Time, error) {
 }
 
 func runEventsFailed(cmd *cobra.Command, args []string) error {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(evTenant) == "" {
 		return fmt.Errorf("--tenant is required: failed events are per-tenant, and there is no default")
 	}

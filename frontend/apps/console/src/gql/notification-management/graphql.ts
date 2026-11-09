@@ -108,6 +108,8 @@ export type NotificationPolicyCreateRequest = {
   metadata?: string | null | undefined;
   /** Human-readable name shown in policy lists. */
   name?: string | null | undefined;
+  /** Also notify the policy's channels when an alarm it paged clears. Omit it for false, the behaviour before this option existed. */
+  notifyOnClear?: boolean | null | undefined;
   /**
    * The severity at or above which alarms are sent even during quiet hours. Omit it to hold
    * every severity. It has no effect while the policy has no quiet hours.
@@ -166,6 +168,8 @@ export type NotificationPolicyUpdateRequest = {
   metadata?: string | null | undefined;
   /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** Whether the policy also notifies on clear. Omit it to keep the stored value; an explicit null is refused. */
+  notifyOnClear?: boolean | null | undefined;
   /** New bypass severity, or null so that quiet hours hold every severity. */
   quietHoursBypassSeverity?: string | null | undefined;
   /** New quiet-hours slots (a JSON array serialized to a string), or null to clear them. */
@@ -233,14 +237,14 @@ export type NotificationPolicyRegistryQueryVariables = Exact<{
 }>;
 
 
-export type NotificationPolicyRegistryQuery = { notificationPolicies: { results: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type NotificationPolicyRegistryQuery = { notificationPolicies: { results: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, notifyOnClear: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type NotificationPolicyByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type NotificationPolicyByTokenQuery = { notificationPoliciesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }> };
+export type NotificationPolicyByTokenQuery = { notificationPoliciesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, enabled: boolean, notifyOnClear: boolean, throttleSeconds: number | null, escalateAfterSeconds: number | null, maxEscalations: number | null, metadata: string | null, quietHoursTimezone: string | null, quietHoursSlots: string | null, quietHoursBypassSeverity: string | null, createdAt: string | null, updatedAt: string | null, rules: Array<{ id: string, severity: string, recipients: string | null, channel: { token: string, name: string | null } | null }> }> };
 
 export type CreateNotificationPolicyRecordMutationVariables = Exact<{
   request: NotificationPolicyCreateRequest;
@@ -370,6 +374,7 @@ export const NotificationPolicyRegistryDocument = new TypedDocumentString(`
       name
       description
       enabled
+      notifyOnClear
       throttleSeconds
       escalateAfterSeconds
       maxEscalations
@@ -405,6 +410,7 @@ export const NotificationPolicyByTokenDocument = new TypedDocumentString(`
     name
     description
     enabled
+    notifyOnClear
     throttleSeconds
     escalateAfterSeconds
     maxEscalations

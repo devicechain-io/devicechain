@@ -105,11 +105,11 @@ Dos comprobaciones usan la audiencia. Son defensa en profundidad: las autoridade
 
 ### La lista de permitidos {#token-audience-allowlist}
 
-Estos son los recursos a los que el servidor de autorización vincula un token, y las audiencias que acepta una API, cuando la aplicación obligatoria está activada. Con `observe`, cualquier otro se cuenta y se registra, pero se atiende:
+Estos son los recursos a los que el servidor de autorización vincula un token, y las audiencias que acepta una API, con `enforce`, el valor por defecto. Con `observe`, cualquier otro se cuenta y se registra, pero se atiende:
 
 - **El servidor MCP**, cuando está desplegado: su URL de recurso, `<origin>/api/mcp`.
 - **La API de cada área**, en `<origin>/api/<área>` para todas las áreas salvo `mcp`, por ejemplo `https://iot.example.com/api/device-management`.
-- **Recursos externos**, que son las entradas que enumera en `externalResources`. Úselos para un servicio suyo, fuera de DeviceChain, que valida los tokens de DeviceChain con el conjunto de claves publicado (`/oauth/jwks`) y pide tokens vinculados a sí mismo. El servidor de autorización emite ese token, pero **ninguna API de DeviceChain lo acepta cuando la aplicación obligatoria está activada**, ni tampoco el endpoint `userinfo` del servidor de autorización.
+- **Recursos externos**, que son las entradas que enumera en `externalResources`. Úselos para un servicio suyo, fuera de DeviceChain, que valida los tokens de DeviceChain con el conjunto de claves publicado (`/oauth/jwks`) y pide tokens vinculados a sí mismo. El servidor de autorización emite ese token, pero **ninguna API de DeviceChain lo acepta con `enforce`**, ni tampoco el endpoint `userinfo` del servidor de autorización.
 
 La comparación es byte a byte. No hay conversión de mayúsculas ni tratamiento de la barra final, así que `https://IoT.example.com/api/mcp` no es `https://iot.example.com/api/mcp`. Por eso la configuración solo admite una grafía de cada identificador, y el cliente tiene que enviar exactamente esa grafía.
 
@@ -126,13 +126,25 @@ La comparación es byte a byte. No hay conversión de mayúsculas ni tratamiento
 | Un `resource` en una solicitud de código o de renovación que difiere de aquel al que está vinculada la concesión | Se cuenta y se registra; se atiende | `invalid_target`; un token de renovación no queda gastado |
 | Una API | Se cuenta como `would_reject` y se registra; se atiende | `401`, la misma respuesta que para un token no válido |
 
-`observe` es el valor por defecto en `v1.2`. `v1.3` hace de `enforce` el valor por defecto y mantiene `observe` como salida para esa versión menor. `v1.4` retira la salida: un servicio se niega a arrancar si el documento contiene `observe`, y el chart lo rechaza. Consulte las [notas de actualización](../deployment/releases-and-upgrades.md#v120-token-audience).
+`enforce` es el valor por defecto desde `v1.3`; en `v1.2` lo era `observe`. Establecer `enforcement: observe` mantiene el comportamiento de `v1.2` durante esta versión menor, como salida. `v1.4` retira la salida: un servicio se niega a arrancar si el documento contiene `observe`, y el chart lo rechaza.
+
+Para usar la salida, establezca la clave en sus valores de Helm, o en una [superposición de valores](../deployment/tuning-an-instance.md#tunable) de `dcctl`, y actualice. Establézcala antes de actualizar a `v1.3` si no quiere que ningún pod aplique la comprobación durante el despliegue gradual:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tokenAudience:
+        enforcement: observe
+```
+
+En una instancia cuya configuración escribe usted mismo (`instance.existingSecret`), ponga `"enforcement": "observe"` en el bloque `infrastructure.tokenAudience` del documento. Consulte las [notas de actualización](../deployment/releases-and-upgrades.md#v130-token-audience).
 
 Un token que no nombra ningún recurso es aceptado por la API de cualquier área, en ambos modos. Un cliente que nunca envía `resource` no se ve afectado por ninguna de las dos comprobaciones.
 
 ### Cómo leer los contadores {#token-audience-reading}
 
-Ejecute primero `observe` y vigile los contadores: una serie `would_reject` que nunca se mueve significa que pasar a `enforce` no cambia nada para sus clientes. Las series, las dos alertas y cómo encontrar el cliente que está detrás de una cuenta están en [Comprobaciones de la audiencia del token](../deployment/observability.md#token-audience-checks).
+Con `enforce`, una solicitud rechazada se cuenta con el veredicto `rejected`. Si no está seguro de lo que envían sus clientes, ejecute primero `observe` y vigile los contadores: una serie `would_reject` que nunca se mueve significa que `enforce` no cambia nada para sus clientes. Las series, las dos alertas y cómo encontrar el cliente que está detrás de una cuenta están en [Comprobaciones de la audiencia del token](../deployment/observability.md#token-audience-checks).
 
 ### Configuración {#token-audience-config}
 
@@ -140,7 +152,7 @@ La política es configuración de la instancia en `infrastructure.tokenAudience`
 
 | Clave | La escribe | Valor |
 | --- | --- | --- |
-| `enforcement` | Usted | `observe`, `enforce` o sin definir. Sin definir es el valor por defecto de la versión, `observe` en `v1.2`. Rige ambas comprobaciones a la vez. |
+| `enforcement` | Usted | `observe`, `enforce` o sin definir. Sin definir es el valor por defecto de la versión, `enforce` desde `v1.3` (`observe` en `v1.2`). Rige ambas comprobaciones a la vez. |
 | `unscopedClientCredentials` | Usted | Sin definir u `observe`. `enforce` se rechaza al arrancar en esta versión, porque la regla que activaría todavía no rechaza nada. Consulte [Cuentas de servicio](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
 | `externalResources` | Usted | Una lista de como máximo 8 identificadores de recursos fuera de la plataforma. |
 | `areaBaseUrl` | El chart | `<origin>/api`, a partir del host del ingress. Solo se fija cuando el origen es https, o un host de loopback con http sin cifrar como `localhost`. Un ingress sin TLS en cualquier otro host no tiene recursos de área, igual que no tiene servidor de autorización. |
@@ -167,7 +179,7 @@ En una instancia cuya configuración escribe usted mismo (`instance.existingSecr
 }
 ```
 
-Sin él se desconocen los recursos de área y `mcp` no está registrado, así que cada llamada que reenvía el servidor MCP se cuenta como un rechazo que se habría producido. `dcctl upgrade` avisa de que falta la entrada de MCP y, con `enforce`, se niega a continuar.
+Sin él se desconocen los recursos de área y `mcp` no está registrado. Con `enforce`, el valor por defecto, `mcp` se niega entonces a arrancar y cada llamada que reenvía sería rechazada; con `observe` esas llamadas se cuentan como rechazos que se habrían producido. `dcctl upgrade` rechaza un documento al que le falta la entrada de MCP, y solo avisa cuando `enforcement` es `observe`.
 
 ## Autenticación en dos pasos {#two-factor}
 

@@ -514,7 +514,8 @@ func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
 							"backend": "postgres", "kekProvider": "instance", "rootKey": rootKey,
 						},
 						"egress": map[string]interface{}{
-							"allowedDestinations": []interface{}{"10.42.0.17/32"},
+							"allowedDestinations":    []interface{}{"10.42.0.17/32"},
+							"devAllowedDestinations": []interface{}{"192.168.1.0/24"},
 						},
 						"blob": map[string]interface{}{
 							"backend": "s3", "directory": "", "bucket": "b", "region": "r",

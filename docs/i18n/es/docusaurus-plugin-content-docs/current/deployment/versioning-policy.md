@@ -69,9 +69,10 @@ intencionada, igual que cualquier otra, de modo que ningún cambio en vista prev
 note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
 conoce la versión rechaza el archivo en lugar de adivinar.
 
-Hoy el nivel de vista previa contiene las pruebas de reglas: la operación `evaluateRules` de la API de
-event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test` que los lee.
-Consulta [Probar tus reglas](../guides/testing-your-rules.md).
+Hoy el nivel de vista previa contiene dos superficies. Las pruebas de reglas: la operación `evaluateRules`
+de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
+que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). Y el producto como código:
+`dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 

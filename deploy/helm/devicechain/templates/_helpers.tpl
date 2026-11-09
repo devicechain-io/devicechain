@@ -471,6 +471,30 @@ themselves, and every later template would see the edit.
 {{- end -}}
 
 {{/*
+devicechain.eventSourcesMergedConfig is the config event-sources actually receives, as JSON: the
+operator's explicit value with lpwanDownlink set to true exactly when
+devicechain.lpwanDownlinkEnabled says the LoRaWAN downlink is on. Nobody authors that key. It tells the
+inbound-integration route to carry a network server's reports about downlinks (a ChirpStack ack or
+txack) to the adapter that settles confirmed downlinks, and a value that could be written independently
+of the outbound-connectors area could make the route take reports nothing reads, or ignore reports
+something waits for. A hand-set copy, in any spelling, fails the render.
+
+The explicit config is COPIED first -- `set` on a dict from .Values would edit the values themselves.
+*/}}
+{{- define "devicechain.eventSourcesMergedConfig" -}}
+{{- $cfg := deepCopy (get (get (.Values.functionalAreas | default dict) "event-sources" | default dict) "config" | default dict) -}}
+{{- range $k, $_ := $cfg -}}
+{{- if eq (lower $k) "lpwandownlink" -}}
+{{- fail "functionalAreas.event-sources.config.lpwanDownlink is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled and cannot be set by hand. Set lpwanDownlink.enabled on the outbound-connectors area instead." -}}
+{{- end -}}
+{{- end -}}
+{{- if include "devicechain.lpwanDownlinkEnabled" . -}}
+{{- $_ := set $cfg "lpwanDownlink" true -}}
+{{- end -}}
+{{- $cfg | toJson -}}
+{{- end -}}
+
+{{/*
 The per-service config ConfigMap `data` block: one key per enabled area. Factored
 out so the rendered ConfigMap and the E8 checksum annotation are computed from the
 exact same source. Takes the root context.
@@ -493,6 +517,8 @@ exact same source. Takes the root context.
 {{- $cfg = include "devicechain.updateManagementMergedConfig" $root | fromJson }}
 {{- else if eq $area "command-delivery" }}
 {{- $cfg = include "devicechain.commandDeliveryMergedConfig" $root | fromJson }}
+{{- else if eq $area "event-sources" }}
+{{- $cfg = include "devicechain.eventSourcesMergedConfig" $root | fromJson }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
 {{- end }}
@@ -706,12 +732,14 @@ devicechain.enabledAreas (`$known`).
 {{- end -}}
 
 {{/*
-devicechain.tokenAudienceEnforced renders "true" when the operator set
-tokenAudience.enforcement to enforce, else nothing.
+devicechain.tokenAudienceEnforced renders "true" when the token-audience check refuses: when
+tokenAudience.enforcement is enforce OR unset (the release default is enforce), else nothing.
+Only an explicit observe turns it off. It mirrors config.TokenAudienceReleaseDefault, which a
+dcctl render test pins.
 */}}
 {{- define "devicechain.tokenAudienceEnforced" -}}
 {{- $infra := ((.Values.instance.config | default dict).infrastructure | default dict) -}}
-{{- if eq (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "enforce" -}}true{{- end -}}
+{{- if ne (get (get $infra "tokenAudience" | default dict) "enforcement" | default "") "observe" -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -725,8 +753,8 @@ the tokenAudience fields additionally require a lowercase scheme and host (which
 resourceUrl does not), and an mcp override that is a platform area's identifier
 (<areaBaseUrl>/<area>) collides with the area set. Leaving it out keeps a value that starts
 today from becoming a crash loop. In observe mode the consequence is only that mcp's calls are
-counted as carrying an unregistered audience; once enforcement is on they would be refused, so
-under enforce the render FAILS instead of dropping the entry silently.
+counted as carrying an unregistered audience; under enforce (the default) they would be refused,
+so the render FAILS instead of dropping the entry silently.
 */}}
 {{- define "devicechain.tokenAudienceMcpResources" -}}
 {{- $out := list -}}
@@ -744,7 +772,7 @@ uppercase one from a comparison of its fields). */ -}}
 {{- if and (eq $head (lower $head)) (not $clash) -}}
 {{- $out = append $out $v -}}
 {{- else if include "devicechain.tokenAudienceEnforced" . -}}
-{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while tokenAudience.enforcement is enforce, so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set enforcement to observe." $v $base) -}}
+{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while token audiences are enforced (the default), so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set instance.config.infrastructure.tokenAudience.enforcement to observe." $v $base) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

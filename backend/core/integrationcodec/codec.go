@@ -60,6 +60,10 @@ type Request struct {
 	MessageType string
 	// ReceivedAt is when the platform received the request.
 	ReceivedAt time.Time
+	// DownlinkReports says the route carries a network server's reports about downlinks (a ChirpStack
+	// ack or txack). Without it those events are not read at all: they are Ignored, whatever their
+	// bodies hold, exactly as they were before the reports existed.
+	DownlinkReports bool
 }
 
 // Link is the receive-link metadata a network server reports, kept only when the integration
@@ -160,6 +164,38 @@ type Result struct {
 	// turn into events (a join, a status, a downlink acknowledgement). The route answers 204.
 	Ignored bool
 	Uplinks []Uplink
+	// Downlinks are the network server's reports about downlinks it was asked to send (a ChirpStack
+	// ack or txack). A result holds either uplinks or downlink reports, never both. A route that
+	// does not carry downlink reports treats a result with only these as Ignored.
+	Downlinks []DownlinkEvent
+	// Untracked is set with Ignored on a downlink report that names no downlink the platform can
+	// follow (a ChirpStack txack for a MAC-command-only downlink carries no queue item id). It is
+	// counted by the route and answered 204, never refused.
+	Untracked bool
+}
+
+// The kinds of DownlinkEvent.
+const (
+	// DownlinkAck is the network server's report on a CONFIRMED downlink: the device acknowledged
+	// it, or the network server gave up waiting (Acknowledged says which).
+	DownlinkAck = "ack"
+	// DownlinkTxAck is the gateway accepting the downlink for transmission. It is not evidence the
+	// device heard it.
+	DownlinkTxAck = "txack"
+)
+
+// DownlinkEvent is one network-server report about a downlink, identified by the queue item id the
+// network server returned when the downlink was enqueued.
+type DownlinkEvent struct {
+	Kind string
+	// Scheme and Identifier name the device, as an Uplink's do.
+	Scheme, Identifier string
+	// QueueItemID is the network server's id for the queued downlink (a UUID).
+	QueueItemID string
+	// Acknowledged is meaningful for DownlinkAck only: true when the device acknowledged the frame,
+	// false when the network server timed the confirmation out.
+	Acknowledged bool
+	FCntDown     int64
 }
 
 // ErrTooDeep is the root of a refusal for a JSON value nested deeper than MaxDepth. It always

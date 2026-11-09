@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 
@@ -139,11 +141,28 @@ var (
 	// case every tenant resolves to the fail-safe bronze band.
 	ShedPriorityResolver *governance.ShedPriorityResolver
 
+	// IngestMeteringMode is how the ingest gate meters a message (see IngestMeteringEnv); legacy unless the
+	// operator chose otherwise. LagCredit is the lag-credited gate, built only in lagCredit mode.
+	IngestMeteringMode = IngestMeteringLegacy
+	LagCredit          *processor.LagCreditIngest
+	// ingestBaseCeiling and ingestShedPriority are the BASE (never shed-adjusted) ceiling resolver and the
+	// shed-priority lookup buildRateLimiter built, kept for the lag-credited gate, which applies the
+	// contention factor itself (a separate bucket) instead of tightening the ceiling.
+	ingestBaseCeiling  core.TenantCeilingResolver
+	ingestShedPriority func(string) (int, bool)
+	// ingestUnresolved counts admissions metered at the platform default for want of the tenant's own
+	// ceiling (governance_unresolved_admissions_total); the lag-credited gate reports to the same counter.
+	ingestUnresolved func(core.CeilingSource)
+
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	// IntegrationUplinksWriter writes the integration route's IntegrationUplink events, which go to
 	// their own stream and never to InboundEventsWriter's (streams.IntegrationUplinks says why).
 	IntegrationUplinksWriter messaging.MessageWriter
+
+	// LpwanDownlinkEventsWriter writes the network server's downlink reports (a ChirpStack ack or
+	// txack) the integration route accepted, to the stream outbound-connectors reads.
+	LpwanDownlinkEventsWriter messaging.MessageWriter
 	// InboundEnvelopeMetrics are the instruments of inbound envelopes (realised k, linger paid,
 	// settlement counters). Built once with the other instruments; nil-safe, so it exists whether
 	// or not the setting is on.
@@ -264,6 +283,7 @@ var (
 	// refusal after a restart is an increase.
 	IntegrationRequestsCounter             *prometheus.CounterVec
 	IntegrationUplinksCounter              *prometheus.CounterVec
+	IntegrationDownlinkReportsCounter      *prometheus.CounterVec
 	IntegrationFlattenSkippedCounter       *prometheus.CounterVec
 	IntegrationUnregisteredOverflowCounter prometheus.Counter
 	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
@@ -475,6 +495,7 @@ func initializeMetrics() {
 	for source := range acknowledgedShedSources {
 		ShedAcknowledgedCounter.WithLabelValues(source) // exported at 0, so the first shed is an increase
 	}
+	initializeLagCreditMetrics()
 	initializeIntegrationMetrics()
 	initializeCommandPullMetrics()
 	seedRefusalCounters(configuredSourceIDs())
@@ -494,6 +515,14 @@ func initializeIntegrationMetrics() {
 		"integration_uplinks_total",
 		"Count of uplinks read from accepted integration requests by what became of each",
 		[]string{"result"})
+	IntegrationDownlinkReportsCounter = Microservice.NewCounterVec(
+		"integration_downlink_reports_total",
+		"Count of network-server downlink reports (ChirpStack ack and txack) read from accepted integration "+
+			"requests by what became of each. unknown_device is a report for a device the integration does not govern",
+		[]string{"result"})
+	for _, r := range processor.IntegrationDownlinkReportResults {
+		IntegrationDownlinkReportsCounter.WithLabelValues(r)
+	}
 	IntegrationFlattenSkippedCounter = Microservice.NewCounterVec(
 		"integration_flatten_skipped_total",
 		"Count of leaves of a network server's decoded object that were not stored as readings, by reason",
@@ -642,6 +671,11 @@ func integrationMetrics() processor.IntegrationMetrics {
 				IntegrationUplinksCounter.WithLabelValues(result).Inc()
 			}
 		},
+		DownlinkReport: func(result string) {
+			if IntegrationDownlinkReportsCounter != nil {
+				IntegrationDownlinkReportsCounter.WithLabelValues(result).Inc()
+			}
+		},
 		FlattenSkipped: func(reason string, n int) {
 			if IntegrationFlattenSkippedCounter != nil {
 				IntegrationFlattenSkippedCounter.WithLabelValues(reason).Add(float64(n))
@@ -733,8 +767,18 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Publish: onIntegrationEventDecoded,
 		Metrics: integrationMetrics(),
 	}
+	if Configuration != nil && Configuration.LpwanDownlink {
+		route.PublishDownlink = onDownlinkReport
+		route.DownlinkLimiter = sourcelimit.Must(downlinkReportLimits)
+	}
 	return route
 }
+
+// downlinkReportLimits is a tenant's allowance for network-server downlink reports: a burst of 100
+// and 20 a second sustained. Reports follow the commands a tenant sends to LoRaWAN devices, which a
+// device's duty cycle keeps far below telemetry rates. The limit exists so that one tenant's flood of
+// them cannot fill the shared, small stream and evict other tenants' acknowledgements.
+var downlinkReportLimits = sourcelimit.Limits{Burst: 100, Every: 50 * time.Millisecond, MaxKeys: 10000}
 
 // buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when the operator has
 // not turned the route on (httpIngest.deviceUplinks, off by default so a rolling upgrade cannot lose
@@ -896,7 +940,8 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 // limiter alone: nothing calls AllowUntrusted on the other two, and the counter is one
 // registration, so it belongs to exactly one limiter.
 func buildRateLimiter() {
-	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
+	ingestUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Ingest)
+	unresolved := core.WithUnresolvedAdmissions(ingestUnresolved)
 	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
 	def := governance.Limits{
 		RatePerSecond: Configuration.IngestRateLimit.ReadingsPerSecond,
@@ -915,6 +960,7 @@ func buildRateLimiter() {
 		// transiently down, so the default is the real answer here — unlike the
 		// UM-backed path, where an unfetched tenant is genuinely unresolved).
 		shedPrio := func(string) (int, bool) { return governance.DefaultShedPriority, true }
+		ingestBaseCeiling, ingestShedPriority = flat, shedPrio
 		RateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved)
 		BacklogRateLimiter = core.NewTenantRateLimiter(flat, unresolved)
 		HttpRateLimiter = core.NewTenantRateLimiter(shedAdjusted(flat, shedPrio), unresolved, overflow)
@@ -927,6 +973,7 @@ func buildRateLimiter() {
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest)
 	TenantDirectory = resolver
 	ShedPriorityResolver = governance.NewShedPriorityResolver(client, umURL)
+	ingestBaseCeiling, ingestShedPriority = resolver.Ceiling, ShedPriorityResolver.Resolve
 	// Both limiters share the ceiling resolver, so a tenant's ADR-023 override applies
 	// to their live traffic and their backlog alike — the ceiling is the same, only the
 	// timeline each bucket measures against differs.
@@ -994,10 +1041,7 @@ func buildEventSources() error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	tenantGate, tenantGoneStrict := ingestTenantGates(infra, safetyGates)
 	TenantGone = tenantGoneStrict
-	ingestGate = processor.RefuseDeletedTenants(
-		tenantGate,
-		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed),
-		onTenantGone)
+	legacyGate := processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, IntegrationRateLimiter, onRateShed)
 	// The live/backlog routing decision the capture source makes once per message, sized to
 	// the tenant's live burst (see processor.NewMeterAt).
 	meterAt := processor.NewMeterAt(RateLimiter)
@@ -1005,6 +1049,16 @@ func buildEventSources() error {
 	// for the same reason as ingestGate.
 	readingGate = processor.NewReadingGate(ReadingRateLimiter, BacklogReadingRateLimiter, HttpReadingRateLimiter, IntegrationReadingRateLimiter,
 		onReadingShed)
+	// In lagCredit mode the gateway sources meter themselves in the lag-credited gate, and so do the
+	// sources with no stream (external MQTT, presence); HTTP, integrations and untrusted names keep the
+	// existing limiters either way.
+	LagCredit = nil
+	if IngestMeteringMode == IngestMeteringLagCredit {
+		LagCredit = buildLagCreditIngest()
+		legacyGate = processor.NewLagCreditRateGate(LagCredit, legacyGate)
+		readingGate = processor.NewLagCreditReadingGate(LagCredit, readingGate)
+	}
+	ingestGate = processor.RefuseDeletedTenants(tenantGate, legacyGate, onTenantGone)
 
 	for _, source := range Configuration.EventSources {
 		// Create decoder.
@@ -1066,6 +1120,9 @@ func buildEventSources() error {
 				// INITIALIZE phase and readers and writers are created in START, so there
 				// is nothing to wire here yet.
 				GatewaySource = gateway
+				if LagCredit != nil {
+					gateway.UseLagCredit(LagCredit, processor.StreamCapture)
+				}
 				created = append(created, gateway)
 				// The same source over the MQTT message store: the copy of a device's QoS 1
 				// publish the broker PUBACKs on, read with the fail-closed store (see
@@ -1075,6 +1132,9 @@ func buildEventSources() error {
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate, meterAt)
 				StoreSource.UseMessageStore()
+				if LagCredit != nil {
+					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)
+				}
 				continue
 			}
 			// An external broker must NOT be forced to verify against the NATS CA (it
@@ -1539,6 +1599,25 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 	return writeInbound(ctx, source, msg)
 }
 
+// onDownlinkReport publishes a network server's downlink report, synchronously, to its own stream.
+// The tenant comes from the route's authenticated path and rides the subject, never the body.
+func onDownlinkReport(tenant string, report cmddownlink.DownlinkReport) error {
+	if LpwanDownlinkEventsWriter == nil {
+		return errors.New("no writer for the downlink report stream")
+	}
+	if tenant == "" {
+		return errors.New("a downlink report needs a tenant")
+	}
+	body, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	err = LpwanDownlinkEventsWriter.WriteMessages(core.WithTenant(context.Background(), tenant),
+		messaging.Message{Key: []byte(report.QueueItemID), Value: body})
+	LpwanDownlinkEventsWriter.HandleResponse(err)
+	return err
+}
+
 // writeIntegrationUplink writes an IntegrationUplink to ITS OWN stream. It is never written to
 // inbound-events: a device-management built before payload decoders reads that stream, fails to
 // unmarshal a type it does not know and dead-letters the message on delivery 1, so every
@@ -1671,6 +1750,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	IntegrationUplinksWriter = iuplinks
 
+	// The downlink-report stream's writer. Creating it also ensures the stream, so a report is never
+	// refused for want of one; with outbound-connectors' adapter off nothing reads it and the
+	// broker's age limit trims it.
+	lreports, err := nmgr.NewWriter(streams.LpwanDownlinkEvents)
+	if err != nil {
+		return err
+	}
+	LpwanDownlinkEventsWriter = lreports
+
 	// The presence tap's asynchronous writer (see newPresenceWriter). Built here, once for
 	// the life of the process, and closed by stopBrokerPresence.
 	if err := buildPresenceWriter(nmgr); err != nil {
@@ -1767,7 +1855,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// The metering mode is read from the environment (see IngestMeteringEnv), and a mode this build
 	// cannot run stops the service here rather than running a different gate than the one asked for.
-	if _, err = resolveIngestMetering(os.Getenv); err != nil {
+	if IngestMeteringMode, err = resolveIngestMetering(os.Getenv); err != nil {
 		return err
 	}
 

@@ -799,7 +799,7 @@ imágenes. La canalización, el chart y el operador son idénticos.
 |------|-----------|
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
-| `--size <size>` | El preajuste de tamaño de la instancia: `base` (el valor por defecto) o `perf-12k`, la configuración de alto rendimiento medida. Queda registrado en la instancia y cada actualización lo vuelve a aplicar. Una superposición `--values` y una variable de OpenTofu que indiques tú prevalecen sobre él. Consulta [Elegir un tamaño](./sizing.md). |
+| `--size <size>` | El preajuste de tamaño de la instancia: `base` (el valor por defecto), `perf-12k` o `perf-16k`, las configuraciones de alto rendimiento medidas. Queda registrado en la instancia y cada actualización lo vuelve a aplicar. Una superposición `--values` y una variable de OpenTofu que indiques tú prevalecen sobre él. Consulta [Elegir un tamaño](./sizing.md). |
 | `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M; la gestión de actualizaciones over-the-air forma parte de `default`), `telemetry` o `ingest-only`. |
 | `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area outbound-connectors`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
@@ -1983,6 +1983,8 @@ dcctl sim create demo --instance my-instance --server localhost
 El simulador inyecta entonces telemetría y alarmas por el mismo canal de dispositivo que usa
 el hardware real; consulta
 [Probarlo con datos simulados](../intro.md#trying-it-with-simulated-data).
+
+Todos los comandos que hablan con la API de plataforma de una instancia (`sim`, `events failed`, `dead-letters`, `attr`, `presence`, `product`, `tenant-deletion`, `test` y `device register`) aceptan los mismos indicadores de selección. `--server` (`-s`) indica el host. `--instance` (`-i`) indica la instancia: en `sim` es el id de instancia en la ruta de ingreso de eventos y, en los demás, cuando no se indica `--server`, usa el host (y la configuración de TLS, salvo que se indique `--tls`) con el que se declaró la instancia. Por ejemplo, `dcctl events failed -i my-instance -t acme ...`.
 
 ### Añadir un área funcional más adelante {#enable-area}
 

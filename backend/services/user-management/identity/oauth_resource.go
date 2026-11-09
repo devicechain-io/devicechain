@@ -122,8 +122,9 @@ func newResourcePolicy(cfg config.TokenAudienceConfiguration, metrics *OAuthReso
 }
 
 // defaultResourcePolicy is what a Manager that was never given the instance's block uses: the
-// release default (observe) over an empty allowlist. main installs the real one; a Manager
-// built as a struct literal by a test runs this, which counts nothing and refuses nothing.
+// release default (enforce, from v1.3) over an empty allowlist. main installs the real one; a
+// Manager built as a struct literal runs this, which counts nothing and FAILS CLOSED: it serves
+// a request that names no resource and refuses every one that names one (invalid_target).
 var defaultResourcePolicy = func() *resourcePolicy {
 	p, err := newResourcePolicy(config.TokenAudienceConfiguration{}, nil)
 	if err != nil {

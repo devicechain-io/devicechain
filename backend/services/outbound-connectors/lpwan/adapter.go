@@ -25,12 +25,14 @@ import (
 // Result labels for lpwan_downlinks_total. A fixed enum: never a per-tenant or per-device value.
 const (
 	ResultQueued          = "queued"           // the network server queued the downlink; the command is answered success
+	ResultQueuedConfirmed = "queued_confirmed" // a confirmed downlink was queued; the command waits for the acknowledgement
+	ResultPendingFailed   = "pending_failed"   // a confirmed downlink was queued but could not be tracked; answered unanswered
 	ResultRefusedParams   = "refused_params"   // the command's parameters are not a valid downlink
 	ResultRefusedExpired  = "refused_expired"  // the command expired before it could be sent
 	ResultRefusedNoRoute  = "refused_no_route" // no Dc-Source: the integration cannot be named
 	ResultRefusedNoLink   = "refused_no_link"  // the integration has no (or an ambiguous) network-server link
 	ResultRefusedNoDevEUI = "refused_no_deveui"
-	ResultRefusedConfirm  = "refused_confirmed" // confirmed downlinks need the ack feed
+	ResultRefusedConfirm  = "refused_confirmed" // a confirmed downlink on a build with no acknowledgement feed
 	ResultRefusedRate     = "refused_rate"      // the tenant is over its outbound ceiling
 	ResultUnsent          = "unsent"            // the network server (or the egress guard) refused it, nothing queued
 	ResultUnanswered      = "unanswered"        // the request may have been queued
@@ -45,11 +47,16 @@ const (
 
 // Results is every result label, so a metric can create its children at 0.
 var Results = []string{
-	ResultQueued, ResultRefusedParams, ResultRefusedExpired, ResultRefusedNoRoute, ResultRefusedNoLink,
+	ResultQueued, ResultQueuedConfirmed, ResultPendingFailed, ResultRefusedParams, ResultRefusedExpired, ResultRefusedNoRoute, ResultRefusedNoLink,
 	ResultRefusedNoDevEUI, ResultRefusedConfirm, ResultRefusedRate, ResultUnsent, ResultUnanswered,
 	ResultNotServed, ResultPoison, ResultTenantGone, ResultClaimLost, ResultClaimFailed,
 	ResultLookupFailed, ResultResponseFailed,
 }
+
+// DefaultAckWait is how long a confirmed downlink waits for the device's acknowledgement when its
+// command carries no expiry. A class A device may only listen after its next uplink, which can be
+// hours away, so the wait is long; the command's own expiry, when it has one, ends it sooner.
+const DefaultAckWait = 24 * time.Hour
 
 // Reason is the machine-readable code carried in a refusal's stored response, in the same
 // {"reason": ...} document other adapters use.
@@ -67,6 +74,11 @@ const (
 	ReasonNetworkServer  Reason = "NETWORK_SERVER_REFUSED"
 	ReasonEgressBlocked  Reason = "EGRESS_BLOCKED"
 	ReasonLinkUnreadable Reason = "NETWORK_SERVER_LINK_INVALID"
+	ReasonUntracked      Reason = "ACK_UNTRACKED"
+	// ReasonNotAcknowledged: the network server reported the confirmed downlink unacknowledged.
+	ReasonNotAcknowledged Reason = "NOT_ACKNOWLEDGED"
+	// ReasonNoAcknowledgement: the wait for an outcome ran out with no report.
+	ReasonNoAcknowledgement Reason = "NO_ACKNOWLEDGEMENT"
 )
 
 // Errors a Links or Devices implementation returns to name a definite absence. Any other error is
@@ -110,6 +122,13 @@ type Options struct {
 	ReadPacer *core.ReadPacer
 	// SendTimeout bounds one network-server call. Defaults to 10 s.
 	SendTimeout time.Duration
+	// Pending, when set, is where a CONFIRMED downlink waits for its acknowledgement. Without it the
+	// adapter refuses a confirmed downlink (unconfirmed ones are unaffected).
+	Pending PendingStore
+	// AckWait is how long a confirmed downlink waits for the device's acknowledgement before the
+	// command is answered as unanswered, capped by the command's own expiry. Defaults to
+	// DefaultAckWait.
+	AckWait time.Duration
 	// Now is the clock (tests).
 	Now func() time.Time
 	// ResponseAttempts and ResponseBackoff bound the local retry of the outcome publish.
@@ -153,6 +172,9 @@ func New(reader messaging.MessageReader, responses cmddownlink.ResponseWriter, c
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.AckWait <= 0 {
+		opts.AckWait = DefaultAckWait
 	}
 	if opts.ResponseAttempts < 1 {
 		opts.ResponseAttempts = 3
@@ -236,12 +258,14 @@ func ack(msg messaging.Message) {
 //  4. no Dc-Source: UNSENT
 //  5. expired: UNSENT
 //  6. parameters: UNSENT
-//  7. confirmed: UNSENT (needs the ack feed)
+//  7. confirmed: UNSENT on a build with no acknowledgement feed (no PendingStore)
 //  8. network-server link: UNSENT when absent or ambiguous; unacked when unreadable now
 //  9. DevEUI: UNSENT when absent; unacked when unreadable now
 //  10. tenant rate: UNSENT over the ceiling
 //  11. claim (confirmCommandDispatch): lost -> ack, nothing sent; failed -> unacked, nothing sent
-//  12. enqueue on the network server, then answer the outcome and ack
+//  12. enqueue on the network server, then answer the outcome and ack. A CONFIRMED downlink the
+//     network server accepted is not answered here: its pending record is stored and the command
+//     stays SENT until the acknowledgement feed (or the record's deadline) answers it.
 //
 // Everything before the claim is a read or a refusal, so a redelivery repeats it harmlessly; the
 // network call is made only by the replica that won the claim, once per dispatch nonce.
@@ -296,9 +320,9 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		a.refuse(msg, j, ResultRefusedParams, ReasonInvalidParams, err.Error())
 		return
 	}
-	if params.Confirmed {
+	if params.Confirmed && a.opts.Pending == nil {
 		a.refuse(msg, j, ResultRefusedConfirm, ReasonUnsupported,
-			"confirmed downlinks are not available yet: the acknowledgement feed is not built; send the command unconfirmed")
+			"confirmed downlinks are not available in this build: it has no acknowledgement feed; send the command unconfirmed")
 		return
 	}
 	target, err := a.links.Resolve(ctx, tenant, integration)
@@ -388,11 +412,44 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		})
 		return
 	}
+	if params.Confirmed {
+		a.awaitAck(ctx, msg, j, integration, devEUI, queueID)
+		return
+	}
 	a.count(ResultQueued)
 	body, _ := json.Marshal(map[string]string{"stage": "queued", "queueItemId": queueID})
 	a.finish(msg, j, cmddownlink.ResponseEnvelope{
 		CommandToken: j.token, Success: true, DispatchNonce: j.nonce, Payload: strPtr(string(body)),
 	})
+}
+
+// awaitAck stores the pending record of a confirmed downlink the network server accepted and acks
+// the command message WITHOUT answering the command: it stays SENT, and the acknowledgement feed
+// (or the record's deadline) settles it. If the record cannot be stored the downlink is already
+// queued and nothing could ever close the command, so it is answered UNANSWERED now (TIMEOUT:
+// the device may act) rather than left to the expiry sweep.
+func (a *Adapter) awaitAck(ctx context.Context, msg messaging.Message, j *job, integration, devEUI, queueID string) {
+	deadline := a.opts.Now().Add(a.opts.AckWait)
+	if !j.expires.IsZero() && j.expires.Before(deadline) {
+		deadline = j.expires
+	}
+	err := a.opts.Pending.Add(ctx, Pending{
+		Tenant: j.tenant, Integration: integration, DeviceToken: j.device, DevEUI: devEUI,
+		CommandToken: j.token, DispatchNonce: j.nonce, QueueItemID: strings.ToLower(queueID), DeadlineAt: deadline,
+	})
+	if err != nil {
+		a.count(ResultPendingFailed)
+		log.Warn().Err(err).Str("tenant", j.tenant).Str("command", j.token).
+			Msg("A confirmed LoRaWAN downlink was queued but its acknowledgement could not be tracked; answering the command as unanswered.")
+		a.finish(msg, j, cmddownlink.ResponseEnvelope{
+			CommandToken: j.token, Success: false, Reach: cmddownlink.ReachUnanswered, DispatchNonce: j.nonce,
+			Error:   strPtr("the network server queued the confirmed downlink but the platform could not track its acknowledgement"),
+			Payload: reasonPayload(ReasonUntracked),
+		})
+		return
+	}
+	a.count(ResultQueuedConfirmed)
+	ack(msg)
 }
 
 // refuse answers a command UNSENT before any claim, quoting the envelope's own nonce, and acks.

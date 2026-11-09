@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net/smtp"
 	"strings"
 	"time"
@@ -242,7 +243,9 @@ func buildEmail(from string, recipients []string, msg *RenderedNotification) []b
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
 	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(recipients, ", "))
-	fmt.Fprintf(&b, "Subject: %s\r\n", msg.Subject)
+	// RFC 2047: a non-ASCII subject (a device name) must be encoded, not sent as raw 8-bit
+	// header bytes. Pure ASCII passes through unchanged.
+	fmt.Fprintf(&b, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", msg.Subject))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")

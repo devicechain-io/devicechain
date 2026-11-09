@@ -1,0 +1,303 @@
+---
+title: Security Model
+---
+
+# Security Model {#security-model}
+
+This page states where DeviceChain draws its trust boundaries, what enforces each one today, and what it
+does not yet enforce. The accepted gaps are listed in their own section so that you can plan around them.
+
+To report a vulnerability, follow the process in the
+[security policy](https://github.com/devicechain-io/devicechain/blob/main/SECURITY.md).
+
+## Trust boundaries at a glance {#boundaries}
+
+| Boundary | What separates the two sides | Enforced by |
+| --- | --- | --- |
+| Tenant from tenant | Every tenant-owned row and every message subject carries the tenant | A database scope on every query, and per-tenant subjects at the broker |
+| Device from device | A device connection can use only its own subjects | The broker, through a platform authorization callback |
+| Stranger from first contact | A device with no credential can register only with a profile's shared key and secret | A server-generated 256-bit secret, bounded work before it is checked, and a cap per profile. See [Self-registration](#devices) |
+| Person or program from the API | A signed token, checked in every service | Token signature, tenant claim and permissions |
+| Secret from reader | Secrets are sealed and never returned | Envelope encryption under the instance root key |
+| Tenant from the network | A tenant-supplied destination cannot reach internal addresses | A check at connection time |
+| Internet from the platform's own endpoints | The service-token mint and the signing-key set are served on a port no route reaches | A separate internal listener, not an ingress rule |
+| Platform services from each other | Separate broker and database logins | **Partly.** See [what is not enforced yet](#accepted-gaps) |
+
+## Tenants {#tenants}
+
+One set of services serves every tenant, so isolation is enforced in the data and the messages, not by separate pods.
+
+- **Storage.** Tenant-owned tables carry the tenant, and a central database scope adds the tenant condition to every read and
+  stamps it on every write. A tenant-scoped query that has no tenant in its context is rejected, not run unfiltered.
+- **Messaging.** Subjects are scoped per tenant, and a malformed tenant segment is rejected where a service publishes or subscribes.
+- **API.** The tenant of a request is taken from the tenant claim of the caller's verified token. The one exception is a
+  service calling another service: it names the tenant in a header, which is honored only after the
+  service token's signature is verified.
+
+See [Multi-Tenancy](./multi-tenancy.md).
+
+## Devices {#devices}
+
+- **Transport.** The broker's MQTT and NATS listeners use TLS by default. It can be turned off only for local
+  debugging. HTTP ingest is protected by the TLS of the instance's ingress.
+- **Identity is asserted by the broker.** The broker asks the platform to approve each connection, and the platform
+  binds the connection to that one device's subjects. The device identity the platform trusts for an event is the
+  subject the broker delivered it on, not a claim in the payload. A device cannot publish into another device's or
+  another tenant's subjects, or read their commands. The MQTT client id must also be the device's own
+  `{instanceId}:{tenant}:{deviceToken}`, optionally followed by `:` and a suffix of the device's choosing, so one
+  device cannot take over another's session.
+- **Credentials.** The default device-auth mode is `required`: an event is accepted only from an authenticated device.
+  On the platform's MQTT broker the device authenticates when it connects. Over HTTP, or through a broker of your
+  own, the credential travels in the event body. Once a credential has authenticated a device, an event naming a
+  different device is refused. Disabling, rotating or deleting a credential refuses new connections at once and
+  ends the device's open sessions. See [Device credentials](../guides/device-credentials.md), including how quickly
+  a revocation reaches events already in flight.
+- **Credentials at rest.** The password of an `MQTT_BASIC` credential and the token of an `ACCESS_TOKEN` credential
+  are both stored only as keyed one-way digests, under a key derived from the instance root key, which is not kept
+  in the database. The secret of a provisioning profile and the secret of a device claim are stored the same way, each
+  under a key of its own. Each is shown once, in the response to the call that sets it, and never returned again; a read
+  of an access-token credential returns a fingerprint that cannot be presented as the token. A leak of the
+  database or of a backup therefore yields no working device password, token, provisioning secret or claim secret.
+- **Self-registration.** A device that has no credential yet can register itself over HTTPS by presenting a provisioning profile's shared key and secret ([how to set it up](../guides/device-self-registration.md)). The secret is generated by the server (256 random bits), stored only as a keyed digest, and compared in constant time. Every way authentication can fail, including an unknown tenant or key, a disabled or expired profile and a tenant being deleted, gets the same `401` at the same cost, so the response never says which part was wrong. Work done for a stranger is bounded before the secret is checked: a deadline on the request body, an 8 KiB cap, a bound on requests in flight, and an allowance per client address. That address is the real client's only when `infrastructure.http.trustedProxies` names the proxies in front of the services; see [Client addresses and trusted proxies](../deployment/bootstrap.md#trusted-proxies). A per-tenant ceiling from the tenant's tier or an override applies once the secret has been accepted. The device chooses its own credential, and only a digest of it is kept. **The fleet secret is the trust anchor for first contact.** Whoever holds it can register any serial number nobody has registered yet under `ALLOW_NEW`, or any earmarked serial that has not registered under `CHECK_PRE_PROVISIONED`, up to the profile's `maxDevices`. It can never take over a device that already holds a credential, or one that was not earmarked for the profile. If it leaks, [rotate it and revoke what it registered](../guides/device-self-registration.md#compromise).
+- **Client certificates.** A device can authenticate on the platform's MQTT broker with an X.509 client certificate, proving its key in the TLS handshake, so nothing replayable is stored or sent. The platform checks the chain against a trust anchor the tenant added, at every connect, with a clientAuth key usage required and SHA-1, weak keys and name-constrained CAs refused. **The trust anchor is the identity boundary:** whoever can obtain a certificate from that CA can register under a certificate profile, up to its device cap, so anchor at the narrowest CA and disable the anchor on a compromise. The tenant comes from the MQTT username, never from the certificate. The MQTT client id is pinned to the device, so one certificate cannot take over another device's session, and a first connect whose client id does not match is refused before anything is written. A session ends at the earliest expiry in the chain. There is no CRL fetching: upload a CA's revocation list to the anchor or revoke a certificate by fingerprint to refuse it from its next connect and end the open sessions it affects, disable the credential or the anchor to end sessions without revoking a certificate, use short-lived certificates, and optionally turn on a per-anchor OCSP check at connect (off by default; a revoked answer refuses that connect but does not yet end live sessions). See [Certificate identity](./device-certificates.md).
+- **Credentials in an event body.** On the platform's MQTT broker the connection has already authenticated the
+  device, so an event that also carries a credential in its body is refused, never accepted with the
+  credential removed: a device that still sends one goes quiet, and the refusal is counted so the device can be
+  found and its credential rotated. Over HTTP and through a broker
+  of your own, where the body is how the credential travels, the password or token is sealed before the event is
+  put on the platform's internal stream. On every transport, the copy of an undecodable message that is kept for
+  diagnosis has its credentials removed.
+- **Gateways.** A gateway, such as the [edge agent](../deployment/edge-services.md#gateway-identity), is a device that speaks for other devices. It signs in as itself and publishes in its own namespace, and the platform accepts an event only for a device that was assigned to it. A gateway cannot publish in another gateway's or another device's subjects; one that names a device it does not front is refused, recorded and reported to it, not acknowledged and lost. **A gateway speaks for its children.** A compromised gateway can forge events only for devices assigned to it, and only until it is disabled or its credential is revoked. Its word about *which local client* sent an event is only as strong as the local authentication on its own network. Assigning a device to a gateway needs the same permission as issuing the device a credential, because it grants the same ability.
+
+## People and programs {#api-access}
+
+- **Tokens.** Sign-in issues RS256-signed access and refresh tokens. Services validate them locally against a published
+  key set, so no request waits on a call to the sign-in service. Signing keys are held by `user-management` alone, sealed under the
+  instance root key.
+- **Permissions.** Roles carry permissions, and the API checks them on each call. A membership can be limited to a
+  customer's data, and members, invitations and roles a tenant manages for itself cannot grant more than the person
+  granting them holds. See [Governance & Quotas](./governance.md).
+- **Integrations.** A tenant's [service accounts](../user-guide/service-accounts.md) exchange a client ID and secret
+  for a 5-minute access token (the OAuth `client_credentials` grant), with no refresh token and no person's sign-in.
+  An account holds exactly its roles' permissions, its secret is stored only as a keyed digest, and what it does is
+  audited under its own name.
+- **Inbound integrations.** A LoRaWAN network server or a webhook sender authenticates with a per-integration bearer
+  token, generated by the server, shown once and stored only as a keyed digest. The token is checked before the body is
+  read and again when the event is processed. It speaks for every device of its scoped types that has an alias, so scope
+  an [integration](../guides/inbound-integrations.md#trust) narrowly and rotate its token if it may have leaked.
+- **Single sign-on.** A tenant can require sign-in through its own identity provider. See
+  [Single sign-on](./single-sign-on.md).
+- **AI agents.** The optional [MCP server](./mcp.md) calls the platform with the caller's own token. It holds no token of
+  its own, so an agent can read only what its user can read.
+- **Abuse limits.** Ingest has a per-tenant rate ceiling, outbound connectors have per-tenant ceilings, the MCP server
+  limits each caller, GraphQL requests have bounded execution and body size, and failed sign-in attempts are rate limited.
+  There is no per-tenant request-rate limit on the GraphQL API itself.
+
+## Token audience {#token-audience}
+
+An OAuth client can ask for an access token bound to one resource, by sending the `resource` parameter (RFC 8707) with its authorization or token request. The token then names that resource in its `aud` (audience) claim. A token from signing in to the console, the dashboard app, the C# SDK or `dcctl` names none.
+
+Two checks use the audience. They are defence in depth: a token's authorities are fixed when it is issued, so accepting a token where it was not meant to go never gives it more than it already carried.
+
+- **The authorization server checks the requested resource.** It binds a token only to a resource on the instance's allowlist. It checks at the authorization endpoint, in the `client_credentials` grant and at each refresh.
+- **Each API checks the token's audience.** An area's API accepts a token whose audience is empty, is that area, or is a registered MCP resource. The [MCP server](./mcp.md) forwards the caller's own token, so its calls carry the MCP binding and are accepted.
+
+### The allowlist {#token-audience-allowlist}
+
+These are the resources the authorization server binds a token to, and the audiences an API accepts, under `enforce`, the default. Under `observe`, anything else is counted and logged but served:
+
+- **The MCP server**, when it is deployed: its resource URL, `<origin>/api/mcp`.
+- **Each area's API**, at `<origin>/api/<area>` for every area except `mcp`, for example `https://iot.example.com/api/device-management`.
+- **External resources**, which are the entries you list under `externalResources`. Use one for a service of your own, outside DeviceChain, that validates DeviceChain tokens with the published key set (`/oauth/jwks`) and asks for tokens bound to itself. The authorization server issues such a token, but **no DeviceChain API accepts it under `enforce`**, and neither does the authorization server's `userinfo` endpoint.
+
+Matching is byte for byte. There is no case folding and no trailing-slash handling, so `https://IoT.example.com/api/mcp` is not `https://iot.example.com/api/mcp`. The configuration therefore accepts only one spelling of each identifier, and a client has to send exactly that spelling.
+
+### Observe and enforce {#token-audience-modes}
+
+`enforcement` decides what happens to a request that breaks either check:
+
+| Where | `observe` | `enforce` |
+| --- | --- | --- |
+| Authorization endpoint | Counted and logged; the sign-in page is served as before | The client is sent back to its redirect address with `invalid_target` |
+| `client_credentials` grant | Counted and logged; the token is issued | `invalid_target`. An unlisted resource is judged after the client's secret has been checked, so an unauthenticated sender is not told what the list holds |
+| Authorization code bound to a resource that is no longer served | Served, and not counted | `invalid_grant` |
+| Refresh token bound to a resource that is no longer served | Counted and logged; served | `invalid_grant`; the refresh token is spent |
+| A `resource` on a code or refresh request that differs from the one the grant is bound to | Counted and logged; served | `invalid_target`; a refresh token is not spent |
+| An API | Counted as `would_reject` and logged; served | `401`, the same answer as for an invalid token |
+
+`enforce` is the default from `v1.3`; `v1.2` defaulted to `observe`. Setting `enforcement: observe` keeps the `v1.2` behaviour for this one minor, as an opt-out. `v1.4` removes the opt-out: a service refuses to start with `observe` in the document, and the chart rejects it.
+
+To opt out, set the key in your Helm values, or in a `dcctl` [values overlay](../deployment/tuning-an-instance.md#tunable), and upgrade. Set it before you upgrade to `v1.3` if you want no pod to enforce during the roll:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tokenAudience:
+        enforcement: observe
+```
+
+On an instance whose configuration you write yourself (`instance.existingSecret`), put `"enforcement": "observe"` in the document's `infrastructure.tokenAudience` block instead. See the [upgrade notes](../deployment/releases-and-upgrades.md#v130-token-audience).
+
+A token that names no resource is accepted by every area's API, in both modes. A client that never sends `resource` is not affected by either check.
+
+### Reading the counters {#token-audience-reading}
+
+Under `enforce`, a refused request is counted with the verdict `rejected`. If you are not sure what your clients send, run `observe` first and watch the counters: a `would_reject` series that never moves means `enforce` changes nothing for your clients. The series, the two alerts and how to find the client behind a count are in [Token audience checks](../deployment/observability.md#token-audience-checks).
+
+### Configuration {#token-audience-config}
+
+The policy is instance configuration under `infrastructure.tokenAudience`, in the document every service reads, so the list the authorization server issues against and the set an API accepts cannot differ. Every key is optional.
+
+| Key | Written by | Value |
+| --- | --- | --- |
+| `enforcement` | You | `observe`, `enforce`, or unset. Unset is the release default, `enforce` from `v1.3` (`observe` in `v1.2`). It governs both checks together. |
+| `unscopedClientCredentials` | You | Unset or `observe`. `enforce` is refused at startup in this release, because the rule it would switch on does not refuse anything yet. See [Service accounts](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
+| `externalResources` | You | A list of at most 8 resource identifiers outside the platform. |
+| `areaBaseUrl` | The chart | `<origin>/api`, from the ingress host. Set only when the origin is https, or a plain-http loopback host such as `localhost`. An ingress without TLS on any other host has no area resources, just as it has no authorization server. |
+| `mcpResources` | The chart | The MCP server's resolved `resourceUrl`, when the `mcp` area is deployed. |
+
+A service stops at startup, naming the key, when the block breaks any of these rules:
+
+- `enforcement` and `unscopedClientCredentials` must be `observe` or `enforce`, or unset. Unset `unscopedClientCredentials` and `observe` are the same, and `enforce` is refused as above.
+- `areaBaseUrl` and each list entry must be an absolute URL with an `https` scheme (`http` only for `localhost`, `127.0.0.1` or `::1`), with a lowercase scheme and host, no query, fragment or user information, and no trailing slash.
+- Each list holds at most 8 entries. No entry may appear twice, in either list, and none may equal an area's own identifier.
+- An `externalResources` entry may not sit under `areaBaseUrl`: with an `areaBaseUrl` of `https://iot.example.com/api`, both `https://iot.example.com/api` and `https://iot.example.com/api/x` are refused, and `https://iot.example.com/apiary` is not. This stops a platform area being re-labelled as external.
+- A key that is not in the table is refused, as everywhere in the instance configuration.
+
+The chart adds its own checks, so a mistake stops `helm upgrade` before any pod rolls. Setting `areaBaseUrl` or `mcpResources` under `instance.config` fails the render, and so does a misspelt key or an `externalResources` entry that breaks the rules above. `dcctl` accepts `enforcement`, `unscopedClientCredentials` and `externalResources` in a [values overlay](../deployment/tuning-an-instance.md#tunable) and refuses the two derived keys.
+
+On an instance whose configuration you write yourself (`instance.existingSecret`), the chart does not write the block. Add it to the document, listing the MCP server's `resourceUrl` exactly as the `mcp` area is configured, and update `instance.existingSecretChecksum`:
+
+```json
+"infrastructure": {
+  "tokenAudience": {
+    "areaBaseUrl": "https://iot.example.com/api",
+    "mcpResources": ["https://iot.example.com/api/mcp"]
+  }
+}
+```
+
+Without it the area resources are unknown and `mcp` is not registered. Under `enforce`, the default, `mcp` then refuses to start and every call it forwards would be refused; under `observe` those calls are counted as would-be refusals. `dcctl upgrade` refuses a document that omits the MCP entry, and only warns when `enforcement` is `observe`.
+
+## Two-factor authentication {#two-factor}
+
+An account can require a code from an authenticator app after its password. [How to use it](../guides/two-factor-authentication.md); this is what it guarantees and where it stops.
+
+- **The second factor gates the token.** When the password of an account with a second factor is right, sign-in issues nothing: no session and no token, only a short-lived challenge. The tokens are minted when the code is accepted. Because the token does not exist until then, the operators' admin API, which trusts any valid token, is covered as well.
+- **How the person proved who they are is recorded by the server.** Every token descended from the sign-in carries an `amr` claim: `["pwd","otp","mfa"]` for an app code, `["pwd","mfa"]` for a recovery code and `["pwd"]` for a password alone. It is read from the session record, never taken from the client. A tenant's requirement is checked there on every grant into the tenant: selecting it, refreshing a session, and the authorization step of an MCP or OAuth connection. A session that predates the upgrade records no `amr`, so a tenant that requires the factor refuses it. Service tokens and service-account tokens never carry the claim, and a token that claims it is refused.
+- **Secrets at rest.** The authenticator's secret is sealed in the [secret store](#secrets) under the instance root key. It is read only to check a code, is returned once at setup and never again, and is not cached. A recovery code carries 80 random bits and is stored only as a one-way digest.
+- **A code works once.** A code is accepted only for a step newer than the last one accepted, and two requests with the same code produce one winner. Codes are accepted one 30-second step either side of now.
+- **Guessing is counted before it is checked.** Every wrong code is charged to the account before it is evaluated, so a burst of simultaneous guesses cannot outrun the limit. After 5 wrong codes from one source address that address is locked out, and after 20 from all addresses together the authenticator locks for everyone; each lock lasts a minute, doubling with each further failure up to 15 minutes. A locked attempt is answered exactly like a wrong code. Recovery codes are exempt from the lock, because they cannot be guessed.
+- **Service accounts, devices and single sign-on are outside it.** A service account never signs in with a password. A single sign-on session is governed by its connection's required authentication methods, not by a tenant's setting. See [Single sign-on](./single-sign-on.md).
+
+What it does not do, stated plainly:
+
+- **Against someone who already holds the password, it slows guessing but does not stop it.** Every guess at a code comes from someone who passed the password step. At the cap, after the first 20 guesses, an attacker gets about four guesses an hour, and each has three valid codes in a million to hit. Someone who keeps guessing at that rate for a year has about a **10% chance** of getting in. The `MfaIdentityLocked` alert fires on the first lock for that reason, and its remedy is to reset the password.
+- **A password holder can keep the owner's authenticator locked.** Renewing the lock needs one wrong code each time it expires. The owner can still sign in with a recovery code, and resetting the password ends it. There is no permanent lock, because a permanent one would let anyone who knows an address lock its owner out.
+- **The per-address allowance can be refreshed by a sender who controls the forwarded-address header.** The limit across all addresses still holds.
+- **A tenant's requirement binds that tenant, not the operators.** It decides who may enter the tenant. It does not gate the admin console or the admin API, and an instance-wide requirement for operators is not available yet. A superuser with a password-only session can enter a tenant that requires the factor, and each entry is audited. Operators should enrol, and the audit journal and alerts are how you watch for attempts on their accounts.
+- **The challenge says the password was right.** That is inherent to any second factor that follows the password. Nothing else about the account is revealed until the code is accepted.
+- **Recovery codes are spent before the token is minted.** If the service fails in between, the code is gone and the person signs in again with another.
+
+## Endpoints that never leave the cluster {#internal-endpoints}
+
+Two endpoints exist only for the platform's own services. `/auth/service-token` exchanges the shared service
+secret for a short-lived token, and `/auth/jwks` is the key set every service uses to validate tokens.
+`user-management` serves both on a separate internal port (8082), not on the public one. The chart publishes that
+port on the cluster-internal Service only. No ingress, route or load balancer refers to it.
+
+This means the public port answers 404 for both paths whatever sits in front of it, including no ingress at all.
+Nothing at the edge is a security control:
+
+- **A bring-your-own ingress controller needs no rule for these paths.** Route to the Services the chart
+  creates, as you would anyway, and the mint is not reachable from outside.
+- **The mint is protected by the shared service secret.** The secret is compared in constant time, and an instance
+  with no secret configured refuses to mint. The internal port keeps the endpoint off the public network; the
+  secret is what authenticates a caller that can reach it.
+- **The chart sets no nginx snippet annotation.** A configuration snippet lets whoever can write an Ingress object
+  inject nginx configuration, and nothing here needs one. `ingress-nginx`, on a cluster that still runs it, still
+  accepts snippets in this release, because instances not yet upgraded rely on them; a later release turns them off
+  once no instance does.
+- **A network policy narrows the internal port further, but it is defence in depth and it is off by default.** With
+  `networkPolicy.enabled` the chart restricts the port to pods in the instance's own namespace, on a cluster whose
+  network plugin enforces policy. `dcctl` installs run with the policy off.
+- **An external token verifier uses the public key set instead.** The authorization-server metadata
+  (`jwks_uri`) points at `/oauth/jwks`, which serves the same public keys once an issuer URL is configured.
+
+If you run your own policy engine, allow pods in the instance namespace to reach port 8082 on
+`user-management`, and nothing more. Every service dials it to fetch the key set at startup and to mint its
+service token.
+
+## Secrets {#secrets}
+
+Credentials a tenant stores, such as connector settings and identity-provider client secrets, are kept in an
+encrypted secret store. Each value is sealed with its own AES-256-GCM data key, and that key is wrapped by the
+instance **root key**, which lives in the instance's Kubernetes Secret. A value is write-only over the API: it is
+resolved inside the server when it is used and never returned. Changes are audited by who, when and which handle, never by value.
+
+The root key is the one thing the store cannot recover from. Keep an escrow copy: without it, a restored instance
+cannot decrypt its secrets and no one can sign in. See [Disaster Recovery](../deployment/disaster-recovery.md).
+The store takes a pluggable key provider, but the instance root key is the only provider that ships today.
+
+## Outbound traffic {#egress}
+
+Webhooks, mail relays and outbound connectors send to destinations a tenant supplies. Every such connection is checked at the moment it is made,
+against the address the name actually resolved to, so a name that changes its answer between a check and a
+connection cannot get past it. Loopback, private, carrier-grade NAT, link-local and cloud-metadata addresses are refused, and a
+refused destination is a permanent failure, not a retry. An operator can permit specific private
+addresses. The chart's `networkPolicy` is a second layer, off by default. See
+[Outbound Connectors](./outbound-connectors.md).
+
+## Audit {#audit}
+
+Every service records a journal entry, with the acting identity, for each create, update and delete it makes to
+a tenant's data, and the sign-in service also records sign-in events such as logins, failed logins and single
+sign-on outcomes. A tenant's Audit screen shows the registry journal, and only that tenant's entries. Sign-in
+events are read through the operator's administration API, and the journals of other areas, such as connectors,
+dashboards and updates, are recorded but are not shown on the Audit screen.
+
+A registry entry is written in the same transaction as the change it describes, so the two are saved together or
+not at all. If the entry cannot be written, the change is not made and the call reports a failure, so a change is
+never left unrecorded and a reported failure is never a change that was saved. A failed write of a sign-in entry is logged and does not block the
+sign-in. Entries are never edited, except that deleting a tenant empties the names in its entries. The journal
+is not pruned automatically. See [Audit](../user-guide/audit.md).
+
+## What is not enforced yet {#accepted-gaps}
+
+These are known and accepted for the current release. Plan around them.
+
+1. **An upgraded instance keeps the broker's shared login until its next upgrade.** Every area connects to the broker with a
+   login of its own, limited to the subjects, streams, consumers and buckets it uses, and no service can create,
+   change or delete a stream or a bucket: one administration login does that, in a job the chart runs before every
+   install and upgrade, and a service only checks that what it opens matches what its release declares and stops, naming the difference,
+   when it does not. A compromised service therefore cannot reconfigure a stream to write into the subjects only a device
+   may write, so it cannot forge device events, command responses or device reports by that route. What is left
+   is the shared login that earlier releases used. A new instance never has it. An instance upgraded from a release that had it
+   keeps it through the upgrade that gives every area a login of its own, in the broker's configuration and in the instance
+   configuration every pod reads, with the permissions it always had, including administering streams, so a pod on that
+   instance can present it. The next `dcctl upgrade` removes it from both. Services that accept device traffic (event-sources, device-management, lwm2m-ingest and sparkplug-ingest) are
+   still part of the trusted core of the platform, because they write device data by design. Two grants are wider by design: event-sources can update the broker's own MQTT stores, and
+   user-management can purge a deleted tenant's data across every stream. A compromised service can still cause
+   loss, though not forgery, by filling a stream it may create consumers on until older messages are discarded.
+2. **The database login is shared by all services in an instance.** Every service reaches the instance's relational
+   database with one login, so a compromised service could read and write another area's tables. Tenant isolation
+   in the database rests on the application's tenant scope, not on database permissions. The platform does not
+   provide separate database roles per service.
+3. **MQTT acknowledgements the broker can lose.** By default the broker can acknowledge a QoS 1 message and
+   then lose it in two ways. One is while the capture stream changes leader, which a broker restart, an upgrade or the loss of a
+   node causes, at any load. The other needs no restart: under sustained load, if `event-sources` falls behind and the
+   capture stream's backlog reaches its bound, the stream discards its oldest unread messages. `devicechain_<area>_jetstream_consumer_unread_skipped_total` counts those, and the
+   `JetStreamDurableLostUnread` alert fires. With `infrastructure.nats.mqttFailClosed` on, an acknowledgement means the
+   platform holds the message; in exchange the broker refuses QoS 1 publishes while there is no leader or its message store is full, and
+   the instance keeps up with less traffic, so it is for installations sized to stay below that ceiling.
+   The setting is off by default; `--mqtt-fail-closed` on `dcctl bootstrap` or `dcctl upgrade` turns it on, and
+   [Observability](../deployment/observability.md#mqtt-fail-closed)
+   describes the trade-off.
+4. **The root key is readable by anyone who can read the instance's Kubernetes Secret.** Restrict access to that
+   Secret and to the cluster's etcd accordingly.
+5. **Two-factor authentication guards the password, and only the password.** It does not bind the operators' admin plane to a tenant's requirement, an attacker who holds a password and keeps guessing at the lockout cap has about a 10% chance a year, and a password holder can keep an account's authenticator locked by renewing the lock. See [Two-factor authentication](#two-factor).
+6. **No external penetration test has been published.**
+
+Nothing on this page replaces your own review. If an entry here is a problem for your deployment, the matching
+section above says where the control sits.

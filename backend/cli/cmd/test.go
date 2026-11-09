@@ -72,6 +72,7 @@ of the shell history and the process list.`,
 func init() {
 	testCmd.Flags().StringVarP(&testTenant, "tenant", "t", "", "tenant whose rules are tested (required)")
 	testCmd.Flags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(testCmd)
 	testCmd.Flags().Bool("tls", false, "use https for platform endpoints")
 	testCmd.Flags().StringVar(&testEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
 	testCmd.Flags().StringVar(&testPassword, "password", "", "password for the identity (required unless DCCTL_PASSWORD is set)")
@@ -85,8 +86,10 @@ func init() {
 const passwordEnv = "DCCTL_PASSWORD"
 
 func runTest(cmd *cobra.Command, args []string) error {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return err
+	}
 	junit, _ := cmd.Flags().GetString("junit")
 	password := testPassword
 	if password == "" {

@@ -738,7 +738,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--size <size>` | The instance's size preset: `base` (the default) or `perf-12k`, the measured high-throughput shape. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
+| `--size <size>` | The instance's size preset: `base` (the default), `perf-12k` or `perf-16k`, the measured high-throughput shapes. Recorded on the instance and applied again by every upgrade. A `--values` overlay and an OpenTofu variable you state yourself win over it. See [Choosing a size](./sizing.md). |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest and LwM2M ingest; over-the-air update management is part of `default`), `telemetry`, or `ingest-only`. |
 | `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area outbound-connectors`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
@@ -1831,6 +1831,8 @@ dcctl sim create demo --instance my-instance --server localhost
 
 The simulator then drives telemetry and alarms in over the same device wire real hardware
 uses — see [Trying it with simulated data](../intro.md#trying-it-with-simulated-data).
+
+Every command that talks to an instance's platform API (`sim`, `events failed`, `dead-letters`, `attr`, `presence`, `product`, `tenant-deletion`, `test` and `device register`) takes the same selector flags. `--server` (`-s`) names the host. `--instance` (`-i`) names the instance: on `sim` it is the instance id in the event-ingress path, and on the others, when `--server` is not given, it uses the host (and TLS setting, unless `--tls` is given) the instance was declared with. For example, `dcctl events failed -i my-instance -t acme ...`.
 
 ### Adding a functional area later {#enable-area}
 

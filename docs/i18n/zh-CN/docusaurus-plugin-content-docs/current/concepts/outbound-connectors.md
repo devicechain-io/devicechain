@@ -82,6 +82,8 @@ webhook 投递通过以下方式加固：
 
 要允许连接器访问私有目标，运维人员在 `instance.config.infrastructure.egress.allowedDestinations` 下，为每个地址添加独立的 `/32`。私有目标包括集群内消息代理、**Amazon MSK**、**Amazon MQ**，以及通过**启用私有 DNS 的接口 VPC 端点**访问的 SNS/SQS；后者会使默认区域名称也解析为私有地址。接口端点在每个可用区都有一个地址，每个地址都需要自己的条目。允许规则适用于**所有租户、所有连接器和 webhook**，而不仅是添加它时针对的那个对象。
 
+在**本地开发集群**（kind、minikube、k3d、Docker Desktop 或 Rancher Desktop）上，`dcctl bootstrap` 和 `dcctl upgrade` 支持 `--dev-allow-egress <地址或 CIDR>`（可重复，也可用逗号分隔），让 webhook 或连接器访问你本机或局域网上的服务。它仅用于开发：dcctl 在任何其他集群上都会拒绝它；它会记录在实例上，使后续升级保留该设置；`dcctl instances` 会列出它（`DEV EGRESS ALLOWED`）；每个使用它的服务在启动时都会记录一条警告。请只写你需要的单个地址或较窄的范围。**无论你列出什么，云元数据地址、环回、链路本地和组播范围始终保持阻止**，与其重叠的条目会被拒绝。只接受地址和 CIDR，不接受名称，因为检查针对的是解析后的地址。`dcctl upgrade --dev-allow-egress none` 可将其移除。真实部署请使用上面的 `allowedDestinations`。 仅限本地集群的检查读取的是 kube 上下文名称，因此它只是防止失误的护栏，而不是强制手段。`10.0.0.0/8` 或 `172.16.0.0/12` 这类宽泛条目还会向所有租户开放集群自身的 Pod、Service 和节点网段，请列出具体主机。
+
 `blocked` 结果只向租户说明目标解析到被拒绝地址，与 webhook 拒绝提供的信息相同。被拒绝地址本身记录在死信中，运维人员可读，租户不可读。
 
 ## 治理 {#governance}

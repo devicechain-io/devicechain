@@ -50,7 +50,7 @@ func (f *fakeAuthorizeSvc) IssueAuthorizationCode(context.Context, *iam.OAuthCli
 }
 
 func (f *fakeAuthorizeSvc) ValidateAuthorize(client *iam.OAuthClient, p AuthorizeParams) (ResourceCheck, error) {
-	return ValidateAuthorizeRequest(client, p, defaultResourcePolicy)
+	return ValidateAuthorizeRequest(client, p, harnessResourcePolicy)
 }
 func (f *fakeAuthorizeSvc) RecordAuthorizeResource(_ *iam.OAuthClient, rc ResourceCheck) {
 	f.recorded = append(f.recorded, rc)

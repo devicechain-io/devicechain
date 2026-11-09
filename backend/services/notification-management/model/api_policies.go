@@ -55,6 +55,7 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 			EscalateAfterSeconds: sqlnull.Int64FromInt32(request.EscalateAfterSeconds),
 			MaxEscalations:       sqlnull.Int64FromInt32(request.MaxEscalations),
 			Enabled:              request.Enabled,
+			NotifyOnClear:        request.NotifyOnClear != nil && *request.NotifyOnClear,
 
 			QuietHoursTimezone:       rdb.NullStrOf(quiet.timezone),
 			QuietHoursSlots:          quiet.slots,
@@ -132,6 +133,10 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	notifyOnClear, err := request.NotifyOnClear.ApplyToRequired("notifyOnClear", policy.NotifyOnClear)
+	if err != nil {
+		return nil, err
+	}
 	metadata := request.Metadata.ApplyTo(dcgraphql.MetadataStr(policy.Metadata))
 	if err := validateJSONObject(metadata, "metadata"); err != nil {
 		return nil, err
@@ -206,6 +211,7 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.EscalateAfterSeconds = request.EscalateAfterSeconds.ApplyToNullInt64(policy.EscalateAfterSeconds)
 		policy.MaxEscalations = request.MaxEscalations.ApplyToNullInt64(policy.MaxEscalations)
 		policy.Enabled = enabled
+		policy.NotifyOnClear = notifyOnClear
 		policy.QuietHoursTimezone = rdb.NullStrOf(quiet.timezone)
 		policy.QuietHoursSlots = quiet.slots
 		policy.QuietHoursBypassSeverity = rdb.NullStrOf(quiet.bypass)
@@ -230,6 +236,7 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 				"escalate_after_seconds": policy.EscalateAfterSeconds,
 				"max_escalations":        policy.MaxEscalations,
 				"enabled":                policy.Enabled,
+				"notify_on_clear":        policy.NotifyOnClear,
 
 				"quiet_hours_timezone":        policy.QuietHoursTimezone,
 				"quiet_hours_slots":           policy.QuietHoursSlots,

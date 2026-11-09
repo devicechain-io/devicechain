@@ -112,6 +112,7 @@ rotate it to issue one.`,
 func init() {
 	productCmd.PersistentFlags().StringVarP(&productTenant, "tenant", "t", "", "tenant to read or change (required)")
 	productCmd.PersistentFlags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(productCmd)
 	productCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	productCmd.PersistentFlags().StringVar(&productEmail, "email", "", "identity to authenticate as; it must be a member of the tenant (required)")
 	productCmd.PersistentFlags().StringVar(&productPassword, "password", "", "password for the identity (required)")
@@ -139,8 +140,10 @@ func connectorsURL(dashboardURL string) string {
 }
 
 func productSession(cmd *cobra.Command) (product.Client, product.Endpoints, error) {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return nil, product.Endpoints{}, err
+	}
 	if strings.TrimSpace(productTenant) == "" {
 		return nil, product.Endpoints{}, fmt.Errorf("--tenant is required: a product is per-tenant, and there is no default")
 	}

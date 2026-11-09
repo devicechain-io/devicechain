@@ -117,6 +117,8 @@ func shardGuard(db *gorm.DB) { guardPlacement(db, false) }
 // callback skip, Row() then finds no *sql.Row and returns nil, and Scan on that panics. So here
 // a refusal swaps the statement's pool for a refusing one instead: the row callback still runs
 // and yields a *sql.Row that carries the refusal.
+// (rowReturnsRefusal now covers this for any refusal on the Row chain; this swap predates it and
+// keeps the refusal flowing through the pool, so a transaction is not left holding the error.)
 func shardGuardRow(db *gorm.DB) { guardPlacement(db, true) }
 
 func guardPlacement(db *gorm.DB, row bool) {
@@ -363,6 +365,8 @@ func failedDB(base *gorm.DB, err error) *gorm.DB {
 	tx := base.Session(&gorm.Session{NewDB: true}).Where("1 = 1")
 	tx.Config.ConnPool = pool // Session copied the Config, so this is this chain's own
 	tx.Statement.ConnPool = pool
+	// (rowReturnsRefusal now also turns a handle that carries an error into a Row() that returns it,
+	// so this is no longer the only protection against a nil row.)
 	// No AddError, deliberately: a handle that already carries an error makes Row() return nil
 	// (its callbacks skip), and Scan on that panics. Failing at the pool instead makes every
 	// entry point, Row included, return the error.

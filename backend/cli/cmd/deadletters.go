@@ -59,6 +59,7 @@ truncated list read as a complete one.`,
 
 func init() {
 	deadLettersCmd.PersistentFlags().StringP("server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(deadLettersCmd)
 	deadLettersCmd.PersistentFlags().Bool("tls", false, "use https for platform endpoints")
 	deadLettersCmd.PersistentFlags().StringVar(&dlEmail, "email", "", "identity to authenticate as (required)")
 	deadLettersCmd.PersistentFlags().StringVar(&dlPassword, "password", "", "password for the identity (required)")
@@ -82,8 +83,10 @@ func init() {
 }
 
 func runDeadLettersList(cmd *cobra.Command, args []string) error {
-	server, _ := cmd.Flags().GetString("server")
-	tls, _ := cmd.Flags().GetBool("tls")
+	server, tls, err := targetFlags(cmd)
+	if err != nil {
+		return err
+	}
 	if dlEmail == "" || dlPassword == "" {
 		return fmt.Errorf("--email and --password are required")
 	}

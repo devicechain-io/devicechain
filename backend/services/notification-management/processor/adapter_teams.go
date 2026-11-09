@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -34,7 +35,7 @@ func (a *teamsAdapter) Deliver(ctx context.Context, channel *model.NotificationC
 	if msg.Alarm.AlarmToken == "" {
 		return fmt.Errorf("teams channel %q: %w", channel.Token, errNoAlarm)
 	}
-	if err := postJSON(ctx, a.client, secret, true, nil, teamsMessage(msg, alarmLink(cfg.LinkBaseURL))); err != nil {
+	if err := postJSON(ctx, a.client, secret, true, nil, teamsMessage(msg, alarmLink(cfg.LinkBaseURL), deviceLink(cfg.LinkBaseURL, msg.Alarm.DeviceToken))); err != nil {
 		return fmt.Errorf("teams channel %q: %w", channel.Token, err)
 	}
 	return nil
@@ -58,16 +59,46 @@ func teamsAccent(a AlarmFacts) string {
 	}
 }
 
+// teamsEscape makes device- or tenant-authored text safe for an Adaptive Card TextBlock or
+// FactSet, which render a Markdown subset (links and emphasis) and, in a bot's messages, <at>
+// mentions. Backslash escapes are NOT relied on: Teams documents no escape syntax for the
+// card's Markdown, and renderers show the backslash literally (over_temp would read
+// over\_temp). Instead the characters that form links and mentions, [ ] ( ) < >, are replaced
+// by look-alike characters that are inert, and line breaks are flattened to a space. _ and *
+// are left alone: at worst a name is emphasised, which is cosmetic, and a title such as
+// over_temp stays readable. Truncate BEFORE calling this.
+func teamsEscape(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '[':
+			return '\uFF3B' // FULLWIDTH LEFT SQUARE BRACKET
+		case ']':
+			return '\uFF3D'
+		case '(':
+			return '\uFF08'
+		case ')':
+			return '\uFF09'
+		case '<':
+			return '\u2039' // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+		case '>':
+			return '\u203A'
+		case '\n', '\r':
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 // teamsMessage builds the Workflows envelope around the Adaptive Card.
-func teamsMessage(msg *RenderedNotification, link string) map[string]any {
+func teamsMessage(msg *RenderedNotification, link, deviceLink string) map[string]any {
 	a := msg.Alarm
 	facts := make([]map[string]any, 0, 8)
 	for _, f := range a.facts() {
-		facts = append(facts, map[string]any{"title": f[0], "value": trunc(f[1], 500)})
+		facts = append(facts, map[string]any{"title": f[0], "value": teamsEscape(trunc(f[1], 500))})
 	}
 	body := []map[string]any{
 		{
-			"type": "TextBlock", "text": trunc(a.title(msg), 300), "weight": "Bolder",
+			"type": "TextBlock", "text": teamsEscape(trunc(a.title(msg), 300)), "weight": "Bolder",
 			"size": "Medium", "wrap": true, "color": teamsAccent(a),
 		},
 		{"type": "FactSet", "facts": facts},
@@ -83,8 +114,15 @@ func teamsMessage(msg *RenderedNotification, link string) map[string]any {
 		"version": "1.4",
 		"body":    body,
 	}
+	var actions []map[string]any
 	if link != "" {
-		card["actions"] = []map[string]any{{"type": "Action.OpenUrl", "title": "Open alarms", "url": link}}
+		actions = append(actions, map[string]any{"type": "Action.OpenUrl", "title": "Open alarms", "url": link})
+	}
+	if deviceLink != "" {
+		actions = append(actions, map[string]any{"type": "Action.OpenUrl", "title": "Open device", "url": deviceLink})
+	}
+	if len(actions) > 0 {
+		card["actions"] = actions
 	}
 	return map[string]any{
 		"type": "message",

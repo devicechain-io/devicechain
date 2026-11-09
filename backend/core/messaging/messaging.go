@@ -245,6 +245,13 @@ type Message struct {
 	// whose broker metadata is unavailable (non-JetStream), so consumers that don't
 	// checkpoint are unaffected.
 	StreamSeq uint64
+	// NumPending is how many messages the broker still had queued for this consumer, not yet
+	// delivered, when it delivered this one (the JetStream delivery metadata). Zero means the reader
+	// was caught up as of this delivery. It is meaningful only on a message read through a durable
+	// consumer that also carries an AppendTime; the by-sequence replay readers do not know it and
+	// leave it zero. The ingest gate's lag estimate uses it to tell a reader that is current from one
+	// working through a backlog.
+	NumPending uint64
 	// AppendTime is the broker's timestamp for when a consumed message was written
 	// to the stream — server-assigned, never supplied by the publisher. For the
 	// ingest capture stream (ADR-030) the write happens before the device is

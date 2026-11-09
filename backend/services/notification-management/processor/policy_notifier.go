@@ -293,13 +293,21 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 			return n.resolveHeld(c, event)
 		})
 	case dmmodel.AlarmEventCleared:
-		return n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
+		// Stamp the clear FIRST: that is what stops escalation. Announcing it (to the policies
+		// that opted in) comes after, claimed separately so it is sent once; see announceClear.
+		if err := n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
 			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity,
 				event.RaisedTime, event.OccurredTime); err != nil {
 				return err
 			}
 			return n.resolveHeld(c, event)
-		})
+		}); err != nil {
+			return err
+		}
+		if n.tenantDeleted(ctx) {
+			return nil
+		}
+		return n.announceClear(ctx, event, false, false)
 	case dmmodel.AlarmEventDeescalated:
 		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
 			return n.api.TouchSeverity(c, event.AlarmToken, event.Severity)
@@ -429,6 +437,15 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		state = states[0]
 	}
 
+	// An escalation that arrives after its alarm cleared (the pool is unordered) would page
+	// "worse" about an alarm that is over.
+	if event.EventType == dmmodel.AlarmEventEscalated && state != nil && state.ClearedAt.Valid &&
+		state.SameCycleAs(event.RaisedTime) {
+		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).
+			Msg("Not paging an escalation: the alarm has already cleared")
+		return nil
+	}
+
 	// Quiet hours come BEFORE the plan: a policy that holds this notification is taken out
 	// of the policies the plan sends through, and what it holds is written FIRST — before
 	// anything is sent. The write is an idempotent upsert, so a failure here returns an
@@ -513,11 +530,14 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// escalation substrate, so the page that just went out would never be followed up.
 	// recordTimeout bounds each ATTEMPT and is smaller than dispatchMargin so the first
 	// still lands inside AckWait; a held re-run is kept alive by the hold's beats.
+	var recorded *model.NotificationState
 	if err := storehold.Settle(ctx, func(c context.Context) error {
 		rctx, rcancel := context.WithTimeout(c, recordTimeout)
 		defer rcancel()
-		return n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
-			event.RaisedTime, event.OccurredTime)
+		var err error
+		recorded, err = n.api.RecordPaged(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
+			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets))
+		return err
 	}); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Delivered notification but failed to record notification state; the alarm " +
@@ -542,6 +562,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		}
 		n.countQuiet(quietSuperseded, int(superseded))
 	}
+	n.announceLateClear(ctx, event, recorded)
 	return nil
 }
 
@@ -578,6 +599,8 @@ type dispatchTally struct {
 	refused     int
 	failed      int
 	unattempted int
+	// targets are the deliveries that went out, for the state row's paged set.
+	targets []delivery
 }
 
 // retryable is the count of outcomes a redelivery could still turn into a page. A refusal
@@ -637,6 +660,7 @@ func (n *PolicyNotifier) deliverAll(ctx context.Context, deliveries []delivery,
 		switch n.deliverWithRetry(ctx, d, rendered) {
 		case deliveryOK:
 			tally.delivered++
+			tally.targets = append(tally.targets, d)
 		case deliveryRefused:
 			tally.refused++
 		default:
@@ -795,6 +819,14 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	}
 	tally := n.deliverAll(ectx, deliveries, renderEscalation(state, state.EscalationLevel+1), state.AlarmToken,
 		model.AttemptTriggerEscalation)
+	if tally.delivered > 0 {
+		// Best effort: the escalation's own claim already counted it, and a missed record only
+		// means a clear is not announced to a target an escalation alone reached.
+		if err := n.api.AddPagedTargets(ctx, state.AlarmToken, state.CycleRaisedAt, pagedTargets(tally.targets)); err != nil {
+			log.Warn().Err(err).Str("alarm", state.AlarmToken).
+				Msg("Could not record the targets an escalation reached")
+		}
+	}
 	if tally.delivered == 0 {
 		// Same reasoning as dispatch: a refusal is not an outage, so redelivering it only
 		// delays the same answer. The tier has already been claimed either way.

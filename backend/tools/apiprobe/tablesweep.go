@@ -203,6 +203,13 @@ var tableSweepExemptions = map[string]string{
 		"No GraphQL mutation mints a capability, so seeding a key would mean a device session this " +
 		"drill deliberately does not open. The assignment and attempt that a grant would answer are " +
 		"covered: update-assignment writes both through the real API.",
+	"outbound-connectors.lpwan_pending_acks": "a CONFIRMED LoRaWAN downlink waiting for the device's " +
+		"acknowledgement. The only writer is the downlink adapter, after a network server accepted the " +
+		"downlink, and a row is deleted when the network server's report (or the row's deadline) answers " +
+		"the command. The drill runs no network server and the adapter is off by default, so the table " +
+		"is empty by construction; seeding a row would assert it rather than the path that writes it. Its " +
+		"tenant column is proved by the purge coverage gate, and the matching, settling and deadline " +
+		"paths by the lpwan package's store, feed and adapter tests.",
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",

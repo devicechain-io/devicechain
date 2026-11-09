@@ -6,10 +6,12 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -66,8 +68,20 @@ func (api *Api) NotificationStates(ctx context.Context,
 // cycle is a stale redelivery and changes nothing.
 func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, severity string,
 	raisedTime, at time.Time) error {
+	_, err := api.RecordPaged(ctx, alarmToken, alarmKey, severity, raisedTime, at, nil)
+	return err
+}
+
+// RecordPaged is RecordNotification that also merges the targets that delivered into the
+// cycle's paged set, and returns the row as it stands afterwards. The caller needs the row
+// because a CLEARED can be processed before the RAISED it follows is recorded (the dispatch
+// pool is unordered): the clear stamped a tombstone, and only the page's own dispatch knows,
+// once its targets are recorded, that an unannounced clear is now owed.
+func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity string,
+	raisedTime, at time.Time, targets []PagedTarget) (*NotificationState, error) {
 	raised := cycleKey(raisedTime)
-	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+	var out *NotificationState
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		found := &NotificationState{}
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("alarm_token = ?", alarmToken).First(found)
@@ -82,14 +96,24 @@ func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, se
 					NotifyCount:     1,
 					CycleRaisedAt:   raised,
 				}
+				created.PagedTargets = mergePaged(nil, raised, targets)
+				if created.PagedTargets != nil {
+					created.PagedCycle = raised
+				}
+				out = created
 				return tx.Create(created).Error
 			}
 			return result.Error
 		}
+		out = found
 		if !enterCycle(found, raised) {
 			// A notification about an EARLIER cycle (an unordered redelivery). The row
 			// describes a newer cycle; nothing about this one belongs on it.
 			return nil
+		}
+		found.PagedTargets = mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)
+		if len(targets) > 0 {
+			found.PagedCycle = found.CycleRaisedAt
 		}
 		found.NotifyCount++
 		if !found.FirstNotifiedAt.Valid {
@@ -106,6 +130,114 @@ func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, se
 		}
 		return tx.Save(found).Error
 	})
+	return out, err
+}
+
+// mergePaged unions targets into the stored set, by identity, keeping first-seen order. It
+// returns the stored value unchanged when there is nothing to add.
+func mergePaged(stored *datatypes.JSON, cycle sql.NullTime, add []PagedTarget) *datatypes.JSON {
+	if len(add) == 0 {
+		return stored
+	}
+	label := cycleLabel(cycle)
+	var have []PagedTarget
+	if stored != nil {
+		var doc pagedDoc
+		if json.Unmarshal(*stored, &doc) == nil && doc.Cycle == label {
+			have = doc.Targets
+		}
+	}
+	seen := make(map[string]bool, len(have))
+	for _, t := range have {
+		seen[t.Key()] = true
+	}
+	for _, t := range add {
+		if !seen[t.Key()] {
+			seen[t.Key()] = true
+			have = append(have, t)
+		}
+	}
+	raw, err := json.Marshal(pagedDoc{Cycle: label, Targets: have})
+	if err != nil {
+		return stored
+	}
+	j := datatypes.JSON(raw)
+	return &j
+}
+
+// AddPagedTargets merges targets that delivered into the cycle's paged set without counting a
+// notification (an escalation's claim already did). A stale cycle, or no row, changes nothing.
+func (api *Api) AddPagedTargets(ctx context.Context, alarmToken string, cycle sql.NullTime,
+	targets []PagedTarget) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		found := &NotificationState{}
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("alarm_token = ?", alarmToken).First(found)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return result.Error
+		}
+		if cycle.Valid && found.CycleRaisedAt.Valid && !found.CycleRaisedAt.Time.Equal(cycle.Time) {
+			return nil
+		}
+		return tx.Model(found).Updates(map[string]any{
+			"paged_targets": mergePaged(found.PagedTargets, found.CycleRaisedAt, targets),
+			"paged_cycle":   found.CycleRaisedAt,
+		}).Error
+	})
+}
+
+// ClaimClearAnnouncement claims the right to announce THIS cycle's clear: a compare-and-set of
+// clear_notified_at from NULL, only on a row that is already stamped cleared and is still on
+// the cycle named. Exactly one caller across replicas and redeliveries wins, and only after the
+// clear has been recorded (which is what stops escalation), so a clear announced is a clear
+// that also ended the alarm's paging. raisedTime is the event's RaisedTime.
+func (api *Api) ClaimClearAnnouncement(ctx context.Context, alarmToken string, cycle sql.NullTime, at time.Time) (bool, error) {
+	q := api.RDB.DB(ctx).Model(&NotificationState{}).
+		Where("alarm_token = ? AND cleared_at IS NOT NULL", alarmToken)
+	set := map[string]any{"clear_notified_at": at}
+	if cycle.Valid {
+		// By CYCLE, never by comparing times: the stamp that wins names the cycle it won.
+		q = q.Where("cycle_raised_at = ? AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> ?)",
+			cycle.Time, cycle.Time)
+		set["clear_notified_cycle"] = cycle.Time
+	} else {
+		q = q.Where("cycle_raised_at IS NULL AND clear_notified_at IS NULL")
+	}
+	result := q.Updates(set)
+	return result.RowsAffected == 1, result.Error
+}
+
+// PendingClearStates lists the caller tenant's alarms whose clear is stamped, whose cycle paged
+// someone, and whose clear has not been claimed, cleared since `since`. It is what the scheduler
+// walks to send a clear that overtook its page or failed to send when it first came due, so
+// neither depends on a message being redelivered.
+//
+// Rows whose paged set belongs to another cycle are excluded in SQL (paged_cycle), and rows
+// touched after untouchedSince are skipped: a failed send gives its claim back, which touches
+// the row, so this is the backoff between attempts.
+func (api *Api) PendingClearStates(ctx context.Context, since, untouchedSince time.Time, limit int) ([]*NotificationState, error) {
+	found := make([]*NotificationState, 0)
+	err := api.RDB.DB(ctx).
+		Where("cleared_at IS NOT NULL AND cleared_at > ? AND paged_targets IS NOT NULL AND cycle_raised_at IS NOT NULL "+
+			"AND paged_cycle = cycle_raised_at AND updated_at < ? "+
+			"AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> cycle_raised_at)", since.UTC(), untouchedSince.UTC()).
+		// Least recently touched first: a clear whose send failed has its claim given back (which
+		// touches the row), so it moves behind the ones not yet tried instead of starving them.
+		Order("updated_at ASC").Limit(limit).Find(&found).Error
+	return found, err
+}
+
+// UnclaimClearAnnouncement gives the claim back after a clear that reached no channel and may
+// be retried, so a redelivery can try again. It only clears the stamp the caller set.
+func (api *Api) UnclaimClearAnnouncement(ctx context.Context, alarmToken string, at time.Time) error {
+	return api.RDB.DB(ctx).Model(&NotificationState{}).
+		Where("alarm_token = ? AND clear_notified_at = ?", alarmToken, at).
+		Updates(map[string]any{"clear_notified_at": nil, "clear_notified_cycle": nil}).Error
 }
 
 // MarkAcknowledged stamps AcknowledgedAt on the alarm's state row so the escalation
@@ -272,6 +404,9 @@ func startCycle(s *NotificationState, raised sql.NullTime) {
 	s.LastEscalatedAt = sql.NullTime{}
 	s.FirstNotifiedAt = sql.NullTime{}
 	s.NotifyCount = 0
+	s.ClearNotifiedAt = sql.NullTime{}
+	s.PagedTargets = nil
+	s.PagedCycle = sql.NullTime{}
 	s.CycleRaisedAt = raised
 }
 

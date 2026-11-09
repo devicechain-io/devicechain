@@ -58,15 +58,15 @@
     "site is a separate repository and nothing here reads its prose. Answering \"no site",
     "impact\" is a fine answer; not asking is not."
   ],
-  "version": "v1.2.0",
-  "theme": "payload decoders a tenant writes, and revocation that ends sessions",
+  "version": "v1.3.0",
+  "theme": "commands reach HTTP and LoRaWAN devices, and deliveries leave evidence",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.1.0 with `dcctl install`, then one `dcctl upgrade` per instance; eight appended migrations add tables, nullable columns and storage parameters, and nothing is removed. Two things to check first: a v1.1 pod that restarts in the middle of the roll waits for its v1.2 replacement, so keep the roll moving; and create Slack, Teams or PagerDuty channels only once the rollout has finished.",
-    "Tenants write their own payload decoders: rules, written as expressions, that turn a LoRaWAN or other binary frame, a JSON body or a network server's decoded object into measurements. They are authored and tested in the console, gated at publish by their test vectors, and run live on every inbound integration uplink. Each decoder is held to a failure budget, and its health and recent failing uplinks are shown beside it.",
-    "X.509 certificates can be revoked: upload a certificate authority's revocation list, or revoke a certificate by hand, and the open sessions of the affected devices are ended. The C# SDK and the Unity package can connect a device with a client certificate.",
-    "Alarms reach Slack, Microsoft Teams and PagerDuty as native notification channels, and dashboards gain a status grid, a state timeline and SCADA symbols.",
-    "`dcctl bootstrap --size perf-12k` applies the sizing measured at 12,000 events a second. Detection uses far less memory: an absence rule keeps one timer per device instead of one per event, and the duplicate-event guard is about 40% smaller at 20,000 events a second.",
-    "Tokens bound to a resource the instance does not serve are counted and logged, not yet refused. The HTTP event endpoint answers 500 instead of 202 for an event it could not build."
+    "Upgrade in place from v1.2.0 with `dcctl install`, then one `dcctl upgrade` per instance; the appended migrations add tables, nullable columns and indexes, and nothing is removed. Token audiences are now enforced by default: check the would-reject counters first, and if you supply the instance configuration yourself, list the MCP server in it. Turn on OCSP, HTTP command pull, device uplinks and webhook signing only once the rollout has finished.",
+    "Devices that only speak HTTP fetch their commands with a long poll, and devices behind a ChirpStack v4 network server get theirs as LoRaWAN downlinks. Every command records how its delivery was observed.",
+    "The platform's own alerts reach a person: `dcctl` routes them to a webhook, an email address or your own Alertmanager configuration, a dead-man receiver reports when alerting goes quiet, and every alert links to a runbook entry.",
+    "Outbound webhooks can be signed per the Standard Webhooks specification, the HTTP event endpoint answers 401 for an unknown tenant or a bad credential, and certificate connects can be checked with OCSP per trust anchor.",
+    "A tenant's product can be kept as files with `dcctl product export | plan | apply`, and detection rules can be unit-tested with `dcctl test`; both are in the new preview tier.",
+    "MCP tool results now carry device- and user-written text under `untrusted`, with its source. The MCP tool catalog is not a covered interface, so MCP clients that read those fields must read them from there."
   ]
 }

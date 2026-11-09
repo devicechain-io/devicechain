@@ -491,6 +491,16 @@ const (
 	CommandResponses  = "command-responses"
 	ConnectorDispatch = "connector-dispatch"
 
+	// LpwanDownlinkEvents carries a network server's report about a downlink (a ChirpStack ack or
+	// txack) from the inbound integration route, which authenticated it, to the outbound-connectors
+	// adapter that holds the downlink's pending record and answers the command.
+	//
+	// 🔴 IT IS ITS OWN SUBJECT, NOT AN EVENT TYPE ON InboundEvents, for the reason IntegrationUplinks
+	// gives: a device-management built before it would fail to unmarshal an unknown event type and
+	// letter it as Invalid on delivery 1. Append-only: an older event-sources never writes it and an
+	// older outbound-connectors never reads it, so a rolling upgrade needs no ordering.
+	LpwanDownlinkEvents = "lpwan-downlink-events"
+
 	// IntegrationUplinks carries an inbound integration's raw input (an IntegrationUplink event)
 	// to the decoder on the device's profile.
 	//
@@ -684,6 +694,12 @@ const maxDeliveriesMaxBytesCap = 8 << 20
 // integrationUplinksMaxBytesCap is the ceiling of the integration-uplinks stream: small and fixed,
 // safe only because its reader is a backpressure reader (see its declaration).
 const integrationUplinksMaxBytesCap = 32 << 20
+
+// lpwanDownlinkEventsMaxBytesCap is the ceiling of the lpwan-downlink-events stream. A report is a few
+// hundred bytes and its volume follows the commands sent to LoRaWAN devices, so 8 MiB holds tens of
+// thousands. It is small and fixed because every install creates the stream whether or not anything
+// reads it, and an uncapped Cold stream reserves 128 MiB, which moves the published sizing table.
+const lpwanDownlinkEventsMaxBytesCap = 8 << 20
 
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
 //
@@ -997,6 +1013,20 @@ var All = []Stream{
 		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
+
+	// A network server's report about a downlink it was asked to send, written by event-sources
+	// once the report's sender is authenticated and its device resolved under that integration.
+	// outbound-connectors reads it on a durable only a build with the acknowledgement feed
+	// creates, matches the report to the downlink's pending record by the network server's queue
+	// item id, and answers the command.
+	//
+	// Cold: its volume is the rate of downlinks (a txack per downlink, an ack per CONFIRMED one),
+	// which follows commands sent and not telemetry. A report lost here is repaired by the
+	// pending record's own deadline, which answers the command as unanswered, so the stream is
+	// Transient. With the adapter off nothing reads it and the broker's age limit trims it.
+	// Window: event-sources publishes it with no Nats-Msg-Id; the consumer is idempotent.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: LpwanDownlinkEvents, Durability: durability.Transient, DurabilityWhy: "a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Cold, MaxBytesCap: lpwanDownlinkEventsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "network-server downlink reports — scale with commands sent"},
 
 	// Emitted post-commit on profile publish and rollback, carrying the ENABLED
 	// rules of the now-active version, keyed on profile-version token, and the

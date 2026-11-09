@@ -107,6 +107,14 @@ type ResponseWriter interface {
 // per-publish ceiling.
 func PublishResponse(w ResponseWriter, tenant, deviceToken string, env ResponseEnvelope,
 	attempts int, backoff time.Duration) error {
+	return PublishResponseContext(context.Background(), w, tenant, deviceToken, env, attempts, backoff)
+}
+
+// PublishResponseContext is PublishResponse bounded by ctx: no attempt starts once ctx is done, and
+// ctx rides the writer, so a settler that holds a lease while it answers can promise it will have
+// stopped before the lease runs out.
+func PublishResponseContext(ctx context.Context, w ResponseWriter, tenant, deviceToken string, env ResponseEnvelope,
+	attempts int, backoff time.Duration) error {
 	if attempts < 1 {
 		return fmt.Errorf("cmddownlink: publish response for command %q: attempts must be at least 1", env.CommandToken)
 	}
@@ -114,14 +122,47 @@ func PublishResponse(w ResponseWriter, tenant, deviceToken string, env ResponseE
 	if err != nil {
 		return fmt.Errorf("cmddownlink: encode response for command %q: %w", env.CommandToken, err)
 	}
-	tctx := core.WithTenant(context.Background(), tenant)
+	tctx := core.WithTenant(ctx, tenant)
 	for attempt := 0; attempt < attempts; attempt++ {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("cmddownlink: publish response for command %q: %w", env.CommandToken, cerr)
+		}
 		if err = w.WriteToDevice(tctx, deviceToken, messaging.Message{Value: data}); err == nil {
 			return nil
 		}
 		if attempt < attempts-1 {
-			time.Sleep(backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+			}
 		}
 	}
 	return fmt.Errorf("cmddownlink: publish response for command %q: %w", env.CommandToken, err)
 }
+
+// DownlinkReport is a network server's report about a downlink, as event-sources publishes it on
+// the lpwan-downlink-events subject after the sender's bearer token proved the integration and the
+// device resolved under it. outbound-connectors matches it to the pending downlink by QueueItemID,
+// scoped to the tenant (the subject) and Integration, and to the DevEUI it enqueued for.
+type DownlinkReport struct {
+	// Integration is the token of the inbound integration whose authenticated request carried the
+	// report. A pending downlink only accepts a report from the integration it was sent through.
+	Integration string `json:"integration"`
+	// Kind is "ack" (the device's confirmation, or the network server's timeout of it) or "txack"
+	// (a gateway accepted the frame for transmission).
+	Kind string `json:"kind"`
+	// DevEUI is the report's device, canonical upper-case hex.
+	DevEUI string `json:"devEui"`
+	// QueueItemID is the network server's id for the queued downlink.
+	QueueItemID string `json:"queueItemId"`
+	// Acknowledged is read for Kind "ack" only.
+	Acknowledged bool  `json:"acknowledged,omitempty"`
+	FCntDown     int64 `json:"fCntDown,omitempty"`
+}
+
+// The kinds of DownlinkReport. They match integrationcodec's, spelled out here because this
+// package is a leaf of the contract between two services.
+const (
+	DownlinkReportAck   = "ack"
+	DownlinkReportTxAck = "txack"
+)

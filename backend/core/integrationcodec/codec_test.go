@@ -60,7 +60,8 @@ func req(body []byte, event string) *Request {
 	if event != "" {
 		q.Set("event", event)
 	}
-	return &Request{Body: body, Header: http.Header{}, Query: q, ContentType: "application/json", ReceivedAt: receipt}
+	return &Request{Body: body, Header: http.Header{}, Query: q, ContentType: "application/json", ReceivedAt: receipt,
+		DownlinkReports: true}
 }
 
 // The Things Stack's example is dated 2020, so its requests are received just after.
@@ -118,9 +119,48 @@ func TestChirpStackEventsThatAreNotUplinksAreIgnored(t *testing.T) {
 		require.Empty(t, res.Uplinks, event)
 	}
 	// An event type this build has never heard of is also not an uplink.
-	res, err := Decode(chirp(false), req([]byte(`{}`), "txack"))
+	res, err := Decode(chirp(false), req([]byte(`{}`), "log"))
 	require.NoError(t, err)
 	require.True(t, res.Ignored)
+}
+
+func TestChirpStackDownlinkReports(t *testing.T) {
+	cases := []struct {
+		file, event, id string
+		acked           bool
+		fcnt            int64
+	}{
+		{"ack.json", "ack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11", true, 12},
+		// acknowledged is false by default and protobuf-JSON may omit it: the network server's timeout.
+		{"ack_timeout.json", "ack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f12", false, 13},
+		{"txack.json", "txack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f13", false, 14},
+	}
+	for _, c := range cases {
+		res, err := Decode(chirp(false), req(fixture(t, "chirpstack/"+c.file), c.event))
+		require.NoError(t, err, c.file)
+		require.False(t, res.Ignored, c.file)
+		require.Empty(t, res.Uplinks, c.file)
+		require.Equal(t, []DownlinkEvent{{Kind: c.event, Scheme: "lorawan.deveui", Identifier: "0101010101010101",
+			QueueItemID: c.id, Acknowledged: c.acked, FCntDown: c.fcnt}}, res.Downlinks, c.file)
+	}
+}
+
+func TestChirpStackDownlinkReportRefusals(t *testing.T) {
+	for name, body := range map[string]string{
+		"no queue item":       `{"deviceInfo":{"devEui":"0101010101010101"},"acknowledged":true}`,
+		"queue item not uuid": `{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"abc","acknowledged":true}`,
+		"no deveui":           `{"queueItemId":"5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11","acknowledged":true}`,
+		"not json":            `nope`,
+		"acknowledged text":   `{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11","acknowledged":"yes"}`,
+	} {
+		for _, ev := range []string{"ack", "txack"} {
+			if name == "no queue item" && ev == "txack" {
+				continue // untracked, not malformed: see TestAChirpStackTxAckWithNoQueueItemIsUntrackedNotMalformed
+			}
+			_, err := Decode(chirp(false), req([]byte(body), ev))
+			require.ErrorIs(t, err, ErrMalformed, name+" "+ev)
+		}
+	}
 }
 
 func TestChirpStackRefusals(t *testing.T) {
@@ -456,4 +496,38 @@ func TestDecodeRefusesAnyCodecsBadDedupKey(t *testing.T) {
 	}
 	_, err := Decode(chirp(false), req(nil, "up"))
 	require.NoError(t, err, "the paired positive")
+}
+
+// With the route not carrying downlink reports (the feed is off) an ack or txack is not read at all:
+// Ignored whatever the body holds, as it was before the reports existed, so a body that would be
+// refused with the feed on is not refused with it off.
+func TestChirpStackDownlinkReportsAreIgnoredWhenTheRouteDoesNotCarryThem(t *testing.T) {
+	for _, body := range [][]byte{fixture(t, "chirpstack/ack.json"), fixture(t, "chirpstack/txack.json"), []byte("not json"), []byte(`{}`)} {
+		for _, ev := range []string{"ack", "txack"} {
+			r := req(body, ev)
+			r.DownlinkReports = false
+			res, err := Decode(chirp(false), r)
+			require.NoError(t, err)
+			require.True(t, res.Ignored)
+			require.Empty(t, res.Downlinks)
+			require.False(t, res.Untracked)
+		}
+	}
+}
+
+// A txack for a downlink that carried only MAC commands has no queue item: Ignored and flagged untracked,
+// never a 400. An ack is held to the stricter rule, because a confirmed data downlink always has one.
+func TestAChirpStackTxAckWithNoQueueItemIsUntrackedNotMalformed(t *testing.T) {
+	body := []byte(`{"deviceInfo":{"devEui":"0101010101010101"},"fCntDown":3,"gatewayId":"0102030405060708"}`)
+	res, err := Decode(chirp(false), req(body, "txack"))
+	require.NoError(t, err)
+	require.True(t, res.Ignored)
+	require.True(t, res.Untracked)
+	require.Empty(t, res.Downlinks)
+
+	_, err = Decode(chirp(false), req(body, "ack"))
+	require.ErrorIs(t, err, ErrMalformed)
+	// ...and a queue item that is present but not a UUID is still malformed for a txack.
+	_, err = Decode(chirp(false), req([]byte(`{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"x"}`), "txack"))
+	require.ErrorIs(t, err, ErrMalformed)
 }

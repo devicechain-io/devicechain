@@ -298,6 +298,13 @@ func (l *LagCreditLimiter) Admit(req LagCreditRequest) LagCreditDecision {
 
 	rate := req.Scale * max(c.RatePerSecond, 0)
 	capacity := req.Scale * (float64(max(c.Burst, 0)) + max(c.RatePerSecond, 0)*credit.Seconds())
+	if req.Scale < 1 && capacity < 1 {
+		// A scaled bucket is a throttle, and a throttle still admits the occasional message: below one
+		// token it could never admit anything, which is the hard drop (a factor of 0, decided by the
+		// caller) in a throttle's clothes. governance.Limits.Shed floors the scaled burst at one for
+		// the same reason, so the existing gate and this one throttle a small-burst tenant alike.
+		capacity = 1
+	}
 	if fresh {
 		b.tokens = capacity
 	}

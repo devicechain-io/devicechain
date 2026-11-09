@@ -335,7 +335,7 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
-| `--size <size>` | 实例的规格预设：`base`（默认）或 `perf-12k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
+| `--size <size>` | 实例的规格预设：`base`（默认）、`perf-12k` 或 `perf-16k`（已实测的高吞吐形态）。记录在实例上，每次升级都会重新应用。`--values` 覆盖文件和你自行声明的 OpenTofu 变量优先于它。见[选择规格](./sizing.md)。 |
 | `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取，空中（OTA）更新管理已包含在 `default` 中；还可选 `telemetry` 或 `ingest-only`。 |
 | `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area outbound-connectors`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
@@ -836,6 +836,8 @@ dcctl sim create demo --instance my-instance --server localhost
 ```
 
 模拟器通过真实硬件相同的设备协议发送遥测及告警，见[使用模拟数据体验](../intro.md#trying-it-with-simulated-data)。
+
+所有与实例平台 API 通信的命令（`sim`、`events failed`、`dead-letters`、`attr`、`presence`、`product`、`tenant-deletion`、`test` 和 `device register`）都接受相同的选择器参数。`--server`（`-s`）指定主机；`--instance`（`-i`）指定实例：在 `sim` 中它是事件接入路径中的实例 id，在其他命令中，未给出 `--server` 时，它会使用该实例声明时的主机（以及 TLS 设置，除非给出了 `--tls`）。例如 `dcctl events failed -i my-instance -t acme ...`。
 
 ### 稍后添加功能领域 {#enable-area}
 

@@ -393,7 +393,7 @@ func TestPartialUpdateInputsDeclareTheirFieldsAsOptional(t *testing.T) {
 		},
 		"NotificationPolicyUpdateRequest": {
 			"name", "description", "throttleSeconds", "escalateAfterSeconds", "maxEscalations",
-			"enabled", "rules", "metadata", "quietHoursTimezone", "quietHoursSlots",
+			"enabled", "notifyOnClear", "rules", "metadata", "quietHoursTimezone", "quietHoursSlots",
 			"quietHoursBypassSeverity",
 		},
 	} {

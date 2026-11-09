@@ -51,6 +51,9 @@ var (
 	// Lpwan is the LoRaWAN downlink adapter: nil unless lpwanDownlink.enabled, in which case the
 	// service behaves exactly as it did before the adapter existed.
 	Lpwan *lpwan.Adapter
+	// LpwanAcks settles confirmed downlinks from the network server's reports; built and started
+	// with Lpwan.
+	LpwanAcks *lpwan.AckFeed
 	// LpwanMetrics is built ONCE in buildMetrics (nil when the adapter is off).
 	LpwanMetrics *lpwan.PromMetrics
 	// DispatchMetrics is built ONCE, in the initialize phase, and shared by every
@@ -188,7 +191,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		tenantDeleted, Configuration.MaxConcurrentSends,
 		DispatchMetrics, core.NewReadPacer(Microservice, "connector dispatch"))
 	if Configuration.LpwanDownlink.Enabled {
-		Lpwan, err = buildLpwan(nmgr, infra, tenantDeleted)
+		Lpwan, LpwanAcks, err = buildLpwan(nmgr, infra, tenantDeleted)
 		if err != nil {
 			return err
 		}
@@ -207,19 +210,19 @@ const downlinkLookback = 30 * time.Minute
 // nothing else (command:write would let it create and cancel commands for any tenant); the device
 // client holds device:read, to read a device's DevEUI alias. Neither can be widened by the other.
 func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfiguration,
-	tenantDeleted func(string) bool) (*lpwan.Adapter, error) {
+	tenantDeleted func(string) bool) (*lpwan.Adapter, *lpwan.AckFeed, error) {
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
-		return nil, fmt.Errorf("lpwanDownlink is enabled but the service secret or user-management endpoint is not configured (infrastructure.serviceAuth, infrastructure.userManagement)")
+		return nil, nil, fmt.Errorf("lpwanDownlink is enabled but the service secret or user-management endpoint is not configured (infrastructure.serviceAuth, infrastructure.userManagement)")
 	}
 	if infra.CommandDelivery.Hostname == "" || infra.CommandDelivery.Port == 0 {
-		return nil, fmt.Errorf("lpwanDownlink is enabled but the command-delivery endpoint is not configured (infrastructure.commandDelivery): it could not claim or answer a command")
+		return nil, nil, fmt.Errorf("lpwanDownlink is enabled but the command-delivery endpoint is not configured (infrastructure.commandDelivery): it could not claim or answer a command")
 	}
 	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
-		return nil, fmt.Errorf("lpwanDownlink is enabled but the device-management endpoint is not configured (infrastructure.deviceManagement): it could not read a device's DevEUI")
+		return nil, nil, fmt.Errorf("lpwanDownlink is enabled but the device-management endpoint is not configured (infrastructure.deviceManagement): it could not read a device's DevEUI")
 	}
 	guard, err := egress.FromConfig(infra.Egress)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// 🔴 A LOOKBACK, NOT THE TAIL. command-delivery starts dispatching integration commands the
 	// moment the downlink is switched on, which can be before this service's durable exists; a
@@ -231,11 +234,11 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 	reader, err := nmgr.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverLookback(downlinkLookback),
 		messaging.ReaderWithCapacity(Configuration.MaxConcurrentSends))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	responses, err := nmgr.NewWriter(streams.CommandResponses)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cdURL := fmt.Sprintf("http://%s:%d/graphql", infra.CommandDelivery.Hostname, infra.CommandDelivery.Port)
 	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
@@ -245,7 +248,17 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 		[]string{string(auth.DeviceRead)})
 	log.Info().Str("commandDelivery", cdURL).
 		Msg("LoRaWAN downlink is enabled: consuming device-commands for devices behind inbound integrations.")
-	return lpwan.New(reader, responses, cmddownlink.NewClaimer(claimClient, cdURL),
+	pending := lpwan.NewDBPending(RdbManager)
+	reports, err := nmgr.NewReader(streams.LpwanDownlinkEvents, messaging.ReaderWithCapacity(Configuration.MaxConcurrentSends))
+	if err != nil {
+		return nil, nil, err
+	}
+	acks := lpwan.NewAckFeed(reports, responses, pending, LpwanMetrics, lpwan.AckFeedOptions{
+		Workers:       Configuration.MaxConcurrentSends,
+		TenantDeleted: tenantDeleted,
+		ReadPacer:     core.NewReadPacer(Microservice, "lpwan downlink reports"),
+	})
+	adapter := lpwan.New(reader, responses, cmddownlink.NewClaimer(claimClient, cdURL),
 		lpwan.NewStoreLinks(Api, processor.NewSecretResolver(SecretStore)),
 		lpwan.NewServiceDevices(deviceClient, dmURL), lpwan.NewChirpStack(guard), LpwanMetrics,
 		lpwan.Options{
@@ -254,7 +267,9 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 			TenantDeleted: tenantDeleted,
 			ReadPacer:     core.NewReadPacer(Microservice, "device commands"),
 			SendTimeout:   time.Duration(Configuration.SendTimeoutMs) * time.Millisecond,
-		}), nil
+			Pending:       pending,
+		})
+	return adapter, acks, nil
 }
 
 // newExecutor builds the dispatch executor over the instance's tenant-egress boundary. The
@@ -435,6 +450,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if Lpwan != nil {
 		Lpwan.Start()
 	}
+	if LpwanAcks != nil {
+		LpwanAcks.Start()
+	}
 	return nil
 }
 
@@ -442,6 +460,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 func beforeMicroserviceStopped(ctx context.Context) error {
 	// Stop the consumers first (before their readers are torn down with the NATS manager), symmetric
 	// with start, so no worker sends on a torn-down reader/writer.
+	if LpwanAcks != nil {
+		LpwanAcks.Stop()
+	}
 	if Lpwan != nil {
 		Lpwan.Stop()
 	}

@@ -43,6 +43,13 @@ func gaugeValue(t *testing.T, reg *prometheus.Registry) float64 {
 }
 
 func TestEnforceRefusesToStartWhenResourceUrlIsNotRegistered(t *testing.T) {
+	// "" is the release default, enforce from v1.3: an unset enforcement refuses too.
+	for _, mode := range []string{"enforce", ""} {
+		reg := prometheus.NewRegistry()
+		err := checkAudienceRegistration(regMCP, cfgWith(mode, regOther), reg, "mcp")
+		require.Error(t, err, "mode=%q", mode)
+		require.Contains(t, err.Error(), "enforcement to observe", "names the opt-out")
+	}
 	for name, mcp := range map[string][]string{
 		"empty list":      nil,
 		"another value":   {regOther},
@@ -63,7 +70,7 @@ func TestEnforceRefusesToStartWhenResourceUrlIsNotRegistered(t *testing.T) {
 }
 
 func TestObserveWarnsButStartsWhenResourceUrlIsNotRegistered(t *testing.T) {
-	for _, mode := range []string{"observe", ""} { // "" is the v1.2 default
+	for _, mode := range []string{"observe"} { // only an explicit observe: "" is enforce from v1.3
 		t.Run("mode="+mode, func(t *testing.T) {
 			logs := logSink.Capture(t)
 			reg := prometheus.NewRegistry()

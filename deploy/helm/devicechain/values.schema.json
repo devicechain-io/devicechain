@@ -175,7 +175,7 @@
                         "observe",
                         "enforce"
                       ],
-                      "description": "observe counts and logs a request or token whose resource is not allowed and lets it through; enforce refuses it. Unset means the release default, which is observe in this release. Governs the authorization-server resource check and the plane audience check together."
+                      "description": "observe counts and logs a request or token whose resource is not allowed and lets it through; enforce refuses it. Unset means the release default, which is enforce from v1.3; set observe to count and log without refusing. Governs the authorization-server resource check and the plane audience check together."
                     },
                     "unscopedClientCredentials": {
                       "type": "string",
@@ -297,7 +297,7 @@
             "legacy",
             "lagCredit"
           ],
-          "description": "How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling; it is not available yet, and event-sources refuses to start with it rather than falling back to legacy. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key."
+          "description": "How event-sources meters a message against its tenant's ingest ceiling. legacy is the gate as it has always run. lagCredit meters fresh traffic at pod time with a measured reader-lag credit, so a short platform stall cannot shed a tenant that stayed within its ceiling, measured per replica from the broker's own delivery metadata. Rendered as the EVENT_SOURCES_INGEST_METERING environment variable, not as an instance configuration key."
         }
       },
       "description": "Settings that belong to the event-sources area alone."

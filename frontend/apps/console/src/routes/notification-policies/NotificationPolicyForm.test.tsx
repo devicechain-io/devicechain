@@ -35,6 +35,7 @@ function stored(over: Partial<NotificationPolicyRecord> = {}): NotificationPolic
     name: 'Night',
     description: null,
     enabled: true,
+    notifyOnClear: false,
     throttleSeconds: null,
     escalateAfterSeconds: null,
     maxEscalations: null,

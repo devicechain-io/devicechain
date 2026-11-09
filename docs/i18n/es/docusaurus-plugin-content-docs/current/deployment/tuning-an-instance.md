@@ -131,7 +131,9 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
   defecto) en la configuración de `event-management`, sin pérdida, pero no hace nada con la semana
   más reciente: dimensione el volumen para al menos esa cantidad de datos sin comprimir. La cifra
   de 600 bytes es la no comprimida, y la razón de compresión depende de sus datos, así que mídala
-  antes de contar con ella.
+  antes de contar con ella. Contando todas las tablas en las que se escribe un evento (eventos y
+  mediciones, con índices), una medición posterior en GKE dio 756 bytes por evento almacenado, sin
+  comprimir.
 - **Filas por lectura.** Cada [métrica calculada](../user-guide/calculated-metrics.md) que se aplica
   a un perfil almacena una fila más por lectura. Cada fórmula añade una fila por lectura, así que un perfil con N métricas calculadas almacena
   (1 + N) filas por lectura, de modo que N fórmulas multiplican el volumen hasta por 1 + N. El techo del nivel `calculatedMetricsPerProfile` es 0 (desactivado) por defecto y como máximo 32; es un techo, y el coste depende del uso.

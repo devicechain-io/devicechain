@@ -25,8 +25,7 @@ const (
 	// bucket at now or to the backlog bucket at its append stamp. The default.
 	IngestMeteringLegacy IngestMetering = "legacy"
 	// IngestMeteringLagCredit meters fresh traffic at pod time in a bucket whose capacity carries a
-	// platform-measured lag credit. The library (core.LagCreditMeter) exists; the gateway does not
-	// run it yet, so selecting it is refused at startup.
+	// platform-measured lag credit, so a compliant tenant is not shed for a platform stall.
 	IngestMeteringLagCredit IngestMetering = "lagCredit"
 )
 
@@ -44,17 +43,7 @@ func parseIngestMetering(value string) (IngestMetering, error) {
 	}
 }
 
-// resolveIngestMetering returns the mode this build can run. lagCredit is a valid choice that this
-// build cannot execute yet, and it fails loudly rather than falling back to legacy: an operator who
-// asked for the lag-credited gate must not be told, by silence, that they have it.
+// resolveIngestMetering returns the mode the environment asks for.
 func resolveIngestMetering(getenv func(string) string) (IngestMetering, error) {
-	mode, err := parseIngestMetering(getenv(IngestMeteringEnv))
-	if err != nil {
-		return "", err
-	}
-	if mode == IngestMeteringLagCredit {
-		return "", fmt.Errorf("%s=%s is recognised but not available in this build: the gateway does not run the "+
-			"lag-credited gate yet. Unset it or set it to %q", IngestMeteringEnv, mode, IngestMeteringLegacy)
-	}
-	return mode, nil
+	return parseIngestMetering(getenv(IngestMeteringEnv))
 }

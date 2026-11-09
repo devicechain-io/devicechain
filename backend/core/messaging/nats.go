@@ -2725,7 +2725,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				continue // its AckWait has run out: the broker is redelivering it
 			}
 		}
-		seq, deliv, appended := msgMeta(nm)
+		seq, deliv, appended, pending := msgMeta(nm)
 		// A direct copy of a device QoS 1 publish the fail-closed store holds: the store copy is
 		// the one forwarded, so this one is acked and skipped.
 		if r.carried != "" && r.nmgr.mqttView().carriedByStore(r.carried, nm.Header.Get(mqttGatewayHeader), seq) {
@@ -2753,6 +2753,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		}
 		msg.StreamSeq = seq
 		msg.AppendTime = appended
+		msg.NumPending = pending
 		msg.slot = sl
 		msg.origin = Origin{Suffix: r.suffix, Stream: r.stream, Consumer: r.durable, Seq: seq}
 		return msg, nil
@@ -3013,9 +3014,9 @@ func natsHeaders(nm *nats.Msg) map[string]string {
 }
 
 // msgMeta returns the JetStream stream sequence, delivery-attempt count and
-// append time of a consumed message in a single metadata parse (the reply subject
-// is parsed once, not once per field). All three are zero when metadata is
-// unavailable — a non-JetStream message — which callers treat as "no durable
+// append time of a consumed message, and how many messages the broker still had queued for the consumer
+// when it delivered this one, in a single metadata parse (the reply subject is parsed once, not once per
+// field). All four are zero when metadata is unavailable — a non-JetStream message — which callers treat as "no durable
 // position / first delivery / no send time".
 //
 // The stream sequence is the durable, gapless position a checkpointing consumer
@@ -3027,12 +3028,12 @@ func natsHeaders(nm *nats.Msg) map[string]string {
 // to the stream, which for the ingest capture stream is when the device published
 // it — so it is the tenant's SEND time, and the clock a drain-admission gate must
 // meter against rather than the time we got round to reading it (ADR-030 I4).
-func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int, appendTime time.Time) {
+func msgMeta(nm *nats.Msg) (streamSeq uint64, numDelivered int, appendTime time.Time, numPending uint64) {
 	md, err := nm.Metadata()
 	if err != nil {
-		return 0, 0, time.Time{}
+		return 0, 0, time.Time{}, 0
 	}
-	return md.Sequence.Stream, int(md.NumDelivered), md.Timestamp
+	return md.Sequence.Stream, int(md.NumDelivered), md.Timestamp, md.NumPending
 }
 
 // HandleResponse logs the result of a read operation.

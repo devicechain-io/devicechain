@@ -82,6 +82,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 	tenants = unionSorted(tenants, holding)
 	var visited, failed int
 	var lastErr error
+	var pickups []pendingPickup
 	for _, tenant := range tenants {
 		select {
 		case <-ctx.Done():
@@ -108,7 +109,15 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 			releaseFailed = true
 			lastErr = err
 		}
+		// Clears that overtook their page, or failed to send, are not carried by any message
+		// still to be redelivered; this sends them. It runs AFTER the escalation below, so a
+		// channel that is down cannot hold the pages of every tenant behind it, and under one
+		// bounded budget of its own.
+		pickup := func() {
+			pickups = append(pickups, pendingPickup{tenant: tenant, ctx: tctx, policies: policies})
+		}
 		if !anyEscalationEnabled(policies) {
+			pickup()
 			if releaseFailed {
 				failed++
 			}
@@ -140,11 +149,34 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 				lastErr = err
 			}
 		}
+		pickup()
 		if escalationFailed {
 			failed++
 		}
 	}
+	// The pickup of clears runs only after EVERY tenant's escalations, each tenant under its own
+	// bounded budget, so a stalled destination in one tenant delays no tenant's re-pages.
+	for _, pk := range pickups {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := s.Notifier.AnnouncePendingClears(pk.ctx, pk.policies, s.Notifier.clock()); err != nil {
+			log.Warn().Err(err).Str("tenant", pk.tenant).
+				Msg("Escalation scheduler: announcing pending clears failed; will retry next tick")
+			failed++
+			lastErr = err
+		}
+	}
 	return core.PassResult(visited, failed, lastErr)
+}
+
+// pendingPickup is one tenant's clear pickup, deferred to the end of the pass.
+type pendingPickup struct {
+	tenant   string
+	ctx      context.Context
+	policies []*model.NotificationPolicy
 }
 
 // anyEscalationEnabled reports whether any policy has escalation configured, so the

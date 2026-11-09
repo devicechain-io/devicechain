@@ -543,12 +543,12 @@ instance:
       # loopback origin, so a plain-http ingress on a real host has no area audiences) and
       # mcpResources (mcp's resolved resourceUrl, when mcp is deployed) from the ingress and the
       # enabled areas, and refuses to render if either is set here. The operator's keys:
-      #   enforcement: observe | enforce            (unset = the release default, observe)
+      #   enforcement: observe | enforce            (unset = the release default, enforce)
       #   unscopedClientCredentials: observe          (enforce is refused until the next major release)
       #   externalResources: [https://api.example.com]   (resource servers outside the platform)
       # Under instance.existingSecret the chart does not write the document, so the supplier
       # writes the keys they need, and dcctl checks that mcpResources lists mcp's resourceUrl (a warning
-      # while enforcement is observe or unset, a refusal under enforce).
+      # while enforcement is observe, a refusal under enforce or unset).
       serviceAuth:
         # Shared secret backing the synchronous cross-service call primitive
         # (ADR-044 amendment): a caller presents it to user-management's mint
@@ -606,6 +606,13 @@ instance:
         # though it were not.
         allowedDestinations: []
         # - "10.42.0.17/32"   # the in-cluster SMTP relay
+        # LOCAL DEVELOPMENT ONLY. Written by `dcctl bootstrap|upgrade --dev-allow-egress` for an
+        # instance on a local cluster; do not set it for a real deployment (use allowedDestinations
+        # after reading the notes above). Same shape as allowedDestinations (masked CIDRs), but it can
+        # never admit the cloud metadata addresses, loopback, link-local, multicast or the unspecified
+        # address, and every service that reads it logs a warning at startup. A prefix overlapping
+        # one of those fails the service at startup.
+        devAllowedDestinations: []
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
         # Postgres (branding logos and firmware/OTA update artifacts; exports later, ADR-058).
@@ -1062,8 +1069,8 @@ eventSources:
   #   legacy     the gate as it has always run (the default).
   #   lagCredit  meter fresh traffic at pod time in a bucket whose capacity carries a measured
   #              reader-lag credit, so a short platform stall cannot shed a tenant that stayed
-  #              within its ceiling. NOT AVAILABLE YET: event-sources refuses to start with it,
-  #              rather than falling back to legacy.
+  #              within its ceiling. Measured per replica from the broker's own delivery
+  #              metadata; off by default until it has been through a production-scale round.
   # It is rendered into the event-sources pods as the EVENT_SOURCES_INGEST_METERING environment
   # variable and is deliberately not a key of the instance configuration, so a pod from an earlier
   # release that restarts mid-upgrade never sees it.

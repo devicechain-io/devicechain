@@ -132,7 +132,7 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
 3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，并把它的 DevEUI 设为 `lorawan.deveui` 别名。
 
-只读取上行。ChirpStack 会用不同的 `event` 值把其他事件（join、status、确认）发送到同一个 URL，这些事件会返回 `204` 并被忽略。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
+上行会被存储为读数。ChirpStack 还会把 `ack` 和 `txack` 事件发送到同一个 URL：启用了 [LoRaWAN 下行](#lorawan-downlink)的安装会读取它们来结束[确认下行](#lorawan-confirmed)；未启用时它们与其他事件（join、status）一样返回 `204` 并被不加读取地忽略，无论正文内容如何。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -295,13 +295,13 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | --- | --- |
 | `fPort` | LoRaWAN 应用端口，1 到 223。必填。 |
 | `hex` 或 `base64` | 应用负载，十六进制或带填充的标准 base64。二者给出且仅给出一个。最多 242 字节。 |
-| `confirmed` | 暂不可用。设置它的命令会被拒绝，而不会以未确认方式发出。 |
+| `confirmed` | 可选，默认 `false`。`true` 要求设备应答该帧，并让命令一直等到应答为止（见[确认下行](#lorawan-confirmed)）。 |
 
 任何其他参数名都会被拒绝。
 
 **3. 发送。** 设备必须带有 `lorawan.deveui` [别名](#aliases)：DevEUI 取自设备，绝不取自命令。命令经由设备**最近一次上报所用**的集成发出。
 
-**结果的含义。** `SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。其他结果：
+**结果的含义。** 对未确认的下行，`SUCCEEDED` 表示网络服务器已**排入**该下行（结果带有 `{"stage":"queued","queueItemId":...}`）。这并不表示设备已收到：A 类设备只在下一次上行之后才会收听下行，而未确认的下行不会得到应答。对[确认下行](#lorawan-confirmed)，`SUCCEEDED` 表示设备已应答。其他结果：
 
 | 发生了什么 | 结果 |
 | --- | --- |
@@ -310,6 +310,27 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | 请求已发出，但服务器出错或没有应答（5xx、超时） | 结果**未知**：下行可能已入队，再次发送可能会发出两次。 |
 
 按结果查看 `lpwan_downlinks_total` 指标，可以看到命令在哪一步停下。
+
+### 确认下行 {#lorawan-confirmed}
+
+在命令中设置 `"confirmed": true`，网络服务器会要求设备应答该帧。下行排入队列时命令**不会**得到回答：它保持 `SENT`，直到网络服务器报告结果，然后依据这些证据结束：
+
+| 网络服务器报告 | 命令 |
+| --- | --- |
+| 设备应答了该帧（`ack`，已应答） | `SUCCEEDED`。结果带有 `{"stage":"acknowledged",...}`。 |
+| 网络服务器不再等待应答（`ack`，未应答） | `TIMEOUT`，结果未知。设备可能已收到该帧而应答丢失，再次发送可能会动作两次。 |
+| 网关接受了该帧用于发射（`txack`） | 记录下来，命令继续等待。网关发出帧不等于设备收到。 |
+| 截止时间前没有任何报告 | `TIMEOUT`，结果未知。截止时间是命令自身的过期时间；没有过期时间时为 24 小时。 |
+
+只有应用的 HTTP 集成被设置为发送 `ack` 事件时，ChirpStack 才会报告应答，而且它必须是你在 DeviceChain 中登记的那个集成（上文的 URL 和令牌）：报告通过集成自己的令牌读取，因此只能结束经该集成发出的、发往登记在它名下设备的命令。如果希望记录发射情况，也请启用 `txack` 事件；它是可选的。
+
+与任何等待中的下行都不匹配的报告绝不会靠猜测去匹配。它会被丢弃、写入日志，并计入 `lpwan_ack_reports_total`（没有等待该队列项时为 `unmatched`，指向另一个集成或设备时为 `mismatch`）；这两项都值得告警。每条下行（无论是否确认）都会产生 `txack`，所以针对未在等待的下行的 `txack` 计为 `tx_untracked`，属于正常情况。滚动升级期间，旧版本的 Pod 仍会把确认命令按未投递拒绝，可以放心重发。
+
+按结果查看 `lpwan_ack_reports_total`：`acknowledged`、`timed_out`、`transmitted` 和 `deadline` 即上述结果。偶尔出现一次 `unmatched` 并非故障：如果报告已被回答、但消息在 broker 上的确认丢失，该报告会再次到达并发现没有任何等待项（刚刚结束它的副本会把它计为 `redelivered`）。请对持续出现的 `unmatched` 或任何 `mismatch` 告警。
+
+只携带 MAC 命令的下行的 `txack` 没有队列项，会返回 `204` 并被计数（`integration_downlink_reports_total`，结果 `untracked`）；没有队列项的 `ack` 会被以 `400` 拒绝。报告有自己的限额，与遥测分开：每个租户突发 100 条、持续每秒 20 条。超出后请求返回 `202` 并被计数（结果 `rate_limited`），它本可结束的命令在截止时间结束，因此一个租户的洪泛不会挤掉另一个租户的应答。
+
+**升级。** 确认下行需要出站连接器和事件源两者都是新版本。出站连接器已是新版本而事件源仍是旧版本期间，旧 Pod 会对网络服务器的报告返回 `204` 并丢弃，因此在这一窗口内发出的确认下行会在截止时间以 `TIMEOUT`（结果未知）结束。Chart 在同一次升级中滚动二者；要避开这一窗口，请在其持续期间暂停确认命令。
 
 **在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
 
@@ -329,7 +350,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 第 1 版不包含 {#not-supported}
 
-- **面向 The Things Stack 与通用发送方的下行、确认下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)只覆盖 ChirpStack v4 和原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
+- **面向 The Things Stack 与通用发送方的下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)只覆盖 ChirpStack v4 和原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。

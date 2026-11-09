@@ -343,8 +343,8 @@ func checkAuthoredTransforms(ch *chart.Chart, vals map[string]interface{}, manif
 // see: it writes infrastructure.tokenAudience.mcpResources from mcp's resolved resourceUrl.
 // A supplier's document carries whatever they wrote, and a document with no entry for a
 // deployed mcp loads without complaint. The cost is that every call mcp forwards is counted
-// as a would-reject (and warned about) in observe mode, and refused in enforce mode, while
-// mcp itself reports healthy. mcp is meant to check the same thing at its own startup (a separate change);
+// as a would-reject (and warned about) in observe mode, and refused in enforce mode (the
+// default). mcp is meant to check the same thing at its own startup (a separate change);
 // this reports it at deploy time, before any pod starts.
 //
 // The value compared is the one mcp is HANDED, read out of the rendered per-service
@@ -360,22 +360,26 @@ func checkAuthoredTokenAudience(manifest string, areas []string, cfg *config.Ins
 	if slices.Contains(cfg.Infrastructure.TokenAudience.McpResources, resource) {
 		return nil
 	}
-	// A v1.1-era document cannot carry the block (v1.1 refuses the key), and an absent
-	// enforcement means observe, where the omission only counts and logs. Refusing an upgrade
-	// for that would be a new refusal in a minor release, so it is a warning that prints the
-	// block to add. Enforcing without the resource breaks MCP, so that stays a refusal.
+	// Enforcing without the resource breaks MCP, so it is a refusal, and enforce is what an
+	// absent enforcement means from v1.3: a document that never wrote the key is refused here,
+	// at deploy time, rather than rolling an mcp that refuses to start and planes that refuse
+	// every call it forwards. An explicit observe keeps the v1.2 warning that prints the block
+	// to add.
 	if cfg.Infrastructure.TokenAudience.EffectiveEnforcement() == config.TokenAudienceEnforce {
 		return fmt.Errorf("the supplied instance configuration enforces token audiences "+
-			"(infrastructure.tokenAudience.enforcement: enforce) but does not list mcp's resource %q in "+
+			"(infrastructure.tokenAudience.enforcement is enforce, or unset, which defaults to enforce) "+
+			"but does not list mcp's resource %q in "+
 			"infrastructure.tokenAudience.mcpResources, and this deploy runs mcp. Every call mcp "+
-			"forwards would be refused while mcp itself reports healthy. Add it to the list, as the "+
-			"chart does when it authors the document", resource)
+			"forwards would be refused, and mcp refuses to start. Add it to the list, as the "+
+			"chart does when it authors the document (its scheme and host must be lowercase, so "+
+			"lowercase mcp's resourceUrl first if it has an uppercase letter), or set "+
+			"infrastructure.tokenAudience.enforcement to observe", resource)
 	}
 	fmt.Fprintln(authoredWarnOut, color.YellowString("  Warning: the supplied instance configuration does not list mcp's "+
 		"resource in infrastructure.tokenAudience.mcpResources, so every call mcp forwards is counted "+
 		"as carrying an unregistered token audience and logged. Add this to the document:\n"+
 		"    \"infrastructure\": {\"tokenAudience\": {\"mcpResources\": [%q]}}\n"+
-		"  It is only counted today; once enforcement is on, mcp calls would be refused.", resource))
+		"  It is only counted while enforcement is observe; under enforce, the default, mcp calls would be refused.", resource))
 	return nil
 }
 

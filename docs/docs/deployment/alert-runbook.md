@@ -713,6 +713,22 @@ An external MQTT source is not being read by exactly one pod
 
 **What it means and what to do.** External MQTT source ‹source› has been read by ‹value› event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker.
 
+### IngestAppendSkewLarge {#ingestappendskewlarge}
+
+**Severity:** `warning` · **Rule group:** `devicechain.event-sources`
+
+The message broker's clock is more than 2 seconds from event-sources'
+
+**What it means and what to do.** For at least 10 minutes, the lag-credited ingest gate (eventSources.ingestMetering: lagCredit) has measured the message broker's append stamps on stream ‹stream› as more than 2 seconds away from the clock of an event-sources pod. The gate corrects a message's age for that offset only up to 2 seconds, so beyond it a tenant is credited too little after a stall (the broker's clock ahead) or too much (behind). devicechain_eventsources_append_skew_seconds shows the offset each pod measured, positive when the broker's clock is behind. Check time synchronisation (NTP) on the nodes running the message broker and event-sources; the alert clears once the clocks agree again.
+
+### IngestShedBeyondLagCredit {#ingestshedbeyondlagcredit}
+
+**Severity:** `warning` · **Rule group:** `devicechain.event-sources`
+
+Messages were shed at the ingest ceiling while the platform's readers were behind
+
+**What it means and what to do.** In the last 10 minutes, ‹value› messages read from stream ‹stream› on pod ‹pod› were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), and in the same 10 minutes that pod measured its readers of the stream as more than a second behind. The likely cause is a tenant sending above its ceiling while the readers were behind: compare devicechain_eventsources_total_msg_rate_limited, raise event-sources to debug logging to name the tenant, and check its ceiling (ingestReadingsPerSecond, ingestBurst) against what its devices send. The other cause is a platform stall longer than the credit covers (the time the tenant's burst covers, never more than 5 seconds): check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was). If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well.
+
 ### IntegrationAuthFailuresSustained {#integrationauthfailuressustained}
 
 **Severity:** `warning` · **Rule group:** `devicechain.event-sources`
@@ -1151,15 +1167,15 @@ Nothing is reporting whether tenant deletions are progressing
 
 A client is asking for tokens bound to a resource this instance does not serve
 
-**What it means and what to do.** For at least an hour, ‹job› has been receiving token or authorization requests that name a resource this instance does not serve. They are being served today and counted as would_reject. The next minor release refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the upgrade notes for the release that introduced the check.
+**What it means and what to do.** For at least an hour, ‹job› has been receiving token or authorization requests that name a resource this instance does not serve. They are being served only because this instance sets tokenAudience.enforcement to observe, and are counted as would_reject. Enforce mode, the default, refuses them (invalid_target, or invalid_grant on a refresh). Find the client from the rate-limited 'OAuth resource' warning in the user-management log, which names its client_id and the grant, and have it leave the resource out or use one this instance serves. See the v1.3 upgrade notes: https://docs.devicechain.io/deployment/releases-and-upgrades#v130-token-audience
 
 ### TokenAudienceWouldReject {#tokenaudiencewouldreject}
 
 **Severity:** `info` · **Rule group:** `devicechain.token-audience`
 
-A client is sending tokens that the next minor release will refuse
+A client is sending tokens that enforce mode would refuse
 
-**What it means and what to do.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served today and counted as would_reject. The next minor release refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls. See the upgrade notes for the release that introduced the check.
+**What it means and what to do.** For at least an hour, ‹job› has been receiving requests whose access token is bound to a resource other than the one this service serves (and is not a registered MCP resource). They are being served only because this instance sets tokenAudience.enforcement to observe, and are counted as would_reject. Enforce mode, the default, refuses them. Find the client from the rate-limited 'token audience' warning in the service log, which names its client_id and the audience class, and have it request a token for the resource it actually calls before the observe setting is removed. See the v1.3 upgrade notes: https://docs.devicechain.io/deployment/releases-and-upgrades#v130-token-audience
 
 ## `devicechain.update-management`
 

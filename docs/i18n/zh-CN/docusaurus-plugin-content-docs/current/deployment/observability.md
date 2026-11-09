@@ -376,6 +376,8 @@ kubectl -n dci-my-instance patch pvc <claim> -p '{"spec":{"resources":{"requests
 
 最近十分钟内，MQTT 来源只要在租户的摄取上限处丢弃了任何消息（`devicechain_eventsources_total_msg_shed_acknowledged` 上升），`MqttIngestShedAfterAcknowledgement`（warning）立即触发。它没有等待期，因为平台停顿造成的丢弃只持续数秒。这些消息在丢弃之前，代理已向设备确认（PUBACK），设备不会重发：它们是丢失，而不是延后。原因要么是租户发送量超过其上限，要么是平台短暂停顿后积压的消息一起到达。该计数器带有来源而非租户：请按丢弃等级对比 `total_msg_rate_limited` 和 `total_msg_reading_limited`，把日志级别调到 `debug` 以查看租户，核对其上限与设备实际发送量，并在消息代理日志中查找耗时过长的内部订阅。HTTP 的丢弃会以 `429` 应答并被重试，因此不计入此处。
 
+启用 `eventSources.ingestMetering: lagCredit` 后，`devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}` 会给出每条消息被丢弃的原因。当 `ingest_lag_credit_seconds` 偏高时，`route="fresh"` 上出现 `cause="ceiling"` 的丢弃，说明有租户未超出上限，却在一次大于额度的停顿之后被丢弃，请上报。`cause="contention"` 和 `cause="hard_drop"` 是过载档位按配置在起作用，`route="backlog"` 上的丢弃则是租户在被排空的积压中超出了上限。`reader_lag_seconds` 和 `append_skew_seconds` 显示各副本的测量值；偏差停在任一方向的 2 秒（`append_skew_clamped_total` 上升）意味着消息代理的时钟与 Pod 时钟相差超出了闸门可修正的范围。告警 [`IngestShedBeyondLagCredit`](./alert-runbook.md#ingestshedbeyondlagcredit) 和 [`IngestAppendSkewLarge`](./alert-runbook.md#ingestappendskewlarge) 在此模式下监视这些序列；在 `legacy` 模式下这些序列为空，两个告警都不会触发。
+
 ## 超过确认窗口的消息 {#held-past-ack-wait}
 
 代理为每条交付消息提供固定确认窗口。窗口关闭仍未确认，会重新交付，服务按新消息处理。告警通知和对外连接器的工作是向平台外慢速发送，因此可能重复通知或调用 webhook。两者仅在有空闲 worker 时读取相应数量消息，避免排队消耗窗口；每次发送也会在窗口结束前留有余量地截止。下列告警报告仍超时的情况。
@@ -912,26 +914,28 @@ chart 覆盖链条各环节：
 
 ## 令牌受众检查 {#token-audience-checks}
 
-每个 API 都会检查访问令牌绑定到哪个资源，授权服务器则检查客户端申请哪个资源。规则见[令牌受众](../concepts/security-model.md#token-audience)。检查只做观察时（这是 `v1.2` 的默认），下面的序列和告警就是你找出 `v1.3` 会拒绝的客户端的方法。当 chart 的告警处于开启状态（`metrics.alerts`，默认开启）时，它们就存在。
+每个 API 都会检查访问令牌绑定到哪个资源，授权服务器则检查客户端申请哪个资源。规则见[令牌受众](../concepts/security-model.md#token-audience)。从 `v1.3` 起，两项检查默认强制执行，会拒绝这样的令牌或请求；下面的序列把每次拒绝计为 `rejected`。在设置了 `enforcement: observe`（即退路，也是 `v1.2` 的默认）的实例上，什么都不会被拒绝，下面的序列和告警就是你在移除退路之前找出 `enforce` 会拒绝的客户端的方法。当 chart 的告警处于开启状态（`metrics.alerts`，默认开启）时，它们就存在。
 
 | 序列 | 标签 | 如何读取 |
 | --- | --- | --- |
 | `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`、`resource`、`verdict` | 授权服务器每做出一次资源判定计一次。`grant` 是 `authorization_code`、`refresh_token` 或 `client_credentials`。`resource` 是所申请内容的类别：`none`、`area`、`mcp`、`external`、`unlisted`、`malformed` 或 `multiple`。`resource` 与其授权码或刷新令牌所绑定的资源不同的请求也会计入这里。 |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | 指定了资源却未指定 scope 的 `client_credentials` 请求，这种请求已被弃用。判定始终是 `would_reject`，请求照常处理。 |
-| `devicechain_mcp_token_audience_registered` | 无 | MCP 服务器的 `resourceUrl` 在 `infrastructure.tokenAudience.mcpResources` 中时为 1，不在时为 0。为 0 表示 MCP 服务器转发的调用被计为 `would_reject`，并且在启用强制执行后 `mcp` 会拒绝启动。 |
+| `devicechain_mcp_token_audience_registered` | 无 | MCP 服务器的 `resourceUrl` 在 `infrastructure.tokenAudience.mcpResources` 中时为 1，不在时为 0。为 0 表示在 `observe` 下 MCP 服务器转发的调用被计为 `would_reject`。在默认的 `enforce` 下，`mcp` 会拒绝启动。 |
 
-健康的实例只有 `accepted` 判定。前两行的 `would_reject` 序列有变化，说明某个客户端发送的令牌或请求会被 `v1.3` 拒绝；第三行有变化，则说明有请求会被下一个主版本拒绝。读取这些数字时请记住两点：
+健康的实例只有 `accepted` 判定。前两行的 `rejected` 序列有变化，说明某个客户端正在被拒绝；那里的 `would_reject` 序列（只在 `observe` 下出现）有变化，说明某个客户端发送的令牌或请求会被 `enforce` 拒绝；第三行有变化，则说明有请求会被下一个主版本拒绝。读取这些数字时请记住两点：
 
 - **它们统计的是请求，不是客户端。** 一个持续发送同一令牌的客户端，每次调用都会让某个序列增加，而且入口是在 GraphQL 授权运行之前计数的。序列不为零回答的是“有没有客户端这样做”，日志回答的是“是哪一个”。伪造或过期的令牌永远不会让入口计数器增加，因为检查是在验证签名之后进行的。授权服务器的计数器在客户端通过认证之后才增加，只有一个例外：授权端点在任何人登录之前就对请求计数，所用的值都是公开的，所以任何能访问该页面的人都可以让它的序列增加。
-- **`rejected` 只在强制执行时出现。** 使用 `observe` 时它保持为零。
+- **`rejected` 只在 `enforce` 下出现，`would_reject` 只在 `observe` 下出现。** 在另一种模式下它们各自保持为零。
 
-有两个 `info` 级告警监视 `would_reject` 判定。两者都在序列最近一小时的速率持续一小时大于零之后触发，并在最后一个违规请求之后大约一小时自行解除。它们都不带租户标签；kube-prometheus-stack 默认的 Alertmanager 配置会抑制 `info` 级告警，所以如果想收到它们，请显式配置路由。
+**升级到 `v1.3` 之前，** 请在 `v1.2` 实例上检查前两个序列的 `would_reject` 判定，或下面的两个告警。如果它们在所有区域都为零，默认值的改变对你的客户端没有任何影响。如果它们有变化，请先根据下表中的日志行找到并修正客户端，或者设置 `enforcement: observe` 以保留 `v1.2` 的行为。参见[观察与强制执行](../concepts/security-model.md#token-audience-modes)。
+
+有两个 `info` 级告警监视 `would_reject` 判定，因此它们只会在设置了 `enforcement: observe` 的实例上触发。两者都在序列最近一小时的速率持续一小时大于零之后触发，并在最后一个违规请求之后大约一小时自行解除。它们都不带租户标签；kube-prometheus-stack 默认的 Alertmanager 配置会抑制 `info` 级告警，所以如果想收到它们，请显式配置路由。
 
 | 告警 | 严重程度 | 含义 | 处理方式 |
 | --- | --- | --- | --- |
-| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。目前这些请求照常处理，`v1.3` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
-| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。目前这些请求照常处理，`v1.3` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
+| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。这些请求之所以照常处理，只是因为实例设置了 `observe`。默认的 `enforce` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
+| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。这些请求之所以照常处理，只是因为实例设置了 `observe`。默认的 `enforce` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
 
 已弃用的 `client_credentials` 请求在 `user-management` 的日志中有它自己的警告 `A client_credentials request named a resource without a scope`，带有客户端和租户，但没有告警。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
 

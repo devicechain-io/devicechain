@@ -6,6 +6,7 @@ package integrationcodec
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/devicealias"
 )
@@ -55,6 +56,11 @@ func decodeChirpStack(d *Descriptor, r *Request) (*Result, error) {
 	}
 	switch ev := r.Query.Get("event"); ev {
 	case "up":
+	case DownlinkAck, DownlinkTxAck:
+		if !r.DownlinkReports {
+			return &Result{Ignored: true}, nil
+		}
+		return decodeChirpStackDownlink(ev, r)
 	case "":
 		return nil, malformed("the request names no event: add ?event=up, which ChirpStack's HTTP integration appends itself")
 	default:
@@ -107,4 +113,45 @@ func decodeChirpStack(d *Descriptor, r *Request) (*Result, error) {
 		u.Link = link
 	}
 	return &Result{Uplinks: []Uplink{u}}, nil
+}
+
+// csDownlinkEvent is the part of ChirpStack's AckEvent and TxAckEvent the platform reads. Both carry
+// queue_item_id (4) and device_info (3); the AckEvent adds acknowledged (5) and f_cnt_down (6), the
+// TxAckEvent f_cnt_down (5). The AckEvent's own comment: "sent when a confirmation on a confirmed
+// downlink has been received -or- when the downlink timed out", so acknowledged=false is the
+// timeout, and protobuf-JSON may omit it (false is its default).
+type csDownlinkEvent struct {
+	DeviceInfo struct {
+		DevEui string `json:"devEui"`
+	} `json:"deviceInfo"`
+	QueueItemID  string          `json:"queueItemId"`
+	Acknowledged bool            `json:"acknowledged"`
+	FCntDown     json.RawMessage `json:"fCntDown"`
+}
+
+func decodeChirpStackDownlink(kind string, r *Request) (*Result, error) {
+	var ev csDownlinkEvent
+	if err := parseDocument(r.Body, &ev); err != nil {
+		return nil, err
+	}
+	if kind == DownlinkTxAck && ev.QueueItemID == "" {
+		// A downlink that carried only MAC commands has no queue item: nothing to follow.
+		return &Result{Ignored: true, Untracked: true}, nil
+	}
+	if !uuidShape.MatchString(ev.QueueItemID) {
+		return nil, malformed("the %s has no queueItemId, or it is not a UUID", kind)
+	}
+	eui, err := normalized(devicealias.SchemeDevEUI, ev.DeviceInfo.DevEui)
+	if err != nil {
+		return nil, err
+	}
+	d := DownlinkEvent{Kind: kind, Scheme: devicealias.SchemeDevEUI, Identifier: eui, QueueItemID: strings.ToLower(ev.QueueItemID)}
+	if kind == DownlinkAck {
+		d.Acknowledged = ev.Acknowledged
+	}
+	// A counter that is absent or unreadable is informational only: never a reason to lose the report.
+	if n, err := loraCounter(ev.FCntDown, "fCntDown"); err == nil && n >= 0 {
+		d.FCntDown = n
+	}
+	return &Result{Downlinks: []DownlinkEvent{d}}, nil
 }

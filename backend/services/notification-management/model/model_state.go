@@ -5,8 +5,13 @@ package model
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -61,6 +66,93 @@ type NotificationState struct {
 	// a cycle adopts it, resetting the row only when that cycle was raised after the
 	// row's clear (see enterCycle).
 	CycleRaisedAt sql.NullTime
+
+	// ClearNotifiedAt is when this cycle's clear was CLAIMED for announcement to the channels
+	// that paged it (see Api.ClaimClearAnnouncement). Per cycle: a new cycle resets it. NULL
+	// means no clear has been announced for the cycle the row describes.
+	ClearNotifiedAt sql.NullTime
+
+	// ClearNotifiedCycle is the CYCLE (a CycleRaisedAt value) whose clear has been claimed. The
+	// claim is judged by cycle, never by comparing times: see ClearAnnounced.
+	ClearNotifiedCycle sql.NullTime
+
+	// PagedTargets is a JSON array of PagedTarget: the (channel, recipients) targets that
+	// actually delivered a page in this cycle, merged in as pages go out. A clear is sent only
+	// to these, so it reaches what was paged and nothing else. Per cycle; NULL until a page is
+	// recorded (including every row written before the column existed).
+	PagedTargets *datatypes.JSON
+
+	// PagedCycle is the cycle PagedTargets describes, as a column so SQL can match it to
+	// CycleRaisedAt (see Api.PendingClearStates).
+	PagedCycle sql.NullTime
+}
+
+// PagedTarget names one destination that delivered a page: the channel by token and the
+// resolved recipients, the same identity the dispatcher dedups deliveries on.
+type PagedTarget struct {
+	// ChannelID is the channel's stable identity: a token can be renamed between the page and
+	// the clear, an id cannot. Channel is the token at the time, for reading the record.
+	ChannelID  uint     `json:"channelId,omitempty"`
+	Channel    string   `json:"channel"`
+	Recipients []string `json:"recipients,omitempty"`
+}
+
+// Key is the target's identity: the channel's id (its token only for a record that has no id)
+// and the recipients.
+func (t PagedTarget) Key() string {
+	if t.ChannelID != 0 {
+		return fmt.Sprintf("#%d|%s", t.ChannelID, strings.Join(t.Recipients, ","))
+	}
+	return t.Channel + "|" + strings.Join(t.Recipients, ",")
+}
+
+// PagedTargetSet decodes the row's paged targets; a missing or unreadable value is the empty
+// set, which sends no clear (an unreadable record must not turn into a clear sent anywhere).
+func (s *NotificationState) PagedTargetSet() map[string]bool {
+	out := map[string]bool{}
+	if s == nil || s.PagedTargets == nil {
+		return out
+	}
+	var doc pagedDoc
+	if err := json.Unmarshal(*s.PagedTargets, &doc); err != nil || doc.Cycle != cycleLabel(s.CycleRaisedAt) {
+		return out
+	}
+	for _, t := range doc.Targets {
+		out[t.Key()] = true
+	}
+	return out
+}
+
+// pagedDoc is the stored form of the paged set. It names the cycle it describes so that a
+// value an earlier cycle left behind is never read as this one's.
+type pagedDoc struct {
+	Cycle   string        `json:"cycle"`
+	Targets []PagedTarget `json:"targets"`
+}
+
+// cycleLabel is a cycle's stable text form ("" for none).
+func cycleLabel(c sql.NullTime) string {
+	if !c.Valid {
+		return ""
+	}
+	return c.Time.UTC().Format(time.RFC3339Nano)
+}
+
+// ClearAnnounced reports whether THIS cycle's clear has been claimed: the claim names the row's
+// cycle. A claim naming another cycle (left by an earlier one) is not this cycle's, whatever
+// the clocks say. A row with no cycle recorded cannot name one, so any claim stands for it.
+func (s *NotificationState) ClearAnnounced() bool {
+	if !s.CycleRaisedAt.Valid {
+		return s.ClearNotifiedAt.Valid
+	}
+	return s.ClearNotifiedCycle.Valid && s.ClearNotifiedCycle.Time.Equal(s.CycleRaisedAt.Time)
+}
+
+// SameCycleAs reports whether an event raised at `raised` belongs to the cycle the row
+// describes. A row or an event that names no cycle cannot be ordered and is taken as the same.
+func (s *NotificationState) SameCycleAs(raised time.Time) bool {
+	k := cycleKey(raised)
+	return !s.CycleRaisedAt.Valid || !k.Valid || s.CycleRaisedAt.Time.Equal(k.Time)
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, tiebroken on the row id.

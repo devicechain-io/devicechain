@@ -164,6 +164,7 @@ const NOTIFICATION_POLICY_REGISTRY = graphql(`
         name
         description
         enabled
+        notifyOnClear
         throttleSeconds
         escalateAfterSeconds
         maxEscalations
@@ -210,6 +211,7 @@ const NOTIFICATION_POLICY_BY_TOKEN = graphql(`
       name
       description
       enabled
+      notifyOnClear
       throttleSeconds
       escalateAfterSeconds
       maxEscalations

@@ -75,8 +75,8 @@
       "translationSha256": "a5f494146f7aed3b7a159aa0dfb637b55aa89e37722a2e8307d18759b7fb9c09"
     },
     "concepts/security-model.md": {
-      "sourceSha256": "d2880d500139ccc344478087c39b4cf91119748dde581a9bc4fd1c6a0b44ab3b",
-      "translationSha256": "f0302b09c6b2bb03b2354246833ceddf713f5ac3bb1a48879c536c9e8052ecf6"
+      "sourceSha256": "4b0ba200a4c2b73ad7eb4637385b9a03ed8051fbfd369bcb49c6b56aa9c54245",
+      "translationSha256": "9e474a002217cee56a1f6e9d9d384e97a02ef9c92993a3a3b90534ef01da7a12"
     },
     "concepts/single-sign-on.md": {
       "sourceSha256": "9979f642b5846262c252585b0e00da2c96703cc6313a4fa38813f14b96d504b4",
@@ -97,6 +97,10 @@
     "concepts/white-labeling.md": {
       "sourceSha256": "cd5d23795508ae3259d295bed6fa30e944703edfab47b1604d8988bf795bc800",
       "translationSha256": "d5bd343edadd73150870463670d14d3215ec47b183e0dc76c14b672a29c9ac65"
+    },
+    "deployment/alert-runbook.md": {
+      "sourceSha256": "f52f3da17841b3c11be90fb9e57d0d9161fea61deb2ae4c4bb73b61358d31caa",
+      "translationSha256": "5c50e72d05570727f6c68790bcb212a565f88a7bf1744f2948481d78f1107fe6"
     },
     "deployment/bootstrap.md": {
       "sourceSha256": "17cca8d57c4ac8f152f3f4f7b62054db73ddaba8dc61ecbbd94c93ccf414d60c",
@@ -147,8 +151,8 @@
       "translationSha256": "329a6ae32a0786f0fa62b6376d8c0497e969eb2d5de25a04bfc48b5ed6447e5e"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "ded9ff90a396990de66cb55ea038e4248bbbc88ee9127bd6c524d8a9a1e60ec6",
-      "translationSha256": "64a44b1018dfcce2754e38084e7584fd27832d0770984c43221373e6e6848b21"
+      "sourceSha256": "7e110322706a9ba70a65a3d4dfe13a4e83f66a09bfb67c8ab3199f0c124dec4a",
+      "translationSha256": "2f90afeaa83ecea93bf81e8ee2691575399f315d2f5f53a5b2cf903719c09aef"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",
@@ -163,8 +167,8 @@
       "translationSha256": "a5d43d9ed7b052d0f97588e84ac48ad6e3b4657782c825fd0538b0c32da41aad"
     },
     "deployment/versioning-policy.md": {
-      "sourceSha256": "020237577f7bdfce6fc19be5590945e99a1e14d185a4b59ee813db6d6c8a8e9f",
-      "translationSha256": "1aa4b1724ff1f09b3e656d5ae03f2ddea922604d11924b15c6e95041f9ae5c67"
+      "sourceSha256": "f6cb545b0301c74b256fb13dba745220a0877ada24bcda9b618bc88d833dd649",
+      "translationSha256": "280dced56631337949e511ab6569a9ebffd95eeaa12228bb6f1a8a5d5985c0aa"
     },
     "getting-help.md": {
       "sourceSha256": "2e6792a617080e3a77408de5384ec039a57047795661d751c405935c92f2bdce",
