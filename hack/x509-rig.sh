@@ -276,7 +276,7 @@ fetch_release() {
   if [[ "$os" == windows ]]; then want_files+=("dcctl_${v}_windows_${arch}.zip"); else want_files+=("dcctl_${v}_${os}_${arch}.tar.gz"); fi
   for f in "${want_files[@]}"; do
     curl -fsSL "${curl_revoke[@]}" -o "$release_dir/$f" "$base/$f" || fail "could not download $base/$f"
-    want="$(cat "$release_dir/checksums.txt" "$release_dir/dc-simulator_checksums.txt" | awk -v f="$f" '$2 == f || $2 == "*" f { print $1; exit }')"
+    want="$(awk -v f="$f" '($2 == f || $2 == "*" f) && w == "" { w = $1 } END { print w }' "$release_dir/checksums.txt" "$release_dir/dc-simulator_checksums.txt")"
     sum="$(sha256sum "$release_dir/$f" | awk '{ print $1 }')"
     [[ -n "$want" && "$sum" == "$want" ]] || fail "$f: sha256 $sum, the release's checksums say '${want:-nothing}'"
     note "$f: sha256 $sum matches the release's checksums"
