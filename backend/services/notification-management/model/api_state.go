@@ -187,14 +187,33 @@ func (api *Api) AddPagedTargets(ctx context.Context, alarmToken string, cycle sq
 // the cycle named. Exactly one caller across replicas and redeliveries wins, and only after the
 // clear has been recorded (which is what stops escalation), so a clear announced is a clear
 // that also ended the alarm's paging. raisedTime is the event's RaisedTime.
-func (api *Api) ClaimClearAnnouncement(ctx context.Context, alarmToken string, raisedTime, at time.Time) (bool, error) {
+func (api *Api) ClaimClearAnnouncement(ctx context.Context, alarmToken string, cycle sql.NullTime, at time.Time) (bool, error) {
 	q := api.RDB.DB(ctx).Model(&NotificationState{}).
-		Where("alarm_token = ? AND cleared_at IS NOT NULL AND (clear_notified_at IS NULL OR clear_notified_at < cleared_at)", alarmToken)
-	if k := cycleKey(raisedTime); k.Valid {
-		q = q.Where("(cycle_raised_at = ? OR cycle_raised_at IS NULL)", k.Time)
+		Where("alarm_token = ? AND cleared_at IS NOT NULL", alarmToken)
+	set := map[string]any{"clear_notified_at": at}
+	if cycle.Valid {
+		// By CYCLE, never by comparing times: the stamp that wins names the cycle it won.
+		q = q.Where("cycle_raised_at = ? AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> ?)",
+			cycle.Time, cycle.Time)
+		set["clear_notified_cycle"] = cycle.Time
+	} else {
+		q = q.Where("cycle_raised_at IS NULL AND clear_notified_at IS NULL")
 	}
-	result := q.Update("clear_notified_at", at)
+	result := q.Updates(set)
 	return result.RowsAffected == 1, result.Error
+}
+
+// PendingClearStates lists the caller tenant's alarms whose clear is stamped, whose cycle paged
+// someone, and whose clear has not been claimed, cleared since `since`. It is what the scheduler
+// walks to send a clear that overtook its page or failed to send when it first came due, so
+// neither depends on a message being redelivered.
+func (api *Api) PendingClearStates(ctx context.Context, since time.Time, limit int) ([]*NotificationState, error) {
+	found := make([]*NotificationState, 0)
+	err := api.RDB.DB(ctx).
+		Where("cleared_at IS NOT NULL AND cleared_at > ? AND paged_targets IS NOT NULL AND cycle_raised_at IS NOT NULL "+
+			"AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> cycle_raised_at)", since).
+		Order("cleared_at ASC").Limit(limit).Find(&found).Error
+	return found, err
 }
 
 // UnclaimClearAnnouncement gives the claim back after a clear that reached no channel and may
@@ -202,7 +221,7 @@ func (api *Api) ClaimClearAnnouncement(ctx context.Context, alarmToken string, r
 func (api *Api) UnclaimClearAnnouncement(ctx context.Context, alarmToken string, at time.Time) error {
 	return api.RDB.DB(ctx).Model(&NotificationState{}).
 		Where("alarm_token = ? AND clear_notified_at = ?", alarmToken, at).
-		Update("clear_notified_at", nil).Error
+		Updates(map[string]any{"clear_notified_at": nil, "clear_notified_cycle": nil}).Error
 }
 
 // MarkAcknowledged stamps AcknowledgedAt on the alarm's state row so the escalation

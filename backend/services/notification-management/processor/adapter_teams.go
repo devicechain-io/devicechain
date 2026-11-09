@@ -59,24 +59,34 @@ func teamsAccent(a AlarmFacts) string {
 	}
 }
 
-// teamsEscape neutralises the Markdown an Adaptive Card TextBlock and FactSet render, so a
-// device- or tenant-authored name cannot inject links, emphasis or mentions: every Markdown
-// control character is backslash-escaped, and a line break (which would start a new block) is
-// flattened to a space. Truncate BEFORE escaping, never after, so a cut cannot split an escape.
+// teamsEscape makes device- or tenant-authored text safe for an Adaptive Card TextBlock or
+// FactSet, which render a Markdown subset (links and emphasis) and, in a bot's messages, <at>
+// mentions. Backslash escapes are NOT relied on: Teams documents no escape syntax for the
+// card's Markdown, and renderers show the backslash literally (over_temp would read
+// over\_temp). Instead the characters that form links and mentions, [ ] ( ) < >, are replaced
+// by look-alike characters that are inert, and line breaks are flattened to a space. _ and *
+// are left alone: at worst a name is emphasised, which is cosmetic, and a title such as
+// over_temp stays readable. Truncate BEFORE calling this.
 func teamsEscape(s string) string {
-	var b strings.Builder
-	for _, r := range s {
+	return strings.Map(func(r rune) rune {
 		switch r {
-		case '\\', '`', '*', '_', '[', ']', '(', ')', '<', '>', '~', '|', '#', '!', '&':
-			b.WriteByte('\\')
-			b.WriteRune(r)
+		case '[':
+			return '\uFF3B' // FULLWIDTH LEFT SQUARE BRACKET
+		case ']':
+			return '\uFF3D'
+		case '(':
+			return '\uFF08'
+		case ')':
+			return '\uFF09'
+		case '<':
+			return '\u2039' // SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+		case '>':
+			return '\u203A'
 		case '\n', '\r':
-			b.WriteByte(' ')
-		default:
-			b.WriteRune(r)
+			return ' '
 		}
-	}
-	return b.String()
+		return r
+	}, s)
 }
 
 // teamsMessage builds the Workflows envelope around the Adaptive Card.

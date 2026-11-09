@@ -31,14 +31,17 @@ func TestStaleClearBookkeepingFromAnEarlierCycleIsIgnored(t *testing.T) {
 		t.Fatalf("merge inherited the earlier cycle's targets: %v", got)
 	}
 
-	cleared := sql.NullTime{Time: c2.Time.Add(time.Minute), Valid: true}
-	stale := &NotificationState{ClearedAt: cleared,
-		ClearNotifiedAt: sql.NullTime{Time: c1.Time.Add(time.Minute), Valid: true}}
-	if stale.ClearAnnounced() {
-		t.Fatal("a claim older than this cycle's clear was read as this cycle's")
+	// The claim names a CYCLE. One naming an earlier cycle is not this cycle's, however the
+	// clocks of the pod that took it and the event compare.
+	future := sql.NullTime{Time: c2.Time.Add(time.Hour), Valid: true}
+	st := &NotificationState{CycleRaisedAt: c2, ClearedAt: future,
+		ClearNotifiedCycle: c1, ClearNotifiedAt: sql.NullTime{Time: c2.Time, Valid: true}}
+	if st.ClearAnnounced() {
+		t.Fatal("a claim naming an earlier cycle suppressed this cycle's clear")
 	}
-	stale.ClearNotifiedAt = sql.NullTime{Time: cleared.Time.Add(time.Second), Valid: true}
-	if !stale.ClearAnnounced() {
-		t.Fatal("a claim after the clear is this cycle's")
+	st.ClearNotifiedCycle = c2
+	st.ClearNotifiedAt = sql.NullTime{Time: c2.Time.Add(-time.Hour), Valid: true} // earlier than cleared_at: irrelevant
+	if !st.ClearAnnounced() {
+		t.Fatal("a claim naming this cycle must stand even when its time precedes the clear's")
 	}
 }

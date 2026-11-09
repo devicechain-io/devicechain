@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -42,11 +41,16 @@ import (
 // giving the claim back, so the durable consumer redelivers; a clear that reached at least one
 // channel, or that was refused, is final. Delivery is at-most-once past the claim: a crash
 // between claiming and sending loses the clear rather than repeating it.
-func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent) error {
+func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent, fresh bool) error {
 	tenant, _ := core.TenantFromContext(ctx)
 
+	// fresh: the caller is not this clear's own message (a RAISED that finished first, or the
+	// scheduler), so the message's ack deadline, already spent, must not bound it.
+	if fresh {
+		ctx = context.WithoutCancel(ctx)
+	}
 	deadline := time.Now().Add(n.wholeDispatchBudget())
-	if ackDeadline, ok := messaging.AckDeadlineFrom(ctx); ok {
+	if ackDeadline, ok := messaging.AckDeadlineFrom(ctx); ok && !fresh {
 		if capped := ackDeadline.Add(-dispatchMargin); capped.Before(deadline) {
 			deadline = capped
 		}
@@ -59,6 +63,57 @@ func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.Alarm
 		return nil
 	}
 	return err
+}
+
+// pendingClearWindow is how long after a clear the scheduler keeps trying to announce it. A
+// clear older than this is news no longer worth sending.
+const pendingClearWindow = 30 * time.Minute
+
+// pendingClearBatch bounds one tenant's pickup per tick.
+const pendingClearBatch = 50
+
+// AnnouncePendingClears is the durable half of the late-clear path. A clear can overtake its page,
+// or fail to send when it first came due, after both of its messages have been acknowledged, so
+// no redelivery will carry it. The scheduler walks the alarms that are stamped cleared, paged
+// someone and have no claimed announcement, and announces each; the claim keeps it once across
+// pods. It does nothing for a tenant with no policy that opted in.
+func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*model.NotificationPolicy, now time.Time) error {
+	if n.tenantDeleted(ctx) {
+		return nil
+	}
+	optedIn := false
+	for _, p := range policies {
+		if p.NotifyOnClear {
+			optedIn = true
+			break
+		}
+	}
+	if !optedIn {
+		return nil
+	}
+	states, err := n.api.PendingClearStates(ctx, now.Add(-pendingClearWindow), pendingClearBatch)
+	if err != nil {
+		if errors.Is(err, rdb.ErrTenantPurged) {
+			return nil
+		}
+		return fmt.Errorf("listing clears awaiting announcement: %w", err)
+	}
+	var lastErr error
+	for _, st := range states {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		clear := &dmmodel.AlarmStateChangeEvent{
+			EventType: dmmodel.AlarmEventCleared, AlarmToken: st.AlarmToken, AlarmKey: st.AlarmKey,
+			Severity: st.Severity, State: "CLEARED",
+			RaisedTime: st.CycleRaisedAt.Time, OccurredTime: st.ClearedAt.Time,
+		}
+		if err := n.announceClear(ctx, clear, true); err != nil {
+			log.Warn().Err(err).Str("alarm", st.AlarmToken).Msg("Announcing a pending clear failed; will retry next tick")
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, clear *dmmodel.AlarmStateChangeEvent) error {
@@ -107,7 +162,7 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 	}
 
 	claimedAt := time.Now().UTC()
-	won, err := n.api.ClaimClearAnnouncement(ctx, clear.AlarmToken, clear.RaisedTime, claimedAt)
+	won, err := n.api.ClaimClearAnnouncement(ctx, clear.AlarmToken, state.CycleRaisedAt, claimedAt)
 	if err != nil {
 		return fmt.Errorf("claiming the clear announcement: %w", err)
 	}
@@ -152,7 +207,7 @@ func (n *PolicyNotifier) appendPagedDeliveries(policyToken string, rules []model
 			continue
 		}
 		recipients := parseRecipients(rule.Recipients)
-		key := rule.Channel.Token + "|" + strings.Join(recipients, ",")
+		key := model.PagedTarget{ChannelID: rule.Channel.ID, Channel: rule.Channel.Token, Recipients: recipients}.Key()
 		if !paged[key] || seen[key] {
 			continue
 		}
@@ -166,7 +221,7 @@ func (n *PolicyNotifier) appendPagedDeliveries(policyToken string, rules []model
 func pagedTargets(ds []delivery) []model.PagedTarget {
 	out := make([]model.PagedTarget, 0, len(ds))
 	for _, d := range ds {
-		out = append(out, model.PagedTarget{Channel: d.channel.Token, Recipients: d.recipients})
+		out = append(out, model.PagedTarget{ChannelID: d.channel.ID, Channel: d.channel.Token, Recipients: d.recipients})
 	}
 	return out
 }
@@ -176,7 +231,7 @@ func pagedTargets(ds []delivery) []model.PagedTarget {
 // paged targets and announces nothing. Once the page has recorded its targets, if the row is
 // already stamped cleared and the clear is still unannounced, the announcement is owed now.
 // Errors are logged, not returned: the page that led here has gone out, and returning would
-// resend it.
+// resend it. The scheduler (AnnouncePendingClears) picks up what this could not send.
 func (n *PolicyNotifier) announceLateClear(ctx context.Context, event *dmmodel.AlarmStateChangeEvent,
 	recorded *model.NotificationState) {
 	if recorded == nil || !recorded.ClearedAt.Valid || recorded.ClearAnnounced() ||
@@ -187,9 +242,9 @@ func (n *PolicyNotifier) announceLateClear(ctx context.Context, event *dmmodel.A
 	clear.EventType = dmmodel.AlarmEventCleared
 	clear.State = "CLEARED"
 	clear.OccurredTime = recorded.ClearedAt.Time
-	if err := n.announceClear(ctx, &clear); err != nil {
+	if err := n.announceClear(ctx, &clear, true); err != nil {
 		tenant, _ := core.TenantFromContext(ctx)
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
-			Msg("Could not announce a clear that overtook its page")
+			Msg("Could not announce a clear that overtook its page; the scheduler will retry it")
 	}
 }

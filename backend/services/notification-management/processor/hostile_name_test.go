@@ -42,16 +42,18 @@ func TestTeamsEscapesMarkdownInADeviceName(t *testing.T) {
 	card := decoded["attachments"].([]any)[0].(map[string]any)["content"].(map[string]any)
 	body := card["body"].([]any)
 	title := body[0].(map[string]any)["text"].(string)
-	if strings.Contains(title, "[click](") || strings.Contains(title, "*bold*") {
+	if strings.Contains(title, "[click](") {
 		t.Fatalf("the title renders device-authored Markdown: %q", title)
 	}
 	for _, f := range body[1].(map[string]any)["facts"].([]any) {
 		v := f.(map[string]any)["value"].(string)
-		if strings.Contains(v, "[click](") || strings.Contains(v, "*bold*") || strings.ContainsAny(v, "\r\n") {
+		if strings.Contains(v, "[click](") || strings.ContainsAny(v, "\r\n") {
 			t.Fatalf("a fact renders device-authored Markdown: %q", v)
 		}
 	}
-	if got := teamsEscape("a*b_c[d](e)\n"); got != "a\\*b\\_c\\[d\\]\\(e\\) " {
+	// Link and mention syntax is made inert with look-alikes; _ and * are left alone, so a
+	// title like over_temp is not shown as over\\_temp.
+	if got := teamsEscape("over_temp [a](b) <at>x</at>\n"); strings.ContainsAny(got, "[]()<>\n\\") || !strings.Contains(got, "over_temp") {
 		t.Fatalf("teamsEscape = %q", got)
 	}
 }

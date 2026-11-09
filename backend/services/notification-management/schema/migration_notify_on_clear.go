@@ -41,10 +41,13 @@ func NewNotifyOnClearSchema() *gormigrate.Migration {
 // that predates them: nothing recorded, nothing announced). It is its own migration, after
 // NewNotifyOnClearSchema, because a database that already ran that one must still get them.
 //
-//   - clear_notified_at: when this cycle's clear was claimed for announcement. The claim is a
-//     compare-and-set, so each clear is sent once across replicas and redeliveries, separately
-//     from cleared_at (which stops escalation and is stamped first). A stamp older than the
-//     row's cleared_at belongs to an earlier cycle and counts as no claim.
+//   - clear_notified_cycle: the cycle (cycle_raised_at) whose clear has been claimed for
+//     announcement. The claim is a compare-and-set on it differing from the row's cycle, so each
+//     cycle's clear is sent once across replicas and redeliveries, separately from cleared_at
+//     (which stops escalation and is stamped first). It names a CYCLE, never a time, so no clock
+//     ordering (a device's skewed event time, another pod's clock) can make a claim re-winnable,
+//     and a value left by an earlier cycle never reads as this one's.
+//   - clear_notified_at: when the claim was taken. Informational and the give-back key only.
 //   - paged_targets: a JSON document {cycle, targets} of the (channel, recipients) targets that
 //     actually delivered in that cycle, so a clear goes to where the alarm was paged and nowhere
 //     else. It names its cycle, so a value left by an earlier cycle (a pod from before this
@@ -58,6 +61,7 @@ func NewClearAnnouncementSchema() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			for _, stmt := range []string{
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS clear_notified_at timestamp with time zone;`,
+				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS clear_notified_cycle timestamp with time zone;`,
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS paged_targets jsonb;`,
 			} {
 				if err := tx.Exec(stmt).Error; err != nil {

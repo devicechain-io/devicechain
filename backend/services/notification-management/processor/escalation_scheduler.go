@@ -108,6 +108,14 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 			releaseFailed = true
 			lastErr = err
 		}
+		// Clears that overtook their page, or failed to send, are not carried by any message
+		// still to be redelivered; this is what sends them.
+		if err := s.Notifier.AnnouncePendingClears(tctx, policies, now); err != nil {
+			log.Warn().Err(err).Str("tenant", tenant).
+				Msg("Escalation scheduler: announcing pending clears failed; will retry next tick")
+			releaseFailed = true
+			lastErr = err
+		}
 		if !anyEscalationEnabled(policies) {
 			if releaseFailed {
 				failed++

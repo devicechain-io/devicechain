@@ -223,6 +223,7 @@ CREATE TABLE "notification-management".notification_states (
  last_escalated_at timestamp with time zone,
  cycle_raised_at timestamp with time zone,
  clear_notified_at timestamp with time zone,
+ clear_notified_cycle timestamp with time zone,
  paged_targets jsonb
 );
 CREATE TABLE "notification-management".purged_tenants (

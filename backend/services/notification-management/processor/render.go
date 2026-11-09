@@ -70,6 +70,9 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	// A person reads the device's name, or failing that its token, in preference to a numeric
 	// id; the id stays in the structured payload for anything that wants it.
 	shown := originator
+	if event.OriginatorType == "" && event.OriginatorId == 0 {
+		shown = "an unnamed source"
+	}
 	switch {
 	case event.DeviceName != "":
 		shown = oneLine(event.DeviceName)

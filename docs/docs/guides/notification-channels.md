@@ -193,7 +193,7 @@ mutation {
 A clear is informational, so it is handled differently from a page:
 
 - It goes only to destinations that delivered a page in that cycle. A policy that never paged the alarm (its notification was throttled, held for quiet hours, or the policy was created after the raise) sends no clear.
-- It is sent once per cycle, after the clear has been recorded, so no "still unresolved" escalation follows it. If no channel takes it, it is retried; once any channel has taken it, it is not repeated. A clear that is processed before its alarm's page has been recorded is sent right after that page.
+- It is sent once per cycle, after the clear has been recorded, so no "still unresolved" escalation follows it. If no channel takes it, it is retried; once any channel has taken it, it is not repeated. A clear that is processed before its alarm's page has been recorded is sent right after that page, and one that could not be sent then is picked up by the notification scheduler's next passes for up to 30 minutes.
 - It is **not** throttled, does not count as a notification, and does not start escalation.
 - A clear that happens during a policy's quiet hours is **dropped**, not held: a "cleared" released hours later would report old news.
 - `notifyOnClear` cannot be cleared with `null`; send `true` or `false`.
