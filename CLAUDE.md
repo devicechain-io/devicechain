@@ -100,8 +100,13 @@ hack/                         license headers, dev scripts, and the six VALIDATI
                               through the ingress; a tenant payload decoder turns them into stored
                               readings, a paired broken decoder records DECODE_FAILED and shows in the
                               decoder health, a planted-broken-decoder control turns the stored-count
-                              check red, and `mixed` parks uplinks while nothing reads their stream; run it
-                              whenever the decoder pipeline or its streams change).
+                              check red, `mixed` parks uplinks while nothing reads their stream, and
+                              `mqtt` turns mqttDeviceUplinks on and off in upgrades of their own and
+                              proves a device's own payload on its broker connection: refused while
+                              off and on another device's topic, decoded exactly, over-cap and
+                              no-decoder payloads on failed-decode, and a hanging device-management
+                              not stalling ordinary events, each with a planted defect; run it
+                              whenever the decoder pipeline, its streams or the device grant change).
                               All are manual, all need a real cluster, and all carry a NEGATIVE
                               CONTROL: a check is worth nothing until it has been shown to fail
 _legacy/                      archived pre-migration SiteWhere code — NOT in the workspace, not built; do not edit
