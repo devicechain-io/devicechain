@@ -200,3 +200,31 @@ func TestWebhookDoesNotLinkAnUnnamedDevice(t *testing.T) {
 		t.Fatalf("deviceUrl = %v", got["deviceUrl"])
 	}
 }
+
+func TestANewerEventUpdatesSourceAfterEscalation(t *testing.T) {
+	event := namedAlarm()
+	n, _, api, ctx := pagedThenDue(t, event)
+	states, err := api.OpenNotificationStates(ctx)
+	if err != nil || len(states) != 1 {
+		t.Fatalf("states = %v, %v", states, err)
+	}
+	escAt := n.clock()
+	if err := n.Escalate(ctx, states[0], enabledPolicies(t, api, ctx), escAt, 5); err != nil {
+		t.Fatal(err)
+	}
+	newer := *event
+	newer.EventType = dmmodel.AlarmEventEscalated
+	newer.OccurredTime = event.OccurredTime.Add(time.Minute)
+	newer.DeviceName = "New"
+	if err := n.Notify(ctx, &newer); err != nil {
+		t.Fatal(err)
+	}
+	states, err = api.OpenNotificationStates(ctx)
+	if err != nil || len(states) != 1 {
+		t.Fatalf("states = %v, %v", states, err)
+	}
+	row := states[0]
+	if row.EscalationLevel != 1 || row.Source().DeviceName != "New" || !row.SourceAt.Valid || !row.SourceAt.Time.Equal(newer.OccurredTime) || !row.LastNotifiedAt.Time.Equal(escAt) {
+		t.Fatalf("post-escalation source state = %+v", row)
+	}
+}

@@ -97,6 +97,9 @@ type NotificationState struct {
 	DeviceToken     sql.NullString
 	DeviceName      sql.NullString
 	DeviceTypeToken sql.NullString
+
+	// SourceAt orders source facts by the event occurrence time, independently of delivery.
+	SourceAt sql.NullTime
 }
 
 // AlarmSource is the originator facts an alarm event carries that a state row keeps. The zero

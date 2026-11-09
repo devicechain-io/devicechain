@@ -232,7 +232,8 @@ CREATE TABLE "notification-management".notification_states (
  originator_id bigint,
  device_token text,
  device_name text,
- device_type_token text
+ device_type_token text,
+ source_at timestamp with time zone
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,

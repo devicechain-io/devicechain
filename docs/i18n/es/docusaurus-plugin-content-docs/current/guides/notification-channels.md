@@ -88,7 +88,7 @@ Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [can
 
 El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador cuando se conocen, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Las renotificaciones temporizadas (`RENOTIFIED`) y las notificaciones `CLEARED` tardías que recoge el planificador también incluyen estos campos del dispositivo y del originador cuando se conocen. Las alarmas notificadas antes de actualizar omiten estos campos en esas notificaciones posteriores.
 
-Opcionalmente, establezca `linkBaseUrl` en el `config` del canal webhook con la URL base `https` de su consola, por ejemplo `"linkBaseUrl":"https://console.example.com"`. El cuerpo incluirá entonces `alarmUrl` y, cuando la alarma identifique su dispositivo, `deviceUrl`. Ambas claves se omiten cuando no se establece `linkBaseUrl`.
+Opcionalmente, establece `linkBaseUrl` en el `config` del canal webhook con la URL base `https` de tu consola, por ejemplo `"linkBaseUrl":"https://console.example.com"`. El cuerpo incluirá entonces `alarmUrl` y, cuando la alarma identifique el dispositivo, `deviceUrl`. Ambas claves se omiten cuando no se establece `linkBaseUrl`.
 
 ### Canales nativos de Slack, Teams y PagerDuty {#native-channels}
 

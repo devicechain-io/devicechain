@@ -536,7 +536,7 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		defer rcancel()
 		var err error
 		recorded, err = n.api.RecordPagedFrom(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
-			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event))
+			event.RaisedTime, event.OccurredTime, pagedTargets(tally.targets), eventSource(event), event.OccurredTime)
 		return err
 	}); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).

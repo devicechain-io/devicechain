@@ -289,7 +289,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			// rather than writing it into the newer cycle as that cycle's first page.
 			var err error
 			recorded, err = n.api.RecordPagedFrom(sctx, alarm, latest.AlarmKey, latest.Severity,
-				event.RaisedTime, now, pagedTargets(tally.targets), eventSource(&event))
+				event.RaisedTime, now, pagedTargets(tally.targets), eventSource(&event), event.OccurredTime)
 			return err
 		}); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).

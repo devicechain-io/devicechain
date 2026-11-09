@@ -31,6 +31,7 @@ func NewStateSourceSchema() *gormigrate.Migration {
 				"device_token text",
 				"device_name text",
 				"device_type_token text",
+				"source_at timestamp with time zone",
 			} {
 				if err := tx.Exec(`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS ` + col + `;`).Error; err != nil {
 					return err

@@ -347,17 +347,45 @@ func TestRecordedSourceIsNotRegressedByAnOlderEvent(t *testing.T) {
 	api := newTestApi(t)
 	ctx := tenantCtx("A")
 	t0 := time.Now().UTC().Truncate(time.Second)
-	rec := func(at time.Time, src AlarmSource) {
+	rec := func(at, sourceAt time.Time, src AlarmSource) {
 		t.Helper()
-		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src); err != nil {
+		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, at, nil, src, sourceAt); err != nil {
 			t.Fatal(err)
 		}
 	}
-	rec(t0.Add(time.Minute), AlarmSource{DeviceName: "New name", DeviceToken: "dev-1"})
-	rec(t0, AlarmSource{DeviceName: "Old name", DeviceTypeToken: "boiler"})
+	rec(t0.Add(time.Minute), t0.Add(time.Minute), AlarmSource{DeviceName: "New", DeviceToken: "dev-1"})
+	rec(t0.Add(time.Hour), t0, AlarmSource{DeviceName: "Old", DeviceTypeToken: "boiler"})
+	rec(t0.Add(2*time.Hour), time.Time{}, AlarmSource{DeviceName: "Unknown time"})
+	rec(t0.Add(3*time.Hour), t0.Add(time.Minute), AlarmSource{DeviceName: "Equal time"})
 	states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"alarm-1"})
+	if !states[0].SourceAt.Valid || !states[0].SourceAt.Time.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("source timestamp regressed: %+v", states[0].SourceAt)
+	}
 	got := states[0].Source()
-	if got.DeviceName != "New name" || got.DeviceToken != "dev-1" || got.DeviceTypeToken != "boiler" {
+	if got.DeviceName != "New" || got.DeviceToken != "dev-1" || got.DeviceTypeToken != "boiler" {
 		t.Fatalf("source = %+v", got)
+	}
+}
+
+func TestRecordedSourceAdvancesAfterEscalation(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	t0 := time.Now().UTC().Truncate(time.Second)
+	row, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil, AlarmSource{DeviceName: "Old"}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escAt := t0.Add(time.Hour)
+	claimed, err := api.ClaimEscalation(ctx, "alarm-1", 0, row.CycleRaisedAt, escAt)
+	if err != nil || !claimed {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	newer := t0.Add(time.Minute)
+	row, err = api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, newer, nil, AlarmSource{DeviceName: "New"}, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Source().DeviceName != "New" || !row.SourceAt.Valid || !row.SourceAt.Time.Equal(newer) || !row.LastNotifiedAt.Time.Equal(escAt) {
+		t.Fatalf("post-escalation source state = %+v", row)
 	}
 }
