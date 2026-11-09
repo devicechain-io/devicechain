@@ -143,3 +143,28 @@ func TestAClearDuringQuietHoursIsDroppedNotHeld(t *testing.T) {
 		t.Fatalf("channel heard %v, want only the raise", got)
 	}
 }
+
+// TestAFailedClearStillRecordsTheAlarmAsCleared: a destination that is down must not leave a
+// resolved alarm open in the notification state, where escalation would go on paging about it.
+// The clear is informational and is not retried by redelivery.
+func TestAFailedClearStillRecordsTheAlarmAsCleared(t *testing.T) {
+	api := fencedApi(t)
+	ctx := tenantScoped()
+	seedClearPolicy(t, api, ctx, true)
+	fa := &fakeAdapter{}
+	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
+	n.api = api
+	n.store = &fakeSecretStore{}
+	raised := time.Now().UTC().Add(-time.Hour)
+	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	fa.failTimes = 1 << 20 // every later delivery fails
+	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventCleared, raised, raised.Add(time.Minute))); err != nil {
+		t.Fatalf("a failed clear must not be returned for redelivery: %v", err)
+	}
+	open, err := api.OpenNotificationStates(ctx)
+	if err != nil || len(open) != 0 {
+		t.Fatalf("the cleared alarm must no longer be open for escalation; got %d (err %v)", len(open), err)
+	}
+}

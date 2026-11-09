@@ -36,10 +36,11 @@ import (
 //   - Record anything. RecordNotification would count the clear as a page and re-arm the
 //     escalation clock of an alarm that is over.
 //
-// It returns an error only when no channel took the clear and a retry could change that, so
-// the durable consumer redelivers; a clear that reached at least one channel is acked, so
-// the ones that worked are not sent twice. Like every dispatch, delivery is at-least-once: a
-// crash between the send and the stamp that follows re-sends the clear on redelivery.
+// It returns an error only when it could not READ what it needs (the policies or the state),
+// before anything was sent, so the durable consumer redelivers and nothing is sent twice. A
+// delivery that fails is not retried by redelivery: see the comment at the end. Like every
+// dispatch, delivery is at-least-once: a crash between the send and the stamp that follows
+// re-sends the clear on redelivery.
 func (n *PolicyNotifier) notifyClear(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
 	tenant, _ := core.TenantFromContext(ctx)
 
@@ -100,19 +101,17 @@ func (n *PolicyNotifier) notifyClear(ctx context.Context, event *dmmodel.AlarmSt
 	}
 
 	tally := n.deliverAll(dctx, deliveries, renderNotification(event), event.AlarmToken, model.AttemptTriggerAlarm)
-	if tally.delivered > 0 {
-		return nil
+	if tally.delivered == 0 {
+		// 🔴 A failed clear is LOGGED, NOT RETURNED. Returning it would skip the stamp that
+		// follows, and that stamp is what stops this alarm escalating and drops what quiet hours
+		// hold about it: an endpoint that stays down would leave a resolved alarm paging people
+		// until the consumer gave up. The clear is informational and each channel has already had
+		// its in-line retries; the failure is in the delivery ledger and the log.
+		log.Error().Str("tenant", tenant).Str("alarm", event.AlarmToken).
+			Int("refused", tally.refused).Int("failed", tally.failed).Int("unattempted", tally.unattempted).
+			Msg("No channel took this alarm's clear; it is not retried, and the alarm is recorded as cleared.")
 	}
-	if tally.retryable() == 0 && tally.refused > 0 {
-		log.Error().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("channels", tally.refused).
-			Msg("Every channel for this alarm's clear was refused; acking rather than redelivering, " +
-				"because redelivery cannot change that.")
-		return nil
-	}
-	if tally.storeErr != nil {
-		return fmt.Errorf("all %d clear deliveries failed for alarm %q: %w", len(deliveries), event.AlarmToken, tally.storeErr)
-	}
-	return fmt.Errorf("all %d clear deliveries failed for alarm %q", len(deliveries), event.AlarmToken)
+	return nil
 }
 
 // clearOwed reports whether the clear is one a human is owed: the alarm's current cycle was

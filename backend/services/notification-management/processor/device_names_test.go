@@ -74,3 +74,18 @@ func TestAnEventWithoutNamesDecodesAndRenders(t *testing.T) {
 		t.Fatalf("subject = %q", r.Subject)
 	}
 }
+
+// A device name may hold a line break; the summary doubles as the email subject, where a header
+// with a line break is refused, so the summary must stay on one line. The payload keeps the name.
+func TestAMultilineDeviceNameKeepsTheSummaryOnOneLine(t *testing.T) {
+	const stored = "Boiler\r\n7\tEast"
+	e := namedEvent()
+	e.DeviceName = stored
+	r := renderNotification(e)
+	if strings.ContainsAny(r.Subject, "\r\n\t") || !strings.Contains(r.Subject, "on Boiler 7 East") {
+		t.Fatalf("subject = %q", r.Subject)
+	}
+	if r.Payload["deviceName"] != stored {
+		t.Fatalf("payload must keep the stored name, got %q", r.Payload["deviceName"])
+	}
+}

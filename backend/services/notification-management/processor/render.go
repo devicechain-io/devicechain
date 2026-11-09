@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -71,9 +72,9 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	shown := originator
 	switch {
 	case event.DeviceName != "":
-		shown = event.DeviceName
+		shown = oneLine(event.DeviceName)
 	case event.DeviceToken != "":
-		shown = event.DeviceToken
+		shown = oneLine(event.DeviceToken)
 	}
 	subject := fmt.Sprintf("[%s] Alarm %s: %s on %s", event.Severity, verb, event.AlarmKey, shown)
 
@@ -203,6 +204,25 @@ func renderEscalation(state *model.NotificationState, level int) *RenderedNotifi
 		facts.OccurredTime = state.LastNotifiedAt.Time
 	}
 	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload, Alarm: facts}
+}
+
+// oneLine makes a tenant-authored name safe for the one-line summary: control characters
+// (a device name may hold a line break) become spaces, because the summary is also the email
+// subject and a header with a line break is refused outright, which would fail every email
+// about that device. It is capped so a long name cannot swamp the line. The structured payload
+// keeps the name exactly as stored.
+func oneLine(s string) string {
+	out := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	out = strings.Join(strings.Fields(out), " ")
+	if r := []rune(out); len(r) > 120 {
+		out = string(r[:119]) + "…"
+	}
+	return out
 }
 
 // verbForEvent renders an event type as a human past-tense verb for the summary.
