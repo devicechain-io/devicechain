@@ -2260,8 +2260,9 @@ images that have never seen them. To go back, where that release's notes allow i
 the dcctl of the older release. A NEWER release is refused too, and installing it with
 this dcctl would not help, because the install record names the dcctl that ran the
 install, not the --version it was given: get the dcctl of the newer release, run
-'dcctl install' with it, then upgrade. A flag-less upgrade, a tag on a registry of
-your own (--registry) and this dcctl's own release are not affected.
+'dcctl install' with it, then upgrade. A tag on a registry of your own (--registry)
+and this dcctl's own release are not affected, and a flag-less upgrade is refused only when the
+instance is declared at a release newer than this dcctl.
 
 It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the

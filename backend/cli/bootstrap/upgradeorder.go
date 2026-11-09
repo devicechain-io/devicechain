@@ -207,7 +207,8 @@ var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interfac
 // and the upgrade would ask for it again, for ever. The newer release's own dcctl is the only
 // thing that records it.
 //
-// Only an EXPLICIT version is judged: the version a plain upgrade stays on is the instance's.
+// An explicit version is judged in both directions. A plain upgrade stays on the instance's declared
+// version, which is judged only when it is NEWER than this dcctl (judgeForeignRelease, olderOK).
 // Equal to this dcctl's release is the ordinary case; a tag that is not a release (a local
 // build, any tag on a registry of the operator's own) and a dcctl built from source are not
 // compared.
@@ -216,7 +217,7 @@ func refuseForeignRelease(requested, ownRelease, registry, retry string) error {
 }
 
 // normalizeRegistry reduces the spellings of one registry to a comparable form: surrounding
-// space, an https:// scheme, trailing slashes, the host's case and the default :443 are not
+// space, an https:// scheme, trailing slashes, case (the whole string is lowercased, path included) and the default :443 are not
 // differences. Anything else is left alone, so a genuinely different registry stays different.
 func normalizeRegistry(r string) string {
 	r = strings.ToLower(strings.TrimSpace(r))
