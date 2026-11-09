@@ -81,7 +81,7 @@ mensajes, así que el panel mantiene una línea continua cuando una releva a la 
 
 ![El mismo panel después de volver a escalar event-management a una réplica: la línea vuelve a cero.](/img/grafana/recovered-persistence-backlog.webp)
 
-*El mismo panel una vez que `event-management` se volvió a escalar a 1. El retraso se vacía en cerca de un minuto desde que arranca el lector. La breve caída a cero antes del último pico es el lector reiniciado tomando en vuelo los eventos en espera, que el broker ya no cuenta como no leídos, antes de que se recolecte su propio reporte por primera vez.*
+*El mismo panel una vez que `event-management` se volvió a escalar a 1. El retraso se vacía en cerca de un minuto desde que arranca el lector. El respaldo del broker cuenta tanto los eventos en espera como los eventos en vuelo hasta que el lector vuelve a reportar.*
 
 Diecinueve paneles tienen la alternativa del broker:
 

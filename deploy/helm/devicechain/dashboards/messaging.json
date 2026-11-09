@@ -1729,7 +1729,7 @@
       "id": 27,
       "type": "timeseries",
       "title": "Unread backlog per reader",
-      "description": "Messages waiting for each reader that it has not been handed yet. A backlog that grows steadily means the reader is slower than the producers. A brief rise during a restart is normal. Scale the reading service or look for what is slowing it. While the reading service is down this shows the message broker's own count.",
+      "description": "Messages waiting for each reader that it has not finished handling. A backlog that grows steadily means the reader is slower than the producers. A brief rise during a restart is normal. Scale the reading service or look for what is slowing it. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1747,7 +1747,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\"}) or max by (durable) (label_replace(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\"}, \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
+          "expr": "max by (durable) ({__name__=~\"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages\", namespace=\"$namespace\"}) or max by (durable) (label_replace(sum by (stream_name, consumer_name) (max by (__name__, stream_name, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\"})), \"durable\", \"$1\", \"consumer_name\", \"(.+)\"))",
           "legendFormat": "{{durable}}"
         }
       ],
