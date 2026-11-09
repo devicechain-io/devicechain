@@ -9,6 +9,8 @@ A **payload decoder** turns what a device or a network server sent into measurem
 
 :::note Live decoding is in v1.2
 A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+
+The same decoder also reads a payload a device sends on its own connection, over HTTP or MQTT, when the operator has turned that on. See [A device's own connection](#device-connection).
 :::
 
 ## When you need one {#when}
@@ -18,7 +20,8 @@ You probably do not need one when the network server already decodes the frame. 
 - the network server has no codec or formatter for the device, and you have the byte layout of its frames;
 - you want to rename, rescale or reshape what the network server decoded, such as converting Fahrenheit to Celsius or reading `bat.mv` as `battery`;
 - the sender is a [generic JSON](./inbound-integrations.md#generic-json) or [generic binary](./inbound-integrations.md#generic-binary) integration and you want more than the numbers it flattens;
-- the frame carries a Cayenne LPP payload, which `lpp.decode` reads in one call.
+- the frame carries a Cayenne LPP payload, which `lpp.decode` reads in one call;
+- the device connects to the platform itself, with no network server in between, and publishes a compact binary frame or JSON in a shape of its own: it can [send that payload as it is](#device-connection).
 
 ## What a decoder is {#what-it-is}
 
@@ -213,6 +216,120 @@ A decode that fails reports one of these reasons. Nothing is stored for that upl
 
 An uplink whose decode fails is not stored, and is recorded as a failed event with the reason `DECODE_FAILED`; the start of its error text is the reason in this table. It is recorded on the first delivery and not retried.
 
+## A device's own connection {#device-connection}
+
+A device that is not behind an integration can use its type's decoder too. Instead of the [event JSON](../reference/device-protocol.md#device-event), it sends its own payload, bytes and all, to a route made for that, and the decoder on its device type's profile turns the bytes into measurements. It is the same decoder, the same validation of the metrics you declared, and the same budgets, health and samples as for an integration.
+
+**Nothing changes for a device that sends event JSON.** A payload is read by a decoder only when a device addresses the raw-payload route or topic. The `events` route and topic never run a profile decoder, and nothing is chosen by what a body looks like.
+
+### 1. Write the decoder {#device-connection-decoder}
+
+Declare the metrics, write the decoder and publish the profile, as in [the ChirpStack example](#example-chirpstack). A device's own connection has no LoRaWAN port, so `fPort` and `fCnt` are `-1` there: use a section with no condition. This decoder reads a six-byte frame:
+
+```json
+{
+  "kind": "CEL",
+  "envVersion": 1,
+  "input": "FRAME",
+  "sections": [
+    {
+      "name": "uplink",
+      "outputs": [
+        { "key": "temperature", "expr": "double(i16be(frame, 0)) / 10.0" },
+        { "key": "humidity", "expr": "double(u8(frame, 2)) / 2.0" },
+        { "key": "battery", "expr": "u16be(frame, 3)" },
+        { "key": "door", "expr": "bit(frame, 5, 0)" }
+      ]
+    }
+  ],
+  "vectors": [
+    {
+      "name": "room sensor",
+      "input": { "frameHex": "00D75A0CE401" },
+      "expect": { "temperature": 21.5, "humidity": 45, "battery": 3300, "door": 1 }
+    }
+  ]
+}
+```
+
+The device's own profile version must be the one that carries the decoder. A newly published decoder can take up to about a minute to be picked up.
+
+What the decoder reads decides what is carried:
+
+| Decoder input | What the device's payload is |
+| --- | --- |
+| **Binary frame** | The bytes, at most 4 KiB. A larger payload is refused. |
+| **Generic JSON** | A JSON object, at most 64 KiB once parsed and 32 levels deep. Over HTTP the request's `Content-Type` must be `application/json` or end in `+json` (the command the console builds sends `application/octet-stream`, so change that header for a JSON decoder); over MQTT the payload must begin with `{`. A body announced as JSON that does not hold a JSON object is refused over HTTP; over MQTT it is read as bytes, and a decoder that needs the JSON records `missing_input`. |
+| **Decoded object** | Not available: nothing on a device's connection has decoded the payload, so the decode fails with `missing_input`. |
+
+### 2. Turn the wire on {#device-connection-enable}
+
+Both wires are off until the operator turns them on, and the two settings are independent:
+
+| Wire | Setting | Until it is on |
+| --- | --- | --- |
+| HTTP | `httpIngest.deviceUplinks` of the `event-sources` area | The route does not exist: `404`. |
+| MQTT | `infrastructure.nats.mqttDeviceUplinks` | The broker refuses a publish to the topic. A device receives the grant when it next connects. |
+
+Turn either on only after every `event-sources` and `device-management` replica runs a release that knows it; see [Releases and upgrades](../deployment/releases-and-upgrades.md#v130-device-uplinks) and the [Device Protocol Reference](../reference/device-protocol.md#raw-payload). The console shows the commands below whether or not the setting is on, because it cannot see the setting: a device that gets `404` or is refused by the broker is waiting on the operator.
+
+### 3. Send a payload {#device-connection-send}
+
+The **Send data** tab of a device in the console has a **Raw payload** choice that builds these commands for the device's own credential. Put the six bytes in a file:
+
+```bash
+printf '\x00\xd7\x5a\x0c\xe4\x01' > payload.bin
+```
+
+**Over HTTP**, `POST` the bytes to `/{instanceId}/{tenant}/devices/{deviceToken}/uplink` on the `event-sources` service (port 8081). A credential is required whatever the instance's authentication mode, and a binary body has nowhere to carry one, so it goes in headers: `Authorization: Bearer <access-token>` for an access token, or `X-DeviceChain-Credential-Type`, `X-DeviceChain-Credential-Id` and `X-DeviceChain-Credential-Secret` for any other type. Sending both forms is refused with `400`.
+
+```bash
+curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/<tenant>/devices/<device>/uplink' \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary '@payload.bin'
+```
+
+**Over MQTT**, publish the bytes, with no envelope and no credential, to `{instanceId}/{tenant}/devices/{deviceToken}/uplink`. The device authenticates when it connects, exactly as for events, and the broker lets it publish only to the topic with its own token:
+
+```bash
+mosquitto_pub --cafile instance-ca.crt \
+  -h '<mqtt-host>' -p 1883 \
+  -i '<instance-id>:<tenant>:<device>' \
+  -u '<tenant>:<access-token>' \
+  -t '<instance-id>/<tenant>/devices/<device>/uplink' \
+  -f payload.bin
+```
+
+A `202` or an MQTT acknowledgement means the payload was received, not that it decoded. Look for the readings on the device's Events tab: `temperature` 21.5, `humidity` 45, `battery` 3300 and `door` 1.
+
+### 4. When it does not work {#device-connection-failures}
+
+HTTP answers the device. Every answer that depends on the device is given only after its credential is proven, so a caller without the credential learns nothing about the device or its type:
+
+| Status | Meaning |
+| --- | --- |
+| `202` | Received and handed to the decoder. |
+| `400` | A credential header is malformed, or the body is announced as JSON and is not an object, or it nests deeper than 32 levels. |
+| `401` | No credential, or one that does not authenticate. Every cause gets the same answer. |
+| `404` | The route is not turned on. |
+| `413` | The body is over the cap for what the decoder reads (4 KiB of frame, 64 KiB of JSON) or over 1 MiB. |
+| `422` | The device's type has no decoder. The payload is never read as an event. |
+| `429` | The tenant is over its ingest ceiling, by messages or by readings. `Retry-After` says when to retry. |
+| `500` | The platform could not build the message. Not retryable by the device. |
+| `503` | The decoder lookup is unavailable, ingest is applying backpressure, or the downstream stream could not take the payload. `Retry-After` is set for the first two and says when to retry. |
+
+MQTT cannot answer a device, so the platform records what happened instead. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the full table; in short:
+
+- **A payload that cannot be handed to a decoder** (the device's type has no decoder, no device has the token, or the payload is over a cap) is recorded as a failed decode with the cause, and is never read as an event. An operator sees it as `total_msg_failed_decode` and in `device_uplink_messages_total` by `result`.
+- **A decode that runs and fails** is the same on both wires. Nothing from that payload is stored; it is counted in the decoder's health and recorded as a failed event with the reason `DECODE_FAILED`, whose error text names the [reason](#refusal-reasons), and it appears on the console's **Ingest failures** page and, as samples, on the profile's Decoder tab. A decoder that fails past its record budget in a window is counted and not recorded one failure at a time. On HTTP the device was already answered `202`.
+- **A tenant over its ceiling** is shed: over HTTP the device is told `429`; over MQTT the message is acknowledged and dropped, and counted in `total_msg_rate_limited` or `total_msg_reading_limited`.
+- **A decision the platform cannot make yet** (device-management cannot be asked, or backpressure) is retried: HTTP answers `503`, and an MQTT message waits and is offered again.
+
+An operator watches `device_uplink_requests_total` (HTTP) and `device_uplink_messages_total` (MQTT), each by `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), and `device_uplink_charged_readings_total` for the readings charged.
+
+A payload counts against the tenant's ingest ceilings once as a message and then as readings, at least the decoder's [maximum readings](#max-readings), as for an integration.
+
 ## Authoring over GraphQL {#graphql}
 
 Everything the console does is available on the device-management GraphQL API. Saving and clearing need permission to edit devices; testing needs permission to read them, and a caller limited to part of the tenant is refused.
@@ -381,6 +498,7 @@ A function's behaviour never changes once it has shipped. A fix arrives under a 
 - [LoRaWAN Uplink to Alarm](./lorawan-uplink-to-alarm.md): a decoder, an integration, a rule and an alarm, end to end, with the simulator as the network server.
 - [Decoder function reference](../reference/decoder-functions.md): the library's functions with their costs, and the limits.
 - [Inbound integrations](./inbound-integrations.md): the senders a decoder reads from.
+- [Device Protocol Reference](../reference/device-protocol.md#raw-payload): the raw-payload topic and route, and what happens to each message.
 - [Device types and profiles](../user-guide/device-types-and-profiles.md): metrics, drafts and publishing.
 - [Transport capability matrix](../reference/transport-matrix.md#inbound-integrations): what each way in supports.
 - [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders): what changed in this release.

@@ -9,6 +9,8 @@ Un **decodificador de payload** convierte lo que envió un dispositivo o un serv
 
 :::note La decodificación en vivo está en la v1.2
 Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un decodificador recién publicado puede tardar hasta un minuto en aplicarse. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders).
+
+El mismo decodificador también lee una carga útil que un dispositivo envía por su propia conexión, por HTTP o por MQTT, cuando el operador lo ha activado. Consulta [La conexión propia de un dispositivo](#device-connection).
 :::
 
 ## Cuándo necesitas uno {#when}
@@ -18,7 +20,8 @@ Probablemente no necesitas uno cuando el servidor de red ya decodifica la trama.
 - el servidor de red no tiene códec ni formatter para el dispositivo y conoces la disposición de bytes de sus tramas;
 - quieres renombrar, reescalar o remodelar lo que decodificó el servidor de red, por ejemplo convertir Fahrenheit a Celsius o leer `bat.mv` como `battery`;
 - el remitente es una integración de [JSON genérico](./inbound-integrations.md#generic-json) o de [binario genérico](./inbound-integrations.md#generic-binary) y quieres más que los números que aplana;
-- la trama lleva un payload Cayenne LPP, que `lpp.decode` lee en una sola llamada.
+- la trama lleva un payload Cayenne LPP, que `lpp.decode` lee en una sola llamada;
+- el dispositivo se conecta directamente a la plataforma, sin servidor de red de por medio, y publica una trama binaria compacta o JSON con una forma propia: puede [enviar esa carga útil tal cual](#device-connection).
 
 ## Qué es un decodificador {#what-it-is}
 
@@ -213,6 +216,120 @@ Una decodificación que falla informa de uno de estos motivos. No se guarda nada
 
 Un uplink cuya decodificación falla no se guarda y se registra como un evento fallido con el motivo `DECODE_FAILED`; el comienzo de su texto de error es el motivo de esta tabla. Se registra en la primera entrega y no se reintenta.
 
+## La conexión propia de un dispositivo {#device-connection}
+
+Un dispositivo que no está detrás de una integración también puede usar el decodificador de su tipo. En lugar del [JSON de evento](../reference/device-protocol.md#device-event), envía su propia carga útil, con todos sus bytes, a una ruta pensada para ello, y el decodificador del perfil de su tipo de dispositivo convierte los bytes en mediciones. Es el mismo decodificador, la misma validación de las métricas que declaraste y los mismos presupuestos, salud y muestras que para una integración.
+
+**Nada cambia para un dispositivo que envía JSON de evento.** Un decodificador solo lee una carga útil cuando un dispositivo se dirige a la ruta o al tema de carga útil sin procesar. La ruta y el tema `events` nunca ejecutan un decodificador de perfil, y nada se elige por el aspecto de un cuerpo.
+
+### 1. Escribe el decodificador {#device-connection-decoder}
+
+Declara las métricas, escribe el decodificador y publica el perfil, como en [el ejemplo de ChirpStack](#example-chirpstack). La conexión propia de un dispositivo no tiene puerto LoRaWAN, así que allí `fPort` y `fCnt` valen `-1`: usa una sección sin condición. Este decodificador lee una trama de seis bytes:
+
+```json
+{
+  "kind": "CEL",
+  "envVersion": 1,
+  "input": "FRAME",
+  "sections": [
+    {
+      "name": "uplink",
+      "outputs": [
+        { "key": "temperature", "expr": "double(i16be(frame, 0)) / 10.0" },
+        { "key": "humidity", "expr": "double(u8(frame, 2)) / 2.0" },
+        { "key": "battery", "expr": "u16be(frame, 3)" },
+        { "key": "door", "expr": "bit(frame, 5, 0)" }
+      ]
+    }
+  ],
+  "vectors": [
+    {
+      "name": "room sensor",
+      "input": { "frameHex": "00D75A0CE401" },
+      "expect": { "temperature": 21.5, "humidity": 45, "battery": 3300, "door": 1 }
+    }
+  ]
+}
+```
+
+La versión del perfil del dispositivo debe ser la que lleva el decodificador. Un decodificador recién publicado puede tardar hasta un minuto en aplicarse.
+
+Lo que lee el decodificador decide lo que se transporta:
+
+| Entrada del decodificador | Qué es la carga útil del dispositivo |
+| --- | --- |
+| **Trama binaria** | Los bytes, como máximo 4 KiB. Una carga útil mayor se rechaza. |
+| **JSON genérico** | Un objeto JSON de como máximo 64 KiB una vez analizado y 32 niveles de profundidad. Por HTTP, el `Content-Type` de la solicitud debe ser `application/json` o terminar en `+json` (el comando que construye la consola envía `application/octet-stream`, así que cambia esa cabecera para un decodificador JSON); por MQTT, la carga útil debe empezar por `{`. Un cuerpo anunciado como JSON que no contiene un objeto JSON se rechaza por HTTP; por MQTT se lee como bytes, y un decodificador que necesita el JSON registra `missing_input`. |
+| **Objeto decodificado** | No disponible: nada en la conexión de un dispositivo ha decodificado la carga útil, así que la decodificación falla con `missing_input`. |
+
+### 2. Activa la vía {#device-connection-enable}
+
+Ambas vías están desactivadas hasta que el operador las activa, y los dos ajustes son independientes:
+
+| Vía | Ajuste | Mientras no esté activado |
+| --- | --- | --- |
+| HTTP | `httpIngest.deviceUplinks` del área `event-sources` | La ruta no existe: `404`. |
+| MQTT | `infrastructure.nats.mqttDeviceUplinks` | El broker rechaza la publicación en el tema. Un dispositivo recibe la concesión la próxima vez que se conecta. |
+
+Activa cualquiera de ellas solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que la conozca; consulta [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v130-device-uplinks) y la [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload). La consola muestra los comandos siguientes esté o no activado el ajuste, porque no puede verlo: un dispositivo que recibe `404` o al que el broker rechaza está esperando al operador.
+
+### 3. Envía una carga útil {#device-connection-send}
+
+La pestaña **Enviar datos** de un dispositivo en la consola tiene la opción **Carga útil sin procesar**, que construye estos comandos con la credencial del propio dispositivo. Guarda los seis bytes en un archivo:
+
+```bash
+printf '\x00\xd7\x5a\x0c\xe4\x01' > payload.bin
+```
+
+**Por HTTP**, haz `POST` de los bytes a `/{instanceId}/{tenant}/devices/{deviceToken}/uplink` en el servicio `event-sources` (puerto 8081). Se exige una credencial sea cual sea el modo de autenticación de la instancia, y un cuerpo binario no tiene dónde llevarla, así que va en cabeceras: `Authorization: Bearer <access-token>` para un token de acceso, o `X-DeviceChain-Credential-Type`, `X-DeviceChain-Credential-Id` y `X-DeviceChain-Credential-Secret` para cualquier otro tipo. Enviar ambas formas a la vez se rechaza con `400`.
+
+```bash
+curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/<tenant>/devices/<device>/uplink' \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary '@payload.bin'
+```
+
+**Por MQTT**, publica los bytes, sin envoltorio y sin credencial, en `{instanceId}/{tenant}/devices/{deviceToken}/uplink`. El dispositivo se autentica al conectarse, exactamente como para los eventos, y el broker le deja publicar solo en el tema con su propio token:
+
+```bash
+mosquitto_pub --cafile instance-ca.crt \
+  -h '<mqtt-host>' -p 1883 \
+  -i '<instance-id>:<tenant>:<device>' \
+  -u '<tenant>:<access-token>' \
+  -t '<instance-id>/<tenant>/devices/<device>/uplink' \
+  -f payload.bin
+```
+
+Un `202` o un acuse de recibo MQTT significa que la carga útil se recibió, no que se decodificó. Busca las lecturas en la pestaña Eventos del dispositivo: `temperature` 21.5, `humidity` 45, `battery` 3300 y `door` 1.
+
+### 4. Cuando no funciona {#device-connection-failures}
+
+HTTP responde al dispositivo. Toda respuesta que depende del dispositivo se da solo después de comprobar su credencial, de modo que quien no la tiene no averigua nada sobre el dispositivo ni sobre su tipo:
+
+| Estado | Significado |
+| --- | --- |
+| `202` | Recibida y entregada al decodificador. |
+| `400` | Una cabecera de credencial está mal formada, o el cuerpo se anuncia como JSON y no es un objeto, o anida más de 32 niveles. |
+| `401` | Sin credencial, o con una que no se autentica. Todas las causas reciben la misma respuesta. |
+| `404` | La ruta no está activada. |
+| `413` | El cuerpo supera el límite de lo que lee el decodificador (4 KiB de trama, 64 KiB de JSON) o 1 MiB. |
+| `422` | El tipo del dispositivo no tiene decodificador. La carga útil nunca se lee como un evento. |
+| `429` | El inquilino supera su límite de ingesta, por mensajes o por lecturas. `Retry-After` indica cuándo reintentar. |
+| `500` | La plataforma no pudo construir el mensaje. El dispositivo no debe reintentar. |
+| `503` | La consulta del decodificador no está disponible, la ingesta aplica contrapresión, o el flujo posterior no pudo aceptar la carga útil. `Retry-After` se envía en los dos primeros casos e indica cuándo reintentar. |
+
+MQTT no puede responder a un dispositivo, así que la plataforma registra lo ocurrido. La [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload) tiene la tabla completa; en resumen:
+
+- **Una carga útil que no puede entregarse a un decodificador** (el tipo del dispositivo no tiene decodificador, ningún dispositivo tiene ese token, o la carga útil supera un límite) se registra como decodificación fallida con su causa y nunca se lee como un evento. Un operador la ve como `total_msg_failed_decode` y en `device_uplink_messages_total` por `result`.
+- **Una decodificación que se ejecuta y falla** es igual en ambas vías. No se almacena nada de esa carga útil; se cuenta en la salud del decodificador y se registra como evento fallido con el motivo `DECODE_FAILED`, cuyo texto de error nombra el [motivo](#refusal-reasons), y aparece en la página **Fallos de ingesta** de la consola y, como muestras, en la pestaña Decodificador del perfil. Un decodificador que falla por encima de su presupuesto de registros en una ventana se cuenta, pero no se registra fallo a fallo. Por HTTP, el dispositivo ya había recibido `202`.
+- **Un inquilino por encima de su límite** se descarta: por HTTP se le responde `429`; por MQTT el mensaje se confirma y se descarta, y se cuenta en `total_msg_rate_limited` o `total_msg_reading_limited`.
+- **Una decisión que la plataforma aún no puede tomar** (no se puede consultar a device-management, o hay contrapresión) se reintenta: HTTP responde `503`, y un mensaje MQTT espera y se vuelve a ofrecer.
+
+Un operador vigila `device_uplink_requests_total` (HTTP) y `device_uplink_messages_total` (MQTT), cada una por `result` (`accepted`, `bad_request`, `unauthorized`, `too_large`, `no_decoder`, `rate_limited`, `plan_unavailable`, `backpressure`, `publish_failed`, `internal_error`), y `device_uplink_charged_readings_total` para las lecturas cargadas.
+
+Una carga útil cuenta contra los límites de ingesta del inquilino una vez como mensaje y luego como lecturas, al menos las [lecturas máximas](#max-readings) del decodificador, igual que para una integración.
+
 ## Creación mediante GraphQL {#graphql}
 
 Todo lo que hace la consola está disponible en la API GraphQL de device-management. Guardar y borrar requieren permiso para editar dispositivos; probar requiere permiso para leerlos, y se rechaza a quien tenga el acceso limitado a una parte del inquilino.
@@ -381,6 +498,7 @@ El comportamiento de una función no cambia nunca una vez publicada. Una correcc
 - [De un uplink LoRaWAN a una alarma](./lorawan-uplink-to-alarm.md): un decodificador, una integración, una regla y una alarma, de principio a fin, con el simulador como servidor de red.
 - [Referencia de funciones del decodificador](../reference/decoder-functions.md): las funciones de la biblioteca con su coste, y los límites.
 - [Integraciones de entrada](./inbound-integrations.md): los remitentes de los que lee un decodificador.
+- [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload): el tema y la ruta de carga útil propia, y qué ocurre con cada mensaje.
 - [Tipos y perfiles de dispositivo](../user-guide/device-types-and-profiles.md): métricas, borradores y publicación.
 - [Matriz de capacidades por transporte](../reference/transport-matrix.md#inbound-integrations): qué admite cada vía de entrada.
 - [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders): qué cambió en esta versión.

@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -47,8 +48,10 @@ type snippetCase struct {
 			CredentialId   string `json:"credentialId"`
 		} `json:"credential"`
 	} `json:"input"`
-	Mqtt string `json:"mqtt"`
-	Http string `json:"http"`
+	Mqtt       string `json:"mqtt"`
+	Http       string `json:"http"`
+	MqttUplink string `json:"mqttUplink"`
+	HttpUplink string `json:"httpUplink"`
 }
 
 func loadSnippetCases(t *testing.T) []snippetCase {
@@ -314,6 +317,122 @@ func TestConnectSnippetMqttPublishesTheDevicesOwnEvent(t *testing.T) {
 				t.Errorf("topic names %q, body names %q", got, event.Device)
 			}
 			checkSnippetEvent(t, c, true, event, built)
+		})
+	}
+}
+
+// The raw-payload curl is sent, as the shell would send it, through this service's real
+// device-uplink route: the path, the credential headers and the body (a file, so the test
+// stands in bytes for it) must be what the route accepts and hands on.
+func TestConnectSnippetRawPayloadCurlIsAcceptedByTheDeviceUplinkRoute(t *testing.T) {
+	for _, c := range loadSnippetCases(t) {
+		t.Run(c.Name, func(t *testing.T) {
+			argv := shellWords(t, c.HttpUplink)
+			if len(argv) == 0 || argv[0] != "curl" {
+				t.Fatalf("not a curl: %v", argv)
+			}
+			flags := flagValues(t, argv, "-i")
+			if one(t, flags, "-X") != http.MethodPost {
+				t.Fatalf("method = %v", flags["-X"])
+			}
+			headers := map[string]string{}
+			for _, h := range flags["-H"] {
+				name, value, ok := strings.Cut(h, ": ")
+				if !ok {
+					t.Fatalf("malformed header %q", h)
+				}
+				headers[name] = value
+			}
+			if headers["Content-Type"] != "application/octet-stream" {
+				t.Errorf("Content-Type = %q", headers["Content-Type"])
+			}
+			if one(t, flags, "--data-binary") != "@payload.bin" {
+				t.Errorf("body = %v, want the contents of payload.bin", flags["--data-binary"])
+			}
+			// The harness's instance id is "inst", so the placeholder is filled with that.
+			target, err := url.Parse(strings.ReplaceAll(one(t, flags, ""), snippetInstancePlaceholder, "inst"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target.Port() != strconv.Itoa(config.DefaultHttpIngestPort) {
+				t.Errorf("port = %q, want the HTTP ingest listener's %d", target.Port(), config.DefaultHttpIngestPort)
+			}
+			wantPath := "/inst" + "/" + c.Input.Tenant + "/devices/" + c.Input.DeviceToken + "/uplink"
+			if target.Path != wantPath {
+				t.Fatalf("path = %q, want %q", target.Path, wantPath)
+			}
+
+			// The harness's route is the real one; its plan fake authenticates the credential the
+			// snippet presents and reports a frame decoder.
+			h := newDeviceHarness(t, fplan())
+			h.plans.valid[c.Input.Credential.CredentialId] = true
+			rec := h.post(target.Path, headers["Content-Type"], "", headers)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("POST %s answered %d: %s", target.Path, rec.Code, rec.Body.String())
+			}
+			if len(h.published) != 1 {
+				t.Fatalf("published %d uplinks", len(h.published))
+			}
+			e := h.published[0]
+			if !bytes.Equal(h.payloads[0].Frame, []byte("")) {
+				t.Errorf("the route carried %x, not the bytes the snippet's file holds", h.payloads[0].Frame)
+			}
+			if e.Device != c.Input.DeviceToken {
+				t.Errorf("device = %q, want %q", e.Device, c.Input.DeviceToken)
+			}
+			if e.CredentialType == nil || *e.CredentialType != c.Input.Credential.CredentialType {
+				t.Errorf("credential type = %v, want %q", e.CredentialType, c.Input.Credential.CredentialType)
+			}
+			if e.CredentialSecret != nil && *e.CredentialSecret != "<password>" {
+				t.Errorf("credential secret = %q, want the console's placeholder", *e.CredentialSecret)
+			}
+			if e.CredentialId == nil || *e.CredentialId != c.Input.Credential.CredentialId {
+				t.Errorf("credential id = %v, want %q", e.CredentialId, c.Input.Credential.CredentialId)
+			}
+			if wantSecret := c.Input.Credential.CredentialType == "MQTT_BASIC"; (e.CredentialSecret != nil) != wantSecret {
+				t.Errorf("credential secret present = %t, want %t", e.CredentialSecret != nil, wantSecret)
+			}
+		})
+	}
+}
+
+// The raw-payload mosquitto_pub publishes a file on the device's own uplink topic, the one the
+// broker grants it (when the operator opts in) and this service captures, with the same
+// connection arguments the events command uses and no message body of its own.
+func TestConnectSnippetRawPayloadMqttPublishesOnTheDevicesOwnUplinkTopic(t *testing.T) {
+	for _, c := range loadSnippetCases(t) {
+		t.Run(c.Name, func(t *testing.T) {
+			argv := shellWords(t, c.MqttUplink)
+			if len(argv) == 0 || argv[0] != "mosquitto_pub" {
+				t.Fatalf("not a mosquitto_pub: %v", argv)
+			}
+			flags := flagValues(t, argv)
+			if one(t, flags, "-f") != "payload.bin" {
+				t.Errorf("message = %v, want the contents of payload.bin", flags["-f"])
+			}
+			if len(flags["-m"]) != 0 {
+				t.Error("a raw payload command must not carry a message body of its own")
+			}
+			topic := fillInstance(one(t, flags, "-t"))
+			want := messaging.SubjectToMqttTopic(messaging.DeviceUplinkSubject(snippetInstance, c.Input.Tenant, c.Input.DeviceToken))
+			if topic != want {
+				t.Fatalf("topic = %q, want the device's own uplink topic %q", topic, want)
+			}
+			if tenant, ok := tenantFromTopic(topic); !ok || tenant != c.Input.Tenant {
+				t.Errorf("tenantFromTopic = %q, %t", tenant, ok)
+			}
+			// The connection arguments are the events command's, so the broker accepts the same
+			// client id and username.
+			events := flagValues(t, shellWords(t, c.Mqtt))
+			for _, f := range []string{"-i", "-u", "-P", "-h", "-p", "--cafile"} {
+				if strings.Join(flags[f], "|") != strings.Join(events[f], "|") {
+					t.Errorf("%s = %v, the events command has %v", f, flags[f], events[f])
+				}
+			}
+			device, ok := messaging.ParseDeviceUplinkSubject(strings.ReplaceAll(topic, "/", "."))
+			if !ok || device != c.Input.DeviceToken {
+				t.Errorf("the capture stream reads the device as %q, %t", device, ok)
+			}
 		})
 	}
 }

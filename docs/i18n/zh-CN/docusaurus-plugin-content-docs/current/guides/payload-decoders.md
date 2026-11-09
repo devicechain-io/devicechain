@@ -9,6 +9,8 @@ title: 载荷解码器
 
 :::note 实时解码已随 v1.2 提供
 你发布的解码器会在[入站集成](./inbound-integrations.md)的实时上行上运行：当上行所属的设备，其设备类型的配置文件版本带有解码器时，该上行会用它来解码，而不是按网络服务器解码出的内容存储。新发布的解码器可能需要约一分钟才会生效。没有解码器的设备类型照旧存储。升级时如何滚动部署见[发布与升级](../deployment/releases-and-upgrades.md#v120-payload-decoders)。
+
+同一个解码器也会读取设备通过自己的连接（HTTP 或 MQTT）发送的载荷，前提是运维人员已开启该功能。参见[设备自己的连接](#device-connection)。
 :::
 
 ## 什么时候需要 {#when}
@@ -18,7 +20,8 @@ title: 载荷解码器
 - 网络服务器没有为该设备配置编解码器或格式化器，而你有它的帧字节布局；
 - 你想重命名、重新缩放或重新组织网络服务器解码出的内容，例如把华氏度转换成摄氏度，或把 `bat.mv` 读作 `battery`；
 - 发送方是[通用 JSON](./inbound-integrations.md#generic-json) 或[通用二进制](./inbound-integrations.md#generic-binary)集成，而你想要的不止它展平出来的数字；
-- 帧中携带 Cayenne LPP 载荷，`lpp.decode` 一次调用就能读取。
+- 帧中携带 Cayenne LPP 载荷，`lpp.decode` 一次调用就能读取；
+- 设备自己直接连接平台，中间没有网络服务器，并发布紧凑的二进制帧或自成一格的 JSON：它可以[原样发送该载荷](#device-connection)。
 
 ## 解码器是什么 {#what-it-is}
 
@@ -213,6 +216,120 @@ sections[0].outputs[1].key: "nope" is not a declared measured metric of this pro
 
 解码失败的上行不会被存储，而是被记录为原因为 `DECODE_FAILED` 的失败事件；其错误文本的开头就是本表中的原因。它在第一次投递时记录，不会重试。
 
+## 设备自己的连接 {#device-connection}
+
+不在集成之后的设备也可以使用其类型的解码器。它不发送[事件 JSON](../reference/device-protocol.md#device-event)，而是把自己的载荷（连同所有字节）发送到专用的路由，由其设备类型配置文件上的解码器把这些字节转换为测量。它与集成使用的是同一个解码器，对你所声明指标的校验和预算、健康状况与样本也都相同。
+
+**发送事件 JSON 的设备不受任何影响。** 只有当设备访问原始载荷的路由或主题时，解码器才会读取载荷。`events` 路由和主题从不运行配置文件解码器，也不会根据正文的样子来选择。
+
+### 1. 编写解码器 {#device-connection-decoder}
+
+声明指标、编写解码器并发布配置文件，方法与 [ChirpStack 示例](#example-chirpstack)相同。设备自己的连接没有 LoRaWAN 端口，因此那里的 `fPort` 和 `fCnt` 都是 `-1`：请使用不带条件的分区。下面的解码器读取一个六字节的帧：
+
+```json
+{
+  "kind": "CEL",
+  "envVersion": 1,
+  "input": "FRAME",
+  "sections": [
+    {
+      "name": "uplink",
+      "outputs": [
+        { "key": "temperature", "expr": "double(i16be(frame, 0)) / 10.0" },
+        { "key": "humidity", "expr": "double(u8(frame, 2)) / 2.0" },
+        { "key": "battery", "expr": "u16be(frame, 3)" },
+        { "key": "door", "expr": "bit(frame, 5, 0)" }
+      ]
+    }
+  ],
+  "vectors": [
+    {
+      "name": "room sensor",
+      "input": { "frameHex": "00D75A0CE401" },
+      "expect": { "temperature": 21.5, "humidity": 45, "battery": 3300, "door": 1 }
+    }
+  ]
+}
+```
+
+设备所用的配置文件版本必须是带有该解码器的版本。新发布的解码器可能需要约一分钟才会生效。
+
+解码器读取什么，决定了传递什么：
+
+| 解码器输入 | 设备的载荷是什么 |
+| --- | --- |
+| **二进制帧** | 字节，最大 4 KiB。更大的载荷会被拒绝。 |
+| **通用 JSON** | 一个 JSON 对象，解析后最大 64 KiB，嵌套最多 32 层。通过 HTTP 时，请求的 `Content-Type` 必须是 `application/json` 或以 `+json` 结尾（控制台生成的命令发送的是 `application/octet-stream`，因此对 JSON 解码器要修改该请求头）；通过 MQTT 时，载荷必须以 `{` 开头。声明为 JSON 但其中不含 JSON 对象的正文，在 HTTP 上会被拒绝；在 MQTT 上则作为字节读取，需要 JSON 的解码器会记录 `missing_input`。 |
+| **已解码对象** | 不可用：设备的连接上没有任何环节解码过载荷，因此解码会以 `missing_input` 失败。 |
+
+### 2. 开启通道 {#device-connection-enable}
+
+两条通道在运维人员开启之前都处于关闭状态，且两个设置相互独立：
+
+| 通道 | 设置 | 未开启时 |
+| --- | --- | --- |
+| HTTP | `event-sources` 区域的 `httpIngest.deviceUplinks` | 路由不存在：`404`。 |
+| MQTT | `infrastructure.nats.mqttDeviceUplinks` | 代理拒绝向该主题的发布。设备在下次连接时获得授权。 |
+
+只有当所有 `event-sources` 和 `device-management` 副本都运行了认识它的版本之后，才可开启任一通道；参见[发布与升级](../deployment/releases-and-upgrades.md#v130-device-uplinks)和[设备协议参考](../reference/device-protocol.md#raw-payload)。无论该设置是否开启，控制台都会显示下面的命令，因为它看不到该设置：收到 `404` 或被代理拒绝的设备，是在等待运维人员。
+
+### 3. 发送载荷 {#device-connection-send}
+
+控制台中设备的 **Send data** 选项卡有一个 **Raw payload** 选项，会用设备自己的凭据生成这些命令。先把这六个字节放进一个文件：
+
+```bash
+printf '\x00\xd7\x5a\x0c\xe4\x01' > payload.bin
+```
+
+**通过 HTTP**，把字节 `POST` 到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/devices/{deviceToken}/uplink`。无论实例采用何种认证模式，都必须提供凭据；二进制正文没有地方携带凭据，所以凭据放在请求头中：访问令牌使用 `Authorization: Bearer <access-token>`，其他类型使用 `X-DeviceChain-Credential-Type`、`X-DeviceChain-Credential-Id` 和 `X-DeviceChain-Credential-Secret`。同时使用两种形式会被以 `400` 拒绝。
+
+```bash
+curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/<tenant>/devices/<device>/uplink' \
+  -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary '@payload.bin'
+```
+
+**通过 MQTT**，把字节（不加信封，也不带凭据）发布到 `{instanceId}/{tenant}/devices/{deviceToken}/uplink`。设备在连接时完成认证，与事件完全相同，代理只允许它向带有自己令牌的主题发布：
+
+```bash
+mosquitto_pub --cafile instance-ca.crt \
+  -h '<mqtt-host>' -p 1883 \
+  -i '<instance-id>:<tenant>:<device>' \
+  -u '<tenant>:<access-token>' \
+  -t '<instance-id>/<tenant>/devices/<device>/uplink' \
+  -f payload.bin
+```
+
+`202` 或 MQTT 确认表示载荷已收到，并不表示已解码。请在设备的 Events 选项卡中查看读数：`temperature` 21.5、`humidity` 45、`battery` 3300 和 `door` 1。
+
+### 4. 不工作时 {#device-connection-failures}
+
+HTTP 会回应设备。凡是取决于设备的回应，都只在其凭据通过验证之后才给出，因此没有凭据的调用方无法得知设备或其类型的任何信息：
+
+| 状态码 | 含义 |
+| --- | --- |
+| `202` | 已收到并交给解码器。 |
+| `400` | 凭据请求头格式不正确，或正文声明为 JSON 但不是对象，或嵌套超过 32 层。 |
+| `401` | 没有凭据，或凭据无法通过认证。所有原因得到相同的回应。 |
+| `404` | 该路由未开启。 |
+| `413` | 正文超过解码器所读内容的上限（帧 4 KiB、JSON 64 KiB），或超过 1 MiB。 |
+| `422` | 设备的类型没有解码器。载荷绝不会被当作事件读取。 |
+| `429` | 租户超出其摄取上限（按消息或按读数）。`Retry-After` 指明何时重试。 |
+| `500` | 平台无法构造该消息。设备不应重试。 |
+| `503` | 解码器查询不可用、摄取正在施加背压，或下游流无法接收该载荷。前两种情况会设置 `Retry-After`，指明何时重试。 |
+
+MQTT 无法回应设备，因此平台会把发生的情况记录下来。完整表格见[设备协议参考](../reference/device-protocol.md#raw-payload)；简要如下：
+
+- **无法交给解码器的载荷**（设备的类型没有解码器、没有设备使用该令牌，或载荷超出上限）会连同原因记录为解码失败，绝不会被当作事件读取。运维人员可在 `total_msg_failed_decode` 以及按 `result` 区分的 `device_uplink_messages_total` 中看到。
+- **运行后失败的解码**在两条通道上相同。该载荷的任何内容都不会被存储；它会计入解码器的健康状况，并以原因 `DECODE_FAILED` 记录为失败事件，其错误文本会指明[原因](#refusal-reasons)，并出现在控制台的 **Ingest failures** 页面，以及配置文件 Decoder 选项卡中的样本里。在某个时间窗口内超出记录预算的失败只计数，不会逐条记录。通过 HTTP 时，设备已经收到 `202`。
+- **超出上限的租户**会被丢弃：通过 HTTP 时设备收到 `429`；通过 MQTT 时消息被确认后丢弃，并计入 `total_msg_rate_limited` 或 `total_msg_reading_limited`。
+- **平台暂时无法作出的决定**（无法询问 device-management，或存在背压）会被重试：HTTP 返回 `503`，MQTT 消息则等待并再次投递。
+
+运维人员关注 `device_uplink_requests_total`（HTTP）和 `device_uplink_messages_total`（MQTT），两者都按 `result` 区分（`accepted`、`bad_request`、`unauthorized`、`too_large`、`no_decoder`、`rate_limited`、`plan_unavailable`、`backpressure`、`publish_failed`、`internal_error`），以及用于统计已计费读数的 `device_uplink_charged_readings_total`。
+
+载荷与集成一样计入租户的摄取上限：先按一条消息计，再按读数计，至少为解码器的[最大读数](#max-readings)。
+
 ## 通过 GraphQL 编写 {#graphql}
 
 控制台所做的一切，都可以在 device-management 的 GraphQL API 上完成。保存和清除需要编辑设备的权限；测试需要读取设备的权限，访问范围仅限于租户一部分的调用者会被拒绝。
@@ -381,6 +498,7 @@ The Things Stack 中的载荷格式化器已经解码了帧，但得到的是 `{
 - [从 LoRaWAN 上行到告警](./lorawan-uplink-to-alarm.md)：解码器、集成、规则和告警的完整过程，以模拟器充当网络服务器。
 - [解码器函数参考](../reference/decoder-functions.md)：函数库中的函数及其成本，以及各项限制。
 - [入站集成](./inbound-integrations.md)：解码器读取的发送方。
+- [设备协议参考](../reference/device-protocol.md#raw-payload)：原始载荷的主题和路由，以及每条消息的处理方式。
 - [设备类型与配置文件](../user-guide/device-types-and-profiles.md)：指标、草稿与发布。
 - [传输能力矩阵](../reference/transport-matrix.md#inbound-integrations)：每种接入方式支持什么。
 - [发布与升级](../deployment/releases-and-upgrades.md#v120-payload-decoders)：本版本有哪些变化。

@@ -35,7 +35,10 @@ import {
   CA_FILE,
   exampleMeasurements,
   httpCommand,
+  httpUplinkCommand,
   mqttCommand,
+  mqttUplinkCommand,
+  PAYLOAD_FILE,
   PLACEHOLDER,
   usableCredential,
   type SnippetInput,
@@ -44,6 +47,10 @@ import {
 const TRANSPORTS = ['mqtt', 'http'] as const;
 type Transport = (typeof TRANSPORTS)[number];
 const TRANSPORT_LABEL_KEYS = { mqtt: 'connectTransportMqtt', http: 'connectTransportHttp' } as const;
+// What is sent: the DeviceChain event JSON, or the device's own bytes for its type's decoder.
+const KINDS = ['event', 'payload'] as const;
+type Kind = (typeof KINDS)[number];
+const KIND_LABEL_KEYS = { event: 'connectKindEvent', payload: 'connectKindPayload' } as const;
 
 export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken: string; deviceEnabled: boolean }) {
   const { t } = useTranslation('devices');
@@ -51,6 +58,7 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
   const tenant = claims?.tenant ?? '';
   const { toast } = useToast();
   const [transport, setTransport] = useState<Transport>('mqtt');
+  const [kind, setKind] = useState<Kind>('event');
   const [picked, setPicked] = useState('');
 
   const creds = useQuery(() => listDeviceCredentials(deviceToken), [deviceToken]);
@@ -95,7 +103,12 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
     metrics,
   };
   const example = exampleMeasurements(metrics);
-  const command = transport === 'mqtt' ? mqttCommand(input) : httpCommand(input);
+  const raw = kind === 'payload';
+  const builders = {
+    event: { mqtt: mqttCommand, http: httpCommand },
+    payload: { mqtt: mqttUplinkCommand, http: httpUplinkCommand },
+  } as const;
+  const command = builders[kind][transport](input);
 
   const copy = async () => {
     try {
@@ -111,6 +124,12 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">{t('connectIntro')}</p>
       <div className="flex flex-wrap items-end gap-4">
+        <SegmentedControl<Kind>
+          ariaLabel={t('connectKindLabel')}
+          value={kind}
+          onValueChange={setKind}
+          options={KINDS.map((v) => ({ value: v, label: t(KIND_LABEL_KEYS[v]) }))}
+        />
         <SegmentedControl<Transport>
           ariaLabel={t('connectTransportLabel')}
           value={transport}
@@ -167,14 +186,26 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
         {chosen.credentialType === 'ACCESS_TOKEN' && (
           <li>{t('connectPlaceholderAccessToken', { placeholder: PLACEHOLDER.accessToken })}</li>
         )}
-        <li>
-          {example.fallback
-            ? t('connectExampleFallback')
-            : example.omitted > 0
-              ? t('connectExamplePartial', { count: example.omitted })
-              : t('connectExamplePublished')}
-        </li>
-        <li>{t('connectAcceptedIsNotStored')}</li>
+        {raw ? (
+          <>
+            <li>{t('connectPayloadFile', { file: PAYLOAD_FILE })}</li>
+            <li>{t('connectPayloadDecoder')}</li>
+            {transport === 'http' && <li>{t('connectPayloadHttpJson')}</li>}
+            <li>{transport === 'mqtt' ? t('connectPayloadMqttSetting') : t('connectPayloadHttpSetting')}</li>
+            <li>{transport === 'mqtt' ? t('connectPayloadMqttOutcome') : t('connectPayloadHttpOutcome')}</li>
+          </>
+        ) : (
+          <>
+            <li>
+              {example.fallback
+                ? t('connectExampleFallback')
+                : example.omitted > 0
+                  ? t('connectExamplePartial', { count: example.omitted })
+                  : t('connectExamplePublished')}
+            </li>
+            <li>{t('connectAcceptedIsNotStored')}</li>
+          </>
+        )}
       </ul>
     </div>
   );
