@@ -102,7 +102,8 @@ export type ScopeAnchorKind =
 export type ServiceAccountCreateRequest = {
   /**
    * True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
-   * place of its roles' write authorities. Cannot be changed later. Defaults to false. A tenant
+   * place of its roles' write authorities. Cannot be changed later. Defaults to false. Refused
+   * unless agent actions are enabled on this instance. A tenant
    * whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
    * account that holds any of them without this flag.
    */

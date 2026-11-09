@@ -54,6 +54,7 @@ const (
 	ReasonPublicClientNoAuto = "PUBLIC_CLIENT_NOT_AUTO"
 	ReasonTooFewApprovers    = "TOO_FEW_ELIGIBLE_APPROVERS"
 	ReasonAgentOnly          = "NOT_AN_AGENT_PRINCIPAL"
+	ReasonAutoNotAvailable   = "AUTO_NOT_AVAILABLE"
 )
 
 // Request is what a decision is asked about. Client and Attested come from the caller's TOKEN and
@@ -214,9 +215,13 @@ func Decide(st State, req Request) Decision {
 		d.Reasons = append(d.Reasons, ReasonPublicClientNoAuto)
 	}
 	if auto {
-		d.Verdict = VerdictAuto
-		d.RequiredApprovals = 0
-		return d
+		// 🔴 NO AUTOMATIC PATH IN THIS RELEASE (red line AX-RL8: no auto path without holdouts and
+		// invariants). The holdout sets and invariant coverage that would make automatic
+		// execution answerable do not exist yet, so a policy that WOULD allow AUTO gets a verdict
+		// that needs a person instead. VerdictAuto stays in the vocabulary for the release that
+		// earns it; this function cannot return it until then.
+		auto = false
+		d.Reasons = append(d.Reasons, ReasonAutoNotAvailable)
 	}
 	if req.Kind == KindAnnotation {
 		// An annotation never queues: it is automatic or it does not happen.

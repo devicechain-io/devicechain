@@ -161,13 +161,39 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 			return m.AgentPolicy(ctx, claims.Tenant)
 		}
 	}
-	return m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, current *iam.AgentPolicyVersion) (string, string, bool, error) {
+	view, err := m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, current *iam.AgentPolicyVersion) (string, string, bool, error) {
 		if current == nil {
 			return "", "", false, agentPolicyErr(AgentPolicyNoPolicy, "publish an agent policy before enabling agent actuation")
 		}
 		doc, err := agentpolicy.Parse([]byte(current.Document))
 		if err != nil {
-			return "", "", false, fmt.Errorf("the agent policy in force cannot be read: %w", err)
+			if enabled {
+				return "", "", false, fmt.Errorf("the agent policy in force cannot be read: %w", err)
+			}
+			// 🔴 THE KILL SWITCH NEVER DEPENDS ON READING THE POLICY IT STOPS, AND NEVER DROPS
+			// THE SERVICE-ACCOUNT RULE. A document this pod cannot read (written by a newer
+			// release mid-upgrade, or damaged) is replaced by a disabled policy that carries the
+			// tenant's serviceAccounts.agentFlagRequiredFor forward (the key is frozen across
+			// versions), keeping only the authorities this release knows: no role here can hold
+			// another. If even that key cannot be read, no pod can read the document at all, so
+			// actuation is already off everywhere; nothing is published rather than a document
+			// that would silently lift the rule.
+			req, ok := agentpolicy.ExtractAgentFlagRequirement([]byte(current.Document))
+			if !ok {
+				log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read at all; agent actuation is already off, and the kill switch publishes nothing.")
+				return "", "", false, errNothingToKill
+			}
+			doc = &agentpolicy.Document{}
+			var known []string
+			for _, a := range req {
+				if a != string(auth.AuthorityAll) && auth.ValidAuthority(a) && !slices.Contains(known, a) {
+					known = append(known, a)
+				}
+			}
+			if len(known) > 0 {
+				doc.ServiceAccounts = &agentpolicy.ServiceAccts{AgentFlagRequiredFor: known}
+			}
+			log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read; the kill switch publishes a disabled policy keeping its service-account rule.")
 		}
 		if enabled {
 			doc.Actuation = agentpolicy.ActuationEnabled
@@ -180,7 +206,14 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 		}
 		return string(b), iam.AgentPolicyOriginActuation, false, nil
 	})
+	if errors.Is(err, errNothingToKill) {
+		return m.AgentPolicy(ctx, claims.Tenant)
+	}
+	return view, err
 }
+
+// errNothingToKill aborts a kill-switch publish that has nothing safe to publish (see above).
+var errNothingToKill = errors.New("agent actuation is already off: the policy in force cannot be read")
 
 // publishAgentPolicy publishes the document pick chooses, classifying it against the policy in
 // force UNDER the head lock, and refusing a loosening without a fresh second factor.
@@ -394,7 +427,8 @@ func grantAuthorities(authorities []string, su, scoped bool, scope string) ([]st
 }
 
 // eligibleApprovers counts the members of tenant who could approve: an enabled membership of an
-// enabled identity, UNSCOPED (a customer- or group-scoped member covers only part of the tenant, and
+// enabled identity WITH AN ACTIVE SECOND FACTOR (approval needs a step-up, so a person who cannot
+// present one cannot approve), UNSCOPED (a customer- or group-scoped member covers only part of the tenant, and
 // a count cannot know the targets, so it is not counted), holding one of roles and the raw write
 // authority w (directly or through "*"). It may undercount, never overcount: an approval verdict
 // is refused when it needs more approvers than this.
@@ -407,6 +441,7 @@ func (m *Manager) eligibleApprovers(ctx context.Context, tenant string, roles []
 		return 0, err
 	}
 	n := 0
+	var candidates []uint
 	for i := range ms {
 		mem := &ms[i]
 		if !mem.Enabled || mem.IsScoped() {
@@ -426,14 +461,14 @@ func (m *Manager) eligibleApprovers(ctx context.Context, tenant string, roles []
 		if !slices.Contains(held, string(w)) && !slices.Contains(held, string(auth.AuthorityAll)) {
 			continue
 		}
-		id, err := m.iam.IdentityByID(ctx, mem.IdentityID)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			continue
-		}
-		if err != nil {
-			return 0, err
-		}
-		if id.Enabled {
+		candidates = append(candidates, mem.IdentityID)
+	}
+	ok, err := m.iam.ApproverCandidates(ctx, candidates)
+	if err != nil {
+		return 0, err
+	}
+	for _, id := range candidates {
+		if ok[id] {
 			n++
 		}
 	}
@@ -477,7 +512,18 @@ func (m *Manager) clientAttested(ctx context.Context, clientID string) (bool, er
 // agent action, for the caller's OWN tenant and the client id in the caller's OWN token (never an
 // argument). It reads everything now, with no cache, and a store error is returned rather than
 // answered: a caller must treat an error as a refusal.
+//
+// Only an AGENT may ask: an agent-origin token that carries at least one proposal authority. A
+// person's console token, or an integration's, is refused with ErrForbidden rather than answered,
+// so the query is not an oracle over the tenant's policy and approvers for anyone else.
+//
+// It is cheap first: the switches, the client and the kind are decided before anything is counted,
+// and the approver count (the one query over the tenant's members) runs only for a verdict that
+// would need one.
 func (m *Manager) AgentActuationDecision(ctx context.Context, claims *auth.Claims, req agentpolicy.Request) (agentpolicy.Decision, error) {
+	if !holdsProposalAuthority(claims) {
+		return agentpolicy.Decision{}, fmt.Errorf("%w: agentActuationDecision answers only an agent's token", auth.ErrForbidden)
+	}
 	req.Client = claims.ClientId
 	req.Attested = false
 	st := agentpolicy.State{InstanceEnabled: m.agentActuation}
@@ -486,17 +532,55 @@ func (m *Manager) AgentActuationDecision(ctx context.Context, claims *auth.Claim
 		return agentpolicy.Decision{}, err
 	}
 	st.OperatorSuspended, st.Policy, st.Version = suspended, doc, version
-	if req.Client != "" && doc != nil {
-		if req.Attested, err = m.clientAttested(ctx, req.Client); err != nil {
-			return agentpolicy.Decision{}, err
-		}
+	// Decide as though approvers were plentiful: a refusal for any other reason needs no count.
+	st.EligibleApprovers = 2
+	if pre := agentpolicy.Decide(st, req); pre.Verdict == agentpolicy.VerdictRefuse {
+		return pre, nil
 	}
-	if w, ok := kindSource[req.Kind]; ok && doc != nil && doc.Approvers != nil {
+	if req.Attested, err = m.clientAttested(ctx, req.Client); err != nil {
+		return agentpolicy.Decision{}, err
+	}
+	st.EligibleApprovers = 0
+	if w, ok := kindSource[req.Kind]; ok && doc.Approvers != nil {
 		if st.EligibleApprovers, err = m.eligibleApprovers(ctx, claims.Tenant, doc.Approvers.Roles, w); err != nil {
 			return agentpolicy.Decision{}, err
 		}
 	}
 	return agentpolicy.Decide(st, req), nil
+}
+
+// holdsProposalAuthority reports whether claims are an agent's: agent-origin, and literally
+// carrying at least one proposal authority (which only the mint-time derivation puts there).
+func holdsProposalAuthority(c *auth.Claims) bool {
+	if c == nil || !auth.IsAgentOrigin(c) {
+		return false
+	}
+	for _, a := range c.Authorities {
+		if auth.IsProposalAuthority(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// requiredAgentFlags reads the tenant's serviceAccounts.agentFlagRequiredFor for the service
+// account paths (create, access change, mint).
+//
+// 🔴 THE RULE NEVER LAPSES. A damaged document of this release's format is an error, and the
+// caller refuses (fail closed). A document written by a NEWER release during a rolling upgrade has
+// its one frozen key extracted (agentpolicy.AgentFlagRequirement), so an older pod enforces the
+// same rule as the new ones instead of minting the raw writes they would refuse, without stopping
+// every integration on the old pods until the rollout finishes.
+func requiredAgentFlags(ctx context.Context, store *iam.Store, tenant string) ([]string, error) {
+	_, v, err := store.PublishedAgentPolicy(ctx, tenant)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	required, perr := agentpolicy.AgentFlagRequirement([]byte(v.Document))
+	if perr != nil {
+		return nil, fmt.Errorf("the published agent policy of %s cannot be read: %w", tenant, perr)
+	}
+	return required, nil
 }
 
 // checkActSessionCap enforces the policy's absolute cap on an act:* grant

@@ -113,6 +113,18 @@ func (s *signIn) options() []auth.MintOption {
 	return opts
 }
 
+// oauthOptions are the sign-in facts an OAuth (third-party client) token carries: the amr only.
+//
+// 🔴 NEVER mfa_time. When the person last presented a second factor is a fact about the person's
+// own console session; a token handed to a third-party client must not carry it, and a step-up
+// never accepts an agent-origin token anyway (auth.StepUpFresh).
+func (s *signIn) oauthOptions() []auth.MintOption {
+	if s == nil {
+		return nil
+	}
+	return amrOptions(s.amr)
+}
+
 func (r *sessionRecord) signIn() *signIn {
 	return &signIn{amr: r.Amr, mfaAt: r.MfaAt, anchor: r.Anchor}
 }

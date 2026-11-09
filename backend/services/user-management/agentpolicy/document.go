@@ -22,6 +22,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/auth"
 )
 
 // Mode is what a policy says about one kind of action.
@@ -124,6 +126,11 @@ func (d *Duration) D(def time.Duration) time.Duration {
 // Document is the policy as a tenant writes it. Every field is optional; Validate applies the
 // rules and Effective* accessors apply the defaults. Unknown keys are refused at Parse.
 type Document struct {
+	// Version is the document format, "v1alpha1" in this release (the agent policy is in the
+	// preview tier). Absent reads as v1alpha1, and the stored form always carries it. A version
+	// this build does not know is refused (ErrUnknownVersion) before any other key is read, so a
+	// document written by a newer release is never half-understood by an older one.
+	Version string `json:"version,omitempty"`
 	// Actuation is "enabled" or "disabled". Anything else, or absent, is disabled.
 	Actuation string `json:"actuation,omitempty"`
 	// Clients are the OAuth client_ids (and agent service-account client ids) that may receive
@@ -252,6 +259,15 @@ type RolloutTools struct {
 // ErrInvalid wraps every validation failure.
 var ErrInvalid = errors.New("invalid agent policy")
 
+// DocumentVersion is the one document format this build reads and writes.
+const DocumentVersion = "v1alpha1"
+
+// ErrUnknownVersion is a document whose format this build does not know: one written by a newer
+// release, read on an older pod during a rolling upgrade. It is NOT ErrInvalid. Every reader that
+// decides whether agents may act treats it as "no policy" (actuation off); see each caller for
+// what else it does.
+var ErrUnknownVersion = errors.New("agent policy document version not known to this release")
+
 func invalid(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, a...))
 }
@@ -261,6 +277,17 @@ func invalid(format string, a ...any) error {
 func Parse(raw []byte) (*Document, error) {
 	if len(raw) > maxDocumentBytes {
 		return nil, invalid("the document is larger than %d bytes", maxDocumentBytes)
+	}
+	// The version first, read loosely: a newer format may carry keys this build would refuse,
+	// and the right answer to it is "unknown version", not "invalid".
+	var head struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return nil, invalid("%v", err)
+	}
+	if head.Version != "" && head.Version != DocumentVersion {
+		return nil, fmt.Errorf("%w: %q (this release reads %q)", ErrUnknownVersion, head.Version, DocumentVersion)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -279,7 +306,13 @@ func Parse(raw []byte) (*Document, error) {
 
 // Canonical is the document's stored form: Go's struct order, defaults NOT filled in, so what is
 // stored is what the tenant wrote.
-func (d *Document) Canonical() ([]byte, error) { return json.Marshal(d) }
+//
+// It always carries the version, so a later release can tell this format from its own.
+func (d *Document) Canonical() ([]byte, error) {
+	c := *d
+	c.Version = DocumentVersion
+	return json.Marshal(&c)
+}
 
 // Validate applies every rule to the document.
 func (d *Document) Validate() error {
@@ -317,6 +350,12 @@ func (d *Document) Validate() error {
 	if sa := d.ServiceAccounts; sa != nil {
 		if err := validList("serviceAccounts.agentFlagRequiredFor", sa.AgentFlagRequiredFor); err != nil {
 			return err
+		}
+		for _, a := range sa.AgentFlagRequiredFor {
+			// A misspelt authority would require nothing and look like a rule.
+			if a == string(auth.AuthorityAll) || !auth.ValidAuthority(a) {
+				return invalid("serviceAccounts.agentFlagRequiredFor: %q is not a grantable authority", a)
+			}
 		}
 	}
 	if t := d.Tools; t != nil {
@@ -533,4 +572,49 @@ func intOr(n *int, def int) int {
 		return def
 	}
 	return *n
+}
+
+// ExtractAgentFlagRequirement reads ONLY serviceAccounts.agentFlagRequiredFor out of a stored
+// document of ANY version, ignoring every other key. ok is false when raw is not a JSON object or
+// that one key is malformed.
+//
+// 🔴 IT EXISTS SO THE SERVICE-ACCOUNT RULE NEVER LAPSES ON AN OLDER POD. A document written by a
+// newer release is refused by Parse (ErrUnknownVersion), which is right for every decision about
+// agents: those fail closed to "off". But the service-account rule restricts ORDINARY accounts,
+// and reading it as "no requirement" would let an older pod mint raw writes the newer pods refuse.
+// So the key's spelling and meaning are FROZEN across document versions: a later format may add
+// keys, and must keep this one.
+func ExtractAgentFlagRequirement(raw []byte) (required []string, ok bool) {
+	var probe struct {
+		ServiceAccounts *struct {
+			AgentFlagRequiredFor []string `json:"agentFlagRequiredFor"`
+		} `json:"serviceAccounts"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, false
+	}
+	if probe.ServiceAccounts == nil {
+		return nil, true
+	}
+	return append([]string(nil), probe.ServiceAccounts.AgentFlagRequiredFor...), true
+}
+
+// AgentFlagRequirement is the service-account rule of a stored document, for the paths that
+// enforce it (account creation, access changes, every mint). A document of this release's format
+// must parse in full: a damaged one is an error, so the rule does not lapse. A document of a newer
+// format has the one frozen key extracted (ExtractAgentFlagRequirement); if even that fails, it is
+// an error too.
+func AgentFlagRequirement(raw []byte) ([]string, error) {
+	doc, err := Parse(raw)
+	if err == nil {
+		return doc.AgentFlagRequiredFor(), nil
+	}
+	if !errors.Is(err, ErrUnknownVersion) {
+		return nil, err
+	}
+	req, ok := ExtractAgentFlagRequirement(raw)
+	if !ok {
+		return nil, fmt.Errorf("%w; and its serviceAccounts.agentFlagRequiredFor cannot be read", err)
+	}
+	return req, nil
 }

@@ -211,3 +211,24 @@ func TestStepUpUsesMfaTimeNotIat(t *testing.T) {
 	}
 	require.False(t, StepUpFresh(nil, su, now))
 }
+
+// 🔴 A step-up is a person at their own session: an agent-origin token never counts, whatever it
+// carries (a client id, a scope, an audience, a proposal authority).
+func TestStepUpRefusesAgentOrigin(t *testing.T) {
+	now := time.Now()
+	su := StepUp{MaxAge: 15 * time.Minute}
+	base := func() *Claims {
+		return &Claims{TokenType: TokenTypeAccess, Amr: AmrPasswordOTP(), MfaTime: jwt.NewNumericDate(now)}
+	}
+	require.True(t, StepUpFresh(base(), su, now), "control: a console token with a fresh factor steps up")
+	for name, mut := range map[string]func(*Claims){
+		"client_id": func(c *Claims) { c.ClientId = "agent" },
+		"scope":     func(c *Claims) { c.Scope = "read-only" },
+		"audience":  func(c *Claims) { c.Audience = []string{"https://mcp.example"} },
+		"proposal":  func(c *Claims) { c.Authorities = []string{string(AlarmPropose)} },
+	} {
+		c := base()
+		mut(c)
+		require.False(t, StepUpFresh(c, su, now), name)
+	}
+}

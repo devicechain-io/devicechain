@@ -235,3 +235,30 @@ var (
 	_ rdb.AuditLabeler = AgentPolicy{}
 	_ rdb.AuditLabeler = AgentPolicyVersion{}
 )
+
+// ApproverCandidates answers, for a set of identity ids, which are ENABLED identities with an
+// ACTIVE second factor: the people who could step up to approve. Two queries for the whole set,
+// whatever its size.
+func (s *Store) ApproverCandidates(ctx context.Context, identityIDs []uint) (map[uint]bool, error) {
+	out := map[uint]bool{}
+	if len(identityIDs) == 0 {
+		return out, nil
+	}
+	var enabled []uint
+	if err := s.sys(ctx).Model(&Identity{}).Where("id IN ? AND enabled = ?", identityIDs, true).
+		Pluck("id", &enabled).Error; err != nil {
+		return nil, err
+	}
+	if len(enabled) == 0 {
+		return out, nil
+	}
+	var withFactor []uint
+	if err := s.sys(ctx).Model(&MfaFactor{}).Where("identity_id IN ? AND kind = ? AND state = ?", enabled, MfaKindTotp, MfaStateActive).
+		Pluck("identity_id", &withFactor).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range withFactor {
+		out[id] = true
+	}
+	return out, nil
+}

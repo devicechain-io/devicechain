@@ -479,6 +479,11 @@ func validateClientId(id string) error {
 	if len(id) > 128 {
 		return fmt.Errorf("clientId must be at most 128 characters")
 	}
+	// Service account client ids start with "dcsa_"; an OAuth client named like one would be
+	// a label claiming to be an account (and would collide with the agent policy's client list).
+	if strings.HasPrefix(strings.ToLower(id), "dcsa_") {
+		return fmt.Errorf("clientId may not start with %q, which is reserved for service accounts", "dcsa_")
+	}
 	for _, r := range id {
 		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
 			r == '-' || r == '_' || r == '.'

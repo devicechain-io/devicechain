@@ -100,6 +100,11 @@ func StepUpFresh(c *Claims, su StepUp, now time.Time) bool {
 	if c == nil || c.TokenType != TokenTypeAccess || c.MfaTime == nil || su.MaxAge <= 0 {
 		return false
 	}
+	// A step-up is a PERSON proving presence at their own session. An agent-origin token (an
+	// OAuth client's, a service account's) never counts, whatever it carries.
+	if IsAgentOrigin(c) {
+		return false
+	}
 	switch {
 	case slices.Contains(c.Amr, AmrOTP):
 	case su.AcceptRecoveryCodes && slices.Contains(c.Amr, AmrMFA):

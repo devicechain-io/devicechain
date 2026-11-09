@@ -651,7 +651,7 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 		return nil, errServer(err.Error())
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.sid, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti, g.amr.options()...)
+	refresh, err := issuer.IssueOAuthRefresh(g.tenant, g.email, g.epoch, g.sid, g.roles, g.refreshCaps, g.refreshScope, audience, clientID, refreshJti, g.amr.oauthOptions()...)
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
@@ -675,7 +675,7 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 // (one minted before the claim existed) is read as "session unknown", never as a match
 // (auth.SameSession).
 func accessMintOptions(g scopedGrant) []auth.MintOption {
-	return append(g.amr.options(), auth.WithSessionID(g.sid))
+	return append(g.amr.oauthOptions(), auth.WithSessionID(g.sid))
 }
 
 // expiresInSeconds is the OAuth expires_in of an access token: the seconds from now until

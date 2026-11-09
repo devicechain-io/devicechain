@@ -378,14 +378,14 @@ func (m *Manager) serviceAccountAuthorities(ctx context.Context, acct *iam.Servi
 		}
 		// The tenant's serviceAccounts.agentFlagRequiredFor, applied to the roles as they are NOW:
 		// a role edited after the account was created can make it hold a listed authority, and
-		// the checks at creation and at access changes cannot see that. A store error decides
-		// nothing; an unreadable policy requires nothing (it is logged where it is read).
-		_, doc, _, err := m.publishedPolicy(ctx, acct.TenantId)
+		// the checks at creation and at access changes cannot see that. A store error, or a
+		// published policy that cannot be read, refuses the mint (see requiredAgentFlags).
+		required, err := requiredAgentFlags(ctx, m.iam, acct.TenantId)
 		if err != nil {
-			log.Error().Err(err).Msg("Could not load the agent policy to check a service account mint.")
+			log.Error().Err(err).Msg("Could not read the agent policy to check a service account mint; refused.")
 			return nil, errServer(errGrantUnavailable)
 		}
-		for _, r := range doc.AgentFlagRequiredFor() {
+		for _, r := range required {
 			if slices.Contains(roleAuthorities, r) || slices.Contains(roleAuthorities, string(auth.AuthorityAll)) {
 				return nil, errInvalidGrant("this tenant requires a service account holding " + r + " to be an agent account")
 			}

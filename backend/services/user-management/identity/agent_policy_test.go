@@ -289,14 +289,16 @@ func TestMfaTimeNotAdvancedByRefresh(t *testing.T) {
 	require.NoError(t, err)
 	e.kvr.entries[sessionKey(sid)] = b
 
-	toks, err := e.m.mintScopedGrant(ctx, agentPerson, e.epochOf(t, agentPerson), sid, agentTenant,
-		auth.ScopeReadOnly, auth.ScopeReadOnly, nil, agentClient)
+	// The console path: the tenant pair a sign-in mints, then a refresh of it.
+	rec2, err := e.m.loadSession(sid, agentPerson)
 	require.NoError(t, err)
-	first := e.claimsOf(t, toks.AccessToken)
+	pair, err := e.m.issueTenantTokens(agentTenant, agentPerson, e.epochOf(t, agentPerson), sid, nil, nil, auth.Scope{}, false, rec2.signIn())
+	require.NoError(t, err)
+	first := e.claimsOf(t, pair.AccessToken)
 	require.NotNil(t, first.MfaTime)
 	require.Equal(t, past.Unix(), first.MfaTime.Unix())
 
-	renewed, err := e.m.RefreshOAuth(ctx, toks.RefreshToken, "", agentClient, nil)
+	renewed, err := e.m.Refresh(ctx, pair.RefreshToken)
 	require.NoError(t, err)
 	second := e.claimsOf(t, renewed.AccessToken)
 	require.NotNil(t, second.MfaTime)
@@ -305,8 +307,31 @@ func TestMfaTimeNotAdvancedByRefresh(t *testing.T) {
 		"a freshly minted token from an hour-old verification is not a step-up")
 
 	// A password-only sign-in carries no mfa_time at all.
-	plain := e.claimsOf(t, mustGrant(t, e, e.sidOf(t, agentPerson)).AccessToken)
-	require.Nil(t, plain.MfaTime)
+	plainSid := e.sidOf(t, agentPerson)
+	rec3, err := e.m.loadSession(plainSid, agentPerson)
+	require.NoError(t, err)
+	plainPair, err := e.m.issueTenantTokens(agentTenant, agentPerson, e.epochOf(t, agentPerson), plainSid, nil, nil, auth.Scope{}, false, rec3.signIn())
+	require.NoError(t, err)
+	require.Nil(t, e.claimsOf(t, plainPair.AccessToken).MfaTime)
+}
+
+// 🔴 An OAuth (third-party client) token never carries mfa_time, even from a sign-in that verified
+// a factor a second ago: when a person last presented a factor is not the client's business, and
+// a step-up never accepts an agent-origin token anyway.
+func TestOAuthTokenCarriesNoMfaTime(t *testing.T) {
+	e := newAgentEnv(t, string(auth.AlarmWrite))
+	sid, err := e.m.startSession(agentPerson, auth.AmrPasswordOTP())
+	require.NoError(t, err)
+	toks := mustGrant(t, e, sid)
+	access := e.claimsOf(t, toks.AccessToken)
+	require.Nil(t, access.MfaTime)
+	require.Equal(t, auth.AmrPasswordOTP(), access.Amr, "the amr itself still rides the token")
+	refresh, err := e.validator.ValidateRefresh(toks.RefreshToken)
+	require.NoError(t, err)
+	require.Nil(t, refresh.MfaTime)
+	renewed, err := e.m.RefreshOAuth(context.Background(), toks.RefreshToken, "", agentClient, nil)
+	require.NoError(t, err)
+	require.Nil(t, e.claimsOf(t, renewed.AccessToken).MfaTime)
 }
 
 func mustGrant(t *testing.T, e *agentEnv, sid auth.SessionID) *OAuthTokens {
@@ -392,7 +417,8 @@ func TestLoosenRequiresStepUp(t *testing.T) {
 func TestDecisionFailsClosedOnMissingPolicy(t *testing.T) {
 	e := newAgentEnv(t, string(auth.AlarmWrite))
 	ctx := context.Background()
-	agent := &auth.Claims{Tenant: agentTenant, Username: agentPerson, ClientId: agentClient, TokenType: auth.TokenTypeAccess}
+	agent := &auth.Claims{Tenant: agentTenant, Username: agentPerson, ClientId: agentClient, Scope: "act:alarms",
+		Authorities: []string{string(auth.AlarmPropose)}, TokenType: auth.TokenTypeAccess}
 	req := agentpolicy.Request{Kind: agentpolicy.KindAlarmAck, TargetCount: 1, Client: "forged-client-argument"}
 
 	d, err := e.m.AgentActuationDecision(ctx, agent, req)
@@ -409,11 +435,16 @@ func TestDecisionFailsClosedOnMissingPolicy(t *testing.T) {
 	require.Equal(t, 1, d.RequiredApprovals)
 	require.Equal(t, 1, d.PolicyVersion)
 
-	// The client comes from the token: a console token (no client) is refused whatever is passed.
-	human := &auth.Claims{Tenant: agentTenant, Username: agentPerson, TokenType: auth.TokenTypeAccess}
-	d, err = e.m.AgentActuationDecision(ctx, human, agentpolicy.Request{Kind: agentpolicy.KindAlarmAck, TargetCount: 1, Client: agentClient})
-	require.NoError(t, err)
-	require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
+	// Only an agent may ask: a console token, even a tenant administrator's with "*", and an
+	// agent-origin token without a proposal authority are refused, whatever client is passed.
+	for name, c := range map[string]*auth.Claims{
+		"console":   {Tenant: agentTenant, Username: agentPerson, Authorities: []string{"*"}, TokenType: auth.TokenTypeAccess},
+		"read-only": {Tenant: agentTenant, Username: agentPerson, ClientId: agentClient, Scope: "read-only", Authorities: []string{"alarm:read"}, TokenType: auth.TokenTypeAccess},
+		"no origin": {Tenant: agentTenant, Username: agentPerson, Authorities: []string{"alarm:write"}, TokenType: auth.TokenTypeAccess},
+	} {
+		_, err = e.m.AgentActuationDecision(ctx, c, agentpolicy.Request{Kind: agentpolicy.KindAlarmAck, TargetCount: 1, Client: agentClient})
+		require.ErrorIs(t, err, auth.ErrForbidden, name)
+	}
 
 	_, err = e.store.SetAgentPolicySuspended(ctx, agentTenant, true, "operator")
 	require.NoError(t, err)
@@ -447,6 +478,7 @@ func (e *agentEnv) seedApprover(t *testing.T, email, roleToken string, authoriti
 		Email: email, Enabled: true, PasswordHash: "x",
 		Memberships: []iam.Membership{{TenantId: agentTenant, Enabled: true, TenantRoles: []iam.Role{*role}}},
 	}))
+	e.enrollFactor(t, email)
 }
 
 // An AGENT service account's token never carries a raw write: reads, plus the proposal authorities
@@ -502,4 +534,16 @@ func TestAgentFlaggedServiceAccountMintsProposalsOnly(t *testing.T) {
 	c, err = e.validator.Validate(decode(t, rec).AccessToken)
 	require.NoError(t, err)
 	require.True(t, slices.Contains(c.Authorities, "command:write"))
+}
+
+// enrollFactor gives email an ACTIVE TOTP factor, which an eligible approver needs.
+func (e *mintTestEnv) enrollFactor(t *testing.T, email string) {
+	t.Helper()
+	ctx := context.Background()
+	id, err := e.store.IdentityByEmail(ctx, email)
+	require.NoError(t, err)
+	now := time.Now()
+	require.NoError(t, e.m.db.Database.WithContext(core.WithSystemContext(ctx)).Create(&iam.MfaFactor{
+		IdentityID: id.ID, Kind: iam.MfaKindTotp, State: iam.MfaStateActive, SecretName: "test-" + email, CreatedAt: now, ConfirmedAt: &now,
+	}).Error)
 }

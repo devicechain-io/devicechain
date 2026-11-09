@@ -32,11 +32,13 @@ func requireAgentFlag(ctx context.Context, tx *iam.Store, tenant string, agent b
 	if v == nil {
 		return nil
 	}
-	doc, err := agentpolicy.Parse([]byte(v.Document))
+	// A document of a newer release (mid-upgrade) has the frozen key extracted, so this pod
+	// enforces the same rule the new pods do; a damaged one of this release's format is an error,
+	// so the rule never lapses.
+	required, err := agentpolicy.AgentFlagRequirement([]byte(v.Document))
 	if err != nil {
 		return fmt.Errorf("the published agent policy of %s cannot be read: %w", tenant, err)
 	}
-	required := doc.AgentFlagRequiredFor()
 	if len(required) == 0 {
 		return nil
 	}

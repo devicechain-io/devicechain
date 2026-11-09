@@ -191,6 +191,15 @@ func (s *Service) CreateServiceAccount(ctx context.Context, in ServiceAccountInp
 	if err := core.ValidateToken(in.Token); err != nil {
 		return nil, "", integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("service account token %q: %v", in.Token, err))
 	}
+	// 🔴 AN AGENT ACCOUNT ONLY WHERE AGENT ACTUATION IS ON. A pod of an earlier release does not
+	// know the flag and mints an account's roles' writes as they are; during a rolling upgrade
+	// an agent account created here could have its token minted there, carrying raw writes. The
+	// instance switch is turned on only after the rollout has finished, so requiring it here
+	// closes that window.
+	if in.Agent && !s.agentActuation {
+		return nil, "", integrity.NewRefusal(integrity.ClassInvalid,
+			"an agent service account can be created only when agent actions are enabled on this instance")
+	}
 	if len(in.Name) > maxNameLen {
 		return nil, "", limit.Exceeded("name length", len(in.Name), maxNameLen)
 	}

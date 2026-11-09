@@ -1718,7 +1718,7 @@ type Query {
     # administered on the same plane by the same operator.
     tenantTiers: [AdminTenantTier!]!
     """
-    Agent actions in one tenant: whether this instance allows them, whether the operator has
+    (Preview: may change in a minor release.) Agent actions in one tenant: whether this instance allows them, whether the operator has
     suspended them for the tenant, and the tenant's published agent policy version. Requires
     tenant:read.
     """
@@ -2508,7 +2508,7 @@ type Mutation {
         id: ID!
     ): Boolean!
     """
-    Suspends or restores agent actions for one tenant, whatever its own agent policy says.
+    (Preview: may change in a minor release.) Suspends or restores agent actions for one tenant, whatever its own agent policy says.
     Suspended, no AI agent can be granted an action scope in the tenant and every agent decision
     there is a refusal. Restoring returns the tenant to its own policy. Requires tenant:write.
     """

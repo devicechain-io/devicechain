@@ -858,7 +858,9 @@ type ServiceAccount {
     """
     True when the account runs an AI agent. Its tokens never carry a write authority: in place of
     its roles' writes they carry the matching proposal authorities, so it can ask for an action and
-    never perform one. Set when the account is created and never changed.
+    never perform one. Set when the account is created and never changed. This field is stable,
+    not preview: it will not be removed, because removing it would turn agent accounts back into
+    integrations holding their roles' writes.
     """
     agent: Boolean!
     """
@@ -915,7 +917,8 @@ input ServiceAccountCreateRequest {
     secretExpiresInDays: Int
     """
     True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
-    place of its roles' write authorities. Cannot be changed later. Defaults to false. A tenant
+    place of its roles' write authorities. Cannot be changed later. Defaults to false. Refused
+    unless agent actions are enabled on this instance. A tenant
     whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
     account that holds any of them without this flag.
     """
@@ -1188,20 +1191,22 @@ type Query {
     """
     serviceAccountTokenEndpoint: String
     """
-    This tenant's agent policy: the version in force, the working draft, and whether agent
+    (Preview: may change in a minor release.) This tenant's agent policy: the version in force, the working draft, and whether agent
     actions are in effect. Requires agent:admin.
     """
     agentPolicy: AgentPolicy!
-    """The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
+    """(Preview: may change in a minor release.) The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
     agentPolicyVersions(
         """How many versions to return: 1 to 100. Defaults to 20."""
         limit: Int
     ): [AgentPolicyVersion!]!
     """
-    The tenant's verdict on an action an AI agent proposes to take, read now from the published
+    (Preview: may change in a minor release.) The tenant's verdict on an action an AI agent proposes to take, read now from the published
     policy. The agent's client is the one in the caller's own token, never an argument, so this
-    answers only for the caller. A caller without a client (a person's console session) is always
-    refused. An error must be treated as a refusal.
+    answers only for the caller, and only an agent's token (one carrying a proposal authority) may
+    ask: any other caller is refused with an error. This release never answers AUTO: an action the
+    policy would let run automatically still needs one person to approve it. An error must be
+    treated as a refusal.
     """
     agentActuationDecision(
         """The kind of action."""
@@ -1788,7 +1793,7 @@ type Mutation {
         token: String!
     ): Boolean!
     """
-    Saves the working draft of this tenant's agent policy. The document is JSON; unknown keys
+    (Preview: may change in a minor release.) Saves the working draft of this tenant's agent policy. The document is JSON; unknown keys
     and invalid values are refused. Saving changes nothing in force. Requires agent:admin, and
     cannot be called by an AI agent or a service account.
     """
@@ -1797,7 +1802,7 @@ type Mutation {
         document: String!
     ): AgentPolicy!
     """
-    Publishes the draft as the agent policy in force, as a new version. A change that loosens the
+    (Preview: may change in a minor release.) Publishes the draft as the agent policy in force, as a new version. A change that loosens the
     policy (more automatic actions, larger limits, new clients, more approvers, fewer approvals,
     weaker sign-in requirements) needs a second factor verified within the policy's step-up age,
     and is refused with the code STEP_UP_REQUIRED otherwise. Requires agent:admin, and cannot be
@@ -1805,7 +1810,7 @@ type Mutation {
     """
     publishAgentPolicy: AgentPolicy!
     """
-    Publishes an earlier version's document again, as a new version. The same step-up rule as
+    (Preview: may change in a minor release.) Publishes an earlier version's document again, as a new version. The same step-up rule as
     publishAgentPolicy applies. Requires agent:admin, and cannot be called by an AI agent or a
     service account.
     """
@@ -1814,7 +1819,7 @@ type Mutation {
         version: Int!
     ): AgentPolicy!
     """
-    Turns agent actions in this tenant off or on: publishes the policy in force as a new version
+    (Preview: may change in a minor release.) Turns agent actions in this tenant off or on: publishes the policy in force as a new version
     with only that changed. Turning them off always succeeds and needs no second factor; turning
     them back on is a loosening and needs one. Requires agent:admin, and cannot be called by an AI
     agent or a service account.

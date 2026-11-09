@@ -37,6 +37,9 @@ func TestParseIsStrict(t *testing.T) {
 		`{"clients":[" a"]}`,
 		`{"tools":{"commands":{"caps":{"perAction":-1}}}}`,
 		`{"tools":{"commands":{"groups":[]}}}`,
+		`{"serviceAccounts":{"agentFlagRequiredFor":["command:wirte"]}}`,
+		`{"serviceAccounts":{"agentFlagRequiredFor":["*"]}}`,
+		`{"serviceAccounts":{"agentFlagRequiredFor":["alarm:propose"]}}`,
 		`not json`,
 	}
 	for _, b := range bad {
@@ -227,20 +230,25 @@ const openPolicy = `{"actuation":"enabled","clients":["agent"],"tools":{"alarms"
 // suspension: every one refuses, whatever is asked.
 func TestDecisionFailsClosedOnMissingPolicy(t *testing.T) {
 	req := Request{Kind: KindAlarmAck, TargetCount: 1, Client: "agent", Attested: true}
-	cases := map[string]State{
-		"no policy":        {InstanceEnabled: true, Policy: nil, Version: 0},
-		"version zero":     {InstanceEnabled: true, Policy: mustParseNoT(openPolicy), Version: 0},
-		"instance off":     {InstanceEnabled: false, Policy: mustParseNoT(openPolicy), Version: 3},
-		"suspended":        {InstanceEnabled: true, OperatorSuspended: true, Policy: mustParseNoT(openPolicy), Version: 3},
-		"disabled":         enabledState(`{"actuation":"disabled","clients":["agent"],"tools":{"alarms":{"ack":"auto"}}}`),
-		"absent actuation": enabledState(`{"clients":["agent"],"tools":{"alarms":{"ack":"auto"}}}`),
+	// Approvers are plentiful in every case, so each refusal is the switch it names and not a
+	// shortage of approvers.
+	cases := map[string]struct {
+		st     State
+		reason string
+	}{
+		"no policy":        {State{InstanceEnabled: true, Policy: nil, Version: 0, EligibleApprovers: 5}, ReasonNoPolicy},
+		"version zero":     {State{InstanceEnabled: true, Policy: mustParseNoT(openPolicy), Version: 0, EligibleApprovers: 5}, ReasonNoPolicy},
+		"instance off":     {State{InstanceEnabled: false, Policy: mustParseNoT(openPolicy), Version: 3, EligibleApprovers: 5}, ReasonInstanceOff},
+		"suspended":        {State{InstanceEnabled: true, OperatorSuspended: true, Policy: mustParseNoT(openPolicy), Version: 3, EligibleApprovers: 5}, ReasonOperatorSuspended},
+		"disabled":         {enabledState(`{"actuation":"disabled","clients":["agent"],"tools":{"alarms":{"ack":"auto"}}}`), ReasonActuationOff},
+		"absent actuation": {enabledState(`{"clients":["agent"],"tools":{"alarms":{"ack":"auto"}}}`), ReasonActuationOff},
 	}
-	for name, st := range cases {
-		d := Decide(st, req)
+	for name, c := range cases {
+		d := Decide(c.st, req)
 		require.Equal(t, VerdictRefuse, d.Verdict, name)
-		require.NotEmpty(t, d.Reasons, name)
+		require.Equal(t, []string{c.reason}, d.Reasons, name)
 	}
-	require.Equal(t, VerdictAuto, Decide(enabledState(openPolicy), req).Verdict, "control: the open policy does allow it")
+	require.Equal(t, VerdictApprove, Decide(enabledState(openPolicy), req).Verdict, "control: the open policy does allow it (with a person, see TestDecisionNeverReturnsAuto)")
 }
 
 // The client allowlist: an unlisted client, and a token with no client at all, are refused.
@@ -259,9 +267,12 @@ func TestDecisionCodeFloors(t *testing.T) {
 	d := Decide(st, Request{Kind: KindCommandSend, Impact: ImpactDestructive, Command: "wipe", TargetCount: 1, Client: "agent", Attested: true})
 	require.Equal(t, VerdictApprove, d.Verdict)
 	require.Equal(t, 2, d.RequiredApprovals)
-	// NORMAL inside the auto block: AUTO.
+	// NORMAL inside the auto block: the policy would allow AUTO, and this release holds it to one
+	// approval (TestDecisionNeverReturnsAuto).
 	d = Decide(st, Request{Kind: KindCommandSend, Impact: ImpactNormal, Command: "reboot", TargetCount: 1, Client: "agent", Attested: true})
-	require.Equal(t, VerdictAuto, d.Verdict)
+	require.Equal(t, VerdictApprove, d.Verdict)
+	require.Equal(t, 1, d.RequiredApprovals)
+	require.Contains(t, d.Reasons, ReasonAutoNotAvailable)
 	// Over the auto device limit: approval; over the default two-person size: two.
 	d = Decide(st, Request{Kind: KindCommandBatch, Impact: ImpactNormal, Command: "reboot", TargetCount: 60, Client: "agent", Attested: true})
 	require.Equal(t, VerdictApprove, d.Verdict)
@@ -284,12 +295,52 @@ func TestDecisionCodeFloors(t *testing.T) {
 	require.Equal(t, VerdictRefuse, Decide(st, Request{Kind: KindCommandSend, Impact: "SPICY", Command: "reboot", TargetCount: 1, Client: "agent"}).Verdict)
 }
 
-// A public client's proposals never auto-execute unless the policy opts in.
+// A public client's proposals are never automatic unless the policy opts in; the reason says so.
 func TestDecisionPublicClientNotAuto(t *testing.T) {
 	st := enabledState(openPolicy)
 	d := Decide(st, Request{Kind: KindAlarmAck, TargetCount: 1, Client: "agent", Attested: false})
 	require.Equal(t, VerdictApprove, d.Verdict)
 	require.Contains(t, d.Reasons, ReasonPublicClientNoAuto)
 	st.Policy.Auto = &Auto{AllowAutoForPublicClients: true}
-	require.Equal(t, VerdictAuto, Decide(st, Request{Kind: KindAlarmAck, TargetCount: 1, Client: "agent", Attested: false}).Verdict)
+	d = Decide(st, Request{Kind: KindAlarmAck, TargetCount: 1, Client: "agent", Attested: false})
+	require.NotContains(t, d.Reasons, ReasonPublicClientNoAuto)
+	require.Contains(t, d.Reasons, ReasonAutoNotAvailable)
+}
+
+// 🔴 AX-RL8: no automatic path until holdouts and invariants exist. Under the most permissive
+// policy there is, for every kind, impact and size, Decide never answers AUTO.
+func TestDecisionNeverReturnsAuto(t *testing.T) {
+	st := enabledState(`{"actuation":"enabled","clients":["agent"],"auto":{"allowAutoForPublicClients":true},
+		"tools":{"alarms":{"ack":"auto","clear":"auto"},"annotate":"auto",
+		"commands":{"commands":["c"],"auto":{"impact":["NORMAL","DISRUPTIVE"],"maxDevices":1000000}}}}`)
+	for _, k := range Kinds {
+		for _, i := range []Impact{"", ImpactNormal, ImpactDisruptive, ImpactDestructive} {
+			for _, n := range []int{0, 1, 5, 1000} {
+				for _, att := range []bool{true, false} {
+					d := Decide(st, Request{Kind: k, Impact: i, TargetCount: n, Command: "c", Client: "agent", Attested: att})
+					require.NotEqual(t, VerdictAuto, d.Verdict, "%s %s %d attested=%v", k, i, n, att)
+					if d.Verdict == VerdictApprove {
+						require.GreaterOrEqual(t, d.RequiredApprovals, 1)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The document carries a format version: absent reads as the current one and the stored form
+// always writes it; a version this build does not know is ErrUnknownVersion, not ErrInvalid,
+// even when the newer format also carries keys this build would refuse.
+func TestDocumentVersion(t *testing.T) {
+	d := mustParse(t, `{"actuation":"disabled"}`)
+	b, err := d.Canonical()
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"version":"v1alpha1"`)
+	_, err = Parse(b)
+	require.NoError(t, err)
+	_, err = Parse([]byte(`{"version":"v2","newKey":true}`))
+	require.ErrorIs(t, err, ErrUnknownVersion)
+	require.NotErrorIs(t, err, ErrInvalid)
+	_, err = Parse([]byte(`{"version":"v1alpha1","newKey":true}`))
+	require.ErrorIs(t, err, ErrInvalid)
 }
