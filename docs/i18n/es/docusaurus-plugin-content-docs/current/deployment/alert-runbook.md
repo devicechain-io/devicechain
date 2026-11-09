@@ -713,6 +713,22 @@ An external MQTT source is not being read by exactly one pod
 
 **Qué significa y qué hacer.** External MQTT source ‹source› has been read by ‹value› event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker.
 
+### IngestAppendSkewLarge {#ingestappendskewlarge}
+
+**Gravedad:** `warning` · **Grupo de reglas:** `devicechain.event-sources`
+
+The message broker's clock is more than 2 seconds from event-sources'
+
+**Qué significa y qué hacer.** For at least 10 minutes, the lag-credited ingest gate (eventSources.ingestMetering: lagCredit) has measured the message broker's append stamps on stream ‹stream› as more than 2 seconds away from the clock of an event-sources pod. The gate corrects a message's age for that offset only up to 2 seconds, so beyond it a tenant is credited too little after a stall (the broker's clock ahead) or too much (behind). devicechain_eventsources_append_skew_seconds shows the offset each pod measured, positive when the broker's clock is behind. Check time synchronisation (NTP) on the nodes running the message broker and event-sources; the alert clears once the clocks agree again.
+
+### IngestShedBeyondLagCredit {#ingestshedbeyondlagcredit}
+
+**Gravedad:** `warning` · **Grupo de reglas:** `devicechain.event-sources`
+
+Messages were shed at the ingest ceiling while the platform's readers were behind
+
+**Qué significa y qué hacer.** In the last 10 minutes, ‹value› messages read from stream ‹stream› on pod ‹pod› were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), and in the same 10 minutes that pod measured its readers of the stream as more than a second behind. The likely cause is a tenant sending above its ceiling while the readers were behind: compare devicechain_eventsources_total_msg_rate_limited, raise event-sources to debug logging to name the tenant, and check its ceiling (ingestReadingsPerSecond, ingestBurst) against what its devices send. The other cause is a platform stall longer than the credit covers (the time the tenant's burst covers, never more than 5 seconds): check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was). If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well.
+
 ### IntegrationAuthFailuresSustained {#integrationauthfailuressustained}
 
 **Gravedad:** `warning` · **Grupo de reglas:** `devicechain.event-sources`

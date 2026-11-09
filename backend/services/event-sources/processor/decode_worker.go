@@ -44,6 +44,10 @@ type rawMessage struct {
 	// The reading stage is charged at the same time, so both stages route one message to
 	// the same limiter. Zero on HTTP and external MQTT, which have no backlog.
 	meterAt time.Time
+	// metering is the lag-credited gate's decision for this message (route, stamp, the time of the
+	// message stage), carried so the reading stage follows it; the zero value when the message was not
+	// metered there (legacy mode, HTTP, external MQTT under legacy).
+	metering ingestMeter
 	// redelivery is true when the broker re-offers a message it delivered before (a capture
 	// message with NumDelivered > 1). The reading charge exempts it for the reason RateGate
 	// does: delivery 1 paid. One gap is accepted: a pod stopped after delivery 1 was charged
@@ -192,7 +196,7 @@ func (wrk *DecodeWorker) Process() {
 				} else {
 					raw.settle(nil)
 				}
-			} else if !wrk.Readings(wrk.SourceId, raw.tenant, raw.meterAt, raw.redelivery, raw.origin, readingsOf(payload)) {
+			} else if !wrk.chargeReadings(raw, readingsOf(payload)) {
 				// Shed at the tenant's ceiling for the readings it carries. ACKED, like a
 				// message the message stage sheds: left unacked it would be redelivered into
 				// the same over-limit gate (the ACK TRAP). Workers can take a backlog slightly
@@ -210,6 +214,16 @@ func (wrk *DecodeWorker) Process() {
 			return
 		}
 	}
+}
+
+// chargeReadings is the reading stage's verdict for one decoded message: the lag-credited gate when the
+// message stage metered it there (the decision rides in raw.metering, so both stages follow one route),
+// the Readings gate otherwise.
+func (wrk *DecodeWorker) chargeReadings(raw rawMessage, readings int) bool {
+	if raw.metering.active() {
+		return raw.metering.readings(wrk.SourceId, raw.tenant, readings)
+	}
+	return wrk.Readings(wrk.SourceId, raw.tenant, raw.meterAt, raw.redelivery, raw.origin, readings)
 }
 
 // checkDeviceMatchesTransport rejects an event whose payload claims to be from a

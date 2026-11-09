@@ -741,6 +741,8 @@ arrived together. The counter carries the source, not the tenant, so compare `to
 ceiling against what its devices send, and look in the message broker's log for an internal subscription that took
 too long. HTTP sheds are answered `429` and retried, so they are not counted here.
 
+With `eventSources.ingestMetering: lagCredit`, `devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}` says why each message was shed. A `cause="ceiling"` shed on `route="fresh"` while `ingest_lag_credit_seconds` is high is a tenant that stayed within its ceiling but was shed after a stall larger than the credit, so report it. `cause="contention"` and `cause="hard_drop"` are the overload bands doing what they are configured to do, and `route="backlog"` sheds are a tenant above its ceiling in a drained backlog. `reader_lag_seconds` and `append_skew_seconds` show what each replica measured; a skew that sits at 2 seconds in either direction (`append_skew_clamped_total` rising) means the message broker's clock is further from the pods' clocks than the gate corrects for. The alerts [`IngestShedBeyondLagCredit`](./alert-runbook.md#ingestshedbeyondlagcredit) and [`IngestAppendSkewLarge`](./alert-runbook.md#ingestappendskewlarge) watch these series in this mode; in `legacy` mode the series are empty and neither can fire.
+
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 
 The broker gives a service a fixed window to acknowledge each message it hands out. A
