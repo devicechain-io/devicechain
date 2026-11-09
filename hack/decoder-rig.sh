@@ -122,10 +122,22 @@ cluster_exists() { grep -qx -- "$cluster" <<<"$(kind get clusters 2>/dev/null)";
 # DC_DEC_RIG_DEADMAN_HOURS (0 disarms it). `down` disarms it, so a later cluster of the same name is
 # never deleted by an earlier run's timer.
 deadman_pid_file="$state_dir/deadman.pid"
+deadman_cmdline_of() {
+  { tr '\0' ' ' <"/proc/$1/cmdline"; } 2>/dev/null || true
+}
 disarm_deadman() {
-  local pid child
+  local pid child cmd
   [[ -f "$deadman_pid_file" ]] || return 0
   pid="$(<"$deadman_pid_file")"
+  # A saved PID can belong to an unrelated process after a reboot or PID reuse.
+  cmd=""
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then cmd="$(deadman_cmdline_of "$pid")"; fi
+  if [[ ! "$pid" =~ ^[0-9]+$ ]] ||
+    [[ "$cmd" != *"kind delete cluster --name '$cluster'"* || "$cmd" != *"--kubeconfig '$kubeconfig'"* ]]; then
+    note "recorded PID '$pid' is not this rig's dead-man; left alone"
+    rm -f "$deadman_pid_file"
+    return 0
+  fi
   # The sleep is the timer's child: end it too, so nothing outlives the disarm.
   for child in $(ps -o pid=,ppid= 2>/dev/null | awk -v p="$pid" '$2 == p { print $1 }'); do kill "$child" 2>/dev/null || true; done
   kill "$pid" 2>/dev/null || true
@@ -566,6 +578,59 @@ cmd_selftest() {
   if (check_failed_rows "p" "$rows" 3) >/dev/null 2>&1; then fail "selftest: a short count of failed rows was accepted"; fi
   if (check_failed_rows "p" "" 2) >/dev/null 2>&1; then fail "selftest: no failed rows was accepted"; fi
   if (check_failed_rows "p" $'decode_failed: eval_error: x\ndecode_failed: no_section: x' 2) >/dev/null 2>&1; then fail "selftest: a wrong reason was accepted"; fi
+  metric_series_present device_uplink_messages_total 'devicechain_eventsources_device_uplink_messages_total{result="accepted"} 0' ||
+    fail "selftest: a zero-valued uplink series was refused"
+  local metrics
+  for metrics in "" $'# HELP devicechain_eventsources_device_uplink_messages_total Uplinks\n# TYPE devicechain_eventsources_device_uplink_messages_total counter' \
+    'devicechain_eventsources_device_uplink_requests_total{result="accepted"} 0' \
+    'devicechain_eventsources_xdevice_uplink_messages_total_extra 1'; do
+    if metric_series_present device_uplink_messages_total "$metrics"; then fail "selftest: metric_series_present accepted '$metrics'"; fi
+    note "refused: missing uplink series in '$metrics'"
+  done
+  (
+    local saved_deadman_pid_file="$deadman_pid_file" decoy="" timer="" timer_children="" i
+    deadman_pid_file="$rig_tmp/selftest-deadman.pid"
+    # Keep both planted processes contained even if an assertion fails.
+    # shellcheck disable=SC2317 # invoked by the EXIT trap below
+    selftest_deadman_cleanup() {
+      local pid child
+      for pid in "$decoy" "$timer" $timer_children; do
+        [[ -n "$pid" ]] || continue
+        for child in $(ps -ef | awk -v p="$pid" '$3 == p { print $2 }'); do kill "$child" 2>/dev/null || true; done
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+      done
+    }
+    trap selftest_deadman_cleanup EXIT
+    sleep 300 &
+    decoy=$!
+    printf '%s\n' "$decoy" >"$deadman_pid_file"
+    disarm_deadman
+    kill -0 "$decoy" 2>/dev/null || fail "selftest: disarm_deadman killed an unrelated process"
+    note "refused: unrelated sleep as this rig's dead-man"
+    kill "$decoy" 2>/dev/null || true
+    wait "$decoy" 2>/dev/null || true
+    decoy=""
+    bash -c "sleep 300 && kind delete cluster --name '$cluster' --kubeconfig '$kubeconfig'" &
+    timer=$!
+    # Track the child before disarming so cleanup also works where ps lacks -o support.
+    for i in {1..20}; do
+      timer_children="$(ps -ef | awk -v p="$timer" '$3 == p { print $2 }')"
+      [[ -n "$timer_children" && "$(deadman_cmdline_of "$timer")" == *"kind delete cluster --name '$cluster'"* ]] && break
+      sleep 0.1
+    done
+    printf '%s\n' "$timer" >"$deadman_pid_file"
+    disarm_deadman
+    for i in {1..20}; do
+      kill -0 "$timer" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$timer" 2>/dev/null; then fail "selftest: disarm_deadman left its own timer alive"; fi
+    wait "$timer" 2>/dev/null || true
+    timer=""
+    deadman_pid_file="$saved_deadman_pid_file"
+    note "disarmed: this rig's own dead-man"
+  )
   say "selftest: the good inputs pass and every planted fault is refused"
 }
 
@@ -822,6 +887,20 @@ es_pods() {
   kn get pods -l devicechain.io/functional-area=event-sources -o json |
     jq -r '.items[] | select(.metadata.deletionTimestamp == null) | .metadata.name'
 }
+# A zero counter proves the metric is served; comments and similarly named metrics do not.
+metric_series_present() {
+  awk -v n="$1" '$0 ~ ("^[a-zA-Z0-9_:]*_" n "[{ ]") { found = 1 }
+    END { exit !found }' <<<"$2"
+}
+es_metric_present() {
+  local pods p text
+  pods="$(es_pods)" || return 1
+  [[ -n "$pods" ]] || return 1
+  for p in $pods; do
+    text="$(MSYS_NO_PATHCONV=1 k get --raw "/api/v1/namespaces/$namespace/pods/$p:$es_metrics_port/proxy/metrics")" || return 1
+    metric_series_present "$1" "$text" || return 1
+  done
+}
 # es_metric <name> <label filter or ""> sums a counter over every event-sources replica.
 es_metric() {
   local p total=0 v
@@ -910,7 +989,7 @@ discover() {
     jq -r '[.items[0].spec.containers[0].ports[]? | select(.name | test("metric"))][0].containerPort // empty')"
   [[ -n "$es_metrics_port" ]] || es_metrics_port=8080
   note "broker MQTT at $broker_host:$mqtt_port; event-sources metrics on :$es_metrics_port"
-  [[ "$(uplink_all)" =~ ^[0-9]+$ ]] || fail "event-sources serves no device_uplink_messages_total"
+  es_metric_present device_uplink_messages_total || fail "event-sources serves no device_uplink_messages_total"
 }
 
 # ---- devices -------------------------------------------------------------------------------------
