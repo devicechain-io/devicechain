@@ -269,7 +269,7 @@ func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationR
 	// 🔴 THE OCSP CHECK, after every cheap local check (chain, expiry, CRL, manual) so a certificate
 	// already refused never costs a fetch, and only for an anchor that asked for it. An OFF anchor
 	// (every anchor that predates OCSP) returns from applyOcsp before any OCSP code runs.
-	verified, refusal = c.applyOcsp(ctx, tenant, found.Anchor, allPaths, verified)
+	verified, refusal = c.applyOcsp(ctx, tenant, found.Anchor, allPaths, verified, true)
 	if refusal != "" {
 		log.Debug().Str("tenant", tenant).Str("device", device.Token).Str("host", req.ClientInformation.Host).Str("result", refusal).
 			Msg("Auth-callout refused a certificate connect on OCSP.")

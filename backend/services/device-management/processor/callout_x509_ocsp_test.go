@@ -526,13 +526,13 @@ func TestOcspRevokedOnACrlDroppedPathStillRefuses(t *testing.T) {
 	anchor := &model.DeviceTrustAnchor{}
 	anchor.OcspMode.String, anchor.OcspMode.Valid = string(x509trust.OCSPEnforceKnown), true
 
-	_, refusal := resp.applyOcsp(context.Background(), "acme", anchor, all, survivor)
+	_, refusal := resp.applyOcsp(context.Background(), "acme", anchor, all, survivor, true)
 	require.Equal(t, x509ResultOcspRevoked, refusal, "a revoked intermediate on the dropped path must refuse")
 	require.Len(t, script.calls[0].Targets, 4, "every certificate on every verified path is asked about")
 
 	// Control: nothing revoked, the survivor is admitted.
 	revokedB = nil
-	got, refusal := resp.applyOcsp(context.Background(), "acme", anchor, all, survivor)
+	got, refusal := resp.applyOcsp(context.Background(), "acme", anchor, all, survivor, true)
 	require.Empty(t, refusal)
 	require.NotNil(t, got)
 }
@@ -557,7 +557,7 @@ func TestOcspUnavailableLogsTheLeafsReasonFirst(t *testing.T) {
 	logs := captureWarnings(t) // the shared sink: never swap the global logger
 	for i := 0; i < 40; i++ {
 		resp := (&CalloutResponder{now: time.Now}).WithOcsp(true, script, nil)
-		_, refusal := resp.applyOcsp(context.Background(), "acme", anchor, v, v)
+		_, refusal := resp.applyOcsp(context.Background(), "acme", anchor, v, v, true)
 		require.Equal(t, x509ResultOcspUnavailable, refusal)
 	}
 	var lines []string
@@ -570,4 +570,23 @@ func TestOcspUnavailableLogsTheLeafsReasonFirst(t *testing.T) {
 	for _, l := range lines {
 		require.Contains(t, l, `"reason":"timeout"`, "logged reason must be the leaf's")
 	}
+}
+
+// The allowed counter's help says it counts CONNECTS. A device's first connect runs the OCSP step
+// twice (the registration gate, then the grant), and it must still be one connect: one count.
+func TestOcspAllowedCountsAFirstConnectOnce(t *testing.T) {
+	r := newJitRig(t, jitRigOpts{})
+	sc := &scriptedOcsp{by: nothing}
+	ms := &core.Microservice{InstanceId: "inst-1", FunctionalArea: "device-management"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	om := NewOcspMetrics(ms)
+	r.resp.WithOcsp(true, sc, om)
+	require.NoError(t, r.api.RDB.DB(r.ctx).Model(&model.DeviceTrustAnchor{}).Where("token = ?", "maker").
+		Update("ocsp_mode", "ENFORCE_KNOWN").Error)
+
+	dev := r.ca.simDevice(t, "SN-ONCE", time.Hour)
+	before := testutil.ToFloat64(om.Allowed.WithLabelValues("timeout"))
+	r.grants(x509ResultJitCreated, r.clientID("SN-ONCE"), dev)
+	assert.Equal(t, before+1, testutil.ToFloat64(om.Allowed.WithLabelValues("timeout")),
+		"a first connect (registration + grant) is one connect")
 }
