@@ -818,7 +818,7 @@ New Helm values, each off or unchanged by default:
 | `functionalAreas.device-management.config.callout.ocsp.allowRequireCurrent` | `false` | Lets an anchor use `REQUIRE_CURRENT`. |
 | `functionalAreas.event-sources.config.httpIngest.deviceUplinks` | `false` | Serves `POST /{instanceId}/{tenant}/devices/{token}/uplink`. |
 | `functionalAreas.event-sources.config.httpIngest.maxCommandPollsPerTenant` | `256` | Held HTTP command polls per tenant per replica; one more is answered `429`. Not listed in the chart's `values.yaml`; set it if you need another cap. |
-| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | Sends commands to LoRaWAN devices through their network server. |
+| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | Sends commands to LoRaWAN devices through their network server. Not listed in the chart's `values.yaml`; set it to turn the feature on. |
 
 #### Token audiences are enforced by default {#v130-token-audience}
 
@@ -979,7 +979,7 @@ It drives a new query, `evaluateRules` (event-processing tenant API, `device:rea
 
 #### Campaigns {#v130-campaigns}
 
-A campaign sends a series of commands, with a delay between steps, to the devices of an entity group on a schedule: a cron expression in a named time zone, calendar dates and times, or sunrise or sunset plus an offset, computed for each device from its [installed position](#v130-installed-position). Holidays suppress a firing; they never move it. Daylight-saving changes follow one rule: a time inside a spring-forward gap fires at the jump, and a repeated hour fires once. Each firing is tracked per device (planned, sent, skipped with a reason, failed), and `retryCampaignFailed` sends only the failed ones again. Commands go through the usual batch path, so maintenance windows still apply. Every replica runs the scheduler, and the database decides which one sends each command, so nothing is sent twice.
+A campaign sends a series of commands, with a delay between steps, to the devices of an entity group on a schedule: a cron expression in a named time zone, calendar dates and times, or sunrise or sunset plus an offset, computed for each device from its [installed position](#v130-installed-position). Holidays suppress a firing; they never move it. Daylight-saving changes follow one rule: a time inside a spring-forward gap fires at the jump, and a repeated hour fires once. Each firing is tracked per device (pending, dispatched, refused or skipped, with a reason), and `retryCampaignFailed` sends the cycle's command again to the devices whose command did not succeed. Commands go through the usual batch path, so maintenance windows still apply. Every replica runs the scheduler, and the database decides which one sends each command, so nothing is sent twice.
 
 - **A campaign cannot be edited.** Delete and recreate it; a recreated campaign sends nothing that fell due before it was created.
 - **Targets are groups.** Use a dynamic group to select an area's devices.
@@ -991,7 +991,7 @@ A device or an asset that does not move, such as a streetlight, a parking space 
 
 #### The notification delivery ledger {#v130-delivery-ledger}
 
-Each attempt to send an alarm's notification through a channel now writes one row: what triggered it, the policy, the channel, the recipients, the outcome (`SENT`, `FAILED`, `REFUSED` or `NOT_ATTEMPTED`), the attempt number, the latency and a classified error code. Read it with `notificationAttempts` (`notification:read`); `NotificationChannel.deliveryHealth` gives each channel's last success, last failure and consecutive failures. Delivery URLs, which can themselves be credentials, are never stored. Rows are kept for 7 days.
+Each attempt to send an alarm's notification through a channel now writes one row: what triggered it, the policy, the channel, the recipients, the outcome (`SENT`, `FAILED`, `REFUSED` or `NOT_ATTEMPTED`), the attempt number, the latency and a classified error code. Read it with `notificationAttempts` (`notification:read`); `NotificationChannel.deliveryHealth` gives each channel's last success, last failure and consecutive failures. Delivery URLs, which can themselves be credentials, are never stored. Rows are kept for 7 days by default.
 
 The ledger never delays a page: rows are written in the background from a bounded queue, and a full queue drops the row and counts it on `devicechain_notificationmanagement_ledger_writes_total{outcome}`. So a row proves an attempt happened; a missing row proves nothing.
 
@@ -1001,7 +1001,7 @@ The ledger never delays a page: rows are written in the background from a bounde
 
 #### Semantic bindings {#v130-semantic-bindings}
 
-A tenant can attach terms from a vocabulary to the model it already has: `semanticTypes` on device, asset, area and customer types, `semanticPredicate` and `semanticInverse` on relationship types, and `semanticProperty` and `semanticPointClass` on metrics. The vocabularies shipped are Brick 1.4.4, SAREF 4.1.1 with SAREF4CITY and SAREF4BLDG, the Smart Data Models for street lighting, parking and environment, and the NGSI-LD core terms. A tenant enables the ones it uses, and may add prefixes of its own, with `setSemanticContext` (`device:write`). Every term is checked for existence and kind, stored as a full IRI, and refused with `INVALID_ARGUMENT` naming the term; a context change that would leave a stored binding unexplained is refused with `SEMANTIC_CONTEXT_IN_USE`. `thingModel(includeSemanticTypes: true)` adds the bindings to the Thing Model; by default its output is unchanged.
+A tenant can attach terms from a vocabulary to the model it already has: `semanticTypes` on device, asset, area and customer types, `semanticPredicate` and `semanticInverse` on relationship types, and `semanticProperty` and `semanticPointClass` on metrics. The vocabularies shipped are Brick 1.4.4, SAREF 4.1.1 with SAREF4CITY and SAREF4BLDG, the Smart Data Models for street lighting, parking and environment, and the NGSI-LD core terms. A tenant enables the ones it uses, and may add prefixes of its own, with `setSemanticContext` (`device:write`). Every term is checked for existence and kind, stored as a full IRI, and refused with `INVALID_ARGUMENT` naming the term; a context change that would leave a stored binding unexplained is refused with `SEMANTIC_CONTEXT_IN_USE`. `thingModel(includeSemanticTypes: true)` adds each metric's semantic property and point class to its property's `@type`; by default its output is unchanged.
 
 - **During the rolling window,** an older pod that publishes a profile or an asset type writes a snapshot without the bindings. The draft keeps them, and the next publish from an upgraded pod freezes them.
 

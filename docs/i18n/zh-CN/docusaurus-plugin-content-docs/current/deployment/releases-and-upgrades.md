@@ -574,7 +574,7 @@ dcctl upgrade local devicechain --version v1.3.0
 | `functionalAreas.device-management.config.callout.ocsp.allowRequireCurrent` | `false` | 允许信任锚使用 `REQUIRE_CURRENT`。 |
 | `functionalAreas.event-sources.config.httpIngest.deviceUplinks` | `false` | 提供 `POST /{instanceId}/{tenant}/devices/{token}/uplink`。 |
 | `functionalAreas.event-sources.config.httpIngest.maxCommandPollsPerTenant` | `256` | 每个副本为每个租户保持的 HTTP 命令轮询数；超出的一个会得到 `429`。未列在 chart 的 `values.yaml` 中；需要其他上限时再设置。 |
-| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | 通过网络服务器向 LoRaWAN 设备发送命令。 |
+| `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled` | `false` | 通过网络服务器向 LoRaWAN 设备发送命令。未列在 chart 的 `values.yaml` 中；设置它即可开启该功能。 |
 
 #### 令牌受众默认强制执行 {#v130-token-audience}
 
@@ -735,7 +735,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 活动 {#v130-campaigns}
 
-活动按计划向一个实体组中的设备发送一系列命令，步骤之间可以设置延迟。计划可以是指定时区中的 cron 表达式、日历日期和时间，或者日出、日落加上偏移量，后者按每台设备的[安装位置](#v130-installed-position)分别计算。节假日会取消一次触发，但绝不会把它挪到别的日子。夏令时变化遵循同一条规则：落在春季跳变空档中的时间在跳变时刻触发，重复的那个小时只触发一次。每次触发都按设备跟踪（已计划、已发送、带原因跳过、失败），`retryCampaignFailed` 只重新发送失败的部分。命令通过常规的批量路径发送，因此维护窗口仍然生效。每个副本都运行调度器，由数据库决定哪个副本发送每条命令，因此不会重复发送。
+活动按计划向一个实体组中的设备发送一系列命令，步骤之间可以设置延迟。计划可以是指定时区中的 cron 表达式、日历日期和时间，或者日出、日落加上偏移量，后者按每台设备的[安装位置](#v130-installed-position)分别计算。节假日会取消一次触发，但绝不会把它挪到别的日子。夏令时变化遵循同一条规则：落在春季跳变空档中的时间在跳变时刻触发，重复的那个小时只触发一次。每次触发都按设备跟踪（待处理、已派发、被拒绝或已跳过，并附原因），`retryCampaignFailed` 会向命令未成功的设备重新发送该周期的命令。命令通过常规的批量路径发送，因此维护窗口仍然生效。每个副本都运行调度器，由数据库决定哪个副本发送每条命令，因此不会重复发送。
 
 - **活动不能编辑。** 请删除后重新创建；重新创建的活动不会发送在其创建之前就已到期的内容。
 - **目标是组。** 使用动态组来选择某个区域中的设备。
@@ -747,7 +747,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 通知投递台账 {#v130-delivery-ledger}
 
-每次通过某个渠道发送告警通知的尝试现在都会写入一行：触发原因、策略、渠道、接收人、结果（`SENT`、`FAILED`、`REFUSED` 或 `NOT_ATTEMPTED`）、尝试序号、延迟以及分类后的错误代码。通过 `notificationAttempts`（`notification:read`）读取；`NotificationChannel.deliveryHealth` 给出每个渠道最近一次成功、最近一次失败和连续失败次数。投递 URL 本身可能就是凭据，因此绝不会被存储。记录保留 7 天。
+每次通过某个渠道发送告警通知的尝试现在都会写入一行：触发原因、策略、渠道、接收人、结果（`SENT`、`FAILED`、`REFUSED` 或 `NOT_ATTEMPTED`）、尝试序号、延迟以及分类后的错误代码。通过 `notificationAttempts`（`notification:read`）读取；`NotificationChannel.deliveryHealth` 给出每个渠道最近一次成功、最近一次失败和连续失败次数。投递 URL 本身可能就是凭据，因此绝不会被存储。记录默认保留 7 天。
 
 台账绝不会延迟告警通知：记录从一个有界队列在后台写入，队列满时会丢弃该行，并计入 `devicechain_notificationmanagement_ledger_writes_total{outcome}`。因此，有记录可以证明发生过尝试；缺少记录则不能证明任何事情。
 
@@ -757,7 +757,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 #### 语义绑定 {#v130-semantic-bindings}
 
-租户可以把词汇表中的术语附加到已有的模型上：设备、资产、区域和客户类型上的 `semanticTypes`，关系类型上的 `semanticPredicate` 和 `semanticInverse`，以及指标上的 `semanticProperty` 和 `semanticPointClass`。随附的词汇表有 Brick 1.4.4、SAREF 4.1.1 及 SAREF4CITY 和 SAREF4BLDG、路灯、停车和环境领域的 Smart Data Models，以及 NGSI-LD 核心术语。租户通过 `setSemanticContext`（`device:write`）启用所用的词汇表，并可以添加自己的前缀。每个术语都会检查是否存在及其种类，以完整 IRI 存储，被拒绝时返回指明该术语的 `INVALID_ARGUMENT`；会让已存储绑定失去依据的上下文变更会以 `SEMANTIC_CONTEXT_IN_USE` 被拒绝。`thingModel(includeSemanticTypes: true)` 会把绑定加入 Thing Model；默认输出不变。
+租户可以把词汇表中的术语附加到已有的模型上：设备、资产、区域和客户类型上的 `semanticTypes`，关系类型上的 `semanticPredicate` 和 `semanticInverse`，以及指标上的 `semanticProperty` 和 `semanticPointClass`。随附的词汇表有 Brick 1.4.4、SAREF 4.1.1 及 SAREF4CITY 和 SAREF4BLDG、路灯、停车和环境领域的 Smart Data Models，以及 NGSI-LD 核心术语。租户通过 `setSemanticContext`（`device:write`）启用所用的词汇表，并可以添加自己的前缀。每个术语都会检查是否存在及其种类，以完整 IRI 存储，被拒绝时返回指明该术语的 `INVALID_ARGUMENT`；会让已存储绑定失去依据的上下文变更会以 `SEMANTIC_CONTEXT_IN_USE` 被拒绝。`thingModel(includeSemanticTypes: true)` 会把每个指标的语义属性和点类加入其属性的 `@type`；默认输出不变。
 
 - **在滚动窗口内，** 发布配置文件或资产类型的旧 Pod 写出的快照不含绑定。草稿会保留它们，由已升级的 Pod 进行的下一次发布会将其固定下来。
 
