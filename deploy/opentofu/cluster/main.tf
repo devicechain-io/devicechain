@@ -381,6 +381,31 @@ resource "terraform_data" "backup_destination_guard" {
   }
 }
 
+# The relational store's WAL allowance must fit its volume. pg_wal sits on the data volume, and
+# max_wal_size is only a soft target, so an allowance close to the volume's size is a full disk
+# waiting for a burst. A quarter is the same bound the event store's size presets hold themselves
+# to. The condition spans two variables, so it is a precondition here (see the guard below for
+# why not a `validation`). A volume in a unit this cannot read is not judged.
+locals {
+  postgres_storage_parts = try(regex("^([0-9]+)(Mi|Gi|Ti)$", var.postgres_storage), null)
+  postgres_storage_mib = local.postgres_storage_parts == null ? null : (
+    tonumber(local.postgres_storage_parts[0]) * lookup({ Mi = 1, Gi = 1024, Ti = 1048576 }, local.postgres_storage_parts[1])
+  )
+}
+
+resource "terraform_data" "postgres_wal_guard" {
+  count = var.postgres_max_wal_size_mib > 0 ? 1 : 0
+
+  input = var.postgres_max_wal_size_mib
+
+  lifecycle {
+    precondition {
+      condition     = local.postgres_storage_mib == null || var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib
+      error_message = "postgres_max_wal_size_mib is more than a quarter of postgres_storage. pg_wal sits on the data volume and max_wal_size is a soft target, so the allowance has to leave the volume room to peak. Lower postgres_max_wal_size_mib, or raise postgres_storage (a larger volume is set when the store is first created)."
+    }
+  }
+}
+
 # THE RESTORE GUARD (ADR-028, ADR-020 A2.5).
 #
 # The cnpg-cluster chart refuses these combinations too, and that is not
@@ -605,6 +630,10 @@ module "cnpg_rdb" {
   parameters = {
     max_connections = tostring(var.postgres_max_connections)
   }
+
+  # The checkpoint allowance, set only when asked for (0 leaves Postgres's own 1GB). A
+  # reload, not a restart. See var.postgres_max_wal_size_mib.
+  max_wal_size = var.postgres_max_wal_size_mib > 0 ? format("%dMB", var.postgres_max_wal_size_mib) : ""
 
   # A profiling RUN switch (off by default); see modules/cnpg-cluster var.statement_stats.
   statement_stats = var.postgres_statement_stats

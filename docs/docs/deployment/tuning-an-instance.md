@@ -125,6 +125,8 @@ purpose. Three figures decide it.
   `event-management`'s config, losslessly, but it does nothing for the newest week: size the
   volume for at least that much uncompressed data. The 600-byte figure is the uncompressed one,
   and the compression ratio depends on your data, so measure it before counting on it.
+  Counting every table an event is written to (events and measurements, indexes included), a
+  later GKE measurement read 756 bytes per stored event, uncompressed.
 - **Rows per reading.** Every [calculated metric](../user-guide/calculated-metrics.md) that
   applies to a profile stores one more row per reading. Each formula adds one row per reading, so a profile with N calculated metrics stores (1 + N) rows per reading, so N formulas multiply the volume by up to 1 + N. The tier ceiling `calculatedMetricsPerProfile` is 0 (off) by default and at most 32; it is a ceiling, and the cost depends on use.
 - **Retention.** `lifecycle.retentionDays` is 0 by default, which keeps data forever. An
