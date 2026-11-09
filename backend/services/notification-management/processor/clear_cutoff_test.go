@@ -12,6 +12,7 @@ import (
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"gorm.io/gorm"
@@ -64,8 +65,9 @@ func TestEditingAPolicyDoesNotDropAPendingClear(t *testing.T) {
 }
 
 // A destination that is healthy but slow, with more clears pending than one pass's budget can
-// announce, is not a failed pass: the rest waits for the next tick.
-func TestABudgetSpentWithProgressIsNotAFailedPass(t *testing.T) {
+// announce, is not a failed pass, and not a complete one either: it is PARTIAL (the rest waits
+// for the next tick).
+func TestABudgetSpentWithProgressIsAPartialPass(t *testing.T) {
 	api := fencedApi(t)
 	ctx := tenantScoped()
 	seedClearPolicy(t, api, ctx, true)
@@ -101,8 +103,8 @@ func TestABudgetSpentWithProgressIsNotAFailedPass(t *testing.T) {
 	if delivered.Load() == 0 || delivered.Load() >= 12 {
 		t.Fatalf("harness: %d of 12 clears delivered; the budget should cut the pass part-way", delivered.Load())
 	}
-	if err != nil {
-		t.Fatalf("a pass that announced %d clears and ran out of budget was reported as failed: %v", delivered.Load(), err)
+	if !errors.Is(err, core.ErrPassPartial) {
+		t.Fatalf("a pass that announced %d clears and ran out of budget must be partial, got: %v", delivered.Load(), err)
 	}
 }
 

@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -80,7 +81,12 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		return fmt.Errorf("listing tenants holding notifications for quiet hours: %w", err)
 	}
 	tenants = unionSorted(tenants, holding)
-	var visited, failed int
+	var visited int
+	// A tenant is failed at most ONCE however many of its steps failed (policies, release,
+	// open states, escalations, clear pickup): the pass tallies tenants, not errors.
+	failedTenants := make(map[string]bool)
+	failed := func(tenant string) { failedTenants[tenant] = true }
+	partialTenants := make(map[string]bool)
 	var lastErr error
 	var pickups []pendingPickup
 	for _, tenant := range tenants {
@@ -94,7 +100,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		policies, err := s.Api.EnabledNotificationPolicies(tctx)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Escalation scheduler: failed to load policies")
-			failed++
+			failed(tenant)
 			lastErr = err
 			continue
 		}
@@ -119,7 +125,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		if !anyEscalationEnabled(policies) {
 			pickup()
 			if releaseFailed {
-				failed++
+				failed(tenant)
 			}
 			continue
 		}
@@ -129,7 +135,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 			// The clear pickup reads its own rows, not these: one failed read must not also
 			// leave the tenant's clears unannounced.
 			pickup()
-			failed++
+			failed(tenant)
 			lastErr = err
 			continue
 		}
@@ -154,7 +160,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		}
 		pickup()
 		if escalationFailed {
-			failed++
+			failed(tenant)
 		}
 	}
 	// The pickup of clears runs only after EVERY tenant's escalations, each tenant under its own
@@ -168,11 +174,20 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		if err := s.Notifier.AnnouncePendingClears(pk.ctx, pk.policies, s.Notifier.clock()); err != nil {
 			log.Warn().Err(err).Str("tenant", pk.tenant).
 				Msg("Escalation scheduler: announcing pending clears failed; will retry next tick")
-			failed++
+			if errors.Is(err, core.ErrPassPartial) {
+				// Delivered, then ran out of its budget with a backlog: keeping up, not broken.
+				partialTenants[pk.tenant] = true
+			} else {
+				failed(pk.tenant)
+			}
 			lastErr = err
 		}
 	}
-	return core.PassResult(visited, failed, lastErr)
+	if len(failedTenants) == 0 && len(partialTenants) > 0 {
+		return fmt.Errorf("%d of %d tenants left clears for the next tick (last: %v): %w",
+			len(partialTenants), visited, lastErr, core.ErrPassPartial)
+	}
+	return core.PassResult(visited, len(failedTenants), lastErr)
 }
 
 // pendingPickup is one tenant's clear pickup, deferred to the end of the pass.

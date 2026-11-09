@@ -42,6 +42,14 @@ import (
 // channel, or that was refused, is final. Delivery is at-most-once past the claim: a crash
 // between claiming and sending loses the clear rather than repeating it.
 func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent, fresh, cutoff bool) error {
+	_, err := n.announceClearReporting(ctx, clear, fresh, cutoff)
+	return err
+}
+
+// announceClearReporting is announceClear that also says whether a clear was actually DELIVERED to
+// a channel. nil error is not that: a lost claim, a clear with nothing routed, and a clear every
+// channel refused all return nil having sent nothing.
+func (n *PolicyNotifier) announceClearReporting(ctx context.Context, clear *dmmodel.AlarmStateChangeEvent, fresh, cutoff bool) (bool, error) {
 	tenant, _ := core.TenantFromContext(ctx)
 
 	// fresh: the caller is not this clear's own message (a RAISED that finished first, or the
@@ -55,11 +63,11 @@ func (n *PolicyNotifier) announceClear(ctx context.Context, clear *dmmodel.Alarm
 	dctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
-	err := n.announceClearIn(dctx, tenant, clear, cutoff)
+	delivered, err := n.announceClearIn(dctx, tenant, clear, cutoff)
 	if errors.Is(err, rdb.ErrTenantPurged) {
-		return nil
+		return false, nil
 	}
-	return err
+	return delivered, err
 }
 
 // pendingClearWindow is how long after a clear the scheduler keeps trying to announce it. A
@@ -119,18 +127,25 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 	}
 	var lastErr error
 	sent, announced := 0, 0
-	// spent: the pass ran out of ITS OWN budget (the caller is still going) after announcing
-	// something (a row handled without error: sent, or settled by another replica). That is a healthy destination with a backlog longer than one pass, and the rest
+	// spent: the pass ran out of ITS OWN budget (the caller is still going) after DELIVERING a
+	// clear. That is a destination that works with a backlog longer than one pass, and the rest
 	// waits for the next tick; reporting it as a failed pass would page an operator about a
-	// destination that is working. With nothing announced it still is a failure.
+	// destination that is working. It is not COMPLETE either: rows were skipped, so it is graded
+	// partial. Only a delivery counts as progress: a row handled with nothing sent (a lost claim,
+	// nothing routed, every channel refused) must not let a hanging channel next to a healthy
+	// one read as a complete pass forever. With nothing delivered it is a failure.
 	spent := func(err error) bool {
 		return announced > 0 && parent.Err() == nil && errors.Is(err, context.DeadlineExceeded)
+	}
+	partial := func() error {
+		log.Info().Int("announced", announced).Msg("Pending clears: pass budget spent with a backlog left; continuing next tick")
+		return fmt.Errorf("pending clears: budget spent after announcing %d with rows left (last: %v): %w",
+			announced, lastErr, core.ErrPassPartial)
 	}
 	for _, st := range states {
 		if err := ctx.Err(); err != nil {
 			if spent(err) {
-				log.Info().Int("announced", announced).Msg("Pending clears: pass budget spent with a backlog left; continuing next tick")
-				return lastErr
+				return partial()
 			}
 			return err
 		}
@@ -143,40 +158,42 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 			Severity: st.Severity, State: "CLEARED",
 			RaisedTime: st.CycleRaisedAt.Time, OccurredTime: st.ClearedAt.Time,
 		}
-		if err := n.announceClear(ctx, clear, true, true); err != nil {
+		delivered, err := n.announceClearReporting(ctx, clear, true, true)
+		if err != nil {
 			if spent(ctx.Err()) {
-				log.Info().Int("announced", announced).Msg("Pending clears: pass budget spent with a backlog left; continuing next tick")
-				return lastErr
+				return partial()
 			}
 			log.Warn().Err(err).Str("alarm", st.AlarmToken).Msg("Announcing a pending clear failed; will retry next tick")
 			lastErr = err
 			continue
 		}
-		announced++
+		if delivered {
+			announced++
+		}
 	}
 	return lastErr
 }
 
-func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, clear *dmmodel.AlarmStateChangeEvent, cutoff bool) error {
+func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, clear *dmmodel.AlarmStateChangeEvent, cutoff bool) (bool, error) {
 	states, err := n.api.NotificationStatesByAlarmToken(ctx, []string{clear.AlarmToken})
 	if err != nil {
-		return fmt.Errorf("loading notification state: %w", err)
+		return false, fmt.Errorf("loading notification state: %w", err)
 	}
 	if len(states) == 0 {
-		return nil
+		return false, nil
 	}
 	state := states[0]
 	if !state.ClearedAt.Valid || state.ClearAnnounced() || !state.SameCycleAs(clear.RaisedTime) {
-		return nil
+		return false, nil
 	}
 	paged := state.PagedTargetSet()
 	if len(paged) == 0 {
-		return nil
+		return false, nil
 	}
 
 	policies, err := n.api.EnabledNotificationPolicies(ctx)
 	if err != nil {
-		return fmt.Errorf("loading notification policies: %w", err)
+		return false, fmt.Errorf("loading notification policies: %w", err)
 	}
 	optedIn := 0
 	now := n.clock()
@@ -204,27 +221,27 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 		deliveries = n.appendPagedDeliveries(p.Token, p.Rules, paged, seen, deliveries)
 	}
 	if optedIn == 0 {
-		return nil
+		return false, nil
 	}
 
 	claimedAt := time.Now().UTC()
 	won, err := n.api.ClaimClearAnnouncement(ctx, clear.AlarmToken, state.CycleRaisedAt, claimedAt)
 	if err != nil {
-		return fmt.Errorf("claiming the clear announcement: %w", err)
+		return false, fmt.Errorf("claiming the clear announcement: %w", err)
 	}
 	if !won || len(deliveries) == 0 {
-		return nil
+		return false, nil
 	}
 
 	tally := n.deliverAll(ctx, deliveries, renderNotification(clear), clear.AlarmToken, model.AttemptTriggerAlarm)
 	if tally.delivered > 0 {
-		return nil
+		return true, nil
 	}
 	if tally.retryable() == 0 {
 		log.Error().Str("tenant", tenant).Str("alarm", clear.AlarmToken).Int("channels", tally.refused).
 			Msg("Every channel for this alarm's clear was refused; not retrying, because redelivery " +
 				"cannot change that.")
-		return nil
+		return false, nil
 	}
 	// Nothing took it and a retry could: give the claim back so the redelivery can send it. The
 	// clear is already stamped, so the alarm is not paging in the meantime.
@@ -235,9 +252,9 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 	if uerr := n.api.UnclaimClearAnnouncement(uctx, clear.AlarmToken, claimedAt); uerr != nil {
 		log.Error().Err(uerr).Str("tenant", tenant).Str("alarm", clear.AlarmToken).
 			Msg("Could not give back the clear announcement; the clear will not be retried")
-		return nil
+		return false, nil
 	}
-	return fmt.Errorf("all %d clear deliveries failed for alarm %q", len(deliveries), clear.AlarmToken)
+	return false, fmt.Errorf("all %d clear deliveries failed for alarm %q", len(deliveries), clear.AlarmToken)
 }
 
 // appendPagedDeliveries is appendRuleDeliveries for a clear: the policy's rules, whatever
