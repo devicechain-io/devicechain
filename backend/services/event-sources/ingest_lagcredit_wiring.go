@@ -80,6 +80,7 @@ func buildLagCreditIngest() *processor.LagCreditIngest {
 				onRateShed(source, tenant)
 			},
 			ReadingShed: onReadingShed,
+			Unresolved:  ingestUnresolved,
 			Credit: func(stream string, credit time.Duration) {
 				IngestLagCreditHistogram.WithLabelValues(streamLabel(stream)).Observe(credit.Seconds())
 			},

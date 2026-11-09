@@ -461,3 +461,67 @@ func TestTheIdleProbeDiscardsAnAnswerThatOverlappedARead(t *testing.T) {
 	stop()
 	require.GreaterOrEqual(t, lc.view(StreamStore).view(time.Now()).Lag, 2*time.Second, "the overlapped answer was used")
 }
+
+// ---- parity with the existing gate's accounting ----
+
+// An admission metered at the platform default because the tenant's own ceiling is not known is counted, as
+// the existing gate's message limiters count it (core.WithUnresolvedAdmissions): the ingest
+// governance_unresolved_admissions_total series, and the alert on its unreachable cause, must not go quiet
+// for the gateway and external MQTT traffic when an operator switches to lagCredit. A denied message and a
+// resolved or static ceiling are not counted, and the reading stage is not counted (the existing reading
+// limiters do not count either).
+func TestLagCreditAdmissionsAtAnUnresolvedCeilingAreCounted(t *testing.T) {
+	var counted []core.CeilingSource
+	ceiling := func(tenant string) core.TenantCeiling {
+		switch tenant {
+		case "unreachable":
+			return core.TenantCeiling{RatePerSecond: 1, Burst: 1, Source: core.CeilingUnreachable}
+		case "pending":
+			return core.TenantCeiling{RatePerSecond: 1, Burst: 1, Source: core.CeilingPending}
+		case "unknown":
+			return core.TenantCeiling{RatePerSecond: 1, Burst: 1, Source: core.CeilingUnknownTenant}
+		}
+		return core.TenantCeiling{RatePerSecond: 1, Burst: 1, Source: core.CeilingResolved}
+	}
+	lc := NewLagCreditIngest(LagCreditIngestConfig{
+		Ceiling: ceiling, Reading: ceiling, Factor: func(string) float64 { return 1 },
+		Clock: func() time.Time { return viewEpoch },
+		Hooks: LagCreditHooks{Unresolved: func(src core.CeilingSource) { counted = append(counted, src) }},
+	})
+	lc.view(StreamCapture).start()
+	stamped := func(seq uint64) messaging.Message {
+		return messaging.Message{AppendTime: viewEpoch, StreamSeq: seq, NumDelivered: 1}
+	}
+
+	_, ok := lc.admit("gw", "unreachable", StreamCapture, stamped(1))
+	require.True(t, ok)
+	_, ok = lc.admit("gw", "unreachable", StreamCapture, stamped(2))
+	require.False(t, ok, "burst 1")
+	require.True(t, lc.admitLive("mqtt", "pending"))
+	m, ok := lc.admit("gw", "resolved", StreamCapture, stamped(3))
+	require.True(t, ok)
+	require.True(t, m.readings("gw", "unknown", 1), "the reading stage")
+	// a backlog admission at the default is counted too
+	old := messaging.Message{AppendTime: viewEpoch.Add(-time.Minute), StreamSeq: 4, NumPending: 1000, NumDelivered: 1}
+	m, ok = lc.admit("gw", "unknown", StreamCapture, old)
+	require.True(t, ok)
+	require.Equal(t, core.RouteBacklog, m.route)
+
+	require.Equal(t, []core.CeilingSource{core.CeilingUnreachable, core.CeilingPending, core.CeilingUnknownTenant}, counted)
+}
+
+// With the lag-credited branch taken, the gateway asks the composed gate with OriginPreMetered and skips the
+// reading stage's Readings gate, so the legacy transcript cannot pass: the existing gate refuses the origin
+// loudly. This is what makes TestTheLegacyGateIsUnchangedByTheLagCreditedGate a statement about the
+// branch rather than about a source that never takes it.
+func TestTheLegacyTranscriptCannotPassWithTheLagCreditedBranchTaken(t *testing.T) {
+	require.PanicsWithValue(t, "processor: OriginPreMetered reached the existing rate gate; it is valid only with the lag-credited gate (ingestMetering: lagCredit)", func() {
+		legacyTranscript(t, func(es *GatewayJetStreamSource) {
+			lc := NewLagCreditIngest(LagCreditIngestConfig{
+				Ceiling: core.StaticCeiling(10, 5), Reading: core.StaticCeiling(10, 3), Factor: func(string) float64 { return 1 },
+			})
+			lc.view(StreamCapture).start()
+			es.UseLagCredit(lc, StreamCapture)
+		})
+	})
+}

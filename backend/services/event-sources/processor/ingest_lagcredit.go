@@ -71,6 +71,11 @@ type LagCreditHooks struct {
 	// Reader is called on each first delivery with the stream's corrected head-of-line age, the skew
 	// estimate in force, and whether that estimate was clamped.
 	Reader func(stream string, lag, skew time.Duration, clamped bool)
+	// Unresolved is called once per message-stage ADMISSION metered at the platform default because the
+	// tenant's own ceiling was not known (pending, unreachable, unknown tenant), as the existing gate's
+	// message limiters report it through core.WithUnresolvedAdmissions. A refusal, and a resolved or static
+	// ceiling, is not reported; nor is the reading stage, whose existing limiters do not report either.
+	Unresolved func(core.CeilingSource)
 }
 
 // LagCreditIngestConfig builds a LagCreditIngest.
@@ -185,6 +190,7 @@ func (lc *LagCreditIngest) admit(source, tenant string, stream int, msg messagin
 		}
 		return m, false
 	}
+	lc.countUnresolved(tenant)
 	return m, true
 }
 
@@ -198,7 +204,22 @@ func (lc *LagCreditIngest) admitLive(source, tenant string) bool {
 	if !d.Admitted && lc.hooks.Shed != nil {
 		lc.hooks.Shed(source, tenant, "", d.Route, d.Cause)
 	}
+	if d.Admitted {
+		lc.countUnresolved(tenant)
+	}
 	return d.Admitted
+}
+
+// countUnresolved reports one admission to the Unresolved hook when the tenant's ceiling is the platform
+// default for want of its own (the sources core.WithUnresolvedAdmissions counts).
+func (lc *LagCreditIngest) countUnresolved(tenant string) {
+	if lc.hooks.Unresolved == nil {
+		return
+	}
+	switch src := lc.base(tenant).Source; src {
+	case core.CeilingPending, core.CeilingUnreachable, core.CeilingUnknownTenant:
+		lc.hooks.Unresolved(src)
+	}
 }
 
 // readings charges a decoded message's readings at the reading stage, on the route the message stage chose.

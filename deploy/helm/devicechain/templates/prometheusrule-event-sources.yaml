@@ -52,6 +52,27 @@ created long after startup. The gauge is 1 only when a stream is found unbounded
 not be set (typically the broker has no storage left to reserve it), so the alert has a `for` that rides
 out a failed leader election and never fires while the platform is bounding streams normally. The
 series are exported by every pod at 0 from start, whatever mqttFailClosed says.
+
+IngestShedBeyondLagCredit and IngestAppendSkewLarge watch the lag-credited ingest gate
+(eventSources.ingestMetering: lagCredit). Its series are registered on every pod but carry no
+child until that gate meters something, so with the default (legacy) both expressions are empty
+and neither alert can fire; no absent() arm, for the same reason as above. None carries a tenant.
+
+IngestShedBeyondLagCredit is the case the gate exists to remove coming back: messages shed at the
+tenant's ceiling on the fresh route while fresh admissions on the same reader stream were being
+judged against more than a second of lag credit, so the platform's readers were measurably behind
+when the shed happened. That is either a stall longer than the tenant's burst covers (the credit
+is capped there, never above 5 seconds) or a tenant above its ceiling during a stall; the series
+cannot tell which, because they carry no tenant. NO `for`, like MqttIngestShedAfterAcknowledgement
+and for its reason: the shed is a burst of seconds, and an MQTT message shed here was already
+acknowledged to its device. The two fire together for such a shed; this one says the lag credit was
+in play, the other says data was lost.
+
+IngestAppendSkewLarge is the broker's clock more than 2 seconds from a pod's: the gate corrects the
+age of a message by the measured offset, up to 2 seconds either way, and counts every message read
+while the estimate sits at that clamp. Beyond it the gate under- or over-credits by the difference.
+`for` equals the increase window, as for the sibling alerts: one clock step that the estimate
+relearns clears inside a window, a clock that stays out lasts the whole window.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -203,4 +224,26 @@ spec:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#integrationundecodedhigh"
             summary: "Most integration uplinks carry nothing to store"
             description: "For at least 30 minutes, more than half of the uplinks arriving over inbound integrations have had no decoded values to store. The network server forwards the raw frame but the device profile there has no payload codec configured (or the codec returns nothing), or a generic sender posts only text. Configure the codec in the network server; the integration's 'last undecoded' sample in the console shows a frame it could not read."
+        # The lag-credited gate (ingestMetering: lagCredit); see the header. Joined by reader
+        # stream: a fresh-route ceiling shed, and fresh admissions on that stream judged against
+        # more than one second of credit (the histogram's count above its le="1" bucket).
+        - alert: IngestShedBeyondLagCredit
+          expr: (sum by (stream) (increase(devicechain_eventsources_ingest_shed_cause_total{namespace="{{ $ns }}", route="fresh", cause="ceiling"}[10m])) > 0) and on (stream) (sum by (stream) (increase(devicechain_eventsources_ingest_lag_credit_seconds_count{namespace="{{ $ns }}"}[10m])) > sum by (stream) (increase(devicechain_eventsources_ingest_lag_credit_seconds_bucket{namespace="{{ $ns }}", le="1"}[10m])))
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ingestshedbeyondlagcredit"
+            summary: "Messages were shed at the ingest ceiling while the platform's readers were behind"
+            description: "In the last 10 minutes, {{ "{{ $value }}" }} messages read from stream {{ "{{ $labels.stream }}" }} were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), at a time when the platform's readers of that stream were more than a second behind. The gate grows a tenant's allowance by what its rate earns over the measured delay, up to the time its burst covers and never more than 5 seconds, so a shed here is either a platform stall longer than that or a tenant above its ceiling during a stall. Check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was), and raise event-sources to debug logging to name the tenant. If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well."
+        - alert: IngestAppendSkewLarge
+          expr: sum by (stream) (increase(devicechain_eventsources_append_skew_clamped_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ingestappendskewlarge"
+            summary: "The message broker's clock is more than 2 seconds from event-sources'"
+            description: "For at least 10 minutes, the lag-credited ingest gate (eventSources.ingestMetering: lagCredit) has measured the message broker's append stamps on stream {{ "{{ $labels.stream }}" }} as more than 2 seconds away from the clock of an event-sources pod. The gate corrects a message's age for that offset only up to 2 seconds, so beyond it a tenant is credited too little after a stall (the broker's clock ahead) or too much (behind). devicechain_eventsources_append_skew_seconds shows the offset each pod measured, positive when the broker's clock is behind. Check time synchronisation (NTP) on the nodes running the message broker and event-sources; the alert clears once the clocks agree again."
 {{- end }}

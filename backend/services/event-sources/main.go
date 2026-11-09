@@ -148,6 +148,9 @@ var (
 	// contention factor itself (a separate bucket) instead of tightening the ceiling.
 	ingestBaseCeiling  core.TenantCeilingResolver
 	ingestShedPriority func(string) (int, bool)
+	// ingestUnresolved counts admissions metered at the platform default for want of the tenant's own
+	// ceiling (governance_unresolved_admissions_total); the lag-credited gate reports to the same counter.
+	ingestUnresolved func(core.CeilingSource)
 
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
@@ -907,7 +910,8 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 // limiter alone: nothing calls AllowUntrusted on the other two, and the counter is one
 // registration, so it belongs to exactly one limiter.
 func buildRateLimiter() {
-	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
+	ingestUnresolved = governance.NewUnresolvedAdmissions(Microservice, governance.Ingest)
+	unresolved := core.WithUnresolvedAdmissions(ingestUnresolved)
 	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
 	def := governance.Limits{
 		RatePerSecond: Configuration.IngestRateLimit.ReadingsPerSecond,
