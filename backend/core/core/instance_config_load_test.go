@@ -354,3 +354,18 @@ func TestLoadInstanceConfigurationAcceptsMqttFailClosed(t *testing.T) {
 	require.NoError(t, unsetMs.LoadInstanceConfigurationFrom(instanceDoc(t, unset)))
 	assert.False(t, unsetMs.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed, "it must default to off")
 }
+
+// infrastructure.nats.mqttDeviceUplinks loads at the load every service makes, as the document wrote
+// it: on when it says true, off when it says false or nothing (the grant is the operator's opt-in).
+func TestLoadInstanceConfigurationAcceptsMqttDeviceUplinks(t *testing.T) {
+	load := func(nats string) bool {
+		doc := `{"infrastructure":{"nats":{"hostname":"h","port":4222` + nats + `},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+		ms := &Microservice{}
+		require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc)))
+		return ms.InstanceConfiguration.Infrastructure.Nats.MqttDeviceUplinks
+	}
+	assert.True(t, load(`,"mqttDeviceUplinks":true`))
+	assert.False(t, load(`,"mqttDeviceUplinks":false`))
+	assert.False(t, load(``), "it must default to off")
+}

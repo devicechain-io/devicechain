@@ -149,6 +149,21 @@ type NatsConfiguration struct {
 	// once no pod with it on holds it, and once the platform durables are drained removes
 	// them and hands the store back to the gateway's default discard policy and bound.
 	MqttFailClosed bool
+	// MqttDeviceUplinks lets a device publish its OWN payload (a binary or vendor-JSON message, not the
+	// DeviceChain JSON envelope) to its raw-payload topic, {instance}/{tenant}/devices/{device}/uplink,
+	// for the decoder on its device type's profile to read. It is OFF unless set: it is read by
+	// device-management when it mints a device's broker grant, so with it off no device may publish
+	// there and nothing about the broker differs from an install that has never heard of it.
+	//
+	// 🔴 TURN IT ON ONLY AFTER EVERY event-sources AND device-management REPLICA RUNS A RELEASE THAT
+	// KNOWS THE TOPIC, in an upgrade of its own. It also decides the device-events capture stream's
+	// subject list: with it off the stream is exactly what earlier releases declared (so a pod of an
+	// earlier release that restarts mid-roll is unaffected), and with it on the stream also stores the
+	// topic. An earlier event-sources pod already running would then discard such a message as foreign,
+	// and one that restarts stops with a stream-drift error; an earlier device-management pod refuses
+	// the uplink the new one produces. A device is granted the topic when it next connects (and loses it
+	// the same way when this is turned off), so the setting reaches a fleet as its devices reconnect.
+	MqttDeviceUplinks bool
 	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
 	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in
 	// the same account and draw on the same max_file_store, but until now nothing

@@ -34,7 +34,14 @@ const deviceDecoderQuery = `query($deviceToken: String!, $credentialType: String
   }
 }`
 
-var unsupportedDeviceField = regexp.MustCompile(`Cannot query field "deviceDecoder" on type "Query"`)
+// The answer is aliased to deviceDecoder so both questions are read into one shape.
+const brokerAssertedDeviceDecoderQuery = `query($deviceToken: String!) {
+  deviceDecoder: brokerAssertedDeviceDecoder(deviceToken: $deviceToken) {
+    present input maxReadings composedCost parsesJson profileVersionToken
+  }
+}`
+
+var unsupportedDeviceField = regexp.MustCompile(`Cannot query field "(deviceDecoder|brokerAssertedDeviceDecoder)" on type "Query"`)
 
 // IsDeviceDecoderUnsupported reports whether err is exactly the validation error of a
 // device-management that predates the query.
@@ -51,11 +58,17 @@ func IsDeviceDecoderUnsupported(err error) bool {
 	return true
 }
 
-// DeviceCredential is the credential a device presented on the device-uplink route.
+// DeviceCredential is the credential a device presented on the device-uplink route, or the fact that
+// there is none to present because the platform's own MQTT broker authenticated the device.
 type DeviceCredential struct {
 	Type   string
 	ID     string
 	Secret *string
+	// AssertedByBroker marks a device whose identity the platform's broker proved at connect and whose
+	// publish it confined to the device's own raw-payload topic (the MQTT wire). There is no credential
+	// then, and device-management is asked the one question it can answer without one. Only the capture
+	// source, which reads what the broker alone writes, may set it.
+	AssertedByBroker bool
 }
 
 // digest is a fixed-width fingerprint of the credential, so the plan cache is keyed by WHO is
@@ -69,6 +82,12 @@ func (c DeviceCredential) digest() string {
 		binary.BigEndian.PutUint64(n[:], uint64(len(s)))
 		h.Write(n[:])
 		h.Write([]byte(s))
+	}
+	if c.AssertedByBroker {
+		// A fingerprint no presented credential can share: the marker rides in its own field.
+		put("broker-asserted")
+	} else {
+		put("presented")
 	}
 	put(c.Type)
 	put(c.ID)
@@ -105,10 +124,14 @@ func (d *DM) DeviceDecoder(ctx context.Context, tenant, deviceToken string, cred
 			ProfileVersionToken string  `json:"profileVersionToken"`
 		} `json:"deviceDecoder"`
 	}
+	query := deviceDecoderQuery
 	vars := map[string]any{
 		"deviceToken": deviceToken, "credentialType": cred.Type, "credentialId": cred.ID, "credentialSecret": cred.Secret,
 	}
-	if err := d.client.Query(ctx, d.url, tenant, deviceDecoderQuery, vars, &out); err != nil {
+	if cred.AssertedByBroker {
+		query, vars = brokerAssertedDeviceDecoderQuery, map[string]any{"deviceToken": deviceToken}
+	}
+	if err := d.client.Query(ctx, d.url, tenant, query, vars, &out); err != nil {
 		if IsDeviceDecoderUnsupported(err) {
 			return nil, ErrDeviceDecoderUnsupported
 		}
@@ -168,6 +191,9 @@ type DeviceDecoderConfig struct {
 	MaxTenantBuckets int
 	Now              func() time.Time
 }
+
+// flightTimeout bounds one question to device-management however long its callers wait.
+const flightTimeout = 10 * time.Second
 
 // Defaults of DeviceDecoderConfig.
 const (
@@ -322,7 +348,9 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 	// 🔴 THE BUDGET IS SPENT INSIDE THE FLIGHT, once per backend call. Spent before it, every
 	// concurrent miss for one cold device would pay for the one call they share, and a burst on a
 	// single device could drain a bucket.
-	v, err, _ := d.sf.Do(key, func() (any, error) {
+	// DoChan, so a caller with a deadline stops WAITING at it (the flight itself runs on, to store
+	// its answer for the next caller) instead of being held for as long as device-management takes.
+	resCh := d.sf.DoChan(key, func() (any, error) {
 		// 🔴 THE CACHE IS READ AGAIN INSIDE THE FLIGHT. A goroutine that read a miss can reach here
 		// just after another flight for this key finished and stored its answer; without this it
 		// would spend a token and ask again for something that is now held.
@@ -331,12 +359,18 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		if ok && cur.fresh(at, d.cfg) {
 			return cur, nil
 		}
-		// Only an authenticated answer still inside StaleMax makes this a refresh charged to a tenant.
-		refresh := ok && cur.authed && at.Sub(cur.at) < d.cfg.StaleMax
+		// Only an authenticated answer still inside StaleMax makes this a refresh charged to a tenant,
+		// and so does a question about a device the platform's own broker has already proven: its
+		// tenant is the broker's, not an unproven caller's, so it is charged to THAT tenant's bucket
+		// and never spends the cold bucket that bounds a flood of invented credentials.
+		refresh := cred.AssertedByBroker || (ok && cur.authed && at.Sub(cur.at) < d.cfg.StaleMax)
 		if !d.takeFill(tenant, refresh, at) {
 			return nil, ErrDeviceDecoderBudget
 		}
-		plan, err := d.backend.DeviceDecoder(context.WithoutCancel(ctx), tenant, device, cred)
+		// The flight outlives a caller that stopped waiting, so it carries a deadline of its own.
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flightTimeout)
+		defer cancel()
+		plan, err := d.backend.DeviceDecoder(fctx, tenant, device, cred)
 		if err != nil {
 			return nil, err
 		}
@@ -347,6 +381,14 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 		d.put(key, fresh)
 		return fresh, nil
 	})
+	var v any
+	var err error
+	select {
+	case r := <-resCh:
+		v, err = r.Val, r.Err
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
 	if err != nil {
 		// A refusal stored since this request read the entry (by a flight that finished first) is newer
 		// than what it holds, and a stale authentication must never stand in over it.
@@ -358,6 +400,25 @@ func (d *DeviceDecoders) Lookup(ctx context.Context, tenant, device string, cred
 	// The flight may have returned the entry a concurrent flight stored: either way it is an answer
 	// obtained now, not one remembered from before this request.
 	return lookupOf(v.(deviceDecoderEntry), false, false), nil
+}
+
+// Peek answers from the cache alone, never asking device-management. ok is false when nothing usable
+// is held: nothing, a refusal past its short life, or an authenticated answer past StaleMax. fresh is
+// false for an authenticated answer past its TTL that is still inside StaleMax: it may be served now
+// and should be refreshed.
+func (d *DeviceDecoders) Peek(tenant, device string, cred DeviceCredential) (l DeviceLookup, fresh, ok bool) {
+	e, have := d.get(tenant + "\x00" + device + "\x00" + cred.digest())
+	if !have {
+		return DeviceLookup{}, false, false
+	}
+	now := d.cfg.Now()
+	if e.fresh(now, d.cfg) {
+		return lookupOf(e, true, false), true, true
+	}
+	if e.authed && now.Sub(e.at) < d.cfg.StaleMax {
+		return lookupOf(e, true, true), false, true
+	}
+	return DeviceLookup{}, false, false
 }
 
 func lookupOf(e deviceDecoderEntry, cached, stale bool) DeviceLookup {

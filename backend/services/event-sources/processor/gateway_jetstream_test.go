@@ -61,6 +61,9 @@ type captureHarness struct {
 	source     *GatewayJetStreamSource
 	publishErr error
 	failedErr  error
+	// failedHold, when set before the pipeline starts, holds every failed-decode publish until it is
+	// closed: a failed-decode stream that has stopped answering.
+	failedHold chan struct{}
 
 	mu          sync.Mutex
 	published   int
@@ -169,6 +172,12 @@ func newCaptureHarnessWith(t *testing.T, configure func(*GatewayJetStreamSource)
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		func(_ string, _ string, _ []byte, err error) error {
+			h.mu.Lock()
+			hold := h.failedHold
+			h.mu.Unlock()
+			if hold != nil {
+				<-hold
+			}
 			h.mu.Lock()
 			h.failedCalls++
 			h.failedReasons = append(h.failedReasons, err)

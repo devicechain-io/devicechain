@@ -895,7 +895,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
-	subjects := StreamSubjects(nmgr.Microservice.InstanceId, suffix)
+	subjects := nmgr.streamSubjects(suffix)
 	retention := retentionPolicy(streams.RetentionFor(suffix))
 	dupWindow := time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second
 	// Retry on connection/server errors so a few seconds of NATS lag on a cluster
@@ -2351,7 +2351,11 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	// pod of the previous build running beside this one, and that build re-filters the durable
 	// it knows in place whenever it re-binds; see CaptureDurableName.
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
-		subjects := DeviceEventsSubjects(nmgr.Microservice.InstanceId)
+		// 🔴 THE HAND-OUT DOES NOT FOLLOW THE OPT-IN, THE STREAM'S SUBJECT LIST DOES. A reader that
+		// acks and drops what it does not hand out would delete a raw payload a flag-on replica's
+		// grant let a device publish, if this replica had not yet been told the setting (a roll in
+		// either direction), so every replica of this release hands out every shape it knows.
+		subjects := DeviceEventsSubjectsWith(nmgr.Microservice.InstanceId, true)
 		r.forwards, r.alsoForwards = subjects[0], subjects[1:]
 		r.legacyDurable = DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
 	} else {

@@ -38,7 +38,8 @@ const AppAccount = "APP"
 const ServiceUser = "dc_service"
 
 // ServicePublishDeny is the publish DENY the broker holds the shared service login to: the
-// device-events namespace, "{instance}.{tenant}.devices.{device}.events", the gateway namespace's
+// device-events namespace, "{instance}.{tenant}.devices.{device}.events" and its raw-payload sibling
+// "{instance}.{tenant}.devices.{device}.uplink", the gateway namespace's
 // "{instance}.{tenant}.gateways.{gateway}.devices.{child}.events", and the MQTT gateway's
 // "$MQTT.msgs." form of each. Only a device writes there, through the grant DevicePermissions
 // mints, so a subject in this namespace is what makes an event broker-asserted. Without the
@@ -68,7 +69,9 @@ const ServiceUser = "dc_service"
 func ServicePublishDeny() []string {
 	events := messaging.DeviceEventsWildcard("*")
 	gatewayEvents := messaging.GatewayEventsWildcard("*")
-	return []string{events, messaging.MqttMsgsSubject(events), gatewayEvents, messaging.MqttMsgsSubject(gatewayEvents)}
+	uplink := messaging.DeviceUplinkWildcard("*")
+	return []string{events, messaging.MqttMsgsSubject(events), gatewayEvents, messaging.MqttMsgsSubject(gatewayEvents),
+		uplink, messaging.MqttMsgsSubject(uplink)}
 }
 
 // SystemAccount is the NATS system account — where the broker publishes its own
@@ -484,7 +487,11 @@ const MqttDeliverySubject = "$MQTT.sub.>"
 // make that unreachable, but the tenant in this same flow gets a local check for
 // exactly this reason rather than resting on a distant invariant, and the signed
 // grant is the higher-blast-radius splice of the two.
-func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions, error) {
+func DevicePermissions(instanceId, tenant, deviceToken string, opts ...GrantOption) (jwt.Permissions, error) {
+	var g grantOptions
+	for _, o := range opts {
+		o(&g)
+	}
 	if err := core.ValidateToken(deviceToken); err != nil {
 		return jwt.Permissions{}, fmt.Errorf("refusing to build a grant for an invalid device token: %w", err)
 	}
@@ -517,6 +524,12 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentEvents),
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentResponses),
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentReports))
+	// 🔴 THE RAW-PAYLOAD SUBJECT IS GRANTED ONLY ON THE OPERATOR'S OPT-IN, and only the device's OWN:
+	// the token is spliced here, into the signed grant, so a device can never publish a payload to
+	// be decoded as another device. Off, the grant is byte-for-byte the one every earlier build minted.
+	if g.deviceUplink {
+		p.Pub.Allow.Add(messaging.DeviceUplinkSubject(instanceId, tenant, deviceToken))
+	}
 	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject,
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentCommands),
 		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentDesired),
@@ -525,12 +538,23 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	return p, nil
 }
 
+// GrantOption varies the grant DevicePermissions mints. The zero set is the grant every earlier
+// build minted, so a caller that passes none is unchanged.
+type GrantOption func(*grantOptions)
+
+type grantOptions struct{ deviceUplink bool }
+
+// WithDeviceUplink adds the device's own raw-payload subject
+// ("{instance}.{tenant}.devices.{device}.uplink") to what it may publish. The operator's opt-in
+// (infrastructure.nats.mqttDeviceUplinks); see messaging.DeviceUplinkSubject.
+func WithDeviceUplink(on bool) GrantOption { return func(g *grantOptions) { g.deviceUplink = on } }
+
 // SignDeviceUserJWT builds and signs the user JWT the callout returns for an
 // authenticated device. subject MUST be the server-supplied user nkey from the
 // authorization request (req.UserNkey); the JWT places the user in AppAccount
 // (via aud) with instance-and-tenant-scoped permissions (ADR-048), signed by the
 // issuer account seed.
-func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant, deviceToken string, now time.Time, ttl time.Duration) (string, error) {
+func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant, deviceToken string, now time.Time, ttl time.Duration, opts ...GrantOption) (string, error) {
 	akp, err := nkeys.FromSeed([]byte(issuerSeed))
 	if err != nil {
 		return "", fmt.Errorf("loading issuer seed: %w", err)
@@ -538,7 +562,7 @@ func SignDeviceUserJWT(issuerSeed, userNkey, instanceId, tenant, deviceToken str
 	uc := jwt.NewUserClaims(userNkey)
 	uc.Name = tenant
 	uc.Audience = AppAccount
-	perms, err := DevicePermissions(instanceId, tenant, deviceToken)
+	perms, err := DevicePermissions(instanceId, tenant, deviceToken, opts...)
 	if err != nil {
 		return "", err
 	}

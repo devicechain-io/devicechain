@@ -183,6 +183,12 @@ type GatewayJetStreamSource struct {
 	// capture stream; see UseMessageStore.
 	fromStore bool
 
+	// uplinks is the route that carries a device's raw payload to its type's decoder (UseDeviceUplinks),
+	// and uplinkRun the current start's runner built from it. nil: a raw payload is recorded on
+	// failed-decode with its cause.
+	uplinks   *DeviceUplinkRoute
+	uplinkRun *uplinkRunner
+
 	// feedback tells a gateway which of its events were durably accepted, or shed at the
 	// tenant's ceiling (see UseGatewayFeedback). nil sends nothing.
 	feedback GatewayFeedback
@@ -270,6 +276,17 @@ func (es *GatewayJetStreamSource) SetWriter(writer messaging.OrderedWriter) {
 // built, not one it built itself.
 func (es *GatewayJetStreamSource) Writer() messaging.OrderedWriter {
 	return es.writer
+}
+
+// UseDeviceUplinks gives the source the route that carries a device's raw payload (published to its
+// own uplink topic) to the decoder of its device type. Call it before the source starts. Without it
+// such a payload is recorded on failed-decode with its cause.
+func (es *GatewayJetStreamSource) UseDeviceUplinks(rt *DeviceUplinkRoute) error {
+	if rt == nil || rt.Plans == nil || rt.Publish == nil {
+		return errors.New("a device-uplink route needs its plan cache and its publisher")
+	}
+	es.uplinks = rt
+	return nil
 }
 
 func (es *GatewayJetStreamSource) Initialize(ctx context.Context) error {
@@ -360,10 +377,15 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 		}
 		es.ce = ce
 	}
+	es.uplinkRun = nil
+	if es.uplinks != nil {
+		es.uplinkRun = newUplinkRunner(es.uplinks, es.readings, es.failed)
+	}
 	var running sync.WaitGroup
 	es.workers = make([]*DecodeWorker, 0, workers)
 	for w := 1; w <= workers; w++ {
 		worker := NewDecodeWorker(w, es.Id, es.Decoder, messages, es.readings, submit, es.failed)
+		worker.Uplinks = es.uplinkRun
 		es.workers = append(es.workers, worker)
 		running.Add(1)
 		go func() {
@@ -484,6 +506,17 @@ func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 	}
 	close(es.messages)
 	if !es.await(ctx, es.workersDone, "decode workers") {
+		return false
+	}
+	// A raw payload's publish runs off its worker, so the workers returning does not mean those
+	// have reported: wait for them before the connection they publish on is drained.
+	uplinksDone := make(chan struct{})
+	run := es.uplinkRun
+	go func() {
+		defer close(uplinksDone)
+		run.wait()
+	}()
+	if !es.await(ctx, uplinksDone, "device uplink publishes") {
 		return false
 	}
 	close(es.publishes)
@@ -703,7 +736,10 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	}
 	dedupID := es.dedupID(tenant, msg)
 	var beatRef uint64
-	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 {
+	// A raw payload is published to the uplink stream, not through the envelope engine that settles
+	// inbound-events rounds, so it carries a plain dedup id.
+	_, isUplink := messaging.ParseDeviceUplinkSubject(msg.Subject)
+	if es.ce != nil && !es.fromStore && msg.StreamSeq != 0 && !isUplink {
 		// Envelope mode: the decode pipeline carries the message's position to the submitter in
 		// the id it already passes through (see positionToken).
 		if key, _, ok := messaging.RoundKeyOf(tenant, msg.StreamSeq, msg.AppendTime); ok {
@@ -730,6 +766,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		assertion:  assertedByCaptureBroker(msg),
+		uplink:     isUplink,
 		done:       es.settleAndForget(settle, beatRef),
 		shed:       shed,
 	}
@@ -911,6 +948,9 @@ func tenantFromSubject(subject string) (string, bool) {
 // this parser cannot recognise a shape the stream no longer captures or miss one
 // it does.
 func deviceFromSubject(subject string) string {
+	if device, ok := messaging.ParseDeviceUplinkSubject(subject); ok {
+		return device
+	}
 	_, device, _ := messaging.ParseDeviceEventsSubject(subject)
 	return device
 }

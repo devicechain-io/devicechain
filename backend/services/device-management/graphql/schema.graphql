@@ -5628,6 +5628,17 @@ type Query {
     ): DeviceDecoderPlan
     """
     Service-only: callable with a service token that holds device:read, and refused for any
+    user's access token. The same question as deviceDecoder, for a device that published its own
+    payload on its raw-payload MQTT topic: the platform's broker authenticated the device at
+    connect and confined it to its own topic, so no credential is presented. Null when no device
+    has this token; present: false for a device whose type has no decoder.
+    """
+    brokerAssertedDeviceDecoder(
+        """Token of the device the broker confined the publish to."""
+        deviceToken: String!
+    ): DeviceDecoderPlan
+    """
+    Service-only: callable with a service token that holds device:read, and refused for any
     user's access token. Proves a bearer token belongs to the integration with this token.
     Returns the integration when it does, and null for every failure: no such integration and
     a wrong token are indistinguishable. A switched-off integration whose token matches is

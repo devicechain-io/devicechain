@@ -41,7 +41,7 @@ func TestADeviceUplinkIsWrittenToTheUplinkStreamSealedAndUnmarked(t *testing.T) 
 	e.Integration, e.SealedIntegrationToken, e.IntegrationIdentifier = "cs", []byte{1}, "dev"
 	e.AuthenticatedTransport = true
 
-	require.NoError(t, onDeviceUplinkDecoded("http", "acme", e, &model.UnresolvedIntegrationUplinkPayload{Frame: []byte{1, 2}, MaxReadings: 3}))
+	require.NoError(t, onDeviceUplinkDecoded("http", "acme", e, &model.UnresolvedIntegrationUplinkPayload{Frame: []byte{1, 2}, MaxReadings: 3}, ""))
 	require.Zero(t, inbound.count(), "a device uplink must never reach inbound-events")
 	require.Equal(t, 1, uplinks.count())
 
@@ -73,14 +73,14 @@ func TestADeviceUplinkWriteFailureIsReturnedNotSwallowed(t *testing.T) {
 	payload := &model.UnresolvedIntegrationUplinkPayload{MaxReadings: 1}
 
 	IntegrationUplinksWriter = nil
-	require.Error(t, onDeviceUplinkDecoded("http", "acme", deviceUplinkEvent(), payload))
+	require.Error(t, onDeviceUplinkDecoded("http", "acme", deviceUplinkEvent(), payload, ""))
 
 	IntegrationUplinksWriter = &recordingWriter{err: messaging.ErrStreamBackpressure}
-	require.ErrorIs(t, onDeviceUplinkDecoded("http", "acme", deviceUplinkEvent(), payload), messaging.ErrStreamBackpressure)
+	require.ErrorIs(t, onDeviceUplinkDecoded("http", "acme", deviceUplinkEvent(), payload, ""), messaging.ErrStreamBackpressure)
 
 	// A message that cannot be built is the route's 500, not a success.
 	IntegrationUplinksWriter = &recordingWriter{}
-	require.ErrorIs(t, onDeviceUplinkDecoded("http", "", deviceUplinkEvent(), payload), processor.ErrEventNotBuilt)
+	require.ErrorIs(t, onDeviceUplinkDecoded("http", "", deviceUplinkEvent(), payload, ""), processor.ErrEventNotBuilt)
 }
 
 // 🔴 THE ROUTE IS OFF UNLESS THE OPERATOR TURNS IT ON. It publishes an uplink with no integration
@@ -93,4 +93,31 @@ func TestTheDeviceUplinkRouteIsOffUnlessTheOperatorEnablesIt(t *testing.T) {
 	// The paired positive: enabling it reaches the part that needs the instance (a nil Microservice
 	// here), so the guard above is what stopped the others.
 	require.Panics(t, func() { buildDeviceUplinkRoute(config.HttpIngest{DeviceUplinks: true}) })
+}
+
+// A device's raw payload over MQTT is written to the uplink stream with the broker's mark kept and
+// the capture sequence as its dedup id (so a redelivered capture message is stored once), with no
+// credential and no integration authority.
+func TestAnMqttDeviceUplinkKeepsTheBrokersMarkAndItsDedupID(t *testing.T) {
+	sealingFixture(t)
+	savedInbound, savedUplinks := InboundEventsWriter, IntegrationUplinksWriter
+	t.Cleanup(func() { InboundEventsWriter, IntegrationUplinksWriter = savedInbound, savedUplinks })
+	inbound, uplinks := &recordingWriter{}, &recordingWriter{}
+	InboundEventsWriter, IntegrationUplinksWriter = inbound, uplinks
+
+	now := time.Now().UTC()
+	e := &model.UnresolvedEvent{Device: "meter-1", OccurredTime: now, ProcessedTime: now,
+		EventType: eventtype.IntegrationUplink, BrokerAsserted: true}
+	dedup := processor.DedupID("acme", 77)
+	require.NoError(t, onDeviceUplinkDecoded("gw", "acme", e, &model.UnresolvedIntegrationUplinkPayload{Frame: []byte{9}, MaxReadings: 1}, dedup))
+
+	require.Zero(t, inbound.count(), "never inbound-events")
+	require.Equal(t, 1, uplinks.count())
+	require.Equal(t, dedup, uplinks.msgs[0].DedupID)
+	got, err := esproto.UnmarshalUnresolvedEvent(uplinks.msgs[0].Value)
+	require.NoError(t, err)
+	require.True(t, got.BrokerAsserted, "the broker authenticated the device")
+	require.Nil(t, got.CredentialType)
+	require.Empty(t, got.Integration)
+	require.False(t, got.AuthenticatedTransport)
 }

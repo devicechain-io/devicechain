@@ -117,6 +117,26 @@ func (r *SchemaResolver) DeviceDecoder(ctx context.Context, args struct {
 	return &DeviceDecoderPlanResolver{IntegrationDecoderPlanResolver{M: answer}}, nil
 }
 
+// Whether a device's type has a payload decoder (service plane), for a device that published its own
+// payload on its raw-payload MQTT topic. The platform's broker authenticated the device and confined
+// it to its own topic, so there is no credential to check; only a service holding device:read may ask.
+func (r *SchemaResolver) BrokerAssertedDeviceDecoder(ctx context.Context, args struct {
+	DeviceToken string
+}) (*DeviceDecoderPlanResolver, error) {
+	if err := auth.AuthorizeService(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	var api model.DeviceManagementApi = r.GetApi(ctx)
+	if capi, ok := ctx.Value(ContextCachedApiKey).(*model.CachedApi); ok && capi != nil {
+		api = capi
+	}
+	answer, err := model.BrokerAssertedDeviceDecoder(ctx, api, args.DeviceToken)
+	if err != nil || answer == nil {
+		return nil, err
+	}
+	return &DeviceDecoderPlanResolver{IntegrationDecoderPlanResolver{M: answer}}, nil
+}
+
 // The sender-named devices an integration has seen that the tenant has no device in scope for.
 func (r *SchemaResolver) UnregisteredIntegrationDevices(ctx context.Context, args struct {
 	Criteria model.UnregisteredDeviceSearchCriteria

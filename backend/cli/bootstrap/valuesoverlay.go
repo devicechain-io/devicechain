@@ -98,6 +98,12 @@ var tunableValues = []string{
 	"instance.config.infrastructure.nats.streamMaxBytes",
 	"instance.config.infrastructure.nats.streamMaxBytesCold",
 	"instance.config.infrastructure.nats.streamMaxMsgs",
+	// Whether a device may publish its OWN payload to its raw-payload MQTT topic, for the decoder on
+	// its device type's profile to read. Off by default. It is an opt-in, not wiring: it adds one
+	// topic, confined to the device's own token, to the grant device-management mints, and the
+	// capture stream's subject list follows it at the next upgrade's broker step. Carried forward
+	// by every later upgrade like the rest of the overlay.
+	"instance.config.infrastructure.nats.mqttDeviceUplinks",
 	// Whether device-management writes resolved events as envelopes. A capacity dial, off by
 	// default; dcctl records when it is turned on and what the streams held when it is turned
 	// off, because that is what makes a later move to a release that cannot read envelopes

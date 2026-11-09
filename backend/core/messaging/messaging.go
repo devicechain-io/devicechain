@@ -101,7 +101,9 @@ func TenantSubjectFilter(instanceId, tenant, suffix string) string {
 func TenantSubjectFilters(instanceId, tenant, suffix string) []string {
 	filters := []string{TenantSubjectFilter(instanceId, tenant, suffix)}
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
-		filters = append(filters, fmt.Sprintf("%s.%s.%s.*.%s.*.%s", instanceId, tenant, SegmentGateways, SegmentDevices, SegmentEvents))
+		filters = append(filters,
+			fmt.Sprintf("%s.%s.%s.*.%s.*.%s", instanceId, tenant, SegmentGateways, SegmentDevices, SegmentEvents),
+			fmt.Sprintf("%s.%s.%s.*.%s", instanceId, tenant, SegmentDevices, SegmentUplink))
 	}
 	return filters
 }
@@ -141,8 +143,14 @@ func StreamSubject(instanceId, suffix string) string {
 // would do is every stream on the broker, which captures other instances' advisories into
 // this one's work queue.
 func StreamSubjects(instanceId, suffix string) []string {
+	return StreamSubjectsWith(instanceId, suffix, false)
+}
+
+// StreamSubjectsWith is StreamSubjects for an instance that may have opted in to raw device
+// payloads; only the device-events capture stream's list depends on it.
+func StreamSubjectsWith(instanceId, suffix string, uplinks bool) []string {
 	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
-		return DeviceEventsSubjects(instanceId)
+		return DeviceEventsSubjectsWith(instanceId, uplinks)
 	}
 	if streams.ShapeOf(suffix) != streams.ShapeAdvisory {
 		return []string{StreamSubject(instanceId, suffix)}
@@ -751,6 +759,7 @@ const (
 	// the leaf, which is the only place all four can reach without a cycle.
 	SegmentDevices = streams.SegmentDevices
 	SegmentEvents  = streams.SegmentEvents
+	SegmentUplink  = streams.SegmentUplink
 
 	// Segment count and the position of each fixed segment within a well-formed
 	// device events subject/topic: {instance}/{tenant}/devices/{token}/events.
@@ -785,6 +794,35 @@ func DeviceEventsSubject(instanceId, tenant, deviceToken string) string {
 // subject cannot be granted to a device, so it cannot be ingested as telemetry.
 func DeviceEventsWildcard(instanceId string) string {
 	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentDevices, SegmentEvents)
+}
+
+// DeviceUplinkSubject builds the concrete subject a single device publishes its own raw payload
+// to: "{instance}.{tenant}.devices.{deviceToken}.uplink" (MQTT topic
+// "{instance}/{tenant}/devices/{deviceToken}/uplink"). A sibling of DeviceEventsSubject: the broker
+// grant confines a device to exactly the subject this returns, and only when the operator has opted
+// in.
+func DeviceUplinkSubject(instanceId, tenant, deviceToken string) string {
+	return fmt.Sprintf("%s.%s.%s.%s.%s", instanceId, tenant, SegmentDevices, deviceToken, SegmentUplink)
+}
+
+// DeviceUplinkWildcard is the pattern covering every device's raw-payload subject for an instance:
+// "{instance}.*.devices.*.uplink". It is the third subject the device-events capture stream stores
+// once the operator has opted in (DeviceEventsSubjectsWith).
+func DeviceUplinkWildcard(instanceId string) string {
+	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentDevices, SegmentUplink)
+}
+
+// ParseDeviceUplinkSubject recovers the device a captured raw-payload subject speaks for. It is a
+// separate parser from ParseDeviceEventsSubject, which stays fixed to the events leaf, so a caller
+// that does not know the uplink leaf can never mistake one for telemetry. ok is false for any other
+// shape and for an empty token.
+func ParseDeviceUplinkSubject(subject string) (device string, ok bool) {
+	parts := strings.Split(subject, ".")
+	if len(parts) == DeviceEventsSegmentCount && parts[DeviceEventsDevicesIndex] == SegmentDevices &&
+		parts[DeviceEventsEventsIndex] == SegmentUplink && parts[DeviceEventsTokenIndex] != "" {
+		return parts[DeviceEventsTokenIndex], true
+	}
+	return "", false
 }
 
 // The GATEWAY shape (see streams.SegmentGateways): a gateway device publishes for a child
@@ -865,11 +903,30 @@ func GatewayAcceptsWildcard(instanceId string) string {
 	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentGateways, SegmentAccepts)
 }
 
-// DeviceEventsSubjects is every subject the device-events capture stream stores: a device's
-// own telemetry and a gateway's telemetry for its children. The stream's subjects, its
-// reader's filters and the message-store forwarding all come from this one list.
+// DeviceEventsSubjects is every subject the device-events capture stream stores on an instance
+// that has NOT opted in to raw device payloads: a device's own telemetry and a gateway's telemetry
+// for its children. It is byte-for-byte the list every earlier build declared.
 func DeviceEventsSubjects(instanceId string) []string {
-	return []string{DeviceEventsWildcard(instanceId), GatewayEventsWildcard(instanceId)}
+	return DeviceEventsSubjectsWith(instanceId, false)
+}
+
+// DeviceEventsSubjectsWith is the same list for an instance that may have opted in
+// (infrastructure.nats.mqttDeviceUplinks): with it, the stream also stores a device's own raw
+// payload (the uplink leaf). The stream's subjects, its reader's hand-out and the message-store
+// forwarding all come from this one list.
+//
+// 🔴 THE UPLINK SUBJECT IS DECLARED ONLY WHEN THE OPERATOR OPTS IN. A service compares the
+// stream's subjects with its own expectation and refuses to start on a difference, and the
+// pre-upgrade hook is what writes them, so a list that always carried the new subject would make
+// an old pod that restarts mid-roll exit with a drift error even with the setting off. Off, the
+// stream is the one every earlier build declared and old pods are unaffected; turning the
+// setting on goes through an upgrade (and so the hook), which is when the subject is added.
+func DeviceEventsSubjectsWith(instanceId string, uplinks bool) []string {
+	subjects := []string{DeviceEventsWildcard(instanceId), GatewayEventsWildcard(instanceId)}
+	if uplinks {
+		subjects = append(subjects, DeviceUplinkWildcard(instanceId))
+	}
+	return subjects
 }
 
 // ParseDeviceEventsSubject recovers who a captured telemetry subject speaks for. For a
