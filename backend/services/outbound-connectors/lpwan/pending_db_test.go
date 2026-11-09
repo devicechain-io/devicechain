@@ -151,6 +151,11 @@ func TestDeleteGoneRemovesALeasedRowOfThatTenantOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, won)
 
+	// Another tenant naming this row's id deletes nothing: the delete is tenant-scoped.
+	require.NoError(t, s.DeleteGone(ctx, "other", got.ID))
+	_, err = s.Lookup(ctx, "acme", itemID)
+	require.NoError(t, err, "a delete from another tenant removed this tenant's row")
+
 	require.NoError(t, s.DeleteGone(ctx, "acme", got.ID), "a lease is not needed")
 	require.NoError(t, s.DeleteGone(ctx, "acme", got.ID), "deleting one already gone is not an error")
 	_, err = s.Lookup(ctx, "acme", itemID)
