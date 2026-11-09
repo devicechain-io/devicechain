@@ -18,6 +18,8 @@ Todo lo que muestran los paneles se construye con las métricas que los servicio
 Kubernetes, de la base de datos y del broker de mensajes que recoge la pila de monitoreo. No hay
 que activar nada para tenerlas.
 
+Las imágenes de esta página se tomaron en una instancia local de un solo nodo con una carga sintética constante de cuatro inquilinos: telemetría, alarmas que las reglas generan y resuelven, y comandos que los dispositivos responden. Las horas están en UTC; las imágenes de los paneles cubren 30 minutos y las de la interrupción, 15.
+
 ## Dónde encontrar los paneles {#finding-the-boards}
 
 [Abra Grafana](./observability.md#acceder-a-grafana) y busque la carpeta
@@ -33,7 +35,7 @@ que se elige es el **origen de datos**, que es el Prometheus instalado por la pi
 Todos los paneles empiezan con la misma tabla **Firing alerts**. Lista las alertas que se están
 disparando ahora mismo para esta instancia y que pertenecen a la etapa del panel, de modo que un
 panel por etapa está en silencio cuando su etapa está bien. Una tabla vacía significa que no se
-dispara ninguna. La tabla lee las reglas de Prometheus de la instancia, así que sigue vacía si esas
+dispara ninguna; Grafana la muestra como *No data*. La tabla lee las reglas de Prometheus de la instancia, así que sigue vacía si esas
 reglas no están instaladas. El resumen lista todas las alertas, por lo que una alerta que ningún
 panel por etapa recoge sigue siendo visible allí.
 
@@ -73,6 +75,14 @@ Un panel que puede recurrir a esta alternativa lo dice en su descripción (*"Whi
 service is down this shows the message broker's own count"*). Ambas fuentes cuentan los mismos
 mensajes, así que el panel mantiene una línea continua cuando una releva a la otra.
 
+![El panel de eventos en espera de almacenarse con event-management escalado a cero: la línea sube sin parar.](/img/grafana/fault-persistence-backlog.webp)
+
+*Events waiting to be stored, unos dos minutos y medio después de escalar a 0 `event-management`, el lector que almacena los eventos. El lector no puede reportar mientras está caído, así que esta línea es el recuento del propio broker para los mismos mensajes, y sube a medida que siguen llegando eventos.*
+
+![El mismo panel después de volver a escalar event-management a una réplica: la línea vuelve a cero.](/img/grafana/recovered-persistence-backlog.webp)
+
+*El mismo panel una vez que `event-management` se volvió a escalar a 1. El retraso se vacía en cerca de un minuto desde que arranca el lector. La breve caída a cero antes del último pico es el lector reiniciado tomando en vuelo los eventos en espera, que el broker ya no cuenta como no leídos, antes de que se recolecte su propio reporte por primera vez.*
+
 Diecinueve paneles tienen la alternativa del broker:
 
 - **Messaging:** *Unread backlog per reader*, *Handed out, not yet acknowledged* y
@@ -108,12 +118,18 @@ Conviene conocer dos límites:
   capacity left unread*, que sigue funcionando: al 100 % el flujo empieza a descartar mensajes que
   el lector no ha visto. Consulte [Mensajes que un consumidor nunca leyó](./observability.md#unread-loss).
 
+![El grupo de lectores del panel de messaging durante la misma interrupción: el retraso sin leer y la proporción de la capacidad del flujo suben juntos para el lector detenido.](/img/grafana/fault-messaging-readers.webp)
+
+*Messaging durante la misma interrupción, en **Readers of streams**. **Unread backlog per reader** sube para el lector detenido (la leyenda lista todos los lectores; pase el cursor sobre la línea para ver su nombre), y **Share of stream capacity left unread** muestra cuánto del límite del flujo ocupa ese retraso: aquí menos del 1 %, lejos del límite.*
+
 Una serie ausente significa "no medido", nunca "nada esperando". Si un panel de retraso está vacío, ninguna de las dos fuentes ha reportado: compruebe que el
 broker se está recolectando (Messaging, *Broker servers up*) y que existe el durable del lector.
 
 ## El resumen {#overview-board}
 
-<!-- screenshots: G13 -->
+![El panel de resumen con carga constante: todos los indicadores de "Is everything up?" están en verde y las cinco líneas de "Events through the pipeline" se superponen.](/img/grafana/overview.webp)
+
+*El resumen con una carga constante. Todos los indicadores de **Is everything up?** están en verde, y las líneas de **Events through the pipeline** se superponen: los eventos recibidos, asociados a un dispositivo, almacenados, aplicados al estado del dispositivo y entregados a las reglas avanzan al mismo ritmo. La etapa cuya línea se separa de las demás es el panel por etapa que hay que abrir.*
 
 **Úselo para responder de un vistazo a "¿está todo en marcha y se está perdiendo algo?".** Empiece
 aquí y siga el enlace al panel por etapa de lo que no esté en verde.
@@ -154,9 +170,15 @@ y de la alerta, porque no es un área.
 Un área que el perfil de la instancia no ejecuta no tiene ningún deployment, así que no aparece en
 ninguno de los dos indicadores.
 
+![El resumen con event-management escalado a cero: la línea de almacenados se separa de las demás, "Areas scaled to 0" marca 1 en azul y "Areas with no pod available" sigue en 0.](/img/grafana/fault-overview.webp)
+
+*El resumen mientras `event-management` está escalado a 0. En **Events through the pipeline** la línea de almacenados cae mientras todas las etapas anteriores mantienen su ritmo. **Areas scaled to 0** marca 1, en azul, y **Areas with no pod available** sigue en 0, porque el área se detuvo a propósito.*
+
 ## Ingest {#ingest-board}
 
-<!-- screenshots: G13 -->
+![El panel de ingest con carga constante: los eventos llegan a un ritmo estable y la línea de crecimiento del retraso se mantiene en cero.](/img/grafana/ingest.webp)
+
+*Ingest con la misma carga. Los eventos llegan a un ritmo estable y la línea de crecimiento del retraso de **Arriving vs backlog growth** se mantiene en cero, así que la instancia va al día; por encima de cero, los eventos llegan más rápido de lo que se reenvían. Aquí los dispositivos envían por HTTP, por lo que el flujo de captura MQTT sigue vacío.*
 
 **Úselo cuando los eventos no llegan, se rechazan o la ruta MQTT está bajo presión.** Cubre la
 puerta de entrada: lo que aceptan los transportes, lo que rechazan y el retraso de mensajes MQTT
@@ -180,7 +202,9 @@ credenciales y limitador de tasa, y las de ingesta Sparkplug y LwM2M.
 
 ## Messaging {#messaging-board}
 
-<!-- screenshots: G13 -->
+![El panel de messaging con carga constante: los indicadores de los servidores del broker, su CPU, memoria y conexiones de clientes, y los mensajes que pasan por el broker.](/img/grafana/messaging.webp)
+
+*Messaging con la misma carga: los servidores del broker, su CPU, memoria y conexiones de clientes, y los mensajes que pasan por ellos. Cuando algo se acumula y no sabe dónde, el grupo **Readers of streams**, más abajo, nombra al lector.*
 
 **Úselo cuando algo va lento o acumula retraso y aún no sabe dónde.** El broker de mensajes
 conecta todas las etapas, así que este panel muestra la infraestructura compartida: los
@@ -207,7 +231,9 @@ Alertas que lo respaldan: las alertas [`JetStream*`](./observability.md#consumer
 
 ## Persistence and state {#persistence-board}
 
-<!-- screenshots: G13 -->
+![El panel de persistence con carga constante: los eventos se almacenan al ritmo de llegada, ninguno se rechaza y el panel de eventos en espera se mantiene plano en cero.](/img/grafana/persistence.webp)
+
+*Persistence con la misma carga. **Events stored per second** coincide con el ritmo de llegada de Ingest, **Events not stored** es 0, el percentil 95 del tiempo para almacenar un evento está en decenas de milisegundos y **Events waiting to be stored** (abajo a la derecha) se mantiene plano en cero.*
 
 **Úselo cuando los eventos se aceptan pero no aparecen, o el estado vivo de un dispositivo está
 desactualizado.** Sigue un evento hasta el almacén de eventos y el estado vivo del dispositivo, y
@@ -234,7 +260,9 @@ volumen `Database*`, `BackupDestination*` y `TenantPurge*`.
 
 ## Event processing {#event-processing-board}
 
-<!-- screenshots: G13 -->
+![El panel de event processing con carga constante: el retraso del consumidor es cero, los mensajes en vuelo suben y bajan, y el retraso de la marca de agua se mantiene estable.](/img/grafana/event-processing.webp)
+
+*Event processing mientras las reglas generan y resuelven alarmas y envían comandos. **Consumer lag** es 0, e **In-flight** sube y baja a medida que los lotes se entregan y se confirman, lo cual es normal con carga. **Watermark lag** se mantiene estable; una línea que no deja de subir significa que la detección se está quedando atrás respecto del reloj.*
 
 **Úselo cuando las reglas no se disparan, las alarmas llegan tarde o las reacciones no se
 ejecutan.** Vigila el motor de detección y reacción descrito en
@@ -257,7 +285,9 @@ para saber cómo se ejecuta y se escala el consumidor del motor.
 
 ## Command delivery {#command-delivery-board}
 
-<!-- screenshots: G13 -->
+![El panel de command delivery mientras las reglas envían comandos: todos los indicadores de escrituras a la flota marcan cero y los gráficos de rechazos están planos.](/img/grafana/command-delivery.webp)
+
+*Command delivery mientras las reglas envían comandos que los dispositivos responden. En esta ventana nada escribió a una flota en un solo lote, así que todos los indicadores de escrituras a la flota marcan 0 y los gráficos de rechazos siguen planos. Los comandos que envían las reglas recorren la ruta de despacho; los indicadores *Commands given up* y *Commands that cannot be delivered* del resumen marcan 0 para ellos.*
 
 **Úselo cuando los comandos no llegan a los dispositivos o se rechazan escrituras masivas.**
 
@@ -272,12 +302,14 @@ Alertas que lo respaldan: todas las alertas `Command*`, descritas en
 
 ## Delivery {#delivery-board}
 
-<!-- screenshots: G13 -->
+![El panel de delivery abierto en la entrega desde las reglas de automatización: acciones de generar alarma, resolver alarma y enviar comando entregadas a sus destinos, ninguna rechazada, y notificaciones de alarma gestionadas sin reintentos.](/img/grafana/delivery.webp)
+
+*Delivery, abierto en **Hand-off from automation rules**. Las reglas entregan acciones de generar alarma, resolver alarma y enviar comando a sus destinos, ninguna se rechaza, y las notificaciones de alarma que siguen se gestionan sin reintentos. El primer grupo del panel, los conectores salientes, pertenece a un servicio opcional que esta instancia no ejecuta, por lo que no muestra datos.*
 
 **Úselo cuando ocurrió una alarma y nadie fue avisado, o cuando un conector o una actualización
 está atascado.** Es el último tramo, desde la reacción de una regla hasta una persona o un sistema
-externo. Los grupos de conectores y de actualizaciones de software aparecen para los servicios
-opcionales que los ejecutan.
+externo. Los grupos de conectores y de actualizaciones de software pertenecen a servicios
+opcionales: en una instancia que no ejecuta uno de ellos, su grupo sigue en el panel y muestra *No data*.
 
 | Grupo | Qué muestra |
 | --- | --- |
@@ -295,7 +327,9 @@ panel. El de actualizaciones de software tiene cuatro: `UpdateDownloadsNotConfig
 
 ## Platform {#platform-board}
 
-<!-- screenshots: G13 -->
+![El panel de platform con carga constante: ninguna réplica falta, ningún pod sin estar listo, ningún reinicio, y las réplicas disponibles de cada deployment iguales a las que quiere.](/img/grafana/platform.webp)
+
+*Platform con la misma carga: ninguna réplica falta, ningún pod sin estar listo, ningún reinicio, y las réplicas disponibles de cada deployment iguales a las que quiere. **Memory in use against limit**, abajo, es el panel que conviene leer antes de cambiar los límites de un servicio.*
 
 **Úselo cuando un servicio parece poco sano y necesita saber si es el servicio o el nodo que tiene
 debajo.** Es el único panel que trata de los procesos y no del flujo de mensajes.

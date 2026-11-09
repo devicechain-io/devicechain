@@ -91,6 +91,9 @@ frontend/.api-selftest/
 # hack/x509-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
 /.x509-rig/
 
+# hack/grafana-shots.sh: the cluster's kubeconfig, release binaries and logs (never committed)
+/.grafana-shots/
+
 # hack/conformance-rig.sh: the rig's kubeconfig and state (a cluster credential; never committed)
 /.conformance-rig/
 
