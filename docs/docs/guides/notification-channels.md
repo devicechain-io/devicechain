@@ -182,7 +182,7 @@ The severity here is **uppercase** because it is the *alarm's* severity. A detec
 
 ### Notify when an alarm clears {#notify-on-clear}
 
-By default a policy tells its channels only when an alarm is raised or escalates. Set `notifyOnClear: true` on a policy to also tell them when an alarm that the policy paged **clears**. The clear goes through the same rules and channels, matched on the severity the alarm held when it cleared, and its `eventType` is `CLEARED`. It is off by default, so a policy that existed before the option behaves as it did.
+By default a policy tells its channels only when an alarm is raised or escalates. Set `notifyOnClear: true` on a policy to also tell them when an alarm that the policy paged **clears**. The clear goes to the channels and recipients that actually delivered a page for that alarm, among those the policy routes, whatever severity the alarm has when it clears (an alarm raised `CRITICAL`, lowered to `MAJOR` and then cleared resolves on the channel that paged it). Its `eventType` is `CLEARED`, which PagerDuty maps to a resolve. It is off by default, so a policy that existed before the option behaves as it did.
 
 ```graphql
 mutation {
@@ -192,7 +192,8 @@ mutation {
 
 A clear is informational, so it is handled differently from a page:
 
-- It is sent only for an alarm cycle that was actually notified, and only once, even if the clear event is delivered again.
+- It goes only to destinations that delivered a page in that cycle. A policy that never paged the alarm (its notification was throttled, held for quiet hours, or the policy was created after the raise) sends no clear.
+- It is sent once per cycle, after the clear has been recorded, so no "still unresolved" escalation follows it. If no channel takes it, it is retried; once any channel has taken it, it is not repeated. A clear that is processed before its alarm's page has been recorded is sent right after that page.
 - It is **not** throttled, does not count as a notification, and does not start escalation.
 - A clear that happens during a policy's quiet hours is **dropped**, not held: a "cleared" released hours later would report old news.
 - `notifyOnClear` cannot be cleared with `null`; send `true` or `false`.

@@ -88,7 +88,9 @@ func slackMessage(msg *RenderedNotification, link, deviceLink string) map[string
 		blocks = append(blocks, map[string]any{"type": "actions", "elements": buttons})
 	}
 	return map[string]any{
-		"text":        msg.Subject,
+		// The top-level text is mrkdwn too (push previews, fallbacks), and it carries a
+		// device-authored name: escape it so <!channel> or a link cannot ride in.
+		"text":        slackEscape(msg.Subject),
 		"attachments": []map[string]any{{"color": severityColor(a), "blocks": blocks}},
 	}
 }

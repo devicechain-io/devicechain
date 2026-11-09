@@ -309,6 +309,9 @@ func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent
 	}
 }
 
+// alarmDeviceLookupTimeout bounds the device read that names an alarm event.
+const alarmDeviceLookupTimeout = 500 * time.Millisecond
+
 // describeAlarmDevice names the originating device on the event (token, name, type token) so
 // a subscriber such as notification-management can show a person which device it is. It is
 // best effort and never blocks the page: the transition is already committed, so a failed read
@@ -317,7 +320,18 @@ func (api *Api) describeAlarmDevice(ctx context.Context, event *AlarmStateChange
 	if event.OriginatorType != string(entity.TypeDevice) || event.OriginatorId == 0 {
 		return
 	}
-	devices, err := api.DevicesById(ctx, []uint{event.OriginatorId})
+	// Only the transitions that notify a person. An acknowledgement does not, and bulk
+	// acknowledgements (thousands of alarms) must not each pay a device read.
+	switch event.EventType {
+	case AlarmEventRaised, AlarmEventEscalated, AlarmEventCleared:
+	default:
+		return
+	}
+	// A short bound: naming is a courtesy to the reader, and a slow database must not hold the
+	// transition's emission.
+	rctx, cancel := context.WithTimeout(ctx, alarmDeviceLookupTimeout)
+	defer cancel()
+	devices, err := api.DevicesById(rctx, []uint{event.OriginatorId})
 	if err != nil {
 		log.Warn().Err(err).Str("alarm", event.AlarmToken).
 			Msg("Could not read the alarm's device to name it on the event; publishing it unnamed")

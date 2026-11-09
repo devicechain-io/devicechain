@@ -324,10 +324,12 @@ type NotificationPolicy {
     """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
     """
-    True when the policy also notifies its channels when an alarm it paged clears, through
-    the same rules, matched on the severity the alarm held when it cleared. A clear is
+    True when the policy also tells the destinations that paged an alarm when it clears.
+    The clear goes only to the channels and recipients that actually delivered a page for
+    that alarm cycle and that this policy routes, whatever severity the alarm has when it
+    clears. It is sent once per cycle, after the clear has stopped escalation. A clear is
     informational: it is not throttled, it does not start escalation, and one that happens
-    during quiet hours is dropped rather than held.
+    during the policy's quiet hours is dropped rather than held.
     """
     notifyOnClear: Boolean!
     """The policy's routing rules."""

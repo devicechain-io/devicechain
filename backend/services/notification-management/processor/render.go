@@ -81,13 +81,13 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	var b strings.Builder
 	fmt.Fprintf(&b, "Alarm %s %s on %s.\n\n", event.AlarmKey, verb, shown)
 	if event.DeviceName != "" {
-		writeField(&b, "Device", event.DeviceName)
+		writeField(&b, "Device", oneLine(event.DeviceName))
 	}
 	if event.DeviceToken != "" {
-		writeField(&b, "Device token", event.DeviceToken)
+		writeField(&b, "Device token", oneLine(event.DeviceToken))
 	}
 	if event.DeviceTypeToken != "" {
-		writeField(&b, "Device type", event.DeviceTypeToken)
+		writeField(&b, "Device type", oneLine(event.DeviceTypeToken))
 	}
 	writeField(&b, "Severity", event.Severity)
 	if event.PreviousSeverity != "" {

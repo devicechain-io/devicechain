@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
@@ -58,16 +59,36 @@ func teamsAccent(a AlarmFacts) string {
 	}
 }
 
+// teamsEscape neutralises the Markdown an Adaptive Card TextBlock and FactSet render, so a
+// device- or tenant-authored name cannot inject links, emphasis or mentions: every Markdown
+// control character is backslash-escaped, and a line break (which would start a new block) is
+// flattened to a space. Truncate BEFORE escaping, never after, so a cut cannot split an escape.
+func teamsEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\', '`', '*', '_', '[', ']', '(', ')', '<', '>', '~', '|', '#', '!', '&':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n', '\r':
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // teamsMessage builds the Workflows envelope around the Adaptive Card.
 func teamsMessage(msg *RenderedNotification, link, deviceLink string) map[string]any {
 	a := msg.Alarm
 	facts := make([]map[string]any, 0, 8)
 	for _, f := range a.facts() {
-		facts = append(facts, map[string]any{"title": f[0], "value": trunc(f[1], 500)})
+		facts = append(facts, map[string]any{"title": f[0], "value": teamsEscape(trunc(f[1], 500))})
 	}
 	body := []map[string]any{
 		{
-			"type": "TextBlock", "text": trunc(a.title(msg), 300), "weight": "Bolder",
+			"type": "TextBlock", "text": teamsEscape(trunc(a.title(msg), 300)), "weight": "Bolder",
 			"size": "Medium", "wrap": true, "color": teamsAccent(a),
 		},
 		{"type": "FactSet", "facts": facts},

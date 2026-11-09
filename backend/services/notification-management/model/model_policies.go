@@ -68,10 +68,10 @@ type NotificationPolicy struct {
 	// NotifyOnClear opts the policy into telling its channels when an alarm it paged CLEARS,
 	// not only when it raises. Off by default and for every policy that predates the column
 	// (the migration's DEFAULT false), which is exactly what those policies did before. The
-	// notification is the same rule routing a raise uses, matched on the severity the alarm
-	// held when it cleared; it is informational, so it is neither throttled nor held for
-	// quiet hours (a clear inside a quiet stretch is dropped, not deferred) and it does not
-	// arm escalation.
+	// clear goes to the (channel, recipients) targets that actually delivered a page for the
+	// alarm's cycle and that this policy routes, whatever severity the alarm clears at; it is
+	// informational, so it is neither throttled nor held for quiet hours (a clear inside a
+	// quiet stretch is dropped, not deferred) and it does not arm escalation.
 	NotifyOnClear bool
 
 	// Rules are the policy's owned routing rules; loaded with the policy and

@@ -12,11 +12,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// An alarm event names the device that raised it. The numeric id alone is useless to the
-// person a notification reaches, so the producer, which owns devices, reads the device once
-// at emission and puts its token, name and type token on the event.
-func TestAlarmEventNamesItsDevice(t *testing.T) {
-	api, cap := newContributorTestApi(t)
+func seedBoiler(t *testing.T, api *Api) context.Context {
+	t.Helper()
 	if err := api.RDB.Database.AutoMigrate(&Device{}, &DeviceType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -34,6 +31,15 @@ func TestAlarmEventNamesItsDevice(t *testing.T) {
 	if err := api.RDB.Database.WithContext(ctx).Create(d).Error; err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
+	return ctx
+}
+
+// An alarm event names the device that raised it. The numeric id alone is useless to the
+// person a notification reaches, so the producer, which owns devices, reads the device once
+// at emission and puts its token, name and type token on the event.
+func TestAlarmEventNamesItsDevice(t *testing.T) {
+	api, cap := newContributorTestApi(t)
+	ctx := seedBoiler(t, api)
 
 	raiseEdge(t, api, ctx, "over-temp", "r1", "MAJOR", 10)
 	resolveEdge(t, api, ctx, "over-temp", "r1", 20)
@@ -61,5 +67,17 @@ func TestAlarmEventWithoutAReadableDeviceIsStillPublished(t *testing.T) {
 	if ev := cap.events[0]; ev.DeviceToken != "" || ev.DeviceName != "" || ev.DeviceTypeToken != "" {
 		t.Fatalf("an unreadable device must leave the names empty, got %q/%q/%q",
 			ev.DeviceToken, ev.DeviceName, ev.DeviceTypeToken)
+	}
+}
+
+// An acknowledgement does not notify anyone, so it must not pay a device read: a bulk acknowledge
+// emits one per alarm.
+func TestAcknowledgementEventsAreNotNamed(t *testing.T) {
+	api, _ := newContributorTestApi(t)
+	ctx := seedBoiler(t, api)
+	ev := &AlarmStateChangeEvent{EventType: AlarmEventAcknowledged, OriginatorType: "device", OriginatorId: dev}
+	api.describeAlarmDevice(ctx, ev)
+	if ev.DeviceToken != "" {
+		t.Fatalf("an acknowledgement was named: %+v", ev)
 	}
 }

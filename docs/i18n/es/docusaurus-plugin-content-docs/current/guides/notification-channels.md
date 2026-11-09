@@ -182,7 +182,7 @@ Aquí la severidad va en **mayúsculas** porque es la severidad de la *alarma*. 
 
 ### Notificar cuando una alarma se resuelve {#notify-on-clear}
 
-De forma predeterminada, una política avisa a sus canales solo cuando una alarma se genera o escala. Establezca `notifyOnClear: true` en una política para avisarles también cuando una alarma que la política notificó **se resuelve** (`clear`). El aviso pasa por las mismas reglas y canales, según la severidad que tenía la alarma al resolverse, y su `eventType` es `CLEARED`. Está desactivado de forma predeterminada, así que una política anterior a la opción se comporta como antes.
+De forma predeterminada, una política avisa a sus canales solo cuando una alarma se genera o escala. Establece `notifyOnClear: true` en una política para avisarles también cuando una alarma que la política notificó **se resuelve** (`clear`). El aviso va a los canales y destinatarios que realmente entregaron un aviso de esa alarma, entre los que la política enruta, sea cual sea la severidad de la alarma al resolverse (una alarma generada como `CRITICAL`, bajada a `MAJOR` y luego resuelta se resuelve en el canal que la notificó). Su `eventType` es `CLEARED`, que PagerDuty traduce en un resolve. Está desactivado de forma predeterminada, así que una política anterior a la opción se comporta como antes.
 
 ```graphql
 mutation {
@@ -192,10 +192,11 @@ mutation {
 
 Una resolución es informativa, así que se trata de forma distinta a un aviso:
 
-- Se envía solo para un ciclo de alarma que realmente se notificó, y una sola vez, aunque el evento de resolución se entregue de nuevo.
+- Va solo a los destinos que entregaron un aviso en ese ciclo. Una política que nunca notificó la alarma (su notificación se limitó por frecuencia, se retuvo por las horas de silencio, o la política se creó después de la generación) no envía resolución.
+- Se envía una vez por ciclo, después de registrar la resolución, así que ninguna escalada de "sigue sin resolverse" la sigue. Si ningún canal la acepta, se reintenta; cuando algún canal la ha aceptado, no se repite. Una resolución que se procesa antes de que se haya registrado el aviso de su alarma se envía justo después de ese aviso.
 - **No** se limita por frecuencia, no cuenta como notificación y no inicia la escalada.
 - Una resolución que ocurre durante las horas de silencio de una política se **descarta**, no se retiene: un "resuelta" liberado horas después comunicaría una noticia vieja.
-- `notifyOnClear` no se puede borrar con `null`; envíe `true` o `false`.
+- `notifyOnClear` no se puede borrar con `null`; envía `true` o `false`.
 
 ### Acotamiento por tipo de dispositivo {#device-type-scoping}
 

@@ -5,8 +5,12 @@ package model
 
 import (
 	"database/sql"
+	"encoding/json"
+	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -61,6 +65,51 @@ type NotificationState struct {
 	// a cycle adopts it, resetting the row only when that cycle was raised after the
 	// row's clear (see enterCycle).
 	CycleRaisedAt sql.NullTime
+
+	// ClearNotifiedAt is when this cycle's clear was CLAIMED for announcement to the channels
+	// that paged it (see Api.ClaimClearAnnouncement). Per cycle: a new cycle resets it. NULL
+	// means no clear has been announced for the cycle the row describes.
+	ClearNotifiedAt sql.NullTime
+
+	// PagedTargets is a JSON array of PagedTarget: the (channel, recipients) targets that
+	// actually delivered a page in this cycle, merged in as pages go out. A clear is sent only
+	// to these, so it reaches what was paged and nothing else. Per cycle; NULL until a page is
+	// recorded (including every row written before the column existed).
+	PagedTargets *datatypes.JSON
+}
+
+// PagedTarget names one destination that delivered a page: the channel by token and the
+// resolved recipients, the same identity the dispatcher dedups deliveries on.
+type PagedTarget struct {
+	Channel    string   `json:"channel"`
+	Recipients []string `json:"recipients,omitempty"`
+}
+
+// Key is the target's identity, matching the dispatcher's delivery dedup key.
+func (t PagedTarget) Key() string { return t.Channel + "|" + strings.Join(t.Recipients, ",") }
+
+// PagedTargetSet decodes the row's paged targets; a missing or unreadable value is the empty
+// set, which sends no clear (an unreadable record must not turn into a clear sent anywhere).
+func (s *NotificationState) PagedTargetSet() map[string]bool {
+	out := map[string]bool{}
+	if s == nil || s.PagedTargets == nil {
+		return out
+	}
+	var targets []PagedTarget
+	if err := json.Unmarshal(*s.PagedTargets, &targets); err != nil {
+		return out
+	}
+	for _, t := range targets {
+		out[t.Key()] = true
+	}
+	return out
+}
+
+// SameCycleAs reports whether an event raised at `raised` belongs to the cycle the row
+// describes. A row or an event that names no cycle cannot be ordered and is taken as the same.
+func (s *NotificationState) SameCycleAs(raised time.Time) bool {
+	k := cycleKey(raised)
+	return !s.CycleRaisedAt.Valid || !k.Valid || s.CycleRaisedAt.Time.Equal(k.Time)
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, tiebroken on the row id.
