@@ -150,7 +150,7 @@ The Things Stack 通过应用上的 **webhook** 发送上行。
 3. **在应用或设备上设置载荷格式化器（payload formatter）**（LoRaWAN Device Repository 为许多传感器提供了现成的格式化器）。平台存储格式化器的输出，不会自己解码原始帧。没有格式化器时，该上行会被[计为未解码](#undecoded)。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，把 DevEUI 设为 `lorawan.deveui` 别名；如果选择了 **Device id**，则把设备 ID 设为 `tts.device-id` 别名。
 
-发送到其他任何路径的消息（join accept、下行确认）会返回 `204` 并被忽略，因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
+发送到其他任何路径的消息（join accept、位置解算）会返回 `204` 并被忽略，不属于平台所发下行的下行事件也一样（见 [The Things Stack 下行](#lorawan-downlink-tts)），因此启用其他消息类型不需要在 DeviceChain 中改动任何内容，但也没有必要这样做。消息时间是上行的 `received_at`，它必须存在，且不得早于 366 天前。去重键由设备、帧计数器和该时间共同组成，因为设备重新入网时计数器会重置。
 
 ## 通用 JSON {#generic-json}
 
@@ -332,6 +332,33 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 **升级。** 确认下行需要出站连接器和事件源两者都是新版本。出站连接器已是新版本而事件源仍是旧版本期间，旧 Pod 会对网络服务器的报告返回 `204` 并丢弃，因此在这一窗口内发出的确认下行会在截止时间以 `TIMEOUT`（结果未知）结束。Chart 在同一次升级中滚动二者；要避开这一窗口，请在其持续期间暂停确认命令。
 
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+指向 The Things Stack 的关联是一个 `"networkServer": "tts_v3"` 的 `lorawan_downlink` 连接器，并带上设备所属的应用：
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+连接器的**密钥**是一个有权写入该应用下行流量的 API 密钥。设备必须带有 `tts.device-id` [别名](#aliases)（The Things Stack 用它来寻址设备），而不是 DevEUI；它取自设备，绝不取自命令。命令的参数与 ChirpStack 相同，下行会加入设备队列的末尾。
+
+对**未确认**的下行，`SUCCEEDED` 同样表示网络服务器已接受它。对**确认**的下行，平台会给每条下行一个自己的标识（The Things Stack 不返回任何标识），作为以 `dc:` 开头的 correlation id 发送，并依据 The Things Stack 为该下行发布的事件来结束命令。在应用的 webhook 中启用下行事件，并在集成 URL 下给每种事件各自的路径，路径**必须以 `downlink` 开头**：例如 `/downlink-ack`、`/downlink-nack`、`/downlink-sent` 和 `/downlink-failed`。
+
+| The Things Stack 报告 | 命令 |
+| --- | --- |
+| `downlink_ack`：设备应答了该帧 | `SUCCEEDED`。 |
+| `downlink_nack`：设备没有应答 | `TIMEOUT`，结果未知。设备可能已收到该帧而应答丢失，再次发送可能会动作两次。 |
+| `downlink_sent`：网关发射了该帧 | 记录下来，命令继续等待。 |
+| `downlink_failed`：网络服务器无法发出该下行 | `FAILED`，未投递。可以放心重发。 |
+| 截止时间前没有任何报告 | `TIMEOUT`，结果未知。 |
+
+报告只通过平台设置的 `dc:` correlation id 与其命令匹配，并且只在它指明的应用和设备正是该下行所发往的、且经由发出时所用的集成时才匹配；网络服务器自己的追踪标识绝不会被使用。在 The Things Stack 控制台中手工排入队列的下行不带这种 id，其事件会被忽略。不匹配和无对应的报告会如上所述被计数并丢弃。发送到不带路径的基础 URL 的 webhook 不指明消息类型，因此其报告按遥测处理，租户超出消息上限时可能被丢弃；请给每种类型各自的路径。
+
 **在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
 
 ## 集成令牌能做什么 {#trust}
@@ -350,7 +377,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 第 1 版不包含 {#not-supported}
 
-- **面向 The Things Stack 与通用发送方的下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)只覆盖 ChirpStack v4 和原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
+- **面向通用发送方的下行以及负载编码器。** [LoRaWAN 下行](#lorawan-downlink)覆盖 ChirpStack v4 与 The Things Stack v3，且只支持原始负载。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。

@@ -531,3 +531,85 @@ func TestAChirpStackTxAckWithNoQueueItemIsUntrackedNotMalformed(t *testing.T) {
 	_, err = Decode(chirp(false), req([]byte(`{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"x"}`), "txack"))
 	require.ErrorIs(t, err, ErrMalformed)
 }
+
+func TestTTSDownlinkReports(t *testing.T) {
+	const key = "dc:0123456789abcdef0123456789abcdef"
+	cases := []struct {
+		file, kind string
+		acked      bool
+	}{
+		{"downlink_ack_dc.json", "ack", true},
+		// downlink_nack: the device did not acknowledge. The same "ack, not acknowledged" as ChirpStack's
+		// timeout, because that is exactly the evidence: it says nothing about whether the frame was heard.
+		{"downlink_nack_dc.json", "ack", false},
+		{"downlink_sent_dc.json", "txack", false},
+		{"downlink_failed_dc.json", "failed", false},
+	}
+	for _, c := range cases {
+		for _, identity := range []string{"DEV_EUI", "DEVICE_ID"} {
+			d := tts(identity, false)
+			// Whatever path the webhook posted the message type to, the body says what it is.
+			for _, path := range []string{"", "downlink-ack", "up"} {
+				r := req(fixture(t, "tts/"+c.file), "")
+				r.MessageType = path
+				res, err := Decode(d, r)
+				require.NoError(t, err, c.file)
+				require.Len(t, res.Downlinks, 1, c.file+" "+identity+" "+path)
+				got := res.Downlinks[0]
+				require.Equal(t, c.kind, got.Kind)
+				require.Equal(t, c.acked, got.Acknowledged)
+				require.Equal(t, key, got.QueueItemID, "matched by the correlation id the platform set, never the event's own")
+				require.Equal(t, "app1/dev1", got.DeviceRef)
+				if identity == "DEV_EUI" {
+					require.Equal(t, "lorawan.deveui", got.Scheme)
+					require.Equal(t, "0004A30B001C0530", got.Identifier)
+				} else {
+					require.Equal(t, "tts.device-id", got.Scheme)
+					require.Equal(t, "dev1", got.Identifier)
+				}
+				require.Empty(t, res.Uplinks)
+			}
+		}
+	}
+}
+
+func TestTTSDownlinkReportsNotFromThePlatformAreIgnored(t *testing.T) {
+	// The recorded TTS example has correlation ids of the network server's own; a downlink queued by hand
+	// in the console carries none of the platform's.
+	for _, f := range []string{"downlink_ack.json", "downlink_ack_foreign.json"} {
+		for _, path := range []string{"", "downlink-ack"} {
+			r := req(fixture(t, "tts/"+f), "")
+			r.MessageType = path
+			res, err := Decode(tts("DEV_EUI", false), r)
+			require.NoError(t, err)
+			require.True(t, res.Ignored, f)
+			require.Empty(t, res.Downlinks)
+		}
+	}
+	// A bad body at another path is ignored, as it always was.
+	r := req([]byte("nope"), "")
+	r.MessageType = "join-accept"
+	res, err := Decode(tts("DEV_EUI", false), r)
+	require.NoError(t, err)
+	require.True(t, res.Ignored)
+}
+
+func TestTTSDownlinkReportsAreIgnoredWhenTheRouteDoesNotCarryThem(t *testing.T) {
+	for _, f := range []string{"downlink_ack_dc.json", "downlink_nack_dc.json", "downlink_sent_dc.json", "downlink_failed_dc.json"} {
+		for _, path := range []string{"", "downlink-ack", "up"} {
+			r := req(fixture(t, "tts/"+f), "")
+			r.MessageType = path
+			r.DownlinkReports = false
+			res, err := Decode(tts("DEV_EUI", false), r)
+			require.NoError(t, err)
+			require.True(t, res.Ignored, f+" "+path)
+			require.Empty(t, res.Downlinks)
+		}
+	}
+	// A downlink the platform did not push is flagged untracked when the route does carry reports.
+	r := req(fixture(t, "tts/downlink_ack_foreign.json"), "")
+	res, err := Decode(tts("DEV_EUI", false), r)
+	require.NoError(t, err)
+	require.True(t, res.Ignored)
+	require.True(t, res.Untracked)
+}

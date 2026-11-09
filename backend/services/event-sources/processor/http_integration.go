@@ -683,13 +683,19 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 }
 
 // isDownlinkEvent reports whether the request names a downlink report: ChirpStack by its event query
-// value. (messageType is the webhook path segment, which only The Things Stack uses.)
+// value, The Things Stack by a webhook path that starts with "downlink" (downlink-ack, downlink/nack,
+// downlink_failed, ...). A The Things Stack webhook posted to its bare base URL names nothing, so its
+// reports are shed with telemetry; the documentation says to give each message type its own path.
 func isDownlinkEvent(t integrationcodec.Type, r *http.Request, messageType string) bool {
-	if t != integrationcodec.ChirpStackV4 {
-		return false
+	switch t {
+	case integrationcodec.ChirpStackV4:
+		ev := r.URL.Query().Get("event")
+		return ev == integrationcodec.DownlinkAck || ev == integrationcodec.DownlinkTxAck
+	case integrationcodec.TTSV3:
+		seg := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(messageType))
+		return strings.HasPrefix(seg, "downlink")
 	}
-	ev := r.URL.Query().Get("event")
-	return ev == integrationcodec.DownlinkAck || ev == integrationcodec.DownlinkTxAck
+	return false
 }
 
 // handleDownlinkReports carries a network server's reports about downlinks (ack, txack) to the
@@ -744,7 +750,7 @@ func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.
 			return
 		}
 		out = append(out, cmddownlink.DownlinkReport{
-			Integration: slug, Kind: d.Kind, DevEUI: d.Identifier, QueueItemID: d.QueueItemID,
+			Integration: slug, Kind: d.Kind, DevEUI: d.Identifier, QueueItemID: d.QueueItemID, DeviceRef: d.DeviceRef,
 			Acknowledged: d.Acknowledged, FCntDown: d.FCntDown,
 		})
 	}

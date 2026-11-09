@@ -150,7 +150,7 @@ The Things Stack sends uplinks through a **webhook** on an application.
 3. **Set a payload formatter** on the application or on the device (the LoRaWAN Device Repository offers one for many sensors). The platform stores the formatter's output; it does not decode the raw frame. Without one, the uplink is [counted as undecoded](#undecoded). Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias, or their device id as a `tts.device-id` alias if you chose **Device id**.
 
-A message posted to any other path (a join accept, a downlink acknowledgement) is answered `204` and ignored, so you can enable other message types without changing anything in DeviceChain, but there is no reason to. The message time is the uplink's `received_at`, which must be present and not older than 366 days. The deduplication key is the device, the frame counter and that time together, because the counter restarts when a device rejoins.
+A message posted to any other path (a join accept, a location solve) is answered `204` and ignored, as is a downlink event that does not belong to a downlink the platform sent (see [The Things Stack downlink](#lorawan-downlink-tts)), so you can enable other message types without changing anything in DeviceChain, but there is no reason to. The message time is the uplink's `received_at`, which must be present and not older than 366 days. The deduplication key is the device, the frame counter and that time together, because the counter restarts when a device rejoins.
 
 ## Generic JSON {#generic-json}
 
@@ -332,6 +332,33 @@ A `txack` for a downlink that carried only MAC commands has no queue item and is
 
 **Upgrading.** Confirmed downlinks need the new version of both the outbound connectors and the event sources. While the outbound connectors are new and the event sources still old, the network server's reports are answered `204` and dropped by the old pods, so a confirmed downlink sent in that window settles `TIMEOUT`, outcome unknown, at its deadline. The chart rolls them in the same upgrade; to avoid the window, hold confirmed commands for its length.
 
+### The Things Stack v3 {#lorawan-downlink-tts}
+
+A link to The Things Stack is a `lorawan_downlink` connector with `"networkServer": "tts_v3"` and the application the devices belong to:
+
+```json
+{
+  "networkServer": "tts_v3",
+  "baseUrl": "https://eu1.cloud.thethings.network",
+  "integration": "my-integration-token",
+  "applicationId": "my-application"
+}
+```
+
+The connector's **secret** is an API key with the right to write downlink traffic of that application. The device must carry a `tts.device-id` [alias](#aliases), which is what The Things Stack addresses it by, instead of a DevEUI; it is read from the device, never from the command. The command's parameters are the same as for ChirpStack, and the downlink joins the end of the device's queue.
+
+For an **unconfirmed** downlink, `SUCCEEDED` again means the network server accepted it. For a **confirmed** one, the platform gives each downlink an identifier of its own (The Things Stack returns none), sent as a correlation id that starts with `dc:`, and settles the command from the events The Things Stack posts for that downlink. In the application's webhook, enable the downlink events and give each its own path under the integration URL, with a path that **starts with `downlink`**: for example `/downlink-ack`, `/downlink-nack`, `/downlink-sent` and `/downlink-failed`.
+
+| What The Things Stack reports | Command |
+| --- | --- |
+| `downlink_ack`: the device acknowledged the frame | `SUCCEEDED`. |
+| `downlink_nack`: the device did not acknowledge it | `TIMEOUT`, outcome unknown. The device may have heard the frame and its acknowledgement been lost, so sending again may act twice. |
+| `downlink_sent`: a gateway transmitted the frame | Recorded, and the command keeps waiting. |
+| `downlink_failed`: the network server could not send the downlink | `FAILED`, not delivered. Safe to send again. |
+| Nothing by the deadline | `TIMEOUT`, outcome unknown. |
+
+A report is matched to its command only by the `dc:` correlation id the platform set, and only when it names the application and device the downlink was sent to, through the integration it was sent through; the network server's own trace identifiers are never used. A downlink queued by hand in The Things Stack console carries no such id, and its events are ignored. Mismatches and unmatched reports are counted and dropped as described above. A webhook posted to the bare base URL, with no path, names no message type, so its reports are treated like telemetry and can be shed when the tenant is over its message ceiling; give each type its own path.
+
 **Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
 
 
@@ -351,7 +378,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Downlink to The Things Stack and generic senders, and payload encoders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and raw payloads only. Commands to any other integration device fail as described in [Commands to integration devices](#commands).
+- **Downlink to generic senders, and payload encoders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and The Things Stack v3, and raw payloads only. Commands to any other integration device fail as described in [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.

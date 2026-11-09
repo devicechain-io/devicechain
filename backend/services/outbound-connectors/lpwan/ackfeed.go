@@ -35,12 +35,13 @@ const (
 	AckDeadlineFault = "deadline_fault"  // an overdue downlink could not be answered this pass
 	AckContended     = "contended"       // another settler holds the record; this report is left to redeliver
 	AckRedelivered   = "redelivered"     // a report for a downlink this replica just settled: its message ack was lost, nothing to do
+	AckFailed        = "failed"          // the network server reported it could not send the downlink: the command is NOT_DELIVERED
 )
 
 // AckResults is every ack result label, so a metric can create its children at 0.
 var AckResults = []string{
 	AckAcknowledged, AckTimedOut, AckTransmitted, AckTxUntracked, AckUnmatched, AckRetried, AckMismatch,
-	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended, AckRedelivered,
+	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended, AckRedelivered, AckFailed,
 }
 
 // AckMetrics counts ack feed results; a nil AckMetrics counts nothing.
@@ -229,7 +230,8 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 	}
 	var rep cmddownlink.DownlinkReport
 	if err := json.Unmarshal(msg.Value, &rep); err != nil || rep.QueueItemID == "" || rep.Integration == "" ||
-		rep.DevEUI == "" || (rep.Kind != cmddownlink.DownlinkReportAck && rep.Kind != cmddownlink.DownlinkReportTxAck) {
+		(rep.DevEUI == "" && rep.DeviceRef == "") || (rep.Kind != cmddownlink.DownlinkReportAck &&
+		rep.Kind != cmddownlink.DownlinkReportTxAck && rep.Kind != cmddownlink.DownlinkReportFailed) {
 		log.Warn().Str("tenant", tenant).Msg("Dropping an undecodable downlink report.")
 		f.count(AckPoison)
 		ack(msg)
@@ -252,7 +254,7 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 		}
 		return
 	}
-	if p.Integration != rep.Integration || !strings.EqualFold(p.DevEUI, rep.DevEUI) {
+	if p.Integration != rep.Integration || !sameDevice(p, rep) {
 		// The queue item id matched a downlink sent through another integration or to another device.
 		// The id is unguessable, so this is a misconfigured sender or an attack; either way it
 		// settles nothing, and the real downlink keeps waiting for its own report.
@@ -283,11 +285,20 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 	}
 	env := cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce}
 	result := AckAcknowledged
-	if rep.Acknowledged {
+	switch {
+	case rep.Kind == cmddownlink.DownlinkReportFailed:
+		// The network server says it could not send the downlink. That is the one party that controls
+		// the radio reporting the frame did not go out, which is what NOT_DELIVERED (safe to send
+		// again) means. It is NOT said of a downlink the device failed to acknowledge, below.
+		result = AckFailed
+		env.Reach = cmddownlink.ReachUnsent
+		env.Error = strPtr("the network server reported it could not send the downlink")
+		env.Payload = reasonPayload(ReasonFailed)
+	case rep.Acknowledged:
 		env.Success = true
 		body, _ := json.Marshal(map[string]any{"stage": "acknowledged", "queueItemId": p.QueueItemID, "fCntDown": rep.FCntDown})
 		env.Payload = strPtr(string(body))
-	} else {
+	default:
 		result = AckTimedOut
 		env.Reach = cmddownlink.ReachUnanswered
 		env.Error = strPtr("the network server reported the confirmed downlink was not acknowledged by the device in time; the device may have received it")
@@ -297,6 +308,15 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 		f.count(result)
 		ack(msg)
 	}
+}
+
+// sameDevice reports whether a report names the device the downlink was sent to. A downlink stored
+// with a DeviceRef (The Things Stack) is matched on it alone; one without (ChirpStack) on its DevEUI.
+func sameDevice(p *Pending, rep cmddownlink.DownlinkReport) bool {
+	if p.DeviceRef != "" {
+		return p.DeviceRef == rep.DeviceRef
+	}
+	return rep.DeviceRef == "" && strings.EqualFold(p.DevEUI, rep.DevEUI)
 }
 
 // claim takes the record's settle lease, counting why when it cannot.

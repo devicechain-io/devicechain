@@ -69,6 +69,8 @@ const (
 	ReasonNoLink         Reason = "NO_NETWORK_SERVER_LINK"
 	ReasonAmbiguousLink  Reason = "AMBIGUOUS_NETWORK_SERVER_LINK"
 	ReasonNoDevEUI       Reason = "NO_DEVEUI"
+	ReasonNoDeviceID     Reason = "NO_DEVICE_ID"
+	ReasonFailed         Reason = "DOWNLINK_FAILED"
 	ReasonUnsupported    Reason = "UNSUPPORTED"
 	ReasonRateLimited    Reason = "RATE_LIMITED"
 	ReasonNetworkServer  Reason = "NETWORK_SERVER_REFUSED"
@@ -88,6 +90,8 @@ var (
 	ErrAmbiguous = errors.New("lpwan: more than one network-server link names the integration")
 	ErrBadLink   = errors.New("lpwan: the network-server link is not usable")
 	ErrNoDevEUI  = errors.New("lpwan: the device has no DevEUI")
+	// ErrNoDeviceID: the device has no tts.device-id alias, which The Things Stack addresses it by.
+	ErrNoDeviceID = errors.New("lpwan: the device has no tts.device-id")
 )
 
 // Links finds the published network-server link (a lorawan_downlink connector, with its credential
@@ -96,9 +100,11 @@ type Links interface {
 	Resolve(ctx context.Context, tenant, integration string) (connectorspec.LoRaWANDownlinkTarget, error)
 }
 
-// Devices finds a device's DevEUI.
+// Devices finds the name a network server addresses a device by: its DevEUI (ChirpStack) or its
+// tts.device-id (The Things Stack).
 type Devices interface {
 	DevEUI(ctx context.Context, tenant, deviceToken string) (string, error)
+	TTSDeviceID(ctx context.Context, tenant, deviceToken string) (string, error)
 }
 
 // Claimer confirms a dispatch on the live path (cmddownlink.Claimer.ClaimDispatch).
@@ -343,14 +349,30 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		a.lookupFailed(ctx, j, "link", err)
 		return
 	}
-	devEUI, err := a.devices.DevEUI(ctx, tenant, j.device)
-	switch {
-	case errors.Is(err, ErrNoDevEUI):
-		a.refuse(msg, j, ResultRefusedNoDevEUI, ReasonNoDevEUI, "the device has no lorawan.deveui alias")
-		return
-	case err != nil:
-		a.lookupFailed(ctx, j, "devEUI", err)
-		return
+	// The name the network server addresses the device by: read from the device, never the command.
+	var ident, pendEUI, deviceRef string
+	if target.NetworkServer == connectorspec.NetworkServerTTSV3 {
+		id, err := a.devices.TTSDeviceID(ctx, tenant, j.device)
+		switch {
+		case errors.Is(err, ErrNoDeviceID):
+			a.refuse(msg, j, ResultRefusedNoDevEUI, ReasonNoDeviceID, "the device has no tts.device-id alias")
+			return
+		case err != nil:
+			a.lookupFailed(ctx, j, "deviceId", err)
+			return
+		}
+		ident, deviceRef = id, target.ApplicationID+"/"+id
+	} else {
+		eui, err := a.devices.DevEUI(ctx, tenant, j.device)
+		switch {
+		case errors.Is(err, ErrNoDevEUI):
+			a.refuse(msg, j, ResultRefusedNoDevEUI, ReasonNoDevEUI, "the device has no lorawan.deveui alias")
+			return
+		case err != nil:
+			a.lookupFailed(ctx, j, "devEUI", err)
+			return
+		}
+		ident, pendEUI = eui, eui
 	}
 	if a.opts.Rate != nil && !a.opts.Rate.Allow(tenant) {
 		a.refuse(msg, j, ResultRefusedRate, ReasonRateLimited, "the tenant is over its outbound call ceiling; retry shortly")
@@ -390,7 +412,7 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		sendCtx, c2 = context.WithDeadline(sendCtx, j.expires)
 		defer c2()
 	}
-	queueID, err := a.sender.Enqueue(sendCtx, target, devEUI, params, j.expires)
+	queueID, err := a.sender.Enqueue(sendCtx, target, ident, params, j.expires)
 	cancel()
 	if err != nil {
 		var se *SendError
@@ -413,7 +435,7 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		return
 	}
 	if params.Confirmed {
-		a.awaitAck(ctx, msg, j, integration, devEUI, queueID)
+		a.awaitAck(ctx, msg, j, integration, pendEUI, deviceRef, queueID)
 		return
 	}
 	a.count(ResultQueued)
@@ -428,13 +450,13 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 // (or the record's deadline) settles it. If the record cannot be stored the downlink is already
 // queued and nothing could ever close the command, so it is answered UNANSWERED now (TIMEOUT:
 // the device may act) rather than left to the expiry sweep.
-func (a *Adapter) awaitAck(ctx context.Context, msg messaging.Message, j *job, integration, devEUI, queueID string) {
+func (a *Adapter) awaitAck(ctx context.Context, msg messaging.Message, j *job, integration, devEUI, deviceRef, queueID string) {
 	deadline := a.opts.Now().Add(a.opts.AckWait)
 	if !j.expires.IsZero() && j.expires.Before(deadline) {
 		deadline = j.expires
 	}
 	err := a.opts.Pending.Add(ctx, Pending{
-		Tenant: j.tenant, Integration: integration, DeviceToken: j.device, DevEUI: devEUI,
+		Tenant: j.tenant, Integration: integration, DeviceToken: j.device, DevEUI: devEUI, DeviceRef: deviceRef,
 		CommandToken: j.token, DispatchNonce: j.nonce, QueueItemID: strings.ToLower(queueID), DeadlineAt: deadline,
 	})
 	if err != nil {

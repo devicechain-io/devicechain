@@ -148,13 +148,17 @@ type DownlinkReport struct {
 	// Integration is the token of the inbound integration whose authenticated request carried the
 	// report. A pending downlink only accepts a report from the integration it was sent through.
 	Integration string `json:"integration"`
-	// Kind is "ack" (the device's confirmation, or the network server's timeout of it) or "txack"
-	// (a gateway accepted the frame for transmission).
+	// Kind is "ack" (the device's confirmation, or the network server's report that it did not
+	// confirm), "txack" (a gateway accepted the frame for transmission) or "failed" (the network
+	// server could not send it).
 	Kind string `json:"kind"`
 	// DevEUI is the report's device, canonical upper-case hex.
 	DevEUI string `json:"devEui"`
 	// QueueItemID is the network server's id for the queued downlink.
 	QueueItemID string `json:"queueItemId"`
+	// DeviceRef is the device as the network server names it when DevEUI alone does not (The Things
+	// Stack: "<application id>/<device id>"). Empty for ChirpStack.
+	DeviceRef string `json:"deviceRef,omitempty"`
 	// Acknowledged is read for Kind "ack" only.
 	Acknowledged bool  `json:"acknowledged,omitempty"`
 	FCntDown     int64 `json:"fCntDown,omitempty"`
@@ -165,4 +169,6 @@ type DownlinkReport struct {
 const (
 	DownlinkReportAck   = "ack"
 	DownlinkReportTxAck = "txack"
+	// DownlinkReportFailed: the network server could not send the downlink.
+	DownlinkReportFailed = "failed"
 )

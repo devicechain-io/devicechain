@@ -86,11 +86,24 @@ func (l *fakeLinks) Resolve(_ context.Context, _, integration string) (connector
 }
 
 type fakeDevices struct {
-	eui string
-	err error
+	eui   string
+	ttsID string
+	err   error
 }
 
-func (d *fakeDevices) DevEUI(context.Context, string, string) (string, error) { return d.eui, d.err }
+func (d *fakeDevices) DevEUI(context.Context, string, string) (string, error) {
+	if d.eui == "" && d.err == nil {
+		return "", ErrNoDevEUI
+	}
+	return d.eui, d.err
+}
+
+func (d *fakeDevices) TTSDeviceID(context.Context, string, string) (string, error) {
+	if d.ttsID == "" && d.err == nil {
+		return "", ErrNoDeviceID
+	}
+	return d.ttsID, d.err
+}
 
 type enqueueCall struct {
 	target  connectorspec.LoRaWANDownlinkTarget

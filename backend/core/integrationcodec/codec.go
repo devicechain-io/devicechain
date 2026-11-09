@@ -182,7 +182,15 @@ const (
 	// DownlinkTxAck is the gateway accepting the downlink for transmission. It is not evidence the
 	// device heard it.
 	DownlinkTxAck = "txack"
+	// DownlinkFailed is the network server reporting it could not send the downlink (The Things
+	// Stack's downlink_failed). ChirpStack has no such event.
+	DownlinkFailed = "failed"
 )
+
+// DownlinkCorrelationPrefix starts every correlation id the platform puts on a downlink it pushes
+// to The Things Stack. A report is only the platform's when a correlation id carries it, so a
+// downlink somebody queued by hand in the network server's console is not mistaken for one.
+const DownlinkCorrelationPrefix = "dc:"
 
 // DownlinkEvent is one network-server report about a downlink, identified by the queue item id the
 // network server returned when the downlink was enqueued.
@@ -190,8 +198,13 @@ type DownlinkEvent struct {
 	Kind string
 	// Scheme and Identifier name the device, as an Uplink's do.
 	Scheme, Identifier string
-	// QueueItemID is the network server's id for the queued downlink (a UUID).
+	// QueueItemID is the key the report is matched to its downlink by: ChirpStack's queue item id (a
+	// UUID), or, for The Things Stack, the correlation id the platform put on the downlink when it
+	// pushed it (DownlinkCorrelationPrefix + hex).
 	QueueItemID string
+	// DeviceRef names the device as the network server does, when DevEUI alone does not (The Things
+	// Stack: "<application id>/<device id>"). Empty for ChirpStack.
+	DeviceRef string
 	// Acknowledged is meaningful for DownlinkAck only: true when the device acknowledged the frame,
 	// false when the network server timed the confirmation out.
 	Acknowledged bool
