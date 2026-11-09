@@ -2255,7 +2255,8 @@ And it REFUSES '--version' naming a release older than this dcctl: the chart and
 infrastructure configuration it applies are this release's, so they would be planned
 around images that have never seen them. To go back, use the dcctl of the older release
 (its own 'upgrade --version', the documented way back). A flag-less upgrade, a tag that
-is not a release (an image you built) and this dcctl's own release are not affected.
+on a registry of your own (--registry) and this dcctl's own release are not affected.
+A release newer than the install is refused until 'dcctl install' has been run at it.
 
 It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the

@@ -24,29 +24,32 @@ func TestUpgradeIsRefusedWhenTheClusterInstallIsOlderThanThisDcctl(t *testing.T)
 		name    string
 		w       installWitness
 		dcctl   string
+		target  string
 		refused bool
 		names   string // a fragment the refusal must carry
 	}{
-		{"install by the previous release", installWitness{Found: true, DcctlVersion: "v1.2.0"}, "v1.3.0", true, "v1.2.0"},
-		{"install by an older patch", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.1", true, "v1.3.0"},
-		{"install by a release candidate of the same version", installWitness{Found: true, DcctlVersion: "v1.3.0-rc.1"}, "v1.3.0", true, "v1.3.0-rc.1"},
-		{"install by an older candidate", installWitness{Found: true, DcctlVersion: "v1.4.0-rc.2"}, "v1.4.0-rc.10", true, "rc.2"},
-		{"no install record", installWitness{}, "v1.3.0", true, "no install record"},
-		{"an install that never finished", installWitness{Found: true, Applying: true}, "v1.3.0", true, "did not finish"},
-		{"a record that does not say who installed", installWitness{Found: true}, "v1.3.0", true, "does not say"},
-		{"a record naming a build that is no release", installWitness{Found: true, DcctlVersion: "dev"}, "v1.3.0", true, "does not say"},
-		{"an unfinished re-install over an older install", installWitness{Found: true, Applying: true, DcctlVersion: "v1.2.0"}, "v1.3.0", true, "v1.2.0"},
+		{"install by the previous release", installWitness{Found: true, DcctlVersion: "v1.2.0"}, "v1.3.0", "", true, "v1.2.0"},
+		{"install by an older patch", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.1", "", true, "v1.3.0"},
+		{"install by a release candidate of the same version", installWitness{Found: true, DcctlVersion: "v1.3.0-rc.1"}, "v1.3.0", "", true, "v1.3.0-rc.1"},
+		{"install by an older candidate", installWitness{Found: true, DcctlVersion: "v1.4.0-rc.2"}, "v1.4.0-rc.10", "", true, "rc.2"},
+		{"no install record", installWitness{}, "v1.3.0", "", true, "no install record"},
+		{"an install that never finished", installWitness{Found: true, Applying: true}, "v1.3.0", "", true, "did not finish"},
+		{"a record that does not say who installed", installWitness{Found: true}, "v1.3.0", "", true, "does not say"},
+		{"a record naming a build that is no release", installWitness{Found: true, DcctlVersion: "dev"}, "v1.3.0", "", true, "does not say"},
+		{"an unfinished re-install over an older install", installWitness{Found: true, Applying: true, DcctlVersion: "v1.2.0"}, "v1.3.0", "", true, "v1.2.0"},
+		{"a target newer than the install, by the same dcctl", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0", "v1.4.0", true, "v1.4.0"},
+		{"a target the install already covers", installWitness{Found: true, DcctlVersion: "v1.4.0"}, "v1.3.0", "v1.4.0", false, ""},
 
 		// The counterweights: a check that refused these would break every upgrade there is.
-		{"a re-run at the same version", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0", false, ""},
-		{"the bare form of the same version", installWitness{Found: true, DcctlVersion: "1.3.0"}, "v1.3.0", false, ""},
-		{"install by a newer dcctl (going back is the older dcctl's documented path)", installWitness{Found: true, DcctlVersion: "v1.4.0"}, "v1.3.0", false, ""},
-		{"a candidate over a final release", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0-rc.1", false, ""},
-		{"a source build is not compared", installWitness{}, "dev", false, ""},
-		{"a stamped source build is not compared", installWitness{Found: true, DcctlVersion: "v1.2.0"}, "v1.3.0-dev.20261109", false, ""},
+		{"a re-run at the same version", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0", "", false, ""},
+		{"the bare form of the same version", installWitness{Found: true, DcctlVersion: "1.3.0"}, "v1.3.0", "", false, ""},
+		{"install by a newer dcctl (going back is the older dcctl's documented path)", installWitness{Found: true, DcctlVersion: "v1.4.0"}, "v1.3.0", "", false, ""},
+		{"a candidate over a final release", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0-rc.1", "", false, ""},
+		{"a source build is not compared", installWitness{}, "dev", "", false, ""},
+		{"a stamped source build is not compared", installWitness{Found: true, DcctlVersion: "v1.2.0"}, "v1.3.0-dev.20261109", "", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := judgeInstallOrder(tc.w, tc.dcctl, orderInstall)
+			err := judgeInstallOrder(tc.w, tc.dcctl, tc.target, orderInstall)
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -81,14 +84,14 @@ func TestTheInstallOrderIsReadFromTheClustersInstallRecord(t *testing.T) {
 		return typed
 	}
 
-	if err := requireInstallOrderFor(ctx, put(t, "v1.2.0"), "v1.3.0", orderInstall); err == nil ||
+	if err := requireInstallOrderFor(ctx, put(t, "v1.2.0"), "v1.3.0", "", orderInstall); err == nil ||
 		!strings.Contains(err.Error(), orderInstall) {
 		t.Fatalf("an install by v1.2.0 was accepted for a v1.3.0 upgrade: %v", err)
 	}
-	if err := requireInstallOrderFor(ctx, put(t, "v1.3.0"), "v1.3.0", orderInstall); err != nil {
+	if err := requireInstallOrderFor(ctx, put(t, "v1.3.0"), "v1.3.0", "", orderInstall); err != nil {
 		t.Fatalf("a re-run at the installed version was refused: %v", err)
 	}
-	if err := requireInstallOrderFor(ctx, fake.NewClientset(), "v1.3.0", orderInstall); err == nil {
+	if err := requireInstallOrderFor(ctx, fake.NewClientset(), "v1.3.0", "", orderInstall); err == nil {
 		t.Fatal("a cluster with no install record was accepted")
 	}
 
@@ -139,23 +142,26 @@ func TestHydratingAnUpgradeAsksWhichDcctlInstalledTheCluster(t *testing.T) {
 
 func TestANewerDcctlIsNotPointedAtAnOlderRelease(t *testing.T) {
 	for _, tc := range []struct {
-		name, requested, own string
-		refused              bool
+		name, requested, own, registry string
+		refused                        bool
 	}{
-		{"the previous release", "v1.2.0", "v1.3.0", true},
-		{"an older patch", "v1.3.0", "v1.3.1", true},
-		{"a candidate of this release from the final dcctl", "v1.3.0-rc.1", "v1.3.0", true},
-		{"the bare form of an older release", "1.2.0", "v1.3.0", true},
+		{"the previous release", "v1.2.0", "v1.3.0", "", true},
+		{"an older patch", "v1.3.0", "v1.3.1", "", true},
+		{"a candidate of this release from the final dcctl", "v1.3.0-rc.1", "v1.3.0", "", true},
+		{"the bare form of an older release", "1.2.0", "v1.3.0", "", true},
 
-		{"its own release", "v1.3.0", "v1.3.0", false},
-		{"the bare form of its own release", "1.3.0", "v1.3.0", false},
-		{"a newer release", "v1.4.0", "v1.3.0", false},
-		{"no version asked for", "", "v1.3.0", false},
-		{"a tag that is no release", "my-build", "v1.3.0", false},
-		{"a source-built dcctl", "v1.2.0", "dev", false},
+		{"its own release", "v1.3.0", "v1.3.0", "", false},
+		{"the bare form of its own release", "1.3.0", "v1.3.0", "", false},
+		{"a newer release", "v1.4.0", "v1.3.0", "", false},
+		{"no version asked for", "", "v1.3.0", "", false},
+		{"a tag that is no release", "my-build", "v1.3.0", "", false},
+		{"a source-built dcctl", "v1.2.0", "dev", "", false},
+		{"a drill tag on a registry of the operator's own", "0.24.0-drill.1", "v1.3.0", "localhost:5000", false},
+		{"an older release tag on a registry of the operator's own", "v1.2.0", "v1.3.0", "localhost:5000", false},
+		{"an older release on the published registry", "v1.2.0", "v1.3.0", DefaultImageRegistry, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := refuseOlderRelease(tc.requested, tc.own, "local", "prod")
+			err := refuseOlderRelease(tc.requested, tc.own, tc.registry, "dcctl upgrade local prod --version "+tc.requested)
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("refused: %v", err)

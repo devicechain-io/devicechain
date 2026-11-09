@@ -93,7 +93,11 @@ func hydrateUpgradeState(
 	// release's controller passes the check above whenever a release left the definitions alone.
 	// The install record says which dcctl last finished the cluster-level install. See
 	// upgradeorder.go.
-	if err := requireInstallOrderFor(ctx, typed, opts.DcctlVersion,
+	target := opts.ImageVersion
+	if opts.ImageRegistry != "" && opts.ImageRegistry != DefaultImageRegistry {
+		target = "" // a tag on the operator's own registry is not a release
+	}
+	if err := requireInstallOrderFor(ctx, typed, opts.DcctlVersion, target,
 		InstallCommand(provider.Name(), binding)); err != nil {
 		return nil, err
 	}
@@ -339,7 +343,8 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// A newer dcctl is not pointed at an older release: that plans its chart around images it
 	// was not built for. See refuseOlderRelease.
 	if len(opts.EnableAreas) == 0 && opts.ImageVersion != "" {
-		if err := refuseOlderRelease(st.ImageVersion, DefaultImageVersion, inst.Spec.Provider, opts.Instance); err != nil {
+		if err := refuseOlderRelease(st.ImageVersion, DefaultImageVersion, st.ImageRegistry,
+			fmt.Sprintf("dcctl upgrade %s %s --version %s", inst.Spec.Provider, opts.Instance, st.ImageVersion)); err != nil {
 			return err
 		}
 	}

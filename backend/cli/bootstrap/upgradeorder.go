@@ -143,7 +143,11 @@ func readInstallWitness(ctx context.Context, typed kubernetes.Interface) (instal
 // the cluster-level install, or when that cannot be told. Equal is fine (a re-run at the same
 // version), and so is an install by a NEWER dcctl (an older one going back is the documented
 // downgrade path). A dcctl built from source carries no release to compare and is let through.
-func judgeInstallOrder(w installWitness, dcctlVersion, installCommand string) error {
+//
+// target is the release the upgrade was asked to move to ("" when none was named): an install by
+// this very dcctl does not make a newer controller of it, so the install has to be at least as new
+// as the release the instance is being moved onto as well.
+func judgeInstallOrder(w installWitness, dcctlVersion, target, installCommand string) error {
 	if dcctlVersion == "dev" || IsUnpublishedImageVersion(dcctlVersion) {
 		return nil
 	}
@@ -151,6 +155,9 @@ func judgeInstallOrder(w installWitness, dcctlVersion, installCommand string) er
 	if !ok {
 		return fmt.Errorf("this dcctl carries no release version (%q), so whether the cluster-level install "+
 			"is current for it cannot be judged; use a released dcctl or one built from source", dcctlVersion)
+	}
+	if t, ok := parseRelease(target); ok && t.compare(ours) > 0 {
+		ours, dcctlVersion = t, target
 	}
 	first := fmt.Sprintf("Run the cluster-level install first, then this again:\n\n    %s\n\n"+
 		"  The install moves the operator and its definitions, which every instance on the cluster shares; "+
@@ -180,7 +187,7 @@ func judgeInstallOrder(w installWitness, dcctlVersion, installCommand string) er
 
 // requireInstallOrderFor is the seam hydrateUpgradeState reads through, for the reason
 // requireOperatorFor is one.
-var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interface, dcctlVersion, installCommand string) error {
+var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interface, dcctlVersion, target, installCommand string) error {
 	if dcctlVersion == "dev" || IsUnpublishedImageVersion(dcctlVersion) {
 		return nil // nothing to compare; spare the read
 	}
@@ -188,7 +195,7 @@ var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interfac
 	if err != nil {
 		return err
 	}
-	return judgeInstallOrder(w, dcctlVersion, installCommand)
+	return judgeInstallOrder(w, dcctlVersion, target, installCommand)
 }
 
 // refuseOlderRelease refuses `--version <older release>` from a newer dcctl.
@@ -198,10 +205,12 @@ var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interfac
 // supported way back is the older release's own dcctl, which carries the matching chart.
 // Only an EXPLICIT version is judged: the version a plain upgrade stays on is the instance's.
 // Equal to this dcctl's release is the ordinary case; a tag that is not a release (a local
-// build, a tag pushed to a registry of the operator's own) and a dcctl built from source are
-// not compared.
-func refuseOlderRelease(requested, ownRelease, provider, instance string) error {
-	if requested == "" {
+// build, any tag on a registry of the operator's own) and a dcctl built from source are not
+// compared.
+func refuseOlderRelease(requested, ownRelease, registry, retry string) error {
+	// 🔴 A TAG ON A REGISTRY OF THE OPERATOR'S OWN IS WHATEVER THEY PUSHED, and the upgrade drill
+	// pushes semver-shaped ones (0.24.0-drill.1). Only the published registry's tags are releases.
+	if requested == "" || (registry != "" && registry != DefaultImageRegistry) {
 		return nil
 	}
 	want, ok := parseRelease(requested)
@@ -221,7 +230,13 @@ func refuseOlderRelease(requested, ownRelease, provider, instance string) error 
 	}
 	return fmt.Errorf("--version %s is older than this dcctl (release %s) and a dcctl only moves an instance "+
 		"to its own release or later: it would plan its own newer chart and infrastructure configuration "+
-		"around the older images. To go back, use the dcctl of release %s (`dcctl upgrade %s %s --version %s` "+
-		"with that binary). Nothing has been changed",
-		requested, ownRelease, requested, provider, instance, requested)
+		"around the older images. To go back, use the dcctl of release %s (`%s` with that binary). "+
+		"Nothing has been changed",
+		requested, ownRelease, requested, retry)
+}
+
+// RefuseOlderRelease is refuseOlderRelease for this build's own release, for the command layer
+// (`dcctl install --version`).
+func RefuseOlderRelease(requested, registry, retry string) error {
+	return refuseOlderRelease(requested, DefaultImageVersion, registry, retry)
 }

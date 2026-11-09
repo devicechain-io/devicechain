@@ -229,7 +229,7 @@ dcctl upgrade local devicechain --version <new-version>
 它不推翻无法观察的选择，而是打印所需 install 命令后继续。
 如果你并非手动安装 Operator，应把提示视为原本会发生的拒绝，继续前先运行 `dcctl install`。
 
-**升级还会检查 install 已经运行，并拒绝回退。** Operator 的定义可以在多个发布之间保持不变而控制器已经变化，所以仅检查 Operator 无法发现 `dcctl install` 被跳过。因此 `dcctl upgrade` 还会读取集群中的安装记录（其中记有最后一次完成 `dcctl install` 的 `dcctl` 版本），并在以下情况**拒绝**：该版本早于执行升级的 `dcctl`、某次安装已开始但未完成，或集群没有可用的记录。拒绝信息会指出需要先运行的 install 命令，且不会更改任何内容。在已安装的版本上再次运行升级不会被拒绝，由更新版本的 `dcctl` 安装的集群也不会。从源码构建的 `dcctl` 不参与比较。同样，`dcctl upgrade --version <标签>` **会拒绝早于当前 `dcctl` 的发布**：它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划。要回退，请使用旧发布的 `dcctl` 运行升级，它自带匹配的 chart；`--version` 等于当前 `dcctl` 的发布、不是发布版本的标签（你自己构建的镜像）以及不带 `--version` 的升级不受影响。这两项拒绝都没有跳过选项。
+**升级还会检查 install 已经运行，并拒绝回退。** Operator 的定义可以在多个发布之间保持不变而控制器已经变化，所以仅检查 Operator 无法发现 `dcctl install` 被跳过。因此 `dcctl upgrade` 还会读取集群中的安装记录（其中记有最后一次完成 `dcctl install` 的 `dcctl` 版本），并在以下情况**拒绝**：该版本早于执行升级的 `dcctl`、某次安装已开始但未完成，或集群没有可用的记录。拒绝信息会指出需要先运行的 install 命令，且不会更改任何内容。在已安装的版本上再次运行升级不会被拒绝，由更新版本的 `dcctl` 安装的集群也不会。从源码构建的 `dcctl` 不参与比较。同样，`dcctl upgrade --version <标签>` **会拒绝早于当前 `dcctl` 的发布**（`dcctl install --version` 同样如此；比已安装版本更新的发布也会被拒绝，直到你用它运行 `dcctl install`）：它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划。要回退，请使用旧发布的 `dcctl` 运行升级，它自带匹配的 chart；`--version` 等于当前 `dcctl` 的发布、来自你自己的镜像仓库（`--registry`）的标签以及不带 `--version` 的升级不受影响。这两项拒绝都没有跳过选项。
 
 需要查看会改什么时，可以先给任一命令加 `--dry-run`。
 `dcctl upgrade` 从实例记录取得目标集群，不作猜测，并明确输出该集群。
