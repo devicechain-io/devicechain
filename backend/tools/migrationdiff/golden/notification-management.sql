@@ -193,7 +193,8 @@ CREATE TABLE "notification-management".notification_policies (
  quiet_hours_timezone character varying(64),
  quiet_hours_slots jsonb,
  quiet_hours_bypass_severity character varying(16),
- notify_on_clear boolean DEFAULT false NOT NULL
+ notify_on_clear boolean DEFAULT false NOT NULL,
+ notify_on_clear_since timestamp with time zone
 );
 CREATE TABLE "notification-management".notification_rules (
  id bigint NOT NULL,

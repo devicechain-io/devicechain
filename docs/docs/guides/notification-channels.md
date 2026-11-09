@@ -86,7 +86,7 @@ mutation {
 
 For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
 
-A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId`, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. A timed re-notification does not carry them.
+A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. A `CLEARED` notification sent late, after the alarm was already stored as cleared, does not carry the originator, because the stored state does not keep it. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. A timed re-notification does not carry them.
 
 ### Native Slack, Teams and PagerDuty channels {#native-channels}
 

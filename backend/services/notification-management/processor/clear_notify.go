@@ -90,8 +90,8 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 	var optedSince time.Time
 	for _, p := range policies {
 		if p.NotifyOnClear {
-			if !optedIn || p.UpdatedAt.Before(optedSince) {
-				optedSince = p.UpdatedAt
+			if cut := p.ClearCutoff(); !optedIn || cut.Before(optedSince) {
+				optedSince = cut
 			}
 			optedIn = true
 		}
@@ -101,6 +101,7 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 	}
 	// ONE budget for the whole pass, about one dispatch's worth, and the caller's cancellation is
 	// kept: a webhook that is down must not stall the escalations behind this, nor a stop.
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
 	// Only clears that happened after a policy opted in: switching the option on must not
@@ -117,9 +118,20 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 		return fmt.Errorf("listing clears awaiting announcement: %w", err)
 	}
 	var lastErr error
-	sent := 0
+	sent, announced := 0, 0
+	// spent: the pass ran out of ITS OWN budget (the caller is still going) after announcing
+	// something (a row handled without error: sent, or settled by another replica). That is a healthy destination with a backlog longer than one pass, and the rest
+	// waits for the next tick; reporting it as a failed pass would page an operator about a
+	// destination that is working. With nothing announced it still is a failure.
+	spent := func(err error) bool {
+		return announced > 0 && parent.Err() == nil && errors.Is(err, context.DeadlineExceeded)
+	}
 	for _, st := range states {
 		if err := ctx.Err(); err != nil {
+			if spent(err) {
+				log.Info().Int("announced", announced).Msg("Pending clears: pass budget spent with a backlog left; continuing next tick")
+				return lastErr
+			}
 			return err
 		}
 		if sent >= pendingClearBatch {
@@ -132,9 +144,15 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 			RaisedTime: st.CycleRaisedAt.Time, OccurredTime: st.ClearedAt.Time,
 		}
 		if err := n.announceClear(ctx, clear, true, true); err != nil {
+			if spent(ctx.Err()) {
+				log.Info().Int("announced", announced).Msg("Pending clears: pass budget spent with a backlog left; continuing next tick")
+				return lastErr
+			}
 			log.Warn().Err(err).Str("alarm", st.AlarmToken).Msg("Announcing a pending clear failed; will retry next tick")
 			lastErr = err
+			continue
 		}
+		announced++
 	}
 	return lastErr
 }
@@ -175,7 +193,7 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 		}
 		// A clear picked up later than its own message only goes through a policy saved before
 		// it happened: a policy opted in afterwards must not announce what predates its opt-in.
-		if cutoff && !clear.OccurredTime.IsZero() && p.UpdatedAt.After(clear.OccurredTime) {
+		if cutoff && !clear.OccurredTime.IsZero() && p.ClearCutoff().After(clear.OccurredTime) {
 			continue
 		}
 		if hold, _ := quietHold(p, clear.Severity, now); hold {

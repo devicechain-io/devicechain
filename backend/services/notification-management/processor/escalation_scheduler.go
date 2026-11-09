@@ -126,6 +126,9 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		states, err := s.Api.OpenNotificationStates(tctx)
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).Msg("Escalation scheduler: failed to load open states")
+			// The clear pickup reads its own rows, not these: one failed read must not also
+			// leave the tenant's clears unannounced.
+			pickup()
 			failed++
 			lastErr = err
 			continue
