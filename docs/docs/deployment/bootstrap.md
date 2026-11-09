@@ -1832,6 +1832,8 @@ dcctl sim create demo --instance my-instance --server localhost
 The simulator then drives telemetry and alarms in over the same device wire real hardware
 uses — see [Trying it with simulated data](../intro.md#trying-it-with-simulated-data).
 
+Every command that talks to an instance's platform API (`sim`, `events failed`, `dead-letters`, `attr`, `presence`, `product`, `tenant-deletion`, `test` and `device register`) takes the same selector flags. `--server` (`-s`) names the host. `--instance` (`-i`) names the instance: on `sim` it is the instance id in the event-ingress path, and on the others, when `--server` is not given, it uses the host (and TLS setting, unless `--tls` is given) the instance was declared with. For example, `dcctl events failed -i my-instance -t acme ...`.
+
 ### Adding a functional area later {#enable-area}
 
 An instance runs the areas its profile names, plus any added with `--enable-area` at bootstrap.

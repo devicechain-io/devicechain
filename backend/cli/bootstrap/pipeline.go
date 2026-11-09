@@ -217,6 +217,14 @@ type State struct {
 	MQTTExposureChange bool
 	MQTTExposureGiven  string
 	MQTTHostGiven      string
+	// DevAllowEgress is the settled local-development egress allowance (canonical CIDRs), rendered
+	// as infrastructure.egress.devAllowedDestinations; DevAllowEgressGiven is this run's flag
+	// (nil: keep what is recorded, empty: clear), DevAllowEgressRecorded what the declaration
+	// holds now, and DevAllowEgressChange says the run must record the difference. See devegress.go.
+	DevAllowEgress         []string
+	DevAllowEgressGiven    []string
+	DevAllowEgressRecorded []string
+	DevAllowEgressChange   bool
 	// BrokerMaxConnections is the settled cap on broker connections (0: the server's own limit),
 	// BrokerMaxConnectionsGiven this run's flag, and BrokerMaxConnectionsChange says an upgrade
 	// must record it.

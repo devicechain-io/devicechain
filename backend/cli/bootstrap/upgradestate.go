@@ -407,6 +407,11 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 		st.MQTTExposure, st.MQTTHost, st.MQTTExposureChange = got.Mode, got.Host, got.Changed
 	}
 	sayMQTTExposure(st)
+	// The development egress allowance: the declaration's, unless this run was given one.
+	if err := settleDevAllowEgress(st, recordedDevAllowEgress(inst.Annotations), opts.DevAllowEgress); err != nil {
+		return err
+	}
+	sayDevAllowEgress(st)
 	if err := adoptBrokerMaxConnections(st, st.BrokerMaxConnections, opts.BrokerMaxConnections); err != nil {
 		return err
 	}

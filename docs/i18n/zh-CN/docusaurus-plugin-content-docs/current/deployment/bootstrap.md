@@ -837,6 +837,8 @@ dcctl sim create demo --instance my-instance --server localhost
 
 模拟器通过真实硬件相同的设备协议发送遥测及告警，见[使用模拟数据体验](../intro.md#trying-it-with-simulated-data)。
 
+所有与实例平台 API 通信的命令（`sim`、`events failed`、`dead-letters`、`attr`、`presence`、`product`、`tenant-deletion`、`test` 和 `device register`）都接受相同的选择器参数。`--server`（`-s`）指定主机；`--instance`（`-i`）指定实例：在 `sim` 中它是事件接入路径中的实例 id，在其他命令中，未给出 `--server` 时，它会使用该实例声明时的主机（以及 TLS 设置，除非给出了 `--tls`）。例如 `dcctl events failed -i my-instance -t acme ...`。
+
 ### 稍后添加功能领域 {#enable-area}
 
 实例运行其配置档所列的功能领域，以及初始化时通过 `--enable-area` 添加的领域。要为已在运行的实例添加领域（例如在 `default` 实例上添加出站连接器、AI 推理或 MCP），使用 `dcctl enable-area`：

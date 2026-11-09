@@ -1984,6 +1984,8 @@ El simulador inyecta entonces telemetría y alarmas por el mismo canal de dispos
 el hardware real; consulta
 [Probarlo con datos simulados](../intro.md#trying-it-with-simulated-data).
 
+Todos los comandos que hablan con la API de plataforma de una instancia (`sim`, `events failed`, `dead-letters`, `attr`, `presence`, `product`, `tenant-deletion`, `test` y `device register`) aceptan los mismos indicadores de selección. `--server` (`-s`) indica el host. `--instance` (`-i`) indica la instancia: en `sim` es el id de instancia en la ruta de ingreso de eventos y, en los demás, cuando no se indica `--server`, usa el host (y la configuración de TLS, salvo que se indique `--tls`) con el que se declaró la instancia. Por ejemplo, `dcctl events failed -i my-instance -t acme ...`.
+
 ### Añadir un área funcional más adelante {#enable-area}
 
 Una instancia ejecuta las áreas que nombra su perfil, más las que se añadieron con

@@ -1169,6 +1169,20 @@ type EgressConfiguration struct {
 	// AllowedDestinations are CIDR prefixes (IPv4 or IPv6) exempt from the guard's deny
 	// list. Empty — the default — means no exemptions.
 	AllowedDestinations []string
+
+	// DevAllowedDestinations is the LOCAL-DEVELOPMENT allowance: CIDR prefixes (IPv4 or IPv6) a
+	// developer's own instance may reach even though the guard refuses them, so a webhook or
+	// connector can point at a service on the developer's machine or LAN.
+	//
+	// It is not a second spelling of AllowedDestinations. dcctl writes it only for an instance
+	// on a local cluster (dcctl bootstrap|upgrade --dev-allow-egress), records it on the
+	// declaration, shows it in `dcctl instances`, and every service that builds a guard from it
+	// logs a warning at startup. Unlike AllowedDestinations it can NEVER exempt the cloud
+	// metadata addresses, loopback, link-local, multicast or the unspecified address, and a
+	// prefix that overlaps one fails the service at startup rather than being trimmed.
+	// Empty (the default) means none. An operator's production exemption belongs in
+	// AllowedDestinations, which dcctl does not write.
+	DevAllowedDestinations []string
 }
 
 // Generic datastore configuration
