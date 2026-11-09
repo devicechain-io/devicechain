@@ -151,6 +151,12 @@ func RegisterTenantScoping(db *gorm.DB) error {
 			return db.Callback().Row().Before("gorm:row").Register("dc:tenant_row", tenantScopeQuery)
 		},
 		func() error {
+			return db.Callback().Row().Before("*").Register("dc:row_stale", rememberStaleRow)
+		},
+		func() error {
+			return db.Callback().Row().After("gorm:row").Register("dc:row_refusal", rowReturnsRefusal)
+		},
+		func() error {
 			return db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeUpdate)
 		},
 		func() error {
