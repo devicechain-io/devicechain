@@ -40,6 +40,9 @@ var neverDevAllowed = func() []netip.Prefix {
 		// IPv4 prefix is not accepted as a harmless dead entry.
 		netip.MustParsePrefix("64:ff9b:1::/48"),
 		netip.MustParsePrefix("::ffff:0:0/96"),
+		// An older documented Oracle metadata address, inside an IETF assignments range the
+		// operator might otherwise cover.
+		netip.MustParsePrefix("192.0.0.192/32"),
 		// The cloud IPv6 metadata services live in unique-local space, which is otherwise
 		// a legitimate private range, so the two provider /32 blocks are named whole.
 		netip.MustParsePrefix("fd00:ec2::/32"),
@@ -94,7 +97,9 @@ func ParseDevPrefixes(raw []string) ([]netip.Prefix, error) {
 			}
 		}
 		// Embedded forms: refuse a wrapper that carries a refused address at a known offset.
-		if p.Addr().Is6() && p.Bits() <= 96 {
+		// Any v6 prefix that overlaps a wrapper range, however narrow: a /128 inside one names
+		// the wrapped IPv4 address directly.
+		if p.Addr().Is6() {
 			if why := neverDevAllowedWrapper(p); why != "" {
 				return nil, fmt.Errorf("egress dev allowed destination %s wraps %s, which is never allowed", p, why)
 			}

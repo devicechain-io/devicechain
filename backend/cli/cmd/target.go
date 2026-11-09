@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
@@ -30,6 +31,9 @@ var readRecordedTarget = func(ctx context.Context, kubeContext, instance string)
 	binding, source := bootstrap.ResolveBinding(bootstrap.Options{Instance: instance, KubeContext: kubeContext})
 	if source == bootstrap.BindingUnreadable || source == bootstrap.BindingConflict {
 		return "", false, fmt.Errorf("the record of which cluster instance %q lives on cannot be used", instance)
+	}
+	if source == bootstrap.BindingGuessed {
+		fmt.Fprintf(os.Stderr, "note: no record of which cluster instance %q lives on; guessing context %s\n", instance, binding.KubeContext)
 	}
 	inst, err := bootstrap.ReadInstanceCR(ctx, binding.KubeContext, instance)
 	if err != nil {

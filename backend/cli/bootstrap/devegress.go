@@ -84,7 +84,14 @@ func ParseDevAllowEgress(raw []string) ([]string, error) {
 // contains "kind-" must not unlock a development allowance.
 func isLocalDevContext(kubeContext string) bool {
 	for _, p := range localPrefixes {
-		if strings.HasPrefix(kubeContext, p) {
+		// Delimiter-aware: "minikube" or "minikube-<profile>", never "minikubeprod".
+		if strings.HasSuffix(p, "-") {
+			if strings.HasPrefix(kubeContext, p) {
+				return true
+			}
+			continue
+		}
+		if kubeContext == p || strings.HasPrefix(kubeContext, p+"-") {
 			return true
 		}
 	}
@@ -100,7 +107,7 @@ func CheckDevAllowEgressContext(kubeContext string, list []string) error {
 	return fmt.Errorf("--dev-allow-egress is for a local development cluster (a kube context starting with one of %s), "+
 		"and %q is not one. It relaxes the tenant-egress boundary for private addresses; on a real cluster an "+
 		"operator grants a destination in the instance configuration (egress.allowedDestinations) after reading "+
-		"its sharp edges, which dcctl does not write",
+		"its sharp edges, which dcctl does not write. (This check reads the context NAME: it is a guardrail against a slip, not an enforcement point)",
 		strings.Join(localPrefixes, ", "), kubeContext)
 }
 
@@ -116,14 +123,23 @@ func settleDevAllowEgress(st *State, recorded, given []string) error {
 	}
 	if len(st.DevAllowEgress) > 0 {
 		// A recorded value is re-validated: this release's guard may refuse what an older one let by.
-		if _, err := ParseDevAllowEgress(st.DevAllowEgress); err != nil {
+		// What is rendered is the PARSED canonical form, never the raw annotation: a hand-edited
+		// bare IP would otherwise pass here and crash-loop every service on the unmasked entry,
+		// and a recorded "none" means empty.
+		canon, err := ParseDevAllowEgress(st.DevAllowEgress)
+		if err != nil {
 			return fmt.Errorf("the development egress allowance recorded on instance %q is not accepted by this release: %w", st.Instance, err)
 		}
+		st.DevAllowEgress = canon
 		if err := CheckDevAllowEgressContext(st.KubeContext, st.DevAllowEgress); err != nil {
 			return err
 		}
 	}
 	st.DevAllowEgressChange = !slices.Equal(st.DevAllowEgress, st.DevAllowEgressRecorded)
+	if given == nil && len(st.DevAllowEgress) == 0 && len(recorded) > 0 {
+		// A recorded "none" (or an empty entry) is an empty allowance; leave the annotation be.
+		st.DevAllowEgressChange = false
+	}
 	return nil
 }
 

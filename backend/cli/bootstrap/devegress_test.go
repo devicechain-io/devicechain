@@ -189,3 +189,30 @@ func TestDevAllowEgressIsSettledAndRecordedByBothVerbs(t *testing.T) {
 		t.Error("the allowance is judged after the declaration is written")
 	}
 }
+
+func TestSettleRendersTheCanonicalFormOfARecordedAllowance(t *testing.T) {
+	st := &State{Instance: "i", KubeContext: "kind-x"}
+	if err := settleDevAllowEgress(st, []string{"192.168.1.20", "10.0.0.0/8"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(st.DevAllowEgress, []string{"10.0.0.0/8", "192.168.1.20/32"}) {
+		t.Errorf("raw annotation rendered: %v", st.DevAllowEgress)
+	}
+	st = &State{Instance: "i", KubeContext: "gke_prod"}
+	if err := settleDevAllowEgress(st, []string{"none"}, nil); err != nil || len(st.DevAllowEgress) != 0 || st.DevAllowEgressChange {
+		t.Errorf("a recorded none is empty: %v %v %+v", err, st.DevAllowEgress, st)
+	}
+}
+
+func TestLocalContextMatchIsDelimiterAware(t *testing.T) {
+	for _, no := range []string{"minikubeprod", "kindly", "docker-desktopx"} {
+		if isLocalDevContext(no) {
+			t.Errorf("%q must not count as local", no)
+		}
+	}
+	for _, ok := range []string{"minikube", "minikube-dev", "kind-a", "docker-desktop", "k3d-x"} {
+		if !isLocalDevContext(ok) {
+			t.Errorf("%q must count as local", ok)
+		}
+	}
+}
