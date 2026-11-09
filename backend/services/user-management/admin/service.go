@@ -33,6 +33,10 @@ import (
 type Service struct {
 	iam *iam.Store
 
+	// agentActuation is the instance flag for agent actions (SetAgentActuation): whether an OAuth
+	// client may be registered for an act:* scope.
+	agentActuation bool
+
 	// settle and tokenHold are the purge coordinator's two windows (ADR-077), carried here
 	// so a caller asking what a deletion is waiting on gets an answer derived from the
 	// SAME values the coordinator decides on.
@@ -203,3 +207,7 @@ func (s *Service) TenantDeletionProgress(rec *iam.TenantPurge, lines []iam.Tenan
 	}
 	return purge.Waiting(lines, rec.Epoch, time.Now().UTC(), s.settle, s.tokenHold)
 }
+
+// SetAgentActuation installs the instance flag for agent actions. Off (the default), no OAuth
+// client may be registered for an act:* scope.
+func (s *Service) SetAgentActuation(enabled bool) { s.agentActuation = enabled }

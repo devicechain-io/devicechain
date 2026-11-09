@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // The authentication-method references a DeviceChain token can carry in its "amr"
@@ -58,6 +59,65 @@ func WithSessionID(sid SessionID) MintOption {
 	return func(s *tokenSpec) { s.sessionID = sid }
 }
 
+// WithMfaTime stamps the "mfa_time" claim: when the sign-in last verified a second factor. Like
+// WithAmr, the value must come from the session RECORD, never from a request or a presented token,
+// so a refresh carries the time of the verification it descends from and never advances it. A
+// zero time writes no claim. The mint fails if the token's amr does not prove a second factor.
+func WithMfaTime(at time.Time) MintOption {
+	return func(s *tokenSpec) {
+		if at.IsZero() {
+			s.mfaTime = nil
+			return
+		}
+		t := at.UTC()
+		s.mfaTime = &t
+	}
+}
+
+// StepUp is what a sensitive mutation demands of the caller's second factor.
+type StepUp struct {
+	// MaxAge is how recently the factor must have been verified.
+	MaxAge time.Duration
+	// AcceptRecoveryCodes admits a sign-in completed with a recovery code (amr ["pwd","mfa"]).
+	// Off, only a TOTP verification (amr containing "otp") counts.
+	AcceptRecoveryCodes bool
+}
+
+// stepUpClockSkew tolerates a mfa_time slightly ahead of this replica's clock.
+const stepUpClockSkew = 30 * time.Second
+
+// StepUpFresh reports whether claims prove a second factor verified no longer than su.MaxAge
+// before now.
+//
+// 🔴 FRESHNESS IS mfa_time AND NOTHING ELSE. A token's iat is when it was MINTED, and a refresh
+// mints a new one every few minutes without anyone presenting a factor, so reading iat would let a
+// sign-in from last week pass a fifteen-minute step-up. A token with no mfa_time (minted before the
+// claim existed, or from a sign-in without a second factor) is not fresh.
+//
+// It also requires an ACCESS token: an identity, refresh or service token never authorizes a
+// tenant mutation, and the amr rule already keeps a machine credential from carrying a factor.
+func StepUpFresh(c *Claims, su StepUp, now time.Time) bool {
+	if c == nil || c.TokenType != TokenTypeAccess || c.MfaTime == nil || su.MaxAge <= 0 {
+		return false
+	}
+	// A step-up is a PERSON proving presence at their own session. An agent-origin token (an
+	// OAuth client's, a service account's) never counts, whatever it carries.
+	if IsAgentOrigin(c) {
+		return false
+	}
+	switch {
+	case slices.Contains(c.Amr, AmrOTP):
+	case su.AcceptRecoveryCodes && slices.Contains(c.Amr, AmrMFA):
+	default:
+		return false
+	}
+	at := c.MfaTime.Time
+	if at.After(now.Add(stepUpClockSkew)) {
+		return false
+	}
+	return now.Sub(at) <= su.MaxAge
+}
+
 // Mfa reports whether the token's sign-in passed a second factor.
 func (c *Claims) Mfa() bool {
 	return c != nil && slices.Contains(c.Amr, AmrMFA)
@@ -84,6 +144,11 @@ func validAmrShape(amr []string) bool {
 // access, refresh and identity. A present-but-empty or unrecognised list is refused too,
 // never read as "no second factor".
 func validateAmrClaim(c *Claims) error {
+	// mfa_time is a statement about the second factor, so it may ride only beside an amr that
+	// proves one: alone, or beside a password-only amr, it is a forgery.
+	if c.MfaTime != nil && !slices.Contains(c.Amr, AmrMFA) {
+		return fmt.Errorf("%w: mfa_time without a second-factor amr", ErrMalformedAmr)
+	}
 	if c.Amr == nil {
 		return nil
 	}

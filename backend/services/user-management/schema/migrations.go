@@ -139,5 +139,9 @@ var (
 		// vpartition, and the tenants pinned to a vpartition by hand. Three new tables, no seed;
 		// nothing routes by them yet.
 		NewPartitionPlacementMigration(),
+		// Agentic actions: a tenant's AGENT POLICY (a head row per tenant and its append-only
+		// published versions) and the immutable agent flag on service accounts. No seed rows: a
+		// tenant with no published policy has agent actuation off.
+		NewAgentPolicyMigration(),
 	}
 )

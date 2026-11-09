@@ -147,7 +147,7 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 		DashboardRead, DashboardWrite,
 		NotificationRead, NotificationWrite, AuditRead, SettingsRead, SettingsWrite,
 		ClientRead, ClientWrite, ConnectorRead, ConnectorWrite, ArtifactRead, ArtifactWrite, ArtifactTrust, BrandingWrite,
-		BasemapWrite, LocaleWrite, AIAdmin, AIInfer, MemberRead, MemberWrite,
+		BasemapWrite, LocaleWrite, AIAdmin, AIInfer, MemberRead, MemberWrite, AgentAdmin,
 	}
 	for _, a := range expected {
 		tiers, known := TiersOf(a)

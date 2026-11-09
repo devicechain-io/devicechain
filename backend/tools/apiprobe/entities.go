@@ -1582,6 +1582,30 @@ var entities = []entity{
 	},
 }
 
+// probeAgentPolicy is the agent policy the probe publishes: actuation disabled and every alarm
+// action refused, which is a tightening and so needs no second factor. A fixed literal, so the
+// stored canonical document is a constant verify can compare.
+const probeAgentPolicy = `{"actuation":"disabled","tools":{"alarms":{"ack":"refuse","clear":"refuse"}}}`
+
+// publishProbeAgentPolicy publishes the probe's draft agent policy, which writes the version row.
+func publishProbeAgentPolicy(ctx context.Context, c *connection, sess *userclient.TenantSession, _ *state) error {
+	var out struct {
+		PublishAgentPolicy struct {
+			Published *struct {
+				Version int `json:"version"`
+			} `json:"published"`
+		} `json:"publishAgentPolicy"`
+	}
+	if err := sess.Query(ctx, c.areaURL("user-management"), `mutation{publishAgentPolicy{published{version}}}`,
+		map[string]any{}, &out); err != nil {
+		return fmt.Errorf("publish the probe agent policy: %w", err)
+	}
+	if out.PublishAgentPolicy.Published == nil || out.PublishAgentPolicy.Published.Version < 1 {
+		return fmt.Errorf("the probe agent policy published no version")
+	}
+	return nil
+}
+
 // probeInviteeEmail is the person member-invitation invites. Not derived from the tenant:
 // the read-back criteria are a literal (verify holds only the receipt), and an identity
 // is instance-global anyway, so every probe tenant inviting the same person is the shape
@@ -1712,7 +1736,7 @@ const tenantCreateMutations = 34
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because
 // they are separate claims: a table can cover every create and no publish, which is
 // exactly the state this constant was added to end.
-const tenantPublishMutations = 5
+const tenantPublishMutations = 6
 
 // printCoverage prints the tool's coverage CLAIM. Given a baseline it also
 // prints what a seed against that release would SKIP — so the drill's real

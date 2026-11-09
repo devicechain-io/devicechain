@@ -78,6 +78,59 @@ Entity tokens, such as a device or alarm token, stay at the top level because th
 Fields that used to sit beside a token (a device's `name`, `description` and `externalId`, a metric's `name` and `unit`, an alarm's `alarmKey`, a command's `name` and `error`) now sit under `untrusted` as `{ "value": ..., "source": ... }`. Update any client that reads them.
 :::
 
+## Agent actions: who may act, and the off switch (preview) {#agent-actions}
+
+DeviceChain is building toward letting an assistant act, not only read: acknowledge an alarm, send a command, propose a rule or a rollout. This release ships the controls that decide **whether an assistant may ask to act at all**. It adds no action tool, and nothing an assistant holds can change anything yet. Every surface in this section is in the [preview tier](../deployment/versioning-policy.md#preview-interfaces), except the `agent` flag on service accounts, which is stable: removing it later would turn agent accounts back into integrations holding their roles' write permissions.
+
+**An assistant never holds a write permission.** When a person authorizes an assistant for an action scope, the token it receives carries a *proposal* permission instead of the person's write permission: `alarm:propose` in place of `alarm:write`, `command:propose` in place of `command:write`. A proposal permission is worked out from what the person holds at that moment, and is worked out again at every refresh, so a person who loses `alarm:write` takes `alarm:propose` away from their assistant within one token lifetime. No role can grant a proposal permission, and a superuser's `*` never counts as one. Every existing operation that changes data checks the write permission, so a stolen assistant token cannot change anything, even when it is sent straight to the API instead of through the MCP server.
+
+**The action scopes.** Each is a separate line on the consent screen:
+
+| Scope | What it may ask for |
+| --- | --- |
+| `act:alarms` | Acknowledge or clear alarms. |
+| `act:commands` | Send commands to devices. |
+| `act:rules` | Propose detection rules for a person to review. |
+| `act:updates` | Propose firmware update rollouts for a person to review. |
+| `act:annotate` | Add notes marked as written by the assistant. |
+
+**Three switches, all off by default.** An action scope is granted only when all of these hold. They are checked again when the authorization code is redeemed and at every refresh, so turning any one off ends existing assistant sessions at their next refresh:
+
+1. **The instance.** The operator sets `agentActuation.enabled: true` under `functionalAreas.user-management.config`. Off, the action scopes are not advertised, no OAuth client can be registered for one, and every request for one is refused. Turn it on only after an upgrade has finished rolling out. The operator then registers the action scopes on each OAuth client that may use them, one client at a time.
+2. **The operator's per-tenant override.** `setTenantAgentActuationSuspended` on the admin API (requires `tenant:write`) stops agent actions in one tenant whatever its own policy says.
+3. **The tenant's agent policy.** A tenant administrator holding `agent:admin` publishes a policy that enables actuation and lists the OAuth client ids allowed to receive action scopes. With no published policy, agents cannot act.
+
+A superuser's session is never given an action scope. An operator who wants an assistant to act in a tenant does it through a membership in that tenant, like anyone else.
+
+**The agent policy** is a JSON document, in format `v1alpha1` (the `version` key; a document without one is read as `v1alpha1`), saved as a draft (`saveAgentPolicyDraft`) and published as a numbered version (`publishAgentPolicy`). Unknown keys and invalid values are refused. Publishing never edits an old version: a rollback (`rollbackAgentPolicy`) publishes an earlier document again as a new version. A change that **loosens** the policy (enabling it, adding a client, more automatic actions, larger limits, more approvers, fewer approvals, a longer step-up age) needs a second factor verified within the policy's step-up age, 15 minutes by default, and is refused with `STEP_UP_REQUIRED` otherwise. A sign-in completed with a recovery code counts only when the policy says so. A tightening needs no step-up. Every write is recorded in the audit journal, and none can be made by an assistant or a service account.
+
+```json
+{
+  "version": "v1alpha1",
+  "actuation": "enabled",
+  "clients": ["claude-desktop"],
+  "approvers": { "roles": ["ops-lead"], "stepUpMaxAge": "15m" },
+  "tools": {
+    "alarms": { "ack": "approve", "clear": "approve" },
+    "commands": { "commands": ["setpoint"], "auto": { "impact": ["NORMAL"], "maxDevices": 5 } }
+  }
+}
+```
+
+**The kill switch.** `setAgentActuation(enabled: false)` turns agent actions off in the tenant at once by publishing the policy in force with only that changed. It always succeeds and needs no second factor. Turning it back on is a loosening and needs one.
+
+**Asking for a verdict.** `agentActuationDecision` returns the tenant's verdict on an action an assistant proposes: `REFUSE`, or `APPROVE` with one or two approvals, plus the reasons and the policy version. Only an assistant's own token, one that carries a proposal permission, may ask, and the assistant is the client named in that token, never an argument. **This release never answers `AUTO`.** A policy may already say which actions could run without a person, but nothing runs automatically until the platform can check automatic actions against held-back comparison groups and declared invariants. Until then such an action needs one person's approval, and an annotation, which never waits for one, is refused. Some floors hold whatever a policy says: a destructive command, a rule change or a rollout never runs without a person; a destructive command and a rollout over 100 devices need two people; and an action that needs more approvers than the tenant has is refused rather than downgraded.
+
+**Who counts as an approver.** An approver is an enabled member, not limited to a customer or group, in one of the policy's approver roles, who holds the write permission the action needs and has a second factor enrolled. Changing who holds an approver role therefore changes who counts, and a verdict that needs more approvers than the tenant has is a refusal.
+
+**Assistants that run without a person.** A service account can be created as an **agent account** (`agent: true`, which cannot be changed later, and which is refused unless the instance switch is on). Its tokens carry its roles' read permissions and, when it asks for an action scope that the tenant's policy allows for its client id, the proposal permissions worked out from its roles' write permissions, never the writes themselves. An ordinary service account holds its roles' permissions as before; an assistant run under one is an integration, not a governed agent. A tenant can require the flag: listing permissions under `serviceAccounts.agentFlagRequiredFor` refuses an ordinary account that would hold any of them, at creation, when its roles change, and at every token request, so a role edited later cannot step around it. OAuth client ids may not begin with `dcsa_`, which service accounts use.
+
+**Upgrading and operating.**
+
+- Turn `agentActuation.enabled` on in a separate upgrade, after the release that brings it has finished rolling out. Pods of an earlier release do not know agent accounts and would issue an agent account's token with its roles' write permissions; agent accounts receive proposal-only tokens only from pods of this release or later, which is why an agent account can be created only while the switch is on.
+- If you turn the switch off while an OAuth client still has action scopes registered, remove those scopes in the same edit the next time you change the client: an edit that keeps a scope the instance no longer offers is refused.
+- Loosening the policy needs a second factor presented with a one-time code within the step-up age. A tenant administrator who signs in only through single sign-on, or has not enrolled a code, cannot loosen it until the console offers a step-up prompt; tightening and the kill switch are always available.
+
 ## The security model
 
 MCP is becoming a standard way to give AI assistants real capabilities. The risk is that a careless implementation hands an agent a powerful, broadly scoped key. DeviceChain's server is designed so that this cannot happen.
@@ -184,7 +237,7 @@ Some limits are decisions and some are bounds of the current implementation. Eac
 
 **Deliberate, and not scheduled to change:**
 
-- **No writes.** Sending a command or acknowledging an alarm through MCP is planned, but only behind an elevated scope *and* an explicit human confirmation. An assistant will never silently actuate a device.
+- **No writes.** Sending a command or acknowledging an alarm through MCP is planned, but only behind an action scope, the tenant's agent policy *and* a person's approval where the policy requires one. The controls that decide whether an assistant may ask are in place (see [Agent actions](#agent-actions)); no action tool exists yet. An assistant will never silently actuate a device.
 - **No cross-tenant access.** The token is scoped to one tenant, chosen by the user at grant time. Tenancy is never a tool parameter, so there is no argument an agent can vary to reach another tenant.
 - **No arbitrary queries.** Only the curated tool set is reachable; there is no `run_graphql`.
 - **No service credential in any code path it runs.** This is stronger than "it does not use a service token": no code path in the MCP server reaches for a credential of its own, so an agent has no borrowed authority to exploit. Every downstream read goes out under the caller's own token, and an agent with no permission to read something gets the same refusal a person would. (Its pod mounts the instance configuration like every other service's does. That is deployment plumbing, not something the server uses.)

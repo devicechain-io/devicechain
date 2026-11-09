@@ -316,6 +316,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// The instance switch for agent actions, off unless the configuration turns it on.
+	IdentityManager.SetAgentActuation(Configuration.AgentActuation.Enabled)
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return explainSeedRefusal(err)
 	}
@@ -369,6 +371,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// token. One instance, so the two planes cannot be wired to different stores.
 	AdminService = newAdminService(iam.NewStore(RdbManager), Configuration.TenantPurgeSettle(),
 		Configuration.TenantPurgeTokenHold(), DeadLetterStore, serviceAccountKey, secretStore)
+	AdminService.SetAgentActuation(Configuration.AgentActuation.Enabled)
 
 	// Map of providers injected into the graphql http context.
 	providers := dataPlaneProviders(AdminService, IdentityManager, SettingsService, BlobStore)
@@ -673,7 +676,7 @@ func registerSsoHandlersIfEnabled() {
 }
 
 func registerOAuthHandlers() {
-	identity.RegisterMetadataHandlers(Microservice.Mux(), Configuration.Auth.IssuerUrl)
+	identity.RegisterMetadataHandlersFor(Microservice.Mux(), Configuration.Auth.IssuerUrl, IdentityManager.SupportedScopes())
 
 	// The token endpoint (ADR-047 slice B): authorization_code (+ PKCE) and
 	// refresh_token grants. AuthenticateClient runs first — public clients (PKCE) and

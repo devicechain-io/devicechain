@@ -48,6 +48,11 @@ type ServiceAccount struct {
 	// CreatedBy is the administrator who created the account (their token's subject), kept
 	// for the record.
 	CreatedBy string `gorm:"size:256"`
+	// Agent marks an account that runs an AI agent. It is set at creation and NEVER changed: a
+	// flagged account's tokens carry PROPOSAL authorities derived from its roles in place of the
+	// roles' writes, so it can ask for an effect and never cause one, and an update that could
+	// clear the flag would be a way to promote an agent into an integration holding raw writes.
+	Agent bool `gorm:"not null;default:false"`
 
 	Roles   []Role                 `gorm:"many2many:iam_service_account_roles;"`
 	Secrets []ServiceAccountSecret `gorm:"constraint:OnDelete:CASCADE"`

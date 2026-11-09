@@ -101,6 +101,11 @@ const (
 	// AuditOpTenantMfaRequiredChanged records a change to a tenant's own "second factor
 	// required" flag. The actor is who changed it, the tenant the one it applies to.
 	AuditOpTenantMfaRequiredChanged = "tenant_mfa_required_changed"
+	// AuditOpAgentActuationSuspended and AuditOpAgentActuationRestored record the operator's
+	// per-tenant override of agent actions, one row per transition. The actor is the operator,
+	// the tenant the one it applies to. The override row itself keeps only the latest state.
+	AuditOpAgentActuationSuspended = "agent_actuation_suspended"
+	AuditOpAgentActuationRestored  = "agent_actuation_restored"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,

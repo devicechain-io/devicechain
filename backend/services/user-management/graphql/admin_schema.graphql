@@ -1718,6 +1718,15 @@ type Query {
     # administered on the same plane by the same operator.
     tenantTiers: [AdminTenantTier!]!
     """
+    (Preview: may change in a minor release.) Agent actions in one tenant: whether this instance allows them, whether the operator has
+    suspended them for the tenant, and the tenant's published agent policy version. Requires
+    tenant:read.
+    """
+    tenantAgentActuation(
+        """Token of the tenant."""
+        tenant: String!
+    ): AdminTenantAgentActuation!
+    """
     The governance dimensions the platform defines, so an editor can offer exactly the
     settings a tier or tenant may carry. The answer does not depend on the tenant. Requires
     tenant:read.
@@ -2498,6 +2507,37 @@ type Mutation {
         """Identifier of the request."""
         id: ID!
     ): Boolean!
+    """
+    (Preview: may change in a minor release.) Suspends or restores agent actions for one tenant, whatever its own agent policy says.
+    Suspended, no AI agent can be granted an action scope in the tenant and every agent decision
+    there is a refusal. Restoring returns the tenant to its own policy. Requires tenant:write.
+    """
+    setTenantAgentActuationSuspended(
+        """Token of the tenant."""
+        tenant: String!
+        """True to suspend agent actions in the tenant; false to restore its own policy."""
+        suspended: Boolean!
+    ): AdminTenantAgentActuation!
+}
+
+"""
+Agent actions in one tenant, as the instance operator sees them. Agents can act in a tenant only
+when this instance allows agent actions, the operator has not suspended them for the tenant, and
+the tenant's own published agent policy enables them.
+"""
+type AdminTenantAgentActuation {
+    """Token of the tenant."""
+    tenant: String!
+    """True when this instance allows agent actions at all."""
+    instanceEnabled: Boolean!
+    """True when the operator has suspended agent actions for this tenant."""
+    suspended: Boolean!
+    """When the suspension was set, as an RFC 3339 timestamp, or null."""
+    suspendedAt: String
+    """Who set the suspension, or null."""
+    suspendedBy: String
+    """The tenant's published agent policy version, or 0 when it has published none."""
+    publishedVersion: Int!
 }
 
 schema {

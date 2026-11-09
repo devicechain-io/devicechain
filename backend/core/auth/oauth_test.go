@@ -321,11 +321,21 @@ func TestLocationIsReachableOnlyThroughItsOwnScope(t *testing.T) {
 // would make this table the authority. A table that is the authority has to be the thing
 // the test reads.
 func TestCeilingsHoldNoRawWriteOrAll(t *testing.T) {
+	all := map[string][]string{}
 	for scope, allow := range scopeAllowances {
 		if _, ok := ScopeAllowance(scope); !ok {
 			t.Errorf("scope %q has a ceiling in scopeAllowances but is not in SupportedScopes, so "+
 				"ScopeAllowance refuses it — the two lists must agree", scope)
 		}
+		all[scope] = allow
+	}
+	for scope, allow := range actScopeCeilings {
+		if !IsSupportedScopeFor(scope, true) {
+			t.Errorf("act scope %q has a ceiling but is not advertised with the flag on", scope)
+		}
+		all[scope] = allow
+	}
+	for scope, allow := range all {
 		if len(allow) == 0 {
 			t.Errorf("scope %q has an empty ceiling, so a token minted for it carries "+
 				"nothing and the scope is unusable", scope)

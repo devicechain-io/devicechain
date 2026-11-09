@@ -85,6 +85,48 @@ type sessionRecord struct {
 	// overstate. A record written by a build that predates it has none and reads as no
 	// second factor, so a tenant that requires one refuses it. A single sign-on records none.
 	Amr []string `json:"amr,omitempty"`
+	// MfaAt is when this sign-in last VERIFIED a second factor: the code that completed it. Every
+	// token minted from the sign-in carries it as "mfa_time", copied unchanged through every
+	// refresh, so a step-up check reads how long ago a person actually presented a factor rather
+	// than how long ago a token was minted. Nil when the sign-in presented none, and for a record
+	// written before it existed, which reads as "no recent factor".
+	MfaAt *time.Time `json:"mfa_at,omitempty"`
+}
+
+// signIn is what a minted token takes from its sign-in's RECORD, and from nothing a credential
+// carries: the amr, the second-factor time, and the moment the sign-in was accepted.
+type signIn struct {
+	amr    []string
+	mfaAt  *time.Time
+	anchor time.Time
+}
+
+// options are the mint options that stamp the sign-in's facts on a token.
+func (s *signIn) options() []auth.MintOption {
+	if s == nil {
+		return nil
+	}
+	opts := amrOptions(s.amr)
+	if s.mfaAt != nil && slices.Contains(s.amr, auth.AmrMFA) {
+		opts = append(opts, auth.WithMfaTime(*s.mfaAt))
+	}
+	return opts
+}
+
+// oauthOptions are the sign-in facts an OAuth (third-party client) token carries: the amr only.
+//
+// 🔴 NEVER mfa_time. When the person last presented a second factor is a fact about the person's
+// own console session; a token handed to a third-party client must not carry it, and a step-up
+// never accepts an agent-origin token anyway (auth.StepUpFresh).
+func (s *signIn) oauthOptions() []auth.MintOption {
+	if s == nil {
+		return nil
+	}
+	return amrOptions(s.amr)
+}
+
+func (r *sessionRecord) signIn() *signIn {
+	return &signIn{amr: r.Amr, mfaAt: r.MfaAt, anchor: r.Anchor}
 }
 
 // secondFactor reports whether the sign-in passed a second factor.
@@ -93,7 +135,13 @@ func (r *sessionRecord) secondFactor() bool { return slices.Contains(r.Amr, auth
 // startSession records a new password sign-in for email and returns its id. amr is what the
 // sign-in presented: the password alone, or with a code (see sessionRecord.Amr).
 func (m *Manager) startSession(email string, amr []string) (auth.SessionID, error) {
-	return m.putSession(sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr})
+	rec := sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr}
+	if slices.Contains(amr, auth.AmrMFA) {
+		// The factor was verified by the very step that is starting this session.
+		at := rec.Anchor
+		rec.MfaAt = &at
+	}
+	return m.putSession(rec)
 }
 
 // startSsoSession records a new single sign-on for email through conn, anchored at the
@@ -198,7 +246,7 @@ func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
 //
 // It returns the sign-in's "amr" (nil for a single sign-on), read from the SESSION RECORD. A
 // caller that mints tokens takes the claim from this and from nothing a credential carries.
-func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) ([]string, error) {
+func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) (*signIn, error) {
 	rec, err := m.loadSession(sid, id.Email)
 	if err != nil {
 		return nil, err
@@ -207,8 +255,10 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 		if err := m.admitPasswordSession(ctx, rec, id, tenant, su); err != nil {
 			return nil, err
 		}
-		return rec.Amr, nil
+		return rec.signIn(), nil
 	}
+	// A single sign-on records no amr; its facts are only its anchor.
+	sso := &signIn{anchor: rec.Anchor}
 	conn, err := m.admitSsoSession(ctx, rec, id)
 	if err != nil {
 		return nil, err
@@ -221,14 +271,14 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 		}
 		for _, t := range served {
 			if t == tenant {
-				return nil, nil
+				return sso, nil
 			}
 		}
 		return nil, errTenantAccessDenied
 	case iam.IdpKindInstance:
 		if su {
 			m.recordAuthLabeled(ctx, rdb.AuditOpSsoBreakGlass, id.Email, tenant, conn.Token)
-			return nil, nil
+			return sso, nil
 		}
 		return nil, errTenantAccessDenied
 	}

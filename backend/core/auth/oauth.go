@@ -60,7 +60,97 @@ const (
 
 // SupportedScopes is the set of scopes this Authorization Server will grant,
 // advertised in the RFC 8414 metadata's scopes_supported.
+//
+// It is the list for an instance with agent actuation OFF, which is the default, and it is
+// unchanged by the act:* scopes below: those are advertised and accepted only through the
+// *For(actuation) variants, by an AS whose instance flag is on.
 var SupportedScopes = []string{ScopeReadOnly, ScopeLocation}
+
+// The ACT scopes (agentic actions). Each is a ceiling of PROPOSAL authorities only: a token
+// minted through one can ask for an effect, never cause it (see proposal.go). They are granted
+// only when ALL of these hold, checked at /authorize, at code redemption and at every refresh:
+// the instance flag is on, the operator registered the scope on the OAuth client, the tenant's
+// published agent policy enables actuation and lists the client, and the grant is not a
+// superuser's.
+//
+// 🔴 EACH CEILING IS FROZEN PER NAME. A grant refreshes against the CURRENT ceiling, so widening
+// one would silently widen every live agent session at its next refresh. A wider capability gets
+// a new scope name. TestActCeilingsAreExact pins each one literally.
+const (
+	ScopeActAlarms   = "act:alarms"
+	ScopeActCommands = "act:commands"
+	ScopeActRules    = "act:rules"
+	ScopeActUpdates  = "act:updates"
+	ScopeActAnnotate = "act:annotate"
+)
+
+// ActScopes is the act:* vocabulary, advertised only when the instance flag is on.
+var ActScopes = []string{ScopeActAlarms, ScopeActCommands, ScopeActRules, ScopeActUpdates, ScopeActAnnotate}
+
+// actScopeCeilings is the act scope -> proposal-authority ceiling table. Nothing here may be
+// anything but a proposal authority (TestCeilingsHoldNoRawWriteOrAll).
+var actScopeCeilings = map[string][]string{
+	ScopeActAlarms:   {string(AlarmPropose)},
+	ScopeActCommands: {string(CommandPropose)},
+	ScopeActRules:    {string(RulePropose)},
+	ScopeActUpdates:  {string(RolloutPropose)},
+	ScopeActAnnotate: {string(AnnotationPropose)},
+}
+
+// IsActScope reports whether s is one of the act:* scopes.
+func IsActScope(s string) bool {
+	_, ok := actScopeCeilings[s]
+	return ok
+}
+
+// HasActScope reports whether a space-delimited scope string names any act:* scope.
+func HasActScope(scope string) bool {
+	for _, s := range ParseScope(scope) {
+		if IsActScope(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// ActScopeCeiling returns the proposal-authority ceiling of one act scope (a copy), and whether
+// the scope is one. It does NOT consult the instance flag: whether an act scope may be granted at
+// all is decided by the AS at every mint, and this answers only what the scope would reach.
+func ActScopeCeiling(scope string) ([]string, bool) {
+	c, ok := actScopeCeilings[scope]
+	if !ok {
+		return nil, false
+	}
+	return append([]string(nil), c...), true
+}
+
+// SupportedScopesFor is the advertised scope list for an instance whose agent-actuation flag is
+// actuation: SupportedScopes, plus ActScopes when the flag is on.
+func SupportedScopesFor(actuation bool) []string {
+	out := append([]string(nil), SupportedScopes...)
+	if actuation {
+		out = append(out, ActScopes...)
+	}
+	return out
+}
+
+// IsSupportedScopeFor is IsSupportedScope over SupportedScopesFor(actuation).
+func IsSupportedScopeFor(s string, actuation bool) bool {
+	if IsSupportedScope(s) {
+		return true
+	}
+	return actuation && IsActScope(s)
+}
+
+// ScopeSupportedFor is ScopeSupported over SupportedScopesFor(actuation).
+func ScopeSupportedFor(requested string, actuation bool) bool {
+	for _, r := range ParseScope(requested) {
+		if !IsSupportedScopeFor(r, actuation) {
+			return false
+		}
+	}
+	return true
+}
 
 // scopeAllowances is the scope→authority ceiling table: the most a token minted
 // through each scope may carry. It lives here, beside the scope vocabulary and
@@ -135,6 +225,12 @@ func ScopeAllowance(scope string) ([]string, bool) {
 var scopeDescriptions = map[string]string{
 	ScopeReadOnly: "Read your devices, their current state, their telemetry, their alarms, the commands sent to them, and your dashboards.",
 	ScopeLocation: "Read where your devices have been — their reported position history, not just where they are now.",
+
+	ScopeActAlarms:   "Acknowledge or clear your alarms, as your organization's agent policy allows. Some actions wait for a person to approve them.",
+	ScopeActCommands: "Ask your devices to run commands, as your organization's agent policy allows. Commands that are not pre-approved wait for a person to approve them.",
+	ScopeActRules:    "Propose detection rules for a person to review. Nothing it proposes runs until a person applies and publishes it.",
+	ScopeActUpdates:  "Propose firmware update rollouts for a person to review. Nothing it proposes reaches a device until a person starts it.",
+	ScopeActAnnotate: "Add notes to your devices, assets and alarms. Notes are marked as written by this assistant.",
 }
 
 // ScopeDescription returns the sentence to show a resource owner for one scope,
@@ -251,6 +347,9 @@ func IntersectAuthorities(held, allowed []string) []string {
 	for _, a := range allowed {
 		if a == string(AuthorityAll) {
 			continue // a scope allowance must never grant the super-authority
+		}
+		if looksLikeProposal(a) {
+			continue // a proposal authority is derived (DeriveProposalAuthorities), never intersected
 		}
 		if _, dup := seen[a]; dup {
 			continue

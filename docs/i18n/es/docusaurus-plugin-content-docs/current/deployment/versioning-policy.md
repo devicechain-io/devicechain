@@ -69,10 +69,14 @@ intencionada, igual que cualquier otra, de modo que ningún cambio en vista prev
 note. Un formato de archivo en vista previa lleva una versión, como `v1alpha1`, y una herramienta que no
 conoce la versión rechaza el archivo en lugar de adivinar.
 
-Hoy el nivel de vista previa contiene dos superficies. Las pruebas de reglas: la operación `evaluateRules`
+Hoy el nivel de vista previa contiene tres superficies. Las pruebas de reglas: la operación `evaluateRules`
 de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
-que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). Y el producto como código:
+que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
 `dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
+Y las acciones de agentes: los alcances OAuth `act:*`, las operaciones de la política de agentes y su
+documento (formato `v1alpha1`), la consulta `agentActuationDecision` y la suspensión del operador por
+inquilino (consulta [Acciones de agentes](../concepts/mcp.md#agent-actions)). La marca `agent` de las
+cuentas de servicio no está en vista previa: está cubierta desde la versión que la añade.
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 

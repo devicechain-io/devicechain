@@ -213,11 +213,16 @@ var publishes = []publishOp{
 // govulncheck allowlist, and for the same reason: an exception nobody is watching is a
 // gap with paperwork.
 //
-// It is EMPTY, and it was not. publishEntityGroup lived here for exactly as long as the
-// table seeded only a STATIC group — the platform refuses to publish one, in its own
-// words: `only a dynamic entity group can be published`. The table now seeds both, so
-// the exclusion was deleted rather than left to look maintained.
-var publishesNotCovered = map[string]string{}
+// publishEntityGroup lived here for exactly as long as the table seeded only a STATIC
+// group — the platform refuses to publish one, in its own words: `only a dynamic entity
+// group can be published`. The table now seeds both, so that exclusion was deleted
+// rather than left to look maintained.
+var publishesNotCovered = map[string]string{
+	"publishAgentPolicy": "not in this table because it takes no token and no label, the two arguments " +
+		"every row here is rendered with; it IS exercised, by the agent-policy entity's After step " +
+		"(entities.go), and the version it writes is read back and compared through agentPolicy. " +
+		"Move it here only if the publish table learns an argument-less shape.",
+}
 
 // afterPublish is the third phase: entities that cannot be created until something has
 // been published, because they reference a published VERSION NUMBER.
@@ -564,6 +569,49 @@ var afterPublish = []entity{
 		Settled: func(f map[string]any) error {
 			if n, _ := f["targetCount"].(float64); n < 1 {
 				return fmt.Errorf("targetCount is %v, want the started rollout's frozen target set", f["targetCount"])
+			}
+			return nil
+		},
+	},
+	{
+		// The tenant's AGENT POLICY, so iam_agent_policies (the head) and
+		// iam_agent_policy_versions (a published version) both hold a row the drill can watch.
+		// One per tenant and addressed by no token, so it is read back with the argument-less
+		// agentPolicy (Singleton) and keyed on the receipt by name.
+		//
+		// The draft is saved here and published by the After step, which clears the draft, so
+		// the settled read selects the PUBLISHED version: its number, its document (stored
+		// canonically, so the comparison asserts the canonical form survives) and its origin.
+		//
+		// 🔴 THE DOCUMENT DISABLES ACTUATION ON PURPOSE. A publish that LOOSENS the policy
+		// (enabling it is one) needs a second factor verified in the last fifteen minutes, which
+		// the probe's sign-in does not have. A disabled policy that only refuses is a tightening
+		// against no policy at all, so it publishes with the probe's ordinary session, and the
+		// seed turns nothing on in the instance it runs against.
+		//
+		// A SKIPPABLE LEAF: it Requires the agent policy type, so a baseline that predates it
+		// skips the row, and nothing records its token.
+		Name:         "agent-policy",
+		Area:         "user-management",
+		Mutation:     "saveAgentPolicyDraft",
+		Params:       []param{{Name: "document", Type: "String!"}},
+		Read:         "agentPolicy",
+		Singleton:    true,
+		Requires:     []string{"AgentPolicy.actuationInEffect"},
+		Fields:       "draft operatorSuspended published{version document origin}",
+		AbsentIfNull: "published",
+		TokenFrom:    func(s *state) string { return s.tok("agent-policy") },
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"document": probeAgentPolicy}
+		},
+		After: publishProbeAgentPolicy,
+		Settled: func(f map[string]any) error {
+			pub, _ := f["published"].(map[string]any)
+			if pub == nil {
+				return fmt.Errorf("no published agent policy yet")
+			}
+			if f["draft"] != nil {
+				return fmt.Errorf("the draft was not consumed by the publish")
 			}
 			return nil
 		},

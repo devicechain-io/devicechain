@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -134,8 +135,11 @@ type tokenSpec struct {
 	// WithAmr, from the session record.
 	amr    []string
 	amrSet bool
-	jti    string
-	ttl    time.Duration
+	// mfaTime is when the sign-in last verified a second factor (the "mfa_time" claim); set only
+	// through WithMfaTime, from the session record.
+	mfaTime *time.Time
+	jti     string
+	ttl     time.Duration
 }
 
 // IssueAccess mints a short-lived tenant-scoped access token (the data-plane
@@ -346,6 +350,13 @@ func (i *Issuer) sign(spec tokenSpec, opts ...MintOption) (IssuedToken, error) {
 	if spec.amrSet && !validAmrShape(spec.amr) {
 		return IssuedToken{}, fmt.Errorf("%w: %v", ErrMalformedAmr, spec.amr)
 	}
+	var mfaTime *jwt.NumericDate
+	if spec.mfaTime != nil {
+		if !slices.Contains(spec.amr, AmrMFA) {
+			return IssuedToken{}, fmt.Errorf("%w: mfa_time without a second-factor amr", ErrMalformedAmr)
+		}
+		mfaTime = jwt.NewNumericDate(*spec.mfaTime)
+	}
 	now := time.Now()
 	expires := now.Add(spec.ttl)
 	claims := &Claims{
@@ -358,6 +369,7 @@ func (i *Issuer) sign(spec tokenSpec, opts ...MintOption) (IssuedToken, error) {
 		Scope:             spec.scope,
 		ScopeAnchors:      spec.scopeAnchors,
 		Amr:               spec.amr,
+		MfaTime:           mfaTime,
 		ClientId:          spec.clientID,
 		SessionEpoch:      spec.sessionEpoch,
 		SessionID:         spec.sessionID,

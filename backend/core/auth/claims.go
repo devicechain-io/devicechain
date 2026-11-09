@@ -121,6 +121,13 @@ type Claims struct {
 	// the sign-in's value. Validator.Parse refuses it on a service token and on a service
 	// account's token. Read it through Mfa, never by indexing.
 	Amr []string `json:"amr,omitempty"`
+	// MfaTime (the "mfa_time" claim) is when this token's sign-in last VERIFIED a second factor:
+	// the TOTP code or recovery code that completed the sign-in, or a later step-up. It is written
+	// from the session record at mint time, exactly as Amr is, so a refresh copies it unchanged and
+	// a token's own issue time never counts as freshness. Only a new factor verification advances
+	// it. It rides only beside an amr that proves a second factor; Validator.Parse refuses it
+	// anywhere else. Read it through StepUpFresh, never directly.
+	MfaTime *jwt.NumericDate `json:"mfa_time,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 
@@ -145,9 +152,15 @@ type SessionID string
 // nothing else: not the tier (ADR-065), and not the scope (ADR-081). Gate on Authorize,
 // AuthorizeAny, AuthorizeScoped or AuthorizeCatalogue — a gate written on HasAuthority
 // admits a scoped member to an operation that refuses every scoped caller elsewhere.
+//
+// 🔴 "*" NEVER SATISFIES A PROPOSAL AUTHORITY. A proposal authority is held only when a token
+// literally carries it, which only DeriveProposalAuthorities puts there; a console token whose
+// subject holds "*" is a human acting directly, not an agent asking, and must not pass a gate that
+// exists for agents. Any ":propose"-shaped string is treated this way, defined or not.
 func (c *Claims) HasAuthority(required Authority) bool {
+	proposal := looksLikeProposal(string(required))
 	for _, held := range c.Authorities {
-		if held == string(AuthorityAll) || held == string(required) {
+		if (held == string(AuthorityAll) && !proposal) || held == string(required) {
 			return true
 		}
 	}
