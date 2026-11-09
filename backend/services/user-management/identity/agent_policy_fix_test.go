@@ -5,7 +5,9 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,4 +262,101 @@ func TestEveryWriterStoresTheCanonicalForm(t *testing.T) {
 		require.Equal(t, string(c), s, "a stored document must be exactly the canonical form")
 		require.Contains(t, s, `"version":"v1alpha1"`)
 	}
+}
+
+// nearLimitPolicy builds a VALID, readable document whose submitted form is just under the size
+// limit and whose stored (canonical) form, which always adds the version, is over it.
+func nearLimitPolicy(t *testing.T, actuation string) string {
+	t.Helper()
+	// Tight settings beside the clients, so a minimal fallback would read as a LOOSENING of them:
+	// the kill switch must not be judged on that.
+	prefix := `{"actuation":"` + actuation + `","approvers":{"roles":["r"],"stepUpMaxAge":"5m"},"expiry":{"default":"10m"},"clients":[`
+	var clients []string
+	size := len(prefix) + 2
+	for i := 0; ; i++ {
+		c := fmt.Sprintf(`"c%03d-%s"`, i, strings.Repeat("x", 250))
+		if size+len(c)+1 > agentpolicy.MaxDocumentBytes-8 {
+			break
+		}
+		clients = append(clients, c)
+		size += len(c) + 1
+	}
+	// One last entry fills the remaining room, so the submitted form sits a few bytes under the
+	// limit and the version the canonical form adds tips it over.
+	if pad := agentpolicy.MaxDocumentBytes - 4 - size - 3; pad > 0 {
+		clients = append(clients, `"`+strings.Repeat("y", min(pad, 256))+`"`)
+	}
+	raw := prefix + strings.Join(clients, ",") + "]}"
+	require.LessOrEqual(t, len(raw), agentpolicy.MaxDocumentBytes)
+	d, err := agentpolicy.ParseStored([]byte(raw))
+	require.NoError(t, err, "the near-limit document must be readable as stored")
+	b, err := d.Canonical()
+	require.NoError(t, err)
+	require.Greater(t, len(b), agentpolicy.MaxDocumentBytes, "its canonical form must be over the limit")
+	return raw
+}
+
+// 🔴 THE OFF SWITCH IS NEVER REFUSED BY SIZE OR VALIDATION OF THE POLICY IN FORCE. A readable policy
+// whose stored form would be over the limit, and a stored policy full of characters JSON escapes
+// (written before the token grammar held list entries), are both killable without a second factor,
+// and the service-account rule survives.
+func TestKillSwitchSurvivesOversizedAndEscapingPolicies(t *testing.T) {
+	escaping := `{"version":"v1alpha1","actuation":"enabled","serviceAccounts":{"agentFlagRequiredFor":["command:write"]},"clients":[`
+	var cs []string
+	size := len(escaping) + 2
+	// About 16.5 KB as written, within every list limit, and roughly six times that once JSON
+	// escapes each '<': the shape the final review found could refuse the kill switch.
+	for i := 0; size < 16500; i++ {
+		c := fmt.Sprintf(`"%d%s"`, i, strings.Repeat("<", 200))
+		cs = append(cs, c)
+		size += len(c) + 1
+	}
+	escaping += strings.Join(cs, ",") + "]}"
+	require.LessOrEqual(t, len(escaping), agentpolicy.MaxDocumentBytes)
+
+	for name, doc := range map[string]string{
+		"canonical over the limit": nearLimitPolicy(t, "enabled"),
+		"escapable characters":     escaping,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newAgentEnv(t)
+			ctx := context.Background()
+			_, err := e.store.PublishAgentPolicy(ctx, agentTenant, "legacy", func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error) {
+				return doc, iam.AgentPolicyOriginPublish, false, nil
+			})
+			require.NoError(t, err)
+			view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
+			require.NoError(t, err, "the kill switch must not be refused")
+			require.Equal(t, 2, view.Published.Version)
+			require.LessOrEqual(t, len(view.Published.Document), agentpolicy.MaxDocumentBytes)
+			d, err := agentpolicy.ParseStored([]byte(view.Published.Document))
+			require.NoError(t, err, "what the kill switch stores must be readable")
+			require.False(t, d.ActuationOn())
+			if name == "escapable characters" {
+				require.Equal(t, []string{"command:write"}, d.AgentFlagRequiredFor())
+			}
+		})
+	}
+}
+
+// Every write checks the stored form's size: a draft whose canonical form would be over the limit
+// is refused at save, and a rollback to an oversized version is refused (it is not a kill).
+func TestEveryWriteChecksTheStoredSize(t *testing.T) {
+	e := newAgentEnv(t)
+	ctx := context.Background()
+	now := time.Now()
+	fresh := adminClaims(&now, auth.AmrPasswordOTP())
+	_, err := e.m.SaveAgentPolicyDraft(ctx, fresh, nearLimitPolicy(t, "disabled"))
+	require.Equal(t, AgentPolicyInvalid, policyErrCode(err))
+
+	_, err = e.store.PublishAgentPolicy(ctx, agentTenant, "legacy", func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error) {
+		return nearLimitPolicy(t, "disabled"), iam.AgentPolicyOriginPublish, false, nil
+	})
+	require.NoError(t, err)
+	_, err = e.m.SaveAgentPolicyDraft(ctx, fresh, `{"actuation":"disabled"}`)
+	require.NoError(t, err)
+	_, err = e.m.PublishAgentPolicyDraft(ctx, fresh)
+	require.NoError(t, err)
+	_, err = e.m.RollbackAgentPolicy(ctx, fresh, 1)
+	require.Equal(t, AgentPolicyInvalid, policyErrCode(err))
 }

@@ -20,7 +20,6 @@ import (
 	"io"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -84,8 +83,11 @@ const (
 	RolloutTwoPersonOver = 100
 	// MaxListEntries bounds every list in the document.
 	MaxListEntries = 256
-	// maxDocumentBytes bounds the stored document.
-	maxDocumentBytes = 64 * 1024
+	// MaxDocumentBytes bounds a document, as submitted and as stored (its canonical form).
+	MaxDocumentBytes = 64 * 1024
+	maxDocumentBytes = MaxDocumentBytes
+	// maxStoredReadBytes bounds a STORED document as read back (see parse).
+	maxStoredReadBytes = 2 * MaxDocumentBytes
 )
 
 // Defaults applied where the document is silent.
@@ -284,8 +286,16 @@ func Parse(raw []byte) (*Document, error) { return parse(raw, true) }
 func ParseStored(raw []byte) (*Document, error) { return parse(raw, false) }
 
 func parse(raw []byte, vocabulary bool) (*Document, error) {
-	if len(raw) > maxDocumentBytes {
-		return nil, invalid("the document is larger than %d bytes", maxDocumentBytes)
+	limit := maxDocumentBytes
+	if !vocabulary {
+		// A STORED document was size-checked in its canonical form when it was written, but it is
+		// read back through a jsonb column, whose text output adds a space after every ':' and ','.
+		// That can never double it, so twice the limit admits every document a writer stored and
+		// still bounds the read.
+		limit = maxStoredReadBytes
+	}
+	if len(raw) > limit {
+		return nil, invalid("the document is larger than %d bytes", limit)
 	}
 	// The version first, read loosely: a newer format may carry keys this build would refuse,
 	// and the right answer to it is "unknown version", not "invalid".
@@ -519,14 +529,77 @@ func validImpacts(name string, in []Impact) error {
 	return nil
 }
 
+// validListEntry is the grammar every list entry is held to: letters, digits and . _ : -. It
+// covers everything a list legitimately holds (OAuth and service-account client ids, role, group
+// and command tokens, authorities such as command:write, REACT action names).
+//
+// 🔴 IT IS ALSO WHAT KEEPS THE CANONICAL FORM THE SIZE OF THE INPUT. Canonical() is JSON, which
+// writes < > & as six-byte escapes; an entry allowed to hold them could make a document that is
+// under the size limit as submitted several times over it as stored, and a stored document over
+// the limit is one no reader can parse. None of those characters is in this grammar.
+func validListEntry(v string) bool {
+	if v == "" || len(v) > 256 {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '_', c == ':', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// CheckCanonicalSize refuses a canonical form over MaxDocumentBytes. Every writer calls it on the
+// bytes it is about to store, so nothing is stored that a reader would then refuse to parse.
+func CheckCanonicalSize(canonical []byte) error {
+	if len(canonical) > MaxDocumentBytes {
+		return invalid("the stored form of the document is %d bytes, over the limit of %d", len(canonical), MaxDocumentBytes)
+	}
+	return nil
+}
+
+// KillDocument is the smallest policy there is: actuation disabled, carrying only the tenant's
+// service-account rule. The kill switch publishes it when the policy in force cannot be carried
+// forward as it is.
+//
+// 🔴 ITS OUTPUT IS ALWAYS A DOCUMENT EVERY READER CAN PARSE. Each carried entry is kept verbatim if
+// it is one an authority could be (the list grammar, never "*"), whether or not THIS build knows
+// it, so a newer release's rule survives. An entry outside the grammar cannot name an authority any
+// release defines, so dropping it lifts nothing; keeping it would make the kill switch's own output
+// unreadable, and every service-account operation would then fail. Entries are also capped by
+// count and by the room left under the size limit, so the stored form always fits.
+func KillDocument(rule []string) *Document {
+	d := &Document{Actuation: ActuationDisabled}
+	var carried []string
+	room := MaxDocumentBytes - 256 // the rest of the document: version, actuation, keys
+	for _, a := range rule {
+		if a == string(auth.AuthorityAll) || !validListEntry(a) || slices.Contains(carried, a) {
+			continue
+		}
+		if len(carried) >= MaxListEntries || room-(len(a)+3) < 0 {
+			break
+		}
+		room -= len(a) + 3
+		carried = append(carried, a)
+	}
+	if len(carried) > 0 {
+		d.ServiceAccounts = &ServiceAccts{AgentFlagRequiredFor: carried}
+	}
+	return d
+}
+
 func validList(name string, in []string) error {
 	if len(in) > MaxListEntries {
 		return invalid("%s may hold at most %d entries", name, MaxListEntries)
 	}
 	seen := map[string]bool{}
 	for _, v := range in {
-		if strings.TrimSpace(v) != v || v == "" || len(v) > 256 {
-			return invalid("%s: %q is not a valid entry", name, v)
+		if !validListEntry(v) {
+			return invalid("%s: %q is not a valid entry (letters, digits and . _ : - only, at most 256)", name, v)
 		}
 		if seen[v] {
 			return invalid("%s lists %q twice", name, v)
