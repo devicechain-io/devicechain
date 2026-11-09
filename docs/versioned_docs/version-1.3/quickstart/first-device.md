@@ -1,0 +1,431 @@
+---
+title: Your First Device
+---
+
+import YouTubeLite from '@site/src/components/YouTubeLite';
+
+# Your First Device {#your-first-device-end-to-end}
+
+By the end of this page, a device you created has sent a reading and you are looking at that
+reading in the console. You need no hardware and no firmware. The "device" is a `curl` command,
+which is all a device is from the platform's side.
+
+Budget about half an hour, most of it waiting for the bootstrap.
+
+**Prefer to watch?** The video follows this page: it installs DeviceChain on a laptop and sends the first device reading. It has English audio, with English and Spanish captions and chapters.
+
+<YouTubeLite id="fWnVhI7icOk" title="Install DeviceChain on a laptop and send your first device reading" />
+
+:::note What this page assumes
+You need `dcctl` plus four tools on your `PATH`: `docker`, `kubectl`,
+`terraform` also works). You do not need a cluster in advance. The details are under
+`terraform` also works). You do not need a cluster in advance. The details are under
+[Prerequisites](#prerequisites) below.
+:::
+
+## Prerequisites {#prerequisites}
+
+`dcctl install` and `dcctl bootstrap` each run a preflight first, and **stop** if one of the four
+tools is missing. A gap costs you the first ten seconds rather than ten minutes.
+- You do not need the `helm` command. `dcctl` carries the chart inside itself and installs it
+  through Helm's Go library, and the preflight does not check for the binary.
+  Go library rather than the command, but the preflight checks for the binary regardless.
+- `ko` and `cloud-provider-kind` are only warnings. You need `ko` solely to build images from
+  source (`--build`).
+- No cluster is needed in advance. `dcctl install local` looks for a kind cluster named
+  `devicechain` (or the name given with `--cluster`) and offers to create one if there is none.
+  `--kube-context <name>` points it at a cluster you already run, which it will never create or
+  delete.
+- Ports **80**, **443** and **1883** on your machine must be free. The kind cluster publishes them
+  for the console, HTTPS and MQTT, and creating it fails if another program (often another local
+  Kubernetes cluster) already holds one. `dcctl preflight local` names the holder before you start.
+- **On Linux, a raised inotify limit.** `dcctl preflight local` requires `fs.inotify.max_user_instances` of at least 256 for a local kind cluster, and a stock Ubuntu 24.04 ships 128, so it fails
+  on it and prints the command to run. The first line raises
+  the limit (the second, `max_user_watches`, is only a warning) and `/etc/sysctl.d` keeps it
+  across reboots:
+
+  ```bash
+  echo 'fs.inotify.max_user_instances=512' | sudo tee /etc/sysctl.d/99-kind.conf
+  echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf
+  sudo sysctl --system
+  ```
+- Kubernetes **1.29 or newer**, either way. Older versions are refused, because the database
+  charts refuse them.
+
+`dcctl preflight local` runs the same checks, and those of your Docker engine, kernel limits, disk and ports, without bootstrapping anything. The
+[bootstrap guide](../deployment/bootstrap.md#prerequisites) has the detail.
+
+The commands below assume the instance is reachable at `localhost` over plain HTTP, which is what
+the flags in step 1 produce.
+
+## Get dcctl {#get-dcctl}
+
+`dcctl` is one file, attached to every [GitHub release](https://github.com/devicechain-io/devicechain/releases)
+as `dcctl_<version>_<os>_<arch>`: a `.tar.gz` for Linux and macOS, a `.zip` for Windows, with
+`<os>` one of `linux`, `darwin` or `windows` and `<arch>` one of `amd64` or `arm64`. The release's
+`checksums.txt` lists the SHA-256 digest of each. `<version>` is the release without its leading
+`v` (`0.27.0` for the release tagged `v0.27.0`).
+
+On Linux or macOS:
+
+```bash
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_<os>_<arch>.tar.gz
+curl -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+sha256sum --ignore-missing -c checksums.txt   # on macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf dcctl_<version>_<os>_<arch>.tar.gz
+sudo mv dcctl /usr/local/bin/
+```
+
+On Windows, in PowerShell:
+
+```powershell
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/dcctl_<version>_windows_amd64.zip
+curl.exe -fLO https://github.com/devicechain-io/devicechain/releases/download/v<version>/checksums.txt
+(Get-FileHash dcctl_<version>_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String windows_amd64 checksums.txt
+Expand-Archive dcctl_<version>_windows_amd64.zip -DestinationPath .
+```
+
+The two digests must match. Then put `dcctl.exe` in a directory on your `PATH`. `dcctl version`
+prints the release it came from, which is also the release of the images it installs. To check
+the release's signatures as well, see [Verifying releases](../deployment/verifying-releases.md).
+
+## 1. Bring up an instance {#1-bring-up-an-instance}
+
+Prepare the cluster once, then create the instance on it:
+
+```bash
+dcctl install local
+dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+:::note In a script or CI job
+`dcctl bootstrap` asks for a passphrase to seal the root-key escrow artifact. With no terminal to
+ask at it stops with `no escrow passphrase and no terminal to ask at`. Supply one without a
+prompt, either by file or by environment variable:
+
+```bash
+dcctl bootstrap local devicechain --host localhost --no-tls --escrow-passphrase-file ./escrow.pass
+# or
+DCCTL_ESCROW_PASSPHRASE='<passphrase>' dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+For a throwaway instance you can skip the escrow with `--no-escrow` (`--dev` implies it). The cost:
+the instance's secret-store root key then exists only inside the cluster, so if the cluster is
+lost, every secret the instance stored becomes permanently unreadable, even from a database
+backup. See [the root-key escrow](../deployment/bootstrap.md#escrow).
+:::
+
+On a local kind cluster, port **1883** on your machine reaches the MQTT broker of the first
+instance you bootstrap. It speaks TLS; see [Publishing an event](../guides/connecting-a-device.md#publishing-an-event)
+to connect to it.
+
+`dcctl install` creates the kind cluster and installs what every instance on it shares: the
+DeviceChain operator and its custom resource definitions, the relational database, the
+CloudNativePG operator, cert-manager, monitoring and ingress. You run it once per cluster, and
+`dcctl bootstrap` refuses on a cluster where it has not completed. See
+[Install the cluster](../deployment/bootstrap.md#install).
+
+The instance id (`devicechain` here) matters in two places:
+
+- It names the instance's Kubernetes namespace, as the id behind a `dci-` prefix
+  (`dci-devicechain`).
+- It is the first segment of every device topic and ingest path on this page.
+
+If you choose a different id, substitute it throughout: on its own in the topics and paths, and
+after the `dci-` prefix wherever a command names the namespace.
+
+When the bootstrap finishes, it prints the namespace, the console URL and the superuser
+credential. The superuser is `superuser@devicechain.local`. There is no default password: the
+bootstrap generates one for this instance and prints it once, at the end of its output. To read
+it again later:
+
+```bash
+kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.data.password}' | base64 -d
+```
+
+That Secret keeps the password the superuser was **first** given. If you change the password in
+the console, the Secret is not updated.
+
+Open the console at the URL the bootstrap printed (`http://localhost/` on a default install) and
+sign in. As the superuser you land in the instance **Admin** console. It has no tenant pages and is
+empty of devices, because there is no tenant yet and every device belongs to one. The superuser
+administers the instance; it is not a tenant user. To work in the tenant console you need a
+tenant-admin identity, which the next step creates.
+
+## 2. Create a tenant {#2-create-a-tenant}
+
+Creating a tenant is instance-level administration. Rather than walk the admin API by hand, use
+the command that does it in one step:
+
+```bash
+dcctl sim create demo
+```
+
+`dcctl sim create` talks to the instance at `localhost` by default. If the console is served on
+another port, give the host and port in `--server`, and the device-plane ingress too, because
+that one is derived from the host and is not told about the port:
+`dcctl sim create demo --server localhost:8080 --ingress http://localhost:8081`.
+
+This command:
+
+- mints a tenant `sim-demo`,
+- creates an identity `demo@sim.devicechain.local` scoped to it, with the tenant-admin role and no
+  instance-wide power, and
+- writes a handshake file at `~/.devicechain/sims/demo.json`.
+
+Read your identity's generated password out of the handshake file:
+
+```bash
+cat ~/.devicechain/sims/demo.json
+```
+
+The `simPassword` field is the password for `demo@sim.devicechain.local`. You use both in the next
+step.
+
+To see the tenant in the console, sign out of the superuser and sign in as
+`demo@sim.devicechain.local` with that password. This is the identity that opens the tenant
+console. If you would rather not use `dcctl sim create`, create the identity with the
+`createIdentity` mutation on the instance admin API and then grant it the tenant-admin role in the
+tenant with `addMembership`.
+
+:::tip Borrowed from the simulator
+`dcctl sim create` is the first half of the [simulator](#where-to-go-next) workflow. It is used
+here because it mints a tenant plus a scoped identity, which is exactly what you need; doing that
+by hand takes three mutations on the instance admin API. Everything after this step is the
+ordinary tenant API that any application uses.
+:::
+
+## 3. Get a tenant token {#3-get-a-tenant-token}
+
+Authentication takes two calls. The first proves who you are. The second picks which tenant you
+are acting in, because one person can belong to several.
+
+```bash
+curl -s -X POST http://localhost/api/user-management/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($e:String!,$p:String!){login(email:$e,password:$p){identityToken}}",
+       "variables":{"e":"demo@sim.devicechain.local","p":"<simPassword from step 2>"}}'
+```
+
+That returns an `identityToken`. It says who you are, and nothing about where you are acting.
+Exchange it for a tenant-scoped `accessToken`:
+
+```bash
+curl -s -X POST http://localhost/api/user-management/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($t:String!,$n:String!){selectTenant(identityToken:$t,tenant:$n){accessToken}}",
+       "variables":{"t":"<identityToken>","n":"sim-demo"}}'
+```
+
+Keep that `accessToken`. Every call from here on carries it:
+
+```bash
+export DC_TOKEN='<accessToken>'
+```
+
+An access token lasts **15 minutes**. When calls start failing with an authentication error, repeat the two
+requests above (`login`, then `selectTenant`) and export the new `accessToken`.
+
+## 4. Create the device {#4-create-the-device}
+
+Devices are typed, so you create a device type first. Everything is addressed by a **token** you
+choose, a stable, human-readable handle, rather than by a generated id.
+
+```bash
+curl -s -X POST http://localhost/api/device-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($r:DeviceTypeCreateRequest){createDeviceType(request:$r){token}}",
+       "variables":{"r":{"token":"temp-probe","name":"Temperature probe"}}}'
+```
+
+```bash
+curl -s -X POST http://localhost/api/device-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($r:DeviceCreateRequest){createDevice(request:$r){token}}",
+       "variables":{"r":{"token":"sensor-001","deviceTypeToken":"temp-probe","name":"Bench sensor"}}}'
+```
+
+Now give the device a credential. The credential is what the device presents to prove it is
+itself, and the platform expects one by default.
+
+First generate the credential id and keep it in a shell variable, so this step and step 6 use the same one:
+
+```bash
+export DC_CRED_ID="$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
+```
+
+```bash
+curl -s -X POST http://localhost/api/device-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"mutation($r:DeviceCredentialCreateRequest!){createDeviceCredential(request:$r){token}}",
+       "variables":{"r":{"token":"sensor-001-cred","deviceToken":"sensor-001",
+                         "credentialType":"ACCESS_TOKEN",
+                         "credentialId":"'"$DC_CRED_ID"'",
+                         "enabled":true}}}'
+```
+
+The `credentialId` is any unguessable string; the command above generated one for you, so every reader gets a different secret. For an `ACCESS_TOKEN` credential, the
+`credentialId` **is** the secret the device presents, so treat it like a password rather than a
+name. The platform stores only a one-way digest of it, so keep your own copy: the response to this
+request is the last time it can be read.
+
+Refresh the console's **Devices** list. `sensor-001` is there, with no data yet.
+
+## 5. Open a path to the ingest endpoint {#5-open-a-path-to-the-ingest-endpoint}
+
+Device traffic does not go through the same door as the API. The ingress publishes the console and
+`/api/…`. The device-ingest listener is a separate port that a stock install does **not** expose
+outside the cluster. Forward it:
+
+```bash
+kubectl -n dci-devicechain port-forward svc/event-sources 8081:8081
+```
+
+Leave that running in its own terminal.
+
+:::note Why this step exists
+This is a property of the default install, not of your setup. Making a fleet's ingest endpoint
+publicly reachable is a decision an operator should make on purpose, so nothing makes it for you.
+A real deployment exposes it deliberately; for one `curl` from your laptop, a port-forward is the
+smaller thing to do.
+:::
+
+## 6. Send a reading {#6-send-a-reading}
+
+This `curl` is the device:
+
+```bash
+curl -i -X POST http://localhost:8081/devicechain/sim-demo/events \
+  -H 'Content-Type: application/json' \
+  -d '{"device":"sensor-001",
+       "eventType":"Measurement",
+       "credentialType":"ACCESS_TOKEN",
+       "credentialId":"'"$DC_CRED_ID"'",
+       "payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
+```
+
+`202 Accepted` means the event was queued. Two rules in that body catch nearly everyone once:
+
+- **Every payload wraps its readings in `entries`**, even a single one.
+- **Every numeric value is a JSON string:** `"21.5"`, not `21.5`. A bare number is rejected.
+
+The path is `/{instanceId}/{tenant}/events`. `devicechain` is the instance from step 1 and
+`sim-demo` is the tenant from step 2. A `404` here means the **instance id** is wrong, because the
+route exists only under this instance's own id.
+
+A wrong **tenant** does not return `404`. Any well-formed tenant name is accepted with `202`,
+whether or not a tenant of that name exists. The event is dropped further downstream, and nothing
+in the response says so. If a `202` produces no data, check the tenant name before anything else.
+
+Send a few more readings with different values, so there is a line to look at rather than a
+point:
+
+```bash
+for t in 21.9 22.4 22.1 23.0; do
+  curl -s -o /dev/null -X POST http://localhost:8081/devicechain/sim-demo/events \
+    -H 'Content-Type: application/json' \
+    -d "{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",
+         \"credentialType\":\"ACCESS_TOKEN\",
+         \"credentialId\":\"$DC_CRED_ID\",
+         \"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"$t\"}}]}}"
+  sleep 1
+done
+```
+
+## 7. See your data {#7-see-your-data}
+
+In the console, open `http://localhost/devices/sensor-001`. The device now shows as **Online**,
+with `temperature` and its latest value. Nothing declared it online: for a device on HTTP,
+presence is inferred from the fact that an event arrived.
+
+Over the API, the same latest values:
+
+```bash
+curl -s -X POST http://localhost/api/device-state/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{latestMeasurements(deviceToken:\"sensor-001\"){name value unit occurredTime}}"}'
+```
+
+And the history rather than the last value:
+
+```bash
+curl -s -X POST http://localhost/api/event-management/graphql \
+  -H "Authorization: Bearer $DC_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query":"{measurementEvents(criteria:{pageNumber:1,pageSize:20,deviceToken:\"sensor-001\"}){results{name value occurredTime} pagination{totalRecords}}}"}'
+```
+
+You now have a device end to end: registered, credentialed, reporting and queryable.
+
+## Troubleshooting {#if-something-did-not-work}
+
+| What you see | Usually means |
+| --- | --- |
+| `404` from the ingest `POST` | The **instance id** in the path is wrong. It is `devicechain` unless you changed it. A wrong tenant does not produce this. |
+| Connection refused on `:8081` | The port-forward in step 5 is not running. |
+| `400` from the ingest `POST` | A bare number instead of a string, readings not wrapped in `entries`, or a tenant segment that is not a valid token. |
+| `202`, but nothing appears | Either the **tenant** does not exist (a well-formed name is accepted whether or not it names anything), or the credential did not match. `credentialId` in the body must be exactly the one you created in step 4. |
+| `429` from the ingest `POST` | The tenant is over its ingest ceiling: you are sending more readings per second than its tier allows. The event was not accepted. The response carries a `Retry-After` header, so back off and send it again. |
+| `503` with a `Retry-After` header from the ingest `POST` | The platform is refusing new events for every tenant ([backpressure](../deployment/observability.md#ingest-backpressure)). The event was **not** stored. Wait the number of seconds in `Retry-After` (10) and send it again. `curl -i` prints the response headers. |
+| `503` without a `Retry-After` header from the ingest `POST` | The event could not be handed to the stream, and it **may** have been stored anyway. Send it again, but a resend stores a second copy unless the event carries an `altId` and an `occurredTime` (see [quality of service](../guides/connecting-a-device.md#quality-of-service)). |
+| Unauthorized on an API call | The access token has expired, or you are sending the `identityToken` from the first call in step 3 instead of the `accessToken` from the second. |
+
+`202`, `400` and `404` are terminal for that request: do not send it again unchanged. Retry a `429`
+and either kind of `503`, as described above.
+
+## Where to go next {#where-to-go-next}
+
+- **Run a simulated fleet.** One device is not a fleet. `dcctl sim create` from step 2 also set up
+  a simulated scenario. Download the simulator and run it to have it provision a populated tenant
+  and emit continuously. No Go toolchain is needed: `dc-simulator` is attached to every
+  [GitHub release](https://github.com/devicechain-io/devicechain/releases) as
+  `dc-simulator_<version>_<os>_<arch>` (a `.tar.gz`, or a `.zip` on Windows), for Linux, macOS and
+  Windows on `amd64` and `arm64`, with its SHA-256 digests in `dc-simulator_checksums.txt` on the
+  same release. Unpack it, then either put it on your `PATH` or point `dcctl` at it:
+
+  ```bash
+  tar -xzf dc-simulator_<version>_<os>_<arch>.tar.gz
+  dcctl sim run demo --simulator ./dc-simulator
+  ```
+
+  `dcctl sim run` finds the sim's handshake file and control port itself, and looks for
+  `dc-simulator` on your `PATH` when you leave out `--simulator`. Contributors building from a
+  source checkout can run `cd backend/sims/dc-simulator && make build` and use
+  `./build/dc-simulator` instead.
+
+  Then control it with `dcctl sim status demo`, `dcctl sim stop demo` and `dcctl sim start demo`.
+  The simulator reaches the same ingest endpoint, so it needs the port-forward from step 5 too.
+
+- **[Feature tour](./feature-tour.md)**: carry on from here to a dashboard, a rule that raises an
+  alarm and sends a command, the device's answer, and a customer user who sees only their own
+  device, then run the same tour again as a second tenant.
+
+- **[Connecting a device](../guides/connecting-a-device.md)**: the real transport, MQTT, with the
+  credential on the connection as well as the event, plus every payload shape and the rules the
+  pipeline enforces.
+- **[Transport capability matrix](../reference/transport-matrix.md)**: what each transport
+  supports in each direction, before you commit to one.
+- **[Sending a command](../guides/sending-commands.md)**: the other direction.
+- **[Event processing](../concepts/event-processing.md)**: turning those readings into alarms.
+
+## Cleaning up {#cleaning-up}
+
+```bash
+dcctl sim destroy demo
+dcctl destroy local devicechain
+```
+
+`dcctl destroy` removes the instance and leaves the cluster installed, ready for the next
+bootstrap. It waits until the instance's namespace is fully gone, so the cluster is ready at once
+for a bootstrap under the same name. If it is interrupted, running it again finishes the job.
+
+:::warning Move the escrow artifact first
+Before you bootstrap again under the same name, move aside the escrow artifact that `destroy`
+names. The next instance mints a key of its own, and bootstrap will not write over the old one.
+:::
+
+To remove the cluster as well:
+
+```bash
+kind delete cluster --name devicechain
+```
