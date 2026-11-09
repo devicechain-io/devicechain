@@ -96,7 +96,7 @@ instance:
         enforcement: observe
 ```
 
-在你自己编写配置（`instance.existingSecret`）的实例上，请改为在文档的 `infrastructure.tokenAudience` 配置块中写入 `"enforcement": "observe"`。参见[升级说明](../deployment/releases-and-upgrades.md#v120-token-audience)。
+在你自己编写配置（`instance.existingSecret`）的实例上，请改为在文档的 `infrastructure.tokenAudience` 配置块中写入 `"enforcement": "observe"`。参见[升级说明](../deployment/releases-and-upgrades.md#v130-token-audience)。
 
 未写明任何资源的令牌，在两种模式下都会被每个区域的 API 接受。从不发送 `resource` 的客户端不受这两项检查影响。
 

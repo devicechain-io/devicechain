@@ -54,8 +54,7 @@ v1.0.0 之前，本页内容均不适用。v1.0.0 之前的发布可能改变什
 它会被提升并与其他接口一样受到承诺保护。对预览接口的不兼容变更并不豁免于项目的兼容性检查：它要像其他任何变更一样，在那里声明为有意的破坏性变更，
 因此预览变更不会在无人察觉的情况下发布。预览层级的文件格式带有版本号，例如 `v1alpha1`，不认识该版本的工具会拒绝该文件，而不是去猜测。
 
-目前预览层级包含规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令。
-参见[测试你的规则](../guides/testing-your-rules.md)。
+目前预览层级包含两类接口。一是规则测试：event-processing API 的 `evaluateRules` 操作、场景文件和测试文件的格式，以及读取它们的 `dcctl test` 命令（参见[测试你的规则](../guides/testing-your-rules.md)）。二是产品即代码：`dcctl product export`、`plan` 和 `apply` 命令及其包格式（参见[产品即代码](../guides/product-as-code.md)）。
 
 ## 支持的升级路径 {#upgrade-paths}
 

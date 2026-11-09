@@ -371,7 +371,8 @@ func checkAuthoredTokenAudience(manifest string, areas []string, cfg *config.Ins
 			"but does not list mcp's resource %q in "+
 			"infrastructure.tokenAudience.mcpResources, and this deploy runs mcp. Every call mcp "+
 			"forwards would be refused, and mcp refuses to start. Add it to the list, as the "+
-			"chart does when it authors the document, or set "+
+			"chart does when it authors the document (its scheme and host must be lowercase, so "+
+			"lowercase mcp's resourceUrl first if it has an uppercase letter), or set "+
 			"infrastructure.tokenAudience.enforcement to observe", resource)
 	}
 	fmt.Fprintln(authoredWarnOut, color.YellowString("  Warning: the supplied instance configuration does not list mcp's "+
