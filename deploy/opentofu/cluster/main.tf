@@ -386,6 +386,7 @@ resource "terraform_data" "backup_destination_guard" {
 # waiting for a burst. A quarter is the same bound the event store's size presets hold themselves
 # to. The condition spans two variables, so it is a precondition here (see the guard below for
 # why not a `validation`). A volume in a unit this cannot read is not judged.
+# The ternary is deliberate: `||` evaluates both sides on OpenTofu 1.9, and a null size would fail it.
 locals {
   postgres_storage_parts = try(regex("^([0-9]+)(Mi|Gi|Ti)$", var.postgres_storage), null)
   postgres_storage_mib = local.postgres_storage_parts == null ? null : (
@@ -400,8 +401,8 @@ resource "terraform_data" "postgres_wal_guard" {
 
   lifecycle {
     precondition {
-      condition     = local.postgres_storage_mib == null || var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib
-      error_message = "postgres_max_wal_size_mib is more than a quarter of postgres_storage. pg_wal sits on the data volume and max_wal_size is a soft target, so the allowance has to leave the volume room to peak. Lower postgres_max_wal_size_mib, or raise postgres_storage (a larger volume is set when the store is first created)."
+      condition     = local.postgres_storage_mib == null ? true : var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib
+      error_message = "postgres_max_wal_size_mib is more than a quarter of postgres_storage. pg_wal sits on the data volume and max_wal_size is a soft target, so the allowance has to leave the volume room to peak. Lower postgres_max_wal_size_mib, or raise postgres_storage (a volume can be grown where its storage class allows expansion, or sized larger when the store is first created)."
     }
   }
 }

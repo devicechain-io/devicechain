@@ -195,7 +195,7 @@ func TestRelationalMaxWALReachesTheClusterSpec(t *testing.T) {
 		t.Error("module cnpg_rdb does not pass postgres_max_wal_size_mib as max_wal_size")
 	}
 	if !strings.Contains(main, `resource "terraform_data" "postgres_wal_guard"`) ||
-		!strings.Contains(main, "var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib") {
+		!strings.Contains(main, "local.postgres_storage_mib == null ? true : var.postgres_max_wal_size_mib * 4 <= local.postgres_storage_mib") {
 		t.Error("the cluster root does not hold the relational allowance to a quarter of postgres_storage")
 	}
 	// The cluster root declares it, so splitVars routes it there and nowhere else: a bootstrap
