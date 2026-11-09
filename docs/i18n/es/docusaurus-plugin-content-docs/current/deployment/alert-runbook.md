@@ -29,7 +29,7 @@ an area of this instance has no pod available
 
 the broker's TLS certificate expires within 30 days
 
-**Qué significa y qué hacer.** The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl install and then dcctl upgrade for this instance now, both with the same dcctl release, clears this alert (the upgrade refuses until the cluster install is current for the dcctl running it). If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch.
+**Qué significa y qué hacer.** The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl install and then dcctl upgrade for this instance now, both with the same dcctl release, clears this alert. If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch.
 
 ### BrokerCertificateExpiryCritical {#brokercertificateexpirycritical}
 
