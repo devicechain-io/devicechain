@@ -1,0 +1,14 @@
+{
+  "downlinkId": 2756436091,
+  "time": "2022-07-18T09:33:28.823500726+00:00",
+  "deviceInfo": {
+    "devEui": "0101010101010101"
+  },
+  "queueItemId": "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f13",
+  "fCntDown": 14,
+  "gatewayId": "0102030405060708",
+  "txInfo": {
+    "frequency": 868100000,
+    "power": 14
+  }
+}

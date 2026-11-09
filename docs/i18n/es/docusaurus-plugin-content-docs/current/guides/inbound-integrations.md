@@ -132,7 +132,7 @@ ChirpStack envía los uplinks mediante una **integración HTTP** en una aplicaci
 3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). La plataforma guarda los valores que decodifica el servidor de red; no decodifica la trama cruda. Sin códec, ChirpStack envía la trama cruda y ningún objeto decodificado, y el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse. Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`.
 
-Solo se leen los uplinks. ChirpStack envía otros eventos (join, status, confirmaciones) a la misma URL con otro valor de `event`, y se responden con `204` y se ignoran. El `deduplicationId` del uplink debe ser un UUID, como siempre envía ChirpStack; cualquier otra cosa se rechaza con `400`. La hora del mensaje es el `time` que informa ChirpStack, o la hora a la que lo recibió la plataforma cuando el campo falta.
+Los uplinks se guardan como lecturas. ChirpStack envía además los eventos `ack` y `txack` a la misma URL: una instalación con el [downlink LoRaWAN](#lorawan-downlink) activado los lee para cerrar los [downlinks confirmados](#lorawan-confirmed); sin él se responden con `204` y se ignoran, como los demás eventos (join, status). El `deduplicationId` del uplink debe ser un UUID, como siempre envía ChirpStack; cualquier otra cosa se rechaza con `400`. La hora del mensaje es el `time` que informa ChirpStack, o la hora a la que lo recibió la plataforma cuando el campo falta.
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -295,13 +295,13 @@ Una instalación que ejecuta los conectores de salida con el downlink activado (
 | --- | --- |
 | `fPort` | El puerto de aplicación LoRaWAN, de 1 a 223. Obligatorio. |
 | `hex` o `base64` | La carga útil de la aplicación, en hexadecimal o en base64 estándar con relleno. Indica exactamente uno. Como máximo 242 bytes. |
-| `confirmed` | Aún no disponible. Un comando que lo establece se rechaza, no se envía sin confirmar. |
+| `confirmed` | Opcional, por defecto `false`. `true` pide al dispositivo que acuse la trama y retiene el comando hasta que lo haga (véase [Downlinks confirmados](#lorawan-confirmed)). |
 
 Cualquier otro nombre de parámetro se rechaza.
 
 **3. Envíalo.** El dispositivo debe tener un [alias](#aliases) `lorawan.deveui`: el DevEUI se lee del dispositivo, nunca del comando. El comando sale por la integración por la que el dispositivo **informó por última vez**.
 
-**Qué significa el resultado.** `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. Los demás resultados:
+**Qué significa el resultado.** En un downlink sin confirmar, `SUCCEEDED` significa que el servidor de red **encoló** el downlink (el resultado incluye `{"stage":"queued","queueItemId":...}`). No significa que el dispositivo lo haya recibido: un dispositivo de clase A solo oye los downlinks después de su siguiente transmisión, y un downlink sin confirmar no recibe acuse. En un [downlink confirmado](#lorawan-confirmed), `SUCCEEDED` significa que el dispositivo lo acusó. Los demás resultados:
 
 | Qué ocurrió | Resultado |
 | --- | --- |
@@ -310,6 +310,23 @@ Cualquier otro nombre de parámetro se rechaza.
 | La petición se envió y el servidor falló o no respondió (un 5xx, un tiempo de espera) | El resultado es **desconocido**: el downlink puede estar en cola, y enviarlo de nuevo puede enviarlo dos veces. |
 
 Consulta la métrica `lpwan_downlinks_total` por resultado para ver dónde se detienen los comandos.
+
+### Downlinks confirmados {#lorawan-confirmed}
+
+Indica `"confirmed": true` en el comando y el servidor de red pide al dispositivo que acuse la trama. El comando **no** se responde cuando el downlink se encola: permanece en `SENT` hasta que el servidor de red informa de lo ocurrido, y entonces se cierra con esa evidencia:
+
+| Qué informa el servidor de red | Comando |
+| --- | --- |
+| El dispositivo acusó la trama (`ack`, acusada) | `SUCCEEDED`. El resultado incluye `{"stage":"acknowledged",...}`. |
+| El servidor de red dejó de esperar el acuse (`ack`, no acusada) | `TIMEOUT`, resultado desconocido. El dispositivo pudo oír la trama y perderse su acuse, así que enviarlo de nuevo puede actuar dos veces. |
+| Una pasarela aceptó la trama para transmitirla (`txack`) | Se registra y el comando sigue esperando. Que una pasarela envíe una trama no es que el dispositivo la reciba. |
+| Nada antes del plazo | `TIMEOUT`, resultado desconocido. El plazo es la caducidad del propio comando, o 24 horas si no tiene. |
+
+ChirpStack solo informa de un acuse si la integración HTTP de la aplicación está configurada para enviar el evento `ack`, y debe ser la misma integración que registraste en DeviceChain (la URL y el token de arriba): el informe se lee con el token de la propia integración, de modo que solo puede cerrar comandos enviados por esa integración, a dispositivos registrados en ella. Activa también el evento `txack` si quieres que se registre la transmisión; es opcional.
+
+Un informe que no corresponde a ningún downlink en espera nunca se asocia por suposición. Se descarta, se registra en el log y se cuenta en `lpwan_ack_reports_total` (`unmatched` cuando nada espera ese elemento de la cola, `mismatch` cuando nombra otra integración u otro dispositivo); ambos merecen una alerta. Todo downlink produce un `txack`, confirmado o no, así que uno para un downlink que no está en espera se cuenta como `tx_untracked` y es normal. Durante una actualización progresiva, un pod de la versión anterior sigue rechazando un comando confirmado como no entregado, lo que es seguro volver a enviar.
+
+Consulta `lpwan_ack_reports_total` por resultado: `acknowledged`, `timed_out`, `transmitted` y `deadline` son los resultados de arriba.
 
 **Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
 
@@ -329,7 +346,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Downlink hacia The Things Stack y remitentes genéricos, downlinks confirmados y codificadores de carga útil.** El [downlink LoRaWAN](#lorawan-downlink) cubre solo ChirpStack v4 y cargas útiles en bruto. Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
+- **Downlink hacia The Things Stack y remitentes genéricos, y codificadores de carga útil.** El [downlink LoRaWAN](#lorawan-downlink) cubre solo ChirpStack v4 y cargas útiles en bruto. Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.

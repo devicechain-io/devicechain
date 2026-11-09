@@ -118,9 +118,45 @@ func TestChirpStackEventsThatAreNotUplinksAreIgnored(t *testing.T) {
 		require.Empty(t, res.Uplinks, event)
 	}
 	// An event type this build has never heard of is also not an uplink.
-	res, err := Decode(chirp(false), req([]byte(`{}`), "txack"))
+	res, err := Decode(chirp(false), req([]byte(`{}`), "log"))
 	require.NoError(t, err)
 	require.True(t, res.Ignored)
+}
+
+func TestChirpStackDownlinkReports(t *testing.T) {
+	cases := []struct {
+		file, event, id string
+		acked           bool
+		fcnt            int64
+	}{
+		{"ack.json", "ack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11", true, 12},
+		// acknowledged is false by default and protobuf-JSON may omit it: the network server's timeout.
+		{"ack_timeout.json", "ack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f12", false, 13},
+		{"txack.json", "txack", "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f13", false, 14},
+	}
+	for _, c := range cases {
+		res, err := Decode(chirp(false), req(fixture(t, "chirpstack/"+c.file), c.event))
+		require.NoError(t, err, c.file)
+		require.False(t, res.Ignored, c.file)
+		require.Empty(t, res.Uplinks, c.file)
+		require.Equal(t, []DownlinkEvent{{Kind: c.event, Scheme: "lorawan.deveui", Identifier: "0101010101010101",
+			QueueItemID: c.id, Acknowledged: c.acked, FCntDown: c.fcnt}}, res.Downlinks, c.file)
+	}
+}
+
+func TestChirpStackDownlinkReportRefusals(t *testing.T) {
+	for name, body := range map[string]string{
+		"no queue item":       `{"deviceInfo":{"devEui":"0101010101010101"},"acknowledged":true}`,
+		"queue item not uuid": `{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"abc","acknowledged":true}`,
+		"no deveui":           `{"queueItemId":"5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11","acknowledged":true}`,
+		"not json":            `nope`,
+		"acknowledged text":   `{"deviceInfo":{"devEui":"0101010101010101"},"queueItemId":"5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11","acknowledged":"yes"}`,
+	} {
+		for _, ev := range []string{"ack", "txack"} {
+			_, err := Decode(chirp(false), req([]byte(body), ev))
+			require.ErrorIs(t, err, ErrMalformed, name+" "+ev)
+		}
+	}
 }
 
 func TestChirpStackRefusals(t *testing.T) {

@@ -35,9 +35,10 @@ func TestTheLpwanAdapterFailsClosedWithoutWhatItNeeds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			i := complete()
 			mut(&i)
-			a, err := buildLpwan(nil, i, nil)
+			a, f, err := buildLpwan(nil, i, nil)
 			require.Error(t, err)
 			require.Nil(t, a)
+			require.Nil(t, f)
 		})
 	}
 }
@@ -47,4 +48,5 @@ func TestTheLpwanAdapterFailsClosedWithoutWhatItNeeds(t *testing.T) {
 func TestTheLpwanAdapterDefaultsOff(t *testing.T) {
 	require.False(t, config.NewOutboundConnectorsConfiguration().LpwanDownlink.Enabled)
 	require.Nil(t, Lpwan, "nothing builds the adapter unless it is enabled")
+	require.Nil(t, LpwanAcks, "nor its acknowledgement feed")
 }

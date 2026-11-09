@@ -581,6 +581,7 @@ outbound connector deliveries, and the object store. Everything else comes back 
 | `device-events-capture` | stream | must-back-up | raw device telemetry already acknowledged to the device and not yet forwarded; the database holds no copy of it. No backup tool ships in this release. Telemetry acknowledged and not yet forwarded when the cluster is lost is the recovery gap, so keep the capture backlog drained. |
 | `command-responses` | stream | transient | a device answer not yet consumed; the command it answers is settled from its stored state as unanswered |
 | `connector-dispatch` | stream | transient | outbound deliveries not yet attempted; in flight, at least once |
+| `lpwan-downlink-events` | stream | transient | a network-server report not yet matched to its command; a lost report is settled by the pending record's deadline as unanswered |
 | `detection-rules-published` | stream | rebuildable | a rule publish is re-derived from the stored profile version |
 | `device-roster` | stream | rebuildable | roster changes are projected from the device store |
 | `geofence-set-manifest` | stream | rebuildable | a fence edit is re-derived from the stored fence set |

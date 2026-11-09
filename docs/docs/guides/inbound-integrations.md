@@ -132,7 +132,7 @@ ChirpStack sends uplinks through an **HTTP integration** on an application.
 3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). The platform stores the values the network server decodes; it does not decode the raw frame. Without a codec, ChirpStack sends the raw frame and no decoded object, and the uplink is [counted as undecoded](#undecoded) instead of stored. Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias.
 
-Only uplinks are read. ChirpStack sends other events (join, status, acknowledgements) to the same URL with a different `event` value, and they are answered `204` and ignored. The uplink's `deduplicationId` must be a UUID, which ChirpStack always sends; anything else is refused with `400`. The message time is the `time` ChirpStack reports, or the time the platform received it when the field is absent.
+Uplinks are stored as readings. ChirpStack also sends the events `ack` and `txack` to the same URL, which an installation with the [LoRaWAN downlink](#lorawan-downlink) switched on reads to settle [confirmed downlinks](#lorawan-confirmed); without it they are answered `204` and ignored, like the other events (join, status). The uplink's `deduplicationId` must be a UUID, which ChirpStack always sends; anything else is refused with `400`. The message time is the `time` ChirpStack reports, or the time the platform received it when the field is absent.
 
 ## The Things Stack v3 {#the-things-stack}
 
@@ -295,13 +295,13 @@ An installation that runs the outbound connectors with the downlink switched on 
 | --- | --- |
 | `fPort` | The LoRaWAN application port, 1 to 223. Required. |
 | `hex` or `base64` | The application payload, as hexadecimal or standard padded base64. Give exactly one. At most 242 bytes. |
-| `confirmed` | Not available yet. A command that sets it is refused, not sent unconfirmed. |
+| `confirmed` | Optional, default `false`. `true` asks the device to acknowledge the frame and holds the command until it does (see [Confirmed downlinks](#lorawan-confirmed)). |
 
 Any other parameter name is refused.
 
 **3. Send it.** The device must carry a `lorawan.deveui` [alias](#aliases): the DevEUI is read from the device, never from the command. The command goes through the integration the device **last reported through**.
 
-**What the outcome means.** `SUCCEEDED` means the network server **queued** the downlink (the result carries `{"stage":"queued","queueItemId":...}`). It does not mean the device has received it: a class A device hears downlinks only after it next transmits, and an unconfirmed downlink gets no acknowledgement. The other outcomes:
+**What the outcome means.** For an unconfirmed downlink, `SUCCEEDED` means the network server **queued** the downlink (the result carries `{"stage":"queued","queueItemId":...}`). It does not mean the device has received it: a class A device hears downlinks only after it next transmits, and an unconfirmed downlink gets no acknowledgement. For a [confirmed downlink](#lorawan-confirmed), `SUCCEEDED` means the device acknowledged it. The other outcomes:
 
 | What happened | Outcome |
 | --- | --- |
@@ -310,6 +310,23 @@ Any other parameter name is refused.
 | The request was sent and the server failed or did not answer (a 5xx, a timeout) | The outcome is **unknown**: the downlink may be queued, and sending again may send it twice. |
 
 Check the `lpwan_downlinks_total` metric by result to see where commands stop.
+
+### Confirmed downlinks {#lorawan-confirmed}
+
+Set `"confirmed": true` in the command and the network server asks the device to acknowledge the frame. The command is **not** answered when the downlink is queued: it stays `SENT` until the network server reports what happened, and then settles from that evidence:
+
+| What the network server reports | Command |
+| --- | --- |
+| The device acknowledged the frame (`ack`, acknowledged) | `SUCCEEDED`. The result carries `{"stage":"acknowledged",...}`. |
+| The network server gave up waiting for the acknowledgement (`ack`, not acknowledged) | `TIMEOUT`, outcome unknown. The device may have heard the frame and its acknowledgement been lost, so sending again may act twice. |
+| A gateway accepted the frame for transmission (`txack`) | Recorded, and the command keeps waiting. A gateway sending a frame is not the device receiving it. |
+| Nothing by the deadline | `TIMEOUT`, outcome unknown. The deadline is the command's own expiry, or 24 hours when it has none. |
+
+ChirpStack reports an acknowledgement only if the HTTP integration of the application is set to send the `ack` event, and the same integration must be the one you registered in DeviceChain (the URL and token above): the report is read through the integration's own token, so it can only settle commands sent through that integration, to devices registered under it. Enable the `txack` event as well if you want the transmission to be recorded; it is optional.
+
+A report that matches no waiting downlink is never matched by guess. It is dropped, logged, and counted in `lpwan_ack_reports_total` (`unmatched` when nothing waits for that queue item, `mismatch` when it names another integration or device); both are worth an alert. Every downlink produces a `txack`, confirmed or not, so one for a downlink that is not waiting is counted as `tx_untracked` and is normal. During a rolling upgrade, a pod of the previous version still refuses a confirmed command as not delivered, which is safe to send again.
+
+Check `lpwan_ack_reports_total` by result: `acknowledged`, `timed_out`, `transmitted` and `deadline` are the outcomes above.
 
 **Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
 
@@ -330,7 +347,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Downlink to The Things Stack and generic senders, confirmed downlinks, and payload encoders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and raw payloads only. Commands to any other integration device fail as described in [Commands to integration devices](#commands).
+- **Downlink to The Things Stack and generic senders, and payload encoders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and raw payloads only. Commands to any other integration device fail as described in [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.
