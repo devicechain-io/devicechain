@@ -212,7 +212,9 @@ func (api *Api) PendingClearStates(ctx context.Context, since time.Time, limit i
 	err := api.RDB.DB(ctx).
 		Where("cleared_at IS NOT NULL AND cleared_at > ? AND paged_targets IS NOT NULL AND cycle_raised_at IS NOT NULL "+
 			"AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> cycle_raised_at)", since).
-		Order("cleared_at ASC").Limit(limit).Find(&found).Error
+		// Least recently touched first: a clear whose send failed has its claim given back (which
+		// touches the row), so it moves behind the ones not yet tried instead of starving them.
+		Order("updated_at ASC").Limit(limit).Find(&found).Error
 	return found, err
 }
 

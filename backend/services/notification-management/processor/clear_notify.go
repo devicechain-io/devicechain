@@ -72,6 +72,10 @@ const pendingClearWindow = 30 * time.Minute
 // pendingClearBatch bounds one tenant's pickup per tick.
 const pendingClearBatch = 50
 
+// pendingClearScan is how many candidate rows one tick reads, so rows that cannot be announced
+// (a paged set that belongs to another cycle) do not occupy the batch.
+const pendingClearScan = 4 * pendingClearBatch
+
 // AnnouncePendingClears is the durable half of the late-clear path. A clear can overtake its page,
 // or fail to send when it first came due, after both of its messages have been acknowledged, so
 // no redelivery will carry it. The scheduler walks the alarms that are stamped cleared, paged
@@ -91,7 +95,7 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 	if !optedIn {
 		return nil
 	}
-	states, err := n.api.PendingClearStates(ctx, now.Add(-pendingClearWindow), pendingClearBatch)
+	states, err := n.api.PendingClearStates(ctx, now.Add(-pendingClearWindow), pendingClearScan)
 	if err != nil {
 		if errors.Is(err, rdb.ErrTenantPurged) {
 			return nil
@@ -99,10 +103,15 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 		return fmt.Errorf("listing clears awaiting announcement: %w", err)
 	}
 	var lastErr error
+	sent := 0
 	for _, st := range states {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if len(st.PagedTargetSet()) == 0 || sent >= pendingClearBatch {
+			continue
+		}
+		sent++
 		clear := &dmmodel.AlarmStateChangeEvent{
 			EventType: dmmodel.AlarmEventCleared, AlarmToken: st.AlarmToken, AlarmKey: st.AlarmKey,
 			Severity: st.Severity, State: "CLEARED",
