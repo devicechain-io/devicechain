@@ -284,6 +284,19 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 	if !ok {
 		return
 	}
+	if rep.Kind == cmddownlink.DownlinkReportFailed {
+		// The row was read before the lease was taken, and a transmission report for the same downlink
+		// can have been recorded since by another worker. Decide on the row as it is now; a row that
+		// cannot be read again is treated as one that may have been transmitted.
+		fresh, err := f.pending.Lookup(ctx, tenant, rep.QueueItemID)
+		if err != nil {
+			p = &Pending{ID: p.ID, Tenant: p.Tenant, Integration: p.Integration, DeviceToken: p.DeviceToken,
+				DevEUI: p.DevEUI, DeviceRef: p.DeviceRef, CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce,
+				QueueItemID: p.QueueItemID, DeadlineAt: p.DeadlineAt, TransmittedAt: &token}
+		} else {
+			p = fresh
+		}
+	}
 	env := cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce}
 	result := AckAcknowledged
 	switch {
@@ -335,15 +348,19 @@ func sameDevice(p *Pending, rep cmddownlink.DownlinkReport) bool {
 		(rep.DeviceToken == "" || rep.DeviceToken == p.DeviceToken)
 }
 
-// preTransmissionErrors are the network server's own errors for a queued downlink it dropped before it
-// was ever scheduled for transmission (pkg/networkserver/downlink.go): the session is unknown, the
-// downlink is a confirmed one for a multicast device, it has expired, its payload exceeds the band's
-// limit, or every gateway refused it with a non-retryable error (invalid absolute time, invalid fixed
-// paths). A gateway's transmission error (a TxAck that is not a success) is deliberately NOT here: the
-// gateway says the frame was not sent, but the platform does not rest a "safe to send again" on it.
+// preTransmissionErrors are the network server's own errors for a queued downlink it dropped at the
+// head of its queue processing (pkg/networkserver/downlink.go), before any attempt to schedule it on a
+// gateway: the session is unknown, the downlink is a confirmed one for a multicast device, or its
+// payload exceeds the band's limit.
+//
+// 🔴 THE LIST IS DELIBERATELY SHORT. Three other errors name drops that can come AFTER a scheduling
+// attempt, and a scheduling attempt can have reached a gateway even when the network server saw it
+// fail (an ambiguous gateway RPC error is retried): downlink_expired (a time-based drop, reached on a
+// later pass), absolute_time and fixed_paths (outcomes of gateway scheduling errors), and a gateway's
+// own transmission error. Each of those is TIMEOUT. A "safe to send again" is only said where nothing
+// could have been sent.
 var preTransmissionErrors = map[string]bool{
-	"unknown_session": true, "confirmed_multicast_downlink": true, "downlink_expired": true,
-	"application_downlink_too_long": true, "absolute_time": true, "fixed_paths": true,
+	"unknown_session": true, "confirmed_multicast_downlink": true, "application_downlink_too_long": true,
 }
 
 // neverTransmitted reports whether a failed report positively shows the downlink was never

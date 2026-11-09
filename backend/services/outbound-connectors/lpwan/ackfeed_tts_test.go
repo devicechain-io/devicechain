@@ -4,6 +4,7 @@
 package lpwan
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func TestATTSAckNackSentAndFailedMapOnlyToWhatTheyProve(t *testing.T) {
 	// no transmission reported: NOT_DELIVERED (UNSENT).
 	r = newAckRig(t)
 	r.seedTTS(t)
-	a := r.deliver(t, ttsFailed(0, "pkg/networkserver", "downlink_expired"), 1)
+	a := r.deliver(t, ttsFailed(0, "pkg/networkserver", "unknown_session"), 1)
 	require.True(t, a.acked)
 	require.Len(t, r.resp.envs, 1)
 	e := r.resp.envs[0]
@@ -81,12 +82,15 @@ func TestAFailedReportThatCannotShowTheFrameNeverLeftIsTimeoutNotNotDelivered(t 
 	}{
 		"retries exhausted (AS emits it after transmissions)": {ttsFailed(8, "pkg/applicationserver", "max_retries_reached"), false},
 		"re-push after a nack failed (attempt 1)":             {ttsFailed(1, "pkg/networkserver", "downlink_expired"), false},
-		"any retry at all":                               {ttsFailed(2, "pkg/networkserver", "unknown_session"), false},
-		"failed after a downlink_sent":                   {ttsFailed(0, "pkg/networkserver", "downlink_expired"), true},
-		"a gateway transmission error":                   {ttsFailed(0, "pkg/networkserver", "transmission"), false},
-		"an error name nobody classified":                {ttsFailed(0, "pkg/networkserver", "something_new"), false},
-		"no error at all":                                {ttsFailed(0, "", ""), false},
-		"a pre-transmission name from another namespace": {ttsFailed(0, "pkg/applicationserver", "downlink_expired"), false},
+		"any retry at all":                                        {ttsFailed(2, "pkg/networkserver", "unknown_session"), false},
+		"failed after a downlink_sent":                            {ttsFailed(0, "pkg/networkserver", "unknown_session"), true},
+		"an expiry (a drop that can follow a scheduling attempt)": {ttsFailed(0, "pkg/networkserver", "downlink_expired"), false},
+		"an invalid absolute time (a gateway scheduling outcome)": {ttsFailed(0, "pkg/networkserver", "absolute_time"), false},
+		"invalid fixed paths (a gateway scheduling outcome)":      {ttsFailed(0, "pkg/networkserver", "fixed_paths"), false},
+		"a gateway transmission error":                            {ttsFailed(0, "pkg/networkserver", "transmission"), false},
+		"an error name nobody classified":                         {ttsFailed(0, "pkg/networkserver", "something_new"), false},
+		"no error at all":                                         {ttsFailed(0, "", ""), false},
+		"a pre-transmission name from another namespace":          {ttsFailed(0, "pkg/applicationserver", "unknown_session"), false},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -116,6 +120,31 @@ func TestAFailedReportThatCannotShowTheFrameNeverLeftIsTimeoutNotNotDelivered(t 
 		require.Len(t, r.resp.envs, 1, name)
 		require.Equal(t, cmddownlink.ReachUnsent, r.resp.envs[0].Reach, name)
 	}
+}
+
+// A transmission report recorded by another worker after this one loaded the row must still count: the
+// decision is made on the row as it is once the lease is held.
+func TestAFailedReportDecidesOnTheRowAsItIsOnceTheLeaseIsHeld(t *testing.T) {
+	r := newAckRig(t)
+	r.seedTTS(t)
+	r.pend.onClaim = func() {
+		now := r.now
+		for id, p := range r.pend.rows {
+			p.TransmittedAt = &now
+			r.pend.rows[id] = p
+		}
+	}
+	r.deliver(t, ttsFailed(0, "pkg/networkserver", "unknown_session"), 1)
+	require.Len(t, r.resp.envs, 1)
+	require.Equal(t, cmddownlink.ReachUnanswered, r.resp.envs[0].Reach, "a txack that landed between the read and the claim means it may have been sent")
+
+	// A row that cannot be read again is treated the same way.
+	r2 := newAckRig(t)
+	r2.seedTTS(t)
+	r2.pend.onClaim = func() { r2.pend.findErr = errors.New("db down") }
+	r2.deliver(t, ttsFailed(0, "pkg/networkserver", "unknown_session"), 1)
+	require.Len(t, r2.resp.envs, 1)
+	require.Equal(t, cmddownlink.ReachUnanswered, r2.resp.envs[0].Reach)
 }
 
 func TestAReportForTheRightDeviceRefButNotTheDeviceTheDownlinkWentToSettlesNothing(t *testing.T) {
