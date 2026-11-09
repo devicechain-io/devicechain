@@ -63,20 +63,23 @@ const DefaultAckWait = 24 * time.Hour
 type Reason string
 
 const (
-	ReasonInvalidParams  Reason = "INVALID_PARAMETERS"
-	ReasonExpired        Reason = "EXPIRED"
-	ReasonNoRoute        Reason = "NO_ROUTE"
-	ReasonNoLink         Reason = "NO_NETWORK_SERVER_LINK"
-	ReasonAmbiguousLink  Reason = "AMBIGUOUS_NETWORK_SERVER_LINK"
-	ReasonNoDevEUI       Reason = "NO_DEVEUI"
-	ReasonNoDeviceID     Reason = "NO_DEVICE_ID"
-	ReasonFailed         Reason = "DOWNLINK_FAILED"
-	ReasonUnsupported    Reason = "UNSUPPORTED"
-	ReasonRateLimited    Reason = "RATE_LIMITED"
-	ReasonNetworkServer  Reason = "NETWORK_SERVER_REFUSED"
-	ReasonEgressBlocked  Reason = "EGRESS_BLOCKED"
-	ReasonLinkUnreadable Reason = "NETWORK_SERVER_LINK_INVALID"
-	ReasonUntracked      Reason = "ACK_UNTRACKED"
+	ReasonInvalidParams Reason = "INVALID_PARAMETERS"
+	ReasonExpired       Reason = "EXPIRED"
+	ReasonNoRoute       Reason = "NO_ROUTE"
+	ReasonNoLink        Reason = "NO_NETWORK_SERVER_LINK"
+	ReasonAmbiguousLink Reason = "AMBIGUOUS_NETWORK_SERVER_LINK"
+	ReasonNoDevEUI      Reason = "NO_DEVEUI"
+	ReasonNoDeviceID    Reason = "NO_DEVICE_ID"
+	ReasonFailed        Reason = "DOWNLINK_FAILED"
+	// ReasonFailedMaybeSent: the network server reported the downlink failed and it cannot be shown
+	// that it was never transmitted.
+	ReasonFailedMaybeSent Reason = "DOWNLINK_FAILED_MAYBE_SENT"
+	ReasonUnsupported     Reason = "UNSUPPORTED"
+	ReasonRateLimited     Reason = "RATE_LIMITED"
+	ReasonNetworkServer   Reason = "NETWORK_SERVER_REFUSED"
+	ReasonEgressBlocked   Reason = "EGRESS_BLOCKED"
+	ReasonLinkUnreadable  Reason = "NETWORK_SERVER_LINK_INVALID"
+	ReasonUntracked       Reason = "ACK_UNTRACKED"
 	// ReasonNotAcknowledged: the network server reported the confirmed downlink unacknowledged.
 	ReasonNotAcknowledged Reason = "NOT_ACKNOWLEDGED"
 	// ReasonNoAcknowledgement: the wait for an outcome ran out with no report.

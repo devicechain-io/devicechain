@@ -24,8 +24,8 @@
     },
     "error": {
       "namespace": "pkg/networkserver",
-      "name": "gateway_not_found",
-      "message_format": "gateway not found"
+      "name": "downlink_expired",
+      "message_format": "queued downlink is expired"
     }
   }
 }

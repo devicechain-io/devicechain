@@ -72,7 +72,7 @@ func parseLoRaWANDownlink(config []byte) (Target, error) {
 			return nil, fmt.Errorf("%s config: applicationId is only for tts_v3", LoRaWANDownlinkType)
 		}
 	case NetworkServerTTSV3:
-		if !ttsIDShape.MatchString(c.ApplicationID) {
+		if len(c.ApplicationID) > 36 || !ttsIDShape.MatchString(c.ApplicationID) {
 			return nil, fmt.Errorf("%s config: applicationId must be the The Things Stack application id (3 to 36 lower-case letters, digits and single dashes)", LoRaWANDownlinkType)
 		}
 	case "":

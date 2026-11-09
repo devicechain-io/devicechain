@@ -57,7 +57,7 @@ func TestAnAckIsPublishedForTheIntegrationsDeviceStampedWithTheProvenIntegration
 	h.nothingPublished()
 	require.Equal(t, []string{"acme"}, sink.tenants, "the tenant is the one the path proved, never one in the body")
 	require.Equal(t, []cmddownlink.DownlinkReport{{
-		Integration: "cs", Kind: "ack", DevEUI: "0101010101010101",
+		Integration: "cs", Kind: "ack", DevEUI: "0101010101010101", DeviceToken: "dev-0101010101010101",
 		QueueItemID: "5e0a6c1e-6a1c-4f38-9d2b-0c7a2b7d9f11", Acknowledged: true, FCntDown: 12,
 	}}, sink.reports)
 	require.Equal(t, 1, h.count("report/published"))
@@ -241,6 +241,7 @@ func TestTheThingsStackDownlinkReportsArePublishedAndNotShedWithTelemetry(t *tes
 	for _, r := range sink.reports {
 		kinds[r.Kind]++
 		require.Equal(t, "app1/dev1", r.DeviceRef)
+		require.Equal(t, "dev-0004a30b001c0530", r.DeviceToken, "the device the platform resolved, not text the network server sent")
 		require.Equal(t, "dc:0123456789abcdef0123456789abcdef", r.QueueItemID)
 		require.Equal(t, "cs", r.Integration)
 	}

@@ -81,6 +81,8 @@ func TestValidateTTSv3Link(t *testing.T) {
 		"double dash":           `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"my--app"}`,
 		"trailing dash":         `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"my-app-"}`,
 		"path injection":        `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"a/../b"}`,
+		"dashed too long":       `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"` + strings.Repeat("a-", 18) + `a"}`,
+		"dashed 71":             `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"` + strings.Repeat("a-", 35) + `a"}`,
 		"too long":              `{"networkServer":"tts_v3","baseUrl":"https://x.io","integration":"i","applicationId":"` + strings.Repeat("a", 37) + `"}`,
 		"chirpstack with appid": `{"networkServer":"chirpstack_v4","baseUrl":"https://x.io","integration":"i","applicationId":"my-app"}`,
 	} {

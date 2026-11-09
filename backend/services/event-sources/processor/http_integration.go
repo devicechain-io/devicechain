@@ -751,6 +751,7 @@ func (es *HttpEventSource) handleDownlinkReports(w http.ResponseWriter, r *http.
 		}
 		out = append(out, cmddownlink.DownlinkReport{
 			Integration: slug, Kind: d.Kind, DevEUI: d.Identifier, QueueItemID: d.QueueItemID, DeviceRef: d.DeviceRef,
+			DeviceToken: looked.DeviceToken, Attempt: d.Attempt, ErrorNamespace: d.ErrorNamespace, ErrorName: d.ErrorName,
 			Acknowledged: d.Acknowledged, FCntDown: d.FCntDown,
 		})
 	}

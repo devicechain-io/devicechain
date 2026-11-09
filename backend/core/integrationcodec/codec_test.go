@@ -573,6 +573,37 @@ func TestTTSDownlinkReports(t *testing.T) {
 	}
 }
 
+// downlink_failed is not always a frame that never left: the Application Server emits it when it gives up
+// retrying a transmitted confirmed downlink. The report carries what decides that.
+func TestTTSFailedReportsCarryTheRetryAndTheErrorThatDecideWhetherItWasTransmitted(t *testing.T) {
+	for file, want := range map[string]DownlinkEvent{
+		"downlink_failed_dc.json":          {Attempt: 0, ErrorNamespace: "pkg/networkserver", ErrorName: "downlink_expired"},
+		"downlink_failed_retries_dc.json":  {Attempt: 8, ErrorNamespace: "pkg/applicationserver", ErrorName: "max_retries_reached"},
+		"downlink_failed_attempt1_dc.json": {Attempt: 1, ErrorNamespace: "pkg/networkserver", ErrorName: "downlink_expired"},
+	} {
+		res, err := Decode(tts("DEV_EUI", false), req(fixture(t, "tts/"+file), ""))
+		require.NoError(t, err, file)
+		require.Len(t, res.Downlinks, 1, file)
+		got := res.Downlinks[0]
+		require.Equal(t, DownlinkFailed, got.Kind)
+		require.Equal(t, want.Attempt, got.Attempt, file)
+		require.Equal(t, want.ErrorNamespace, got.ErrorNamespace, file)
+		require.Equal(t, want.ErrorName, got.ErrorName, file)
+	}
+	// An attempt that cannot be read is not 0: it is read as a retry that happened.
+	body := []byte(`{"end_device_ids":{"device_id":"dev1","application_ids":{"application_id":"app1"},"dev_eui":"0004A30B001C0530"},` +
+		`"downlink_failed":{"downlink":{"correlation_ids":["dc:0123456789abcdef0123456789abcdef"],"confirmed_retry":{"attempt":"x"}}}}`)
+	res, err := Decode(tts("DEV_EUI", false), req(body, ""))
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Downlinks[0].Attempt)
+	// A failed report with no error at all carries empty names, which never show a pre-transmission drop.
+	body = []byte(`{"end_device_ids":{"device_id":"dev1","application_ids":{"application_id":"app1"},"dev_eui":"0004A30B001C0530"},` +
+		`"downlink_failed":{"downlink":{"correlation_ids":["dc:0123456789abcdef0123456789abcdef"]}}}`)
+	res, err = Decode(tts("DEV_EUI", false), req(body, ""))
+	require.NoError(t, err)
+	require.Empty(t, res.Downlinks[0].ErrorName)
+}
+
 func TestTTSDownlinkReportsNotFromThePlatformAreIgnored(t *testing.T) {
 	// The recorded TTS example has correlation ids of the network server's own; a downlink queued by hand
 	// in the console carries none of the platform's.

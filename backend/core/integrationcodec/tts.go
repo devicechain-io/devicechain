@@ -45,6 +45,10 @@ type ttsUp struct {
 	DownlinkSent   *ttsDownlink `json:"downlink_sent"`
 	DownlinkFailed *struct {
 		Downlink *ttsDownlink `json:"downlink"`
+		Error    *struct {
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+		} `json:"error"`
 	} `json:"downlink_failed"`
 	UplinkMessage *struct {
 		FPort          json.RawMessage `json:"f_port"`
@@ -64,6 +68,11 @@ type ttsUp struct {
 // server's trace of the event and are never used.
 type ttsDownlink struct {
 	CorrelationIds []string `json:"correlation_ids"`
+	// ConfirmedRetry is set by the Application Server when it re-queues a confirmed downlink after a
+	// nack. proto3 JSON omits attempt at 0.
+	ConfirmedRetry *struct {
+		Attempt json.RawMessage `json:"attempt"`
+	} `json:"confirmed_retry"`
 }
 
 // ttsUplinkPath says whether a webhook path segment names the uplink message type. The type is
@@ -221,8 +230,28 @@ func decodeTTSDownlink(d *Descriptor, up *ttsUp) (*Result, error) {
 	if up.EndDeviceIds.ApplicationIds.ApplicationId == "" || up.EndDeviceIds.DeviceId == "" {
 		return nil, malformed("the downlink report names no application or device id")
 	}
-	return &Result{Downlinks: []DownlinkEvent{{
+	ev := DownlinkEvent{
 		Kind: kind, Scheme: scheme, Identifier: id, QueueItemID: key, Acknowledged: acked,
 		DeviceRef: up.EndDeviceIds.ApplicationIds.ApplicationId + "/" + up.EndDeviceIds.DeviceId,
-	}}}, nil
+	}
+	if kind == DownlinkFailed {
+		// What the failure came after matters more than the failure: the Application Server also emits
+		// downlink_failed when it gives up retrying a confirmed downlink that WAS transmitted (retries
+		// exhausted, or the re-push failed), so a failed report is only ever "never transmitted" when
+		// no retry preceded it and the error is one of the network server's own drops.
+		if dl.ConfirmedRetry != nil {
+			if text, present := loraNumber(dl.ConfirmedRetry.Attempt); present {
+				if n, err := strconv.ParseUint(text, 10, 32); err == nil {
+					ev.Attempt = int(n)
+				} else {
+					// An attempt that cannot be read is not 0: it is read as a retry that happened.
+					ev.Attempt = 1
+				}
+			}
+		}
+		if e := up.DownlinkFailed.Error; e != nil {
+			ev.ErrorNamespace, ev.ErrorName = e.Namespace, e.Name
+		}
+	}
+	return &Result{Downlinks: []DownlinkEvent{ev}}, nil
 }

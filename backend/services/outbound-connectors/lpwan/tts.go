@@ -65,7 +65,20 @@ type ttsDownlinkItem struct {
 	Confirmed      bool     `json:"confirmed"`
 	Priority       string   `json:"priority"`
 	CorrelationIDs []string `json:"correlation_ids"`
+	// ConfirmedRetry bounds how many times the Application Server re-queues the downlink after a nack.
+	// Left unset, the Application Server's own configuration decides (8 by default): a command a device
+	// did not acknowledge would be sent up to eight more times, each a fresh downlink the device may act
+	// on, long after DeviceChain has closed the command.
+	ConfirmedRetry *ttsConfirmedRetry `json:"confirmed_retry,omitempty"`
 }
+
+type ttsConfirmedRetry struct {
+	MaxAttempts int `json:"max_attempts"`
+}
+
+// ttsConfirmedMaxAttempts is the retry bound sent with a confirmed downlink. The network server
+// accepts 1 to 100, so one re-queue after the first nack is the least it will take.
+const ttsConfirmedMaxAttempts = 1
 
 // Enqueue implements Enqueuer. deviceID is the device's tts.device-id. The downlink is pushed (it
 // joins the end of the device's queue). The network server has no per-item expiry on this call, so
@@ -74,7 +87,9 @@ func (c *TTS) Enqueue(ctx context.Context, t connectorspec.LoRaWANDownlinkTarget
 	if t.NetworkServer != connectorspec.NetworkServerTTSV3 || t.BaseURL == nil {
 		return "", &SendError{Reach: cmddownlink.ReachUnsent, Text: fmt.Sprintf("the network server type %q has no downlink client in this build", t.NetworkServer)}
 	}
-	if !ttsIDShape.MatchString(deviceID) || !ttsIDShape.MatchString(t.ApplicationID) {
+	// The pattern counts dash-separated groups, not characters, so the length is checked on its own.
+	if len(deviceID) > 36 || len(t.ApplicationID) > 36 ||
+		!ttsIDShape.MatchString(deviceID) || !ttsIDShape.MatchString(t.ApplicationID) {
 		return "", &SendError{Reach: cmddownlink.ReachUnsent, Text: "the application or device id is not a valid The Things Stack identifier"}
 	}
 	var raw [16]byte
@@ -82,10 +97,14 @@ func (c *TTS) Enqueue(ctx context.Context, t connectorspec.LoRaWANDownlinkTarget
 		return "", &SendError{Reach: cmddownlink.ReachUnsent, Text: "could not name the downlink"}
 	}
 	key := integrationcodec.DownlinkCorrelationPrefix + hex.EncodeToString(raw[:])
-	body, err := json.Marshal(map[string][]ttsDownlinkItem{"downlinks": {{
+	item := ttsDownlinkItem{
 		FPort: p.FPort, FrmPayload: base64.StdEncoding.EncodeToString(p.Data), Confirmed: p.Confirmed,
 		Priority: "NORMAL", CorrelationIDs: []string{key},
-	}}})
+	}
+	if p.Confirmed {
+		item.ConfirmedRetry = &ttsConfirmedRetry{MaxAttempts: ttsConfirmedMaxAttempts}
+	}
+	body, err := json.Marshal(map[string][]ttsDownlinkItem{"downlinks": {item}})
 	if err != nil {
 		return "", &SendError{Reach: cmddownlink.ReachUnsent, Text: "could not encode the downlink"}
 	}

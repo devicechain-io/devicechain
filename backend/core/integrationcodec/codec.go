@@ -205,6 +205,12 @@ type DownlinkEvent struct {
 	// DeviceRef names the device as the network server does, when DevEUI alone does not (The Things
 	// Stack: "<application id>/<device id>"). Empty for ChirpStack.
 	DeviceRef string
+	// Attempt is a failed report's confirmed-downlink retry count (The Things Stack
+	// confirmed_retry.attempt, absent meaning 0); ErrorNamespace and ErrorName are its error's.
+	// They are read for Kind DownlinkFailed only.
+	Attempt        int
+	ErrorNamespace string
+	ErrorName      string
 	// Acknowledged is meaningful for DownlinkAck only: true when the device acknowledged the frame,
 	// false when the network server timed the confirmation out.
 	Acknowledged bool

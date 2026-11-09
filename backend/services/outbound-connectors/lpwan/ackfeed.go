@@ -20,28 +20,29 @@ import (
 
 // Result labels for lpwan_ack_reports_total. A fixed enum: never a tenant, device or queue item.
 const (
-	AckAcknowledged  = "acknowledged"    // the device acknowledged: the command is SUCCESSFUL
-	AckTimedOut      = "timed_out"       // the network server gave up waiting: the command is TIMEOUT
-	AckTransmitted   = "transmitted"     // a gateway accepted the frame; recorded, the command keeps waiting
-	AckTxUntracked   = "tx_untracked"    // a txack for a downlink not awaiting an acknowledgement (every unconfirmed one)
-	AckUnmatched     = "unmatched"       // an ack matching no pending downlink: dropped, never guessed
-	AckRetried       = "retried"         // the first sight of an unmatched ack, left to redeliver once
-	AckMismatch      = "mismatch"        // an ack whose integration or device is not the downlink's: dropped
-	AckPoison        = "poison"          // undecodable or malformed
-	AckTenantGone    = "tenant_gone"     // the tenant was deleted
-	AckStoreFailed   = "store_failed"    // the pending store could not be read or written; left unacked
-	AckResponseFail  = "response_failed" // the answer could not be published; left unacked
-	AckDeadline      = "deadline"        // a downlink's wait ran out: the command is answered unanswered
-	AckDeadlineFault = "deadline_fault"  // an overdue downlink could not be answered this pass
-	AckContended     = "contended"       // another settler holds the record; this report is left to redeliver
-	AckRedelivered   = "redelivered"     // a report for a downlink this replica just settled: its message ack was lost, nothing to do
-	AckFailed        = "failed"          // the network server reported it could not send the downlink: the command is NOT_DELIVERED
+	AckAcknowledged    = "acknowledged"      // the device acknowledged: the command is SUCCESSFUL
+	AckTimedOut        = "timed_out"         // the network server gave up waiting: the command is TIMEOUT
+	AckTransmitted     = "transmitted"       // a gateway accepted the frame; recorded, the command keeps waiting
+	AckTxUntracked     = "tx_untracked"      // a txack for a downlink not awaiting an acknowledgement (every unconfirmed one)
+	AckUnmatched       = "unmatched"         // an ack matching no pending downlink: dropped, never guessed
+	AckRetried         = "retried"           // the first sight of an unmatched ack, left to redeliver once
+	AckMismatch        = "mismatch"          // an ack whose integration or device is not the downlink's: dropped
+	AckPoison          = "poison"            // undecodable or malformed
+	AckTenantGone      = "tenant_gone"       // the tenant was deleted
+	AckStoreFailed     = "store_failed"      // the pending store could not be read or written; left unacked
+	AckResponseFail    = "response_failed"   // the answer could not be published; left unacked
+	AckDeadline        = "deadline"          // a downlink's wait ran out: the command is answered unanswered
+	AckDeadlineFault   = "deadline_fault"    // an overdue downlink could not be answered this pass
+	AckContended       = "contended"         // another settler holds the record; this report is left to redeliver
+	AckRedelivered     = "redelivered"       // a report for a downlink this replica just settled: its message ack was lost, nothing to do
+	AckFailed          = "failed"            // the network server reported it could not send the downlink: the command is NOT_DELIVERED
+	AckFailedMaybeSent = "failed_maybe_sent" // a failed report that cannot show the frame was never transmitted: the command is TIMEOUT
 )
 
 // AckResults is every ack result label, so a metric can create its children at 0.
 var AckResults = []string{
 	AckAcknowledged, AckTimedOut, AckTransmitted, AckTxUntracked, AckUnmatched, AckRetried, AckMismatch,
-	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended, AckRedelivered, AckFailed,
+	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended, AckRedelivered, AckFailed, AckFailedMaybeSent,
 }
 
 // AckMetrics counts ack feed results; a nil AckMetrics counts nothing.
@@ -286,14 +287,24 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 	env := cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce}
 	result := AckAcknowledged
 	switch {
-	case rep.Kind == cmddownlink.DownlinkReportFailed:
-		// The network server says it could not send the downlink. That is the one party that controls
-		// the radio reporting the frame did not go out, which is what NOT_DELIVERED (safe to send
-		// again) means. It is NOT said of a downlink the device failed to acknowledge, below.
+	case rep.Kind == cmddownlink.DownlinkReportFailed && neverTransmitted(p, rep):
+		// A network server drop of a downlink it had not transmitted, named by the server itself and
+		// not preceded by a retry or a transmission report: what NOT_DELIVERED (safe to send again)
+		// means.
 		result = AckFailed
 		env.Reach = cmddownlink.ReachUnsent
-		env.Error = strPtr("the network server reported it could not send the downlink")
+		env.Error = strPtr("the network server reported it dropped the downlink before transmitting it")
 		env.Payload = reasonPayload(ReasonFailed)
+	case rep.Kind == cmddownlink.DownlinkReportFailed:
+		// 🔴 A FAILED REPORT IS NOT ALWAYS A FRAME THAT NEVER LEFT. The Application Server emits one when
+		// it gives up retrying a confirmed downlink that WAS transmitted (retries exhausted, or the
+		// re-push after a nack failed), and the network server emits one for a gateway that reports it
+		// could not transmit. Whatever cannot be positively shown to be a pre-transmission drop is
+		// answered as unanswered: the device may have acted, so sending again may act twice.
+		result = AckFailedMaybeSent
+		env.Reach = cmddownlink.ReachUnanswered
+		env.Error = strPtr("the network server reported the downlink failed, and it cannot be shown that it was never transmitted; the device may have received it")
+		env.Payload = reasonPayload(ReasonFailedMaybeSent)
 	case rep.Acknowledged:
 		env.Success = true
 		body, _ := json.Marshal(map[string]any{"stage": "acknowledged", "queueItemId": p.QueueItemID, "fCntDown": rep.FCntDown})
@@ -312,11 +323,36 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 
 // sameDevice reports whether a report names the device the downlink was sent to. A downlink stored
 // with a DeviceRef (The Things Stack) is matched on it alone; one without (ChirpStack) on its DevEUI.
+//
+// A downlink with a DeviceRef (The Things Stack) also needs the report's DeviceToken to equal the
+// downlink's: DeviceRef is text the network server sent, while DeviceToken is what the platform's own
+// device lookup answered under the proven integration. A report without one cannot settle it.
 func sameDevice(p *Pending, rep cmddownlink.DownlinkReport) bool {
 	if p.DeviceRef != "" {
-		return p.DeviceRef == rep.DeviceRef
+		return p.DeviceRef == rep.DeviceRef && rep.DeviceToken != "" && rep.DeviceToken == p.DeviceToken
 	}
-	return rep.DeviceRef == "" && strings.EqualFold(p.DevEUI, rep.DevEUI)
+	return rep.DeviceRef == "" && strings.EqualFold(p.DevEUI, rep.DevEUI) &&
+		(rep.DeviceToken == "" || rep.DeviceToken == p.DeviceToken)
+}
+
+// preTransmissionErrors are the network server's own errors for a queued downlink it dropped before it
+// was ever scheduled for transmission (pkg/networkserver/downlink.go): the session is unknown, the
+// downlink is a confirmed one for a multicast device, it has expired, its payload exceeds the band's
+// limit, or every gateway refused it with a non-retryable error (invalid absolute time, invalid fixed
+// paths). A gateway's transmission error (a TxAck that is not a success) is deliberately NOT here: the
+// gateway says the frame was not sent, but the platform does not rest a "safe to send again" on it.
+var preTransmissionErrors = map[string]bool{
+	"unknown_session": true, "confirmed_multicast_downlink": true, "downlink_expired": true,
+	"application_downlink_too_long": true, "absolute_time": true, "fixed_paths": true,
+}
+
+// neverTransmitted reports whether a failed report positively shows the downlink was never
+// transmitted: no retry preceded it (a retry means an earlier transmission), no transmission was
+// reported for it, and the error is one of the network server's own pre-transmission drops. Anything
+// less is "cannot show".
+func neverTransmitted(p *Pending, rep cmddownlink.DownlinkReport) bool {
+	return rep.Attempt == 0 && p.TransmittedAt == nil &&
+		rep.ErrorNamespace == "pkg/networkserver" && preTransmissionErrors[rep.ErrorName]
 }
 
 // claim takes the record's settle lease, counting why when it cannot.

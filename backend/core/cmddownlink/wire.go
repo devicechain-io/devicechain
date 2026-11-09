@@ -159,6 +159,18 @@ type DownlinkReport struct {
 	// DeviceRef is the device as the network server names it when DevEUI alone does not (The Things
 	// Stack: "<application id>/<device id>"). Empty for ChirpStack.
 	DeviceRef string `json:"deviceRef,omitempty"`
+	// DeviceToken is the device token event-sources resolved the report's device to under the proven
+	// integration. Unlike every other field it is not text the network server sent: it is what the
+	// platform's own lookup answered, so a downlink is only settled by a report for the device it was
+	// sent to. Empty from an event-sources that predates it.
+	DeviceToken string `json:"deviceToken,omitempty"`
+	// Attempt, ErrorNamespace and ErrorName describe a Kind "failed" report (The Things Stack
+	// downlink_failed): the confirmed-downlink retry the failure came after (0 when the field was
+	// absent, which proto3 JSON does that for) and the network server's own name for the error. They
+	// decide whether the downlink can be said never to have been transmitted.
+	Attempt        int    `json:"attempt,omitempty"`
+	ErrorNamespace string `json:"errorNamespace,omitempty"`
+	ErrorName      string `json:"errorName,omitempty"`
 	// Acknowledged is read for Kind "ack" only.
 	Acknowledged bool  `json:"acknowledged,omitempty"`
 	FCntDown     int64 `json:"fCntDown,omitempty"`

@@ -40,6 +40,7 @@ func TestTTSEnqueueRequestIsExactAndNamesTheDownlinkItself(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotAuth, gotMethod = r.URL.Path, r.Header.Get("Authorization"), r.Method
 		b, _ := io.ReadAll(r.Body)
+		gotBody.Downlinks = nil
 		require.NoError(t, json.Unmarshal(b, &gotBody))
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -62,6 +63,16 @@ func TestTTSEnqueueRequestIsExactAndNamesTheDownlinkItself(t *testing.T) {
 	require.True(t, strings.HasPrefix(key, integrationcodec.DownlinkCorrelationPrefix))
 	require.Len(t, key, len("dc:")+32)
 	require.Equal(t, []any{key}, d["correlation_ids"])
+	// A confirmed downlink bounds the Application Server's re-queues after a nack (it would otherwise
+	// send it up to 8 more times, each a fresh downlink the device may act on).
+	require.Equal(t, map[string]any{"max_attempts": float64(1)}, d["confirmed_retry"])
+
+	// An unconfirmed downlink carries no retry setting.
+	_, err = NewTTSWithTransport(http.DefaultTransport).Enqueue(ctx5(t), ttsTarget(t, srv.URL), "dev-1",
+		Params{FPort: 1, Data: []byte{1}}, time.Time{})
+	require.NoError(t, err)
+	_, has := gotBody.Downlinks[0]["confirmed_retry"]
+	require.False(t, has)
 
 	key2, err := NewTTSWithTransport(http.DefaultTransport).Enqueue(ctx5(t), ttsTarget(t, srv.URL), "dev-1",
 		Params{FPort: 1, Data: []byte{1}}, time.Time{})
@@ -116,7 +127,10 @@ func TestTTSEnqueueClassifiesByHowFarItGot(t *testing.T) {
 func TestTTSEnqueueRefusesWhatCannotBeAPathOrBelongsToAnotherServer(t *testing.T) {
 	c := NewTTSWithTransport(http.DefaultTransport)
 	tg := ttsTarget(t, "https://tts.example.com")
-	for _, id := range []string{"../etc", "Dev1", "a/b", "", "-x", strings.Repeat("a", 37)} {
+	// The id pattern counts dash-separated groups, so a 37-character dashed id still matches it; the
+	// length is what refuses it (and a 71-character one).
+	for _, id := range []string{"../etc", "Dev1", "a/b", "", "-x", strings.Repeat("a", 37), strings.Repeat("a-", 18) + "a",
+		strings.Repeat("a-", 35) + "a"} {
 		_, err := c.Enqueue(ctx5(t), tg, id, Params{FPort: 1, Data: []byte{1}}, time.Time{})
 		require.Equal(t, cmddownlink.ReachUnsent, sendErr(t, err).Reach, id)
 	}

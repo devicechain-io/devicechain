@@ -20,7 +20,7 @@ func (r *ackRig) seedTTS(t *testing.T) Pending {
 
 func ttsReport(kind string, acked bool) cmddownlink.DownlinkReport {
 	return cmddownlink.DownlinkReport{Integration: "tts1", Kind: kind, DevEUI: "0004A30B001C0530",
-		DeviceRef: "my-app/sensor-1", QueueItemID: ttsKey, Acknowledged: acked}
+		DeviceRef: "my-app/sensor-1", DeviceToken: "dev-1", QueueItemID: ttsKey, Acknowledged: acked}
 }
 
 func TestATTSAckNackSentAndFailedMapOnlyToWhatTheyProve(t *testing.T) {
@@ -50,11 +50,11 @@ func TestATTSAckNackSentAndFailedMapOnlyToWhatTheyProve(t *testing.T) {
 	require.Equal(t, 1, r.pend.size())
 	require.Equal(t, 1, r.m.get(AckTransmitted))
 
-	// downlink_failed: the network server says it could not send it. NOT_DELIVERED (UNSENT): the party
-	// that controls the radio says the frame did not go out.
+	// downlink_failed with one of the network server's own pre-transmission drops, no retry before it and
+	// no transmission reported: NOT_DELIVERED (UNSENT).
 	r = newAckRig(t)
 	r.seedTTS(t)
-	a := r.deliver(t, ttsReport("failed", false), 1)
+	a := r.deliver(t, ttsFailed(0, "pkg/networkserver", "downlink_expired"), 1)
 	require.True(t, a.acked)
 	require.Len(t, r.resp.envs, 1)
 	e := r.resp.envs[0]
@@ -63,6 +63,74 @@ func TestATTSAckNackSentAndFailedMapOnlyToWhatTheyProve(t *testing.T) {
 	require.JSONEq(t, `{"reason":"DOWNLINK_FAILED"}`, *e.Payload)
 	require.Zero(t, r.pend.size())
 	require.Equal(t, 1, r.m.get(AckFailed))
+}
+
+func ttsFailed(attempt int, ns, name string) cmddownlink.DownlinkReport {
+	rep := ttsReport("failed", false)
+	rep.Attempt, rep.ErrorNamespace, rep.ErrorName = attempt, ns, name
+	return rep
+}
+
+// 🔴 downlink_failed IS NOT ALWAYS A FRAME THAT NEVER LEFT. The Application Server emits it when it
+// gives up retrying a transmitted confirmed downlink, so every case that cannot positively show a
+// pre-transmission drop must be TIMEOUT / UNKNOWN, never NOT_DELIVERED.
+func TestAFailedReportThatCannotShowTheFrameNeverLeftIsTimeoutNotNotDelivered(t *testing.T) {
+	cases := map[string]struct {
+		rep      cmddownlink.DownlinkReport
+		txBefore bool
+	}{
+		"retries exhausted (AS emits it after transmissions)": {ttsFailed(8, "pkg/applicationserver", "max_retries_reached"), false},
+		"re-push after a nack failed (attempt 1)":             {ttsFailed(1, "pkg/networkserver", "downlink_expired"), false},
+		"any retry at all":                               {ttsFailed(2, "pkg/networkserver", "unknown_session"), false},
+		"failed after a downlink_sent":                   {ttsFailed(0, "pkg/networkserver", "downlink_expired"), true},
+		"a gateway transmission error":                   {ttsFailed(0, "pkg/networkserver", "transmission"), false},
+		"an error name nobody classified":                {ttsFailed(0, "pkg/networkserver", "something_new"), false},
+		"no error at all":                                {ttsFailed(0, "", ""), false},
+		"a pre-transmission name from another namespace": {ttsFailed(0, "pkg/applicationserver", "downlink_expired"), false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newAckRig(t)
+			r.seedTTS(t)
+			if c.txBefore {
+				r.deliver(t, ttsReport("txack", false), 1)
+				require.Empty(t, r.resp.envs)
+			}
+			a := r.deliver(t, c.rep, 1)
+			require.True(t, a.acked)
+			require.Len(t, r.resp.envs, 1)
+			e := r.resp.envs[0]
+			require.False(t, e.Success)
+			require.Equal(t, cmddownlink.ReachUnanswered, e.Reach, "UNSENT would offer a retry as safe for a frame that may have been transmitted")
+			require.JSONEq(t, `{"reason":"DOWNLINK_FAILED_MAYBE_SENT"}`, *e.Payload)
+			require.Equal(t, 1, r.m.get(AckFailedMaybeSent))
+			require.Zero(t, r.m.get(AckFailed))
+		})
+	}
+
+	// Each of the network server's own pre-transmission drops, alone, is NOT_DELIVERED.
+	for name := range preTransmissionErrors {
+		r := newAckRig(t)
+		r.seedTTS(t)
+		r.deliver(t, ttsFailed(0, "pkg/networkserver", name), 1)
+		require.Len(t, r.resp.envs, 1, name)
+		require.Equal(t, cmddownlink.ReachUnsent, r.resp.envs[0].Reach, name)
+	}
+}
+
+func TestAReportForTheRightDeviceRefButNotTheDeviceTheDownlinkWentToSettlesNothing(t *testing.T) {
+	for name, token := range map[string]string{"another device token": "dev-2", "no device token": ""} {
+		t.Run(name, func(t *testing.T) {
+			r := newAckRig(t)
+			r.seedTTS(t)
+			rep := ttsReport("ack", true)
+			rep.DeviceToken = token
+			a := r.deliver(t, rep, 1)
+			require.True(t, a.acked)
+			require.Empty(t, r.resp.envs, "DeviceRef is text the network server sent; the resolved device is what must agree")
+			require.Equal(t, 1, r.m.get(AckMismatch))
+		})
+	}
 }
 
 func TestATTSReportIsMatchedOnItsDeviceRefAndANoLongerPendingFailedIsUnmatched(t *testing.T) {
