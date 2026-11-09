@@ -48,6 +48,11 @@ func NewNotifyOnClearSchema() *gormigrate.Migration {
 //     ordering (a device's skewed event time, another pod's clock) can make a claim re-winnable,
 //     and a value left by an earlier cycle never reads as this one's.
 //   - clear_notified_at: when the claim was taken. Informational and the give-back key only.
+//   - paged_cycle: the cycle paged_targets describes, as a column so the pickup query can match
+//     it to the row's cycle in SQL (a row whose paged set belongs to another cycle must not
+//     occupy the scan). Also nullable, no default.
+//   - a partial index (tenant_id, updated_at) over the rows the pickup reads: stamped cleared
+//     and holding a paged set.
 //   - paged_targets: a JSON document {cycle, targets} of the (channel, recipients) targets that
 //     actually delivered in that cycle, so a clear goes to where the alarm was paged and nowhere
 //     else. It names its cycle, so a value left by an earlier cycle (a pod from before this
@@ -63,6 +68,9 @@ func NewClearAnnouncementSchema() *gormigrate.Migration {
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS clear_notified_at timestamp with time zone;`,
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS clear_notified_cycle timestamp with time zone;`,
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS paged_targets jsonb;`,
+				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS paged_cycle timestamp with time zone;`,
+				`CREATE INDEX IF NOT EXISTS "idx_notification-management_notification_states_pending_clear" ON ` +
+					states + ` (tenant_id, updated_at) WHERE cleared_at IS NOT NULL AND paged_targets IS NOT NULL;`,
 			} {
 				if err := tx.Exec(stmt).Error; err != nil {
 					return err

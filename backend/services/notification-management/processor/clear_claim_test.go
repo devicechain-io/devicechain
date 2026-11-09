@@ -130,12 +130,15 @@ func TestTheSchedulerAnnouncesAPendingClearOnce(t *testing.T) {
 	n := testNotifier(map[string]ChannelAdapter{model.ChannelTypeSMTP: fa})
 	n.api = api
 	n.store = &fakeSecretStore{}
-	raised := time.Now().UTC().Add(-10 * time.Minute)
+	// Raised and cleared AFTER the policy opted in (see the opt-in cut-off), and picked up on a
+	// later tick, past the backoff.
+	raised := time.Now().UTC().Add(time.Second)
+	later := time.Now().Add(10 * time.Minute)
 	if err := n.Notify(ctx, cycleEvent(dmmodel.AlarmEventRaised, raised, raised)); err != nil {
 		t.Fatal(err)
 	}
 	// Stamped cleared with nobody announcing it.
-	if err := api.MarkCleared(ctx, "a1", "k", "CRITICAL", raised, raised.Add(time.Minute)); err != nil {
+	if err := api.MarkCleared(ctx, "a1", "k", "CRITICAL", raised, raised.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	policies, err := api.EnabledNotificationPolicies(ctx)
@@ -143,12 +146,12 @@ func TestTheSchedulerAnnouncesAPendingClearOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	fa.calls, fa.failTimes = 0, 1<<20
-	if err := n.AnnouncePendingClears(ctx, policies, time.Now()); err == nil {
+	if err := n.AnnouncePendingClears(ctx, policies, later); err == nil {
 		t.Fatal("a pickup that could not send must report it")
 	}
 	fa.calls, fa.failTimes = 0, 0
 	for i := 0; i < 3; i++ {
-		if err := n.AnnouncePendingClears(ctx, policies, time.Now()); err != nil {
+		if err := n.AnnouncePendingClears(ctx, policies, later); err != nil {
 			t.Fatal(err)
 		}
 	}

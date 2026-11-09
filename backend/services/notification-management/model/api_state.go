@@ -97,6 +97,9 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 					CycleRaisedAt:   raised,
 				}
 				created.PagedTargets = mergePaged(nil, raised, targets)
+				if created.PagedTargets != nil {
+					created.PagedCycle = raised
+				}
 				out = created
 				return tx.Create(created).Error
 			}
@@ -109,6 +112,9 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 			return nil
 		}
 		found.PagedTargets = mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)
+		if len(targets) > 0 {
+			found.PagedCycle = found.CycleRaisedAt
+		}
 		found.NotifyCount++
 		if !found.FirstNotifiedAt.Valid {
 			found.FirstNotifiedAt = sql.NullTime{Time: at, Valid: true}
@@ -178,7 +184,10 @@ func (api *Api) AddPagedTargets(ctx context.Context, alarmToken string, cycle sq
 		if cycle.Valid && found.CycleRaisedAt.Valid && !found.CycleRaisedAt.Time.Equal(cycle.Time) {
 			return nil
 		}
-		return tx.Model(found).Update("paged_targets", mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)).Error
+		return tx.Model(found).Updates(map[string]any{
+			"paged_targets": mergePaged(found.PagedTargets, found.CycleRaisedAt, targets),
+			"paged_cycle":   found.CycleRaisedAt,
+		}).Error
 	})
 }
 
@@ -207,11 +216,16 @@ func (api *Api) ClaimClearAnnouncement(ctx context.Context, alarmToken string, c
 // someone, and whose clear has not been claimed, cleared since `since`. It is what the scheduler
 // walks to send a clear that overtook its page or failed to send when it first came due, so
 // neither depends on a message being redelivered.
-func (api *Api) PendingClearStates(ctx context.Context, since time.Time, limit int) ([]*NotificationState, error) {
+//
+// Rows whose paged set belongs to another cycle are excluded in SQL (paged_cycle), and rows
+// touched after untouchedSince are skipped: a failed send gives its claim back, which touches
+// the row, so this is the backoff between attempts.
+func (api *Api) PendingClearStates(ctx context.Context, since, untouchedSince time.Time, limit int) ([]*NotificationState, error) {
 	found := make([]*NotificationState, 0)
 	err := api.RDB.DB(ctx).
 		Where("cleared_at IS NOT NULL AND cleared_at > ? AND paged_targets IS NOT NULL AND cycle_raised_at IS NOT NULL "+
-			"AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> cycle_raised_at)", since).
+			"AND paged_cycle = cycle_raised_at AND updated_at < ? "+
+			"AND (clear_notified_cycle IS NULL OR clear_notified_cycle <> cycle_raised_at)", since.UTC(), untouchedSince.UTC()).
 		// Least recently touched first: a clear whose send failed has its claim given back (which
 		// touches the row), so it moves behind the ones not yet tried instead of starving them.
 		Order("updated_at ASC").Limit(limit).Find(&found).Error
@@ -392,6 +406,7 @@ func startCycle(s *NotificationState, raised sql.NullTime) {
 	s.NotifyCount = 0
 	s.ClearNotifiedAt = sql.NullTime{}
 	s.PagedTargets = nil
+	s.PagedCycle = sql.NullTime{}
 	s.CycleRaisedAt = raised
 }
 

@@ -81,6 +81,10 @@ type NotificationState struct {
 	// to these, so it reaches what was paged and nothing else. Per cycle; NULL until a page is
 	// recorded (including every row written before the column existed).
 	PagedTargets *datatypes.JSON
+
+	// PagedCycle is the cycle PagedTargets describes, as a column so SQL can match it to
+	// CycleRaisedAt (see Api.PendingClearStates).
+	PagedCycle sql.NullTime
 }
 
 // PagedTarget names one destination that delivered a page: the channel by token and the

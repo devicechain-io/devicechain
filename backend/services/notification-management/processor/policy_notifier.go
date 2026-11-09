@@ -307,7 +307,7 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 		if n.tenantDeleted(ctx) {
 			return nil
 		}
-		return n.announceClear(ctx, event, false)
+		return n.announceClear(ctx, event, false, false)
 	case dmmodel.AlarmEventDeescalated:
 		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
 			return n.api.TouchSeverity(c, event.AlarmToken, event.Severity)

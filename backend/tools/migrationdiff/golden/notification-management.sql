@@ -51,6 +51,7 @@ CREATE INDEX "idx_notification-management_notification_rules_policy_id" ON "noti
 CREATE INDEX "idx_notification-management_notification_rules_tenant_id" ON "notification-management".notification_rules USING btree (tenant_id);
 CREATE INDEX "idx_notification-management_notification_states_alarm_key" ON "notification-management".notification_states USING btree (alarm_key);
 CREATE INDEX "idx_notification-management_notification_states_deleted_at" ON "notification-management".notification_states USING btree (deleted_at);
+CREATE INDEX "idx_notification-management_notification_states_pending_clear" ON "notification-management".notification_states USING btree (tenant_id, updated_at) WHERE ((cleared_at IS NOT NULL) AND (paged_targets IS NOT NULL));
 CREATE INDEX "idx_notification-management_notification_states_tenant_id" ON "notification-management".notification_states USING btree (tenant_id);
 CREATE INDEX "idx_notification-management_secrets_deleted_at" ON "notification-management".secrets USING btree (deleted_at);
 CREATE INDEX "idx_notification-management_secrets_name" ON "notification-management".secrets USING btree (name);
@@ -224,7 +225,8 @@ CREATE TABLE "notification-management".notification_states (
  cycle_raised_at timestamp with time zone,
  clear_notified_at timestamp with time zone,
  clear_notified_cycle timestamp with time zone,
- paged_targets jsonb
+ paged_targets jsonb,
+ paged_cycle timestamp with time zone
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,

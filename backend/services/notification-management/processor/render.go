@@ -108,17 +108,23 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	writeField(&b, "Occurred", formatTime(event.OccurredTime))
 
 	payload := map[string]any{
-		"text":           subject,
-		"eventType":      event.EventType.String(),
-		"alarmToken":     event.AlarmToken,
-		"alarmKey":       event.AlarmKey,
-		"originatorType": event.OriginatorType,
-		"originatorId":   event.OriginatorId,
-		"severity":       event.Severity,
-		"state":          event.State,
-		"acknowledged":   event.Acknowledged,
-		"raisedTime":     formatTime(event.RaisedTime),
-		"occurredTime":   formatTime(event.OccurredTime),
+		"text":         subject,
+		"eventType":    event.EventType.String(),
+		"alarmToken":   event.AlarmToken,
+		"alarmKey":     event.AlarmKey,
+		"severity":     event.Severity,
+		"state":        event.State,
+		"acknowledged": event.Acknowledged,
+		"raisedTime":   formatTime(event.RaisedTime),
+		"occurredTime": formatTime(event.OccurredTime),
+	}
+	// The originator is stated only when the event carries one (a clear the scheduler rebuilds
+	// from the state row does not): an unknown value is omitted, never sent as ""/0.
+	if event.OriginatorType != "" {
+		payload["originatorType"] = event.OriginatorType
+	}
+	if event.OriginatorId != 0 {
+		payload["originatorId"] = event.OriginatorId
 	}
 	// Named only when the event named them: a missing name is omitted, never invented.
 	if event.DeviceToken != "" {
@@ -140,6 +146,9 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 		payload["value"] = *event.LastValue
 	}
 
+	if event.OriginatorType == "" && event.OriginatorId == 0 && event.DeviceName == "" && event.DeviceToken == "" {
+		shown = "" // nothing to list as the source
+	}
 	facts := AlarmFacts{
 		EventType: event.EventType.String(), AlarmToken: event.AlarmToken, AlarmKey: event.AlarmKey,
 		Severity: event.Severity, PreviousSeverity: event.PreviousSeverity, State: event.State,
