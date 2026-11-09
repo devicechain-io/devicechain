@@ -321,6 +321,9 @@ func TestConnectSnippetMqttPublishesTheDevicesOwnEvent(t *testing.T) {
 	}
 }
 
+// guideFrame is the frame the payload-decoders guide builds payload.bin from (00 d7 5a 0c e4 01).
+var guideFrame = []byte{0x00, 0xd7, 0x5a, 0x0c, 0xe4, 0x01}
+
 // The raw-payload curl is sent, as the shell would send it, through this service's real
 // device-uplink route: the path, the credential headers and the body (a file, so the test
 // stands in bytes for it) must be what the route accepts and hands on.
@@ -366,7 +369,7 @@ func TestConnectSnippetRawPayloadCurlIsAcceptedByTheDeviceUplinkRoute(t *testing
 			// snippet presents and reports a frame decoder.
 			h := newDeviceHarness(t, fplan())
 			h.plans.valid[c.Input.Credential.CredentialId] = true
-			rec := h.post(target.Path, headers["Content-Type"], "", headers)
+			rec := h.post(target.Path, headers["Content-Type"], string(guideFrame), headers)
 			if rec.Code != http.StatusAccepted {
 				t.Fatalf("POST %s answered %d: %s", target.Path, rec.Code, rec.Body.String())
 			}
@@ -374,7 +377,7 @@ func TestConnectSnippetRawPayloadCurlIsAcceptedByTheDeviceUplinkRoute(t *testing
 				t.Fatalf("published %d uplinks", len(h.published))
 			}
 			e := h.published[0]
-			if !bytes.Equal(h.payloads[0].Frame, []byte("")) {
+			if !bytes.Equal(h.payloads[0].Frame, guideFrame) {
 				t.Errorf("the route carried %x, not the bytes the snippet's file holds", h.payloads[0].Frame)
 			}
 			if e.Device != c.Input.DeviceToken {

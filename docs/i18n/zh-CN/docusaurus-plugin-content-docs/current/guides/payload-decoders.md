@@ -10,7 +10,7 @@ title: 载荷解码器
 :::note 实时解码已随 v1.2 提供
 你发布的解码器会在[入站集成](./inbound-integrations.md)的实时上行上运行：当上行所属的设备，其设备类型的配置文件版本带有解码器时，该上行会用它来解码，而不是按网络服务器解码出的内容存储。新发布的解码器可能需要约一分钟才会生效。没有解码器的设备类型照旧存储。升级时如何滚动部署见[发布与升级](../deployment/releases-and-upgrades.md#v120-payload-decoders)。
 
-同一个解码器也会读取设备通过自己的连接（HTTP 或 MQTT）发送的载荷，前提是运维人员已开启该功能。参见[设备自己的连接](#device-connection)。
+同一个解码器也会读取设备通过自己的连接（HTTP 自 v1.3 起，MQTT 自 v1.4 起）发送的载荷，前提是运维人员已开启该功能。参见[设备自己的连接](#device-connection)。
 :::
 
 ## 什么时候需要 {#when}
@@ -271,7 +271,7 @@ sections[0].outputs[1].key: "nope" is not a declared measured metric of this pro
 | HTTP | `event-sources` 区域的 `httpIngest.deviceUplinks` | 路由不存在：`404`。 |
 | MQTT | `infrastructure.nats.mqttDeviceUplinks` | 代理拒绝向该主题的发布。设备在下次连接时获得授权。 |
 
-只有当所有 `event-sources` 和 `device-management` 副本都运行了认识它的版本之后，才可开启任一通道；参见[发布与升级](../deployment/releases-and-upgrades.md#v130-device-uplinks)和[设备协议参考](../reference/device-protocol.md#raw-payload)。无论该设置是否开启，控制台都会显示下面的命令，因为它看不到该设置：收到 `404` 或被代理拒绝的设备，是在等待运维人员。
+只有当所有 `event-sources` 和 `device-management` 副本都运行了认识它的版本之后，才可开启任一通道，并且要在该版本就位之后，单独做一次升级来开启。使用 `dcctl` 时，在 `--values` 覆盖文件中设置 MQTT 通道：`instance.config.infrastructure.nats.mqttDeviceUplinks: true`。再次关闭它，只有在设备重新连接或其会话令牌过期时才会生效：已连接的设备在此之前会保留其授权。详情见[设备协议参考](../reference/device-protocol.md#raw-payload)。无论该设置是否开启，控制台都会显示下面的命令，因为它看不到该设置：收到 `404` 或被代理拒绝的设备，是在等待运维人员。
 
 ### 3. 发送载荷 {#device-connection-send}
 
@@ -310,7 +310,7 @@ HTTP 会回应设备。凡是取决于设备的回应，都只在其凭据通过
 | 状态码 | 含义 |
 | --- | --- |
 | `202` | 已收到并交给解码器。 |
-| `400` | 凭据请求头格式不正确，或正文声明为 JSON 但不是对象，或嵌套超过 32 层。 |
+| `400` | 凭据请求头格式不正确，或正文声明为 JSON 但不是对象，或嵌套超过 32 层，或路径中的租户或设备无效。 |
 | `401` | 没有凭据，或凭据无法通过认证。所有原因得到相同的回应。 |
 | `404` | 该路由未开启。 |
 | `413` | 正文超过解码器所读内容的上限（帧 4 KiB、JSON 64 KiB），或超过 1 MiB。 |

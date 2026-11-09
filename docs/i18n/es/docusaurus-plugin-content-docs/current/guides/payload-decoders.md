@@ -10,7 +10,7 @@ Un **decodificador de payload** convierte lo que envió un dispositivo o un serv
 :::note La decodificación en vivo está en la v1.2
 Un decodificador que publicas se ejecuta sobre los uplinks en vivo de una [integración de entrada](./inbound-integrations.md): cuando el dispositivo del que trata un uplink tiene un tipo de dispositivo cuya versión de perfil lleva un decodificador, el uplink se decodifica con él en lugar de guardarse como lo decodificó el servidor de red. Un decodificador recién publicado puede tardar hasta un minuto en aplicarse. Un tipo de dispositivo sin decodificador se guarda como antes. Cómo desplegar la actualización se describe en [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v120-payload-decoders).
 
-El mismo decodificador también lee una carga útil que un dispositivo envía por su propia conexión, por HTTP o por MQTT, cuando el operador lo ha activado. Consulta [La conexión propia de un dispositivo](#device-connection).
+El mismo decodificador también lee una carga útil que un dispositivo envía por su propia conexión, por HTTP (desde la v1.3) o por MQTT (desde la v1.4), cuando el operador lo ha activado. Consulta [La conexión propia de un dispositivo](#device-connection).
 :::
 
 ## Cuándo necesitas uno {#when}
@@ -271,7 +271,7 @@ Ambas vías están desactivadas hasta que el operador las activa, y los dos ajus
 | HTTP | `httpIngest.deviceUplinks` del área `event-sources` | La ruta no existe: `404`. |
 | MQTT | `infrastructure.nats.mqttDeviceUplinks` | El broker rechaza la publicación en el tema. Un dispositivo recibe la concesión la próxima vez que se conecta. |
 
-Activa cualquiera de ellas solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que la conozca; consulta [Versiones y actualizaciones](../deployment/releases-and-upgrades.md#v130-device-uplinks) y la [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload). La consola muestra los comandos siguientes esté o no activado el ajuste, porque no puede verlo: un dispositivo que recibe `404` o al que el broker rechaza está esperando al operador.
+Activa cualquiera de ellas solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que la conozca, y hazlo en una actualización propia, una vez instalada esa versión. Con `dcctl`, define la de MQTT en una superposición `--values`: `instance.config.infrastructure.nats.mqttDeviceUplinks: true`. Desactivarla solo surte efecto cuando un dispositivo se reconecta o caduca su token de sesión: un dispositivo ya conectado conserva su concesión hasta entonces. La [Referencia del protocolo de dispositivos](../reference/device-protocol.md#raw-payload) tiene los detalles. La consola muestra los comandos siguientes esté o no activado el ajuste, porque no puede verlo: un dispositivo que recibe `404` o al que el broker rechaza está esperando al operador.
 
 ### 3. Envía una carga útil {#device-connection-send}
 
@@ -310,7 +310,7 @@ HTTP responde al dispositivo. Toda respuesta que depende del dispositivo se da s
 | Estado | Significado |
 | --- | --- |
 | `202` | Recibida y entregada al decodificador. |
-| `400` | Una cabecera de credencial está mal formada, o el cuerpo se anuncia como JSON y no es un objeto, o anida más de 32 niveles. |
+| `400` | Una cabecera de credencial está mal formada, o el cuerpo se anuncia como JSON y no es un objeto, o anida más de 32 niveles, o el tenant o el dispositivo de la ruta no son válidos. |
 | `401` | Sin credencial, o con una que no se autentica. Todas las causas reciben la misma respuesta. |
 | `404` | La ruta no está activada. |
 | `413` | El cuerpo supera el límite de lo que lee el decodificador (4 KiB de trama, 64 KiB de JSON) o 1 MiB. |

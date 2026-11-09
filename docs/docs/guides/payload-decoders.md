@@ -10,7 +10,7 @@ A **payload decoder** turns what a device or a network server sent into measurem
 :::note Live decoding is in v1.2
 A decoder you publish runs on the live uplinks of an [inbound integration](./inbound-integrations.md): when the device an uplink is about has a device type whose profile version carries a decoder, the uplink is decoded with it instead of being stored as the network server decoded it. A newly published decoder can take up to about a minute to be picked up. A device type with no decoder is stored as before. Rolling the upgrade out is described in [Releases and upgrades](../deployment/releases-and-upgrades.md#v120-payload-decoders).
 
-The same decoder also reads a payload a device sends on its own connection, over HTTP or MQTT, when the operator has turned that on. See [A device's own connection](#device-connection).
+The same decoder also reads a payload a device sends on its own connection, over HTTP (from v1.3) or MQTT (from v1.4), when the operator has turned that on. See [A device's own connection](#device-connection).
 :::
 
 ## When you need one {#when}
@@ -271,7 +271,7 @@ Both wires are off until the operator turns them on, and the two settings are in
 | HTTP | `httpIngest.deviceUplinks` of the `event-sources` area | The route does not exist: `404`. |
 | MQTT | `infrastructure.nats.mqttDeviceUplinks` | The broker refuses a publish to the topic. A device receives the grant when it next connects. |
 
-Turn either on only after every `event-sources` and `device-management` replica runs a release that knows it; see [Releases and upgrades](../deployment/releases-and-upgrades.md#v130-device-uplinks) and the [Device Protocol Reference](../reference/device-protocol.md#raw-payload). The console shows the commands below whether or not the setting is on, because it cannot see the setting: a device that gets `404` or is refused by the broker is waiting on the operator.
+Turn either on only after every `event-sources` and `device-management` replica runs a release that knows it, and do it in an upgrade of its own, after that release is in place. With `dcctl`, set the MQTT one in a `--values` overlay: `instance.config.infrastructure.nats.mqttDeviceUplinks: true`. Turning it off again takes effect only when a device reconnects or its session token expires: a device that is already connected keeps its grant until then. The [Device Protocol Reference](../reference/device-protocol.md#raw-payload) has the details. The console shows the commands below whether or not the setting is on, because it cannot see the setting: a device that gets `404` or is refused by the broker is waiting on the operator.
 
 ### 3. Send a payload {#device-connection-send}
 
@@ -310,7 +310,7 @@ HTTP answers the device. Every answer that depends on the device is given only a
 | Status | Meaning |
 | --- | --- |
 | `202` | Received and handed to the decoder. |
-| `400` | A credential header is malformed, or the body is announced as JSON and is not an object, or it nests deeper than 32 levels. |
+| `400` | A credential header is malformed, or the body is announced as JSON and is not an object, or it nests deeper than 32 levels, or the path's tenant or device is invalid. |
 | `401` | No credential, or one that does not authenticate. Every cause gets the same answer. |
 | `404` | The route is not turned on. |
 | `413` | The body is over the cap for what the decoder reads (4 KiB of frame, 64 KiB of JSON) or over 1 MiB. |
