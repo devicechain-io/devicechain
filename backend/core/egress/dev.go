@@ -34,6 +34,12 @@ var neverDevAllowed = func() []netip.Prefix {
 		netip.MustParsePrefix("::1/128"),
 		netip.MustParsePrefix("fe80::/10"),
 		netip.MustParsePrefix("ff00::/8"),
+		// The local-use NAT64 range embeds an IPv4 address at an offset that cannot be known
+		// from the address, so the guard refuses it whole (ranges.go) and a dev prefix may not
+		// reach it either; the IPv4-mapped range is refused so a mapped spelling of a refused
+		// IPv4 prefix is not accepted as a harmless dead entry.
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+		netip.MustParsePrefix("::ffff:0:0/96"),
 		// The cloud IPv6 metadata services live in unique-local space, which is otherwise
 		// a legitimate private range, so the two provider /32 blocks are named whole.
 		netip.MustParsePrefix("fd00:ec2::/32"),
