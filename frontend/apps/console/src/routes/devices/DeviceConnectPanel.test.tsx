@@ -103,6 +103,33 @@ describe('DeviceConnectPanel', () => {
     expect(screen.getByText(/sends an undeclared reading/)).toBeTruthy();
   });
 
+  it("offers the device's own payload over both transports, saying what each needs from the operator", async () => {
+    route([tokenRow]);
+    render(<DeviceConnectPanel deviceToken="dev-1" deviceEnabled />);
+    await screen.findByTestId('connect-command');
+    fireEvent.click(screen.getByRole('radio', { name: 'Raw payload' }));
+
+    await waitFor(() => expect(command()).toContain(`-t '<instance-id>/acme/devices/dev-1/uplink'`));
+    expect(command()).toContain('-f payload.bin');
+    expect(command()).not.toContain(' -m ');
+    expect(screen.getByText(/infrastructure\.nats\.mqttDeviceUplinks/)).toBeTruthy();
+    expect(screen.getByText(/profile's Decoder tab/)).toBeTruthy();
+    // The event-only notes do not apply to a payload.
+    expect(screen.queryByText(/example readings/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'HTTP' }));
+    await waitFor(() =>
+      expect(command()).toContain(`curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/devices/dev-1/uplink'`),
+    );
+    expect(command()).toContain(`-H 'Authorization: Bearer <access-token>'`);
+    expect(command()).toContain(`--data-binary '@payload.bin'`);
+    expect(screen.getByText(/httpIngest\.deviceUplinks/)).toBeTruthy();
+    expect(screen.getByText(/change the Content-Type header to application\/json/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Event (JSON)' }));
+    await waitFor(() => expect(command()).toContain('/events'));
+  });
+
   it('copies the command shown', async () => {
     route([tokenRow]);
     const writeText = vi.fn().mockResolvedValue(undefined);
