@@ -241,7 +241,7 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
-Dé a `dcctl install` los mismos ajustes con los que se instaló el clúster, como `--ha` o `--compact`. Se niega a cambiarlos mientras una instancia se ejecuta en el clúster; consulte [Volver a ejecutar install](./bootstrap.md#re-running-install).
+Ejecute ambos con el `dcctl` de la versión a la que va a pasar: un `dcctl` instala y actualiza solo a su propia versión, y `dcctl upgrade` se niega si la instalación del clúster la hizo uno más antiguo. Dé a `dcctl install` los mismos ajustes con los que se instaló el clúster, como `--ha` o `--compact`. Se niega a cambiarlos mientras una instancia se ejecuta en el clúster; consulte [Volver a ejecutar install](./bootstrap.md#re-running-install).
 
 :::note Qué se ha medido
 La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se

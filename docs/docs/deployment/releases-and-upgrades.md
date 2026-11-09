@@ -233,7 +233,7 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
-Give `dcctl install` the same settings the cluster was installed with, such as `--ha` or `--compact`. It refuses to change them while an instance runs on the cluster; see [Re-running install](./bootstrap.md#re-running-install).
+Run both with the dcctl of the release you are moving to: a dcctl installs and upgrades only to its own release, and `dcctl upgrade` refuses when the cluster's install was made by an older one. Give `dcctl install` the same settings the cluster was installed with, such as `--ha` or `--compact`. It refuses to change them while an instance runs on the cluster; see [Re-running install](./bootstrap.md#re-running-install).
 
 :::note What has been measured
 The upgrade has been rehearsed by hand on a local cluster: an instance installed with `--ha` was upgraded
