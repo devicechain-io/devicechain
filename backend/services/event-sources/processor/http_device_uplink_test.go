@@ -87,7 +87,7 @@ func newDeviceHarness(t *testing.T, plan *integration.DecoderPlan) *deviceHarnes
 	require.NoError(t, err)
 	rt := &DeviceUplinkRoute{
 		Plans: integration.NewDeviceDecoders(h.plans, integration.DeviceDecoderConfig{}),
-		Publish: func(_, _ string, e *model.UnresolvedEvent, p interface{}) error {
+		Publish: func(_, _ string, e *model.UnresolvedEvent, p interface{}, _ string) error {
 			if h.pubErr != nil {
 				return h.pubErr
 			}

@@ -291,8 +291,8 @@
       "translationSha256": "745fb949ccf105936209fdec705d1e5c73893e0fbc36125d181f17debb98b83e"
     },
     "reference/device-protocol.md": {
-      "sourceSha256": "9a43388c44aafd506a157a417953cf261e185aee026fa3263ac640a49578c091",
-      "translationSha256": "641b9d84b76bf9b7c7923bf36fefcdb095ac1ef1ff660b7975bf1368ee30a303"
+      "sourceSha256": "8a42fda950773b2d1b61b35e04354de562616f73603090ace1cfe9bdc03c8b8c",
+      "translationSha256": "8ebe06131a8793349a2c831299db20f8b90a4ee201fdbba1b86c46ad59c93d0c"
     },
     "reference/graphql-api.md": {
       "sourceSha256": "7065199ec043ecb34044c4fda42d72bb4970fca15cb95654ce37703afa8d7b2d",

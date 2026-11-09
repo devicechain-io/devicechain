@@ -643,6 +643,11 @@ const deadLetterSuffix = ".dead"
 const (
 	SegmentDevices = "devices"
 	SegmentEvents  = "events"
+	// SegmentUplink is the leaf of a device's RAW-PAYLOAD subject, a sibling of the events leaf:
+	// "{instance}.{tenant}.devices.{device}.uplink". What a device publishes there is its own
+	// bytes, not the DeviceChain JSON envelope, and the decoder on its device type's profile
+	// reads them. It is granted only when the operator opts in (infrastructure.nats.mqttDeviceUplinks).
+	SegmentUplink = "uplink"
 )
 
 // The GATEWAY shape, the second device-plane subject family a capture stream stores. A

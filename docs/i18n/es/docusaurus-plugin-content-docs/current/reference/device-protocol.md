@@ -48,6 +48,7 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 | Mensaje | Dirección | Topic MQTT | Subject NATS |
 | --- | --- | --- | --- |
 | [Evento](#device-event) | dispositivo → plataforma | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
+| [Carga útil propia](#raw-payload) | dispositivo → plataforma | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
 | [Entrega de comando](#command-delivery) | plataforma → dispositivo | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [Respuesta a comando](#command-response) | dispositivo → plataforma | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
 | Mensajes de [configuración](../guides/connecting-a-device.md#reserved-device-topics) y de [actualización](../guides/connecting-a-device.md#over-the-air-updates) | plataforma → dispositivo | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
@@ -59,7 +60,7 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 
 Un dispositivo que todavía no tiene credencial llega a la plataforma por HTTPS para [registrarse por sí mismo](#self-registration), en `POST /api/device-management/provisioning/{tenant}/register`. Es un endpoint distinto de la ingesta de eventos, servido por `device-management`.
 
-Por **HTTP**, un dispositivo solo puede enviar eventos. Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
+Por **HTTP**, un dispositivo solo puede enviar eventos (y, donde el operador lo ha activado, una [carga útil propia](#raw-payload)). Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
 
 ### El espacio de nombres de pasarela {#gateway-namespace}
 
@@ -166,6 +167,42 @@ Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tena
 | `target` | string | sí | El token de la entidad de destino. | `"building-7-sensors"` |
 
 Una relación que la plataforma no puede crear (un tipo de destino desconocido, un destino que no existe, un tipo de relación desconocido) no se crea. Como cualquier evento que no se puede resolver, se reintenta y después pasa a dead-letter.
+
+## La carga útil propia de un dispositivo {#raw-payload}
+
+Un dispositivo que no puede enviar el [JSON de evento](#device-event), porque publica una trama binaria compacta o un JSON con una forma propia, puede publicar esa carga útil tal cual y hacer que el [decodificador](../guides/payload-decoders.md) del perfil de su tipo de dispositivo la convierta en eventos. El decodificador es el que se redacta en la pestaña **Decoder** de la consola; el mismo decodificador sirve a una [integración de entrada](../guides/inbound-integrations.md) y a la conexión propia de un dispositivo.
+
+Publica los bytes, sin envoltorio, en el topic de carga útil propia del dispositivo:
+
+| | |
+| --- | --- |
+| Topic MQTT | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` |
+| Subject NATS | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
+| Cuerpo | La carga útil del dispositivo, tal cual. Hasta 1 MiB; un decodificador que lee la trama admite como máximo 4 KiB de ella, y uno que lee JSON, como máximo 64 KiB. |
+| QoS | 0 o 1, como en los [eventos](#topics). |
+
+- **El topic es la activación.** Un mensaje en el topic `events` nunca lo lee un decodificador de perfil, y nada se elige por el aspecto de un cuerpo. Un dispositivo usa su decodificador publicando aquí.
+- **El operador concede el topic.** Está desactivado salvo que se establezca `infrastructure.nats.mqttDeviceUplinks`. Mientras lo está, el broker rechaza una publicación en este topic, igual que en cualquier topic para el que el dispositivo no está autorizado. Con `dcctl`, establécelo en una superposición `--values` (`instance.config.infrastructure.nats.mqttDeviceUplinks: true`); las actualizaciones posteriores lo conservan. Un dispositivo recibe la concesión la próxima vez que se conecta, así que activar el ajuste llega a una flota a medida que sus dispositivos se reconectan, y **desactivarlo** surte efecto del mismo modo: un dispositivo ya conectado conserva su concesión hasta que se reconecta o caduca el token de su sesión.
+- **El topic es la identidad.** Como en los eventos, el dispositivo se autentica al conectarse y solo puede publicar en el topic que lleva **su propio** token, de modo que nunca se puede hacer decodificar una carga útil como la de otro dispositivo. No envíes ninguna credencial: la carga útil no es un envoltorio y no tiene dónde llevarla. El [modo de autenticación](../guides/device-credentials.md) de dispositivos se aplica igual que a los eventos.
+- **Qué lee el decodificador.** Si el decodificador lee una trama, los bytes son su entrada. Si lee JSON y la carga útil empieza por `{`, además se analiza como objeto JSON (de hasta 32 niveles de profundidad) y el decodificador lee ese objeto; una carga útil que empieza como un objeto y no lo es se transporta como trama, y un decodificador que necesita el JSON registra entonces `missing_input`.
+- **Límites.** Una carga útil cuenta contra los límites de ingesta del inquilino como un evento: una vez como mensaje y, después, por las lecturas que el decodificador puede producir, como lecturas (al menos las lecturas máximas del decodificador, más para un decodificador costoso, nunca más de 256).
+
+MQTT no puede responder a un dispositivo, así que una carga útil que la plataforma no puede transportar se registra para un operador y el dispositivo no se entera:
+
+| Condición | Resultado | Dónde lo ve un operador |
+| --- | --- | --- |
+| El tipo del dispositivo no tiene decodificador, o ningún dispositivo tiene este token | Se encamina a `failed-decode` con el motivo; nunca se lee como un evento | `total_msg_failed_decode`; `device_uplink_messages_total` por `result` (`no_decoder`, `unauthorized`) |
+| La carga útil supera un límite que permite la entrada del decodificador | Se encamina a `failed-decode` | `total_msg_failed_decode`; `device_uplink_messages_total` con `result="too_large"` |
+| El inquilino supera su límite de ingesta, por mensajes o por lecturas | Se confirma y luego se **descarta** | `total_msg_rate_limited`, `total_msg_reading_limited` |
+| No se puede consultar a device-management, o la canalización aplica contrapresión | No se rechaza: espera en el stream de captura y se vuelve a ofrecer | `result="plan_unavailable"` o `"backpressure"` |
+| El decodificador se ejecuta y falla (una salida rechazada, `missing_input`) | Se registra en `failed-events` como `DECODE_FAILED`, con la salud y las muestras propias del decodificador en la consola | la salud del decodificador en la consola |
+| Decodificada | Se almacenan los eventos que produce el decodificador | `result="accepted"` |
+
+:::caution Actívalo después de la actualización, no durante
+Activa `mqttDeviceUplinks` solo cuando todas las réplicas de `event-sources` y de `device-management` ejecuten una versión que conozca el topic, en una actualización aparte, una vez instalada la versión. Con el ajuste desactivado el stream de captura es exactamente el que declaraban las versiones anteriores; la actualización que lo activa añade el topic al stream, y una réplica de `event-sources` anterior a esta versión que se reinicie después se detiene al arrancar con un error de desajuste del stream. Una que ya esté en ejecución leería un mensaje así y lo descartaría por ajeno, y una réplica de `device-management` anterior rechaza el uplink que produce la nueva, de modo que una carga útil publicada mientras conviven las dos podría perderse.
+:::
+
+**Por HTTP**, la misma capacidad es `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink` en el servicio `event-sources`. El dispositivo presenta su propia credencial en cabeceras (`Authorization: Bearer <token>`, o `X-DeviceChain-Credential-Type`, `-Id` y `-Secret`), porque un cuerpo binario no tiene dónde llevarla, y la ruta responde `401` sin ella. Existe solo cuando el operador establece `httpIngest.deviceUplinks` en `event-sources`; si no, responde `404`.
 
 ## Entrega de comando {#command-delivery}
 

@@ -80,6 +80,47 @@ func IntegrationDecoder(ctx context.Context, api DeviceManagementApi, integratio
 	}, nil
 }
 
+// BrokerAssertedDeviceDecoder answers the same question as DeviceDecoder for a device whose identity
+// the platform's own MQTT broker has already proven: the device authenticated at CONNECT and was
+// confined by its grant to its own raw-payload topic, so there is no credential to present.
+//
+// 🔴 ONLY A SERVICE WITH device:read MAY ASK (the resolver enforces it), and the asker is event-sources
+// reading the capture stream, which the broker alone writes a device's publish into. The answer is
+// null for a device that does not exist, so the ingest path records the payload as undeliverable
+// rather than carrying bytes for a device nobody registered. It reads through
+// ProfileResolutionByDeviceType exactly as DeviceDecoder does, so what is answered is what the
+// resolver will run.
+func BrokerAssertedDeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken string) (*IntegrationDecoderAnswer, error) {
+	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
+	if err != nil {
+		return nil, err
+	}
+	if len(devices) != 1 || devices[0] == nil {
+		return nil, nil
+	}
+	return decoderAnswerForType(ctx, api, devices[0].DeviceTypeId)
+}
+
+// decoderAnswerForType is the plan of the active published profile version of a device type.
+func decoderAnswerForType(ctx context.Context, api DeviceManagementApi, deviceTypeId uint) (*IntegrationDecoderAnswer, error) {
+	res, err := api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
+	if err != nil {
+		return nil, err
+	}
+	dec := res.Decoder()
+	if !dec.Declared() {
+		return &IntegrationDecoderAnswer{}, nil
+	}
+	return &IntegrationDecoderAnswer{
+		Present:             true,
+		Input:               dec.Input(),
+		MaxReadings:         dec.MaxReadings(),
+		EstimatedCost:       dec.EstimatedCost(),
+		Cost:                dec.CostShape(),
+		ProfileVersionToken: res.Scope().ProfileVersionToken,
+	}, nil
+}
+
 // DeviceDecoder answers whether the type of the device with this token has a payload decoder, for
 // a device that publishes its own payload, AFTER authenticating the credential the device presented.
 //
@@ -108,20 +149,5 @@ func DeviceDecoder(ctx context.Context, api DeviceManagementApi, deviceToken str
 	if device == nil || device.Token != deviceToken {
 		return nil, nil
 	}
-	res, err := api.ProfileResolutionByDeviceType(ctx, device.DeviceTypeId)
-	if err != nil {
-		return nil, err
-	}
-	dec := res.Decoder()
-	if !dec.Declared() {
-		return &IntegrationDecoderAnswer{}, nil
-	}
-	return &IntegrationDecoderAnswer{
-		Present:             true,
-		Input:               dec.Input(),
-		MaxReadings:         dec.MaxReadings(),
-		EstimatedCost:       dec.EstimatedCost(),
-		Cost:                dec.CostShape(),
-		ProfileVersionToken: res.Scope().ProfileVersionToken,
-	}, nil
+	return decoderAnswerForType(ctx, api, device.DeviceTypeId)
 }

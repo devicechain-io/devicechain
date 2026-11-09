@@ -60,6 +60,10 @@ type rawMessage struct {
 	// assertion says whether the platform's own broker authenticated this message's
 	// device. Only the capture source can make it true; see brokerAssertion.
 	assertion brokerAssertion
+	// uplink is true for a raw payload a device published to its own uplink topic: not a DeviceChain
+	// envelope, so it is never decoded by Decoder but carried to the profile decoder (see
+	// mqtt_device_uplink.go). Only the capture source sets it, from the subject.
+	uplink bool
 	// done reports the outcome of handling this message back to the source that
 	// produced it, so the source can acknowledge the broker only once the payload
 	// is durably forwarded. nil for a fire-and-forget transport, which is why every
@@ -136,6 +140,10 @@ type DecodeWorker struct {
 	// Failed routes an undecodable payload to the failed-decode path, likewise
 	// reporting whether that routing itself succeeded.
 	Failed func(string, string, []byte, error) error
+	// Uplinks carries a device's raw payload (rawMessage.uplink) to its type's decoder. nil on a
+	// worker of a source that has no such route: such a payload is then recorded on failed-decode
+	// with its cause, never decoded as an envelope and never dropped without a word.
+	Uplinks *uplinkRunner
 }
 
 // Create a new decode worker. A nil readings panics: a worker built without the reading
@@ -165,6 +173,21 @@ func (wrk *DecodeWorker) Process() {
 		raw, more := <-wrk.RawMessages
 		if more {
 			log.Debug().Msg(fmt.Sprintf("Decode handled by worker id %d", wrk.WorkerId))
+			if raw.uplink {
+				u := wrk.Uplinks
+				if u == nil {
+					// No route behind this worker: the payload is recorded with that cause.
+					u = &uplinkRunner{failed: wrk.Failed}
+				}
+				// Only a message the platform's broker asserted may be carried: the assertion is read here,
+				// where it is allowed to be, and handed in as the mark.
+				if !raw.assertion.asserted || raw.assertion.gateway != "" {
+					u.recordNow(wrk.SourceId, raw, DeviceUplinkInternalError, ErrUplinkNotAsserted)
+					continue
+				}
+				u.run(wrk.SourceId, raw, raw.assertion.mark)
+				continue
+			}
 			event, payload, err := wrk.Decoder.Decode(raw.payload, raw.receivedAt)
 			if err == nil {
 				err = checkDeviceMatchesTransport(raw, event)

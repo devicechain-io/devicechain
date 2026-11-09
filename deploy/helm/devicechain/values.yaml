@@ -276,6 +276,14 @@ instance:
         # for streamReplicas 3. Turning it off again hands the store back once its consumers
         # are drained.
         # mqttFailClosed: false
+        # Raw device payloads over MQTT (off by default). On, every device is granted its OWN
+        # {instance}/{tenant}/devices/{device}/uplink topic, where it may publish a payload of
+        # its own (a binary frame, or JSON in a vendor's shape) for the decoder on its device
+        # type's profile to read. Turn it on only after every event-sources and
+        # device-management replica runs a release that knows the topic, in an upgrade of its own
+        # (the capture stream gains the topic when this is on). A device is granted the topic when
+        # it next connects, and loses it the same way when this is turned off.
+        # mqttDeviceUplinks: false
         # The JetStream KV buckets (device caches, locks, refresh tokens, OAuth
         # codes, sign-in attempt counts). They are streams too — backed by KV_-prefixed streams in the same
         # account — so a bounded bucket reserves its ceiling up front like any other.

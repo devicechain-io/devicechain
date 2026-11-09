@@ -136,7 +136,7 @@ type streamExpectation struct {
 
 func (nmgr *NatsManager) expectedStream(suffix string) streamExpectation {
 	return streamExpectation{
-		subjects:    StreamSubjects(nmgr.Microservice.InstanceId, suffix),
+		subjects:    nmgr.streamSubjects(suffix),
 		retention:   retentionPolicy(streams.RetentionFor(suffix)),
 		duplicates:  time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second,
 		allowDirect: streams.AllowDirectFor(suffix),
@@ -333,4 +333,11 @@ func (nmgr *NatsManager) ReconcileBroker(ctx context.Context, areas []string) (*
 		Int("unchanged", report.Count("unchanged")+report.Count("present")).
 		Msg("Reconciled the broker's streams and buckets")
 	return report, nil
+}
+
+// streamSubjects is the subject list this instance declares for a stream: the one every earlier
+// build declared, plus the raw-payload subject on the capture stream when the operator has opted in.
+func (nmgr *NatsManager) streamSubjects(suffix string) []string {
+	return StreamSubjectsWith(nmgr.Microservice.InstanceId, suffix,
+		nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.MqttDeviceUplinks)
 }

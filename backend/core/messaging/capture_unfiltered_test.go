@@ -48,8 +48,8 @@ func TestTheCaptureDurableIsUnfilteredOnTheBroker(t *testing.T) {
 	require.Empty(t, info.Config.FilterSubjects, "the capture durable has a broker filter list")
 
 	r := readers[0].(*natsReader)
-	require.ElementsMatch(t, DeviceEventsSubjects("test"), append([]string{r.forwards}, r.alsoForwards...),
-		"the capture reader does not hand out exactly the stream's subjects")
+	require.ElementsMatch(t, DeviceEventsSubjectsWith("test", true), append([]string{r.forwards}, r.alsoForwards...),
+		"the capture reader does not hand out every shape this release knows, whatever the opt-in says")
 }
 
 // GUARD: the durable an earlier build created (old name, filter list) is DELETED when the reader
@@ -68,7 +68,7 @@ func TestAnOlderCaptureDurableIsReplacedByANewUnfilteredOne(t *testing.T) {
 	stream := captureStreamOn("test")
 	durable := DurableName("test", area, captureSuffix)
 	_, err = js.AddStream(&nats.StreamConfig{
-		Name: stream, Subjects: DeviceEventsSubjects("test"), Retention: nats.WorkQueuePolicy,
+		Name: stream, Subjects: oldBuildCaptureSubjects("test"), Retention: nats.WorkQueuePolicy,
 	})
 	require.NoError(t, err)
 	// The durable exactly as the previous build created it, at the AckWait the rig below
@@ -76,7 +76,7 @@ func TestAnOlderCaptureDurableIsReplacedByANewUnfilteredOne(t *testing.T) {
 	_, err = js.AddConsumer(stream, &nats.ConsumerConfig{
 		Durable: durable, AckPolicy: nats.AckExplicitPolicy,
 		AckWait: time.Second, MaxDeliver: MaxDeliver, MaxAckPending: readerMaxAckPending,
-		FilterSubjects: DeviceEventsSubjects("test"),
+		FilterSubjects: oldBuildCaptureSubjects("test"),
 	})
 	require.NoError(t, err)
 	staged, err := js.ConsumerInfo(stream, durable)
@@ -244,13 +244,13 @@ func TestACaptureDurableThatDiffersInMoreThanItsFilterIsStillRefused(t *testing.
 	stream := captureStreamOn(ms.InstanceId)
 	durable := CaptureDurableName(ms.InstanceId, area, captureSuffix)
 	_, err := nmgr.js.AddStream(&nats.StreamConfig{
-		Name: stream, Subjects: DeviceEventsSubjects(ms.InstanceId), Retention: nats.WorkQueuePolicy,
+		Name: stream, Subjects: oldBuildCaptureSubjects(ms.InstanceId), Retention: nats.WorkQueuePolicy,
 	})
 	require.NoError(t, err)
 	_, err = nmgr.js.AddConsumer(stream, &nats.ConsumerConfig{
 		Durable: durable, AckPolicy: nats.AckExplicitPolicy,
 		AckWait: nmgr.ackWait() + 7*time.Second, MaxDeliver: MaxDeliver, MaxAckPending: readerMaxAckPending,
-		FilterSubjects: DeviceEventsSubjects(ms.InstanceId),
+		FilterSubjects: oldBuildCaptureSubjects(ms.InstanceId),
 	})
 	require.NoError(t, err)
 	staged, err := nmgr.js.ConsumerInfo(stream, durable)
@@ -276,12 +276,12 @@ func TestAFilteredDurableUnderTheCaptureNameIsRecreatedNotUpdated(t *testing.T) 
 	js, err := nc.JetStream()
 	require.NoError(t, err)
 	stream := captureStreamOn("test")
-	_, err = js.AddStream(&nats.StreamConfig{Name: stream, Subjects: DeviceEventsSubjects("test"), Retention: nats.WorkQueuePolicy})
+	_, err = js.AddStream(&nats.StreamConfig{Name: stream, Subjects: oldBuildCaptureSubjects("test"), Retention: nats.WorkQueuePolicy})
 	require.NoError(t, err)
 	_, err = js.AddConsumer(stream, &nats.ConsumerConfig{
 		Durable: CaptureDurableName("test", area, captureSuffix), AckPolicy: nats.AckExplicitPolicy,
 		AckWait: time.Second, MaxDeliver: MaxDeliver, MaxAckPending: readerMaxAckPending,
-		FilterSubjects: DeviceEventsSubjects("test"),
+		FilterSubjects: oldBuildCaptureSubjects("test"),
 	})
 	require.NoError(t, err)
 	staged := captureDurable(t, js, area)

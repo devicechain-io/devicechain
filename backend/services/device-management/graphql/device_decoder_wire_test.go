@@ -161,3 +161,63 @@ func TestDeviceDecoderIsServiceOnly(t *testing.T) {
 		}
 	}
 }
+
+// brokerAssertedDeviceDecoder: the question event-sources asks for a device that published on its own
+// raw-payload MQTT topic. The broker proved the device, so there is no credential; the answer is the
+// plan of the device's type, and null only for a device that does not exist.
+
+const wireBrokerAsserted = `query ($d: String!) {
+  brokerAssertedDeviceDecoder(deviceToken: $d) {
+    present input maxReadings composedCost parsesJson profileVersionToken } }`
+
+func TestBrokerAssertedDeviceDecoderAnswersWithoutACredential(t *testing.T) {
+	f, _ := newIntegrationDecoderFixture(t)
+	svc := service(f)
+	ask := func(device string) served { return serve(t, svc, wireBrokerAsserted, map[string]any{"d": device}) }
+	plan := func(res served) map[string]any {
+		t.Helper()
+		require.Empty(t, res.errs)
+		p, _ := res.data["brokerAssertedDeviceDecoder"].(map[string]any)
+		return p
+	}
+
+	// No published decoder: an authenticated-by-the-broker device whose type has none is present:false.
+	none := plan(ask("acme-pump"))
+	require.NotNil(t, none)
+	assert.Equal(t, false, none["present"])
+
+	f.publishDecoder(t, wireFrameDecoder)
+	got := plan(ask("acme-pump"))
+	require.NotNil(t, got)
+	assert.Equal(t, true, got["present"])
+	assert.Equal(t, "FRAME", got["input"])
+	assert.Equal(t, "meter@1", got["profileVersionToken"])
+
+	// A device nobody registered is null, indistinguishable from nothing to carry bytes for.
+	assert.Nil(t, plan(ask("no-such-device")))
+}
+
+func TestBrokerAssertedDeviceDecoderIsServiceOnly(t *testing.T) {
+	f, _ := newIntegrationDecoderFixture(t)
+	f.publishDecoder(t, wireFrameDecoder)
+	ask := func(ctx context.Context) served {
+		return serve(t, ctx, wireBrokerAsserted, map[string]any{"d": "acme-pump"})
+	}
+	got := ask(service(f))
+	require.Empty(t, got.errs, "the paired positive")
+	require.NotNil(t, got.data["brokerAssertedDeviceDecoder"])
+
+	refused := map[string]context.Context{
+		"an access token holding device:read": f.withClaims(&auth.Claims{TokenType: auth.TokenTypeAccess,
+			Tenant: scopeTenant, Authorities: []string{string(auth.DeviceRead)}}),
+		"a tenant administrator": f.operator(),
+		"a service token without device:read": f.withClaims(&auth.Claims{TokenType: auth.TokenTypeService,
+			Tenant: scopeTenant, Authorities: []string{string(auth.EventRead)}}),
+	}
+	for who, ctx := range refused {
+		res := ask(ctx)
+		if len(res.errs) == 0 || res.data["brokerAssertedDeviceDecoder"] != nil {
+			t.Errorf("brokerAssertedDeviceDecoder was admitted for %s: %v %v", who, res.data, res.errs)
+		}
+	}
+}

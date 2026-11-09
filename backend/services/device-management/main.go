@@ -1152,6 +1152,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// The bounds are stated rather than left to the constructor's defaults, and the load
 		// metrics are attached here: a responder without them enforces its bounds but reports
 		// nothing, which left the Ingest board's callout panels empty.
+		CalloutResponder.UseDeviceUplinks(infra.Nats.MqttDeviceUplinks)
 		CalloutResponder.Configure(processor.DefaultCalloutMaxInFlight, processor.DefaultCalloutLookupTimeout,
 			processor.DefaultCalloutStopWait, CalloutMetrics)
 		// The broker encrypts each authorization request to the responder's curve key when it is

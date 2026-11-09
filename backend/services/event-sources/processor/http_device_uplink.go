@@ -89,11 +89,16 @@ type DeviceUplinkRoute struct {
 	Plans *integration.DeviceDecoders
 	// Publish writes the device's IntegrationUplink to the uplink stream and returns whether it was
 	// durably published (processor.ErrEventNotBuilt when the message could not be built).
-	Publish func(source, tenant string, event *model.UnresolvedEvent, payload interface{}) error
+	// dedupID names the message for the stream's duplicate window: "" on HTTP, which has no stable id
+	// for a request, and the capture sequence on MQTT, so a redelivered capture message is stored once.
+	Publish func(source, tenant string, event *model.UnresolvedEvent, payload interface{}, dedupID string) error
 	// Result counts one request's result. May be nil.
 	Result func(result string)
 	// Charged counts the readings charged for a carried uplink. May be nil.
 	Charged func(n int)
+	// Message counts one raw payload received on a device's MQTT uplink topic, by the same result
+	// labels (device_uplink_messages_total). May be nil.
+	Message func(result string)
 }
 
 func (rt *DeviceUplinkRoute) result(r string) {
@@ -150,6 +155,36 @@ func isJSONContent(ct string) bool {
 		return false
 	}
 	return mt == "application/json" || strings.HasSuffix(mt, "+json")
+}
+
+// errNotJSONObject is a body that was announced as JSON and is not an object.
+var errNotJSONObject = errors.New("the body is not a JSON object")
+
+// carryDeviceBytes builds the carrier for a device's own bytes, for the plan of its type: what the
+// decoder reads decides what is parsed. The JSON is parsed only when the caller says the bytes are
+// JSON (a JSON content type on HTTP; a leading '{' on MQTT) and only when the decoder reads it; an
+// unknown input kind is carried in full, as the integration route does. It is the one place the
+// HTTP and MQTT device wires build a carrier, so the two charge and refuse alike.
+//
+// notJSON is non-nil when the bytes were announced as JSON and are not an object; carrier refusals
+// (a frame or object over its cap, a too-deep object) come back as refusal.
+func carryDeviceBytes(body []byte, jsonContent bool, plan integration.DecoderPlan) (carried *model.UnresolvedIntegrationUplinkPayload, charge int, refusal *carrierRefusal, notJSON error) {
+	wantsJSON := plan.Input == "JSON" || plan.Cost.ParsesJSON || !(plan.Input == "FRAME" || plan.Input == "DECODED")
+	up := &integrationcodec.Uplink{
+		Frame: body, FPort: integrationcodec.NoLoRaWAN, FCnt: integrationcodec.NoLoRaWAN,
+	}
+	if wantsJSON && jsonContent {
+		var obj map[string]any
+		dc := json.NewDecoder(bytes.NewReader(body))
+		dc.UseNumber()
+		if err := dc.Decode(&obj); err != nil || obj == nil {
+			return nil, 0, nil, errNotJSONObject
+		}
+		up.Decoded = obj
+		up.DepthErr = integrationcodec.CheckDepth(obj)
+	}
+	carried, charge, refusal = buildUplinkCarrier(&integrationcodec.Descriptor{Type: integrationcodec.GenericJSON}, up, plan)
+	return carried, charge, refusal, nil
 }
 
 func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Request) {
@@ -233,27 +268,13 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 	}
 	es.received(es.Id, body)
 
-	// What the decoder reads decides what is parsed. The JSON is parsed only for a JSON content type
-	// and only when the decoder reads it; an unknown input kind is carried in full, as the integration
-	// route does.
-	wantsJSON := plan.Input == "JSON" || plan.Cost.ParsesJSON || !(plan.Input == "FRAME" || plan.Input == "DECODED")
-	up := &integrationcodec.Uplink{
-		Frame: body, FPort: integrationcodec.NoLoRaWAN, FCnt: integrationcodec.NoLoRaWAN,
+	carried, charge, refusal, notJSON := carryDeviceBytes(body, isJSONContent(r.Header.Get("Content-Type")), plan)
+	if notJSON != nil {
+		rt.result(DeviceUplinkBadRequest)
+		es.failed(es.Id, tenant, body, notJSON)
+		http.Error(w, notJSON.Error(), http.StatusBadRequest)
+		return
 	}
-	if wantsJSON && isJSONContent(r.Header.Get("Content-Type")) {
-		var obj map[string]any
-		dc := json.NewDecoder(bytes.NewReader(body))
-		dc.UseNumber()
-		if err := dc.Decode(&obj); err != nil || obj == nil {
-			rt.result(DeviceUplinkBadRequest)
-			es.failed(es.Id, tenant, body, fmt.Errorf("the body is not a JSON object"))
-			http.Error(w, "the body is not a JSON object", http.StatusBadRequest)
-			return
-		}
-		up.Decoded = obj
-		up.DepthErr = integrationcodec.CheckDepth(obj)
-	}
-	carried, charge, refusal := buildUplinkCarrier(&integrationcodec.Descriptor{Type: integrationcodec.GenericJSON}, up, plan)
 	if refusal != nil {
 		code := http.StatusBadRequest
 		res := DeviceUplinkBadRequest
@@ -291,7 +312,7 @@ func (es *HttpEventSource) handleDeviceUplink(w http.ResponseWriter, r *http.Req
 		CredentialId:     cid,
 		CredentialSecret: csecret,
 	}
-	if err := rt.Publish(es.Id, tenant, event, carried); err != nil {
+	if err := rt.Publish(es.Id, tenant, event, carried, ""); err != nil {
 		switch {
 		case errors.Is(err, messaging.ErrStreamBackpressure):
 			rt.result(DeviceUplinkBackpressure)

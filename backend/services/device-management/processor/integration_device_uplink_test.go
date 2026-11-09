@@ -103,6 +103,36 @@ func TestADeviceUplinkFollowsTheDeviceAuthPolicy(t *testing.T) {
 	assert.Equal(t, uint(resolvedevent.FailureReason_Unauthenticated), reason)
 }
 
+// A device's raw payload over its own MQTT connection is marked BrokerAsserted by event-sources (the
+// platform's broker authenticated the device and confined it to its topic) and carries no credential:
+// with authentication REQUIRED it resolves and decodes, where the same uplink without the mark is
+// refused. The mark confers no more than that, and only on the uplink stream.
+func TestABrokerAssertedDeviceUplinkNeedsNoCredentialWhenAuthIsRequired(t *testing.T) {
+	d := newDecodeRig(t)
+	d.publishDecoder(tempDecoder)
+	required := d.resolver(config.AuthModeRequired)
+	required.decode, required.decodeObserver = d.metrics, d.obs
+
+	unmarked := d.deviceUplink(frameUplink(0x00, 0xD7))
+	_, reason, err := required.ResolveEvent(withUplinkStream(d.ctx), unmarked)
+	require.Error(t, err, "negative control: no credential and no mark")
+	assert.Equal(t, uint(resolvedevent.FailureReason_Unauthenticated), reason)
+
+	marked := d.deviceUplink(frameUplink(0x00, 0xD7))
+	marked.BrokerAsserted = true
+	results, reason, err := required.ResolveEvent(withUplinkStream(d.ctx), marked)
+	require.NoError(t, err)
+	require.Zero(t, reason)
+	require.Equal(t, map[string]string{"temp": "21.5"}, readingsOf(t, results))
+
+	// The mark does not make an uplink decodable from anywhere but the uplink stream.
+	again := d.deviceUplink(frameUplink(0x00, 0xD7))
+	again.BrokerAsserted = true
+	_, reason, err = required.ResolveEvent(d.ctx, again)
+	require.Error(t, err)
+	assert.Equal(t, uint(resolvedevent.FailureReason_Unauthenticated), reason)
+}
+
 // A device whose profile has no decoder is a recorded no_decoder failure, terminal on delivery 1:
 // its bytes are never flattened and never silently dropped. The control is the same type of
 // uplink for an integration, which does flatten.

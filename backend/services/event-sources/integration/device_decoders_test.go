@@ -483,3 +483,70 @@ func TestDeviceDecodersStaleAuthenticationDoesNotOverrideANewerRefusal(t *testin
 	require.Error(t, err, "an error, not the stale authentication this request read before the refusal")
 	require.False(t, got.Authenticated)
 }
+
+// Peek answers from the cache alone: nothing held is ok=false and asks no one; a fresh answer is
+// served fresh; an authenticated answer past its TTL is served stale (to be refreshed); a refusal
+// past its short life and anything past StaleMax are not served.
+func TestDeviceDecodersPeekNeverAsksTheBackend(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
+	be := &deviceBackendFake{plan: &DecoderPlan{Present: true, Input: "FRAME"}}
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now})
+	ctx := context.Background()
+
+	_, _, ok := d.Peek("acme", "m1", cred1)
+	require.False(t, ok)
+	require.EqualValues(t, 0, be.calls.Load(), "a peek asks no one")
+
+	_, err := d.Lookup(ctx, "acme", "m1", cred1)
+	require.NoError(t, err)
+	l, fresh, ok := d.Peek("acme", "m1", cred1)
+	require.True(t, ok)
+	require.True(t, fresh)
+	require.True(t, l.Authenticated && l.Plan.Present)
+
+	ck.t = ck.t.Add(DefaultDecoderTTL + time.Second)
+	l, fresh, ok = d.Peek("acme", "m1", cred1)
+	require.True(t, ok, "stale is still served")
+	require.False(t, fresh)
+	require.True(t, l.Stale)
+
+	ck.t = ck.t.Add(time.Hour)
+	_, _, ok = d.Peek("acme", "m1", cred1)
+	require.False(t, ok, "past StaleMax nothing is served")
+	require.EqualValues(t, 1, be.calls.Load())
+
+	// A remembered refusal is served only within its short life.
+	be.set(nil, nil)
+	_, err = d.Lookup(ctx, "acme", "ghost", cred1)
+	require.NoError(t, err)
+	l, fresh, ok = d.Peek("acme", "ghost", cred1)
+	require.True(t, ok && fresh)
+	require.False(t, l.Authenticated)
+	ck.t = ck.t.Add(DefaultRefusedTTL + time.Second)
+	_, _, ok = d.Peek("acme", "ghost", cred1)
+	require.False(t, ok)
+}
+
+// A question about a device the broker proved is charged to ITS tenant's bucket and never spends the
+// cold bucket that bounds a flood of invented credentials: with the cold bucket empty, a broker-asserted
+// first contact is still answered, while a presented credential on its first contact is refused.
+func TestABrokerAssertedFirstContactDoesNotSpendTheColdBucket(t *testing.T) {
+	ck := &dclock{t: time.Unix(1000, 0)}
+	be := &deviceBackendFake{plan: &DecoderPlan{Present: true}}
+	d := NewDeviceDecoders(be, DeviceDecoderConfig{Now: ck.now, ColdFillBurst: 1, ColdFillsPerSecond: 0.0001})
+	ctx := context.Background()
+
+	// The one cold token goes to a presented credential.
+	_, err := d.Lookup(ctx, "acme", "m1", cred1)
+	require.NoError(t, err)
+	_, err = d.Lookup(ctx, "acme", "m2", credN(2))
+	require.ErrorIs(t, err, ErrDeviceDecoderBudget, "negative control: the cold bucket is empty")
+
+	// Broker-asserted first contacts for many devices are all answered.
+	asserted := DeviceCredential{Type: "BROKER_ASSERTED", AssertedByBroker: true}
+	for i := 0; i < 50; i++ {
+		l, err := d.Lookup(ctx, "acme", "dev-"+strconv.Itoa(i), asserted)
+		require.NoError(t, err, "device %d", i)
+		require.True(t, l.Authenticated)
+	}
+}

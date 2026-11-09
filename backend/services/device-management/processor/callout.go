@@ -88,6 +88,10 @@ type CalloutResponder struct {
 	// reads "active". Never nil: NewCalloutResponder refuses to build a responder without
 	// one.
 	tenantFenced func(ctx context.Context, tenant string) error
+	// deviceUplinks adds each device's own raw-payload topic to the grant it is minted
+	// (infrastructure.nats.mqttDeviceUplinks; UseDeviceUplinks). False mints the grant every earlier
+	// build minted.
+	deviceUplinks bool
 	// creds compares every MQTT password behind DeviceCredentialPolicy's backoff. Never
 	// nil: NewCalloutResponder refuses to build a responder without one.
 	creds *credential.Checker
@@ -193,6 +197,11 @@ func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
 			"Certificate registrations on first connect being decided right now."),
 	}
 }
+
+// UseDeviceUplinks makes the responder grant every device it admits the right to publish its own
+// payload to {instance}/{tenant}/devices/{device}/uplink, for the decoder on its device type's
+// profile to read. Call it before Start; it applies to grants minted from then on.
+func (c *CalloutResponder) UseDeviceUplinks(on bool) { c.deviceUplinks = on }
 
 // Configure overrides the bounds; a non-positive value keeps the current one. Call it
 // before Start.
@@ -795,7 +804,8 @@ func (c *CalloutResponder) grantSession(ctx context.Context, req jwt.Authorizati
 			Msg("Auth-callout refused a device connect: the credential expires too soon to mint a session.")
 		return "", grantRefusedExpiry
 	}
-	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), ttl)
+	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), ttl,
+		natsauth.WithDeviceUplink(c.deviceUplinks))
 	if err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to sign a device user JWT.")
 		return "", grantRefusedFailure

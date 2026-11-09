@@ -46,6 +46,7 @@ Schema 表达不了的内容：
 | 消息 | 方向 | MQTT 主题 | NATS subject |
 | --- | --- | --- | --- |
 | [事件](#device-event) | 设备 → 平台 | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
+| [设备自身的载荷](#raw-payload) | 设备 → 平台 | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
 | [命令下发](#command-delivery) | 平台 → 设备 | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [命令响应](#command-response) | 设备 → 平台 | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
 | [配置](../guides/connecting-a-device.md#reserved-device-topics)与[更新](../guides/connecting-a-device.md#over-the-air-updates)消息 | 平台 → 设备 | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
@@ -57,7 +58,7 @@ Schema 表达不了的内容：
 
 尚无凭据的设备通过 HTTPS 向 `POST /api/device-management/provisioning/{tenant}/register` [自行注册](#self-registration)。这是与事件接入分开的端点，由 `device-management` 提供。
 
-通过 **HTTP**，设备只能发送事件。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
+通过 **HTTP**，设备只能发送事件（运维人员启用后，还可以发送[设备自身的载荷](#raw-payload)）。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
 
 ### 网关命名空间 {#gateway-namespace}
 
@@ -164,6 +165,42 @@ Schema 表达不了的内容：
 | `target` | string | 是 | 目标实体的令牌。 | `"building-7-sensors"` |
 
 平台无法创建的关系（未知的目标类型、不存在的目标、未知的关系类型）不会被创建。与任何无法解析的事件一样，它会被重试，然后进入死信。
+
+## 设备自身的载荷 {#raw-payload}
+
+设备如果无法发送[事件 JSON](#device-event)，因为它发布的是紧凑的二进制帧，或是自成一格的 JSON，就可以原样发布该载荷，由其设备类型配置文件上的[解码器](../guides/payload-decoders.md)把它转换为事件。解码器就是在控制台 **Decoder** 选项卡中编写的那个；同一个解码器既服务于[入站集成](../guides/inbound-integrations.md)，也服务于设备自己的连接。
+
+把字节直接发布（不加信封）到设备自己的原始载荷主题：
+
+| | |
+| --- | --- |
+| MQTT 主题 | `{instanceId}/{tenant}/devices/{deviceToken}/uplink` |
+| NATS 主题（subject） | `{instanceId}.{tenant}.devices.{deviceToken}.uplink` |
+| 正文 | 设备的载荷，原样发送。最大 1 MiB；读取帧的解码器最多接收其中 4 KiB，读取 JSON 的最多 64 KiB。 |
+| QoS | 0 或 1，与[事件](#topics)相同。 |
+
+- **主题就是启用开关。** `events` 主题上的消息绝不会被配置文件解码器读取，也不会根据正文的样子来选择。设备通过向这里发布来使用它的解码器。
+- **由运维人员授予该主题。** 除非设置了 `infrastructure.nats.mqttDeviceUplinks`，否则它处于关闭状态。关闭时，代理会拒绝向该主题的发布，就像拒绝设备无权使用的任何主题一样。使用 `dcctl` 时，在 `--values` 覆盖文件中设置（`instance.config.infrastructure.nats.mqttDeviceUplinks: true`），后续升级会沿用该设置。设备在下次连接时才获得授权，因此开启该设置会随着设备重连逐步覆盖整个设备群；**关闭它**也是同样的方式生效：已经连接的设备会保留其授权，直到重新连接或其会话令牌过期。
+- **主题就是身份。** 与事件一样，设备在连接时完成认证，并且只能向带有**自己**令牌的主题发布，因此设备永远无法让一个载荷被当作另一台设备的载荷来解码。不要发送凭据：载荷不是信封，没有地方放凭据。设备的[认证模式](../guides/device-credentials.md)与对事件的作用方式相同。
+- **解码器读取什么。** 如果解码器读取帧，字节就是它的输入。如果它读取 JSON，且载荷以 `{` 开头，载荷还会被解析为 JSON 对象（最多 32 层嵌套），解码器读取的就是这个对象；以对象开头但并非对象的载荷会作为帧传递，需要 JSON 的解码器随后会记录 `missing_input`。
+- **限制。** 载荷与事件一样计入租户的摄取上限：先按一条消息计，再按解码器可能产生的读数计（至少为解码器的最大读数，开销大的解码器更多，但不超过 256）。
+
+MQTT 无法回应设备，因此平台无法处理的载荷会记录下来供运维人员查看，设备不会得到通知：
+
+| 情形 | 结果 | 运维人员在哪里看到 |
+| --- | --- | --- |
+| 设备类型没有解码器，或没有设备使用此令牌 | 连同原因路由到 `failed-decode`；绝不会被当作事件读取 | `total_msg_failed_decode`；`device_uplink_messages_total` 按 `result` 区分（`no_decoder`、`unauthorized`） |
+| 载荷超出解码器输入所允许的限制 | 路由到 `failed-decode` | `total_msg_failed_decode`；`device_uplink_messages_total` 的 `result="too_large"` |
+| 租户超出摄取上限（按消息或按读数） | 已确认，随后被**丢弃** | `total_msg_rate_limited`、`total_msg_reading_limited` |
+| 无法询问 device-management，或流水线正在施加背压 | 不拒绝：它留在捕获流中等待再次投递 | `result="plan_unavailable"` 或 `"backpressure"` |
+| 解码器运行后失败（输出被拒绝、`missing_input`） | 以 `DECODE_FAILED` 记录到 `failed-events`，解码器自身的健康状况和样本显示在控制台 | 控制台中解码器的健康状况 |
+| 解码成功 | 存储解码器产生的事件 | `result="accepted"` |
+
+:::caution 在升级之后开启，而不是升级期间
+只有当每个 `event-sources` 和 `device-management` 副本都运行了认识该主题的版本之后，才开启 `mqttDeviceUplinks`，并且应在版本就位之后单独进行一次升级。该设置关闭时，捕获流与早期版本声明的完全一致；开启它的那次升级会把该主题加入捕获流，此后重启的、早于本版本的 `event-sources` 副本会在启动时因流不一致而报错退出。已在运行的旧副本会读到这样的消息并把它当作无关消息丢弃，旧版本的 `device-management` 副本也会拒绝新版本产生的上行消息，因此在两者混合运行期间发布的载荷可能丢失。
+:::
+
+**通过 HTTP**，同样的能力是 `event-sources` 服务上的 `POST /{instanceId}/{tenant}/devices/{deviceToken}/uplink`。设备在请求头中出示自己的凭据（`Authorization: Bearer <token>`，或 `X-DeviceChain-Credential-Type`、`-Id`、`-Secret`），因为二进制正文无处携带凭据；没有凭据时该路由返回 `401`。只有运维人员在 `event-sources` 上设置了 `httpIngest.deviceUplinks` 时它才存在，否则返回 `404`。
 
 ## 命令下发 {#command-delivery}
 

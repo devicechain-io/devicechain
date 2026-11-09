@@ -291,6 +291,7 @@ var (
 	IntegrationDecoderProbeUnsupportedCounter prometheus.Counter
 	// DeviceUplinkRequestsCounter and DeviceUplinkChargedCounter report the device-uplink route.
 	DeviceUplinkRequestsCounter      *prometheus.CounterVec
+	DeviceUplinkMessagesCounter      *prometheus.CounterVec
 	DeviceUplinkChargedCounter       prometheus.Counter
 	IntegrationDecoderChargedCounter prometheus.Counter
 
@@ -551,11 +552,16 @@ func initializeIntegrationMetrics() {
 		"device_uplink_requests_total",
 		"Count of requests to the device-uplink route (a device's own payload, read by its type's decoder) by result",
 		[]string{"result"})
+	DeviceUplinkMessagesCounter = Microservice.NewCounterVec(
+		"device_uplink_messages_total",
+		"Count of raw payloads a device published to its own MQTT uplink topic (read by its type's decoder) by result",
+		[]string{"result"})
 	DeviceUplinkChargedCounter = Microservice.NewCounter(
 		"device_uplink_charged_readings_total",
 		"Count of readings charged at the reading gate for device uplinks carried to a payload decoder")
 	for _, r := range processor.DeviceUplinkResults {
 		DeviceUplinkRequestsCounter.WithLabelValues(r)
+		DeviceUplinkMessagesCounter.WithLabelValues(r)
 	}
 	for _, r := range processor.IntegrationDecoderLookupResults {
 		IntegrationDecoderLookupsCounter.WithLabelValues(r)
@@ -787,6 +793,14 @@ func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRou
 	if !ingest.DeviceUplinks {
 		return nil
 	}
+	return newDeviceUplinkRoute()
+}
+
+// newDeviceUplinkRoute is the device-uplink route's dependencies, without asking whether an
+// operator switched a transport on. The MQTT wire is switched on at the broker (the grant to publish
+// to the uplink topic, infrastructure.nats.mqttDeviceUplinks), so this service serves whatever the
+// broker captured; nil only when device-management cannot be reached from here.
+func newDeviceUplinkRoute() *processor.DeviceUplinkRoute {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.DeviceManagement.Hostname == "" {
 		return nil
@@ -806,6 +820,11 @@ func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRou
 				DeviceUplinkChargedCounter.Add(float64(n))
 			}
 		},
+		Message: func(result string) {
+			if DeviceUplinkMessagesCounter != nil {
+				DeviceUplinkMessagesCounter.WithLabelValues(result).Inc()
+			}
+		},
 	}
 }
 
@@ -813,10 +832,11 @@ func buildDeviceUplinkRoute(ingest config.HttpIngest) *processor.DeviceUplinkRou
 // stream. It is the only device-facing publish that may carry that type: the event is stamped with
 // the source, any integration mark is cleared (a device has none), the presented credential is
 // sealed, and nothing is written to inbound-events.
-func onDeviceUplinkDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{}) error {
+func onDeviceUplinkDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
+	dedupID string) error {
 	event.Source = source
 	processor.ClearIntegrationMark(event)
-	ctx, msg, ok := buildInboundMessage(source, tenant, event, payload, "")
+	ctx, msg, ok := buildInboundMessage(source, tenant, event, payload, dedupID)
 	if !ok {
 		return processor.ErrEventNotBuilt
 	}
@@ -1134,6 +1154,17 @@ func buildEventSources() error {
 				StoreSource.UseMessageStore()
 				if LagCredit != nil {
 					StoreSource.UseLagCredit(LagCredit, processor.StreamStore)
+				}
+				// A device's raw payload (its own uplink topic) reaches its type's decoder from either
+				// path. The grant to publish there is the operator's, so this serves whatever the
+				// broker captured.
+				if dr := newDeviceUplinkRoute(); dr != nil {
+					if err := gateway.UseDeviceUplinks(dr); err != nil {
+						return err
+					}
+					if err := StoreSource.UseDeviceUplinks(dr); err != nil {
+						return err
+					}
 				}
 				continue
 			}
