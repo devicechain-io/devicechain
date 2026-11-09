@@ -53,6 +53,9 @@ const (
 	AgentPolicyNoVersion = "NO_SUCH_VERSION"
 	// AgentPolicyInvalid: the document does not parse or breaks a rule.
 	AgentPolicyInvalid = "INVALID_POLICY"
+	// AgentPolicyUnreadable: the policy in force cannot be read by this release, usually because
+	// a newer release wrote it during an upgrade. Only the kill switch can change it here.
+	AgentPolicyUnreadable = "UNREADABLE_POLICY"
 )
 
 func agentPolicyErr(code, format string, a ...any) error {
@@ -165,7 +168,7 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 		if current == nil {
 			return "", "", false, agentPolicyErr(AgentPolicyNoPolicy, "publish an agent policy before enabling agent actuation")
 		}
-		doc, err := agentpolicy.Parse([]byte(current.Document))
+		doc, err := agentpolicy.ParseStored([]byte(current.Document))
 		if err != nil {
 			if enabled {
 				return "", "", false, fmt.Errorf("the agent policy in force cannot be read: %w", err)
@@ -173,9 +176,10 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 			// 🔴 THE KILL SWITCH NEVER DEPENDS ON READING THE POLICY IT STOPS, AND NEVER DROPS
 			// THE SERVICE-ACCOUNT RULE. A document this pod cannot read (written by a newer
 			// release mid-upgrade, or damaged) is replaced by a disabled policy that carries the
-			// tenant's serviceAccounts.agentFlagRequiredFor forward (the key is frozen across
-			// versions), keeping only the authorities this release knows: no role here can hold
-			// another. If even that key cannot be read, no pod can read the document at all, so
+			// tenant's serviceAccounts.agentFlagRequiredFor forward VERBATIM (the key is frozen
+			// across versions): an authority this release does not know requires nothing here,
+			// but the newer release that wrote it does know it, and dropping it would lift the
+			// rule there. If even that key cannot be read, no pod can read the document at all, so
 			// actuation is already off everywhere; nothing is published rather than a document
 			// that would silently lift the rule.
 			req, ok := agentpolicy.ExtractAgentFlagRequirement([]byte(current.Document))
@@ -184,14 +188,14 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 				return "", "", false, errNothingToKill
 			}
 			doc = &agentpolicy.Document{}
-			var known []string
+			var carried []string
 			for _, a := range req {
-				if a != string(auth.AuthorityAll) && auth.ValidAuthority(a) && !slices.Contains(known, a) {
-					known = append(known, a)
+				if a != "" && !slices.Contains(carried, a) {
+					carried = append(carried, a)
 				}
 			}
-			if len(known) > 0 {
-				doc.ServiceAccounts = &agentpolicy.ServiceAccts{AgentFlagRequiredFor: known}
+			if len(carried) > 0 {
+				doc.ServiceAccounts = &agentpolicy.ServiceAccts{AgentFlagRequiredFor: carried}
 			}
 			log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read; the kill switch publishes a disabled policy keeping its service-account rule.")
 		}
@@ -228,17 +232,42 @@ func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, p
 		if err != nil {
 			return "", "", false, err
 		}
-		next, canonical, err := parsePolicyInput(raw)
+		// A draft is what a person submitted and is held to every rule. A rollback or an actuation
+		// change republishes STORED content, whose carried-forward rule entries may name
+		// authorities this release does not know (ParseStored).
+		var next *agentpolicy.Document
+		if origin == iam.AgentPolicyOriginPublish {
+			next, err = agentpolicy.Parse([]byte(raw))
+		} else {
+			next, err = agentpolicy.ParseStored([]byte(raw))
+		}
+		if err != nil {
+			return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", err)
+		}
+		b, err := next.Canonical()
 		if err != nil {
 			return "", "", false, err
 		}
+		canonical := string(b)
 		var prev *agentpolicy.Document
 		if current != nil {
-			if prev, err = agentpolicy.Parse([]byte(current.Document)); err != nil {
-				// An unreadable predecessor is classified as nothing in force, so anything that
-				// enables actuation is a loosening and needs the step-up.
-				log.Error().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read; classifying against none.")
-				prev = nil
+			if prev, err = agentpolicy.ParseStored([]byte(current.Document)); err != nil {
+				// 🔴 NOTHING BUT THE KILL SWITCH CHANGES A POLICY THIS RELEASE CANNOT READ. A
+				// loosening is judged against the policy in force, and an unreadable one cannot be
+				// judged: classifying against "nothing" would let a publish or a rollback drop
+				// rules this release cannot see without anyone presenting a second factor. A
+				// newer release wrote it (or it is damaged); finish the upgrade, and change it
+				// from a pod that can read it.
+				if origin != iam.AgentPolicyOriginActuation || next.ActuationOn() {
+					return "", "", false, agentPolicyErr(AgentPolicyUnreadable,
+						"the agent policy in force cannot be read by this release (a newer release wrote it, or it is damaged); finish the upgrade first, then change it")
+				}
+				// The kill switch: classified against what CAN be read of the predecessor, its
+				// frozen service-account rule, so dropping that rule is still a loosening.
+				prev = &agentpolicy.Document{}
+				if req, ok := agentpolicy.ExtractAgentFlagRequirement([]byte(current.Document)); ok && len(req) > 0 {
+					prev.ServiceAccounts = &agentpolicy.ServiceAccts{AgentFlagRequiredFor: req}
+				}
 			}
 		}
 		if loosen := agentpolicy.Loosenings(prev, next); len(loosen) > 0 {
@@ -308,7 +337,7 @@ func (m *Manager) publishedPolicy(ctx context.Context, tenant string) (suspended
 	if v == nil {
 		return suspended, nil, 0, nil
 	}
-	d, perr := agentpolicy.Parse([]byte(v.Document))
+	d, perr := agentpolicy.ParseStored([]byte(v.Document))
 	if perr != nil {
 		log.Error().Err(perr).Str("tenant", tenant).Int("version", v.Version).
 			Msg("The published agent policy cannot be read; agent actuation is refused in this tenant.")

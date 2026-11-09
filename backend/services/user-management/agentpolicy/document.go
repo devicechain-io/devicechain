@@ -273,8 +273,17 @@ func invalid(format string, a ...any) error {
 }
 
 // Parse reads a policy document strictly: unknown keys, trailing data, and any rule violation are
-// refused. It never returns a partially valid document.
-func Parse(raw []byte) (*Document, error) {
+// refused. It never returns a partially valid document. It is for what a PERSON submits.
+func Parse(raw []byte) (*Document, error) { return parse(raw, true) }
+
+// ParseStored reads a document that is already STORED: every rule Parse applies, except that an
+// entry of serviceAccounts.agentFlagRequiredFor need not be an authority THIS build knows. A stored
+// entry this build does not know was carried forward from a newer release's document by the kill
+// switch (see ExtractAgentFlagRequirement); it requires nothing here, because no role here can
+// hold it, and dropping it would lift the rule for the release that does know it.
+func ParseStored(raw []byte) (*Document, error) { return parse(raw, false) }
+
+func parse(raw []byte, vocabulary bool) (*Document, error) {
 	if len(raw) > maxDocumentBytes {
 		return nil, invalid("the document is larger than %d bytes", maxDocumentBytes)
 	}
@@ -298,7 +307,7 @@ func Parse(raw []byte) (*Document, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, invalid("trailing data after the document")
 	}
-	if err := d.Validate(); err != nil {
+	if err := d.validate(vocabulary); err != nil {
 		return nil, err
 	}
 	return &d, nil
@@ -306,6 +315,12 @@ func Parse(raw []byte) (*Document, error) {
 
 // Canonical is the document's stored form: Go's struct order, defaults NOT filled in, so what is
 // stored is what the tenant wrote.
+//
+// 🔴 EVERY WRITER STORES Canonical() OF A PARSED DOCUMENT, AND NOTHING ELSE. The forward-compat
+// rules lean on it: a later release tells this format from its own by the version Canonical always
+// writes, and ExtractAgentFlagRequirement reads the one frozen key from the stored bytes. A writer
+// that stored raw input would let a document with no version, or with this key spelt differently,
+// reach a release that cannot tell what it is. TestEveryWriterStoresTheCanonicalForm pins it.
 //
 // It always carries the version, so a later release can tell this format from its own.
 func (d *Document) Canonical() ([]byte, error) {
@@ -315,7 +330,9 @@ func (d *Document) Canonical() ([]byte, error) {
 }
 
 // Validate applies every rule to the document.
-func (d *Document) Validate() error {
+func (d *Document) Validate() error { return d.validate(true) }
+
+func (d *Document) validate(vocabulary bool) error {
 	switch d.Actuation {
 	case "", ActuationEnabled, ActuationDisabled:
 	default:
@@ -353,7 +370,7 @@ func (d *Document) Validate() error {
 		}
 		for _, a := range sa.AgentFlagRequiredFor {
 			// A misspelt authority would require nothing and look like a rule.
-			if a == string(auth.AuthorityAll) || !auth.ValidAuthority(a) {
+			if a == string(auth.AuthorityAll) || (vocabulary && !auth.ValidAuthority(a)) {
 				return invalid("serviceAccounts.agentFlagRequiredFor: %q is not a grantable authority", a)
 			}
 		}
@@ -605,7 +622,7 @@ func ExtractAgentFlagRequirement(raw []byte) (required []string, ok bool) {
 // format has the one frozen key extracted (ExtractAgentFlagRequirement); if even that fails, it is
 // an error too.
 func AgentFlagRequirement(raw []byte) ([]string, error) {
-	doc, err := Parse(raw)
+	doc, err := ParseStored(raw)
 	if err == nil {
 		return doc.AgentFlagRequiredFor(), nil
 	}

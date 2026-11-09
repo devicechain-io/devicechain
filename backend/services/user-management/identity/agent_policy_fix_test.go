@@ -110,10 +110,18 @@ func TestSuspensionTransitionsAreJournaled(t *testing.T) {
 // read (written by a newer release, or damaged), turning actuation off still publishes a disabled
 // policy without a second factor; turning it on over one is refused.
 func TestKillSwitchWorksOverAnUnreadablePolicy(t *testing.T) {
-	for name, doc := range map[string]string{
-		"newer version": `{"version":"v9","actuation":"enabled","clients":["agent-desktop"],"futureKey":1,"serviceAccounts":{"agentFlagRequiredFor":["command:write","future:write"]}}`,
-		"damaged":       `{"version":"v1alpha1","actuation":"enabled","typo":1,"serviceAccounts":{"agentFlagRequiredFor":["command:write"]}}`,
+	for name, c := range map[string]struct {
+		doc  string
+		want []string
+	}{
+		// future:write is an authority only the newer release knows: it is carried VERBATIM, so
+		// the rule still holds on the pods that can read it once the rollout finishes.
+		"newer version": {`{"version":"v9","actuation":"enabled","clients":["agent-desktop"],"futureKey":1,"serviceAccounts":{"agentFlagRequiredFor":["command:write","future:write"]}}`,
+			[]string{"command:write", "future:write"}},
+		"damaged": {`{"version":"v1alpha1","actuation":"enabled","typo":1,"serviceAccounts":{"agentFlagRequiredFor":["command:write"]}}`,
+			[]string{"command:write"}},
 	} {
+		doc := c.doc
 		t.Run(name, func(t *testing.T) {
 			e := newAgentEnv(t)
 			ctx := context.Background()
@@ -124,11 +132,11 @@ func TestKillSwitchWorksOverAnUnreadablePolicy(t *testing.T) {
 			noFactor := adminClaims(nil, auth.AmrPasswordOnly())
 			view, err := e.m.SetTenantAgentActuation(ctx, noFactor, false)
 			require.NoError(t, err)
-			d, err := agentpolicy.Parse([]byte(view.Published.Document))
+			d, err := agentpolicy.ParseStored([]byte(view.Published.Document))
 			require.NoError(t, err)
 			require.False(t, d.ActuationOn())
-			require.Equal(t, []string{"command:write"}, d.AgentFlagRequiredFor(),
-				"the kill switch must carry the service-account rule forward, never drop it")
+			require.ElementsMatch(t, c.want, d.AgentFlagRequiredFor(),
+				"the kill switch must carry the service-account rule forward verbatim, never drop an entry")
 
 			_, err = e.store.PublishAgentPolicy(ctx, agentTenant, "test", func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error) {
 				return doc, iam.AgentPolicyOriginPublish, false, nil
@@ -185,4 +193,71 @@ func TestKillSwitchPublishesNothingOverAnUnparseableDocument(t *testing.T) {
 	view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
 	require.NoError(t, err)
 	require.Equal(t, 1, view.Published.Version, "nothing must be published")
+}
+
+// 🔴 Nothing but the kill switch changes a policy this release cannot read: a publish and a rollback
+// over one are refused, with a second factor or without, because a loosening cannot be judged
+// against a predecessor nobody here can read. The kill switch still works.
+func TestPublishAndRollbackRefusedOverAnUnreadablePolicy(t *testing.T) {
+	e := newAgentEnv(t)
+	ctx := context.Background()
+	now := time.Now()
+	fresh := adminClaims(&now, auth.AmrPasswordOTP())
+	_, err := e.m.SaveAgentPolicyDraft(ctx, fresh, `{"actuation":"disabled"}`)
+	require.NoError(t, err)
+	_, err = e.m.PublishAgentPolicyDraft(ctx, fresh)
+	require.NoError(t, err, "control: v1 is readable")
+
+	_, err = e.store.PublishAgentPolicy(ctx, agentTenant, "newer-pod", func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error) {
+		return `{"version":"v9","actuation":"enabled","serviceAccounts":{"agentFlagRequiredFor":["future:write"]}}`, iam.AgentPolicyOriginPublish, false, nil
+	})
+	require.NoError(t, err)
+
+	_, err = e.m.SaveAgentPolicyDraft(ctx, fresh, `{"actuation":"disabled"}`)
+	require.NoError(t, err, "a draft changes nothing in force and may still be saved")
+	_, err = e.m.PublishAgentPolicyDraft(ctx, fresh)
+	require.Equal(t, AgentPolicyUnreadable, policyErrCode(err), "publish over an unreadable policy")
+	_, err = e.m.RollbackAgentPolicy(ctx, fresh, 1)
+	require.Equal(t, AgentPolicyUnreadable, policyErrCode(err), "rollback over an unreadable policy")
+
+	view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
+	require.NoError(t, err, "the kill switch still works, without a second factor")
+	d, err := agentpolicy.ParseStored([]byte(view.Published.Document))
+	require.NoError(t, err)
+	require.Equal(t, []string{"future:write"}, d.AgentFlagRequiredFor())
+}
+
+// 🔴 Every writer stores Canonical() of a parsed document: the version is always written and the
+// frozen key is always spelt the one way, which is what a later release relies on to read it.
+func TestEveryWriterStoresTheCanonicalForm(t *testing.T) {
+	e := newAgentEnv(t)
+	ctx := context.Background()
+	now := time.Now()
+	fresh := adminClaims(&now, auth.AmrPasswordOTP())
+	// Deliberately non-canonical input: whitespace, key order, no version.
+	_, err := e.m.SaveAgentPolicyDraft(ctx, fresh, ` { "serviceAccounts" : {"agentFlagRequiredFor":["command:write"]}, "actuation":"disabled" } `)
+	require.NoError(t, err)
+	head, err := e.store.AgentPolicyHead(ctx, agentTenant)
+	require.NoError(t, err)
+	stored := []string{*head.Draft}
+	_, err = e.m.PublishAgentPolicyDraft(ctx, fresh)
+	require.NoError(t, err)
+	_, err = e.m.SetTenantAgentActuation(ctx, fresh, false)
+	require.NoError(t, err)
+	_, err = e.m.RollbackAgentPolicy(ctx, fresh, 1)
+	require.NoError(t, err)
+	vs, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+	require.NoError(t, err)
+	require.Len(t, vs, 3)
+	for _, v := range vs {
+		stored = append(stored, v.Document)
+	}
+	for _, s := range stored {
+		d, err := agentpolicy.ParseStored([]byte(s))
+		require.NoError(t, err)
+		c, err := d.Canonical()
+		require.NoError(t, err)
+		require.Equal(t, string(c), s, "a stored document must be exactly the canonical form")
+		require.Contains(t, s, `"version":"v1alpha1"`)
+	}
 }

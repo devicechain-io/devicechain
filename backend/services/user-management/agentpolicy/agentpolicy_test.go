@@ -344,3 +344,18 @@ func TestDocumentVersion(t *testing.T) {
 	_, err = Parse([]byte(`{"version":"v1alpha1","newKey":true}`))
 	require.ErrorIs(t, err, ErrInvalid)
 }
+
+// A person's document is held to this build's authority vocabulary; a STORED one is not, because a
+// stored entry this build does not know was carried forward from a newer release by the kill switch.
+func TestParseStoredToleratesCarriedForwardAuthorities(t *testing.T) {
+	doc := []byte(`{"version":"v1alpha1","serviceAccounts":{"agentFlagRequiredFor":["future:write","command:write"]}}`)
+	_, err := Parse(doc)
+	require.ErrorIs(t, err, ErrInvalid)
+	d, err := ParseStored(doc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"command:write", "future:write"}, d.AgentFlagRequiredFor())
+	_, err = ParseStored([]byte(`{"serviceAccounts":{"agentFlagRequiredFor":["*"]}}`))
+	require.ErrorIs(t, err, ErrInvalid, "* is never a rule entry, stored or not")
+	_, err = ParseStored([]byte(`{"version":"v1alpha1","unknown":1}`))
+	require.ErrorIs(t, err, ErrInvalid, "everything else stays strict")
+}

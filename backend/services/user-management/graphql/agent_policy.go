@@ -92,7 +92,7 @@ func (r *AgentPolicyResolver) ActuationInEffect() bool {
 	if !r.instance || r.OperatorSuspended() || r.view == nil || r.view.Published == nil {
 		return false
 	}
-	doc, err := agentpolicy.Parse([]byte(r.view.Published.Document))
+	doc, err := agentpolicy.ParseStored([]byte(r.view.Published.Document))
 	return err == nil && doc.ActuationOn()
 }
 
