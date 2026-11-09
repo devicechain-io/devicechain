@@ -222,7 +222,7 @@ type InstanceSpec struct {
 	// +optional
 	Compact bool `json:"compact,omitempty"`
 
-	// Size names the size preset the instance runs ("compact", "perf-12k"); empty is base. It
+	// Size names the size preset the instance runs ("compact", "perf-12k", "perf-16k"); empty is base. It
 	// is a NAME, never a number: the numbers belong to the dcctl release that applies it, and a
 	// release that retunes a preset retunes every instance recorded with it on its next
 	// upgrade. A compact instance records "compact" here beside compact: true.

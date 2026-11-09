@@ -43,10 +43,10 @@ func sizeTableBlock(lines []string, id string) (start, end int, ok bool) {
 // cell in them is a setting name or a quantity, which do not translate. Regenerate with
 // -update-size-docs.
 func TestPublishedSizingTables(t *testing.T) {
-	p := sizePresets[SizePerf12k]
-	tables := map[string][]string{
-		SizePerf12k + ":areas": p.docAreaRows(),
-		SizePerf12k + ":infra": p.docInfraRows(),
+	tables := map[string][]string{}
+	for name, p := range sizePresets {
+		tables[name+":areas"] = p.docAreaRows()
+		tables[name+":infra"] = p.docInfraRows()
 	}
 	for _, page := range sizingDocPages {
 		path := filepath.Join(sizeDocsRoot(), filepath.FromSlash(page))
