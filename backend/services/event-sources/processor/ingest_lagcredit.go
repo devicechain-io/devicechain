@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
@@ -100,8 +101,9 @@ type LagCreditIngest struct {
 	clock       func() time.Time
 	meter       *core.LagCreditMeter
 	readCeiling *core.LagCreditLimiter
-	// readContention is the reading stage's contention bucket, charged at the contention factor on the
-	// fresh and live routes, as the message stage's contention bucket is (core.LagCreditMeter).
+	// readContention is the reading stage's contention bucket, over the reading ceiling SHED by the tenant's
+	// contention factor and then floored as every reading ceiling is (see contendedReading), charged for
+	// every message the message stage contended.
 	readContention *core.LagCreditLimiter
 	readBacklog    [ingestStreams]*core.TenantRateLimiter
 	base           core.TenantCeilingResolver
@@ -129,13 +131,31 @@ func NewLagCreditIngest(cfg LagCreditIngestConfig) *LagCreditIngest {
 			Streams: ingestStreams, Ceiling: cfg.Ceiling, PhaseCalm: cfg.PhaseCalm, Clock: clock,
 		}),
 		readCeiling:    core.NewLagCreditLimiter(cfg.Reading, ingestStreams, core.WithLagCreditClock(clock)),
-		readContention: core.NewLagCreditLimiter(cfg.Reading, ingestStreams, core.WithLagCreditClock(clock)),
+		readContention: core.NewLagCreditLimiter(contendedReading(cfg.Reading, cfg.Factor), ingestStreams, core.WithLagCreditClock(clock)),
 	}
 	for i := range lc.views {
 		lc.views[i] = newSourceView()
 		lc.readBacklog[i] = core.NewTenantRateLimiter(cfg.Reading, core.WithClock(clock))
 	}
 	return lc
+}
+
+// contendedReading is the reading ceiling a tenant is held to under contention, built the way the existing
+// gate builds its live reading limiter (governance.ReadingCeiling over the shed-adjusted ceiling): the rate
+// and burst scaled by the factor (governance.Limits.Shed, burst floored at one), and then the burst raised
+// to the most readings one event may carry. Scaling an already floored reading burst instead would hold a
+// throttled tenant below one event's worth of readings, refusing its large events at any frequency.
+// Given the reading ceiling over the base (governance.ReadingCeiling(base)), this equals the existing
+// gate's ReadingCeiling(shed(base)): the floor is idempotent, and below it both are the floor.
+func contendedReading(reading core.TenantCeilingResolver, factor func(string) float64) core.TenantCeilingResolver {
+	return governance.ReadingCeiling(func(tenant string) core.TenantCeiling {
+		c := reading(tenant)
+		if f := factor(tenant); f < 1 {
+			l := governance.Limits{RatePerSecond: c.RatePerSecond, Burst: c.Burst}.Shed(f)
+			c.RatePerSecond, c.Burst = l.RatePerSecond, l.Burst
+		}
+		return c
+	})
 }
 
 // ingestMeter is the metering decision of one message, made once at the message stage and carried to the
@@ -152,9 +172,10 @@ type ingestMeter struct {
 	stagedAt time.Time
 	// redelivery marks a message that paid on delivery 1; the reading stage admits it uncharged.
 	redelivery bool
-	// contention is the tenant's contention factor the message stage read, applied again at the reading
-	// stage on the fresh and live routes. Zero means none was read (the message was not contended).
-	contention float64
+	// contended says the message stage applied the overload bands to this message (factor below one, and
+	// the message read within its cover: every fresh or live message, and a young one the phase keeps on
+	// the backlog route), so the reading stage charges its readings in the contention bucket too.
+	contended bool
 }
 
 // active reports whether this message was metered by the lag-credited gate.
@@ -181,7 +202,13 @@ func (lc *LagCreditIngest) admit(source, tenant string, stream int, msg messagin
 	d := lc.meter.Admit(core.MeterRequest{
 		Tenant: tenant, N: 1, Source: src, Stamp: msg.AppendTime, Sources: srcs, Factor: factor,
 	})
-	m := ingestMeter{lc: lc, stream: src, route: d.Route, stamp: msg.AppendTime, stagedAt: now, contention: factor}
+	m := ingestMeter{lc: lc, stream: src, route: d.Route, stamp: msg.AppendTime, stagedAt: now}
+	// The meter contends every message read within its own cover, in or out of the backlog phase; only a
+	// true backlog (older than the cover) is exempt. The reading stage follows the same rule.
+	if factor < 1 {
+		age := max(now.Sub(msg.AppendTime)-srcs[stream].Skew, 0)
+		m.contended = d.Route != core.RouteBacklog || age <= core.LagCreditMax(lc.base(tenant))
+	}
 	if stamped {
 		m.sent = msg.AppendTime.Add(srcs[stream].Skew)
 	}
@@ -231,37 +258,33 @@ func (lc *LagCreditIngest) countUnresolved(tenant string) {
 }
 
 // readings charges a decoded message's readings at the reading stage, on the route the message stage chose.
-// A backlog message is charged at its corrected stamp in its stream's own bucket, never contention-scaled
-// (the existing gate's backlog reading limiter is not shed either). A fresh message is charged at pod time
-// with the lag credit plus the delay it sat between the two stages. A live message (no stream) is charged
-// at pod time with the delay only. On those two routes a contention factor below one is charged first in
-// the separate contention bucket at that scale, as the existing gate's live reading limiter carries the
-// shed: a tenant of large events passes the message stage and is still throttled here.
+// A message the message stage contended is first charged in the contention bucket (the reading ceiling
+// shed by the tenant's factor, see contendedReading), as the existing gate's live reading limiter carries
+// the shed: a tenant of large events passes the message stage and is still throttled here. Then the
+// ceiling: a backlog message at its corrected stamp in its stream's own bucket, never shed (the existing
+// backlog reading limiter is not either); a fresh message at pod time with the lag credit plus the delay
+// it sat between the two stages; a live message (no stream) at pod time with the delay only.
 func (m ingestMeter) readings(source, tenant string, readings int) bool {
 	lc := m.lc
 	if m.redelivery || readings <= 0 {
 		return true
 	}
 	now := lc.clock()
-	var ok bool
-	if m.route == core.RouteBacklog {
-		ok = lc.readBacklog[m.stream].AllowNAt(tenant, m.sent, readings)
-	} else {
-		delay := max(now.Sub(m.stagedAt), 0)
-		cover := core.LagCreditMax(lc.base(tenant))
-		srcs := lc.sources(now)
-		// A live message has no stamp (the zero time), which the limiter reads as "feeds no last stamp".
-		req := core.LagCreditRequest{
-			Tenant: tenant, N: readings, Scale: 1, Source: m.stream, Stamp: m.stamp, Sources: srcs,
-			Delay: delay, CreditCap: cover + delay,
-		}
-		ok = true
-		if f := m.contention; f > 0 && f < 1 {
-			scaled := req
-			scaled.Scale = f
-			ok = lc.readContention.Admit(scaled).Admitted
-		}
-		if ok {
+	delay := max(now.Sub(m.stagedAt), 0)
+	cover := core.LagCreditMax(lc.base(tenant))
+	// A live message has no stamp (the zero time), which the limiter reads as "feeds no last stamp".
+	req := core.LagCreditRequest{
+		Tenant: tenant, N: readings, Scale: 1, Source: m.stream, Stamp: m.stamp, Sources: lc.sources(now),
+		Delay: delay, CreditCap: cover + delay,
+	}
+	ok := true
+	if m.contended {
+		ok = lc.readContention.Admit(req).Admitted
+	}
+	if ok {
+		if m.route == core.RouteBacklog {
+			ok = lc.readBacklog[m.stream].AllowNAt(tenant, m.sent, readings)
+		} else {
 			ok = lc.readCeiling.Admit(req).Admitted
 		}
 	}
@@ -282,7 +305,7 @@ func (lc *LagCreditIngest) readingsLive(source, tenant string, readings int) boo
 		}
 		return false
 	}
-	return ingestMeter{lc: lc, stream: -1, route: core.RouteLive, stagedAt: lc.clock(), contention: factor}.readings(source, tenant, readings)
+	return ingestMeter{lc: lc, stream: -1, route: core.RouteLive, stagedAt: lc.clock(), contended: factor < 1}.readings(source, tenant, readings)
 }
 
 // sources is the view of every reader stream now.

@@ -439,9 +439,10 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 		es.cancel()
 	}
 	// The stream is no longer read here: its lag-credit view must stop growing a lag (and crediting every
-	// tenant the full cover) for a reader that no longer exists.
+	// tenant the full cover) for a reader that no longer exists. Deferred, so the messages still in the
+	// pipeline are charged at the reading stage with the lag they were read under, not with none.
 	if es.lc != nil {
-		es.lc.views[es.lcStream].stop()
+		defer es.lc.views[es.lcStream].stop()
 	}
 	// A source stopped without ever having started has nothing to stop. The lifecycle
 	// permits that stop, and without this it would wait out the whole deadline on a nil

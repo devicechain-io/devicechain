@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -604,7 +605,9 @@ func TestAColdPodCannotTellASmallStallFromClockSkew(t *testing.T) {
 // (few messages, many readings) passes the message stage's scaled bucket and must still be throttled here.
 //
 // A bronze tenant at factor 0.25: 10 events a second of 10 readings each, exactly its reading ceiling of
-// 100/s, well inside its message ceiling of 1000/s. Over a minute the reading stage admits about a quarter.
+// 100/s, well inside its message ceiling of 1000/s. Shed, its reading ceiling is 25/s with the burst floored
+// at one event's maximum (256), as governance.ReadingCeiling(shed) gives the existing gate: over a minute
+// that is (256 + 25 x 60) / 10, about 175 of the 600 events.
 func TestTheReadingStageIsThrottledByTheContentionFactor(t *testing.T) {
 	run := func(factor float64) (events int) {
 		clk := &replayClock{t: viewEpoch}
@@ -636,7 +639,62 @@ func TestTheReadingStageIsThrottledByTheContentionFactor(t *testing.T) {
 	}
 	require.Equal(t, 600, run(1), "no overload: every event's readings are within the ceiling")
 	got := run(0.25)
-	require.InDeltaf(t, 150, got, 30, "factor 0.25: about a quarter of the readings (%d of 600 events)", got)
+	require.InDeltaf(t, 175, got, 15, "factor 0.25: the shed reading rate plus the floored burst (%d of 600 events)", got)
+}
+
+// THE FLOOR COMES AFTER THE SHED (second opinion, round 2). A throttled tenant is still admitted an event as
+// large as one event may be, at a rate its shed ceiling allows: the existing gate floors the shed reading
+// burst at eventlimit.MaxReadingsPerEvent. Scaling the floored burst instead (256 x 0.25 = 64) would refuse
+// every event of 65 to 256 readings at any frequency.
+func TestAThrottledTenantsLargeEventIsStillAdmittedAtItsShedRate(t *testing.T) {
+	clk := &replayClock{t: viewEpoch}
+	reading := governance.ReadingCeiling(core.StaticCeiling(100, 100))
+	lc := NewLagCreditIngest(LagCreditIngestConfig{
+		Ceiling: core.StaticCeiling(1000, 1000), Reading: reading,
+		Factor: func(string) float64 { return 0.25 }, Clock: clk.now,
+	})
+	lc.view(StreamCapture).start()
+	for i := 0; i < 6; i++ { // one 200-reading event every 10 s: 20 readings/s, under the shed 25/s
+		m, ok := lc.admit("gw", "bronze", StreamCapture, messaging.Message{AppendTime: clk.t, StreamSeq: uint64(i + 1), NumDelivered: 1})
+		require.True(t, ok)
+		require.Truef(t, m.readings("gw", "bronze", 200), "event %d: a 200-reading event within the shed rate", i)
+		clk.t = clk.t.Add(10 * time.Second)
+	}
+}
+
+// A YOUNG MESSAGE THE PHASE KEEPS ON THE BACKLOG ROUTE IS STILL CONTENDED at the reading stage (second
+// opinion, round 2), as the message stage contends it: only a true backlog, older than the tenant's cover,
+// is exempt. Here a tenant enters its backlog phase on one old message, then sends young events of 100
+// readings each: the backlog reading bucket (burst 1000) would take ten of them, the shed reading ceiling
+// (250/s, burst floored at 256, plus the lag credit) at most five.
+func TestAYoungMessageInTheBacklogPhaseIsContendedAtTheReadingStage(t *testing.T) {
+	clk := &replayClock{t: viewEpoch}
+	lc := NewLagCreditIngest(LagCreditIngestConfig{
+		Ceiling: core.StaticCeiling(1000, 1000), Reading: governance.ReadingCeiling(core.StaticCeiling(1000, 1000)),
+		Factor: func(string) float64 { return 0.25 }, Clock: clk.now,
+	})
+	lc.view(StreamCapture).start()
+	// caught up and the clock learned, then one message two seconds old: past the 1 s cover, into backlog
+	_, _ = lc.admit("gw", "other", StreamCapture, messaging.Message{AppendTime: clk.t, StreamSeq: 1, NumDelivered: 1})
+	old, ok := lc.admit("gw", "bronze", StreamCapture, messaging.Message{AppendTime: clk.t.Add(-2 * time.Second), StreamSeq: 2, NumPending: 1000, NumDelivered: 1})
+	require.True(t, ok)
+	require.Equal(t, core.RouteBacklog, old.route)
+	require.False(t, old.contended, "a true backlog is never contended")
+	admitted := 0
+	for i := 0; i < 20; i++ {
+		m, ok := lc.admit("gw", "bronze", StreamCapture, messaging.Message{AppendTime: clk.t, StreamSeq: uint64(i + 3), NumPending: 1000, NumDelivered: 1})
+		require.True(t, ok)
+		require.Equal(t, core.RouteBacklog, m.route, "the phase holds a young message on the backlog route")
+		require.True(t, m.contended)
+		if m.readings("gw", "bronze", 100) {
+			admitted++
+		}
+		clk.t = clk.t.Add(10 * time.Millisecond)
+	}
+	// the shed ceiling: burst 256 plus at most a 1 s cover of credit at the shed 250/s, so 2 to 5 events;
+	// the backlog bucket alone would take 10
+	require.GreaterOrEqual(t, admitted, 2)
+	require.LessOrEqual(t, admitted, 5, "the shed reading ceiling, not the backlog bucket, decided")
 }
 
 // A factor of 0 is the hard drop at the reading stage too, for external MQTT's readings (the message stage
