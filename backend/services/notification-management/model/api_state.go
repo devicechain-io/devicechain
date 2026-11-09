@@ -96,7 +96,7 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 					NotifyCount:     1,
 					CycleRaisedAt:   raised,
 				}
-				created.PagedTargets = mergePaged(nil, targets)
+				created.PagedTargets = mergePaged(nil, raised, targets)
 				out = created
 				return tx.Create(created).Error
 			}
@@ -108,7 +108,7 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 			// describes a newer cycle; nothing about this one belongs on it.
 			return nil
 		}
-		found.PagedTargets = mergePaged(found.PagedTargets, targets)
+		found.PagedTargets = mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)
 		found.NotifyCount++
 		if !found.FirstNotifiedAt.Valid {
 			found.FirstNotifiedAt = sql.NullTime{Time: at, Valid: true}
@@ -129,13 +129,17 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 
 // mergePaged unions targets into the stored set, by identity, keeping first-seen order. It
 // returns the stored value unchanged when there is nothing to add.
-func mergePaged(stored *datatypes.JSON, add []PagedTarget) *datatypes.JSON {
+func mergePaged(stored *datatypes.JSON, cycle sql.NullTime, add []PagedTarget) *datatypes.JSON {
 	if len(add) == 0 {
 		return stored
 	}
+	label := cycleLabel(cycle)
 	var have []PagedTarget
 	if stored != nil {
-		_ = json.Unmarshal(*stored, &have)
+		var doc pagedDoc
+		if json.Unmarshal(*stored, &doc) == nil && doc.Cycle == label {
+			have = doc.Targets
+		}
 	}
 	seen := make(map[string]bool, len(have))
 	for _, t := range have {
@@ -147,7 +151,7 @@ func mergePaged(stored *datatypes.JSON, add []PagedTarget) *datatypes.JSON {
 			have = append(have, t)
 		}
 	}
-	raw, err := json.Marshal(have)
+	raw, err := json.Marshal(pagedDoc{Cycle: label, Targets: have})
 	if err != nil {
 		return stored
 	}
@@ -174,7 +178,7 @@ func (api *Api) AddPagedTargets(ctx context.Context, alarmToken string, cycle sq
 		if cycle.Valid && found.CycleRaisedAt.Valid && !found.CycleRaisedAt.Time.Equal(cycle.Time) {
 			return nil
 		}
-		return tx.Model(found).Update("paged_targets", mergePaged(found.PagedTargets, targets)).Error
+		return tx.Model(found).Update("paged_targets", mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)).Error
 	})
 }
 
@@ -185,7 +189,7 @@ func (api *Api) AddPagedTargets(ctx context.Context, alarmToken string, cycle sq
 // that also ended the alarm's paging. raisedTime is the event's RaisedTime.
 func (api *Api) ClaimClearAnnouncement(ctx context.Context, alarmToken string, raisedTime, at time.Time) (bool, error) {
 	q := api.RDB.DB(ctx).Model(&NotificationState{}).
-		Where("alarm_token = ? AND cleared_at IS NOT NULL AND clear_notified_at IS NULL", alarmToken)
+		Where("alarm_token = ? AND cleared_at IS NOT NULL AND (clear_notified_at IS NULL OR clear_notified_at < cleared_at)", alarmToken)
 	if k := cycleKey(raisedTime); k.Valid {
 		q = q.Where("(cycle_raised_at = ? OR cycle_raised_at IS NULL)", k.Time)
 	}

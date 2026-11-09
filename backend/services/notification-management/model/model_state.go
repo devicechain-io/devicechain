@@ -95,14 +95,36 @@ func (s *NotificationState) PagedTargetSet() map[string]bool {
 	if s == nil || s.PagedTargets == nil {
 		return out
 	}
-	var targets []PagedTarget
-	if err := json.Unmarshal(*s.PagedTargets, &targets); err != nil {
+	var doc pagedDoc
+	if err := json.Unmarshal(*s.PagedTargets, &doc); err != nil || doc.Cycle != cycleLabel(s.CycleRaisedAt) {
 		return out
 	}
-	for _, t := range targets {
+	for _, t := range doc.Targets {
 		out[t.Key()] = true
 	}
 	return out
+}
+
+// pagedDoc is the stored form of the paged set. It names the cycle it describes so that a
+// value an earlier cycle left behind is never read as this one's.
+type pagedDoc struct {
+	Cycle   string        `json:"cycle"`
+	Targets []PagedTarget `json:"targets"`
+}
+
+// cycleLabel is a cycle's stable text form ("" for none).
+func cycleLabel(c sql.NullTime) string {
+	if !c.Valid {
+		return ""
+	}
+	return c.Time.UTC().Format(time.RFC3339Nano)
+}
+
+// ClearAnnounced reports whether THIS cycle's clear has been claimed. A claim stamped before the
+// row's clear belongs to an earlier cycle, which a pod that predates the column may have left
+// behind when it advanced the cycle, and is not this cycle's.
+func (s *NotificationState) ClearAnnounced() bool {
+	return s.ClearNotifiedAt.Valid && s.ClearedAt.Valid && !s.ClearNotifiedAt.Time.Before(s.ClearedAt.Time)
 }
 
 // SameCycleAs reports whether an event raised at `raised` belongs to the cycle the row

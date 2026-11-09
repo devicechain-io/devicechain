@@ -30,5 +30,6 @@ var (
 		NewNotificationStateCycleSchema(),
 		NewNotificationAttemptsSchema(),
 		NewNotifyOnClearSchema(),
+		NewClearAnnouncementSchema(),
 	}
 )

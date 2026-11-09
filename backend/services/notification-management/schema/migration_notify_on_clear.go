@@ -20,16 +20,6 @@ import (
 // safe: a pod from before this migration inserts a policy without naming the column and the
 // row still lands, as a policy that does not notify on clear.
 //
-// It also adds the two per-cycle columns the clear notification rests on, both on
-// notification_states and both NULLABLE with no default (NULL is the true state of every row
-// that predates them: nothing recorded, nothing announced):
-//
-//   - clear_notified_at: when this cycle's clear was claimed for announcement. The claim is a
-//     compare-and-set on it being NULL, so each clear is sent once across replicas and
-//     redeliveries, separately from cleared_at (which stops escalation and must be stamped first).
-//   - paged_targets: a JSON array of the (channel, recipients) targets that actually delivered
-//     this cycle, so a clear goes to where the alarm was paged and nowhere else.
-//
 // Re-runnable: IF NOT EXISTS, since migrations run with UseTransaction:false and replay from
 // the top after a failure.
 func NewNotifyOnClearSchema() *gormigrate.Migration {
@@ -37,9 +27,36 @@ func NewNotifyOnClearSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "20261109000100",
 		Migrate: func(tx *gorm.DB) error {
-			const states = `"notification-management".notification_states`
+			return tx.Exec(`ALTER TABLE ` + policies +
+				` ADD COLUMN IF NOT EXISTS notify_on_clear boolean NOT NULL DEFAULT false;`).Error
+		},
+		// The column is configuration; a rollback exists to undo a failed forward migration,
+		// not to erase what operators set after it, so it is left in place.
+		Rollback: func(tx *gorm.DB) error { return nil },
+	}
+}
+
+// NewClearAnnouncementSchema adds the two per-cycle columns a clear notification rests on, both
+// on notification_states and both NULLABLE with no default (NULL is the true state of every row
+// that predates them: nothing recorded, nothing announced). It is its own migration, after
+// NewNotifyOnClearSchema, because a database that already ran that one must still get them.
+//
+//   - clear_notified_at: when this cycle's clear was claimed for announcement. The claim is a
+//     compare-and-set, so each clear is sent once across replicas and redeliveries, separately
+//     from cleared_at (which stops escalation and is stamped first). A stamp older than the
+//     row's cleared_at belongs to an earlier cycle and counts as no claim.
+//   - paged_targets: a JSON document {cycle, targets} of the (channel, recipients) targets that
+//     actually delivered in that cycle, so a clear goes to where the alarm was paged and nowhere
+//     else. It names its cycle, so a value left by an earlier cycle (a pod from before this
+//     release advances the cycle without knowing the column) is ignored.
+//
+// Re-runnable: IF NOT EXISTS.
+func NewClearAnnouncementSchema() *gormigrate.Migration {
+	const states = `"notification-management".notification_states`
+	return &gormigrate.Migration{
+		ID: "20261109000200",
+		Migrate: func(tx *gorm.DB) error {
 			for _, stmt := range []string{
-				`ALTER TABLE ` + policies + ` ADD COLUMN IF NOT EXISTS notify_on_clear boolean NOT NULL DEFAULT false;`,
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS clear_notified_at timestamp with time zone;`,
 				`ALTER TABLE ` + states + ` ADD COLUMN IF NOT EXISTS paged_targets jsonb;`,
 			} {
@@ -49,8 +66,7 @@ func NewNotifyOnClearSchema() *gormigrate.Migration {
 			}
 			return nil
 		},
-		// The column is configuration; a rollback exists to undo a failed forward migration,
-		// not to erase what operators set after it, so it is left in place.
+		// Bookkeeping about delivery, re-learned from the next page; left in place on rollback.
 		Rollback: func(tx *gorm.DB) error { return nil },
 	}
 }

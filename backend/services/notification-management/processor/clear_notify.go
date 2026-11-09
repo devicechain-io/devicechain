@@ -70,7 +70,7 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 		return nil
 	}
 	state := states[0]
-	if !state.ClearedAt.Valid || state.ClearNotifiedAt.Valid || !state.SameCycleAs(clear.RaisedTime) {
+	if !state.ClearedAt.Valid || state.ClearAnnounced() || !state.SameCycleAs(clear.RaisedTime) {
 		return nil
 	}
 	paged := state.PagedTargetSet()
@@ -127,7 +127,11 @@ func (n *PolicyNotifier) announceClearIn(ctx context.Context, tenant string, cle
 	}
 	// Nothing took it and a retry could: give the claim back so the redelivery can send it. The
 	// clear is already stamped, so the alarm is not paging in the meantime.
-	if uerr := n.api.UnclaimClearAnnouncement(ctx, clear.AlarmToken, claimedAt); uerr != nil {
+	// Under its own bound, not the delivery deadline: a delivery that spent that deadline is
+	// exactly when the claim most needs to be given back.
+	uctx, ucancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer ucancel()
+	if uerr := n.api.UnclaimClearAnnouncement(uctx, clear.AlarmToken, claimedAt); uerr != nil {
 		log.Error().Err(uerr).Str("tenant", tenant).Str("alarm", clear.AlarmToken).
 			Msg("Could not give back the clear announcement; the clear will not be retried")
 		return nil
@@ -175,7 +179,7 @@ func pagedTargets(ds []delivery) []model.PagedTarget {
 // resend it.
 func (n *PolicyNotifier) announceLateClear(ctx context.Context, event *dmmodel.AlarmStateChangeEvent,
 	recorded *model.NotificationState) {
-	if recorded == nil || !recorded.ClearedAt.Valid || recorded.ClearNotifiedAt.Valid ||
+	if recorded == nil || !recorded.ClearedAt.Valid || recorded.ClearAnnounced() ||
 		!recorded.SameCycleAs(event.RaisedTime) {
 		return
 	}
