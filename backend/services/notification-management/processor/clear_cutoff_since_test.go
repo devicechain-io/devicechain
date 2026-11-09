@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-notification-management/model"
 )
 
@@ -44,5 +45,31 @@ func TestTheClearCutoffMovesOnlyWhenTheOptionTurnsOn(t *testing.T) {
 	set(false)
 	if get().NotifyOnClearSince.Valid {
 		t.Fatal("turning the option off left a cut-off")
+	}
+}
+
+// A policy that was switched on before the column existed has no stamp; the first edit after the
+// upgrade pins the cut-off it was measured against rather than leaving it to follow updated_at.
+func TestEditingALegacyOptedInPolicyPinsItsCutoff(t *testing.T) {
+	api := fencedApi(t)
+	ctx := tenantScoped()
+	seedClearPolicy(t, api, ctx, true) // on, no stamp
+	before, err := api.NotificationPoliciesByToken(ctx, []string{"p"})
+	if err != nil || len(before) != 1 || before[0].NotifyOnClearSince.Valid {
+		t.Fatalf("harness: %v", err)
+	}
+	was := before[0].UpdatedAt
+	time.Sleep(20 * time.Millisecond)
+	name := "renamed"
+	if _, err := api.UpdateNotificationPolicy(ctx, "p", &model.NotificationPolicyUpdateRequest{
+		Name: dcgraphql.OptionalString{Set: true, Value: &name}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := api.NotificationPoliciesByToken(ctx, []string{"p"})
+	if !after[0].NotifyOnClearSince.Valid || !after[0].NotifyOnClearSince.Time.Equal(was) {
+		t.Fatalf("cut-off = %+v, want the pre-edit updated_at %v", after[0].NotifyOnClearSince, was)
+	}
+	if !after[0].ClearCutoff().Equal(was) {
+		t.Fatal("the cut-off followed the edit")
 	}
 }

@@ -217,6 +217,11 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		// The cut-off moves only when the option turns on, never on another edit; it is
 		// cleared when the option turns off so the next opt-in starts fresh.
 		switch {
+		case notifyOnClear && policy.NotifyOnClear && !policy.NotifyOnClearSince.Valid:
+			// Already on with no stamp (it was switched on by a pod from before the column):
+			// pin the cut-off it has been measured against until now, so this edit does not
+			// move it.
+			policy.NotifyOnClearSince = sql.NullTime{Time: readAt, Valid: true}
 		case notifyOnClear && !policy.NotifyOnClear:
 			policy.NotifyOnClearSince = sql.NullTime{Time: time.Now().UTC(), Valid: true}
 		case !notifyOnClear:

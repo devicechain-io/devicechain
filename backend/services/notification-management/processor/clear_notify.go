@@ -120,7 +120,7 @@ func (n *PolicyNotifier) AnnouncePendingClears(ctx context.Context, policies []*
 	var lastErr error
 	sent, announced := 0, 0
 	// spent: the pass ran out of ITS OWN budget (the caller is still going) after announcing
-	// something. That is a healthy destination with a backlog longer than one pass, and the rest
+	// something (a row handled without error: sent, or settled by another replica). That is a healthy destination with a backlog longer than one pass, and the rest
 	// waits for the next tick; reporting it as a failed pass would page an operator about a
 	// destination that is working. With nothing announced it still is a failure.
 	spent := func(err error) bool {
