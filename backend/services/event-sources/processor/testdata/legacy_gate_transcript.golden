@@ -128,3 +128,50 @@ msg 30 tenant=acme seq=31 deliveries=4 stamp=-59m58.28s now=1.72s
   gate tenant=acme sentAt=-59m58.28s redelivery=true origin=1 -> true
   readings tenant=acme sentAt=-59m58.28s redelivery=true origin=1 n=1 -> true
   acks=1 published=19 failed=0 received=23
+msg 31 tenant=acme seq=32 deliveries=1 stamp=3.72s now=3.72s
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> true
+  readings tenant=acme sentAt=zero redelivery=false origin=1 n=1 -> true
+  feedback accepted tenant=acme gateway=gw-1 altId=edge:i:e:0
+  acks=1 published=20 failed=0 received=24
+msg 32 tenant=acme seq=33 deliveries=1 stamp=3.72s now=3.72s
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> true
+  readings tenant=acme sentAt=zero redelivery=false origin=1 n=1 -> true
+  feedback accepted tenant=acme gateway=gw-1 altId=edge:i:e:1
+  acks=1 published=21 failed=0 received=25
+msg 33 tenant=acme seq=34 deliveries=1 stamp=3.72s now=3.72s
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> true
+  readings tenant=acme sentAt=zero redelivery=false origin=1 n=1 -> true
+  feedback accepted tenant=acme gateway=gw-1 altId=edge:i:e:2
+  acks=1 published=22 failed=0 received=26
+msg 34 tenant=acme seq=35 deliveries=1 stamp=3.72s now=3.72s
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> true
+  reading-shed source=gw-test tenant=acme readings=1
+  readings tenant=acme sentAt=zero redelivery=false origin=1 n=1 -> false
+  feedback refused tenant=acme gateway=gw-1 altId=edge:i:e:3 device=sensor-001 reason=over_ceiling
+  acks=1 published=22 failed=0 received=27
+msg 35 tenant=acme seq=36 deliveries=1 stamp=3.72s now=3.72s
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> true
+  reading-shed source=gw-test tenant=acme readings=1
+  readings tenant=acme sentAt=zero redelivery=false origin=1 n=1 -> false
+  feedback refused tenant=acme gateway=gw-1 altId=edge:i:e:4 device=sensor-001 reason=over_ceiling
+  acks=1 published=22 failed=0 received=28
+msg 36 tenant=acme seq=37 deliveries=1 stamp=3.72s now=3.72s
+  shed source=gw-test tenant=acme
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> false
+  feedback refused tenant=acme gateway=gw-1 altId=edge:i:e:5 device=sensor-001 reason=over_ceiling
+  acks=1 published=22 failed=0 received=28
+msg 37 tenant=acme seq=38 deliveries=1 stamp=3.72s now=3.72s
+  shed source=gw-test tenant=acme
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> false
+  feedback refused tenant=acme gateway=gw-1 altId=edge:i:e:6 device=sensor-001 reason=over_ceiling
+  acks=1 published=22 failed=0 received=28
+msg 38 tenant=acme seq=39 deliveries=1 stamp=3.72s now=3.72s
+  shed source=gw-test tenant=acme
+  gate tenant=acme sentAt=zero redelivery=false origin=1 -> false
+  feedback refused tenant=acme gateway=gw-1 altId=edge:i:e:7 device=sensor-001 reason=over_ceiling
+  acks=1 published=22 failed=0 received=28
+msg 39 tenant=gone seq=40 deliveries=1 stamp=3.72s now=3.72s
+  tenant-gone source=gw-test tenant=gone
+  gate tenant=gone sentAt=zero redelivery=false origin=1 -> false
+  feedback refused tenant=gone gateway=gw-1 altId=edge:i:e:gone device=sensor-001 reason=over_ceiling
+  acks=1 published=22 failed=0 received=28

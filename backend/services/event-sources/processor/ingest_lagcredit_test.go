@@ -597,3 +597,81 @@ func TestAColdPodCannotTellASmallStallFromClockSkew(t *testing.T) {
 	}
 	require.Equal(t, 20, legacy, "legacy sheds the same messages: the residual is not a regression")
 }
+
+// THE READING STAGE CARRIES THE CONTENTION SHED. The existing gate's live, HTTP and integration reading
+// limiters are built over the shed-adjusted ceiling, so under an overload band a throttled class is held to
+// factor x its reading rate after decode as well as at the message stage. A tenant whose events are large
+// (few messages, many readings) passes the message stage's scaled bucket and must still be throttled here.
+//
+// A bronze tenant at factor 0.25: 10 events a second of 10 readings each, exactly its reading ceiling of
+// 100/s, well inside its message ceiling of 1000/s. Over a minute the reading stage admits about a quarter.
+func TestTheReadingStageIsThrottledByTheContentionFactor(t *testing.T) {
+	run := func(factor float64) (events int) {
+		clk := &replayClock{t: viewEpoch}
+		lc := NewLagCreditIngest(LagCreditIngestConfig{
+			Ceiling: core.StaticCeiling(1000, 1000), Reading: core.StaticCeiling(100, 100),
+			Factor: func(string) float64 { return factor }, Clock: clk.now,
+		})
+		lc.view(StreamCapture).start()
+		admitted := 0
+		for i := 0; i < 600; i++ {
+			msg := messaging.Message{AppendTime: clk.t, StreamSeq: uint64(i + 1), NumDelivered: 1}
+			m, ok := lc.admit("gw", "bronze", StreamCapture, msg)
+			require.True(t, ok, "the message stage has room: 10/s against 250/s")
+			if m.readings("gw", "bronze", 10) {
+				admitted++
+			}
+			clk.t = clk.t.Add(100 * time.Millisecond)
+		}
+		// external MQTT, through readingsLive, is throttled alike
+		live := 0
+		for i := 0; i < 600; i++ {
+			if lc.readingsLive("ext", "bronze-live", 10) {
+				live++
+			}
+			clk.t = clk.t.Add(100 * time.Millisecond)
+		}
+		require.InDelta(t, admitted, live, float64(admitted)*0.2+2, "external MQTT's reading stage is throttled like the gateway's")
+		return admitted
+	}
+	require.Equal(t, 600, run(1), "no overload: every event's readings are within the ceiling")
+	got := run(0.25)
+	require.InDeltaf(t, 150, got, 30, "factor 0.25: about a quarter of the readings (%d of 600 events)", got)
+}
+
+// A factor of 0 is the hard drop at the reading stage too, for external MQTT's readings (the message stage
+// already refuses the gateway's fresh messages at 0, so they never reach it).
+func TestTheReadingStageHardDropsAtFactorZero(t *testing.T) {
+	sheds := 0
+	lc := NewLagCreditIngest(LagCreditIngestConfig{
+		Ceiling: core.StaticCeiling(1000, 1000), Reading: core.StaticCeiling(100, 100),
+		Factor: func(string) float64 { return 0 }, Clock: func() time.Time { return viewEpoch },
+		Hooks: LagCreditHooks{ReadingShed: func(string, string, int) { sheds++ }},
+	})
+	require.False(t, lc.readingsLive("ext", "besteffort", 1))
+	require.Equal(t, 1, sheds, "and it is counted as a reading shed")
+}
+
+// A STOPPED SOURCE HAS NO READER TO BE BEHIND. Start marks its stream started (an unseen started stream is
+// credited as the cover allows, a seen one by how long ago it read); stopping the source must undo that,
+// or a stream nobody reads any more keeps a lag that grows without bound and credits every tenant the
+// full cover until the process exits. A restart begins again as unknown, not from the old last read.
+func TestStoppingTheSourceStopsItsStreamsView(t *testing.T) {
+	clk := &replayClock{t: viewEpoch}
+	lc := NewLagCreditIngest(LagCreditIngestConfig{
+		Ceiling: core.StaticCeiling(1000, 2000), Reading: core.StaticCeiling(1000, 2000), Factor: func(string) float64 { return 1 },
+		Clock: clk.now,
+	})
+	es := &GatewayJetStreamSource{Id: "store"}
+	es.UseLagCredit(lc, StreamStore)
+	lc.view(StreamStore).start()
+	lc.view(StreamStore).observe(clk.t, clk.t, 1, 0)
+	clk.t = clk.t.Add(time.Minute)
+	require.Equal(t, time.Minute, lc.view(StreamStore).view(clk.t).Lag, "a started stream read a minute ago")
+
+	require.NoError(t, es.ExecuteStop(context.Background()))
+	require.Zero(t, lc.view(StreamStore).view(clk.t).Lag, "a stopped stream has no reader to be behind")
+
+	lc.view(StreamStore).start()
+	require.Equal(t, unknownLag, lc.view(StreamStore).view(clk.t).Lag, "restarted, it is unknown until it reads")
+}

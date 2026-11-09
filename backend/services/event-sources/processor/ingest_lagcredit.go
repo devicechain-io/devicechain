@@ -100,11 +100,14 @@ type LagCreditIngest struct {
 	clock       func() time.Time
 	meter       *core.LagCreditMeter
 	readCeiling *core.LagCreditLimiter
-	readBacklog [ingestStreams]*core.TenantRateLimiter
-	base        core.TenantCeilingResolver
-	factor      func(tenant string) float64
-	views       [ingestStreams]*sourceView
-	hooks       LagCreditHooks
+	// readContention is the reading stage's contention bucket, charged at the contention factor on the
+	// fresh and live routes, as the message stage's contention bucket is (core.LagCreditMeter).
+	readContention *core.LagCreditLimiter
+	readBacklog    [ingestStreams]*core.TenantRateLimiter
+	base           core.TenantCeilingResolver
+	factor         func(tenant string) float64
+	views          [ingestStreams]*sourceView
+	hooks          LagCreditHooks
 }
 
 // NewLagCreditIngest builds the gate. A missing ceiling or factor panics: a gate that cannot resolve a
@@ -125,7 +128,8 @@ func NewLagCreditIngest(cfg LagCreditIngestConfig) *LagCreditIngest {
 		meter: core.NewLagCreditMeter(core.LagCreditMeterConfig{
 			Streams: ingestStreams, Ceiling: cfg.Ceiling, PhaseCalm: cfg.PhaseCalm, Clock: clock,
 		}),
-		readCeiling: core.NewLagCreditLimiter(cfg.Reading, ingestStreams, core.WithLagCreditClock(clock)),
+		readCeiling:    core.NewLagCreditLimiter(cfg.Reading, ingestStreams, core.WithLagCreditClock(clock)),
+		readContention: core.NewLagCreditLimiter(cfg.Reading, ingestStreams, core.WithLagCreditClock(clock)),
 	}
 	for i := range lc.views {
 		lc.views[i] = newSourceView()
@@ -148,6 +152,9 @@ type ingestMeter struct {
 	stagedAt time.Time
 	// redelivery marks a message that paid on delivery 1; the reading stage admits it uncharged.
 	redelivery bool
+	// contention is the tenant's contention factor the message stage read, applied again at the reading
+	// stage on the fresh and live routes. Zero means none was read (the message was not contended).
+	contention float64
 }
 
 // active reports whether this message was metered by the lag-credited gate.
@@ -170,10 +177,11 @@ func (lc *LagCreditIngest) admit(source, tenant string, stream int, msg messagin
 		src = -1
 	}
 	srcs := lc.sources(now)
+	factor := lc.factor(tenant)
 	d := lc.meter.Admit(core.MeterRequest{
-		Tenant: tenant, N: 1, Source: src, Stamp: msg.AppendTime, Sources: srcs, Factor: lc.factor(tenant),
+		Tenant: tenant, N: 1, Source: src, Stamp: msg.AppendTime, Sources: srcs, Factor: factor,
 	})
-	m := ingestMeter{lc: lc, stream: src, route: d.Route, stamp: msg.AppendTime, stagedAt: now}
+	m := ingestMeter{lc: lc, stream: src, route: d.Route, stamp: msg.AppendTime, stagedAt: now, contention: factor}
 	if stamped {
 		m.sent = msg.AppendTime.Add(srcs[stream].Skew)
 	}
@@ -223,9 +231,12 @@ func (lc *LagCreditIngest) countUnresolved(tenant string) {
 }
 
 // readings charges a decoded message's readings at the reading stage, on the route the message stage chose.
-// A backlog message is charged at its corrected stamp in its stream's own bucket. A fresh message is
-// charged at pod time with the lag credit plus the delay it sat between the two stages. A live message
-// (no stream) is charged at pod time with the delay only.
+// A backlog message is charged at its corrected stamp in its stream's own bucket, never contention-scaled
+// (the existing gate's backlog reading limiter is not shed either). A fresh message is charged at pod time
+// with the lag credit plus the delay it sat between the two stages. A live message (no stream) is charged
+// at pod time with the delay only. On those two routes a contention factor below one is charged first in
+// the separate contention bucket at that scale, as the existing gate's live reading limiter carries the
+// shed: a tenant of large events passes the message stage and is still throttled here.
 func (m ingestMeter) readings(source, tenant string, readings int) bool {
 	lc := m.lc
 	if m.redelivery || readings <= 0 {
@@ -238,11 +249,21 @@ func (m ingestMeter) readings(source, tenant string, readings int) bool {
 	} else {
 		delay := max(now.Sub(m.stagedAt), 0)
 		cover := core.LagCreditMax(lc.base(tenant))
+		srcs := lc.sources(now)
 		// A live message has no stamp (the zero time), which the limiter reads as "feeds no last stamp".
-		ok = lc.readCeiling.Admit(core.LagCreditRequest{
-			Tenant: tenant, N: readings, Scale: 1, Source: m.stream, Stamp: m.stamp, Sources: lc.sources(now),
+		req := core.LagCreditRequest{
+			Tenant: tenant, N: readings, Scale: 1, Source: m.stream, Stamp: m.stamp, Sources: srcs,
 			Delay: delay, CreditCap: cover + delay,
-		}).Admitted
+		}
+		ok = true
+		if f := m.contention; f > 0 && f < 1 {
+			scaled := req
+			scaled.Scale = f
+			ok = lc.readContention.Admit(scaled).Admitted
+		}
+		if ok {
+			ok = lc.readCeiling.Admit(req).Admitted
+		}
 	}
 	if !ok && lc.hooks.ReadingShed != nil {
 		lc.hooks.ReadingShed(source, tenant, readings)
@@ -250,9 +271,18 @@ func (m ingestMeter) readings(source, tenant string, readings int) bool {
 	return ok
 }
 
-// readingsLive charges a stream-less message's readings (external MQTT) at pod time with no credit.
+// readingsLive charges a stream-less message's readings (external MQTT) at pod time with no credit, at the
+// tenant's contention factor now. A factor of 0 is the hard drop, as the existing gate's shed ceiling of
+// zero refuses every reading.
 func (lc *LagCreditIngest) readingsLive(source, tenant string, readings int) bool {
-	return ingestMeter{lc: lc, stream: -1, route: core.RouteLive, stagedAt: lc.clock()}.readings(source, tenant, readings)
+	factor := lc.factor(tenant)
+	if factor == 0 && readings > 0 {
+		if lc.hooks.ReadingShed != nil {
+			lc.hooks.ReadingShed(source, tenant, readings)
+		}
+		return false
+	}
+	return ingestMeter{lc: lc, stream: -1, route: core.RouteLive, stagedAt: lc.clock(), contention: factor}.readings(source, tenant, readings)
 }
 
 // sources is the view of every reader stream now.
@@ -331,6 +361,16 @@ func newSourceView() *sourceView { return &sourceView{} }
 func (v *sourceView) start() {
 	v.mu.Lock()
 	v.started = true
+	v.mu.Unlock()
+}
+
+// stop marks the stream as no longer read by this process (its source stopped): it has no reader to be
+// behind, so its lag is zero again. What it had read is forgotten, so a later start is unknown until it
+// reads or is seen idle, rather than measured from a read before the stop. The skew estimate is kept: it
+// describes the broker's clock, not the reader.
+func (v *sourceView) stop() {
+	v.mu.Lock()
+	v.started, v.seen, v.readAt, v.readAlpha, v.readPending = false, false, time.Time{}, 0, 0
 	v.mu.Unlock()
 }
 
@@ -549,6 +589,15 @@ func (es *GatewayJetStreamSource) UseLagCredit(lc *LagCreditIngest, stream int) 
 		panic(fmt.Sprintf("processor.UseLagCredit: a gate and a stream in [0,%d) are required", ingestStreams))
 	}
 	es.lc, es.lcStream = lc, stream
+}
+
+// LagCredit reports the lag-credited gate this source meters itself with, and the stream it is metered as;
+// nil (and -1) in legacy mode, where the source asks the composed gate for every decision.
+func (es *GatewayJetStreamSource) LagCredit() (*LagCreditIngest, int) {
+	if es.lc == nil {
+		return nil, -1
+	}
+	return es.lc, es.lcStream
 }
 
 // startLagCredit marks the stream started and, when the reader can be asked, starts the idle probe.

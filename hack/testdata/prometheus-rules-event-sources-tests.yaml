@@ -736,7 +736,8 @@ tests:
   # ------------------------------------------------------------------
   # THE FIELD CASE: a stall longer than the credit. On the capture stream, 300 fresh-route
   # ceiling sheds land while 600 of 1000 fresh admissions were judged against more than a second
-  # of credit. No pending period: seen at once, held for the window, cleared after it.
+  # of credit. Pending for the 5-minute `for` (the window holds the burst for 10), then firing,
+  # cleared after the window.
   #
   # Beside it, and NOT named: the store stream sheds at the ceiling with every admission judged at
   # a second or less (a tenant over its ceiling with the readers current: the gate doing its job),
@@ -764,7 +765,11 @@ tests:
       - eval_time: 10m
         alertname: IngestShedBeyondLagCredit
         exp_alerts: []
-      - eval_time: 12m
+      # pending for the short `for`: a shed seen at once, paged only once it has held 5 minutes
+      - eval_time: 14m
+        alertname: IngestShedBeyondLagCredit
+        exp_alerts: []
+      - eval_time: 18m
         alertname: IngestShedBeyondLagCredit
         exp_alerts:
           - exp_labels:
@@ -775,7 +780,7 @@ tests:
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#ingestshedbeyondlagcredit"
               summary: "Messages were shed at the ingest ceiling while the platform's readers were behind"
-              description: "In the last 10 minutes, 300 messages read from stream capture on pod dc-event-sources-5d8f-aaaaa were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), and in the same 10 minutes that pod measured its readers of the stream as more than a second behind. The gate grows a tenant's allowance by what its rate earns over the measured delay, up to the time its burst covers and never more than 5 seconds, so a shed here is either a platform stall longer than that or a tenant above its ceiling during a stall. Check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was), and raise event-sources to debug logging to name the tenant. If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well."
+              description: "In the last 10 minutes, 300 messages read from stream capture on pod dc-event-sources-5d8f-aaaaa were shed at their tenant's ingest ceiling by the lag-credited gate (eventSources.ingestMetering: lagCredit), and in the same 10 minutes that pod measured its readers of the stream as more than a second behind. The likely cause is a tenant sending above its ceiling while the readers were behind: compare devicechain_eventsources_total_msg_rate_limited, raise event-sources to debug logging to name the tenant, and check its ceiling (ingestReadingsPerSecond, ingestBurst) against what its devices send. The other cause is a platform stall longer than the credit covers (the time the tenant's burst covers, never more than 5 seconds): check the platform's message broker and event-sources for a stall at the same time (devicechain_eventsources_reader_lag_seconds shows how far behind each stream was). If the tenant was within its ceiling, report it: it is the case this metering mode exists to prevent. MQTT messages shed this way were already acknowledged to their devices; MqttIngestShedAfterAcknowledgement fires for them as well."
       - eval_time: 40m
         alertname: IngestShedBeyondLagCredit
         exp_alerts: []

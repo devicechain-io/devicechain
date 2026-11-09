@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // THE LEGACY GATE IS UNCHANGED BY THE LAG-CREDITED ONE (#2163).
@@ -66,6 +67,9 @@ type legacyStep struct {
 	deliveries int
 	stamp      *time.Duration
 	advance    time.Duration
+	// altId, when set, sends the message on a gateway's namespace carrying that key, so the source owes
+	// the gateway an answer (accepted, or refused when it is shed).
+	altId string
 }
 
 func ago(d time.Duration) *time.Duration { v := -d; return &v }
@@ -104,6 +108,19 @@ func legacySequence() []legacyStep {
 		add("beta", 1, ago(20*time.Second), 0) // a second backlog, older stamps than the bucket has seen
 	}
 	add("acme", 4, ago(time.Hour), 0) // an old redelivery
+	// On a gateway's namespace: every outcome is answered. After a refill, 8 at once: 5 pass the message
+	// ceiling, of which the reading stage takes 3 (accepted) and sheds 2 (refused), and 3 are shed at the
+	// message gate (refused); then a deleted tenant's gateway event (refused).
+	for i := 0; i < 8; i++ {
+		adv := time.Duration(0)
+		if i == 0 {
+			adv = 2 * time.Second
+		}
+		add("acme", 1, ago(0), adv)
+		s[len(s)-1].altId = fmt.Sprintf("edge:i:e:%d", i)
+	}
+	add("gone", 1, ago(0), 0)
+	s[len(s)-1].altId = "edge:i:e:gone"
 	return s
 }
 
@@ -160,7 +177,9 @@ func legacyTranscript(t *testing.T, configure func(es *GatewayJetStreamSource)) 
 		log("  reading-shed source=%s tenant=%s readings=%d", source, tenant, n)
 	})
 
+	feedback := &transcriptFeedback{log: log}
 	h := newCaptureHarnessWith(t, func(es *GatewayJetStreamSource) {
+		es.UseGatewayFeedback(feedback)
 		es.meter = newMeterAtClock(live, clk.now)
 		if configure != nil {
 			configure(es)
@@ -181,7 +200,11 @@ func legacyTranscript(t *testing.T, configure func(es *GatewayJetStreamSource)) 
 		clk.advance(st.advance)
 		stamp := "none"
 		ack := &recordingAck{}
-		m := capturedMsg("inst-1."+st.tenant+".devices.sensor-001.events", validEvent, st.deliveries, st.seq, ack)
+		subject, body := "inst-1."+st.tenant+".devices.sensor-001.events", validEvent
+		if st.altId != "" {
+			subject, body = "inst-1."+st.tenant+".gateways.gw-1.devices.sensor-001.events", gatewayEvent(st.altId)
+		}
+		m := capturedMsg(subject, body, st.deliveries, st.seq, ack)
 		if st.stamp != nil {
 			m.AppendTime = clk.now().Add(*st.stamp)
 			stamp = rel(m.AppendTime)
@@ -193,6 +216,19 @@ func legacyTranscript(t *testing.T, configure func(es *GatewayJetStreamSource)) 
 		log("  acks=%d published=%d failed=%d received=%d", ack.counts(), published, failed, received)
 	}
 	return lines
+}
+
+// transcriptFeedback writes the answers the source gives a gateway into the transcript.
+type transcriptFeedback struct {
+	log func(format string, args ...any)
+}
+
+func (f *transcriptFeedback) Accepted(tenant, gateway, altId string) {
+	f.log("  feedback accepted tenant=%s gateway=%s altId=%s", tenant, gateway, altId)
+}
+
+func (f *transcriptFeedback) Refused(tenant, gateway string, n messaging.GatewayNotice) {
+	f.log("  feedback refused tenant=%s gateway=%s altId=%s device=%s reason=%s", tenant, gateway, n.AltId, n.Device, n.Reason)
 }
 
 func TestTheLegacyGateIsUnchangedByTheLagCreditedGate(t *testing.T) {
@@ -208,7 +244,7 @@ func TestTheLegacyGateIsUnchangedByTheLagCreditedGate(t *testing.T) {
 		"the legacy ingest gate (the default) no longer makes the decisions, or emits the counts, it made on main")
 	// The transcript has to have exercised what it claims to: every kind of line, at least once.
 	for _, kind := range []string{"  shed ", "  reading-shed ", "  tenant-gone ", "  unresolved stage=live",
-		"redelivery=true", "sentAt=zero", "origin=1", "acks=1 published="} {
+		"redelivery=true", "sentAt=zero", "origin=1", "acks=1 published=", "feedback accepted", "feedback refused"} {
 		require.Containsf(t, got, kind, "the sequence no longer exercises %q", kind)
 	}
 }
