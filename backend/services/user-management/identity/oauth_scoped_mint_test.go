@@ -109,6 +109,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 		accessTTL: time.Minute,
 	}
 	m.initLimiters()
+	installHarnessTokenAudience(t, m)
 	return &mintTestEnv{m: m, store: store, validator: auth.NewValidator(&key.PublicKey), kv: kv}
 }
 

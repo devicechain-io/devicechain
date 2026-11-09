@@ -1209,7 +1209,16 @@ func TestSetTokenAudienceRefusesAnInvalidBlock(t *testing.T) {
 	require.Nil(t, m.resources, "a refused block must not install a policy")
 	require.NoError(t, m.SetTokenAudience(rCfg("enforce"), nil))
 	require.True(t, m.resourcePolicy().enforcing())
-	require.False(t, (&Manager{}).resourcePolicy().enforcing(), "an unconfigured manager runs the release default")
+	// An unconfigured manager runs the release default, enforce, over an EMPTY allowlist: it
+	// fails closed, refusing every resource, rather than issuing for anything.
+	unconfigured := (&Manager{}).resourcePolicy()
+	require.True(t, unconfigured.enforcing(), "an unconfigured manager runs the release default, enforce")
+	require.True(t, unconfigured.check(rMCP, 1).Refused(), "an unconfigured manager issues for no resource")
+	require.False(t, unconfigured.check("", 0).Refused(), "a request naming no resource is still served")
+	// The opt-out: an explicit observe restores the v1.2 behaviour.
+	require.NoError(t, m.SetTokenAudience(rCfg("observe"), nil))
+	require.False(t, m.resourcePolicy().enforcing())
+	require.False(t, m.resourcePolicy().check(rEvil, 1).Refused(), "observe counts an unlisted resource and serves it")
 }
 
 func mustClaims(t *testing.T, e *ccEnv, rec *httptest.ResponseRecorder) *auth.Claims {

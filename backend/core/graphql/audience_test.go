@@ -454,7 +454,7 @@ func TestPolicyIsReadFromTheGateOnTheRegisteredRoute(t *testing.T) {
 	}{
 		{"enforce", http.StatusUnauthorized},
 		{"observe", http.StatusOK},
-		{"", http.StatusOK}, // the release default is observe
+		{"", http.StatusUnauthorized}, // the release default is enforce (from v1.3)
 	} {
 		t.Run("enforcement="+tc.enforcement, func(t *testing.T) {
 			// Loading the instance document sets the process-wide log level; put it back so

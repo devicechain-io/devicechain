@@ -91,14 +91,14 @@ func TestChartDerivesTheTokenAudienceBlockAndTheServicesAcceptIt(t *testing.T) {
 		{"loopback mcp override behind an https ingress",
 			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "http://localhost:8080", nil),
 			"https://iot.example.com/api", []string{"http://localhost:8080"}, nil},
-		{"mixed-case loopback mcp override is left out rather than crash-looping the instance",
-			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "http://LOCALHOST:8080", nil),
+		{"under observe, mixed-case loopback mcp override is left out rather than crash-looping the instance",
+			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "http://LOCALHOST:8080", map[string]interface{}{"enforcement": "observe"}),
 			"https://iot.example.com/api", nil, nil},
-		{"uppercase-scheme loopback override is left out rather than crash-looping the instance",
-			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "HTTP://localhost:8080", nil),
+		{"under observe, uppercase-scheme loopback override is left out rather than crash-looping the instance",
+			tokenAudienceValues(tlsIngress("iot.example.com"), "full", "HTTP://localhost:8080", map[string]interface{}{"enforcement": "observe"}),
 			"https://iot.example.com/api", nil, nil},
-		{"an mcp override naming a platform area's identifier is left out (the validator would refuse it)",
-			tokenAudienceValues(plainIngress("localhost"), "full", "http://localhost/api/device-management", nil),
+		{"under observe, an mcp override naming a platform area's identifier is left out (the validator would refuse it)",
+			tokenAudienceValues(plainIngress("localhost"), "full", "http://localhost/api/device-management", map[string]interface{}{"enforcement": "observe"}),
 			"http://localhost/api", nil, nil},
 		{"a bare IPv6 loopback host does not parse as loopback and derives no base",
 			tokenAudienceValues(plainIngress("::1"), "telemetry", "", nil), "", nil, nil},
@@ -212,8 +212,9 @@ func TestHandSetDerivedTokenAudienceKeysAreRefusedOnBothConfigSources(t *testing
 	}
 }
 
-// The authored-document check: a document that omits a deployed mcp's resource warns in observe
-// mode and is refused in enforce mode; one that lists it passes silently.
+// The authored-document check: a document that omits a deployed mcp's resource warns under an
+// explicit observe and is refused in enforce mode, which is also what an absent enforcement
+// means; one that lists it passes silently.
 func TestAuthoredDocumentMustListMcpsResource(t *testing.T) {
 	// Not parallel: it swaps the package-level warning writer.
 	ch := chartForTest(t)
@@ -239,29 +240,37 @@ func TestAuthoredDocumentMustListMcpsResource(t *testing.T) {
 	if string(missing) == string(good) {
 		t.Fatal("the mutation did not apply; this control would prove nothing")
 	}
-	// Observe (the absent default): a WARNING that prints the block to add, and the deploy
-	// continues. A v1.1-era document cannot carry the block, so refusing here would be a new
-	// refusal in a minor release.
+	// Absent enforcement is enforce from v1.3: the omission is REFUSED at deploy time, naming the
+	// key, the value to add and the opt-out.
 	var warned strings.Builder
 	prev := authoredWarnOut
 	authoredWarnOut = &warned
 	err = validateRenderedInstanceConfig(t.Context(), ch, external(), missing)
 	authoredWarnOut = prev
-	if err != nil {
-		t.Fatalf("observe mode refused a document that omits mcp's resource: %v", err)
+	if err == nil {
+		t.Fatal("a document with no enforcement (enforce by default) omitting mcp's resource passed the pre-flight")
 	}
-	if !strings.Contains(warned.String(), "Warning") || !strings.Contains(warned.String(), `"mcpResources": ["https://iot.example.com/api/mcp"]`) {
-		t.Errorf("the warning does not print the block to add: %q", warned.String())
+	for _, want := range []string{"mcpResources", "https://iot.example.com/api/mcp", "unset", "observe"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
 	}
 
-	// Explicit observe warns the same way.
+	// Explicit observe (the opt-out) keeps the v1.2 behaviour: a WARNING that prints the block
+	// to add, and the deploy continues.
 	explicitObserve := []byte(strings.Replace(string(missing), `"tokenAudience":{`, `"tokenAudience":{"enforcement":"observe",`, 1))
+	if string(explicitObserve) == string(missing) {
+		t.Fatal("the mutation did not apply; this control would prove nothing")
+	}
 	warned.Reset()
 	authoredWarnOut = &warned
 	err = validateRenderedInstanceConfig(t.Context(), ch, external(), explicitObserve)
 	authoredWarnOut = prev
-	if err != nil || warned.Len() == 0 {
-		t.Errorf("explicit observe: err=%v warning=%q; want a warning and no refusal", err, warned.String())
+	if err != nil {
+		t.Fatalf("explicit observe refused a document that omits mcp's resource: %v", err)
+	}
+	if !strings.Contains(warned.String(), "Warning") || !strings.Contains(warned.String(), `"mcpResources": ["https://iot.example.com/api/mcp"]`) {
+		t.Errorf("the warning does not print the block to add: %q", warned.String())
 	}
 
 	// NEGATIVE CONTROL: enforce still refuses, and says why.

@@ -171,12 +171,12 @@ Installing the `mcp` area with more than one replica is refused outright, rather
 
 ## Token audience {#token-audience}
 
-The address in [Where to point a client](#where-to-point-a-client) is the server's **resource identifier**. A token the client requests for it names that address as its audience, and once enforcement is on the authorization server binds a token only to an address on the instance's allowlist. The same address must be registered for the platform's APIs to accept the calls this server forwards, because those calls carry the MCP binding. [Token audience](./security-model.md#token-audience) explains the allowlist and the observe and enforce modes.
+The address in [Where to point a client](#where-to-point-a-client) is the server's **resource identifier**. A token the client requests for it names that address as its audience, and under `enforce`, the default, the authorization server binds a token only to an address on the instance's allowlist. The same address must be registered for the platform's APIs to accept the calls this server forwards, because those calls carry the MCP binding. [Token audience](./security-model.md#token-audience) explains the allowlist and the observe and enforce modes.
 
 - **The chart registers it.** It writes the server's `resourceUrl` into `infrastructure.tokenAudience.mcpResources`. You do nothing.
-- **The server checks at startup.** If its `resourceUrl` is not in that list, it logs one Error on every start and reports `devicechain_mcp_token_audience_registered` as 0 while it keeps running, and every call it forwards is counted as a would-be refusal. When enforcement is on it refuses to start, naming the key. On an instance whose configuration you write yourself (`instance.existingSecret`) and that has no `tokenAudience` block, the gauge stays at 0 until you add one.
-- **Write the address with a lowercase scheme and host.** Matching is byte for byte. A `resourceUrl` you set by hand with an uppercase letter in the scheme or host is not accepted into the list, so change it to lowercase before enforcement.
-- **A client must send the same address** as its `resource`. A client that sends nothing, or a different value, either gets a token that is not bound to this server or, once enforcement is on, is refused.
+- **The server checks at startup.** If its `resourceUrl` is not in that list, it reports `devicechain_mcp_token_audience_registered` as 0. Under `enforce`, the default, it refuses to start, naming the key. Under `observe` it logs one Error on every start and keeps running, and every call it forwards is counted as a would-be refusal. On an instance whose configuration you write yourself (`instance.existingSecret`) and that has no `tokenAudience` block, the gauge stays at 0 until you add one.
+- **Write the address with a lowercase scheme and host.** Matching is byte for byte. A `resourceUrl` you set by hand with an uppercase letter in the scheme or host is not accepted into the list, and under `enforce` the chart refuses to render it, so change it to lowercase.
+- **A client must send the same address** as its `resource`. A client that sends nothing, or a different value, either gets a token that is not bound to this server or, under `enforce`, is refused.
 
 ## Limits and boundaries {#limits-and-boundaries}
 

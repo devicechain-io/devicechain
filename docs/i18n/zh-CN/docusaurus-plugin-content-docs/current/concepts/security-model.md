@@ -63,11 +63,11 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 
 ### 允许列表 {#token-audience-allowlist}
 
-启用强制执行后，授权服务器把令牌绑定到下列资源，各 API 也只接受这些受众。在 `observe` 下，其他任何值都只会被统计并记录日志，但照常处理：
+在默认的 `enforce` 下，授权服务器把令牌绑定到下列资源，各 API 也只接受这些受众。在 `observe` 下，其他任何值都只会被统计并记录日志，但照常处理：
 
 - **MCP 服务器**（已部署时）：它的资源 URL，`<origin>/api/mcp`。
 - **各区域的 API**，位于 `<origin>/api/<区域>`（`mcp` 除外的每个区域），例如 `https://iot.example.com/api/device-management`。
-- **外部资源**，即你在 `externalResources` 中列出的条目。当你自己有一个位于 DeviceChain 之外的服务，用公开的密钥集（`/oauth/jwks`）验证 DeviceChain 令牌，并申请绑定到自身的令牌时使用它。授权服务器会签发这样的令牌，但**启用强制执行后，没有任何 DeviceChain API 接受它**，授权服务器的 `userinfo` 端点也不接受。
+- **外部资源**，即你在 `externalResources` 中列出的条目。当你自己有一个位于 DeviceChain 之外的服务，用公开的密钥集（`/oauth/jwks`）验证 DeviceChain 令牌，并申请绑定到自身的令牌时使用它。授权服务器会签发这样的令牌，但**在 `enforce` 下，没有任何 DeviceChain API 接受它**，授权服务器的 `userinfo` 端点也不接受。
 
 比较是逐字节的，不做大小写折叠，也不处理末尾斜杠，所以 `https://IoT.example.com/api/mcp` 不等于 `https://iot.example.com/api/mcp`。因此配置只接受每个标识符的一种写法，客户端必须原样发送这种写法。
 
@@ -84,13 +84,25 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 | 授权码或刷新请求中的 `resource` 与该授权所绑定的资源不同 | 统计并记录日志；照常处理 | `invalid_target`；刷新令牌不会被作废 |
 | API | 计为 `would_reject` 并记录日志；照常处理 | `401`，与无效令牌的响应相同 |
 
-`observe` 是 `v1.2` 的默认值。`v1.3` 把默认值改为 `enforce`，并为那一个次版本保留 `observe` 作为退路。`v1.4` 移除这条退路：文档中含有 `observe` 时服务拒绝启动，chart 也会拒绝它。参见[升级说明](../deployment/releases-and-upgrades.md#v120-token-audience)。
+从 `v1.3` 起默认值是 `enforce`；`v1.2` 的默认值是 `observe`。设置 `enforcement: observe` 可以在这一个次版本中保留 `v1.2` 的行为，作为退路。`v1.4` 移除这条退路：文档中含有 `observe` 时服务拒绝启动，chart 也会拒绝它。
+
+要使用这条退路，请在 Helm 取值中或 `dcctl` 的[取值覆盖文件](../deployment/tuning-an-instance.md#tunable)中设置该键，然后升级。如果希望滚动升级期间没有任何 Pod 执行强制检查，请在升级到 `v1.3` 之前设置它：
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tokenAudience:
+        enforcement: observe
+```
+
+在你自己编写配置（`instance.existingSecret`）的实例上，请改为在文档的 `infrastructure.tokenAudience` 配置块中写入 `"enforcement": "observe"`。参见[升级说明](../deployment/releases-and-upgrades.md#v120-token-audience)。
 
 未写明任何资源的令牌，在两种模式下都会被每个区域的 API 接受。从不发送 `resource` 的客户端不受这两项检查影响。
 
 ### 读取计数器 {#token-audience-reading}
 
-先运行 `observe` 并观察计数器：如果 `would_reject` 序列始终不变，切换到 `enforce` 对你的客户端就没有任何影响。各序列、两个告警，以及如何找到计数背后的客户端，见[令牌受众检查](../deployment/observability.md#token-audience-checks)。
+在 `enforce` 下，被拒绝的请求以判定 `rejected` 计数。如果你不确定客户端会发送什么，请先运行 `observe` 并观察计数器：如果 `would_reject` 序列始终不变，`enforce` 对你的客户端就没有任何影响。各序列、两个告警，以及如何找到计数背后的客户端，见[令牌受众检查](../deployment/observability.md#token-audience-checks)。
 
 ### 配置 {#token-audience-config}
 
@@ -98,7 +110,7 @@ OAuth 客户端可以在授权请求或令牌请求中发送 `resource` 参数�
 
 | 键 | 由谁写入 | 取值 |
 | --- | --- | --- |
-| `enforcement` | 你 | `observe`、`enforce` 或不设置。不设置即版本默认值，在 `v1.2` 中是 `observe`。它同时控制两项检查。 |
+| `enforcement` | 你 | `observe`、`enforce` 或不设置。不设置即版本默认值，从 `v1.3` 起是 `enforce`（`v1.2` 中是 `observe`）。它同时控制两项检查。 |
 | `unscopedClientCredentials` | 你 | 不设置或 `observe`。本版本在启动时拒绝 `enforce`，因为它要开启的规则目前还不拒绝任何请求。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。 |
 | `externalResources` | 你 | 平台之外的资源标识符列表，最多 8 项。 |
 | `areaBaseUrl` | chart | `<origin>/api`，由 ingress 主机得出。仅当来源为 https，或为 `localhost` 这样的明文 http 回环主机时才设置。在其他主机上未启用 TLS 的 ingress 没有区域资源，正如它也没有授权服务器。 |
@@ -125,7 +137,7 @@ chart 另有自己的检查，因此出错会让 `helm upgrade` 在任何 Pod �
 }
 ```
 
-缺少它时，区域资源未知，`mcp` 也没有注册，因此 MCP 服务器转发的每个调用都会被计为本应拒绝的请求。`dcctl upgrade` 会就缺少 MCP 条目发出警告，在 `enforce` 下则拒绝继续。
+缺少它时，区域资源未知，`mcp` 也没有注册。在默认的 `enforce` 下，`mcp` 会因此拒绝启动，它转发的每个调用也都会被拒绝；在 `observe` 下，这些调用会被计为本应拒绝的请求。`dcctl upgrade` 会拒绝缺少 MCP 条目的文档，只有当 `enforcement` 为 `observe` 时才仅发出警告。
 
 ## 双重身份验证 {#two-factor}
 

@@ -116,11 +116,14 @@ func TestTokenAudienceNoBaseMeansNoAreaResources(t *testing.T) {
 	assert.Equal(t, taOrigin+"/api/device-management", AreaResource(taOrigin+"/api", "device-management"))
 }
 
-// M21: an explicit value wins over the release default, in both directions. The default is
-// asserted against the constant, so the v1.3 flip changes one line and one expectation.
+// M21: an explicit value wins over the release default, in both directions. v1.3 ships
+// enforce as the default (the promise v1.2 published), and an explicit observe still restores
+// the v1.2 behaviour.
 func TestTokenAudienceEffectiveEnforcement(t *testing.T) {
 	assert.Equal(t, TokenAudienceReleaseDefault, TokenAudienceConfiguration{}.EffectiveEnforcement())
-	assert.Equal(t, TokenAudienceObserve, TokenAudienceReleaseDefault, "v1.2 ships observe")
+	assert.Equal(t, TokenAudienceEnforce, TokenAudienceReleaseDefault, "v1.3 ships enforce")
+	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{}.EffectiveEnforcement(), "unset is enforce")
+	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{Enforcement: ""}.EffectiveEnforcement(), "empty is enforce")
 	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{Enforcement: "observe"}.EffectiveEnforcement())
 	assert.Equal(t, TokenAudienceEnforce, TokenAudienceConfiguration{Enforcement: "enforce"}.EffectiveEnforcement())
 	assert.Equal(t, TokenAudienceObserve, TokenAudienceConfiguration{}.EffectiveUnscopedClientCredentials())
