@@ -26,6 +26,9 @@ var bootstrapMqttFailClosed bool
 var (
 	bootstrapMQTTExposure string
 	bootstrapMQTTHost     string
+	// bootstrapDevAllowEgress is --dev-allow-egress, bootstrapDevAllowEgressList its parsed form.
+	bootstrapDevAllowEgress     []string
+	bootstrapDevAllowEgressList []string
 	// bootstrapSize is --size. See bootstrap.SizeNames.
 	bootstrapSize string
 )
@@ -190,6 +193,7 @@ func bootstrapOptions(instance string, enableAreas []string, mqttFailClosed *boo
 		MQTTExposure:         bootstrapMQTTExposure,
 		BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(bootstrapBrokerMaxConnectionsGiven, bootstrapBrokerMaxConnections),
 		MQTTHost:             bootstrapMQTTHost,
+		DevAllowEgress:       bootstrapDevAllowEgressList,
 		SparkplugSources:     bootstrapSparkplugSources,
 		Lwm2mIdentities:      bootstrapLwm2mIdentityList,
 
@@ -231,6 +235,7 @@ func bootstrapStateFor(opts bootstrap.Options, binding bootstrap.ClusterBinding,
 		MQTTExposureGiven:         opts.MQTTExposure,
 		BrokerMaxConnectionsGiven: opts.BrokerMaxConnections,
 		MQTTHostGiven:             opts.MQTTHost,
+		DevAllowEgressGiven:       opts.DevAllowEgress,
 		TrustedProxiesOverride:    opts.TrustedProxies,
 		ValuesOverlay:             valuesOverlay,
 		ObjectStore:               objectStore,
@@ -307,6 +312,20 @@ var bootstrapCmd = &cobra.Command{
 		}
 		if err := bootstrap.CheckMQTTExposureFlags(bootstrapMQTTExposure, bootstrapMQTTHost); err != nil {
 			return err
+		}
+		// --dev-allow-egress is judged up front too: a metadata range, an unmasked prefix or a
+		// non-local --kube-context fails before any cluster exists.
+		bootstrapDevAllowEgressList = nil
+		if cmd.Flags().Changed("dev-allow-egress") {
+			if bootstrapDevAllowEgressList, err = bootstrap.ParseDevAllowEgress(bootstrapDevAllowEgress); err != nil {
+				return err
+			}
+			if bootstrapDevAllowEgressList == nil {
+				return fmt.Errorf("--dev-allow-egress needs an IP address, a CIDR or 'none'")
+			}
+			if err := bootstrap.CheckDevAllowEgressContext(bootstrapKubeContext, bootstrapDevAllowEgressList); err != nil {
+				return err
+			}
 		}
 		if err := bootstrap.ValidateSize(bootstrapSize); err != nil {
 			return fmt.Errorf("--size: %w", err)
@@ -751,6 +770,7 @@ func init() {
 	bootstrapCmd.Flags().IntVar(&bootstrapBrokerMaxConnections, "broker-max-connections", 0, brokerMaxConnectionsUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapMQTTHost, "mqtt-host", "", mqttHostUsage)
+	bootstrapCmd.Flags().StringSliceVar(&bootstrapDevAllowEgress, "dev-allow-egress", nil, devAllowEgressUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapSparkplugSource, "sparkplug-source", "", sparkplugSourceUsage)
 	bootstrapCmd.Flags().BoolVar(&bootstrapWithdrawSparkplug, "withdraw-sparkplug-sources", false, withdrawSparkplugUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", lwm2mIdentitiesUsage)
@@ -828,6 +848,9 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 	}
 	return finishErr
 }
+
+// devAllowEgressUsage is the help for --dev-allow-egress on bootstrap and upgrade.
+const devAllowEgressUsage = "DEVELOPMENT ONLY, local clusters only (kind, minikube, k3d, docker-desktop, rancher-desktop): let tenant webhooks and connectors reach these private destinations (IP addresses or CIDRs, repeatable or comma-separated), for example a service on your own machine or LAN. Recorded on the instance so every upgrade keeps it, shown by 'dcctl instances', and logged as a warning by every service that uses it. The cloud metadata addresses, loopback, link-local and multicast stay blocked whatever you list. 'none' removes it. Refused on any other cluster"
 
 // mqttExposureUsage and mqttHostUsage are the help for --mqtt-exposure and --mqtt-host on bootstrap and upgrade.
 const (

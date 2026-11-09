@@ -69,6 +69,7 @@ permission itself.
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
   -h, --help              help for attr
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -113,6 +114,7 @@ dcctl attr get <kind> <token> [key] [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -166,6 +168,7 @@ dcctl attr set <kind> <token> <key> <value> [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -203,6 +206,7 @@ dcctl attr unset <kind> <token> <key> [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -234,6 +238,7 @@ dcctl bootstrap <provider> <instance> [flags]
       --build                                       build images from source into a local registry (developer path; requires source + ko)
       --cluster string                              local provider: the kind cluster 'dcctl install local' prepared (default "devicechain")
       --dev                                         local-developer preset: --build --host localhost --no-tls --yes, and implies --no-escrow (a zero-config http://localhost/ bring-up); rejects contradictory flags
+      --dev-allow-egress strings                    DEVELOPMENT ONLY, local clusters only (kind, minikube, k3d, docker-desktop, rancher-desktop): let tenant webhooks and connectors reach these private destinations (IP addresses or CIDRs, repeatable or comma-separated), for example a service on your own machine or LAN. Recorded on the instance so every upgrade keeps it, shown by 'dcctl instances', and logged as a warning by every service that uses it. The cloud metadata addresses, loopback, link-local and multicast stay blocked whatever you list. 'none' removes it. Refused on any other cluster
       --dry-run                                     print what would happen without applying changes
       --enable-area strings                         additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)
       --escrow-file string                          where to write the encrypted root-key escrow artifact (default ~/.devicechain/escrow/<instance>-rootkey.escrow). Refuses a path inside ~/.devicechain/instances/<instance>, which 'dcctl destroy' deletes
@@ -487,6 +492,7 @@ This reads the operator plane and authenticates as an identity, not as a tenant.
 ```
       --email string      identity to authenticate as (required)
   -h, --help              help for dead-letters
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -530,6 +536,7 @@ dcctl dead-letters list [flags]
 
 ```
       --email string      identity to authenticate as (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -687,6 +694,7 @@ dcctl device register [flags]
       --external-id string     the device's serial number or other external id (required)
   -h, --help                   help for register
       --insecure-plaintext     send the request over plaintext http, secret included; for a local test cluster only
+  -i, --instance string        instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --key string             the provisioning profile's provision key (required)
       --material-file string   file the device's credential is saved to before it is sent, and read back on a re-run (required)
       --max-attempts int       give up after this many sends (0 keeps trying until --timeout) (default 10)
@@ -783,6 +791,7 @@ member's console shows, under the same grants.
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
   -h, --help              help for events
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -850,6 +859,7 @@ dcctl events failed [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -1320,6 +1330,7 @@ hands them to inference again.
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
   -h, --help              help for presence
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -1386,6 +1397,7 @@ dcctl presence demote [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -1425,6 +1437,7 @@ Every bundle is also scanned for values shaped like a secret, and one that holds
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
   -h, --help              help for product
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
@@ -1487,6 +1500,7 @@ dcctl product apply <dir> [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
@@ -1534,6 +1548,7 @@ dcctl product export <dir> [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
@@ -1582,6 +1597,7 @@ dcctl product plan <dir> [flags]
 
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --kinds string      comma-separated kinds to include: device-types, profiles, integrations, connectors, dashboards (export default: all)
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
@@ -2053,6 +2069,7 @@ Check whether a deleted tenant's data is established as erased
 ```
       --email string      identity to authenticate as (required)
   -h, --help              help for tenant-deletion
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -2111,6 +2128,7 @@ dcctl tenant-deletion status <token> [flags]
 
 ```
       --email string      identity to authenticate as (required)
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required)
   -s, --server string     instance host for platform API calls (default "localhost")
@@ -2179,6 +2197,7 @@ dcctl test <path> [flags]
 ```
       --email string      identity to authenticate as; it must be a member of the tenant (required)
   -h, --help              help for test
+  -i, --instance string   instance id: when --server is not given, the host (and TLS setting, unless --tls is given) the instance was declared with is used, read from its declaration on the cluster
       --junit string      also write the results as JUnit XML to this file
       --otp string        one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
       --password string   password for the identity (required unless DCCTL_PASSWORD is set)
@@ -2345,6 +2364,7 @@ dcctl upgrade <provider> <instance> [flags]
       --allow-envelope-downgrade                move to a release below the first one that reads event envelopes even though the streams may still hold one: a service on such a release dead-letters an envelope and the events in it are lost to that service
       --broker-max-connections int              cap the platform broker's simultaneous client connections (nats-server max_connections), devices and platform clients alike. It bounds a connection flood against the MQTT port when that is exposed (--mqtt-exposure): every connection costs a TLS handshake and, for a device, an authentication round trip. Size it above your fleet with headroom for a reconnect storm; devices past it are refused. 0 returns to the server's own limit, which is also what an instance that never set it has. Recorded on the instance and kept by 'dcctl upgrade' when the flag is omitted
       --clear-alert-routing                     remove the alert routing: alerts go back to no receiver and the instance reports ALERTS NOT ROUTED
+      --dev-allow-egress strings                DEVELOPMENT ONLY, local clusters only (kind, minikube, k3d, docker-desktop, rancher-desktop): let tenant webhooks and connectors reach these private destinations (IP addresses or CIDRs, repeatable or comma-separated), for example a service on your own machine or LAN. Recorded on the instance so every upgrade keeps it, shown by 'dcctl instances', and logged as a warning by every service that uses it. The cloud metadata addresses, loopback, link-local and multicast stay blocked whatever you list. 'none' removes it. Refused on any other cluster
       --drop-legacy-ingress                     stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class
       --dry-run                                 print what would happen without changing anything
       --escrow-file string                      where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on

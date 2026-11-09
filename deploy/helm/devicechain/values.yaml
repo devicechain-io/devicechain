@@ -606,6 +606,13 @@ instance:
         # though it were not.
         allowedDestinations: []
         # - "10.42.0.17/32"   # the in-cluster SMTP relay
+        # LOCAL DEVELOPMENT ONLY. Written by `dcctl bootstrap|upgrade --dev-allow-egress` for an
+        # instance on a local cluster; do not set it for a real deployment (use allowedDestinations
+        # after reading the notes above). Same shape as allowedDestinations (masked CIDRs), but it can
+        # never admit the cloud metadata addresses, loopback, link-local, multicast or the unspecified
+        # address, and every service that reads it logs a warning at startup. A prefix overlapping
+        # one of those fails the service at startup.
+        devAllowedDestinations: []
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
         # Postgres (branding logos and firmware/OTA update artifacts; exports later, ADR-058).

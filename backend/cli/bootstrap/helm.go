@@ -506,6 +506,10 @@ func helmValues(st *State) map[string]interface{} {
 	if httpVals := trustedProxiesValues(st); httpVals != nil {
 		infraVals["http"] = httpVals
 	}
+	// Absent unless a developer asked for it on a local cluster (devegress.go).
+	if egressVals := devAllowEgressValues(st); egressVals != nil {
+		infraVals["egress"] = egressVals
+	}
 	// The shared service secret (ADR-044 amendment) backing the sync cross-service
 	// call primitive, threaded into every service's instance config.
 	if secret := st.Values["serviceAuthSecret"]; secret != "" {

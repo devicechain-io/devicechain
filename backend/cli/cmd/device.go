@@ -95,11 +95,19 @@ the other commands.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// --instance names the host, never the scheme: the provision secret goes over
+			// https unless --insecure-plaintext says otherwise, whatever the declaration holds.
+			server, _, err := targetFlags(cmd)
+			if err != nil {
+				return err
+			}
+			f.server = server
 			return runDeviceRegister(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), &f)
 		},
 	}
 	fl := c.Flags()
 	fl.StringVarP(&f.server, "server", "s", "localhost", "instance host for platform API calls")
+	addInstanceTargetFlags(c)
 	fl.BoolVar(&f.insecure, "insecure-plaintext", false, "send the request over plaintext http, secret included; for a local test cluster only")
 	fl.StringVarP(&f.tenant, "tenant", "t", "", "tenant the device registers into (required)")
 	fl.StringVar(&f.key, "key", "", "the provisioning profile's provision key (required)")

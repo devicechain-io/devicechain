@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -188,7 +189,19 @@ func declarationStatus(ctx context.Context, known bootstrap.KnownInstance, probe
 		return "declaration marked for deletion"
 	}
 
-	return declarationPhaseWords(inst) + alertRoutingWarning(inst)
+	return declarationPhaseWords(inst) + alertRoutingWarning(inst) + devEgressWarning(inst)
+}
+
+// devEgressWarning is the suffix a row carries while the instance holds a development egress
+// allowance (dcctl bootstrap|upgrade --dev-allow-egress). It is a warning, not a status: the
+// allowance relaxes the tenant-egress boundary, and an instance that should not have it is
+// found by this cell.
+func devEgressWarning(inst *dcv1beta1.Instance) string {
+	list := bootstrap.DevAllowEgressOf(inst)
+	if len(list) == 0 {
+		return ""
+	}
+	return "; DEV EGRESS ALLOWED: " + strings.Join(list, ", ") + " (dcctl upgrade --dev-allow-egress none)"
 }
 
 // alertRoutingWarning is the suffix a row carries when the instance's alerts go nowhere.

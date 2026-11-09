@@ -27,6 +27,9 @@ var (
 	upgradeTrustedProxies []string
 	upgradeMQTTExposure   string
 	upgradeMQTTHost       string
+	// upgradeDevAllowEgress is --dev-allow-egress; upgradeDevAllowEgressList its parsed form.
+	upgradeDevAllowEgress     []string
+	upgradeDevAllowEgressList []string
 
 	upgradeBrokerMaxConnections      int
 	upgradeBrokerMaxConnectionsGiven bool
@@ -101,6 +104,7 @@ func upgradeOptions(instance string, mqttFailClosed *bool, valuesOverlay map[str
 			TrustedProxies: upgradeTrustedProxies,
 			MQTTExposure:   upgradeMQTTExposure,
 			MQTTHost:       upgradeMQTTHost,
+			DevAllowEgress: upgradeDevAllowEgressList,
 
 			BrokerMaxConnections: bootstrap.BrokerMaxConnectionsFromFlag(upgradeBrokerMaxConnectionsGiven, upgradeBrokerMaxConnections),
 			ValuesOverlay:        valuesOverlay,
@@ -286,6 +290,18 @@ store), says so when it rises, and warns when the volume has less free space tha
 		if err := bootstrap.CheckMQTTExposureFlagsForUpgrade(upgradeMQTTExposure, upgradeMQTTHost); err != nil {
 			return err
 		}
+		upgradeDevAllowEgressList = nil
+		if cmd.Flags().Changed("dev-allow-egress") {
+			if upgradeDevAllowEgressList, err = bootstrap.ParseDevAllowEgress(upgradeDevAllowEgress); err != nil {
+				return err
+			}
+			if upgradeDevAllowEgressList == nil {
+				return fmt.Errorf("--dev-allow-egress needs an IP address, a CIDR or 'none'")
+			}
+			if err := bootstrap.CheckDevAllowEgressContext(upgradeKubeContext, upgradeDevAllowEgressList); err != nil {
+				return err
+			}
+		}
 		if upgradeResetValues && len(upgradeValues) > 0 {
 			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
 		}
@@ -334,6 +350,7 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEventStoreCheckpoint, "event-store-checkpoint-timeout", "", eventStoreCheckpointUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTExposure, "mqtt-exposure", "", mqttExposureUsage)
 	upgradeCmd.Flags().StringVar(&upgradeMQTTHost, "mqtt-host", "", mqttHostUsage)
+	upgradeCmd.Flags().StringSliceVar(&upgradeDevAllowEgress, "dev-allow-egress", nil, devAllowEgressUsage)
 	upgradeCmd.Flags().StringVar(&upgradeIngressController, "ingress-controller", "", ingressControllerUsage)
 	upgradeCmd.Flags().BoolVar(&upgradeDropLegacyIngress, "drop-legacy-ingress", false, dropLegacyIngressUsage)
 	upgradeAlerts.register(upgradeCmd)

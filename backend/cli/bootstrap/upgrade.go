@@ -318,6 +318,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			return err
 		}
 	}
+	// The development egress allowance, recorded before the move for the same reason.
+	if st.DevAllowEgressChange {
+		if err := recordDevAllowEgress(ctx, dyn, opts.Instance, st.DevAllowEgress); err != nil {
+			return err
+		}
+	}
 	// And so is the front-end choice: a rollback to the Ingress objects has to survive the next
 	// plain upgrade, which re-derives everything from the cluster.
 	if st.IngressControllerChange {

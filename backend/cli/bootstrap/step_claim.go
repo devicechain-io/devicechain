@@ -93,6 +93,16 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		}
 	}
 	sayMQTTExposure(st)
+	// The development egress allowance: this run's flag over the declaration's, judged against
+	// the cluster while nothing has been written.
+	var recordedDev []string
+	if existing != nil {
+		recordedDev = recordedDevAllowEgress(existing.Annotations)
+	}
+	if err := settleDevAllowEgress(st, recordedDev, st.DevAllowEgressGiven); err != nil {
+		return err
+	}
+	sayDevAllowEgress(st)
 	var recordedCap int32
 	if existing != nil {
 		recordedCap = existing.Spec.BrokerMaxConnections
@@ -134,6 +144,11 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// The operator's tuning rides on the declaration, so the first upgrade finds it there.
 	if valuesOverlayChanges(st) {
 		if err := recordValuesOverlayFor(ctx, st.KubeContext, st.Instance, st.ValuesOverlay); err != nil {
+			return err
+		}
+	}
+	if st.DevAllowEgressChange {
+		if err := recordDevAllowEgressFor(ctx, st.KubeContext, st.Instance, st.DevAllowEgress); err != nil {
 			return err
 		}
 	}
