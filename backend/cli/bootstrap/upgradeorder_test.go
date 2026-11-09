@@ -270,3 +270,58 @@ func TestANewerVersionIsNotAnInstallThenUpgradeLoop(t *testing.T) {
 		t.Fatalf("the newer dcctl was refused its own release: %v", err)
 	}
 }
+
+// A flagless upgrade re-applies the instance's DECLARED version. One declared by a newer dcctl
+// than this one is refused like an explicit --version, naming that release's dcctl; an older
+// declaration is the ordinary pre-upgrade state.
+func TestAFlaglessUpgradeOfADeclarationNewerThanThisDcctlIsRefused(t *testing.T) {
+	saved := DefaultImageVersion
+	t.Cleanup(func() { DefaultImageVersion = saved })
+	DefaultImageVersion = "v1.3.0"
+
+	apply := func(registry, version string) error {
+		inst := readyGuide()
+		inst.Spec.ImageRegistry, inst.Spec.ImageVersion = registry, version
+		st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+		return applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}})
+	}
+	err := apply(DefaultImageRegistry, "v1.4.0")
+	if err == nil || !strings.Contains(err.Error(), "Get the dcctl of release v1.4.0") ||
+		!strings.Contains(err.Error(), "dcctl install") {
+		t.Fatalf("a declaration at v1.4.0 was re-applied by a v1.3.0 dcctl: %v", err)
+	}
+	if err := apply(DefaultImageRegistry, "v1.3.0"); err != nil {
+		t.Errorf("a declaration at this dcctl's release was refused: %v", err)
+	}
+	if err := apply(DefaultImageRegistry, "v1.2.0"); err != nil {
+		t.Errorf("a declaration older than this dcctl was refused: %v", err)
+	}
+	if err := apply("localhost:5000", "v1.4.0"); err != nil {
+		t.Errorf("a tag on the operator's own registry was judged as a release: %v", err)
+	}
+}
+
+// Every spelling of the published registry is the published registry; a different one is not.
+func TestSpellingsOfThePublishedRegistryAreNotCustomRegistries(t *testing.T) {
+	for _, tc := range []struct {
+		registry string
+		refused  bool
+	}{
+		{DefaultImageRegistry, true},
+		{"ghcr.io:443/devicechain-io", true},
+		{DefaultImageRegistry + "/", true},
+		{"GHCR.IO/devicechain-io", true},
+		{"https://ghcr.io/devicechain-io//", true},
+		{"ghcr.io:5000/devicechain-io", false},
+		{"ghcr.io/other", false},
+		{"localhost:5000", false},
+	} {
+		err := refuseForeignRelease("v1.2.0", "v1.3.0", tc.registry, "retry")
+		if tc.refused && err == nil {
+			t.Errorf("registry %q bypassed the published-registry check", tc.registry)
+		}
+		if !tc.refused && err != nil {
+			t.Errorf("registry %q was judged as the published one: %v", tc.registry, err)
+		}
+	}
+}

@@ -193,7 +193,7 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
-运行 `dcctl install` 时，请使用安装该集群时的同样设置，例如 `--ha` 或 `--compact`。集群上有实例运行时，它会拒绝改变这些设置；参见[重新运行安装](./bootstrap.md#re-running-install)。
+两条命令都请使用目标版本自带的 `dcctl`：一个 `dcctl` 只会安装并升级到它自己的版本，如果集群是由更旧的 `dcctl` 安装的，`dcctl upgrade` 会拒绝执行。运行 `dcctl install` 时，请使用安装该集群时的同样设置，例如 `--ha` 或 `--compact`。集群上有实例运行时，它会拒绝改变这些设置；参见[重新运行安装](./bootstrap.md#re-running-install)。
 
 :::note 已测量的内容
 升级曾在本地集群上手动演练：一个以 `--ha` 安装的实例在 MQTT 流量持续运行时被原地升级（四台设备以 QoS 1 发布，合计每秒 20 条消息，`infrastructure.nats.mqttFailClosed` 保持默认的关闭状态），其代理滚动两次，设备在每次滚动后重新连接。在一次演练中，代理已确认的每条消息之后仍被保存（11,009 条中的 11,009 条）。在另一次演练中，11,262 条已确认消息中丢失了 11 条，全部发生在某台代理服务器重启、MQTT 捕获流更换主节点期间。`mqttFailClosed` 关闭时，无论流量大小，每次代理滚动都应预期出现一个类似的短暂丢失窗口；见 [MQTT：平台代理](../reference/transport-matrix.md#mqtt--the-platform-broker)。这些演练是手动进行的。作为发布关卡的自动升级检查在没有流量的情况下运行。
@@ -233,7 +233,7 @@ dcctl upgrade local devicechain --version <new-version>
 
 **升级还会检查 install 已经运行，并且只升级到自身 dcctl 的发布。** Operator 的定义可以在多个发布之间保持不变而控制器已经变化，所以仅检查 Operator 无法发现 `dcctl install` 被跳过。因此 `dcctl upgrade` 还会读取集群中的安装记录（其中记有最后一次完成 `dcctl install` 的 `dcctl` 版本），并在以下情况**拒绝**：该版本早于执行升级的 `dcctl`、某次安装已开始但未完成，或集群没有可用的记录。拒绝信息会指出需要先运行的 install 命令，且不会更改任何内容。在已安装的版本上再次运行升级不会被拒绝，由更新版本的 `dcctl` 安装的集群也不会。从源码构建的 `dcctl` 不参与比较。从本发布起，用更新的补丁版本 `dcctl` 执行普通的 `dcctl upgrade` 也需要先运行 `dcctl install`。
 
-显式的 `--version` 在 `dcctl upgrade` 和 `dcctl install` 中都受同一规则约束，两个方向都是如此。**早于**当前 `dcctl` 的发布会被拒绝，因为它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划；要回退，在该发布的说明允许时，请使用旧发布的 `dcctl`。**晚于**当前 `dcctl` 的发布同样会被拒绝，用当前 `dcctl` 去安装也无济于事：安装记录记录的是执行安装的 `dcctl`，而不是传入的 `--version`。请获取新发布的 `dcctl`，用它运行 `dcctl install`，然后再升级。`--version` 等于当前 `dcctl` 的发布、来自你自己的镜像仓库（`--registry`）的标签以及不带 `--version` 的升级不受影响。这两项拒绝都没有跳过选项。
+显式的 `--version` 在 `dcctl upgrade` 和 `dcctl install` 中都受同一规则约束，两个方向都是如此。**早于**当前 `dcctl` 的发布会被拒绝，因为它的 chart 和基础设施配置属于它自己的发布，会围绕从未见过这些配置的镜像来规划；要回退，在该发布的说明允许时，请使用旧发布的 `dcctl`。**晚于**当前 `dcctl` 的发布同样会被拒绝，用当前 `dcctl` 去安装也无济于事：安装记录记录的是执行安装的 `dcctl`，而不是传入的 `--version`。请获取新发布的 `dcctl`，用它运行 `dcctl install`，然后再升级。`--version` 等于当前 `dcctl` 的发布和来自你自己的镜像仓库（`--registry`）的标签不受影响。不带 `--version` 的升级只有在实例声明的发布晚于当前 `dcctl` 时才会被拒绝。这两项拒绝都没有跳过选项。
 
 需要查看会改什么时，可以先给任一命令加 `--dry-run`。
 `dcctl upgrade` 从实例记录取得目标集群，不作猜测，并明确输出该集群。

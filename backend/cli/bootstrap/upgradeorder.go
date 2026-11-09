@@ -207,14 +207,39 @@ var requireInstallOrderFor = func(ctx context.Context, typed kubernetes.Interfac
 // and the upgrade would ask for it again, for ever. The newer release's own dcctl is the only
 // thing that records it.
 //
-// Only an EXPLICIT version is judged: the version a plain upgrade stays on is the instance's.
+// An explicit version is judged in both directions. A plain upgrade stays on the instance's declared
+// version, which is judged only when it is NEWER than this dcctl (judgeForeignRelease, olderOK).
 // Equal to this dcctl's release is the ordinary case; a tag that is not a release (a local
 // build, any tag on a registry of the operator's own) and a dcctl built from source are not
 // compared.
 func refuseForeignRelease(requested, ownRelease, registry, retry string) error {
+	return judgeForeignRelease("--version "+requested, requested, ownRelease, registry, retry, false)
+}
+
+// normalizeRegistry reduces the spellings of one registry to a comparable form: surrounding
+// space, an https:// scheme, trailing slashes, case (the whole string is lowercased, path included) and the default :443 are not
+// differences. Anything else is left alone, so a genuinely different registry stays different.
+func normalizeRegistry(r string) string {
+	r = strings.ToLower(strings.TrimSpace(r))
+	r = strings.TrimPrefix(r, "https://")
+	r = strings.TrimRight(r, "/")
+	host, rest, hasPath := strings.Cut(r, "/")
+	host = strings.TrimSuffix(host, ":443")
+	if hasPath {
+		return host + "/" + rest
+	}
+	return host
+}
+
+// judgeForeignRelease is refuseForeignRelease for a version that may not have been asked for with
+// --version: subject names where it came from, and olderOK lets a version older than this dcctl
+// through (an instance's declared version, which a flagless upgrade keeps).
+func judgeForeignRelease(subject, requested, ownRelease, registry, retry string, olderOK bool) error {
 	// 🔴 A TAG ON A REGISTRY OF THE OPERATOR'S OWN IS WHATEVER THEY PUSHED, and the upgrade drill
-	// pushes semver-shaped ones (0.24.0-drill.1). Only the published registry's tags are releases.
-	if requested == "" || (registry != "" && registry != DefaultImageRegistry) {
+	// pushes semver-shaped ones (0.24.0-drill.1). Only the published registry's tags are releases,
+	// and it is recognised by every spelling of it (ghcr.io:443/..., a trailing slash), not only
+	// the literal constant.
+	if requested == "" || (registry != "" && normalizeRegistry(registry) != normalizeRegistry(DefaultImageRegistry)) {
 		return nil
 	}
 	want, ok := parseRelease(requested)
@@ -222,8 +247,8 @@ func refuseForeignRelease(requested, ownRelease, registry, retry string) error {
 		return nil
 	}
 	if ownRelease == "" {
-		return fmt.Errorf("this dcctl carries no image version at all, so whether --version %s is a move it "+
-			"can make cannot be judged; use a released dcctl, or one built from source", requested)
+		return fmt.Errorf("this dcctl carries no image version at all, so whether %s is a move it "+
+			"can make cannot be judged; use a released dcctl, or one built from source", subject)
 	}
 	if IsUnpublishedImageVersion(ownRelease) {
 		return nil
@@ -234,16 +259,16 @@ func refuseForeignRelease(requested, ownRelease, registry, retry string) error {
 	}
 	switch c := want.compare(own); {
 	case c > 0:
-		return fmt.Errorf("--version %s is newer than this dcctl (%s). Get the dcctl of release %s, run "+
+		return fmt.Errorf("%s is newer than this dcctl (%s). Get the dcctl of release %s, run "+
 			"`dcctl install` with it, then upgrade. A dcctl installs and upgrades only to its own release: "+
 			"the install is recorded against the dcctl that ran it, so running it here at %s would not "+
-			"satisfy the upgrade. Nothing has been changed", requested, ownRelease, requested, requested)
-	case c < 0:
-		return fmt.Errorf("--version %s is older than this dcctl (release %s) and a dcctl only moves an instance "+
+			"satisfy the upgrade. Nothing has been changed", subject, ownRelease, requested, requested)
+	case c < 0 && !olderOK:
+		return fmt.Errorf("%s is older than this dcctl (release %s) and a dcctl only moves an instance "+
 			"to its own release: it would plan its own newer chart and infrastructure configuration "+
 			"around the older images. To go back, where that release's notes allow it, use the dcctl "+
 			"of release %s (`%s` with that binary). Nothing has been changed",
-			requested, ownRelease, requested, retry)
+			subject, ownRelease, requested, retry)
 	}
 	return nil
 }

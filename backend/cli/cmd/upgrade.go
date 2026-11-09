@@ -176,8 +176,9 @@ images that have never seen them. To go back, where that release's notes allow i
 the dcctl of the older release. A NEWER release is refused too, and installing it with
 this dcctl would not help, because the install record names the dcctl that ran the
 install, not the --version it was given: get the dcctl of the newer release, run
-'dcctl install' with it, then upgrade. A flag-less upgrade, a tag on a registry of
-your own (--registry) and this dcctl's own release are not affected.
+'dcctl install' with it, then upgrade. A tag on a registry of your own (--registry)
+and this dcctl's own release are not affected, and a flag-less upgrade is refused only when the
+instance is declared at a release newer than this dcctl.
 
 It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the
@@ -351,7 +352,7 @@ store), says so when it rises, and warns when the volume has less free space tha
 func init() {
 	upgradeCmd.Flags().StringVar(&upgradeKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
 	upgradeCmd.Flags().StringVar(&upgradeRegistry, "registry", "", "image registry to pull from (default: "+bootstrap.DefaultImageRegistry+")")
-	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to (default: this dcctl's pinned version)")
+	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "release version to upgrade to; must be this dcctl's own release (default: the version the instance is declared at)")
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
 	upgradeCmd.Flags().BoolVarP(&upgradeAssumeYes, "yes", "y", false, "assume yes for prompts (an upgrade asks none, so this changes nothing; it is accepted so a script can pass the same flag to install, bootstrap and upgrade)")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")

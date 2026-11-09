@@ -344,6 +344,18 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 			return err
 		}
 	}
+	// 🔴 A FLAGLESS UPGRADE RE-APPLIES THE DECLARED VERSION, and a declaration written by a newer
+	// dcctl names a release this one was not built for while the cluster's install record (this
+	// dcctl's, or older) cannot satisfy it. Same refusal and remedy as an explicit --version;
+	// a declared version OLDER than this dcctl is the ordinary case (the instance has yet to move).
+	if len(opts.EnableAreas) == 0 && opts.ImageVersion == "" {
+		if err := judgeForeignRelease(
+			fmt.Sprintf("the version instance %q is declared at (%s)", opts.Instance, st.ImageVersion),
+			st.ImageVersion, DefaultImageVersion, st.ImageRegistry,
+			fmt.Sprintf("dcctl upgrade %s %s", inst.Spec.Provider, opts.Instance), true); err != nil {
+			return err
+		}
+	}
 
 	// `dcctl enable-area`: the requested areas join the declaration's delta here, so
 	// the resolution below — and everything downstream of it, the chart values, the
