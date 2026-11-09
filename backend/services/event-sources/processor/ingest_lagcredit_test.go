@@ -369,13 +369,14 @@ type fakeProber struct {
 	acks    atomic.Uint64
 	err     atomic.Bool
 	calls   atomic.Int32
-	hook    func()
+	// hook runs inside each question; it is set while the probe goroutine runs, so it is atomic.
+	hook atomic.Pointer[func()]
 }
 
 func (f *fakeProber) Backlog(context.Context) (uint64, uint64, error) {
 	f.calls.Add(1)
-	if f.hook != nil {
-		f.hook()
+	if h := f.hook.Load(); h != nil {
+		(*h)()
 	}
 	if f.err.Load() {
 		return 0, 0, errors.New("broker unreachable")
@@ -456,7 +457,8 @@ func TestTheIdleProbeIgnoresAnErrorAndALoopBlockedInHandle(t *testing.T) {
 func TestTheIdleProbeDiscardsAnAnswerThatOverlappedARead(t *testing.T) {
 	_, lc, p, stop := probeFixture(t)
 	// a message is read while the question is in flight: the broker's "nothing queued" predates it and may describe a batch the loop holds
-	p.hook = func() { lc.view(StreamStore).observe(time.Now(), time.Now().Add(-2*time.Second), 1, 5000) }
+	hook := func() { lc.view(StreamStore).observe(time.Now(), time.Now().Add(-2*time.Second), 1, 5000) }
+	p.hook.Store(&hook)
 	time.Sleep(900 * time.Millisecond)
 	stop()
 	require.GreaterOrEqual(t, lc.view(StreamStore).view(time.Now()).Lag, 2*time.Second, "the overlapped answer was used")
