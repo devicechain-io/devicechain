@@ -332,6 +332,19 @@ func TestASweepDoesNotClaimADeletedTenantsRows(t *testing.T) {
 	require.Empty(t, r.resp.envs)
 }
 
+// A delete that fails is not a settled row: counting it as tenant_gone hides a store that cannot
+// delete, while the row stays and fills the batch every pass. It is store_failed.
+func TestASweepCountsAFailedGoneDeleteAsStoreFailed(t *testing.T) {
+	r := newAckRig(t)
+	r.seed(t, func(p *Pending) { p.DeadlineAt = r.now.Add(-time.Minute) })
+	r.gone["acme"] = true
+	r.pend.delErr = errors.New("store unavailable")
+	r.f.Sweep(context.Background())
+	require.Equal(t, 1, r.m.get(AckStoreFailed))
+	require.Zero(t, r.m.get(AckTenantGone), "a delete that failed was counted as settled")
+	require.Equal(t, 1, r.pend.size(), "the row is still there")
+}
+
 // ---- never matched by guess ----
 
 func TestAnAckForNoPendingDownlinkIsRetriedOnceThenDroppedLoudly(t *testing.T) {
