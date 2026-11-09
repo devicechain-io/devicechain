@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
 
@@ -144,6 +146,10 @@ var (
 	// IntegrationUplinksWriter writes the integration route's IntegrationUplink events, which go to
 	// their own stream and never to InboundEventsWriter's (streams.IntegrationUplinks says why).
 	IntegrationUplinksWriter messaging.MessageWriter
+
+	// LpwanDownlinkEventsWriter writes the network server's downlink reports (a ChirpStack ack or
+	// txack) the integration route accepted, to the stream outbound-connectors reads.
+	LpwanDownlinkEventsWriter messaging.MessageWriter
 	// InboundEnvelopeMetrics are the instruments of inbound envelopes (realised k, linger paid,
 	// settlement counters). Built once with the other instruments; nil-safe, so it exists whether
 	// or not the setting is on.
@@ -264,6 +270,7 @@ var (
 	// refusal after a restart is an increase.
 	IntegrationRequestsCounter             *prometheus.CounterVec
 	IntegrationUplinksCounter              *prometheus.CounterVec
+	IntegrationDownlinkReportsCounter      *prometheus.CounterVec
 	IntegrationFlattenSkippedCounter       *prometheus.CounterVec
 	IntegrationUnregisteredOverflowCounter prometheus.Counter
 	// The payload-decoder selection's accounting, under the same rule: no tenant, no integration.
@@ -494,6 +501,14 @@ func initializeIntegrationMetrics() {
 		"integration_uplinks_total",
 		"Count of uplinks read from accepted integration requests by what became of each",
 		[]string{"result"})
+	IntegrationDownlinkReportsCounter = Microservice.NewCounterVec(
+		"integration_downlink_reports_total",
+		"Count of network-server downlink reports (ChirpStack ack and txack) read from accepted integration "+
+			"requests by what became of each. unknown_device is a report for a device the integration does not govern",
+		[]string{"result"})
+	for _, r := range processor.IntegrationDownlinkReportResults {
+		IntegrationDownlinkReportsCounter.WithLabelValues(r)
+	}
 	IntegrationFlattenSkippedCounter = Microservice.NewCounterVec(
 		"integration_flatten_skipped_total",
 		"Count of leaves of a network server's decoded object that were not stored as readings, by reason",
@@ -642,6 +657,11 @@ func integrationMetrics() processor.IntegrationMetrics {
 				IntegrationUplinksCounter.WithLabelValues(result).Inc()
 			}
 		},
+		DownlinkReport: func(result string) {
+			if IntegrationDownlinkReportsCounter != nil {
+				IntegrationDownlinkReportsCounter.WithLabelValues(result).Inc()
+			}
+		},
 		FlattenSkipped: func(reason string, n int) {
 			if IntegrationFlattenSkippedCounter != nil {
 				IntegrationFlattenSkippedCounter.WithLabelValues(reason).Add(float64(n))
@@ -733,8 +753,18 @@ func buildIntegrationRoute() *processor.IntegrationRoute {
 		Publish: onIntegrationEventDecoded,
 		Metrics: integrationMetrics(),
 	}
+	if Configuration != nil && Configuration.LpwanDownlink {
+		route.PublishDownlink = onDownlinkReport
+		route.DownlinkLimiter = sourcelimit.Must(downlinkReportLimits)
+	}
 	return route
 }
+
+// downlinkReportLimits is a tenant's allowance for network-server downlink reports: a burst of 100
+// and 20 a second sustained. Reports follow the commands a tenant sends to LoRaWAN devices, which a
+// device's duty cycle keeps far below telemetry rates. The limit exists so that one tenant's flood of
+// them cannot fill the shared, small stream and evict other tenants' acknowledgements.
+var downlinkReportLimits = sourcelimit.Limits{Burst: 100, Every: 50 * time.Millisecond, MaxKeys: 10000}
 
 // buildDeviceUplinkRoute builds the device-uplink route's dependencies, or nil when the operator has
 // not turned the route on (httpIngest.deviceUplinks, off by default so a rolling upgrade cannot lose
@@ -1539,6 +1569,25 @@ func onIntegrationEventDecoded(source string, tenant string, event *model.Unreso
 	return writeInbound(ctx, source, msg)
 }
 
+// onDownlinkReport publishes a network server's downlink report, synchronously, to its own stream.
+// The tenant comes from the route's authenticated path and rides the subject, never the body.
+func onDownlinkReport(tenant string, report cmddownlink.DownlinkReport) error {
+	if LpwanDownlinkEventsWriter == nil {
+		return errors.New("no writer for the downlink report stream")
+	}
+	if tenant == "" {
+		return errors.New("a downlink report needs a tenant")
+	}
+	body, err := json.Marshal(report)
+	if err != nil {
+		return err
+	}
+	err = LpwanDownlinkEventsWriter.WriteMessages(core.WithTenant(context.Background(), tenant),
+		messaging.Message{Key: []byte(report.QueueItemID), Value: body})
+	LpwanDownlinkEventsWriter.HandleResponse(err)
+	return err
+}
+
 // writeIntegrationUplink writes an IntegrationUplink to ITS OWN stream. It is never written to
 // inbound-events: a device-management built before payload decoders reads that stream, fails to
 // unmarshal a type it does not know and dead-letters the message on delivery 1, so every
@@ -1670,6 +1719,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 	IntegrationUplinksWriter = iuplinks
+
+	// The downlink-report stream's writer. Creating it also ensures the stream, so a report is never
+	// refused for want of one; with outbound-connectors' adapter off nothing reads it and the
+	// broker's age limit trims it.
+	lreports, err := nmgr.NewWriter(streams.LpwanDownlinkEvents)
+	if err != nil {
+		return err
+	}
+	LpwanDownlinkEventsWriter = lreports
 
 	// The presence tap's asynchronous writer (see newPresenceWriter). Built here, once for
 	// the life of the process, and closed by stopBrokerPresence.

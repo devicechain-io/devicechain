@@ -48,6 +48,9 @@ var sanctionedSystemContexts = map[string][]string{
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
 		"CommandDeliveryProcessor.failUnacknowledgedPulls",
 	},
+	// The downlink acknowledgement sweep lists overdue pending downlinks across tenants (one read), then
+	// answers, claims and deletes each under that row's own core.WithTenant.
+	"backend/services/outbound-connectors/lpwan/pending.go":    {"DBPending.Expired"},
 	"backend/services/update-management/model/api_updates.go":  {"Api.SweepDeadlines"},
 	"backend/services/update-management/model/api_rollouts.go": {"Api.AdvanceRollouts"},
 	// The campaign tick and the campaign pruner each list the tenants that have campaigns (or

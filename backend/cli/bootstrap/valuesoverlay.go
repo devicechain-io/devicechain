@@ -205,6 +205,8 @@ var ownedWithinTunable = []struct {
 		"lwm2m-ingest's identity bindings are wiring, not tuning: provision them with --lwm2m-identities <file>, which keeps the pre-shared keys out of the configuration and carries the bindings through every upgrade"},
 	{"functionalAreas.command-delivery.config.sparkplugCommands",
 		"whether Sparkplug commands are deliverable is derived by the chart from the Sparkplug sources' commands.enabled; a value written here could say they are while no source sends them, or the reverse"},
+	{"functionalAreas.event-sources.config.lpwanDownlink",
+		"whether the inbound-integration route carries a network server's downlink reports is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled; a value written here could make the route take reports nothing reads, or ignore reports something waits for"},
 	{"functionalAreas.command-delivery.config.lpwanDownlink",
 		"whether commands to LoRaWAN devices are deliverable is derived by the chart from functionalAreas.outbound-connectors.config.lpwanDownlink.enabled; a value written here could say they are while no adapter reads them, or the reverse"},
 }

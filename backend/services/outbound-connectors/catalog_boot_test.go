@@ -30,6 +30,29 @@ import (
 // newDeadLetterIndexWriter, ConnectorDispatch reader via newDispatchReader), plus the
 // max-delivery recorder core/service installs.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
+	startUnderCatalog(t, `{}`, nil)
+	require.Nil(t, Lpwan, "the LoRaWAN downlink is off by default and builds nothing")
+	require.Nil(t, LpwanAcks)
+}
+
+// The same start with the LoRaWAN downlink ENABLED: the device-commands reader, the command-responses
+// writer and the downlink-report reader are opened under the area's real login, so a stream or reader
+// mode that core/streams does not declare for this area (or that natsauth does not grant it) fails
+// here instead of crash-looping a pod of an installation that turned the downlink on.
+func TestStartsUnderItsDeclaredCatalogWithTheLpwanDownlinkEnabled(t *testing.T) {
+	startUnderCatalog(t, `{"lpwanDownlink":{"enabled":true}}`, func(ms *core.Microservice) {
+		infra := &ms.InstanceConfiguration.Infrastructure
+		infra.ServiceAuth.Secret = "catalog-boot-secret"
+		infra.UserManagement.Hostname, infra.UserManagement.Port = "user-management", 8080
+		infra.CommandDelivery.Hostname, infra.CommandDelivery.Port = "command-delivery", 8080
+		infra.DeviceManagement.Hostname, infra.DeviceManagement.Port = "device-management", 8080
+	})
+	require.NotNil(t, Lpwan, "the downlink adapter was not built")
+	require.NotNil(t, LpwanAcks, "the acknowledgement feed was not built")
+}
+
+func startUnderCatalog(t *testing.T, rawConfig string, configure func(*core.Microservice)) {
+	t.Helper()
 	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
 	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
 	// is also the area's permission test: the real wiring runs against it and the broker's log of
@@ -39,7 +62,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	savedMs, savedCfg, savedSvc, savedNats := Microservice, Configuration, Svc, NatsManager
 	savedMetrics, savedUnres, savedDead := DispatchMetrics, EgressUnresolved, DeadLetters
 	savedGates, savedLimiter, savedConsumer := safetyGates, RateLimiter, Consumer
+	savedLpwan, savedAcks, savedLpwanMetrics := Lpwan, LpwanAcks, LpwanMetrics
 	t.Cleanup(func() {
+		Lpwan, LpwanAcks, LpwanMetrics = savedLpwan, savedAcks, savedLpwanMetrics
 		Microservice, Configuration, Svc, NatsManager = savedMs, savedCfg, savedSvc, savedNats
 		DispatchMetrics, EgressUnresolved, DeadLetters = savedMetrics, savedUnres, savedDead
 		safetyGates, RateLimiter, Consumer = savedGates, savedLimiter, savedConsumer
@@ -53,7 +78,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("outbound-connectors")
-	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
+	if configure != nil {
+		configure(Microservice)
+	}
+	Microservice.MicroserviceConfigurationRaw = []byte(rawConfig)
 	require.NoError(t, parseConfiguration())
 
 	safetyGates = governance.NewSafetyGates(Microservice)

@@ -114,6 +114,10 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		streams.ConnectorDispatchDead: afterRestart,
 		streams.DeadLetters:           afterRestart,
 
+		// event-sources' integration route publishes a network server's downlink report with no
+		// Nats-Msg-Id (ChirpStack does not resend an ack), and the consumer is idempotent: a repeat settles
+		// nothing the first did not. The window is the broker default.
+		streams.LpwanDownlinkEvents:     noID,
 		streams.DeviceAttribute:         noID,
 		streams.DeviceCommands:          noID,
 		streams.DeviceDesired:           noID,

@@ -205,3 +205,18 @@ func TestValidateRejectsDuplicateSourceIds(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicates")
 }
+
+// The downlink feed switch is chart-derived and defaults off, so a configuration that predates it (and
+// an installation that leaves the LoRaWAN downlink off) behaves exactly as before. It is a typed key:
+// a document that carries it loads, and a misspelling is still refused.
+func TestTheDownlinkFeedDefaultsOffAndIsReadFromTheDocument(t *testing.T) {
+	off := &EventSourcesConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{}`), off))
+	assert.False(t, off.LpwanDownlink)
+
+	on := &EventSourcesConfiguration{}
+	assert.NoError(t, core.LoadConfiguration([]byte(`{"lpwanDownlink":true}`), on))
+	assert.True(t, on.LpwanDownlink)
+
+	assert.Error(t, core.LoadConfiguration([]byte(`{"lpwanDownlinks":true}`), &EventSourcesConfiguration{}))
+}
