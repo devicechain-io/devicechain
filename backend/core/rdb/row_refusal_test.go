@@ -5,6 +5,7 @@ package rdb
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -73,14 +74,24 @@ func TestARefusedRowReadOnAReusedHandleReturnsTheRefusal(t *testing.T) {
 }
 
 // A refused Rows() read keeps gorm's behaviour: the error is on the handle, no row is built.
+//
+// The error alone cannot tell the callback's Rows() early-return from its absence (Rows() reports the
+// refusal either way), so the test also looks at what the callback leaves in the statement: a
+// *sql.Row in Dest means rowReturnsRefusal built a row for a read that wanted rows.
 func TestARefusedRowsReadBuildsNoRow(t *testing.T) {
 	db := newTestDB(t)
-	tx := db.WithContext(context.Background()).Model(&widget{}).Select("count(*)")
-	rows, err := tx.Rows()
+	// A plain chain, not a session: its Statement is the one the callbacks ran on, so it can be
+	// inspected afterwards.
+	q := db.Model(&widget{}).Select("count(*)")
+	q.Statement.Context = context.Background() // no tenant: refused
+	rows, err := q.Rows()
 	if rows != nil {
 		rows.Close()
 	}
 	if !errors.Is(err, core.ErrNoTenant) {
 		t.Fatalf("want ErrNoTenant, got %v", err)
+	}
+	if row, ok := q.Statement.Dest.(*sql.Row); ok {
+		t.Fatalf("a refused Rows() read left a built *sql.Row in the statement: %p", row)
 	}
 }
