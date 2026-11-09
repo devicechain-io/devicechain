@@ -73,6 +73,10 @@ type AckFeedOptions struct {
 // has stopped before another can take the lease, and two settlers never publish different answers.
 const settleBudget = SettleLease / 3
 
+// settleMargin is the slice of the lease a settler leaves unused, so its answer is on the wire before
+// the lease can be taken by another.
+const settleMargin = SettleLease / 6
+
 // recentSettledTTL and recentSettledMax bound the memory of downlinks this replica has just settled.
 const (
 	recentSettledTTL = 10 * time.Minute
@@ -350,7 +354,15 @@ func (f *AckFeed) recentlySettled(tenant, key string) bool {
 // need not be the true one. Bounded, it has stopped before the lease can be taken; and if it was
 // overtaken anyway its delete removes nothing, so the overtaker's record is untouched.
 func (f *AckFeed) respond(ctx context.Context, p *Pending, env cmddownlink.ResponseEnvelope, token time.Time) bool {
-	pctx, cancel := context.WithTimeout(ctx, f.opts.SettleBudget)
+	// The budget runs from the lease's own expiry, not from when this call began: a worker that was
+	// paused between claiming and answering has less of the lease left, and none left means it must
+	// not answer at all (another settler may already have).
+	budget := min(f.opts.SettleBudget, token.Sub(f.opts.Now())-settleMargin)
+	if budget <= 0 {
+		f.count(AckContended)
+		return false
+	}
+	pctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	if err := cmddownlink.PublishResponseContext(pctx, f.responses, p.Tenant, p.DeviceToken, env, f.opts.ResponseAttempts, f.opts.ResponseBackoff); err != nil {
 		f.count(AckResponseFail)

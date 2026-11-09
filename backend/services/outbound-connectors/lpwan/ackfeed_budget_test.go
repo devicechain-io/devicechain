@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -78,4 +79,22 @@ func TestARedeliveredReportForADownlinkThisReplicaJustSettledIsNotCountedUnmatch
 	r.now = r.now.Add(recentSettledTTL + time.Second)
 	r.deliver(t, report("ack", true), 2)
 	require.Equal(t, 2, r.m.get(AckUnmatched))
+}
+
+// A worker paused between claiming and answering has little or none of the lease left: it must not
+// answer, or it could publish a different outcome from the settler that took the lease after it.
+func TestAWorkerThatWasPausedPastItsLeaseDoesNotAnswer(t *testing.T) {
+	r := newAckRig(t)
+	r.seed(t, nil)
+	p, err := r.pend.Lookup(context.Background(), "acme", itemID)
+	require.NoError(t, err)
+	token := r.now.Add(SettleLease)
+	r.now = r.now.Add(SettleLease - settleMargin + time.Second) // the clock moved on while it was paused
+	require.False(t, r.f.respond(context.Background(), p, cmddownlinkSuccess(p), token))
+	require.Empty(t, r.resp.envs, "an answer past the lease is not published")
+	require.Equal(t, 1, r.m.get(AckContended))
+}
+
+func cmddownlinkSuccess(p *Pending) cmddownlink.ResponseEnvelope {
+	return cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce, Success: true}
 }
