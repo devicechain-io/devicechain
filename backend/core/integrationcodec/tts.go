@@ -241,7 +241,7 @@ func decodeTTSDownlink(d *Descriptor, up *ttsUp) (*Result, error) {
 		// no retry preceded it and the error is one of the network server's own drops.
 		if dl.ConfirmedRetry != nil {
 			if text, present := loraNumber(dl.ConfirmedRetry.Attempt); present {
-				if n, err := strconv.ParseUint(text, 10, 32); err == nil {
+				if n, err := strconv.ParseUint(text, 10, 31); err == nil {
 					ev.Attempt = int(n)
 				} else {
 					// An attempt that cannot be read is not 0: it is read as a retry that happened.
