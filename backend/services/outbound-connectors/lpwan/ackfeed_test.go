@@ -113,6 +113,16 @@ func (m *memPending) Delete(_ context.Context, _ string, id uint, token time.Tim
 	return nil
 }
 
+func (m *memPending) DeleteGone(_ context.Context, _ string, id uint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.delErr != nil {
+		return m.delErr
+	}
+	delete(m.rows, id)
+	return nil
+}
+
 func (m *memPending) Expired(_ context.Context, now time.Time, limit int) ([]Pending, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -306,6 +316,20 @@ func TestAnOverdueDownlinkOfADeletedTenantIsDroppedWithoutAnAnswer(t *testing.T)
 	r.f.Sweep(context.Background())
 	require.Empty(t, r.resp.envs)
 	require.Zero(t, r.pend.size())
+}
+
+// A purge in progress fences the tenant's writes, so a claim of its row fails. The sweep must
+// not try: it would count store_failed for every row, every pass, and leave them in the batch.
+func TestASweepDoesNotClaimADeletedTenantsRows(t *testing.T) {
+	r := newAckRig(t)
+	r.seed(t, func(p *Pending) { p.DeadlineAt = r.now.Add(-time.Minute) })
+	r.gone["acme"] = true
+	r.pend.claimErr = errors.New("tenant purged: writes fenced")
+	r.f.Sweep(context.Background())
+	require.Zero(t, r.m.get(AckStoreFailed), "a deleted tenant's row was claimed")
+	require.Equal(t, 1, r.m.get(AckTenantGone))
+	require.Zero(t, r.pend.size())
+	require.Empty(t, r.resp.envs)
 }
 
 // ---- never matched by guess ----

@@ -69,6 +69,10 @@ type PendingStore interface {
 	// (token): a settler overtaken after its lease expired deletes nothing. Deleting one already gone
 	// is not an error.
 	Delete(ctx context.Context, tenant string, id uint, token time.Time) error
+	// DeleteGone removes a record of a tenant that has been deleted, with no lease: nobody is left
+	// to answer, so there is nothing for a lease to protect, and taking one first only fails while
+	// the tenant's purge is fencing its writes. Deleting one already gone is not an error.
+	DeleteGone(ctx context.Context, tenant string, id uint) error
 	// Expired returns up to limit records whose deadline is at or before now and that no settler
 	// holds, across tenants.
 	Expired(ctx context.Context, now time.Time, limit int) ([]Pending, error)
@@ -153,6 +157,11 @@ func (s *DBPending) Claim(ctx context.Context, tenant string, id uint, now time.
 func (s *DBPending) Delete(ctx context.Context, tenant string, id uint, token time.Time) error {
 	return s.db(ctx, tenant).Where("id = ? AND settling_until = ?", id, token.UTC().Truncate(time.Microsecond)).
 		Delete(&LpwanPendingAck{}).Error
+}
+
+// DeleteGone implements PendingStore.
+func (s *DBPending) DeleteGone(ctx context.Context, tenant string, id uint) error {
+	return s.db(ctx, tenant).Where("id = ?", id).Delete(&LpwanPendingAck{}).Error
 }
 
 // Expired implements PendingStore. It is the one cross-tenant read: the sweep answers every
