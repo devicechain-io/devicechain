@@ -971,6 +971,9 @@ run_assertions() {
   rejects postgres_max_connections 600.5
   accepts postgres_max_connections 100
   accepts postgres_max_connections 800
+  # The relational store's max_wal_size, in MiB: whole, at least 64, or 0 for Postgres's own.
+  for v in 0 64 4096 8192; do accepts postgres_max_wal_size_mib "$v"; done
+  for v in 1 63 -1 1.5; do rejects postgres_max_wal_size_mib "$v"; done
 
   # --- chart version pins, the RUNTIME half -------------------------------------
   #
