@@ -67,6 +67,7 @@ use (
 	./backend/tools/drdrill
 	./backend/tools/migrationdiff
 	./backend/tools/muxguard
+	./backend/tools/ocspresponder
 	./backend/tools/phaseguard
 	./backend/tools/playground
 	./backend/tools/promqlguard
