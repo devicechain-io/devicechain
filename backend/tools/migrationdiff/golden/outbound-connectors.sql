@@ -117,7 +117,8 @@ CREATE TABLE "outbound-connectors".lpwan_pending_acks (
  dispatch_nonce character varying(128) NOT NULL,
  queue_item_id character varying(64) NOT NULL,
  deadline_at timestamp with time zone NOT NULL,
- transmitted_at timestamp with time zone
+ transmitted_at timestamp with time zone,
+ settling_until timestamp with time zone
 );
 CREATE TABLE "outbound-connectors".outbound_connectors_migrations (
  id character varying(255) NOT NULL

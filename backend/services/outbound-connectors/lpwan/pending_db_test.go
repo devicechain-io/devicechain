@@ -97,3 +97,33 @@ func TestExpiredIsCrossTenantAndBoundedAndOrdered(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, due, 2)
 }
+
+func TestClaimIsAtomicAndExpiresAndHidesTheRecordFromTheSweep(t *testing.T) {
+	s := newDBPending(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.Add(ctx, Pending{Tenant: "acme", Integration: "cs1", DeviceToken: "d", DevEUI: "0102030405060708",
+		CommandToken: "c", DispatchNonce: "n", QueueItemID: itemID, DeadlineAt: now.Add(-time.Minute)}))
+	p, err := s.Find(ctx, "acme", itemID)
+	require.NoError(t, err)
+
+	won, err := s.Claim(ctx, "acme", p.ID, now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, won)
+	won, err = s.Claim(ctx, "acme", p.ID, now.Add(30*time.Second), time.Minute)
+	require.NoError(t, err)
+	require.False(t, won, "a second settler cannot take a held record")
+	due, err := s.Expired(ctx, now.Add(30*time.Second), 10)
+	require.NoError(t, err)
+	require.Empty(t, due, "a held record is not offered to the sweep")
+
+	won, err = s.Claim(ctx, "other", p.ID, now.Add(2*time.Minute), time.Minute)
+	require.NoError(t, err)
+	require.False(t, won, "another tenant cannot claim it")
+	won, err = s.Claim(ctx, "acme", p.ID, now.Add(2*time.Minute), time.Minute)
+	require.NoError(t, err)
+	require.True(t, won, "an expired lease can be taken again")
+	due, err = s.Expired(ctx, now.Add(3*time.Minute+time.Second), 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+}

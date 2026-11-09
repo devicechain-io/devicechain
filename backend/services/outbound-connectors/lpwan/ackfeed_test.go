@@ -29,9 +29,14 @@ type memPending struct {
 	markErr error
 	delErr  error
 	listErr error
+	// claimErr fails Claim; lease is each record's settle lease.
+	claimErr error
+	lease    map[uint]time.Time
 }
 
-func newMemPending() *memPending { return &memPending{rows: map[uint]Pending{}} }
+func newMemPending() *memPending {
+	return &memPending{rows: map[uint]Pending{}, lease: map[uint]time.Time{}}
+}
 
 func (m *memPending) Add(_ context.Context, p Pending) error {
 	m.mu.Lock()
@@ -79,6 +84,19 @@ func (m *memPending) MarkTransmitted(_ context.Context, _ string, id uint, at ti
 	return nil
 }
 
+func (m *memPending) Claim(_ context.Context, _ string, id uint, now time.Time, lease time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.claimErr != nil {
+		return false, m.claimErr
+	}
+	if _, ok := m.rows[id]; !ok || m.lease[id].After(now) {
+		return false, nil
+	}
+	m.lease[id] = now.Add(lease)
+	return true, nil
+}
+
 func (m *memPending) Delete(_ context.Context, _ string, id uint) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -97,7 +115,7 @@ func (m *memPending) Expired(_ context.Context, now time.Time, limit int) ([]Pen
 	}
 	var out []Pending
 	for _, r := range m.rows {
-		if !r.DeadlineAt.After(now) && len(out) < limit {
+		if !r.DeadlineAt.After(now) && !m.lease[r.ID].After(now) && len(out) < limit {
 			out = append(out, r)
 		}
 	}
@@ -389,6 +407,7 @@ func TestAnAnswerThatCannotBePublishedLeavesTheReportAndTheRecord(t *testing.T) 
 	require.Equal(t, 1, r.m.get(AckResponseFail))
 
 	r.resp.fail = nil
+	r.now = r.now.Add(SettleLease + time.Second) // the redelivery arrives after the lease
 	a = r.deliver(t, report("ack", true), 2)
 	require.True(t, a.acked)
 	require.Len(t, r.resp.envs, 1)
@@ -418,6 +437,7 @@ func TestAnAnswerThatLeftItsRecordIsRepeatedBySweepNotLost(t *testing.T) {
 	require.Len(t, r.resp.envs, 1)
 	require.Equal(t, 1, r.pend.size())
 	r.pend.delErr = nil
+	r.now = r.now.Add(SettleLease + time.Second)
 	r.f.Sweep(context.Background())
 	require.Len(t, r.resp.envs, 2, "the repeat is ignored by command-delivery for a terminal command")
 	require.Zero(t, r.pend.size())
@@ -432,4 +452,49 @@ func TestASweepThatCannotListCountsTheFault(t *testing.T) {
 
 func TestNewAckFeedPanicsWithoutWhatItNeeds(t *testing.T) {
 	require.Panics(t, func() { NewAckFeed(nil, nil, nil, nil, AckFeedOptions{}) })
+}
+
+// ---- exactly one settler ----
+
+func TestAReportAndTheSweepNeverAnswerTheSameDownlinkBothWays(t *testing.T) {
+	// The sweep holds the record: a late acknowledgement must not also answer SUCCESSFUL.
+	r := newAckRig(t)
+	r.seed(t, func(p *Pending) { p.DeadlineAt = r.now.Add(-time.Minute) })
+	r.f.Sweep(context.Background())
+	require.Len(t, r.resp.envs, 1)
+	require.Equal(t, cmddownlink.ReachUnanswered, r.resp.envs[0].Reach)
+
+	// The converse: a report holds the record (its answer could not be published), so the sweep that
+	// follows must not answer TIMEOUT beside it.
+	r2 := newAckRig(t)
+	r2.seed(t, func(p *Pending) { p.DeadlineAt = r2.now.Add(-time.Minute) })
+	r2.resp.fail = errors.New("broker down")
+	a := r2.deliver(t, report("ack", true), 1)
+	require.False(t, a.acked)
+	r2.resp.fail = nil
+	r2.f.Sweep(context.Background())
+	require.Empty(t, r2.resp.envs, "the report's lease keeps the sweep away")
+
+	// The lease expires, so a settler that died mid-answer does not strand the command.
+	r2.now = r2.now.Add(SettleLease + time.Second)
+	a = r2.deliver(t, report("ack", true), 2)
+	require.True(t, a.acked)
+	require.Len(t, r2.resp.envs, 1)
+	require.True(t, r2.resp.envs[0].Success)
+}
+
+func TestAReportThatLosesTheClaimIsLeftToRedeliver(t *testing.T) {
+	r := newAckRig(t)
+	p := r.seed(t, nil)
+	r.pend.lease[1] = r.now.Add(time.Minute)
+	_ = p
+	a := r.deliver(t, report("ack", true), 1)
+	require.False(t, a.acked)
+	require.Empty(t, r.resp.envs)
+	require.Equal(t, 1, r.m.get(AckContended))
+
+	r.pend.claimErr = errors.New("db down")
+	a = r.deliver(t, report("ack", true), 1)
+	require.False(t, a.acked)
+	require.Equal(t, 1, r.m.get(AckStoreFailed))
 }

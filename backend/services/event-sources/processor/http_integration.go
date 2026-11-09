@@ -361,7 +361,13 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 
 	// 3. The tenant's message gate, with the integration as the origin: its token is proven.
-	if es.allow != nil && !es.allow(es.Id, tenant, time.Time{}, false, OriginIntegration) {
+	//
+	// A ChirpStack downlink report (ack, txack) is not telemetry and is not shed with it: shedding is
+	// answered 202, the network server never resends, and a dropped acknowledgement would turn a
+	// delivered command into a TIMEOUT. Its volume follows the commands the tenant sent, it is
+	// authenticated, and its stream is small and bounded.
+	if es.allow != nil && !(rt.PublishDownlink != nil && desc.Type == integrationcodec.ChirpStackV4 && isDownlinkEvent(r)) &&
+		!es.allow(es.Id, tenant, time.Time{}, false, OriginIntegration) {
 		m.request(typ, ResultShedAccepted)
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -646,6 +652,12 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 	}
 	m.request(typ, ResultAccepted)
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// isDownlinkEvent reports whether the request names a downlink report by its event query value.
+func isDownlinkEvent(r *http.Request) bool {
+	ev := r.URL.Query().Get("event")
+	return ev == integrationcodec.DownlinkAck || ev == integrationcodec.DownlinkTxAck
 }
 
 // handleDownlinkReports carries a network server's reports about downlinks (ack, txack) to the

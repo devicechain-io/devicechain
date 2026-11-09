@@ -138,3 +138,21 @@ func TestAMalformedDownlinkReportIsRefusedAndNeverPublished(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, h.post(csPath+"?event=ack", goodBearer, body).Code)
 	require.Empty(t, sink.reports)
 }
+
+func TestADownlinkReportIsNotShedWithTelemetryButAnUplinkIs(t *testing.T) {
+	h := newRouteHarness(t)
+	sink := withReportSink(h)
+	h.allowOK.Store(false) // the tenant is over its message ceiling
+	require.Equal(t, http.StatusAccepted, h.post(csPath+"?event=ack", goodBearer, fixtureBody(t, "chirpstack/ack.json")).Code)
+	require.Len(t, sink.reports, 1, "a dropped acknowledgement would turn a delivered command into a TIMEOUT")
+
+	require.Equal(t, http.StatusAccepted, h.up().Code)
+	h.nothingPublished()
+	require.Equal(t, 1, h.count("request/CHIRPSTACK_V4/shed_accepted"), "telemetry is still shed")
+
+	// Without the stream wired, a report is shed like any other message.
+	h2 := newRouteHarness(t)
+	h2.allowOK.Store(false)
+	require.Equal(t, http.StatusAccepted, h2.post(csPath+"?event=ack", goodBearer, fixtureBody(t, "chirpstack/ack.json")).Code)
+	require.Equal(t, 1, h2.count("request/CHIRPSTACK_V4/shed_accepted"))
+}

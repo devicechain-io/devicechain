@@ -30,6 +30,8 @@ type lpwanPendingAck struct {
 	QueueItemID   string    `gorm:"not null;size:64;uniqueIndex:uix_lpwan_pending_acks_item,priority:2"`
 	DeadlineAt    time.Time `gorm:"not null;index"`
 	TransmittedAt *time.Time
+	// SettlingUntil is the lease a settler holds while it answers the command: NULL when nobody is.
+	SettlingUntil *time.Time
 }
 
 // NewLpwanPendingAcksSchema adds the table behind confirmed LoRaWAN downlinks: one row per

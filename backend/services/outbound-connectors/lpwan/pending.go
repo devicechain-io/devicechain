@@ -45,6 +45,12 @@ type Pending struct {
 	TransmittedAt *time.Time
 }
 
+// SettleLease is how long a settler (a report or the deadline sweep) holds a record while it
+// answers the command. It is shorter than the report stream's redelivery wait (60 s), so a report
+// whose answer failed can claim the record again when it redelivers, and it bounds how long a
+// settler that died mid-answer blocks the record.
+const SettleLease = 45 * time.Second
+
 // PendingStore holds the downlinks awaiting an acknowledgement.
 type PendingStore interface {
 	// Add records a pending downlink. The (tenant, queue item id) pair is unique.
@@ -53,9 +59,15 @@ type PendingStore interface {
 	Find(ctx context.Context, tenant, queueItemID string) (*Pending, error)
 	// MarkTransmitted records the gateway's acceptance of the frame, keeping the first.
 	MarkTransmitted(ctx context.Context, tenant string, id uint, at time.Time) error
+	// Claim takes the record's settle lease for lease from now, reporting whether this caller got it.
+	// Exactly one of a report and the deadline sweep settles a record, so the command is never
+	// answered both SUCCESSFUL and TIMEOUT: whoever claims first publishes its outcome, and the
+	// other leaves the record alone.
+	Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (bool, error)
 	// Delete removes a settled record. Deleting one already gone is not an error.
 	Delete(ctx context.Context, tenant string, id uint) error
-	// Expired returns up to limit records whose deadline is at or before now, across tenants.
+	// Expired returns up to limit records whose deadline is at or before now and that no settler
+	// holds, across tenants.
 	Expired(ctx context.Context, now time.Time, limit int) ([]Pending, error)
 }
 
@@ -76,6 +88,7 @@ type LpwanPendingAck struct {
 	QueueItemID   string    `gorm:"not null;size:64;uniqueIndex:uix_lpwan_pending_acks_item,priority:2"`
 	DeadlineAt    time.Time `gorm:"not null;index"`
 	TransmittedAt *time.Time
+	SettlingUntil *time.Time
 }
 
 // DBPending is the relational PendingStore.
@@ -123,6 +136,14 @@ func (s *DBPending) MarkTransmitted(ctx context.Context, tenant string, id uint,
 		Update("transmitted_at", at.UTC()).Error
 }
 
+// Claim implements PendingStore. The conditional update is the atomic step.
+func (s *DBPending) Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (bool, error) {
+	res := s.db(ctx, tenant).Model(&LpwanPendingAck{}).
+		Where("id = ? AND (settling_until IS NULL OR settling_until <= ?)", id, now.UTC()).
+		Update("settling_until", now.Add(lease).UTC())
+	return res.RowsAffected == 1, res.Error
+}
+
 // Delete implements PendingStore.
 func (s *DBPending) Delete(ctx context.Context, tenant string, id uint) error {
 	return s.db(ctx, tenant).Where("id = ?", id).Delete(&LpwanPendingAck{}).Error
@@ -133,7 +154,7 @@ func (s *DBPending) Delete(ctx context.Context, tenant string, id uint) error {
 func (s *DBPending) Expired(ctx context.Context, now time.Time, limit int) ([]Pending, error) {
 	var rows []LpwanPendingAck
 	err := s.rdb.DB(core.WithSystemContext(ctx)).
-		Where("deadline_at <= ?", now.UTC()).Order("deadline_at ASC").Limit(limit).Find(&rows).Error
+		Where("deadline_at <= ? AND (settling_until IS NULL OR settling_until <= ?)", now.UTC(), now.UTC()).Order("deadline_at ASC").Limit(limit).Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}

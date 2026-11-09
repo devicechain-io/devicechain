@@ -33,12 +33,13 @@ const (
 	AckResponseFail  = "response_failed" // the answer could not be published; left unacked
 	AckDeadline      = "deadline"        // a downlink's wait ran out: the command is answered unanswered
 	AckDeadlineFault = "deadline_fault"  // an overdue downlink could not be answered this pass
+	AckContended     = "contended"       // another settler holds the record; this report is left to redeliver
 )
 
 // AckResults is every ack result label, so a metric can create its children at 0.
 var AckResults = []string{
 	AckAcknowledged, AckTimedOut, AckTransmitted, AckTxUntracked, AckUnmatched, AckRetried, AckMismatch,
-	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault,
+	AckPoison, AckTenantGone, AckStoreFailed, AckResponseFail, AckDeadline, AckDeadlineFault, AckContended,
 }
 
 // AckMetrics counts ack feed results; a nil AckMetrics counts nothing.
@@ -244,6 +245,12 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 		ack(msg)
 		return
 	}
+	// Exactly one settler answers the command: a report and the deadline sweep both claim the
+	// record's lease first, so a late acknowledgement cannot be answered beside a timeout. A report
+	// that loses is left to redeliver; by then the record is gone and it is dropped as unmatched.
+	if !f.claim(ctx, p) {
+		return
+	}
 	env := cmddownlink.ResponseEnvelope{CommandToken: p.CommandToken, DispatchNonce: p.DispatchNonce}
 	result := AckAcknowledged
 	if rep.Acknowledged {
@@ -260,6 +267,23 @@ func (f *AckFeed) handle(ctx context.Context, msg messaging.Message) {
 		f.count(result)
 		ack(msg)
 	}
+}
+
+// claim takes the record's settle lease, counting why when it cannot.
+func (f *AckFeed) claim(ctx context.Context, p *Pending) bool {
+	won, err := f.pending.Claim(ctx, p.Tenant, p.ID, f.opts.Now(), SettleLease)
+	switch {
+	case err != nil:
+		if ctx.Err() == nil {
+			f.count(AckStoreFailed)
+			log.Warn().Err(err).Str("tenant", p.Tenant).Msg("Could not claim a pending LoRaWAN downlink; leaving it to retry.")
+		}
+		return false
+	case !won:
+		f.count(AckContended)
+		return false
+	}
+	return true
 }
 
 // respond publishes the answer and removes the record, reporting whether the report is settled.
@@ -320,6 +344,9 @@ func (f *AckFeed) Sweep(ctx context.Context) {
 		if f.opts.TenantDeleted != nil && f.opts.TenantDeleted(p.Tenant) {
 			_ = f.pending.Delete(ctx, p.Tenant, p.ID)
 			f.count(AckTenantGone)
+			continue
+		}
+		if !f.claim(ctx, &p) {
 			continue
 		}
 		text := "the network server reported no outcome for the confirmed downlink in time; it may still be queued or may have been delivered"
