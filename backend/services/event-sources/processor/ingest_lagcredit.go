@@ -295,16 +295,11 @@ func (m ingestMeter) readings(source, tenant string, readings int) bool {
 }
 
 // readingsLive charges a stream-less message's readings (external MQTT) at pod time with no credit, at the
-// tenant's contention factor now. A factor of 0 is the hard drop, as the existing gate's shed ceiling of
-// zero refuses every reading.
+// tenant's contention factor now. A factor of 0 is the hard drop with no branch of its own: the shed
+// reading ceiling is then rate 0 and burst 0 (the floor applies only to a usable rate), which admits
+// nothing, as the existing gate's shed ceiling of zero refuses every reading.
 func (lc *LagCreditIngest) readingsLive(source, tenant string, readings int) bool {
 	factor := lc.factor(tenant)
-	if factor == 0 && readings > 0 {
-		if lc.hooks.ReadingShed != nil {
-			lc.hooks.ReadingShed(source, tenant, readings)
-		}
-		return false
-	}
 	return ingestMeter{lc: lc, stream: -1, route: core.RouteLive, stagedAt: lc.clock(), contended: factor < 1}.readings(source, tenant, readings)
 }
 
