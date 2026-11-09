@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
@@ -24,18 +25,27 @@ import (
 // is untouched. Everywhere else it is the CONVENIENT spelling of --server: name the instance
 // and dcctl uses the host and TLS setting the instance was declared with.
 
+// The pieces readRecordedTarget is built from, indirected so a test can drive it without a
+// cluster or a record on disk: which binding an instance resolves to, the declaration read from
+// that cluster, and where the note about a guessed binding is written.
+var (
+	resolveTargetBinding           = bootstrap.ResolveBinding
+	readTargetInstanceCR           = bootstrap.ReadInstanceCR
+	targetNoteOut        io.Writer = os.Stderr
+)
+
 // readRecordedTarget is the cluster read of the host and TLS setting an instance was declared
 // with, indirected so selection can be tested without a cluster. ("", false, nil) means the
 // declaration holds no host.
 var readRecordedTarget = func(ctx context.Context, kubeContext, instance string) (string, bool, error) {
-	binding, source := bootstrap.ResolveBinding(bootstrap.Options{Instance: instance, KubeContext: kubeContext})
+	binding, source := resolveTargetBinding(bootstrap.Options{Instance: instance, KubeContext: kubeContext})
 	if source == bootstrap.BindingUnreadable || source == bootstrap.BindingConflict {
 		return "", false, fmt.Errorf("the record of which cluster instance %q lives on cannot be used", instance)
 	}
 	if source == bootstrap.BindingGuessed {
-		fmt.Fprintf(os.Stderr, "note: no record of which cluster instance %q lives on; guessing context %s\n", instance, binding.KubeContext)
+		fmt.Fprintf(targetNoteOut, "note: no record of which cluster instance %q lives on; guessing context %s\n", instance, binding.KubeContext)
 	}
-	inst, err := bootstrap.ReadInstanceCR(ctx, binding.KubeContext, instance)
+	inst, err := readTargetInstanceCR(ctx, binding.KubeContext, instance)
 	if err != nil {
 		return "", false, err
 	}
