@@ -348,19 +348,20 @@ func sameDevice(p *Pending, rep cmddownlink.DownlinkReport) bool {
 		(rep.DeviceToken == "" || rep.DeviceToken == p.DeviceToken)
 }
 
-// preTransmissionErrors are the network server's own errors for a queued downlink it dropped at the
-// head of its queue processing (pkg/networkserver/downlink.go), before any attempt to schedule it on a
-// gateway: the session is unknown, the downlink is a confirmed one for a multicast device, or its
-// payload exceeds the band's limit.
+// preTransmissionErrors are the network server's own errors that name a drop which cannot follow a
+// transmission: a confirmed downlink queued for a multicast device is refused by a static property of
+// the device, however many times the item is looked at (pkg/networkserver/downlink.go).
 //
-// 🔴 THE LIST IS DELIBERATELY SHORT. Three other errors name drops that can come AFTER a scheduling
-// attempt, and a scheduling attempt can have reached a gateway even when the network server saw it
-// fail (an ambiguous gateway RPC error is retried): downlink_expired (a time-based drop, reached on a
-// later pass), absolute_time and fixed_paths (outcomes of gateway scheduling errors), and a gateway's
-// own transmission error. Each of those is TIMEOUT. A "safe to send again" is only said where nothing
-// could have been sent.
+// 🔴 THE LIST IS DELIBERATELY ONE NAME. Every other network-server drop can be reached on a LATER pass
+// over an item that an earlier pass already tried to send. If a gateway-server scheduling call fails
+// ambiguously (it may have been accepted), the network server puts the item back at the head of the
+// queue with no retry counted and no transmission reported, and a later pass can then drop it as
+// unknown_session (after a rejoin), application_downlink_too_long (after a data-rate drop),
+// downlink_expired, or on a scheduling error. From the report alone those cannot be told apart from a
+// drop of an item that was never tried, so each is TIMEOUT. A "safe to send again" is only said where
+// the cause is static.
 var preTransmissionErrors = map[string]bool{
-	"unknown_session": true, "confirmed_multicast_downlink": true, "application_downlink_too_long": true,
+	"confirmed_multicast_downlink": true,
 }
 
 // neverTransmitted reports whether a failed report positively shows the downlink was never
