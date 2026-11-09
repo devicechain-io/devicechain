@@ -90,9 +90,11 @@
 #        N11 REVOKED  refused in both modes (ocsp_revoked); the responder was asked
 #        N12 UNKNOWN  "no answer": ENFORCE_KNOWN admits, counting unknown_cert; REQUIRE_CURRENT
 #                     refuses (ocsp_unavailable)
-#        N13 WRONG KEY  a good answer signed by a key the CA never certified (embedded, as a
-#                     delegate's would be) is unverifiable: ENFORCE_KNOWN admits counting
-#                     unverified; REQUIRE_CURRENT refuses. A forged GOOD must never admit there
+#        N13 WRONG KEY  a good answer signed by an embedded delegated responder that a FAKE CA
+#                     issued, the fake CA carrying the real CA's exact subject DN under its own
+#                     key: every by-name check passes, only the delegate's signature against the
+#                     real CA's key fails. Unverifiable: ENFORCE_KNOWN admits counting unverified;
+#                     REQUIRE_CURRENT refuses. A forged GOOD must never admit there
 #        N14 STALE    a good answer whose nextUpdate passed before it was sent: unverifiable, so
 #                     the same split (unverified)
 #        N15 DOWN     the responder stopped: ENFORCE_KNOWN admits counting unreachable (fail
@@ -174,7 +176,10 @@ ocsp_container="${DC_X509_RIG_OCSP_CONTAINER:-$cluster-ocsp}"
 ocsp_net="${DC_X509_RIG_OCSP_NET:-$cluster-ocsp-pub}"
 # NOT a private range, on purpose: the egress boundary refuses every private address before it
 # dials, and a real CA's responder is on the public internet. The range is routed only inside
-# this docker network (the kind node and the responder), never on the host.
+# this docker network (the kind node and the responder). On Docker Desktop the host never routes
+# it; on native Linux Docker the host itself gets a connected route for the subnet while the
+# network exists (`down` removes it), so pick DC_X509_RIG_OCSP_SUBNET away from anything the host
+# must reach.
 ocsp_subnet="${DC_X509_RIG_OCSP_SUBNET:-11.255.250.0/24}"
 ocsp_ip="${DC_X509_RIG_OCSP_IP:-11.255.250.10}"
 ocsp_host_port="${DC_X509_RIG_OCSP_HOST_PORT:-18580}"
@@ -255,40 +260,69 @@ dk() { MSYS_NO_PATHCONV=1 docker "$@"; }
 
 release_dir="$state_dir/release-$release"
 rel_sim=""
+host_os="$(go env GOHOSTOS)"
+host_arch="$(go env GOHOSTARCH)"
 if [[ -n "$release" ]]; then
-  dcctl="$release_dir/dcctl$exe"
+  dcctl="$release_dir/dcctl$([[ "$host_os" != windows ]] || printf .exe)"
   rel_sim="$release_dir/dc-simulator"
 fi
+release_fetched=""
 
-# fetch_release downloads the release's dcctl for this host and its linux/amd64 simulator, and
-# refuses either unless its SHA-256 is the one the release's own checksum file names.
+# fetch_release puts the release's dcctl for this host and its linux/amd64 simulator in
+# $release_dir, once per invocation. Each archive must hash to what the release's own checksum
+# files (downloaded afresh every time) name AND carry the release workflow's build provenance
+# (`gh attestation verify`); an archive already on disk is held to the same two checks, and the
+# binaries are always unpacked again from the archives just verified, into a temporary directory
+# that is renamed into place, so a binary left on disk is never trusted on its own.
 fetch_release() {
-  [[ -x "$dcctl" && -s "$rel_sim" ]] && { note "release $release already fetched into $release_dir"; return; }
-  local v="${release#v}" os arch="amd64" base url f sum want
-  os="$(go env GOOS)"
+  [[ -z "$release_fetched" ]] || return 0
+  need gh
+  local v="${release#v}" base f sum want tmp dcctl_archive
   base="https://github.com/devicechain-io/devicechain/releases/download/$release"
   mkdir -p "$release_dir"
-  say "fetching the published dcctl and dc-simulator of $release"
+  say "fetching and verifying the published dcctl and dc-simulator of $release"
   for f in checksums.txt dc-simulator_checksums.txt; do
-    curl -fsSL "${curl_revoke[@]}" -o "$release_dir/$f" "$base/$f" || fail "could not download $base/$f"
+    curl -fsSL --max-time 120 "${curl_revoke[@]}" -o "$release_dir/$f" "$base/$f" || fail "could not download $base/$f"
   done
-  local -a want_files=("dc-simulator_${v}_linux_amd64.tar.gz")
-  if [[ "$os" == windows ]]; then want_files+=("dcctl_${v}_windows_${arch}.zip"); else want_files+=("dcctl_${v}_${os}_${arch}.tar.gz"); fi
-  for f in "${want_files[@]}"; do
-    curl -fsSL "${curl_revoke[@]}" -o "$release_dir/$f" "$base/$f" || fail "could not download $base/$f"
+  if [[ "$host_os" == windows ]]; then dcctl_archive="dcctl_${v}_windows_${host_arch}.zip"; else dcctl_archive="dcctl_${v}_${host_os}_${host_arch}.tar.gz"; fi
+  for f in "dc-simulator_${v}_linux_amd64.tar.gz" "$dcctl_archive"; do
     want="$(awk -v f="$f" '($2 == f || $2 == "*" f) && w == "" { w = $1 } END { print w }' "$release_dir/checksums.txt" "$release_dir/dc-simulator_checksums.txt")"
-    sum="$(sha256sum "$release_dir/$f" | awk '{ print $1 }')"
-    [[ -n "$want" && "$sum" == "$want" ]] || fail "$f: sha256 $sum, the release's checksums say '${want:-nothing}'"
-    note "$f: sha256 $sum matches the release's checksums"
+    [[ -n "$want" ]] || fail "$f: the release's checksum files do not name it"
+    sum=""
+    [[ ! -f "$release_dir/$f" ]] || sum="$(sha256sum "$release_dir/$f" | awk '{ print $1 }')"
+    if [[ "$sum" != "$want" ]]; then
+      curl -fsSL --max-time 600 "${curl_revoke[@]}" -o "$release_dir/$f" "$base/$f" || fail "could not download $base/$f"
+      sum="$(sha256sum "$release_dir/$f" | awk '{ print $1 }')"
+    fi
+    [[ "$sum" == "$want" ]] || fail "$f: sha256 $sum, the release's checksums say '$want'"
+    # Bound to the release workflow AT this tag: provenance from another workflow or ref of the same
+    # repository is not the release's.
+    gh attestation verify "$(winpath "$release_dir/$f")" --repo devicechain-io/devicechain \
+      --signer-workflow devicechain-io/devicechain/.github/workflows/release.yml --source-ref "refs/tags/$release" >/dev/null ||
+      fail "$f: its hash matches, but gh attestation verify finds no provenance from release.yml at refs/tags/$release for it"
+    note "$f: sha256 $sum matches the release's checksums, and its build provenance verifies"
   done
-  (cd "$release_dir" && tar xzf "dc-simulator_${v}_linux_amd64.tar.gz" dc-simulator) || fail "could not unpack the simulator"
-  if [[ "$os" == windows ]]; then
-    (cd "$release_dir" && unzip -o -q "dcctl_${v}_windows_${arch}.zip" dcctl.exe) || fail "could not unpack dcctl"
+  tmp="$(mktemp -d "$release_dir/unpack.XXXXXX")"
+  # Relative names, from inside the directory: GNU tar reads "D:/..." as a remote host.
+  (cd "$tmp" && tar xzf "../dc-simulator_${v}_linux_amd64.tar.gz" dc-simulator) || fail "could not unpack the simulator"
+  if [[ "$host_os" == windows ]]; then
+    (cd "$tmp" && unzip -o -q "../$dcctl_archive" dcctl.exe) || fail "could not unpack dcctl"
   else
-    (cd "$release_dir" && tar xzf "dcctl_${v}_${os}_${arch}.tar.gz" dcctl) || fail "could not unpack dcctl"
+    (cd "$tmp" && tar xzf "../$dcctl_archive" dcctl) || fail "could not unpack dcctl"
   fi
-  [[ -x "$dcctl" && -s "$rel_sim" ]] || fail "the release did not unpack to $dcctl and $rel_sim"
+  [[ -s "$tmp/dc-simulator" && -s "$tmp/${dcctl##*/}" ]] || fail "the release archives did not hold dc-simulator and ${dcctl##*/}"
+  mv -f "$tmp/dc-simulator" "$rel_sim"
+  mv -f "$tmp/${dcctl##*/}" "$dcctl"
+  rmdir "$tmp"
+  chmod +x "$dcctl"
+  release_fetched=1
   "$dcctl" version | sed 's/^/    /'
+}
+
+# ensure_dcctl: a dcctl to drive the instance with. A release's is verified again (fetch_release);
+# this tree's is built only when there is none.
+ensure_dcctl() {
+  if [[ -n "$release" ]]; then fetch_release; elif [[ ! -x "$dcctl" ]]; then build_dcctl; fi
 }
 
 build_dcctl() {
@@ -421,7 +455,7 @@ cmd_down() {
       recctx="$(jq -r '.kubeContext // empty' "$rec")"
       [[ "$recctx" == "$kube_context" ]] ||
         fail "$rec names context '$recctx', not $kube_context: instance $instance is not this rig's; refusing to destroy it"
-      [[ -x "$dcctl" ]] || build_dcctl
+      ensure_dcctl
       say "destroying instance $instance"
       "$dcctl" destroy local "$instance" --yes 2>&1 | redact ||
         warn "dcctl destroy exited non-zero; deleting the cluster anyway"
@@ -599,7 +633,7 @@ sim_bin=""
 build_sim() {
   sim_bin="$work/dc-simulator"
   if [[ -n "$release" ]]; then
-    [[ -s "$rel_sim" ]] || fetch_release
+    fetch_release
     say "using the PUBLISHED dc-simulator of $release"
     cp "$rel_sim" "$sim_bin"
     return
@@ -916,20 +950,27 @@ make_tenant() {
   # The tenant's own override of its registration ceiling: a burst of $burst, refilled at a rate
   # too small to matter over a run. The callout charges the SAME limiter the self-registration
   # endpoint does.
-  adm 'mutation($r:AdminTenantCreateRequest!){createTenant(request:$r){token}}'     "$(jq -n --arg t "$tenant" --arg tier "$tier" --argjson b "$burst"       '{r:{token:$t,name:"X509 rig",tierToken:$tier,provisioningRegistrationsPerSecond:0.001,provisioningBurst:$b}}')" >/dev/null ||
+  adm 'mutation($r:AdminTenantCreateRequest!){createTenant(request:$r){token}}' \
+    "$(jq -n --arg t "$tenant" --arg tier "$tier" --argjson b "$burst" \
+      '{r:{token:$t,name:"X509 rig",tierToken:$tier,provisioningRegistrationsPerSecond:0.001,provisioningBurst:$b}}')" >/dev/null ||
     fail "could not create tenant $tenant"
   member_password="$(openssl rand -base64 24 | tr -d '/+=')Aa1"
-  adm 'mutation($e:String!,$p:String!){createIdentity(request:{email:$e,password:$p,enabled:true,systemRoles:[]}){email}}'     "$(jq -n --arg e "$member_email" --arg p "$member_password" '{e:$e,p:$p}')" >/dev/null ||
+  adm 'mutation($e:String!,$p:String!){createIdentity(request:{email:$e,password:$p,enabled:true,systemRoles:[]}){email}}' \
+    "$(jq -n --arg e "$member_email" --arg p "$member_password" '{e:$e,p:$p}')" >/dev/null ||
     fail "could not create the tenant member"
-  adm 'mutation($e:String!,$t:String!){addMembership(email:$e,tenant:$t,roleTokens:["tenant-admin"]){email}}'     "$(jq -n --arg e "$member_email" --arg t "$tenant" '{e:$e,t:$t}')" >/dev/null || fail "could not add the membership"
+  adm 'mutation($e:String!,$t:String!){addMembership(email:$e,tenant:$t,roleTokens:["tenant-admin"]){email}}' \
+    "$(jq -n --arg e "$member_email" --arg t "$tenant" '{e:$e,t:$t}')" >/dev/null || fail "could not add the membership"
   ident="$(login "$member_email" "$member_password")"
-  tenant_token="$(gql "$um/graphql" - 'mutation($i:String!,$t:String!){selectTenant(identityToken:$i,tenant:$t){accessToken}}'     "$(jq -n --arg i "$ident" --arg t "$tenant" '{i:$i,t:$t}')" | jq -r '.selectTenant.accessToken')"
+  tenant_token="$(gql "$um/graphql" - 'mutation($i:String!,$t:String!){selectTenant(identityToken:$i,tenant:$t){accessToken}}' \
+    "$(jq -n --arg i "$ident" --arg t "$tenant" '{i:$i,t:$t}')" | jq -r '.selectTenant.accessToken')"
   [[ -n "$tenant_token" && "$tenant_token" != null ]] || fail "could not enter tenant $tenant"
 
-  dmq 'mutation($r:DeviceProfileCreateRequest){createDeviceProfile(request:$r){token}}'     "$(jq -n --arg t "$profile" '{r:{token:$t,name:"X509 rig device"}}')" >/dev/null || fail "createDeviceProfile"
+  dmq 'mutation($r:DeviceProfileCreateRequest){createDeviceProfile(request:$r){token}}' \
+    "$(jq -n --arg t "$profile" '{r:{token:$t,name:"X509 rig device"}}')" >/dev/null || fail "createDeviceProfile"
   dmq 'mutation($t:String!){publishDeviceProfile(token:$t){version}}' "$(jq -n --arg t "$profile" '{t:$t}')" >/dev/null ||
     fail "publishDeviceProfile"
-  dmq 'mutation($r:DeviceTypeCreateRequest){createDeviceType(request:$r){token}}'     "$(jq -n --arg t "$dtype" --arg p "$profile" '{r:{token:$t,name:"X509 rig device",profileToken:$p}}')" >/dev/null ||
+  dmq 'mutation($r:DeviceTypeCreateRequest){createDeviceType(request:$r){token}}' \
+    "$(jq -n --arg t "$dtype" --arg p "$profile" '{r:{token:$t,name:"X509 rig device",profileToken:$p}}')" >/dev/null ||
     fail "createDeviceType"
 }
 
@@ -1339,6 +1380,8 @@ O_AFTER=""
 O_ASKED=0
 O_WANT_REASON="-"
 O_WANT_ASKED=yes
+# snap_has <snapshot> <name>: the snapshot carries a line for that name.
+snap_has() { awk -F= -v r="$2" '$1 == r { f = 1 } END { exit !f }' <<<"$1"; }
 set_trace() { O_BEFORE="$1"; O_AFTER="$2"; O_ASKED="$3"; O_WANT_REASON="$4"; O_WANT_ASKED="$5"; }
 
 # check_ocsp_trace: a checker (see CHECKERS) over the OCSP part of a record. asked: the responder
@@ -1349,6 +1392,13 @@ set_trace() { O_BEFORE="$1"; O_AFTER="$2"; O_ASKED="$3"; O_WANT_REASON="$4"; O_W
 check_ocsp_trace() {
   local -a tags=()
   local r d moved="" others=""
+  # unread: the counter was not read in full at both ends. Every reason is registered at zero, so a
+  # real read always names unreachable, and the same reasons at both ends; a side that is empty or
+  # names other reasons is a read that failed (or lost a series) and was not stopped, and "nothing
+  # moved" would then be a guess about a reason never measured.
+  snap_has "$O_BEFORE" unreachable && snap_has "$O_AFTER" unreachable &&
+    [[ "$(awk -F= '{ print $1 }' <<<"$O_BEFORE" | sort)" == "$(awk -F= '{ print $1 }' <<<"$O_AFTER" | sort)" ]] ||
+    { tags+=(unread); echo "  unread: x509_ocsp_unavailable_allowed_total was not read before and after (before: '${O_BEFORE:0:40}', after: '${O_AFTER:0:40}')"; }
   if [[ "$O_WANT_ASKED" == yes ]]; then
     ((O_ASKED >= 1)) || { tags+=(asked); echo "  asked: the responder never saw a request for this certificate"; }
   else
@@ -1391,8 +1441,16 @@ ocsp_offline_controls() {
   expect_red "the right reason AND another one" "allowed" yes check_ocsp_trace
   set_trace "$b" $'unknown_cert=0\nunverified=0\nunreachable=0\nblocked=1' 1 blocked no
   expect_red "a refused dial whose responder was nonetheless asked" "asked" yes check_ocsp_trace
+  set_trace "$b" "" 1 - yes
+  expect_red "a good connect whose AFTER read of the counter came back empty" "unread" yes check_ocsp_trace
+  set_trace "" "$b" 1 - yes
+  expect_red "a good connect whose BEFORE read of the counter came back empty" "unread" yes check_ocsp_trace
+  set_trace "$b" $'unverified=0\nunreachable=0\nblocked=0' 1 - yes
+  expect_red "a good connect whose AFTER read lost a series (unknown_cert)" "unread" yes check_ocsp_trace
 }
 
+ocsp_summary=""
+ocsp_n16=""
 ocsp_dir=""
 ocsp_private_ip=""
 declare -A ocsp_serial=()
@@ -1414,7 +1472,7 @@ ocsp_snap() { dm_counter x509_ocsp_unavailable_allowed_total reason unreachable;
 ocsp_responder_up() {
   dk exec -d "$ocsp_container" sh -c 'exec /work/ocspresponder -listen :8080 -issuer /work/ocsp/root.pem -issuer-key /work/ocsp/root.key -wrong-cert /work/ocsp/wrong.pem -wrong-key /work/ocsp/wrong.key -status /work/ocsp/status.json -log /work/ocsp/requests.log >>/work/ocsp/responder.out 2>&1'
   local deadline=$((SECONDS + 30))
-  until curl -fsS "http://127.0.0.1:$ocsp_host_port/healthz" >/dev/null 2>&1; do
+  until curl -fsS --max-time 3 "http://127.0.0.1:$ocsp_host_port/healthz" >/dev/null 2>&1; do
     ((SECONDS < deadline)) || fail "the OCSP responder did not come up: $(tail -3 "$ocsp_dir/responder.out" 2>/dev/null)"
     sleep 1
   done
@@ -1423,7 +1481,7 @@ ocsp_responder_up() {
 ocsp_responder_down() {
   dk exec "$ocsp_container" pkill -f /work/ocspresponder || true
   local deadline=$((SECONDS + 30))
-  while curl -fsS "http://127.0.0.1:$ocsp_host_port/healthz" >/dev/null 2>&1; do
+  while curl -fsS --max-time 3 "http://127.0.0.1:$ocsp_host_port/healthz" >/dev/null 2>&1; do
     ((SECONDS < deadline)) || fail "the OCSP responder would not stop"
     sleep 1
   done
@@ -1495,7 +1553,7 @@ ocsp_anchor() {
 # and shows the check that guards the case red on the very same record: the admit checker on a
 # refusal, the GOOD device's trace on an admission the responder never vouched for.
 ocsp_attempt() {
-  local label="$1" expect="$2" kind="$3" wreason="$4" wasked="$5" i="$6" tok serial val out tr ob a0
+  local label="$1" expect="$2" kind="$3" wreason="$4" wasked="$5" i="$6" tok serial val out tr ob oa a0 a1
   tok="$(entry pki-ocsp jit "$i" token)"
   serial="${ocsp_serial[$i]}"
   val="$(next_value)"
@@ -1504,7 +1562,11 @@ ocsp_attempt() {
   a0="$(ocsp_asked "$serial")"
   pub_x509 "/work/pki-ocsp/$(entry pki-ocsp jit "$i" certFile)" "/work/pki-ocsp/$(entry pki-ocsp jit "$i" keyFile)" "$(client_id "$tok")" "$tok" "$val"
   attempt_record "$expect" "$kind" "$tok" yes "$val"
-  set_trace "$ob" "$(ocsp_snap)" $(($(ocsp_asked "$serial") - a0)) "$wreason" "$wasked"
+  # Each read is ASSIGNED on its own line: a read that fails inside an argument's command
+  # substitution ends only that subshell, and an empty "after" would then read as nothing moved.
+  oa="$(ocsp_snap)"
+  a1="$(ocsp_asked "$serial")"
+  set_trace "$ob" "$oa" $((a1 - a0)) "$wreason" "$wasked"
   if [[ "$kind" == admit ]]; then
     out="$(check_admitted)" || fail "$label: $out ${A_OUT:+(mosquitto_pub: ${A_OUT:0:200})}"
   else
@@ -1547,7 +1609,7 @@ EOF
   local -a args=(upgrade local "$instance" --values "$(winpath "$work/ocsp-values.yaml")")
   if [[ -n "$release" ]]; then args+=(--version "$release"); else args+=(--registry localhost:5000 --version "$(tr -d '\r\n' <"$state_dir/image-tag")"); fi
   say "turning the instance's OCSP switch on: dcctl ${args[*]}"
-  [[ -x "$dcctl" ]] || build_dcctl
+  ensure_dcctl
   "$dcctl" "${args[@]}" 2>&1 | redact
   k -n "$namespace" rollout status deploy/device-management --timeout=600s
   local st
@@ -1585,9 +1647,25 @@ step7_ocsp() {
   echo '{}' >"$ocsp_dir/status.json"
   : >"$ocsp_dir/requests.log"
   mk_root "$ocsp_dir"
+  # N13's signer: a delegated responder (OCSPSigning, digitalSignature, in its validity) issued by
+  # a FAKE CA whose subject DN is byte-for-byte the real CA's, under a key of its own. Everything a
+  # verifier can check by NAME says the real CA issued it, so the forgery is caught only by checking
+  # the delegate's signature against the real CA's key: that is the check this plants against.
+  local ca_dn
+  ca_dn="$(MSYS2_ARG_CONV_EXCL='*' openssl x509 -in "$(winpath "$ocsp_dir/root.pem")" -noout -subject -nameopt compat)"
+  ca_dn="${ca_dn#subject=}"
+  [[ "$ca_dn" == /CN=* ]] || fail "cannot read the OCSP CA's subject DN (got '$ca_dn')"
+  mk_key "$ocsp_dir/fakeca.key"
+  ossl req -x509 -new -key "$ocsp_dir/fakeca.key" -subj "$ca_dn" -days 30 -sha256 \
+    -addext "basicConstraints=critical,CA:TRUE,pathlen:1" -addext "keyUsage=critical,keyCertSign,cRLSign" -out "$ocsp_dir/fakeca.pem" 2>/dev/null
   mk_key "$ocsp_dir/wrong.key"
-  ossl req -x509 -new -key "$ocsp_dir/wrong.key" -subj "/CN=x509-rig NOT the CA" -days 30 -sha256 \
-    -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=OCSPSigning" -out "$ocsp_dir/wrong.pem" 2>/dev/null
+  ossl req -new -key "$ocsp_dir/wrong.key" -subj "/CN=x509-rig OCSP delegate" -out "$ocsp_dir/wrong.csr" 2>/dev/null
+  printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=OCSPSigning\n' >"$ocsp_dir/wrong.ext"
+  ossl x509 -req -in "$ocsp_dir/wrong.csr" -CA "$ocsp_dir/fakeca.pem" -CAkey "$ocsp_dir/fakeca.key" -set_serial "0x$(openssl rand -hex 8)" \
+    -days 30 -sha256 -extfile "$ocsp_dir/wrong.ext" -out "$ocsp_dir/wrong.pem" 2>/dev/null
+  # The plant is worth something only if the delegate's issuer is byte-for-byte the real CA's subject.
+  [[ "$(ossl x509 -in "$ocsp_dir/wrong.pem" -noout -issuer -nameopt RFC2253)" == "issuer=$(ossl x509 -in "$ocsp_dir/root.pem" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')" ]] ||
+    fail "the N13 delegate does not name the real CA as its issuer"
   local n_ocsp=17
   simp pki-ocsp x5o- x509rig-ocsp-unused --x509-pinned 0 --x509-jit "$n_ocsp" --x509-mint-only 2>>"$work/sim.err" || fail "could not mint the OCSP names"
   # Leaves 0-2 are the instrument's probes; 3 onward meet the platform.
@@ -1615,7 +1693,7 @@ step7_ocsp() {
   ocsp_probe "$p1" /ok ': revoked' ': good|[Vv]erify [Ff]ailure' "a revoked serial on /ok"
   ocsp_probe "$p2" /ok ': unknown' ': good|: revoked' "a serial the responder never heard of on /ok"
   ocsp_probe "$p0" /wrongkey '[Vv]erify [Ff]ailure' 'Response verify OK' "a good serial on /wrongkey"
-  ocsp_probe "$p0" /stale '[Ss]tatus times invalid' 'xx-never-xx' "a good serial on /stale"
+  ocsp_probe "$p0" /stale '[Ss]tatus times invalid' 'Response [Vv]erify [Ff]ailure' "a good serial on /stale"
 
   # ---- the anchor and its certificate profile ----
   dmq 'mutation($r:DeviceTrustAnchorCreateRequest!){createDeviceTrustAnchor(request:$r){token}}' \
@@ -1638,8 +1716,10 @@ step7_ocsp() {
     fi
     grep -q 'switched off' "$work/n16.err" || fail "N16: the switch was refused, but not because OCSP is off: $(cat "$work/n16.err")"
     pass "N16: ENFORCE_KNOWN refused while the instance switch is off (\"$(jq -r '.[0].message' "$work/n16.err" | cut -c1-120)...\")"
+    ocsp_n16=ran
   else
     warn "N16 NOT RUN: device-management's OCSP switch is already '$st' (an earlier run turned it on); it needs a fresh instance"
+    ocsp_n16=skipped
   fi
   say "an anchor whose mode is OFF: a device is admitted and the responder is never asked"
   ocsp_attempt "OFF: a device under an anchor whose ocspMode is OFF" jit_created admit - no $L_OFF
@@ -1694,6 +1774,15 @@ step7_ocsp() {
   member_password="$saved_pw"
   write_handshake
   token_alive "after the OCSP step, in the first tenant"
+  local n16_said="the API refused to switch an anchor on while the instance switch was off (N16)"
+  [[ "$ocsp_n16" == ran ]] || n16_said="N16 (the API refusing while the switch is off) did NOT run: the switch was already on"
+  ocsp_summary="Against a live OCSP responder (step 7): $n16_said; with the switch on, a good certificate was
+admitted and checked under ENFORCE_KNOWN and under REQUIRE_CURRENT, and a revoked one refused under both
+(N11); an unknown answer (N12), a forged delegate under a same-name fake CA (N13), a stale answer (N14)
+and a stopped responder (N15) were each admitted and counted by reason under ENFORCE_KNOWN and refused
+under REQUIRE_CURRENT, and a good device was admitted again once the responder was back; a responder
+URL at a private address was refused by the egress boundary under ENFORCE_KNOWN (N17, run in that mode
+only)."
 }
 
 # ---------------------------------------------------------------------------
@@ -1707,21 +1796,12 @@ cmd_run() {
   ((n_pinned >= 4)) || fail "DC_X509_RIG_PINNED must be at least 4 (N6 uses four devices)"
   ((m_jit >= 1)) || fail "DC_X509_RIG_JIT must be at least 1"
   # A fresh tenant per run: tokens are unique per tenant, so a re-run on the same instance starts clean.
-  local run_id image want_tag
+  local run_id
   run_id="$(date -u +%H%M%S)"
   tenant="${DC_X509_RIG_TENANT:-x5$run_id}"
   member_email="x509-rig@$tenant.test"
   say "run $run_id: tenant $tenant on instance $instance (cluster $cluster)"
-  image="$(k -n "$namespace" get deploy device-management -o jsonpath='{.spec.template.spec.containers[0].image}')"
-  note "git HEAD $(git -C "$repo_root" rev-parse HEAD); $(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ') dirty path(s)"
-  note "hack/x509-rig.sh blob $(git -C "$repo_root" hash-object hack/x509-rig.sh)"
-  note "device-management image: $image"
-  [[ -f "$state_dir/image-tag" ]] || fail "$state_dir/image-tag is missing: this instance was not brought up by this rig's 'up'"
-  want_tag="$(tr -d '\r\n' <"$state_dir/image-tag")"
-  local running_tag="${image%@*}"
-  running_tag="${running_tag##*:}"
-  [[ "$running_tag" == "$want_tag" ]] ||
-    fail "device-management runs tag '$running_tag', but 'up' installed '$want_tag': this is not the build under test"
+  run_evidence
   offline_controls
   discover
   step1_broker
@@ -1740,11 +1820,24 @@ certificates; $n_pinned pinned devices and $m_jit JIT-registered devices connect
 stored through their certificates while the token device kept working. Nine planted defects (N1-N9)
 each turned the platform's own counter, the device's CONNACK and the store red for the reason they were
 planted, the checkers were shown to go red on the opposite verdict, and the callout's issuer pin held
-the broker's live servers without refusing one genuine request (N10).$([[ "$ocsp_on" == 1 ]] && printf '%s' "
-Against a live OCSP responder (step 7) a good certificate was admitted and checked in both modes, a
-revoked one refused in both, and an unknown, a forged (wrong key), a stale and an unreachable answer,
-and a responder at a private address, were each admitted and counted by reason under ENFORCE_KNOWN
-and refused under REQUIRE_CURRENT, as the documentation says (N11-N17).")"
+the broker's live servers without refusing one genuine request (N10).${ocsp_summary:+
+$ocsp_summary}"
+}
+
+# run_evidence prints what is under test and refuses an instance whose device-management image is
+# not the tag `up` recorded.
+run_evidence() {
+  local image want_tag running_tag
+  image="$(k -n "$namespace" get deploy device-management -o jsonpath='{.spec.template.spec.containers[0].image}')"
+  note "git HEAD $(git -C "$repo_root" rev-parse HEAD); $(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ') dirty path(s)"
+  note "hack/x509-rig.sh blob $(git -C "$repo_root" hash-object hack/x509-rig.sh)"
+  note "device-management image: $image"
+  [[ -f "$state_dir/image-tag" ]] || fail "$state_dir/image-tag is missing: this instance was not brought up by this rig's 'up'"
+  want_tag="$(tr -d '\r\n' <"$state_dir/image-tag")"
+  running_tag="${image%@*}"
+  running_tag="${running_tag##*:}"
+  [[ "$running_tag" == "$want_tag" ]] ||
+    fail "device-management runs tag '$running_tag', but 'up' installed '$want_tag': this is not the build under test"
 }
 
 # cmd_run_ocsp: the checkers offline, the broker and the first tenant, then step 7 alone.
@@ -1757,16 +1850,13 @@ cmd_run_ocsp() {
   tenant="${DC_X509_RIG_TENANT:-x5$run_id}"
   member_email="x509-rig@$tenant.test"
   say "run $run_id (OCSP only): tenant $tenant on instance $instance (cluster $cluster)"
-  note "git HEAD $(git -C "$repo_root" rev-parse HEAD); $(git -C "$repo_root" status --porcelain | wc -l | tr -d ' ') dirty path(s)"
-  note "hack/x509-rig.sh blob $(git -C "$repo_root" hash-object hack/x509-rig.sh)"
-  note "device-management image: $(k -n "$namespace" get deploy device-management -o jsonpath='{.spec.template.spec.containers[0].image}')"
+  run_evidence
   offline_controls
   discover
   step1_broker
   step2_setup
   step7_ocsp
-  say "X509 RIG (OCSP) GREEN: N11-N17 each judged by the callout's counters, the responder's request log,
-the device's CONNACK and the store, every case's guard shown red on its own record."
+  say "X509 RIG (OCSP) GREEN: $ocsp_summary"
 }
 
 rig_cmd="${1:-}"

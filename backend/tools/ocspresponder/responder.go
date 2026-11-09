@@ -10,9 +10,10 @@
 //	/ok        the status the status file names for the serial (good | revoked), and unknown for a
 //	           serial it does not name. Signed by the issuer, thisUpdate a minute ago, nextUpdate an
 //	           hour ahead: what a healthy CA's responder answers.
-//	/wrongkey  the same status, signed by a key the issuer never certified (the signer certificate
-//	           is embedded, as a delegated responder's would be). A planted defect: the answer must
-//	           not be believed.
+//	/wrongkey  the same status, signed by -wrong-key with -wrong-cert embedded as a delegated
+//	           responder's certificate would be. The rig makes that certificate a delegate issued by
+//	           a fake CA with the issuer's exact subject DN, so it NAMES the issuer and only its
+//	           signature betrays it. A planted defect: the answer must not be believed.
 //	/stale     the same status, signed by the issuer, but thisUpdate three hours ago and nextUpdate
 //	           an hour ago. A planted defect: the answer lapsed before it was sent.
 //

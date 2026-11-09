@@ -51,9 +51,20 @@ func mint(t *testing.T) pki {
 		c, _ := x509.ParseCertificate(der)
 		return c
 	}
-	caKey, wrongKey, leafKey := key(), key(), key()
+	caKey, fakeKey, wrongKey, leafKey := key(), key(), key(), key()
 	ca := self("rig CA", caKey, nil)
-	wrong := self("not the CA", wrongKey, []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning})
+	// The rig's N13 signer: a delegate issued by a fake CA with the real CA's exact name.
+	fake := self("rig CA", fakeKey, nil)
+	dt := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "rig OCSP delegate"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning},
+	}
+	dder, err := x509.CreateCertificate(rand.Reader, dt, fake, &wrongKey.PublicKey, fakeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong, _ := x509.ParseCertificate(dder)
 	lt := &x509.Certificate{
 		SerialNumber: new(big.Int).SetBytes([]byte{0x00, 0x1a, 0xbc, 0xde}), Subject: pkix.Name{CommonName: "device"},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -131,6 +142,14 @@ func TestOKAnswersTheStatusFileSignedByTheIssuer(t *testing.T) {
 
 func TestWrongKeyIsNotTheIssuersSignature(t *testing.T) {
 	p := mint(t)
+	// The delegate NAMES the issuer byte for byte, and only its signature does not verify: a
+	// verifier that matched by name alone would believe it.
+	if !bytes.Equal(p.wrong.RawIssuer, p.ca.RawSubject) {
+		t.Fatal("the fixture's delegate does not name the issuer: the plant would stop at a name check")
+	}
+	if p.wrong.CheckSignatureFrom(p.ca) == nil {
+		t.Fatal("the fixture's delegate verifies against the issuer: it plants no defect")
+	}
 	r, _ := newResponder(t, p, `{"1abcde":"good"}`)
 	_, der := ask(t, r, p, "/wrongkey")
 	if _, err := ocsp.ParseResponseForCert(der, p.leaf, p.ca); err == nil {
