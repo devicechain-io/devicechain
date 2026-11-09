@@ -389,3 +389,24 @@ func TestRecordedSourceAdvancesAfterEscalation(t *testing.T) {
 		t.Fatalf("post-escalation source state = %+v", row)
 	}
 }
+
+// Event times are compared at the database's precision: an older event inside the same
+// microsecond as the stored one is not newer.
+func TestSourceOrderingUsesDatabasePrecision(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	t0 := time.Now().UTC().Truncate(time.Second)
+	rec := func(sat time.Time, name string) {
+		t.Helper()
+		if _, err := api.RecordPagedFrom(ctx, "alarm-1", "k", "CRITICAL", testCycle, t0, nil,
+			AlarmSource{DeviceName: name}, sat); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec(t0.Add(123456900*time.Nanosecond), "new")
+	rec(t0.Add(123456800*time.Nanosecond), "old")
+	states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"alarm-1"})
+	if got := states[0].Source().DeviceName; got != "new" {
+		t.Fatalf("name = %q, want new", got)
+	}
+}

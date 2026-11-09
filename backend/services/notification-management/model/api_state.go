@@ -89,6 +89,11 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, severity string,
 	raisedTime, at time.Time, targets []PagedTarget, src AlarmSource, sourceAt time.Time) (*NotificationState, error) {
 	raised := cycleKey(raisedTime)
+	// The database keeps microseconds; an event time compared raw against what it stored would
+	// let an older event inside the same microsecond pass as newer.
+	if !sourceAt.IsZero() {
+		sourceAt = sourceAt.UTC().Truncate(time.Microsecond)
+	}
 	var out *NotificationState
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		found := &NotificationState{}

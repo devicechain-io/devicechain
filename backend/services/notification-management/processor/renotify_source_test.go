@@ -224,7 +224,7 @@ func TestANewerEventUpdatesSourceAfterEscalation(t *testing.T) {
 		t.Fatalf("states = %v, %v", states, err)
 	}
 	row := states[0]
-	if row.EscalationLevel != 1 || row.Source().DeviceName != "New" || !row.SourceAt.Valid || !row.SourceAt.Time.Equal(newer.OccurredTime) || !row.LastNotifiedAt.Time.Equal(escAt) {
+	if row.EscalationLevel != 1 || row.Source().DeviceName != "New" || !row.SourceAt.Valid || !row.SourceAt.Time.Equal(newer.OccurredTime.UTC().Truncate(time.Microsecond)) || !row.LastNotifiedAt.Time.Equal(escAt) {
 		t.Fatalf("post-escalation source state = %+v", row)
 	}
 }
