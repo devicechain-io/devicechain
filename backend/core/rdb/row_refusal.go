@@ -4,6 +4,7 @@
 package rdb
 
 import (
+	"context"
 	"database/sql"
 
 	"gorm.io/gorm"
@@ -22,8 +23,34 @@ func rowReturnsRefusal(db *gorm.DB) {
 	if db.Error == nil {
 		return
 	}
-	if _, ok := db.Statement.Dest.(*sql.Row); ok {
+	// Rows() reads through the same chain but hands back a *sql.Rows, which nobody here builds.
+	if rows, _ := db.Get("rows"); rows == true {
 		return
 	}
-	db.Statement.Dest = refusingPool{err: db.Error}.QueryRowContext(db.Statement.Context, "")
+	// A *sql.Row already in Dest counts only if gorm:row put it there in THIS execution. On a
+	// reused handle Dest still holds the previous, already scanned, row; handing that back would
+	// make Scan report sql.ErrNoRows instead of the refusal.
+	if row, ok := db.Statement.Dest.(*sql.Row); ok {
+		if stale, _ := db.Statement.Settings.Load(staleRowKey); stale != row {
+			return
+		}
+	}
+	// WithoutCancel: no I/O happens here, and a cancelled context must not hide the refusal.
+	ctx := context.Background()
+	if db.Statement.Context != nil {
+		ctx = context.WithoutCancel(db.Statement.Context)
+	}
+	db.Statement.Dest = refusingPool{err: db.Error}.QueryRowContext(ctx, "")
+}
+
+// staleRowKey holds the *sql.Row (if any) the statement carried when this execution began.
+const staleRowKey = "dc:row_stale"
+
+// rememberStaleRow runs first on the Row chain and notes any row left over from a prior execution.
+func rememberStaleRow(db *gorm.DB) {
+	if row, ok := db.Statement.Dest.(*sql.Row); ok {
+		db.Statement.Settings.Store(staleRowKey, row)
+	} else {
+		db.Statement.Settings.Delete(staleRowKey)
+	}
 }
