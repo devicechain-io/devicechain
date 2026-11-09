@@ -134,6 +134,11 @@ func (o *ocspCheck) countAllowed(reason string) {
 // checks (so a certificate already refused never costs a fetch). It returns the verified paths
 // that survive, or the callout result that counts a refusal.
 //
+// count says whether an admitted-unchecked connect is counted (and warned about) here. A device's
+// first connect asks twice (the registration gate, then the grant) and is ONE connect, so only
+// the grant counts; the gate passes false and a gate admit that never reaches the grant is not a
+// connect at all.
+//
 // all is EVERY path that verified to the anchor, before the CRL step dropped any; survivor is
 // what the CRL step left. Every certificate on all is asked about, and a revoked answer for ANY of
 // them refuses: a path the CRL step dropped for completeness (no current list) may still carry an
@@ -147,7 +152,7 @@ func (o *ocspCheck) countAllowed(reason string) {
 // unless the decision admits: a stored mode this build does not know is "error", an ApplyOCSP
 // error with no classification is "error", and the only road to a nil refusal is a nil error.
 func (c *CalloutResponder) applyOcsp(ctx context.Context, tenant string, anchor *model.DeviceTrustAnchor,
-	all, verified *x509trust.Verified) (*x509trust.Verified, string) {
+	all, verified *x509trust.Verified, count bool) (*x509trust.Verified, string) {
 	mode, err := anchor.OcspModeOf()
 	if err != nil {
 		c.logAuthFailure(tenant, err)
@@ -163,7 +168,9 @@ func (c *CalloutResponder) applyOcsp(ctx context.Context, tenant string, anchor 
 				Msg("Auth-callout refused a certificate connect: the anchor requires a current OCSP answer and OCSP is switched off on this instance.")
 			return nil, x509ResultOcspUnavailable
 		}
-		o.countAllowed(ocspReasonDisabled)
+		if count {
+			o.countAllowed(ocspReasonDisabled)
+		}
 		return verified, ""
 	}
 	out := o.checker.Check(ctx, ocspclient.Request{
@@ -193,7 +200,7 @@ func (c *CalloutResponder) applyOcsp(ctx context.Context, tenant string, anchor 
 	if decision.Survivor == nil {
 		return nil, x509ResultError
 	}
-	if decision.Incomplete {
+	if decision.Incomplete && count {
 		reason := firstOcspReason(verified, out)
 		o.countAllowed(string(reason))
 		if ok, held := o.failOpenLog.allow(c.now()); ok {

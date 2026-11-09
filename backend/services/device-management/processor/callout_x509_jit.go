@@ -237,7 +237,7 @@ func (c *CalloutResponder) unknownX509Pin(ctx context.Context, req jwt.Authoriza
 			// And OCSP, for the anchors that ask for it (OFF returns at once): a certificate its CA
 			// says is revoked is never registered either. grantX509 asks again after the read-back,
 			// from the cache.
-			survivor, refusal = c.applyOcsp(ctx, tenant, m.cand.Anchor, m.verified, survivor)
+			survivor, refusal = c.applyOcsp(ctx, tenant, m.cand.Anchor, m.verified, survivor, false)
 		}
 		if refusal != "" {
 			log.Debug().Str("tenant", tenant).Str("host", host).Str("result", refusal).
