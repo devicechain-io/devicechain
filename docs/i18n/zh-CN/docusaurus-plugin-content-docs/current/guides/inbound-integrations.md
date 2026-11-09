@@ -328,7 +328,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 按结果查看 `lpwan_ack_reports_total`：`acknowledged`、`timed_out`、`transmitted` 和 `deadline` 即上述结果。偶尔出现一次 `unmatched` 并非故障：如果报告已被回答、但消息在 broker 上的确认丢失，该报告会再次到达并发现没有任何等待项（刚刚结束它的副本会把它计为 `redelivered`）。请对持续出现的 `unmatched` 或任何 `mismatch` 告警。
 
-只携带 MAC 命令的下行的 `txack` 没有队列项，会返回 `204` 并被计数（`integration_downlink_reports_total`，结果 `untracked`）；没有队列项的 `ack` 会被以 `400` 拒绝。报告有自己的限额，与遥测分开：每个租户突发 100 条、持续每秒 20 条。超出后请求返回 `202` 并被计数（结果 `rate_limited`），它本可结束的命令在截止时间结束，因此一个租户的洪泛不会挤掉另一个租户的应答。
+只携带 MAC 命令的下行的 `txack` 没有队列项，会返回 `204` 并被计数（`integration_downlink_reports_total`，结果 `untracked`）；没有队列项的 `ack` 会被以 `400` 拒绝。报告有自己的限额，与遥测分开：每个租户突发 100 条、持续每秒 20 条。该限额按 `event-sources` 副本分别计算，因此租户的实际上限是这个速率乘以副本数。超出后请求返回 `202` 并被计数（结果 `rate_limited`），它本可结束的命令在截止时间结束，因此一个租户的洪泛不会挤掉另一个租户的应答。
 
 **升级。** 确认下行需要出站连接器和事件源两者都是新版本。出站连接器已是新版本而事件源仍是旧版本期间，旧 Pod 会对网络服务器的报告返回 `204` 并丢弃，因此在这一窗口内发出的确认下行会在截止时间以 `TIMEOUT`（结果未知）结束。Chart 在同一次升级中滚动二者；要避开这一窗口，请在其持续期间暂停确认命令。
 

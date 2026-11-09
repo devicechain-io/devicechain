@@ -136,3 +136,25 @@ func TestClaimIsAtomicAndExpiresAndHidesTheRecordFromTheSweep(t *testing.T) {
 	_, err = s.Lookup(ctx, "acme", itemID)
 	require.ErrorIs(t, err, ErrNoPending)
 }
+
+func TestDeleteGoneRemovesALeasedRowOfThatTenantOnly(t *testing.T) {
+	s := newDBPending(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	for _, tenant := range []string{"acme", "other"} {
+		require.NoError(t, s.Add(ctx, Pending{Tenant: tenant, Integration: "cs1", DeviceToken: "d", DevEUI: "0102030405060708",
+			CommandToken: "c", DispatchNonce: "n", QueueItemID: itemID, DeadlineAt: now}))
+	}
+	got, err := s.Lookup(ctx, "acme", itemID)
+	require.NoError(t, err)
+	_, won, err := s.Claim(ctx, "acme", got.ID, now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	require.NoError(t, s.DeleteGone(ctx, "acme", got.ID), "a lease is not needed")
+	require.NoError(t, s.DeleteGone(ctx, "acme", got.ID), "deleting one already gone is not an error")
+	_, err = s.Lookup(ctx, "acme", itemID)
+	require.ErrorIs(t, err, ErrNoPending)
+	_, err = s.Lookup(ctx, "other", itemID)
+	require.NoError(t, err, "another tenant's row was deleted")
+}

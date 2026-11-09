@@ -423,13 +423,16 @@ func (f *AckFeed) Sweep(ctx context.Context) {
 	}
 	for i := range due {
 		p := due[i]
-		token, ok := f.claim(ctx, &p)
-		if !ok {
+		// Before claiming: a deleted tenant's writes are fenced while its purge runs, so a claim
+		// would fail as store_failed, once per row, every pass, and the rows would fill the batch
+		// ahead of live tenants' overdue downlinks. Nobody is left to answer, so no lease is needed.
+		if f.opts.TenantDeleted != nil && f.opts.TenantDeleted(p.Tenant) {
+			_ = f.pending.DeleteGone(ctx, p.Tenant, p.ID)
+			f.count(AckTenantGone)
 			continue
 		}
-		if f.opts.TenantDeleted != nil && f.opts.TenantDeleted(p.Tenant) {
-			_ = f.pending.Delete(ctx, p.Tenant, p.ID, token)
-			f.count(AckTenantGone)
+		token, ok := f.claim(ctx, &p)
+		if !ok {
 			continue
 		}
 		text := "the network server reported no outcome for the confirmed downlink in time; it may still be queued or may have been delivered"
