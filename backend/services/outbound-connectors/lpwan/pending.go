@@ -134,7 +134,7 @@ func (s *DBPending) Lookup(ctx context.Context, tenant, queueItemID string) (*Pe
 
 // MarkTransmitted implements PendingStore. The first report wins.
 func (s *DBPending) MarkTransmitted(ctx context.Context, tenant string, id uint, at time.Time) error {
-	return s.db(ctx, tenant).Model(&LpwanPendingAck{}).
+	return s.db(ctx, tenant).Model(&LpwanPendingAck{ID: id}).
 		Where("id = ? AND transmitted_at IS NULL", id).
 		Update("transmitted_at", at.UTC()).Error
 }
@@ -143,7 +143,7 @@ func (s *DBPending) MarkTransmitted(ctx context.Context, tenant string, id uint,
 func (s *DBPending) Claim(ctx context.Context, tenant string, id uint, now time.Time, lease time.Duration) (time.Time, bool, error) {
 	// Microsecond precision, the database's own, so the token compares equal when it is read back.
 	token := now.Add(lease).UTC().Truncate(time.Microsecond)
-	res := s.db(ctx, tenant).Model(&LpwanPendingAck{}).
+	res := s.db(ctx, tenant).Model(&LpwanPendingAck{ID: id}).
 		Where("id = ? AND (settling_until IS NULL OR settling_until <= ?)", id, now.UTC()).
 		Update("settling_until", token)
 	return token, res.RowsAffected == 1, res.Error
@@ -157,6 +157,12 @@ func (s *DBPending) Delete(ctx context.Context, tenant string, id uint, token ti
 
 // Expired implements PendingStore. It is the one cross-tenant read: the sweep answers every
 // tenant's overdue downlinks, so it runs under the system context and answers each in its own.
+//
+// 🔴 THE SYSTEM CONTEXT IS THE ONE BYPASS OF TENANT ISOLATION IN THIS STORE, and it covers exactly this
+// read. The sweep has to find overdue rows of every tenant, and there is no per-tenant list to walk
+// first. Nothing else runs under it: every row it returns is claimed, answered and deleted afterwards
+// through a context built with core.WithTenant from that row's own tenant, so the predicate and the
+// fail-closed check apply to each of those statements. It is declared in the isolation guard.
 func (s *DBPending) Expired(ctx context.Context, now time.Time, limit int) ([]Pending, error) {
 	var rows []LpwanPendingAck
 	err := s.rdb.DB(core.WithSystemContext(ctx)).
