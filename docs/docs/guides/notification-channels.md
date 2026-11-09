@@ -86,6 +86,8 @@ mutation {
 
 For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
 
+A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId`, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. A timed re-notification does not carry them.
+
 ### Native Slack, Teams and PagerDuty channels {#native-channels}
 
 The three native types speak each service's own format instead of a generic JSON body. They share three rules:
@@ -162,6 +164,8 @@ mutation {
 
 A webhook channel can also **sign** its deliveries so the receiver can verify them. It is off unless you ask for it, by adding `"signing":true` to the channel's `config` once you have generated a signing secret for it. A channel set to sign that holds no secret is refused, not sent unsigned, and counted with `reason="signing"`. See [Signing Outbound Webhooks](signed-webhooks.md).
 
+Chat messages and the webhook summary name the device by its name (or its token when it has no name), and list its device type. When the channel has a `linkBaseUrl` and the alarm names its device, the message also carries an **Open device** button or link to `<linkBaseUrl>/devices/<device token>`; with no `linkBaseUrl`, or for an alarm that does not name its device, there is no device link.
+
 ## Policies
 
 A **policy** decides which raised alarms are delivered, to whom, and through which channels. It carries a set of **rules**. Each rule maps:
@@ -175,6 +179,23 @@ The severity here is **uppercase** because it is the *alarm's* severity. A detec
 :::caution Policies are tenant-wide
 `deviceTypeToken` is **not honoured yet**, and a policy that sets it is refused at write. Leave `deviceTypeToken` unset. See [Device-type scoping](#device-type-scoping) for why.
 :::
+
+### Notify when an alarm clears {#notify-on-clear}
+
+By default a policy tells its channels only when an alarm is raised or escalates. Set `notifyOnClear: true` on a policy to also tell them when an alarm that the policy paged **clears**. The clear goes through the same rules and channels, matched on the severity the alarm held when it cleared, and its `eventType` is `CLEARED`. It is off by default, so a policy that existed before the option behaves as it did.
+
+```graphql
+mutation {
+  updateNotificationPolicy(token: "ops", request: { notifyOnClear: true }) { token notifyOnClear }
+}
+```
+
+A clear is informational, so it is handled differently from a page:
+
+- It is sent only for an alarm cycle that was actually notified, and only once, even if the clear event is delivered again.
+- It is **not** throttled, does not count as a notification, and does not start escalation.
+- A clear that happens during a policy's quiet hours is **dropped**, not held: a "cleared" released hours later would report old news.
+- `notifyOnClear` cannot be cleared with `null`; send `true` or `false`.
 
 ### Device-type scoping {#device-type-scoping}
 

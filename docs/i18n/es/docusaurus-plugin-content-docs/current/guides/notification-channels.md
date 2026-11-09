@@ -86,6 +86,8 @@ mutation {
 
 Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [canal de Slack](#create-a-slack-channel) nativo de abajo da formato al mensaje por ti y es la mejor opción.
 
+El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Una renotificación temporizada no las incluye.
+
 ### Canales nativos de Slack, Teams y PagerDuty {#native-channels}
 
 Los tres tipos nativos usan el formato propio de cada servicio en lugar de un cuerpo JSON genérico. Comparten tres reglas:
@@ -162,6 +164,8 @@ mutation {
 
 Un canal webhook también puede **firmar** sus entregas para que el receptor pueda verificarlas. Está desactivado salvo que lo pidas, añadiendo `"signing":true` al `config` del canal una vez que le hayas generado un secreto de firma. Un canal configurado para firmar que no tiene secreto se rechaza, no se envía sin firma, y se cuenta con `reason="signing"`. Consulta [Firma de Webhooks de Salida](signed-webhooks.md).
 
+Los mensajes de chat y el resumen del webhook nombran el dispositivo por su nombre (o por su token si no tiene nombre) e indican su tipo de dispositivo. Cuando el canal tiene `linkBaseUrl` y la alarma indica su dispositivo, el mensaje incluye además un botón o enlace **Open device** a `<linkBaseUrl>/devices/<token del dispositivo>`; sin `linkBaseUrl`, o para una alarma que no indica su dispositivo, no hay enlace al dispositivo.
+
 ## Políticas
 
 Una **política** decide qué alarmas levantadas se entregan, a quién y a través de qué canales. Lleva un conjunto de **reglas**. Cada regla mapea:
@@ -175,6 +179,23 @@ Aquí la severidad va en **mayúsculas** porque es la severidad de la *alarma*. 
 :::caution Las políticas son de alcance para todo el inquilino
 `deviceTypeToken` **todavía no se respeta**, y una política que lo establece se rechaza al escribir. Deja `deviceTypeToken` sin establecer. Consulta [Acotamiento por tipo de dispositivo](#device-type-scoping) para saber por qué.
 :::
+
+### Notificar cuando una alarma se resuelve {#notify-on-clear}
+
+De forma predeterminada, una política avisa a sus canales solo cuando una alarma se genera o escala. Establezca `notifyOnClear: true` en una política para avisarles también cuando una alarma que la política notificó **se resuelve** (`clear`). El aviso pasa por las mismas reglas y canales, según la severidad que tenía la alarma al resolverse, y su `eventType` es `CLEARED`. Está desactivado de forma predeterminada, así que una política anterior a la opción se comporta como antes.
+
+```graphql
+mutation {
+  updateNotificationPolicy(token: "ops", request: { notifyOnClear: true }) { token notifyOnClear }
+}
+```
+
+Una resolución es informativa, así que se trata de forma distinta a un aviso:
+
+- Se envía solo para un ciclo de alarma que realmente se notificó, y una sola vez, aunque el evento de resolución se entregue de nuevo.
+- **No** se limita por frecuencia, no cuenta como notificación y no inicia la escalada.
+- Una resolución que ocurre durante las horas de silencio de una política se **descarta**, no se retiene: un "resuelta" liberado horas después comunicaría una noticia vieja.
+- `notifyOnClear` no se puede borrar con `null`; envíe `true` o `false`.
 
 ### Acotamiento por tipo de dispositivo {#device-type-scoping}
 
