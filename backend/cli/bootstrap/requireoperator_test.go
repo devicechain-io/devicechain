@@ -11,6 +11,7 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dcctl/operator"
+	"k8s.io/client-go/kubernetes"
 )
 
 // stubOperatorCheck replaces the operator guard for tests about the refusals AROUND
@@ -30,6 +31,11 @@ func stubOperatorCheck(t *testing.T, err error) *int {
 		calls++
 		return err
 	}
+	// The install-order check reads the install record, which these tests have no cluster for;
+	// it is covered in upgradeorder_test.go.
+	prevOrder := requireInstallOrderFor
+	t.Cleanup(func() { requireInstallOrderFor = prevOrder })
+	requireInstallOrderFor = func(context.Context, kubernetes.Interface, string, string) error { return nil }
 	return &calls
 }
 

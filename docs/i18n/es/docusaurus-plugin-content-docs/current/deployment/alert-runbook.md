@@ -29,7 +29,7 @@ an area of this instance has no pod available
 
 the broker's TLS certificate expires within 30 days
 
-**Qué significa y qué hacer.** The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl upgrade for this instance now clears this alert. If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch.
+**Qué significa y qué hacer.** The broker server named by the pod label presents a TLS certificate that expires in less than 30 days. When it expires the broker refuses TLS connections from devices and from this instance's own services. The certificate is renewed by dcctl upgrade, which re-issues it inside its last 30 days and swaps it in without restarting the broker when only the certificate changed, so running dcctl install and then dcctl upgrade for this instance now, both with the same dcctl release, clears this alert. If this keeps firing after an upgrade, the broker has not picked the new certificate up; check the server's log, and restart the server pod if it did not switch.
 
 ### BrokerCertificateExpiryCritical {#brokercertificateexpirycritical}
 
@@ -37,7 +37,7 @@ the broker's TLS certificate expires within 30 days
 
 the broker's TLS certificate expires within 7 days, or already has
 
-**Qué significa y qué hacer.** The broker server named by the pod label presents a TLS certificate that expires in less than 7 days, or that has already expired. Once it has expired the broker's TLS connections fail for devices and for this instance's own services. Run dcctl upgrade for this instance now: it re-issues the certificate under the authority the instance keeps. An instance that does not keep its authority (one bootstrapped by an early release) cannot re-issue it in place and has to be rebuilt; dcctl upgrade says so when that is the case. If an upgrade has run and this still fires, the broker has not picked the new certificate up; restart the server pod.
+**Qué significa y qué hacer.** The broker server named by the pod label presents a TLS certificate that expires in less than 7 days, or that has already expired. Once it has expired the broker's TLS connections fail for devices and for this instance's own services. Run dcctl install and then dcctl upgrade for this instance now, both with the same dcctl release: it re-issues the certificate under the authority the instance keeps. An instance that does not keep its authority (one bootstrapped by an early release) cannot re-issue it in place and has to be rebuilt; dcctl upgrade says so when that is the case. If an upgrade has run and this still fires, the broker has not picked the new certificate up; restart the server pod.
 
 ### BrokerLeadershipImbalanced {#brokerleadershipimbalanced}
 

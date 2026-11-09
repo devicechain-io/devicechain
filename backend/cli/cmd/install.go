@@ -347,6 +347,14 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
+		// The recorded install is what `dcctl upgrade` trusts to say which controller the cluster
+		// runs, so it must not name this dcctl for an older one. Only an explicit --version.
+		if installVersion != "" && !installBuild {
+			if err := bootstrap.RefuseForeignRelease(imageSource.Version, imageSource.Registry,
+				fmt.Sprintf("dcctl install %s --version %s", args[0], imageSource.Version)); err != nil {
+				return err
+			}
+		}
 
 		if !installSkipPreflight {
 			if d := runDoctor(args[0], doctorOptsFor(installKubeContext, installCluster, installBuild)); d.fails > 0 {

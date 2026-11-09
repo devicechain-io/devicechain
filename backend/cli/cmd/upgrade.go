@@ -156,9 +156,28 @@ So an upgrade is two commands, in this order:
 
 This command checks the cluster's operator and never moves it. It REFUSES when the
 cluster has no operator, or has one identifiably from another release, naming the
-install command that fixes it. An operator installed by hand carries no record of
-which release put it there, and dcctl cannot tell that apart from one an older
-dcctl overwrote — so that case is allowed through with a note rather than refused.
+install command that fixes it. An operator installed by hand carries no identity,
+and dcctl cannot tell that apart from one an older dcctl overwrote, so that one check
+lets it through with a note rather than refusing; the install check below still applies.
+
+It also REFUSES, before anything is written, when the cluster-level install is older than
+this dcctl, or cannot be shown to be current for it: the operator's definitions can stay
+the same across a release while its controller changes, so the check reads the install
+record in the cluster, which names the dcctl that last finished 'dcctl install'. A
+cluster with no usable record (an install that never finished, or never ran) is refused
+until 'dcctl install' has run. A re-run at the same version is not refused, and neither
+is a cluster installed by a newer dcctl. A dcctl built from source is not compared. From
+this release, a flag-less upgrade with a newer patch dcctl needs 'dcctl install' first.
+
+An explicit '--version' must be this dcctl's own release; the same holds for
+'dcctl install --version'. An OLDER release is refused: the chart and the infrastructure
+configuration this dcctl applies are its own release's, so they would be planned around
+images that have never seen them. To go back, where that release's notes allow it, use
+the dcctl of the older release. A NEWER release is refused too, and installing it with
+this dcctl would not help, because the install record names the dcctl that ran the
+install, not the --version it was given: get the dcctl of the newer release, run
+'dcctl install' with it, then upgrade. A flag-less upgrade, a tag on a registry of
+your own (--registry) and this dcctl's own release are not affected.
 
 It replaces no credential. Every credential the instance is running on is read back
 and kept: the database passwords, the broker's authority and logins, the
