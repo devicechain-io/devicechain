@@ -75,7 +75,7 @@ El resultado también enumera las clases que contiene en `_meta`, bajo `io.devic
 Los tokens de entidad, como el de un dispositivo o una alarma, permanecen en el nivel superior porque la siguiente llamada a una herramienta tiene que nombrarlos. Un token solo puede contener letras, dígitos, guiones y guiones bajos, lo que lo mantiene corto y sin signos de puntuación, pero lo elige igualmente quien creó la entidad.
 
 :::note Actualización
-Los campos que antes estaban junto a un token (el `name`, `description` y `externalId` de un dispositivo, el `name` y `unit` de una métrica, el `alarmKey` de una alarma, el `name` y `error` de un comando) ahora están bajo `untrusted` como `{ "value": ..., "source": ... }`. Actualice los clientes que los leen.
+Los campos que antes estaban junto a un token (el `name`, `description` y `externalId` de un dispositivo, el `name` y `unit` de una métrica, el `alarmKey` de una alarma, el `name` y `error` de un comando) ahora están bajo `untrusted` como `{ "value": ..., "source": ... }`. Actualiza los clientes que los leen.
 :::
 
 ## Acciones de agentes: quién puede actuar y cómo detenerlo (vista previa) {#agent-actions}
@@ -267,7 +267,7 @@ Instalar el área `mcp` con más de una réplica se rechaza de plano, en lugar d
 La dirección de [Adónde apuntar un cliente](#where-to-point-a-client) es el **identificador de recurso** del servidor. Un token que el cliente pide para ella nombra esa dirección como su audiencia, y, con `enforce`, el valor por defecto, el servidor de autorización solo vincula un token a una dirección que figure en la lista de permitidos de la instancia. Esa misma dirección debe estar registrada para que las API de la plataforma acepten las llamadas que este servidor reenvía, porque esas llamadas llevan el vínculo MCP. [Audiencia del token](./security-model.md#token-audience) explica la lista de permitidos y la aplicación de las comprobaciones.
 
 - **El chart la registra.** Escribe la `resourceUrl` del servidor en `infrastructure.tokenAudience.mcpResources`. No tienes que hacer nada.
-- **El servidor comprueba al arrancar.** Si falta su `resourceUrl` en `infrastructure.tokenAudience.mcpResources`, informa `devicechain_mcp_token_audience_registered` como 0 y rechaza el arranque. Añada el recurso al documento de `instance.existingSecret`. `v1.4` rechaza `enforcement: observe`; quite la clave o use `enforce`.
+- **El servidor comprueba al arrancar.** Si falta su `resourceUrl` en `infrastructure.tokenAudience.mcpResources`, informa `devicechain_mcp_token_audience_registered` como 0 y rechaza el arranque. Añade el recurso al documento de `instance.existingSecret`. `v1.4` rechaza `enforcement: observe`; quita la clave o usa `enforce`.
 - **Escribe la dirección con esquema y host en minúsculas.** La comparación es byte a byte. Una `resourceUrl` que fijes a mano con una mayúscula en el esquema o en el host no se admite en la lista, y con `enforce` el chart se niega a renderizarla, así que cámbiala a minúsculas.
 - **Un cliente debe enviar la misma dirección** como su `resource`. Un cliente que no envía nada, o envía otro valor, recibe un token que no está vinculado a este servidor o, con `enforce`, es rechazado.
 
