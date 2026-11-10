@@ -648,9 +648,9 @@ func revokeAreaStatements(role string) []string {
 }
 
 // analyticsRolesQuery finds every role that participates in the read surface: the group
-// roles and every login role carrying the naming convention. All are converged, because a
-// grant made directly to a per-tenant role would not be caught by converging the groups
-// alone.
+// roles, direct members of either group regardless of name, and every role carrying
+// the naming convention. All are converged, because a grant made directly to a
+// member would not be caught by converging the groups alone.
 //
 // The group roles are named explicitly even though both happen to match the prefix LIKE
 // below. That redundancy is deliberate: the prefix is a naming convention for READERS, so
@@ -664,17 +664,24 @@ func revokeAreaStatements(role string) []string {
 func analyticsRolesQuery() string {
 	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(analyticsGroupRoles())), ", ")
 	return fmt.Sprintf(`SELECT rolname FROM pg_roles `+
-		`WHERE rolname IN (%s) OR rolname LIKE ? ESCAPE '=' ORDER BY rolname`, placeholders)
+		`WHERE rolname IN (%s) OR rolname LIKE ? ESCAPE '=' `+
+		`OR oid IN (SELECT m.member FROM pg_auth_members m `+
+		`JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname IN (%s)) `+
+		`ORDER BY rolname`, placeholders, placeholders)
 }
 
 // analyticsRolesQueryArgs binds analyticsRolesQuery: the group roles, then the reader
-// prefix pattern, in the order the placeholders appear.
+// prefix pattern, then the membership group roles, in placeholder order.
 func analyticsRolesQueryArgs() []any {
-	args := make([]any, 0, len(analyticsGroupRoles())+1)
+	args := make([]any, 0, 2*len(analyticsGroupRoles())+1)
 	for _, role := range analyticsGroupRoles() {
 		args = append(args, role)
 	}
-	return append(args, analyticsRolePattern())
+	args = append(args, analyticsRolePattern())
+	for _, role := range analyticsGroupRoles() {
+		args = append(args, role)
+	}
+	return args
 }
 
 // analyticsRolePattern renders the LIKE pattern matching every per-tenant reader.
