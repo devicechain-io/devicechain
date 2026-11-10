@@ -346,7 +346,14 @@ func TestAKeyedLinkIsNotMatchedUnderAnotherIssuerKey(t *testing.T) {
 	real := v.RevocationKeys().Serials[0].Issuer
 	f.resetCalls()
 
-	wrong := x509trust.IssuerID{Key: "ff" + real.Key[2:], Name: real.Name}
+	// Flip the first hex digit: a fixed prefix would equal the real key whenever it happened to start
+	// with it (1 run in 256), and the "another key" assertion would then fail at random.
+	flipped := "0"
+	if real.Key[0] == '0' {
+		flipped = "1"
+	}
+	wrong := x509trust.IssuerID{Key: flipped + real.Key[1:], Name: real.Name}
+	require.NotEqual(t, real.Key, wrong.Key)
 	require.NoError(t, f.seam("maker", RevocationDelta{Serials: []x509trust.IssuerSerial{{Issuer: wrong, Serial: serial}}}))
 	assert.Empty(t, f.kicked(), "another issuer key")
 
