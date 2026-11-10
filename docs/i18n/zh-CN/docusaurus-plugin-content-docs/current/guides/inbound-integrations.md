@@ -183,7 +183,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ## 通用二进制 {#generic-binary}
 
-通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。如果设备类型上没有[载荷解码器](./payload-decoders.md)，平台就无法读取这些字节，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。用它来了解发送方发来了什么。设备类型上有解码器时，这些字节会被解码为读数。
+通用二进制集成接受原始字节正文，标识符放在请求头或查询参数中（`idFrom` 为 `header:` 或 `query:`；二进制正文没有可指向的字段）。如果设备类型上没有[载荷解码器](./payload-decoders.md)，平台就无法读取这些字节，因此每条这类上行都会被接受并[计为未解码](#undecoded)，其前 512 字节作为样本保存在集成上。在尚无解码器时，用它来了解发送方发来了什么。设备类型上有解码器时，这些字节会被解码为读数。
 
 ## 存储的内容 {#what-is-stored}
 
@@ -273,7 +273,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 对必须接收命令、且不在 ChirpStack v4 网络服务器后面的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
 
-## LoRaWAN 下行（ChirpStack v4）{#lorawan-downlink}
+## LoRaWAN 下行（ChirpStack v4） {#lorawan-downlink}
 
 当安装启用了出站连接器的下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`；此时 Helm chart 会让命令投递服务派发这些命令，并拒绝手工设置的该标志副本），向 ChirpStack v4 网络服务器后面的设备发送命令时，会在该服务器上排入一条下行。未启用的安装不受任何影响。
 
@@ -369,12 +369,13 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 ### 从带类型的参数编码命令 {#lorawan-command-encoder}
 
 命令定义可以包含可选的 `encoder` JSON 字符串。发布设备配置文件后生效。
+ChirpStack v4 和 The Things Stack v3 使用相同的编码器。
 命令使用派发时生效的编码器；重新发布适用于发布后派发的命令，包括已排队的命令。
 每次派发都会重新读取已发布的定义，不会跨发布缓存编码器。
 如果定义查询失败或返回不完整的响应，平台会重试：命令保持待处理状态，不会发送任何内容。
 只有确定的定义问题（编码器无效、命令定义重复，或命令不在受约束的已发布命令词汇表中）
 才会将命令拒绝为**未发送**。
-ChirpStack v4 和 The Things Stack v3 使用相同的编码器。以下文档按顺序拼接常量、
+例如，以下文档按顺序拼接常量、
 缩放后的数值、布尔值和打包位字段：
 
 ```json
@@ -422,6 +423,7 @@ scale 默认为 1，其绝对值必须在 `1e-9` 到 `1e9` 之间；offset 默�
 raw 的类型范围在舍入前检查，边界允许 `1e-6` 的浮点误差容差。
 scale 为 1 且 offset 为 0 时输入必须为精确整数；其他变换允许 `1e-6` 的整数误差。
 输入绝对值不得超过 `1e15`，输入和 raw 的绝对值都必须小于 `2^53`。
+不会静默舍入或截断任何值：scale 为 1 时，`215.4` 会被拒绝。
 NaN、无穷大、超出范围、JSON 类型错误或缺少编码器参数，都会在发起网络调用前将命令拒绝为
 **未发送**。参数模式中的默认值仅用于编辑提示，不会自动填入。
 

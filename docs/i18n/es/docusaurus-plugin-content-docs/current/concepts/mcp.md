@@ -24,7 +24,7 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 - `get_device` — los detalles de un dispositivo individual.
 - `get_device_capabilities` — qué puede medir un dispositivo y los comandos publicados que acepta, con el esquema de parámetros de cada comando. Las métricas proceden de las definiciones actuales del perfil, así que pueden incluir alguna que aún no se ha publicado; los comandos son siempre los publicados.
 
-`list_devices` y `get_device` todavía no indican si un dispositivo está deshabilitado, y `list_devices` no puede filtrar por ello. Un dispositivo deshabilitado aparece exactamente igual que uno activo, así que con estas herramientas un asistente no puede distinguir un dispositivo en cuarentena de uno que funciona. Comprueba el estado del dispositivo en la consola, donde un dispositivo deshabilitado lleva el distintivo **Deshabilitado**; consulta [Deshabilitar y habilitar un dispositivo](../user-guide/devices.md).
+`list_devices` y `get_device` todavía no indican si un dispositivo está deshabilitado, y `list_devices` no puede filtrar por ello. Un dispositivo deshabilitado aparece exactamente igual que uno activo, así que con estas herramientas un asistente no puede distinguir un dispositivo en cuarentena de uno que funciona. Comprueba el estado del dispositivo en la consola, donde un dispositivo deshabilitado lleva el distintivo **Deshabilitado**; consulta [Deshabilitar y habilitar un dispositivo](../user-guide/devices.md#disabling-and-enabling-a-device).
 
 **Estado en vivo y telemetría**
 
@@ -80,7 +80,7 @@ Los campos que antes estaban junto a un token (el `name`, `description` y `exter
 
 ## Acciones de agentes: quién puede actuar y cómo detenerlo (vista previa) {#agent-actions}
 
-DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Los controles siguientes deciden **si un asistente puede pedir actuar**, y un asistente ya puede proponer una acción sobre alarmas para que la aprueben personas ([Propuestas y aprobaciones](#agent-proposals)). Las acciones sobre alarmas requieren la aprobación final de una persona. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces), salvo la marca `agent` de las cuentas de servicio, que es estable: quitarla más adelante convertiría las cuentas de agente de nuevo en integraciones con los permisos de escritura de sus roles.
+DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Los controles siguientes deciden **si un asistente puede pedir actuar**, y un asistente ya puede proponer una acción sobre alarmas para que la aprueben personas ([Propuestas y aprobaciones](#agent-proposals)). Todavía no existe ninguna herramienta de acción MCP, y las acciones sobre alarmas requieren la aprobación final de una persona. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces), salvo la marca `agent` de las cuentas de servicio, que es estable: quitarla más adelante convertiría las cuentas de agente de nuevo en integraciones con los permisos de escritura de sus roles.
 
 **Un asistente nunca tiene un permiso de escritura.** Cuando una persona autoriza a un asistente para un alcance de acción, el token que recibe lleva un permiso de *propuesta* en lugar del permiso de escritura de la persona: `alarm:propose` en lugar de `alarm:write`, `command:propose` en lugar de `command:write`. El permiso de propuesta se calcula a partir de lo que la persona tiene en ese momento, y se vuelve a calcular en cada renovación, así que una persona que pierde `alarm:write` le quita `alarm:propose` a su asistente en el plazo de vida de un token. Ningún rol puede conceder un permiso de propuesta, y el `*` de un superusuario nunca cuenta como tal. Toda operación existente que cambia datos comprueba el permiso de escritura, así que un token de asistente robado no puede cambiar nada, aunque se envíe directamente a la API en vez de a través del servidor MCP.
 
@@ -240,13 +240,13 @@ Esa única cadena cumple tres funciones, y por eso es la única que necesitas:
 No introduces nada más a mano. Cuando el endpoint responde `401`, el cliente lee la ubicación de los metadatos en la cabecera `WWW-Authenticate` de la respuesta y la sigue. Ese documento le dice dónde está el servidor de autorización, y el cliente pide entonces al servidor de autorización sus propios metadatos. El descubrimiento son esas tres peticiones, y puedes recorrerlas a mano antes de apuntar ningún cliente:
 
 ```bash
-# 1. El endpoint responde 401 y nombra su documento de metadatos.
+# 1. The endpoint answers 401 and names its metadata document.
 curl -i -X POST https://<your-instance-host>/api/mcp
 
-# 2. Ese documento nombra el servidor de autorización.
+# 2. That document names the authorization server.
 curl https://<your-instance-host>/.well-known/oauth-protected-resource/api/mcp
 
-# 3. El servidor de autorización describe dónde iniciar sesión y obtener un token.
+# 3. The authorization server describes where to log in and get a token.
 curl https://<your-instance-host>/.well-known/oauth-authorization-server/api/user-management
 ```
 

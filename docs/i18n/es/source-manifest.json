@@ -200,7 +200,7 @@
     },
     "guides/connecting-a-device.md": {
       "sourceSha256": "1992e1f3e3922b139d4c9488b9df43ccc3630d170a2db58ee6365741e1af79d2",
-      "translationSha256": "9ef145730e0e5d3ed01603d87d99952e64c3cbd972cb056786c94657bc4022fd"
+      "translationSha256": "44c9c8860fb271666f2dd9a275545833ee99bc9f30c7745da6e3636f45b2c7c8"
     },
     "guides/device-credentials.md": {
       "sourceSha256": "6ede441808d3660e93fba14b9a15afe02b3c64e23dca147a06347d83f0cc2cd3",
@@ -219,8 +219,8 @@
       "translationSha256": "b28c294ce81a9f06068e5c874869dabdb9b512c30cfbf8a2658d00135f0813f8"
     },
     "guides/inbound-integrations.md": {
-      "sourceSha256": "a5ee9aced3147c227fcb2472476d4d9372c1b8b94855e80bac0bc013ea6a5f01",
-      "translationSha256": "062a86eda97c61cd33488daefc79c28638c6c9839bc153bf178c8b6d5740daf8"
+      "sourceSha256": "44a912685a57302859180d6b161b22834962bb0197ab2546ae310ff9f15f90bc",
+      "translationSha256": "d991e6ad71eeeb95eee5c96091677efe13c23bceeb5da3e880f3aace34c80ee5"
     },
     "guides/local-development.md": {
       "sourceSha256": "4dd334e1d7524eaedf541eb6234b1255a63fa4908789e38ce57b448089b49e7e",
@@ -331,8 +331,8 @@
       "translationSha256": "e9499ad843163edd29f7540cfc844ddc3241dedba7643e90664a2e7816837f3c"
     },
     "reference/transport-matrix.md": {
-      "sourceSha256": "91d46e4bb3471bba69cd52d3364b3e712becc50231c0b940e753a9b16b70a6e3",
-      "translationSha256": "a321dfdbe472bb1d48933d3f3ccb2985e627623e0bdee1217a942a6f52a38ce5"
+      "sourceSha256": "a9da2273aa7ee44dadd88e6a1da914d624ebce21c4580a17b7870e8980db8124",
+      "translationSha256": "4056703530e3e7e164f366a949b1cdad91cfeb8fda728da85c92adb18abb4184"
     },
     "user-guide/administering-the-instance.md": {
       "sourceSha256": "486afa34377503efb40a986b7040645b4dd8b7e2106631d3cf467b71a1f95d01",

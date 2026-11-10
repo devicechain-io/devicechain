@@ -29,7 +29,7 @@ Conectar un dispositivo por MQTT significa acertar con tres identificadores dist
 Es **`{tenant}:{credentialId}`**. Copiar el valor «Usuario» de la consola directamente en tu cliente es el fallo de conexión más común.
 :::
 
-El broker rechaza cualquier client id que no sea `{instanceId}:{tenant}:{deviceToken}` o ese valor más un `:sufijo`. Eso incluye el id aleatorio que inventa tu biblioteca cliente cuando no lo fijas. El sufijo es la forma de que un dispositivo abra dos conexiones; consulta [MQTT](#mqtt).
+El broker rechaza cualquier client id que no sea `{instanceId}:{tenant}:{deviceToken}` o ese valor más un `:suffix`. Eso incluye el id aleatorio que inventa tu biblioteca cliente cuando no lo fijas. El sufijo es la forma de que un dispositivo abra dos conexiones; consulta [MQTT](#mqtt).
 
 Los tres errores se ven idénticos desde el dispositivo. Una conexión rechazada recibe una única respuesta genérica: el broker devuelve el código de retorno 5 del CONNACK de MQTT (*no autorizado*) y después cierra la conexión. El código es genérico a propósito: es el mismo tanto si lo incorrecto era el client id, el prefijo `{tenant}:` o la credencial, así que el rechazo nunca dice qué comprobación falló. Tu cliente informa de «no autorizado» o, si nunca lee el CONNACK, solo del reset o EOF inesperado que sigue. Un dispositivo que se reconecta automáticamente entrará en bucle.
 
@@ -43,7 +43,7 @@ Más adelante aparece un cuarto identificador: el `token` del sobre de un **coma
 
 ## El cuerpo del evento
 
-Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
+Todo evento entrante, sobre cualquier transporte, es un objeto JSON. El ejemplo siguiente es la forma HTTP; la forma MQTT es la misma sin los campos de credencial:
 
 ```json
 {
@@ -182,7 +182,7 @@ Un topic de MQTT se asigna directamente a un subject de NATS. Una publicación e
 
 El listener es TLS y la conexión está autenticada por el broker. Conéctate por TLS con la CA de la instancia y presenta la credencial del dispositivo como nombre de usuario MQTT **`{tenant}:{credentialId}`** y contraseña.
 
-Fija el **client id** de MQTT en `{instanceId}:{tenant}:{deviceToken}` para que la conexión declare qué dispositivo es. El broker rechaza cualquier otra cosa, incluido el valor aleatorio que inventa tu biblioteca cliente cuando no lo fijas. La única excepción es un `:sufijo` tras el token del dispositivo, descrito más abajo.
+Fija el **client id** de MQTT en `{instanceId}:{tenant}:{deviceToken}` para que la conexión declare qué dispositivo es. El broker rechaza cualquier otra cosa, incluido el valor aleatorio que inventa tu biblioteca cliente cuando no lo fijas. La única excepción es un `:suffix` tras el token del dispositivo, descrito más abajo.
 
 Un dispositivo puede en cambio autenticarse con un certificado de cliente TLS: el usuario es `{tenant}:@x509`, no hay contraseña y la regla del client id no cambia. Consulta [Conectar con un certificado](./device-x509.md).
 
@@ -197,7 +197,7 @@ Un client id incorrecto, un prefijo `{tenant}:` ausente y una credencial incorre
 ### Publicación de un evento {#publishing-an-event}
 
 :::tip Deja que la consola lo escriba
-La pestaña **Enviar datos** de la página de un dispositivo en la consola construye este comando, y el de HTTP más abajo, para ese dispositivo: su token, su credencial y lecturas de ejemplo para las métricas que declara su perfil publicado. Consulta [Enviar datos](../user-guide/devices.md#send-data).
+La pestaña **Enviar datos** de la página de un dispositivo en la consola construye este comando, y el de HTTP más abajo, para ese dispositivo: su token, su credencial y lecturas de ejemplo para las métricas que declara su perfil publicado. Consulta [Enviar datos](/user-guide/devices#send-data).
 :::
 
 Publica el cuerpo del evento en el topic de eventos de tu dispositivo:
@@ -420,8 +420,8 @@ Guarda el nonce junto al comando mientras lo ejecutas, y sobrescríbelo si el mi
 Un dispositivo recibe su configuración, y le dice a la plataforma qué hizo con ella, mediante dos topics por dispositivo:
 
 ```
-{instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
-{instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
+{instanceId}/{tenant}/device-desired/{deviceToken}    (platform to device; a device may subscribe to its own)
+{instanceId}/{tenant}/device-reports/{deviceToken}    (device to platform; a device may publish to its own)
 ```
 
 Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado. La plataforma toma el tenant y el dispositivo del topic, nunca del mensaje, así que un mensaje no debe llevar la identidad de un dispositivo (si la lleva, se rechaza) y un dispositivo solo puede informar por sí mismo.
@@ -488,14 +488,14 @@ Cuando se asigna un artefacto al dispositivo, la plataforma publica en `device-d
 Para producir una firma a mano (`file` es el artefacto, `k.pem` la clave privada):
 
 ```bash
-# keyId: SHA-256 de la clave pública en DER SubjectPublicKeyInfo
+# keyId: SHA-256 of the public key as DER SubjectPublicKeyInfo
 openssl pkey -in k.pem -pubout -outform DER | openssl dgst -sha256
 
-# ECDSA_P256_SHA256 (clave P-256): firma SHA-256(file)
+# ECDSA_P256_SHA256 (a P-256 key): signs SHA-256(file)
 openssl dgst -sha256 -sign k.pem -binary file | base64 | tr -d '\n'
-cosign sign-blob --key k.key file          # la misma firma, en base64
+cosign sign-blob --key k.key file          # the same signature, base64
 
-# ED25519: firma los 32 bytes del resumen
+# ED25519: sign the 32 digest bytes themselves
 openssl dgst -sha256 -binary file > digest
 openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
 ```
