@@ -154,6 +154,14 @@
       "sourceSha256": "37520b426d3b772af6d800f02f37b903a5963b96add5dc415d092e4208ef5aad",
       "translationSha256": "53f26f911d21614acf41e97e8cd6ef9030b98f841a310968eac9049478bd76e9"
     },
+    "deployment/security-process.md": {
+      "sourceSha256": "8a0f79d6d26c39d5f1483a7376ce17e965b5868d437e9534b8288312b5cce500",
+      "translationSha256": "bb3c4e717741ed848245e5801cae354eaea670e52bfc49048cf896b7e7b5d4bc"
+    },
+    "deployment/sizing.md": {
+      "sourceSha256": "bd7f0973582f99b1b1a86fd58582a18bc752fc84ba7e58a0e240b21a02b8592f",
+      "translationSha256": "687ef6fedf1647cf0a9ef2c627b4fd68ca04a2d7aecd997fbe24307a1f23dd0f"
+    },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "90ff891f7c64ecbf7d4f00c20f59bc08ab84e9f04ab21deeaadbf163994fe5e7",
       "translationSha256": "4f4b3c9bce2fd5380aec6b86225dd3b6a37c80f073ed84ce12fbad9e97cf42e0"
