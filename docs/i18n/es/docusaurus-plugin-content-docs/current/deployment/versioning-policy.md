@@ -59,7 +59,8 @@ Estas pueden cambiar en una versión menor. Cuando lo hacen, las notas de versi�
 
 Una superficie nueva puede pasar su primera versión menor en un nivel de **vista previa** antes de quedar
 cubierta por la promesa anterior. Una superficie en vista previa lo dice donde se lee sobre ella: en su
-página de referencia o de guía y, en una operación de GraphQL, en su descripción. Mientras una superficie
+página de referencia o de guía y, para cada operación, campo, argumento, tipo y valor de enumeración
+de GraphQL de esa superficie, en su descripción. Mientras una superficie
 está en vista previa puede cambiar de forma incompatible en una versión menor; cuando lo hace, la sección
 de esa versión en [Versiones y actualizaciones](./releases-and-upgrades.md) dice qué cambió y qué hacer.
 Una superficie permanece en vista previa como máximo durante dos versiones menores; al terminar la segunda
@@ -73,12 +74,19 @@ Hoy el nivel de vista previa contiene tres superficies. Las pruebas de reglas: l
 de la API de event-processing, los formatos de archivo de escenario y de prueba, y el comando `dcctl test`
 que los lee (consulta [Probar tus reglas](../guides/testing-your-rules.md)). El producto como código:
 `dcctl product export`, `plan` y `apply`, y su formato de paquete (consulta [Producto como código](../guides/product-as-code.md)).
-Y las acciones de agentes: los alcances OAuth `act:*`, las operaciones de la política de agentes y su
-documento (formato `v1alpha1`), las consultas `agentActuationDecision` y `agentExecutionDecision`, la
-suspensión del operador por inquilino y las operaciones de propuestas de agentes (`proposeAlarmAction`,
+Y las acciones de agentes: los alcances OAuth `act:*` y sus permisos de propuesta derivados;
+las operaciones de la política de agentes (`agentPolicy`, `agentPolicyVersions`, `saveAgentPolicyDraft`,
+`publishAgentPolicy`, `rollbackAgentPolicy`, `setAgentActuation`) y su documento (formato `v1alpha1`);
+las consultas `agentActuationDecision` y `agentExecutionDecision`; los controles del operador por
+inquilino (`tenantAgentActuation`, `setTenantAgentActuationSuspended`); la creación de cuentas de
+servicio de agentes (`ServiceAccountCreateRequest.agent`) y los permisos de sus tokens descritos en
+`ServiceAccount.roles`; y las operaciones de propuestas de agentes (`proposeAlarmAction`,
 `approveAgentProposal`, `rejectAgentProposal`, `agentProposals`, `agentProposal`) (consulta
-[Acciones de agentes](../concepts/mcp.md#agent-actions)). La marca `agent` de las
-cuentas de servicio no está en vista previa: está cubierta desde la versión que la añade.
+[Acciones de agentes](../concepts/mcp.md#agent-actions)). Las superficies GraphQL en vista previa
+incluyen sus tipos de entrada y resultado exclusivos, campos, argumentos y valores de enumeración.
+El campo `ServiceAccount.agent` no está en vista previa: está cubierto desde la versión que lo añade.
+Los roles de las cuentas de servicio ordinarias siguen cubiertos. Todavía no se ofrece ninguna
+herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálogo no cubierto anterior.
 
 ## Rutas de actualización admitidas {#upgrade-paths}
 

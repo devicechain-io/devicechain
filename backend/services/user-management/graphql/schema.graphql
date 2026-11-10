@@ -865,8 +865,8 @@ type ServiceAccount {
     agent: Boolean!
     """
     The roles the account holds. An ordinary account's tokens carry exactly these roles'
-    authorities; an agent account's carry their reads and the proposal authorities derived from
-    their writes.
+    authorities. (Preview: may change in a minor release.) An agent account's tokens carry their
+    reads and the proposal authorities derived from their writes.
     """
     roles: [TenantRole!]!
     """The customers or groups whose devices the account is limited to. Empty for the whole tenant."""
@@ -916,7 +916,7 @@ input ServiceAccountCreateRequest {
     """Days until the first secret expires: 1 to 730. Defaults to 365."""
     secretExpiresInDays: Int
     """
-    True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
+    (Preview: may change in a minor release.) True to create an AGENT account, for an AI agent: its tokens carry proposal authorities in
     place of its roles' write authorities. Cannot be changed later. Defaults to false. Refused
     unless agent actions are enabled on this instance. A tenant
     whose agent policy lists authorities under serviceAccounts.agentFlagRequiredFor refuses an
@@ -925,118 +925,118 @@ input ServiceAccountCreateRequest {
     agent: Boolean
 }
 
-"""How a version of the agent policy came to be published."""
+"""(Preview: may change in a minor release.) How a version of the agent policy came to be published."""
 enum AgentPolicyOrigin {
-    """The draft was published."""
+    """(Preview: may change in a minor release.) The draft was published."""
     PUBLISH
-    """An earlier version's document was published again as a new version."""
+    """(Preview: may change in a minor release.) An earlier version's document was published again as a new version."""
     ROLLBACK
-    """The version in force was republished with only agent actuation turned on or off."""
+    """(Preview: may change in a minor release.) The version in force was republished with only agent actuation turned on or off."""
     ACTUATION
 }
 
-"""One published version of this tenant's agent policy. Versions are never changed or removed."""
+"""(Preview: may change in a minor release.) One published version of this tenant's agent policy. Versions are never changed or removed."""
 type AgentPolicyVersion {
-    """The version number. It only grows: a rollback publishes a new, higher version."""
+    """(Preview: may change in a minor release.) The version number. It only grows: a rollback publishes a new, higher version."""
     version: Int!
-    """The policy document, as JSON."""
+    """(Preview: may change in a minor release.) The policy document, as JSON."""
     document: String!
-    """How this version came to be published."""
+    """(Preview: may change in a minor release.) How this version came to be published."""
     origin: AgentPolicyOrigin!
-    """Who published it."""
+    """(Preview: may change in a minor release.) Who published it."""
     publishedBy: String!
-    """When it was published, as an RFC 3339 timestamp."""
+    """(Preview: may change in a minor release.) When it was published, as an RFC 3339 timestamp."""
     publishedAt: String!
 }
 
 """
-This tenant's agent policy: whether AI agents may act in the tenant, which OAuth clients may,
+(Preview: may change in a minor release.) This tenant's agent policy: whether AI agents may act in the tenant, which OAuth clients may,
 what each kind of action needs before it happens, and who may approve it. Agents can act only
 when this instance allows agent actions, the operator has not suspended them for this tenant,
 the tenant kill switch is off, and the published policy enables them.
 """
 type AgentPolicy {
-    """The version in force, or null when none has been published (agents cannot act)."""
+    """(Preview: may change in a minor release.) The version in force, or null when none has been published (agents cannot act)."""
     published: AgentPolicyVersion
-    """The working draft, as JSON, or null when there is none. A draft changes nothing until it is published."""
+    """(Preview: may change in a minor release.) The working draft, as JSON, or null when there is none. A draft changes nothing until it is published."""
     draft: String
-    """When the draft was last saved, as an RFC 3339 timestamp, or null."""
+    """(Preview: may change in a minor release.) When the draft was last saved, as an RFC 3339 timestamp, or null."""
     draftUpdatedAt: String
-    """Who last saved the draft, or null."""
+    """(Preview: may change in a minor release.) Who last saved the draft, or null."""
     draftUpdatedBy: String
-    """True when the instance operator has suspended agent actions for this tenant, whatever its policy says."""
+    """(Preview: may change in a minor release.) True when the instance operator has suspended agent actions for this tenant, whatever its policy says."""
     operatorSuspended: Boolean!
     """(Preview: may change in a minor release.) True when the tenant has switched agent actions off with the kill switch, independent of the document."""
     actuationOff: Boolean!
-    """True when this instance allows agent actions at all."""
+    """(Preview: may change in a minor release.) True when this instance allows agent actions at all."""
     instanceEnabled: Boolean!
-    """True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, the tenant kill switch is off, and the published policy enables it."""
+    """(Preview: may change in a minor release.) True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, the tenant kill switch is off, and the published policy enables it."""
     actuationInEffect: Boolean!
 }
 
-"""A kind of action an AI agent may ask for."""
+"""(Preview: may change in a minor release.) A kind of action an AI agent may ask for."""
 enum AgentActionKind {
-    """Acknowledge an alarm."""
+    """(Preview: may change in a minor release.) Acknowledge an alarm."""
     ALARM_ACK
-    """Clear an alarm."""
+    """(Preview: may change in a minor release.) Clear an alarm."""
     ALARM_CLEAR
-    """Send a command to one device."""
+    """(Preview: may change in a minor release.) Send a command to one device."""
     COMMAND_SEND
-    """Send a command to several devices."""
+    """(Preview: may change in a minor release.) Send a command to several devices."""
     COMMAND_BATCH
-    """Change detection rules."""
+    """(Preview: may change in a minor release.) Change detection rules."""
     RULE_CHANGESET
-    """Start a firmware update rollout."""
+    """(Preview: may change in a minor release.) Start a firmware update rollout."""
     ROLLOUT_CREATE
-    """Add a note to a device, asset or alarm."""
+    """(Preview: may change in a minor release.) Add a note to a device, asset or alarm."""
     ANNOTATION
 }
 
-"""How much an action changes the physical or logical world, as its command definition declares."""
+"""(Preview: may change in a minor release.) How much an action changes the physical or logical world, as its command definition declares."""
 enum AgentActionImpact {
-    """An ordinary action."""
+    """(Preview: may change in a minor release.) An ordinary action."""
     NORMAL
-    """An action that interrupts a device's normal operation."""
+    """(Preview: may change in a minor release.) An action that interrupts a device's normal operation."""
     DISRUPTIVE
-    """An action that cannot be undone."""
+    """(Preview: may change in a minor release.) An action that cannot be undone."""
     DESTRUCTIVE
 }
 
-"""The outcome of an agent-action decision."""
+"""(Preview: may change in a minor release.) The outcome of an agent-action decision."""
 enum AgentActionVerdict {
-    """The action is not allowed."""
+    """(Preview: may change in a minor release.) The action is not allowed."""
     REFUSE
-    """The action may run without a person approving it."""
+    """(Preview: may change in a minor release.) The action may run without a person approving it."""
     AUTO
-    """The action needs the given number of people to approve it."""
+    """(Preview: may change in a minor release.) The action needs the given number of people to approve it."""
     APPROVE
 }
 
-"""The tenant's verdict on an action an AI agent proposes to take."""
+"""(Preview: may change in a minor release.) The tenant's verdict on an action an AI agent proposes to take."""
 type AgentActuationDecision {
-    """What the policy says."""
+    """(Preview: may change in a minor release.) What the policy says."""
     verdict: AgentActionVerdict!
-    """How many distinct people must approve: 0 for AUTO and REFUSE, otherwise 1 or 2."""
+    """(Preview: may change in a minor release.) How many distinct people must approve: 0 for AUTO and REFUSE, otherwise 1 or 2."""
     requiredApprovals: Int!
-    """Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED or FLOOR_TWO_PERSON."""
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example CLIENT_NOT_ALLOWED or FLOOR_TWO_PERSON."""
     reasons: [String!]!
-    """The policy version the decision was made under, or 0 when none is published."""
+    """(Preview: may change in a minor release.) The policy version the decision was made under, or 0 when none is published."""
     policyVersion: Int!
-    """When set, the groups every target device must belong to. Null for no group restriction."""
+    """(Preview: may change in a minor release.) When set, the groups every target device must belong to. Null for no group restriction."""
     groupRestriction: [String!]
     """
-    How long a proposal made now may wait for approval, in seconds, from the policy's expiry
+    (Preview: may change in a minor release.) How long a proposal made now may wait for approval, in seconds, from the policy's expiry
     settings and never more than 24 hours. 0 when the verdict is REFUSE.
     """
     expiresInSeconds: Int!
     """
-    The policy's limit on how many actions of this kind the client, and separately the person,
+    (Preview: may change in a minor release.) The policy's limit on how many actions of this kind the client, and separately the person,
     may propose per hour, or 0 when the policy sets none and the platform limit applies. The
     owning service never lets it exceed the platform limit. 0 when the verdict is REFUSE.
     """
     actionsPerHour: Int!
     """
-    Whether the client's identity is authenticated (a confidential client or an agent service
+    (Preview: may change in a minor release.) Whether the client's identity is authenticated (a confidential client or an agent service
     account) rather than a label any application can claim. False when the verdict is REFUSE.
     """
     clientAttested: Boolean!
@@ -1047,25 +1047,25 @@ type AgentActuationDecision {
 proposal, and who has approved it so far, for agentExecutionDecision.
 """
 input AgentExecutionDecisionInput {
-    """The proposal's token, for correlation."""
+    """(Preview: may change in a minor release.) The proposal's token, for correlation."""
     proposalToken: String!
-    """The kind of action."""
+    """(Preview: may change in a minor release.) The kind of action."""
     kind: AgentActionKind!
-    """The action's impact. Defaults to NORMAL."""
+    """(Preview: may change in a minor release.) The action's impact. Defaults to NORMAL."""
     impact: AgentActionImpact
-    """How many targets the proposal reaches."""
+    """(Preview: may change in a minor release.) How many targets the proposal reaches."""
     targetCount: Int!
-    """The groups the targets were chosen through, if any."""
+    """(Preview: may change in a minor release.) The groups the targets were chosen through, if any."""
     groupTokens: [String!]
-    """For a command, its name."""
+    """(Preview: may change in a minor release.) For a command, its name."""
     command: String
-    """The principal the proposal was made for, as recorded on it."""
+    """(Preview: may change in a minor release.) The principal the proposal was made for, as recorded on it."""
     proposerPrincipal: String!
-    """The agent client the proposal was made through, as recorded on it."""
+    """(Preview: may change in a minor release.) The agent client the proposal was made through, as recorded on it."""
     proposerClient: String!
-    """The grant session the proposal was made under, when the token carried one."""
+    """(Preview: may change in a minor release.) The grant session the proposal was made under, when the token carried one."""
     proposerSid: String
-    """The principals who have approved so far, including the caller when the caller is approving. At most 10."""
+    """(Preview: may change in a minor release.) The principals who have approved so far, including the caller when the caller is approving. At most 10."""
     approvers: [String!]!
 }
 
@@ -1074,21 +1074,21 @@ input AgentExecutionDecisionInput {
 under what approval rules, read now from this service's records.
 """
 type AgentExecutionDecision {
-    """What the current policy says. Never AUTO."""
+    """(Preview: may change in a minor release.) What the current policy says. Never AUTO."""
     verdict: AgentActionVerdict!
-    """How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
+    """(Preview: may change in a minor release.) How many distinct people must approve under the current policy: 0 for REFUSE, otherwise 1 or 2."""
     requiredApprovals: Int!
-    """The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor."""
+    """(Preview: may change in a minor release.) The named approvers who are approvers now: enabled members in an approver role, holding the write the action needs, with an active second factor."""
     validApprovers: [String!]!
-    """Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
+    """(Preview: may change in a minor release.) Platform-defined codes saying why, for example PROPOSER_LOST_AUTHORITY or CLIENT_NOT_ALLOWED."""
     reasons: [String!]!
-    """The policy version the decision was made under, or 0 when none is published."""
+    """(Preview: may change in a minor release.) The policy version the decision was made under, or 0 when none is published."""
     policyVersion: Int!
-    """How recently, in seconds, an approver's second factor must have been verified."""
+    """(Preview: may change in a minor release.) How recently, in seconds, an approver's second factor must have been verified."""
     stepUpMaxAgeSeconds: Int!
-    """Whether a sign-in completed with a recovery code counts as a second factor for an approval."""
+    """(Preview: may change in a minor release.) Whether a sign-in completed with a recovery code counts as a second factor for an approval."""
     acceptRecoveryCodes: Boolean!
-    """Whether the person the proposal was made for may be its only approver."""
+    """(Preview: may change in a minor release.) Whether the person the proposal was made for may be its only approver."""
     allowSelfConfirm: Boolean!
 }
 
@@ -1265,7 +1265,7 @@ type Query {
     agentPolicy: AgentPolicy!
     """(Preview: may change in a minor release.) The published versions of this tenant's agent policy, newest first. Requires agent:admin."""
     agentPolicyVersions(
-        """How many versions to return: 1 to 100. Defaults to 20."""
+        """(Preview: may change in a minor release.) How many versions to return: 1 to 100. Defaults to 20."""
         limit: Int
     ): [AgentPolicyVersion!]!
     """
@@ -1277,15 +1277,15 @@ type Query {
     treated as a refusal.
     """
     agentActuationDecision(
-        """The kind of action."""
+        """(Preview: may change in a minor release.) The kind of action."""
         kind: AgentActionKind!
-        """The action's impact, from the command definition. Defaults to NORMAL."""
+        """(Preview: may change in a minor release.) The action's impact, from the command definition. Defaults to NORMAL."""
         impact: AgentActionImpact
-        """How many devices the action would reach."""
+        """(Preview: may change in a minor release.) How many devices the action would reach."""
         targetCount: Int!
-        """The groups the targets were chosen through, if any."""
+        """(Preview: may change in a minor release.) The groups the targets were chosen through, if any."""
         groupTokens: [String!]
-        """For a command, its name."""
+        """(Preview: may change in a minor release.) For a command, its name."""
         command: String
     ): AgentActuationDecision!
     """
@@ -1296,7 +1296,7 @@ type Query {
     service's records read now. An error must be treated as a refusal.
     """
     agentExecutionDecision(
-        """What the owning service recorded about the proposal, and who has approved it so far."""
+        """(Preview: may change in a minor release.) What the owning service recorded about the proposal, and who has approved it so far."""
         input: AgentExecutionDecisionInput!
     ): AgentExecutionDecision!
 }
@@ -1877,7 +1877,7 @@ type Mutation {
     cannot be called by an AI agent or a service account.
     """
     saveAgentPolicyDraft(
-        """The policy document, as JSON."""
+        """(Preview: may change in a minor release.) The policy document, as JSON."""
         document: String!
     ): AgentPolicy!
     """
@@ -1894,7 +1894,7 @@ type Mutation {
     service account.
     """
     rollbackAgentPolicy(
-        """The version whose document to publish again."""
+        """(Preview: may change in a minor release.) The version whose document to publish again."""
         version: Int!
     ): AgentPolicy!
     """
@@ -1906,7 +1906,7 @@ type Mutation {
     agent or a service account.
     """
     setAgentActuation(
-        """False to stop agent actions; true to allow them again under the published policy."""
+        """(Preview: may change in a minor release.) False to stop agent actions; true to allow them again under the published policy."""
         enabled: Boolean!
     ): AgentPolicy!
 }
