@@ -6,38 +6,38 @@ export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' |
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 /** (Preview: may change in a minor release.) The kind of action an agent proposal asks for. */
 export type AgentProposalKind =
-  /** Acknowledge alarms. */
+  /** (Preview: may change in a minor release.) Acknowledge alarms. */
   | 'ALARM_ACK'
-  /** Clear alarms. */
+  /** (Preview: may change in a minor release.) Clear alarms. */
   | 'ALARM_CLEAR';
 
 /** (Preview: may change in a minor release.) Filters for listing agent proposals. */
 export type AgentProposalSearchCriteria = {
-  /** Only proposals of this kind. */
+  /** (Preview: may change in a minor release.) Only proposals of this kind. */
   kind?: AgentProposalKind | null | undefined;
-  /** The page to return, starting at 1. */
+  /** (Preview: may change in a minor release.) The page to return, starting at 1. */
   pageNumber: number;
-  /** How many proposals a page holds. */
+  /** (Preview: may change in a minor release.) How many proposals a page holds. */
   pageSize: number;
-  /** Only proposals in this state. */
+  /** (Preview: may change in a minor release.) Only proposals in this state. */
   state?: AgentProposalState | null | undefined;
 };
 
 /** (Preview: may change in a minor release.) Where an agent proposal is in its life. */
 export type AgentProposalState =
-  /** Withdrawn by the agent that proposed it. */
+  /** (Preview: may change in a minor release.) Withdrawn by the agent that proposed it. */
   | 'CANCELLED'
-  /** Approved and carried out. */
+  /** (Preview: may change in a minor release.) Approved and carried out. */
   | 'EXECUTED'
-  /** Nobody approved it before it expired. */
+  /** (Preview: may change in a minor release.) Nobody approved it before it expired. */
   | 'EXPIRED'
-  /** Ended by an agent-actions switch being turned off. */
+  /** (Preview: may change in a minor release.) Ended by an agent-actions switch being turned off. */
   | 'KILLED'
-  /** Waiting for people to approve it. The only state that changes. */
+  /** (Preview: may change in a minor release.) Waiting for people to approve it. The only state that changes. */
   | 'PROPOSED'
-  /** The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why. */
+  /** (Preview: may change in a minor release.) The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why. */
   | 'REFUSED'
-  /** A person rejected it. */
+  /** (Preview: may change in a minor release.) A person rejected it. */
   | 'REJECTED';
 
 /**
