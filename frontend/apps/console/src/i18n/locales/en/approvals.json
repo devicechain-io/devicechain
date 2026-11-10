@@ -35,7 +35,7 @@
   "approveConfirm": "Approve the displayed action for {{count}} targets with impact {{impact}}?",
   "approved": "Approval recorded.",
   "rejected": "Proposal rejected.",
-  "executionUnavailable": "The approval was recorded. Execution is not available in this release; the proposal has not been carried out.",
+  "executionUnavailable": "This approval would complete the proposal, but carrying it out is not available in this release. It was not recorded and the proposal is still pending.",
   "note": "Rejection note (optional)",
   "noteTooLong": "The note must be at most 512 bytes.",
   "submitReject": "Submit rejection",

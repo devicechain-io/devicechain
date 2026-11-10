@@ -34,7 +34,7 @@ const relativeExpiry = (value: string, language: string) =>
 export default function ApprovalsPage() {
   return <ApprovalsGate><Inbox /></ApprovalsGate>;
 }
-function KillSwitch() {
+function KillSwitch({ onChanged }: { onChanged: () => void }) {
   const { t } = useTranslation('approvals');
   const { toast } = useToast();
   const confirm = useConfirm();
@@ -54,6 +54,7 @@ function KillSwitch() {
       await setAgentActuation(enabled);
       toast(t('switchSaved'));
       reload();
+      onChanged();
     } catch (err) {
       if (enabled && serverErrorCode(err) === 'STEP_UP_REQUIRED') setStepUp(true);
       else toast(errMessage(err), 'error');
@@ -75,13 +76,16 @@ function Inbox() {
   const { t, i18n } = useTranslation('approvals');
   const [state, setState] = useState<AgentProposalState>('PROPOSED');
   const [pageNumber, setPageNumber] = useState(1);
-  const { data, loading, error } = useQuery(() => listAgentProposals({ pageNumber, pageSize, state }), [pageNumber, state]);
+  const [version, reload] = useReload();
+  // The rows are the answer to THIS filter and page only: `current`, never the sticky `data`, so a
+  // failed or slow re-read can not leave another state's proposals on screen.
+  const { current: data, loading, error } = useQuery(() => listAgentProposals({ pageNumber, pageSize, state }), [pageNumber, state, version]);
   return <PageShell title={t('title')} titleAdornment={<Badge variant="secondary">{t('preview')}</Badge>}>
     <div className="space-y-4">
-      <KillSwitch />
+      <KillSwitch onChanged={reload} />
       <Combobox value={state} allowClear={false} aria-label={t('state')} options={STATES.map(value => ({ value, label: t(value) }))}
         onChange={value => { setState(value as AgentProposalState); setPageNumber(1); }} />
-      {!data && loading ? <LoadingState description={t('loading')} /> : !data && error ? <ErrorState description={error} />
+      {loading ? <LoadingState description={t('loading')} /> : error ? <ErrorState description={error} />
         : !data?.results.length ? <EmptyState description={t('empty')} /> : <>
           <DataTable><DataTableHead>
             {COLUMNS.map(key => <DataTableHeaderCell key={key}>{t(key)}</DataTableHeaderCell>)}

@@ -35,7 +35,7 @@
   "approveConfirm": "¿Aprobar la acción mostrada para {{count}} destinos con impacto {{impact}}?",
   "approved": "Aprobación registrada.",
   "rejected": "Propuesta rechazada.",
-  "executionUnavailable": "La aprobación se ha registrado. La ejecución no está disponible en esta versión; la propuesta no se ha ejecutado.",
+  "executionUnavailable": "Esta aprobación completaría la propuesta, pero ejecutarla no está disponible en esta versión. No se ha registrado y la propuesta sigue pendiente.",
   "note": "Nota de rechazo (opcional)",
   "noteTooLong": "La nota debe tener como máximo 512 bytes.",
   "submitReject": "Enviar rechazo",

@@ -93,7 +93,7 @@ describe('proposal decisions', () => {
     h.approve.mockRejectedValue(serverError('EXECUTION_NOT_AVAILABLE'));
     show(); await approve();
     await screen.findByRole('status');
-    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining('approval was recorded'), 'info');
+    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining('It was not recorded'), 'info');
     await waitFor(() => expect(h.get).toHaveBeenCalledTimes(2));
   });
   it('disables both decisions while a refetch is unresolved, retaining the display', async () => {
@@ -124,6 +124,7 @@ describe('inbox and kill switch', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Turn agent actions off' }));
     await waitFor(() => expect(h.setActuation).toHaveBeenCalledExactlyOnceWith(false));
     await screen.findByRole('button', { name: 'Turn agent actions back on' });
+    await waitFor(() => expect(h.list).toHaveBeenCalledTimes(2));
     expect(h.policy).toHaveBeenCalledTimes(3);
     expect(screen.queryByText('Approving needs a fresh second factor')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
