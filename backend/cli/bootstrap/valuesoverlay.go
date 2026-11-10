@@ -396,7 +396,19 @@ func refuseObserveValues(values map[string]interface{}, source string) error {
 	}
 	if current == "observe" {
 		err := (config.TokenAudienceConfiguration{Enforcement: "observe"}).Validate()
-		return fmt.Errorf("%s: %w. Remove instance.config.infrastructure.tokenAudience.enforcement from the values or set it to enforce before upgrading; v1.4 refuses observe. Nothing has been changed", source, err)
+		return fmt.Errorf("%s: %w. Remove instance.config.infrastructure.tokenAudience.enforcement from the values or set it to enforce; v1.4 refuses observe. Nothing has been changed", source, err)
+	}
+	return nil
+}
+
+// refuseCarriedObserveValues names the command that can replace historical values.
+func refuseCarriedObserveValues(values map[string]interface{}, source, command string) error {
+	if err := refuseObserveValues(values, source); err != nil {
+		remedy := "re-run `dcctl " + command + "` with `--values <file without the key>`"
+		if command == "upgrade" {
+			remedy += " or `--reset-values`"
+		}
+		return fmt.Errorf("%w; %s", err, remedy)
 	}
 	return nil
 }

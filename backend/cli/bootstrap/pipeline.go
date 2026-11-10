@@ -257,6 +257,9 @@ type State struct {
 	// one the declaration already records), merged over what dcctl computes. See
 	// valuesoverlay.go. Nil means none.
 	ValuesOverlay map[string]interface{}
+	// ValuesOverlayIntent says this run explicitly replaces or resets the overlay,
+	// so historical token-audience enforcement values are not carried.
+	ValuesOverlayIntent bool
 	// ValuesOverlayRecorded is the overlay the declaration holds NOW, so a run can say what
 	// it changes and write only when it changes something.
 	ValuesOverlayRecorded map[string]interface{}

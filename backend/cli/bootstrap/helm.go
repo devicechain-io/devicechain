@@ -157,8 +157,10 @@ func helmInstall(ctx context.Context, st *State) error {
 		if previous, err = previousReleaseValues(actionConfig, releaseName); err != nil {
 			return err
 		}
-		if err := refuseObserveValues(previous, "the previously installed release's user-supplied values"); err != nil {
-			return err
+		if !st.ValuesOverlayIntent {
+			if err := refuseCarriedObserveValues(previous, "the previously installed release's user-supplied values", "upgrade"); err != nil {
+				return err
+			}
 		}
 		carryForwardFromRelease(st, previous)
 	}
@@ -302,6 +304,9 @@ func helmInstall(ctx context.Context, st *State) error {
 
 // precheckTokenAudienceRelease reads historical user-supplied values before the upgrade writes.
 func precheckTokenAudienceRelease(st *State) error {
+	if st.ValuesOverlayIntent {
+		return nil
+	}
 	cfg, err := helmActionConfigFor(st.KubeContext)
 	if err != nil {
 		return err
@@ -310,7 +315,7 @@ func precheckTokenAudienceRelease(st *State) error {
 	if err != nil {
 		return err
 	}
-	return refuseObserveValues(previous, "the previously installed release's user-supplied values")
+	return refuseCarriedObserveValues(previous, "the previously installed release's user-supplied values", "upgrade")
 }
 
 // releaseValues is the value map helmInstall hands Helm, and the instance configuration

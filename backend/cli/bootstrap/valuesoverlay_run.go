@@ -24,6 +24,7 @@ import (
 // failed install ten minutes in; refusing here, with the key named and the two ways out,
 // costs nothing.
 func applyUpgradeValuesOverlay(st *State, inst *dcv1beta1.Instance, opts UpgradeOptions) error {
+	st.ValuesOverlayIntent = opts.ResetValues || opts.ValuesOverlay != nil
 	recorded, err := decodeValuesOverlay(inst.Annotations)
 	if err != nil {
 		// 🔴 THE TWO WAYS OUT HAVE TO WORK ON THE ONE CASE THAT NAMES THEM. An unreadable
@@ -34,8 +35,10 @@ func applyUpgradeValuesOverlay(st *State, inst *dcv1beta1.Instance, opts Upgrade
 		}
 		recorded, st.ValuesOverlayUnreadable = nil, true
 	}
-	if err := refuseObserveValues(recorded, "the stored overlay annotation "+AnnotationValuesOverlay); err != nil {
-		return err
+	if !st.ValuesOverlayIntent {
+		if err := refuseCarriedObserveValues(recorded, "the stored overlay annotation "+AnnotationValuesOverlay, "upgrade"); err != nil {
+			return err
+		}
 	}
 	st.ValuesOverlayRecorded = recorded
 	switch {
@@ -93,8 +96,8 @@ func sayValuesOverlay(st *State) {
 // written, so a combination the chart refuses at render time (a request above its limit,
 // two pods on a one-pod volume) stops the run while it still costs nothing.
 func precheckValuesOverlay(ctx context.Context, st *State) error {
-	// Historical release values must be checked even with no overlay: recomposition
-	// could otherwise silently discard the old opt-out during a rolling upgrade.
+	// Historical values must be checked even with no overlay, unless this run
+	// explicitly replaces them with --values or --reset-values.
 	if st.Evolving {
 		if err := precheckTokenAudienceRelease(st); err != nil {
 			return err
@@ -167,8 +170,10 @@ func adoptRecordedValuesOverlay(st *State, existing *dcv1beta1.Instance) error {
 		}
 		recorded, st.ValuesOverlayUnreadable = nil, true
 	}
-	if err := refuseObserveValues(recorded, "the stored overlay annotation "+AnnotationValuesOverlay); err != nil {
-		return err
+	if st.ValuesOverlay == nil {
+		if err := refuseCarriedObserveValues(recorded, "the stored overlay annotation "+AnnotationValuesOverlay, "bootstrap"); err != nil {
+			return err
+		}
 	}
 	st.ValuesOverlayRecorded = recorded
 	if st.ValuesOverlay == nil && len(recorded) > 0 {

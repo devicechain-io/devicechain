@@ -47,12 +47,32 @@ func TestV14UpgradeRefusesStoredObserveBeforeRecordingAnything(t *testing.T) {
 	}
 	inst.Annotations[AnnotationValuesOverlay] = string(raw)
 	before := inst.DeepCopy()
-	for _, opts := range []UpgradeOptions{{}, {Options: Options{ResetValues: true}}, {Options: Options{ValuesOverlay: map[string]interface{}{"replicas": 2}}}} {
-		err = applyUpgradeValuesOverlay(&State{Instance: "prod"}, inst, opts)
-		require.ErrorContains(t, err, "v1.4")
-		require.ErrorContains(t, err, AnnotationValuesOverlay)
-		require.Equal(t, before, inst, "refusal must not rewrite the stored overlay")
+	err = applyUpgradeValuesOverlay(&State{Instance: "prod"}, inst, UpgradeOptions{})
+	require.ErrorContains(t, err, "v1.4")
+	require.ErrorContains(t, err, AnnotationValuesOverlay)
+	require.ErrorContains(t, err, "Nothing has been changed")
+	require.ErrorContains(t, err, "re-run `dcctl upgrade` with `--values <file without the key>` or `--reset-values`")
+	require.Equal(t, before, inst, "refusal must not rewrite the stored overlay")
+	for _, opts := range []UpgradeOptions{{Options: Options{ResetValues: true}}, {Options: Options{ValuesOverlay: map[string]interface{}{"replicas": 2}}}} {
+		st := compactState(false)
+		require.NoError(t, applyUpgradeValuesOverlay(st, inst, opts))
+		require.True(t, st.ValuesOverlayIntent)
+		require.Equal(t, opts.ValuesOverlay, st.ValuesOverlay)
+		require.NoError(t, refuseObserveValues(st.ValuesOverlay, "the new overlay"))
+		require.Equal(t, before, inst, "settling must not rewrite the stored overlay")
+		if opts.ResetValues {
+			require.Empty(t, st.ValuesOverlay)
+			raw, err := renderInstanceConfigDocument(t.Context(), chartForTest(t), renderOnlyAuthoring(st))
+			require.NoError(t, err)
+			require.NotEmpty(t, raw)
+			cfg, err := loadInstanceConfigDocument(raw)
+			require.NoError(t, err)
+			require.Equal(t, "enforce", string(cfg.Infrastructure.TokenAudience.EffectiveEnforcement()))
+			require.NotContains(t, string(raw), `"enforcement":"observe"`)
+		}
 	}
+	// A replacement file must still pass validation before being applied.
+	require.ErrorContains(t, ValidateValuesOverlay(legacyObserveValues()), "v1.4")
 	// Drive the actual hydration preflight too, using the upgrade harness and a
 	// Kubernetes fake that records every operation. No mutation may reach it.
 	fakeHome(t)
@@ -84,6 +104,8 @@ func TestV14UpgradePreflightRefusesPreviousReleaseObserveWithoutAnOverlay(t *tes
 	require.ErrorContains(t, err, "v1.4")
 	require.ErrorContains(t, err, "previously installed release")
 	require.ErrorContains(t, err, "Nothing has been changed")
+	require.ErrorContains(t, err, "re-run `dcctl upgrade` with `--values <file without the key>` or `--reset-values`")
+	require.NoError(t, precheckValuesOverlay(t.Context(), &State{Instance: "prod", Evolving: true, ValuesOverlayIntent: true}))
 	unchanged, err := store.Last(helmReleaseNameFor("prod"))
 	require.NoError(t, err)
 	require.Equal(t, rel, unchanged)
@@ -91,6 +113,29 @@ func TestV14UpgradePreflightRefusesPreviousReleaseObserveWithoutAnOverlay(t *tes
 	rel.Config = map[string]interface{}{}
 	require.NoError(t, store.Update(rel))
 	require.NoError(t, precheckValuesOverlay(t.Context(), &State{Instance: "prod", Evolving: true}))
+}
+
+func TestV14BootstrapReplacesStoredObserveWithExplicitOverlay(t *testing.T) {
+	inst := atVersion(t, "ghcr.io/devicechain-io", "v1.3.0")
+	raw, err := json.Marshal(legacyObserveValues())
+	require.NoError(t, err)
+	if inst.Annotations == nil {
+		inst.Annotations = map[string]string{}
+	}
+	inst.Annotations[AnnotationValuesOverlay] = string(raw)
+	before := inst.DeepCopy()
+	err = adoptRecordedValuesOverlay(&State{Instance: "prod"}, inst)
+	require.ErrorContains(t, err, "v1.4")
+	require.ErrorContains(t, err, AnnotationValuesOverlay)
+	require.ErrorContains(t, err, "Nothing has been changed")
+	require.ErrorContains(t, err, "re-run `dcctl bootstrap` with `--values <file without the key>`")
+	require.NotContains(t, err.Error(), "--reset-values")
+	overlay := map[string]interface{}{"replicas": 2}
+	st := &State{Instance: "prod", ValuesOverlay: overlay}
+	require.NoError(t, adoptRecordedValuesOverlay(st, inst))
+	require.Equal(t, overlay, st.ValuesOverlay)
+	require.Equal(t, legacyObserveValues(), st.ValuesOverlayRecorded)
+	require.Equal(t, before, inst)
 }
 
 // The same source-order harness used by the infrastructure gates pins the preflight
@@ -137,6 +182,6 @@ func TestV14ExistingSecretDocumentRefusesObserve(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorContains(t, validateRenderedInstanceConfig(t.Context(), ch, externalValues(digest("a")), raw), "removed in v1.4")
 	_, err = parseDeployedConfig(raw, "prod", "dci-prod-config")
-	require.ErrorContains(t, err, "existingSecret")
+	require.ErrorContains(t, err, "the deployed instance configuration document for instance")
 	require.ErrorContains(t, err, "v1.4")
 }
