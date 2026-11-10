@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestDisabledHTTPAddsZeroAllocations(t *testing.T) {
 
 func TestHTTPParentAndSafeAttributes(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())))
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	t.Cleanup(Install(tp))
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 	parent := trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled, Remote: true})
@@ -79,10 +80,10 @@ func TestHTTPParentAndSafeAttributes(t *testing.T) {
 	})
 	spans := exporter.GetSpans()
 	if len(spans) != 1 {
-		t.Fatalf("spans %d, want sampled upstream even with zero root sampling", len(spans))
+		t.Fatalf("spans %d, want 1", len(spans))
 	}
 	s := spans[0]
-	if s.Name != "GetDevices" || s.Parent.SpanID() != parent.SpanID() || s.SpanContext.TraceID() != parent.TraceID() || s.SpanKind != trace.SpanKindServer {
+	if s.Name != "GetDevices" || s.Parent.IsValid() || s.SpanContext.TraceID() == parent.TraceID() || len(s.Links) != 1 || s.Links[0].SpanContext.TraceID() != parent.TraceID() || s.SpanKind != trace.SpanKindServer {
 		t.Fatalf("wrong HTTP span: %+v", s)
 	}
 	attrs := map[string]any{}
@@ -131,5 +132,81 @@ func TestSetupSamplerAndServiceName(t *testing.T) {
 	}
 	if name != "devicechain-device-management" {
 		t.Fatalf("service.name %q", name)
+	}
+}
+
+// With the sampler at ratio 0, a device that sends a sampled traceparent must not get a
+// sampled span, and its context is linked, never adopted.
+func TestUntrustedEdgeIgnoresRemoteSampledFlag(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(0))))
+	t.Cleanup(Install(tp))
+	const remoteTrace = "0af7651916cd43dd8448eb211c80319c"
+	var inner trace.SpanContext
+	r := httptest.NewRequest(http.MethodPost, "/events", nil)
+	r.Header.Set("traceparent", "00-"+remoteTrace+"-b7ad6b7169203331-01")
+	r.Header.Set("tracestate", "vendor=huge")
+	HTTP(httptest.NewRecorder(), r, "ingest.http", func(w http.ResponseWriter, req *http.Request) {
+		inner = trace.SpanContextFromContext(req.Context())
+	})
+	if inner.IsSampled() || inner.TraceID().String() == remoteTrace || inner.TraceState().Len() != 0 {
+		t.Fatalf("remote context was adopted: %+v", inner)
+	}
+	if n := len(exporter.GetSpans()); n != 0 {
+		t.Fatalf("ratio 0 recorded %d spans for a device-sampled request", n)
+	}
+
+	// At ratio 1 the span exists, is a new root, and links the remote context.
+	exporter.Reset()
+	tp2 := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(Install(tp2))
+	HTTP(httptest.NewRecorder(), r, "ingest.http", func(http.ResponseWriter, *http.Request) {})
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Parent.IsValid() || len(spans[0].Links) != 1 ||
+		spans[0].Links[0].SpanContext.TraceID().String() != remoteTrace {
+		t.Fatalf("want one root span linking the remote trace, got %+v", spans)
+	}
+}
+
+func TestOperationNameIsBounded(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(Install(tp))
+	ctx, span := Start(context.Background(), "graphql.request", "http", "", trace.SpanKindServer)
+	Operation(ctx, strings.Repeat("x", 10000), "", false)
+	span.End()
+	if got := exporter.GetSpans()[0].Name; len(got) != maxOperationNameBytes {
+		t.Fatalf("span name is %d bytes", len(got))
+	}
+}
+
+// The OTLP/HTTP exporter given a path-less URL must post to /v1/traces, not "/".
+func TestHTTPExporterPostsToTracesPath(t *testing.T) {
+	one := 1.0
+	got := make(chan string, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r.Method + " " + r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	for url, want := range map[string]string{srv.URL: "POST /v1/traces", srv.URL + "/": "POST /v1/traces", srv.URL + "/prefix/v1/traces": "POST /prefix/v1/traces"} {
+		shutdown, err := Setup(context.Background(), config.TracingConfiguration{Enabled: true, Protocol: "http", Endpoint: url, Insecure: true, SamplingRatio: &one}, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, span := Start(context.Background(), "probe", "test", "", trace.SpanKindInternal)
+		span.End()
+		if err := shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case g := <-got:
+			if g != want {
+				t.Fatalf("%s: collector saw %q, want %q", url, g, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: collector saw nothing", url)
+		}
 	}
 }

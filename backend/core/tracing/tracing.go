@@ -6,6 +6,7 @@ package tracing
 
 import (
 	"context"
+	"net/url"
 	"sync/atomic"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -34,9 +35,9 @@ func Setup(ctx context.Context, cfg config.TracingConfiguration, area string) (f
 	var exporter sdktrace.SpanExporter
 	var err error
 	if cfg.Protocol == "http" {
-		opts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(cfg.Endpoint)}
-		if cfg.Insecure {
-			opts = append(opts, otlptracehttp.WithInsecure())
+		opts, oerr := httpExporterOptions(cfg)
+		if oerr != nil {
+			return nil, oerr
 		}
 		exporter, err = otlptracehttp.New(ctx, opts...)
 	} else {
@@ -79,6 +80,23 @@ func Install(tp trace.TracerProvider) func() {
 }
 
 // Start returns a nil span when disabled; callers only defer End for a non-nil span.
+// StartEdge starts a span at an UNTRUSTED boundary (a device's HTTP request, a GraphQL
+// call). The caller's traceparent/tracestate is not adopted: a remote party must not choose
+// whether this platform samples, nor the tracestate it carries onward. The span is a new
+// local root, linked to the remote context so the two can still be correlated.
+func StartEdge(ctx context.Context, name, transport string, remote trace.SpanContext) (context.Context, trace.Span) {
+	if !Enabled() {
+		return ctx, nil
+	}
+	opts := []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindServer), trace.WithNewRoot()}
+	if remote.IsValid() {
+		opts = append(opts, trace.WithLinks(trace.Link{SpanContext: remote.WithTraceState(trace.TraceState{})}))
+	}
+	ctx, span := otel.Tracer("devicechain").Start(ctx, name, opts...)
+	span.SetAttributes(attribute.String("transport", transport))
+	return ctx, span
+}
+
 func Start(ctx context.Context, name, transport, tenant string, kind trace.SpanKind) (context.Context, trace.Span) {
 	if !Enabled() {
 		return ctx, nil
@@ -89,4 +107,28 @@ func Start(ctx context.Context, name, transport, tenant string, kind trace.SpanK
 		span.SetAttributes(attribute.String("tenant.id", tenant))
 	}
 	return ctx, span
+}
+
+// httpExporterOptions maps the configured URL onto the exporter. WithEndpointURL keeps a
+// path-less URL's path as "/", which a collector answers 404 (the OTLP/HTTP path is
+// /v1/traces), so a URL with no path is given the standard one. A URL that names a path
+// (a collector behind a prefix) is used exactly as written.
+//
+// The OTEL_EXPORTER_OTLP_* environment variables are still read by the exporter and can
+// override these settings; they are documented as such rather than cleared.
+func httpExporterOptions(cfg config.TracingConfiguration) ([]otlptracehttp.Option, error) {
+	u, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var opts []otlptracehttp.Option
+	if u.Path == "" || u.Path == "/" {
+		opts = append(opts, otlptracehttp.WithEndpoint(u.Host), otlptracehttp.WithURLPath("/v1/traces"))
+	} else {
+		opts = append(opts, otlptracehttp.WithEndpointURL(cfg.Endpoint))
+	}
+	if cfg.Insecure || u.Scheme == "http" {
+		opts = append(opts, otlptracehttp.WithInsecure())
+	}
+	return opts, nil
 }

@@ -6,6 +6,7 @@ package tracing
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -39,8 +40,8 @@ func HTTP(w http.ResponseWriter, r *http.Request, name string, next http.Handler
 		next(w, r)
 		return
 	}
-	ctx := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-	ctx, span := Start(ctx, name, "http", "", trace.SpanKindServer)
+	remote := trace.SpanContextFromContext(propagation.TraceContext{}.Extract(context.Background(), propagation.HeaderCarrier(r.Header)))
+	ctx, span := StartEdge(r.Context(), name, "http", remote)
 	defer span.End()
 	rw := &responseWriter{ResponseWriter: w}
 	defer func() {
@@ -56,6 +57,9 @@ func HTTP(w http.ResponseWriter, r *http.Request, name string, next http.Handler
 	next(rw, r.WithContext(ctx))
 }
 
+// maxOperationNameBytes bounds a client-chosen operation name used as a span name.
+const maxOperationNameBytes = 128
+
 // Operation is called after the normal decode; it never parses a document for tracing.
 func Operation(ctx context.Context, name, tenant string, failed bool) {
 	if !Enabled() {
@@ -63,6 +67,9 @@ func Operation(ctx context.Context, name, tenant string, failed bool) {
 	}
 	span := trace.SpanFromContext(ctx)
 	if name != "" {
+		if len(name) > maxOperationNameBytes {
+			name = strings.ToValidUTF8(name[:maxOperationNameBytes], "")
+		}
 		span.SetName(name)
 	}
 	if tenant != "" {

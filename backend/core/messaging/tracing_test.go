@@ -5,7 +5,9 @@ package messaging
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,5 +197,48 @@ func BenchmarkDisabledPublishHeaders(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		injectPublish(ctx, streams.InboundEvents, m, nm)
+	}
+}
+
+// A member's context may carry a maximal tracestate; none of it may reach the header, and
+// the header as a whole stays inside its budget however many members the envelope has.
+func TestEnvelopeTraceHeaderStaysWithinBudget(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(tracing.Install(tp))
+	var ts trace.TraceState
+	for i := 0; i < 32; i++ {
+		var err error
+		ts, err = ts.Insert(fmt.Sprintf("vendor%02d", i), strings.Repeat("v", 256))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	members := make([]TraceMember, 0, 600)
+	for i := 0; i < 600; i++ {
+		sc := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: trace.TraceID{1, byte(i), byte(i >> 8)}, SpanID: trace.SpanID{2, byte(i)},
+			TraceFlags: trace.FlagsSampled, TraceState: ts,
+		})
+		members = append(members, TraceMember{Index: uint32(i), Context: trace.ContextWithSpanContext(context.Background(), sc)})
+	}
+	m, _ := envelopeMessage(t, nil, event("a", 1), event("b", 1))
+	m = m.WithTraceMembers(members)
+	nm := publishMessage(context.Background(), m.Subject, streams.InboundEvents, m)
+	got := nm.Header.Get(HeaderTraceMembers)
+	if got == "" {
+		t.Fatal("no member trace header")
+	}
+	if len(got) > maxTraceMemberHeaderBytes+traceMemberEntryBytes {
+		t.Fatalf("member trace header is %d bytes, budget %d", len(got), maxTraceMemberHeaderBytes)
+	}
+	if strings.Contains(got, "vendor") || strings.Contains(got, "vvvv") {
+		t.Fatal("a member's tracestate reached the header")
+	}
+	if nm.Header.Get("tracestate") != "" {
+		t.Fatal("tracestate was published")
+	}
+	if len(nm.Header) > 0 && wireSize(nm) != nm.Size() {
+		t.Fatal("header bytes are not counted in the message size")
 	}
 }

@@ -46,7 +46,15 @@ over HTTP, use `protocol: http` and `endpoint: http://otel-collector.observabili
 with `insecure: true`; use an `https://` endpoint and `insecure: false` for TLS.
 The collector is deployed separately; DeviceChain does not deploy one for you.
 
-Sampling is parent based: a sampled upstream trace stays sampled across services. If
+An HTTP endpoint without a path posts to `/v1/traces`; give a path (for a collector behind
+a prefix) and it is used as written. The standard `OTEL_EXPORTER_OTLP_*` environment variables
+are still read by the exporter, so if you set any on a pod they can override these values.
+
+Sampling is parent based between DeviceChain services: a trace sampled at the first service
+stays sampled through the rest of the pipeline. A device's or API caller's own `traceparent`
+is never trusted to choose sampling: the request starts a new local trace that links to the
+caller's trace. Events that fail resolution and are dead-lettered, and events re-published
+for retry, start a new trace rather than continuing the original. If
 `samplingRatio` is omitted, enabled tracing samples 10% of new root traces. Explicit `0`
 samples no new roots; `1` samples all roots. Start low on busy fleets and increase briefly
 while diagnosing a problem. Credentials, device tokens, GraphQL variables and document

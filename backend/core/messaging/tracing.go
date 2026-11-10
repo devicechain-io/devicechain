@@ -25,6 +25,14 @@ type TraceMember struct {
 	Context context.Context
 }
 
+// maxTraceMemberHeaderBytes caps the Dc-Tc header value; traceMemberEntryBytes is the
+// size of one member's entry (a 55-byte traceparent plus JSON framing), used as the
+// room a member needs.
+const (
+	maxTraceMemberHeaderBytes = 8 << 10
+	traceMemberEntryBytes     = 72
+)
+
 type memberTrace struct {
 	Parent string `json:"p"`
 	State  string `json:"s,omitempty"`
@@ -182,19 +190,30 @@ func injectPublish(ctx context.Context, suffix string, m Message, nm *nats.Msg) 
 		spans := make([]trace.Span, 0, len(m.traceMembers))
 		parents := make(map[string]memberTrace, len(m.traceMembers))
 		tenant, _ := ParseTenantFromSubject(nm.Subject)
+		budget := maxTraceMemberHeaderBytes
 		for _, member := range m.traceMembers {
+			// The header rides on every envelope publish, so its total is bounded: past
+			// the budget a member simply is not traced, never the whole publish failed.
+			if budget < traceMemberEntryBytes {
+				break
+			}
 			if member.Context == nil || !trace.SpanContextFromContext(member.Context).IsValid() {
 				continue
 			}
 			memberCtx, span := tracing.Start(member.Context, "messaging.publish "+suffix, "nats", tenant, trace.SpanKindProducer)
 			carrier := propagation.MapCarrier{}
 			propagation.TraceContext{}.Inject(memberCtx, carrier)
-			parents[strconv.FormatUint(uint64(member.Index), 10)] = memberTrace{Parent: carrier.Get("traceparent"), State: carrier.Get("tracestate")}
+			// tracestate is deliberately not carried per member: it is vendor-defined, up to
+			// ~16 KiB, and nothing here reads it back.
+			key := strconv.FormatUint(uint64(member.Index), 10)
+			parents[key] = memberTrace{Parent: carrier.Get("traceparent")}
+			budget -= len(key) + traceMemberEntryBytes
 			if nm.Header.Get("traceparent") == "" {
 				propagation.TraceContext{}.Inject(memberCtx, natsTraceCarrier(nm.Header))
 			}
 			spans = append(spans, span)
 		}
+		nm.Header.Del("tracestate")
 		if len(parents) > 0 {
 			data, _ := json.Marshal(parents)
 			nm.Header.Set(HeaderTraceMembers, string(data))
