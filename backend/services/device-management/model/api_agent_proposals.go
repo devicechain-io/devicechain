@@ -523,18 +523,24 @@ var (
 //
 //  1. the proposal must still be PROPOSED, inside its expiry, and its stored digest must equal the
 //     one the approver was shown;
-//  2. an approver who has already approved is answered with the proposal, unchanged;
+//  2. collect the distinct previous approvers and the current approver;
 //  3. user-management is asked, under the APPROVER'S own token and with no cache, whether the
 //     proposal may still go ahead (agentExecutionDecision): the original client, the proposer's
 //     standing and every counted approver's standing, under the current policy. A refusal ends
 //     the proposal as REFUSED with the reasons;
-//  4. the approver must be one of the valid approvers, with a second factor fresh by the policy's
-//     measure, and may be the proposer only when the policy allows self-confirmation of a
+//  4. an already-approved, still-valid approver with a fresh approval is answered unchanged;
+//     otherwise their stale entry is replaced after the normal checks. The approver must be a
+//     valid approver, with a second factor fresh by the policy's measure, and may be the proposer
+//     only when the policy allows self-confirmation of a
 //     single-approval, normal-impact proposal;
 //  5. the approvals that still stand are tallied. If this approval would complete the proposal,
 //     it is refused with actiongate.ErrExecutionNotAvailable and nothing is recorded: executing is
 //     not in this release. Otherwise it is recorded as a compare-and-set on the row's revision,
 //     with the current policy's required count.
+//
+// The revision compare-and-set fences concurrent LEDGER writes only; authorization changes in
+// user-management are fenced by completion-time re-validation of every approver (and, when
+// execution ships, by the decision asked immediately before execution).
 func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (*AgentProposal, error) {
 	for attempt := 0; ; attempt++ {
 		now := time.Now().UTC()
@@ -549,8 +555,9 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		if err != nil {
 			return nil, err
 		}
-		if slices.Contains(actiongate.Principals(approvals), approver.Principal) {
-			return p, nil
+		principals := actiongate.Principals(approvals)
+		if !slices.Contains(principals, approver.Principal) {
+			principals = append(principals, approver.Principal)
 		}
 		if api.AgentDecider == nil {
 			return nil, errAgentDecider
@@ -562,7 +569,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		dec, err := api.AgentDecider.Execution(ctx, actiongate.ExecutionRequest{
 			ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
 			ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid,
-			Approvers: append(actiongate.Principals(approvals), approver.Principal),
+			Approvers: principals,
 		})
 		// The decision is a remote call, so the window and step-up are judged when the approval
 		// is written, not when the request arrived.
@@ -586,14 +593,27 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		if !slices.Contains(dec.ValidApprovers, approver.Principal) {
 			return nil, errNotAnApprover
 		}
+		for _, a := range approvals {
+			if a.Sub == approver.Principal && auth.StepUpFreshAt(a.Amr, a.MfaTime, dec.StepUp, now) {
+				// Nothing to write; answer what is stored NOW, not the row read before the remote
+				// decision, which a concurrent decision may have moved on.
+				return api.AgentProposalByToken(ctx, p.Token, nil)
+			}
+		}
 		if err := actiongate.CheckStepUp(approver, dec.StepUp, now); err != nil {
 			return nil, err
 		}
 		if approver.Principal == p.ProposerSub && (!dec.AllowSelfConfirm || dec.RequiredApprovals > 1) {
 			return nil, errSelfApproval
 		}
-		next := append(approvals, actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
-		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm) >= dec.RequiredApprovals {
+		next := make([]actiongate.Approval, 0, len(approvals)+1)
+		for _, a := range approvals {
+			if a.Sub != approver.Principal {
+				next = append(next, a)
+			}
+		}
+		next = append(next, actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
+		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm, dec.StepUp, now) >= dec.RequiredApprovals {
 			return nil, actiongate.ErrExecutionNotAvailable
 		}
 		err = actiongate.RecordApproval(api.RDB.DB(ctx), &AgentProposal{}, p.Token, p.Revision, next, dec.RequiredApprovals, now)

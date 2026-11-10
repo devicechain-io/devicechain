@@ -276,7 +276,7 @@ func TestActRefreshRefusedPastSessionCap(t *testing.T) {
 func TestMfaTimeNotAdvancedByRefresh(t *testing.T) {
 	e := newAgentEnv(t, string(auth.AlarmWrite))
 	ctx := context.Background()
-	sid, err := e.m.startSession(agentPerson, auth.AmrPasswordOTP())
+	sid, err := e.m.startSession(agentPerson, string(e.epochOf(t, agentPerson)), auth.AmrPasswordOTP())
 	require.NoError(t, err)
 	// Age the verification: rewrite the record as though the factor was presented an hour ago.
 	past := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
@@ -320,7 +320,7 @@ func TestMfaTimeNotAdvancedByRefresh(t *testing.T) {
 // a step-up never accepts an agent-origin token anyway.
 func TestOAuthTokenCarriesNoMfaTime(t *testing.T) {
 	e := newAgentEnv(t, string(auth.AlarmWrite))
-	sid, err := e.m.startSession(agentPerson, auth.AmrPasswordOTP())
+	sid, err := e.m.startSession(agentPerson, string(e.epochOf(t, agentPerson)), auth.AmrPasswordOTP())
 	require.NoError(t, err)
 	toks := mustGrant(t, e, sid)
 	access := e.claimsOf(t, toks.AccessToken)

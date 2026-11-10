@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -346,6 +347,8 @@ func TestPolicyTightenedToTwoKeepsPending(t *testing.T) {
 	again, err := r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("boss", time.Now()), out.Proposal.Token, out.Digest)
 	require.NoError(t, err)
 	require.Equal(t, p.Revision, again.Revision)
+	require.Len(t, r.decider.execReqs, 2, "idempotency still asks the current decision")
+	require.Equal(t, []string{"boss"}, r.decider.execReqs[1].Approvers)
 
 	// The second approver completes it: refused, not recorded.
 	_, err = r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("carol", time.Now()), out.Proposal.Token, out.Digest)
@@ -367,6 +370,10 @@ func TestRevokedFirstApproverNoLongerCounts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(actiongate.StateProposed), p.State)
 	require.Equal(t, []string{"boss", "carol"}, r.decider.execReqs[1].Approvers, "every approver so far is re-checked")
+	r.decider.exec = execApprove(2, "carol", "dave")
+	_, err = r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("dave", time.Now()), out.Proposal.Token, out.Digest)
+	require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable)
+	require.Equal(t, []string{"boss", "carol", "dave"}, r.decider.execReqs[2].Approvers)
 }
 
 // The approver must be one of the valid approvers, fresh by the policy's step-up, and may be the
@@ -474,4 +481,49 @@ func TestAlarmProposalRequestIsBounded(t *testing.T) {
 		AlarmTokens: []string{"a1"}, RequestId: "r", Rationale: &long})
 	require.Error(t, err)
 	require.Zero(t, r.decider.actCalls, "nothing is asked for a malformed request")
+}
+
+// A prior factor must still be fresh at completion; re-approving replaces a stale entry.
+func TestApprovalFreshnessAtCompletion(t *testing.T) {
+	for _, mode := range []string{"stale", "fresh", "refresh"} {
+		t.Run(mode, func(t *testing.T) {
+			r := newProposalRig(t)
+			out := r.propose(t, rigAgent, clearReq("r1", "a1"))
+			r.decider.exec = execApprove(2, "boss", "carol")
+			p, err := r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("boss", time.Now()), out.Proposal.Token, out.Digest)
+			require.NoError(t, err)
+			if mode != "fresh" {
+				approvals, err := actiongate.ParseApprovals(p.Approvals)
+				require.NoError(t, err)
+				old := time.Now().Add(-20 * time.Minute)
+				approvals[0].MfaTime = &old
+				raw, err := json.Marshal(approvals)
+				require.NoError(t, err)
+				require.NoError(t, r.db.WithContext(tenantCtx(rigTenant)).Model(&AgentProposal{}).Where("token = ?", p.Token).Update("approvals", raw).Error)
+			}
+			if mode == "refresh" {
+				fresh := time.Now().UTC()
+				again, err := r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("boss", fresh), out.Proposal.Token, out.Digest)
+				require.NoError(t, err)
+				require.Equal(t, p.Revision+1, again.Revision)
+				approvals, err := actiongate.ParseApprovals(again.Approvals)
+				require.NoError(t, err)
+				require.Len(t, approvals, 1)
+				require.Equal(t, "boss", approvals[0].Sub)
+				require.True(t, fresh.Equal(*approvals[0].MfaTime))
+				require.Equal(t, []string{"boss"}, r.decider.execReqs[len(r.decider.execReqs)-1].Approvers)
+			}
+			got, err := r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("carol", time.Now()), out.Proposal.Token, out.Digest)
+			if mode == "stale" {
+				require.NoError(t, err)
+				require.Equal(t, string(actiongate.StateProposed), got.State)
+				require.Equal(t, p.Revision+1, got.Revision)
+				approvals, err := actiongate.ParseApprovals(got.Approvals)
+				require.NoError(t, err)
+				require.Equal(t, []string{"boss", "carol"}, actiongate.Principals(approvals))
+			} else {
+				require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable)
+			}
+		})
+	}
 }

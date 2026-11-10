@@ -532,7 +532,7 @@ func (m *Manager) completeSignIn(ctx context.Context, id *iam.Identity, amr []st
 	// only ErrInvalidCredentials, the same as every other sign-in failure: this branch
 	// is reached only after the password matched, so a distinct error would tell
 	// whoever sent it that the password was right.
-	sid, err := m.startSession(id.Email, amr)
+	sid, err := m.startSession(id.Email, id.SessionEpoch, amr)
 	if err != nil {
 		return nil, err
 	}

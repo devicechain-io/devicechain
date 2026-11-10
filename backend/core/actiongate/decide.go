@@ -110,7 +110,10 @@ var sharedTransport = httptransport.New()
 
 // NewCallerDecider builds a CallerDecider for user-management at url.
 func NewCallerDecider(url string) *CallerDecider {
-	return &CallerDecider{URL: url, HTTP: &http.Client{Timeout: 10 * time.Second, Transport: sharedTransport}}
+	return &CallerDecider{URL: url, HTTP: &http.Client{Timeout: 10 * time.Second, Transport: sharedTransport,
+		// 🔴 The caller's bearer must never follow a redirect anywhere.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
 }
 
 // maxDecisionResponse bounds a decision response.

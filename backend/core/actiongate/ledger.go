@@ -11,6 +11,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
+
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -102,8 +104,9 @@ func Principals(approvals []Approval) []string {
 // as valid approvers (valid), never the proposer when two approvals are required or self-confirm is
 // not allowed. A principal approving twice counts once, and an approval made by someone who has
 // since lost the role, the authority or the membership does not count at all: EVERY counted
-// approval is re-validated, not only the latest.
-func Tally(approvals []Approval, valid []string, proposer string, required int, selfConfirm bool) int {
+// approval is re-validated, not only the latest. An approval whose second factor is older than
+// the CURRENT policy's step-up at the moment of the tally does not count.
+func Tally(approvals []Approval, valid []string, proposer string, required int, selfConfirm bool, su auth.StepUp, now time.Time) int {
 	n := 0
 	for _, p := range Principals(approvals) {
 		if !slices.Contains(valid, p) {
@@ -112,7 +115,12 @@ func Tally(approvals []Approval, valid []string, proposer string, required int, 
 		if p == proposer && (required > 1 || !selfConfirm) {
 			continue
 		}
-		n++
+		for _, a := range approvals {
+			if a.Sub == p && auth.StepUpFreshAt(a.Amr, a.MfaTime, su, now) {
+				n++
+				break
+			}
+		}
 	}
 	return n
 }
@@ -158,8 +166,9 @@ func Transition(tx *gorm.DB, model any, token string, from, to State, now time.T
 	return nil
 }
 
-// RecordApproval stores approvals (the previous list with one approval appended) on the proposal
-// token as a compare-and-set on its revision, with requiredApprovals as the current policy states
+// RecordApproval stores approvals, with a new entry appended or the principal's stale entry
+// replaced, on the proposal token as a compare-and-set on its revision, with requiredApprovals
+// as the current policy states
 // it: it applies only if the row is still PROPOSED, inside its expiry and at revision.
 // ErrNotPending means another approval (or a transition) landed first; the caller re-reads and
 // decides again.

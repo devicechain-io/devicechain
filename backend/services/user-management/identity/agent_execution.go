@@ -37,6 +37,9 @@ import (
 
 // Reasons of the proposal-bound decision, beside agentpolicy's.
 const (
+	// ReasonProposerStanding is the coarse form of the PROPOSER_* reasons below, answered to a
+	// caller who is neither the proposer nor an agent administrator.
+	ReasonProposerStanding      = "PROPOSER_NOT_IN_STANDING"
 	ReasonProposerSessionEnded  = "PROPOSER_SESSION_ENDED"
 	ReasonProposerNotMember     = "PROPOSER_NOT_A_MEMBER"
 	ReasonProposerScoped        = "PROPOSER_SCOPED"
@@ -162,6 +165,11 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 	if reason, err := m.proposerStanding(ctx, tenant, req); err != nil {
 		return ExecutionDecision{}, err
 	} else if reason != "" {
+		// Why another principal lost standing is theirs (and an agent administrator's) to read;
+		// an approver who only needs the yes/no is told the coarse reason.
+		if claims.Username != req.ProposerPrincipal && !claims.HasAuthority(auth.AgentAdmin) {
+			reason = ReasonProposerStanding
+		}
 		out.Decision = agentpolicy.Decision{Verdict: agentpolicy.VerdictRefuse, Reasons: []string{reason}, PolicyVersion: version}
 		return out, nil
 	}
@@ -229,7 +237,8 @@ func (m *Manager) proposerStanding(ctx context.Context, tenant string, req Execu
 		// tied to a sign-in that is still open.
 		return ReasonProposerSessionEnded, nil
 	}
-	if err := m.sessionLive(sid, req.ProposerPrincipal); err != nil {
+	rec, err := m.loadSession(sid, req.ProposerPrincipal)
+	if err != nil {
 		if errors.Is(err, errSessionEnded) {
 			return ReasonProposerSessionEnded, nil
 		}
@@ -242,6 +251,14 @@ func (m *Manager) proposerStanding(ctx context.Context, tenant string, req Execu
 	case err != nil:
 		return "", err
 	case !id.Enabled:
+		return ReasonProposerSessionEnded, nil
+	}
+	// 🔴 THE RECORD EXISTING IS NOT ENOUGH. A rotation of the identity's epoch (a password or MFA
+	// reset, an enrolment, a disable) ends every credential minted before it, but deleting the
+	// sign-in's record is best-effort, so the sign-in is live only while it was started under the
+	// epoch the identity holds NOW. A record from a build before the field existed has none and
+	// is refused: fail closed, and the person signs in again and the agent proposes again.
+	if rec.Epoch == "" || id.SessionEpoch == "" || rec.Epoch != id.SessionEpoch {
 		return ReasonProposerSessionEnded, nil
 	}
 	if isSuperuser(id) {

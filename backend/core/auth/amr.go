@@ -97,7 +97,7 @@ const stepUpClockSkew = 30 * time.Second
 // It also requires an ACCESS token: an identity, refresh or service token never authorizes a
 // tenant mutation, and the amr rule already keeps a machine credential from carrying a factor.
 func StepUpFresh(c *Claims, su StepUp, now time.Time) bool {
-	if c == nil || c.TokenType != TokenTypeAccess || c.MfaTime == nil || su.MaxAge <= 0 {
+	if c == nil || c.TokenType != TokenTypeAccess {
 		return false
 	}
 	// A step-up is a PERSON proving presence at their own session. An agent-origin token (an
@@ -105,13 +105,25 @@ func StepUpFresh(c *Claims, su StepUp, now time.Time) bool {
 	if IsAgentOrigin(c) {
 		return false
 	}
+	var at *time.Time
+	if c.MfaTime != nil {
+		at = &c.MfaTime.Time
+	}
+	return StepUpFreshAt(c.Amr, at, su, now)
+}
+
+// StepUpFreshAt checks a recorded second factor under the current policy and clock.
+func StepUpFreshAt(amr []string, mfaTime *time.Time, su StepUp, now time.Time) bool {
+	if mfaTime == nil || su.MaxAge <= 0 {
+		return false
+	}
 	switch {
-	case slices.Contains(c.Amr, AmrOTP):
-	case su.AcceptRecoveryCodes && slices.Contains(c.Amr, AmrMFA):
+	case slices.Contains(amr, AmrOTP):
+	case su.AcceptRecoveryCodes && slices.Contains(amr, AmrMFA):
 	default:
 		return false
 	}
-	at := c.MfaTime.Time
+	at := *mfaTime
 	if at.After(now.Add(stepUpClockSkew)) {
 		return false
 	}

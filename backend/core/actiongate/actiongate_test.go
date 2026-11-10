@@ -280,12 +280,12 @@ func TestRecordApprovalIsCompareAndSet(t *testing.T) {
 // Every counted approval is re-validated; the proposer never counts toward two approvals.
 func TestTallyRevalidatesEveryApprover(t *testing.T) {
 	now := time.Now()
-	approvals := []Approval{{Sub: "a", At: now}, {Sub: "b", At: now}, {Sub: "a", At: now}, {Sub: "ana", At: now}}
-	require.Equal(t, 2, Tally(approvals, []string{"a", "b"}, "ana", 2, true))
-	require.Equal(t, 1, Tally(approvals, []string{"b"}, "ana", 2, true), "a revoked first approver no longer counts")
-	require.Equal(t, 2, Tally(approvals, []string{"b", "ana", "a"}, "ana", 2, true), "the proposer never counts toward two")
-	require.Equal(t, 1, Tally([]Approval{{Sub: "ana"}}, []string{"ana"}, "ana", 1, true), "self-confirm of a single approval")
-	require.Equal(t, 0, Tally([]Approval{{Sub: "ana"}}, []string{"ana"}, "ana", 1, false), "self-confirm forbidden by policy")
+	approvals := []Approval{{Sub: "a", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sub: "b", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sub: "a", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}, {Sub: "ana", At: now, Amr: auth.AmrPasswordOTP(), MfaTime: &now}}
+	require.Equal(t, 2, Tally(approvals, []string{"a", "b"}, "ana", 2, true, auth.StepUp{MaxAge: time.Minute}, now))
+	require.Equal(t, 1, Tally(approvals, []string{"b"}, "ana", 2, true, auth.StepUp{MaxAge: time.Minute}, now), "a revoked first approver no longer counts")
+	require.Equal(t, 2, Tally(approvals, []string{"b", "ana", "a"}, "ana", 2, true, auth.StepUp{MaxAge: time.Minute}, now), "the proposer never counts toward two")
+	require.Equal(t, 1, Tally([]Approval{{Sub: "ana", Amr: auth.AmrPasswordOTP(), MfaTime: &now}}, []string{"ana"}, "ana", 1, true, auth.StepUp{MaxAge: time.Minute}, now), "self-confirm of a single approval")
+	require.Equal(t, 0, Tally([]Approval{{Sub: "ana", Amr: auth.AmrPasswordOTP(), MfaTime: &now}}, []string{"ana"}, "ana", 1, false, auth.StepUp{MaxAge: time.Minute}, now), "self-confirm forbidden by policy")
 }
 
 // The policy can narrow the platform rate and never widen it; each limit is checked.
@@ -359,4 +359,40 @@ func TestCallerDeciderErrorsAreNeverVerdicts(t *testing.T) {
 	require.Equal(t, DefaultExpiry, BoundExpiry(0))
 	require.Equal(t, MaxExpiry, BoundExpiry(48*time.Hour))
 	require.Equal(t, time.Minute, BoundExpiry(time.Minute))
+}
+
+// An older approval is judged by the current policy, including recovery-code admission.
+func TestTallyChecksCurrentFreshness(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-20 * time.Minute)
+	su := auth.StepUp{MaxAge: 15 * time.Minute}
+	approvals := []Approval{
+		{Sub: "a", Amr: auth.AmrPasswordOTP(), MfaTime: &old},
+		{Sub: "b", Amr: auth.AmrPasswordRecovery(), MfaTime: &now},
+	}
+	require.Zero(t, Tally(approvals, []string{"a", "b"}, "proposer", 2, false, su, now))
+	approvals = append(approvals, Approval{Sub: "a", Amr: auth.AmrPasswordOTP(), MfaTime: &now})
+	approvals = append(approvals, approvals[2])
+	require.Equal(t, 1, Tally(approvals, []string{"a", "b"}, "proposer", 2, false, su, now))
+	su.AcceptRecoveryCodes = true
+	require.Equal(t, 2, Tally(approvals, []string{"a", "b"}, "proposer", 2, false, su, now))
+}
+
+// A decision endpoint redirect must never receive the caller's bearer at its destination.
+func TestCallerDeciderRefusesRedirect(t *testing.T) {
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+	d := NewCallerDecider(source.URL)
+	d.HTTP.Transport = http.DefaultTransport
+	ctx := auth.WithBearer(context.Background(), "caller-secret")
+	_, err := d.Actuation(ctx, ActuationRequest{Kind: KindAlarmClear, TargetCount: 1})
+	require.ErrorContains(t, err, "HTTP 307")
+	_, err = d.Execution(ctx, ExecutionRequest{Kind: KindAlarmClear})
+	require.ErrorContains(t, err, "HTTP 307")
+	require.Zero(t, hits.Load())
 }
