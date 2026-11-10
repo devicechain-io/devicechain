@@ -129,3 +129,15 @@ func TestDeviceSelectorAcceptsAndPreservesDefinitions(t *testing.T) {
 		})
 	}
 }
+
+// TestDeviceSelectorCaseVariantWidgetsKeyDoesNotHideIt pins that only the exact "widgets"
+// key is read, as the runtime does: a trailing "Widgets" must not replace the list checked.
+func TestDeviceSelectorCaseVariantWidgetsKeyDoesNotHideIt(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{
+		Token:      "case",
+		Definition: `{"widgets":[{"datasource":{"kind":"device","deviceToken":5,"measurements":[]}}],"Widgets":[]}`,
+	})
+	assert.ErrorIs(t, err, ErrInvalidDefinition)
+}

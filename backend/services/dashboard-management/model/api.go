@@ -105,14 +105,15 @@ func definitionJSON(raw string) (datatypes.JSON, error) {
 	if trimmed := bytes.TrimSpace(b); len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, ErrInvalidDefinition
 	}
-	var definition struct {
-		Widgets []json.RawMessage `json:"widgets"`
-	}
-	// A non-array widgets field is outside this narrow selector check.
+	// Exact-key lookup: a struct decode would also match "Widgets", which the runtime does not.
+	var definition map[string]json.RawMessage
 	if err := json.Unmarshal(b, &definition); err != nil {
 		return datatypes.JSON(b), nil
 	}
-	for _, rawWidget := range definition.Widgets {
+	// A non-array widgets field is outside this narrow selector check.
+	var widgets []json.RawMessage
+	_ = json.Unmarshal(definition["widgets"], &widgets)
+	for _, rawWidget := range widgets {
 		var widget map[string]json.RawMessage
 		if err := json.Unmarshal(rawWidget, &widget); err != nil || widget == nil {
 			continue
