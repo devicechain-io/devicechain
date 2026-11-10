@@ -20,10 +20,11 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref to save CI minutes.
+# Keep each pushed commit in its own group so later main pushes cannot replace it.
+# This fits the existing concurrency block; superseded PR runs still cancel.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ---------------------------------------------------------------------------
