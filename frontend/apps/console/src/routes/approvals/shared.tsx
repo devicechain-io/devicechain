@@ -24,12 +24,14 @@ export function StepUpPrompt({ path }: { path: string }) {
 }
 
 export function ApprovalsGate({ children }: { children: ReactNode }) {
-  const { claims } = useAuth();
+  const { claims, identityToken } = useAuth();
   const { t } = useTranslation('approvals');
   if (!hasAuthority(claims, 'agent:admin') || isScoped(claims)) {
     return <PageShell title={t('title')}><EmptyState description={t('notAuthorized')} /></PageShell>;
   }
-  return <InstanceGate>{children}</InstanceGate>;
+  // Drop policy, proposals and local decision state when another tab changes the session.
+  const sessionKey = JSON.stringify([claims?.tenant, claims?.username, identityToken]);
+  return <InstanceGate key={sessionKey}>{children}</InstanceGate>;
 }
 function InstanceGate({ children }: { children: ReactNode }) {
   const { t } = useTranslation('approvals');
