@@ -165,10 +165,7 @@ func frameTextOf(item map[string]any, s *GenericSettings) (text, encoding string
 }
 
 func decodeGenericJSON(d *Descriptor, r *Request) (*Result, error) {
-	if IsGenericAckPath(r.MessageType) {
-		if !r.DownlinkReports {
-			return &Result{Ignored: true}, nil
-		}
+	if r.DownlinkReports && IsGenericAckPath(r.MessageType) {
 		return decodeGenericAck(d, r)
 	}
 	s := d.Settings()
@@ -276,8 +273,8 @@ func decodeGenericJSON(d *Descriptor, r *Request) (*Result, error) {
 }
 
 func decodeGenericBinary(d *Descriptor, r *Request) (*Result, error) {
-	if IsGenericAckPath(r.MessageType) {
-		return &Result{Ignored: true}, nil
+	if r.DownlinkReports && IsGenericAckPath(r.MessageType) {
+		return nil, malformed("generic acknowledgements require a JSON integration")
 	}
 	s := d.Settings()
 	if s == nil {

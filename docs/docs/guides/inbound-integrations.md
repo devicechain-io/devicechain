@@ -435,7 +435,9 @@ The call uses the egress guard; private destinations need an operator allowance.
 {"correlationId":"dc:0123456789abcdef0123456789abcdef","status":"acknowledged"}
 ```
 
-`correlationId` is required, starts with `dc:`, contains lower-case hex after the prefix, and is at most 100 characters. `status` is required and case-sensitive. Generic binary ack paths are ignored. The body is a single JSON object under the normal request and item size limits; uplink array settings do not apply.
+`correlationId` is required, starts with `dc:`, contains lower-case hex after the prefix, and is at most 100 characters. `status` is required and case-sensitive. With the downlink feed enabled, generic binary ack paths are refused with 400. The body is a single JSON object under the normal request and item size limits; uplink array settings do not apply.
+
+With LoRaWAN downlink enabled on the installation, generic JSON integration paths named `ack` or beginning with `downlink` are reserved for acknowledgements (a non-acknowledgement body is refused with 400); with it off, they behave as any other path.
 
 | Ack `status` | Command outcome |
 | --- | --- |

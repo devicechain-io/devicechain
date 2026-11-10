@@ -114,3 +114,10 @@ func TestWebhookFormBodyEscapesValues(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "devEui=AABBCCDDEEFF0011&data=%2B%2F8%3D&ref=dc%3A0123456789abcdef0123456789abcdef", r.Body)
 }
+
+func TestWebhookJSONTemplateSamples(t *testing.T) {
+	for _, body := range []string{`[{{fPort}}{{devEui}}]`, `"\u{{payloadHex}}"`} {
+		require.ErrorContains(t, ValidateConfig(LoRaWANDownlinkType, webhookConfig(map[string]any{"bodyTemplate": body})), "valid JSON")
+	}
+	require.NoError(t, ValidateConfig(LoRaWANDownlinkType, webhookConfig(map[string]any{"bodyTemplate": `{"port":{{fPort}},"confirmed":{{confirmed}},"hex":"{{payloadHex}}"}`})))
+}

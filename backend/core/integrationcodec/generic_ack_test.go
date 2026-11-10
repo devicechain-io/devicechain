@@ -73,10 +73,46 @@ func TestGenericAckDecode(t *testing.T) {
 	r.DownlinkReports = false
 	r.Body = []byte("invalid")
 	got, err := Decode(d, r)
-	require.NoError(t, err)
-	require.True(t, got.Ignored)
+	require.ErrorIs(t, err, ErrMalformed)
+	require.Nil(t, got)
 	r.DownlinkReports = true
 	got, err = Decode(generic(GenericBinary, `{"idFrom":"header:X-Device"}`), r)
-	require.NoError(t, err)
-	require.True(t, got.Ignored)
+	require.ErrorIs(t, err, ErrMalformed)
+	require.Nil(t, got)
+}
+
+func TestGenericAckPathFeedCompatibility(t *testing.T) {
+	for _, kind := range []Type{GenericJSON, GenericBinary} {
+		t.Run(string(kind), func(t *testing.T) {
+			d := generic(kind, `{"idFrom":"header:X-Device"}`)
+			r := req([]byte(`{"temperature":21.5}`), "")
+			r.Header.Set("X-Device", "Pump-1")
+			r.DownlinkReports = false
+			if kind == GenericBinary {
+				r.Body = []byte{0x01, 0xff}
+				r.ContentType = "application/octet-stream"
+			}
+			want, err := Decode(d, r)
+			require.NoError(t, err)
+			require.Len(t, want.Uplinks, 1)
+			if kind == GenericBinary {
+				require.Equal(t, r.Body, want.Uplinks[0].Frame)
+			} else {
+				require.Equal(t, map[string]any{"temperature": json.Number("21.5")}, want.Uplinks[0].Decoded)
+			}
+			for _, path := range []string{"ack", "downlink-status"} {
+				r.MessageType = path
+				got, err := Decode(d, r)
+				require.NoError(t, err)
+				require.Equal(t, want, got, path)
+			}
+			r.DownlinkReports = true
+			for _, path := range []string{"ack", "downlink-x"} {
+				r.MessageType = path
+				got, err := Decode(d, r)
+				require.ErrorIs(t, err, ErrMalformed)
+				require.Nil(t, got)
+			}
+		})
+	}
 }

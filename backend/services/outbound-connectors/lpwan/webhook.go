@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,9 @@ func (c *Webhook) Enqueue(ctx context.Context, t connectorspec.LoRaWANDownlinkTa
 	rendered, err := t.Webhook.Render(connectorspec.DownlinkValues{DevEUI: deviceID, FPort: p.FPort, Payload: p.Data, Confirmed: p.Confirmed, CorrelationID: key})
 	if err != nil {
 		return "", &SendError{Reach: cmddownlink.ReachUnsent, Text: "could not render the downlink request"}
+	}
+	if t.Webhook.ContentType == "application/json" && rendered.Body != "" && !json.Valid([]byte(rendered.Body)) {
+		return "", &SendError{Reach: cmddownlink.ReachUnsent, Text: "the downlink request did not render valid JSON"}
 	}
 	u, err := connectorspec.JoinWebhookURL(t.BaseURL, rendered.URL)
 	if err != nil || u.Scheme != t.BaseURL.Scheme || u.Host != t.BaseURL.Host {

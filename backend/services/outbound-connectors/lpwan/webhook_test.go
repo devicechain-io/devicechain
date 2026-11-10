@@ -232,3 +232,21 @@ func TestWebhookDefaultsAndRenderedAuthorityDefense(t *testing.T) {
 	_, err = NewWebhookWithTransport(http.DefaultTransport).Enqueue(ctx5(t), tg, "0011223344556677", Params{}, time.Time{})
 	require.Equal(t, cmddownlink.ReachUnsent, sendErr(t, err).Reach)
 }
+
+func TestWebhookInvalidRenderedJSONIsUnsent(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+	// Save a text template, then force JSON to exercise the send-time defense.
+	cfg, err := json.Marshal(map[string]any{"networkServer": "webhook", "baseUrl": srv.URL, "integration": "cs1", "urlTemplate": "/{{devEui}}", "contentType": "text/plain", "bodyTemplate": "private-invalid-body {{payloadHex}}"})
+	require.NoError(t, err)
+	target, err := connectorspec.Build(connectorspec.LoRaWANDownlinkType, cfg, testKey)
+	require.NoError(t, err)
+	tg := target.(connectorspec.LoRaWANDownlinkTarget)
+	tg.Webhook.ContentType = "application/json"
+	id, err := NewWebhookWithTransport(http.DefaultTransport).Enqueue(ctx5(t), tg, "0011223344556677", Params{Data: []byte{0xff}}, time.Time{})
+	require.Empty(t, id)
+	require.Equal(t, cmddownlink.ReachUnsent, sendErr(t, err).Reach)
+	require.NotContains(t, err.Error(), "private-invalid-body")
+	require.Zero(t, hits.Load())
+}

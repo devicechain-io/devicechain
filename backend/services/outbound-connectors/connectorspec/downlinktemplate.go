@@ -4,6 +4,7 @@
 package connectorspec
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -254,12 +255,19 @@ func parseWebhook(c lorawanConfig, base *url.URL) (*WebhookSpec, error) {
 			return nil, err
 		}
 	}
-	r, err := s.Render(DownlinkValues{DevEUI: "0011223344556677", FPort: 1, Payload: []byte{251, 255}, Confirmed: true, CorrelationID: "dc:00112233445566778899aabbccddeeff"})
-	if err != nil {
-		return nil, err
-	}
-	if s.ContentType == "application/json" && r.Body != "" && !json.Valid([]byte(r.Body)) {
-		return nil, fmt.Errorf("bodyTemplate does not render valid JSON")
+	// Vary lengths and scalar values: one valid render can hide unsafe token placement.
+	for _, payload := range [][]byte{nil, {0xff}, {0xfb, 0xff}, bytes.Repeat([]byte{0xff}, 242)} {
+		for _, port := range []int{1, 223} {
+			for _, confirmed := range []bool{false, true} {
+				r, err := s.Render(DownlinkValues{DevEUI: "001122AABBCCDDEE", FPort: port, Payload: payload, Confirmed: confirmed, CorrelationID: "dc:00112233445566778899aabbccddeeff"})
+				if err != nil {
+					return nil, err
+				}
+				if s.ContentType == "application/json" && r.Body != "" && !json.Valid([]byte(r.Body)) {
+					return nil, fmt.Errorf("bodyTemplate does not render valid JSON")
+				}
+			}
+		}
 	}
 	return s, nil
 }

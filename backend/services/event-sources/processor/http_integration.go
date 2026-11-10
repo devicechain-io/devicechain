@@ -443,7 +443,7 @@ func (es *HttpEventSource) handleIntegration(w http.ResponseWriter, r *http.Requ
 		switch {
 		case result.Untracked:
 			m.downlinkReport(DownlinkReportUntracked)
-		case rt.PublishDownlink == nil && isDownlinkEvent(desc.Type, r, messageType):
+		case rt.PublishDownlink == nil && desc.Type != integrationcodec.GenericJSON && desc.Type != integrationcodec.GenericBinary && isDownlinkEvent(desc.Type, r, messageType):
 			m.downlinkReport(DownlinkReportNotRouted)
 		}
 		m.request(typ, ResultIgnoredType)

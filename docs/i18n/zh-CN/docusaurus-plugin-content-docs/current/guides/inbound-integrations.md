@@ -434,7 +434,9 @@ webhook 不接受 `applicationId`。原生服务器类型不接受 webhook 专�
 {"correlationId":"dc:0123456789abcdef0123456789abcdef","status":"acknowledged"}
 ```
 
-`correlationId` 必填，以 `dc:` 开头，前缀后必须是小写十六进制，最多 100 个字符。`status` 必填且区分大小写。正文必须是单个 JSON 对象，遵循通常的请求及条目大小限制；不使用上行数组设置。通用二进制集成忽略 ack 路径；未接入报告流时，通用 JSON 的 ack 路径也会被忽略。
+`correlationId` 必填，以 `dc:` 开头，前缀后必须是小写十六进制，最多 100 个字符。`status` 必填且区分大小写。正文必须是单个 JSON 对象，遵循通常的请求及条目大小限制；不使用上行数组设置。启用下行报告流时，通用二进制集成的 ack 路径会被拒绝并返回 400。
+
+安装中启用 LoRaWAN 下行后，名为 `ack` 或以 `downlink` 开头的通用 JSON 集成路径将保留用于确认（非确认请求体将被拒绝并返回 400）；关闭时，这些路径与其他路径的行为相同。
 
 | Ack `status` | 命令结果 |
 | --- | --- |

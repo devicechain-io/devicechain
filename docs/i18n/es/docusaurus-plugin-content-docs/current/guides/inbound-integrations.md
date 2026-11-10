@@ -434,7 +434,9 @@ La llamada usa la política de salida; los destinos privados necesitan una autor
 {"correlationId":"dc:0123456789abcdef0123456789abcdef","status":"acknowledged"}
 ```
 
-`correlationId` es obligatorio, empieza por `dc:`, contiene hexadecimal en minúsculas tras el prefijo y tiene como máximo 100 caracteres. `status` es obligatorio y distingue mayúsculas. Las rutas ack de integraciones binarias genéricas se ignoran. El cuerpo es un único objeto JSON sujeto a los límites normales de solicitud y elemento; no se aplica la configuración de arreglos de uplinks.
+`correlationId` es obligatorio, empieza por `dc:`, contiene hexadecimal en minúsculas tras el prefijo y tiene como máximo 100 caracteres. `status` es obligatorio y distingue mayúsculas. Con el feed de downlink habilitado, las rutas ack de integraciones binarias genéricas se rechazan con 400. El cuerpo es un único objeto JSON sujeto a los límites normales de solicitud y elemento; no se aplica la configuración de arreglos de uplinks.
+
+Con el downlink LoRaWAN habilitado en la instalación, las rutas de integración JSON genérica llamadas `ack` o que empiezan por `downlink` están reservadas para acuses de recibo (un cuerpo que no sea un acuse se rechaza con 400); si está deshabilitado, se comportan como cualquier otra ruta.
 
 | Ack `status` | Resultado del comando |
 | --- | --- |

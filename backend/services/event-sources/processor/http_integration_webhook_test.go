@@ -38,3 +38,45 @@ func TestGenericAckRoutePublishesProvenDeviceAndBypassesTelemetryShedding(t *tes
 	}
 	require.False(t, isDownlinkEvent(integrationcodec.GenericBinary, r, "ack"))
 }
+
+func TestGenericAckPathsWithFeedOffPublishUplinks(t *testing.T) {
+	for _, kind := range []integrationcodec.Type{integrationcodec.GenericJSON, integrationcodec.GenericBinary} {
+		t.Run(string(kind), func(t *testing.T) {
+			h := newRouteHarness(t)
+			h.backend.desc = func() integrationcodec.Descriptor {
+				s := `{"idFrom":"header:X-Device"}`
+				return integrationcodec.Descriptor{Type: kind, Identity: "DEV_EUI", Generic: &s}
+			}
+			h.route.Metrics.DownlinkReport = func(result string) { h.bump("report/" + result) }
+			body := `{"temperature":21.5}`
+			if kind == integrationcodec.GenericBinary {
+				body = "\x01\xff"
+				h.withDecoder(framePlan(), nil)
+			}
+			rec := h.post(csPath+"/ack", goodBearer, body, func(r *http.Request) {
+				r.Header.Set("X-Device", "0011223344556677")
+				if kind == integrationcodec.GenericBinary {
+					r.Header.Set("Content-Type", "application/octet-stream")
+				}
+			})
+			require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+			require.Len(t, h.published, 1)
+			require.Equal(t, "dev-0011223344556677", h.published1().event.Device)
+			require.Equal(t, 1, h.count("uplink/published"))
+			require.Zero(t, h.count("report/not_routed"))
+		})
+	}
+}
+
+func TestGenericFeedOnRefusesUplinkOnAckPath(t *testing.T) {
+	h := newRouteHarness(t)
+	sink := withReportSink(h)
+	h.backend.desc = func() integrationcodec.Descriptor {
+		s := `{"idFrom":"pointer:/device"}`
+		return integrationcodec.Descriptor{Type: integrationcodec.GenericJSON, Identity: "DEV_EUI", Generic: &s}
+	}
+	rec := h.post(csPath+"/downlink-x", goodBearer, `{"device":"0011223344556677","temperature":21.5}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Empty(t, sink.reports)
+	h.nothingPublished()
+}
