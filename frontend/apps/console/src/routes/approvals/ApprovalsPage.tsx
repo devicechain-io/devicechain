@@ -23,11 +23,11 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from '@/components/ui/data-table';
-import { ApprovalsGate, StepUpPrompt } from './shared';
+import { ApprovalsGate, ProposalResult, StepUpPrompt } from './shared';
 
 const STATES: AgentProposalState[] = ['PROPOSED', 'EXECUTED', 'REJECTED', 'EXPIRED', 'REFUSED', 'CANCELLED', 'KILLED'];
 const pageSize = 25;
-const COLUMNS = ['proposer', 'kind', 'targets', 'expires', 'approvals', 'rationale'];
+const COLUMNS = ['proposer', 'kind', 'targets', 'expires', 'approvals', 'state', 'result', 'rationale'];
 const relativeExpiry = (value: string, language: string) =>
   new Intl.RelativeTimeFormat(language, { numeric: 'auto' }).format(Math.round((Date.parse(value) - Date.now()) / 60000), 'minute');
 
@@ -97,7 +97,11 @@ function Inbox() {
             <DataTableCell>{t(p.kind)}</DataTableCell>
             <DataTableCell>{p.targetCount} <Badge variant="outline">{p.impact}</Badge></DataTableCell>
             <DataTableCell><div>{relativeExpiry(p.expiresAt, i18n.language)}</div>{formatTime(p.expiresAt)}</DataTableCell>
-            <DataTableCell>{t('approvalCount', { done: p.approvals.length, required: p.requiredApprovals })}</DataTableCell>
+            <DataTableCell>{t('approvalCount', { done: p.approvals.length, required: p.requiredApprovals })}
+              <ul>{p.approvals.map(a => <li key={a.principal}>{t('recordedApproval', { principal: a.principal, when: formatTime(a.approvedAt) })}</li>)}</ul>
+            </DataTableCell>
+            <DataTableCell>{t(p.state)}{p.decidedBy && <div>{t('decisionBy', { principal: p.decidedBy })}</div>}</DataTableCell>
+            <DataTableCell><ProposalResult proposal={p} /></DataTableCell>
             <DataTableCell><p className="max-w-xs truncate">{p.rationale}</p></DataTableCell>
           </DataTableRow>)}</DataTableBody></DataTable>
           <Pagination pageNumber={pageNumber} pageSize={pageSize} pagination={data.pagination} onPageChange={setPageNumber} />

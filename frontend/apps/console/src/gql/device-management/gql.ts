@@ -17,7 +17,7 @@ import * as types from './graphql';
 type Documents = {
     "\n  query AgentProposals($criteria: AgentProposalSearchCriteria!) {\n    agentProposals(criteria: $criteria) {\n      results { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note }\n      pagination { pageStart pageEnd totalRecords }\n    }\n  }\n": typeof types.AgentProposalsDocument,
     "\n  query AgentProposalDetail($token: String!) {\n    agentProposal(token: $token) { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note }\n  }\n": typeof types.AgentProposalDetailDocument,
-    "\n  mutation ApproveAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token }\n  }\n": typeof types.ApproveAgentProposalDocument,
+    "\n  mutation ApproveAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token state reasons }\n  }\n": typeof types.ApproveAgentProposalDocument,
     "\n  mutation RejectAgentProposal($token: String!, $note: String) {\n    rejectAgentProposal(token: $token, note: $note) { token }\n  }\n": typeof types.RejectAgentProposalDocument,
     "\n  query Alarms($criteria: AlarmSearchCriteria!) {\n    alarms(criteria: $criteria) {\n      results {\n        id\n        token\n        originatorType\n        originatorId\n        originatorToken\n        alarmKey\n        metricKey\n        state\n        acknowledged\n        severity\n        raisedTime\n        clearedTime\n        acknowledgedTime\n        acknowledgedBy\n        lastValue\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.AlarmsDocument,
     "\n  mutation AcknowledgeAlarm($token: String!) {\n    acknowledgeAlarm(token: $token) {\n      id\n    }\n  }\n": typeof types.AcknowledgeAlarmDocument,
@@ -195,7 +195,7 @@ type Documents = {
 const documents: Documents = {
     "\n  query AgentProposals($criteria: AgentProposalSearchCriteria!) {\n    agentProposals(criteria: $criteria) {\n      results { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note }\n      pagination { pageStart pageEnd totalRecords }\n    }\n  }\n": types.AgentProposalsDocument,
     "\n  query AgentProposalDetail($token: String!) {\n    agentProposal(token: $token) { token kind state payload targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note }\n  }\n": types.AgentProposalDetailDocument,
-    "\n  mutation ApproveAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token }\n  }\n": types.ApproveAgentProposalDocument,
+    "\n  mutation ApproveAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token state reasons }\n  }\n": types.ApproveAgentProposalDocument,
     "\n  mutation RejectAgentProposal($token: String!, $note: String) {\n    rejectAgentProposal(token: $token, note: $note) { token }\n  }\n": types.RejectAgentProposalDocument,
     "\n  query Alarms($criteria: AlarmSearchCriteria!) {\n    alarms(criteria: $criteria) {\n      results {\n        id\n        token\n        originatorType\n        originatorId\n        originatorToken\n        alarmKey\n        metricKey\n        state\n        acknowledged\n        severity\n        raisedTime\n        clearedTime\n        acknowledgedTime\n        acknowledgedBy\n        lastValue\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.AlarmsDocument,
     "\n  mutation AcknowledgeAlarm($token: String!) {\n    acknowledgeAlarm(token: $token) {\n      id\n    }\n  }\n": types.AcknowledgeAlarmDocument,
@@ -382,7 +382,7 @@ export function graphql(source: "\n  query AgentProposalDetail($token: String!) 
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation ApproveAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token }\n  }\n"): typeof import('./graphql').ApproveAgentProposalDocument;
+export function graphql(source: "\n  mutation ApproveAgentProposal($token: String!, $digest: String!) {\n    approveAgentProposal(token: $token, digest: $digest) { token state reasons }\n  }\n"): typeof import('./graphql').ApproveAgentProposalDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

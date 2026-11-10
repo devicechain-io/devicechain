@@ -1552,7 +1552,7 @@ export type ApproveAgentProposalMutationVariables = Exact<{
 }>;
 
 
-export type ApproveAgentProposalMutation = { approveAgentProposal: { token: string } };
+export type ApproveAgentProposalMutation = { approveAgentProposal: { token: string, state: AgentProposalState, reasons: Array<string> } };
 
 export type RejectAgentProposalMutationVariables = Exact<{
   token: string;
@@ -2924,6 +2924,8 @@ export const ApproveAgentProposalDocument = new TypedDocumentString(`
     mutation ApproveAgentProposal($token: String!, $digest: String!) {
   approveAgentProposal(token: $token, digest: $digest) {
     token
+    state
+    reasons
   }
 }
     `) as unknown as TypedDocumentString<ApproveAgentProposalMutation, ApproveAgentProposalMutationVariables>;
