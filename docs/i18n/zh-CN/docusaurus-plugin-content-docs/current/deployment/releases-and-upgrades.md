@@ -559,7 +559,7 @@ dcctl upgrade local devicechain --version v1.4.0
 - **检查通用 webhook、Slack、Teams 和 PagerDuty 渠道的 `linkBaseUrl`。**现在保存渠道时会验证它（拒绝查询或片段），升级后投递时，已存储的无效值会使链接被省略，通知仍会发送。参见[标明设备的通知](#v140-notifications)。
 - **重命名以 `dcsa_` 开头的 OAuth 客户端 ID（不区分大小写），包括预置配置中的 ID。** 此前缀标识服务账号，可能与代理策略的客户端列表冲突。参见[现有操作的更严格检查](#v140-tightenings)。
 - **如果实例记录的规模为 `--size perf-12k`，下次 `dcctl upgrade` 时会有两项 Pod 规格变更：** `device-management` 请求 400m CPU（原为 500m），`event-sources` 的内存限制为 256Mi（原为 512Mi）。Pod 会像任何一次发布一样重启。参见[规模规划](#v140-sizing)。
-- **首次连接在 OCSP 状态不可用时获准接入，`x509_ocsp_unavailable_allowed_total` 将增加一，而不是二。** 设备首次连接过去会执行两次 OCSP 步骤，并将两次都计数；该序列的帮助文本说它统计连接次数，现在实际行为与之相符。允许和拒绝的决定、名称及标签均不变。请重新校准按双倍速率调好的仪表板或告警。
+- **首次连接在 OCSP 状态不可用时获准接入，`devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total` 将增加一，而不是二。** 设备首次连接过去会执行两次 OCSP 步骤，并将两次都计数；该序列的帮助文本说它统计连接次数，现在实际行为与之相符。允许和拒绝的决定、名称及标签均不变。请重新校准按双倍速率调好的仪表板或告警。
 - **根据下方的更严格检查审查脚本，** 包括原始 LoRaWAN 命令及 HTTP 解码器查询超时。
 
 新的 Helm 值和 `dcctl` 设置，默认都是关闭或保持不变：
@@ -594,7 +594,7 @@ dcctl upgrade local devicechain --version v1.4.0
 - chart 的值架构会拒绝 Helm 值和 `dcctl` 值覆盖文件中的此值。
 - 如果实例上记录的覆盖值、安装该版本时使用的值，或 `instance.existingSecret` 中的文档仍设置了此值，`dcctl upgrade` 会在改动任何内容之前拒绝升级。
 
-移除该键（未设置表示 `enforce`）或将其设为 `enforce`，然后升级。对于由 `dcctl` 管理且记录的覆盖值设置了此值的实例，请运行带 `--reset-values` 或 `--values <file without the key>` 的 `dcctl upgrade`；两者都不带的运行会被拒绝，并给出这两个命令。如果文档由你自行提供（`instance.existingSecret`），请在运行 `helm upgrade` 之前从文档中移除该键，因为服务会在启动时拒绝此值，而普通的 `helm upgrade` 无法查看 Secret 内部；同时更新 `instance.existingSecretChecksum`。升级前，请检查 `v1.3` 实例上的 `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 和 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}` 是否为零，否则其对应的客户端将被拒绝。为保持兼容性，`would_reject` 序列以及 `TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 告警仍予保留，但不再可能触发。`unscopedClientCredentials` 不变。
+移除该键（未设置表示 `enforce`）或将其设为 `enforce`，然后升级。对于由 `dcctl` 管理且记录的覆盖值设置了此值的实例，请运行带 `--reset-values` 或 `--values <file without the key>` 的 `dcctl upgrade`；两者都不带的运行会被拒绝，并给出这两个命令。如果文档由你自行提供（`instance.existingSecret`），请在运行 `helm upgrade` 之前从文档中移除该键，因为服务会在启动时拒绝此值，而普通的 `helm upgrade` 无法查看 Secret 内部；同时更新 `instance.existingSecretChecksum`。升级前，请检查 `v1.3` 实例上的 `{__name__=~"devicechain_[a-z0-9]+_token_audience_checks_total", verdict="would_reject"}` 和 `devicechain_usermanagement_oauth_resource_checks_total{verdict="would_reject"}` 在具有代表性的流量时间窗口内是否没有新增计数，否则其对应的客户端将被拒绝。为保持兼容性，`would_reject` 序列以及 `TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 告警仍予保留，但不再可能触发。`unscopedClientCredentials` 不变。
 
 #### 标明设备的通知 {#v140-notifications}
 
@@ -607,17 +607,17 @@ dcctl upgrade local devicechain --version v1.4.0
 
 设备可以向 `{instance}/{tenant}/devices/{device}/uplink` 发布自己的字节数据，由其设备类型配置文件上的解码器转换为事件，与 `v1.3.0` 中 HTTP `uplink` 路由提供的能力相同。设备在连接时认证，签名授权只指定其自身的上行主题，因此载荷绝不可能被当作另一台设备的数据解码。`events` 上的载荷仍然绝不会由解码器读取。
 
-此功能需主动开启：`infrastructure.nats.mqttDeviceUplinks` 默认关闭，此时签发的授权与早期版本完全相同，消息代理会拒绝向该主题发布。MQTT 无法向设备作出应答，因此无法处理的载荷（没有解码器、设备未知或超出限制）会连同原因记录为解码失败，并计入新的 `device_uplink_messages_total{result}`。还新增了一个服务平面查询 `brokerAssertedDeviceDecoder`。
+此功能需主动开启：`infrastructure.nats.mqttDeviceUplinks` 默认关闭，此时签发的授权与早期版本完全相同，消息代理会拒绝向该主题发布。载荷处理的终止性错误会连同原因记录为解码失败，并计入新的 `devicechain_eventsources_device_uplink_messages_total{result}`；限速丢弃会单独确认，消息阶段的丢弃不经过此计数器。还新增了一个服务平面查询 `brokerAssertedDeviceDecoder`。
 
-**在 `v1.4.0` 安装就绪后，单独进行一次升级来开启此功能。** 开启后，捕获流还会声明上行 subject。如果开启时仍有 `v1.3.0` Pod 运行：重启的 `event-sources` Pod 会因流漂移错误而停止（明确报错，且不会丢失任何数据）；已在运行的 Pod 会确认并丢弃其两个 subject 之外的 subject，因此到达它的原始载荷会丢失；`device-management` Pod 则会拒绝无法安置的上行，该上行会被重新投递。关闭时，捕获流与 `v1.3.0` 声明的完全相同，因此在发布过程中重启的 Pod 不受影响。再次关闭后，会在设备重新连接或其会话令牌过期时对该设备生效。
+**在 `v1.4.0` 安装就绪后，单独进行一次升级来开启此功能。** 开启后，捕获流还会声明上行 subject。如果开启时仍有 `v1.3.0` Pod 运行：重启的 `event-sources` Pod 会因流漂移错误而停止（明确报错，且不会丢失任何数据）；已在运行的 Pod 会确认并丢弃其两个 subject 之外的 subject，因此到达它的原始载荷会丢失；`device-management` Pod 则会拒绝无法安置的上行，该上行会被重新投递。关闭时，捕获流与 `v1.3.0` 声明的完全相同，因此在发布过程中重启的 Pod 不受影响。现有发布授权会保留到重新连接或会话令牌过期，但关闭此设置会在协调时将上行从捕获范围中移除，因此继续发布可能丢失载荷。
 
 使用 `dcctl` 时，在 `--values` 覆盖文件中设置：`instance.config.infrastructure.nats.mqttDeviceUplinks: true`；后续升级会保留它。参见[载荷解码器指南](../guides/payload-decoders.md)和[设备协议参考](../reference/device-protocol.md#raw-payload)。控制台中设备的**发送数据**标签页现在在事件 JSON 旁提供**原始载荷**选项，包含用于 HTTP 路由的 `curl` 和用于该主题的 `mosquitto_pub`。控制台无法判断运维人员是否启用了其中任一功能，因此每条命令都会标明所需设置。
 
 #### LoRaWAN 确认下行 {#v140-lorawan}
 
-- **ChirpStack v4。** 带有 `"confirmed": true` 的命令保持 `SENT`，直到网络服务器给出最终结果，而不再在下行排入队列时就得到应答。ChirpStack 的 `ack` 和 `txack` 事件会到达已为上行配置的入站集成 URL。收到确认后，命令最终状态为 `SUCCESSFUL`；确认超时且未收到确认，或截止时间前未收到任何报告（使用命令过期时间，否则为 24 小时），最终状态为 `TIMEOUT`，投递情况未知，绝不会标为“未投递”，因为设备可能已经收到。无法通过队列项 ID、集成和 DevEUI 匹配到待处理下行的事件会被丢弃，并计入 `lpwan_ack_reports_total`，绝不猜测匹配。
+- **ChirpStack v4。** 带有 `"confirmed": true` 的命令保持 `SENT`，直到网络服务器给出最终结果，而不再在下行排入队列时就得到应答。ChirpStack 的 `ack` 和 `txack` 事件会到达已为上行配置的入站集成 URL。收到确认后，命令最终状态为 `SUCCESSFUL`；确认超时且未收到确认，或截止时间前未收到任何报告，最终状态为 `TIMEOUT`，投递情况未知，绝不会标为“未投递”，因为设备可能已经收到。截止时间取命令过期时间与入队后 24 小时中较早者。无法通过队列项 ID、集成和 DevEUI 匹配到待处理下行的事件会被丢弃，并计入 `devicechain_outboundconnectors_lpwan_ack_reports_total`，绝不猜测匹配。
 - **The Things Stack v3。** 下行也能送达位于 The Things Stack v3 网络服务器之后的设备。创建 `lorawan_downlink` 连接器，设置 `networkServer: "tts_v3"` 和应用 ID；设备需要一个 `tts.device-id` 别名。确认下行的最终结果来自 `downlink_ack`、`downlink_nack`、`downlink_sent` 和 `downlink_failed` webhook 事件；必须在应用的 webhook 中启用这些事件，并使用以 `downlink` 开头的路径（例如 `/downlink-ack`）。只有能证明帧从未传输的失败才会得出确定的未投递结果；不确定的失败会以 `TIMEOUT` 结束，投递情况未知。
-- **命令定义上的载荷编码器。** 命令定义可以带有可选的声明式 `encoder`，将命令的类型化参数转换为应用载荷，与上行解码器相对应：一个 `fPort`、可选的静态 `confirmed`，以及有序字段（常量字节、支持两种字节序并带 `scale` 和 `offset` 的 8、16 或 32 位定宽整数、布尔值及打包位字段）。创建或更新定义时以及发布配置文件时都会验证，因此错误的编码器会明确报错并指出命令。不会进行任何舍入或截断：值超出范围、整数字段出现小数、值缺失、类型错误或无法精确表示，都会使命令以未发送状态被拒绝。没有编码器的定义保留原始十六进制或 base64 约定。等待投递的命令使用发送时生效的已发布编码器，包括重新发布之后；每次发送都会重新读取词汇表。查询故障会推迟投递以便重试，不会使用过时的编码器。参见[入站集成指南](../guides/inbound-integrations.md)。
+- **命令定义上的载荷编码器。** 命令定义可以带有可选的声明式 `encoder`，将命令的类型化参数转换为应用载荷，与上行解码器相对应：一个 `fPort`、可选的静态 `confirmed`，以及有序字段（常量字节、支持两种字节序并带 `scale` 和 `offset` 的 8、16 或 32 位定宽整数、布尔值及打包位字段）。创建或更新定义时以及发布配置文件时都会验证，因此错误的编码器会明确报错并指出命令。当 scale/offset 转换后得到的值在编码器的浮点容差内为范围内的整数时，允许小数输入。超出这些界限、值缺失或类型错误，都会使命令以未发送状态被拒绝。没有编码器的定义保留原始十六进制或 base64 约定。等待投递的命令使用发送时生效的已发布编码器，包括重新发布之后；每次发送都会重新读取词汇表。查询故障会推迟投递以便重试，不会使用过时的编码器。参见[入站集成指南](../guides/inbound-integrations.md)。
 
 此功能需要 `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`，与 `v1.3.0` 相同。请等到发布完成后再发送确认下行，以确保每个 `outbound-connectors` Pod 都读取新的确认流。仍在运行的 `v1.3.0` Pod 会拒绝 `"confirmed": true`，并将命令应答为未发送，因此不会让命令卡住；如果 Pod 在下行排入队列之后、记录之前停止，命令会保持 `SENT`，直到过期扫描将其最终状态设为 `TIMEOUT`。对于 ChirpStack，确认下行需要 HTTP 集成向集成 URL 发送 `ack`（以及可选的 `txack`）事件；对于 The Things Stack，请启用上述下行事件。
 
@@ -629,13 +629,13 @@ dcctl upgrade local devicechain --version v1.4.0
 - **作用。** 新流量仍在 Pod 读取时计数，但租户的额度会增加，增量为其速率在读取器实测延迟期间所积累的额度，最多覆盖其突发额度允许的时长（绝不超过 5 秒）。超过上限的租户仍会被丢弃超额部分，早于覆盖时段的积压仍按原方式排空。
 - **不变之处。** 超出上限、过载档位或硬丢弃造成的丢弃，仍由已有的限速计数器按原方式计数。HTTP 和入站集成保留各自限制。上限仍按副本计算。
 - **测量方式。** 每个副本利用消息代理已有的投递信息，估算代理的追加时间戳与自身时钟之间的偏差，以及每个读取器落后多少，并每秒约四次询问代理，检查安静的流中是否有消息排队。停顿期间启动的副本尚未测量代理时钟，因此在停顿最初的一段时间内，给出的补偿可能少于应有值。
-- **新的指标，** 在 `legacy` 模式下为空，且均不带租户标签：`ingest_shed_cause_total{stream,route,cause}`、`ingest_lag_credit_seconds{stream}`、`reader_lag_seconds{stream}`、`append_skew_seconds{stream}` 和 `append_skew_clamped_total{stream}`。**新的告警，** 在 `legacy` 模式下不触发：`IngestShedBeyondLagCredit` 和 `IngestAppendSkewLarge`。
+- **新的指标，** 在 `legacy` 模式下为空，且均不带租户标签：`devicechain_eventsources_ingest_shed_cause_total{stream,route,cause}`、`devicechain_eventsources_ingest_lag_credit_seconds{stream}`、`devicechain_eventsources_reader_lag_seconds{stream}`、`devicechain_eventsources_append_skew_seconds{stream}` 和 `devicechain_eventsources_append_skew_clamped_total{stream}`。**新的告警，** 在 `legacy` 模式下不触发：`IngestShedBeyondLagCredit` 和 `IngestAppendSkewLarge`。
 
 #### 规模规划 {#v140-sizing}
 
 - **`perf-16k` 是新的 `--size` 值，** 用于持续每秒 16,000 个事件：NATS 请求 6 CPU 和 6Gi，事件存储在 260Gi 卷上设置 40960 MiB 的 `max_wal_size`，`event-processing` 使用 2 CPU 和 1536Mi，并为设计速率配备 36Gi JetStream 卷。实测配置完整承载了每秒 16,000 个事件；每秒 20,000 个事件也能完整存储，但超出了延迟目标，因此文档将其列为吞吐量上限，且没有 `perf-20k`。`perf-16k` 的值根据实测递增负载推导，尚未按当前写法实际运行；规模规划页面已说明这一点。
 - **修正 `perf-12k`：** `device-management` 请求 400m CPU（原为 500m），`event-sources` 的内存限制为 256Mi（原为 512Mi，实测驻留内存最多 81 MiB）。记录为 `perf-12k` 的实例会在下次 `dcctl upgrade` 时应用这两项变更。
-- **关系存储的 `max_wal_size`。** 新增的集群根级 OpenTofu 变量 `postgres_max_wal_size_mib`（默认为 `0`，即 PostgreSQL 自身的 1 GB，因此不改变任何已有安装）通过集群定义设置该值；超过 `postgres_storage` 四分之一的值会在规划时被拒绝。关系存储属于集群，因此 `dcctl bootstrap --size` 不会写入此值：请在安装时通过 `TF_VAR_postgres_max_wal_size_mib` 指定，并确保 `TF_VAR_postgres_storage` 足够大。`dcctl` 不会持久保存此设置：后续运行 `dcctl install` 时若未提供，会重置为 PostgreSQL 默认值。每次安装都要重复提供。规模规划页面列出了测量每种规模时使用的值。
+- **关系存储的 `max_wal_size`。** 新增的集群根级 OpenTofu 变量 `postgres_max_wal_size_mib`（默认为 `0`，即 PostgreSQL 自身的 1 GB，因此不改变任何已有安装）通过集群定义设置该值。当存储以整数 Mi、Gi 或 Ti 数量表示时，计划会拒绝超过 `postgres_storage` 四分之一的额度；其他形式会跳过此检查。关系存储属于集群，因此 `dcctl bootstrap --size` 不会写入此值：请在安装时通过 `TF_VAR_postgres_max_wal_size_mib` 指定，并确保 `TF_VAR_postgres_storage` 足够大。`dcctl` 不会持久保存此设置：后续运行 `dcctl install` 时若未提供，会重置为 PostgreSQL 默认值。每次安装都要重复提供。规模规划页面列出了测量每种规模时使用的值。
 
 参见[规模规划](./sizing.md)。
 
