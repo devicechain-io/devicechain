@@ -61,6 +61,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 				return err
 			}
 		}
+		if existing != nil && st.MqttDeviceUplinks == nil {
+			st.MqttDeviceUplinks = copyBoolPtr(existing.Spec.MQTTDeviceUplinks)
+		}
 		if existing != nil && st.MqttFailClosed == nil {
 			st.MqttFailClosed = copyBoolPtr(existing.Spec.MQTTFailClosed)
 		}
@@ -112,6 +115,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 	sayMqttFailClosed(st)
+	sayMqttDeviceUplinks(st)
 	sayUpdateStoreMountless(st)
 
 	if st.DryRun {
@@ -168,6 +172,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		// something deleting declarations underneath a running bootstrap.
 		return fmt.Errorf("the declaration for instance %q was not there immediately after being written; "+
 			"something else is deleting it", st.Instance)
+	}
+	if err := verifyDeviceUplinksRecorded(st.MqttDeviceUplinks, inst.Spec.MQTTDeviceUplinks); err != nil {
+		return err
 	}
 	if err := verifyFailClosedRecorded(st.MqttFailClosed, inst.Spec.MQTTFailClosed); err != nil {
 		return err
@@ -263,6 +270,7 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	// real answer (never chose), taken as one -- an instance declared before this field
 	// existed keeps the platform default rather than being handed a decision.
 	st.MqttFailClosed = copyBoolPtr(spec.MQTTFailClosed)
+	st.MqttDeviceUplinks = copyBoolPtr(spec.MQTTDeviceUplinks)
 	st.TrustedProxies = append([]string(nil), spec.TrustedProxies...)
 	st.TrustedProxiesExplicit = spec.TrustedProxiesExplicit
 	st.MQTTExposure, st.MQTTHost = spec.MQTTExposure, spec.MQTTHost

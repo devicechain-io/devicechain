@@ -209,6 +209,11 @@ func (in *InstanceSpec) DeepCopyInto(out *InstanceSpec) {
 		in, out := &in.RestoredAt, &out.RestoredAt
 		*out = (*in).DeepCopy()
 	}
+	if in.MQTTDeviceUplinks != nil {
+		in, out := &in.MQTTDeviceUplinks, &out.MQTTDeviceUplinks
+		*out = new(bool)
+		**out = **in
+	}
 	if in.MQTTFailClosed != nil {
 		in, out := &in.MQTTFailClosed, &out.MQTTFailClosed
 		*out = new(bool)

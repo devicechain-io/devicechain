@@ -55,7 +55,7 @@ func TestSizeFlagIsWired(t *testing.T) {
 	old := bootstrapSize
 	t.Cleanup(func() { bootstrapSize = old })
 	bootstrapSize = "perf-12k"
-	opts := bootstrapOptions("i1", nil, nil)
+	opts := bootstrapOptions("i1", nil, nil, nil)
 	if opts.Size != "perf-12k" {
 		t.Fatalf("bootstrapOptions dropped --size: %q", opts.Size)
 	}

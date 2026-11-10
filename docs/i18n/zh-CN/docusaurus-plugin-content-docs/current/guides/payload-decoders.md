@@ -271,7 +271,7 @@ sections[0].outputs[1].key: "nope" is not a declared measured metric of this pro
 | HTTP | `event-sources` 区域的 `httpIngest.deviceUplinks` | 路由不存在：`404`。 |
 | MQTT | `infrastructure.nats.mqttDeviceUplinks` | 代理拒绝向该主题的发布。设备在下次连接时获得授权。 |
 
-只有当所有 `event-sources` 和 `device-management` 副本都运行了认识它的版本之后，才可开启任一通道，并且要在该版本就位之后，单独做一次升级来开启。使用 `dcctl` 时，在 `--values` 覆盖文件中设置 MQTT 通道：`instance.config.infrastructure.nats.mqttDeviceUplinks: true`。再次关闭它，只有在设备重新连接或其会话令牌过期时才会生效：已连接的设备在此之前会保留其授权。详情见[设备协议参考](../reference/device-protocol.md#raw-payload)。无论该设置是否开启，控制台都会显示下面的命令，因为它看不到该设置：收到 `404` 或被代理拒绝的设备，是在等待运维人员。
+只有当所有 `event-sources` 和 `device-management` 副本都运行了认识它的版本之后，才可开启任一通道，并且要在该版本就位之后，单独做一次升级来开启。使用 `dcctl` 时，将 `--mqtt-device-uplinks` 传给 `dcctl upgrade`（或 `dcctl bootstrap`）；`--mqtt-device-uplinks=false` 会将其关闭。该选择会记录在实例上，后续升级会沿用。`--values` 覆盖文件中的 `instance.config.infrastructure.nats.mqttDeviceUplinks` 键仍然有效，显式标志优先于该键。再次关闭它，只有在设备重新连接或其会话令牌过期时才会生效：已连接的设备在此之前会保留其授权。详情见[设备协议参考](../reference/device-protocol.md#raw-payload)。无论该设置是否开启，控制台都会显示下面的命令，因为它看不到该设置：收到 `404` 或被代理拒绝的设备，是在等待运维人员。
 
 ### 3. 发送载荷 {#device-connection-send}
 

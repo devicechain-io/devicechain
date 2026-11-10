@@ -103,7 +103,8 @@ var tunableValues = []string{
 	// its device type's profile to read. Off by default. It is an opt-in, not wiring: it adds one
 	// topic, confined to the device's own token, to the grant device-management mints, and the
 	// capture stream's subject list follows it at the next upgrade's broker step. Carried forward
-	// by every later upgrade like the rest of the overlay.
+	// by every later upgrade like the rest of the overlay. --mqtt-device-uplinks records
+	// the choice on the instance and takes precedence over this overlay key.
 	"instance.config.infrastructure.nats.mqttDeviceUplinks",
 	// Whether device-management writes resolved events as envelopes. A capacity dial, off by
 	// default; dcctl records when it is turned on and what the streams held when it is turned
@@ -515,6 +516,11 @@ func deepCopyValues(m map[string]interface{}) map[string]interface{} {
 func authoringValues(st *State) map[string]interface{} {
 	vals := helmValues(st)
 	if overlay := effectiveOverlay(st); len(overlay) > 0 {
+		// A recorded choice wins without changing the stored tuning overlay.
+		if st.MqttDeviceUplinks != nil {
+			overlay = deepCopyValues(overlay)
+			deletePath(overlay, splitPath("instance.config.infrastructure.nats.mqttDeviceUplinks"))
+		}
 		mergeOverlay(vals, overlay)
 	}
 	return vals
