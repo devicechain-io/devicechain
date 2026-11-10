@@ -6,11 +6,17 @@ package server
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"unicode"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// alarmTokenPattern bounds what an agent may put in a target. A refused proposal is stored with
+// its targets even when no such alarm exists, so a free-form string here would come back to the
+// model, unmarked, as an identifier.
+var alarmTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 const proposalNotice = "Preview. A person must approve in the console Approvals inbox; NOTHING happens until a person approves it in the console. An agent can never approve."
 
@@ -129,6 +135,11 @@ func (t *Tools) ProposeAlarmAction(ctx context.Context, req *mcp.CallToolRequest
 	}
 	if len(in.AlarmTokens) < 1 || len(in.AlarmTokens) > 100 {
 		return nil, out, invalidProposalInput("alarmTokens must contain 1 to 100 tokens")
+	}
+	for _, tok := range in.AlarmTokens {
+		if !alarmTokenPattern.MatchString(tok) {
+			return nil, out, invalidProposalInput("alarmTokens must be alarm tokens (letters, digits and . _ : - only, at most 128 characters)")
+		}
 	}
 	if in.Rationale != nil && len(*in.Rationale) > 2048 {
 		return nil, out, invalidProposalInput("rationale must be at most 2048 bytes")
