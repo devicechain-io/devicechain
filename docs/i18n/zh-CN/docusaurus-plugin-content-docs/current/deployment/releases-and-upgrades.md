@@ -3,9 +3,7 @@ sidebar_position: 4
 title: 发布与升级
 ---
 
-<a id="releases--upgrades"></a>
-
-# 发布与升级
+# 发布与升级 {#releases--upgrades}
 
 DeviceChain 以预构建、带版本的容器镜像及 Helm chart 发布。
 运行时**不需要**构建任何内容：拉取已发布版本、安装 chart，即可通过滚动更新原地升级。
@@ -22,9 +20,7 @@ DeviceChain 以预构建、带版本的容器镜像及 Helm chart 发布。
 `v0.23.0` 之后的版本以 `v0.22.0` 及更早版本无法读取的形式写入事件。从 `v0.22.0` 或更早版本升级时，请先将每个实例升级到 `v0.23.0`，再升级到之后的版本。参见[事件在代理上的编码格式](#event-wire-format)。
 :::
 
-<a id="versioning-model"></a>
-
-## 版本模型
+## 版本模型 {#versioning-model}
 
 每次发布对应一个语义版本 Git 标签（`vX.Y.Z`）。
 同一版本覆盖**全部组件**：各服务镜像、Operator、Helm chart 和 `dcctl` CLI 都以相同版本发布。
@@ -69,9 +65,7 @@ Operator 是每集群一个控制器，由集群上的所有实例共用，因�
 GA 之前发布频繁，因此**次版本**表示里程碑，例如重要功能或子系统落地；
 **补丁版本**承载持续修复和加固。此阶段补丁升级不自动等于低风险，仍以发布说明为准。
 
-<a id="images"></a>
-
-## 镜像
+## 镜像 {#images}
 
 镜像发布到公开 GitHub Container Registry 的 `ghcr.io/devicechain-io` 下，
 例如 `ghcr.io/devicechain-io/device-management`。
@@ -80,9 +74,7 @@ GA 之前发布频繁，因此**次版本**表示里程碑，例如重要功能�
 
 注册表公开，因此拉取已发布镜像无需凭据。
 
-<a id="installing-a-specific-version"></a>
-
-## 安装指定版本
+## 安装指定版本 {#installing-a-specific-version}
 
 将镜像标签固定为所需发布：
 
@@ -599,7 +591,7 @@ dcctl upgrade local devicechain --version v1.4.0
 #### 标明设备的通知 {#v140-notifications}
 
 - **`notifyOnClear`。** 通知策略可在此前已发出通知的告警清除时通知，选项默认关闭。清除通知只发给该周期内成功投递过告警通知的渠道和接收人。静默时段会丢弃清除通知，不会保留等待。认领后至多投递一次：认领与发送之间崩溃可能导致通知丢失。拾取失败后退避两分钟重试，并在清除发生 30 分钟后停止。
-- **通知标明设备。** 已知时，webhook 载荷携带 `deviceToken`、`deviceName` 和 `deviceTypeToken`，摘要显示设备名称。定时重复通知和迟到的清除使用存储的来源；没有来源的旧行会省略这些字段。已知时包含 `originatorType` 和 `originatorId`。
+- **通知标明设备。** 已知时，webhook 载荷携带 `deviceToken`、`deviceName` 和 `deviceTypeToken`。Slack、Teams、PagerDuty 和电子邮件摘要显示设备名称；通用 webhook 的 `text` 用设备令牌标明设备，设备自己设置的名称只出现在结构化字段 `deviceName` 中，因此名称无法向渲染 `text` 的聊天工具注入标记。要发送到 Slack，请使用原生 Slack 渠道，而不是通用 webhook。定时重复通知和迟到的清除使用存储的来源；没有来源的旧行会省略这些字段。已知时包含 `originatorType` 和 `originatorId`。
 - **链接。** 通用 webhook、Slack、Teams 和 PagerDuty 渠道可以设置 `linkBaseUrl`。通用 webhook 载荷新增 `alarmUrl`，设备已知时还新增 `deviceUrl`；原生消息可链接到设备。保存已有渠道前，请参见[现有操作的更严格检查](#v140-tightenings)。
 - **文本渲染。** 设备或租户编写的文本中，Slack 控制字符（`&`、`<`、`>`）会被转义，Teams 提及和链接会被中和。摘要中的名称归一为单行，最多 120 个字符；结构化载荷保留存储的名称。非 ASCII 邮件主题按 RFC 2047 编码；ASCII 主题保持原样。
 
@@ -664,6 +656,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 - **通知清除拾取流程**会将已完成部分投递、随后耗尽预算的一轮处理报告为部分完成，而非失败，并且对两次读取均失败的租户只计数一次。
 - **删除已删除租户的待处理下行失败时，** 会记录为 `store_failed`，确认扫描会在认领之前丢弃已删除租户的行。
 - **被拒绝的数据库读取**会返回错误，而不是发生空指针 panic。
+- **代理令牌不能再更改某个人的个人资料名称：**`updateProfile` 拒绝代理令牌。
 
 #### 架构变更与回退 {#v140-going-back}
 
@@ -1003,7 +996,7 @@ MCP 工具目录（工具名称、输入和结果结构）不受兼容性承诺�
 
 ### v1.2.0：租户自行编写的载荷解码器，以及会结束会话的证书吊销 {#v120-upgrade}
 
-`v1.2.0` 是从 `v1.1.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。升级时会运行八个追加的迁移（`device-management` 四个，`device-state` 三个，`user-management` 一个）；它们新增表、可为空的列和存储参数，其中两个修复 `device_states` 的一个列。参见[架构变更与回退](#v120-going-back)。`Instance` 的新字段 `spec.size` 随 operator 一同发布，由 `dcctl install` 更新，因此请如上所述先运行它，再升级实例。如果从 `v1.0.0` 升级，请先阅读 [`v1.1.0` 的说明](#v110-upgrade)，并在其中使用 `--version v1.2.0`。
+`v1.2.0` 是从 `v1.1.0` 起的原地升级：先对集群运行 `dcctl install`，再对每个实例运行一次 `dcctl upgrade`，方法见[v0.17.0 的说明](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade)。请给 `dcctl install` 传入集群安装时使用的设置（如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`），以及 `--version`。升级时会运行八个追加的迁移（`device-management` 四个，`device-state` 三个，`user-management` 一个）；它们新增表、可为空的列和存储参数，其中两个修复 `device_states` 的一个列。参见[架构变更与回退](#v120-going-back)。`Instance` 的新字段 `spec.size` 随 operator 一同发布，由 `dcctl install` 更新，因此请如上所述先运行它，再升级实例。如果从 `v1.0.0` 升级，请先阅读 [`v1.1.0` 的说明](https://github.com/devicechain-io/devicechain/blob/v1.1.0/docs/i18n/zh-CN/docusaurus-plugin-content-docs/current/deployment/releases-and-upgrades.md#v110-upgrade)，并在其中使用 `--version v1.2.0`。
 
 ```bash
 dcctl install local --version v1.2.0
