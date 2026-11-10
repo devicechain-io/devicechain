@@ -885,6 +885,7 @@ An AI agent can propose acknowledging or clearing alarms. In this preview, off b
 - **The kill switch takes effect at the next decision.** `setAgentActuation(enabled: false)` is accepted even when the policy cannot be read or validated. A decision that has not yet been reached refuses execution when the switch is off; an action already past that decision may complete. The switch does not undo an executed action. Turning actions back on needs a fresh second factor. This is an application-level gate.
 - **Other actions do not execute.** Only alarm ACK/CLEAR proposals have an execution path in this preview; commands and rollouts do not. MCP tools execute no actions.
 - **Proposer standing.** The platform checks the original sign-in and current permissions again. A caller who is neither the proposer nor an `agent:admin` receives the coarse `PROPOSER_NOT_IN_STANDING` reason; stored `PROPOSER_` refusal reasons are also coarsened.
+- **Proposal targets must be valid alarm tokens.** `proposeAlarmAction` refuses a target that is not a well-formed token, so a stored proposal cannot carry free-form text that a later read would present as a platform identifier.
 - **Deprecation.** `EXECUTION_NOT_AVAILABLE` is no longer returned and is deprecated; it remains in the vocabulary.
 
 #### Local development egress {#v140-dev-egress}

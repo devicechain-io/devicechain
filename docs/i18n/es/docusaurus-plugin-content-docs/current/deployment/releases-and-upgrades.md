@@ -930,6 +930,7 @@ Un agente de IA puede proponer reconocer o despejar alarmas. En esta vista previ
 - **El interruptor de emergencia actúa en la siguiente decisión.** Se acepta `setAgentActuation(enabled: false)` incluso si no se puede leer o validar la política. Una decisión aún no alcanzada rechaza la ejecución si está apagado; una acción que ya pasó esa decisión puede completarse. El interruptor no deshace acciones ejecutadas. Reactivarlas requiere un segundo factor reciente. Es un control a nivel de aplicación.
 - **Las otras acciones no se ejecutan.** Solo las propuestas de ACK/CLEAR de alarma tienen una ruta de ejecución en esta vista previa; los comandos y despliegues no. Las herramientas MCP no ejecutan acciones.
 - **Vigencia del proponente.** La plataforma vuelve a comprobar el inicio de sesión original y los permisos actuales. Un solicitante que no sea el proponente ni `agent:admin` recibe el motivo genérico `PROPOSER_NOT_IN_STANDING`; los motivos `PROPOSER_` almacenados también se generalizan.
+- **Los destinos de una propuesta deben ser tokens de alarma válidos.** `proposeAlarmAction` rechaza un destino que no sea un token bien formado, de modo que una propuesta almacenada no puede llevar texto libre que una lectura posterior presentaría como un identificador de la plataforma.
 - **Obsolescencia.** Ya no se devuelve `EXECUTION_NOT_AVAILABLE` y queda obsoleto; permanece en el vocabulario.
 
 #### Tráfico saliente en desarrollo local {#v140-dev-egress}
