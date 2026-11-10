@@ -1339,7 +1339,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_notificationmanagement_deliveries_refused_total{namespace=\"$namespace\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_notificationmanagement_deliveries_refused_total{namespace=\"$namespace\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"notification-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }
@@ -1402,7 +1402,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(devicechain_notificationmanagement_quiet_hours_total{namespace=\"$namespace\", outcome=\"held\"}[$__range])))",
+          "expr": "round(sum(increase(devicechain_notificationmanagement_quiet_hours_total{namespace=\"$namespace\", outcome=\"held\"}[$__range]))) or (0 * max(up{namespace=\"$namespace\", job=\"notification-management\"} == 1))",
           "legendFormat": "__auto",
           "instant": true
         }

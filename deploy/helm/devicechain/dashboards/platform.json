@@ -406,7 +406,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\", reason=\"OOMKilled\"})",
+          "expr": "sum(kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\", reason=\"OOMKilled\"}) or (0 * max(kube_pod_status_ready{namespace=\"$namespace\"}))",
           "legendFormat": "__auto"
         }
       ],

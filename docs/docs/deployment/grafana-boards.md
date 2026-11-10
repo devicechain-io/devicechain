@@ -80,7 +80,7 @@ one continuous line when one takes over from the other.
 
 ![The same panel after event-management was scaled back to one replica: the line drops back to zero.](/img/grafana/recovered-persistence-backlog.webp)
 
-*The same panel once `event-management` was scaled back to 1. The backlog drains to zero within about a minute of the reader starting. The brief drop to zero before the last peak is the restarted reader taking the waiting events in flight, which the broker no longer counts as unread, before its own report is first scraped.*
+*The same panel once `event-management` was scaled back to 1. The backlog drains to zero within about a minute of the reader starting. The broker fallback counts both waiting events and events in flight until the reader reports again.*
 
 Nineteen panels carry the broker fallback:
 
