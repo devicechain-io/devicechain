@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -306,4 +308,60 @@ func TestDecisionIsAskedAfterTheAlarmsAreLocked(t *testing.T) {
 	require.NotEmpty(t, order)
 	require.Equal(t, "alarms", order[0])
 	require.Contains(t, order, "decision")
+}
+
+func TestAgentExecutionSQLiteSkipsTimeouts(t *testing.T) {
+	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
+	require.Equal(t, "sqlite", r.db.Dialector.Name())
+	var rawStatements []string
+	require.NoError(t, r.db.Callback().Raw().Before("gorm:raw").Register("capture_execution_raw", func(db *gorm.DB) {
+		rawStatements = append(rawStatements, db.Statement.SQL.String())
+	}))
+	t.Cleanup(func() { r.db.Callback().Raw().Remove("capture_execution_raw") })
+	got, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), got.State)
+	require.Empty(t, rawStatements, "SQLite must not execute SET LOCAL")
+}
+
+func TestAgentExecutionLockErrors(t *testing.T) {
+	for _, code := range []string{"55P03", "57014", "40P01"} {
+		t.Run(code, func(t *testing.T) {
+			err := fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: code})
+			got := agentExecutionLockError(err)
+			if code == "55P03" {
+				require.True(t, actiongate.IsCode(got, "CONCURRENT_APPROVAL"))
+			} else {
+				require.Same(t, err, got)
+			}
+		})
+	}
+}
+
+func TestAgentExecutionLocksSortedCopyAndPreservesEffectOrder(t *testing.T) {
+	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1", "a2")
+	require.NoError(t, r.db.WithContext(ctx).Model(&AgentProposal{}).Where("token = ?", p.Token).
+		Update("target_set", datatypes.JSON(`["a2","a1"]`)).Error)
+	var lockTokens []any
+	require.NoError(t, r.db.Callback().Query().After("gorm:query").Register("capture_alarm_lock", func(db *gorm.DB) {
+		if db.Statement.Table == "alarms" {
+			if _, ok := db.Statement.Clauses["FOR"]; ok {
+				require.Contains(t, db.Statement.SQL.String(), "ORDER BY token")
+				lockTokens = append(lockTokens, db.Statement.Vars...)
+			}
+		}
+	}))
+	t.Cleanup(func() { r.db.Callback().Query().Remove("capture_alarm_lock") })
+	var effects []string
+	require.NoError(t, r.db.Callback().Update().Before("gorm:update").Register("capture_alarm_effect", func(db *gorm.DB) {
+		if alarm, ok := db.Statement.Model.(*Alarm); ok {
+			effects = append(effects, alarm.Token)
+		}
+	}))
+	t.Cleanup(func() { r.db.Callback().Update().Remove("capture_alarm_effect") })
+	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(lockTokens), 2)
+	require.Equal(t, []any{"a1", "a2"}, lockTokens[:2])
+	require.Equal(t, []string{"a2", "a1"}, effects)
 }

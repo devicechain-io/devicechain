@@ -9,15 +9,40 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const (
+	lockTimeout      = "3s"
+	statementTimeout = "8s"
+)
+
+func setAgentExecutionTimeouts(tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	if err := tx.Exec("SET LOCAL lock_timeout = '" + lockTimeout + "'").Error; err != nil {
+		return err
+	}
+	return tx.Exec("SET LOCAL statement_timeout = '" + statementTimeout + "'").Error
+}
+
+func agentExecutionLockError(err error) error {
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) && pgerr.Code == "55P03" {
+		return errConcurrentApproval
+	}
+	return err
+}
 
 // executeAlarmProposal consumes the final approval and its effects atomically.
 func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Approver, p *AgentProposal, next []actiongate.Approval) (*AgentProposal, error) {
@@ -25,9 +50,12 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 	var events []*AlarmStateChangeEvent
 	executed := false
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
-		var locked AgentProposal
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", p.Token).First(&locked).Error; err != nil {
+		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
+		}
+		var locked AgentProposal
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}).Where("token = ?", p.Token).First(&locked).Error; err != nil {
+			return agentExecutionLockError(err)
 		}
 		if locked.State != string(actiongate.StateProposed) || locked.Revision != p.Revision {
 			return actiongate.ErrNotPending
@@ -75,11 +103,14 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 			return errors.New("missing stored raisedTimes")
 		}
 		byToken := map[string]*Alarm{}
-		for start := 0; start < len(targets); start += rdb.MaxLookupKeys {
+		// Sort a copy so every execution locks in global token order, across chunks too.
+		lockTargets := slices.Clone(targets)
+		sort.Strings(lockTargets)
+		for start := 0; start < len(lockTargets); start += rdb.MaxLookupKeys {
 			var alarms []*Alarm
-			end := min(start+rdb.MaxLookupKeys, len(targets))
-			if err := rdb.FindByKeys(tx.Clauses(clause.Locking{Strength: "UPDATE"}), &alarms, "token", targets[start:end]); err != nil {
-				return err
+			end := min(start+rdb.MaxLookupKeys, len(lockTargets))
+			if err := rdb.FindByKeys(tx.Clauses(clause.Locking{Strength: "UPDATE"}).Order("token"), &alarms, "token", lockTargets[start:end]); err != nil {
+				return agentExecutionLockError(err)
 			}
 			for _, alarm := range alarms {
 				byToken[alarm.Token] = alarm

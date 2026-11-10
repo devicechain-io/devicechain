@@ -26,8 +26,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Two clients of ONE person race proposals at the per-principal limit: exactly the limit lands,
@@ -221,5 +224,105 @@ func TestAgentExecutionChangedCycleAndFailedEffect(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, alarms[0].Acknowledged)
 		})
+	}
+}
+
+func TestConcurrentFinalApprovalReturnsConcurrentApprovalFast(t *testing.T) {
+	api, ctx := newPostgresIntegrationApi(t)
+	require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
+		TokenReference: rdb.TokenReference{Token: "a1"}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
+		AlarmKey: "k", MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now(),
+	}).Error)
+	api.AgentDecider = &fixedExecutionDecider{fakeDecider: fakeDecider{act: approveOne(), exec: execApprove(1, "boss")}}
+	out, err := api.ProposeAlarmAction(ctx, rigAgent, AlarmProposalRequest{Action: AlarmProposalAck, AlarmTokens: []string{"a1"}, RequestId: "nowait"})
+	require.NoError(t, err)
+	tx := api.RDB.DB(ctx).Begin()
+	require.NoError(t, tx.Error)
+	defer tx.Rollback()
+	var locked AgentProposal
+	require.NoError(t, tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("token = ?", out.Proposal.Token).First(&locked).Error)
+	start := time.Now()
+	_, err = api.ApproveAgentProposal(ctx, approver("boss", time.Now()), out.Proposal.Token, out.Digest)
+	elapsed := time.Since(start)
+	require.True(t, actiongate.IsCode(err, "CONCURRENT_APPROVAL"), "got %v", err)
+	require.Less(t, elapsed, 2*time.Second)
+	require.NoError(t, tx.Rollback().Error)
+	got, err := api.ApproveAgentProposal(ctx, approver("boss", time.Now()), out.Proposal.Token, out.Digest)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), got.State)
+}
+
+func TestAgentExecutionTimeouts(t *testing.T) {
+	api, ctx := newPostgresIntegrationApi(t)
+	require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := setAgentExecutionTimeouts(tx); err != nil {
+			return err
+		}
+		var lock, statement string
+		if err := tx.Raw("SHOW lock_timeout").Scan(&lock).Error; err != nil {
+			return err
+		}
+		if err := tx.Raw("SHOW statement_timeout").Scan(&statement).Error; err != nil {
+			return err
+		}
+		require.Equal(t, lockTimeout, lock)
+		require.Equal(t, statementTimeout, statement)
+		return nil
+	}))
+}
+
+func TestOverlappingTargetExecutionsDoNotDeadlock(t *testing.T) {
+	api, ctx := newPostgresIntegrationApi(t)
+	for _, token := range []string{"a1", "a2"} {
+		require.NoError(t, api.RDB.DB(ctx).Create(&Alarm{
+			TokenReference: rdb.TokenReference{Token: token}, OriginatorType: string(entity.TypeDevice), OriginatorId: 1,
+			AlarmKey: token, MetricKey: "m", State: string(AlarmStateActive), Severity: string(AlarmSeverityMajor), RaisedTime: time.Now(),
+		}).Error)
+	}
+	api.AgentDecider = &fixedExecutionDecider{fakeDecider: fakeDecider{act: approveOne(), exec: execApprove(1, "boss")}}
+	replica := NewApi(api.RDB)
+	replica.AgentDecider = api.AgentDecider
+	apis := []*Api{api, replica}
+	for iteration := 0; iteration < 20; iteration++ {
+		require.NoError(t, api.RDB.DB(ctx).Model(&Alarm{}).Where("token IN ?", []string{"a1", "a2"}).Update("acknowledged", false).Error)
+		outcomes := make([]*ProposalOutcome, 2)
+		for i := range outcomes {
+			out, err := apis[i].ProposeAlarmAction(ctx, rigAgent, AlarmProposalRequest{
+				Action: AlarmProposalAck, AlarmTokens: []string{"a1", "a2"}, RequestId: fmt.Sprintf("overlap-%d-%d", iteration, i),
+			})
+			require.NoError(t, err)
+			require.Equal(t, ProposalStatusPending, out.Status)
+			outcomes[i] = out
+		}
+		// Proposal creation canonicalizes targets. Force the opposite stored order for the race.
+		require.NoError(t, api.RDB.DB(ctx).Model(&AgentProposal{}).Where("token = ?", outcomes[1].Proposal.Token).
+			Update("target_set", datatypes.JSON(`["a2","a1"]`)).Error)
+		start := make(chan struct{})
+		errs := make([]error, 2)
+		var wg sync.WaitGroup
+		for i := range apis {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				_, errs[i] = apis[i].ApproveAgentProposal(ctx, approver("boss", time.Now()), outcomes[i].Proposal.Token, outcomes[i].Digest)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		for i, err := range errs {
+			var pgerr *pgconn.PgError
+			if errors.As(err, &pgerr) {
+				require.NotEqual(t, "40P01", pgerr.Code, "iteration %d", iteration)
+			}
+			if err != nil {
+				require.True(t, actiongate.IsCode(err, "CONCURRENT_APPROVAL"), "got %v", err)
+				_, err = apis[i].ApproveAgentProposal(ctx, approver("boss", time.Now()), outcomes[i].Proposal.Token, outcomes[i].Digest)
+			}
+			require.NoError(t, err)
+			stored, err := api.AgentProposalByToken(ctx, outcomes[i].Proposal.Token, nil)
+			require.NoError(t, err)
+			require.Equal(t, string(actiongate.StateExecuted), stored.State)
+		}
 	}
 }
