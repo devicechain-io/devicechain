@@ -510,7 +510,7 @@
       "id": 7,
       "type": "stat",
       "title": "Waiting to be sent",
-      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Dispatch requests the connectors service has not been handed yet, as last sampled. A number that keeps growing means sends are not keeping up; look at the retry and given-up panels below. While the reading service is down this shows the message broker's own count.",
+      "description": "Reports only when the outbound connectors area is installed (it is optional and not part of the default install). Without it this panel stays empty. Dispatch requests the connectors service has not finished handling (waiting or in progress), as last sampled. A number that keeps growing means sends are not keeping up; look at the retry and given-up panels below. While the reading service is down this shows the message broker's own count.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -528,7 +528,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(devicechain_outboundconnectors_jetstream_consumer_pending_messages{namespace=\"$namespace\"}) or max(nats_consumer_num_pending{namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"})",
+          "expr": "sum(max by (__name__, durable) ({__name__=~\"devicechain_outboundconnectors_jetstream_consumer_pending_messages|devicechain_outboundconnectors_jetstream_consumer_ack_pending_messages\", namespace=\"$namespace\"})) or sum(max by (__name__, consumer_name) ({__name__=~\"nats_consumer_num_pending|nats_consumer_num_ack_pending\", namespace=\"$namespace\", stream_name=~\"${instance}_.+\", consumer_name=~\".+_outbound-connectors_.+\"}))",
           "legendFormat": "__auto"
         }
       ],
