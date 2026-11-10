@@ -106,3 +106,11 @@ func TestWebhookRender(t *testing.T) {
 		require.Equal(t, name != "none", tg.(LoRaWANDownlinkTarget).Webhook.CarriesCorrelation(), name)
 	}
 }
+
+func TestWebhookFormBodyEscapesValues(t *testing.T) {
+	target, err := Build(LoRaWANDownlinkType, webhookConfig(map[string]any{"urlTemplate": "/d/{{devEui}}", "contentType": "application/x-www-form-urlencoded", "bodyTemplate": "devEui={{devEui}}&data={{payloadBase64}}&ref={{correlationId}}"}), "secret")
+	require.NoError(t, err)
+	r, err := target.(LoRaWANDownlinkTarget).Webhook.Render(DownlinkValues{DevEUI: "aabbccddeeff0011", FPort: 1, Payload: []byte{251, 255}, CorrelationID: "dc:0123456789abcdef0123456789abcdef"})
+	require.NoError(t, err)
+	require.Equal(t, "devEui=AABBCCDDEEFF0011&data=%2B%2F8%3D&ref=dc%3A0123456789abcdef0123456789abcdef", r.Body)
+}

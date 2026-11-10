@@ -69,7 +69,7 @@ func (t downlinkTemplate) carries(name string) bool {
 	}
 	return false
 }
-func (t downlinkTemplate) render(v map[string]string, inURL bool) string {
+func (t downlinkTemplate) render(v map[string]string, inURL, form bool) string {
 	var b strings.Builder
 	query := false
 	for _, p := range t {
@@ -81,7 +81,9 @@ func (t downlinkTemplate) render(v map[string]string, inURL bool) string {
 			continue
 		}
 		s := v[p.name]
-		if inURL {
+		if form {
+			s = url.QueryEscape(s)
+		} else if inURL {
 			if query {
 				s = url.QueryEscape(s)
 			} else {
@@ -120,12 +122,12 @@ func (s *WebhookSpec) CarriesCorrelation() bool {
 // Render substitutes each token once, escaping URL values for their path or query context.
 func (s *WebhookSpec) Render(values DownlinkValues) (RenderedRequest, error) {
 	v := map[string]string{"devEui": strings.ToUpper(values.DevEUI), "fPort": strconv.Itoa(values.FPort), "payloadBase64": base64.StdEncoding.EncodeToString(values.Payload), "payloadHex": hex.EncodeToString(values.Payload), "confirmed": strconv.FormatBool(values.Confirmed), "correlationId": values.CorrelationID}
-	r := RenderedRequest{URL: s.url.render(v, true), Body: s.body.render(v, false), Headers: make(map[string]string)}
+	r := RenderedRequest{URL: s.url.render(v, true, false), Body: s.body.render(v, false, s.ContentType == "application/x-www-form-urlencoded"), Headers: make(map[string]string)}
 	if _, err := JoinWebhookURL(s.baseURL, r.URL); err != nil {
 		return RenderedRequest{}, err
 	}
 	for k, t := range s.headers {
-		val := t.render(v, false)
+		val := t.render(v, false, false)
 		if controls(val) {
 			return RenderedRequest{}, fmt.Errorf("header %s contains control characters", k)
 		}
