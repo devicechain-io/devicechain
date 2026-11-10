@@ -67,5 +67,6 @@ var (
 		NewAlarmDispositionsSchema(),
 		NewInstalledPositionSchema(),
 		NewSemanticBindingsSchema(),
+		NewAgentProposalsSchema(),
 	}
 )

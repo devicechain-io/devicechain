@@ -142,6 +142,12 @@ func reconcileTableCoverage(
 // exemption, and TestEveryExemptionExplainsItself rejects it. The question each answers
 // is: why is it CORRECT for this table to be empty after a tenant has been fully seeded?
 var tableSweepExemptions = map[string]string{
+	"device-management.agent_proposals": "the agent-proposal ledger, written only by proposeAlarmAction, " +
+		"which accepts nothing but an AI agent's access token carrying alarm:propose; a person's console " +
+		"token, like the tenant administrator this probe runs as, is refused with AGENT_ONLY by design. Such " +
+		"a token exists only through an act:* OAuth grant behind three switches that are off on the drill " +
+		"instance. The table's tenant column is proved by the purge coverage gate, and its reads are swept " +
+		"through agentProposals.",
 	// ---- the device plane, which the load harness owns ------------------------
 	//
 	// These hold what DEVICES produce, not what a tenant creates. The load-test harness

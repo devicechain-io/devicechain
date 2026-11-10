@@ -190,7 +190,18 @@ func (r *SchemaResolver) SetAgentActuation(ctx context.Context, args struct{ Ena
 }
 
 // AgentActuationDecisionResolver resolves AgentActuationDecision.
-type AgentActuationDecisionResolver struct{ d agentpolicy.Decision }
+type AgentActuationDecisionResolver struct {
+	d      agentpolicy.Decision
+	detail identity.ActuationDetail
+}
+
+func (r *AgentActuationDecisionResolver) ExpiresInSeconds() int32 {
+	return int32(r.detail.Expiry / time.Second)
+}
+func (r *AgentActuationDecisionResolver) ActionsPerHour() int32 {
+	return int32(r.detail.ActionsPerHour)
+}
+func (r *AgentActuationDecisionResolver) ClientAttested() bool { return r.detail.ClientAttested }
 
 func (r *AgentActuationDecisionResolver) Verdict() string { return string(r.d.Verdict) }
 func (r *AgentActuationDecisionResolver) RequiredApprovals() int32 {
@@ -240,9 +251,17 @@ func (r *SchemaResolver) AgentActuationDecision(ctx context.Context, args struct
 	if args.Command != nil {
 		req.Command = *args.Command
 	}
-	d, err := r.getIdentityManager(ctx).AgentActuationDecision(ctx, claims, req)
+	m := r.getIdentityManager(ctx)
+	d, err := m.AgentActuationDecision(ctx, claims, req)
 	if err != nil {
 		return nil, err
 	}
-	return &AgentActuationDecisionResolver{d: d}, nil
+	out := &AgentActuationDecisionResolver{d: d}
+	if d.Verdict != agentpolicy.VerdictRefuse {
+		// The figures a gate stores beside the verdict, from the same policy version.
+		if out.detail, err = m.AgentActuationDetail(ctx, claims, req.Kind, d.PolicyVersion); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

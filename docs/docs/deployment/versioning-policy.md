@@ -74,8 +74,9 @@ event-processing API, the scenario and test file formats, and the `dcctl test` c
 (see [Testing your rules](../guides/testing-your-rules.md)). Product as code: `dcctl product export`,
 `plan` and `apply`, and their bundle format (see [Product as Code](../guides/product-as-code.md)). And
 agent actions: the `act:*` OAuth scopes, the agent policy operations and its document (format
-`v1alpha1`), the `agentActuationDecision` query and the operator's per-tenant suspension (see
-[Agent actions](../concepts/mcp.md#agent-actions)). The `agent` flag on service accounts is not in
+`v1alpha1`), the `agentActuationDecision` and `agentExecutionDecision` queries, the operator's per-tenant
+suspension, and the agent proposal operations (`proposeAlarmAction`, `approveAgentProposal`,
+`rejectAgentProposal`, `agentProposals`, `agentProposal`) (see [Agent actions](../concepts/mcp.md#agent-actions)). The `agent` flag on service accounts is not in
 preview: it is covered from the release that adds it.
 
 ## Supported upgrade paths {#upgrade-paths}

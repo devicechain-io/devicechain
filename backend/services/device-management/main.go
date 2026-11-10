@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"os"
 	"time"
 
@@ -132,6 +133,10 @@ var (
 	// repeat the operation. SessionKicksPending and SessionKickOldestAge are what an alert reads.
 	SessionKickDrain        *core.PeriodicTask
 	SessionKickDrainMetrics *core.PeriodicTaskMetrics
+
+	// AgentProposalReaper moves agent proposals nobody approved in time to EXPIRED. The approval
+	// paths enforce the expiry themselves, so it only makes the ledger say so.
+	AgentProposalReaper *core.PeriodicTask
 
 	// DecodeAccountant is the payload decoders' accounting: the per-(tenant, device type) record
 	// budget a failing decoder is held to, the health tallies and the failure samples. It is the
@@ -429,6 +434,12 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 			return nil, nil, err
 		}
 	}
+	// The tenant's decisions on agent proposals are asked of user-management UNDER THE CALLER'S
+	// OWN TOKEN (never a service token). Without its address every proposal and approval is
+	// refused with POLICY_UNAVAILABLE: nothing is decided without the policy.
+	if um := nmgr.Microservice.InstanceConfiguration.Infrastructure.UserManagement; um.Hostname != "" && um.Port != 0 {
+		api.AgentDecider = actiongate.NewCallerDecider(fmt.Sprintf("http://%s:%d/graphql", um.Hostname, um.Port))
+	}
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.
@@ -724,6 +735,21 @@ func initSessionKickDrain() error {
 	return SessionKickDrain.Initialize(context.Background())
 }
 
+// agentProposalReaperInterval is how often overdue agent proposals are marked EXPIRED.
+const agentProposalReaperInterval = time.Minute
+
+// initAgentProposalReaper builds the agent-proposal reaper. Every replica runs it: the transition
+// is one conditional update, so two passes at once each move what the other has not.
+func initAgentProposalReaper() error {
+	AgentProposalReaper = core.NewPeriodicTask(Microservice.FunctionalArea, "agent-proposal-reaper", agentProposalReaperInterval,
+		func(ctx context.Context) error {
+			_, err := Api.ExpireAgentProposals(ctx)
+			return err
+		},
+		core.NewNoOpLifecycleCallbacks())
+	return AgentProposalReaper.Initialize(context.Background())
+}
+
 // decodeAccountingInterval is how often the decoders' health tallies and failure samples are
 // written. A tally is held in memory between passes, so this is also the most a crash can lose of
 // the counts (never of the failed-events records, which are written before the source is acked).
@@ -993,6 +1019,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err = initSessionKickDrain(); err != nil {
 				return err
 			}
+			if err = initAgentProposalReaper(); err != nil {
+				return err
+			}
 			if err = initDecodeAccounting(); err != nil {
 				return err
 			}
@@ -1107,6 +1136,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err = SessionKickDrain.Start(ctx); err != nil {
 		return err
 	}
+	if err = AgentProposalReaper.Start(ctx); err != nil {
+		return err
+	}
 
 	// Start flushing the payload decoders' health and failure samples.
 	if DecodeAccounting != nil {
@@ -1212,6 +1244,9 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	if err := SessionKickDrain.Stop(ctx); err != nil {
 		return err
 	}
+	if err := AgentProposalReaper.Stop(ctx); err != nil {
+		return err
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1256,6 +1291,9 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		return err
 	}
 	if err := SessionKickDrain.Terminate(ctx); err != nil {
+		return err
+	}
+	if err := AgentProposalReaper.Terminate(ctx); err != nil {
 		return err
 	}
 	if DecodeAccounting != nil {

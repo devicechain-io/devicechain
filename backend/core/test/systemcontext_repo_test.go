@@ -67,6 +67,8 @@ var sanctionedSystemContexts = map[string][]string{
 	},
 	"backend/services/device-management/model/session_kick_revocation.go":     {"Api.tenantsOwingRevocationKicks"},
 	"backend/services/device-management/model/api_x509_revocation_markers.go": {"Api.tenantsOwingMarkers"},
+	// The agent-proposal reaper: one conditional update that can only move overdue PROPOSED rows to EXPIRED.
+	"backend/services/device-management/model/api_agent_proposals.go": {"Api.ExpireAgentProposals"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},
