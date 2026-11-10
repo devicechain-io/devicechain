@@ -1723,7 +1723,7 @@ type Query {
     tenant:read.
     """
     tenantAgentActuation(
-        """Token of the tenant."""
+        """(Preview: may change in a minor release.) Token of the tenant."""
         tenant: String!
     ): AdminTenantAgentActuation!
     """
@@ -2513,30 +2513,30 @@ type Mutation {
     there is a refusal. Restoring returns the tenant to its own policy. Requires tenant:write.
     """
     setTenantAgentActuationSuspended(
-        """Token of the tenant."""
+        """(Preview: may change in a minor release.) Token of the tenant."""
         tenant: String!
-        """True to suspend agent actions in the tenant; false to restore its own policy."""
+        """(Preview: may change in a minor release.) True to suspend agent actions in the tenant; false to restore its own policy."""
         suspended: Boolean!
     ): AdminTenantAgentActuation!
 }
 
 """
-Agent actions in one tenant, as the instance operator sees them. Agents can act in a tenant only
+(Preview: may change in a minor release.) Agent actions in one tenant, as the instance operator sees them. Agents can act in a tenant only
 when this instance allows agent actions, the operator has not suspended them for the tenant, and
 the tenant's own published agent policy enables them.
 """
 type AdminTenantAgentActuation {
-    """Token of the tenant."""
+    """(Preview: may change in a minor release.) Token of the tenant."""
     tenant: String!
-    """True when this instance allows agent actions at all."""
+    """(Preview: may change in a minor release.) True when this instance allows agent actions at all."""
     instanceEnabled: Boolean!
-    """True when the operator has suspended agent actions for this tenant."""
+    """(Preview: may change in a minor release.) True when the operator has suspended agent actions for this tenant."""
     suspended: Boolean!
-    """When the suspension was set, as an RFC 3339 timestamp, or null."""
+    """(Preview: may change in a minor release.) When the suspension was set, as an RFC 3339 timestamp, or null."""
     suspendedAt: String
-    """Who set the suspension, or null."""
+    """(Preview: may change in a minor release.) Who set the suspension, or null."""
     suspendedBy: String
-    """The tenant's published agent policy version, or 0 when it has published none."""
+    """(Preview: may change in a minor release.) The tenant's published agent policy version, or 0 when it has published none."""
     publishedVersion: Int!
 }
 
