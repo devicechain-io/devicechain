@@ -75,6 +75,12 @@ llamador. Algunas autoridades no coinciden con la intuición:
 - Leer credenciales de dispositivo requiere `device:write`, no `device:read`.
 - `latestLocation` requiere `location:read`, mientras que sus hermanas en `device-state` requieren
   `state:read`.
+- La posición instalada de un activo fijo (`Device.installedPosition`, `Asset.installedPosition`) requiere
+  `location:installed:read`, que está incluida en `location:read`. Es un dato de instalación y nunca recurre
+  a una posición comunicada por el dispositivo. Sin ninguno de esos permisos, recibes `positionWithheld: true`
+  para todos los dispositivos y activos, tengan o no una posición; el indicador se refiere solo a la posición
+  instalada. Establecerla o borrarla (`setInstalledPosition`, `clearInstalledPosition`) requiere `device:write`,
+  y un miembro limitado a una parte del inquilino no puede escribirla.
 - `demoteAssertedPresence` requiere `state:demote`, que no es ninguna de las dos. Ningún rol la
   nombra por defecto; solo un rol que tenga la superautoridad `*`, como el rol `tenant-admin`
   sembrado, la tiene sin una concesión explícita. Es lo único fuera del canal de eventos que escribe

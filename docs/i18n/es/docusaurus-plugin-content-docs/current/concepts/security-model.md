@@ -115,7 +115,7 @@ La comparación es byte a byte. No hay conversión de mayúsculas ni tratamiento
 
 ### Observar y aplicar {#token-audience-modes}
 
-Desde `v1.4`, las audiencias de tokens siempre se aplican. El servicio rechaza `infrastructure.tokenAudience.enforcement: observe` al arrancar y el esquema del chart lo rechaza. Quite la clave (sin ella se aplica `enforce`) o use `enforce` antes de actualizar. En valores Helm y overlays de `dcctl`, quite `instance.config.infrastructure.tokenAudience.enforcement`, también de la anotación del overlay almacenado y de los valores aportados por el usuario al release anterior. Con `instance.existingSecret`, quite `infrastructure.tokenAudience.enforcement` del documento o use `enforce`. `dcctl upgrade` comprueba estas fuentes antes de cualquier cambio.
+Desde `v1.4`, las audiencias de tokens siempre se aplican. El servicio rechaza `infrastructure.tokenAudience.enforcement: observe` al arrancar y el esquema del chart lo rechaza. Quita la clave (sin ella se aplica `enforce`) o usa `enforce` antes de actualizar. En valores Helm y overlays de `dcctl`, quita `instance.config.infrastructure.tokenAudience.enforcement`, también de la anotación del overlay almacenado y de los valores aportados por el usuario al release anterior. Con `instance.existingSecret`, quita `infrastructure.tokenAudience.enforcement` del documento o usa `enforce`. `dcctl upgrade` comprueba estas fuentes antes de cualquier cambio.
 
 La tabla compara el comportamiento histórico de `observe` en `v1.2`/`v1.3` con el de `enforce` en `v1.4`. Los tokens sin audiencia siguen aceptándose. `unscopedClientCredentials: observe` es una opción distinta y sigue admitida.
 
@@ -130,7 +130,7 @@ La tabla compara el comportamiento histórico de `observe` en `v1.2`/`v1.3` con 
 
 ### Cómo leer los contadores {#token-audience-reading}
 
-Los rechazos de audiencia y recurso se cuentan como `rejected`. Las series `would_reject` y las dos alertas se conservan por compatibilidad y solo pueden activarse en instancias `v1.2`/`v1.3` con observe. Consulte [Comprobaciones de audiencia](../deployment/observability.md#token-audience-checks).
+Los rechazos de audiencia y recurso se cuentan como `rejected`. Las series `would_reject` y las dos alertas se conservan por compatibilidad y solo pueden activarse en instancias `v1.2`/`v1.3` con observe. Consulta [Comprobaciones de audiencia](../deployment/observability.md#token-audience-checks).
 
 ### Configuración {#token-audience-config}
 
@@ -138,7 +138,7 @@ La política es configuración de la instancia en `infrastructure.tokenAudience`
 
 | Clave | La escribe | Valor |
 | --- | --- | --- |
-| `enforcement` | Usted | Sin definir o `enforce`; ambos aplican las comprobaciones. `v1.4` rechaza `observe`. |
+| `enforcement` | Tú | Sin definir o `enforce`; ambos aplican las comprobaciones. `v1.4` rechaza `observe`. |
 | `unscopedClientCredentials` | Usted | Sin definir u `observe`. `enforce` se rechaza al arrancar en esta versión, porque la regla que activaría todavía no rechaza nada. Consulte [Cuentas de servicio](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
 | `externalResources` | Usted | Una lista de como máximo 8 identificadores de recursos fuera de la plataforma. |
 | `areaBaseUrl` | El chart | `<origin>/api`, a partir del host del ingress. Solo se fija cuando el origen es https, o un host de loopback con http sin cifrar como `localhost`. Un ingress sin TLS en cualquier otro host no tiene recursos de área, igual que no tiene servidor de autorización. |

@@ -241,7 +241,7 @@ dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
 
-Ejecute ambos con el `dcctl` de la versión a la que va a pasar: un `dcctl` instala y actualiza solo a su propia versión, y `dcctl upgrade` se niega si la instalación del clúster la hizo uno más antiguo. Dé a `dcctl install` los mismos ajustes con los que se instaló el clúster, como `--ha` o `--compact`. Se niega a cambiarlos mientras una instancia se ejecuta en el clúster; consulte [Volver a ejecutar install](./bootstrap.md#re-running-install).
+Ejecuta ambos con el `dcctl` de la versión a la que vas a pasar: un `dcctl` instala y actualiza solo a su propia versión, y `dcctl upgrade` se niega si la instalación del clúster la hizo uno más antiguo. Da a `dcctl install` los mismos ajustes con los que se instaló el clúster, como `--ha` o `--compact`. Se niega a cambiarlos mientras una instancia se ejecuta en el clúster; consulta [Volver a ejecutar install](./bootstrap.md#re-running-install).
 
 :::note Qué se ha medido
 La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
@@ -299,15 +299,15 @@ Hay un caso que la comprobación del operador deja pasar con un aviso en lugar d
 marca con una identidad las definiciones que aplica; un operador puesto en el clúster **a
 mano** no la lleva, y `dcctl` no puede distinguir una instalación manual deliberada de una que
 un `dcctl` más antiguo sobrescribió. En lugar de pasar por encima de una decisión que no puede
-ver, esa comprobación imprime una nota con el comando de instalación y continúa. Si usted no
-instaló el operador a mano, tome esa nota como el rechazo que habría sido y ejecute
+ver, esa comprobación imprime una nota con el comando de instalación y continúa. Si no
+instalaste el operador a mano, toma esa nota como el rechazo que habría sido y ejecuta
 `dcctl install` antes de seguir. La comprobación de instalación de más abajo es independiente
 y sigue aplicándose: un clúster en el que `dcctl install` nunca terminó no tiene registro de
 instalación, y su actualización se rechaza hasta que se ejecute `dcctl install`.
 
 **La actualización también comprueba que la instalación se ejecutó, y solo avanza a la versión de su propio dcctl.** Las definiciones de un operador pueden seguir iguales entre versiones mientras su controlador cambia, así que la comprobación del operador por sí sola no detecta que se omitió `dcctl install`. Por eso `dcctl upgrade` lee además el registro de instalación del clúster, que nombra el `dcctl` que terminó por última vez `dcctl install`, y **se niega** cuando ese es anterior al `dcctl` que hace la actualización, cuando una instalación empezó y no terminó, o cuando el clúster no tiene un registro utilizable. El rechazo nombra el comando de instalación que hay que ejecutar antes y no cambia nada. Repetir la actualización con la versión que se instaló no se rechaza, ni tampoco un clúster instalado por un `dcctl` más nuevo. Un `dcctl` compilado desde el código fuente no se compara. Desde esta versión, un `dcctl upgrade` normal con una versión de parche más nueva de `dcctl` también necesita `dcctl install` antes.
 
-Un `--version` explícito se rige por la misma regla, en ambos sentidos, en `dcctl upgrade` y en `dcctl install`. Se rechaza una versión **anterior** a la del `dcctl` que se ejecuta, porque su chart y su configuración de infraestructura son los de su propia versión y se planificarían alrededor de imágenes que nunca los han visto; para retroceder, cuando las notas de esa versión lo permitan, use el `dcctl` de la versión anterior. También se rechaza una versión **más nueva** que la del `dcctl` que se ejecuta, y instalarla con este `dcctl` no ayudaría: el registro de instalación nombra el `dcctl` que ejecutó la instalación, no el `--version` que recibió. Obtenga el `dcctl` de la versión más nueva, ejecute `dcctl install` con él y después actualice. No se ven afectados `--version` igual a la versión del `dcctl` en ejecución, ni una etiqueta de un registro propio (`--registry`). Una actualización sin `--version` solo se rechaza cuando la instancia está declarada en una versión más nueva que la del `dcctl` en ejecución. Ninguno de los dos rechazos tiene una forma de omitirse.
+Un `--version` explícito se rige por la misma regla, en ambos sentidos, en `dcctl upgrade` y en `dcctl install`. Se rechaza una versión **anterior** a la del `dcctl` que se ejecuta, porque su chart y su configuración de infraestructura son los de su propia versión y se planificarían alrededor de imágenes que nunca los han visto; para retroceder, cuando las notas de esa versión lo permitan, usa el `dcctl` de la versión anterior. También se rechaza una versión **más nueva** que la del `dcctl` que se ejecuta, y instalarla con este `dcctl` no ayudaría: el registro de instalación nombra el `dcctl` que ejecutó la instalación, no el `--version` que recibió. Obtén el `dcctl` de la versión más nueva, ejecuta `dcctl install` con él y después actualiza. No se ven afectados `--version` igual a la versión del `dcctl` en ejecución, ni una etiqueta de un registro propio (`--registry`). Una actualización sin `--version` solo se rechaza cuando la instancia está declarada en una versión más nueva que la del `dcctl` en ejecución. Ninguno de los dos rechazos tiene una forma de omitirse.
 
 Ejecute cualquiera de los dos con `--dry-run` primero si quiere ver qué movería. `dcctl
 upgrade` toma el clúster de destino del propio registro de la instancia en lugar de
