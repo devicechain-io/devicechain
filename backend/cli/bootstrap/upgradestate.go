@@ -201,6 +201,14 @@ func hydrateUpgradeState(
 				"finished — there is no running instance here to upgrade. Complete the bootstrap, "+
 				"or destroy the instance and build it again", opts.Instance)
 	}
+	// The deployed document still says observe (v1.3 opt-out). dcctl writes that document, so an explicit
+	// --reset-values or replacing --values recomposes it without the key; a flagless run would rewrite it
+	// unchanged from the recorded overlay and is refused here, before anything is changed.
+	if deployed.Infrastructure.TokenAudience.Enforcement == "observe" && !st.ValuesOverlayIntent {
+		return nil, fmt.Errorf("the deployed instance configuration document for instance %q sets "+
+			"infrastructure.tokenAudience.enforcement to observe, which v1.4 refuses. Re-run `dcctl upgrade` with "+
+			"`--values <file without the key>` or `--reset-values`. Nothing has been changed", opts.Instance)
+	}
 	st.FromImageVersion = inst.Spec.ImageVersion
 	st.EnvelopesEnabledAt = inst.Annotations[AnnotationEnvelopesEnabledAt]
 	st.EnvelopesOffMarks = inst.Annotations[AnnotationEnvelopesOffMarks]

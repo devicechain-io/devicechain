@@ -888,9 +888,6 @@ func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.Ins
 	if err := json.Unmarshal(raw, cfg); err != nil {
 		return nil, fmt.Errorf("decoding the configuration of the existing instance %q: %w", instanceId, err)
 	}
-	if cfg.Infrastructure.TokenAudience.Enforcement == "observe" {
-		return nil, fmt.Errorf("the deployed instance configuration document for instance %q: %w. Remove infrastructure.tokenAudience.enforcement from the Secret document or set it to enforce before upgrading. Nothing has been changed", instanceId, cfg.Infrastructure.TokenAudience.Validate())
-	}
 	return cfg, nil
 }
 

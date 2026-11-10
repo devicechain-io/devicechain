@@ -5,6 +5,7 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"github.com/devicechain-io/dc-microservice/config"
 	"go/ast"
 	"testing"
 
@@ -181,7 +182,46 @@ func TestV14ExistingSecretDocumentRefusesObserve(t *testing.T) {
 	raw, err = json.Marshal(doc)
 	require.NoError(t, err)
 	require.ErrorContains(t, validateRenderedInstanceConfig(t.Context(), ch, externalValues(digest("a")), raw), "removed in v1.4")
+	// Reading a deployed document that still says observe is not itself a refusal; the upgrade
+	// decides (TestV14DeployedObserveIsRefusedFlaglessAndOverriddenByAnExplicitReset).
 	_, err = parseDeployedConfig(raw, "prod", "dci-prod-config")
-	require.ErrorContains(t, err, "the deployed instance configuration document for instance")
-	require.ErrorContains(t, err, "v1.4")
+	require.NoError(t, err)
+}
+
+func TestV14DeployedObserveIsRefusedFlaglessAndOverriddenByAnExplicitReset(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		opts    UpgradeOptions
+		refused bool
+	}{
+		{"flagless", UpgradeOptions{Options: Options{Instance: "prod"}}, true},
+		{"reset-values", UpgradeOptions{Options: Options{Instance: "prod", ResetValues: true}}, false},
+		{"replacing values", UpgradeOptions{Options: Options{Instance: "prod", ValuesOverlay: map[string]interface{}{"replicas": 2}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := atVersion(t, "ghcr.io/devicechain-io", "v1.3.0")
+			inst.Spec.TrustedProxies = []string{"10.0.0.0/8"}
+			inst.Spec.TrustedProxiesExplicit = true
+			fakeHome(t)
+			stubOperatorCheck(t, nil)
+			stubDeclaration(t, inst)
+			deployed := &config.InstanceConfiguration{}
+			deployed.Infrastructure.TokenAudience.Enforcement = "observe"
+			stubDeployedInstance(t, deployed)
+			provider, err := Get("local")
+			require.NoError(t, err)
+			client := fake.NewSimpleClientset()
+			_, err = hydrateUpgradeState(t.Context(), client, provider,
+				ClusterBinding{KubeContext: "kind-c", Cluster: "c"}, tc.opts)
+			if tc.refused {
+				require.ErrorContains(t, err, "--reset-values")
+				require.ErrorContains(t, err, "Nothing has been changed")
+			} else if err != nil {
+				require.NotContains(t, err.Error(), "which v1.4 refuses")
+			}
+			for _, action := range client.Actions() {
+				require.Contains(t, []string{"get", "list", "watch"}, action.GetVerb())
+			}
+		})
+	}
 }
