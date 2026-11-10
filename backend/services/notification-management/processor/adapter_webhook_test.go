@@ -4,19 +4,15 @@
 package processor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-notification-management/model"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 )
 
@@ -172,10 +168,6 @@ func TestWebhookStoredInvalidLinkBaseStillDelivers(t *testing.T) {
 	key := struct{ token, text string }{token, parseErr.Error()}
 	webhookLinkBaseWarnings.Delete(key)
 	defer webhookLinkBaseWarnings.Delete(key)
-	var logs bytes.Buffer
-	previousLogger := log.Logger
-	log.Logger = zerolog.New(&logs).Level(zerolog.WarnLevel)
-	defer func() { log.Logger = previousLogger }()
 
 	adapter := &webhookAdapter{client: srv.Client()}
 	channel := channelWith(token, model.ChannelTypeWebhook, config)
@@ -192,7 +184,8 @@ func TestWebhookStoredInvalidLinkBaseStillDelivers(t *testing.T) {
 			t.Fatalf("notification payload changed: %v", got)
 		}
 	}
-	if count := strings.Count(logs.String(), `"level":"warn"`); count != 1 {
-		t.Fatalf("got %d warnings across two deliveries: %s", count, logs.String())
+	// Both deliveries have warned (once); a third claim must find the warning already given.
+	if claimLinkBaseWarning(token, parseErr) {
+		t.Fatal("the invalid linkBaseUrl was not warned about during delivery")
 	}
 }

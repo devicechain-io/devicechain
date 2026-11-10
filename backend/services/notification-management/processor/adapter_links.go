@@ -13,12 +13,17 @@ import (
 // across webhook, Slack, Teams and PagerDuty deliveries.
 var webhookLinkBaseWarnings sync.Map
 
+// claimLinkBaseWarning reports whether this channel and error have not been warned about yet.
+func claimLinkBaseWarning(token string, err error) bool {
+	_, loaded := webhookLinkBaseWarnings.LoadOrStore(struct{ token, text string }{token, err.Error()}, struct{}{})
+	return !loaded
+}
+
 func warnInvalidLinkBase(token string, err error) {
 	if err == nil {
 		return
 	}
-	key := struct{ token, text string }{token, err.Error()}
-	if _, loaded := webhookLinkBaseWarnings.LoadOrStore(key, struct{}{}); !loaded {
+	if claimLinkBaseWarning(token, err) {
 		log.Warn().Err(err).Str("channel", token).Msg("Ignoring invalid linkBaseUrl; links omitted")
 	}
 }
