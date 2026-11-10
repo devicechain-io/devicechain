@@ -55,7 +55,7 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
 ## Crear una métrica calculada
 
 Abre un perfil de dispositivo y elige la pestaña **Métricas** (consulta
-[Métricas](device-types-and-profiles.md#métricas)). Elige **Nueva métrica**.
+[Métricas](device-types-and-profiles.md#metrics)). Elige **Nueva métrica**.
 
 1. Establece **Tipo** en **Calculada**. La elección es definitiva, por lo que queda bloqueada al
    editar una métrica.

@@ -352,7 +352,7 @@
     },
     "user-guide/calculated-metrics.md": {
       "sourceSha256": "bd6135fed34388e0aca2881c9b9d94b7f58e693b55f85f43d5e191fef22a0c2c",
-      "translationSha256": "b61339864215b4818e002694da9ca84a29e9a5c9459dc506dcb406c468e532e7"
+      "translationSha256": "c8856964eb546da30e147d34d79460ce4215d08f3d19bafc646a3eb97c0c0502"
     },
     "user-guide/commanding-a-fleet.md": {
       "sourceSha256": "c8b89df2280936786090ddd21711483740db83dcdd583e45c5b2ebb6301fea6e",
@@ -376,11 +376,11 @@
     },
     "user-guide/device-types-and-profiles.md": {
       "sourceSha256": "f7ac29b4a880a8b723b32cdc99f8f8b4cf9e9cf1a9e145b8217c97ab5759c734",
-      "translationSha256": "a6bed6a98f36ba891cf75323e5e261a5e25cc2003c701d60de372003ec69f45e"
+      "translationSha256": "ca9a780e46f4684f851acd3a1c72948c8315a080e42d6a87ca8b6916e7d1d88e"
     },
     "user-guide/devices.md": {
       "sourceSha256": "61619190558b033c351d4676bb93daa4cddbd1ebb1f47b853b1551576f24deae",
-      "translationSha256": "53d5a75e1caf4dd8339eaa08efb789ffd55ecc74ee9f166a0a7f92a49f5b2376"
+      "translationSha256": "749d5db2d2e16c81aeb57c02d12ab9a7b0487e1ee318a6502e428ad7cd166779"
     },
     "user-guide/geofences.md": {
       "sourceSha256": "4be8af277e1423cbf7b8cdacaa22dfd7cb07f1776622db5c61b8d4fcab8fbcc3",
@@ -392,7 +392,7 @@
     },
     "user-guide/inbound-integrations.md": {
       "sourceSha256": "1db3b24b120c22d9f72ab870cf3ff2a6b3f0b2f85fb07f1aac391281cb9313bf",
-      "translationSha256": "a0ab8a7215614a5ecf16010792803355776dffd87c62ba3c8c5be2c900f9bc7f"
+      "translationSha256": "bc7a9c426ca82b57378530d753cabb2b17a3b2d9f6f2661a26f069bbae57c791"
     },
     "user-guide/index.md": {
       "sourceSha256": "341ca58b57ea6e4a1987477808cef4ab13760d37ab57dee6e4b380cd6b80b2c1",
