@@ -756,6 +756,169 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent minor releases are documented in full, newest first.
 
+### v1.4.0 — confirmed LoRaWAN downlinks, a device's own payload over MQTT, and notifications that name the device {#v140-upgrade}
+
+> **TODO (v1.4 freeze):** draft. Confirm the title and the final PR list, and remove every TODO block before merging.
+
+`v1.4.0` is an in-place upgrade from `v1.3.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Use **the new release's `dcctl` for both commands**, and give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Nine appended migrations run on upgrade (two in `device-management`, four in `notification-management`, two in `outbound-connectors` and one in `user-management`); they add tables and nullable columns and change no existing row. See [Schema changes and going back](#v140-going-back). Coming from `v1.2.0` or earlier, read the [`v1.3.0` notes](#v130-upgrade) first and follow them with `--version v1.4.0`.
+
+```bash
+dcctl install local --version v1.4.0
+dcctl upgrade local devicechain --version v1.4.0 --dry-run
+dcctl upgrade local devicechain --version v1.4.0
+```
+
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds to the covered interfaces (new GraphQL fields, operations and enum values, a new MQTT topic, new `dcctl` flags and a new `--size`) and removes none. The new agent proposal and approval operations are in the [preview tier](./versioning-policy.md#preview-interfaces), where they may still change in a minor release; the release notes then say what changed. The Helm values this release adds are not covered by the compatibility policy, and every one is off, or keeps the behaviour of `v1.3.0`, by default.
+
+> **TODO (v1.4 freeze):** the `v1.3.0` notes said `v1.4` refuses `infrastructure.tokenAudience.enforcement: observe`. No merged PR since `v1.3.0` mentions it; confirm whether it landed and add the upgrade note if it did.
+
+What is new:
+
+- **`dcctl` refuses upgrades in the wrong order.** See [Upgrade ordering is enforced](#v140-ordering).
+- **A notification policy can notify when an alarm clears,** and alarm notifications name the device and can link to it. See [Notifications that name the device](#v140-notifications).
+- **A device can publish its own payload over its MQTT connection** for its profile's decoder, and the console's connect snippet can show it. Opt-in. See [A device's own payload over MQTT](#v140-mqtt-uplinks).
+- **LoRaWAN commands can be confirmed,** on ChirpStack v4 and on The Things Stack v3, and a command definition can carry a declarative payload encoder. See [LoRaWAN confirmed downlinks](#v140-lorawan).
+- **Ingest metering can credit the lag a platform stall causes.** Opt-in. See [Lag-credited ingest metering](#v140-ingest-metering).
+- **A `perf-16k` size,** corrections to `perf-12k`, and a relational `max_wal_size` setting. See [Sizing](#v140-sizing).
+- **Agent actions, a preview.** An AI agent can propose acknowledging or clearing alarms, and people approve from their own sessions. Nothing is executed. See [Agent actions (preview)](#v140-agent-actions).
+- **A supported way to reach a service on your own machine from a local cluster:** `--dev-allow-egress`. See [Local development egress](#v140-dev-egress).
+- **The Grafana boards page has screenshots of all eight boards,** and the boards count messages in flight. See [Other changes in this release](#v140-other-changes).
+
+#### Before you upgrade {#v140-before-you-upgrade}
+
+What needs action, in the order to do it:
+
+- **Run `dcctl install` with the new release's `dcctl` before `dcctl upgrade`, always.** `dcctl upgrade` now reads the cluster's install record and refuses, before it writes anything, when the `dcctl` that last finished `dcctl install` is older than the one upgrading, when an install started and never finished, or when the record is missing. That includes a patch release: a flagless `dcctl upgrade` with a newer patch release of `dcctl` needs `dcctl install` with that `dcctl` first. A flagless `dcctl upgrade`, which re-applies the instance's declared version, is also refused when that version is newer than the `dcctl` you run. See [Upgrade ordering is enforced](#v140-ordering).
+- **An explicit `--version` must be your `dcctl`'s own release,** for `install` and for `upgrade`. To move to another release, use that release's `dcctl`. A custom-registry tag, `--build` and `enable-area` are not affected.
+- **Turn on the new opt-in features only after the rollout completes, and each in an upgrade of its own.** Each is off by default, and a pod of `v1.3.0` that is still running does not know it:
+  - Set `infrastructure.nats.mqttDeviceUplinks` in an upgrade of its own, after `v1.4.0` is in place. See [A device's own payload over MQTT](#v140-mqtt-uplinks) for what an older pod does with it, including a stream-drift error.
+  - Set `agentActuation.enabled` in a separate upgrade, after the rollout of `v1.4.0` has finished. See [Agent actions (preview)](#v140-agent-actions).
+  - Set `eventSources.ingestMetering: lagCredit` only after every `event-sources` pod is `v1.4.0`, and set it back to `legacy` before you go back to an earlier release. See [Lag-credited ingest metering](#v140-ingest-metering).
+- **If a webhook notification channel already has a `linkBaseUrl` key in its config, check that its value is valid.** The key was ignored before. It is now validated when you save the channel, and a stored invalid one fails delivery after the upgrade. See [Notifications that name the device](#v140-notifications).
+- **Do not use a `dcsa_` prefix for an OAuth client id.** It is reserved for service accounts, and an OAuth client id, including a seeded one, may not start with it.
+- **If an instance is recorded with `--size perf-12k`, expect two pod-spec changes on its next `dcctl upgrade`:** `device-management` requests 400m CPU (was 500m), and `event-sources` has a 256Mi memory limit (was 512Mi). Pods restart as for any rollout. See [Sizing](#v140-sizing).
+- **Expect `x509_ocsp_unavailable_allowed_total` to rise by one for a first connect, not two.** The first connect of a device ran the OCSP step twice and counted both; the series counts connects, as its help says, and now does. Admit and refuse decisions, the name and the labels are unchanged. Re-baseline a dashboard or alert you tuned against the doubled rate.
+- **Nothing needs doing for anything else in this release.** Every other change is additive or off by default.
+
+New Helm values and `dcctl` settings, each off or unchanged by default:
+
+| Value | Default | What it does |
+| --- | --- | --- |
+| `eventSources.ingestMetering` | `legacy` | `lagCredit` selects the lag-credited gate. Rendered into the `event-sources` pods as an environment variable. |
+| `infrastructure.nats.mqttDeviceUplinks` | `false` | Grants each device the right to publish its own uplink topic, and adds the uplink subject to the capture stream. Settable with `dcctl --values`. |
+| `functionalAreas.user-management.config.agentActuation.enabled` | `false` | One of the three switches for agent actions. |
+| `postgres_max_wal_size_mib` (cluster-root OpenTofu variable) | `0` | The relational store's `max_wal_size`; `0` keeps PostgreSQL's own default of 1 GB. |
+
+> **TODO (v1.4 freeze):** verify the Helm value paths above (especially `eventSources.ingestMetering` and the other two agent-actions switches) against `values.yaml` and the concept page.
+
+#### Upgrade ordering is enforced {#v140-ordering}
+
+The `v1.3.0` upgrade drill found two ordering mistakes `dcctl` did not stop. Both are refusals now; no flag is removed or renamed, and there is no override, because no documented workflow runs a `dcctl` at a release other than its own.
+
+- **`dcctl upgrade` before `dcctl install`.** It used to be accepted whenever a release left the operator's definitions unchanged. It now reads the cluster's install record, which names the `dcctl` that last finished `dcctl install`, and refuses, naming the install command to run first and reminding you to repeat the cluster's install settings.
+- **An explicit `--version` older or newer than the `dcctl`.** Older is refused, because the `dcctl` would plan its own chart around older images; to go back where a release's notes allow it, use the older release's `dcctl`. Newer is refused with a different message: get the `dcctl` of that release, run `dcctl install` with it, then upgrade. A flagless `dcctl upgrade` whose declared version is newer than the `dcctl` is refused the same way. Running the install with the older `dcctl` cannot clear it, because the record stores the running `dcctl`, not the `--version` it was given.
+
+The same release makes `-i` / `--instance` work on every command that talks to the platform API (`events failed`, `attr`, `dead-letters`, `presence`, `product`, `tenant-deletion`, `test` and `device register`), which took only `--server` before. Without `--server`, `--instance` uses the host and TLS setting from the instance's declaration; an explicit `--server` or `--tls` wins.
+
+#### Notifications that name the device {#v140-notifications}
+
+- **`notifyOnClear`.** A notification policy has a new option, off by default; existing policies are unchanged. When on, the policy also notifies its channels when an alarm it paged clears. The clear goes only to the channels and recipients that delivered a page in that cycle, and is sent once. It applies to clears after the option was turned on, and editing the policy later does not drop a clear that is waiting.
+- **Notifications name the device.** Webhook payloads carry `deviceToken`, `deviceName` and `deviceTypeToken` when known, and the summary shows the device name. Timed re-notifications and late clear notices carry them too, for alarms paged after the upgrade; an alarm paged earlier omits them rather than showing invented values. `originatorType` and `originatorId` are present when known, and a late `CLEARED` does not carry them.
+- **Links.** Slack, Teams and PagerDuty messages link to the device's console page when the channel has a `linkBaseUrl`. A generic webhook channel can now set `linkBaseUrl` as well, and then its payload gains `alarmUrl` and, when the device is known, `deviceUrl`. Existing keys are unchanged, and the console's channel form edits it. A `linkBaseUrl` with a query or a fragment is refused when you save the channel, and a stored invalid one omits the links at delivery. A generic webhook config that already carried an invalid `linkBaseUrl` key, which was ignored before, now fails delivery after the upgrade.
+
+> **TODO (v1.4 freeze):** a later PR changed `linkBaseUrl` handling after the PR that added it said a stored invalid one fails delivery. Reconcile the last two sentences of the Links item with the final behaviour for the generic webhook channel.
+
+#### A device's own payload over MQTT {#v140-mqtt-uplinks}
+
+A device can publish its own bytes to `{instance}/{tenant}/devices/{device}/uplink` and the decoder on its device type's profile turns them into events, the same capability the HTTP `uplink` route gave in `v1.3.0`. The device authenticates at connect and its signed grant names only its own uplink topic, so a payload can never be decoded as another device. A payload on `events` is still never read by a decoder.
+
+It is opt-in: with `infrastructure.nats.mqttDeviceUplinks` off, which is the default, the grant is exactly what earlier releases minted and the broker refuses a publish to the topic. MQTT cannot answer a device, so a payload that cannot be carried (no decoder, unknown device, over a limit) is recorded as a failed decode with its cause and counted in the new `device_uplink_messages_total{result}`. There is also a new service-plane query, `brokerAssertedDeviceDecoder`.
+
+**Turn it on in an upgrade of its own, after `v1.4.0` is in place.** Turning it on also makes the capture stream declare the uplink subject. While pods of `v1.3.0` still run with it on: an `event-sources` pod that restarts stops with a stream-drift error (loud, and nothing is lost); one that is already running acknowledges and drops a subject outside its two, so a raw payload that reaches it is lost; and a `device-management` pod refuses the uplink it cannot place, which is redelivered. With it off the capture stream is exactly what `v1.3.0` declares, so a pod that restarts mid-rollout is unaffected. Turning it off again takes effect for a device when it reconnects or its session token expires.
+
+With `dcctl`, set it in a `--values` overlay: `instance.config.infrastructure.nats.mqttDeviceUplinks: true`; later upgrades carry it. See the [payload decoders guide](../guides/payload-decoders.md) and the [Device Protocol Reference](../reference/device-protocol.md#raw-payload). The console's **Send data** tab for a device now offers a **Raw payload** choice beside the event JSON, with the `curl` for the HTTP route and the `mosquitto_pub` for the topic. It cannot see whether the operator enabled either, so each command names the setting it needs.
+
+#### LoRaWAN confirmed downlinks {#v140-lorawan}
+
+- **ChirpStack v4.** A command with `"confirmed": true` stays `SENT` until the network server settles it, instead of being answered when the downlink is queued. ChirpStack's `ack` and `txack` events arrive at the inbound integration URL already configured for uplinks. An acknowledgement settles the command `SUCCESSFUL`; an unacknowledged confirmation timeout, or nothing by the deadline (the command's expiry, else 24 hours), settles it `TIMEOUT` with unknown delivery, never "not delivered", because the device may have heard it. An event that cannot be matched to a pending downlink by queue item id, integration and DevEUI is dropped and counted in `lpwan_ack_reports_total`, never matched by guess.
+- **The Things Stack v3.** The downlink also reaches devices behind a The Things Stack v3 network server. Create a `lorawan_downlink` connector with `networkServer: "tts_v3"` and the application's id; the device needs a `tts.device-id` alias. Confirmed downlinks are settled from the `downlink_ack`, `downlink_nack`, `downlink_sent` and `downlink_failed` webhook events, which must be enabled on the application's webhook with paths that start with `downlink` (for example `/downlink-ack`).
+- **A payload encoder on a command definition.** A command definition can carry an optional, declarative `encoder` that turns the command's typed parameters into the application payload, the mirror of the uplink decoders: an `fPort`, an optional static `confirmed`, and ordered fields (constant bytes, fixed-width integers of 8, 16 or 32 bits in either byte order with `scale` and `offset`, booleans and packed bit fields). It is validated when the definition is created or updated and at profile publish, so a bad encoder fails loudly with the command named. Nothing is rounded or truncated: a value that is out of range, fractional for an integer field, missing, of the wrong type or not exactly representable refuses the command as not sent. A definition without an encoder keeps the raw hex or base64 contract. A republish reaches the wire within about ten seconds. See the [inbound integrations guide](../guides/inbound-integrations.md).
+
+The feature needs `functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`, as in `v1.3.0`. Do not send confirmed downlinks until the rollout is complete, so that every `outbound-connectors` pod reads the new acknowledgement stream.
+
+> **TODO (v1.4 freeze):** confirm the last sentence against the rolling-upgrade section of the ChirpStack acknowledgement PR, and that the encoder is documented in `inbound-integrations.md`.
+
+#### Lag-credited ingest metering {#v140-ingest-metering}
+
+After a short platform stall (a message broker pause, a paused reader, a slow decode stage), a tenant that stayed within its ceiling has its queued traffic read in a burst, and the part the live allowance cannot hold was shed after the device had been told the message arrived. A new metering mode removes that.
+
+- **Nothing changes by default.** `eventSources.ingestMetering` stays `legacy`. Set it to `lagCredit` to use the new gate, and back to `legacy` to return. It is a Helm value rendered into the `event-sources` pods as an environment variable, so a pod of an earlier release never sees it. An unrecognised value stops the pod at startup. **Before going back to a release earlier than `v1.4.0`, set it to `legacy`:** earlier releases refuse to start with `lagCredit`.
+- **What it does.** Fresh traffic is still counted when the pod reads it, but a tenant's allowance grows by what its rate earns over the measured delay of the readers, up to the time its burst covers (never more than 5 seconds). A tenant above its ceiling is still shed by its excess, and a backlog older than the cover drains as before.
+- **What it does not change.** Sheds over the ceiling, by an overload band or by the hard drop are counted by the existing rate-limit counters as before. HTTP and inbound integrations keep their limits. Ceilings are still per replica.
+- **How it measures.** Each replica estimates the offset between the broker's append stamps and its own clock, and how far each reader is behind, from the delivery information the broker already sends, and asks the broker about four times a second whether a quiet stream has anything queued. A replica that starts during a stall has not measured the broker's clock yet, so for the first moments of that stall it can credit less than it should.
+- **New metrics,** empty in `legacy` mode and none with a tenant label: `ingest_shed_cause_total{stream,route,cause}`, `ingest_lag_credit_seconds{stream}`, `reader_lag_seconds{stream}`, `append_skew_seconds{stream}` and `append_skew_clamped_total{stream}`. **New alerts,** quiet in `legacy` mode: `IngestShedBeyondLagCredit` and `IngestAppendSkewLarge`.
+
+> **TODO (v1.4 freeze):** the PR says `lagCredit` stays non-default until the kind rig and a GKE round have run; decide whether to call it opt-in or experimental here. Fix the `v1.3.0` known-issue cross-reference to `#v120-ingest-metering` if it now reads as stale.
+
+#### Sizing {#v140-sizing}
+
+- **`perf-16k` is a new `--size` value** for sustained 16,000 events a second: NATS at 6 CPU and 6Gi requested, an event store `max_wal_size` of 40960 MiB on a 260Gi volume, `event-processing` at 2 CPU and 1536Mi, and a 36Gi JetStream volume for the design rate. The measured shape held 16,000 events a second exactly; 20,000 events a second is stored exactly but over the latency target, so it is documented as a throughput ceiling and there is no `perf-20k`. The `perf-16k` values are derived from the measured ramp and have not yet been run as written; the sizing page says so.
+- **`perf-12k` is corrected:** `device-management` requests 400m CPU (was 500m) and `event-sources` has a 256Mi memory limit (was 512Mi, measured at 81 MiB resident at most). An instance recorded with `perf-12k` picks both up on its next `dcctl upgrade`.
+- **A relational `max_wal_size`.** The new cluster-root OpenTofu variable `postgres_max_wal_size_mib` (default `0`, which is PostgreSQL's own 1 GB, so no existing install changes) sets it through the cluster definition; a value above a quarter of `postgres_storage` is refused at plan time. The relational store belongs to the cluster, so `dcctl bootstrap --size` does not write it: state it at install with `TF_VAR_postgres_max_wal_size_mib`, with `TF_VAR_postgres_storage` large enough. The sizing page lists the value each size was measured with.
+
+See [Sizing](./sizing.md).
+
+#### Agent actions (preview) {#v140-agent-actions}
+
+An AI agent can now propose acknowledging or clearing alarms. The tenant's agent policy decides whether it may, the proposal is recorded with who asked, through which client, exactly what and why, and people approve it from their own sessions with a fresh second factor. **Nothing is executed in this release:** the approval that would complete a proposal is refused with `EXECUTION_NOT_AVAILABLE` and is not recorded, and a verdict is never `AUTO`. Everything is off by default, behind three independent switches. The operations are in the preview tier; see [Agent actions](../concepts/mcp.md#agent-actions).
+
+- **Enable `agentActuation` in a separate upgrade,** after the rollout of the release that brings it has finished. A pod of an earlier release does not know agent accounts and would issue an agent account's token with its roles' write permissions; agent accounts get proposal-only tokens only from pods of this release or later, which is why an agent account can be created only while the switch is on.
+- **Sign in again before an agent can propose.** A proposer's standing now follows the identity's session epoch, which rotates on a password reset, an MFA reset or disable, an enrolment or a disable. A sign-in record from before this release has no epoch and is refused, so the person signs in again and the agent proposes again.
+- **Approvals are checked at the end.** An approval counts only while its second factor is still fresh, and the approval that would complete a proposal re-reads every earlier approver's role, write permission, unscoped membership and active factor. An approver whose approval went stale can approve again.
+- **The kill switch always works.** `setAgentActuation(enabled: false)` is never refused by size or validation, even over a policy this pod cannot read.
+- **`dcsa_` is reserved** as the prefix of service-account ids; an OAuth client id may not start with it.
+- **A caller who is not the proposer and does not hold `agent:admin`** sees the coarse reason `PROPOSER_NOT_IN_STANDING` instead of the detailed one.
+- **Limits worth knowing.** Editing a client that still has act scopes while the switch is off, administrators who sign in only through SSO or without TOTP being unable to loosen the policy until the console step-up lands, and the fact that changing who holds an approver role changes who counts, are documented on the [concept page](../concepts/mcp.md#agent-actions).
+
+> **TODO (v1.4 freeze):** confirm the execution slice did not merge before the freeze (if it did, this section changes), and name the three switches.
+
+#### Local development egress {#v140-dev-egress}
+
+`dcctl bootstrap` and `dcctl upgrade` take `--dev-allow-egress <address-or-CIDR>` (repeatable, or comma-separated; `none` clears it) so a webhook or connector on a local cluster can reach a service on your own machine or LAN. It is refused unless the kube context starts with `kind-`, `minikube`, `k3d-`, `docker-desktop` or `rancher-desktop`. It is a separate key, `infrastructure.egress.devAllowedDestinations`, and the operator's `allowedDestinations` is still not tunable. The cloud metadata addresses, loopback, link-local and multicast ranges, and the other never-allowed ranges stay blocked whatever you list, and an entry that overlaps one fails `dcctl` up front. It is recorded on the instance so later upgrades keep it, `dcctl instances` shows it as `DEV EGRESS ALLOWED`, and every service that uses it logs a warning at startup. See [Outbound connectors](../concepts/outbound-connectors.md).
+
+#### Other changes in this release {#v140-other-changes}
+
+Nothing here needs action.
+
+- **The [Grafana boards](./grafana-boards.md) page has screenshots** of all eight boards from a `v1.3.0` instance under a steady synthetic load, with a scripted outage.
+- **Waiting-backlog panels count messages in flight.** The broker fallback counts waiting and taken-but-unacknowledged messages together, so messages a restarted reader took stay counted; the ingest, persistence, device-state, messaging, delivery and event-processing backlog panels were corrected. The platform OOM and delivery refused or quiet-hours tiles read `0`, not "No data", while their owner is up.
+- **The notification clear pickup** reports a pass that delivered and then ran out of budget as partial, not failed, and counts a tenant whose reads both failed once.
+- **A failed delete of a deleted tenant's pending downlink** is recorded as `store_failed`, and the acknowledgement sweep drops a deleted tenant's rows before claiming them.
+- **A refused database read** returns an error instead of a nil-pointer panic.
+
+#### Schema changes and going back {#v140-going-back}
+
+The following migrations are appended. Every new column is nullable or defaulted and every new table starts empty, so a service from `v1.3.0` that runs against the new schema writes rows it can still store.
+
+- **Agent policy** (`user-management`, migration `20261109120000`). Two new tables, `iam_agent_policies` (a head row per tenant) and `iam_agent_policy_versions` (append-only published versions), and the agent flag on `iam_service_accounts`. No rows are seeded: a tenant with no published policy has agent actuation off.
+- **Agent proposals** (`device-management`, migration `20261125090000`). One new table, `agent_proposals`.
+- **Command encoder** (`device-management`, migration `20261109000100`). One nullable column, `encoder`, on the command definitions.
+- **Notify on clear** (`notification-management`, migrations `20261109000100`, `20261109000200` and `20261110000100`). A `notify_on_clear` column with a default of false on the policies, per-cycle columns and a partial index on the notification state table, and a nullable `notify_on_clear_since` on the policies, filled for policies that already had the option on.
+- **Notification state source** (`notification-management`, migration `20261110000200`). Five nullable columns on the notification state table that keep the alarm's originator and the device's token, name and type token. No backfill.
+- **Pending acknowledgements** (`outbound-connectors`, migrations `20261109120000` and `20261110120000`). One new table, `lpwan_pending_acks`, and a nullable `device_ref` column on it.
+
+**Nothing in a database needs undoing to go back to `v1.3.0`:** the new tables and columns stay in place and the `v1.3.0` services ignore them. Before going back, set `eventSources.ingestMetering` to `legacy` and turn off `mqttDeviceUplinks` and `agentActuation`. `dcctl` refuses a `--version` older than itself, so use the older release's `dcctl`. Roll forward when you can: a failed upgrade is fixed by running `dcctl upgrade` again.
+
+> **TODO (v1.4 freeze):** the migration ids were read from the schema directories at `origin/main` `316c27d40`; the `20261125090000` id for agent proposals is later than the rest, so check ordering against anything merged after. Confirm the table names above.
+
+#### Known issues {#v140-known-issues}
+
+- **A confirmed LoRaWAN downlink that the network server never reports on settles by its deadline,** as `TIMEOUT` with unknown delivery.
+- **An escalation that had already won its claim before a clear was stamped can still deliver after it,** and an escalation's targets recorded after the clear was claimed get no clear. An old pod that toggles `notifyOnClear` off and on during the rolling upgrade can cause clears from just before the re-opt-in to be announced, within the existing 30-minute window.
+- **The relational `max_wal_size` is not written by `dcctl bootstrap --size`;** set it at install.
+
+> **TODO (v1.4 freeze):** add any other known issues the freeze review finds; the three above come from PR bodies.
+
 ### v1.3.0 — commands reach HTTP and LoRaWAN devices, and deliveries leave evidence {#v130-upgrade}
 
 `v1.3.0` is an in-place upgrade from `v1.2.0`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described [for v0.17.0](https://github.com/devicechain-io/devicechain/blob/v0.17.0/docs/docs/deployment/releases-and-upgrades.md#v0170-upgrade). Give `dcctl install` the settings the cluster was installed with, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Ten appended migrations run on upgrade (five in `device-management`, two in `command-delivery`, two in `event-management` and one in `notification-management`), and every area's audit journal gains four nullable columns; they add tables, nullable columns and indexes, and change no existing row. See [Schema changes and going back](#v130-going-back). Run `dcctl install` before the instance upgrade, as above: it also moves the Alertmanager onto the routing configuration that `dcctl` writes (see [Alerts reach a person](#v130-alert-routing)). **Token audiences are now enforced by default:** read [Token audiences are enforced by default](#v130-token-audience) before you upgrade, above all if you write the instance configuration yourself. Coming from `v1.1.0`, read the [`v1.2.0` notes](#v120-upgrade) first and follow them with `--version v1.3.0`.
