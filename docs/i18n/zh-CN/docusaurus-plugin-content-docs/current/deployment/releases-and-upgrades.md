@@ -656,6 +656,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 - **等待积压面板统计传输中的消息。** 消息代理的回退统计方式将等待中的消息和已取出但尚未确认的消息合并计数，因此重启的读取器已取出的消息仍会被计入；接入、持久化、设备状态、消息传递、投递和事件处理的积压面板均已修正。平台 OOM 以及投递被拒或静默时段的指标卡，在其负责服务运行时显示 `0`，而非“无数据”。
 - **通知清除拾取流程**会将已完成部分投递、随后耗尽预算的一轮处理报告为部分完成，而非失败，并且对两次读取均失败的租户只计数一次。
 - **删除已删除租户的待处理下行失败时，** 会记录为 `store_failed`，确认扫描会在认领之前丢弃已删除租户的行。
+- **本版本功能的面板和告警。** Ingest、Command Delivery 和 Delivery 看板新增面板，覆盖设备 MQTT 上行、LoRaWAN 确认与下行、集成下行报告、按延迟补偿的接入计量、OCSP 以及清除通知拾取；七个新告警都有[运行手册条目](./alert-runbook.md)：`LpwanAckReportsAnomalous`, `LpwanAckSettlementFailing`, `LpwanDownlinkTrackingFailing`, `IntegrationDownlinkReportsDiscarded`, `DeviceUplinkMessagesFailing`, `X509OcspUnavailableAllowed` and `NotificationClearPickupFailing`。
 - **被拒绝的数据库读取**会返回错误，而不是发生空指针 panic。
 - **代理令牌不能再更改某个人的个人资料名称：**`updateProfile` 拒绝代理令牌。
 

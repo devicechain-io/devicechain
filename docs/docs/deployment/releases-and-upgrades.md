@@ -900,6 +900,7 @@ Nothing here needs action.
 - **Waiting-backlog panels count messages in flight.** The broker fallback counts waiting and taken-but-unacknowledged messages together, so messages a restarted reader took stay counted; the ingest, persistence, device-state, messaging, delivery and event-processing backlog panels were corrected. The platform OOM and delivery refused or quiet-hours tiles read `0`, not "No data", while their owner is up.
 - **The notification clear pickup** reports a pass that delivered and then ran out of budget as partial, not failed, and counts a tenant whose reads both failed once.
 - **A failed delete of a deleted tenant's pending downlink** is recorded as `store_failed`, and the acknowledgement sweep drops a deleted tenant's rows before claiming them.
+- **Panels and alerts for this release's features.** The Ingest, Command Delivery and Delivery boards gain panels for device MQTT uplinks, LoRaWAN acknowledgements and downlinks, integration downlink reports, lag-credited ingest, OCSP and the clear pickup, and seven new alerts have [runbook entries](./alert-runbook.md): `LpwanAckReportsAnomalous`, `LpwanAckSettlementFailing`, `LpwanDownlinkTrackingFailing`, `IntegrationDownlinkReportsDiscarded`, `DeviceUplinkMessagesFailing`, `X509OcspUnavailableAllowed` and `NotificationClearPickupFailing`.
 - **A refused database read** returns an error instead of a nil-pointer panic.
 - **An agent token can no longer change a person's profile name:** `updateProfile` refuses agent tokens.
 
