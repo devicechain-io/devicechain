@@ -276,4 +276,15 @@ spec:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicetrustanchorsexpiringsoon"
             summary: "A trust anchor expires within 30 days"
             description: "For 1h, {{ "{{ $value | humanize }}" }} enabled trust anchor(s) across the instance's tenants expire within 30 days or already have. When a trust anchor expires, every device whose certificate chains to it is refused. List them with the deviceTrustAnchors query (the notAfter field), and add the replacement CA as a new anchor and pin each device's certificate to it before the date."
+        # A 5m lookback with for: 10m excludes an isolated burst.
+        - alert: X509OcspUnavailableAllowed
+          expr: sum(rate(devicechain_devicemanagement_x509_ocsp_unavailable_allowed_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#x509ocspunavailableallowed"
+            summary: "Certificate connections are being allowed without current OCSP status"
+            description: "For 10 minutes, ENFORCE_KNOWN anchors have admitted certificate connections whose OCSP status could not be learned. Revoked certificates may be admitted while the responder is unreachable. Inspect the Ingest dashboard allowance reasons, responder fetch failures and breakers. Restore responder reachability and allowed egress, check node clocks and capacity, and verify deviceManagement.callout.ocsp.enabled and the anchor policy. REQUIRE_CURRENT refuses connections when current status is unavailable; change policy only with the impact on device availability understood."
 {{- end }}
