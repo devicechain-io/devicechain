@@ -186,7 +186,9 @@ distintivo **Deshabilitado**. A la derecha están **Deshabilitar** (o **Habilita
 
 La página se organiza en pestañas. Puede que no las veas todas: **Credenciales**, **Enviar datos** y
 **Sustitución** requieren permiso para modificar dispositivos, y **Actualizaciones** solo aparece
-cuando tu instalación ejecuta el servicio de actualizaciones y tienes permiso para verlas.
+cuando tu instalación ejecuta el servicio de actualizaciones y tienes permiso para verlas. **Alarmas**
+requiere `alarm:read`. Los miembros limitados a una parte del inquilino no ven **Asignación**,
+**Pasarela**, **Facetas** ni **Configuración**.
 
 ### Básico
 
@@ -211,6 +213,14 @@ una. Los eventos que el dispositivo ya envió conservan las asignaciones con las
 registraron.
 
 Consulta [Gestión de asignaciones de dispositivos](../guides/managing-assignments.md).
+
+### Pasarela {#gateway}
+
+**Pasarela** muestra la pasarela detrás de la que está este dispositivo y los dispositivos que están
+detrás de él. Con permiso para modificar dispositivos, introduce un **Token del dispositivo pasarela**
+y elige **Asignar pasarela**, o **Mover** para cambiar una pasarela existente. **Quitar pasarela**
+elimina la relación; la siguiente publicación de la antigua pasarela para este dispositivo se rechaza.
+Una pasarela no puede estar a su vez detrás de otra pasarela.
 
 ### Facetas {#facets}
 
@@ -260,6 +270,12 @@ las dos condiciones, así que la sección no aparece.
 
 Cada fila muestra cuándo ocurrió el evento, su tipo (por ejemplo, una medición) y el origen por el
 que llegó. Para un historial más largo, usa un panel.
+
+### Alarmas {#alarms}
+
+**Alarmas** enumera las alarmas generadas en este dispositivo, 10 por página, y se actualiza cada
+30 segundos. Con `alarm:write`, puedes reconocer aquí una alarma activa que aún no se haya reconocido.
+El enlace situado sobre la tabla abre la lista de alarmas del inquilino para las demás acciones.
 
 ### Comandos {#commands}
 

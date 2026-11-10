@@ -13,7 +13,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 主页 {#the-home-page}
 
-登录后会进入主页。主页会按姓名问候你，并显示两个数字：租户中有多少台 **Devices**（设备）和多少个 **Device Types**（设备类型）。选择任一数字即可打开对应列表。
+登录后会进入主页。主页会按姓名问候你，并显示租户中有多少台 **Devices**（设备）和多少个 **Device Types**（设备类型）。选择任一数字即可打开对应列表。拥有 `state:read` 权限时，还会显示 **Devices online**（在线设备）和 **Devices offline**（离线设备）；从未上报过数据的设备不计入这两项。拥有 `alarm:read` 权限时，**Active alarms by severity**（按严重程度统计的活动告警）会显示每种严重程度的数量；选择其中一项即可打开按该严重程度和活动状态筛选的告警列表。
 
 <GuideShot id="console-home" alt="控制台主页。左侧是侧边栏。页眉显示 Home，右上角是租户标识“acme (sim)”。页面标题为“Welcome, Dana Okafor”，显示两张卡片：13 Devices 和 1 Device Types。" />
 
@@ -30,7 +30,7 @@ import GuideShot from '@site/src/components/GuideShot';
 | 条目 | 内容 |
 | --- | --- |
 | **Home** | 主页。 |
-| **Monitor**（监控） | 团队创建的 **Dashboards**（仪表板）、规则已触发的 **Alarms**（告警），以及 **Notification Policies**（通知策略）：告警会通知谁，以及暂存这些通知的静默时段。 |
+| **Monitor**（监控） | 团队创建的 **Dashboards**（仪表板）、规则已触发的 **Alarms**（告警）、记录被拒事件的 **Ingest failures**（摄取失败）、设置告警路由和静默时段的 **Notification Policies**（通知策略），以及设置投递目的地的 **Notification Channels**（通知渠道）。 |
 | **Devices** | **Devices**、**Device Types**（设备类型）、**Device Profiles**（设备配置文件，包含该配置文件的规则、指标和命令）、**Device Groups**（设备分组）、**Command Batches**（命令批次）、**Maintenance Windows**（维护窗口）和 **Updates**（更新，其中的 **Artifacts**（制品）、**Rollouts**（发布）和 **Signers**（签名者）用于空中升级）。 |
 | **Connect**（连接） | 设备和其他系统接入租户的方式：**Provisioning Profiles**（预配置文件）、**Trust Anchors**（信任锚）、**Integrations**（集成）和 **Connectors**（连接器，通向其他系统的出站连接）。 |
 | **Organization**（组织） | **Assets**（资产）、**Customers**（客户）和 **Areas**（区域，含 **Geofences** 地理围栏）；**Facets**（分面），即用于描述和筛选实体的键；以及 **Browse**（浏览），按分面查找实体的查询构建器。 |

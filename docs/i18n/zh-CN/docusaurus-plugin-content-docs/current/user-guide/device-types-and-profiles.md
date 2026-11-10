@@ -60,7 +60,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 在侧边栏中打开 **Devices**，再打开 **Device Profiles**（设备配置文件）。列表显示每个配置文件的令牌、类别、使用它的设备类型数量、描述和创建日期。**New device profile**（新建设备配置文件）用于创建配置文件，需要填写令牌、名称、**Category**（类别，即功能分类，如恒温器或电表）和描述。
 
-选择某个配置文件即可打开它。它的选项卡为 **Basic**、**Metrics**、**Commands**、**Configuration**、**Detection Rules**（检测规则）、**Rule Health**（规则健康状况）和 **Versions**。检测规则和规则健康状况见其单独的章节。
+选择某个配置文件即可打开它。它的选项卡为 **Basic**、**Metrics**、**Commands**、**Configuration**、**Decoder**（解码器）、**Detection Rules**（检测规则）、**Rule Health**（规则健康状况）和 **Versions**。检测规则和规则健康状况见其单独的章节。
 
 ### 草稿与版本 {#drafts-and-versions}
 
@@ -110,6 +110,10 @@ import GuideShot from '@site/src/components/GuideShot';
 设备只能看到已声明的键。一个都没有声明时，它看到的是空文档。选择 **Declare key**（声明键）添加一个：填写 **Attribute key**（属性键）、**Value type**（值类型：**String**、**Integer (long)**、**Decimal (double)**、**Boolean** 或 **JSON**）和描述。
 
 具体的值按设备以共享属性的方式设置。设备的 [Configuration 选项卡](/user-guide/devices#configuration)会显示结果。
+
+### Decoder {#decoder}
+
+**Decoder**（解码器）将二进制帧、通用 JSON 或网络服务器的已解码对象转换为测量值。编辑草稿后，使用 **Run test**（运行测试）检查输入而不存储读数，再使用 **Save decoder**（保存解码器）保存。只有发布配置文件后，解码器才会生效。**Clear decoder**（清除解码器）会将其从草稿中移除；已发布的版本仍保留各自的解码器。输入约定和限制参见[载荷解码器](/guides/payload-decoders)。
 
 ### 发布版本 {#publishing-a-version}
 

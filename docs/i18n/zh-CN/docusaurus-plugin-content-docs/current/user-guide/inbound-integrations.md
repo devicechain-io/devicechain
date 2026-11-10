@@ -40,7 +40,7 @@ import GuideShot from '@site/src/components/GuideShot';
 - **Identifier location**（标识符位置）：请求头名称（例如 `X-Device-Id`）、指向字段的 JSON 指针（例如 `/device/id`）或查询参数名称。
 - **Items array**（条目数组，可选）：指向消息体中某个数组的 JSON 指针；每个元素是一条上行消息。当消息体本身就是一条上行消息时留空。
 - **Sender time**（发送方时间，可选）：指向发送方记录的时间的 JSON 指针。不设置时使用接收时间，重试的请求会被存储两次。
-- **Raw frame**（原始帧）和 **Frame encoding**（帧编码）（可选，仅 JSON）：编码后的原始帧所在位置，留给解码器使用。该帧目前不会被解码。
+- **Raw frame**（原始帧）和 **Frame encoding**（帧编码）（可选，仅 JSON）：编码后的原始帧所在位置，供设备已发布配置文件上的载荷解码器使用。
 
 选择 **Create integration**。接下来的对话框 **Integration created**（集成已创建）会显示**承载令牌**。**它只显示一次。**之后无法再次读取；如果丢失，请轮换。请现在就把它填入发送方。
 
@@ -57,15 +57,15 @@ import GuideShot from '@site/src/components/GuideShot';
 - 将 **Payload encoding** 设为 **JSON**。Protobuf 集成会被拒绝，并给出指明该设置的消息。
 - 填入页面上的 **Event endpoint URL**。ChirpStack 会自己在 URL 中加上事件类型；只读取上行消息，其他事件会被确认并忽略。
 - 添加请求头 `Authorization`，值为 `Bearer <承载令牌>`。
-- 在 ChirpStack 设备配置文件上设置**编解码器**。没有它，上行消息不带解码值，会被计为未解码。
+- 在 ChirpStack 设备配置文件上设置**编解码器**，或在 DeviceChain 设备配置文件上发布 **Decoder**（解码器）来读取原始帧。两者都没有时，上行消息不带解码值，会被计为未解码。
 
 ### The Things Stack v3 {#the-things-stack}
 
-在 The Things Stack 中，打开应用程序，添加一个 JSON 格式的 **Custom webhook**，并填入页面上的 **Base URL** 和 `Authorization` 请求头。在页面列出的路径之一上启用上行消息。其他路径上的消息会被确认并忽略。请在应用程序或设备上设置 **payload formatter**，否则上行消息会被计为未解码。
+在 The Things Stack 中，打开应用程序，添加一个 JSON 格式的 **Custom webhook**，并填入页面上的 **Base URL** 和 `Authorization` 请求头。在页面列出的路径之一上启用上行消息。其他路径上的消息会被确认并忽略。请在应用程序或设备上设置 **payload formatter**，或在 DeviceChain 配置文件上发布 **Decoder**（解码器）来读取原始帧。两者都没有时，上行消息会被计为未解码。
 
 ### 通用发送方 {#generic}
 
-对于 **Generic JSON** 和 **Generic binary**，页面会给出一个示例请求，展示标识符放在何处。通用发送方必须把每条上行消息作为 HTTP `POST` 发送，并在 `Authorization` 请求头中带上承载令牌。具体的请求形式见指南中的 [Generic JSON](/guides/inbound-integrations#generic-json) 和 [Generic binary](/guides/inbound-integrations#generic-binary) 部分。Generic binary 只统计上行消息，并保留前若干字节作为样本：它用来查看发送方发来了什么，而不是用来存储读数。
+对于 **Generic JSON** 和 **Generic binary**，页面会给出一个示例请求，展示标识符放在何处。通用发送方必须把每条上行消息作为 HTTP `POST` 发送，并在 `Authorization` 请求头中带上承载令牌。具体的请求形式见指南中的 [Generic JSON](/guides/inbound-integrations#generic-json) 和 [Generic binary](/guides/inbound-integrations#generic-binary) 部分。当设备已发布的配置文件带有用于该帧的载荷解码器时，Generic binary 会存储读数。没有解码器时，它只统计未解码的上行消息，并保留前若干字节作为样本。
 
 ### 发送方的证书 {#sender-certificate}
 
@@ -89,7 +89,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ### 无可读内容的上行消息 {#undecoded}
 
-当上行消息不含任何带数值或布尔值的已解码对象（布尔值存为 1 或 0）时，就会被计为未解码。对于网络服务器，常见原因是缺少编解码器或 payload formatter：请在那里的设备配置文件上设置一个，并使用 JSON 编码。DeviceChain 不会解码原始帧。
+对于没有已发布载荷解码器的设备类型，当上行消息不含任何带数值或布尔值的已解码对象（布尔值存为 1 或 0）时，就会被计为未解码。请在网络服务器中设置编解码器或 payload formatter 并使用 JSON 编码，或在 DeviceChain 设备配置文件上发布 **Decoder**（解码器），将原始帧转换为读数。控制台的连接提示仍然介绍网络服务器编解码器的方式。解码器失败会显示在配置文件的 **Decoder** 选项卡中的 **Health**（健康状况）和 **Recent failures**（最近失败）下，而不计入这里的未解码统计。参见[载荷解码器](/guides/payload-decoders)。
 
 ### 令牌被拒 {#rejected-token}
 

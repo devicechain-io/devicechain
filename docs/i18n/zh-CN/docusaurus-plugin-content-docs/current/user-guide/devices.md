@@ -113,7 +113,7 @@ DeviceChain 如何判断设备是否在线，参见[设备在线状态](/concept
 
 在列表中选择一台设备即可打开其页面。页眉显示设备名称、令牌（带复制按钮）、类型，以及被禁用时的 **Disabled** 徽章。右侧是 **Disable**（或 **Enable**）和 **Delete**（删除）。删除设备无法撤销。
 
-页面按选项卡组织。你可能看不到全部选项卡：**Credentials**、**Send data** 和 **Replacement** 需要修改设备的权限，**Updates** 只在你的安装环境运行了更新服务且你有权查看更新时才会出现。
+页面按选项卡组织。你可能看不到全部选项卡：**Credentials**、**Send data** 和 **Replacement** 需要修改设备的权限，**Updates** 只在你的安装环境运行了更新服务且你有权查看更新时才会出现。**Alarms**（告警）需要 `alarm:read` 权限。访问权限仅限于租户部分范围的成员看不到 **Assignment**、**Gateway**、**Facets** 或 **Configuration**。
 
 ### Basic {#basic}
 
@@ -132,6 +132,10 @@ DeviceChain 如何判断设备是否在线，参见[设备在线状态](/concept
 选择 **Target type**（目标类型，**Customer**、**Area** 或 **Asset**），选取 **Target**（目标），然后选择 **Assign**（分配）。一台设备可以同时有多条分配。**Unassign**（取消分配）会移除其中一条。设备已经上报的事件会保留其记录时的分配。
 
 参见[管理设备分配](/guides/managing-assignments)。
+
+### Gateway {#gateway}
+
+**Gateway**（网关）显示此设备所连接的网关，以及连接在此设备后面的设备。拥有修改设备的权限时，输入 **Gateway device token**（网关设备令牌）并选择 **Assign gateway**（分配网关），或选择 **Move**（移动）更换已有网关。**Clear gateway**（清除网关）会移除该关系；旧网关下次为此设备发布数据时将被拒绝。网关本身不能再连接在另一个网关后面。
 
 ### Facets {#facets}
 
@@ -166,6 +170,10 @@ DeviceChain 如何判断设备是否在线，参见[设备在线状态](/concept
 <GuideShot id="device-detail-events" alt="Events 选项卡：一张表格，列为 Occurred、Type 和 Source。十行的类型都是 Measurement，来源都是 http1，截图中隐藏了时间。表格下方写着“Showing the 10 most recent events.”。" />
 
 每一行显示事件发生的时间、类型（如 **Measurement**）以及事件到达时使用的来源。若要查看更长的历史，请使用仪表板。
+
+### Alarms {#alarms}
+
+**Alarms**（告警）列出此设备上触发的告警，每页 10 条，每 30 秒刷新一次。拥有 `alarm:write` 权限时，你可以在这里确认尚未确认的活动告警。表格上方的链接会打开租户告警列表，以执行其他告警操作。
 
 ### Commands {#commands}
 
