@@ -198,6 +198,7 @@ Una resolución es informativa, así que se trata de forma distinta a un aviso:
 - Se envía una vez por ciclo, después de registrar la resolución, así que ninguna escalada de "sigue sin resolverse" la sigue. Si ningún canal la acepta, se reintenta; cuando algún canal la ha aceptado, no se repite. Una resolución que se procesa antes de que se haya registrado el aviso de su alarma se envía justo después de ese aviso, y una que no pudo enviarse entonces la recoge el planificador de notificaciones en sus siguientes pasadas durante hasta 30 minutos.
 - **No** se limita por frecuencia, no cuenta como notificación y no inicia la escalada.
 - Una resolución que ocurre durante las horas de silencio de una política se **descarta**, no se retiene: un "resuelta" liberado horas después comunicaría una noticia vieja.
+- Activar la opción no anuncia resoluciones históricas: la resolución debe ser posterior a su activación. Una caída después de reclamar una resolución pero antes de enviarla puede perder ese aviso; no se garantiza la entrega exactamente una vez.
 - `notifyOnClear` no se puede borrar con `null`; envía `true` o `false`.
 
 ### Acotamiento por tipo de dispositivo {#device-type-scoping}
