@@ -28,11 +28,8 @@
 // safety property is atomic consume-and-execute in the area that owns the effect: a central
 // service would need the area to execute FOR it, under a service token.
 //
-// 🔴 NO EFFECT IS EXECUTED BY THIS RELEASE. The ledger records proposals and approvals; the final
-// approval of a proposal is refused with ErrExecutionNotAvailable rather than recorded, because
-// recording it would claim an approval was consumed that nothing acted on. And there is no
-// automatic path: an AUTO verdict is read as a refusal (red line: no auto path without holdouts and
-// invariants).
+// Approved ACK/CLEAR proposals execute on final human approval in one transaction.
+// There is no automatic path: an AUTO verdict is read as a refusal.
 package actiongate
 
 import (
@@ -149,10 +146,8 @@ func Refusal(code, msg string, forbidden bool) *Error {
 	return &Error{Code: code, msg: msg, err: wrap}
 }
 
-// ErrExecutionNotAvailable refuses the approval that would complete a proposal: this release
-// records proposals and approvals but executes nothing. It is returned rather than recording the
-// approval, so no proposal is ever marked as having had an approval consumed that nothing acted
-// on, and the proposal stays PROPOSED until it expires or is rejected.
+// ErrExecutionNotAvailable is retained for error-code compatibility.
+// Deprecated: approved ACK/CLEAR proposals execute on final human approval.
 var ErrExecutionNotAvailable = gateErr(CodeExecutionNotAvailable, nil,
 	"this approval would complete the proposal, and executing approved agent actions is not available in this release; the proposal stays pending until it expires or is rejected")
 

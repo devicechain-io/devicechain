@@ -6076,8 +6076,10 @@ type Mutation {
     cleared. Only an agent's token holding alarm:propose may call it; a person's own session is
     refused with AGENT_ONLY and acts through acknowledgeAlarm and clearAlarm instead. The
     tenant's agent policy decides, and a request it allows waits for people to approve it. In
-    this release nothing is carried out automatically, and an approved proposal is not yet
-    carried out at all. A member limited to part of the tenant is refused.
+    this preview, off by default, the final approval carries out the action as the approving
+    person in one transaction after asking the policy again. If an alarm was raised again or
+    policy now refuses, it ends REFUSED without effects. Execution is never automatic.
+    A member limited to part of the tenant is refused.
     """
     proposeAlarmAction(
         """The request."""
@@ -6087,9 +6089,10 @@ type Mutation {
     (Preview: may change in a minor release.) A person approves an agent proposal. The digest
     must be the one shown for the proposal. The approver must be a person (never an agent), hold
     the write the action needs, be in an approver role of the agent policy, and have verified a
-    second factor recently enough (STEP_UP_REQUIRED otherwise). An approval that would complete
-    the proposal fails with EXECUTION_NOT_AVAILABLE in this release, and the proposal stays
-    pending; an earlier approval of a proposal needing two people is recorded.
+    second factor recently enough (STEP_UP_REQUIRED otherwise). The final approval carries out
+    the action as that person, in one transaction after asking the policy again. If an alarm
+    was raised again or policy now refuses, the proposal ends REFUSED and nothing is done.
+    Earlier approvals are recorded. This preview is off by default and never automatic.
     """
     approveAgentProposal(
         """The proposal's token."""

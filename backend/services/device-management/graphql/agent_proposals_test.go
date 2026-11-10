@@ -103,14 +103,10 @@ func TestProposeAndDecideAreDisjointDoors(t *testing.T) {
 	_, err = r.ApproveAgentProposal(svc, struct{ Token, Digest string }{Token: token, Digest: digest})
 	require.True(t, actiongate.IsCode(err, actiongate.CodeServiceTokenRefused), "got %v", err)
 
-	_, err = r.ApproveAgentProposal(person, struct{ Token, Digest string }{Token: token, Digest: digest})
-	require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable, "control: a person reaches the approval, which this release refuses to complete")
-	p, err := r.RejectAgentProposal(person, struct {
-		Token string
-		Note  *string
-	}{Token: token})
+	p, err := r.ApproveAgentProposal(person, struct{ Token, Digest string }{Token: token, Digest: digest})
 	require.NoError(t, err)
-	require.Equal(t, string(actiongate.StateRejected), p.State())
+	require.Equal(t, string(actiongate.StateExecuted), p.State())
+
 }
 
 // A person with alarm:read sees the tenant's proposals; an agent sees only its own client's; a

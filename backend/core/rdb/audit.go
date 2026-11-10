@@ -176,8 +176,9 @@ type AuditEvent struct {
 
 	// ClientId is the OAuth client the acting token was minted for (the "client_id"
 	// claim), so a change made by an agent client is distinguishable from the same
-	// person's console change. NULL for a console token, a system operation and every
-	// auth-event row.
+	// person's console change. When the approving token has no client, agent execution
+	// supplies the original client through WithAgentAttribution. Otherwise NULL for a
+	// console token, a system operation and every auth-event row.
 	//
 	// 🔴 FOR A PUBLIC CLIENT IT IS A LABEL THE CLIENT CHOSE, NOT AN AUTHENTICATED
 	// IDENTITY: only a confidential client proves it. The journal records what the token
@@ -192,14 +193,10 @@ type AuditEvent struct {
 	// row one sign-in produced, so it is retained and not redacted: it is evidence of the
 	// activity, the same as the table and the operation, which a purge keeps.
 	SessionId *string
-	// OnBehalfOf is the principal an actor acted for — the proposer, when the actor is an
-	// approver. RESERVED: nothing writes it yet, and it is NULL on every row until the
-	// proposal gate exists. It NAMES A PERSON (an email), so a tenant purge empties it
-	// beside Actor and EntityLabel (core/tenantpurge), and it is listed there already so
-	// the first writer cannot ship ahead of the redaction.
+	// OnBehalfOf names the proposer for an approved agent execution. Tenant purge
+	// redacts this personal identity alongside Actor and EntityLabel.
 	OnBehalfOf *string
-	// Proposal is the token of the proposal an effect was executed under. RESERVED: NULL on
-	// every row until the proposal gate exists. It is a server-generated token, not text.
+	// Proposal is the server-generated proposal token, set only by agent execution.
 	Proposal *string
 }
 
@@ -348,6 +345,13 @@ func auditCallback(operation string) func(*gorm.DB) {
 			RowsAffected: db.Statement.RowsAffected,
 		}
 		row.ClientId, row.SessionId = auditAgentIdentity(db)
+		if attr, ok := db.Statement.Context.Value(agentAttributionKey{}).(AgentAttribution); ok {
+			if row.ClientId == nil {
+				row.ClientId = nonEmptyAgentField(attr.ClientID)
+			}
+			row.OnBehalfOf = nonEmptyAgentField(attr.OnBehalfOf)
+			row.Proposal = nonEmptyAgentField(attr.Proposal)
+		}
 
 		// Write the audit row on a fresh session that shares this statement's
 		// connection (and thus its transaction), carrying the same context so the
@@ -402,8 +406,8 @@ func auditActor(db *gorm.DB) string {
 //
 // 🔴 EACH COMES FROM ITS OWN CLAIM. client_id is Claims.ClientId and the session is
 // Claims.SessionID; stamping one from the other would make every row name a session that is
-// really a client, and the journal would still look fully populated. Claims are the ONLY
-// source: a WithAuditActor context has a name but no token, and records neither.
+// really a client, and the journal would still look fully populated. This helper reads
+// claims only; agent execution attribution is applied separately by auditCallback.
 func auditAgentIdentity(db *gorm.DB) (clientID, sessionID *string) {
 	claims, ok := auth.ClaimsFromContext(db.Statement.Context)
 	if !ok || claims == nil {
@@ -481,4 +485,27 @@ func (rdb *RdbManager) RecordAuthEventLabeled(ctx context.Context, operation, ac
 		EntityLabel:  label,
 	}
 	return rdb.DB(core.WithSystemContext(ctx)).Create(row).Error
+}
+
+// AgentAttribution identifies the proposal and original agent behind an execution.
+type AgentAttribution struct {
+	ClientID   string
+	OnBehalfOf string
+	Proposal   string
+}
+
+type agentAttributionKey struct{}
+
+// WithAgentAttribution is set only by an area's execution path after the proposal's
+// standing was re-validated. It can never override claims: a token's client_id wins.
+// OnBehalfOf and Proposal are written only through this context. Empty fields stay NULL.
+func WithAgentAttribution(ctx context.Context, attribution AgentAttribution) context.Context {
+	return context.WithValue(ctx, agentAttributionKey{}, attribution)
+}
+
+func nonEmptyAgentField(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

@@ -166,3 +166,32 @@ func TestAuditIdentityColumnsAreAdditiveOnAnExistingJournal(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name, claimClient        string
+		attr                     *AgentAttribution
+		client, behalf, proposal string
+	}{
+		{"human", "", &AgentAttribution{ClientID: "agent", OnBehalfOf: "proposer", Proposal: "token"}, "agent", "proposer", "token"},
+		{"claims win", "claim-client", &AgentAttribution{ClientID: "agent", OnBehalfOf: "proposer", Proposal: "token"}, "claim-client", "proposer", "token"},
+		{"absent", "", nil, "<NULL>", "<NULL>", "<NULL>"},
+		{"empty", "", &AgentAttribution{}, "<NULL>", "<NULL>", "<NULL>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newAuditTestDB(t)
+			ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "human", Tenant: "A", ClientId: tc.claimClient})
+			if tc.attr != nil {
+				ctx = WithAgentAttribution(ctx, *tc.attr)
+			}
+			if err := db.WithContext(ctx).Create(&widget{Name: "w"}).Error; err != nil {
+				t.Fatal(err)
+			}
+			rows := readAudit(t, db)
+			row := rows[len(rows)-1]
+			if row.Actor != "human" || strOf(row.ClientId) != tc.client || strOf(row.OnBehalfOf) != tc.behalf || strOf(row.Proposal) != tc.proposal {
+				t.Fatalf("unexpected attribution: %+v", row)
+			}
+		})
+	}
+}
