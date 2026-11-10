@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
@@ -160,5 +161,51 @@ func TestBrokerFitRequests(t *testing.T) {
 				t.Fatal("invalid preset request did not fail closed")
 			}
 		})
+	}
+}
+
+func TestDeclareInstanceChecksBrokerFitBeforeWriting(t *testing.T) {
+	originalRead, originalWrite := readInstanceDeclaration, writeInstanceDeclaration
+	originalList, originalStates := listNodes, operatorStatesVar
+	t.Cleanup(func() {
+		readInstanceDeclaration, writeInstanceDeclaration = originalRead, originalWrite
+		listNodes, operatorStatesVar = originalList, originalStates
+	})
+	readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+		return nil, nil
+	}
+	writes := 0
+	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string, bool) error {
+		writes++
+		return nil
+	}
+	listNodes = func(context.Context, string) ([]corev1.Node, error) {
+		return []corev1.Node{brokerFitNode("4", "16Gi"), brokerFitNode("4", "16Gi"), brokerFitNode("4", "16Gi")}, nil
+	}
+	operatorStatesVar = func(*State, string) bool { return false }
+
+	st := &State{Instance: "x", HA: true, Size: SizePerf16k, Provider: "local", Profile: "default"}
+	err := stepDeclareInstance(context.Background(), st)
+	if err == nil || !strings.Contains(err.Error(), "perf-16k") {
+		t.Fatalf("expected perf-16k node-fit refusal, got %v", err)
+	}
+	if writes != 0 {
+		t.Fatalf("wrote %d declarations before refusing node fit", writes)
+	}
+	message := err.Error()
+	fileAdvice := strings.Index(message, "terraform.tfvars")
+	for _, name := range []string{"TF_VAR_nats_cpu_request", "TF_VAR_nats_memory_request"} {
+		if at := strings.Index(message, name); at < 0 || fileAdvice < 0 || at >= fileAdvice {
+			t.Errorf("expected %s advice before terraform.tfvars: %s", name, message)
+		}
+	}
+
+	st = &State{Instance: "x", HA: true, Size: SizePerf12k, Provider: "local", Profile: "default"}
+	err = stepDeclareInstance(context.Background(), st)
+	if err != nil && strings.Contains(err.Error(), "allocatable") {
+		t.Fatalf("perf-12k was refused by node fit: %v", err)
+	}
+	if writes != 1 {
+		t.Fatalf("perf-12k did not reach the declaration write (writes=%d): %v", writes, err)
 	}
 }

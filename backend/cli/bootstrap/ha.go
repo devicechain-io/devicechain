@@ -314,18 +314,20 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node, req *brokerRequest
 		return nil
 	}
 	if req != nil && schedulable < eligible {
-		var requests, maxima, resources, variables []string
+		var requests, maxima, resources, variables, envVariables []string
 		if req.CPU != nil {
 			requests = append(requests, req.CPUText+" CPU")
 			maxima = append(maxima, "the largest allocatable CPU on any eligible node is "+largestCPU.String()+" CPU")
 			resources = append(resources, "CPU")
 			variables = append(variables, "nats_cpu_request")
+			envVariables = append(envVariables, "TF_VAR_nats_cpu_request")
 		}
 		if req.Memory != nil {
 			requests = append(requests, req.MemText+" memory")
 			maxima = append(maxima, "the largest allocatable memory is "+largestMemory.String())
 			resources = append(resources, "memory")
 			variables = append(variables, "nats_memory_request")
+			envVariables = append(envVariables, "TF_VAR_nats_memory_request")
 		}
 		maximaText := strings.Join(maxima, ", and ")
 		if len(maxima) > 1 {
@@ -346,11 +348,12 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node, req *brokerRequest
 			"--ha with size %s places %d NATS servers one per node, each requesting %s; "+
 				"%d of %d otherwise-eligible node(s) can hold one broker. For the checked resources, %s. "+
 				"This is an allocatable check, not a free-capacity check or scheduler simulation. "+
-				"To fix this, %s, "+
-				"or add nodes with at least that much allocatable %s, or state %s "+
-				"in the instance root's terraform.tfvars (a stated request is not checked here)",
+				"To fix this, state the environment variables %s (these work on a first bootstrap), "+
+				"or state %s in the instance root's terraform.tfvars (only read once the instance root exists, on a re-run); "+
+				"a stated request is not checked here. Or %s, or use larger nodes with at least that much allocatable %s",
 			req.Preset, ha.ServerReplicas, strings.Join(requests, " and "), schedulable, eligible,
-			maximaText, remediation, strings.Join(resources, " and "), strings.Join(variables, " / "))
+			maximaText, strings.Join(envVariables, " / "), strings.Join(variables, " / "),
+			remediation, strings.Join(resources, " and "))
 	}
 	return fmt.Errorf(
 		"--ha places %d NATS servers one per node, and this cluster has %d node(s) that can "+
