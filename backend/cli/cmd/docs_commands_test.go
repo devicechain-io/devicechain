@@ -7,6 +7,7 @@ package cmd
 // docs must name a command that exists, with flags that command accepts and the number
 // of arguments it takes, and every `hack/` path in one must exist in the tree.
 // Local recursive patterns in go build/go vet must start inside a Go module.
+// Literal local Helm installs must render successfully, entirely offline.
 //
 // WHY A TEST IN THIS PACKAGE. The source of truth for dcctl is the cobra tree, and this
 // is the one place that can ask it directly: rootCmd.Find resolves the command path the
@@ -30,9 +31,11 @@ package cmd
 //
 // 🔴 SCOPE, said up front so a green run is not read as more than it is: it proves a
 // dcctl command NAME, its FLAG names and its ARITY, and literal Go module locations.
-// It does not prove a flag's value parses,
+// Local Helm installs are rendered offline with supplied values and reported stand-ins
+// for whole environment references and image.tag placeholders.
+// It does not otherwise prove a flag's value parses,
 // that the command succeeds, or that the sentence beside it is true. Every other tool
-// (kubectl, helm, curl, ...) is counted, not checked, and the count is printed, so the
+// (kubectl, curl, ...) is counted, not checked, and the count is printed, so the
 // uncovered surface is visible rather than implied:
 //
 //	cd backend/cli && go test ./cmd -run TestPublishedDocsCommandsExist -v -count=1
@@ -666,7 +669,11 @@ func (s *docsScan) scanGoCommands(text, where string, wd *docsWorkingDir, stack 
 					next = wd.previous
 				} else if wd.dir != "" && literalDocsPath(args[0]) {
 					candidate := path.Join(wd.dir, args[0])
-					if s.goLayout.directory(candidate) {
+					layout := s.goLayout
+					if layout == nil {
+						layout = &docsGoLayout{repo: s.helmRepo}
+					}
+					if layout.directory(candidate) {
 						next = candidate
 					}
 				}
@@ -674,7 +681,11 @@ func (s *docsScan) scanGoCommands(text, where string, wd *docsWorkingDir, stack 
 			wd.previous, wd.dir = wd.dir, next
 			continue
 		}
-		if !docsGoRecursiveCommand(words) {
+		if docsHelmInstall(words) {
+			s.scanHelmInstall(words, where, wd.dir, *loops)
+			continue
+		}
+		if s.goLayout == nil || !docsGoRecursiveCommand(words) {
 			continue
 		}
 		invocation := strings.Join(words, " ")
@@ -742,6 +753,10 @@ type docsScan struct {
 	goChecked    int
 	goSkipped    []string
 	goLayout     *docsGoLayout
+	helmRepo     string
+	helmChecked  int
+	helmSkipped  []string
+	helmStandIns []string
 
 	uncovered map[string]int // first word -> count
 }
@@ -765,18 +780,16 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 			}
 
 			outer, inner := extractSubstitutions(stripComment(ln.text))
-			if s.goLayout != nil {
-				// Extraction separates substitutions from their position in the line.
-				// Their execution directory may follow an earlier cd on that line, so
-				// leave it unresolved rather than guess. They cannot change outer state.
-				for _, sub := range inner {
-					subWD, subLoops := wd, loops
-					subWD.dir = ""
-					var subStack []docsWorkingDir
-					s.scanGoCommands(sub, where, &subWD, &subStack, &subLoops)
-				}
-				s.scanGoCommands(outer, where, &wd, &stack, &loops)
+			// Extraction separates substitutions from their position in the line.
+			// Their execution directory may follow an earlier cd on that line, so
+			// leave it unresolved rather than guess. They cannot change outer state.
+			for _, sub := range inner {
+				subWD, subLoops := wd, loops
+				subWD.dir = ""
+				var subStack []docsWorkingDir
+				s.scanGoCommands(sub, where, &subWD, &subStack, &subLoops)
 			}
+			s.scanGoCommands(outer, where, &wd, &stack, &loops)
 			for _, cmdline := range append([]string{outer}, inner...) {
 				for _, seg := range splitSegments(cmdline) {
 					words := commandWords(seg)
@@ -784,8 +797,8 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 						continue
 					}
 					if !isDcctl(words[0]) {
-						if s.goLayout != nil && docsGoRecursiveCommand(words) {
-							continue // counted by the module-location check
+						if docsHelmInstall(words) || s.goLayout != nil && docsGoRecursiveCommand(words) {
+							continue // counted by the Helm or module-location check
 						}
 						if !hackPathRe.MatchString(words[0]) { // a hack/ script is checked above
 							s.uncovered[words[0]]++
@@ -811,7 +824,7 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 }
 
 func newDocsScan() *docsScan {
-	return &docsScan{uncovered: map[string]int{}}
+	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot}
 }
 
 // docsTrees returns docs/docs and every locale's current tree under repo, relative to it.
@@ -868,6 +881,7 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	for _, tree := range trees {
 		s := newDocsScan()
 		s.goLayout = layout
+		s.helmRepo = repo
 		err := filepath.WalkDir(filepath.Join(repo, tree), func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -911,6 +925,10 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		total.dcctlChecked += s.dcctlChecked
 		total.dcctlSkipped = append(total.dcctlSkipped, s.dcctlSkipped...)
 		total.hackChecked += s.hackChecked
+		report = append(report, fmt.Sprintf("%s: %d Helm installs checked, %d skipped", tree, s.helmChecked, len(s.helmSkipped)))
+		total.helmChecked += s.helmChecked
+		total.helmStandIns = append(total.helmStandIns, s.helmStandIns...)
+		total.helmSkipped = append(total.helmSkipped, s.helmSkipped...)
 		total.goChecked += s.goChecked
 		total.goSkipped = append(total.goSkipped, s.goSkipped...)
 		for k, v := range s.uncovered {
@@ -928,6 +946,11 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		report = append(report, "skipped (Go module location): "+s)
 	}
 	report = append(report, fmt.Sprintf("Go module location: %d checked, %d skipped", total.goChecked, len(total.goSkipped)))
+	report = append(report, total.helmStandIns...)
+	for _, skipped := range total.helmSkipped {
+		report = append(report, "skipped (Helm render): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("Helm render: %d checked, %d skipped", total.helmChecked, len(total.helmSkipped)))
 	type kv struct {
 		k string
 		v int
@@ -1028,7 +1051,7 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 
 	// The README goes through the same module-location verdict and skip reporting.
 	readme := filepath.Join(repo, "README.md")
-	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\n```\n"), 0o644); err != nil {
+	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\nhelm install dc external/chart\n```\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	problems, report, err := checkPublishedDocs(rootCmd, repo)
@@ -1040,6 +1063,9 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	}
 	if got := strings.Join(report, "\n"); !strings.Contains(got, "Go module location: 1 checked, 1 skipped") || !strings.Contains(got, "README.md:4: go vet ./... (unresolved working directory)") {
 		t.Errorf("Go counts and skipped location missing from report:\n%s", got)
+	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "Helm render: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (Helm render): README.md:5:") {
+		t.Errorf("Helm counts and skipped location missing from report:\n%s", got)
 	}
 	if err := os.Remove(readme); err != nil {
 		t.Fatal(err)
@@ -1281,4 +1307,13 @@ func TestDocsGateDoesNotTouchRealFlags(t *testing.T) {
 			t.Errorf("--%s was written by the gate: %q -> %q", f.Name, before[f.Name], f.Value.String())
 		}
 	})
+}
+
+// This regression uses only the pre-existing scanner entry point and fields so
+// it also compiles on main, where Helm is merely counted as uncovered.
+func TestDocsHelmMissingRootKey(t *testing.T) {
+	s := scanOne(t, "```bash\nhelm install dc deploy/helm/devicechain --set instance.id=devicechain\n```\n")
+	if len(s.findings) != 1 || !strings.Contains(findingTexts(s), "instance.config.infrastructure.secrets.rootKey is required") || !strings.Contains(findingTexts(s), "page.md:2") {
+		t.Fatalf("missing root key must produce one located render finding; got %s; uncovered: %v", findingTexts(s), s.uncovered)
+	}
 }
