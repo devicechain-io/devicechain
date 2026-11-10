@@ -4,15 +4,63 @@
 package bootstrap
 
 import (
+	"context"
 	"encoding/json"
-	"github.com/devicechain-io/dc-microservice/config"
 	"go/ast"
 	"testing"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/stretchr/testify/require"
 	"helm.sh/helm/v3/pkg/action"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestV14UnfinishedBootstrapRefusesDeployedObserveWithoutExplicitValues(t *testing.T) {
+	// The recorded overlay must not be mistaken for explicit --values: adoption
+	// happens in stepDeclareInstance, after this refusal and before its writes.
+	require.Less(t, stepIndex(t, stepRefuseRebuild), stepIndex(t, stepDeclareInstance))
+	deployed := aLiveInstance()
+	deployed.Infrastructure.TokenAudience.Enforcement = "observe"
+	stubDeployedInstance(t, deployed)
+	decl := aDeclaration(dcv1beta1.PhaseFailed, unfinishedValue)
+	decl.Annotations[AnnotationValuesOverlay] = `{"replicas":3}`
+	before := decl.DeepCopy()
+	stubDeclaration(t, decl)
+	st := aBootstrapOf(testInstance)
+	client := fake.NewSimpleClientset()
+	pipeline := Pipeline{Steps: []Step{
+		{Name: "Refuse a rebuild", Run: stepRefuseRebuild},
+		{Name: "Cluster writes", Run: func(ctx context.Context, _ *State) error {
+			_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: "must-not-be-created"},
+			}, metav1.CreateOptions{})
+			return err
+		}},
+	}}
+	err := pipeline.Run(t.Context(), st)
+	require.ErrorContains(t, err, "v1.4")
+	require.ErrorContains(t, err, "--values")
+	require.ErrorContains(t, err, "Nothing has been changed")
+	require.NotContains(t, err.Error(), "--reset-values")
+	require.Empty(t, client.Actions(), "refusal must precede cluster writes")
+	require.Equal(t, before, decl)
+	require.Nil(t, st.ValuesOverlay, "recorded values must not be adopted before the guard")
+
+	st.DryRun = true
+	out := captureStdout(t, func() {
+		require.NoError(t, stepRefuseRebuild(t.Context(), st))
+	})
+	require.Contains(t, out, "REFUSE")
+	require.Contains(t, out, "v1.4")
+	require.NotContains(t, out, "finish instance")
+
+	st.DryRun = false
+	st.ValuesOverlay = map[string]interface{}{"replicas": 2}
+	require.NoError(t, stepRefuseRebuild(t.Context(), st))
+}
 
 func legacyObserveValues() map[string]interface{} {
 	return map[string]interface{}{"instance": map[string]interface{}{"config": map[string]interface{}{
