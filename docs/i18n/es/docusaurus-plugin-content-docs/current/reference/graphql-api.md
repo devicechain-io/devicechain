@@ -929,21 +929,6 @@ tenants no se ven afectadas.
 
 ## Iniciar sesión con autenticación en dos pasos {#two-factor-sign-in}
 
-**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu token de acceso del inquilino en `Authorization: Bearer ...` y tu propio token de actualización con un código nuevo:
-
-```graphql
-mutation StepUp($refreshToken: String!, $code: String!) {
-  stepUp(refreshToken: $refreshToken, code: $code) {
-    accessToken
-    refreshToken
-    expiresAt
-  }
-}
-```
-
-Devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens y vuelve a intentar la acción sin cerrar sesión. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la verificación. Los tokens deben pertenecer al mismo usuario e inquilino. Se rechazan los tokens de agentes, servicio, identidad o actualización como autorización, los tokens de actualización OAuth, las sesiones terminadas y las épocas revocadas.
-
-Solo admite TOTP: los códigos de recuperación se rechazan **sin evaluarlos ni consumirlos**. Los códigos incorrectos, repetidos y bloqueados devuelven `invalid code` y comparten el bloqueo del inicio de sesión; un código incorrecto no consume el token de actualización. Se permite una verificación por solicitud. Las sesiones de inicio de sesión único devuelven `STEP_UP_SSO`; las cuentas sin factor, `MFA_NOT_ENROLLED`. La consola solicita un código y después indica que vuelvas a intentar la acción; solo ofrece iniciar sesión de nuevo cuando la mutación no está disponible, incluidos servidores antiguos, errores de red o almacén, inicio de sesión único y falta de registro.
 
 Una cuenta con [autenticación en dos pasos](../guides/two-factor-authentication.md) no recibe un token de `login`. Cuando la contraseña es correcta, `login` falla con el código de error `MFA_CHALLENGE`, que lleva un desafío en `extensions`, y no se emite nada hasta que el cliente envía un código a `verifyMfa`. **Un cliente que solo gestiona un `login` correcto ahora falla para estas cuentas**, con un error, y nunca recibe un token que no debería tener.
 
@@ -973,6 +958,21 @@ mutation Verify($challenge: String!, $code: String!) {
 ```
 
 `verifyMfa` devuelve lo mismo que `login`, y el cliente continúa con `selectTenant` como antes. `code` es el código de seis dígitos de la aplicación o un código de recuperación (`ABCD-EFGH-JKMN-PQRS`, en mayúsculas o minúsculas, con o sin guiones). Un desafío dura cinco minutos, admite cinco intentos e inicia sesión una sola vez.
+
+**Verificación adicional dentro de la sesión (Vista previa: puede cambiar en una versión menor).** Si una aprobación de agente o una relajación de política devuelve `STEP_UP_REQUIRED`, envía tu token de acceso del inquilino en `Authorization: Bearer ...` y tu propio token de actualización con un código nuevo:
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+Devuelve el mismo par `AuthToken` que `refresh`. Guarda ambos tokens y vuelve a intentar la acción sin cerrar sesión. Conserva el identificador y la época de la sesión y actualiza `mfa_time`; una actualización normal no renueva la verificación. Los tokens deben pertenecer al mismo usuario e inquilino. Se rechazan los tokens de agentes, servicio, identidad o actualización como autorización, los tokens de actualización OAuth, las sesiones terminadas y las épocas revocadas.
+
 
 Las operaciones están en el endpoint de user-management. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` y `disableTotp` toman el token de identidad como argumento (no en una cabecera `Authorization`), no un token de inquilino. `verifyMfa` no toma ningún token. `setTenantMfaRequired` del plano del inquilino toma el token de acceso del inquilino y requiere `member:write` y un llamador sin alcance restringido. `resetIdentityMfa` y el `setTenantMfaRequired` de la API de administración están en la API de administración y requieren `user:write`:
 
