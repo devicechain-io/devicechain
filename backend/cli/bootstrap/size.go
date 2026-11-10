@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // The size axis: `--size base|compact|perf-12k|perf-16k`.
@@ -218,6 +219,43 @@ func sizeFor(st *State) *sizePreset {
 		return nil
 	}
 	return &p
+}
+
+type brokerRequest struct {
+	Preset           string
+	CPU, Memory      resource.Quantity
+	CPUText, MemText string
+}
+
+// brokerRequestFor checks only requests still supplied by the built-in preset.
+func brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
+	p := sizeFor(st)
+	if p == nil {
+		return nil, "", nil
+	}
+	values := map[string]string{}
+	for _, v := range p.tofuVarsFor(st, stated) {
+		values[v.Name] = v.Value
+	}
+	var missing []string
+	for _, name := range []string{"nats_cpu_request", "nats_memory_request"} {
+		if _, ok := values[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, "the operator states " + strings.Join(missing, " / "), nil
+	}
+	req = &brokerRequest{Preset: p.Name, CPUText: values["nats_cpu_request"], MemText: values["nats_memory_request"]}
+	req.CPU, err = resource.ParseQuantity(req.CPUText)
+	if err != nil {
+		return nil, "", fmt.Errorf("parsing %s nats_cpu_request: %w", p.Name, err)
+	}
+	req.Memory, err = resource.ParseQuantity(req.MemText)
+	if err != nil {
+		return nil, "", fmt.Errorf("parsing %s nats_memory_request: %w", p.Name, err)
+	}
+	return req, "", nil
 }
 
 // helmValues is the preset's chart values, to sit BELOW what dcctl computes. Nil for base.

@@ -140,6 +140,7 @@ Con la configuración de `perf-12k`, 20 000 eventos por segundo se almacenaron c
   cuando un tamaño `perf` se ejecuta con ellos desactivados.
 - **`--ha`.** La tasa se midió con un solo servidor de broker. La combinación está permitida y
   `dcctl bootstrap` avisa de que no se ha medido.
+- **Ajuste a los nodos con `--ha`.** Con `--ha`, un tamaño `perf` se rechaza antes de crear nada cuando menos de tres nodos planificables tienen, cada uno, la solicitud del broker (6 CPU y 6Gi para `perf-16k`, 4 CPU y 4Gi para `perf-12k`) como CPU y memoria asignables. Cada nodo se juzga por separado: la CPU de un nodo y la memoria de otro no se suman. El mensaje indica el nodo más grande que vio y las soluciones: un `--size` menor, nodos más grandes, o declarar usted mismo `nats_cpu_request` y `nats_memory_request`, que `dcctl` entonces deja sin comprobar. Solo compara la capacidad asignable, no lo que está libre ni lo que decidiría el planificador. También rechaza con `--dry-run`, pero si no se puede alcanzar el clúster solo emite un aviso.
 - **La base de datos compartida y los nodos.** El volumen del almacén relacional, las solicitudes
   de CPU y memoria de las bases de datos, el volumen de monitorización y los grupos de nodos
   pertenecen al clúster y quedan como los dejó `dcctl install` y tu clúster. El `max_wal_size` del
