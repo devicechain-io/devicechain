@@ -5,6 +5,8 @@ package lpwan
 
 import (
 	"context"
+	"fmt"
+	"github.com/devicechain-io/dc-microservice/payloadencode"
 	"sync"
 	"time"
 
@@ -16,8 +18,8 @@ import (
 
 var errRecordNotFound = gorm.ErrRecordNotFound
 
-// DevEUIQuery reads one device's aliases from device-management. It is the whole of what the
-// adapter asks that service: the DevEUI is never taken from the command.
+// DevEUIQuery reads one device's aliases from device-management.
+// The DevEUI is never taken from the command.
 const DevEUIQuery = `query($tokens: [String!]!) {
   devicesByToken(tokens: $tokens) { token aliases { scheme value } }
 }`
@@ -26,7 +28,10 @@ const (
 	// devEUICacheTTL bounds how long a device's DevEUI is reused. A DevEUI changes only when
 	// someone edits the device's aliases.
 	devEUICacheTTL = 60 * time.Second
-	devEUICacheMax = 4096
+	// encoderCacheTTL is shorter: a republished encoder must reach the wire within seconds, because
+	// a stale one sends the previous bytes for the same command.
+	encoderCacheTTL = 10 * time.Second
+	devEUICacheMax  = 4096
 )
 
 type devEUIKey struct{ tenant, device, scheme string }
@@ -36,20 +41,21 @@ type devEUIEntry struct {
 	expires time.Time
 }
 
-// ServiceDevices reads DevEUIs over device-management's GraphQL API through the same Querier seam
-// the claimer uses.
+// ServiceDevices reads aliases and published encoders over device-management's GraphQL API
+// through the same Querier seam the claimer uses.
 type ServiceDevices struct {
 	client  cmddownlink.Querier
 	baseURL string
 	now     func() time.Time
 
-	mu    sync.Mutex
-	cache map[devEUIKey]devEUIEntry
+	mu       sync.Mutex
+	cache    map[devEUIKey]devEUIEntry
+	encoders map[devEUIKey]encoderEntry
 }
 
 // NewServiceDevices builds the reader over a service-token client and device-management's URL.
 func NewServiceDevices(client cmddownlink.Querier, baseURL string) *ServiceDevices {
-	return &ServiceDevices{client: client, baseURL: baseURL, now: time.Now, cache: map[devEUIKey]devEUIEntry{}}
+	return &ServiceDevices{client: client, baseURL: baseURL, now: time.Now, cache: map[devEUIKey]devEUIEntry{}, encoders: map[devEUIKey]encoderEntry{}}
 }
 
 // DevEUI implements Devices. Only a found DevEUI is cached; "no such alias" is asked again each
@@ -107,4 +113,67 @@ func (d *ServiceDevices) alias(ctx context.Context, tenant, deviceToken, scheme 
 		}
 	}
 	return "", absent
+}
+
+const EncoderQuery = `query($deviceToken: String!) {
+ deviceCommandVocabulary(deviceToken: $deviceToken) { constrained commands { commandKey encoder } }
+}`
+
+type encoderEntry struct {
+	encoder *payloadencode.Encoder
+	expires time.Time
+}
+
+// Encoder reads only the published vocabulary. Successful absence is cached too.
+func (d *ServiceDevices) Encoder(ctx context.Context, tenant, deviceToken, commandKey string) (*payloadencode.Encoder, error) {
+	key := devEUIKey{tenant, deviceToken, commandKey}
+	d.mu.Lock()
+	if e, ok := d.encoders[key]; ok && d.now().Before(e.expires) {
+		d.mu.Unlock()
+		return e.encoder, nil
+	}
+	d.mu.Unlock()
+	var resp struct {
+		Vocabulary *struct {
+			Constrained *bool `json:"constrained"`
+			Commands    *[]struct {
+				Key     string  `json:"commandKey"`
+				Encoder *string `json:"encoder"`
+			} `json:"commands"`
+		} `json:"deviceCommandVocabulary"`
+	}
+	if err := d.client.Query(ctx, d.baseURL, tenant, EncoderQuery, map[string]any{"deviceToken": deviceToken}, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Vocabulary == nil || resp.Vocabulary.Constrained == nil || resp.Vocabulary.Commands == nil {
+		return nil, fmt.Errorf("published vocabulary is unavailable")
+	}
+	var encoder *payloadencode.Encoder
+	found := false
+	for _, c := range *resp.Vocabulary.Commands {
+		if c.Key != commandKey {
+			continue
+		}
+		if found {
+			return nil, fmt.Errorf("ambiguous command definition")
+		}
+		found = true
+		if c.Encoder != nil {
+			var err error
+			encoder, err = payloadencode.Parse([]byte(*c.Encoder))
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if *resp.Vocabulary.Constrained && !found {
+		return nil, fmt.Errorf("published command is unavailable")
+	}
+	d.mu.Lock()
+	if d.encoders == nil || len(d.encoders) >= devEUICacheMax {
+		d.encoders = map[devEUIKey]encoderEntry{}
+	}
+	d.encoders[key] = encoderEntry{encoder, d.now().Add(encoderCacheTTL)}
+	d.mu.Unlock()
+	return encoder, nil
 }

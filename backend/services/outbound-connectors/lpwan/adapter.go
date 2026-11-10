@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadencode"
 	"github.com/devicechain-io/dc-microservice/transport"
 
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
@@ -106,6 +107,7 @@ type Links interface {
 // Devices finds the name a network server addresses a device by: its DevEUI (ChirpStack) or its
 // tts.device-id (The Things Stack).
 type Devices interface {
+	Encoder(ctx context.Context, tenant, deviceToken, commandKey string) (*payloadencode.Encoder, error)
 	DevEUI(ctx context.Context, tenant, deviceToken string) (string, error)
 	TTSDeviceID(ctx context.Context, tenant, deviceToken string) (string, error)
 }
@@ -324,7 +326,26 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		a.refuse(msg, j, ResultRefusedExpired, ReasonExpired, "the command expired before it could be sent")
 		return
 	}
-	params, err := ParseParams(j.payload)
+	encoder, err := a.devices.Encoder(ctx, tenant, j.device, env.Name)
+	if err != nil {
+		a.refuse(msg, j, ResultRefusedParams, ReasonInvalidParams, "the command definition could not be read")
+		return
+	}
+	var params Params
+	if encoder == nil {
+		params, err = ParseParams(j.payload)
+	} else {
+		var encoded payloadencode.Result
+		encoded, err = encoder.Encode(j.payload)
+		var encodeErr *payloadencode.EncodeError
+		if errors.As(err, &encodeErr) {
+			err = &ParamError{Param: encodeErr.Param, Reason: encodeErr.Reason}
+		}
+		params = Params{FPort: encoded.FPort, Confirmed: encoded.Confirmed, Data: encoded.Data}
+		if err == nil && len(params.Data) > MaxPayloadBytes {
+			err = refuse("(payload)", "encoded payload exceeds 242 bytes")
+		}
+	}
 	if err != nil {
 		a.refuse(msg, j, ResultRefusedParams, ReasonInvalidParams, err.Error())
 		return

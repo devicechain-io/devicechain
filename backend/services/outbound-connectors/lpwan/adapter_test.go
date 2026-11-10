@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadencode"
 
 	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 )
@@ -86,9 +87,11 @@ func (l *fakeLinks) Resolve(_ context.Context, _, integration string) (connector
 }
 
 type fakeDevices struct {
-	eui   string
-	ttsID string
-	err   error
+	encoder    *payloadencode.Encoder
+	encoderErr error
+	eui        string
+	ttsID      string
+	err        error
 }
 
 func (d *fakeDevices) DevEUI(context.Context, string, string) (string, error) {
@@ -529,4 +532,8 @@ func TestStartConsumesMessagesAndStopIsIdempotent(t *testing.T) {
 	}, 5*time.Second, 5*time.Millisecond)
 	r.a.Stop()
 	r.a.Stop()
+}
+
+func (d *fakeDevices) Encoder(context.Context, string, string, string) (*payloadencode.Encoder, error) {
+	return d.encoder, d.encoderErr
 }

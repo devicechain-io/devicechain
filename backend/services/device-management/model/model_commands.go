@@ -37,6 +37,7 @@ type CommandDefinition struct {
 	DeviceProfileId uint
 	DeviceProfile   *DeviceProfile
 	CommandKey      string          // the command the profile's devices accept
+	Encoder         *datatypes.JSON `json:"Encoder,omitempty"` // nil preserves the raw downlink contract in old snapshots.
 	ParameterSchema *datatypes.JSON // ordered []ParameterSpec (JSONB); nil = no declared params
 
 	// Impact says how disruptive the command is to the device's work: NORMAL (a read or a
@@ -66,6 +67,7 @@ type CommandDefinitionCreateRequest struct {
 	CommandKey         string
 	Name               *string
 	Description        *string
+	Encoder            *string
 	ParameterSchema    *string
 	// Impact is NORMAL, DISRUPTIVE or DESTRUCTIVE. Omitted or null is NORMAL.
 	Impact   *string
@@ -86,6 +88,8 @@ type CommandDefinitionUpdateRequest struct {
 	CommandKey  dcgraphql.OptionalString
 	Name        dcgraphql.OptionalString
 	Description dcgraphql.OptionalString
+	// Encoder is nullable; explicit null restores the raw downlink contract.
+	Encoder dcgraphql.OptionalString
 	// ParameterSchema is nullable — a command that takes no structured arguments is a
 	// real state — so an explicit null clears it back to that.
 	ParameterSchema dcgraphql.OptionalString

@@ -367,6 +367,68 @@ A report is matched to its command only by the `dc:` correlation id the platform
 **Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
 
 
+### Encoding commands from typed parameters
+
+A command definition can carry an optional `encoder` JSON string. Publish the device
+profile to activate it. Both ChirpStack v4 and The Things Stack v3 use the same encoder.
+For example, this document combines constant bytes, a scaled number, a boolean and packed bits:
+
+```json
+{
+  "fPort": 10,
+  "confirmed": false,
+  "fields": [
+    {"const": "01ff"},
+    {"param": "level", "type": "u16be", "scale": 0.1, "offset": 0},
+    {"param": "enabled", "type": "bool"},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3},
+      {"param": "armed", "shift": 3, "width": 1}
+    ]}}
+  ]
+}
+```
+
+`fPort` is required, from 1 through 223. `confirmed` defaults to false and keeps the
+acknowledgement-feed requirement above. There must be 1–32 ordered fields, producing
+1–242 bytes in total. Constants are even-length hex. Numeric types are `u8`, `i8`,
+`u16be`, `u16le`, `i16be`, `i16le`, `u32be`, `u32le`, `i32be` and `i32le`.
+`bool` emits `00` or `01`. Packed bits use an integer type; their ranges must fit
+without overlap, and unspecified bits remain zero.
+
+For a thermostat, declare `setpoint` as `DOUBLE` and `mode` as `INT` in
+`parameterSchema`, then set the definition's encoder to:
+
+```json
+{
+  "fPort": 12,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}
+```
+
+The command payload `{"setpoint":21.5,"mode":3}` becomes hex `00d703`, or base64
+`ANcD`, on port 12. Numeric encoding inverts the decoder arithmetic:
+`raw = (value - offset) / scale`. Scale defaults to 1, must be finite and non-zero;
+offset defaults to 0 and must be finite. The raw value must be within `1e-6` of an
+integer and fit its type. Nothing is silently rounded or truncated: `215.4` with
+scale 1 is refused. NaN, infinity, out-of-range values, wrong JSON types and missing
+encoder parameters refuse the command as **not sent**, before any network call.
+Defaults in the parameter schema are authoring hints and are never injected.
+
+Each encoder parameter must be unique and declared with a compatible scalar type:
+numbers use `INT` or `DOUBLE`, booleans use `BOOLEAN`, and bit values use integers
+within their width (a width of 1 also accepts `BOOLEAN`). Unused command parameters
+are ignored by the encoder after the enqueue gate validates the schema. Unknown
+encoder keys are refused. With an encoder, the parameter schema cannot declare
+`fPort`, `hex`, `base64` or `confirmed`; the encoder controls the port and confirmation.
+Clearing `encoder` restores the raw contract. A definition without an encoder keeps
+the existing `fPort` plus `hex` or `base64` contract unchanged.
+
 ## What an integration token can do {#trust}
 
 Treat the bearer token like a password for a whole fleet. **An integration token speaks for every device of its scoped types that carries an alias for it.** The platform checks that the token belongs to the integration and that the device's type is in the integration's scope, and it does so again when the event is processed, but it cannot tell whether the sender is honest about which device a message came from. Anyone who holds the token can submit readings as any aliased device in scope.
