@@ -80,6 +80,8 @@ If you scale a service out, set tier ceilings for the number of replicas you run
 
 ### When ingest can admit a tenant above its ceiling {#ingest-above-ceiling}
 
+The allowances below describe the default `legacy` metering. For opt-in `lagCredit`, its shared fresh allowance and limits, see [Ingest metering](../deployment/tuning-an-instance.md#ingest-metering).
+
 Within one `event-sources` replica, a tenant's ingest ceiling applies to each of four allowances separately, not to the tenant as a whole:
 
 - **Live traffic**: what the tenant's devices send now over MQTT and NATS, including broker presence.

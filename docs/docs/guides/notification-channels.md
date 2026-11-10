@@ -198,6 +198,7 @@ A clear is informational, so it is handled differently from a page:
 - It is sent once per cycle, after the clear has been recorded, so no "still unresolved" escalation follows it. If no channel takes it, it is retried; once any channel has taken it, it is not repeated. A clear that is processed before its alarm's page has been recorded is sent right after that page, and one that could not be sent then is picked up by the notification scheduler's next passes for up to 30 minutes.
 - It is **not** throttled, does not count as a notification, and does not start escalation.
 - A clear that happens during a policy's quiet hours is **dropped**, not held: a "cleared" released hours later would report old news.
+- Enabling the option does not announce historical clears: the clear must be after the option was enabled. A crash after claiming a clear but before sending can lose that announcement; it is not an exactly-once delivery guarantee.
 - `notifyOnClear` cannot be cleared with `null`; send `true` or `false`.
 
 ### Device-type scoping {#device-type-scoping}

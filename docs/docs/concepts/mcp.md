@@ -117,7 +117,7 @@ A superuser's session is never given an action scope. An operator who wants an a
 }
 ```
 
-**The kill switch.** `setAgentActuation(enabled: false)` turns agent actions off in the tenant at once by publishing the policy in force with only that changed. It always succeeds and needs no second factor. Turning it back on is a loosening and needs one.
+**The kill switch.** `setAgentActuation(enabled: false)` turns agent actions off in the tenant at once through a separate tenant flag, even if the published policy cannot be read or is oversized. Turning it off needs no second factor. Republishing or rolling back a policy does not clear that flag. `setAgentActuation(enabled: true)` clears it, requires a published, readable policy and a fresh second factor, and enables the policy's actuation setting. The instance switch and operator suspension still apply.
 
 **Asking for a verdict.** `agentActuationDecision` returns the tenant's verdict on an action an assistant proposes: `REFUSE`, or `APPROVE` with one or two approvals, plus the reasons and the policy version. Only an assistant's own token, one that carries a proposal permission, may ask, and the assistant is the client named in that token, never an argument. **This release never answers `AUTO`.** A policy may already say which actions could run without a person, but nothing runs automatically until the platform can check automatic actions against held-back comparison groups and declared invariants. Until then such an action needs one person's approval, and an annotation, which never waits for one, is refused. Some floors hold whatever a policy says: a destructive command, a rule change or a rollout never runs without a person; a destructive command and a rollout over 100 devices need two people; and an action that needs more approvers than the tenant has is refused rather than downgraded.
 
@@ -129,7 +129,7 @@ A superuser's session is never given an action scope. An operator who wants an a
 
 - Turn `agentActuation.enabled` on in a separate upgrade, after the release that brings it has finished rolling out. Pods of an earlier release do not know agent accounts and would issue an agent account's token with its roles' write permissions; agent accounts receive proposal-only tokens only from pods of this release or later, which is why an agent account can be created only while the switch is on.
 - If you turn the switch off while an OAuth client still has action scopes registered, remove those scopes in the same edit the next time you change the client: an edit that keeps a scope the instance no longer offers is refused.
-- Loosening the policy needs a second factor presented with a one-time code within the step-up age. A tenant administrator who signs in only through single sign-on, or has not enrolled a code, cannot loosen it until the console offers a step-up prompt; tightening and the kill switch are always available.
+- Loosening the policy needs a fresh second factor within the step-up age. If the console asks you to sign in again, use your password and authenticator code, then retry. An SSO-only sign-in does not supply this step-up; enroll an authenticator first. Tightening and turning agent actions off need no step-up.
 
 ### Proposals and approvals (preview) {#agent-proposals}
 
@@ -141,6 +141,32 @@ An assistant asks for an action by **proposing** it, and people decide. In this 
 - **Approving.** `approveAgentProposal(token, digest)` takes the digest shown for the proposal, so a person approves exactly what is stored. The approver must be a person, never an assistant, hold the write permission the action needs, be in one of the policy's approver roles, and have verified a second factor within the policy's step-up age (`STEP_UP_REQUIRED` otherwise). At every approval the platform checks again, from current records: that agent actions are still on (the instance switch, the operator's suspension, the tenant's policy), that the original client is still allowed and enabled, that the person the assistant acted for is still signed in and still holds the write permission, and that every earlier approver still qualifies. If the proposal no longer passes, it ends as `REFUSED` with the reasons. The person the assistant acted for may be the only approver of a single-approval proposal unless the policy sets `approvers.allowSelfConfirm: false`, and is never one of two approvers.
 - **Rejecting and expiry.** `rejectAgentProposal` ends a waiting proposal, with an optional note. A proposal nobody decides before its expiry becomes `EXPIRED`, and an expired proposal cannot be approved whether or not that has been recorded yet.
 - **Reading.** `agentProposals` and `agentProposal` list the proposals: a person needs `alarm:read`, and an assistant sees only the proposals its own client made for the person it acts for. Every proposal and every decision is also recorded in the audit journal.
+
+### Reviewing proposals in the console (preview) {#approvals-inbox}
+
+Open **Monitor > Approvals**. The inbox requires an unscoped tenant membership with
+`agent:admin`, and the instance's agent-actions switch must be enabled. Listing proposals also
+needs `alarm:read`; approval still requires the approver role, `alarm:write` and fresh second
+factor described above. The inbox does not edit the policy document: use the policy API to
+configure clients, approver roles and action rules.
+
+1. The inbox starts at **Pending**. Use **State** to inspect rejected, expired or refused proposals.
+   Open a proposal through its client name. Review the action, target tokens, impact, canonical
+   payload, digest, policy version and reasons. Treat **Agent rationale** as untrusted text;
+   **Unverified client** means the client identity is not attested.
+2. Choose **Approve** and confirm the displayed action, or **Reject** and optionally enter a note
+   of at most 512 bytes. If prompted, choose **Sign in again**, authenticate with your password
+   and authenticator code, then retry after returning to the proposal. Signing in alone does not
+   submit an approval.
+3. If that approval would complete the proposal, the console reports that execution is unavailable.
+   **The approval is not recorded, the proposal stays pending, and no alarm is acknowledged or
+   cleared.** `EXECUTED` in the state filter is not evidence that execution is supported. Perform
+   any needed alarm action yourself on the [Alarms page](../user-guide/alarms.md).
+
+The **Agent actions** panel lets an agent administrator choose **Turn agent actions off** and
+confirm, without step-up. **Turn agent actions back on** requires step-up and does not override
+an operator suspension or a disabled instance switch. Turning actions off stops new proposals
+from passing policy; a waiting proposal is refused when approval rechecks that policy.
 
 ## The security model
 
