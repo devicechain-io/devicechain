@@ -24,6 +24,7 @@ and the library builds with `TreatWarningsAsErrors` + `IsAotCompatible`. It mult
 | GraphQL over HTTP | `GraphQlClient` | typed query/mutate against `/api/{area}/graphql`; caller supplies its own `JsonTypeInfo` (AOT-safe) |
 | Live subscriptions | `Subscriptions.GraphQlWsClient` | `graphql-transport-ws`, one multiplexed socket per area; token in `connection_init` |
 | Device-plane emit | `Ingest.DeviceEventPublisher` | Measurement + Location over `POST /{instanceId}/{tenant}/events` or MQTT (the `JsonEvent` shape; HTTP carries the credential in the body, platform MQTT carries none: the broker authenticated the connection and refuses a body credential, see `IDeviceEventCarrier.CarriesBodyCredential`) |
+| HTTP command pull (v1.4 in progress) | `Commands.HttpCommandPuller` | devices whose type opts into `HTTP_PULL` poll, acknowledge and respond over the device-plane HTTP listener |
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` | pluggable HTTP + WebSocket, so the SDK runs where `HttpClient`/`ClientWebSocket` don't (Unity WebGL) |
 | Facade | `DeviceChainClient` | wires all of the above against one origin |
 
@@ -147,7 +148,7 @@ Unity player check. See [`sdks/unity/MQTT-PLAYER-VERIFICATION.md`](../unity/MQTT
 ## MQTT device plane
 
 `MqttDeviceSession` speaks the device plane the way a device does: it publishes telemetry and
-receives commands over MQTT, which is the only carrier commands travel on. One session is one
+receives commands over MQTT. Other platform command transports are not implemented by this session. One session is one
 device — MQTT 3.1.1 has no shared subscriptions and the broker grant confines a connection to a
 single device — so a scene with 18 machines holds 18 connections.
 

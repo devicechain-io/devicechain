@@ -57,7 +57,7 @@ More on the [DeviceChain YouTube channel](https://www.youtube.com/@devicechain-i
 
 ### Try it locally
 
-You need Docker, `kubectl`, `helm`, `kind` and OpenTofu on your `PATH`, plus `dcctl` from the
+You need Docker, `kubectl`, `kind` and OpenTofu on your `PATH`, plus `dcctl` from the
 [releases page](https://github.com/devicechain-io/devicechain/releases). Most of the time is the
 bootstrap; the [quickstart](https://docs.devicechain.io/quickstart/first-device) budgets about half
 an hour end to end.
@@ -77,7 +77,7 @@ creates a device, sends a reading with `curl` and shows it in the console.
 
 [Docs](https://docs.devicechain.io) · [Examples](examples/) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md) · [Discussions](https://github.com/devicechain-io/devicechain/discussions) · [Releases](https://github.com/devicechain-io/devicechain/releases)
 
-DeviceChain 1.0 is released; see [Status](#status) for what that promises.
+The current release is **v1.3.0**; **v1.4** is in progress. See [Status](#status) for the compatibility promises.
 
 DeviceChain™ takes in telemetry from device fleets, keeps a record of each device and the assets,
 areas and customers it belongs to, detects conditions in the data as it arrives, and sends
@@ -96,7 +96,8 @@ Devices send data over these transports:
   your existing Sparkplug broker as a Host Application
 - [OMA LwM2M](https://docs.devicechain.io/concepts/lwm2m) over CoAP/UDP with DTLS
 
-The transports differ in what they support. HTTP is ingest only, Sparkplug commands (`NCMD` and
+The transports differ in what they support. HTTP devices can opt into command polling with the
+`HTTP_PULL` command channel on their device type (on this tree, for v1.4). Sparkplug commands (`NCMD` and
 `DCMD`) are opt-in and off by default, and LwM2M telemetry is decoded from SenML-JSON only. Sparkplug and LwM2M are not in
 the default install; add them at bootstrap with `--enable-area sparkplug-ingest` or
 `--enable-area lwm2m-ingest`. The
@@ -227,7 +228,6 @@ carries the Helm chart, the operator manifests and the OpenTofu configuration in
 binary is all you need from this repository. It drives these tools, which must be on your `PATH`:
 
 - `kubectl`
-- `helm`
 - OpenTofu (`tofu`) or `terraform`
 - `docker`, only when `dcctl` runs the cluster itself (the `local` provider, which runs kind on
   Docker) or builds images from source (`--build`). Installing into an existing cluster with
@@ -246,7 +246,7 @@ created inside an instance.
 ```bash
 # Prepare the cluster. This creates a kind cluster named "devicechain" if there is none, and
 # installs the DeviceChain operator, a shared PostgreSQL server and its backup store, the
-# CloudNativePG operator, cert-manager, Prometheus and Grafana, and ingress-nginx.
+# CloudNativePG operator, cert-manager, Prometheus and Grafana, and Traefik with Gateway API.
 dcctl install local
 
 # Create an instance served at http://localhost/.

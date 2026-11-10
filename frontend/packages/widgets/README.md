@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # @devicechain/widgets
 
 React dashboard widgets for DeviceChain, plus the renderer that lays a board out.
-Twenty-four widgets — charts, gauges, tables, a fleet table, alarm views,
+Thirty-two widgets — charts, gauges, tables, a fleet table, alarm views,
 command controls, an entity selector and a map — all bound to live data through
 [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards).
 

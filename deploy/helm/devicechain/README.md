@@ -83,7 +83,8 @@ is that same version without the leading `v`; `image.tag` keeps it.
 ```bash
 helm install dc deploy/helm/devicechain \
   --set instance.id=devicechain \
-  --set image.tag=v<X.Y.Z>
+  --set image.tag=v<X.Y.Z> \
+  --set instance.config.infrastructure.secrets.rootKey=$ROOT_KEY
 ```
 
 ## Choosing what to deploy
@@ -112,7 +113,7 @@ helm install dc deploy/helm/devicechain \
 The chart **fails the render** if the selection omits a required core area
 (`user-management`, `device-management`) or an enabled area's hard dependency.
 `user-management` and `device-management` are the required core; every other area in
-the table above is optional — the seven `default` adds on top of the core, plus the six
+the table above is optional — the eight `default` adds on top of the core, plus the five
 only `full` ships. The one dependency between optional areas is `outbound-connectors`,
 which requires `event-processing`; the rest can be enabled or left out independently.
 (`values.schema.json` carries the authoritative area names; the dependency catalog
@@ -170,10 +171,10 @@ installing.
 build has, and a test enforces that, so "full" cannot drift back into meaning "most of
 it".
 
-The difference is the six areas `default` holds back. Each carries a decision an operator
+The difference is the five areas `default` holds back. Each carries a decision an operator
 should make deliberately rather than inherit — a paid provider key, an egress surface, an
-agent-facing API, a customer broker topology, a device-facing DTLS port, an update plane
-that is not implemented yet — not because they are second-class. Get them with `--set profile=full`, or name them in an explicit
+agent-facing API, a customer broker topology or a device-facing DTLS port.
+Get them with `--set profile=full`, or name them in an explicit
 `enabledFunctionalAreas` set:
 
 | Area | Purpose | Notes |
@@ -365,9 +366,10 @@ exports later) go to a pluggable object store, configured under
 
 ## Rolling upgrades
 
-`helm upgrade` rolls forward one pod at a time. Each Deployment uses a
-`RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
-pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
+Most Deployments use `RollingUpdate` with `maxUnavailable: 0` / `maxSurge: 1`,
+so a new pod must pass `/readyz` before an old one is removed. By default,
+`event-processing`, `mcp`, `sparkplug-ingest` and `lwm2m-ingest` use `Recreate`,
+which stops the old pod before starting its replacement. On termination a pod flips `/readyz` to
 503 first, waits `shutdownDrainSeconds` (default 5) for endpoint removal to
 propagate, then drains in-flight requests — an app-side drain, since the
 distroless images have no shell for a `preStop` hook. That window and
@@ -377,10 +379,12 @@ more than half the grace period, since the teardown after the drain is what actu
 finishes in-flight work before the kubelet's SIGKILL. Database migrations run under a
 Postgres advisory lock so concurrently-rolling replicas don't race on DDL.
 
-To keep serving through a rollout run `replicas: 2`+ per area (`--set replicas=2` or
-`functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area
-with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
-`rollingUpdate.maxSurge`.
+For areas that support multiple replicas, set `functionalAreas.<area>.replicas: 2`
+or more to keep serving through a rollout; a `PodDisruptionBudget` is rendered
+for any area with more than one replica. `mcp`, `sparkplug-ingest` and `lwm2m-ingest`
+are limited to one replica. To give `event-processing` a warm standby, set both
+its `replicas: 2` and `strategy: RollingUpdate`; only one replica runs detection.
+Tune rolling updates via `rollingUpdate.maxUnavailable` / `rollingUpdate.maxSurge`.
 
 Each `event-management` pod holds its own pool of 20 connections to the event store.
 On an event store built from this repository's OpenTofu, set the instance root's
