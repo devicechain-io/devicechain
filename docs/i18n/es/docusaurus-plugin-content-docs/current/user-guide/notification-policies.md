@@ -36,6 +36,11 @@ Haz clic en **Nueva política de notificación**. El formulario pide:
 - **Escalar tras (segundos)** y **Escaladas máximas**: cuánto espera una alarma sin reconocer antes
   de notificarse de nuevo, y cuántas veces. Consulta
   [Limitación y escalada](../guides/notification-channels.md#throttling-and-escalation).
+- **Notificar al resolverse**: desactivado de forma predeterminada. Márcalo y guarda para anunciar
+  las resoluciones a los destinos que entregaron correctamente un aviso de ese ciclo de alarma.
+  No anuncia resoluciones anteriores a su activación. Las resoluciones durante las horas de silencio
+  se descartan, y una política que nunca avisó no envía resolución. Consulta
+  [Notificar cuando una alarma se resuelve](/guides/notification-channels#notify-on-clear) para conocer los reintentos y límites.
 - **Horas de silencio**, descritas más abajo.
 
 La consola no edita las **reglas de enrutamiento**. Una política que creas aquí empieza sin

@@ -80,6 +80,8 @@ Si escalas un servicio horizontalmente, fija los techos del nivel según el núm
 
 ### Cuándo la ingesta puede admitir a un inquilino por encima de su techo {#ingest-above-ceiling}
 
+Las asignaciones siguientes describen la medición `legacy` predeterminada. Para conocer la opción `lagCredit`, su asignación compartida para tráfico reciente y sus límites, consulta [Ingest metering](../deployment/tuning-an-instance.md#ingest-metering).
+
 Dentro de una réplica de `event-sources`, el techo de ingesta de un inquilino se aplica por separado a cada una de cuatro asignaciones, no al inquilino en su conjunto:
 
 - **Tráfico en vivo**: lo que los dispositivos del inquilino envían ahora por MQTT y NATS, incluida la presencia del broker.

@@ -39,6 +39,42 @@ dcctl upgrade local my-instance --values tuning.yaml
 dcctl upgrade local my-instance --version <new-version>
 ```
 
+## Ingest metering {#ingest-metering}
+
+Para reducir el descarte de tráfico de un inquilino que cumple sus límites tras una breve pausa
+de la plataforma, activa la medición con crédito por retraso. El valor predeterminado sigue siendo
+`legacy`; `lagCredit` aún no se ha probado a escala de producción. Pon este valor Helm de nivel
+superior en tu superposición de ajustes, junto a tus otros ajustes:
+
+```yaml title="tuning.yaml"
+eventSources:
+  ingestMetering: lagCredit
+```
+
+Aplícalo con `dcctl upgrade <provider> <instance> --values tuning.yaml`, o proporciona el mismo
+valor a Helm. Actívalo después de actualizar event-sources a v1.4; las versiones anteriores rechazan
+este modo. El chart establece `EVENT_SOURCES_INGEST_METERING` en los pods de event-sources. No es
+una clave bajo `instance.config` ni `functionalAreas.event-sources.config`. Los modos desconocidos
+se rechazan. Para volver a la medición anterior, cambia el valor a `legacy` y aplica otra vez la
+superposición. Las actualizaciones posteriores de dcctl conservan la superposición registrada.
+
+El control mide el retraso del lector por separado para los flujos de captura y almacenamiento
+del broker de la plataforma. El tráfico reciente de gateways, MQTT externo y la presencia del
+broker comparten una asignación según el reloj del pod; HTTP y las integraciones entrantes
+conservan sus limitadores separados. Siguen aplicándose los techos de mensajes y lecturas
+decodificadas, el descarte por contención y los [límites por réplica](../concepts/governance.md#per-replica).
+Esto no cambia las garantías de confirmación MQTT: un mensaje descartado tras confirmarse se pierde.
+
+El crédito cubre como máximo el tiempo que permite la ráfaga del inquilino (`burst / rate`), con
+un máximo de cinco segundos. No cubre una interrupción arbitrariamente larga ni permite una tasa
+sostenida por encima del techo. La corrección del reloj del broker tiene un máximo de dos segundos.
+Un pod que arranca durante una pausa, antes de conocer el desfase del reloj del broker, aún puede
+conceder menos crédito del debido si el reloj del broker está adelantado; mantén sincronizados
+los relojes de los nodos. Vigila el retraso del lector, el desfase al añadir y las causas de descarte
+en [Monitorización de la ingesta](./observability.md#external-mqtt-owner), y usa los procedimientos
+[IngestShedBeyondLagCredit](./alert-runbook.md#ingestshedbeyondlagcredit) e
+[IngestAppendSkewLarge](./alert-runbook.md#ingestappendskewlarge).
+
 ## Cómo se combina la superposición con lo que fija dcctl {#precedence}
 
 Tres capas, cada una sobre la anterior:
@@ -75,6 +111,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | El margen de interrupción para el que se dimensionan los streams de eventos y sus techos de bytes y mensajes. La reserva se comprueba con el volumen del broker antes de escribir nada |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Si los eventos se escriben como envelopes, desactivado por defecto |
 | `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Las audiencias siempre se aplican. Deje enforcement sin definir o use `enforce`; `v1.4` rechaza `observe`. La opción distinta `unscopedClientCredentials: observe` sigue admitida. `externalResources` enumera servidores externos. El chart deriva y controla las otras dos claves. |
+| `eventSources.ingestMetering` | Medición de ingesta con crédito por retraso opcional; consulta [Ingest metering](#ingest-metering). Predeterminado: `legacy` |
 | `brokerAdmin.allowCeilingShrink` | Permite que una actualización baje un techo de stream por debajo de lo que contiene. Fíjalo para esa actualización y quítalo después |
 
 `functionalAreas.event-management.replicas` no es ajustable aunque el resto de esa área sí lo
