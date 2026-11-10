@@ -709,6 +709,11 @@ const integrationUplinksMaxBytesCap = 32 << 20
 // reads it, and an uncapped Cold stream reserves 128 MiB, which moves the published sizing table.
 const lpwanDownlinkEventsMaxBytesCap = 8 << 20
 
+// agentActuationKillsMaxBytesCap is the ceiling of the agent-actuation-kills stream. A kill is a
+// few hundred bytes and an operator throws one by hand, so 1 MiB holds thousands; the cap keeps the
+// stream from reserving a full cold-stream ceiling up front (see MaxBytesCap).
+const agentActuationKillsMaxBytesCap = 1 << 20
+
 // DeadLetter returns the dead-letter suffix derived from a base suffix.
 //
 // A derived suffix names a REAL stream that reserves REAL disk, so anything this
@@ -1093,13 +1098,13 @@ var All = []Stream{
 	{Suffix: DeviceOwnership, Durability: durability.Rebuildable, DurabilityWhy: "ownership changes are projected from the stored relationships", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
 	// Small control facts; the window deduplicates retries of the same EventID.
-	{Suffix: AgentActuationKills, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
+	{Suffix: AgentActuationKills, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, MaxBytesCap: agentActuationKillsMaxBytesCap, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
 	// Window: device-management publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: AlarmEvents, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: RestartDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
