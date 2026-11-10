@@ -5,6 +5,7 @@ package identity
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -269,7 +270,16 @@ func TestProposerSessionEpoch(t *testing.T) {
 			case "MFA reset ends standing":
 				require.NoError(t, x.store.ResetMfa(ctx, x.m.secrets, id, ""))
 			default:
-				_, err = x.m.refreshKV.Put(sessionKey(x.sid), []byte(`{"email":"`+agentPerson+`","method":"password"}`))
+				// The real record with ONLY its epoch removed, so nothing else about it refuses.
+				entry, err := x.m.refreshKV.Get(sessionKey(x.sid))
+				require.NoError(t, err)
+				var rec map[string]any
+				require.NoError(t, json.Unmarshal(entry.Value(), &rec))
+				require.NotEmpty(t, rec["epoch"], "control: a sign-in records its epoch")
+				delete(rec, "epoch")
+				raw, err := json.Marshal(rec)
+				require.NoError(t, err)
+				_, err = x.m.refreshKV.Put(sessionKey(x.sid), raw)
 				require.NoError(t, err)
 			}
 			_, err = x.m.refreshKV.Get(sessionKey(x.sid))
