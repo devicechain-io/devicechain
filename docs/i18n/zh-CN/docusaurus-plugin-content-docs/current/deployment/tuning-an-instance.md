@@ -35,6 +35,35 @@ dcctl upgrade local my-instance --values tuning.yaml
 dcctl upgrade local my-instance --version <new-version>
 ```
 
+## Ingest metering {#ingest-metering}
+
+要减少平台短暂停顿后对租户合规流量的丢弃，可以选择启用带延迟补偿额度的计量方式。
+默认值仍为 `legacy`；`lagCredit` 尚未经过生产规模的验证。将以下顶层 Helm 值与其他设置
+一起放入调优覆盖层：
+
+```yaml title="tuning.yaml"
+eventSources:
+  ingestMetering: lagCredit
+```
+
+使用 `dcctl upgrade <provider> <instance> --values tuning.yaml` 应用它，或向 Helm 提供
+相同的值。请在将 event-sources 升级到 v1.4 后启用；旧版本会拒绝此模式。chart 会在
+event-sources Pod 上设置 `EVENT_SOURCES_INGEST_METERING`。这不是 `instance.config` 或
+`functionalAreas.event-sources.config` 下的键。未知模式会被拒绝。要恢复以前的计量方式，
+将值改为 `legacy` 并再次应用覆盖层。之后的 dcctl 升级会保留已记录的覆盖层。
+
+准入控制分别测量平台消息代理的捕获流和存储流的读取延迟。新到的网关流量、外部 MQTT
+和代理在线状态消息共享按 Pod 时钟计算的额度；HTTP 和入站集成保留现有的独立限流器。
+消息数和解码后读数的上限仍然适用，争用导致的丢弃和[每副本限制](../concepts/governance.md#per-replica)
+也仍然适用。这不会改变 MQTT 确认保证：确认后被丢弃的消息会丢失。
+
+补偿额度最多覆盖租户突发额度所允许的时间（`burst / rate`），上限为五秒。它不能覆盖任意
+长的中断，也不允许持续超过上限的速率。代理时钟修正的上限为两秒。若 Pod 在停顿期间启动，
+且尚未获知代理时钟偏移，当代理时钟超前时，它仍可能给予不足的补偿额度；请保持节点时钟
+同步。在[摄取监控](./observability.md#external-mqtt-owner)中观察读取延迟、追加时间偏差和
+丢弃原因，并使用 [IngestShedBeyondLagCredit](./alert-runbook.md#ingestshedbeyondlagcredit)
+和 [IngestAppendSkewLarge](./alert-runbook.md#ingestappendskewlarge) 处置手册。
+
 ## 覆盖层如何与 dcctl 设置的值组合 {#precedence}
 
 共三层，后一层覆盖前一层：
@@ -65,6 +94,7 @@ dcctl upgrade local my-instance --version <new-version>
 | `instance.config.infrastructure.nats.streamDesignRate`、`.streamRunwayMinutes`、`.streamMaxBytes`、`.streamMaxBytesCold`、`.streamMaxMsgs` | 事件流按其预留的中断缓冲时间，以及字节和消息数上限。写入任何内容之前，会用代理的卷检查预留量 |
 | `instance.config.infrastructure.messaging.envelopes.resolved`、`.inbound`、`.inboundLingerMillis` | 事件是否以信封形式写入，默认关闭 |
 | `instance.config.infrastructure.tokenAudience.enforcement`、`.unscopedClientCredentials`、`.externalResources` | 令牌受众始终强制执行。enforcement 应未设置或为 `enforce`；`v1.4` 拒绝 `observe`。不同的设置 `unscopedClientCredentials: observe` 仍受支持。`externalResources` 列出平台外的资源服务器，另外两个键由 chart 派生和控制。 |
+| `eventSources.ingestMetering` | 可选的带延迟补偿额度的摄取计量；参见 [Ingest metering](#ingest-metering)。默认值为 `legacy` |
 | `brokerAdmin.allowCeilingShrink` | 允许一次升级把某个流的上限降到其现有内容以下。仅在该次升级时设置，之后移除 |
 
 `functionalAreas.event-management.replicas` 虽然属于可调优区域，但它本身不可调：它由 `--ha` 设置，事件存储的连接预留量正是按它来确定的。

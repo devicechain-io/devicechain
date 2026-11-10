@@ -14,6 +14,28 @@ import { PageShell } from '@/components/ui/page-shell';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
+import type { AgentProposal } from '@/lib/api/agent-proposals';
+
+export function refusalReasonKey(reason: string) {
+  switch (reason) {
+    case 'DEPENDENCY_CHANGED': return 'dependencyChanged';
+    case 'INSTANCE_ACTUATION_OFF':
+    case 'TENANT_ACTUATION_OFF': return 'actionsOffReason';
+    case 'OPERATOR_SUSPENDED': return 'suspendedReason';
+    case 'KIND_REFUSED_BY_POLICY':
+    case 'NO_PUBLISHED_POLICY': return 'policyRefusalReason';
+    default: return 'refusalReason';
+  }
+}
+
+export function ProposalResult({ proposal }: { proposal: Pick<AgentProposal, 'state' | 'kind' | 'targetCount' | 'reasons'> }) {
+  const { t } = useTranslation('approvals');
+  if (proposal.state === 'EXECUTED') return <p>{t('executedResult', { action: t(proposal.kind), count: proposal.targetCount })}</p>;
+  if (proposal.state !== 'REFUSED') return null;
+  return <div><p>{t('refused')}</p><ul>{proposal.reasons.map(reason => <li key={reason}>
+    {t(refusalReasonKey(reason), { reason })}
+  </li>)}</ul></div>;
+}
 
 export function StepUpPrompt({ path }: { path: string }) {
   const { t } = useTranslation('approvals');

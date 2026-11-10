@@ -55,7 +55,9 @@ below hold across all the boards.
 
 ### Backlog panels, and what they show while a reader is down {#backlog-panels}
 
-A **backlog** is the number of messages in a stream that a reader has not been handed yet.
+These **backlog** panels count messages waiting to be handed to a reader plus messages already
+handed out but not yet acknowledged. A separate pending-only or in-flight panel counts only
+the part its title names.
 It is the most useful early warning in the platform, because a reader that is slower than
 its producers falls behind long before anything fails. See
 [A consumer that stays behind](./observability.md#consumer-backlog) for what the backlog

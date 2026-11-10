@@ -56,8 +56,9 @@ valen para todos los paneles.
 
 ### Paneles de retraso acumulado y qué muestran cuando un lector está caído {#backlog-panels}
 
-Un **retraso acumulado** (backlog) es el número de mensajes de un flujo que aún no se han
-entregado a un lector. Es la señal de alerta temprana más útil de la plataforma, porque un lector
+Estos paneles de **retraso acumulado** (backlog) cuentan los mensajes que esperan ser
+entregados a un lector más los ya entregados pero aún no confirmados. Un panel separado de
+pendientes o en vuelo cuenta solo la parte que indica su título. Es la señal de alerta temprana más útil de la plataforma, porque un lector
 más lento que sus productores se retrasa mucho antes de que algo falle. Consulte
 [Un consumidor que se queda atrás](./observability.md#consumer-backlog) para saber qué significa
 el retraso y cómo se mide.

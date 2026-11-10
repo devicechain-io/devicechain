@@ -42,12 +42,14 @@ una página dentro de ella para ir allí.
 | Entrada | Qué contiene |
 | --- | --- |
 | **Inicio** | La página de inicio. |
-| **Supervisión** | Los **Paneles** que crea tu equipo, las **Alarmas** que han generado tus reglas, los **Fallos de ingesta** para eventos rechazados, las **Políticas de notificación** para el enrutamiento de alarmas y las horas de silencio, y los **Canales de notificación** para los destinos de entrega. |
+| **Supervisión** | **Aprobaciones** (vista previa) para revisar propuestas de agentes, los **Paneles** que crea tu equipo, las **Alarmas** que han generado tus reglas, los **Fallos de ingesta** para eventos rechazados, las **Políticas de notificación** para el enrutamiento de alarmas y las horas de silencio, y los **Canales de notificación** para los destinos de entrega. |
 | **Dispositivos** | **Dispositivos**, **Tipos de dispositivo**, **Perfiles de dispositivo** (que contienen las reglas, métricas y comandos del perfil), **Grupos de dispositivos**, **Lotes de comandos**, **Ventanas de mantenimiento** y **Actualizaciones** (**Artefactos**, **Despliegues** y **Firmantes** para las actualizaciones remotas, OTA). |
 | **Conectar** | Cómo llegan al inquilino los dispositivos y otros sistemas: **Perfiles de aprovisionamiento**, **Anclas de confianza**, **Integraciones** y **Conectores** (conexiones salientes con otros sistemas). |
 | **Organización** | **Activos**, **Clientes** y **Áreas** (incluidas las **Geocercas**); **Facetas**, las claves con las que describes y filtras entidades; y **Explorar**, un generador de consultas para encontrar entidades por sus facetas. |
 | **Acceso** | **Miembros**, **Cuentas de servicio**, **Roles**, **Seguridad de inicio de sesión** y **Auditoría**, el registro del inquilino de quién cambió qué. |
 | **Configuración** | **Marca**, **Mapa** e **Idioma**. |
+
+La [bandeja de aprobaciones (vista previa)](../concepts/mcp.md#approvals-inbox) necesita `agent:admin` y una membresía en el inquilino sin restricción de alcance. El operador también debe habilitar las acciones de agentes antes de que puedas usarla.
 
 Solo ves las entradas que tu rol permite. Si tu rol no puede leer alarmas, por ejemplo,
 **Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación ejecuta el servicio

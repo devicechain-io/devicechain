@@ -30,12 +30,14 @@ import GuideShot from '@site/src/components/GuideShot';
 | 条目 | 内容 |
 | --- | --- |
 | **Home** | 主页。 |
-| **Monitor**（监控） | 团队创建的 **Dashboards**（仪表板）、规则已触发的 **Alarms**（告警）、记录被拒事件的 **Ingest failures**（摄取失败）、设置告警路由和静默时段的 **Notification Policies**（通知策略），以及设置投递目的地的 **Notification Channels**（通知渠道）。 |
+| **Monitor**（监控） | 用于审查代理提议的 **Approvals**（批准，预览版）、团队创建的 **Dashboards**（仪表板）、规则已触发的 **Alarms**（告警）、记录被拒事件的 **Ingest failures**（摄取失败）、设置告警路由和静默时段的 **Notification Policies**（通知策略），以及设置投递目的地的 **Notification Channels**（通知渠道）。 |
 | **Devices** | **Devices**、**Device Types**（设备类型）、**Device Profiles**（设备配置文件，包含该配置文件的规则、指标和命令）、**Device Groups**（设备分组）、**Command Batches**（命令批次）、**Maintenance Windows**（维护窗口）和 **Updates**（更新，其中的 **Artifacts**（制品）、**Rollouts**（发布）和 **Signers**（签名者）用于空中升级）。 |
 | **Connect**（连接） | 设备和其他系统接入租户的方式：**Provisioning Profiles**（预配置文件）、**Trust Anchors**（信任锚）、**Integrations**（集成）和 **Connectors**（连接器，通向其他系统的出站连接）。 |
 | **Organization**（组织） | **Assets**（资产）、**Customers**（客户）和 **Areas**（区域，含 **Geofences** 地理围栏）；**Facets**（分面），即用于描述和筛选实体的键；以及 **Browse**（浏览），按分面查找实体的查询构建器。 |
 | **Access**（访问） | **Members**（成员）、**Service Accounts**（服务账号）、**Roles**（角色）、**Sign-in Security**（登录安全）和 **Audit**（审计，租户内“谁修改了什么”的记录）。 |
 | **Settings**（设置） | **Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
+
+[批准收件箱（预览版）](../concepts/mcp.md#approvals-inbox)需要 `agent:admin` 和不受范围限制的租户成员身份。运维人员还必须先启用代理操作，你才能使用它。
 
 你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Access** 和 **Settings** 两个分区主要面向租户管理员；其中每个条目是否出现取决于你自己的权限。
 

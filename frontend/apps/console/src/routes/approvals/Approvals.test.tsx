@@ -46,7 +46,7 @@ beforeEach(() => {
   h.get.mockResolvedValue(proposal);
   h.list.mockResolvedValue({ results: [proposal], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
   h.stepUp.mockResolvedValue(undefined);
-  h.approve.mockResolvedValue(undefined); h.reject.mockResolvedValue(undefined);
+  h.approve.mockResolvedValue({ ...proposal, approvals: [...proposal.approvals, { principal: 'ann', approvedAt: '2026-11-10T11:00:00Z' }] }); h.reject.mockResolvedValue(undefined);
   h.setActuation.mockImplementation(async (enabled: boolean) => { policy = { ...policy, actuationOff: !enabled }; return policy; });
 });
 afterEach(cleanup);
@@ -61,7 +61,8 @@ function show(path = '/approvals/proposal-17') {
 async function approve() {
   fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
   const dialog = await screen.findByRole('dialog');
-  expect(dialog.textContent).toContain('2 targets with impact NORMAL');
+  expect(dialog.textContent).toContain('2 alarms with impact NORMAL');
+  expect(dialog.textContent).toContain('as you, the approving person');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
 }
 
@@ -99,6 +100,56 @@ async function verifyStepUp() {
 }
 
 describe('proposal decisions', () => {
+  it.each(['ALARM_ACK', 'ALARM_CLEAR'] as const)('warns that final approval carries out %s as the approver', async kind => {
+    h.get.mockResolvedValue({ ...proposal, kind });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain(kind === 'ALARM_ACK' ? 'acknowledge these 2 alarms' : 'clear these 2 alarms');
+    expect(dialog.textContent).toContain('Approving will carry out the action');
+    expect(dialog.textContent).toContain('as you, the approving person');
+    expect(h.approve).not.toHaveBeenCalled();
+  });
+  it('describes an intermediate approval without claiming execution', async () => {
+    h.get.mockResolvedValue({ ...proposal, approvals: [] });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('2 targets with impact NORMAL');
+    expect(dialog.textContent).not.toContain('final approval');
+  });
+  it('shows success for EXECUTED and refreshes to the execution result and approvers', async () => {
+    const executed = { ...proposal, state: 'EXECUTED' as const, decidedBy: 'carol',
+      approvals: [...proposal.approvals, { principal: 'carol', approvedAt: '2026-11-10T11:00:00Z' }] };
+    h.approve.mockResolvedValue(executed);
+    h.get.mockResolvedValueOnce(proposal).mockResolvedValue(executed);
+    show(); await approve();
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Action carried out successfully.'));
+    await screen.findByText('Executed');
+    expect(screen.getByText('Action carried out: Clear alarms (2 alarms).')).toBeTruthy();
+    expect(screen.getByText('carol')).toBeTruthy();
+    expect(screen.getByText(/carol approved at/)).toBeTruthy();
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
+  it.each(['DEPENDENCY_CHANGED', 'KIND_REFUSED_BY_POLICY', 'TENANT_ACTUATION_OFF', 'INSTANCE_ACTUATION_OFF', 'OPERATOR_SUSPENDED', 'NO_PUBLISHED_POLICY', 'FUTURE_REASON'])('explains REFUSED with %s and refreshes without a success toast', async reason => {
+    const refused = { ...proposal, state: 'REFUSED' as const, reasons: [reason], decidedBy: 'carol' };
+    h.approve.mockResolvedValue(refused);
+    h.get.mockResolvedValueOnce(proposal).mockResolvedValue(refused);
+    show(); await approve();
+    await screen.findByText('Refused');
+    expect(screen.getByRole('status').textContent).toContain('Nothing was changed');
+    expect(screen.getByRole('status').textContent).toContain(reason);
+    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining('Nothing was changed'), 'info');
+    expect(h.toast).not.toHaveBeenCalledWith('Approval recorded.');
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
+  it('explains CONCURRENT_APPROVAL and refreshes', async () => {
+    h.approve.mockRejectedValue(serverError('CONCURRENT_APPROVAL'));
+    show(); await approve();
+    expect((await screen.findByRole('status')).textContent).toContain('Someone else is approving');
+    expect(h.toast).toHaveBeenCalledWith(expect.stringContaining('Someone else is approving'), 'info');
+    await waitFor(() => expect(h.get).toHaveBeenCalledTimes(2));
+  });
   it('approves exactly the loaded and displayed digest and refetches', async () => {
     show();
     await screen.findByText(proposal.digest, { selector: 'p' });
@@ -192,6 +243,17 @@ describe('proposal decisions', () => {
 });
 
 describe('inbox and kill switch', () => {
+  it.each(['EXECUTED', 'REFUSED'] as const)('shows %s with the approvers, deciding person and result in the inbox', async state => {
+    h.list.mockResolvedValue({ results: [{ ...proposal, state, reasons: ['DEPENDENCY_CHANGED'], decidedBy: 'carol' }],
+      pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } });
+    show('/approvals');
+    await screen.findByRole('link', { name: 'agent-7' });
+    const row = screen.getByRole('row', { name: /agent-7/ });
+    expect(row.textContent).toContain(state === 'EXECUTED' ? 'Executed' : 'Refused');
+    expect(row.textContent).toContain('bob approved at');
+    expect(row.textContent).toContain('Decided by carol');
+    expect(row.textContent).toContain(state === 'EXECUTED' ? 'Action carried out: Clear alarms (2 alarms).' : 'Nothing was changed');
+  });
   it('confirms turning off, sends false without step-up, then refetches policy', async () => {
     show('/approvals');
     fireEvent.click(await screen.findByRole('button', { name: 'Turn agent actions off' }));
