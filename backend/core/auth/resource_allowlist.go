@@ -55,13 +55,13 @@ type ResourceAllowlist struct {
 }
 
 // NewResourceAllowlist builds the allowlist from the instance's token-audience block. It
-// validates the block again, so a hand-built configuration cannot install an allowlist the
-// loader would have refused.
+// validates resource identifiers and modes again, retaining programmatic observe
+// compatibility. Service startup validates the document before calling this constructor.
 //
 // allowed = {AreaResource(base, a) : a in AreaAudiences} + mcpResources + externalResources.
 // With no base there are no area entries.
 func NewResourceAllowlist(cfg config.TokenAudienceConfiguration) (*ResourceAllowlist, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := validateAudiencePolicy(cfg); err != nil {
 		return nil, fmt.Errorf("infrastructure.tokenAudience: %w", err)
 	}
 	a := &ResourceAllowlist{

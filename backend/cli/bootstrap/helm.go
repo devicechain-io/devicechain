@@ -157,6 +157,9 @@ func helmInstall(ctx context.Context, st *State) error {
 		if previous, err = previousReleaseValues(actionConfig, releaseName); err != nil {
 			return err
 		}
+		if err := refuseObserveValues(previous, "the previously installed release's user-supplied values"); err != nil {
+			return err
+		}
 		carryForwardFromRelease(st, previous)
 	}
 	// The keys an instance on the old layout holds in its release, read BEFORE any write so a
@@ -295,6 +298,19 @@ func helmInstall(ctx context.Context, st *State) error {
 	// Secret the old pods referenced removed (see ownedsecret_phased.go).
 	return finishOwnedSecrets(ctx, release(), []postReleaseStep{spPost, lwPost},
 		func(msg string) { fmt.Println(color.YellowString("warning: " + msg)) })
+}
+
+// precheckTokenAudienceRelease reads historical user-supplied values before the upgrade writes.
+func precheckTokenAudienceRelease(st *State) error {
+	cfg, err := helmActionConfigFor(st.KubeContext)
+	if err != nil {
+		return err
+	}
+	previous, err := previousReleaseValues(cfg, helmReleaseNameFor(st.Instance))
+	if err != nil {
+		return err
+	}
+	return refuseObserveValues(previous, "the previously installed release's user-supplied values")
 }
 
 // releaseValues is the value map helmInstall hands Helm, and the instance configuration

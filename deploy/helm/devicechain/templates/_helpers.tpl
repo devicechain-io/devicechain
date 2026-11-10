@@ -772,7 +772,7 @@ uppercase one from a comparison of its fields). */ -}}
 {{- if and (eq $head (lower $head)) (not $clash) -}}
 {{- $out = append $out $v -}}
 {{- else if include "devicechain.tokenAudienceEnforced" . -}}
-{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while token audiences are enforced (the default), so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those, or set instance.config.infrastructure.tokenAudience.enforcement to observe." $v $base) -}}
+{{- fail (printf "mcp: resourceUrl %q cannot be registered as a token audience while token audiences are enforced (the default), so every call MCP forwards would be refused. The scheme and host must be lowercase, and the URL must not be one of the platform areas' identifiers (%s/<area>). Lowercase it or move it off those identifiers." $v $base) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

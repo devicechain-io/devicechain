@@ -48,7 +48,7 @@ func TestEnforceRefusesToStartWhenResourceUrlIsNotRegistered(t *testing.T) {
 		reg := prometheus.NewRegistry()
 		err := checkAudienceRegistration(regMCP, cfgWith(mode, regOther), reg, "mcp")
 		require.Error(t, err, "mode=%q", mode)
-		require.Contains(t, err.Error(), "enforcement to observe", "names the opt-out")
+		require.Contains(t, err.Error(), "add it to infrastructure.tokenAudience.mcpResources", "names the fix")
 	}
 	for name, mcp := range map[string][]string{
 		"empty list":      nil,

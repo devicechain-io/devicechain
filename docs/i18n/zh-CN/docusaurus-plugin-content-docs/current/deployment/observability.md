@@ -914,28 +914,28 @@ chart 覆盖链条各环节：
 
 ## 令牌受众检查 {#token-audience-checks}
 
-每个 API 都会检查访问令牌绑定到哪个资源，授权服务器则检查客户端申请哪个资源。规则见[令牌受众](../concepts/security-model.md#token-audience)。从 `v1.3` 起，两项检查默认强制执行，会拒绝这样的令牌或请求；下面的序列把每次拒绝计为 `rejected`。在设置了 `enforcement: observe`（即退路，也是 `v1.2` 的默认）的实例上，什么都不会被拒绝，下面的序列和告警就是你在移除退路之前找出 `enforce` 会拒绝的客户端的方法。当 chart 的告警处于开启状态（`metrics.alerts`，默认开启）时，它们就存在。
+每个 API 检查访问令牌的受众，授权服务器检查请求的资源。从 `v1.4` 起，两项检查始终强制执行；下面的序列将拒绝计为 `rejected`。启动加载器、chart 的值模式和升级前的 `dcctl` 都拒绝 `enforcement: observe`。指标和告警为兼容旧实例保留。
 
 | 序列 | 标签 | 如何读取 |
 | --- | --- | --- |
-| `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
+| `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe (v1.2/v1.3)：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`、`resource`、`verdict` | 授权服务器每做出一次资源判定计一次。`grant` 是 `authorization_code`、`refresh_token` 或 `client_credentials`。`resource` 是所申请内容的类别：`none`、`area`、`mcp`、`external`、`unlisted`、`malformed` 或 `multiple`。`resource` 与其授权码或刷新令牌所绑定的资源不同的请求也会计入这里。 |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | 指定了资源却未指定 scope 的 `client_credentials` 请求，这种请求已被弃用。判定始终是 `would_reject`，请求照常处理。 |
-| `devicechain_mcp_token_audience_registered` | 无 | MCP 服务器的 `resourceUrl` 在 `infrastructure.tokenAudience.mcpResources` 中时为 1，不在时为 0。为 0 表示在 `observe` 下 MCP 服务器转发的调用被计为 `would_reject`。在默认的 `enforce` 下，`mcp` 会拒绝启动。 |
+| `devicechain_mcp_token_audience_registered` | 无 | MCP 的 resourceUrl 位于 `infrastructure.tokenAudience.mcpResources` 中时为 1，否则为 0。缺少时 MCP 拒绝启动。 |
 
-健康的实例只有 `accepted` 判定。前两行的 `rejected` 序列有变化，说明某个客户端正在被拒绝；那里的 `would_reject` 序列（只在 `observe` 下出现）有变化，说明某个客户端发送的令牌或请求会被 `enforce` 拒绝；第三行有变化，则说明有请求会被下一个主版本拒绝。读取这些数字时请记住两点：
+前两行的 `rejected` 表示客户端被拒绝；其中的 `would_reject` 来自运行 observe 的历史 `v1.2`/`v1.3` 实例。第三行在 `v1.4` 仍有效：未指定 scope 的客户端凭据请求仍计为 `would_reject` 并被处理。
 
 - **它们统计的是请求，不是客户端。** 一个持续发送同一令牌的客户端，每次调用都会让某个序列增加，而且入口是在 GraphQL 授权运行之前计数的。序列不为零回答的是“有没有客户端这样做”，日志回答的是“是哪一个”。伪造或过期的令牌永远不会让入口计数器增加，因为检查是在验证签名之后进行的。授权服务器的计数器在客户端通过认证之后才增加，只有一个例外：授权端点在任何人登录之前就对请求计数，所用的值都是公开的，所以任何能访问该页面的人都可以让它的序列增加。
-- **`rejected` 只在 `enforce` 下出现，`would_reject` 只在 `observe` 下出现。** 在另一种模式下它们各自保持为零。
+- 受众和资源检查在 `v1.4` 中产生 `accepted` 或 `rejected`；`would_reject` 为旧实例保留。独立的无 scope 客户端凭据计数器仍产生 `would_reject`。
 
-**升级到 `v1.3` 之前，** 请在 `v1.2` 实例上检查前两个序列的 `would_reject` 判定，或下面的两个告警。如果它们在所有区域都为零，默认值的改变对你的客户端没有任何影响。如果它们有变化，请先根据下表中的日志行找到并修正客户端，或者设置 `enforcement: observe` 以保留 `v1.2` 的行为。参见[观察与强制执行](../concepts/security-model.md#token-audience-modes)。
+升级到 `v1.4` 前，修正旧实例的 `would_reject` 计数器识别出的客户端，并从值、已存储的 overlay、上一个 release 的值以及自己编写的 Secret 文档中删除 `enforcement: observe`。未设置即为 enforce。
 
-有两个 `info` 级告警监视 `would_reject` 判定，因此它们只会在设置了 `enforcement: observe` 的实例上触发。两者都在序列最近一小时的速率持续一小时大于零之后触发，并在最后一个违规请求之后大约一小时自行解除。它们都不带租户标签；kube-prometheus-stack 默认的 Alertmanager 配置会抑制 `info` 级告警，所以如果想收到它们，请显式配置路由。
+`TokenAudienceWouldReject` 和 `OAuthResourceWouldReject` 为兼容性保留，不能由 `v1.4` 实例触发；只能由运行 observe 的 `v1.2`/`v1.3` 实例触发。两者均为 `info` 告警，要求过去一小时的速率连续一小时为正。
 
 | 告警 | 严重程度 | 含义 | 处理方式 |
 | --- | --- | --- | --- |
-| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。这些请求之所以照常处理，只是因为实例设置了 `observe`。默认的 `enforce` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
-| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。这些请求之所以照常处理，只是因为实例设置了 `observe`。默认的 `enforce` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
+| `TokenAudienceWouldReject` | info | 至少一小时内，某个服务收到的请求所带访问令牌绑定到了它所提供资源之外的资源，且该资源不是已注册的 MCP 资源。这些请求之所以照常处理，只是因为实例设置了 `observe` (v1.2/v1.3)。默认的 `enforce` 会以 `401` 拒绝它们。 | 在该服务的日志中找到客户端：一条有限频的警告 `Token audience is not accepted by this plane`，带有 `client_id`、`tenant`、`plane`、`audience`、`sub_kind` 和令牌的 `aud`。让客户端改为申请它所调用资源的令牌，或不绑定任何资源。每个 Pod 对每个入口、受众和客户端的组合每分钟最多写一行，`suppressed` 统计被压下的行数。第一方令牌的 `client_id` 为空。 |
+| `OAuthResourceWouldReject` | info | 至少一小时内，授权服务器收到的令牌请求或授权请求指定了本实例不提供的资源。这些请求之所以照常处理，只是因为实例设置了 `observe` (v1.2/v1.3)。默认的 `enforce` 会以 `invalid_target` 拒绝它们，刷新则返回 `invalid_grant`。 | 在 `user-management` 的日志中找到客户端：一条有限频的警告 `OAuth resource is not one this instance serves`，带有 `client_id`、`tenant`、`grant`、`resource_class` 和所申请的 `resource`。`sender_authenticated=false` 表示请求是在登录之前到达授权端点的，因此 `client_id` 只是发送方自称的值。让客户端省略该资源，或改用本实例提供的资源。如果该资源是你自己的服务，请把它列入 `externalResources`。 |
 
 已弃用的 `client_credentials` 请求在 `user-management` 的日志中有它自己的警告 `A client_credentials request named a resource without a scope`，带有客户端和租户，但没有告警。参见[服务账号](../user-guide/service-accounts.md#binding-a-token-to-a-resource)。
 

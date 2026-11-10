@@ -34,6 +34,9 @@ func applyUpgradeValuesOverlay(st *State, inst *dcv1beta1.Instance, opts Upgrade
 		}
 		recorded, st.ValuesOverlayUnreadable = nil, true
 	}
+	if err := refuseObserveValues(recorded, "the stored overlay annotation "+AnnotationValuesOverlay); err != nil {
+		return err
+	}
 	st.ValuesOverlayRecorded = recorded
 	switch {
 	case opts.ResetValues:
@@ -90,6 +93,13 @@ func sayValuesOverlay(st *State) {
 // written, so a combination the chart refuses at render time (a request above its limit,
 // two pods on a one-pod volume) stops the run while it still costs nothing.
 func precheckValuesOverlay(ctx context.Context, st *State) error {
+	// Historical release values must be checked even with no overlay: recomposition
+	// could otherwise silently discard the old opt-out during a rolling upgrade.
+	if st.Evolving {
+		if err := precheckTokenAudienceRelease(st); err != nil {
+			return err
+		}
+	}
 	if len(st.ValuesOverlay) == 0 {
 		return nil
 	}
@@ -156,6 +166,9 @@ func adoptRecordedValuesOverlay(st *State, existing *dcv1beta1.Instance) error {
 			return err
 		}
 		recorded, st.ValuesOverlayUnreadable = nil, true
+	}
+	if err := refuseObserveValues(recorded, "the stored overlay annotation "+AnnotationValuesOverlay); err != nil {
+		return err
 	}
 	st.ValuesOverlayRecorded = recorded
 	if st.ValuesOverlay == nil && len(recorded) > 0 {
