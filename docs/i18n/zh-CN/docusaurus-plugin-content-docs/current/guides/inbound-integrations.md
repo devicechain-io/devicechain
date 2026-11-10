@@ -271,11 +271,11 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 - 同时通过 MQTT 连接的设备，按它最近一次上报所用的传输来判断。最近一次通过集成上报时，其命令会失败；改为通过 MQTT 上报之后，命令即可投递。
 - 从未上报过的设备没有记录的传输，因此它的命令会照常下发，并因无人应答而过期，直到它首次上报为止。
 
-对必须接收命令、且不在 ChirpStack v4 网络服务器后面的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
+对于网络服务器没有下行 API 的设备，请同时为它配置 MQTT 连接。参见[传输能力矩阵](../reference/transport-matrix.md)。
 
-## LoRaWAN 下行（ChirpStack v4）{#lorawan-downlink}
+## LoRaWAN 下行 {#lorawan-downlink}
 
-当安装启用了出站连接器的下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`；此时 Helm chart 会让命令投递服务派发这些命令，并拒绝手工设置的该标志副本），向 ChirpStack v4 网络服务器后面的设备发送命令时，会在该服务器上排入一条下行。未启用的安装不受任何影响。
+当安装启用了出站连接器的下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`；此时 Helm chart 会让命令投递服务派发这些命令，并拒绝手工设置的该标志副本），通过在关联的网络服务器上将下行入队来发送命令。支持 ChirpStack v4、The Things Stack v3 及可配置的 HTTP webhook。以下介绍 ChirpStack，其他服务器见后续小节。未启用的安装不受任何影响。
 
 **1. 把集成关联到它的网络服务器。** 创建并发布一个类型为 `lorawan_downlink` 的连接器：
 
@@ -366,6 +366,87 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 **在运行中的安装上启用。** 下行通过一次 Helm 升级启用；在 Pod 滚动期间，尚未重启的命令投递 Pod 仍会像下行出现之前那样，立即以 `COMMAND_TRANSPORT_UNSUPPORTED` 使发往集成设备的命令失败。这样的命令不会发出任何内容，升级结束后可以放心重新下发。要避开这一窗口，请在升级期间暂停发往集成设备的命令。适配器首次启动前几分钟内下发的命令，在适配器启动时仍会被接收。
 
+### 其他网络服务器（webhook）{#lorawan-downlink-webhook}
+
+对于没有原生客户端的服务器，发布 `networkServer: "webhook"` 的 `lorawan_downlink` 连接器。设备需要 `lorawan.deveui` 别名：DevEUI 来自设备，而非命令。使用上文相同的命令参数或类型化编码器。必须恰好有一个已发布的链接指向该入站集成。
+
+| 配置 | 含义 |
+| --- | --- |
+| `networkServer` | 必填：`webhook`。 |
+| `baseUrl` | 必填的 HTTP(S) API 根地址，主机必须为字面值。允许路径前缀；不允许查询、片段或用户信息。 |
+| `integration` | 必填的入站集成令牌。 |
+| `urlTemplate` | 必填路径，以 `/` 开头，可带查询；最多 1024 字节。 |
+| `method` | `POST`（默认）、`PUT` 或 `PATCH`。 |
+| `contentType` | `application/json`（默认）、`text/plain` 或 `application/x-www-form-urlencoded`。 |
+| `bodyTemplate` | 可选，最多 8192 字节；允许为空。非空 JSON 正文必须渲染为有效 JSON。 |
+| `headers` | 最多 16 个自定义头；每个值最多 512 字节。名称为字面 HTTP token；值可包含占位符。 |
+| `authHeader` | 凭据头名称，默认 `Authorization`。 |
+| `authPrefix` | 默认 `"Bearer "`；显式 `""` 表示直接发送密钥。最多 32 个字符，不能包含控制字符。 |
+| 连接器密钥 | 必填的 API 凭据，加密存储且只能写入。头值 = `authPrefix + secret`。 |
+
+webhook 不接受 `applicationId`。原生服务器类型不接受 webhook 专用字段。自定义头不能设置 `Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`Content-Type`、`Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie` 或配置的 `authHeader`（不区分大小写）。`authHeader` 必须是 HTTP token，且不能为 `Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`Content-Type`、`Cookie` 或 `Set-Cookie`。头值不能包含控制字符。使用 `contentType` 选择格式。
+
+| 占位符 | 值 |
+| --- | --- |
+| `{{devEui}}` | 16 位大写十六进制数字。 |
+| `{{fPort}}` | 十进制应用端口。 |
+| `{{payloadBase64}}` | 带填充的标准 base64 负载。 |
+| `{{payloadHex}}` | 小写十六进制负载。 |
+| `{{confirmed}}` | `true` 或 `false`。 |
+| `{{correlationId}}` | 平台生成的 `dc:`，后接 32 位小写十六进制数字。 |
+
+只接受上述精确名称。未知、不完整、空白或含空格的占位符都会被拒绝；字面 `{{` 没有转义语法。单个花括号保留为字面值以支持 JSON。只替换一次，不再次扫描替换值。URL 值按路径段或查询组件转义；正文和头值直接插入。URL 或正文必须包含 `{{devEui}}`。
+
+例如，将连接器密钥设为 API 凭据并发布：
+
+```json
+{
+  "networkServer": "webhook",
+  "baseUrl": "https://ns.example.com/api",
+  "integration": "my-integration-token",
+  "urlTemplate": "/devices/{{devEui}}/downlinks",
+  "method": "POST",
+  "contentType": "application/json",
+  "bodyTemplate": "{\"devEui\":\"{{devEui}}\",\"fPort\":{{fPort}},\"data\":\"{{payloadBase64}}\",\"confirmed\":{{confirmed}},\"ref\":\"{{correlationId}}\"}",
+  "headers": {
+    "X-Correlation-Id": "{{correlationId}}"
+  },
+  "authHeader": "Authorization",
+  "authPrefix": "Bearer "
+}
+```
+
+向 DevEUI `0011223344556677` 发送命令 `{"fPort":10,"hex":"0a0b","confirmed":false}` 时，会向 `https://ns.example.com/api/devices/0011223344556677/downlinks` 发送 POST，正文含 `data: "Cgs="`、`fPort: 10`、`confirmed: false`，并在正文和头中带上生成的引用。根据服务器 API 调整字段名称。
+
+调用经过出站防护；私有地址需要运维允许。不会跟随重定向，也不使用环境代理。模板不能更改基础协议或主机、添加用户信息或片段，也不能使用 `..` 或反斜杠。认证头最后设置。密钥永不出现在错误中；只报告 HTTP 状态，不显示服务器响应文本。
+
+| 发送结果 | 命令结果 |
+| --- | --- |
+| HTTP 2xx | 已接受。非确认下行：`SUCCEEDED`，结果阶段为 `queued`；确认下行：保持 `SENT` 等待 ack。接受不代表已送达。 |
+| 配置或参数无效、缺少 DevEUI、出站拒绝、写入前 DNS 或连接失败，或其他 HTTP 4xx | `FAILED`，未送达（`UNSENT`）；可安全重发。 |
+| HTTP 3xx、408、499、5xx，或写入后的不确定性 | `TIMEOUT`，结果未知（`UNANSWERED`）；重发可能重复执行。 |
+
+**确认下行要求 URL、正文或头值中包含 `{{correlationId}}`。** 否则在派发前拒绝命令。网络服务器或其中间件必须保留此引用并回传 ack。等待在命令过期或达到配置的等待期限（默认 24 小时）时结束，以较早者为准。
+
+**Ack 契约。** 向已认证的[通用 JSON 集成 URL](#generic-json) 发送 POST，并附加 `ack` 或以 `downlink` 开头的路径段，例如 `/downlink-ack` 或 `/downlink-nack`。匹配忽略大小写及 `-`、`_`、`/`。使用 `Content-Type: application/json` 和集成的 bearer 令牌。`idFrom` 与上行一样标识设备：从 `header:`、`query:` 或此单个 ack 对象中的 `pointer:` 获取。若为 `pointer:/devEui`，请在以下正文中添加 `"devEui":"0011223344556677"`：
+
+```json
+{"correlationId":"dc:0123456789abcdef0123456789abcdef","status":"acknowledged"}
+```
+
+`correlationId` 必填，以 `dc:` 开头，前缀后必须是小写十六进制，最多 100 个字符。`status` 必填且区分大小写。正文必须是单个 JSON 对象，遵循通常的请求及条目大小限制；不使用上行数组设置。启用下行报告流时，通用二进制集成的 ack 路径会被拒绝并返回 400。
+
+安装中启用 LoRaWAN 下行后，名为 `ack` 或以 `downlink` 开头的通用 JSON 集成路径将保留用于确认（非确认请求体将被拒绝并返回 400）；关闭时，这些路径与其他路径的行为相同。
+
+| Ack `status` | 命令结果 |
+| --- | --- |
+| `acknowledged` | `SUCCEEDED`，结果阶段为 `acknowledged`。 |
+| `timeout` | `TIMEOUT`，结果未知；确认可能已丢失。 |
+| `failed` | `TIMEOUT`，结果未知；报告无法证明帧从未发出。 |
+| 截止期限仍无报告 | `TIMEOUT`，结果未知。 |
+
+报告必须匹配关联 ID、集成以及平台解析得到的设备令牌。其他设备的报告会被丢弃，并在 `lpwan_downlink_reports_total` 中计为 `mismatch`；不存在或已结算的等待项计为 `unmatched`，与上文相同。Ack 路径使用下行限流器，不会随遥测一起被丢弃。没有路径的集成基础 URL 不表示任何 ack 类型。
+
 ### 从带类型的参数编码命令 {#lorawan-command-encoder}
 
 命令定义可以包含可选的 `encoder` JSON 字符串。发布设备配置文件后生效。
@@ -374,7 +455,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 如果定义查询失败或返回不完整的响应，平台会重试：命令保持待处理状态，不会发送任何内容。
 只有确定的定义问题（编码器无效、命令定义重复，或命令不在受约束的已发布命令词汇表中）
 才会将命令拒绝为**未发送**。
-ChirpStack v4 和 The Things Stack v3 使用相同的编码器。以下文档按顺序拼接常量、
+ChirpStack v4、The Things Stack v3 和 webhook 链接使用相同的编码器。以下文档按顺序拼接常量、
 缩放后的数值、布尔值和打包位字段：
 
 ```json
@@ -448,7 +529,6 @@ NaN、无穷大、超出范围、JSON 类型错误或缺少编码器参数，都
 
 ## 第 1 版不包含 {#not-supported}
 
-- **面向通用发送方的下行。** [LoRaWAN 下行](#lorawan-downlink)覆盖 ChirpStack v4 与 The Things Stack v3，支持原始负载或[带类型参数的编码](#lorawan-command-encoder)。发给其他集成设备的命令按[发给集成设备的命令](#commands)所述失败。
 - **签名载荷。**请求上没有 HMAC 或签名校验。bearer 令牌是唯一的凭据，传输必须使用 TLS。
 - **Join、status 和位置消息。**它们会被确认并忽略。
 - **自动创建设备。**未知标识符只会被列出，不会被创建。你需要自己根据列表添加设备。

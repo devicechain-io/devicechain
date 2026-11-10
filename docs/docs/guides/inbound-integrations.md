@@ -271,11 +271,11 @@ Two cases are worth knowing:
 - A device that also connects over MQTT is judged by the last transport it reported on. While it last reported through the integration its commands fail; after it reports over MQTT they are delivered.
 - A device that has never reported has no recorded transport, so its commands are dispatched as usual, and expire unanswered, until it first reports.
 
-For a device that must be commanded and is not behind a ChirpStack v4 network server, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
+For a device whose network server has no downlink API, give it an MQTT connection as well. See the [transport matrix](../reference/transport-matrix.md).
 
-## LoRaWAN downlink (ChirpStack v4) {#lorawan-downlink}
+## LoRaWAN downlink {#lorawan-downlink}
 
-An installation that runs the outbound connectors with the downlink switched on (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; the Helm chart then makes command delivery dispatch these commands, and refuses a hand-set copy of that flag) sends a command to a device behind a ChirpStack v4 network server by queueing a downlink on that server. Nothing changes for an installation that leaves it off.
+An installation that runs the outbound connectors with the downlink switched on (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; the Helm chart then makes command delivery dispatch these commands, and refuses a hand-set copy of that flag) sends commands by queueing downlinks on the linked server. ChirpStack v4, The Things Stack v3 and configurable HTTP webhooks are supported. The ChirpStack setup follows; the other servers have subsections below. Nothing changes for an installation that leaves it off.
 
 **1. Link the integration to its network server.** Create and publish a connector of type `lorawan_downlink`:
 
@@ -367,10 +367,92 @@ A report is matched to its command only by the `dc:` correlation id the platform
 **Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
 
 
+### Any other network server (webhook) {#lorawan-downlink-webhook}
+
+For a network server without a native client, publish a `lorawan_downlink` connector with `networkServer: "webhook"`. The device needs a `lorawan.deveui` alias; the platform reads its DevEUI from the device. Use the same command parameters or typed encoder described above. Exactly one published link must name the inbound integration.
+
+| Configuration | Meaning |
+| --- | --- |
+| `networkServer` | Required: `webhook`. |
+| `baseUrl` | Required HTTP(S) API root with a literal host; a path prefix is allowed. No query, fragment or userinfo. |
+| `integration` | Required inbound integration token. |
+| `urlTemplate` | Required path, optionally with query, beginning with `/`; at most 1024 bytes. |
+| `method` | `POST` (default), `PUT` or `PATCH`. |
+| `contentType` | `application/json` (default), `text/plain` or `application/x-www-form-urlencoded`. |
+| `bodyTemplate` | Optional body, at most 8192 bytes; empty is allowed. JSON bodies must render valid JSON. |
+| `headers` | Up to 16 custom headers, each value at most 512 bytes. Names are literal HTTP tokens; values may contain placeholders. |
+| `authHeader` | Credential header name, default `Authorization`. |
+| `authPrefix` | Default `"Bearer "`; explicit `""` sends the raw secret. At most 32 characters, without control characters. |
+| Connector secret | Required API credential, encrypted and write-only. The auth header value is `authPrefix + secret`. |
+
+`applicationId` is refused for webhook. Webhook-specific fields are refused for native network-server types. Header names must be valid HTTP tokens. Custom headers cannot set `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Content-Type`, `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, or the configured `authHeader` (case-insensitive). `authHeader` cannot be a framing, content type, connection or cookie header. Header values cannot contain control characters. Use `contentType` to choose the body format.
+
+| Placeholder | Rendered value |
+| --- | --- |
+| `{{devEui}}` | 16 upper-case hex digits. |
+| `{{fPort}}` | Decimal application port. |
+| `{{payloadBase64}}` | Standard padded base64 payload. |
+| `{{payloadHex}}` | Lower-case hex payload. |
+| `{{confirmed}}` | `true` or `false`. |
+| `{{correlationId}}` | Platform-generated `dc:` followed by 32 lower-case hex digits. |
+
+Only these exact placeholder names are accepted. Whitespace inside a placeholder, unknown or incomplete placeholders and literal `{{` are refused; single braces remain literal for JSON. Values in URL paths are escaped as path segments, and query values as query components; body and header values are raw. Substitution is a single pass. The URL or body must carry `{{devEui}}`.
+
+For example, with the connector secret set to the API credential:
+
+```json
+{
+  "networkServer": "webhook",
+  "baseUrl": "https://ns.example.com/api",
+  "integration": "my-integration-token",
+  "urlTemplate": "/devices/{{devEui}}/downlinks",
+  "method": "POST",
+  "contentType": "application/json",
+  "bodyTemplate": "{\"devEui\":\"{{devEui}}\",\"fPort\":{{fPort}},\"data\":\"{{payloadBase64}}\",\"confirmed\":{{confirmed}},\"ref\":\"{{correlationId}}\"}",
+  "headers": {
+    "X-Correlation-Id": "{{correlationId}}"
+  },
+  "authHeader": "Authorization",
+  "authPrefix": "Bearer "
+}
+```
+
+A command `{"fPort":10,"hex":"0a0b","confirmed":false}` for DevEUI `0011223344556677` posts to `https://ns.example.com/api/devices/0011223344556677/downlinks` with `data: "Cgs="`, `fPort: 10`, `confirmed: false` and the generated reference in the body and header. Adapt the field names to the server's API.
+
+The call uses the egress guard; private destinations need an operator allowance. Redirects are never followed, and environment proxy settings are not used. Templates cannot change the base scheme or host, add userinfo or fragments, or use `..` or backslashes. The credential is set last and is never shown in errors; only the HTTP status is reported, never the server's response text.
+
+| Send outcome | Command outcome |
+| --- | --- |
+| HTTP 2xx | Accepted. Unconfirmed: `SUCCEEDED`, result stage `queued`; confirmed: stays `SENT` awaiting an ack. Queue acceptance does not prove delivery. |
+| Invalid configuration/parameters, missing DevEUI, egress refusal, DNS/connect failure before writing, or other HTTP 4xx | `FAILED`, not delivered (`UNSENT`); safe to send again. |
+| HTTP 3xx, 408, 499, 5xx, or an ambiguous failure after writing | `TIMEOUT`, outcome unknown (`UNANSWERED`); sending again may act twice. |
+
+**Confirmed downlinks require `{{correlationId}}` in the URL, body or a header value.** Otherwise the command is refused before dispatch. The network server or its middleware must preserve that reference and post an acknowledgement back. The pending deadline is the command expiry, capped at 24 hours by default.
+
+**Ack contract.** POST to the authenticated [generic JSON integration URL](#generic-json), adding `ack` or a path segment beginning with `downlink` (for example `/downlink-ack` or `/downlink-nack`; matching ignores case and `-`, `_`, `/`). Use `Content-Type: application/json` and the integration's bearer token. `idFrom` identifies the device exactly as for uplinks: a `header:`, `query:` or `pointer:` into this single ack object. If `idFrom` is `pointer:/devEui`, add `"devEui":"0011223344556677"` to this body:
+
+```json
+{"correlationId":"dc:0123456789abcdef0123456789abcdef","status":"acknowledged"}
+```
+
+`correlationId` is required, starts with `dc:`, contains lower-case hex after the prefix, and is at most 100 characters. `status` is required and case-sensitive. With the downlink feed enabled, generic binary ack paths are refused with 400. The body is a single JSON object under the normal request and item size limits; uplink array settings do not apply.
+
+With LoRaWAN downlink enabled on the installation, generic JSON integration paths named `ack` or beginning with `downlink` are reserved for acknowledgements (a non-acknowledgement body is refused with 400); with it off, they behave as any other path.
+
+| Ack `status` | Command outcome |
+| --- | --- |
+| `acknowledged` | `SUCCEEDED`, result stage `acknowledged`. |
+| `timeout` | `TIMEOUT`, outcome unknown; an acknowledgement may have been lost. |
+| `failed` | `TIMEOUT`, outcome unknown; this report cannot prove the frame was never transmitted. |
+| No report by the deadline | `TIMEOUT`, outcome unknown. |
+
+A report must match the correlation id, integration and platform-resolved device token. A report for another device is dropped and counted as `mismatch`; a missing/already-settled pending item is dropped and counted as `unmatched` in `lpwan_downlink_reports_total`, as above. Ack routes use the downlink report limiter and are not shed with telemetry. A bare integration URL names no ack type.
+
+
 ### Encoding commands from typed parameters {#lorawan-command-encoder}
 
 A command definition can carry an optional `encoder` JSON string. Publish the device
-profile to activate it. Both ChirpStack v4 and The Things Stack v3 use the same encoder.
+profile to activate it. ChirpStack v4, The Things Stack v3 and webhook links use the same encoder.
 The encoder in force when a command is dispatched applies; republishing applies to
 commands dispatched after the publish, including commands already queued. The published
 definition is read afresh for every dispatch, with no encoder cache across a publish.
@@ -459,7 +541,6 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Downlink to generic senders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and The Things Stack v3, with raw payloads or [encoded typed parameters](#lorawan-command-encoder). Commands to any other integration device fail as described in [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.

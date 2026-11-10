@@ -260,7 +260,7 @@ func buildLpwan(nmgr *messaging.NatsManager, infra mscfg.InfrastructureConfigura
 	})
 	adapter := lpwan.New(reader, responses, cmddownlink.NewClaimer(claimClient, cdURL),
 		lpwan.NewStoreLinks(Api, processor.NewSecretResolver(SecretStore)),
-		lpwan.NewServiceDevices(deviceClient, dmURL), lpwan.Router{ChirpStack: lpwan.NewChirpStack(guard), TTS: lpwan.NewTTS(guard)}, LpwanMetrics,
+		lpwan.NewServiceDevices(deviceClient, dmURL), lpwan.Router{ChirpStack: lpwan.NewChirpStack(guard), TTS: lpwan.NewTTS(guard), Webhook: lpwan.NewWebhook(guard)}, LpwanMetrics,
 		lpwan.Options{
 			Workers:       Configuration.MaxConcurrentSends,
 			Rate:          RateLimiter,

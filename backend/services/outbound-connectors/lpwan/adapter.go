@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/integrationcodec"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadencode"
 	"github.com/devicechain-io/dc-microservice/transport"
@@ -377,6 +378,10 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 		a.lookupFailed(ctx, j, "link", err)
 		return
 	}
+	if target.NetworkServer == connectorspec.NetworkServerWebhook && params.Confirmed && !target.Webhook.CarriesCorrelation() {
+		a.refuse(msg, j, ResultRefusedConfirm, ReasonUnsupported, "a confirmed downlink needs {{correlationId}} in the link's templates so the acknowledgement can be matched")
+		return
+	}
 	// The name the network server addresses the device by: read from the device, never the command.
 	var ident, pendEUI, deviceRef string
 	if target.NetworkServer == connectorspec.NetworkServerTTSV3 {
@@ -401,6 +406,9 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 			return
 		}
 		ident, pendEUI = eui, eui
+		if target.NetworkServer == connectorspec.NetworkServerWebhook {
+			deviceRef = integrationcodec.GenericDeviceRef
+		}
 	}
 	if a.opts.Rate != nil && !a.opts.Rate.Allow(tenant) {
 		a.refuse(msg, j, ResultRefusedRate, ReasonRateLimited, "the tenant is over its outbound call ceiling; retry shortly")
