@@ -40,8 +40,9 @@ type AlarmProposalPreview struct {
 	HidesLiveCondition bool   `json:"hidesLiveCondition"`
 }
 type ProposalUntrusted struct {
-	Rationale *Marked `json:"rationale,omitempty" prov:"agent"`
-	Note      *Marked `json:"note,omitempty" prov:"operator"`
+	Rationale    *Marked   `json:"rationale,omitempty" prov:"agent"`
+	Note         *Marked   `json:"note,omitempty" prov:"operator"`
+	OtherTargets []*Marked `json:"otherTargets,omitempty" prov:"device-reported"`
 }
 type ProposalApproval struct {
 	Principal  string `json:"principal" prov:"id"`
@@ -52,6 +53,7 @@ type Proposal struct {
 	Kind              string             `json:"kind" prov:"platform"`
 	State             string             `json:"state" prov:"platform"`
 	Targets           []string           `json:"targets" prov:"id"`
+	TargetsNote       string             `json:"targetsNote,omitempty" prov:"platform"`
 	Digest            string             `json:"digest" prov:"platform"`
 	Impact            string             `json:"impact" prov:"platform"`
 	TargetCount       int                `json:"targetCount"`
@@ -77,6 +79,19 @@ type proposalResponse struct {
 func (p proposalResponse) output() Proposal {
 	out := p.Proposal
 	out.Untrusted = &ProposalUntrusted{Rationale: mark(SourceAgent, p.Rationale), Note: mark(SourceOperator, p.Note)}
+	out.Targets = make([]string, 0, len(p.Targets))
+	for _, target := range p.Targets {
+		if alarmTokenPattern.MatchString(target) {
+			out.Targets = append(out.Targets, target)
+			continue
+		}
+		// Stored targets may bypass MCP input validation. Preserve even empty invalid
+		// values as untrusted text, using the least-trusting source class.
+		out.Untrusted.OtherTargets = append(out.Untrusted.OtherTargets, &Marked{Value: target, Source: SourceDevice})
+	}
+	if len(out.Untrusted.OtherTargets) > 0 {
+		out.TargetsNote = "some stored targets are not alarm tokens and are shown as untrusted text"
+	}
 	return out
 }
 

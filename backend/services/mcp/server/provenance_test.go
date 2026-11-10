@@ -179,16 +179,24 @@ func sourceMismatches(v reflect.Value, path string) []string {
 				ft = ft.Elem()
 			}
 			if ft == markedType {
-				m := fv
-				if m.Kind() == reflect.Pointer {
-					if m.IsNil() {
-						continue
+				var check func(reflect.Value)
+				check = func(m reflect.Value) {
+					switch m.Kind() {
+					case reflect.Pointer:
+						if !m.IsNil() {
+							check(m.Elem())
+						}
+					case reflect.Slice, reflect.Array:
+						for j := 0; j < m.Len(); j++ {
+							check(m.Index(j))
+						}
+					default:
+						if got, want := m.FieldByName("Source").String(), f.Tag.Get("prov"); got != want {
+							out = append(out, path+"."+f.Name+": marked as "+got+", field is "+want)
+						}
 					}
-					m = m.Elem()
 				}
-				if got, want := m.FieldByName("Source").String(), f.Tag.Get("prov"); got != want {
-					out = append(out, path+"."+f.Name+": marked as "+got+", field is "+want)
-				}
+				check(fv)
 				continue
 			}
 			out = append(out, sourceMismatches(fv, path+"."+f.Name)...)
@@ -510,6 +518,12 @@ func TestASourceMismatchIsReported(t *testing.T) {
 	}}}}
 	if len(sourceMismatches(reflect.ValueOf(&out), "out")) == 0 {
 		t.Fatal("a Marked with the wrong source was not reported")
+	}
+	proposal := Proposal{Untrusted: &ProposalUntrusted{
+		OtherTargets: []*Marked{{Value: "free text", Source: SourceOperator}},
+	}}
+	if len(sourceMismatches(reflect.ValueOf(proposal), "proposal")) == 0 {
+		t.Fatal("a Marked list element with the wrong source was not reported")
 	}
 }
 
