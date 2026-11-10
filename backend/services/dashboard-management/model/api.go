@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -25,7 +26,7 @@ import (
 const maxDefinitionBytes = 1 << 20
 
 // ErrInvalidDefinition is returned when a create/update carries a Definition that
-// is not a well-formed JSON object. The document is otherwise stored opaquely.
+// is not a well-formed JSON object or has an invalid device selector.
 var ErrInvalidDefinition = errors.New("dashboard definition must be a JSON object")
 
 // ErrDefinitionTooLarge is returned when a Definition exceeds maxDefinitionBytes.
@@ -89,8 +90,9 @@ func NewApi(rdb *rdb.RdbManager) *Api {
 // helper (which drops invalid input silently) a bad definition is rejected — a
 // dashboard with a corrupt document is a client bug, not a value to swallow. The
 // object requirement rejects well-formed-but-nonsense scalars ("42", true, an
-// array) that would only fail later at render time. The backend still treats the
-// document's *contents* opaquely; the @devicechain/dashboards types own the shape.
+// array) that would only fail later at render time. Explicit device selectors must
+// have a string deviceToken and an array of string measurements. Other contents
+// remain opaque; the @devicechain/dashboards types own the document shape.
 func definitionJSON(raw string) (datatypes.JSON, error) {
 	b := []byte(raw)
 	// Length-check before parsing so an oversized payload can't cost a full scan.
@@ -102,6 +104,43 @@ func definitionJSON(raw string) (datatypes.JSON, error) {
 	}
 	if trimmed := bytes.TrimSpace(b); len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, ErrInvalidDefinition
+	}
+	var definition struct {
+		Widgets []json.RawMessage `json:"widgets"`
+	}
+	// A non-array widgets field is outside this narrow selector check.
+	if err := json.Unmarshal(b, &definition); err != nil {
+		return datatypes.JSON(b), nil
+	}
+	for _, rawWidget := range definition.Widgets {
+		var widget map[string]json.RawMessage
+		if err := json.Unmarshal(rawWidget, &widget); err != nil || widget == nil {
+			continue
+		}
+		var datasource map[string]json.RawMessage
+		if err := json.Unmarshal(widget["datasource"], &datasource); err != nil || datasource == nil {
+			continue
+		}
+		var kind string
+		if err := json.Unmarshal(datasource["kind"], &kind); err != nil || kind != "device" {
+			continue
+		}
+		var id string
+		_ = json.Unmarshal(widget["id"], &id)
+		var deviceToken *string
+		if err := json.Unmarshal(datasource["deviceToken"], &deviceToken); err != nil || deviceToken == nil {
+			return nil, fmt.Errorf("%w: widget %q datasource: deviceToken must be a string", ErrInvalidDefinition, id)
+		}
+		var measurements []json.RawMessage
+		if err := json.Unmarshal(datasource["measurements"], &measurements); err != nil || measurements == nil {
+			return nil, fmt.Errorf("%w: widget %q datasource: measurements must be an array of strings", ErrInvalidDefinition, id)
+		}
+		for _, rawMeasurement := range measurements {
+			var measurement *string
+			if err := json.Unmarshal(rawMeasurement, &measurement); err != nil || measurement == nil {
+				return nil, fmt.Errorf("%w: widget %q datasource: measurements must be an array of strings", ErrInvalidDefinition, id)
+			}
+		}
 	}
 	return datatypes.JSON(b), nil
 }

@@ -111,6 +111,8 @@ Un widget no embebe una consulta. Embebe un **selector** tipado que el runtime r
 
 Otros dos tipos, `devices` y `relatedTraversal`, están reservados para que una definición almacenada siga siendo compatible hacia adelante. El runtime los rechaza hasta que se implementen.
 
+Se rechaza guardar un borrador con un error de definición no válida cuando la fuente de datos de un widget indica `kind: device`, pero `deviceToken` no es una cadena o `measurements` no es un arreglo de cadenas. Se aceptan los valores vacíos de un borrador sin terminar (un token vacío y un arreglo de mediciones vacío); no se comprueban los otros tipos ni la existencia del token.
+
 Los selectores se resuelven a través del SDK de cliente contra la API GraphQL. Eso hace que la resolución sea:
 
 - **actual** — un dispositivo recién asignado a un área aparece en el panel de esa área sin editarlo, la próxima vez que se abre el panel (un panel ya abierto conserva los miembros que resolvió hasta que se recarga);
