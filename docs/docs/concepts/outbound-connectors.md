@@ -50,6 +50,8 @@ One generic `publish` action covers every broker and queue type; the **connector
 
 `gcp_pubsub` is a recognized type with no delivery client in this release, so creating, updating to or publishing a connector of that type is refused with the error code `UNSUPPORTED`. The console does not offer the type. A connector of that type stored by an earlier release is still dead-lettered as unsupported if a `publish` targets it, never silently dropped.
 
+`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+
 ## Connectors are versioned resources
 
 A connector is a **tenant-scoped resource** with the same lifecycle as a [device profile](./domain-model.md) or a [dashboard](./dashboards.md). You edit a **draft**, **publish** an immutable version, and **roll back** to an earlier one if a change misbehaves. A connector holds:

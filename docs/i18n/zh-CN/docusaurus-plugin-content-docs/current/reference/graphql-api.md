@@ -575,6 +575,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
 另外两种拒绝也使用相同响应方式，各有自己的代码。

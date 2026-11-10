@@ -452,6 +452,8 @@ pero no ejecutable, nunca descartado en silencio. Cuando se publique, se autenti
 guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
 :::
 
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
+
 Aparte de los conectores, los [canales de notificación](../guides/notification-channels.md) llegan a
 personas y no a sistemas, por SMTP y webhook.
 

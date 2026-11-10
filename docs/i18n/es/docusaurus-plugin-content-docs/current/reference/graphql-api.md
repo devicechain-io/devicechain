@@ -747,6 +747,8 @@ Algunos rechazos parecen similares y no llevan `CONFLICT`:
 - Eliminar un registro al que otros registros todavía se refieren lleva `REFERENCE_VIOLATION`.
   Consulta [Una referencia o un valor que se rechaza](#reference-and-invalid-values).
 
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
+
 ### Una referencia o un valor que se rechaza {#reference-and-invalid-values}
 
 Otros dos rechazos se responden de la misma forma, cada uno con su propio código.

@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
@@ -41,9 +42,22 @@ func (r *SchemaResolver) UpdateConnector(ctx context.Context, args struct {
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateConnector(ctx, args.Token, &args.Request, args.ExpectedUpdatedAt)
 	if err != nil {
+		if errors.Is(err, model.ErrConflict) {
+			return nil, &staleWriteError{err: err}
+		}
 		return nil, err
 	}
 	return &ConnectorResolver{M: *updated, S: r, C: ctx}, nil
+}
+
+// staleWriteError adds a code only at the connector update boundary. CONFLICT remains
+// reserved for uniqueness collisions; the model's message is preserved for older clients.
+type staleWriteError struct{ err error }
+
+func (e *staleWriteError) Error() string { return e.err.Error() }
+func (e *staleWriteError) Unwrap() error { return e.err }
+func (e *staleWriteError) Extensions() map[string]any {
+	return map[string]any{"code": "STALE_WRITE"}
 }
 
 // RenameConnector changes a connector's token and nothing else. It is the capability
