@@ -83,6 +83,8 @@ mutation {
 
 Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 [Slack 渠道](#create-a-slack-channel)会为你排版消息，是更好的选择。
 
+通用 webhook 的 `text` 是纯文本摘要，使用设备令牌或来源信息，而不包含设备名称；Slack 用户应使用原生 [Slack 通道](#create-a-slack-channel)。
+
 Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知（`RENOTIFIED`）和调度器拾取的延迟 `CLEARED` 通知也会在已知时包含这些设备和来源字段。升级前已发送过通知的告警，其后续此类通知会省略这些字段。
 
 可在 Webhook 通道的 `config` 中设置可选的 `linkBaseUrl`，值为控制台的 `http` 或 `https` 基础 URL（推荐 `https`），例如 `"linkBaseUrl":"https://console.example.com"`。此时，正文会包含 `alarmUrl`，并在告警指明其设备时包含 `deviceUrl`。基础 URL 不得包含查询字符串或片段，因为链接通过追加路径构建。未设置 `linkBaseUrl` 时，这两个键均会省略。如果已存储的 Webhook 配置中的 `linkBaseUrl` 无效，投递时会跳过该值，省略这两个链接并记录警告。

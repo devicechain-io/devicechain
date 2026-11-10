@@ -86,6 +86,8 @@ mutation {
 
 For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
 
+The generic webhook `text` is a plain summary that uses the device token or originator instead of the device name; Slack users should use the native [Slack channel](#create-a-slack-channel).
+
 A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. Timed re-notifications (`RENOTIFIED`) and late `CLEARED` notifications picked up by the scheduler also include these device and originator fields when known. Alarms that were notified before upgrading omit these fields from those later notifications.
 
 Optionally set `linkBaseUrl` in the webhook channel's `config` to your console's `http` or `https` base URL (`https` recommended), for example `"linkBaseUrl":"https://console.example.com"`. The payload then includes `alarmUrl` and, when the alarm names its device, `deviceUrl`. The base URL must not carry a query string or fragment, because links are built by appending a path. Both keys are absent when `linkBaseUrl` is unset. If a stored webhook has an invalid `linkBaseUrl`, delivery skips it, omits both links and logs a warning.
