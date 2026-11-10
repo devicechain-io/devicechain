@@ -148,6 +148,9 @@ type pausingApi struct {
 	reached chan struct{}
 	release chan struct{}
 	once    sync.Once
+	// lag holds the admission after it is released, before its verdict is recorded: the window in
+	// which a slow host finishes an admission whose connection the first sweep already closed.
+	lag time.Duration
 }
 
 func (p *pausingApi) ResolveX509Revocation(ctx context.Context, anchor *model.DeviceTrustAnchor,
@@ -159,6 +162,7 @@ func (p *pausingApi) ResolveX509Revocation(ctx context.Context, anchor *model.De
 		case <-p.release:
 		case <-time.After(4 * time.Second):
 		}
+		time.Sleep(p.lag)
 	}
 	return state, err
 }
@@ -230,7 +234,20 @@ func drainUntil(t *testing.T, f *x509Fixture, cond func() bool, msg string) {
 // lists only authorized sessions), the re-sweep below ends it. Either way no session survives the
 // re-sweep and the reconnect is refused cert_revoked.
 func TestX509AnAdmissionInFlightAtRevocationDoesNotSurvive(t *testing.T) {
+	anAdmissionInFlightAtRevocationDoesNotSurvive(t, 0)
+}
+
+// The same, with the admission slow to finish after it is released. A connection closed by the
+// first sweep fails the client before the callout has recorded its own verdict, so the reconnect's
+// counter assertion must not count that late verdict as the reconnect's.
+func TestX509AnAdmissionInFlightAtRevocationDoesNotSurviveWhenSlowToFinish(t *testing.T) {
+	anAdmissionInFlightAtRevocationDoesNotSurvive(t, 4*time.Millisecond)
+}
+
+func anAdmissionInFlightAtRevocationDoesNotSurvive(t *testing.T, lag time.Duration) {
 	f, pause, leaf := newRaceFixture(t)
+	pause.lag = lag
+	preRace := totalOf(f.counts())
 	c, err := raceDevice(t, f, pause, leaf)
 	if err == nil {
 		t.Cleanup(func() { c.Disconnect(50) })
@@ -240,10 +257,22 @@ func TestX509AnAdmissionInFlightAtRevocationDoesNotSurvive(t *testing.T) {
 	}
 	drainUntil(t, f, func() bool { return err != nil || !c.IsConnectionOpen() },
 		"the session admitted in the race window survived the re-sweep")
+	// The in-flight admission is itself a callout and records exactly one verdict, possibly after
+	// its client has already been refused. Let it land before measuring the reconnect.
+	require.Eventually(t, func() bool { return totalOf(f.counts()) == preRace+1 }, 15*time.Second,
+		20*time.Millisecond, "the in-flight admission never recorded its verdict")
 
 	before := f.counts()
 	require.Error(t, f.revLiveTry("dev-race", leaf), "a reconnect after the revocation must be refused")
 	f.moved(before, x509ResultCertRevoked)
+}
+
+func totalOf(m map[string]float64) float64 {
+	var n float64
+	for _, v := range m {
+		n += v
+	}
+	return n
 }
 
 // swallowingKicker answers its first call "nothing found, nothing to end" without asking the
