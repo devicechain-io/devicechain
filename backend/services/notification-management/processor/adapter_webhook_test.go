@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -147,5 +148,44 @@ func TestWebhookDropsReservedHeaders(t *testing.T) {
 	}
 	if gotCustom != "ok" {
 		t.Fatalf("X-Custom should pass through, got %q", gotCustom)
+	}
+}
+
+func TestWebhookStoredInvalidLinkBaseStillDelivers(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+	}))
+	defer srv.Close()
+	config := `{"url":"` + srv.URL + `","auth":"none","linkBaseUrl":"ftp://x"}`
+	token := t.Name()
+	_, parseErr := model.ParseWebhookConfig(token, &config)
+	if !errors.Is(parseErr, model.ErrInvalidLinkBase) {
+		t.Fatalf("save-time parser: %v, want ErrInvalidLinkBase", parseErr)
+	}
+	key := struct{ token, text string }{token, parseErr.Error()}
+	webhookLinkBaseWarnings.Delete(key)
+	defer webhookLinkBaseWarnings.Delete(key)
+
+	adapter := &webhookAdapter{client: srv.Client()}
+	channel := channelWith(token, model.ChannelTypeWebhook, config)
+	for i := 0; i < 2; i++ {
+		if err := adapter.Deliver(context.Background(), channel, "", nil, renderNotification(namedEvent())); err != nil {
+			t.Fatalf("deliver: %v", err)
+		}
+		for _, key := range []string{"alarmUrl", "deviceUrl"} {
+			if _, ok := got[key]; ok {
+				t.Errorf("payload carries %s with an invalid linkBaseUrl", key)
+			}
+		}
+		if got["deviceToken"] != "boiler-7" || got["alarmToken"] != "alarm-1" {
+			t.Fatalf("notification payload changed: %v", got)
+		}
+	}
+	// Both deliveries have warned (once); a third claim must find the warning already given.
+	if claimLinkBaseWarning(token, parseErr) {
+		t.Fatal("the invalid linkBaseUrl was not warned about during delivery")
 	}
 }

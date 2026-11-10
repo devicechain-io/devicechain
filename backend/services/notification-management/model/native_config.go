@@ -6,6 +6,7 @@ package model
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -75,59 +76,99 @@ func strictDecode(token, kind string, config *string, into any) error {
 	return nil
 }
 
+// ErrInvalidLinkBase identifies an invalid optional console base URL.
+var ErrInvalidLinkBase = errors.New("invalid linkBaseUrl")
+
 // normalizeLinkBase validates an optional console base URL and returns it without a
 // trailing slash. Empty is allowed (the message then carries no link).
 func normalizeLinkBase(token, kind, raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
-	if _, err := httpsink.ValidateURL(raw); err != nil {
-		return "", fmt.Errorf("%s channel %q linkBaseUrl: %w", kind, token, err)
+	u, err := httpsink.ValidateURL(raw)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s channel %q linkBaseUrl: %w", ErrInvalidLinkBase, kind, token, err)
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(raw, "?#") {
+		return "", fmt.Errorf("%w: %s channel %q linkBaseUrl must not carry a query or fragment (links are built by appending a path)",
+			ErrInvalidLinkBase, kind, token)
 	}
 	return strings.TrimRight(raw, "/"), nil
 }
 
 // ParseLinkConfig parses a Slack or Teams channel's config; kind names the type in errors.
 func ParseLinkConfig(token, kind string, config *string) (*LinkConfig, error) {
+	cfg, _, err := parseLinkConfig(token, kind, config, false)
+	return cfg, err
+}
+
+// ParseLinkConfigForDelivery validates a stored config while omitting an invalid
+// optional linkBaseUrl. linkBaseErr reports the omitted link; err prevents delivery.
+func ParseLinkConfigForDelivery(token, kind string, config *string) (cfg *LinkConfig, linkBaseErr error, err error) {
+	return parseLinkConfig(token, kind, config, true)
+}
+
+func parseLinkConfig(token, kind string, config *string, tolerateLink bool) (*LinkConfig, error, error) {
+	var linkErr error
 	cfg := &LinkConfig{}
 	if err := strictDecode(token, kind, config, cfg); err != nil {
-		return nil, err
+		return nil, linkErr, err
 	}
 	base, err := normalizeLinkBase(token, kind, cfg.LinkBaseURL)
 	if err != nil {
-		return nil, err
+		if !tolerateLink {
+			return nil, nil, err
+		}
+		linkErr = err
+		base = ""
 	}
 	cfg.LinkBaseURL = base
-	return cfg, nil
+	return cfg, linkErr, nil
 }
 
 // ParsePagerDutyConfig parses a PagerDuty channel's config, applying the region and source
 // defaults.
 func ParsePagerDutyConfig(token string, config *string) (*PagerDutyConfig, error) {
+	cfg, _, err := parsePagerDutyConfig(token, config, false)
+	return cfg, err
+}
+
+// ParsePagerDutyConfigForDelivery validates a stored config while omitting an invalid
+// optional linkBaseUrl. linkBaseErr reports the omitted link; err prevents delivery.
+func ParsePagerDutyConfigForDelivery(token string, config *string) (cfg *PagerDutyConfig, linkBaseErr error, err error) {
+	return parsePagerDutyConfig(token, config, true)
+}
+
+func parsePagerDutyConfig(token string, config *string, tolerateLink bool) (*PagerDutyConfig, error, error) {
+	var linkErr error
 	cfg := &PagerDutyConfig{}
 	if err := strictDecode(token, ChannelTypePagerDuty, config, cfg); err != nil {
-		return nil, err
+		return nil, linkErr, err
 	}
 	switch cfg.Region {
 	case "":
 		cfg.Region = PagerDutyRegionUS
 	case PagerDutyRegionUS, PagerDutyRegionEU:
 	default:
-		return nil, fmt.Errorf("pagerduty channel %q region %q is not one of %s, %s",
+		return nil, linkErr, fmt.Errorf("pagerduty channel %q region %q is not one of %s, %s",
 			token, cfg.Region, PagerDutyRegionUS, PagerDutyRegionEU)
 	}
 	if cfg.Source == "" {
 		cfg.Source = "devicechain"
 	}
 	if len(cfg.Source) > 255 {
-		return nil, fmt.Errorf("pagerduty channel %q source is longer than 255 characters", token)
+		return nil, linkErr, fmt.Errorf("pagerduty channel %q source is longer than 255 characters", token)
 	}
 	base, err := normalizeLinkBase(token, ChannelTypePagerDuty, cfg.LinkBaseURL)
 	if err != nil {
-		return nil, err
+		if !tolerateLink {
+			return nil, nil, err
+		}
+		linkErr = err
+		base = ""
 	}
 	cfg.LinkBaseURL = base
-	return cfg, nil
+	return cfg, linkErr, nil
 }
 
 // ValidateNativeSecret judges the SHAPE of a credential a caller is writing. It never
