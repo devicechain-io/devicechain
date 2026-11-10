@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/credential"
@@ -165,4 +166,44 @@ func TestStepUpIsRationedPerSourceAndPreservesRefresh(t *testing.T) {
 	require.ErrorIs(t, err, ErrMfaNotEnabled, "another source reaches the factor check")
 	_, err = e.m.Refresh(ctx, pair.RefreshToken)
 	require.NoError(t, err, "a rate-limited step-up must leave the refresh token usable")
+}
+
+// The fake KV retains an old session, as a previous step-up TTL reset would.
+func TestStepUpAbsoluteLifetimeBeforeEvaluatingCode(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(map[bool]string{false: "just under ceiling", true: "past ceiling"}[expired], func(t *testing.T) {
+			e := newMfaEnv(t)
+			e.createMember(t, "pat@example.com", "pw-1")
+			_, pair := e.login(t, "pat@example.com", "pw-1")
+			access, err := e.validator.Validate(pair.AccessToken)
+			require.NoError(t, err)
+			refresh, err := e.validator.ValidateRefresh(pair.RefreshToken)
+			require.NoError(t, err)
+			rec, err := e.m.loadSession(refresh.SessionID, refresh.Username)
+			require.NoError(t, err)
+			e.m.refreshTTL = time.Hour
+			now := rec.Anchor.Add(e.m.refreshTTL).Add(-time.Nanosecond)
+			if expired {
+				now = now.Add(2 * time.Nanosecond)
+			}
+			e.m.now = func() time.Time { return now }
+			data, err := json.Marshal(rec)
+			require.NoError(t, err)
+			kv := &refreshKVStub{entries: map[string][]byte{
+				sessionKey(refresh.SessionID): data,
+				refresh.ID:                    []byte(refresh.Username),
+			}}
+			e.m.refreshKV = kv
+			_, err = e.m.StepUp(context.Background(), access, pair.RefreshToken, "123456", "203.0.113.5")
+			if expired {
+				require.ErrorIs(t, err, ErrInvalidToken)
+			} else {
+				require.ErrorIs(t, err, ErrMfaNotEnabled, "live session reaches factor lookup")
+			}
+			require.Equal(t, data, kv.entries[sessionKey(refresh.SessionID)])
+			require.Len(t, kv.entries, 2)
+			require.Empty(t, kv.deleted)
+			require.Empty(t, e.metrics.verifications, "no code was evaluated")
+		})
+	}
 }

@@ -93,6 +93,15 @@ func (m *Manager) stepUp(ctx context.Context, ot credential.OneTime, access *aut
 	if err != nil {
 		return nil, ErrRefreshUnavailable
 	}
+	// The session shares the refresh bucket TTL configured in main. Updating its
+	// KV entry must not renew the original absolute lifetime.
+	ttl := m.refreshTTL
+	if ttl <= 0 {
+		ttl = auth.DefaultRefreshTTL
+	}
+	if m.clock().Sub(rec.Anchor) > ttl {
+		return nil, ErrInvalidToken
+	}
 	if rec.Method != SessionMethodPassword {
 		return nil, ErrStepUpSso
 	}
@@ -131,6 +140,9 @@ func (m *Manager) stepUp(ctx context.Context, ot credential.OneTime, access *aut
 		return nil, ErrInvalidToken
 	}
 	now := m.clock().UTC()
+	if now.Sub(rec.Anchor) > ttl {
+		return nil, ErrInvalidToken
+	}
 	if rec.MfaAt == nil || now.After(*rec.MfaAt) {
 		rec.MfaAt = &now
 	}
@@ -139,10 +151,8 @@ func (m *Manager) stepUp(ctx context.Context, ot credential.OneTime, access *aut
 	if err != nil {
 		return nil, ErrRefreshUnavailable
 	}
-	if _, err := m.refreshKV.Update(sessionKey(claims.SessionID), data, session.Revision()); err != nil {
-		return nil, ErrRefreshUnavailable
-	}
-	// Re-read the live identity and grant, including the just-updated session facts.
+	// Re-resolve the live identity and grant before claiming the token. Definite
+	// denials still burn it through refuseRefresh, without publishing MFA state.
 	id, err = m.sessionIdentity(ctx, claims.Username, claims.SessionEpoch, claims.SessionID)
 	if err != nil {
 		return nil, m.refuseRefresh(claims.ID, entry.Revision(), err)
@@ -160,11 +170,18 @@ func (m *Manager) stepUp(ctx context.Context, ot credential.OneTime, access *aut
 		return nil, m.refuseRefresh(claims.ID, entry.Revision(), err)
 	}
 	if err := m.refreshKV.Delete(claims.ID, nats.LastRevision(entry.Revision())); err != nil {
-		if errors.Is(err, nats.ErrKeyRevisionMismatch) {
+		if errors.Is(err, nats.ErrKeyRevisionMismatch) || errors.Is(err, nats.ErrKeyNotFound) {
 			return nil, ErrInvalidToken
 		}
 		return nil, ErrRefreshUnavailable
 	}
+	// Claim before publishing fresh MFA state: an ordinary Refresh may already
+	// have won this token. After a successful claim, any failure leaves it consumed.
+	if _, err := m.refreshKV.Update(sessionKey(claims.SessionID), data, session.Revision()); err != nil {
+		return nil, ErrRefreshUnavailable
+	}
+	signIn.amr = rec.Amr
+	signIn.mfaAt = rec.MfaAt
 	pair, err := m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su, signIn)
 	if err != nil {
 		return nil, err

@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
+	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,7 +132,7 @@ func TestStepUpPgFreshTokensSameSessionRotationAuditAndReplay(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestStepUpPgSessionUpdateConflictDoesNotMintOrConsumeRefresh(t *testing.T) {
+func TestStepUpPgSessionUpdateConflictConsumesRefreshWithoutMinting(t *testing.T) {
 	e, seed, pair, access := stepUpPgSession(t)
 	ctx := context.Background()
 	now := e.m.clock().Add(time.Minute)
@@ -155,7 +156,7 @@ func TestStepUpPgSessionUpdateConflictDoesNotMintOrConsumeRefresh(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, now.Add(time.Minute), *rec.MfaAt)
 	_, err = e.m.refreshKV.Get(refresh.ID)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, nats.ErrKeyNotFound)
 }
 
 func TestStepUpPgNeverMovesFactorTimeBackwards(t *testing.T) {
@@ -210,4 +211,82 @@ func TestStepUpPgRefusesStaleSessionRecordEpochWithoutMintingOrConsumingRefresh(
 	require.NoError(t, err, "a stale session record must not consume the refresh token")
 	require.Equal(t, before.Revision(), after.Revision())
 	require.Equal(t, before.Value(), after.Value())
+}
+
+// Force the ordinary refresh to win after TOTP verification, at the claim itself.
+func TestStepUpPgRefreshWinsClaimWithoutElevatingSession(t *testing.T) {
+	e, seed, pair, access := stepUpPgSession(t)
+	e.metrics = newRecordingMfaMetrics()
+	e.m.SetMfaMetrics(e.metrics)
+	ctx := context.Background()
+	now := e.m.clock().Add(time.Minute)
+	e.m.now = func() time.Time { return now }
+	refresh, err := e.validator.ValidateRefresh(pair.RefreshToken)
+	require.NoError(t, err)
+	before, err := e.m.loadSession(refresh.SessionID, refresh.Username)
+	require.NoError(t, err)
+	var competing *TokenPair
+	e.m.refreshKV = &hookKV{KeyValue: e.m.refreshKV, beforeDelete: func(key string) {
+		require.Equal(t, refresh.ID, key)
+		require.Equal(t, 1, e.metrics.count("totp/ok"), "factor verified before the race")
+		competing, err = e.m.Refresh(ctx, pair.RefreshToken)
+		require.NoError(t, err)
+	}}
+	fresh, err := e.m.StepUp(ctx, access, pair.RefreshToken, credential.GenerateTOTP(seed, now), "203.0.113.5")
+	require.ErrorIs(t, err, ErrInvalidToken)
+	require.Nil(t, fresh)
+	after, err := e.m.loadSession(refresh.SessionID, refresh.Username)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	claims, err := e.validator.Validate(competing.AccessToken)
+	require.NoError(t, err)
+	require.Equal(t, before.MfaAt.Unix(), claims.MfaTime.Unix())
+	require.Equal(t, before.Amr, claims.Amr)
+}
+
+func TestStepUpPgAbsoluteSessionLifetime(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprint("expired=", expired), func(t *testing.T) {
+			e, seed, pair, access := stepUpPgSession(t)
+			e.metrics = newRecordingMfaMetrics()
+			e.m.SetMfaMetrics(e.metrics)
+			ctx := context.Background()
+			e.m.refreshTTL = time.Hour
+			refresh, err := e.validator.ValidateRefresh(pair.RefreshToken)
+			require.NoError(t, err)
+			rec, err := e.m.loadSession(refresh.SessionID, refresh.Username)
+			require.NoError(t, err)
+			now := e.m.clock().Add(time.Minute)
+			e.m.now = func() time.Time { return now }
+			rec.Anchor = now.Add(-e.m.refreshTTL).Add(time.Nanosecond)
+			if expired {
+				rec.Anchor = rec.Anchor.Add(-2 * time.Nanosecond)
+			}
+			data, err := json.Marshal(rec)
+			require.NoError(t, err)
+			_, err = e.m.refreshKV.Put(sessionKey(refresh.SessionID), data)
+			require.NoError(t, err)
+			session, err := e.m.refreshKV.Get(sessionKey(refresh.SessionID))
+			require.NoError(t, err)
+			token, err := e.m.refreshKV.Get(refresh.ID)
+			require.NoError(t, err)
+			fresh, err := e.m.StepUp(ctx, access, pair.RefreshToken, credential.GenerateTOTP(seed, now), "203.0.113.5")
+			if !expired {
+				require.NoError(t, err)
+				require.NotNil(t, fresh)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidToken)
+			require.Nil(t, fresh)
+			require.Empty(t, e.metrics.verifications, "no code was evaluated")
+			after, err := e.m.refreshKV.Get(sessionKey(refresh.SessionID))
+			require.NoError(t, err)
+			require.Equal(t, session.Revision(), after.Revision())
+			require.Equal(t, session.Value(), after.Value())
+			after, err = e.m.refreshKV.Get(refresh.ID)
+			require.NoError(t, err)
+			require.Equal(t, token.Revision(), after.Revision())
+			require.Equal(t, token.Value(), after.Value())
+		})
+	}
 }
