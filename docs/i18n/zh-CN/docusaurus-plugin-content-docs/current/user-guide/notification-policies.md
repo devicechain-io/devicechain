@@ -25,7 +25,7 @@ sidebar_position: 18
 - **Notify on clear**（清除时通知）：默认关闭。勾选并保存后，会向成功发送过该告警周期通知的
   目的地通报告警清除。它不会通报启用前的旧清除。静默时段内的清除会被丢弃，从未发送过
   告警通知的策略也不会发送清除通知。重试和限制参见
-  [告警清除时通知](/guides/notification-channels#notify-on-clear)。
+  [告警清除时通知](../guides/notification-channels.md#notify-on-clear)。
 - **Quiet hours**（静默时段），见下文。
 
 控制台不编辑**路由规则**。在这里创建的策略一开始没有任何规则；打开一条策略时，会以只读方式显示它的规则：每个严重程度、所用渠道及其接收人。保存时绝不会改动这些规则。请按[配置通知渠道](/guides/notification-channels#policies)中的说明，通过 API 添加或修改规则。

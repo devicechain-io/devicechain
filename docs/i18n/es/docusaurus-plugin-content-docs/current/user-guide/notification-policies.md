@@ -40,7 +40,7 @@ Haz clic en **Nueva política de notificación**. El formulario pide:
   las resoluciones a los destinos que entregaron correctamente un aviso de ese ciclo de alarma.
   No anuncia resoluciones anteriores a su activación. Las resoluciones durante las horas de silencio
   se descartan, y una política que nunca avisó no envía resolución. Consulta
-  [Notificar cuando una alarma se resuelve](/guides/notification-channels#notify-on-clear) para conocer los reintentos y límites.
+  [Notificar cuando una alarma se resuelve](../guides/notification-channels.md#notify-on-clear) para conocer los reintentos y límites.
 - **Horas de silencio**, descritas más abajo.
 
 La consola no edita las **reglas de enrutamiento**. Una política que creas aquí empieza sin

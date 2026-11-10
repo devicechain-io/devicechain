@@ -37,7 +37,7 @@ Click **New notification policy**. The form asks for:
 - **Notify on clear**: off by default. Tick it and save to announce clears to destinations that
   successfully paged that alarm cycle. It does not announce older clears from before you enabled it.
   Clears during quiet hours are dropped, and a policy that never paged sends no clear. See
-  [Notify when an alarm clears](/guides/notification-channels#notify-on-clear) for retries and limits.
+  [Notify when an alarm clears](../guides/notification-channels.md#notify-on-clear) for retries and limits.
 - **Quiet hours**, described below.
 
 The console does not edit **routing rules**. A policy you create here starts with none, and a policy
