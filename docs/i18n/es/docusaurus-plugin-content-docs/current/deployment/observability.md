@@ -14,9 +14,56 @@ sin necesidad de armar un proyecto de monitoreo aparte.
 :::note Estado
 La pila de monitoreo (kube-prometheus-stack a través de `dcctl install`) y sus paneles de Grafana
 están implementados y validados de extremo a extremo: un resumen de la instancia y siete paneles por etapa,
-descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas. El trazado
-distribuido OTLP es una mejora planeada a futuro.
+descritos en [Paneles de Grafana](./grafana-boards.md), con reglas de alerta incluidas.
 :::
+
+## Trazado distribuido (OpenTelemetry)
+
+El trazado está **desactivado de forma predeterminada**. Al activarlo, las solicitudes GraphQL
+y la ingesta HTTP/MQTT crean spans. W3C TraceContext sigue los eventos entrantes por NATS,
+la resolución en device-management, la publicación de eventos resueltos, el almacenamiento
+en event-management y event-processing. Cada servicio se identifica como `devicechain-<area>`.
+Solo se propaga TraceContext; baggage queda excluido.
+
+Configure un receptor OTLP administrado por el operador, como OpenTelemetry Collector,
+Jaeger o Tempo con su receptor OTLP activado. Añada esta superposición de valores Helm
+(también admitida por `dcctl bootstrap|upgrade --values`) y actualice para reiniciar los servicios:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tracing:
+        enabled: true
+        protocol: grpc
+        endpoint: otel-collector.observability.svc:4317
+        insecure: true
+        samplingRatio: 0.1
+```
+
+El ejemplo usa texto sin cifrar dentro del clúster. Mantenga `insecure: false` para TLS.
+Para OTLP sobre HTTP, use `protocol: http`, `endpoint: http://otel-collector.observability.svc:4318`
+e `insecure: true`; para TLS, use una URL `https://` e `insecure: false`.
+El receptor se despliega por separado; DeviceChain no lo instala.
+
+Un endpoint HTTP sin ruta publica en `/v1/traces`; indique una ruta (para un receptor tras un
+prefijo) y se usa tal cual. El exportador sigue leyendo las variables est�ndar
+`OTEL_EXPORTER_OTLP_*`, por lo que, si las define en un pod, pueden anular estos valores.
+
+El muestreo respeta al padre entre servicios de DeviceChain: una traza muestreada en el primer
+servicio sigue muestreada en el resto del flujo. El `traceparent` de un dispositivo o de quien
+llama a la API nunca decide el muestreo: la solicitud inicia una traza local nueva enlazada a la
+del llamante. Los eventos que fallan la resoluci�n y van a la cola de errores, y los eventos
+republicados para reintento, inician una traza nueva en lugar de continuar la original.
+Si se omite `samplingRatio`, se muestrea el 10 % de las nuevas trazas raíz. El valor explícito
+`0` no muestrea nuevas raíces y `1` las muestrea todas. Empiece con un valor bajo en flotas
+ocupadas y auméntelo brevemente para diagnosticar problemas. Nunca se registran credenciales,
+tokens de dispositivos, variables GraphQL ni el texto de los documentos. Se registran el ID
+del tenant, transporte, nombre de operación y estado HTTP.
+
+El trazado consume CPU, tráfico de red, bytes de cabeceras y almacenamiento del receptor.
+Dimensione juntos la retención y el muestreo. Para desactivarlo, establezca `enabled: false`
+y reinicie; desactivado, no crea exportadores ni goroutines de trazado.
 
 ## Lo que expone cada servicio
 

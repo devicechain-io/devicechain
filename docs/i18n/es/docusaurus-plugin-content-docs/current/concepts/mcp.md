@@ -161,10 +161,14 @@ reglas de acción.
    aplicación de autenticación y vuelve a intentar la aprobación; no cierras sesión. Si la
    verificación no está disponible (inicio de sesión único, sin autenticador registrado), elige
    **Volver a iniciar sesión**. Verificar un código por sí solo no envía una aprobación.
-3. Si esa aprobación completara la propuesta, la consola indica que la ejecución no está disponible.
-   **La aprobación no se registra, la propuesta sigue pendiente y no se reconoce ni se cierra
-   ninguna alarma.** `EXECUTED` en el filtro de estado no demuestra que la ejecución esté admitida.
-   Realiza tú cualquier acción necesaria sobre alarmas en la [página Alarmas](../user-guide/alarms.md).
+3. Si esa aprobación completara la propuesta, la confirmación indica que, al aprobar, la acción
+   se ejecuta en tu nombre. La plataforma vuelve a consultar la política de agentes y reconoce o
+   cierra las alarmas en un solo paso; la propuesta muestra entonces `EXECUTED` con su resultado.
+   Si la política lo deniega o las alarmas cambiaron (`DEPENDENCY_CHANGED`), la propuesta muestra
+   `REFUSED` con el motivo y no se reconoce ni se cierra ninguna alarma. Si otra persona está
+   decidiendo la misma propuesta en ese momento, la consola indica `CONCURRENT_APPROVAL` y la
+   actualiza. Un servidor que aún responda con el código obsoleto `EXECUTION_NOT_AVAILABLE` no
+   registra la aprobación ni cambia ninguna alarma.
 
 El panel **Acciones de agentes** permite a un administrador de agentes elegir **Desactivar las
 acciones de agentes** y confirmar, sin verificación adicional. **Volver a activar las acciones de

@@ -4,8 +4,10 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -685,6 +687,60 @@ func TestATermBuildDoesNotClearACheckpointASuccessorHasAdvanced(t *testing.T) {
 		t.Fatalf("the successor's checkpoint was cleared by a replica that had lost the "+
 			"partition (ok=%v row=%+v); that row is the monotonic floor every split-brain "+
 			"guard in the store compares against", ok, got)
+	}
+}
+
+// Restore must keep the row's watermark for Reset, including when it differs from the
+// engine payload's frontier. Only a subsequent change to that row should refuse reset.
+func TestTermBuildResetComparesTheLoadedWatermark(t *testing.T) {
+	for _, advanced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("watermarkAdvanced=%v", advanced), func(t *testing.T) {
+			ctx := context.Background()
+			store := newTestStore(t)
+			p1 := newTestProcessor(store, nil, 100)
+			if err := p1.restore(ctx); err != nil {
+				t.Fatalf("seed restore: %v", err)
+			}
+			for seq := uint64(1); seq <= 5; seq++ {
+				p1.handle(msgAt(t, seq, &fakeAck{}))
+			}
+			p1.checkpoint(ctx)
+			snap, ok, err := store.Load(ctx, "singleton")
+			if err != nil || !ok {
+				t.Fatalf("load seed: ok=%v err=%v", ok, err)
+			}
+			// Deliberately distinguish the stored timestamp from the engine's frontier.
+			snap.Watermark = snap.Watermark.Add(time.Microsecond)
+			if err := store.Save(ctx, snap); err != nil {
+				t.Fatalf("seed row watermark: %v", err)
+			}
+			p2 := newTestProcessor(store, nil, 100)
+			p2.Replay = &fakeReplayOpener{head: 2}
+			p2.cfg.Suffix = "resolved-events"
+			if err := p2.restore(ctx); err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			if advanced {
+				snap.Watermark = snap.Watermark.Add(time.Microsecond)
+				snap.Payload = []byte("successor")
+				if err := store.Save(ctx, snap); err != nil {
+					t.Fatalf("successor checkpoint: %v", err)
+				}
+			}
+			err = p2.replayToHead()
+			if advanced && !errors.Is(err, model.ErrResetRaced) {
+				t.Errorf("replay returned %v, want ErrResetRaced", err)
+			} else if !advanced && err != nil {
+				t.Errorf("unchanged row reset failed: %v", err)
+			}
+			got, ok, err := store.Load(ctx, "singleton")
+			if err != nil || ok != advanced {
+				t.Fatalf("checkpoint after reset: ok=%v err=%v, want present=%v", ok, err, advanced)
+			}
+			if advanced && (got.StreamSeq != snap.StreamSeq || !got.Watermark.Equal(snap.Watermark) || !bytes.Equal(got.Payload, snap.Payload)) {
+				t.Fatalf("successor checkpoint mutated: %+v", got)
+			}
+		})
 	}
 }
 

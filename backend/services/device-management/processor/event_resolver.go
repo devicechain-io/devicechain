@@ -1462,6 +1462,12 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// exactly once on every disposition path below. correlation ties the
 			// inbound message into the per-message log context (E15).
 			done := rez.metrics.Start()
+			traced, traceCtx, span := unresolved.Process(ctx, "inbound-events")
+			unresolved = traced
+			if span != nil {
+				finish := done
+				done = func(result string) { defer span.End(); finish(result) }
+			}
 			correlation := unresolved.CorrelationID()
 			// Fields, not a formatted message: a disabled level makes this a no-op, and it
 			// is reached for every event resolved.
@@ -1472,7 +1478,7 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// not be processed safely (fail-closed) so it is skipped. The tenant
 			// string is carried onto the resolved/failed channels so the
 			// downstream producer can publish to the same tenant's subject.
-			msgctx, tenant, ok := messaging.TenantContextFromSubject(ctx, unresolved.Subject)
+			msgctx, tenant, ok := messaging.TenantContextFromSubject(traceCtx, unresolved.Subject)
 			if !ok {
 				log.Warn().Str("correlation", correlation).Msg(fmt.Sprintf("Skipping message with no parseable tenant in subject %q", unresolved.Subject))
 				// No tenant means the message can never be processed; ack it so it

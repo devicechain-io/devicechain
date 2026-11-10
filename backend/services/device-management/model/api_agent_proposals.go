@@ -122,9 +122,9 @@ func normalizeAlarmProposal(req AlarmProposalRequest) (actiongate.Kind, []string
 		return "", nil, fmt.Errorf("a proposal names 1 to %d alarms", MaxProposalAlarms)
 	}
 	var tokens []string
-	for _, t := range req.AlarmTokens {
-		if t == "" || len(t) > 128 {
-			return "", nil, errors.New("an alarm token must be 1 to 128 characters")
+	for i, t := range req.AlarmTokens {
+		if err := core.ValidateToken(t); err != nil {
+			return "", nil, fmt.Errorf("alarmTokens[%d]: %w", i, err)
 		}
 		if !slices.Contains(tokens, t) {
 			tokens = append(tokens, t)

@@ -81,6 +81,30 @@ The command presence gate is failing open
 
 **含义与处理方式.** The dispatch sweep cannot read the presence projection, and the gate fails OPEN by design — so commands are being dispatched WITHOUT the absence check, to devices nobody confirmed were there. Nothing else reports this: dispatch looks healthy and the holds-placed counter goes to zero, which reads as "no devices are absent" rather than "nothing is being checked". Check the device-state area and the presence projection's own health.
 
+### LpwanAckReportsAnomalous {#lpwanackreportsanomalous}
+
+**严重程度:** `warning` · **规则组:** `devicechain.command-delivery`
+
+Confirmed LoRaWAN downlink reports do not match pending commands
+
+**含义与处理方式.** For 10 minutes, network-server acknowledgements have named no pending downlink or disagreed with its correlation fields. Commands may reach their deadline despite a device acknowledgement. Check the Command Delivery dashboard, integration device mapping and network-server queue item identifiers; inspect outbound-connectors logs before resending a command.
+
+### LpwanAckSettlementFailing {#lpwanacksettlementfailing}
+
+**严重程度:** `warning` · **规则组:** `devicechain.command-delivery`
+
+Confirmed LoRaWAN downlink reports cannot settle commands
+
+**含义与处理方式.** For 10 minutes, confirmed-downlink reports have failed in the store or response path, or could not be read. A device may have acknowledged while its command remains pending. Check outbound-connectors logs, database writes and the broker response stream; inspect pending commands before retrying them.
+
+### LpwanDownlinkTrackingFailing {#lpwandownlinktrackingfailing}
+
+**严重程度:** `warning` · **规则组:** `devicechain.command-delivery`
+
+LoRaWAN commands cannot be tracked or answered reliably
+
+**含义与处理方式.** For 10 minutes, the LoRaWAN adapter has failed to claim, look up, track or answer commands. pending_failed means the network server accepted a confirmed downlink but its pending acknowledgement could not be stored. The device may still receive it. Check outbound-connectors database and broker health and logs; reconcile the network-server queue before resending.
+
 ## `devicechain.container-restarts`
 
 ### InstanceContainerRestarted {#instancecontainerrestarted}
@@ -399,6 +423,14 @@ A revoked or reset device may still be connected: its broker session was never c
 
 **含义与处理方式.** For at least 5m, the oldest session kick that a provisioning revoke or reset still owes has waited more than 10 minutes (‹value› now). The credentials were withdrawn, so the device cannot reconnect, but an MQTT session it already had open can keep publishing until its token expires (12 hours by default). device-management retries every 30 seconds, so the responder that ends sessions (event-sources) is down or unreachable: check that event-sources is running and its MQTT auth callout is healthy.
 
+### X509OcspUnavailableAllowed {#x509ocspunavailableallowed}
+
+**严重程度:** `warning` · **规则组:** `devicechain.device-management`
+
+Certificate connections are being allowed without current OCSP status
+
+**含义与处理方式.** For 10 minutes, ENFORCE_KNOWN anchors have admitted certificate connections whose OCSP status could not be learned. Revoked certificates may be admitted while the responder is unreachable. Inspect the Ingest dashboard allowance reasons, responder fetch failures and breakers. Restore responder reachability and allowed egress, check node clocks and capacity, and verify deviceManagement.callout.ocsp.enabled and the anchor policy. REQUIRE_CURRENT refuses connections when current status is unavailable; change policy only with the impact on device availability understood.
+
 ## `devicechain.device-state`
 
 ### DeviceStateDroppingEvents {#devicestatedroppingevents}
@@ -697,6 +729,14 @@ Broker presence transitions are not reaching the event stream
 
 **含义与处理方式.** For at least 10 minutes, event-sources has been failing to write device connects and disconnects to the platform's event stream (‹value› in the last 10 minutes). The broker does not resend connection notices, so each one is lost until the next reconciliation pass (every 5 minutes by default) puts the device right; until then a device can read offline while it is connected, or the other way round, and a reconnecting device's held commands are not released early. The cause is the platform's message broker refusing or not answering publishes. Check it, and the event-sources log for 'Failed to emit a broker presence transition', which names each device.
 
+### DeviceUplinkMessagesFailing {#deviceuplinkmessagesfailing}
+
+**严重程度:** `warning` · **规则组:** `devicechain.event-sources`
+
+Device MQTT payloads cannot reach their decoder pipeline
+
+**含义与处理方式.** For 10 minutes, raw device MQTT uplinks have failed before reaching the decoder pipeline. Missing decoders, invalid or oversized payloads and unknown devices go to failed-decode; plan resolution and publish failures retry through the broker. Inspect the Ingest dashboard result labels, failed-events and event-sources logs; check the profile decoder and device-management or broker availability. PayloadDecoderFailuresHigh covers failures after handoff to the decoder.
+
 ### ExternalMqttSourceLosingEvents {#externalmqttsourcelosingevents}
 
 **严重程度:** `warning` · **规则组:** `devicechain.event-sources`
@@ -736,6 +776,14 @@ Messages were shed at the ingest ceiling while the platform's readers were behin
 Requests to an integration are being refused for a bad token
 
 **含义与处理方式.** For at least 10 minutes, more than 30 requests in each 10 minutes to an inbound integration have been refused because the bearer token was wrong, the integration does not exist, or the integration's failure budget was spent. If a sender stopped delivering after you rotated an integration's token, update the token in the network server or webhook. If nothing of yours changed, someone who knows the URL is trying tokens: the integration's 'last authentication failure' time in the console shows which one, and the sprayed integration keeps serving senders that are already known.
+
+### IntegrationDownlinkReportsDiscarded {#integrationdownlinkreportsdiscarded}
+
+**严重程度:** `warning` · **规则组:** `devicechain.event-sources`
+
+Network-server downlink reports are being accepted and discarded
+
+**含义与处理方式.** For 10 minutes, inbound integrations have discarded downlink reports above their separate report allowance while answering 202. The sender believes they arrived, and commands those reports would settle wait until their deadline. Reduce the report flood and inspect integration traffic and the confirmed-downlink dashboard before resending commands.
 
 ### IntegrationShedAccepted {#integrationshedaccepted}
 
@@ -1030,6 +1078,16 @@ A JetStream replica has not caught up
 A service can no longer read a JetStream stream's replication state
 
 **含义与处理方式.** ‹pod› (‹job›) reported the replication of ‹stream› earlier and has not been able to read it for 15 minutes, although the pod is still running. While this fires, the other replication alerts cannot judge that stream for that pod, so its replication is UNKNOWN rather than good. If it fires for every stream at once, the broker or JetStream itself is unavailable: check the NATS pods and the service's connection logs. If it is one stream, that stream has most likely lost its RAFT leader: check it with `nats stream info`. It clears when the pod reads the stream again, and also once six hours have passed since its last reading, so a resolved alert is not proof of recovery.
+
+## `devicechain.notification-management`
+
+### NotificationClearPickupFailing {#notificationclearpickupfailing}
+
+**严重程度:** `warning` · **规则组:** `devicechain.notification-management`
+
+Notification escalation and clear pickup passes are failing
+
+**含义与处理方式.** For 10 minutes, the notification scheduler has reported hard failures while re-paging alarms or delivering pending clear notifications. Clear notifications may be delayed even though escalation already stopped. Check notification-management logs for announcing pending clears failed, channel reachability and credentials, and database errors. Partial passes that deliver clears and leave a backlog for the next tick do not trigger this alert.
 
 ## `devicechain.payload-decoder`
 
