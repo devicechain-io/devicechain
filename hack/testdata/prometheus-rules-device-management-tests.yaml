@@ -1,7 +1,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# promtool UNIT TESTS for the device-management cache alerting rules.
+# promtool UNIT TESTS for the device-management alerting rules.
 #
 # WHAT THESE ARE FOR, over and above the parse check
 #
@@ -860,4 +860,62 @@ tests:
     alert_rule_test:
       - eval_time: 40m
         alertname: PayloadDecoderRecompileSustained
+        exp_alerts: []
+
+  # Agent actions: sustained transaction failures fire, but only after the hold.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="dci-devicechain",kind="ALARM_ACK",result="failed"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AgentExecutionsFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AgentExecutionsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#agentexecutionsfailing"
+              summary: "Agent action executions are failing steadily"
+              description: "For 10m, agent action execution attempts have failed. Their transactions rolled back and the proposals were not executed by those attempts. Check device-management logs for database, lock timeout, policy service or effect errors, and the Agent actions (preview) row on the Platform board. Dependency changes and policy refusals are separate results and do not raise this alert."
+
+  # Expected gate refusals, success, idle failures and another namespace stay quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="dci-devicechain",kind="ALARM_ACK",result="executed"}'
+        values: '0+60x30'
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="dci-devicechain",kind="ALARM_ACK",result="dependency_changed"}'
+        values: '0+60x30'
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="dci-devicechain",kind="ALARM_CLEAR",result="policy_refused"}'
+        values: '0+60x30'
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="dci-devicechain",kind="ALARM_CLEAR",result="failed"}'
+        values: '0+0x30'
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="other-instance",kind="ALARM_ACK",result="failed"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AgentExecutionsFailing
+        exp_alerts: []
+
+  # A single failed attempt cannot satisfy a ten-minute hold.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_agent_executions_total{namespace="dci-devicechain",kind="ALARM_ACK",result="failed"}'
+        values: '0+0x5 1+0x25'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AgentExecutionsFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AgentExecutionsFailing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AgentExecutionsFailing
         exp_alerts: []

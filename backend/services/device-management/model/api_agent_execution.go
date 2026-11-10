@@ -49,6 +49,8 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 	attrCtx := rdb.WithAgentAttribution(ctx, rdb.AgentAttribution{ClientID: p.ProposerClient, OnBehalfOf: p.ProposerSub, Proposal: p.Token})
 	var events []*AlarmStateChangeEvent
 	executed := false
+	started := time.Now()
+	metricResult := "policy_refused"
 	err := api.RDB.DB(attrCtx).Transaction(func(tx *gorm.DB) error {
 		if err := setAgentExecutionTimeouts(tx); err != nil {
 			return err
@@ -167,6 +169,7 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 			}
 		}
 		if changed {
+			metricResult = "dependency_changed"
 			return refuse([]string{actiongate.ReasonDependencyChanged})
 		}
 		// The clock again: the checks above are only as fresh as the moment they ran.
@@ -205,6 +208,12 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 		executed = true
 		return nil
 	})
+	if err != nil {
+		metricResult = "failed"
+	} else if executed {
+		metricResult = "executed"
+	}
+	api.AgentMetrics.execution(actiongate.Kind(p.Kind), metricResult, time.Since(started))
 	if err != nil {
 		return nil, err
 	}

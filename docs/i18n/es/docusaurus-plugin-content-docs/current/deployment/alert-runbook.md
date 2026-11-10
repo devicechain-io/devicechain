@@ -287,6 +287,14 @@ REACT is giving up on detection actions that keep failing
 
 ## `devicechain.device-management`
 
+### AgentExecutionsFailing {#agentexecutionsfailing}
+
+**Gravedad:** `warning` · **Grupo de reglas:** `devicechain.device-management`
+
+Agent action executions are failing steadily
+
+**Qué significa y qué hacer.** For 10m, agent action execution attempts have failed. Their transactions rolled back and the proposals were not executed by those attempts. Check device-management logs for database, lock timeout, policy service or effect errors, and the Agent actions (preview) row on the Platform board. Dependency changes and policy refusals are separate results and do not raise this alert.
+
 ### DeviceCalloutLatencyHigh {#devicecalloutlatencyhigh}
 
 **Gravedad:** `warning` · **Grupo de reglas:** `devicechain.device-management`

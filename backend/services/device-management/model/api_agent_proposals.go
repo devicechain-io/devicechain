@@ -200,7 +200,12 @@ func (api *Api) buildAlarmProposal(ctx context.Context, kind actiongate.Kind, ac
 // A dry run decides and validates but stores nothing. A request whose requestId this client and
 // principal have used before returns that proposal when it asks for the same thing, and is a
 // CONFLICT when it asks for something else.
-func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Proposer, req AlarmProposalRequest) (*ProposalOutcome, error) {
+func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Proposer, req AlarmProposalRequest) (result *ProposalOutcome, resultErr error) {
+	defer func() {
+		if !req.DryRun {
+			api.AgentMetrics.proposal(req.Action.kind(), result, resultErr)
+		}
+	}()
 	kind, tokens, err := normalizeAlarmProposal(req)
 	if err != nil {
 		return nil, err
@@ -529,7 +534,8 @@ var (
 //     single-approval, normal-impact proposal;
 //  5. the final approval executes atomically after another policy decision; earlier
 //     approvals are recorded with a compare-and-set on the row's revision.
-func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (*AgentProposal, error) {
+func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (result *AgentProposal, resultErr error) {
+	defer func() { api.AgentMetrics.approval(result, resultErr) }()
 	for attempt := 0; ; attempt++ {
 		now := time.Now().UTC()
 		p, err := api.pendingProposal(ctx, token, now)
@@ -668,5 +674,9 @@ func (api *Api) endProposal(ctx context.Context, token string, to actiongate.Sta
 // only move a PROPOSED row whose expiry has passed to EXPIRED. It reads nothing back, writes no
 // tenant's data but that one state, and can only STOP a proposal, never start or approve one.
 func (api *Api) ExpireAgentProposals(ctx context.Context) (int64, error) {
-	return actiongate.ExpireDue(core.WithSystemContext(ctx), api.RDB.Database, &AgentProposal{}, time.Now().UTC())
+	n, err := actiongate.ExpireDue(core.WithSystemContext(ctx), api.RDB.Database, &AgentProposal{}, time.Now().UTC())
+	if err == nil && api.AgentMetrics != nil {
+		api.AgentMetrics.expired.Add(float64(n))
+	}
+	return n, err
 }

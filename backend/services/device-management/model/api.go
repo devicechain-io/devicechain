@@ -80,6 +80,9 @@ type Api struct {
 	// POLICY_UNAVAILABLE: without the policy nothing is decided.
 	AgentDecider actiongate.Decider
 
+	// AgentMetrics is shared by all APIs built during messaging reconnects.
+	AgentMetrics *AgentMetrics
+
 	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
 	// disables it.
 	ceilings *ceilingMetrics
