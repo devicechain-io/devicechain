@@ -180,7 +180,7 @@ neither tile.
 
 **Use it when events are not arriving, are being refused, or the MQTT path is under strain.**
 It covers the front door: what the transports accept, what they turn away, and the backlog of
-MQTT messages waiting to be forwarded.
+MQTT messages not yet forwarded (waiting or in progress).
 
 | Group | What it shows |
 | --- | --- |

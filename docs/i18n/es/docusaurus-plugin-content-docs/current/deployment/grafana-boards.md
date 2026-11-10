@@ -182,7 +182,7 @@ ninguno de los dos indicadores.
 
 **Úselo cuando los eventos no llegan, se rechazan o la ruta MQTT está bajo presión.** Cubre la
 puerta de entrada: lo que aceptan los transportes, lo que rechazan y el retraso de mensajes MQTT
-a la espera de ser reenviados.
+aún no reenviados (en espera o en curso).
 
 | Grupo | Qué muestra |
 | --- | --- |
