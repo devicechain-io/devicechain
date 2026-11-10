@@ -123,7 +123,7 @@ cuentas de servicio.
 
 Sin `resource`, el token no está vinculado a nada y las API de la plataforma lo aceptan, con todas las autoridades de los roles de la cuenta, o con el techo del `scope` que envíes. Es el token adecuado para una integración que llama a las API de la plataforma. El servidor MCP no lo acepta, porque exige un token vinculado a sí mismo.
 
-Con `resource`, el token nombra ese recurso como su audiencia. Con `enforce`, el valor por defecto desde `v1.3`, el servidor de autorización solo vincula un token a un recurso que sirve: el servidor MCP, la API de un área en `<origin>/api/<área>` o una dirección que el operador haya enumerado como recurso externo. Consulta [Audiencia del token](../concepts/security-model.md#token-audience). Una API acepta un token vinculado a nada, al área de esa misma API o al servidor MCP. Rechaza un token vinculado a cualquier otra cosa. En una instancia que establece `enforcement: observe`, ambas comprobaciones cuentan y registran en lugar de rechazar.
+Con `resource`, el token nombra ese recurso como su audiencia. Con `enforce`, el valor por defecto desde `v1.3`, el servidor de autorización solo vincula un token a un recurso que sirve: el servidor MCP, la API de un área en `<origin>/api/<área>` o una dirección que el operador haya enumerado como recurso externo. Consulta [Audiencia del token](../concepts/security-model.md#token-audience). Una API acepta un token vinculado a nada, al área de esa misma API o al servidor MCP. Rechaza un token vinculado a cualquier otra cosa. Desde `v1.4` la instancia siempre aplica la restricción; `enforcement: observe`, aceptado en `v1.2` y `v1.3`, se rechaza.
 
 Pide un recurso solo cuando algo distinto de la plataforma comprueba la audiencia, como un servicio tuyo que valida el token con el conjunto de claves publicado de la instancia, y **envía siempre un `scope` con él**:
 
@@ -137,7 +137,7 @@ curl -s -u "$CLIENT_ID:$CLIENT_SECRET" \
 
 Una solicitud con `resource` y sin `scope` está **obsoleta**. Sigue funcionando y el token lleva todas las autoridades de los roles de la cuenta. La plataforma la cuenta en `devicechain_usermanagement_oauth_unscoped_client_credentials_total` y escribe un aviso con el nombre de tu cliente, y la próxima versión mayor la rechaza con `invalid_scope`. Un token con ámbito lleva solo las autoridades de lectura del ámbito. Una integración que tiene que escribir debe omitir el `resource` y obtener un token sin vínculo.
 
-Una solicitud cuyo `resource` la instancia no sirve se rechaza con `invalid_target`, desde `v1.3`. En una instancia que establece `enforcement: observe` se cuenta, se registra y se atiende. En el endpoint de token, una solicitud con más de un `resource`, o con uno que no es una URL `https` absoluta (`http` solo se acepta para `localhost`, `127.0.0.1` y `::1`), se rechaza hoy.
+Una solicitud cuyo `resource` la instancia no sirve se rechaza con `invalid_target`, desde `v1.3`. `v1.4` rechaza `enforcement: observe`, que `v1.2` y `v1.3` aceptaban como exclusión voluntaria. En el endpoint de token, una solicitud con más de un `resource`, o con uno que no es una URL `https` absoluta (`http` solo se acepta para `localhost`, `127.0.0.1` y `::1`), se rechaza hoy.
 
 ## Rotar un secreto {#rotating-a-secret}
 
