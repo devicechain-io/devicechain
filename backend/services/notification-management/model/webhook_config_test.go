@@ -74,3 +74,22 @@ func TestWebhookAuthRefusals(t *testing.T) {
 		}
 	}
 }
+
+func TestWebhookLinkBaseURL(t *testing.T) {
+	parse := func(extra string) (*WebhookConfig, error) {
+		c := `{"url":"https://hooks.example/x","auth":"none"` + extra + `}`
+		return ParseWebhookConfig("hook", &c)
+	}
+	cfg, err := parse(`,"linkBaseUrl":"https://console.example/"`)
+	if err != nil || cfg.LinkBaseURL != "https://console.example" {
+		t.Fatalf("got %+v, %v; want the trailing slash trimmed", cfg, err)
+	}
+	if cfg, err = parse(``); err != nil || cfg.LinkBaseURL != "" {
+		t.Fatalf("absent: %+v, %v", cfg, err)
+	}
+	for _, bad := range []string{`"ftp://x"`, `"not a url"`, `"javascript:alert(1)"`} {
+		if _, err := parse(`,"linkBaseUrl":` + bad); err == nil {
+			t.Errorf("linkBaseUrl %s was accepted", bad)
+		}
+	}
+}

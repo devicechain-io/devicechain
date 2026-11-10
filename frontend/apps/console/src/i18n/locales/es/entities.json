@@ -413,6 +413,7 @@
   "notificationChannelSource": "Origen del evento",
   "notificationChannelSourceHelp": "Se muestra como origen de cada evento de PagerDuty. En blanco se usa «devicechain».",
   "notificationChannelLinkBase": "URL de la consola",
+  "notificationChannelWebhookLinkBaseHelp": "Opcional. La URL base HTTPS de esta consola; el cuerpo incluirá alarmUrl y, cuando la alarma identifique su dispositivo, deviceUrl.",
   "notificationChannelLinkBaseHelp": "Opcional. La dirección de esta consola; los mensajes incluirán entonces un enlace «Abrir alarmas».",
   "notificationChannelConfig": "Configuración (JSON)",
   "notificationChannelConfigHelp": "Los ajustes de conexión no secretos como objeto JSON: host, port y from para el correo; url y auth para un webhook.",

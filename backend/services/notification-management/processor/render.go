@@ -159,6 +159,37 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 	return &RenderedNotification{Subject: subject, TextBody: b.String(), Payload: payload, Alarm: facts}
 }
 
+// eventSource is the originator facts of an alarm event, in the form a state row keeps.
+func eventSource(e *dmmodel.AlarmStateChangeEvent) model.AlarmSource {
+	return model.AlarmSource{
+		OriginatorType: e.OriginatorType, OriginatorId: e.OriginatorId,
+		DeviceToken: e.DeviceToken, DeviceName: e.DeviceName, DeviceTypeToken: e.DeviceTypeToken,
+	}
+}
+
+// applyStateSource copies what a state row remembers about the alarm's source onto an event
+// rebuilt from that row, so its rendering names the device like the original did. Nothing is
+// invented: a row that knows nothing leaves the event as it was.
+func applyStateSource(e *dmmodel.AlarmStateChangeEvent, st *model.NotificationState) {
+	src := st.Source()
+	e.OriginatorType, e.OriginatorId = src.OriginatorType, src.OriginatorId
+	e.DeviceToken, e.DeviceName, e.DeviceTypeToken = src.DeviceToken, src.DeviceName, src.DeviceTypeToken
+}
+
+// sourceLabel is how a summary names the alarm's source: the device's name, else its token,
+// else "type id", else "" when nothing is known. Control characters are flattened.
+func sourceLabel(originatorType string, originatorID uint, deviceName, deviceToken string) string {
+	switch {
+	case deviceName != "":
+		return oneLine(deviceName)
+	case deviceToken != "":
+		return oneLine(deviceToken)
+	case originatorType != "" || originatorID != 0:
+		return fmt.Sprintf("%s %d", originatorType, originatorID)
+	}
+	return ""
+}
+
 // renderEscalation builds the re-notification message for an open alarm that the
 // escalation scheduler (N.D) re-pages. It is rendered from the persisted
 // NotificationState rather than the original alarm event (which the scheduler does not
@@ -168,12 +199,26 @@ func renderNotification(event *dmmodel.AlarmStateChangeEvent) *RenderedNotificat
 // (a "text" summary plus structured keys) so a Slack/webhook endpoint renders it the
 // same way.
 func renderEscalation(state *model.NotificationState, level int) *RenderedNotification {
+	src := state.Source()
+	shown := sourceLabel(src.OriginatorType, src.OriginatorId, src.DeviceName, src.DeviceToken)
 	subject := fmt.Sprintf("[%s] Alarm still unresolved (escalation %d): %s",
 		state.Severity, level, state.AlarmKey)
+	if shown != "" {
+		subject += " on " + shown
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Alarm %s is still unacknowledged and uncleared after %d notification(s).\n\n",
 		state.AlarmKey, state.NotifyCount)
+	if src.DeviceName != "" {
+		writeField(&b, "Device", oneLine(src.DeviceName))
+	}
+	if src.DeviceToken != "" {
+		writeField(&b, "Device token", oneLine(src.DeviceToken))
+	}
+	if src.DeviceTypeToken != "" {
+		writeField(&b, "Device type", oneLine(src.DeviceTypeToken))
+	}
 	writeField(&b, "Severity", state.Severity)
 	writeField(&b, "Escalation", fmt.Sprintf("%d", level))
 	writeField(&b, "Notifications", fmt.Sprintf("%d", state.NotifyCount))
@@ -198,6 +243,21 @@ func renderEscalation(state *model.NotificationState, level int) *RenderedNotifi
 		"notifyCount":  state.NotifyCount,
 		"acknowledged": false,
 	}
+	if src.OriginatorType != "" {
+		payload["originatorType"] = src.OriginatorType
+	}
+	if src.OriginatorId != 0 {
+		payload["originatorId"] = src.OriginatorId
+	}
+	if src.DeviceToken != "" {
+		payload["deviceToken"] = src.DeviceToken
+	}
+	if src.DeviceName != "" {
+		payload["deviceName"] = src.DeviceName
+	}
+	if src.DeviceTypeToken != "" {
+		payload["deviceTypeToken"] = src.DeviceTypeToken
+	}
 	if state.FirstNotifiedAt.Valid {
 		payload["firstNotifiedTime"] = formatTime(state.FirstNotifiedAt.Time)
 	}
@@ -207,7 +267,8 @@ func renderEscalation(state *model.NotificationState, level int) *RenderedNotifi
 
 	facts := AlarmFacts{
 		EventType: "RENOTIFIED", AlarmToken: state.AlarmToken, AlarmKey: state.AlarmKey,
-		Severity: state.Severity, State: "ACTIVE", Escalation: level,
+		Severity: state.Severity, State: "ACTIVE", Escalation: level, Originator: shown,
+		DeviceToken: src.DeviceToken, DeviceName: src.DeviceName, DeviceTypeToken: src.DeviceTypeToken,
 	}
 	if state.FirstNotifiedAt.Valid {
 		facts.RaisedTime = state.FirstNotifiedAt.Time

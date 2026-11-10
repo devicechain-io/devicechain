@@ -227,7 +227,13 @@ CREATE TABLE "notification-management".notification_states (
  clear_notified_at timestamp with time zone,
  clear_notified_cycle timestamp with time zone,
  paged_targets jsonb,
- paged_cycle timestamp with time zone
+ paged_cycle timestamp with time zone,
+ originator_type text,
+ originator_id bigint,
+ device_token text,
+ device_name text,
+ device_type_token text,
+ source_at timestamp with time zone
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,

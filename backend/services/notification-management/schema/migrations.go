@@ -32,5 +32,6 @@ var (
 		NewNotifyOnClearSchema(),
 		NewClearAnnouncementSchema(),
 		NewNotifyOnClearSinceSchema(),
+		NewStateSourceSchema(),
 	}
 )

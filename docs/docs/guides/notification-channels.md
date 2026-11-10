@@ -86,7 +86,9 @@ mutation {
 
 For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The native [Slack channel](#create-a-slack-channel) below formats the message for you, and is the better choice.
 
-A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. A `CLEARED` notification sent late, after the alarm was already stored as cleared, does not carry the originator, because the stored state does not keep it. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. A timed re-notification does not carry them.
+A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. Timed re-notifications (`RENOTIFIED`) and late `CLEARED` notifications picked up by the scheduler also include these device and originator fields when known. Alarms that were notified before upgrading omit these fields from those later notifications.
+
+Optionally set `linkBaseUrl` in the webhook channel's `config` to your console's `https` base URL, for example `"linkBaseUrl":"https://console.example.com"`. The payload then includes `alarmUrl` and, when the alarm names its device, `deviceUrl`. Both keys are absent when `linkBaseUrl` is unset.
 
 ### Native Slack, Teams and PagerDuty channels {#native-channels}
 

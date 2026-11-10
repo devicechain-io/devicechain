@@ -79,7 +79,21 @@ func (api *Api) RecordNotification(ctx context.Context, alarmToken, alarmKey, se
 // once its targets are recorded, that an unannounced clear is now owed.
 func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity string,
 	raisedTime, at time.Time, targets []PagedTarget) (*NotificationState, error) {
+	return api.RecordPagedFrom(ctx, alarmToken, alarmKey, severity, raisedTime, at, targets, AlarmSource{}, time.Time{})
+}
+
+// RecordPagedFrom is RecordPaged that also keeps the alarm's source (originator and device
+// facts) on the row, so a notification rendered from the row alone can name the device. An
+// empty field of src leaves the stored value alone. sourceAt is the event occurrence time;
+// delivery and escalation stamps do not order source facts.
+func (api *Api) RecordPagedFrom(ctx context.Context, alarmToken, alarmKey, severity string,
+	raisedTime, at time.Time, targets []PagedTarget, src AlarmSource, sourceAt time.Time) (*NotificationState, error) {
 	raised := cycleKey(raisedTime)
+	// The database keeps microseconds; an event time compared raw against what it stored would
+	// let an older event inside the same microsecond pass as newer.
+	if !sourceAt.IsZero() {
+		sourceAt = sourceAt.UTC().Truncate(time.Microsecond)
+	}
 	var out *NotificationState
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		found := &NotificationState{}
@@ -96,6 +110,10 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 					NotifyCount:     1,
 					CycleRaisedAt:   raised,
 				}
+				created.applySource(src, false)
+				if !src.IsZero() && !sourceAt.IsZero() {
+					created.SourceAt = sql.NullTime{Time: sourceAt, Valid: true}
+				}
 				created.PagedTargets = mergePaged(nil, raised, targets)
 				if created.PagedTargets != nil {
 					created.PagedCycle = raised
@@ -110,6 +128,11 @@ func (api *Api) RecordPaged(ctx context.Context, alarmToken, alarmKey, severity 
 			// A notification about an EARLIER cycle (an unordered redelivery). The row
 			// describes a newer cycle; nothing about this one belongs on it.
 			return nil
+		}
+		fillOnly := found.SourceAt.Valid && !sourceAt.After(found.SourceAt.Time)
+		found.applySource(src, fillOnly)
+		if !fillOnly && !src.IsZero() && !sourceAt.IsZero() {
+			found.SourceAt = sql.NullTime{Time: sourceAt, Valid: true}
 		}
 		found.PagedTargets = mergePaged(found.PagedTargets, found.CycleRaisedAt, targets)
 		if len(targets) > 0 {

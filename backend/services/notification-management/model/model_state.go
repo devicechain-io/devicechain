@@ -85,6 +85,98 @@ type NotificationState struct {
 	// PagedCycle is the cycle PagedTargets describes, as a column so SQL can match it to
 	// CycleRaisedAt (see Api.PendingClearStates).
 	PagedCycle sql.NullTime
+
+	// The source of the alarm, kept so a notification rendered from this row alone (a timed
+	// re-notification, a clear the scheduler picks up late) can name the device and link to it
+	// the way the event-driven one does. Written from the alarm event when a page is recorded;
+	// NULL means unknown (a row from before these columns, or an alarm whose originator is not a
+	// device), and a renderer omits what is NULL, never invents it. Not per cycle: they describe
+	// the alarm's device, and a newer event's value replaces an older one.
+	OriginatorType  sql.NullString
+	OriginatorId    sql.NullInt64
+	DeviceToken     sql.NullString
+	DeviceName      sql.NullString
+	DeviceTypeToken sql.NullString
+
+	// SourceAt orders source facts by the event occurrence time, independently of delivery.
+	SourceAt sql.NullTime
+}
+
+// AlarmSource is the originator facts an alarm event carries that a state row keeps. The zero
+// value is "nothing known" and changes nothing on the row.
+type AlarmSource struct {
+	OriginatorType  string
+	OriginatorId    uint
+	DeviceToken     string
+	DeviceName      string
+	DeviceTypeToken string
+}
+
+// IsZero reports whether the source states nothing.
+func (a AlarmSource) IsZero() bool { return a == AlarmSource{} }
+
+// applySource writes the facts the source states onto the row. A field the source leaves empty keeps
+// what the row has: an event from a producer that predates a field must not erase it.
+// With fillOnly the row keeps what it already has and only the unknown fields are filled: an
+// older event, finishing late, must not put a stale name back over a newer one.
+func (s *NotificationState) applySource(a AlarmSource, fillOnly bool) {
+	if fillOnly {
+		cur := s.Source()
+		if cur.OriginatorType != "" {
+			a.OriginatorType = ""
+		}
+		if cur.OriginatorId != 0 {
+			a.OriginatorId = 0
+		}
+		if cur.DeviceToken != "" {
+			a.DeviceToken = ""
+		}
+		if cur.DeviceName != "" {
+			a.DeviceName = ""
+		}
+		if cur.DeviceTypeToken != "" {
+			a.DeviceTypeToken = ""
+		}
+	}
+	if a.OriginatorType != "" {
+		s.OriginatorType = sql.NullString{String: a.OriginatorType, Valid: true}
+	}
+	if a.OriginatorId != 0 {
+		s.OriginatorId = sql.NullInt64{Int64: int64(a.OriginatorId), Valid: true}
+	}
+	if a.DeviceToken != "" {
+		s.DeviceToken = sql.NullString{String: a.DeviceToken, Valid: true}
+	}
+	if a.DeviceName != "" {
+		s.DeviceName = sql.NullString{String: a.DeviceName, Valid: true}
+	}
+	if a.DeviceTypeToken != "" {
+		s.DeviceTypeToken = sql.NullString{String: a.DeviceTypeToken, Valid: true}
+	}
+}
+
+// Source is what the row remembers about the alarm's source (zero when it knows nothing).
+func (s *NotificationState) Source() AlarmSource {
+	var a AlarmSource
+	if s == nil {
+		return a
+	}
+	if s.OriginatorType.Valid {
+		a.OriginatorType = s.OriginatorType.String
+	}
+	if s.OriginatorId.Valid && s.OriginatorId.Int64 > 0 {
+		a.OriginatorId = uint(s.OriginatorId.Int64)
+	}
+	if s.DeviceToken.Valid {
+		a.DeviceToken = s.DeviceToken.String
+	}
+	if s.DeviceName.Valid {
+		a.DeviceName = s.DeviceName.String
+	}
+	if s.DeviceTypeToken.Valid {
+		a.DeviceTypeToken = s.DeviceTypeToken.String
+	}
+	return a
 }
 
 // PagedTarget names one destination that delivered a page: the channel by token and the

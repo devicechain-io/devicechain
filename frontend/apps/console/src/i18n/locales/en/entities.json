@@ -413,6 +413,7 @@
   "notificationChannelSource": "Event source",
   "notificationChannelSourceHelp": "Shown as the source of each PagerDuty event. Blank uses “devicechain”.",
   "notificationChannelLinkBase": "Console URL",
+  "notificationChannelWebhookLinkBaseHelp": "Optional. The HTTPS base URL of this console; the payload then includes alarmUrl and, when the alarm names its device, deviceUrl.",
   "notificationChannelLinkBaseHelp": "Optional. The address of this console; messages then carry an “Open alarms” link to it.",
   "notificationChannelConfig": "Configuration (JSON)",
   "notificationChannelConfigHelp": "The non-secret connection settings as a JSON object: host, port and from for email; url and auth for a webhook.",
