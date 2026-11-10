@@ -94,6 +94,8 @@ Two more rules protect the device from the platform side of the wire:
 
 ## Running it
 
+Use the Go toolchain selected by the repository's `go.work` (Go 1.27.3).
+
 Build the two binaries and put the first image in slot `a`:
 
 ```bash
@@ -111,7 +113,7 @@ export OTA_CREDENTIAL_SECRET='<device credential secret>'
 bin/ota-boot --root "$ROOT" -- \
   --root "$ROOT" \
   --broker ssl://mqtt.example.com:8883 --ca instance-ca.crt \
-  --instance devicechain --tenant acme --device pump-7 --credential-id <credentialId> \
+  --instance devicechain --tenant acme --device pump-7 --credential-id '<credentialId>' \
   --origin https://dc.example.com --trust trust.pem
 ```
 

@@ -24,7 +24,7 @@ these scripts are ordinary API calls.
 
 ## Requirements
 
-`bash` (Git Bash on Windows), `curl`, `jq`, `openssl`, `docker` and `kubectl`, and a running instance:
+`bash` (Git Bash on Windows), `curl`, `jq`, `openssl`, `docker`, `kind`, `kubectl` and `dcctl`, and a running instance:
 
 ```bash
 dcctl install local --compact
@@ -55,7 +55,8 @@ Every script is safe to run again.
 
 ## Where your instance is
 
-Environment variables override the site file; each has a default that matches the commands above.
+`DC_URL`, `INSTANCE`, `KUBE_CONTEXT`, `MQTT_HOST` and `MQTT_PORT` environment variables override
+the site file; their defaults match the commands above.
 
 | Variable | Default | |
 | --- | --- | --- |
