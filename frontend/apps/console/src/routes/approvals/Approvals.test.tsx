@@ -14,12 +14,16 @@ import type { AgentPolicy } from '@/lib/api/agent-policy';
 const h = vi.hoisted(() => ({
   list: vi.fn(), get: vi.fn(), approve: vi.fn(), reject: vi.fn(), policy: vi.fn(), setActuation: vi.fn(),
   logout: vi.fn(), toast: vi.fn(), authorities: ['agent:admin'] as string[],
+  tenant: 'tenant-a', username: 'ann', identityToken: 'session-a',
 }));
 vi.mock('@/lib/api/agent-proposals', () => ({
   listAgentProposals: h.list, getAgentProposal: h.get, approveAgentProposal: h.approve, rejectAgentProposal: h.reject,
 }));
 vi.mock('@/lib/api/agent-policy', () => ({ getAgentPolicy: h.policy, setAgentActuation: h.setActuation }));
-vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({ claims: { authorities: h.authorities, scopeAnchors: [] }, logout: h.logout }) }));
+vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({
+  claims: { tenant: h.tenant, username: h.username, authorities: h.authorities, scopeAnchors: [] },
+  identityToken: h.identityToken, logout: h.logout,
+}) }));
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: h.toast }) }));
 import ApprovalsPage from './ApprovalsPage';
 import ApprovalDetailPage from './ApprovalDetailPage';
@@ -36,6 +40,7 @@ let policy: AgentPolicy;
 const serverError = (code: string) => new GraphQLRequestError('Server refusal', 200, [{ message: 'Server refusal', extensions: { code } }]);
 beforeEach(() => {
   vi.resetAllMocks(); sessionStorage.clear(); h.authorities = ['agent:admin'];
+  h.tenant = 'tenant-a'; h.username = 'ann'; h.identityToken = 'session-a';
   policy = { published: null, operatorSuspended: false, actuationOff: false, instanceEnabled: true, actuationInEffect: true };
   h.policy.mockImplementation(async () => ({ ...policy }));
   h.get.mockResolvedValue(proposal);
@@ -45,10 +50,12 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 function show(path = '/approvals/proposal-17') {
-  return render(<MemoryRouter initialEntries={[path]}><ConfirmProvider><Routes>
+  const view = () => <MemoryRouter initialEntries={[path]}><ConfirmProvider><Routes>
     <Route path="/approvals" element={<ApprovalsPage />} />
     <Route path="/approvals/:token" element={<ApprovalDetailPage />} />
-  </Routes></ConfirmProvider></MemoryRouter>);
+  </Routes></ConfirmProvider></MemoryRouter>;
+  const result = render(view());
+  return { ...result, refreshAuth: () => result.rerender(view()) };
 }
 async function approve() {
   fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
@@ -56,6 +63,32 @@ async function approve() {
   expect(dialog.textContent).toContain('2 targets with impact NORMAL');
   fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
 }
+
+describe.each(['/approvals', '/approvals/proposal-17'])('session changes on %s', path => {
+  it.each(['tenant', 'username', 'identityToken'] as const)('clears proposals and refetches when %s changes', async field => {
+    const { refreshAuth } = show(path);
+    await screen.findByText(proposal.rationale!);
+    const policyCalls = h.policy.mock.calls.length;
+    const read = path === '/approvals' ? h.list : h.get;
+    expect(read).toHaveBeenCalledTimes(1);
+
+    let resolve!: (value: AgentProposal) => void;
+    const pending = new Promise<AgentProposal>(r => { resolve = r; });
+    h.get.mockReturnValueOnce(pending);
+    h.list.mockReturnValueOnce(pending.then(p => ({ results: [p], pagination: { pageStart: 1, pageEnd: 1, totalRecords: 1 } })));
+    h[field] = `${h[field]}-changed`;
+    refreshAuth();
+
+    expect(screen.queryByText(proposal.rationale!)).toBeNull();
+    await waitFor(() => expect(h.policy.mock.calls.length).toBeGreaterThan(policyCalls));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(proposal.rationale!)).toBeNull();
+
+    await act(async () => resolve({ ...proposal, rationale: 'Proposal from the new session' }));
+    await screen.findByText('Proposal from the new session');
+    expect(screen.queryByText(proposal.rationale!)).toBeNull();
+  });
+});
 
 describe('proposal decisions', () => {
   it('approves exactly the loaded and displayed digest and refetches', async () => {
