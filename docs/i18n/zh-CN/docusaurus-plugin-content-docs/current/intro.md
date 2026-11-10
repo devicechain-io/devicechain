@@ -25,7 +25,7 @@ DeviceChain 从头重建了 SiteWhere 平台。它保留了 SiteWhere 经过实�
 - **Go 原生微服务。** 服务启动不到一秒，内存占用低，以单个二进制文件交付。
 - **Operator 与 CRD。** DeviceChain 使用 Kubernetes Operator 和声明式 `Instance` 资源，而不是 Shell 脚本。租户是控制平面数据库中的记录，通过管理控制台管理。
 - **以 GraphQL 为核心的 API。** API 通过已发布的 [GraphQL 参考文档](./reference/graphql-api.md)描述自身，无需生成客户端桩代码。默认关闭模式自省，它是一项开发者设置。
-- **精简且完全开源的技术栈。** NATS JetStream 承担全部消息传递、MQTT 和 KV 基础设施。原生 JWT 负责认证，PostgreSQL 是唯一的数据存储技术（一个关系数据库存储实体数据，另一个启用了 TimescaleDB 扩展的数据库存储时序事件），OpenTofu 负责基础设施配置。NATS 和 TimescaleDB 是两个后端服务；本地安装把它们运行在 `dcctl` 为你创建的 kind 集群中（你的机器上需要 Docker、kind、kubectl、Helm 和 OpenTofu）。
+- **精简且完全开源的技术栈。** NATS JetStream 承担全部消息传递、MQTT 和 KV 基础设施。原生 JWT 负责认证，PostgreSQL 是唯一的数据存储技术（一个关系数据库存储实体数据，另一个启用了 TimescaleDB 扩展的数据库存储时序事件），OpenTofu 负责基础设施配置。NATS 和 TimescaleDB 是两个后端服务；本地安装把它们运行在 `dcctl` 为你创建的 kind 集群中（你的机器上需要 Docker、kind、kubectl 和 OpenTofu）。
 - **统一的关系模型。** 设备上下文使用带类型的关系图，而非固定的分配关系，因此可以组合新的实体类型，无需反复修改数据库结构。
 - **可嵌入、支持版本管理的仪表板。** 仪表板布局在由正方形单元格组成的网格上，可从手机屏幕适配到墙面大屏；内置二十多种组件（图表、仪表、车队表格、告警和命令组件、地图），支持带暂停功能的看板时间范围和实时订阅。它支持草稿、发布和回滚，以及运行时绑定模型：一份定义加上宿主清单，即可在任何设备上运行。查看器以 npm 包交付，任何应用都可以嵌入。
 - **自行托管，无计量收费。** DeviceChain 采用 Apache-2.0 许可证，没有开放核心与付费版本之分，也不按设备收费。设备清单、数字孪生状态、命令投递、仪表板、多租户、高可用性和 OAuth 2.1 授权服务器都属于开放平台，无需购买付费套餐。你在自己的环境中运行平台，完全拥有数据。
@@ -46,7 +46,7 @@ DeviceChain 由一组基于共享核心库协作的微服务组成：
 | **command-delivery** | 向设备持久化投递双向命令。 |
 | **update-management** | [空中（OTA）更新](./concepts/over-the-air-updates.md)：按租户保存固件、软件和配置镜像目录（每个镜像都按声明的大小和摘要校验），将其分配给设备，并跟踪每次更新尝试直至设备运行目标版本。 |
 | **dashboard-management** | 支持版本管理的仪表板定义（草稿、发布/回滚、导出），由可嵌入的组件包渲染。 |
-| **notification-management** | 通过电子邮件（SMTP）和 webhook 将已触发的告警通知相关人员，支持按严重程度路由，并升级持续未确认、未解除的告警。 |
+| **notification-management** | 通过电子邮件（SMTP）、webhook、Slack、Teams 和 PagerDuty 将已触发的告警通知相关人员，支持按严重程度路由，并升级持续未确认、未解除的告警。 |
 | **outbound-connectors** | 通过支持版本管理、使用密钥认证的连接器，将流水线的出站动作（webhook `httpCall`，以及向 MQTT/Kafka/AWS SNS/SQS 执行 `publish`）投递到外部系统。 |
 | **ai-inference** _（可选启用）_ | 根据自然语言描述起草检测规则，并提交给人工编写规则所用的同一编译器。AI 只提出建议；编译器决定哪些内容有效。AI 不参与实时检测，因此规则在事件重放时产生相同结果。参见 [AI 辅助编写](./concepts/ai-authoring.md)。 |
 | **user-management** | 管理全局身份、各租户的成员关系、角色目录、JWT 签发与验证、通过租户自己的 OpenID Connect 身份提供商登录（[单点登录](./concepts/single-sign-on.md)），以及租户层级（平台运营方定义并分配给租户的服务组合）。 |

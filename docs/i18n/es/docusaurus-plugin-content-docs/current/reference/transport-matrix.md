@@ -53,16 +53,20 @@ pregunta real.
 
 Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vuelta.
 
+La consulta HTTP de comandos y el canal descendente LoRaWAN se declaran `◐` con
+`basis: "prose"` en la especificación: sus posibilidades y límites se describen abajo,
+pero la ejecución de conformidad registrada no los midió.
+
 {/* conformance:table device-transports */}
 
 | Transporte | Lectura | Escritura | Suscripción |
 | --- | :---: | :---: | :---: |
 | [MQTT](../guides/connecting-a-device.md#mqtt) (bróker de la plataforma) | ○ | ◐ | ◐ |
-| [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
+| [HTTP](../guides/connecting-a-device.md#http) | ○ | ◐ | ● |
 | MQTT (bróker externo) | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
-| [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ○ | ◐ |
+| [Integraciones de entrada](../guides/inbound-integrations.md) (servidor de red LoRaWAN, webhook) | ○ | ◐ | ◐ |
 
 ### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
 
@@ -136,7 +140,7 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
 
 ### HTTP
 
-Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo sentido.
+Un endpoint `POST` para el mismo cuerpo de evento JSON, más consulta opcional de comandos.
 
 - **Suscripción ●**: `POST /{instanceId}/{tenant}/events` devuelve:
   - `202` una vez almacenado el evento en el stream de entrada de la plataforma, con una cabecera de recibo `X-DC-Event-Id`;
@@ -160,22 +164,18 @@ Un endpoint `POST` para el mismo cuerpo de evento JSON. Sencillo, y de un solo s
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service)). Un `429` también significa que el evento no se aceptó; lleva una
   cabecera `Retry-After`, así que espera y reintenta. `202`, `400`, `401` y `404` son terminales
   para esa petición.
-- **Escritura ○ / Lectura ○**: **no hay ningún canal descendente en absoluto.** Un dispositivo que
-  llega a la plataforma solo por HTTP no puede recibir comandos. Más que una carencia a la espera
-  de arreglo, es la forma de la integración: da también una conexión MQTT a un dispositivo que deba
-  recibir comandos.
+- **Escritura ◐ / Lectura ○**: los comandos están disponibles mediante
+  [consulta HTTP de comandos](../concepts/commands.md#http-command-pull). Configura
+  `commandChannel: HTTP_PULL` en el tipo de dispositivo; el dispositivo consulta los comandos,
+  confirma su recepción y envía su respuesta por HTTP. Los comandos esperan la consulta y
+  siguen sujetos a su caducidad. Este canal no lleva configuración ni asignaciones de
+  actualizaciones gestionadas; tampoco existe una lectura iniciada por la plataforma.
 
-  Un comando emitido a un dispositivo solo HTTP **no se rechaza: caduca**. La plataforma no acuña
-  ningún nombre de transporte para un dispositivo que llegó por HTTP (el origen registrado del
-  dispositivo es el id que el operador dio a la fuente de eventos), así que la compuerta que
-  reconoce un transporte no entregable no puede reconocer este. El comando se acepta, se publica
-  donde ningún dispositivo está suscrito para recibirlo, se marca `SENT` y acaba en `TIMEOUT`.
-  Sparkplug (cuando sus comandos no están habilitados) y las
-  [integraciones entrantes](../guides/inbound-integrations.md#commands) son las únicas filas de esta página en las que un `○` en esta columna produce un `FAILED`
-  inmediato.
-- El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia; las
-  credenciales del dispositivo viajan en el cuerpo del evento. Donde necesites TLS, lo aporta lo
-  que pongas por delante del servicio.
+  `PUBLISH` sigue siendo el canal predeterminado. Con él, los comandos se publican en lugar de
+  esperar una consulta HTTP; un dispositivo solo HTTP sin suscriptor no los recibe y caducan.
+- El listener de ingesta termina HTTP en claro y no tiene autenticación de transporte propia;
+  las credenciales del evento viajan en su cuerpo y la consulta de comandos usa un token de acceso
+  bearer. Donde necesites TLS, lo aporta lo que pongas por delante del servicio.
 
 ### Autorregistro {#self-registration}
 
@@ -369,14 +369,19 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
 | Write | ◐ | Un único recurso escalar, solo reemplazo |
 | Execute | ● | Con o sin argumentos. Un Execute sin procesar del recurso Factory Reset del objeto Device (`/3/0/5`) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`; está prevista una operación con nombre y confirmación |
 | Reboot (`lwm2m.reboot`) | ● | Un comando con nombre que ejecuta (Execute) el recurso Reboot del objeto Device; no recibe parámetros |
-| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ◐ | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía. Solo se decodifican respuestas text/plain: un dispositivo que responde en TLV a la lectura de un único recurso, como hace Eclipse Leshan por defecto, ve todos sus recursos listados como ausentes y el comando falla |
-| Recolección de información del dispositivo | ◐ | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría. Solo se decodifican respuestas text/plain, así que no se guarda nada de un dispositivo que responde en TLV |
+| Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ◐ | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía. Se decodifican respuestas text/plain y LwM2M TLV |
+| Recolección de información del dispositivo | ◐ | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría. Se decodifican respuestas text/plain y LwM2M TLV |
 | Observe | ◐ | Solo SenML-JSON; solo recursos numéricos; lista de objetos fija; 32 por registro |
 | Discover | ○ | No implementado |
 | Create | ○ | No implementado |
 | Delete | ○ | No implementado |
 | Write-Attributes | ○ | No implementado: las bandas de notificación no se pueden fijar desde la plataforma |
 | Bootstrap | ○ | No implementado; un servidor Bootstrap está planeado |
+
+Las dos celdas de información del dispositivo conservan `◐`: la ejecución de conformidad
+registrada midió la implementación anterior, limitada a text/plain, y sus limitaciones con TLV.
+La implementación actual también decodifica TLV, pero no se ha medido en una nueva ejecución;
+los resultados y las comprobaciones de límites no se han cambiado. Observe sigue sin decodificar TLV.
 
 La autenticación de dispositivo es por dispositivo, en el handshake DTLS, con claves precompartidas.
 Las credenciales X.509 y de clave pública en bruto están planeadas.
@@ -395,12 +400,17 @@ del inquilino. El dispositivo nunca se conecta a DeviceChain.
   `IntegrationUndecodedHigh` informan de ambos casos. Un [decodificador de payload](../guides/payload-decoders.md)
   escrito en el perfil de dispositivo puede decodificar en su lugar la trama cruda en la plataforma;
   decodifica uplinks en vivo a partir de la v1.2.
-- **Escritura ○ / Lectura ○**: no hay downlink. Un comando emitido a un dispositivo que informó por última
-  vez a través de una integración **se acepta y luego falla** en el siguiente barrido de entrega con
-  `COMMAND_TRANSPORT_UNSUPPORTED`, en lugar de esperar hasta caducar. El fallo es definitivo. Un
-  dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan,
-  y caducan, hasta que informa por primera vez. Como el transporte registrado es el último por el que informó el dispositivo, un dispositivo que
-  también envía por MQTT vuelve a recibir comandos en cuanto lo ha hecho.
+- **Escritura ◐ / Lectura ○**: el [canal descendente LoRaWAN](../guides/inbound-integrations.md#lorawan-downlink)
+  opcional encola comandos en ChirpStack v4 o The Things Stack v3. Un envío no confirmado
+  informa de la aceptación en la cola; uno confirmado espera la confirmación del dispositivo.
+  No se admite el canal descendente para remitentes genéricos. Con el adaptador deshabilitado,
+  un comando a un dispositivo que informó por última vez mediante una integración se acepta
+  y falla en el siguiente barrido con `COMMAND_TRANSPORT_UNSUPPORTED`; el fallo es definitivo.
+  Con el adaptador habilitado, este rechaza como no enviado un comando para una integración sin
+  enlace utilizable al servidor de red. Un dispositivo que nunca informó no tiene transporte
+  registrado: sus comandos se envían y caducan hasta que informe por primera vez. Se registra
+  el último transporte usado; un dispositivo que también publica por MQTT puede volver a
+  recibir comandos después de informar por MQTT.
 
 ## Conectores de salida
 

@@ -8,7 +8,7 @@ title: Conexión de un dispositivo
 Los dispositivos envían eventos a DeviceChain por **MQTT** o por **HTTP**. MQTT lo sirve directamente el servidor MQTT integrado de NATS en el puerto 1883, sin broker independiente. Ambos transportes alimentan el mismo pipeline de decodificación → resolución → persistencia, así que el cuerpo JSON del evento es idéntico en los dos.
 
 :::note Estado
-La ingesta por MQTT y por HTTP está disponible. Los dispositivos restringidos pueden conectarse en su lugar sobre CoAP/UDP con DTLS mediante la [ingesta LwM2M](../concepts/lwm2m.md), y las flotas heredadas (brownfield) mediante [Sparkplug B](../concepts/sparkplug.md). Un transporte WebSocket y el flujo completo de aprovisionamiento/reclamación de autoservicio siguen planificados.
+La ingesta por MQTT y por HTTP está disponible. Los dispositivos restringidos pueden conectarse en su lugar sobre CoAP/UDP con DTLS mediante la [ingesta LwM2M](../concepts/lwm2m.md), y las flotas heredadas (brownfield) mediante [Sparkplug B](../concepts/sparkplug.md). El [autorregistro de dispositivos](./device-self-registration.md) está disponible, al igual que la reclamación de posesión mediante las mutaciones `initiateDeviceClaim` y `claimDevice` de la [API GraphQL de device-management](../reference/graphql-api.md). Un transporte WebSocket sigue planificado.
 :::
 
 Un dispositivo que informa a través de un servidor de red LoRaWAN (ChirpStack, The Things Stack) o del webhook de otro sistema no se conecta por sí mismo; consulta [Integraciones de entrada](./inbound-integrations.md).

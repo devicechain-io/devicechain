@@ -8,7 +8,7 @@ title: Connecting a Device
 Devices send events to DeviceChain over **MQTT** or **HTTP**. MQTT is served directly by NATS' built-in MQTT server on port 1883, with no separate broker. Both transports feed the same decode → resolve → persist pipeline, so the JSON event body is identical between them.
 
 :::note Status
-MQTT and HTTP ingestion are available. Constrained devices can instead connect over CoAP/UDP with DTLS via [LwM2M ingestion](../concepts/lwm2m.md), and brownfield fleets over [Sparkplug B](../concepts/sparkplug.md). A WebSocket transport and the full self-service provisioning/claiming flow are still planned.
+MQTT and HTTP ingestion are available. Constrained devices can instead connect over CoAP/UDP with DTLS via [LwM2M ingestion](../concepts/lwm2m.md), and brownfield fleets over [Sparkplug B](../concepts/sparkplug.md). [Device self-registration](./device-self-registration.md) is available, as is possession claiming through the `initiateDeviceClaim` and `claimDevice` mutations in the [device-management GraphQL API](../reference/graphql-api.md). A WebSocket transport is still planned.
 :::
 
 A device that reports through a LoRaWAN network server (ChirpStack, The Things Stack) or another system's webhook does not connect itself; see [Inbound Integrations](./inbound-integrations.md).

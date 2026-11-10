@@ -129,7 +129,7 @@ ChirpStack 通过应用上的 **HTTP 集成**发送上行。
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`。ChirpStack 会自行追加 `?event=up`。 |
    | Headers | 名称 `Authorization`，值 `Bearer <bearer-token>`。 |
 
-3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。平台存储的是网络服务器解码出的值，不会自己解码原始帧。没有编解码器时，ChirpStack 发送原始帧而没有解码对象，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
+3. **在 ChirpStack 设备配置文件上设置编解码器**（JavaScript 载荷编解码器）。没有配置文件解码器时，平台存储网络服务器解码出的值。如果网络服务器编解码器和配置文件解码器均不适用，该上行会被[计为未解码](#undecoded)，而不会被存储。或者，给设备类型配置一个[载荷解码器](./payload-decoders.md)，由 DeviceChain 读取原始帧。
 4. 在 DeviceChain 中添加设备，并把它的 DevEUI 设为 `lorawan.deveui` 别名。
 
 上行会被存储为读数。ChirpStack 还会把 `ack` 和 `txack` 事件发送到同一个 URL：启用了 [LoRaWAN 下行](#lorawan-downlink)的安装会读取它们来结束[确认下行](#lorawan-confirmed)；未启用时它们与其他事件（join、status）一样返回 `204` 并被不加读取地忽略，无论正文内容如何。上行的 `deduplicationId` 必须是 UUID（ChirpStack 一直如此发送）；其他值会被以 `400` 拒绝。消息时间是 ChirpStack 报告的 `time`；该字段缺失时，则是平台收到消息的时间。
@@ -200,7 +200,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 
 ### 没有可存储内容的上行 {#undecoded}
 
-不带解码对象、或其中没有任何数值或布尔值的上行会被确认，但不存储任何内容。集成会把它计为**未解码**，并在其页面显示计数、最近一条的到达时间，以及十六进制的原始帧样本。常见原因是网络服务器中的设备配置文件没有编解码器。当大部分流量都是这种情况时，`IntegrationUndecodedHigh` 告警会通知运营人员；参见[可观测性](../deployment/observability.md)。
+没有适用的[配置文件载荷解码器](./payload-decoders.md)时，不带解码对象、或其中没有任何数值或布尔值的上行会被确认，但不存储任何内容。集成会把它计为**未解码**，并在其页面显示计数、最近一条的到达时间，以及十六进制的原始帧样本。常见原因是网络服务器中的设备配置文件没有编解码器。有适用的配置文件解码器时，它可以转而解码原始帧；解码失败不会存储任何内容，并报告为 `DECODE_FAILED`，而不会计为网络服务器载荷未解码。参见[解码器拒绝原因](./payload-decoders.md#refusal-reasons)。当大部分流量都是这种情况时，`IntegrationUndecodedHigh` 告警会通知运营人员；参见[可观测性](../deployment/observability.md)。
 
 ## 重复与重试 {#duplicates}
 
@@ -231,7 +231,7 @@ curl -X POST https://dc.example.com/api/integrations/acme/vendor-cloud \
 | 应答 | 含义 |
 | --- | --- |
 | `202` | 已接受。包括未注册设备的消息（会被跳过），以及因租户超出接入额度而被[丢弃](#limits)的消息。 |
-| `204` | 不是上行的消息类型（join、status、确认）。已确认并忽略。 |
+| `204` | 被忽略的消息类型，例如 join 或 status，或下行适配器禁用时的下行报告。启用适配器后，受支持的下行报告会被处理并收到 `202` 应答；参见[确认下行](#lorawan-confirmed)。 |
 | `400` | 正文不是集成的发送方类型所期望的格式：JSON 无效、标识符缺失或格式错误、`deduplicationId` 不是 UUID、时间早于 366 天前、超过 100 个条目，或超过 256 条读数。请求中的任何内容都不会被存储。 |
 | `401` | 令牌缺失、错误，或属于另一个集成。令牌错误和集成不存在有意让人无法区分。 |
 | `403` | 集成已关闭。这不计为登录失败。 |

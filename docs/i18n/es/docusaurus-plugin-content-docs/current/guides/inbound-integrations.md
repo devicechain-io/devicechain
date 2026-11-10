@@ -129,7 +129,7 @@ ChirpStack envía los uplinks mediante una **integración HTTP** en una aplicaci
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack añade `?event=up` por sí mismo. |
    | Headers | Nombre `Authorization`, valor `Bearer <bearer-token>`. |
 
-3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). La plataforma guarda los valores que decodifica el servidor de red; no decodifica la trama cruda. Sin códec, ChirpStack envía la trama cruda y ningún objeto decodificado, y el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse. Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
+3. **Configura un códec en el perfil de dispositivo de ChirpStack** (un códec de payload en JavaScript). Sin un decodificador de perfil, la plataforma guarda los valores que decodifica el servidor de red. Si no se aplica ni un códec del servidor de red ni un decodificador de perfil, el uplink se [cuenta como no decodificado](#undecoded) en lugar de guardarse. Como alternativa, da al tipo de dispositivo un [decodificador de payload](./payload-decoders.md), que lee la trama cruda en DeviceChain.
 4. Añade los dispositivos en DeviceChain con su DevEUI como alias `lorawan.deveui`.
 
 Los uplinks se guardan como lecturas. ChirpStack envía además los eventos `ack` y `txack` a la misma URL: una instalación con el [downlink LoRaWAN](#lorawan-downlink) activado los lee para cerrar los [downlinks confirmados](#lorawan-confirmed); sin él se responden con `204` y se ignoran sin leerlos, como los demás eventos (join, status), sea cual sea su contenido. El `deduplicationId` del uplink debe ser un UUID, como siempre envía ChirpStack; cualquier otra cosa se rechaza con `400`. La hora del mensaje es el `time` que informa ChirpStack, o la hora a la que lo recibió la plataforma cuando el campo falta.
@@ -200,7 +200,7 @@ Con **Guardar métricas del enlace** activado, se guardan tres lecturas más con
 
 ### Uplinks sin nada que guardar {#undecoded}
 
-Un uplink que no lleva objeto decodificado, o que no tiene ningún valor numérico ni booleano, se confirma pero no guarda nada. La integración lo cuenta como **no decodificado**, y su página muestra el recuento, cuándo llegó el último y una muestra de la trama cruda en hexadecimal. La causa habitual es un perfil de dispositivo sin códec en el servidor de red. La alerta `IntegrationUndecodedHigh` avisa a un operador cuando la mayor parte del tráfico es así; consulta [Observabilidad](../deployment/observability.md).
+Sin un [decodificador de payload del perfil](./payload-decoders.md) aplicable, un uplink que no lleva objeto decodificado, o que no tiene ningún valor numérico ni booleano, se confirma pero no guarda nada. La integración lo cuenta como **no decodificado**, y su página muestra el recuento, cuándo llegó el último y una muestra de la trama cruda en hexadecimal. La causa habitual es un perfil de dispositivo sin códec en el servidor de red. Cuando se aplica un decodificador de perfil, puede decodificar la trama cruda en su lugar; una decodificación que falla no guarda nada y se informa como `DECODE_FAILED`, en vez de contarse como un payload no decodificado del servidor de red. Consulta [Motivos de rechazo del decodificador](./payload-decoders.md#refusal-reasons). La alerta `IntegrationUndecodedHigh` avisa a un operador cuando la mayor parte del tráfico es así; consulta [Observabilidad](../deployment/observability.md).
 
 ## Duplicados y reintentos {#duplicates}
 
@@ -231,7 +231,7 @@ Un servidor de red solo ve el código de estado, y algunos suspenden un webhook 
 | Respuesta | Significado |
 | --- | --- |
 | `202` | Aceptado. Incluye los mensajes de dispositivos no registrados, que se omiten, y los mensajes [descartados](#limits) porque el inquilino superó su asignación de ingesta. |
-| `204` | Un tipo de mensaje que no es un uplink (join, status, confirmación). Confirmado e ignorado. |
+| `204` | Un tipo de mensaje ignorado, como join o status, o un informe de downlink cuando el adaptador de downlink está desactivado. Los informes de downlink admitidos se procesan cuando el adaptador está activado y reciben `202`; consulta [Downlinks confirmados](#lorawan-confirmed). |
 | `400` | El cuerpo no es lo que espera el tipo de remitente de la integración: JSON no válido, un identificador ausente o mal formado, un `deduplicationId` que no es un UUID, una hora de más de 366 días, más de 100 elementos o más de 256 lecturas. No se guarda nada de la petición. |
 | `401` | Falta el token, es incorrecto o pertenece a otra integración. Un token incorrecto y una integración que no existe son indistinguibles a propósito. |
 | `403` | La integración está desactivada. No se cuenta como un inicio de sesión fallido. |

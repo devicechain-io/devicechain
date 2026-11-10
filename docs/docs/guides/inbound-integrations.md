@@ -129,7 +129,7 @@ ChirpStack sends uplinks through an **HTTP integration** on an application.
    | Event endpoint URL(s) | `https://<host>/api/integrations/{tenant}/{integration}`. ChirpStack adds `?event=up` itself. |
    | Headers | Name `Authorization`, value `Bearer <bearer-token>`. |
 
-3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). The platform stores the values the network server decodes; it does not decode the raw frame. Without a codec, ChirpStack sends the raw frame and no decoded object, and the uplink is [counted as undecoded](#undecoded) instead of stored. Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
+3. **Set a codec on the ChirpStack device profile** (a JavaScript payload codec). Without a profile decoder, the platform stores the values the network server decodes. If neither a network-server codec nor a profile decoder applies, the uplink is [counted as undecoded](#undecoded) instead of stored. Alternatively, give the device type a [payload decoder](./payload-decoders.md), which reads the raw frame in DeviceChain.
 4. Add the devices in DeviceChain with their DevEUI as a `lorawan.deveui` alias.
 
 Uplinks are stored as readings. ChirpStack also sends the events `ack` and `txack` to the same URL, which an installation with the [LoRaWAN downlink](#lorawan-downlink) switched on reads to settle [confirmed downlinks](#lorawan-confirmed); without it they are answered `204` and ignored unread, like the other events (join, status), whatever their bodies hold. The uplink's `deduplicationId` must be a UUID, which ChirpStack always sends; anything else is refused with `400`. The message time is the `time` ChirpStack reports, or the time the platform received it when the field is absent.
@@ -200,7 +200,7 @@ With **Store link metrics** on, three more readings are stored with each uplink 
 
 ### Uplinks with nothing to store {#undecoded}
 
-An uplink that carries no decoded object, or one with no numeric or boolean value in it, is acknowledged but stores nothing. The integration counts it as **undecoded**, and its page shows the count, when the last one arrived and a sample of the raw frame in hex. The usual cause is a device profile with no codec in the network server. The `IntegrationUndecodedHigh` alert tells an operator when most traffic is like this; see [Observability](../deployment/observability.md).
+Without an applicable [profile payload decoder](./payload-decoders.md), an uplink that carries no decoded object, or one with no numeric or boolean value in it, is acknowledged but stores nothing. The integration counts it as **undecoded**, and its page shows the count, when the last one arrived and a sample of the raw frame in hex. The usual cause is a device profile with no codec in the network server. When a profile decoder applies, it can decode the raw frame instead; a decode that fails stores nothing and is reported as `DECODE_FAILED`, rather than counted as an undecoded network-server payload. See [Decoder refusals](./payload-decoders.md#refusal-reasons). The `IntegrationUndecodedHigh` alert tells an operator when most traffic is like this; see [Observability](../deployment/observability.md).
 
 ## Duplicates and retries {#duplicates}
 
@@ -231,7 +231,7 @@ A network server sees only the status code, and some suspend a webhook that is r
 | Answer | Meaning |
 | --- | --- |
 | `202` | Accepted. Includes messages for devices that are not registered, which are skipped, and messages [shed](#limits) because the tenant is over its ingest allowance. |
-| `204` | A message type that is not an uplink (join, status, acknowledgement). Acknowledged and ignored. |
+| `204` | An ignored message type, such as join or status, or a downlink report when the downlink adapter is disabled. Supported downlink reports are processed when the adapter is enabled and answered `202`; see [Confirmed downlinks](#lorawan-confirmed). |
 | `400` | The body is not what the integration's sender type expects: invalid JSON, a missing or malformed identifier, a `deduplicationId` that is not a UUID, a time older than 366 days, more than 100 items, or more than 256 readings. Nothing in the request is stored. |
 | `401` | The token is missing, wrong, or belongs to a different integration. A wrong token and an integration that does not exist are indistinguishable on purpose. |
 | `403` | The integration is switched off. This is not counted as a failed login. |

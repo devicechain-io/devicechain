@@ -60,7 +60,7 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 
 A device with no credential yet reaches the platform over HTTPS to [register itself](#self-registration), at `POST /api/device-management/provisioning/{tenant}/register`. That is a separate endpoint from event ingest, served by `device-management`.
 
-Over **HTTP**, a device can send events only (and, where the operator has enabled it, a [raw payload](#raw-payload)). `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands, configuration or update assignments.
+Over **HTTP**, a device can send events (and, where the operator has enabled it, a [raw payload](#raw-payload)). `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). To receive commands, set the device type's `commandChannel` to `HTTP_PULL`; the device then polls for commands and sends acknowledgements and responses on the same listener. See [HTTP command pull](../concepts/commands.md#http-command-pull) for the endpoints and authentication. Configuration and managed update assignments still use the MQTT desired/reports channels; HTTP command pull does not carry them.
 
 ### The gateway namespace {#gateway-namespace}
 

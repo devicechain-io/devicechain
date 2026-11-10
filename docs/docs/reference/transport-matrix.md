@@ -37,6 +37,10 @@ hole. That is the only reason HTTP ingest is `●` for Subscribe and the platfor
 the tenant's ingest limit, HTTP answers the publisher `429`, while the broker path drops the message
 after the device has already been PUBACKed, and nothing reaches the publisher.
 
+HTTP command pull and LoRaWAN integration downlink are declared `◐` with `basis: "prose"`
+in the conformance spec: their support and limitations are described below, but the recorded rig
+run did not measure them.
+
 Directions are named from the platform's point of view:
 
 - **Read** — the platform asks a device for a value and gets the answer in that exchange.
@@ -55,11 +59,11 @@ How devices reach the platform, and how the platform reaches back.
 | Transport | Read | Write | Subscribe |
 | --- | :---: | :---: | :---: |
 | [MQTT](../guides/connecting-a-device.md#mqtt) (platform broker) | ○ | ◐ | ◐ |
-| [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
+| [HTTP](../guides/connecting-a-device.md#http) | ○ | ◐ | ● |
 | MQTT (external broker) | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
-| [Inbound integrations](../guides/inbound-integrations.md) (LoRaWAN network server, webhook) | ○ | ○ | ◐ |
+| [Inbound integrations](../guides/inbound-integrations.md) (LoRaWAN network server, webhook) | ○ | ◐ | ◐ |
 
 ### MQTT — the platform broker
 
@@ -112,7 +116,7 @@ operator has switched that on; see [Connecting devices from outside the cluster]
   over the tenant's ceiling is still dropped after its PUBACK. `dcctl bootstrap` and `dcctl upgrade`
   turn it on with `--mqtt-fail-closed`. See
   [quality of service](../guides/connecting-a-device.md#quality-of-service) and
-  [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed). It is off by default in 1.0, because the ceiling with it on is lower and overload does not yet push back; the measured ceiling and the loss bounds with it off are under [quality of service](../guides/connecting-a-device.md#quality-of-service).
+  [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed). It is off by default in 1.0, and the ceiling with it on is lower. A full store refuses publishes, and store pressure backs off new device connections at 80% fill until it falls below 60%. This does not remove the separate broker-memory/OOM limit; the measured ceiling and the loss bounds with it off are under [quality of service](../guides/connecting-a-device.md#quality-of-service).
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
   publish reaches a device that is connected and subscribed at that instant. The broker does not
   hold it for a device that is not, and nothing tells the platform whether the device received
@@ -129,7 +133,7 @@ operator has switched that on; see [Connecting devices from outside the cluster]
 
 ### HTTP
 
-A `POST` endpoint for the same JSON event body. Simple, and one-way.
+A `POST` endpoint for the same JSON event body, plus opt-in command polling.
 
 - **Subscribe ●** — `POST /{instanceId}/{tenant}/events` returns:
   - `202` once the event is stored in the platform's inbound stream, with an `X-DC-Event-Id` receipt header;
@@ -152,19 +156,18 @@ A `POST` endpoint for the same JSON event body. Simple, and one-way.
   [quality of service](../guides/connecting-a-device.md#quality-of-service)). A `429` also means the
   event was not accepted; it carries a `Retry-After` header, so back off and retry. `202`, `400`,
   `401` and `404` are terminal for that request.
-- **Write ○ / Read ○** — **there is no downlink at all.** A device that reaches the platform only
-  over HTTP cannot be commanded. This is less a gap awaiting a fix than the shape of the
-  integration: give a device that must receive commands an MQTT connection as well.
+- **Write ◐ / Read ○** — commands are available through opt-in
+  [HTTP command pull](../concepts/commands.md#http-command-pull). Set the device type's
+  `commandChannel` to `HTTP_PULL`; the device polls for commands, acknowledges receipt and
+  sends its response over HTTP. Commands wait for a pull and remain subject to their expiry.
+  This channel does not carry configuration or managed update assignments, and there is no
+  platform-initiated read primitive.
 
-  A command issued to an HTTP-only device is **not refused — it expires**. The platform mints no
-  transport name for a device that arrived over HTTP (the device's recorded source is the id the
-  operator gave the event source), so the gate that recognises an undeliverable transport cannot
-  recognise this one. The command is accepted, published where no device is subscribed to
-  receive it, marked `SENT`, and ends as `TIMEOUT`. Sparkplug (when its commands are not enabled) and
-  [inbound integrations](../guides/inbound-integrations.md#commands) are the only rows on this page where
-  a `○` in this column produces a prompt `FAILED` instead.
+  `PUBLISH` remains the default command channel. With that setting, commands are published
+  rather than held for an HTTP poll; an HTTP-only device with no subscriber does not receive
+  them, and they time out.
 - The ingest listener terminates plain HTTP and has no transport authentication of its own;
-  device credentials ride in the event body. Where you need TLS, it comes from whatever fronts the
+  event credentials ride in the event body, while command pull uses a bearer access token. Where you need TLS, it comes from whatever fronts the
   service.
 
 ### Self-registration {#self-registration}
@@ -347,14 +350,19 @@ For constrained devices over CoAP/UDP with DTLS.
 | Write | ◐ | Single scalar resource, replace only |
 | Execute | ● | With or without arguments. A raw Execute of the Device object's Factory Reset resource (`/3/0/5`) is refused with `COMMAND_DESTRUCTIVE_REFUSED`; a confirmed named operation is planned |
 | Reboot (`lwm2m.reboot`) | ● | A named command that Executes the Device object's Reboot resource; takes no parameters |
-| Read device information (`lwm2m.readDeviceInfo`) | ◐ | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have. Only text/plain answers are decoded: a device that answers a single-resource read in TLV, as Eclipse Leshan does by default, has every resource listed as missing and the command fails |
-| Device-information harvest | ◐ | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry. Only text/plain answers are decoded, so nothing is recorded for a device that answers in TLV |
+| Read device information (`lwm2m.readDeviceInfo`) | ◐ | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have. Text/plain and LwM2M TLV answers are decoded |
+| Device-information harvest | ◐ | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry. Text/plain and LwM2M TLV answers are decoded |
 | Observe | ◐ | SenML-JSON only; numeric resources only; fixed object allowlist; 32 per registration |
 | Discover | ○ | Not implemented |
 | Create | ○ | Not implemented |
 | Delete | ○ | Not implemented |
 | Write-Attributes | ○ | Not implemented — notification bands cannot be set from the platform |
 | Bootstrap | ○ | Not implemented; a Bootstrap server is planned |
+
+The two device-information cells remain `◐` because the recorded conformance run measured the
+older text/plain-only implementation and its TLV limitations. The current implementation decodes
+TLV too, but that change has not been measured by a new rig run; the recorded results and limit
+checks have not been changed. This does not add TLV decoding to Observe.
 
 Device authentication is per device, at the DTLS handshake, using pre-shared keys. X.509 and
 raw-public-key credentials are planned.
@@ -368,17 +376,20 @@ never connects to DeviceChain.
 - **Subscribe ◐** — the platform stores the decoded values the sender supplies, as ordinary
   measurements. What keeps it from `●`: a message that arrives while the tenant is over its ingest
   allowance is answered `202` and dropped, because a refusal would lose it anyway and some network
-  servers suspend a webhook that is refused. The sender is therefore not told. An uplink with nothing
-  decoded in it is acknowledged and stores nothing, and is counted. `IntegrationShedAccepted` and
+  servers suspend a webhook that is refused. The sender is therefore not told. Without an applicable
+  profile decoder, an uplink with nothing decoded in it is acknowledged and stores nothing, and is counted. `IntegrationShedAccepted` and
   `IntegrationUndecodedHigh` report both.
   A [payload decoder](../guides/payload-decoders.md) written on the device profile can decode the raw
   frame in the platform instead; it decodes live uplinks from v1.2.
-- **Write ○ / Read ○** — there is no downlink unless an installation switches on the
-  [LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink), which queues a command
-  on a ChirpStack v4 network server (it reports that the server accepted the downlink, not that the
-  device received it). Without it, a command issued to a device that last reported
+- **Write ◐ / Read ○** — optional
+  [LoRaWAN downlink](../guides/inbound-integrations.md#lorawan-downlink) queues commands
+  on ChirpStack v4 or The Things Stack v3. An unconfirmed downlink reports queue acceptance;
+  a confirmed downlink waits for the device's acknowledgement. Generic-sender downlink is
+  unsupported. With the adapter disabled, a command issued to a device that last reported
   through an integration **is accepted, and then fails** at the next delivery sweep with
-  `COMMAND_TRANSPORT_UNSUPPORTED`, instead of waiting until it expires. The failure is final. A
+  `COMMAND_TRANSPORT_UNSUPPORTED`, instead of waiting until it expires. The failure is final.
+  With the adapter enabled, an integration without a usable network-server link is refused by
+  the adapter as not sent. A
   device that has never reported has no recorded transport, so its commands are dispatched, and
   expire, until it first reports. Because the recorded transport is the last one the device reported on, a device that also
   sends over MQTT is commanded again once it has.
