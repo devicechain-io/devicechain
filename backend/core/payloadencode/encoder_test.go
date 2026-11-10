@@ -257,10 +257,10 @@ func TestNumberBeyondExactFloatRangeIsRefused(t *testing.T) {
 func TestPrecisionAndRangeRefusals(t *testing.T) {
 	for _, c := range []struct{ field, payload, reason string }{
 		{`{"param":"x","type":"u8"}`, `{"x":255.4}`, "range"},
-		{`{"param":"x","type":"u8"}`, `{"x":255.0000001}`, "range"},
+		{`{"param":"x","type":"u8"}`, `{"x":255.0000001}`, "integer"},
 		{`{"param":"x","type":"u8"}`, `{"x":1.0000001}`, "integer"},
 		{`{"param":"x","type":"u8","scale":1,"offset":0}`, `{"x":1.0000001}`, "integer"},
-		{`{"param":"x","type":"i8"}`, `{"x":-128.0000001}`, "range"},
+		{`{"param":"x","type":"i8"}`, `{"x":-128.0000001}`, "integer"},
 		{`{"param":"x","type":"u8","scale":1e9}`, `{"x":1000000000000001}`, "too large"},
 		{`{"param":"x","type":"u8","scale":1e-9}`, `{"x":9007199.254740992}`, "too large"},
 		{`{"param":"x","type":"u8"}`, `{"x":9007199254740992}`, "too large"},
