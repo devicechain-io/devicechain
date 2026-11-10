@@ -538,3 +538,16 @@ describe('the navigation tree', () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 });
+describe('the Approvals entry', () => {
+  it('shows the preview entry with agent:admin', () => {
+    renderWith(['agent:admin'], '/approvals');
+    expect(entry('Approvals')).toBeTruthy();
+    expect(entry('Preview')).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Approvals/ }).getAttribute('href')).toBe('/approvals');
+  });
+  it('hides the entry without agent:admin', () => {
+    renderWith(['alarm:read', 'member:write'], '/alarms');
+    expect(entry('Approvals')).toBeNull();
+    expect(entry('Alarms')).toBeTruthy();
+  });
+});

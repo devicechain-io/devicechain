@@ -31,6 +31,8 @@ const IntegrationsPage = lazy(() => import('@/routes/integrations/IntegrationsPa
 const IntegrationDetailPage = lazy(() => import('@/routes/integrations/IntegrationDetailPage'));
 const DashboardsPage = lazy(() => import('@/routes/dashboards/DashboardsPage'));
 const DashboardDetailPage = lazy(() => import('@/routes/dashboards/DashboardDetailPage'));
+const ApprovalsPage = lazy(() => import('@/routes/approvals/ApprovalsPage'));
+const ApprovalDetailPage = lazy(() => import('@/routes/approvals/ApprovalDetailPage'));
 const AlarmsPage = lazy(() => import('@/routes/alarms/AlarmsPage'));
 const SignersPage = lazy(() => import('@/routes/updates/SignersPage'));
 const CommandBatchesPage = lazy(() => import('@/routes/command-batches/CommandBatchesPage'));
@@ -133,6 +135,8 @@ export default function App() {
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
+          <Route path="approvals" element={<ApprovalsPage />} />
+          <Route path="approvals/:token" element={<ApprovalDetailPage />} />
           {/* Not wrapped in AreaGate: the page renders its own "not deployed" state on
               status === 'absent', before any query fires. */}
           <Route path="updates/signers" element={<SignersPage />} />

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/i18n/config';
 import LoginPage from './Login';
+import { consumeStepUpReturn, setStepUpReturn } from '@/lib/stepUpReturn';
 
 const login = vi.fn();
 const verifyMfa = vi.fn();
@@ -96,6 +97,35 @@ beforeEach(async () => {
 afterEach(cleanup);
 
 describe('the code step', () => {
+  it('returns to the approval after a fresh password and code sign-in', async () => {
+    setStepUpReturn('/approvals/proposal-17');
+    login.mockRejectedValue(challengeError());
+    verifyMfa.mockResolvedValue(AUTH);
+    selectTenant.mockResolvedValue(undefined);
+    renderLogin();
+    await reachCodeStep();
+    typeCode('123456');
+    submitCode();
+    expect((await screen.findByTestId('at')).textContent).toBe('/approvals/proposal-17|null');
+    expect(verifyMfa).toHaveBeenCalledWith('chal-1', '123456');
+    expect(selectTenant).toHaveBeenCalledWith('id-token', 'acme');
+    expect(consumeStepUpReturn()).toBeNull();
+  });
+
+  it('preserves the return path when tenant entry fails', async () => {
+    setStepUpReturn('/approvals');
+    login.mockRejectedValue(challengeError());
+    verifyMfa.mockResolvedValue(AUTH);
+    selectTenant.mockRejectedValue(uncoded('denied'));
+    renderLogin();
+    await reachCodeStep();
+    typeCode('123456');
+    submitCode();
+    await screen.findByText(t('login:enterTenantFailed'));
+    expect(consumeStepUpReturn()).toBe('/approvals');
+    expect(screen.queryByTestId('at')).toBeNull();
+  });
+
   it('appears when the password is right but the account is held for its second factor', async () => {
     login.mockRejectedValue(challengeError());
     renderLogin();

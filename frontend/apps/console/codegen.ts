@@ -7,7 +7,7 @@ const config: CodegenConfig = {
   generates: {
     './src/gql/user-management/': {
       schema: '../../../backend/services/user-management/graphql/schema.graphql',
-      documents: ['src/lib/api/user-management.ts', 'src/lib/api/members.ts', 'src/lib/api/service-accounts.ts', 'src/lib/api/mfa.ts'],
+      documents: ['src/lib/api/user-management.ts', 'src/lib/api/members.ts', 'src/lib/api/service-accounts.ts', 'src/lib/api/mfa.ts', 'src/lib/api/agent-policy.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
@@ -26,6 +26,7 @@ const config: CodegenConfig = {
         'src/lib/api/credentials.ts',
         'src/lib/api/trust-anchors.ts',
         'src/lib/api/alarms.ts',
+        'src/lib/api/agent-proposals.ts',
         'src/lib/api/facet-keys.ts',
         'src/lib/api/entity-attributes.ts',
         'src/lib/api/browse.ts',

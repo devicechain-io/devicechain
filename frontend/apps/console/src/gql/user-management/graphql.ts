@@ -4,6 +4,15 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** How a version of the agent policy came to be published. */
+export type AgentPolicyOrigin =
+  /** The version in force was republished with only agent actuation turned on or off. */
+  | 'ACTUATION'
+  /** The draft was published. */
+  | 'PUBLISH'
+  /** An earlier version's document was published again as a new version. */
+  | 'ROLLBACK';
+
 /** Paging for listing this tenant's invitations. */
 export type InvitationSearchCriteria = {
   /** Page to return, starting at 1. */
@@ -215,6 +224,18 @@ export type TenantRoleUpdateRequest = {
   /** New name. Omit to keep it, send null to clear it. */
   name?: string | null | undefined;
 };
+
+export type AgentPolicyQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AgentPolicyQuery = { agentPolicy: { operatorSuspended: boolean, actuationOff: boolean, instanceEnabled: boolean, actuationInEffect: boolean, published: { version: number, document: string, origin: AgentPolicyOrigin, publishedBy: string, publishedAt: string } | null } };
+
+export type SetAgentActuationMutationVariables = Exact<{
+  enabled: boolean;
+}>;
+
+
+export type SetAgentActuationMutation = { setAgentActuation: { operatorSuspended: boolean, actuationOff: boolean, instanceEnabled: boolean, actuationInEffect: boolean, published: { version: number, document: string, origin: AgentPolicyOrigin, publishedBy: string, publishedAt: string } | null } };
 
 export type MembersQueryVariables = Exact<{
   criteria: MemberSearchCriteria;
@@ -622,6 +643,40 @@ export const TenantFieldsFragmentDoc = new TypedDocumentString(`
   localeOverride
 }
     `, {"fragmentName":"TenantFields"}) as unknown as TypedDocumentString<TenantFieldsFragment, unknown>;
+export const AgentPolicyDocument = new TypedDocumentString(`
+    query AgentPolicy {
+  agentPolicy {
+    published {
+      version
+      document
+      origin
+      publishedBy
+      publishedAt
+    }
+    operatorSuspended
+    actuationOff
+    instanceEnabled
+    actuationInEffect
+  }
+}
+    `) as unknown as TypedDocumentString<AgentPolicyQuery, AgentPolicyQueryVariables>;
+export const SetAgentActuationDocument = new TypedDocumentString(`
+    mutation SetAgentActuation($enabled: Boolean!) {
+  setAgentActuation(enabled: $enabled) {
+    published {
+      version
+      document
+      origin
+      publishedBy
+      publishedAt
+    }
+    operatorSuspended
+    actuationOff
+    instanceEnabled
+    actuationInEffect
+  }
+}
+    `) as unknown as TypedDocumentString<SetAgentActuationMutation, SetAgentActuationMutationVariables>;
 export const MembersDocument = new TypedDocumentString(`
     query Members($criteria: MemberSearchCriteria!) {
   members(criteria: $criteria) {

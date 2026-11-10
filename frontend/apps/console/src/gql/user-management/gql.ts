@@ -15,6 +15,8 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
+    "\n  query AgentPolicy {\n    agentPolicy {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": typeof types.AgentPolicyDocument,
+    "\n  mutation SetAgentActuation($enabled: Boolean!) {\n    setAgentActuation(enabled: $enabled) {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": typeof types.SetAgentActuationDocument,
     "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.MembersDocument,
     "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.InvitationsDocument,
     "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n": typeof types.TenantRolesDocument,
@@ -65,6 +67,8 @@ type Documents = {
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": typeof types.TenantTokenMasksDocument,
 };
 const documents: Documents = {
+    "\n  query AgentPolicy {\n    agentPolicy {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": types.AgentPolicyDocument,
+    "\n  mutation SetAgentActuation($enabled: Boolean!) {\n    setAgentActuation(enabled: $enabled) {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n": types.SetAgentActuationDocument,
     "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n        mfaEnabled\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.MembersDocument,
     "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.InvitationsDocument,
     "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n": types.TenantRolesDocument,
@@ -115,6 +119,14 @@ const documents: Documents = {
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": types.TenantTokenMasksDocument,
 };
 
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AgentPolicy {\n    agentPolicy {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n"): typeof import('./graphql').AgentPolicyDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetAgentActuation($enabled: Boolean!) {\n    setAgentActuation(enabled: $enabled) {\n      published { version document origin publishedBy publishedAt }\n      operatorSuspended actuationOff instanceEnabled actuationInEffect\n    }\n  }\n"): typeof import('./graphql').SetAgentActuationDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
