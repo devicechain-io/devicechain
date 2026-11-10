@@ -290,7 +290,7 @@ var tableSweepExemptions = map[string]string{
 		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
 		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
 		"a finding this bucket should report.",
-	"device-management.agent_effect_outbox": "the agent-execution outbox: a row lives from the commit of an " +
+	"device-management.agent_effect_outboxes": "the agent-execution outbox: a row lives from the commit of an " +
 		"approved agent proposal's execution until the effect relay has published its event and the broker " +
 		"has acknowledged it. Only an executed agent proposal writes one and the seed proposes nothing " +
 		"(actuation is off by default), so empty is the normal state; a row that stays here means executed " +

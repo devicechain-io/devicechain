@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -18,7 +17,6 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	"gorm.io/gorm/schema"
 )
 
 type AgentEffectOutbox struct {
@@ -30,11 +28,6 @@ type AgentEffectOutbox struct {
 	CreatedAt     time.Time      `gorm:"not null;index"`
 	Attempts      int            `gorm:"not null"`
 	LastError     *string        `gorm:"type:text"`
-}
-
-// Preserve the area's schema prefix while keeping the queue's singular SQL name.
-func (AgentEffectOutbox) TableName(n schema.Namer) string {
-	return strings.TrimSuffix(n.TableName("AgentEffectOutboxes"), "es")
 }
 
 // Queue rows derive from already audited alarm/proposal writes. Auditing their insertion,

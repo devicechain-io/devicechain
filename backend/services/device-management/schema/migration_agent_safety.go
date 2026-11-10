@@ -4,13 +4,11 @@
 package schema
 
 import (
-	"strings"
 	"time"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
-	"gorm.io/gorm/schema"
 )
 
 // These are this migration's snapshots. Both carry tenant_id and are erased by
@@ -33,10 +31,6 @@ type agentEffectOutbox struct {
 	LastError     *string        `gorm:"type:text"`
 }
 
-func (agentEffectOutbox) TableName(n schema.Namer) string {
-	return strings.TrimSuffix(n.TableName("AgentEffectOutboxes"), "es")
-}
-
 // NewAgentSafetySchema is appended after the released chain. AutoMigrate makes
 // each table/index creation safe to repeat after a partially applied upgrade.
 func NewAgentSafetySchema() *gormigrate.Migration {
@@ -46,7 +40,7 @@ func NewAgentSafetySchema() *gormigrate.Migration {
 			return tx.AutoMigrate(&agentActuationFence{}, &agentEffectOutbox{})
 		},
 		Rollback: func(tx *gorm.DB) error {
-			return dropTables(tx, []string{"agent_effect_outbox", "agent_actuation_fences"})
+			return dropTables(tx, []string{"agent_effect_outboxes", "agent_actuation_fences"})
 		},
 	}
 }

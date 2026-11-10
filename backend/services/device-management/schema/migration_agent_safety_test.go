@@ -18,10 +18,9 @@ func TestAgentSafetyMigrationReplaysAndKeepsTenantColumns(t *testing.T) {
 	for range 2 {
 		require.NoError(t, migration.Migrate(db))
 	}
-	for _, table := range []string{"agent_actuation_fences", "agent_effect_outbox"} {
+	for _, table := range []string{"agent_actuation_fences", "agent_effect_outboxes"} {
 		require.True(t, db.Migrator().HasTable(table), table)
 		require.True(t, db.Migrator().HasColumn(table, "tenant_id"), table)
 	}
-	require.False(t, db.Migrator().HasTable("agent_effect_outboxes"))
 	require.True(t, db.Migrator().HasIndex(&agentEffectOutbox{}, "CreatedAt"))
 }

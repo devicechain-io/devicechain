@@ -14,7 +14,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
-	"gorm.io/gorm/schema"
 )
 
 func killFor(tenant string, version int) actiongate.KillEvent {
@@ -181,7 +180,7 @@ func TestAgentEffectsRetryPublishAndLostDeleteAck(t *testing.T) {
 			r.api.AlarmPublisher = pub
 			if mode == "delete" {
 				require.NoError(t, r.db.Callback().Delete().Before("gorm:delete").Register("lost_delete", func(db *gorm.DB) {
-					if db.Statement.Table == "agent_effect_outbox" {
+					if db.Statement.Table == "agent_effect_outboxes" {
 						db.AddError(errors.New("delete failed"))
 					}
 				}))
@@ -219,9 +218,13 @@ func TestAgentEffectsPoisonDoesNotBlockLaterPage(t *testing.T) {
 			// Queue insertion follows target order, but identify it from its payload.
 			var event AlarmStateChangeEvent
 			require.NoError(t, json.Unmarshal(row.Payload, &event))
+			// Fixed, whole-second times: SQLite compares timestamps as text, so a fractional-second
+			// clock reading could order a rotated row ahead of an untouched one.
+			year := 2021
 			if event.AlarmToken == "a1" {
-				require.NoError(t, r.api.RDB.DB(ctx).Model(&AgentEffectOutbox{}).Where("id = ?", row.Id).Update("created_at", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)).Error)
+				year = 2020
 			}
+			require.NoError(t, r.api.RDB.DB(ctx).Model(&AgentEffectOutbox{}).Where("id = ?", row.Id).Update("created_at", time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)).Error)
 		}
 	}
 	pub := &dedupEffectPublisher{fail: map[string]bool{"a1": true}}
@@ -234,11 +237,6 @@ func TestAgentEffectsPoisonDoesNotBlockLaterPage(t *testing.T) {
 		require.Equal(t, "a2", token)
 	}
 	require.Len(t, effectRows(t, r.api, ctx), 1)
-}
-
-func TestAgentSafetyTablesPreserveSchemaPrefix(t *testing.T) {
-	n := schema.NamingStrategy{TablePrefix: "device-management."}
-	require.Equal(t, "device-management.agent_effect_outbox", (AgentEffectOutbox{}).TableName(n))
 }
 
 // A kill that lands between the execution's abort and the re-enable must win: the re-enable only

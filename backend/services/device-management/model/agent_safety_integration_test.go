@@ -97,7 +97,7 @@ func TestAgentEffectsPostgresSkipLockedAndPurgeClassification(t *testing.T) {
 	require.NoError(t, err)
 	found := map[string]bool{}
 	for _, entry := range plan.Entries {
-		if entry.Table.Schema == "device-management" && (entry.Table.Name == "agent_effect_outbox" || entry.Table.Name == "agent_actuation_fences") {
+		if entry.Table.Schema == "device-management" && (entry.Table.Name == "agent_effect_outboxes" || entry.Table.Name == "agent_actuation_fences") {
 			require.Equal(t, tenantpurge.ClassDirect, entry.Class)
 			require.Equal(t, "tenant_id", entry.Column)
 			found[entry.Table.Name] = true
