@@ -48,6 +48,7 @@ const (
 	maxInputMagnitude     = 1e15
 	maxTransformMagnitude = 1e9
 	minScaleMagnitude     = 1e-9
+	rawIntegerTolerance   = 1e-6
 )
 
 // Names match the uplink frame-reader vocabulary.
@@ -254,6 +255,19 @@ func Parse(raw []byte) (*Encoder, error) {
 			if f.Offset != nil && (!finite(*f.Offset) || math.Abs(*f.Offset) > maxTransformMagnitude) {
 				return nil, fmt.Errorf("offset magnitude must be finite and at most 1e9")
 			}
+			if f.Scale != nil || f.Offset != nil {
+				scale, offset := 1.0, 0.0
+				if f.Scale != nil {
+					scale = math.Abs(*f.Scale)
+				}
+				if f.Offset != nil {
+					offset = math.Abs(*f.Offset)
+				}
+				m := math.Max(offset, scale*math.Exp2(float64(8*t.size)))
+				if math.Nextafter(m, math.Inf(1))-m > scale*rawIntegerTolerance {
+					return nil, fmt.Errorf("scale and offset leave too little float64 precision: raise scale or lower offset")
+				}
+			}
 			if err := add(*f.Param, k); err != nil {
 				return nil, err
 			}
@@ -403,11 +417,11 @@ func (e *Encoder) Encode(payload []byte) (Result, error) {
 		}
 		// The range is checked before rounding (255.4 must not round into u8) but with the same
 		// tolerance as integrality, so float error at an exact boundary (178.5/0.7) is not a refusal.
-		if raw < min-1e-6 || raw > max+1e-6 {
+		if raw < min-rawIntegerTolerance || raw > max+rawIntegerTolerance {
 			return Result{}, refuse(p, "value is outside the encoded type range")
 		}
 		n := math.Round(raw)
-		if (scale == 1 && offset == 0 && math.Trunc(v) != v) || math.Abs(raw-n) > 1e-6 {
+		if (scale == 1 && offset == 0 && math.Trunc(v) != v) || math.Abs(raw-n) > rawIntegerTolerance {
 			return Result{}, refuse(p, "raw value must be an integer; no rounding or truncation")
 		}
 		data = appendInt(data, uint64(int64(n)), t)

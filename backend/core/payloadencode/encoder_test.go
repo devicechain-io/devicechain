@@ -276,6 +276,32 @@ func TestPrecisionAndRangeRefusals(t *testing.T) {
 	}
 }
 
+func TestTransformPrecision(t *testing.T) {
+	const precisionError = "scale and offset leave too little float64 precision: raise scale or lower offset"
+	for _, c := range []struct {
+		name, field, wantError string
+	}{
+		{"small scale large offset", `{"param":"x","type":"u32be","scale":1e-9,"offset":1e9}`, precisionError},
+		{"negative scale and offset", `{"param":"x","type":"i32le","scale":-1e-9,"offset":-1e9}`, precisionError},
+		{"signed normal transform", `{"param":"x","type":"i16be","scale":0.1,"offset":-40}`, ""},
+		{"unsigned normal transform", `{"param":"x","type":"u16le","scale":0.01,"offset":1000}`, ""},
+		{"default offset", `{"param":"x","type":"u32be","scale":1e-9}`, ""},
+		{"default scale", `{"param":"x","type":"i32le","offset":1e9}`, ""},
+		{"no transform", `{"param":"x","type":"u32be"}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, err := Parse([]byte(`{"fPort":1,"fields":[` + c.field + `]}`))
+			if c.wantError != "" {
+				if err == nil || e != nil || err.Error() != c.wantError {
+					t.Fatalf("got encoder %v, error %v; want %q", e, err, c.wantError)
+				}
+			} else if err != nil || e == nil {
+				t.Fatalf("expected valid transform: %v", err)
+			}
+		})
+	}
+}
+
 func TestTransformBounds(t *testing.T) {
 	for _, member := range []string{`"offset":1000000001`, `"offset":-1000000001`, `"scale":1000000001`, `"scale":-1000000001`, `"scale":1e-10`, `"scale":-1e-10`, `"offset":1e15`} {
 		// In particular, the old large offset could swallow the fraction in x=1000000000000000.01.
