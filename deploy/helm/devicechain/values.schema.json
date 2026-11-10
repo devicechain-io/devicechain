@@ -129,10 +129,12 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean",
+                      "description": "Turn tracing on. Off by default; when off no exporter is created and messages are unchanged.",
                       "default": false
                     },
                     "protocol": {
                       "type": "string",
+                      "description": "OTLP transport to the collector: grpc (default, usually port 4317) or http (usually port 4318).",
                       "enum": [
                         "grpc",
                         "http"
@@ -141,10 +143,12 @@
                     },
                     "endpoint": {
                       "type": "string",
+                      "description": "OTLP collector address: host:port for grpc, a full http(s) URL for http. Required when enabled; the services validate it at startup and refuse to start on a malformed one.",
                       "default": ""
                     },
                     "insecure": {
                       "type": "boolean",
+                      "description": "Send to the collector without TLS. Off by default; set it only for a collector reached over a trusted in-cluster network.",
                       "default": false
                     },
                     "samplingRatio": {
@@ -153,97 +157,7 @@
                       "maximum": 1,
                       "description": "Root trace sample ratio; absent uses 0.1 when enabled. Zero samples no roots; upstream sampling is respected."
                     }
-                  },
-                  "allOf": [
-                    {
-                      "if": {
-                        "properties": {
-                          "enabled": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "enabled"
-                        ]
-                      },
-                      "then": {
-                        "required": [
-                          "endpoint"
-                        ],
-                        "properties": {
-                          "endpoint": {
-                            "minLength": 1
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "if": {
-                        "properties": {
-                          "endpoint": {
-                            "minLength": 1
-                          }
-                        },
-                        "required": [
-                          "endpoint"
-                        ]
-                      },
-                      "then": {
-                        "if": {
-                          "properties": {
-                            "protocol": {
-                              "const": "http"
-                            }
-                          },
-                          "required": [
-                            "protocol"
-                          ]
-                        },
-                        "then": {
-                          "properties": {
-                            "endpoint": {
-                              "pattern": "^https?://(?:[^\\s:/@?#]+|\\[[0-9A-Fa-f:]+\\])(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?(?:/(?:[^\\s?#%]|%[0-9A-Fa-f]{2})*)?$"
-                            }
-                          },
-                          "allOf": [
-                            {
-                              "if": {
-                                "properties": {
-                                  "insecure": {
-                                    "const": true
-                                  }
-                                },
-                                "required": [
-                                  "insecure"
-                                ]
-                              },
-                              "then": {
-                                "properties": {
-                                  "endpoint": {
-                                    "pattern": "^http://"
-                                  }
-                                }
-                              },
-                              "else": {
-                                "properties": {
-                                  "endpoint": {
-                                    "pattern": "^https://"
-                                  }
-                                }
-                              }
-                            }
-                          ]
-                        },
-                        "else": {
-                          "properties": {
-                            "endpoint": {
-                              "pattern": "^(?:[^\\s:/@?#]+|\\[[0-9A-Fa-f:]+\\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
-                            }
-                          }
-                        }
-                      }
-                    }
-                  ]
+                  }
                 },
                 "http": {
                   "type": "object",

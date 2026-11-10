@@ -51,11 +51,9 @@ func TestTracingOverlaySurvivesDeclarationAndRenders(t *testing.T) {
 func TestTracingOverlayRejectsUnsupportedSettings(t *testing.T) {
 	for _, block := range []map[string]interface{}{
 		{"headers": map[string]interface{}{"Authorization": "secret"}},
-		{"enabled": true},
 		{"protocol": "udp"},
 		{"samplingRatio": 1.1},
 		{"samplingRatio": -0.1},
-		{"endpoint": "collector:70000"},
 	} {
 		overlay := map[string]interface{}{"instance": map[string]interface{}{"config": map[string]interface{}{"infrastructure": map[string]interface{}{"tracing": block}}}}
 		if err := ValidateValuesOverlay(overlay); err == nil {
