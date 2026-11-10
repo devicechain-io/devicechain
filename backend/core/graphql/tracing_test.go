@@ -56,7 +56,18 @@ func TestDisabledGraphQLTracingAddsZeroAllocations(t *testing.T) {
 			}
 		})
 	}
-	base, actual := measure(h.serveHTTP), measure(h.ServeHTTP)
+	// The race detector randomly drops sync.Pool entries, which makes one run's count a
+	// sample, not a constant; the least of several runs is the code's own cost.
+	least := func(handler http.HandlerFunc) float64 {
+		best := measure(handler)
+		for i := 0; i < 8; i++ {
+			if v := measure(handler); v < best {
+				best = v
+			}
+		}
+		return best
+	}
+	base, actual := least(h.serveHTTP), least(h.ServeHTTP)
 	if actual != base {
 		t.Fatalf("GraphQL tracing adds %g allocations", actual-base)
 	}

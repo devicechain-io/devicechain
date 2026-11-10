@@ -233,6 +233,11 @@ func (h *HttpHandler) validator() *auth.Validator {
 
 // Handles http request processing.
 func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Checked here, not inside tracing.HTTP, so the disabled path builds no method-value closure.
+	if !tracing.Enabled() {
+		h.serveHTTP(w, r)
+		return
+	}
 	tracing.HTTP(w, r, "graphql.request", h.serveHTTP)
 }
 
