@@ -117,7 +117,7 @@ La sesión de un superusuario nunca recibe un alcance de acción. Un operador qu
 }
 ```
 
-**El interruptor de parada.** `setAgentActuation(enabled: false)` apaga las acciones de agentes en el inquilino de inmediato, publicando la política vigente con solo eso cambiado. Siempre funciona y no necesita un segundo factor. Volver a encenderlas es una relajación y lo necesita.
+**El interruptor de parada.** `setAgentActuation(enabled: false)` apaga las acciones de agentes en el inquilino de inmediato mediante una marca independiente del inquilino, incluso si la política publicada no se puede leer o es demasiado grande. Apagarlas no necesita un segundo factor. Volver a publicar o revertir una política no borra esa marca. `setAgentActuation(enabled: true)` la borra, requiere una política publicada y legible y un segundo factor reciente, y habilita la opción de actuación de la política. El interruptor de la instancia y la suspensión del operador siguen aplicándose.
 
 **Pedir un veredicto.** `agentActuationDecision` devuelve el veredicto del inquilino sobre una acción que propone un asistente: `REFUSE`, o `APPROVE` con una o dos aprobaciones, además de los motivos y la versión de la política. Solo puede preguntar el propio token de un asistente, uno que lleve un permiso de propuesta, y el asistente es el cliente que nombra ese token, nunca un argumento. **Esta versión nunca responde `AUTO`.** Una política ya puede indicar qué acciones podrían ejecutarse sin una persona, pero nada se ejecuta automáticamente hasta que la plataforma pueda contrastar las acciones automáticas con grupos de comparación reservados e invariantes declarados. Hasta entonces, una acción así necesita la aprobación de una persona, y una anotación, que nunca espera una, se rechaza. Algunos mínimos se mantienen diga lo que diga la política: un comando destructivo, un cambio de reglas o un despliegue nunca se ejecutan sin una persona; un comando destructivo y un despliegue de más de 100 dispositivos necesitan dos personas; y una acción que necesita más aprobadores de los que tiene el inquilino se rechaza en lugar de rebajarse.
 
@@ -141,6 +141,36 @@ El asistente **propone** una acción y las personas deciden. En esta **vista pre
 - **Aprobar.** `approveAgentProposal(token, digest)` recibe el resumen mostrado para la propuesta, así que una persona aprueba exactamente lo que está guardado. Quien aprueba debe ser una persona, nunca un asistente, tener el permiso de escritura que la acción necesita, pertenecer a uno de los roles aprobadores de la política y haber verificado un segundo factor dentro de la antigüedad de verificación de la política (si no, `STEP_UP_REQUIRED`). En cada aprobación la plataforma vuelve a comprobar, con los registros actuales: que las acciones de agentes siguen activadas (el interruptor de la instancia, la suspensión del operador, la política del inquilino), que el cliente original sigue permitido y habilitado, que la persona para la que actuó el asistente sigue con la sesión iniciada y conserva el permiso de escritura, y que cada aprobador anterior sigue cumpliendo los requisitos. Si la propuesta ya no los cumple, termina como `REFUSED` con los motivos. La persona para la que actuó el asistente puede ser la única aprobadora de una propuesta de una sola aprobación salvo que la política indique `approvers.allowSelfConfirm: false`, y nunca es una de dos aprobadoras.
 - **Rechazo y caducidad.** `rejectAgentProposal` termina una propuesta en espera, con una nota opcional. Una propuesta que nadie decide antes de su caducidad pasa a `EXPIRED`, y una propuesta caducada no puede aprobarse, se haya registrado ya o no.
 - **Lectura.** `agentProposals` y `agentProposal` listan las propuestas: una persona necesita `alarm:read`, y un asistente solo ve las propuestas que su propio cliente hizo para la persona para la que actúa. Cada propuesta y cada decisión quedan registradas también en el diario de auditoría.
+
+### Reviewing proposals in the console (preview) {#approvals-inbox}
+
+Abre **Supervisión > Aprobaciones**. La bandeja requiere una membresía en el inquilino sin
+restricción de alcance con `agent:admin`, y el interruptor de acciones de agentes de la instancia
+debe estar habilitado. Listar propuestas también necesita `alarm:read`; aprobar sigue requiriendo
+el rol aprobador, `alarm:write` y el segundo factor reciente descritos arriba. La bandeja no edita
+el documento de política: usa la API de políticas para configurar clientes, roles aprobadores y
+reglas de acción.
+
+1. La bandeja empieza en **Pendiente**. Usa **Estado** para inspeccionar propuestas rechazadas,
+   caducadas o denegadas. Abre una propuesta mediante el nombre de su cliente. Revisa la acción,
+   los tokens de destino, el impacto, el contenido canónico, el resumen criptográfico, la versión
+   de la política y los motivos. Trata **Justificación del agente** como texto no confiable;
+   **Cliente no verificado** significa que la identidad del cliente no está certificada.
+2. Elige **Aprobar** y confirma la acción mostrada, o **Rechazar** e introduce, si quieres, una nota
+   de un máximo de 512 bytes. Si se te pide, elige **Verificar código**, introduce el código de tu
+   aplicación de autenticación y vuelve a intentar la aprobación; no cierras sesión. Si la
+   verificación no está disponible (inicio de sesión único, sin autenticador registrado), elige
+   **Volver a iniciar sesión**. Verificar un código por sí solo no envía una aprobación.
+3. Si esa aprobación completara la propuesta, la consola indica que la ejecución no está disponible.
+   **La aprobación no se registra, la propuesta sigue pendiente y no se reconoce ni se cierra
+   ninguna alarma.** `EXECUTED` en el filtro de estado no demuestra que la ejecución esté admitida.
+   Realiza tú cualquier acción necesaria sobre alarmas en la [página Alarmas](../user-guide/alarms.md).
+
+El panel **Acciones de agentes** permite a un administrador de agentes elegir **Desactivar las
+acciones de agentes** y confirmar, sin verificación adicional. **Volver a activar las acciones de
+agentes** requiere verificación adicional y no anula una suspensión del operador ni un interruptor
+de instancia deshabilitado. Apagar las acciones impide que las propuestas nuevas superen la
+política; una propuesta pendiente se deniega cuando la aprobación vuelve a comprobar esa política.
 
 ## El modelo de seguridad
 
