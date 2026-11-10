@@ -117,6 +117,7 @@ type policyChoice struct {
 	origin          string
 	clearDraft      bool
 	enableActuation bool
+	killFlag        bool
 }
 
 // SaveAgentPolicyDraft validates and stores the tenant's working draft. Saving a draft changes
@@ -161,14 +162,16 @@ func (m *Manager) RollbackAgentPolicy(ctx context.Context, claims *auth.Claims, 
 }
 
 // SetTenantAgentActuation controls the tenant kill switch independently of the document.
-// Disabling never reads or rewrites a document. Enabling is checked under the head lock.
+// Disabling also disables a readable enabled document for older pods. Both changes use the head lock.
 func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Claims, enabled bool) (*AgentPolicyView, error) {
 	if !enabled {
-		if _, err := m.iam.SetAgentPolicyActuationOff(ctx, claims.Tenant, true, principalOf(claims)); err != nil {
-			return nil, err
+		view, err := m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, _ *iam.AgentPolicyVersion) (policyChoice, error) {
+			return policyChoice{killFlag: true}, nil
+		})
+		if err == nil {
+			m.recordAuthLabeled(ctx, rdb.AuditOpAgentActuationDisabled, principalOf(claims), claims.Tenant, claims.Tenant)
 		}
-		m.recordAuthLabeled(ctx, rdb.AuditOpAgentActuationDisabled, principalOf(claims), claims.Tenant, claims.Tenant)
-		return m.AgentPolicy(ctx, claims.Tenant)
+		return view, err
 	}
 	view, err := m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, current *iam.AgentPolicyVersion) (policyChoice, error) {
 		if current == nil {
@@ -198,6 +201,26 @@ func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, p
 		choice, err := pick(head, current)
 		if err != nil {
 			return "", "", false, err
+		}
+		if choice.killFlag {
+			by := principalOf(claims)
+			head.TenantActuationOff, head.ActuationOffAt, head.ActuationOffBy = true, &now, &by
+			if current == nil {
+				return "", "", false, nil
+			}
+			doc, err := agentpolicy.ParseStored([]byte(current.Document))
+			if err != nil || !doc.ActuationOn() {
+				return "", "", false, nil
+			}
+			doc.Actuation = agentpolicy.ActuationDisabled
+			b, err := doc.Canonical()
+			if err != nil || agentpolicy.CheckCanonicalSize(b) != nil {
+				return "", "", false, nil
+			}
+			// Publish only so v1.3 pods, which ignore the flag, stop during a rolling upgrade.
+			// This can be dropped once v1.3 is no longer an upgrade source. It is always a
+			// tightening, so it bypasses loosening classification and step-up checks.
+			return string(b), iam.AgentPolicyOriginActuation, false, nil
 		}
 		origin, clearDraft := choice.origin, choice.clearDraft
 		// A draft is what a person submitted and is held to every rule. A rollback republishes

@@ -1899,7 +1899,8 @@ type Mutation {
     ): AgentPolicy!
     """
     (Preview: may change in a minor release.) Turns agent actions in this tenant off or on using a flag independent of the policy document.
-    Turning them off preserves the document and creates no version, and needs no second factor.
+    Turning them off sets the kill flag and needs no second factor; while upgrading it may also
+    publish the policy with actuation disabled.
     Turning them back on needs a fresh second factor under the policy in force; if the document
     disables actuation, enabling publishes it enabled. Requires agent:admin, and cannot be called by an AI
     agent or a service account.

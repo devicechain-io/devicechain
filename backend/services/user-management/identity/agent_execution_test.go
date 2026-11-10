@@ -153,11 +153,10 @@ func TestKillSwitchRefusesApprovedUnexecuted(t *testing.T) {
 	view, err := x.m.AgentPolicy(ctx, agentTenant)
 	require.NoError(t, err)
 	require.True(t, view.Head.TenantActuationOff)
-	require.Equal(t, 1, view.Published.Version)
+	require.Equal(t, 2, view.Published.Version)
 	doc, err := agentpolicy.ParseStored([]byte(view.Published.Document))
 	require.NoError(t, err)
-	require.True(t, doc.ActuationOn(), "the flag must refuse an enabled document")
-
+	require.False(t, doc.ActuationOn(), "the kill also disables the document for older pods")
 	y := newExecEnv(t)
 	_, err = y.store.SetAgentPolicySuspended(ctx, agentTenant, true, "operator")
 	require.NoError(t, err)
