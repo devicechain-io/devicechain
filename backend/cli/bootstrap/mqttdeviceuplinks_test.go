@@ -315,12 +315,16 @@ func TestDeviceUplinksOverlayPrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := compactState(false)
 			st.MqttDeviceUplinks = tc.flag
+			st.MqttDeviceUplinksGiven = tc.flag != nil
 			st.ValuesOverlay = map[string]interface{}{
 				"instance": map[string]interface{}{"config": map[string]interface{}{
 					"infrastructure": map[string]interface{}{"nats": map[string]interface{}{
 						"mqttDeviceUplinks": tc.overlay,
 					}},
 				}},
+			}
+			if err := checkDeviceUplinksOverlay(st); err != nil {
+				t.Fatal(err)
 			}
 			before, err := encodeValuesOverlay(st.ValuesOverlay)
 			if err != nil {
@@ -396,5 +400,120 @@ func TestDeviceUplinksClaimRoundTrip(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func deviceUplinksOverlay(on bool) map[string]interface{} {
+	return map[string]interface{}{
+		"instance": map[string]interface{}{"config": map[string]interface{}{
+			"infrastructure": map[string]interface{}{"nats": map[string]interface{}{
+				"mqttDeviceUplinks": on,
+			}},
+		}},
+	}
+}
+
+func TestDeviceUplinksUpgradeOverlayConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		overlay bool
+		flag    *bool
+		carried bool
+		refuse  bool
+		want    bool
+	}{
+		{"fresh conflict", false, nil, false, true, true},
+		{"agreement", true, nil, false, false, true},
+		{"explicit off", false, boolPtr(false), false, false, false},
+		{"carried conflict", false, nil, true, false, true},
+	} {
+		for _, dryRun := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dryRun=%t", tc.name, dryRun), func(t *testing.T) {
+				dyn := deviceUplinksBuiltWith(t, boolPtr(true))
+				if tc.carried {
+					if err := recordValuesOverlay(t.Context(), dyn, "prod", deviceUplinksOverlay(false)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := readBack(t, dyn, "prod")
+				dyn.ClearActions()
+				st := &State{Instance: "prod", Evolving: true, DryRun: dryRun, Values: maps.Clone(compactState(false).Values)}
+				opts := UpgradeOptions{Options: Options{Instance: "prod", MqttDeviceUplinks: tc.flag}}
+				if !tc.carried {
+					opts.ValuesOverlay = deviceUplinksOverlay(tc.overlay)
+				}
+				err := applyUpgradeDeclaration(st, before, opts)
+				if err == nil {
+					err = applyUpgradeValuesOverlay(st, before, opts)
+				}
+				if tc.refuse {
+					if err == nil || !strings.Contains(err.Error(), "mqttDeviceUplinks") || !strings.Contains(err.Error(), "--mqtt-device-uplinks") || !strings.Contains(err.Error(), "Nothing has been changed") {
+						t.Fatalf("fresh conflicting overlay was not refused: %v", err)
+					}
+					if len(dyn.Actions()) != 0 {
+						t.Fatal("refusal touched the declaration")
+					}
+					after := readBack(t, dyn, "prod")
+					if after.Spec.ImageVersion != before.Spec.ImageVersion || !sameBoolPtr(after.Spec.MQTTDeviceUplinks, before.Spec.MQTTDeviceUplinks) || after.Annotations[AnnotationValuesOverlay] != "" {
+						t.Fatal("refusal changed the version, choice or recorded overlay")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if on, _ := deviceUplinksDocumentFor(t, st); on != tc.want {
+					t.Fatalf("rendered mqttDeviceUplinks=%t, want %t", on, tc.want)
+				}
+				if tc.flag != nil && !dryRun {
+					st.DcctlVersion = "v0.25.0"
+					if err := recordUpgradedVersion(t.Context(), dyn, "prod", st); err != nil {
+						t.Fatal(err)
+					}
+					if got := readBack(t, dyn, "prod").Spec.MQTTDeviceUplinks; got == nil || *got != tc.want {
+						t.Fatalf("recorded choice = %v, want %t", got, tc.want)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestDeviceUplinksBootstrapRerunRefusesFreshOverlayConflict(t *testing.T) {
+	dyn := deviceUplinksBuiltWith(t, boolPtr(true))
+	before := readBack(t, dyn, "prod")
+	prevRead, prevWrite, prevOverlay := readInstanceDeclaration, writeInstanceDeclaration, recordValuesOverlayFor
+	t.Cleanup(func() {
+		readInstanceDeclaration, writeInstanceDeclaration, recordValuesOverlayFor = prevRead, prevWrite, prevOverlay
+	})
+	readInstanceDeclaration = func(ctx context.Context, _, id string) (*dcv1beta1.Instance, error) {
+		return readInstanceCR(ctx, dyn, id)
+	}
+	writeInstanceDeclaration = func(context.Context, string, string, dcv1beta1.InstanceSpec, string, bool) error {
+		t.Fatal("conflicting overlay reached the declaration write")
+		return nil
+	}
+	recordValuesOverlayFor = func(context.Context, string, string, map[string]interface{}) error {
+		t.Fatal("conflicting overlay was recorded")
+		return nil
+	}
+	dyn.ClearActions()
+	st := &State{Instance: "prod", Provider: "local", Profile: "default", ImageVersion: before.Spec.ImageVersion,
+		ValuesOverlay: deviceUplinksOverlay(false)}
+	err := stepDeclareInstance(t.Context(), st)
+	if err == nil || !strings.Contains(err.Error(), "mqttDeviceUplinks") || !strings.Contains(err.Error(), "--mqtt-device-uplinks") {
+		t.Fatalf("bootstrap re-run did not refuse before apply: %v", err)
+	}
+	if st.MqttDeviceUplinksGiven {
+		t.Fatal("adopted choice was mistaken for a flag given this run")
+	}
+	for _, action := range dyn.Actions() {
+		if action.GetVerb() != "get" {
+			t.Fatalf("refusal made a cluster call other than a read: %s", action.GetVerb())
+		}
+	}
+	after := readBack(t, dyn, "prod")
+	if after.Spec.ImageVersion != before.Spec.ImageVersion || !sameBoolPtr(after.Spec.MQTTDeviceUplinks, before.Spec.MQTTDeviceUplinks) || after.Annotations[AnnotationValuesOverlay] != "" {
+		t.Fatal("bootstrap refusal changed the declaration")
 	}
 }

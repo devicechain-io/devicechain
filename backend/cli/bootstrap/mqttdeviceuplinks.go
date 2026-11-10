@@ -22,6 +22,24 @@ func MqttDeviceUplinksFromFlag(given, value bool) *bool {
 	return &v
 }
 
+// checkDeviceUplinksOverlay refuses a fresh overlay value that would be ignored because
+// the instance already records a different flag choice. A carried value predates that
+// choice and must not prevent later flagless upgrades.
+func checkDeviceUplinksOverlay(st *State) error {
+	path := splitPath("instance.config.infrastructure.nats.mqttDeviceUplinks")
+	v, present := lookupPath(effectiveOverlay(st), path)
+	overlay, isBool := v.(bool)
+	if !present || !isBool || st.MqttDeviceUplinks == nil || st.MqttDeviceUplinksGiven || overlay == *st.MqttDeviceUplinks {
+		return nil
+	}
+	if recorded, was := lookupPath(st.ValuesOverlayRecorded, path); was && recorded == overlay {
+		return nil
+	}
+	return fmt.Errorf("the values overlay sets infrastructure.nats.mqttDeviceUplinks to %t, but this instance records --mqtt-device-uplinks=%t. "+
+		"A choice recorded with the flag takes precedence over the overlay key; change it with --mqtt-device-uplinks (or --mqtt-device-uplinks=false), "+
+		"or remove the key from the overlay. Nothing has been changed", overlay, *st.MqttDeviceUplinks)
+}
+
 // verifyDeviceUplinksRecorded refuses a declaration that came back without the choice this run
 // asked it to keep. The API server prunes a field its CRD's schema does not declare, so a
 // cluster whose Instance definition predates the field accepts the write, drops the field and

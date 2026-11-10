@@ -210,6 +210,8 @@ type State struct {
 	MqttFailClosedChange bool
 	// MqttDeviceUplinks is the settled choice, carried forward from the declaration.
 	MqttDeviceUplinks *bool
+	// MqttDeviceUplinksGiven says this run was given --mqtt-device-uplinks.
+	MqttDeviceUplinksGiven bool
 	// MqttDeviceUplinksChange records a flag choice different from the declaration.
 	MqttDeviceUplinksChange bool
 	// MQTTExposure and MQTTHost are the settled exposure of the MQTT broker to devices outside the

@@ -28,6 +28,7 @@ import (
 // producing two different specs on one object, with the loser's values lingering
 // in whichever fields the winner did not set.
 func stepDeclareInstance(ctx context.Context, st *State) error {
+	st.MqttDeviceUplinksGiven = st.MqttDeviceUplinks != nil
 	// 🔴 THE DECLARED STORE IS CARRIED FORWARD WHEN THIS RUN NAMED NO STORE, the way the restore
 	// fact is. A re-run over a live instance (a restore retry, --allow-legacy-db-removal, the
 	// finish of a bootstrap that never completed) builds its declaration from FLAGS, and a
@@ -72,6 +73,9 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		if err := adoptRecordedValuesOverlay(st, existing); err != nil {
 			return err
 		}
+	}
+	if err := checkDeviceUplinksOverlay(st); err != nil {
+		return err
 	}
 	if err := settleBootstrapTrustedProxies(ctx, st); err != nil {
 		return err
