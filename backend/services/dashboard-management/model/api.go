@@ -29,6 +29,17 @@ const maxDefinitionBytes = 1 << 20
 // is not a well-formed JSON object or has an invalid device selector.
 var ErrInvalidDefinition = errors.New("dashboard definition must be a JSON object")
 
+// selectorError is an invalid device selector. It matches ErrInvalidDefinition with
+// errors.Is, but carries its own text: the document IS a JSON object, so the
+// sentinel's wording would contradict the actual problem.
+type selectorError struct{ widget, detail string }
+
+func (e *selectorError) Error() string {
+	return fmt.Sprintf("invalid dashboard definition: widget %q datasource: %s", e.widget, e.detail)
+}
+
+func (e *selectorError) Is(target error) bool { return target == ErrInvalidDefinition }
+
 // ErrDefinitionTooLarge is returned when a Definition exceeds maxDefinitionBytes.
 var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum size")
 
@@ -130,16 +141,16 @@ func definitionJSON(raw string) (datatypes.JSON, error) {
 		_ = json.Unmarshal(widget["id"], &id)
 		var deviceToken *string
 		if err := json.Unmarshal(datasource["deviceToken"], &deviceToken); err != nil || deviceToken == nil {
-			return nil, fmt.Errorf("%w: widget %q datasource: deviceToken must be a string", ErrInvalidDefinition, id)
+			return nil, &selectorError{widget: id, detail: "deviceToken must be a string"}
 		}
 		var measurements []json.RawMessage
 		if err := json.Unmarshal(datasource["measurements"], &measurements); err != nil || measurements == nil {
-			return nil, fmt.Errorf("%w: widget %q datasource: measurements must be an array of strings", ErrInvalidDefinition, id)
+			return nil, &selectorError{widget: id, detail: "measurements must be an array of strings"}
 		}
 		for _, rawMeasurement := range measurements {
 			var measurement *string
 			if err := json.Unmarshal(rawMeasurement, &measurement); err != nil || measurement == nil {
-				return nil, fmt.Errorf("%w: widget %q datasource: measurements must be an array of strings", ErrInvalidDefinition, id)
+				return nil, &selectorError{widget: id, detail: "measurements must be an array of strings"}
 			}
 		}
 	}
