@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
@@ -99,25 +100,20 @@ func TestRevokedProposerProposalRefusedAtExecution(t *testing.T) {
 		role := id.Memberships[0].TenantRoles[0]
 		role.Authorities = []string{string(auth.CommandWrite)}
 		require.NoError(t, x.m.db.Database.Save(&role).Error)
-		d := x.decide(t, x.request("boss@example.invalid"))
-		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
-		require.Equal(t, []string{ReasonProposerLostAuthority}, d.Reasons)
+		x.assertStandingRefusal(t, x.request("boss@example.invalid"), ReasonProposerLostAuthority)
 	})
 	t.Run("sign-in ended", func(t *testing.T) {
 		x := newExecEnv(t)
 		// Signing out ends the sign-in record by name, which is what a logout and "sign out
 		// everywhere" both do.
 		require.NoError(t, x.m.refreshKV.Delete(sessionKey(x.sid)))
-		d := x.decide(t, x.request("boss@example.invalid"))
-		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
-		require.Equal(t, []string{ReasonProposerSessionEnded}, d.Reasons)
+		x.assertStandingRefusal(t, x.request("boss@example.invalid"), ReasonProposerSessionEnded)
 	})
 	t.Run("no sid", func(t *testing.T) {
 		x := newExecEnv(t)
 		req := x.request("boss@example.invalid")
 		req.ProposerSid = ""
-		d := x.decide(t, req)
-		require.Equal(t, []string{ReasonProposerSessionEnded}, d.Reasons, "a missing sid is unknown, never live")
+		x.assertStandingRefusal(t, req, ReasonProposerSessionEnded)
 	})
 	t.Run("membership disabled", func(t *testing.T) {
 		x := newExecEnv(t)
@@ -125,24 +121,18 @@ func TestRevokedProposerProposalRefusedAtExecution(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, x.m.db.Database.WithContext(core.WithSystemContext(ctx)).Model(&iam.Membership{}).
 			Where("id = ?", id.Memberships[0].ID).Update("enabled", false).Error)
-		d := x.decide(t, x.request("boss@example.invalid"))
-		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
-		require.Equal(t, []string{ReasonProposerNotMember}, d.Reasons)
+		x.assertStandingRefusal(t, x.request("boss@example.invalid"), ReasonProposerNotMember)
 	})
 	t.Run("client disabled", func(t *testing.T) {
 		x := newExecEnv(t)
 		require.NoError(t, x.m.db.Database.WithContext(core.WithSystemContext(ctx)).Model(&iam.OAuthClient{}).
 			Where("client_id = ?", agentClient).Update("enabled", false).Error)
-		d := x.decide(t, x.request("boss@example.invalid"))
-		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
-		require.Equal(t, []string{ReasonProposerClientRefused}, d.Reasons)
+		x.assertStandingRefusal(t, x.request("boss@example.invalid"), ReasonProposerClientRefused)
 	})
 	t.Run("client delisted", func(t *testing.T) {
 		x := newExecEnv(t)
 		x.publish(t, `{"actuation":"enabled","clients":["someone-else"],"approvers":{"roles":["approvers"]}}`)
-		d := x.decide(t, x.request("boss@example.invalid"))
-		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
-		require.Equal(t, []string{agentpolicy.ReasonClientNotAllowed}, d.Reasons, "the ORIGINAL client is checked, not the approver's")
+		x.assertStandingRefusal(t, x.request("boss@example.invalid"), agentpolicy.ReasonClientNotAllowed)
 	})
 }
 
@@ -231,4 +221,96 @@ func TestActuationDetailComesFromThePolicy(t *testing.T) {
 
 	_, err = x.m.AgentActuationDetail(ctx, personClaims(agentPerson, "*"), agentpolicy.KindAlarmAck, 2)
 	require.ErrorIs(t, err, auth.ErrForbidden)
+}
+
+// Detailed standing belongs only to the proposer or an agent administrator.
+func (x *execEnv) assertStandingRefusal(t *testing.T, req ExecutionRequest, reason string) {
+	t.Helper()
+	for _, c := range []*auth.Claims{
+		personClaims("boss@example.invalid", string(auth.AlarmWrite)),
+		personClaims("admin@example.invalid", string(auth.AgentAdmin), string(auth.AlarmWrite)),
+		personClaims(agentPerson, string(auth.AlarmWrite)),
+		personClaims("root@example.invalid", "*"),
+	} {
+		d, err := x.m.AgentExecutionDecision(context.Background(), c, req)
+		require.NoError(t, err)
+		require.Equal(t, agentpolicy.VerdictRefuse, d.Verdict)
+		want := reason
+		if c.Username != req.ProposerPrincipal && !c.HasAuthority(auth.AgentAdmin) && reason != agentpolicy.ReasonClientNotAllowed {
+			want = ReasonProposerStanding
+		}
+		require.Equal(t, []string{want}, d.Reasons, c.Username)
+	}
+}
+
+// A best-effort KV deletion cannot preserve standing after the database epoch rotates.
+func TestProposerSessionEpoch(t *testing.T) {
+	for _, name := range []string{"password reset ends standing", "MFA reset ends standing", "legacy record without epoch"} {
+		t.Run(name, func(t *testing.T) {
+			x := newExecEnv(t)
+			ctx := context.Background()
+			if name == "MFA reset ends standing" {
+				// This reset removes a sealed seed, so use the real secret store as production does.
+				require.NoError(t, secrets.NewSecretStoreSchema().Migrate(x.m.db.Database.WithContext(core.WithSystemContext(ctx))))
+				store, err := secrets.NewFromConfig(ctx, rootKeyConfig(t), x.m.db.Database)
+				require.NoError(t, err)
+				x.m.secrets = store
+				id, err := x.store.IdentityByEmail(ctx, agentPerson)
+				require.NoError(t, err)
+				enrollFactor(t, x.store, x.m.secrets, id.ID)
+				x.sid = x.sidOf(t, agentPerson)
+			}
+			require.Equal(t, agentpolicy.VerdictApprove, x.decide(t, x.request("boss@example.invalid")).Verdict)
+			id, err := x.store.IdentityByEmail(ctx, agentPerson)
+			require.NoError(t, err)
+			switch name {
+			case "password reset ends standing":
+				require.NoError(t, x.store.SetPasswordHash(ctx, id, "new-hash"))
+			case "MFA reset ends standing":
+				require.NoError(t, x.store.ResetMfa(ctx, x.m.secrets, id, ""))
+			default:
+				_, err = x.m.refreshKV.Put(sessionKey(x.sid), []byte(`{"email":"`+agentPerson+`","method":"password"}`))
+				require.NoError(t, err)
+			}
+			_, err = x.m.refreshKV.Get(sessionKey(x.sid))
+			require.NoError(t, err, "the record still exists; the epoch check must refuse it")
+			x.assertStandingRefusal(t, x.request("boss@example.invalid"), ReasonProposerSessionEnded)
+		})
+	}
+}
+
+// Completion re-reads every approver's current role and write authority.
+func TestApproverLosingRoleBetweenApprovalAndCompletion(t *testing.T) {
+	for _, mode := range []string{"role", "write", "scope", "factor"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			x := newExecEnv(t)
+			require.Equal(t, []string{"boss@example.invalid"}, x.decide(t, x.request("boss@example.invalid")).ValidApprovers)
+			id, err := x.store.IdentityByEmail(ctx, "boss@example.invalid")
+			require.NoError(t, err)
+			db := x.m.db.Database.WithContext(core.WithSystemContext(ctx))
+			switch mode {
+			case "role":
+				other := &iam.Role{Scope: iam.ScopeTenant, Token: "operators", Authorities: []string{string(auth.AlarmWrite)}}
+				require.NoError(t, x.store.CreateRole(ctx, other))
+				require.NoError(t, db.Model(&id.Memberships[0]).Association("TenantRoles").Replace([]iam.Role{*other}))
+			case "write":
+				role := id.Memberships[0].TenantRoles[0]
+				role.Authorities = []string{string(auth.CommandWrite)}
+				require.NoError(t, db.Save(&role).Error)
+				// Give the second approver a separate role so restoring their write cannot restore boss's.
+				x.role = &iam.Role{Scope: iam.ScopeTenant, Token: "other-approvers", Authorities: []string{string(auth.AlarmWrite)}}
+				require.NoError(t, x.store.CreateRole(ctx, x.role))
+				x.publish(t, `{"actuation":"enabled","clients":["agent-desktop"],"approvers":{"roles":["approvers","other-approvers"]}}`)
+			case "scope":
+				require.NoError(t, db.Model(&id.Memberships[0]).Update("scope", []byte(`["customer:one"]`)).Error)
+			case "factor":
+				require.NoError(t, db.Where("identity_id = ?", id.ID).Delete(&iam.MfaFactor{}).Error)
+			}
+			x.addApprover(t, "second@example.invalid")
+			d := x.decide(t, x.request("boss@example.invalid", "second@example.invalid"))
+			require.Equal(t, agentpolicy.VerdictApprove, d.Verdict)
+			require.Equal(t, []string{"second@example.invalid"}, d.ValidApprovers)
+		})
+	}
 }

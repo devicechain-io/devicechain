@@ -46,7 +46,7 @@ func (e *ssoEnv) seedLegacyIdentity(t *testing.T) *iam.Identity {
 // canonical form would have: an identity token and a tenant refresh pair.
 func (e *ssoEnv) legacySession(t *testing.T, id *iam.Identity) (identityToken string, pair *TokenPair) {
 	t.Helper()
-	sid, err := e.m.startSession(id.Email, auth.AmrPasswordOnly())
+	sid, err := e.m.startSession(id.Email, id.SessionEpoch, auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	tok, err := e.m.issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), sid, nil, nil, uuid.NewString())
 	require.NoError(t, err)

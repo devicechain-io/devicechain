@@ -132,3 +132,28 @@ func TestServiceAccountMintCarriesNoAmr(t *testing.T) {
 	require.Nil(t, claims.Amr)
 	require.False(t, claims.Mfa())
 }
+
+// Recorded factors obey the same age and skew limits as a caller's claims.
+func TestStepUpFreshAt(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-20 * time.Minute)
+	future := now.Add(31 * time.Second)
+	for _, tc := range []struct {
+		name string
+		amr  []string
+		at   *time.Time
+		su   StepUp
+		want bool
+	}{
+		{"nil time", AmrPasswordOTP(), nil, StepUp{MaxAge: time.Minute}, false},
+		{"zero age", AmrPasswordOTP(), &now, StepUp{}, false},
+		{"negative age", AmrPasswordOTP(), &now, StepUp{MaxAge: -time.Minute}, false},
+		{"otp", AmrPasswordOTP(), &now, StepUp{MaxAge: time.Minute}, true},
+		{"recovery refused", AmrPasswordRecovery(), &now, StepUp{MaxAge: time.Minute}, false},
+		{"recovery accepted", AmrPasswordRecovery(), &now, StepUp{MaxAge: time.Minute, AcceptRecoveryCodes: true}, true},
+		{"old", AmrPasswordOTP(), &old, StepUp{MaxAge: time.Minute}, false},
+		{"future", AmrPasswordOTP(), &future, StepUp{MaxAge: time.Minute}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, StepUpFreshAt(tc.amr, tc.at, tc.su, now)) })
+	}
+}

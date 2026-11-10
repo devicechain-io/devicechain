@@ -128,7 +128,11 @@ func (e *mintTestEnv) epochOf(t *testing.T, email string) auth.SessionEpoch {
 // code or refresh token minted for it would carry.
 func (e *mintTestEnv) sidOf(t *testing.T, email string) auth.SessionID {
 	t.Helper()
-	sid, err := e.m.startSession(email, auth.AmrPasswordOnly())
+	// The epoch as stored, even an empty one: a few tests open a sign-in for a row whose epoch
+	// was blanked on purpose, and the sign-in must record what the row held.
+	id, err := e.store.IdentityByEmail(context.Background(), email)
+	require.NoError(t, err)
+	sid, err := e.m.startSession(email, id.SessionEpoch, auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	return sid
 }

@@ -73,6 +73,14 @@ const (
 // and the moment OUR callback accepted it (Anchor: never the provider's optional
 // auth_time, which a provider may omit or backdate).
 type sessionRecord struct {
+	// Epoch is the identity's session epoch this sign-in was STARTED under: the epoch every
+	// token minted from it carries. A proposal's standing compares it with the identity's
+	// epoch NOW, because ending the sign-in's record after a rotation (password reset, MFA
+	// reset or disable, enrolment, identity disable) is best-effort while the rotation itself
+	// is a database write. Every rotation path starts a NEW sign-in for whoever continues, so
+	// no sid ever legitimately moves to a new epoch. A record written before this field
+	// existed has none, and reads as ended wherever the epoch is checked.
+	Epoch          string      `json:"epoch,omitempty"`
 	Email          string      `json:"email"`
 	Method         string      `json:"method"`
 	ConnectionID   uint        `json:"connection_id,omitempty"`
@@ -134,8 +142,8 @@ func (r *sessionRecord) secondFactor() bool { return slices.Contains(r.Amr, auth
 
 // startSession records a new password sign-in for email and returns its id. amr is what the
 // sign-in presented: the password alone, or with a code (see sessionRecord.Amr).
-func (m *Manager) startSession(email string, amr []string) (auth.SessionID, error) {
-	rec := sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr}
+func (m *Manager) startSession(email string, epoch string, amr []string) (auth.SessionID, error) {
+	rec := sessionRecord{Email: email, Epoch: epoch, Method: SessionMethodPassword, Anchor: time.Now().UTC(), Amr: amr}
 	if slices.Contains(amr, auth.AmrMFA) {
 		// The factor was verified by the very step that is starting this session.
 		at := rec.Anchor
@@ -146,9 +154,9 @@ func (m *Manager) startSession(email string, amr []string) (auth.SessionID, erro
 
 // startSsoSession records a new single sign-on for email through conn, anchored at the
 // moment the callback accepted it.
-func (m *Manager) startSsoSession(email string, conn *iam.IdpConnection, anchor time.Time) (auth.SessionID, error) {
+func (m *Manager) startSsoSession(email string, epoch string, conn *iam.IdpConnection, anchor time.Time) (auth.SessionID, error) {
 	return m.putSession(sessionRecord{
-		Email: email, Method: SessionMethodSso,
+		Email: email, Epoch: epoch, Method: SessionMethodSso,
 		ConnectionID: conn.ID, ConnectionKind: conn.Kind, Anchor: anchor.UTC(),
 	})
 }

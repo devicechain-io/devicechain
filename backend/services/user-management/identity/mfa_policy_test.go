@@ -26,7 +26,7 @@ import (
 // way to hold a session of a chosen kind when the point is what the policy does with it.
 func (e *mfaEnv) signInWith(t *testing.T, email string, amr []string) string {
 	t.Helper()
-	sid, err := e.m.startSession(email, amr)
+	sid, err := e.m.startSession(email, string(e.rowEpoch(t, email)), amr)
 	require.NoError(t, err)
 	var opts []auth.MintOption
 	if len(amr) > 0 {
@@ -248,7 +248,7 @@ func TestAForgedAmrOnARefreshTokenIsNotBelieved(t *testing.T) {
 	email := "plain@example.com"
 	epoch := auth.SessionEpoch(e.rowEpoch(t, email))
 
-	pwdSid, err := e.m.startSession(email, auth.AmrPasswordOnly())
+	pwdSid, err := e.m.startSession(email, string(e.rowEpoch(t, email)), auth.AmrPasswordOnly())
 	require.NoError(t, err)
 	claims := tenantRefreshClaims(email, epoch)
 	claims.SessionID = pwdSid
@@ -271,7 +271,7 @@ func TestAForgedAmrOnARefreshTokenIsNotBelieved(t *testing.T) {
 	require.True(t, isCode(err, CodeMfaEnrollmentRequired), "got %v", err)
 
 	// Twin: a session that really used one keeps its amr across a refresh.
-	otpSid, err := e.m.startSession(email, auth.AmrPasswordOTP())
+	otpSid, err := e.m.startSession(email, string(e.rowEpoch(t, email)), auth.AmrPasswordOTP())
 	require.NoError(t, err)
 	genuine := tenantRefreshClaims(email, epoch)
 	genuine.SessionID = otpSid
