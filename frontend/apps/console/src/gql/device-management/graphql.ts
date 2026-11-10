@@ -239,6 +239,8 @@ export type CommandDefinitionCreateRequest = {
   description?: string | null | undefined;
   /** Token of the profile to declare the command on. An unknown token fails the request. */
   deviceProfileToken: string;
+  /** Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract. */
+  encoder?: string | null | undefined;
   /**
    * How disruptive the command is: NORMAL (the default), DISRUPTIVE or DESTRUCTIVE.
    * DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window. An
@@ -293,6 +295,8 @@ export type CommandDefinitionUpdateRequest = {
    * definition ends up in.
    */
   deviceProfileToken?: string | null | undefined;
+  /** Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract. */
+  encoder?: string | null | undefined;
   /**
    * New impact (NORMAL, DISRUPTIVE or DESTRUCTIVE). An explicit null or an unknown value is
    * refused. The change reaches devices when the profile is published.

@@ -5,6 +5,8 @@ package lpwan
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -12,12 +14,13 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/devicealias"
+	"github.com/devicechain-io/dc-microservice/payloadencode"
 )
 
 var errRecordNotFound = gorm.ErrRecordNotFound
 
-// DevEUIQuery reads one device's aliases from device-management. It is the whole of what the
-// adapter asks that service: the DevEUI is never taken from the command.
+// DevEUIQuery reads one device's aliases from device-management.
+// The DevEUI is never taken from the command.
 const DevEUIQuery = `query($tokens: [String!]!) {
   devicesByToken(tokens: $tokens) { token aliases { scheme value } }
 }`
@@ -36,8 +39,8 @@ type devEUIEntry struct {
 	expires time.Time
 }
 
-// ServiceDevices reads DevEUIs over device-management's GraphQL API through the same Querier seam
-// the claimer uses.
+// ServiceDevices reads aliases and published encoders over device-management's GraphQL API
+// through the same Querier seam the claimer uses.
 type ServiceDevices struct {
 	client  cmddownlink.Querier
 	baseURL string
@@ -107,4 +110,53 @@ func (d *ServiceDevices) alias(ctx context.Context, tenant, deviceToken, scheme 
 		}
 	}
 	return "", absent
+}
+
+const EncoderQuery = `query($deviceToken: String!) {
+ deviceCommandVocabulary(deviceToken: $deviceToken) { constrained commands { commandKey encoder } }
+}`
+
+// ErrDefinitiveDefinition marks a published definition that cannot be dispatched.
+// Read/query failures do not wrap it and must be retried.
+var ErrDefinitiveDefinition = errors.New("invalid published command definition")
+
+// Encoder reads the published vocabulary anew for every dispatch, including raw commands.
+func (d *ServiceDevices) Encoder(ctx context.Context, tenant, deviceToken, commandKey string) (*payloadencode.Encoder, error) {
+	var resp struct {
+		Vocabulary *struct {
+			Constrained *bool `json:"constrained"`
+			Commands    *[]struct {
+				Key     string  `json:"commandKey"`
+				Encoder *string `json:"encoder"`
+			} `json:"commands"`
+		} `json:"deviceCommandVocabulary"`
+	}
+	if err := d.client.Query(ctx, d.baseURL, tenant, EncoderQuery, map[string]any{"deviceToken": deviceToken}, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Vocabulary == nil || resp.Vocabulary.Constrained == nil || resp.Vocabulary.Commands == nil {
+		return nil, fmt.Errorf("published vocabulary is unavailable")
+	}
+	var encoder *payloadencode.Encoder
+	found := false
+	for _, c := range *resp.Vocabulary.Commands {
+		if c.Key != commandKey {
+			continue
+		}
+		if found {
+			return nil, fmt.Errorf("%w: ambiguous command definition", ErrDefinitiveDefinition)
+		}
+		found = true
+		if c.Encoder != nil {
+			var err error
+			encoder, err = payloadencode.Parse([]byte(*c.Encoder))
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrDefinitiveDefinition, err)
+			}
+		}
+	}
+	if *resp.Vocabulary.Constrained && !found {
+		return nil, fmt.Errorf("%w: published command is unavailable", ErrDefinitiveDefinition)
+	}
+	return encoder, nil
 }

@@ -275,6 +275,7 @@ export function CommandDefinitionForm({
         const created: Required<CommandDefinitionCreateRequest> = {
           token: token.trim(),
           ...edited,
+          encoder: null,
           metadata: null,
         };
         await createCommandDefinition(created);

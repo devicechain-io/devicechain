@@ -63,6 +63,13 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 	if err := validateRequestSchema(request.ParameterSchema); err != nil {
 		return nil, err
 	}
+	if err := validateCommandEncoder(request.Encoder, request.ParameterSchema); err != nil {
+		return nil, err
+	}
+	encoderJSON, err := rdb.JSONInputOf("encoder", request.Encoder)
+	if err != nil {
+		return nil, err
+	}
 	impact := ""
 	if request.Impact != nil {
 		impact = *request.Impact
@@ -101,6 +108,7 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		},
 		DeviceProfile:   matches[0],
 		CommandKey:      request.CommandKey,
+		Encoder:         encoderJSON,
 		ParameterSchema: parameterSchemaJSON,
 		Impact:          impact,
 	}
@@ -163,6 +171,15 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 		}
 	}
 
+	encoder := request.Encoder.ApplyTo(dcgraphql.MetadataStr(updated.Encoder))
+	if err := validateCommandEncoder(encoder, parameterSchema); err != nil {
+		return nil, err
+	}
+	encoderJSON, err := rdb.JSONInputOf("encoder", encoder)
+	if err != nil {
+		return nil, err
+	}
+
 	// 🔴 THE UNIQUENESS CHECK RUNS AGAINST THE EFFECTIVE PAIR, not against the request.
 	// Under three states either half of (profile, key) may be absent, so "the key is
 	// unused on this profile" has to be asked of the profile the definition ends up IN
@@ -194,6 +211,7 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	updated.CommandKey = commandKey
 	updated.Impact = impact
 	updated.Metadata = metadataJSON
+	updated.Encoder = encoderJSON
 	updated.ParameterSchema = parameterSchemaJSON
 	updated.Name = request.Name.ApplyToNullString(updated.Name)
 	updated.Description = request.Description.ApplyToNullString(updated.Description)

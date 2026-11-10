@@ -1236,6 +1236,8 @@ type PublishedCommand {
     description: String
     """The command's parameters as a JSON array of parameter descriptors, or null when it takes no structured arguments."""
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """NORMAL, DISRUPTIVE or DESTRUCTIVE. The last two wait for the device type's maintenance window."""
     impact: String!
 }
@@ -1344,6 +1346,8 @@ type CommandDefinition implements Model & TokenReference & NamedEntity & Metadat
     command takes no structured arguments, in which case payloads are not checked.
     """
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """
     How disruptive the command is to the device's work: NORMAL (a read or a benign write),
     DISRUPTIVE (interrupts it, such as a reboot) or DESTRUCTIVE (erases state, such as a
@@ -1381,6 +1385,8 @@ input CommandDefinitionCreateRequest {
     structured arguments.
     """
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """
     How disruptive the command is: NORMAL (the default), DISRUPTIVE or DESTRUCTIVE.
     DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window. An
@@ -1427,6 +1433,8 @@ input CommandDefinitionUpdateRequest {
     structured arguments.
     """
     parameterSchema: String
+    """Optional declarative LoRaWAN payload encoder JSON. Null keeps the raw payload contract."""
+    encoder: String
     """
     New impact (NORMAL, DISRUPTIVE or DESTRUCTIVE). An explicit null or an unknown value is
     refused. The change reaches devices when the profile is published.

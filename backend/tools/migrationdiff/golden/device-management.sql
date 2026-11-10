@@ -910,7 +910,8 @@ CREATE TABLE "device-management".command_definitions (
  command_key character varying(128) NOT NULL,
  parameter_schema jsonb,
  device_profile_id bigint NOT NULL,
- impact character varying(16)
+ impact character varying(16),
+ encoder jsonb
 );
 CREATE TABLE "device-management".customer_types (
  id bigint NOT NULL,

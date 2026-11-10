@@ -366,6 +366,73 @@ Un informe se asocia a su comando solo por el correlation id `dc:` que puso la p
 
 **Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
 
+### Codificar comandos a partir de parámetros tipados
+
+Una definición de comando puede incluir una cadena JSON `encoder` opcional. Publica
+el perfil para activarla. Se aplica tanto a ChirpStack v4 como a The Things Stack v3.
+El codificador vigente al despachar el comando es el que se aplica; una nueva
+publicación se aplica a los comandos despachados después de ella.
+Este documento concatena constantes, números escalados, booleanos y bits:
+
+```json
+{
+  "fPort": 10,
+  "confirmed": false,
+  "fields": [
+    {"const": "01ff"},
+    {"param": "level", "type": "u16be", "scale": 0.1, "offset": 0},
+    {"param": "enabled", "type": "bool"},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3},
+      {"param": "armed", "shift": 3, "width": 1}
+    ]}}
+  ]
+}
+```
+
+`fPort` es obligatorio, de 1 a 223. `confirmed` vale false por defecto y mantiene
+el requisito del canal de acuses indicado arriba. Se admiten 1–32 campos ordenados
+y un total de 1–242 bytes. Las constantes son hexadecimales de longitud par.
+Los tipos numéricos son `u8`, `i8`, `u16be`, `u16le`, `i16be`, `i16le`, `u32be`,
+`u32le`, `i32be` e `i32le`. `bool` genera `00` o `01`. Los bits usan un tipo entero,
+deben caber sin solaparse y dejan a cero las posiciones no especificadas.
+
+Para un termostato, declara `setpoint` como `DOUBLE` y `mode` como `INT` en
+`parameterSchema`, y usa este codificador:
+
+```json
+{
+  "fPort": 12,
+  "fields": [
+    {"param": "setpoint", "type": "i16be", "scale": 0.1},
+    {"bits": {"type": "u8", "fields": [
+      {"param": "mode", "shift": 0, "width": 3}
+    ]}}
+  ]
+}
+```
+
+El payload `{"setpoint":21.5,"mode":3}` produce `00d703` en hexadecimal, o `ANcD`
+en base64, en el puerto 12. El cálculo invierte el decodificador:
+`raw = (value - offset) / scale`. La escala vale 1 por defecto y su magnitud debe estar entre `1e-9` y `1e9`.
+El desplazamiento vale 0 por defecto y su magnitud no puede superar `1e9`; ambos deben
+ser finitos. El valor raw debe caber en su tipo antes de redondear. Con escala 1 y
+desplazamiento 0 se exige un entero exacto; otras transformaciones admiten una
+tolerancia de `1e-6`. La magnitud de entrada no puede superar `1e15`, y las magnitudes
+de entrada y raw deben ser menores que `2^53`. `215.4` con escala 1 se rechaza. NaN, infinito,
+valores fuera de rango, tipos JSON incorrectos o parámetros ausentes rechazan el
+comando como **no enviado**, antes de llamar a la red. Los valores predeterminados
+del esquema son sugerencias de edición y nunca se insertan.
+
+Cada parámetro del codificador debe ser único y estar declarado con un tipo escalar
+compatible: `INT` o `DOUBLE` para números, `BOOLEAN` para booleanos y valores enteros
+dentro de su anchura para bits (anchura 1 también admite `BOOLEAN`). Se rechazan las claves de payload no utilizadas y las claves JSON duplicadas.
+Las claves desconocidas se rechazan. Un codificador requiere un esquema de
+parámetros no vacío, que no puede declarar
+`fPort`, `hex`, `base64` ni `confirmed`: el codificador controla puerto y confirmación.
+Borrar `encoder` restaura el contrato raw. Una definición sin codificador conserva
+sin cambios el contrato `fPort` más `hex` o `base64`.
+
 ## Qué puede hacer un token de integración {#trust}
 
 Trata el token bearer como la contraseña de toda una flota. **Un token de integración habla en nombre de todos los dispositivos de sus tipos en alcance que tengan un alias.** La plataforma comprueba que el token pertenece a la integración y que el tipo del dispositivo está dentro del alcance de la integración, y lo vuelve a hacer cuando se procesa el evento, pero no puede saber si el remitente es sincero sobre de qué dispositivo viene un mensaje. Quien tenga el token puede enviar lecturas como cualquier dispositivo con alias dentro del alcance.

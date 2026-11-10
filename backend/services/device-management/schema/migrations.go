@@ -68,5 +68,6 @@ var (
 		NewInstalledPositionSchema(),
 		NewSemanticBindingsSchema(),
 		NewAgentProposalsSchema(),
+		NewCommandEncoderSchema(),
 	}
 )

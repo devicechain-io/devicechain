@@ -143,3 +143,5 @@ func (r *SchemaResolver) DeviceCommandVocabulary(ctx context.Context, args struc
 	}
 	return &DeviceCommandVocabularyResolver{M: *vocab}, nil
 }
+
+func (r *PublishedCommandResolver) Encoder() *string { return util.MetadataStr(r.M.Encoder) }

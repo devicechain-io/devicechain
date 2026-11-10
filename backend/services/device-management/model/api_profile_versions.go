@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -64,6 +65,9 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 		m.DeviceProfile = nil
 	}
 	for _, c := range commands {
+		if err := validateCommandEncoder(dcgraphql.MetadataStr(c.Encoder), dcgraphql.MetadataStr(c.ParameterSchema)); err != nil {
+			return nil, fmt.Errorf("command %q encoder: %w", c.CommandKey, err)
+		}
 		c.DeviceProfile = nil
 	}
 	for _, dr := range rules {
