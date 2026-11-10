@@ -8,6 +8,7 @@ package cmd
 // of arguments it takes, and every `hack/` path in one must exist in the tree.
 // Local recursive patterns in go build/go vet must start inside a Go module.
 // Literal local Helm installs must render successfully, entirely offline.
+// Literal psql SELECT columns are checked against the frozen analytics projection.
 //
 // WHY A TEST IN THIS PACKAGE. The source of truth for dcctl is the cobra tree, and this
 // is the one place that can ask it directly: rootCmd.Find resolves the command path the
@@ -33,6 +34,8 @@ package cmd
 // dcctl command NAME, its FLAG names and its ARITY, and literal Go module locations.
 // Local Helm installs are rendered offline with supplied values and reported stand-ins
 // for whole environment references and image.tag placeholders.
+// SQL covers one analytics view and a small unqualified expression subset; other
+// syntax and release-history pages are visibly skipped. It never executes SQL.
 // It does not otherwise prove a flag's value parses,
 // that the command succeeds, or that the sentence beside it is true. Every other tool
 // (kubectl, curl, ...) is counted, not checked, and the count is printed, so the
@@ -757,6 +760,9 @@ type docsScan struct {
 	helmChecked  int
 	helmSkipped  []string
 	helmStandIns []string
+	sqlChecked   int
+	sqlSkipped   []string
+	sqlRepo      string
 
 	uncovered map[string]int // first word -> count
 }
@@ -797,6 +803,10 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 						continue
 					}
 					if !isDcctl(words[0]) {
+						if words[0] == "psql" {
+							s.scanPsql(words, where)
+							continue
+						}
 						if docsHelmInstall(words) || s.goLayout != nil && docsGoRecursiveCommand(words) {
 							continue // counted by the Helm or module-location check
 						}
@@ -824,7 +834,7 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 }
 
 func newDocsScan() *docsScan {
-	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot}
+	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot, sqlRepo: repoRoot}
 }
 
 // docsTrees returns docs/docs and every locale's current tree under repo, relative to it.
@@ -882,6 +892,7 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		s := newDocsScan()
 		s.goLayout = layout
 		s.helmRepo = repo
+		s.sqlRepo = repo
 		err := filepath.WalkDir(filepath.Join(repo, tree), func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -931,6 +942,9 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		total.helmSkipped = append(total.helmSkipped, s.helmSkipped...)
 		total.goChecked += s.goChecked
 		total.goSkipped = append(total.goSkipped, s.goSkipped...)
+		report = append(report, fmt.Sprintf("%s: %d SQL SELECTs checked, %d skipped", tree, s.sqlChecked, len(s.sqlSkipped)))
+		total.sqlChecked += s.sqlChecked
+		total.sqlSkipped = append(total.sqlSkipped, s.sqlSkipped...)
 		for k, v := range s.uncovered {
 			total.uncovered[k] += v
 		}
@@ -942,6 +956,10 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	for _, s := range total.dcctlSkipped {
 		report = append(report, "skipped (template): "+s)
 	}
+	for _, skipped := range total.sqlSkipped {
+		report = append(report, "skipped (SQL SELECT): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("SQL SELECT: %d checked, %d skipped", total.sqlChecked, len(total.sqlSkipped)))
 	for _, s := range total.goSkipped {
 		report = append(report, "skipped (Go module location): "+s)
 	}
@@ -1051,7 +1069,7 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 
 	// The README goes through the same module-location verdict and skip reporting.
 	readme := filepath.Join(repo, "README.md")
-	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\nhelm install dc external/chart\n```\n"), 0o644); err != nil {
+	if err := os.WriteFile(readme, []byte("```bash\ngo build ./...\ncd \"$module\"\ngo vet ./...\nhelm install dc external/chart\npsql -f query.sql\n```\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	problems, report, err := checkPublishedDocs(rootCmd, repo)
@@ -1066,6 +1084,9 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	}
 	if got := strings.Join(report, "\n"); !strings.Contains(got, "Helm render: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (Helm render): README.md:5:") {
 		t.Errorf("Helm counts and skipped location missing from report:\n%s", got)
+	}
+	if got := strings.Join(report, "\n"); !strings.Contains(got, "SQL SELECT: 0 checked, 1 skipped") || !strings.Contains(got, "skipped (SQL SELECT): README.md:6:") || strings.Contains(got, "psql=1") {
+		t.Errorf("SQL counts and skipped location missing from report:\n%s", got)
 	}
 	if err := os.Remove(readme); err != nil {
 		t.Fatal(err)
