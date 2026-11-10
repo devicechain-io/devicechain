@@ -344,8 +344,8 @@ func TestRoleQueryNamesEveryGroupRole(t *testing.T) {
 	query := analyticsRolesQuery()
 	args := analyticsRolesQueryArgs()
 
-	if want := 2*len(analyticsGroupRoles()) + 1; len(args) != want {
-		t.Fatalf("the role query binds %d arguments, want %d (groups, prefix, membership groups)",
+	if want := 2*len(analyticsGroupRoles()) + 2; len(args) != want {
+		t.Fatalf("the role query binds %d arguments, want %d (groups, prefix, membership groups, area schema)",
 			len(args), want)
 	}
 	if got := strings.Count(query, "?"); got != len(args) {
@@ -359,14 +359,19 @@ func TestRoleQueryNamesEveryGroupRole(t *testing.T) {
 			t.Errorf("membership argument %d is %v, want the group role %q", i, got, group)
 		}
 	}
+	if args[len(args)-1] != AnalyticsAreaSchema {
+		t.Errorf("the last argument is %v, want the area schema %q", args[len(args)-1], AnalyticsAreaSchema)
+	}
 	if args[len(analyticsGroupRoles())] != analyticsRolePattern() {
 		t.Errorf("the prefix argument is %v, want the reader prefix pattern %q",
 			args[len(analyticsGroupRoles())], analyticsRolePattern())
 	}
 	for _, clause := range []string{
 		"WHERE rolname IN (", "OR rolname LIKE ? ESCAPE '='",
-		"OR oid IN (SELECT m.member FROM pg_auth_members m",
+		"OR (oid IN (SELECT m.member FROM pg_auth_members m",
 		"JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname IN (",
+		"AND NOT rolsuper AND rolname <> current_user",
+		"AND oid NOT IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)",
 		"ORDER BY rolname",
 	} {
 		if !strings.Contains(query, clause) {

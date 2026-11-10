@@ -1213,3 +1213,54 @@ func TestIntegrationAnalyticsNonPrefixedGroupMembersAreReconciled(t *testing.T) 
 		require.Contains(t, tenantsVisible(t, connectAs(t, AnalyticsRolePrefix+tenantA), "location_events"), tenantA)
 	}
 }
+
+// 🔴 The platform's own role must never be selected by membership: the reconciler runs as
+// the area schema's owner, and Postgres lets an owner revoke its privileges from itself.
+// Both exclusions are measured here — the session user (via SET ROLE) and the area
+// schema's owner — each with a control member that IS selected under the same conditions.
+func TestIntegrationAnalyticsMembershipNeverSelectsThePlatformRole(t *testing.T) {
+	_, sys := analyticsHarness(t)
+	const app, owner, control = "bi_app_like_it", "bi_owner_like_it", "bi_member_control_it"
+	for _, role := range []string{app, owner, control} {
+		role := role
+		drop := func() {
+			_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", role)).Error
+			_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", role)).Error
+		}
+		drop()
+		t.Cleanup(drop)
+		require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q NOLOGIN", role)).Error)
+		require.NoError(t, sys.Exec(fmt.Sprintf("GRANT %q TO %q", AnalyticsReaderRole, role)).Error)
+	}
+	selected := func(db *gorm.DB) map[string]bool {
+		var roles []string
+		require.NoError(t, db.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&roles).Error)
+		out := map[string]bool{}
+		for _, r := range roles {
+			out[r] = true
+		}
+		return out
+	}
+
+	// The session user: the same query run AS the member must not name it.
+	require.NoError(t, sys.Transaction(func(tx *gorm.DB) error {
+		require.NoError(t, tx.Exec(fmt.Sprintf("SET LOCAL ROLE %q", app)).Error)
+		got := selected(tx)
+		require.False(t, got[app], "the session user was selected by membership")
+		require.True(t, got[control], "control: a member must still be selected")
+		return nil
+	}))
+
+	// The area schema's owner, while the query runs as someone else.
+	var prior string
+	require.NoError(t, sys.Raw(`SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = ?`,
+		AnalyticsAreaSchema).Scan(&prior).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, owner)).Error)
+	t.Cleanup(func() {
+		_ = sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, prior)).Error
+	})
+	got := selected(sys)
+	require.False(t, got[owner], "the area schema's owner was selected by membership")
+	require.True(t, got[control], "control: a member must still be selected")
+	require.True(t, got[app], "control: the app-like member is selected when it is not the session user")
+}

@@ -631,8 +631,8 @@ func analyticsGrantees(roles []string) []analyticsGrantee {
 // the raw hypertables — and because the reconciler only ever named the roles it found
 // in pg_roles, that grant survived every boot forever. PUBLIC is not a role and does
 // not appear in pg_roles; it has to be revoked by name. Doing so is safe here because
-// the application role OWNS these relations, and an owner's access does not come from
-// a grant.
+// the application role OWNS these relations and is never PUBLIC. (An owner's privileges
+// CAN be revoked from itself, which is why analyticsRolesQuery never selects it.)
 //
 // It takes the grantee as a rendered SQL token rather than a bare identifier because
 // PUBLIC is a keyword rather than something that can be quoted — see analyticsGrantees.
@@ -661,19 +661,30 @@ func revokeAreaStatements(role string) []string {
 // The prefix is passed as a bound parameter with an explicit ESCAPE so an underscore
 // in AnalyticsRolePrefix matches literally rather than as LIKE's single-character
 // wildcard.
+//
+// 🔴 THE MEMBERSHIP ARM NEVER SELECTS THE PLATFORM'S OWN ROLE. Postgres lets an owner
+// revoke its ordinary privileges from ITSELF, and the reconciler runs as the owner of the
+// area schema — so a single hand-run `GRANT analytics_reader TO <app role>` would, without
+// the exclusion, make every boot strip the service's own access to its event tables and
+// undo any manual re-grant on the next restart. The session user, superusers and the area
+// schema's owner are therefore never selected by membership (measured: an owner that is a
+// member lost SELECT and INSERT on its own hypertables).
 func analyticsRolesQuery() string {
 	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(analyticsGroupRoles())), ", ")
 	return fmt.Sprintf(`SELECT rolname FROM pg_roles `+
 		`WHERE rolname IN (%s) OR rolname LIKE ? ESCAPE '=' `+
-		`OR oid IN (SELECT m.member FROM pg_auth_members m `+
+		`OR (oid IN (SELECT m.member FROM pg_auth_members m `+
 		`JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname IN (%s)) `+
+		`AND NOT rolsuper AND rolname <> current_user `+
+		`AND oid NOT IN (SELECT nspowner FROM pg_namespace WHERE nspname = ?)) `+
 		`ORDER BY rolname`, placeholders, placeholders)
 }
 
 // analyticsRolesQueryArgs binds analyticsRolesQuery: the group roles, then the reader
-// prefix pattern, then the membership group roles, in placeholder order.
+// prefix pattern, then the membership group roles, then the area schema whose owner the
+// membership arm excludes, in placeholder order.
 func analyticsRolesQueryArgs() []any {
-	args := make([]any, 0, 2*len(analyticsGroupRoles())+1)
+	args := make([]any, 0, 2*len(analyticsGroupRoles())+2)
 	for _, role := range analyticsGroupRoles() {
 		args = append(args, role)
 	}
@@ -681,7 +692,7 @@ func analyticsRolesQueryArgs() []any {
 	for _, role := range analyticsGroupRoles() {
 		args = append(args, role)
 	}
-	return args
+	return append(args, AnalyticsAreaSchema)
 }
 
 // analyticsRolePattern renders the LIKE pattern matching every per-tenant reader.
