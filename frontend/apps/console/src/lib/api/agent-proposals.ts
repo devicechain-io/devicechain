@@ -21,7 +21,7 @@ const DETAIL = graphql(`
 `);
 const APPROVE = graphql(`
   mutation ApproveAgentProposal($token: String!, $digest: String!) {
-    approveAgentProposal(token: $token, digest: $digest) { token }
+    approveAgentProposal(token: $token, digest: $digest) { token state reasons }
   }
 `);
 const REJECT = graphql(`
@@ -35,8 +35,8 @@ export async function listAgentProposals(criteria: AgentProposalSearchCriteria) 
 export async function getAgentProposal(token: string): Promise<AgentProposal> {
   return (await gql('device-management', DETAIL, { token })).agentProposal;
 }
-export async function approveAgentProposal(token: string, digest: string): Promise<void> {
-  await gql('device-management', APPROVE, { token, digest });
+export async function approveAgentProposal(token: string, digest: string) {
+  return (await gql('device-management', APPROVE, { token, digest })).approveAgentProposal;
 }
 export async function rejectAgentProposal(token: string, note?: string): Promise<void> {
   await gql('device-management', REJECT, { token, note });
