@@ -22,15 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// AGENT PROPOSALS for alarms (agentic actions, S3): an AI agent asks for an alarm to be
-// acknowledged or cleared, the tenant's policy decides, and people approve from their own
-// sessions.
-//
-// 🔴 NOTHING HERE ACKNOWLEDGES OR CLEARS AN ALARM. The ledger records the proposal, its decision
-// and its approvals; the approval that would complete a proposal is refused with
-// actiongate.ErrExecutionNotAvailable, and the proposal stays pending until it expires or is
-// rejected. An agent's token holds alarm:propose, never alarm:write, so acknowledgeAlarm and
-// clearAlarm refuse it directly, whatever path it arrives by.
+// Alarm proposals are executed on final human approval after a fresh policy decision.
+// Agent tokens can propose, but never directly acknowledge or clear alarms.
 
 // LedgerScope separates this area's proposal counters from another area's (actiongate.LockCounters).
 const LedgerScope = "device-management"
@@ -534,14 +527,8 @@ var (
 //     valid approver, with a second factor fresh by the policy's measure, and may be the proposer
 //     only when the policy allows self-confirmation of a
 //     single-approval, normal-impact proposal;
-//  5. the approvals that still stand are tallied. If this approval would complete the proposal,
-//     it is refused with actiongate.ErrExecutionNotAvailable and nothing is recorded: executing is
-//     not in this release. Otherwise it is recorded as a compare-and-set on the row's revision,
-//     with the current policy's required count.
-//
-// The revision compare-and-set fences concurrent LEDGER writes only; authorization changes in
-// user-management are fenced by completion-time re-validation of every approver (and, when
-// execution ships, by the decision asked immediately before execution).
+//  5. the final approval executes atomically after another policy decision; earlier
+//     approvals are recorded with a compare-and-set on the row's revision.
 func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Approver, token, digest string) (*AgentProposal, error) {
 	for attempt := 0; ; attempt++ {
 		now := time.Now().UTC()
@@ -615,7 +602,14 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 		}
 		next = append(next, actiongate.Approval{Sub: approver.Principal, Amr: approver.Amr, MfaTime: approver.MfaTime, At: now})
 		if actiongate.Tally(next, dec.ValidApprovers, p.ProposerSub, dec.RequiredApprovals, dec.AllowSelfConfirm, dec.StepUp, now) >= dec.RequiredApprovals {
-			return nil, actiongate.ErrExecutionNotAvailable
+			result, execErr := api.executeAlarmProposal(ctx, approver, p, next)
+			if errors.Is(execErr, actiongate.ErrNotPending) {
+				if attempt == 0 {
+					continue
+				}
+				return nil, errConcurrentApproval
+			}
+			return result, execErr
 		}
 		err = actiongate.RecordApproval(api.RDB.DB(ctx), &AgentProposal{}, p.Token, p.Revision, next, dec.RequiredApprovals, now)
 		if errors.Is(err, actiongate.ErrNotPending) && attempt == 0 {

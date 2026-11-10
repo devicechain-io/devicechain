@@ -27,6 +27,9 @@ const (
 	VerdictApprove Verdict = "APPROVE"
 )
 
+// ReasonDependencyChanged means the stored alarm cycle no longer matches.
+const ReasonDependencyChanged = "DEPENDENCY_CHANGED"
+
 // ReasonAutoNotAvailable is the reason an AUTO verdict is read as a refusal by this release.
 const ReasonAutoNotAvailable = "AUTO_NOT_AVAILABLE"
 

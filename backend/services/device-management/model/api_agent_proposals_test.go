@@ -27,12 +27,14 @@ import (
 // what the tenant's policy answered.
 
 type fakeDecider struct {
-	act      actiongate.ActuationDecision
-	actErr   error
-	exec     actiongate.ExecutionDecision
-	execErr  error
-	actCalls int
-	execReqs []actiongate.ExecutionRequest
+	act         actiongate.ActuationDecision
+	actErr      error
+	exec        actiongate.ExecutionDecision
+	execErr     error
+	actCalls    int
+	execReqs    []actiongate.ExecutionRequest
+	execBearers []string
+	second      func() (actiongate.ExecutionDecision, error)
 }
 
 func (f *fakeDecider) Actuation(context.Context, actiongate.ActuationRequest) (actiongate.ActuationDecision, error) {
@@ -40,8 +42,13 @@ func (f *fakeDecider) Actuation(context.Context, actiongate.ActuationRequest) (a
 	return f.act, f.actErr
 }
 
-func (f *fakeDecider) Execution(_ context.Context, req actiongate.ExecutionRequest) (actiongate.ExecutionDecision, error) {
+func (f *fakeDecider) Execution(ctx context.Context, req actiongate.ExecutionRequest) (actiongate.ExecutionDecision, error) {
 	f.execReqs = append(f.execReqs, req)
+	bearer, _ := auth.BearerFromContext(ctx)
+	f.execBearers = append(f.execBearers, bearer)
+	if len(f.execReqs) == 2 && f.second != nil {
+		return f.second()
+	}
 	return f.exec, f.execErr
 }
 
@@ -316,20 +323,6 @@ func TestRevokedProposerProposalRefusedAtExecution(t *testing.T) {
 		Approvers: []string{"boss"}}, got)
 }
 
-// The approval that would complete a proposal is refused, and nothing is recorded: this release
-// executes nothing, and recording it would claim an approval consumed that nothing acted on.
-func TestFinalApprovalIsRefusedAndNotRecorded(t *testing.T) {
-	r := newProposalRig(t)
-	out := r.propose(t, rigAgent, clearReq("r1", "a1"))
-	r.decider.exec = execApprove(1, "boss")
-	_, err := r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("boss", time.Now()), out.Proposal.Token, out.Digest)
-	require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable)
-	p := r.stored(t, out.Proposal.Token)
-	require.Equal(t, string(actiongate.StateProposed), p.State)
-	require.JSONEq(t, `[]`, string(p.Approvals))
-	require.Zero(t, p.Revision)
-}
-
 // A policy tightened to two approvers after the proposal keeps it pending: the first approval is
 // recorded with the new requirement.
 func TestPolicyTightenedToTwoKeepsPending(t *testing.T) {
@@ -352,9 +345,13 @@ func TestPolicyTightenedToTwoKeepsPending(t *testing.T) {
 	require.Len(t, r.decider.execReqs, 2, "idempotency still asks the current decision")
 	require.Equal(t, []string{"boss"}, r.decider.execReqs[1].Approvers)
 
-	// The second approver completes it: refused, not recorded.
-	_, err = r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("carol", time.Now()), out.Proposal.Token, out.Digest)
-	require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable)
+	// The second approver executes it.
+	p, err = r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("carol", time.Now()), out.Proposal.Token, out.Digest)
+	require.NoError(t, err)
+	require.Equal(t, string(actiongate.StateExecuted), p.State)
+	approvals, err = actiongate.ParseApprovals(p.Approvals)
+	require.NoError(t, err)
+	require.Equal(t, []string{"boss", "carol"}, actiongate.Principals(approvals))
 }
 
 // A first approver who has since lost their standing no longer counts toward the two.
@@ -374,7 +371,7 @@ func TestRevokedFirstApproverNoLongerCounts(t *testing.T) {
 	require.Equal(t, []string{"boss", "carol"}, r.decider.execReqs[1].Approvers, "every approver so far is re-checked")
 	r.decider.exec = execApprove(2, "carol", "dave")
 	_, err = r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("dave", time.Now()), out.Proposal.Token, out.Digest)
-	require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable)
+	require.NoError(t, err)
 	require.Equal(t, []string{"boss", "carol", "dave"}, r.decider.execReqs[2].Approvers)
 }
 
@@ -406,7 +403,7 @@ func TestApproverRulesAreTheCurrentPolicys(t *testing.T) {
 
 	r.decider.exec = execApprove(1, "ana@example.invalid")
 	_, err = r.api.ApproveAgentProposal(ctx, approver("ana@example.invalid", time.Now()), out.Proposal.Token, out.Digest)
-	require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable, "control: self-confirm of a single approval reaches completion")
+	require.NoError(t, err, "control: self-confirm of a single approval executes")
 }
 
 // A rejection ends the proposal; nothing decides it afterwards.
@@ -524,7 +521,7 @@ func TestApprovalFreshnessAtCompletion(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, []string{"boss", "carol"}, actiongate.Principals(approvals))
 			} else {
-				require.ErrorIs(t, err, actiongate.ErrExecutionNotAvailable)
+				require.NoError(t, err)
 			}
 		})
 	}
