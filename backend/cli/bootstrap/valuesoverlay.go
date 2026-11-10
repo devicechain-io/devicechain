@@ -69,6 +69,7 @@ const maxValuesOverlayBytes = 128 * 1024
 // listener's ADDRESS are all dcctl's or the declaration's. None of them is a tuning knob: they are
 // credentials, wiring, exposure or a way to weaken the pod's isolation.
 var tunableValues = []string{
+	"instance.config.infrastructure.tracing",
 	// Scale and rollout.
 	"replicas",
 	"rollingUpdate",
