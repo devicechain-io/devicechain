@@ -278,6 +278,20 @@ tells you how to dump the data or discard it deliberately. See
 [the legacy database exception](#legacy-db-removal).
 :::
 
+### Relational store WAL tuning {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` sets the shared relational store's
+`max_wal_size` soft checkpoint target to 4096 MiB. Omit the flag to keep the recorded
+choice; on a first install with no choice, the root keeps its stock PostgreSQL default
+(1 GiB). Pass `--relational-store-max-wal-mib=0` to record a reset to that default.
+Positive values must be at least 64 MiB. The choice is recorded before apply, so a
+flagless retry after a failed apply retains it, including an explicit reset.
+
+This is a soft checkpoint target, not a limit on `pg_wal`: WAL can grow beyond it
+when checkpoints or archiving fall behind. The cluster root still refuses a target
+larger than a quarter of the relational store's storage. Performance sizes recommend
+WAL values but never apply them automatically. Changes are reload-only and are allowed while instances exist on the cluster.
+
 ### The legacy database exception {#legacy-db-removal}
 
 A StatefulSet's data directory cannot be adopted by the operator, which is why there is no
@@ -915,6 +929,7 @@ bootstrapped on it follows them. None of them is a `dcctl bootstrap` flag.
 | `--restore-rdb-from <archive>` | Disaster recovery: recover the shared relational store from this archive path inside the backup bucket (`dc-rdb` for a store that has never been restored) instead of initialising an empty one. It takes effect only when the store is **created** — against a cluster whose store already exists it moves no data — so it is a rebuild lever, not a repair. Needs the backup plugin, so it is refused on a cluster installed with `--no-cnpg` or `--compact --no-tls`. See [Recovering an instance](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Stop that recovery at a point in time instead of replaying the whole archive — for data destroyed *correctly*, by a bad migration or a mistaken delete; pick a moment strictly before the damage. Needs `--restore-rdb-from`, and an RFC 3339 timestamp with an explicit offset (`2026-07-27T13:59:00Z`): without one PostgreSQL reads it in the recovering server's own timezone and stops at a different moment than you named. |
 | `--max-connections <n>` | The relational database's connection budget (default `700` on a first install; a re-run without it keeps the current budget) — see [the connection budget](#connection-budget). May be raised, but not lowered, while instances run. |
+| `--relational-store-max-wal-mib <n>` | Shared relational store `max_wal_size` soft checkpoint target in MiB. Omitted keeps the recorded choice (first install: stock 1 GiB); `0` records a reset; positive values must be at least `64`. Recorded before apply and retained on a flagless retry. The root limits it to a quarter of storage. Never set automatically by performance sizes. See [relational WAL tuning](#relational-store-wal). |
 | `--allow-legacy-db-removal` | The relational-database half of the one-time exception described under [What bootstrap does](#what-it-does). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run creates no cluster, so checks that need to read one — the `--ha` node-capacity check in particular — report what they could not see rather than failing the rehearsal. What such a check *does* see is still fatal: a cluster that answers and cannot host `--ha` fails a dry run too. On a cluster that answers, a dry run also makes the refusals a re-install makes — an install from a machine without the cluster's state, changed settings under running instances, an unusable `--backup-snapshot-class` — and fails with the same message the install would. On a cluster it cannot reach, it says those were not checked. |
 | `--yes` | Do not ask before creating a kind cluster. |

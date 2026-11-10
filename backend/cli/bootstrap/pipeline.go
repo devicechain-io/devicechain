@@ -408,6 +408,8 @@ type State struct {
 	// MaxConnections is the relational store's connection budget an install asks for.
 	// Zero keeps what the cluster was installed with.
 	MaxConnections int
+	// RelationalStoreMaxWALMiB is the optional install choice, restored before apply.
+	RelationalStoreMaxWALMiB *int
 	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
 	// than during the apply so the private half never reaches the infrastructure
 	// state. Only the public CA is passed to OpenTofu.
