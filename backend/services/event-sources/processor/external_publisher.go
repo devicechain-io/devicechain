@@ -146,6 +146,10 @@ func (p *AsyncEventPublisher) Publish(source, tenant string, event *model.Unreso
 		done(nil)
 		return
 	}
+	if event != nil && event.TraceContext != nil {
+		msg = msg.WithTraceContext(event.TraceContext)
+		ctx = msg.Context(ctx)
+	}
 	w := p.current()
 	if w == nil {
 		p.fail(source, tenant, errNoWriter)

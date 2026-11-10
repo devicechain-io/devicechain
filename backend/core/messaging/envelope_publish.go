@@ -132,12 +132,15 @@ func (nmgr *NatsManager) NewRoundPublisher(suffix string) (RoundPublisher, error
 	return &roundPublisher{nmgr: nmgr, suffix: suffix, gate: nmgr.registerBackpressure(suffix)}, nil
 }
 
-func (r *roundPublisher) Publish(ctx context.Context, msg Message) (PubAckInfo, error) {
+func (r *roundPublisher) Publish(ctx context.Context, msg Message) (out PubAckInfo, resultErr error) {
 	subject, err := r.nmgr.tenantSubject(ctx, r.suffix, "")
 	if err != nil {
 		return PubAckInfo{}, err
 	}
-	nm := natsMsg(subject, msg)
+	nm, spans := startPublishMessage(ctx, subject, r.suffix, msg)
+	if len(spans) > 0 {
+		defer func() { finishPublish(spans, resultErr) }()
+	}
 	pctx, callerBound, cancel := publishContext(ctx)
 	defer cancel()
 	deadline, _ := pctx.Deadline()

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/tracing"
 	"io"
 	"net"
 	"net/http"
@@ -232,6 +233,10 @@ func (h *HttpHandler) validator() *auth.Validator {
 
 // Handles http request processing.
 func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	tracing.HTTP(w, r, "graphql.request", h.serveHTTP)
+}
+
+func (h *HttpHandler) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// Cap the request body before anything reads it (ADR-029): serveExec's JSON
 	// decode buffers the whole envelope — query + variables — into memory before
 	// the query-length ceiling can reject an oversized query, so without this a
@@ -344,6 +349,10 @@ func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	response := h.Schema.Exec(ctx, params.Query, params.OperationName, params.Variables)
+	if tracing.Enabled() {
+		tenant, _ := core.TenantFromContext(ctx)
+		tracing.Operation(ctx, params.OperationName, tenant, len(response.Errors) > 0)
+	}
 	body, err := json.Marshal(response)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -18,6 +18,7 @@ import (
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/tracing"
 )
 
 // The gateway source keeps a configurable number of inbound-events publishes awaiting
@@ -425,6 +426,10 @@ func (es *GatewayJetStreamSource) submitter(publishes chan<- pendingPublish) Dec
 			done(nil)
 			return
 		}
+		if event != nil && event.TraceContext != nil {
+			msg = msg.WithTraceContext(event.TraceContext)
+			ctx = msg.Context(ctx)
+		}
 		publishes <- pendingPublish{ctx: ctx, msg: msg, done: done, pos: pos}
 	}
 }
@@ -755,20 +760,25 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// reading-shed counters, never on the message stage's rate-limited counter.
 	es.received(es.Id, msg.Value)
 
+	var traceContext context.Context
+	if tracing.Enabled() {
+		traceContext = msg.TraceContext()
+	}
 	es.messages <- rawMessage{
-		tenant:     tenant,
-		payload:    msg.Value,
-		device:     deviceFromSubject(msg.Subject),
-		dedupID:    dedupID,
-		receivedAt: msg.AppendTime,
-		meterAt:    meterAt,
-		metering:   metering,
-		redelivery: redelivery,
-		origin:     OriginAuthenticated,
-		assertion:  assertedByCaptureBroker(msg),
-		uplink:     isUplink,
-		done:       es.settleAndForget(settle, beatRef),
-		shed:       shed,
+		traceContext: traceContext,
+		tenant:       tenant,
+		payload:      msg.Value,
+		device:       deviceFromSubject(msg.Subject),
+		dedupID:      dedupID,
+		receivedAt:   msg.AppendTime,
+		meterAt:      meterAt,
+		metering:     metering,
+		redelivery:   redelivery,
+		origin:       OriginAuthenticated,
+		assertion:    assertedByCaptureBroker(msg),
+		uplink:       isUplink,
+		done:         es.settleAndForget(settle, beatRef),
+		shed:         shed,
 	}
 }
 

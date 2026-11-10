@@ -15,8 +15,46 @@ with no separate monitoring project to assemble.
 The monitoring stack (kube-prometheus-stack via `dcctl install`) and its Grafana
 boards are implemented and validated end-to-end: an instance overview and seven stage
 boards, described in [Grafana boards](./grafana-boards.md), with alert rules alongside them.
-OTLP distributed tracing is a planned follow-up.
 :::
+
+## Distributed tracing (OpenTelemetry)
+
+Tracing is **off by default**. When enabled, GraphQL requests and HTTP/MQTT device ingest
+create spans. W3C TraceContext follows inbound events through NATS, device-management
+resolution, resolved-event publication, event-management storage and event-processing.
+Services identify themselves as `devicechain-<area>`. Only TraceContext is propagated;
+baggage is excluded.
+
+Point every service at an operator-managed OTLP collector, such as OpenTelemetry Collector,
+Jaeger or Tempo with its OTLP receiver enabled. Add this Helm values overlay (also accepted
+by `dcctl bootstrap|upgrade --values`), then upgrade to restart the services:
+
+```yaml
+instance:
+  config:
+    infrastructure:
+      tracing:
+        enabled: true
+        protocol: grpc
+        endpoint: otel-collector.observability.svc:4317
+        insecure: true
+        samplingRatio: 0.1
+```
+
+This example uses plaintext within the cluster. Keep `insecure: false` for TLS. For OTLP
+over HTTP, use `protocol: http` and `endpoint: http://otel-collector.observability.svc:4318`
+with `insecure: true`; use an `https://` endpoint and `insecure: false` for TLS.
+The collector is deployed separately; DeviceChain does not deploy one for you.
+
+Sampling is parent based: a sampled upstream trace stays sampled across services. If
+`samplingRatio` is omitted, enabled tracing samples 10% of new root traces. Explicit `0`
+samples no new roots; `1` samples all roots. Start low on busy fleets and increase briefly
+while diagnosing a problem. Credentials, device tokens, GraphQL variables and document
+text are never recorded. Tenant IDs, transport, operation names and HTTP status are recorded.
+
+Tracing adds CPU, network traffic, message-header bytes and collector storage costs.
+Budget retention and sampling together. Set `enabled: false` and restart to turn it off;
+disabled tracing constructs no exporter or tracing goroutines.
 
 ## What every service exposes
 

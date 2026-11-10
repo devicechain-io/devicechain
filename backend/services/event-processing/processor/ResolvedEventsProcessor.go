@@ -1931,6 +1931,13 @@ func (rp *ResolvedEventsProcessor) checkpointDue() bool {
 // (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
 // predicate evaluations) — still acked upstream, but not counted or marked dirty.
 func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
+	if !msg.IsEnvelope() {
+		traced, _, span := msg.Process(rp.pctx(), "resolved-events.processing")
+		msg = traced
+		if span != nil {
+			defer span.End()
+		}
+	}
 	rp.appliedEvents = 1 // an event envelope sets the number of its members (applyEnvelope)
 	if msg.StreamSeq == 0 {
 		// A JetStream-delivered message always carries a sequence; a 0 means the
@@ -2009,7 +2016,7 @@ func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant s
 			rp.poisonSkipped++
 			continue
 		}
-		if rp.applyEvent(msg, tenant, event, prev, true) {
+		if rp.applyEvent(u.Msg, tenant, event, prev, true) {
 			advanced = true
 		}
 	}
@@ -2025,6 +2032,13 @@ func (rp *ResolvedEventsProcessor) applyEnvelope(msg messaging.Message, tenant s
 // (the descope gate), and member says the event is one of an envelope's, whose sequence the
 // engine records after the first of them (Engine.ProcessReceivedMember).
 func (rp *ResolvedEventsProcessor) applyEvent(msg messaging.Message, tenant string, event *resolvedevent.ResolvedEvent, prev uint64, member bool) bool {
+	if member {
+		traced, _, span := msg.Process(rp.pctx(), "resolved-events.processing")
+		msg = traced
+		if span != nil {
+			defer span.End()
+		}
+	}
 	// 🔴 AN EVENT ALREADY APPLIED IS SKIPPED, whatever sequence it arrived under (see
 	// runtime.AppliedGuard). It is handled exactly as a disabled device's event is: a member
 	// leaves the envelope's sequence to applyEnvelope, a legacy message records its own with
