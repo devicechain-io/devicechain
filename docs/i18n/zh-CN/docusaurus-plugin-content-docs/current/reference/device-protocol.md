@@ -58,7 +58,7 @@ Schema 表达不了的内容：
 
 尚无凭据的设备通过 HTTPS 向 `POST /api/device-management/provisioning/{tenant}/register` [自行注册](#self-registration)。这是与事件接入分开的端点，由 `device-management` 提供。
 
-通过 **HTTP**，设备只能发送事件（运维人员启用后，还可以发送[设备自身的载荷](#raw-payload)）。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
+通过 **HTTP**，设备可以发送事件（运维人员启用后，还可以发送[设备自身的载荷](#raw-payload)）。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。要接收命令，请将设备类型的 `commandChannel` 设为 `HTTP_PULL`；设备随后轮询命令，并向同一监听端口发送确认和响应。端点和认证方式参见 [HTTP 命令拉取](../concepts/commands.md#http-command-pull)。配置和托管更新分配仍使用 MQTT 的 desired/reports 通道；HTTP 命令拉取不承载这些内容。
 
 ### 网关命名空间 {#gateway-namespace}
 

@@ -8,7 +8,7 @@ title: 连接设备
 设备通过 **MQTT** 或 **HTTP** 向 DeviceChain 发送事件。MQTT 由 NATS 内置的 MQTT 服务器直接在 1883 端口提供，无需独立消息代理。两种传输都进入同一条解码 → 解析 → 持久化流水线，因此 JSON 事件正文完全相同。
 
 :::note 状态
-MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](../concepts/lwm2m.md)，使用带 DTLS 的 CoAP/UDP 连接；既有设备群可使用 [Sparkplug B](../concepts/sparkplug.md)。WebSocket 传输及完整的自助配置/认领流程仍在规划中。
+MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](../concepts/lwm2m.md)，使用带 DTLS 的 CoAP/UDP 连接；既有设备群可使用 [Sparkplug B](../concepts/sparkplug.md)。[设备自助注册](./device-self-registration.md)已可用，也可以通过 [device-management GraphQL API](../reference/graphql-api.md) 的 `initiateDeviceClaim` 和 `claimDevice` 变更操作认领设备。WebSocket 传输仍在规划中。
 :::
 
 通过 LoRaWAN 网络服务器（ChirpStack、The Things Stack）或其他系统的 webhook 上报的设备不会自行连接，参见[入站集成](./inbound-integrations.md)。

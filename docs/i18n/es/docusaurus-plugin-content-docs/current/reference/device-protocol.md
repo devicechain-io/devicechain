@@ -60,7 +60,7 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 
 Un dispositivo que todavía no tiene credencial llega a la plataforma por HTTPS para [registrarse por sí mismo](#self-registration), en `POST /api/device-management/provisioning/{tenant}/register`. Es un endpoint distinto de la ingesta de eventos, servido por `device-management`.
 
-Por **HTTP**, un dispositivo solo puede enviar eventos (y, donde el operador lo ha activado, una [carga útil propia](#raw-payload)). Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
+Por **HTTP**, un dispositivo puede enviar eventos (y, donde el operador lo ha activado, una [carga útil propia](#raw-payload)). Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). Para recibir comandos, establece el `commandChannel` del tipo de dispositivo en `HTTP_PULL`; el dispositivo consulta entonces los comandos y envía confirmaciones y respuestas al mismo listener. Consulta [Consulta de comandos por HTTP](../concepts/commands.md#http-command-pull) para ver los endpoints y la autenticación. La configuración y las asignaciones de actualización gestionadas siguen usando los canales desired/reports de MQTT; la consulta de comandos por HTTP no las transporta.
 
 ### El espacio de nombres de pasarela {#gateway-namespace}
 
