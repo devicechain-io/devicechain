@@ -5,8 +5,8 @@ package lpwan
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/devicechain-io/dc-microservice/payloadencode"
 	"sync"
 	"time"
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/devicealias"
+	"github.com/devicechain-io/dc-microservice/payloadencode"
 )
 
 var errRecordNotFound = gorm.ErrRecordNotFound
@@ -28,10 +29,7 @@ const (
 	// devEUICacheTTL bounds how long a device's DevEUI is reused. A DevEUI changes only when
 	// someone edits the device's aliases.
 	devEUICacheTTL = 60 * time.Second
-	// encoderCacheTTL is shorter: a republished encoder must reach the wire within seconds, because
-	// a stale one sends the previous bytes for the same command.
-	encoderCacheTTL = 10 * time.Second
-	devEUICacheMax  = 4096
+	devEUICacheMax = 4096
 )
 
 type devEUIKey struct{ tenant, device, scheme string }
@@ -48,14 +46,13 @@ type ServiceDevices struct {
 	baseURL string
 	now     func() time.Time
 
-	mu       sync.Mutex
-	cache    map[devEUIKey]devEUIEntry
-	encoders map[devEUIKey]encoderEntry
+	mu    sync.Mutex
+	cache map[devEUIKey]devEUIEntry
 }
 
 // NewServiceDevices builds the reader over a service-token client and device-management's URL.
 func NewServiceDevices(client cmddownlink.Querier, baseURL string) *ServiceDevices {
-	return &ServiceDevices{client: client, baseURL: baseURL, now: time.Now, cache: map[devEUIKey]devEUIEntry{}, encoders: map[devEUIKey]encoderEntry{}}
+	return &ServiceDevices{client: client, baseURL: baseURL, now: time.Now, cache: map[devEUIKey]devEUIEntry{}}
 }
 
 // DevEUI implements Devices. Only a found DevEUI is cached; "no such alias" is asked again each
@@ -119,20 +116,12 @@ const EncoderQuery = `query($deviceToken: String!) {
  deviceCommandVocabulary(deviceToken: $deviceToken) { constrained commands { commandKey encoder } }
 }`
 
-type encoderEntry struct {
-	encoder *payloadencode.Encoder
-	expires time.Time
-}
+// ErrDefinitiveDefinition marks a published definition that cannot be dispatched.
+// Read/query failures do not wrap it and must be retried.
+var ErrDefinitiveDefinition = errors.New("invalid published command definition")
 
-// Encoder reads only the published vocabulary. Successful absence is cached too.
+// Encoder reads the published vocabulary anew for every dispatch, including raw commands.
 func (d *ServiceDevices) Encoder(ctx context.Context, tenant, deviceToken, commandKey string) (*payloadencode.Encoder, error) {
-	key := devEUIKey{tenant, deviceToken, commandKey}
-	d.mu.Lock()
-	if e, ok := d.encoders[key]; ok && d.now().Before(e.expires) {
-		d.mu.Unlock()
-		return e.encoder, nil
-	}
-	d.mu.Unlock()
 	var resp struct {
 		Vocabulary *struct {
 			Constrained *bool `json:"constrained"`
@@ -155,25 +144,19 @@ func (d *ServiceDevices) Encoder(ctx context.Context, tenant, deviceToken, comma
 			continue
 		}
 		if found {
-			return nil, fmt.Errorf("ambiguous command definition")
+			return nil, fmt.Errorf("%w: ambiguous command definition", ErrDefinitiveDefinition)
 		}
 		found = true
 		if c.Encoder != nil {
 			var err error
 			encoder, err = payloadencode.Parse([]byte(*c.Encoder))
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %v", ErrDefinitiveDefinition, err)
 			}
 		}
 	}
 	if *resp.Vocabulary.Constrained && !found {
-		return nil, fmt.Errorf("published command is unavailable")
+		return nil, fmt.Errorf("%w: published command is unavailable", ErrDefinitiveDefinition)
 	}
-	d.mu.Lock()
-	if d.encoders == nil || len(d.encoders) >= devEUICacheMax {
-		d.encoders = map[devEUIKey]encoderEntry{}
-	}
-	d.encoders[key] = encoderEntry{encoder, d.now().Add(encoderCacheTTL)}
-	d.mu.Unlock()
 	return encoder, nil
 }

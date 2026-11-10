@@ -328,7 +328,11 @@ func (a *Adapter) handle(ctx context.Context, msg messaging.Message) {
 	}
 	encoder, err := a.devices.Encoder(ctx, tenant, j.device, env.Name)
 	if err != nil {
-		a.refuse(msg, j, ResultRefusedParams, ReasonInvalidParams, "the command definition could not be read")
+		if errors.Is(err, ErrDefinitiveDefinition) {
+			a.refuse(msg, j, ResultRefusedParams, ReasonInvalidParams, "the command definition is invalid")
+		} else {
+			a.lookupFailed(ctx, j, "definition", err)
+		}
 		return
 	}
 	var params Params

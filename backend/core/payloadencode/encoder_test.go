@@ -25,7 +25,7 @@ func TestEncode(t *testing.T) {
 		{`{"param":"x","type":"i32le"}`, `{"x":-2147483648}`, "00000080"},
 		{`{"param":"x","type":"i16be"}`, `{"x":-215}`, "ff29"},
 		{`{"param":"x","type":"i16le","scale":2,"offset":10}`, `{"x":-420}`, "29ff"},
-		{`{"param":"x","type":"bool"}`, `{"x":true,"ignored":12}`, "01"},
+		{`{"param":"x","type":"bool"}`, `{"x":true}`, "01"},
 		{`{"param":"x","type":"bool"}`, `{"x":false}`, "00"},
 		{`{"const":"01ff"}`, `{}`, "01ff"},
 		{`{"bits":{"type":"u8","fields":[{"param":"x","shift":0,"width":3},{"param":"y","shift":3,"width":1}]}}`, `{"x":5,"y":true}`, "0d"},
@@ -43,7 +43,7 @@ func TestEncode(t *testing.T) {
 
 func TestStaticRefusals(t *testing.T) {
 	for _, raw := range []string{
-		`null`, `{}`, `{"fPort":0,"fields":[{"const":"01"}]}`, `{"fPort":224,"fields":[{"const":"01"}]}`,
+		`null`, `{}`, `{"fPort":1,"fPort":2,"fields":[{"const":"01"}]}`, `{"fPort":0,"fields":[{"const":"01"}]}`, `{"fPort":224,"fields":[{"const":"01"}]}`,
 		`{"fPort":1,"fields":[]}`, `{"fPort":1,"wat":1,"fields":[{"const":"01"}]}`,
 		`{"fPort":1,"fields":[{"const":"1"}]}`, `{"fPort":1,"fields":[{"const":"zz"}]}`,
 		`{"fPort":1,"fields":[{"const":""}]}`, `{"fPort":1,"fields":[{"const":"01","param":"x"}]}`,
@@ -245,11 +245,76 @@ func FuzzEncoder(f *testing.F) {
 }
 
 func TestNumberBeyondExactFloatRangeIsRefused(t *testing.T) {
-	e, err := Parse([]byte(`{"fPort":1,"fields":[{"param":"x","type":"u8","offset":9007199254740992}]}`))
+	e, err := Parse([]byte(`{"fPort":1,"fields":[{"param":"x","type":"u8","offset":0}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r, err := e.Encode([]byte(`{"x":9007199254740993}`)); err == nil {
 		t.Fatalf("a value rounded by float64 must be refused, got %x", r.Data)
+	}
+}
+
+func TestPrecisionAndRangeRefusals(t *testing.T) {
+	for _, c := range []struct{ field, payload, reason string }{
+		{`{"param":"x","type":"u8"}`, `{"x":255.4}`, "range"},
+		{`{"param":"x","type":"u8"}`, `{"x":255.0000001}`, "range"},
+		{`{"param":"x","type":"u8"}`, `{"x":1.0000001}`, "integer"},
+		{`{"param":"x","type":"u8","scale":1,"offset":0}`, `{"x":1.0000001}`, "integer"},
+		{`{"param":"x","type":"i8"}`, `{"x":-128.0000001}`, "range"},
+		{`{"param":"x","type":"u8","scale":1e9}`, `{"x":1000000000000001}`, "too large"},
+		{`{"param":"x","type":"u8","scale":1e-9}`, `{"x":9007199.254740992}`, "too large"},
+		{`{"param":"x","type":"u8"}`, `{"x":9007199254740992}`, "too large"},
+	} {
+		e, err := Parse([]byte(`{"fPort":1,"fields":[` + c.field + `]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := e.Encode([]byte(c.payload))
+		if err == nil || r.Data != nil || !strings.Contains(err.Error(), c.reason) {
+			t.Fatalf("%s: %+v %v", c.payload, r, err)
+		}
+	}
+}
+
+func TestTransformBounds(t *testing.T) {
+	for _, member := range []string{`"offset":1000000001`, `"offset":-1000000001`, `"scale":1000000001`, `"scale":-1000000001`, `"scale":1e-10`, `"scale":-1e-10`, `"offset":1e15`} {
+		// In particular, the old large offset could swallow the fraction in x=1000000000000000.01.
+		if _, err := Parse([]byte(`{"fPort":1,"fields":[{"param":"x","type":"u8",` + member + `}]}`)); err == nil {
+			t.Fatal("accepted", member)
+		}
+	}
+	for _, member := range []string{`"offset":1e9`, `"offset":-1e9`, `"scale":1e9`, `"scale":-1e9`, `"scale":1e-9`, `"scale":-1e-9`} {
+		if _, err := Parse([]byte(`{"fPort":1,"fields":[{"param":"x","type":"u8",` + member + `}]}`)); err != nil {
+			t.Fatal(member, err)
+		}
+	}
+}
+
+func TestUnusedAndDuplicatePayloadKeys(t *testing.T) {
+	e, _ := Parse([]byte(`{"fPort":1,"fields":[{"param":"x","type":"u8"}]}`))
+	for _, payload := range []string{`{"x":1,"ignored":12}`, `{"x":1,"x":2}`, `{"x":1,"\u0078":2}`} {
+		r, err := e.Encode([]byte(payload))
+		if err == nil || r.Data != nil {
+			t.Fatalf("accepted %s", payload)
+		}
+	}
+	name := strings.Repeat("k", 500)
+	_, err := e.Encode([]byte(fmt.Sprintf(`{"x":1,%q:12}`, name)))
+	if err == nil || !strings.Contains(err.Error(), name[:80]) || strings.Contains(err.Error(), name) {
+		t.Fatalf("unclipped key: %v", err)
+	}
+}
+
+func TestBoundaryValueWithFloatErrorIsEncoded(t *testing.T) {
+	e, err := Parse([]byte(`{"fPort":1,"fields":[{"param":"x","type":"u8","scale":0.7}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := e.Encode([]byte(`{"x":178.5}`))
+	if err != nil || hex.EncodeToString(r.Data) != "ff" {
+		t.Fatalf("got %x %v", r.Data, err)
+	}
+	if _, err := e.Encode([]byte(`{"x":179.2}`)); err == nil {
+		t.Fatal("above the range must be refused")
 	}
 }

@@ -3,7 +3,11 @@
 
 package model
 
-import "github.com/devicechain-io/dc-microservice/payloadencode"
+import (
+	"fmt"
+
+	"github.com/devicechain-io/dc-microservice/payloadencode"
+)
 
 func validateCommandEncoder(raw, schema *string) error {
 	if raw == nil {
@@ -19,6 +23,9 @@ func validateCommandEncoder(raw, schema *string) error {
 		if err != nil {
 			return err
 		}
+	}
+	if len(params) == 0 {
+		return fmt.Errorf("encoder requires a non-empty parameter schema")
 	}
 	if err := ValidateParameterSchema(params); err != nil {
 		return err

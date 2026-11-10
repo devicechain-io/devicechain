@@ -371,6 +371,8 @@ A report is matched to its command only by the `dc:` correlation id the platform
 
 A command definition can carry an optional `encoder` JSON string. Publish the device
 profile to activate it. Both ChirpStack v4 and The Things Stack v3 use the same encoder.
+The encoder in force when a command is dispatched applies; republishing applies to
+commands dispatched after the publish.
 For example, this document combines constant bytes, a scaled number, a boolean and packed bits:
 
 ```json
@@ -413,18 +415,21 @@ For a thermostat, declare `setpoint` as `DOUBLE` and `mode` as `INT` in
 
 The command payload `{"setpoint":21.5,"mode":3}` becomes hex `00d703`, or base64
 `ANcD`, on port 12. Numeric encoding inverts the decoder arithmetic:
-`raw = (value - offset) / scale`. Scale defaults to 1, must be finite and non-zero;
-offset defaults to 0 and must be finite. The raw value must be within `1e-6` of an
-integer and fit its type. Nothing is silently rounded or truncated: `215.4` with
+`raw = (value - offset) / scale`. Scale defaults to 1; its magnitude must be between `1e-9` and `1e9`.
+Offset defaults to 0 and its magnitude must be at most `1e9`. Both must be finite.
+The raw value must fit its type before rounding is considered. Identity mappings
+(scale 1, offset 0) require an exact integer input; other mappings allow a `1e-6`
+integer tolerance. Input magnitude must be at most `1e15`, and input and raw
+magnitudes must be below `2^53`. Nothing is silently rounded or truncated: `215.4` with
 scale 1 is refused. NaN, infinity, out-of-range values, wrong JSON types and missing
 encoder parameters refuse the command as **not sent**, before any network call.
 Defaults in the parameter schema are authoring hints and are never injected.
 
 Each encoder parameter must be unique and declared with a compatible scalar type:
 numbers use `INT` or `DOUBLE`, booleans use `BOOLEAN`, and bit values use integers
-within their width (a width of 1 also accepts `BOOLEAN`). Unused command parameters
-are ignored by the encoder after the enqueue gate validates the schema. Unknown
-encoder keys are refused. With an encoder, the parameter schema cannot declare
+within their width (a width of 1 also accepts `BOOLEAN`). Payload keys unused by the
+encoder, duplicate JSON keys and unknown encoder keys are refused. An encoder requires
+a non-empty parameter schema. With an encoder, the parameter schema cannot declare
 `fPort`, `hex`, `base64` or `confirmed`; the encoder controls the port and confirmation.
 Clearing `encoder` restores the raw contract. A definition without an encoder keeps
 the existing `fPort` plus `hex` or `base64` contract unchanged.

@@ -9,9 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/cmddownlink"
 	"github.com/devicechain-io/dc-microservice/payloadencode"
@@ -65,10 +63,11 @@ func TestEncodedCommandQueuesExactBytesOnBothServers(t *testing.T) {
 			require.Equal(t, cmddownlink.ReachUnsent, r.resp.envs[1].Reach)
 			require.Contains(t, *r.resp.envs[1].Error, "setpoint")
 			r.devices.encoderErr = errors.New("read unavailable")
-			r.handle(t, subject, envelope(t, goodParams), routed())
+			ack := r.handle(t, subject, envelope(t, goodParams), routed())
+			require.False(t, ack.acked)
 			require.Equal(t, 1, calls)
-			require.Equal(t, cmddownlink.ReachUnsent, r.resp.envs[2].Reach)
-			require.Contains(t, *r.resp.envs[2].Error, "definition could not be read")
+			require.Len(t, r.resp.envs, 2)
+			require.Equal(t, 1, r.m.get(ResultLookupFailed))
 		})
 	}
 }
@@ -123,30 +122,78 @@ func TestNoEncoderKeepsRawContractOnBothServers(t *testing.T) {
 	}
 }
 
-func TestEncoderCacheIncludesAbsenceAndExpires(t *testing.T) {
-	for _, hasEncoder := range []bool{true, false} {
-		encoded := "null"
-		if hasEncoder {
-			b, _ := json.Marshal(thermostatEncoder)
-			encoded = string(b)
+// Use the real vocabulary reader while retaining the existing alias fake.
+type vocabularyDevices struct {
+	*fakeDevices
+	reader *ServiceDevices
+}
+
+func (d vocabularyDevices) Encoder(ctx context.Context, tenant, device, key string) (*payloadencode.Encoder, error) {
+	return d.reader.Encoder(ctx, tenant, device, key)
+}
+
+func TestDefinitionReadFailuresStayUnacked(t *testing.T) {
+	for _, q := range []*fakeQuerier{
+		{err: errors.New("device-management down")},
+		{err: errors.New(`Cannot query field "encoder" on type "PublishedCommand"`)},
+		{body: `{}`},
+		{body: `{"deviceCommandVocabulary":null}`},
+		{body: `{"deviceCommandVocabulary":{"constrained":true,"commands":null}}`},
+	} {
+		r := newRig(t, nil)
+		r.a.devices = vocabularyDevices{r.devices, NewServiceDevices(q, "u")}
+		for i := 0; i < 2; i++ { // A redelivery retries the read without publishing a refusal.
+			ack := r.handle(t, subject, envelope(t, goodParams), routed())
+			require.False(t, ack.acked)
 		}
-		q := &fakeQuerier{body: `{"deviceCommandVocabulary":{"constrained":true,"commands":[{"commandKey":"setLed","encoder":` + encoded + `}]}}`}
+		require.Equal(t, 2, q.calls)
+		require.Equal(t, 2, r.m.get(ResultLookupFailed))
+		require.Zero(t, r.m.get(ResultRefusedParams))
+		require.Zero(t, r.claim.calls)
+		require.Empty(t, r.send.calls)
+		require.Empty(t, r.resp.envs)
+	}
+}
+
+func TestDefinitiveDefinitionFailuresAreUnsent(t *testing.T) {
+	for _, commands := range []string{
+		`[{"commandKey":"setLed","encoder":"{}"}]`,
+		`[{"commandKey":"setLed"},{"commandKey":"setLed"}]`,
+		`[]`,
+	} {
+		r := newRig(t, nil)
+		q := &fakeQuerier{body: `{"deviceCommandVocabulary":{"constrained":true,"commands":` + commands + `}}`}
 		d := NewServiceDevices(q, "u")
-		now := time.Now()
-		d.now = func() time.Time { return now }
-		first, err := d.Encoder(context.Background(), "acme", "dev-1", "setLed")
-		require.NoError(t, err)
-		require.Equal(t, hasEncoder, first != nil)
-		q.body = `{}`
-		second, err := d.Encoder(context.Background(), "acme", "dev-1", "setLed")
-		require.NoError(t, err)
-		require.Same(t, first, second)
-		now = now.Add(61 * time.Second)
-		_, err = d.Encoder(context.Background(), "acme", "dev-1", "setLed")
-		require.Error(t, err)
-		_, err = d.Encoder(context.Background(), "other", "dev-1", "setLed")
-		require.Error(t, err)
-		require.Contains(t, EncoderQuery, "commandKey encoder")
-		require.True(t, strings.Contains(EncoderQuery, "deviceCommandVocabulary"))
+		_, err := d.Encoder(context.Background(), "acme", "dev-1", "setLed")
+		require.ErrorIs(t, err, ErrDefinitiveDefinition)
+		r.a.devices = vocabularyDevices{r.devices, d}
+		ack := r.handle(t, subject, envelope(t, goodParams), routed())
+		require.True(t, ack.acked)
+		require.Empty(t, r.send.calls)
+		require.Len(t, r.resp.envs, 1)
+		require.Equal(t, cmddownlink.ReachUnsent, r.resp.envs[0].Reach)
+		require.Equal(t, 1, r.m.get(ResultRefusedParams))
+	}
+}
+
+func TestDispatchUsesRepublishedEncoderImmediately(t *testing.T) {
+	for _, initiallyRaw := range []bool{false, true} {
+		r := newRig(t, nil)
+		q := &fakeQuerier{}
+		r.a.devices = vocabularyDevices{r.devices, NewServiceDevices(q, "u")}
+		for i, encoded := range []string{`{"fPort":12,"fields":[{"const":"01"}]}`, `{"fPort":12,"fields":[{"const":"02"}]}`} {
+			definition, _ := json.Marshal(encoded)
+			payload := `{}`
+			if i == 0 && initiallyRaw {
+				definition = []byte("null")
+				payload = goodParams
+			}
+			q.body = `{"deviceCommandVocabulary":{"constrained":true,"commands":[{"commandKey":"setLed","encoder":` + string(definition) + `}]}}`
+			ack := r.handle(t, subject, envelope(t, payload), routed())
+			require.True(t, ack.acked)
+			require.Len(t, r.send.calls, i+1)
+		}
+		require.Equal(t, 2, q.calls)
+		require.Equal(t, []byte{2}, r.send.calls[1].params.Data)
 	}
 }

@@ -827,6 +827,14 @@ func commandDefinitionFamily() putest.Family[*Api] {
 		descriptionSeed = "Original description"
 		metadataSeed    = `{"fleet":"north"}`
 	)
+	// An encoder requires its schema. The generic harness moves/clears the pair;
+	// the encoder lifecycle tests cover independent edits and refusing a schema clear.
+	encoderField, schemaField := putest.PairedWith(
+		putest.OptionalStringField("encoder", `{"fPort":10,"fields":[{"const":"01"}]}`, `{"fPort":11,"fields":[{"const":"02"}]}`,
+			func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Encoder }),
+		putest.OptionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
+			func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.ParameterSchema }),
+	)
 	return putest.Family[*Api]{
 		Name:    "commandDefinition",
 		Token:   "cd-1",
@@ -869,10 +877,7 @@ func commandDefinitionFamily() putest.Family[*Api] {
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
 			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
-			putest.OptionalStringField("encoder", `{"fPort":10,"fields":[{"const":"01"}]}`, `{"fPort":11,"fields":[{"const":"02"}]}`,
-				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Encoder }),
-			putest.OptionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
-				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.ParameterSchema }),
+			encoderField, schemaField,
 			putest.RequiredStringField("impact", ImpactNormal, ImpactDisruptive,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Impact }),
 			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,

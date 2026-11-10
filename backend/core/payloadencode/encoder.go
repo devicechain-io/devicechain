@@ -41,6 +41,15 @@ type numberType struct {
 	signed, little bool
 }
 
+// Precision limits keep scale/offset arithmetic from swallowing meaningful fractions.
+// Integers at 2^53 lose float64 precision; the tighter input cap retains fractional headroom.
+const (
+	maxExactInteger       = 1 << 53
+	maxInputMagnitude     = 1e15
+	maxTransformMagnitude = 1e9
+	minScaleMagnitude     = 1e-9
+)
+
 // Names match the uplink frame-reader vocabulary.
 var types = map[string]numberType{
 	"u8": {1, false, false}, "i8": {1, true, false},
@@ -79,7 +88,55 @@ func clip(s string) string {
 }
 func refuse(p, r string) error { return &EncodeError{clip(p), r} }
 
+// uniqueKeys walks tokens before decoding so duplicate object keys cannot be overwritten.
+func uniqueKeys(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok {
+				return fmt.Errorf("invalid object key")
+			}
+			if seen[name] {
+				return refuse(name, "duplicate JSON key")
+			}
+			seen[name] = true
+			if err := uniqueKeys(d); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for d.More() {
+			if err := uniqueKeys(d); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unexpected delimiter")
+	}
+	_, err = d.Token()
+	return err
+}
+
 func strict(raw []byte, dst any) error {
+	tokens := json.NewDecoder(bytes.NewReader(raw))
+	tokens.UseNumber()
+	if err := uniqueKeys(tokens); err != nil {
+		return err
+	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if err := d.Decode(dst); err != nil {
@@ -191,11 +248,11 @@ func Parse(raw []byte) (*Encoder, error) {
 			if f.Type == "bool" && (f.Scale != nil || f.Offset != nil) {
 				return nil, fmt.Errorf("bool cannot have scale or offset")
 			}
-			if f.Scale != nil && (!finite(*f.Scale) || *f.Scale == 0) {
-				return nil, fmt.Errorf("scale must be finite and non-zero")
+			if f.Scale != nil && (!finite(*f.Scale) || math.Abs(*f.Scale) < minScaleMagnitude || math.Abs(*f.Scale) > maxTransformMagnitude) {
+				return nil, fmt.Errorf("scale magnitude must be finite and between 1e-9 and 1e9")
 			}
-			if f.Offset != nil && !finite(*f.Offset) {
-				return nil, fmt.Errorf("offset must be finite")
+			if f.Offset != nil && (!finite(*f.Offset) || math.Abs(*f.Offset) > maxTransformMagnitude) {
+				return nil, fmt.Errorf("offset magnitude must be finite and at most 1e9")
 			}
 			if err := add(*f.Param, k); err != nil {
 				return nil, err
@@ -254,9 +311,7 @@ func value(obj map[string]json.RawMessage, p string, boolean bool) (float64, err
 	if bytes.Equal(r, []byte("null")) || json.Unmarshal(r, &n) != nil || !finite(n) {
 		return 0, refuse(p, "expected a finite number")
 	}
-	// A float64 holds integers exactly only below 2^53; beyond that the input has already been
-	// changed before any range or integrality check could see it, so it is refused, not encoded.
-	if math.Abs(n) >= 1<<53 {
+	if math.Abs(n) >= maxExactInteger || math.Abs(n) > maxInputMagnitude {
 		return 0, refuse(p, "number is too large to encode exactly")
 	}
 	return n, nil
@@ -276,8 +331,19 @@ func appendInt(dst []byte, n uint64, t numberType) []byte {
 // are never injected, and errors always return a zero Result with no bytes.
 func (e *Encoder) Encode(payload []byte) (Result, error) {
 	var obj map[string]json.RawMessage
-	if err := strict(payload, &obj); err != nil || obj == nil {
+	if err := strict(payload, &obj); err != nil {
+		if e, ok := err.(*EncodeError); ok {
+			return Result{}, e
+		}
 		return Result{}, refuse("(payload)", "expected a JSON object")
+	}
+	if obj == nil {
+		return Result{}, refuse("(payload)", "expected a JSON object")
+	}
+	for key := range obj {
+		if _, ok := e.params[key]; !ok {
+			return Result{}, refuse(key, "unused payload key")
+		}
 	}
 	data := make([]byte, 0, e.length)
 	for _, f := range e.doc.Fields {
@@ -326,9 +392,8 @@ func (e *Encoder) Encode(payload []byte) (Result, error) {
 			offset = *f.Offset
 		}
 		raw := (v - offset) / scale
-		n := math.Round(raw)
-		if !finite(raw) || math.Abs(raw-n) > 1e-6 {
-			return Result{}, refuse(p, "raw value must be an integer; no rounding or truncation")
+		if !finite(raw) || math.Abs(raw) >= maxExactInteger {
+			return Result{}, refuse(p, "raw value is too large to encode exactly")
 		}
 		t := types[f.Type]
 		min, max := 0.0, math.Exp2(float64(t.size*8))-1
@@ -336,8 +401,14 @@ func (e *Encoder) Encode(payload []byte) (Result, error) {
 			min = -math.Exp2(float64(t.size*8 - 1))
 			max = math.Exp2(float64(t.size*8-1)) - 1
 		}
-		if n < min || n > max {
+		// The range is checked before rounding (255.4 must not round into u8) but with the same
+		// tolerance as integrality, so float error at an exact boundary (178.5/0.7) is not a refusal.
+		if raw < min-1e-6 || raw > max+1e-6 {
 			return Result{}, refuse(p, "value is outside the encoded type range")
+		}
+		n := math.Round(raw)
+		if (scale == 1 && offset == 0 && math.Trunc(v) != v) || math.Abs(raw-n) > 1e-6 {
+			return Result{}, refuse(p, "raw value must be an integer; no rounding or truncation")
 		}
 		data = appendInt(data, uint64(int64(n)), t)
 	}

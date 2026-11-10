@@ -21,8 +21,7 @@ func NewCommandEncoderSchema() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS encoder jsonb;`).Error
 		},
-		Rollback: func(tx *gorm.DB) error {
-			return tx.Exec(`ALTER TABLE ` + table + ` DROP COLUMN IF EXISTS encoder;`).Error
-		},
+		// Keep the nullable addition: dropping the column would destroy published authoring data.
+		Rollback: func(tx *gorm.DB) error { return nil },
 	}
 }

@@ -89,3 +89,54 @@ func TestCommandEncoderSchemaKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestEncoderRequiresSchemaThroughoutLifecycle(t *testing.T) {
+	api := newEnqueueTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	p := &DeviceProfile{}
+	p.Token = "encoder-schema-profile"
+	if err := api.RDB.DB(ctx).Create(p).Error; err != nil {
+		t.Fatal(err)
+	}
+	encoder := `{"fPort":1,"fields":[{"const":"01"}]}`
+	schema := `[{"name":"x","dataType":"INT"}]`
+	for _, absent := range []*string{nil, strEncoderTest(""), strEncoderTest("[]"), strEncoderTest("null")} {
+		_, err := api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{Token: "bad-schema", DeviceProfileToken: p.Token, CommandKey: "bad", Encoder: &encoder, ParameterSchema: absent})
+		if err == nil || !strings.Contains(err.Error(), "non-empty parameter schema") {
+			t.Fatalf("create without schema: %v", err)
+		}
+	}
+	c, err := api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{Token: "schema-command", DeviceProfileToken: p.Token, CommandKey: "constant", Encoder: &encoder, ParameterSchema: &schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, absent := range []dcgraphql.OptionalString{{Set: true}, dcgraphql.OptionalStringOf(""), dcgraphql.OptionalStringOf("[]"), dcgraphql.OptionalStringOf("null")} {
+		_, err := api.UpdateCommandDefinition(ctx, c.Token, &CommandDefinitionUpdateRequest{ParameterSchema: absent})
+		if err == nil || !strings.Contains(err.Error(), "non-empty parameter schema") {
+			t.Fatalf("clear schema: %v", err)
+		}
+	}
+	for _, payload := range []string{`{"fPort":1}`, `{"hex":"01"}`, `{"base64":"AQ=="}`} {
+		if err := ValidateCommandPayload(c, []byte(payload)); err == nil {
+			t.Fatalf("enqueue accepted %s", payload)
+		}
+	}
+	for _, absent := range []any{nil, datatypes.JSON(`[]`)} {
+		if err := api.RDB.DB(ctx).Model(&CommandDefinition{}).Where("id = ?", c.ID).Update("parameter_schema", absent).Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := api.PublishDeviceProfile(ctx, p.Token, nil, nil, "test"); err == nil || !strings.Contains(err.Error(), "non-empty parameter schema") {
+			t.Fatalf("publish without schema: %v", err)
+		}
+	}
+	// Setting an encoder on an existing raw command also requires a schema.
+	raw, err := api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{Token: "raw-schema-command", DeviceProfileToken: p.Token, CommandKey: "raw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.UpdateCommandDefinition(ctx, raw.Token, &CommandDefinitionUpdateRequest{Encoder: dcgraphql.OptionalStringOf(encoder)}); err == nil || !strings.Contains(err.Error(), "non-empty parameter schema") {
+		t.Fatalf("update without schema: %v", err)
+	}
+}
+
+func strEncoderTest(s string) *string { return &s }

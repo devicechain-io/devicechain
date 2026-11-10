@@ -370,6 +370,8 @@ Un informe se asocia a su comando solo por el correlation id `dc:` que puso la p
 
 Una definición de comando puede incluir una cadena JSON `encoder` opcional. Publica
 el perfil para activarla. Se aplica tanto a ChirpStack v4 como a The Things Stack v3.
+El codificador vigente al despachar el comando es el que se aplica; una nueva
+publicación se aplica a los comandos despachados después de ella.
 Este documento concatena constantes, números escalados, booleanos y bits:
 
 ```json
@@ -412,19 +414,21 @@ Para un termostato, declara `setpoint` como `DOUBLE` y `mode` como `INT` en
 
 El payload `{"setpoint":21.5,"mode":3}` produce `00d703` en hexadecimal, o `ANcD`
 en base64, en el puerto 12. El cálculo invierte el decodificador:
-`raw = (value - offset) / scale`. La escala predeterminada es 1; debe ser finita y
-distinta de cero. El desplazamiento predeterminado es 0 y debe ser finito. El valor
-raw debe estar a menos de `1e-6` de un entero y caber en su tipo. Nunca se redondea
-ni se trunca silenciosamente: `215.4` con escala 1 se rechaza. NaN, infinito,
+`raw = (value - offset) / scale`. La escala vale 1 por defecto y su magnitud debe estar entre `1e-9` y `1e9`.
+El desplazamiento vale 0 por defecto y su magnitud no puede superar `1e9`; ambos deben
+ser finitos. El valor raw debe caber en su tipo antes de redondear. Con escala 1 y
+desplazamiento 0 se exige un entero exacto; otras transformaciones admiten una
+tolerancia de `1e-6`. La magnitud de entrada no puede superar `1e15`, y las magnitudes
+de entrada y raw deben ser menores que `2^53`. `215.4` con escala 1 se rechaza. NaN, infinito,
 valores fuera de rango, tipos JSON incorrectos o parámetros ausentes rechazan el
 comando como **no enviado**, antes de llamar a la red. Los valores predeterminados
 del esquema son sugerencias de edición y nunca se insertan.
 
 Cada parámetro del codificador debe ser único y estar declarado con un tipo escalar
 compatible: `INT` o `DOUBLE` para números, `BOOLEAN` para booleanos y valores enteros
-dentro de su anchura para bits (anchura 1 también admite `BOOLEAN`). El codificador
-ignora los parámetros no utilizados tras la validación del esquema al encolar.
-Las claves desconocidas se rechazan. Con un codificador, el esquema no puede declarar
+dentro de su anchura para bits (anchura 1 también admite `BOOLEAN`). Se rechazan las claves de payload no utilizadas y las claves JSON duplicadas.
+Las claves desconocidas se rechazan. Un codificador requiere un esquema de
+parámetros no vacío, que no puede declarar
 `fPort`, `hex`, `base64` ni `confirmed`: el codificador controla puerto y confirmación.
 Borrar `encoder` restaura el contrato raw. Una definición sin codificador conserva
 sin cambios el contrato `fPort` más `hex` o `base64`.
