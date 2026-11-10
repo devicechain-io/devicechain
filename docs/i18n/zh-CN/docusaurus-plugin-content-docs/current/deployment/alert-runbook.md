@@ -735,7 +735,7 @@ Broker presence transitions are not reaching the event stream
 
 Device MQTT payloads cannot reach their decoder pipeline
 
-**含义与处理方式.** For 10 minutes, raw device MQTT uplinks have failed before reaching the decoder pipeline. Missing decoders, invalid or oversized payloads and unknown devices go to failed-decode; plan lookup and publish failures retry through the broker. Inspect the Ingest dashboard result labels, failed-events and event-sources logs; check the profile decoder and device-management or broker availability. PayloadDecoderFailuresHigh covers failures after handoff to the decoder.
+**含义与处理方式.** For 10 minutes, raw device MQTT uplinks have failed before reaching the decoder pipeline. Missing decoders, invalid or oversized payloads and unknown devices go to failed-decode; plan resolution and publish failures retry through the broker. Inspect the Ingest dashboard result labels, failed-events and event-sources logs; check the profile decoder and device-management or broker availability. PayloadDecoderFailuresHigh covers failures after handoff to the decoder.
 
 ### ExternalMqttSourceLosingEvents {#externalmqttsourcelosingevents}
 
