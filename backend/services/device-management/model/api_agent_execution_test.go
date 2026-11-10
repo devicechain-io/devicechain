@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -46,6 +48,8 @@ func testFinalApproval(t *testing.T, action AlarmProposalAction) {
 	require.NoError(t, err)
 	if action == AlarmProposalAck {
 		require.True(t, alarms[0].Acknowledged)
+		require.NotNil(t, alarms[0].AcknowledgedBy.String)
+		require.Equal(t, "boss", alarms[0].AcknowledgedBy.String, "acknowledged as the approving person, not the agent")
 	} else {
 		require.Equal(t, string(AlarmStateCleared), alarms[0].State)
 	}
@@ -251,4 +255,55 @@ func TestAgentExecutionAlreadyAcknowledgedIsConsumedWithoutEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(actiongate.StateExecuted), got.State)
 	require.Empty(t, pub.events)
+}
+
+// A stored dependency set that does not match the stored targets one for one (an extra or a
+// missing entry) is a change, not a pass: every named alarm still exists, so only the shape check
+// can see it.
+func TestDependencySetMustMatchTargetsExactly(t *testing.T) {
+	for name, deps := range map[string]string{
+		"extra":   `{"raisedTimes":{"a1":"%s","ghost":"2020-01-01T00:00:00Z"}}`,
+		"missing": `{"raisedTimes":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
+			stored := r.stored(t, p.Token)
+			var a Alarm
+			require.NoError(t, r.db.WithContext(ctx).Where("token = ?", "a1").First(&a).Error)
+			doc := deps
+			if name == "extra" {
+				doc = strings.Replace(deps, "%s", a.RaisedTime.UTC().Format(time.RFC3339Nano), 1)
+			}
+			require.NoError(t, r.db.WithContext(ctx).Model(&AgentProposal{}).Where("token = ?", stored.Token).
+				Update("dependencies", datatypes.JSON(doc)).Error)
+			got, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+			require.NoError(t, err)
+			require.Equal(t, string(actiongate.StateRefused), got.State)
+			require.JSONEq(t, `["DEPENDENCY_CHANGED"]`, string(got.Reasons))
+			alarms, err := r.api.AlarmsByToken(ctx, []string{"a1"})
+			require.NoError(t, err)
+			require.False(t, alarms[0].Acknowledged)
+		})
+	}
+}
+
+// The policy is asked AFTER the alarm rows are read (and, on Postgres, locked), never before: a wait
+// for an alarm row must not sit between the decision and the effect.
+func TestDecisionIsAskedAfterTheAlarmsAreLocked(t *testing.T) {
+	r, p, ctx, person := executionSetup(t, AlarmProposalAck, "a1")
+	var order []string
+	require.NoError(t, r.db.Callback().Query().After("gorm:query").Register("order_alarm_reads", func(db *gorm.DB) {
+		if db.Statement.Table == "alarms" {
+			order = append(order, "alarms")
+		}
+	}))
+	r.decider.second = func() (actiongate.ExecutionDecision, error) {
+		order = append(order, "decision")
+		return r.decider.exec, nil
+	}
+	_, err := r.api.ApproveAgentProposal(ctx, person, p.Token, p.Digest)
+	require.NoError(t, err)
+	require.NotEmpty(t, order)
+	require.Equal(t, "alarms", order[0])
+	require.Contains(t, order, "decision")
 }

@@ -37,49 +37,9 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 			return errProposalExpired
 		}
 		p = &locked
-		sid := ""
-		if p.ProposerSid != nil {
-			sid = *p.ProposerSid
-		}
-		fresh, err := api.AgentDecider.Execution(ctx, actiongate.ExecutionRequest{
-			ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
-			ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid, Approvers: actiongate.Principals(next),
-		})
-		if err != nil {
-			if errors.Is(err, auth.ErrForbidden) {
-				return err
-			}
-			return actiongate.ErrPolicyUnavailable
-		}
-		now = time.Now().UTC()
-		refuse := func(reasons []string) error {
-			raw, err := json.Marshal(actiongate.PersistedReasons(reasons))
-			if err != nil {
-				return err
-			}
-			return actiongate.Transition(tx, &AgentProposal{}, p.Token, actiongate.StateProposed, actiongate.StateRefused, now,
-				map[string]any{"decided_at": now, "decided_by": approver.Principal, "reasons": datatypes.JSON(raw)})
-		}
-		if fresh.Verdict != actiongate.VerdictApprove {
-			reasons := actiongate.PersistedReasons(fresh.Reasons)
-			if fresh.Verdict == actiongate.VerdictAuto {
-				reasons = append(reasons, actiongate.ReasonAutoNotAvailable)
-			}
-			return refuse(reasons)
-		}
-		if !slices.Contains(fresh.ValidApprovers, approver.Principal) {
-			return errNotAnApprover
-		}
-		if err := actiongate.CheckStepUp(approver, fresh.StepUp, now); err != nil {
-			return err
-		}
-		if approver.Principal == p.ProposerSub && (!fresh.AllowSelfConfirm || fresh.RequiredApprovals > 1) {
-			return errSelfApproval
-		}
-		if fresh.RequiredApprovals < 1 || actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now) < fresh.RequiredApprovals {
-			return errConcurrentApproval
-		}
-
+		// Parse the stored action and LOCK every target alarm BEFORE asking the policy: a wait for an
+		// alarm row must not sit between the decision and the effect, or a switch thrown during the
+		// wait would be answered by a decision that is already stale.
 		var targets []string
 		var payload struct {
 			Action AlarmProposalAction `json:"action"`
@@ -125,6 +85,49 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 				byToken[alarm.Token] = alarm
 			}
 		}
+		sid := ""
+		if p.ProposerSid != nil {
+			sid = *p.ProposerSid
+		}
+		fresh, err := api.AgentDecider.Execution(ctx, actiongate.ExecutionRequest{
+			ProposalToken: p.Token, Kind: actiongate.Kind(p.Kind), Impact: p.Impact, TargetCount: p.TargetCount,
+			ProposerPrincipal: p.ProposerSub, ProposerClient: p.ProposerClient, ProposerSid: sid, Approvers: actiongate.Principals(next),
+		})
+		if err != nil {
+			if errors.Is(err, auth.ErrForbidden) {
+				return err
+			}
+			return actiongate.ErrPolicyUnavailable
+		}
+		now = time.Now().UTC()
+		refuse := func(reasons []string) error {
+			raw, err := json.Marshal(actiongate.PersistedReasons(reasons))
+			if err != nil {
+				return err
+			}
+			return actiongate.Transition(tx, &AgentProposal{}, p.Token, actiongate.StateProposed, actiongate.StateRefused, now,
+				map[string]any{"decided_at": now, "decided_by": approver.Principal, "reasons": datatypes.JSON(raw)})
+		}
+		if fresh.Verdict != actiongate.VerdictApprove {
+			reasons := actiongate.PersistedReasons(fresh.Reasons)
+			if fresh.Verdict == actiongate.VerdictAuto {
+				reasons = append(reasons, actiongate.ReasonAutoNotAvailable)
+			}
+			return refuse(reasons)
+		}
+		if !slices.Contains(fresh.ValidApprovers, approver.Principal) {
+			return errNotAnApprover
+		}
+		if err := actiongate.CheckStepUp(approver, fresh.StepUp, now); err != nil {
+			return err
+		}
+		if approver.Principal == p.ProposerSub && (!fresh.AllowSelfConfirm || fresh.RequiredApprovals > 1) {
+			return errSelfApproval
+		}
+		if fresh.RequiredApprovals < 1 || actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now) < fresh.RequiredApprovals {
+			return errConcurrentApproval
+		}
+
 		changed := len(raised) != len(targets) || len(byToken) != len(targets)
 		for _, token := range targets {
 			alarm := byToken[token]
@@ -134,6 +137,14 @@ func (api *Api) executeAlarmProposal(ctx context.Context, approver actiongate.Ap
 		}
 		if changed {
 			return refuse([]string{actiongate.ReasonDependencyChanged})
+		}
+		// The clock again: the checks above are only as fresh as the moment they ran.
+		now = time.Now().UTC()
+		if !p.ExpiresAt.After(now) {
+			return errProposalExpired
+		}
+		if actiongate.Tally(next, fresh.ValidApprovers, p.ProposerSub, fresh.RequiredApprovals, fresh.AllowSelfConfirm, fresh.StepUp, now) < fresh.RequiredApprovals {
+			return errConcurrentApproval
 		}
 		for _, token := range targets {
 			var ev *AlarmStateChangeEvent
