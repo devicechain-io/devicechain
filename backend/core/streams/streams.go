@@ -562,9 +562,12 @@ const (
 	// may have changed which tracked relationships it has, so a projection keyed by device
 	// (device-state's live view) can keep a customer-scoped stamp current between events.
 	DeviceOwnership = "device-ownership"
-	AlarmEvents     = "alarm-events"
-	RaiseAlarm      = "raise-alarm"
-	FailedDecode    = "failed-decode"
+
+	// AgentActuationKills carries tenant kill facts to local area fences.
+	AgentActuationKills = "agent-actuation-kills"
+	AlarmEvents         = "alarm-events"
+	RaiseAlarm          = "raise-alarm"
+	FailedDecode        = "failed-decode"
 
 	// FailedEvents carries an event the resolve/persist pipeline could not process:
 	// device-management publishes one when resolution fails, event-management when
@@ -1089,11 +1092,14 @@ var All = []Stream{
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: DeviceOwnership, Durability: durability.Rebuildable, DurabilityWhy: "ownership changes are projected from the stored relationships", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
+	// Small control facts; the window deduplicates retries of the same EventID.
+	{Suffix: AgentActuationKills, Durability: durability.Rebuildable, DurabilityWhy: "the policy head retains the kill state and operators can repeat a kill", DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"user-management"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "tenant agent actuation kills"},
+
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
 	// Window: device-management publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: AlarmEvents, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, Durability: durability.Rebuildable, DurabilityWhy: "alarm state is held in the database and notification re-derives from it", DuplicateWindowSeconds: RestartDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/actiongate"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/agentpolicy"
@@ -170,6 +171,7 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 		})
 		if err == nil {
 			m.recordAuthLabeled(ctx, rdb.AuditOpAgentActuationDisabled, principalOf(claims), claims.Tenant, claims.Tenant)
+			err = m.publishKill(ctx, claims.Tenant, view.Head.PublishedVersion, actiongate.KillCauseTenantDisabled)
 		}
 		return view, err
 	}
@@ -305,7 +307,10 @@ func (m *Manager) SetTenantAgentActuationSuspended(ctx context.Context, tenant s
 		op = rdb.AuditOpAgentActuationSuspended
 	}
 	m.recordAuthLabeled(ctx, op, by, tenant, tenant)
-	return head, nil
+	if suspended {
+		err = m.publishKill(ctx, tenant, head.PublishedVersion, actiongate.KillCauseOperatorSuspended)
+	}
+	return head, err
 }
 
 // principalOf is the canonical principal key, the same one the journal's actor uses.

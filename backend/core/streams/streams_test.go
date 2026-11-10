@@ -318,7 +318,7 @@ func TestPlatformAuthoredStreamsArePinned(t *testing.T) {
 		ResolvedEvents: true, DerivedEvents: true, DeviceAttribute: true, DeviceCommands: true,
 		DeviceDesired: true, ConnectorDispatch: true, DetectionRulesPublished: true, DeviceRoster: true,
 		GeoFenceSetManifest: true, EntityDeleted: true, AlarmEvents: true, RaiseAlarm: true, FailedEvents: true,
-		DeviceOwnership: true,
+		DeviceOwnership: true, AgentActuationKills: true,
 	}
 	got := map[string]bool{}
 	for _, s := range All {
@@ -342,5 +342,18 @@ func TestPlatformAuthoredStreamsArePinned(t *testing.T) {
 	}
 	if KindPlatformAuthored("command-response") || KindPlatformAuthored("no-such-kind") || !KindPlatformAuthored("notification") {
 		t.Error("KindPlatformAuthored must be true only where every stream of the kind is platform-authored")
+	}
+}
+
+func TestAgentActuationKillsContract(t *testing.T) {
+	s := bySuffix[AgentActuationKills]
+	if len(s.Writers) != 1 || s.Writers[0] != "user-management" {
+		t.Fatalf("kill writers = %v", s.Writers)
+	}
+	if len(s.Readers) != 1 || s.Readers[0] != (Reader{"device-management", ReadDurable}) {
+		t.Fatalf("kill readers = %v", s.Readers)
+	}
+	if s.Tier != Cold || s.Shape != ShapeTenant || s.DeadLetterKind != kindControlFact || !s.PlatformAuthored || s.DuplicateWindowSeconds != RedeliveryDuplicateWindowSeconds {
+		t.Fatalf("incorrect kill stream contract: %+v", s)
 	}
 }

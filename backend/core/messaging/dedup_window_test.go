@@ -107,6 +107,11 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		// REACT, on each delivery of the derived event.
 		streams.ConnectorDispatch: onRedelivery,
 		streams.RaiseAlarm:        onRedelivery,
+		// device-management's agent-effect relay, once per outbox row under the row's stable id. A row
+		// stays queued across a broker outage or a restart, so a re-publish can wait for either.
+		streams.AlarmEvents: afterRestart,
+		// user-management stamps EventID; a repeated operator action gets a new id.
+		streams.AgentActuationKills: onRedelivery,
 		// device-management's failure record, on each redelivery of its source.
 		streams.FailedEvents: onRedelivery,
 		// The in-handler arm and the max-delivery recorder write the same give-up; the
@@ -129,7 +134,6 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		streams.DeviceOwnership:         noID,
 		streams.GeoFenceSetManifest:     noID,
 		streams.EntityDeleted:           noID,
-		streams.AlarmEvents:             noID,
 		streams.FailedDecode:            noID,
 		streams.MaxDeliveries:           noID,
 	}
