@@ -133,9 +133,11 @@ on:
 permissions:
   contents: read
 
+# Keep each pushed commit in its own group so later main pushes cannot replace it.
+# This fits the existing concurrency block; superseded PR runs still cancel.
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
