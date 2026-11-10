@@ -106,6 +106,9 @@ const (
 	// the tenant the one it applies to. The override row itself keeps only the latest state.
 	AuditOpAgentActuationSuspended = "agent_actuation_suspended"
 	AuditOpAgentActuationRestored  = "agent_actuation_restored"
+	// Tenant kill-switch changes, independent of published policy versions.
+	AuditOpAgentActuationDisabled = "agent_actuation_disabled"
+	AuditOpAgentActuationEnabled  = "agent_actuation_enabled"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,

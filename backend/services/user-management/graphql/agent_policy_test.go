@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-user-management/iam"
+	"github.com/devicechain-io/dc-user-management/identity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,4 +43,15 @@ func TestPolicyWritesRefuseAgentOrigin(t *testing.T) {
 
 	_, err = authorizePolicyWrite(auth.WithClaims(context.Background(), accessClaims(string(auth.MemberWrite))))
 	require.Error(t, err, "a person without agent:admin must be refused")
+}
+
+func TestTenantKillFlagDisablesActuationInEffect(t *testing.T) {
+	r := &AgentPolicyResolver{instance: true, view: &identity.AgentPolicyView{
+		Head: &iam.AgentPolicy{}, Published: &iam.AgentPolicyVersion{Document: `{"actuation":"enabled"}`},
+	}}
+	require.True(t, r.ActuationInEffect(), "control")
+	require.False(t, r.ActuationOff())
+	r.view.Head.TenantActuationOff = true
+	require.True(t, r.ActuationOff())
+	require.False(t, r.ActuationInEffect())
 }

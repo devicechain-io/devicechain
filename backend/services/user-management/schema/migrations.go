@@ -143,5 +143,6 @@ var (
 		// published versions) and the immutable agent flag on service accounts. No seed rows: a
 		// tenant with no published policy has agent actuation off.
 		NewAgentPolicyMigration(),
+		NewAgentActuationOffMigration(),
 	}
 )

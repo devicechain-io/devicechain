@@ -15,7 +15,7 @@ import (
 )
 
 // AgentPolicy is the HEAD of a tenant's agent policy: its working draft, the version in force,
-// and the operator's per-tenant suspension. The published documents themselves are
+// and the tenant kill switch and operator suspension. The published documents themselves are
 // AgentPolicyVersion rows. One head per tenant, created on first write.
 //
 // 🔴 NO HEAD, VERSION 0, OR A SUSPENDED HEAD ALL MEAN AGENT ACTUATION IS OFF in this tenant.
@@ -24,14 +24,17 @@ type AgentPolicy struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	TenantId          string  `gorm:"not null;size:128;uniqueIndex:idx_iam_agent_policies_tenant"`
-	Draft             *string `gorm:"type:jsonb"`
-	DraftUpdatedAt    *time.Time
-	DraftUpdatedBy    *string `gorm:"size:256"`
-	PublishedVersion  int     `gorm:"not null;default:0"`
-	OperatorSuspended bool    `gorm:"not null;default:false"`
-	SuspendedAt       *time.Time
-	SuspendedBy       *string `gorm:"size:256"`
+	TenantId           string  `gorm:"not null;size:128;uniqueIndex:idx_iam_agent_policies_tenant"`
+	Draft              *string `gorm:"type:jsonb"`
+	DraftUpdatedAt     *time.Time
+	DraftUpdatedBy     *string `gorm:"size:256"`
+	PublishedVersion   int     `gorm:"not null;default:0"`
+	TenantActuationOff bool    `gorm:"not null;default:false"`
+	ActuationOffAt     *time.Time
+	ActuationOffBy     *string `gorm:"size:256"`
+	OperatorSuspended  bool    `gorm:"not null;default:false"`
+	SuspendedAt        *time.Time
+	SuspendedBy        *string `gorm:"size:256"`
 }
 
 func (AgentPolicy) TableName() string { return "iam_agent_policies" }
@@ -45,13 +48,12 @@ const (
 	AgentPolicyOriginPublish = "publish"
 	// AgentPolicyOriginRollback republishes an earlier version's document as a new version.
 	AgentPolicyOriginRollback = "rollback"
-	// AgentPolicyOriginActuation is the tenant kill switch (or its re-enable): the version in
-	// force with only its actuation changed.
+	// AgentPolicyOriginActuation is a re-enable of a disabled published document.
 	AgentPolicyOriginActuation = "actuation"
 )
 
 // AgentPolicyVersion is one published version. Append-only: a rollback publishes a NEW version, so
-// the number only grows and "a decision made under version N" stays meaningful after a kill.
+// the number only grows and "a decision made under version N" identifies its document.
 type AgentPolicyVersion struct {
 	ID          uint `gorm:"primarykey"`
 	CreatedAt   time.Time
@@ -159,7 +161,9 @@ func (s *Store) SaveAgentPolicyDraft(ctx context.Context, tenant, doc, by string
 //
 // Next is given the head and the version in force (nil when none), and returns the document to
 // publish (already validated and canonical) and the origin, or an error that aborts the publish.
-// clearDraft says whether the draft is consumed.
+// clearDraft says whether the draft is consumed. An empty doc saves only the head,
+// allowing a flag change validated under the same lock without publishing a version;
+// the callback may update head flags, and errors roll back every change.
 type AgentPolicyPublish func(head *AgentPolicy, current *AgentPolicyVersion) (doc, origin string, clearDraft bool, err error)
 
 // PublishAgentPolicy appends a new version and makes it the one in force, in one transaction
@@ -183,24 +187,26 @@ func (s *Store) PublishAgentPolicy(ctx context.Context, tenant, by string, next 
 		if err != nil {
 			return err
 		}
-		// The next number is one past the HIGHEST ever published, not the one in force: a
-		// rollback must never reuse a number.
-		var max int
-		if err := tx.Model(&AgentPolicyVersion{}).Where("tenant_id = ?", tenant).Select("COALESCE(MAX(version), 0)").Scan(&max).Error; err != nil {
-			return err
+		// An empty document requests a head-only update under the same lock.
+		if doc != "" {
+			// Always advance past the highest published version, including after rollback.
+			var max int
+			if err := tx.Model(&AgentPolicyVersion{}).Where("tenant_id = ?", tenant).Select("COALESCE(MAX(version), 0)").Scan(&max).Error; err != nil {
+				return err
+			}
+			v := &AgentPolicyVersion{TenantId: tenant, Version: max + 1, Document: doc, Origin: origin, PublishedBy: by}
+			if err := tx.Create(v).Error; err != nil {
+				return err
+			}
+			head.PublishedVersion = v.Version
+			out = v
 		}
-		v := &AgentPolicyVersion{TenantId: tenant, Version: max + 1, Document: doc, Origin: origin, PublishedBy: by}
-		if err := tx.Create(v).Error; err != nil {
-			return err
-		}
-		head.PublishedVersion = v.Version
 		if clearDraft {
 			head.Draft, head.DraftUpdatedAt, head.DraftUpdatedBy = nil, nil, nil
 		}
 		if err := tx.Save(head).Error; err != nil {
 			return err
 		}
-		out = v
 		return nil
 	})
 	return out, err
@@ -220,6 +226,30 @@ func (s *Store) SetAgentPolicySuspended(ctx context.Context, tenant string, susp
 			head.SuspendedAt, head.SuspendedBy = &now, &by
 		} else {
 			head.SuspendedAt, head.SuspendedBy = nil, nil
+		}
+		if err := tx.Save(head).Error; err != nil {
+			return err
+		}
+		out = head
+		return nil
+	})
+	return out, err
+}
+
+// SetAgentPolicyActuationOff records the tenant kill switch.
+func (s *Store) SetAgentPolicyActuationOff(ctx context.Context, tenant string, off bool, by string) (*AgentPolicy, error) {
+	var out *AgentPolicy
+	err := s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		head, err := lockAgentPolicyHead(tx, tenant)
+		if err != nil {
+			return err
+		}
+		head.TenantActuationOff = off
+		if off {
+			now := time.Now().UTC()
+			head.ActuationOffAt, head.ActuationOffBy = &now, &by
+		} else {
+			head.ActuationOffAt, head.ActuationOffBy = nil, nil
 		}
 		if err := tx.Save(head).Error; err != nil {
 			return err

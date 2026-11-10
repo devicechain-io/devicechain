@@ -69,7 +69,8 @@ func (r *AgentProposalResolver) Reasons() []string {
 	if err := json.Unmarshal(r.M.Reasons, &out); err != nil || out == nil {
 		return []string{}
 	}
-	return out
+	// Rows persisted before the coarsening may still carry the detailed proposer reasons.
+	return actiongate.PersistedReasons(out)
 }
 func (r *AgentProposalResolver) CreatedAt() string  { return rfc3339(r.M.CreatedAt) }
 func (r *AgentProposalResolver) ExpiresAt() string  { return rfc3339(r.M.ExpiresAt) }

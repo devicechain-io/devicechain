@@ -112,12 +112,11 @@ func parsePolicyInput(raw string) (*agentpolicy.Document, string, error) {
 // policyChoice is what a publish publishes: a stored or submitted document to parse (raw), or one
 // already in hand (doc), which is never re-parsed.
 type policyChoice struct {
-	raw        string
-	doc        *agentpolicy.Document
-	origin     string
-	clearDraft bool
-	// kill marks the kill switch turning actuation OFF, which must never be refused.
-	kill bool
+	raw             string
+	doc             *agentpolicy.Document
+	origin          string
+	clearDraft      bool
+	enableActuation bool
 }
 
 // SaveAgentPolicyDraft validates and stores the tenant's working draft. Saving a draft changes
@@ -161,22 +160,15 @@ func (m *Manager) RollbackAgentPolicy(ctx context.Context, claims *auth.Claims, 
 	})
 }
 
-// SetTenantAgentActuation is the tenant KILL SWITCH (K1), and its re-enable: it publishes the
-// policy in force as a new version with only its actuation changed. Turning actuation off is a
-// tightening and always succeeds without a step-up, even with no policy (nothing is published
-// then: there is nothing to turn off). Turning it back on is a loosening and needs one.
-//
-// A new VERSION rather than a flag beside the policy, because the version is what a decision
-// reports: a decision made under the killed version is recognisably older than the kill.
+// SetTenantAgentActuation controls the tenant kill switch independently of the document.
+// Disabling never reads or rewrites a document. Enabling is checked under the head lock.
 func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Claims, enabled bool) (*AgentPolicyView, error) {
 	if !enabled {
-		head, err := m.iam.AgentPolicyHead(ctx, claims.Tenant)
-		if err != nil {
+		if _, err := m.iam.SetAgentPolicyActuationOff(ctx, claims.Tenant, true, principalOf(claims)); err != nil {
 			return nil, err
 		}
-		if head == nil || head.PublishedVersion == 0 {
-			return m.AgentPolicy(ctx, claims.Tenant)
-		}
+		m.recordAuthLabeled(ctx, rdb.AuditOpAgentActuationDisabled, principalOf(claims), claims.Tenant, claims.Tenant)
+		return m.AgentPolicy(ctx, claims.Tenant)
 	}
 	view, err := m.publishAgentPolicy(ctx, claims, func(_ *iam.AgentPolicy, current *iam.AgentPolicyVersion) (policyChoice, error) {
 		if current == nil {
@@ -184,43 +176,15 @@ func (m *Manager) SetTenantAgentActuation(ctx context.Context, claims *auth.Clai
 		}
 		doc, err := agentpolicy.ParseStored([]byte(current.Document))
 		if err != nil {
-			if enabled {
-				return policyChoice{}, fmt.Errorf("the agent policy in force cannot be read: %w", err)
-			}
-			// 🔴 THE KILL SWITCH NEVER DEPENDS ON READING THE POLICY IT STOPS, AND NEVER DROPS
-			// THE SERVICE-ACCOUNT RULE. A document this pod cannot read (written by a newer
-			// release mid-upgrade, or damaged) is replaced by a disabled policy that carries the
-			// tenant's serviceAccounts.agentFlagRequiredFor forward VERBATIM (the key is frozen
-			// across versions): an authority this release does not know requires nothing here,
-			// but the newer release that wrote it does know it, and dropping it would lift the
-			// rule there. If even that key cannot be read, no pod can read the document at all, so
-			// actuation is already off everywhere; nothing is published rather than a document
-			// that would silently lift the rule.
-			req, ok := agentpolicy.ExtractAgentFlagRequirement([]byte(current.Document))
-			if !ok {
-				log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read at all; agent actuation is already off, and the kill switch publishes nothing.")
-				return policyChoice{}, errNothingToKill
-			}
-			doc = agentpolicy.KillDocument(req)
-			log.Warn().Err(err).Str("tenant", claims.Tenant).Msg("The agent policy in force cannot be read; the kill switch publishes a disabled policy keeping its service-account rule.")
+			return policyChoice{}, agentPolicyErr(AgentPolicyUnreadable, "the agent policy in force cannot be read: %v", err)
 		}
-		if enabled {
-			doc.Actuation = agentpolicy.ActuationEnabled
-		} else {
-			doc.Actuation = agentpolicy.ActuationDisabled
-		}
-		// The document itself is handed on, never its canonical bytes to be parsed again: the
-		// kill switch must not be refused by a size or validation check on its own output.
-		return policyChoice{doc: doc, origin: iam.AgentPolicyOriginActuation, kill: !enabled}, nil
+		return policyChoice{doc: doc, origin: iam.AgentPolicyOriginActuation, enableActuation: true}, nil
 	})
-	if errors.Is(err, errNothingToKill) {
-		return m.AgentPolicy(ctx, claims.Tenant)
+	if err == nil {
+		m.recordAuthLabeled(ctx, rdb.AuditOpAgentActuationEnabled, principalOf(claims), claims.Tenant, claims.Tenant)
 	}
 	return view, err
 }
-
-// errNothingToKill aborts a kill-switch publish that has nothing safe to publish (see above).
-var errNothingToKill = errors.New("agent actuation is already off: the policy in force cannot be read")
 
 // publishAgentPolicy publishes the document pick chooses, classifying it against the policy in
 // force UNDER the head lock, and refusing a loosening without a fresh second factor.
@@ -250,49 +214,32 @@ func (m *Manager) publishAgentPolicy(ctx context.Context, claims *auth.Claims, p
 				return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", err)
 			}
 		}
+		if choice.enableActuation {
+			if !auth.StepUpFresh(claims, stricterStepUp(next, next), m.clock()) {
+				return "", "", false, agentPolicyErr(AgentPolicyStepUpRequired, "enabling agent actuation needs a fresh second factor")
+			}
+			head.TenantActuationOff, head.ActuationOffAt, head.ActuationOffBy = false, nil, nil
+			if next.ActuationOn() {
+				return "", "", false, nil
+			}
+			next.Actuation = agentpolicy.ActuationEnabled
+		}
 		b, err := next.Canonical()
 		if err != nil {
 			return "", "", false, err
 		}
 		if serr := agentpolicy.CheckCanonicalSize(b); serr != nil {
-			if !choice.kill {
-				return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", serr)
-			}
-			// 🔴 THE KILL SWITCH IS NEVER REFUSED. A policy whose stored form would be too large
-			// is replaced by the smallest disabled policy, carrying the service-account rule.
-			log.Warn().Err(serr).Str("tenant", claims.Tenant).Msg("The policy in force is too large to republish; the kill switch publishes a minimal disabled policy.")
-			next = agentpolicy.KillDocument(next.AgentFlagRequiredFor())
-			if b, err = next.Canonical(); err != nil {
-				return "", "", false, err
-			}
+			return "", "", false, agentPolicyErr(AgentPolicyInvalid, "%v", serr)
 		}
 		canonical := string(b)
 		var prev *agentpolicy.Document
 		if current != nil {
 			if prev, err = agentpolicy.ParseStored([]byte(current.Document)); err != nil {
-				// 🔴 NOTHING BUT THE KILL SWITCH CHANGES A POLICY THIS RELEASE CANNOT READ. A
-				// loosening is judged against the policy in force, and an unreadable one cannot be
-				// judged: classifying against "nothing" would let a publish or a rollback drop
-				// rules this release cannot see without anyone presenting a second factor. A
-				// newer release wrote it (or it is damaged); finish the upgrade, and change it
-				// from a pod that can read it.
-				if origin != iam.AgentPolicyOriginActuation || next.ActuationOn() {
-					return "", "", false, agentPolicyErr(AgentPolicyUnreadable,
-						"the agent policy in force cannot be read by this release (a newer release wrote it, or it is damaged); finish the upgrade first, then change it")
-				}
-				// The kill switch: classified against what CAN be read of the predecessor, its
-				// frozen service-account rule, so dropping that rule is still a loosening.
-				prev = &agentpolicy.Document{}
-				if req, ok := agentpolicy.ExtractAgentFlagRequirement([]byte(current.Document)); ok && len(req) > 0 {
-					prev.ServiceAccounts = &agentpolicy.ServiceAccts{AgentFlagRequiredFor: req}
-				}
+				return "", "", false, agentPolicyErr(AgentPolicyUnreadable,
+					"the agent policy in force cannot be read by this release; finish the upgrade first, then change it")
 			}
 		}
-		// 🔴 TURNING ACTUATION OFF IS NEVER JUDGED A LOOSENING. Its document disables actuation and
-		// carries the service-account rule forward by construction, so it can authorize nothing;
-		// classifying it (against defaults, after a minimal fallback) could only ever refuse the
-		// off switch. Turning actuation back ON is judged in full.
-		if loosen := agentpolicy.Loosenings(prev, next); len(loosen) > 0 && !choice.kill {
+		if loosen := agentpolicy.Loosenings(prev, next); len(loosen) > 0 {
 			if !auth.StepUpFresh(claims, stricterStepUp(prev, next), now) {
 				return "", "", false, agentPolicyErr(AgentPolicyStepUpRequired,
 					"this change loosens the agent policy (%s) and needs a second factor verified in the last %s",
@@ -348,24 +295,24 @@ func principalOf(c *auth.Claims) string {
 
 // publishedPolicy reads the tenant's state for the act:* checks and decisions. A store error is
 // returned; a document that cannot be parsed is logged and read as NO policy (fail closed).
-func (m *Manager) publishedPolicy(ctx context.Context, tenant string) (suspended bool, doc *agentpolicy.Document, version int, err error) {
+func (m *Manager) publishedPolicy(ctx context.Context, tenant string) (suspended, off bool, doc *agentpolicy.Document, version int, err error) {
 	head, v, err := m.iam.PublishedAgentPolicy(ctx, tenant)
 	if err != nil {
-		return false, nil, 0, err
+		return false, false, nil, 0, err
 	}
 	if head != nil {
-		suspended = head.OperatorSuspended
+		suspended, off = head.OperatorSuspended, head.TenantActuationOff
 	}
 	if v == nil {
-		return suspended, nil, 0, nil
+		return suspended, off, nil, 0, nil
 	}
 	d, perr := agentpolicy.ParseStored([]byte(v.Document))
 	if perr != nil {
 		log.Error().Err(perr).Str("tenant", tenant).Int("version", v.Version).
 			Msg("The published agent policy cannot be read; agent actuation is refused in this tenant.")
-		return suspended, nil, 0, nil
+		return suspended, off, nil, 0, nil
 	}
-	return suspended, d, v.Version, nil
+	return suspended, off, d, v.Version, nil
 }
 
 // errActRefused is the one description every act:* admission refusal carries to the client: it
@@ -406,12 +353,12 @@ func (m *Manager) admitActScopes(ctx context.Context, tenant, clientID, scope st
 			return errInvalidScope(errActRefused)
 		}
 	}
-	suspended, doc, _, err := m.publishedPolicy(ctx, tenant)
+	suspended, off, doc, _, err := m.publishedPolicy(ctx, tenant)
 	if err != nil {
 		log.Error().Err(err).Msg("Could not load the agent policy to admit an act scope.")
 		return errServer(errGrantUnavailable)
 	}
-	if suspended || !doc.ActuationOn() || !doc.ClientAllowed(clientID) {
+	if suspended || off || !doc.ActuationOn() || !doc.ClientAllowed(clientID) {
 		return errInvalidScope(errActRefused)
 	}
 	return nil
@@ -578,11 +525,11 @@ func (m *Manager) AgentActuationDecision(ctx context.Context, claims *auth.Claim
 	req.Client = claims.ClientId
 	req.Attested = false
 	st := agentpolicy.State{InstanceEnabled: m.agentActuation}
-	suspended, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
+	suspended, off, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
 	if err != nil {
 		return agentpolicy.Decision{}, err
 	}
-	st.OperatorSuspended, st.Policy, st.Version = suspended, doc, version
+	st.OperatorSuspended, st.TenantActuationOff, st.Policy, st.Version = suspended, off, doc, version
 	// Decide as though approvers were plentiful: a refusal for any other reason needs no count.
 	st.EligibleApprovers = 2
 	if pre := agentpolicy.Decide(st, req); pre.Verdict == agentpolicy.VerdictRefuse {
@@ -642,10 +589,13 @@ func (m *Manager) checkActSessionCap(ctx context.Context, tenant string, in *sig
 		// A sign-in with no recorded anchor has no age to bound: refused rather than unbounded.
 		return errInvalidGrant(errActRefused)
 	}
-	_, doc, _, err := m.publishedPolicy(ctx, tenant)
+	suspended, off, doc, _, err := m.publishedPolicy(ctx, tenant)
 	if err != nil {
 		log.Error().Err(err).Msg("Could not load the agent policy to bound an act grant.")
 		return errServer(errGrantUnavailable)
+	}
+	if suspended || off || !doc.ActuationOn() {
+		return errInvalidGrant(errActRefused)
 	}
 	if m.clock().Sub(in.anchor) > doc.ActRefreshMaxAge() {
 		return errInvalidGrant("the agent session has reached its maximum age; authorize again")

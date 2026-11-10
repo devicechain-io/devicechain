@@ -408,8 +408,8 @@ func TestLoosenRequiresStepUp(t *testing.T) {
 
 	vs, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
 	require.NoError(t, err)
-	require.Len(t, vs, 4, "publish, tighten, kill, re-enable")
-	require.Equal(t, iam.AgentPolicyOriginActuation, vs[0].Origin)
+	require.Len(t, vs, 2, "publish and tighten; flag changes create no versions")
+	require.Equal(t, iam.AgentPolicyOriginPublish, vs[0].Origin)
 }
 
 // Every decision with no policy, an unreadable one, the instance flag off, or the operator's

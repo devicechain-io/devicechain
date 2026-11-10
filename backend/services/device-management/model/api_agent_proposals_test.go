@@ -307,6 +307,8 @@ func TestRevokedProposerProposalRefusedAtExecution(t *testing.T) {
 	p, err := r.api.ApproveAgentProposal(tenantCtx(rigTenant), approver("boss", time.Now()), out.Proposal.Token, out.Digest)
 	require.NoError(t, err)
 	require.Equal(t, string(actiongate.StateRefused), p.State)
+	require.JSONEq(t, `["PROPOSER_NOT_IN_STANDING"]`, string(p.Reasons))
+	require.JSONEq(t, `["PROPOSER_NOT_IN_STANDING"]`, string(r.stored(t, p.Token).Reasons))
 	require.Len(t, r.decider.execReqs, 1)
 	got := r.decider.execReqs[0]
 	require.Equal(t, actiongate.ExecutionRequest{ProposalToken: p.Token, Kind: actiongate.KindAlarmClear, Impact: "NORMAL",
@@ -526,4 +528,18 @@ func TestApprovalFreshnessAtCompletion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCoarseProposalReasons(t *testing.T) {
+	require.Equal(t, []string{"FIRST", actiongate.ReasonProposerNotInStanding, "LAST"}, actiongate.PersistedReasons([]string{
+		"FIRST", "PROPOSER_SESSION_ENDED", "PROPOSER_NOT_A_MEMBER", "PROPOSER_SCOPED", "PROPOSER_LOST_AUTHORITY", "PROPOSER_CLIENT_REFUSED", "PROPOSER_FUTURE", "LAST", "FIRST",
+	}))
+}
+
+func TestProposedDecisionReasonsAreCoarsenedBeforeStorage(t *testing.T) {
+	r := newProposalRig(t)
+	r.decider.act = actiongate.ActuationDecision{Verdict: actiongate.VerdictRefuse, Reasons: []string{"FIRST", "PROPOSER_FUTURE", "PROPOSER_SESSION_ENDED", "LAST"}}
+	out := r.propose(t, rigAgent, clearReq("r1", "a1"))
+	require.Equal(t, []string{"FIRST", actiongate.ReasonProposerNotInStanding, "LAST"}, out.Reasons)
+	require.JSONEq(t, `["FIRST","PROPOSER_NOT_IN_STANDING","LAST"]`, string(r.stored(t, out.Proposal.Token).Reasons))
 }

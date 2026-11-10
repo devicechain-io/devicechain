@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -28,6 +29,25 @@ const (
 
 // ReasonAutoNotAvailable is the reason an AUTO verdict is read as a refusal by this release.
 const ReasonAutoNotAvailable = "AUTO_NOT_AVAILABLE"
+
+// ReasonProposerNotInStanding is the persisted reason for any proposer standing refusal.
+const ReasonProposerNotInStanding = "PROPOSER_NOT_IN_STANDING"
+
+// PersistedReasons removes private proposer details and deduplicates reasons in order.
+func PersistedReasons(reasons []string) []string {
+	out := make([]string, 0, len(reasons))
+	seen := make(map[string]bool)
+	for _, reason := range reasons {
+		if strings.HasPrefix(reason, "PROPOSER_") {
+			reason = ReasonProposerNotInStanding
+		}
+		if !seen[reason] {
+			out = append(out, reason)
+			seen[reason] = true
+		}
+	}
+	return out
+}
 
 // MaxExpiry is the longest any proposal waits for approval, whatever a decision says.
 const MaxExpiry = 24 * time.Hour

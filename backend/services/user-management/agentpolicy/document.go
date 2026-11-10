@@ -280,9 +280,8 @@ func Parse(raw []byte) (*Document, error) { return parse(raw, true) }
 
 // ParseStored reads a document that is already STORED: every rule Parse applies, except that an
 // entry of serviceAccounts.agentFlagRequiredFor need not be an authority THIS build knows. A stored
-// entry this build does not know was carried forward from a newer release's document by the kill
-// switch (see ExtractAgentFlagRequirement); it requires nothing here, because no role here can
-// hold it, and dropping it would lift the rule for the release that does know it.
+// entry this build does not know may have been written by a newer release. It requires nothing
+// here, because no role here can hold it; preserving it keeps the rule for releases that know it.
 func ParseStored(raw []byte) (*Document, error) { return parse(raw, false) }
 
 func parse(raw []byte, vocabulary bool) (*Document, error) {
@@ -560,36 +559,6 @@ func CheckCanonicalSize(canonical []byte) error {
 		return invalid("the stored form of the document is %d bytes, over the limit of %d", len(canonical), MaxDocumentBytes)
 	}
 	return nil
-}
-
-// KillDocument is the smallest policy there is: actuation disabled, carrying only the tenant's
-// service-account rule. The kill switch publishes it when the policy in force cannot be carried
-// forward as it is.
-//
-// 🔴 ITS OUTPUT IS ALWAYS A DOCUMENT EVERY READER CAN PARSE. Each carried entry is kept verbatim if
-// it is one an authority could be (the list grammar, never "*"), whether or not THIS build knows
-// it, so a newer release's rule survives. An entry outside the grammar cannot name an authority any
-// release defines, so dropping it lifts nothing; keeping it would make the kill switch's own output
-// unreadable, and every service-account operation would then fail. Entries are also capped by
-// count and by the room left under the size limit, so the stored form always fits.
-func KillDocument(rule []string) *Document {
-	d := &Document{Actuation: ActuationDisabled}
-	var carried []string
-	room := MaxDocumentBytes - 256 // the rest of the document: version, actuation, keys
-	for _, a := range rule {
-		if a == string(auth.AuthorityAll) || !validListEntry(a) || slices.Contains(carried, a) {
-			continue
-		}
-		if len(carried) >= MaxListEntries || room-(len(a)+3) < 0 {
-			break
-		}
-		room -= len(a) + 3
-		carried = append(carried, a)
-	}
-	if len(carried) > 0 {
-		d.ServiceAccounts = &ServiceAccts{AgentFlagRequiredFor: carried}
-	}
-	return d
 }
 
 func validList(name string, in []string) error {
