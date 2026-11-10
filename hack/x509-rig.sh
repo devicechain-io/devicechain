@@ -206,8 +206,10 @@ rig_tmp="$(mktemp -d "${TMPDIR:-/tmp}/dc-x509-rig.XXXXXX")"
 work="$rig_tmp/work"
 mkdir -p "$work"
 profile_disabled=""
+unpack_tmp=""
 cleanup() {
   local rc=$?
+  if [[ -n "${unpack_tmp:-}" ]]; then rm -rf "$unpack_tmp"; fi
   # N8 holds the certificate profile disabled; a failure while it does must not leave it so.
   if [[ -n "$profile_disabled" ]]; then
     echo "cleanup: re-enabling profile $profile_disabled (N8 did not finish)"
@@ -252,6 +254,14 @@ k() { kubectl --kubeconfig "$kubeconfig" --context "$kube_context" "$@"; }
 dx() { MSYS_NO_PATHCONV=1 docker exec "$device_container" "$@"; }
 dk() { MSYS_NO_PATHCONV=1 docker "$@"; }
 
+# Refuse to remove a container that belongs to another rig (or is not labelled).
+require_rig_container() {
+  local label
+  label="$(docker inspect -f '{{index .Config.Labels "devicechain.io/x509-rig"}}' "$1")" ||
+    fail "cannot read the label of container $1; refusing to remove it"
+  [[ "$label" == "$cluster" ]] || fail "container $1 is not labelled for rig $cluster; refusing to remove it"
+}
+
 [[ "$instance" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "DC_X509_RIG_INSTANCE must be a DNS label, got '$instance'"
 
 # ---------------------------------------------------------------------------
@@ -272,12 +282,12 @@ release_fetched=""
 # $release_dir, once per invocation. Each archive must hash to what the release's own checksum
 # files (downloaded afresh every time) name AND carry the release workflow's build provenance
 # (`gh attestation verify`); an archive already on disk is held to the same two checks, and the
-# binaries are always unpacked again from the archives just verified, into a temporary directory
-# that is renamed into place, so a binary left on disk is never trusted on its own.
+# binaries are always unpacked again from the archives just verified, then staged beside their
+# destinations before each is atomically renamed into place, so binaries on disk are never trusted.
 fetch_release() {
   [[ -z "$release_fetched" ]] || return 0
   need gh
-  local v="${release#v}" base f sum want tmp dcctl_archive
+  local v="${release#v}" base f sum want dcctl_archive
   base="https://github.com/devicechain-io/devicechain/releases/download/$release"
   mkdir -p "$release_dir"
   say "fetching and verifying the published dcctl and dc-simulator of $release"
@@ -302,18 +312,21 @@ fetch_release() {
       fail "$f: its hash matches, but gh attestation verify finds no provenance from release.yml at refs/tags/$release for it"
     note "$f: sha256 $sum matches the release's checksums, and its build provenance verifies"
   done
-  tmp="$(mktemp -d "$release_dir/unpack.XXXXXX")"
+  unpack_tmp="$(mktemp -d "$release_dir/unpack.XXXXXX")"
   # Relative names, from inside the directory: GNU tar reads "D:/..." as a remote host.
-  (cd "$tmp" && tar xzf "../dc-simulator_${v}_linux_amd64.tar.gz" dc-simulator) || fail "could not unpack the simulator"
+  (cd "$unpack_tmp" && tar xzf "../dc-simulator_${v}_linux_amd64.tar.gz" dc-simulator) || fail "could not unpack the simulator"
   if [[ "$host_os" == windows ]]; then
-    (cd "$tmp" && unzip -o -q "../$dcctl_archive" dcctl.exe) || fail "could not unpack dcctl"
+    (cd "$unpack_tmp" && unzip -o -q "../$dcctl_archive" dcctl.exe) || fail "could not unpack dcctl"
   else
-    (cd "$tmp" && tar xzf "../$dcctl_archive" dcctl) || fail "could not unpack dcctl"
+    (cd "$unpack_tmp" && tar xzf "../$dcctl_archive" dcctl) || fail "could not unpack dcctl"
   fi
-  [[ -s "$tmp/dc-simulator" && -s "$tmp/${dcctl##*/}" ]] || fail "the release archives did not hold dc-simulator and ${dcctl##*/}"
-  mv -f "$tmp/dc-simulator" "$rel_sim"
-  mv -f "$tmp/${dcctl##*/}" "$dcctl"
-  rmdir "$tmp"
+  mv -f "$unpack_tmp/dc-simulator" "$rel_sim.new"
+  mv -f "$unpack_tmp/${dcctl##*/}" "$dcctl.new"
+  [[ -s "$rel_sim.new" && -s "$dcctl.new" ]] || fail "the release archives did not hold dc-simulator and ${dcctl##*/}"
+  mv -f "$rel_sim.new" "$rel_sim"
+  mv -f "$dcctl.new" "$dcctl"
+  rmdir "$unpack_tmp"
+  unpack_tmp=""
   chmod +x "$dcctl"
   release_fetched=1
   "$dcctl" version | sed 's/^/    /'
@@ -436,10 +449,12 @@ remove_cluster_state() {
 cmd_down() {
   need kind; need kubectl; need jq; need docker
   if docker inspect "$device_container" >/dev/null 2>&1; then
+    require_rig_container "$device_container"
     say "removing the device container $device_container"
     docker rm -f "$device_container" >/dev/null
   fi
   if docker inspect "$ocsp_container" >/dev/null 2>&1; then
+    require_rig_container "$ocsp_container"
     say "removing the OCSP responder container $ocsp_container"
     docker rm -f "$ocsp_container" >/dev/null
   fi
@@ -644,7 +659,10 @@ build_sim() {
 }
 
 start_container() {
-  dk rm -f "$device_container" >/dev/null 2>&1 || true
+  if docker inspect "$device_container" >/dev/null 2>&1; then
+    require_rig_container "$device_container"
+    dk rm -f "$device_container" >/dev/null
+  fi
   dk run -d --init --name "$device_container" --network kind --add-host "$host:$node_ip" \
     --label devicechain.io/x509-rig="$cluster" -v "$(winpath "$work"):/work" \
     --entrypoint /bin/sleep "$device_image" infinity >/dev/null
@@ -1392,13 +1410,16 @@ set_trace() { O_BEFORE="$1"; O_AFTER="$2"; O_ASKED="$3"; O_WANT_REASON="$4"; O_W
 check_ocsp_trace() {
   local -a tags=()
   local r d moved="" others=""
-  # unread: the counter was not read in full at both ends. Every reason is registered at zero, so a
-  # real read always names unreachable, and the same reasons at both ends; a side that is empty or
-  # names other reasons is a read that failed (or lost a series) and was not stopped, and "nothing
-  # moved" would then be a guess about a reason never measured.
-  snap_has "$O_BEFORE" unreachable && snap_has "$O_AFTER" unreachable &&
-    [[ "$(awk -F= '{ print $1 }' <<<"$O_BEFORE" | sort)" == "$(awk -F= '{ print $1 }' <<<"$O_AFTER" | sort)" ]] ||
-    { tags+=(unread); echo "  unread: x509_ocsp_unavailable_allowed_total was not read before and after (before: '${O_BEFORE:0:40}', after: '${O_AFTER:0:40}')"; }
+  # unread: every reason is registered at zero, so both reads must carry all four series.
+  # Even matching sets can have lost the same series; "nothing moved" would then be a guess
+  # about a reason never measured.
+  for r in unverified unknown_cert unreachable blocked; do
+    if ! snap_has "$O_BEFORE" "$r" || ! snap_has "$O_AFTER" "$r"; then
+      tags+=(unread)
+      echo "  unread: x509_ocsp_unavailable_allowed_total was not read before and after (before: '${O_BEFORE:0:40}', after: '${O_AFTER:0:40}')"
+      break
+    fi
+  done
   if [[ "$O_WANT_ASKED" == yes ]]; then
     ((O_ASKED >= 1)) || { tags+=(asked); echo "  asked: the responder never saw a request for this certificate"; }
   else
@@ -1447,6 +1468,8 @@ ocsp_offline_controls() {
   expect_red "a good connect whose BEFORE read of the counter came back empty" "unread" yes check_ocsp_trace
   set_trace "$b" $'unverified=0\nunreachable=0\nblocked=0' 1 - yes
   expect_red "a good connect whose AFTER read lost a series (unknown_cert)" "unread" yes check_ocsp_trace
+  set_trace $'unverified=0\nunreachable=0\nblocked=0' $'unverified=0\nunreachable=0\nblocked=0' 1 - yes
+  expect_red "a good connect whose BOTH reads lost the same series (unknown_cert)" "unread" yes check_ocsp_trace
 }
 
 ocsp_summary=""
@@ -1498,7 +1521,10 @@ ocsp_container_up() {
   if ! dk inspect "$cluster-control-plane" -f '{{json .NetworkSettings.Networks}}' | jq -e --arg n "$ocsp_net" 'has($n)' >/dev/null; then
     dk network connect "$ocsp_net" "$cluster-control-plane"
   fi
-  dk rm -f "$ocsp_container" >/dev/null 2>&1 || true
+  if docker inspect "$ocsp_container" >/dev/null 2>&1; then
+    require_rig_container "$ocsp_container"
+    dk rm -f "$ocsp_container" >/dev/null
+  fi
   dk run -d --init --name "$ocsp_container" --network "$ocsp_net" --ip "$ocsp_ip" -p "127.0.0.1:$ocsp_host_port:8080" \
     --label devicechain.io/x509-rig="$cluster" -v "$(winpath "$work"):/work" \
     --entrypoint /bin/sleep "$device_image" infinity >/dev/null
