@@ -19,6 +19,7 @@ export interface AlarmStrings {
   // The severity words for the badge description.
   severity: Record<string, string>;
   rows: {
+    scrollLabel: string;
     severity: string;
     status: string;
     originator: string;
@@ -65,6 +66,7 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     activeBadge: (n, worst) => `${n} active ${n === 1 ? 'alarm' : 'alarms'}, worst ${worst}`,
     severity: { CRITICAL: 'Critical', MAJOR: 'Major', MINOR: 'Minor', WARNING: 'Warning', INDETERMINATE: 'Indeterminate' },
     rows: {
+      scrollLabel: 'Alarms',
       severity: 'Severity',
       status: 'Status',
       originator: 'Originator',
@@ -102,6 +104,7 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     activeBadge: (n, worst) => `${n} ${n === 1 ? 'alarma activa' : 'alarmas activas'}, la peor: ${worst}`,
     severity: { CRITICAL: 'Crítica', MAJOR: 'Mayor', MINOR: 'Menor', WARNING: 'Advertencia', INDETERMINATE: 'Indeterminada' },
     rows: {
+      scrollLabel: 'Alarmas',
       severity: 'Severidad',
       status: 'Estado',
       originator: 'Originador',
