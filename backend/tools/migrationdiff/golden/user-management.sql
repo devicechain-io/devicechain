@@ -379,7 +379,10 @@ CREATE TABLE "user-management".iam_agent_policies (
  published_version bigint DEFAULT 0 NOT NULL,
  operator_suspended boolean DEFAULT false NOT NULL,
  suspended_at timestamp with time zone,
- suspended_by character varying(256)
+ suspended_by character varying(256),
+ tenant_actuation_off boolean DEFAULT false NOT NULL,
+ actuation_off_at timestamp with time zone,
+ actuation_off_by character varying(256)
 );
 CREATE TABLE "user-management".iam_agent_policy_versions (
  id bigint NOT NULL,

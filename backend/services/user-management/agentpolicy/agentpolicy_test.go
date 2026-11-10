@@ -389,37 +389,6 @@ func TestListEntriesHeldToTheTokenGrammar(t *testing.T) {
 	require.NoError(t, CheckCanonicalSize(b))
 }
 
-// The kill document carries the rule verbatim and nothing else, actuation disabled.
-func TestKillDocument(t *testing.T) {
-	d := KillDocument([]string{"command:write", "future:write", "command:write", ""})
-	require.False(t, d.ActuationOn())
-	require.Equal(t, []string{"command:write", "future:write"}, d.AgentFlagRequiredFor())
-	require.Nil(t, d.Clients)
-	require.Nil(t, KillDocument(nil).ServiceAccounts)
-}
-
-// What the kill switch stores is ALWAYS readable: entries outside the grammar (and "*") are left
-// out, and however long the extracted rule, the stored form fits the limit and parses.
-func TestKillDocumentIsAlwaysReadable(t *testing.T) {
-	var rule []string
-	for i := 0; i < 2000; i++ {
-		rule = append(rule, fmt.Sprintf("r%04d:%s", i, strings.Repeat("w", 250))) // 256 characters, the most an entry may hold
-	}
-	rule = append(rule, "future/write", "a<b", "*")
-	d := KillDocument(rule)
-	b, err := d.Canonical()
-	require.NoError(t, err)
-	require.NoError(t, CheckCanonicalSize(b))
-	back, err := ParseStored(b)
-	require.NoError(t, err)
-	require.False(t, back.ActuationOn())
-	require.NotEmpty(t, back.AgentFlagRequiredFor())
-	for _, a := range back.AgentFlagRequiredFor() {
-		require.True(t, validListEntry(a), a)
-	}
-	require.Equal(t, []string{"future:write"}, KillDocument([]string{"future/write", "future:write", "*"}).AgentFlagRequiredFor())
-}
-
 // A stored document is read back through jsonb, whose text output adds whitespace: a canonical
 // document at the limit must still parse after that expansion.
 func TestStoredReadToleratesJsonbWhitespace(t *testing.T) {
@@ -438,4 +407,15 @@ func TestStoredReadToleratesJsonbWhitespace(t *testing.T) {
 	require.NoError(t, err)
 	_, err = Parse([]byte(spaced))
 	require.ErrorIs(t, err, ErrInvalid, "a person's submission is still held to the write limit")
+}
+
+func TestTenantActuationOffFlagRefusesEnabledDocument(t *testing.T) {
+	st := enabledState(openPolicy)
+	req := Request{Kind: KindAlarmClear, Client: "agent", Attested: true, TargetCount: 1}
+	require.NotEqual(t, VerdictRefuse, Decide(st, req).Verdict, "control")
+	st.TenantActuationOff = true
+	d := Decide(st, req)
+	require.Equal(t, VerdictRefuse, d.Verdict)
+	require.Equal(t, []string{ReasonActuationOff}, d.Reasons)
+	require.Equal(t, st.Version, d.PolicyVersion)
 }

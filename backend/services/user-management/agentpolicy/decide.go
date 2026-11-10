@@ -79,6 +79,8 @@ type State struct {
 	InstanceEnabled bool
 	// OperatorSuspended is the operator's per-tenant override.
 	OperatorSuspended bool
+	// TenantActuationOff is the tenant kill switch, independent of the document.
+	TenantActuationOff bool
 	// Policy is the published document, nil when none is published (or it cannot be read).
 	Policy *Document
 	// Version is the published version, 0 when none.
@@ -119,6 +121,8 @@ func Decide(st State, req Request) Decision {
 		return refuse(v, ReasonInstanceOff)
 	case st.OperatorSuspended:
 		return refuse(v, ReasonOperatorSuspended)
+	case st.TenantActuationOff:
+		return refuse(v, ReasonActuationOff)
 	case st.Policy == nil || st.Version <= 0:
 		return refuse(v, ReasonNoPolicy)
 	case !st.Policy.ActuationOn():

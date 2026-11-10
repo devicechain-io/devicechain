@@ -84,12 +84,15 @@ func (r *AgentPolicyResolver) DraftUpdatedBy() *string {
 func (r *AgentPolicyResolver) OperatorSuspended() bool {
 	return r.view != nil && r.view.Head != nil && r.view.Head.OperatorSuspended
 }
+func (r *AgentPolicyResolver) ActuationOff() bool {
+	return r.view != nil && r.view.Head != nil && r.view.Head.TenantActuationOff
+}
 func (r *AgentPolicyResolver) InstanceEnabled() bool { return r.instance }
 
 // ActuationInEffect is all three switches, read the same way a decision reads them: an
 // unreadable published document is NOT in effect.
 func (r *AgentPolicyResolver) ActuationInEffect() bool {
-	if !r.instance || r.OperatorSuspended() || r.view == nil || r.view.Published == nil {
+	if !r.instance || r.OperatorSuspended() || r.ActuationOff() || r.view == nil || r.view.Published == nil {
 		return false
 	}
 	doc, err := agentpolicy.ParseStored([]byte(r.view.Published.Document))

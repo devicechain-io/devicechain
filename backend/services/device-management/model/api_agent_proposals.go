@@ -234,7 +234,7 @@ func (api *Api) ProposeAlarmAction(ctx context.Context, proposer actiongate.Prop
 		return nil, actiongate.ErrPolicyUnavailable
 	}
 	out := &ProposalOutcome{
-		Verdict: dec.Verdict, RequiredApprovals: dec.RequiredApprovals, Reasons: append([]string{}, dec.Reasons...),
+		Verdict: dec.Verdict, RequiredApprovals: dec.RequiredApprovals, Reasons: actiongate.PersistedReasons(dec.Reasons),
 		Digest: form.digest, TargetCount: len(tokens), Preview: form.preview,
 	}
 	switch dec.Verdict {
@@ -331,7 +331,7 @@ func (api *Api) newProposalRow(proposer actiongate.Proposer, kind actiongate.Kin
 	if err != nil {
 		return nil, err
 	}
-	reasons, err := json.Marshal(nonNilStrings(out.Reasons))
+	reasons, err := json.Marshal(actiongate.PersistedReasons(out.Reasons))
 	if err != nil {
 		return nil, err
 	}
@@ -409,6 +409,7 @@ func existingOutcome(prior *AgentProposal, digest string) (*ProposalOutcome, err
 	if err := json.Unmarshal(prior.Reasons, &out.Reasons); err != nil {
 		out.Reasons = []string{}
 	}
+	out.Reasons = actiongate.PersistedReasons(out.Reasons)
 	if prior.State == string(actiongate.StateProposed) {
 		exp := prior.ExpiresAt
 		out.ExpiresAt = &exp
@@ -584,7 +585,7 @@ func (api *Api) ApproveAgentProposal(ctx context.Context, approver actiongate.Ap
 			return nil, actiongate.ErrPolicyUnavailable
 		}
 		if dec.Verdict != actiongate.VerdictApprove {
-			reasons := nonNilStrings(dec.Reasons)
+			reasons := actiongate.PersistedReasons(dec.Reasons)
 			if dec.Verdict == actiongate.VerdictAuto {
 				reasons = append(reasons, actiongate.ReasonAutoNotAvailable)
 			}
@@ -654,7 +655,7 @@ func (api *Api) endProposal(ctx context.Context, token string, to actiongate.Sta
 		set["note"] = *note
 	}
 	if reasons != nil {
-		raw, err := json.Marshal(reasons)
+		raw, err := json.Marshal(actiongate.PersistedReasons(reasons))
 		if err != nil {
 			return nil, err
 		}

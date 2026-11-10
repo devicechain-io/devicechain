@@ -83,9 +83,12 @@ func (m *Manager) AgentActuationDetail(ctx context.Context, claims *auth.Claims,
 	if !holdsProposalAuthority(claims) {
 		return ActuationDetail{}, fmt.Errorf("%w: agentActuationDecision answers only an agent's token", auth.ErrForbidden)
 	}
-	_, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
+	suspended, off, doc, version, err := m.publishedPolicy(ctx, claims.Tenant)
 	if err != nil {
 		return ActuationDetail{}, err
+	}
+	if !m.agentActuation || suspended || off || !doc.ActuationOn() {
+		return ActuationDetail{}, errors.New(errActRefused)
 	}
 	if version != policyVersion {
 		return ActuationDetail{}, errors.New("the agent policy changed while it was being read; ask again")
@@ -146,11 +149,11 @@ func (m *Manager) AgentExecutionDecision(ctx context.Context, claims *auth.Claim
 		return ExecutionDecision{}, fmt.Errorf("at most %d approvers may be named", MaxExecutionApprovers)
 	}
 	tenant := claims.Tenant
-	suspended, doc, version, err := m.publishedPolicy(ctx, tenant)
+	suspended, off, doc, version, err := m.publishedPolicy(ctx, tenant)
 	if err != nil {
 		return ExecutionDecision{}, err
 	}
-	st := agentpolicy.State{InstanceEnabled: m.agentActuation, OperatorSuspended: suspended, Policy: doc, Version: version}
+	st := agentpolicy.State{InstanceEnabled: m.agentActuation, OperatorSuspended: suspended, TenantActuationOff: off, Policy: doc, Version: version}
 	preq := agentpolicy.Request{
 		Kind: req.Kind, Impact: req.Impact, TargetCount: req.TargetCount, GroupTokens: req.GroupTokens,
 		Command: req.Command, Client: req.ProposerClient,

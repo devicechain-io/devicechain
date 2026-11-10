@@ -108,45 +108,35 @@ func TestSuspensionTransitionsAreJournaled(t *testing.T) {
 	require.Equal(t, "op2@example.invalid", evs[1].Actor)
 }
 
-// The kill switch never depends on reading the policy it stops: over a document this pod cannot
-// read (written by a newer release, or damaged), turning actuation off still publishes a disabled
-// policy without a second factor; turning it on over one is refused.
+// Killing an unreadable document preserves every byte and never publishes a version.
 func TestKillSwitchWorksOverAnUnreadablePolicy(t *testing.T) {
-	for name, c := range map[string]struct {
-		doc  string
-		want []string
-	}{
-		// future:write is an authority only the newer release knows: it is carried VERBATIM, so
-		// the rule still holds on the pods that can read it once the rollout finishes.
-		"newer version": {`{"version":"v9","actuation":"enabled","clients":["agent-desktop"],"futureKey":1,"serviceAccounts":{"agentFlagRequiredFor":["command:write","future:write"]}}`,
-			[]string{"command:write", "future:write"}},
-		"damaged": {`{"version":"v1alpha1","actuation":"enabled","typo":1,"serviceAccounts":{"agentFlagRequiredFor":["command:write"]}}`,
-			[]string{"command:write"}},
+	for _, doc := range []string{
+		`{"version":"v9","actuation":"enabled","futureKey":1,"serviceAccounts":{"agentFlagRequiredFor":["future:write"]}}`,
+		`{"version":"v1alpha1","actuation":"enabled","typo":1}`,
+		`{"broken":`,
 	} {
-		doc := c.doc
-		t.Run(name, func(t *testing.T) {
+		t.Run(doc, func(t *testing.T) {
 			e := newAgentEnv(t)
 			ctx := context.Background()
 			_, err := e.store.PublishAgentPolicy(ctx, agentTenant, "test", func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error) {
 				return doc, iam.AgentPolicyOriginPublish, false, nil
 			})
 			require.NoError(t, err)
-			noFactor := adminClaims(nil, auth.AmrPasswordOnly())
-			view, err := e.m.SetTenantAgentActuation(ctx, noFactor, false)
+			view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
 			require.NoError(t, err)
-			d, err := agentpolicy.ParseStored([]byte(view.Published.Document))
+			require.Equal(t, 1, view.Published.Version)
+			require.Equal(t, doc, view.Published.Document)
+			require.True(t, view.Head.TenantActuationOff)
+			versions, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
 			require.NoError(t, err)
-			require.False(t, d.ActuationOn())
-			require.ElementsMatch(t, c.want, d.AgentFlagRequiredFor(),
-				"the kill switch must carry the service-account rule forward verbatim, never drop an entry")
-
-			_, err = e.store.PublishAgentPolicy(ctx, agentTenant, "test", func(*iam.AgentPolicy, *iam.AgentPolicyVersion) (string, string, bool, error) {
-				return doc, iam.AgentPolicyOriginPublish, false, nil
-			})
-			require.NoError(t, err)
+			require.Len(t, versions, 1)
 			now := time.Now()
 			_, err = e.m.SetTenantAgentActuation(ctx, adminClaims(&now, auth.AmrPasswordOTP()), true)
-			require.Error(t, err, "enabling over an unreadable policy must be refused")
+			require.Equal(t, AgentPolicyUnreadable, policyErrCode(err))
+			view, err = e.m.AgentPolicy(ctx, agentTenant)
+			require.NoError(t, err)
+			require.True(t, view.Head.TenantActuationOff)
+			require.Equal(t, doc, view.Published.Document)
 		})
 	}
 }
@@ -195,6 +185,7 @@ func TestKillSwitchPublishesNothingOverAnUnparseableDocument(t *testing.T) {
 	view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
 	require.NoError(t, err)
 	require.Equal(t, 1, view.Published.Version, "nothing must be published")
+	require.True(t, view.Head.TenantActuationOff)
 }
 
 // 🔴 Nothing but the kill switch changes a policy this release cannot read: a publish and a rollback
@@ -224,9 +215,9 @@ func TestPublishAndRollbackRefusedOverAnUnreadablePolicy(t *testing.T) {
 
 	view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
 	require.NoError(t, err, "the kill switch still works, without a second factor")
-	d, err := agentpolicy.ParseStored([]byte(view.Published.Document))
-	require.NoError(t, err)
-	require.Equal(t, []string{"future:write"}, d.AgentFlagRequiredFor())
+	require.True(t, view.Head.TenantActuationOff)
+	require.Equal(t, 2, view.Published.Version)
+	require.Contains(t, view.Published.Document, `"version":"v9"`)
 }
 
 // 🔴 Every writer stores Canonical() of a parsed document: the version is always written and the
@@ -250,7 +241,7 @@ func TestEveryWriterStoresTheCanonicalForm(t *testing.T) {
 	require.NoError(t, err)
 	vs, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
 	require.NoError(t, err)
-	require.Len(t, vs, 3)
+	require.Len(t, vs, 2)
 	for _, v := range vs {
 		stored = append(stored, v.Document)
 	}
@@ -317,6 +308,7 @@ func TestKillSwitchSurvivesOversizedAndEscapingPolicies(t *testing.T) {
 	for name, doc := range map[string]string{
 		"canonical over the limit": nearLimitPolicy(t, "enabled"),
 		"escapable characters":     escaping,
+		"stored oversized":         strings.Repeat(" ", agentpolicy.MaxDocumentBytes) + nearLimitPolicy(t, "enabled"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newAgentEnv(t)
@@ -327,14 +319,12 @@ func TestKillSwitchSurvivesOversizedAndEscapingPolicies(t *testing.T) {
 			require.NoError(t, err)
 			view, err := e.m.SetTenantAgentActuation(ctx, adminClaims(nil, auth.AmrPasswordOnly()), false)
 			require.NoError(t, err, "the kill switch must not be refused")
-			require.Equal(t, 2, view.Published.Version)
-			require.LessOrEqual(t, len(view.Published.Document), agentpolicy.MaxDocumentBytes)
-			d, err := agentpolicy.ParseStored([]byte(view.Published.Document))
-			require.NoError(t, err, "what the kill switch stores must be readable")
-			require.False(t, d.ActuationOn())
-			if name == "escapable characters" {
-				require.Equal(t, []string{"command:write"}, d.AgentFlagRequiredFor())
-			}
+			require.Equal(t, 1, view.Published.Version)
+			require.Equal(t, doc, view.Published.Document)
+			require.True(t, view.Head.TenantActuationOff)
+			versions, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+			require.NoError(t, err)
+			require.Len(t, versions, 1)
 		})
 	}
 }
@@ -359,4 +349,123 @@ func TestEveryWriteChecksTheStoredSize(t *testing.T) {
 	require.NoError(t, err)
 	_, err = e.m.RollbackAgentPolicy(ctx, fresh, 1)
 	require.Equal(t, AgentPolicyInvalid, policyErrCode(err))
+}
+
+// The kill stops old and new readers while preserving every other policy setting.
+func TestTenantKillDisablesPolicyAndRefusesEveryPath(t *testing.T) {
+	e := newAgentEnv(t, string(auth.AlarmWrite))
+	ctx := context.Background()
+	e.publish(t, `{"actuation":"enabled","clients":["agent-desktop"],"approvers":{"roles":["approvers"],"stepUpMaxAge":"1m"},"taint":{"neverAutoWhenTaintedOrUnknown":true},"tools":{"commands":{"caps":{"perAction":2,"devicesPerHour":3}}}}`)
+	before, err := e.m.AgentPolicy(ctx, agentTenant)
+	require.NoError(t, err)
+	require.Nil(t, e.m.admitActScopes(ctx, agentTenant, agentClient, auth.ScopeActAlarms, false, false), "control: the enabled document admits act scopes")
+	noFactor := adminClaims(nil, auth.AmrPasswordOnly())
+	killed, err := e.m.SetTenantAgentActuation(ctx, noFactor, false)
+	require.NoError(t, err)
+	require.Equal(t, before.Published.Version+1, killed.Published.Version)
+	require.Equal(t, iam.AgentPolicyOriginActuation, killed.Published.Origin)
+	require.Equal(t, noFactor.Username, killed.Published.PublishedBy)
+	doc, err := agentpolicy.ParseStored([]byte(killed.Published.Document))
+	require.NoError(t, err)
+	require.False(t, doc.ActuationOn(), "v1.3 pods must also stop without reading the flag")
+	doc.Actuation = agentpolicy.ActuationEnabled
+	restored, err := doc.Canonical()
+	require.NoError(t, err)
+	require.Equal(t, before.Published.Document, string(restored), "only actuation changes; taint, caps and step-up age survive")
+	versions, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+	require.NoError(t, err)
+	require.Len(t, versions, 2)
+	require.Equal(t, *before.Published, versions[1], "the previous version stays immutable")
+	require.True(t, killed.Head.TenantActuationOff)
+	require.NotNil(t, killed.Head.ActuationOffAt)
+	require.Equal(t, noFactor.Username, *killed.Head.ActuationOffBy)
+	require.NotNil(t, e.m.admitActScopes(ctx, agentTenant, agentClient, auth.ScopeActAlarms, false, false))
+	agent := &auth.Claims{Tenant: agentTenant, Username: agentPerson, ClientId: agentClient, Scope: auth.ScopeActAlarms,
+		Authorities: []string{string(auth.AlarmPropose)}, TokenType: auth.TokenTypeAccess}
+	decision, err := e.m.AgentActuationDecision(ctx, agent, agentpolicy.Request{Kind: agentpolicy.KindAlarmClear, TargetCount: 1})
+	require.NoError(t, err)
+	require.Equal(t, agentpolicy.VerdictRefuse, decision.Verdict)
+	require.Equal(t, []string{agentpolicy.ReasonActuationOff}, decision.Reasons)
+	_, err = e.m.AgentActuationDetail(ctx, agent, agentpolicy.KindAlarmClear, before.Published.Version)
+	require.Error(t, err)
+	require.NotNil(t, e.m.checkActSessionCap(ctx, agentTenant, &signIn{anchor: time.Now()}))
+	_, err = e.m.SetTenantAgentActuation(ctx, noFactor, true)
+	require.Equal(t, AgentPolicyStepUpRequired, policyErrCode(err))
+	stale := time.Now().Add(-2 * time.Minute)
+	_, err = e.m.SetTenantAgentActuation(ctx, adminClaims(&stale, auth.AmrPasswordOTP()), true)
+	require.Equal(t, AgentPolicyStepUpRequired, policyErrCode(err), "the shorter policy step-up age must hold")
+	after, err := e.m.AgentPolicy(ctx, agentTenant)
+	require.NoError(t, err)
+	require.True(t, after.Head.TenantActuationOff)
+	require.Equal(t, killed.Head, after.Head, "failed enables leave every head field unchanged")
+	require.Equal(t, killed.Published, after.Published, "failed enables leave the document and version unchanged")
+	versions, err = e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+	require.NoError(t, err)
+	require.Len(t, versions, 2)
+	now := time.Now()
+	after, err = e.m.SetTenantAgentActuation(ctx, adminClaims(&now, auth.AmrPasswordOTP()), true)
+	require.NoError(t, err)
+	require.False(t, after.Head.TenantActuationOff)
+	require.Nil(t, after.Head.ActuationOffAt)
+	require.Nil(t, after.Head.ActuationOffBy)
+	require.Equal(t, before.Published.Document, after.Published.Document)
+	require.Equal(t, killed.Published.Version+1, after.Published.Version)
+	require.Equal(t, iam.AgentPolicyOriginActuation, after.Published.Origin)
+	versions, err = e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+	require.NoError(t, err)
+	require.Len(t, versions, 3)
+	var events []rdb.AuditEvent
+	require.NoError(t, e.m.db.Database.WithContext(core.WithSystemContext(ctx)).Where("operation IN ?", []string{rdb.AuditOpAgentActuationDisabled, rdb.AuditOpAgentActuationEnabled}).Order("id").Find(&events).Error)
+	require.Len(t, events, 2, "failed enables must not be journaled as success")
+	require.Equal(t, rdb.AuditOpAgentActuationDisabled, events[0].Operation)
+	require.Equal(t, rdb.AuditOpAgentActuationEnabled, events[1].Operation)
+	require.Equal(t, noFactor.Username, events[0].Actor)
+}
+
+func TestTenantKillWithoutPolicyAndLegacyEnable(t *testing.T) {
+	ctx := context.Background()
+	e := newAgentEnv(t)
+	noFactor := adminClaims(nil, auth.AmrPasswordOnly())
+	view, err := e.m.SetTenantAgentActuation(ctx, noFactor, false)
+	require.NoError(t, err)
+	require.True(t, view.Head.TenantActuationOff)
+	require.Nil(t, view.Published)
+	versions, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+	require.NoError(t, err)
+	require.Empty(t, versions)
+	_, err = e.m.SetTenantAgentActuation(ctx, noFactor, true)
+	require.Equal(t, AgentPolicyNoPolicy, policyErrCode(err))
+	for _, off := range []bool{false, true} {
+		t.Run(fmt.Sprint(off), func(t *testing.T) {
+			e := newAgentEnv(t)
+			e.publish(t, `{"actuation":"disabled","clients":["agent-desktop"]}`)
+			before, err := e.m.AgentPolicy(ctx, agentTenant)
+			require.NoError(t, err)
+			if off {
+				killed, err := e.m.SetTenantAgentActuation(ctx, noFactor, false)
+				require.NoError(t, err)
+				require.True(t, killed.Head.TenantActuationOff)
+				require.Equal(t, before.Published, killed.Published, "an already disabled document stays untouched")
+				versions, err := e.m.AgentPolicyVersions(ctx, agentTenant, 10)
+				require.NoError(t, err)
+				require.Len(t, versions, 1)
+			}
+			require.NotNil(t, e.m.admitActScopes(ctx, agentTenant, agentClient, auth.ScopeActAlarms, false, false))
+			_, err = e.m.SetTenantAgentActuation(ctx, noFactor, true)
+			require.Equal(t, AgentPolicyStepUpRequired, policyErrCode(err))
+			view, err := e.m.AgentPolicy(ctx, agentTenant)
+			require.NoError(t, err)
+			require.Equal(t, off, view.Head.TenantActuationOff)
+			require.Equal(t, 1, view.Published.Version)
+			now := time.Now()
+			view, err = e.m.SetTenantAgentActuation(ctx, adminClaims(&now, auth.AmrPasswordOTP()), true)
+			require.NoError(t, err)
+			require.False(t, view.Head.TenantActuationOff)
+			require.Equal(t, 2, view.Published.Version)
+			require.Equal(t, iam.AgentPolicyOriginActuation, view.Published.Origin)
+			doc, err := agentpolicy.ParseStored([]byte(view.Published.Document))
+			require.NoError(t, err)
+			require.True(t, doc.ActuationOn())
+		})
+	}
 }

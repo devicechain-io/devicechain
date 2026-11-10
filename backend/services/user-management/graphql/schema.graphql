@@ -952,8 +952,8 @@ type AgentPolicyVersion {
 """
 This tenant's agent policy: whether AI agents may act in the tenant, which OAuth clients may,
 what each kind of action needs before it happens, and who may approve it. Agents can act only
-when all three of these are true: this instance allows agent actions, the operator has not
-suspended them for this tenant, and the published policy enables them.
+when this instance allows agent actions, the operator has not suspended them for this tenant,
+the tenant kill switch is off, and the published policy enables them.
 """
 type AgentPolicy {
     """The version in force, or null when none has been published (agents cannot act)."""
@@ -966,9 +966,11 @@ type AgentPolicy {
     draftUpdatedBy: String
     """True when the instance operator has suspended agent actions for this tenant, whatever its policy says."""
     operatorSuspended: Boolean!
+    """(Preview: may change in a minor release.) True when the tenant has switched agent actions off with the kill switch, independent of the document."""
+    actuationOff: Boolean!
     """True when this instance allows agent actions at all."""
     instanceEnabled: Boolean!
-    """True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, and the published policy enables it."""
+    """True when agents may act in this tenant now: the instance allows it, the operator has not suspended it, the tenant kill switch is off, and the published policy enables it."""
     actuationInEffect: Boolean!
 }
 
@@ -1896,9 +1898,11 @@ type Mutation {
         version: Int!
     ): AgentPolicy!
     """
-    (Preview: may change in a minor release.) Turns agent actions in this tenant off or on: publishes the policy in force as a new version
-    with only that changed. Turning them off always succeeds and needs no second factor; turning
-    them back on is a loosening and needs one. Requires agent:admin, and cannot be called by an AI
+    (Preview: may change in a minor release.) Turns agent actions in this tenant off or on using a flag independent of the policy document.
+    Turning them off sets the kill flag and needs no second factor; while upgrading it may also
+    publish the policy with actuation disabled.
+    Turning them back on needs a fresh second factor under the policy in force; if the document
+    disables actuation, enabling publishes it enabled. Requires agent:admin, and cannot be called by an AI
     agent or a service account.
     """
     setAgentActuation(

@@ -146,3 +146,11 @@ func TestProposalReadsAreScopedToTheCaller(t *testing.T) {
 	_, err = r.AgentProposal(auth.WithClaims(ctx, scoped), struct{ Token string }{Token: token})
 	require.ErrorIs(t, err, auth.ErrForbidden)
 }
+
+// A row persisted before the reasons were coarsened is read back coarse.
+func TestProposalReasonsAreCoarseOnReadback(t *testing.T) {
+	var m model.AgentProposal
+	m.Reasons = []byte(`["PROPOSER_LOST_AUTHORITY","OTHER","PROPOSER_SCOPED"]`)
+	r := &AgentProposalResolver{M: m}
+	require.Equal(t, []string{actiongate.ReasonProposerNotInStanding, "OTHER"}, r.Reasons())
+}
