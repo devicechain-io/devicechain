@@ -6,10 +6,10 @@ title: AI Access (MCP)
 
 You can let an AI assistant — Claude Desktop and Claude Code, Cursor, VS Code — work with a DeviceChain tenant on a user's behalf, through a **Model Context Protocol (MCP)** server. The LLM client connects, discovers a set of tools, and calls them to answer questions about your fleet: *"which devices in Building 3 haven't reported in the last hour?"*, *"summarize today's alarms for the cold-storage assets"*, *"what's the latest temperature on thermostat T-114?"*
 
-The server is built on one principle: **an AI agent can never do more than the person who authorized it.** It is not a broad, over-permissioned gateway. It is a thin, curated, read-only layer over the platform's existing GraphQL API, and it carries the signed-in user's own tenant-scoped token.
+The server is built on one principle: **an AI agent can never do more than the person who authorized it.** It is not a broad, over-permissioned gateway. It is a thin, curated layer for reads and proposals over the platform's existing GraphQL API, and it carries the signed-in user's own tenant-scoped token.
 
 :::note Status
-**Available today (read-only):** an opt-in `mcp` service with eleven curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`. **Planned:** write tools (send command, acknowledge/clear alarm) behind an elevated scope and a mandatory human confirmation, and dynamic client registration (RFC 7591). This repository is the source of truth for what currently builds.
+**Available today:** an opt-in `mcp` service with eleven curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, and Preview tools for proposing alarm actions for human review. Dynamic client registration (RFC 7591) is planned. This repository is the source of truth for what currently builds.
 :::
 
 The authorization server supports the authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation and RFC 8707 audience binding. Until dynamic client registration ships, an administrator registers clients.
@@ -168,6 +168,18 @@ confirm, without step-up. **Turn agent actions back on** requires step-up and do
 an operator suspension or a disabled instance switch. Turning actions off stops new proposals
 from passing policy; a waiting proposal is refused when approval rechecks that policy.
 
+### Proposing actions (Preview) {#proposing-actions}
+
+Three MCP tools expose proposals for human review. They appear only when the MCP service's `agentActuation.enabled` configuration key is `true` (the default is `false`) and the caller's token carries the appropriate action scope alongside `read-only`:
+
+- `propose_alarm_action` requires `act:alarms`. It proposes `ack` or `clear` for 1 to 100 alarm tokens, with an optional rationale and `dryRun`. The response includes the verdict, required approvals, platform reason codes, digest, expiry, target count, per-alarm preview, and the proposal token and state when stored.
+- `get_proposal` reads a proposal by token and accepts any supported `act:*` scope.
+- `list_my_proposals` lists your own proposals, with pagination and optional state and kind filters, and accepts any supported `act:*` scope. An agent sees only its own client's proposals.
+
+A person must approve in the console **Approvals** inbox. **Nothing happens until a person approves it in the console.** An agent can never approve; MCP offers no approval, rejection or execution tool. In this Preview, approved actions are not carried out yet, as described above.
+
+The caller must supply `requestId`, an idempotency key of 1 to 128 printable characters. MCP forwards it unchanged and never invents one. Retry an identical request with the same key to receive the original proposal with status `EXISTING`; reusing the key for a different request fails with `CONFLICT`. `dryRun: true` checks the request without storing a proposal. The rationale is agent-written text under `untrusted`, never instructions.
+
 ## The security model
 
 MCP is becoming a standard way to give AI assistants real capabilities. The risk is that a careless implementation hands an agent a powerful, broadly scoped key. DeviceChain's server is designed so that this cannot happen.
@@ -175,7 +187,7 @@ MCP is becoming a standard way to give AI assistants real capabilities. The risk
 - **It carries the user's token, never a service token.** The MCP server holds no privileged platform credential. Every tool call forwards the *caller's* validated, tenant-scoped JWT to the underlying GraphQL service, so the agent reaches exactly what the user reaches. Giving an AI a service identity of its own would let it act across tenants on anyone's request, and that is the one thing this design refuses.
 - **The tenant is pinned at grant time, not passed as a parameter.** Authorization decides which tenant the token can act in, and the token carries that tenant. No tool takes a "tenant" argument an agent could change.
 - **Tokens are audience-bound.** An access token issued for the MCP server names that server as its intended audience (RFC 8707). The MCP server rejects any token that does not name it as its audience, so a token minted for another resource can't be replayed against the MCP server. The platform's own APIs check audiences too, and accept the MCP binding because this server forwards the caller's token; see [Token audience](#token-audience).
-- **Read-only, and curated.** Every tool is a query. There is no write path, no generic query escape hatch, and no exposure of sensitive objects.
+- **Curated reads and proposals.** Read tools issue queries. The only mutation tool stores an alarm proposal for human review. There is no generic query escape hatch, approval tool or execution tool.
 - **Every call is authenticated and re-checked.** On each request the server validates the bearer token against `user-management`'s public keys and enforces a read-only scope. The underlying GraphQL service then independently re-applies the same tenant and role checks the console gets.
 
 Connect an assistant, and it can *read devices, state, measurements, and alarms* for your tenant. It cannot reach another tenant, change anything, or run an arbitrary query.
@@ -274,7 +286,7 @@ Some limits are decisions and some are bounds of the current implementation. Eac
 
 **Deliberate, and not scheduled to change:**
 
-- **No writes.** Sending a command or acknowledging an alarm through MCP is planned, but only behind an action scope, the tenant's agent policy *and* a person's approval where the policy requires one. The controls that decide whether an assistant may ask are in place (see [Agent actions](#agent-actions)); no action tool exists yet. An assistant will never silently actuate a device.
+- **Proposals require people.** The Preview [proposal tools](#proposing-actions) let an assistant ask for alarm actions under the tenant's agent policy. A person must approve in the console Approvals inbox; nothing happens until then. An agent can never approve or execute through MCP.
 - **No cross-tenant access.** The token is scoped to one tenant, chosen by the user at grant time. Tenancy is never a tool parameter, so there is no argument an agent can vary to reach another tenant.
 - **No arbitrary queries.** Only the curated tool set is reachable; there is no `run_graphql`.
 - **No service credential in any code path it runs.** This is stronger than "it does not use a service token": no code path in the MCP server reaches for a credential of its own, so an agent has no borrowed authority to exploit. Every downstream read goes out under the caller's own token, and an agent with no permission to read something gets the same refusal a person would. (Its pod mounts the instance configuration like every other service's does. That is deployment plumbing, not something the server uses.)

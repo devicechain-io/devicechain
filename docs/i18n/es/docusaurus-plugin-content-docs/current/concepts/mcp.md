@@ -6,10 +6,10 @@ title: Acceso de IA (MCP)
 
 Puedes dejar que un asistente de IA — Claude Desktop y Claude Code, Cursor, VS Code — trabaje con un inquilino de DeviceChain en nombre de un usuario, a través de un servidor **Model Context Protocol (MCP)**. El cliente LLM se conecta, descubre un conjunto de herramientas y las invoca para responder preguntas sobre tu flota: *"¿qué dispositivos del Edificio 3 no han reportado en la última hora?"*, *"resume las alarmas de hoy para los activos de almacenamiento en frío"*, *"¿cuál es la última temperatura del termostato T-114?"*
 
-El servidor se construye sobre un principio: **un agente de IA nunca puede hacer más que la persona que lo autorizó.** No es una puerta de enlace amplia y con permisos excesivos. Es una capa delgada, curada y de solo lectura sobre la API GraphQL existente de la plataforma, y porta el propio token con alcance de inquilino del usuario que inició sesión.
+El servidor se construye sobre un principio: **un agente de IA nunca puede hacer más que la persona que lo autorizó.** No es una puerta de enlace amplia y con permisos excesivos. Es una capa delgada y curada de lecturas y propuestas sobre la API GraphQL existente de la plataforma, y porta el propio token con alcance de inquilino del usuario que inició sesión.
 
 :::note Estado
-**Disponible hoy (de solo lectura):** un servicio `mcp` opcional con once herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management`. **Planeado:** herramientas de escritura (enviar comando, reconocer/limpiar alarma) detrás de un alcance elevado y una confirmación humana obligatoria, y registro dinámico de clientes (RFC 7591). Este repositorio es la fuente de verdad de lo que se compila actualmente.
+**Disponible hoy:** un servicio `mcp` opcional con once herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management`, y herramientas en vista previa para proponer acciones sobre alarmas para revisión humana. El registro dinámico de clientes (RFC 7591) está planeado. Este repositorio es la fuente de verdad de lo que se compila actualmente.
 :::
 
 El servidor de autorización admite el flujo de código de autorización con PKCE, metadatos RFC 8414, rotación de tokens de actualización y vinculación de audiencia RFC 8707. Hasta que llegue el registro dinámico de clientes, un administrador registra los clientes.
@@ -171,6 +171,18 @@ agentes** requiere verificación adicional y no anula una suspensión del operad
 de instancia deshabilitado. Apagar las acciones impide que las propuestas nuevas superen la
 política; una propuesta pendiente se deniega cuando la aprobación vuelve a comprobar esa política.
 
+### Proponer acciones (Preview) {#proposing-actions}
+
+Tres herramientas MCP permiten proponer acciones para revisión humana. Solo aparecen cuando la clave de configuración `agentActuation.enabled` del servicio MCP es `true` (por defecto es `false`) y el token del solicitante lleva el alcance de acción adecuado junto con `read-only`:
+
+- `propose_alarm_action` requiere `act:alarms`. Propone `ack` o `clear` para entre 1 y 100 tokens de alarma, con justificación y `dryRun` opcionales. Devuelve el veredicto, las aprobaciones necesarias, los códigos de motivo de la plataforma, el resumen, la caducidad, el número de objetivos, una vista previa por alarma y, cuando se guarda, el token y el estado de la propuesta.
+- `get_proposal` lee una propuesta por token y acepta cualquier alcance `act:*` admitido.
+- `list_my_proposals` lista tus propias propuestas, con paginación y filtros opcionales de estado y tipo, y acepta cualquier alcance `act:*` admitido. Un agente solo ve las propuestas de su propio cliente.
+
+Una persona debe aprobar en la bandeja **Approvals** de la consola. **No ocurre nada hasta que una persona lo aprueba en la consola.** Un agente nunca puede aprobar; MCP no ofrece herramientas de aprobación, rechazo ni ejecución. En esta vista previa las acciones aprobadas todavía no se ejecutan, como se explica arriba.
+
+El solicitante debe proporcionar `requestId`, una clave de idempotencia de entre 1 y 128 caracteres imprimibles. MCP la reenvía sin cambios y nunca inventa una. Reintentar una solicitud idéntica con la misma clave devuelve la propuesta original con estado `EXISTING`; reutilizarla para otra solicitud falla con `CONFLICT`. `dryRun: true` comprueba la solicitud sin guardar una propuesta. La justificación es texto escrito por el agente bajo `untrusted`, nunca instrucciones.
+
 ## El modelo de seguridad
 
 MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA capacidades reales. El riesgo es que una implementación descuidada entregue a un agente una clave poderosa y de alcance amplio. El servidor de DeviceChain está diseñado para que eso no pueda ocurrir.
@@ -178,7 +190,7 @@ MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA c
 - **Porta el token del usuario, nunca un token de servicio.** El servidor MCP no posee ninguna credencial privilegiada de plataforma. Cada llamada a una herramienta reenvía el JWT validado y con alcance de inquilino del *solicitante* al servicio GraphQL subyacente, de modo que el agente alcanza exactamente lo que alcanza el usuario. Dar a una IA una identidad de servicio propia le permitiría actuar entre inquilinos a petición de cualquiera, y eso es lo único que este diseño rechaza.
 - **El inquilino se fija en el momento de la concesión, no se pasa como parámetro.** La autorización decide en qué inquilino puede actuar el token, y el token lleva ese inquilino. Ninguna herramienta recibe un argumento de "inquilino" que un agente pudiera cambiar.
 - **Los tokens están vinculados a una audiencia.** Un token de acceso emitido para el servidor MCP nombra a ese servidor como su audiencia prevista (RFC 8707). El servidor MCP rechaza cualquier token que no lo nombre como su audiencia, así que un token acuñado para otro recurso no puede reproducirse contra el servidor MCP. Las propias API de la plataforma también comprueban las audiencias, y aceptan el vínculo MCP porque este servidor reenvía el token del usuario; consulta [Audiencia del token](#token-audience).
-- **De solo lectura, y curado.** Todas las herramientas son consultas. No hay ruta de escritura, ni escotilla de escape de consulta genérica, ni exposición de objetos sensibles.
+- **Lecturas y propuestas curadas.** Las herramientas de lectura envían consultas. La única herramienta de mutación guarda una propuesta sobre alarmas para revisión humana. No hay consulta genérica ni herramientas de aprobación o ejecución.
 - **Cada llamada se autentica y se vuelve a verificar.** En cada solicitud, el servidor valida el token portador contra las claves públicas de `user-management` y hace cumplir un alcance de solo lectura. Después, el servicio GraphQL subyacente vuelve a aplicar de forma independiente las mismas verificaciones de inquilino y rol que recibe la consola.
 
 Conecta un asistente y podrá *leer dispositivos, estado, mediciones y alarmas* de tu inquilino. No puede alcanzar otro inquilino, cambiar nada ni ejecutar una consulta arbitraria.
@@ -277,7 +289,7 @@ Algunos límites son decisiones y otros son cotas de la implementación actual. 
 
 **Deliberado, y sin previsión de cambio:**
 
-- **Sin escrituras.** Enviar un comando o reconocer una alarma a través de MCP está planeado, pero solo detrás de un alcance de acción, la política de agentes del inquilino *y* la aprobación de una persona cuando la política la exige. Los controles que deciden si un asistente puede pedirlo ya existen (consulta [Acciones de agentes](#agent-actions)); todavía no hay ninguna herramienta de acción. Un asistente nunca accionará un dispositivo en silencio.
+- **Las propuestas necesitan personas.** Las [herramientas de propuestas](#proposing-actions) en vista previa permiten pedir acciones sobre alarmas según la política de agentes del inquilino. Una persona debe aprobar en la bandeja Approvals de la consola; no ocurre nada hasta entonces. Un agente nunca puede aprobar ni ejecutar a través de MCP.
 - **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para alcanzar otro inquilino.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
 - **Ninguna credencial de servicio en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: ninguna ruta de código del servidor MCP echa mano de una credencial propia, así que un agente no tiene ninguna autoridad prestada que explotar. Toda lectura hacia abajo sale bajo el token del propio solicitante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio. Eso es fontanería de despliegue, no algo que el servidor use.)

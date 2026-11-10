@@ -26,8 +26,7 @@ const (
 	// credential, a self-registering device or a compromised gateway can write it, which makes
 	// it the most direct prompt-injection channel the platform has.
 	SourceDevice Source = "device-reported"
-	// SourceAgent is text an agent client wrote. No tool here can store any, so nothing returned
-	// today carries it; it is in the vocabulary so the first stored agent text arrives marked.
+	// SourceAgent is text an agent client wrote, including a stored proposal rationale.
 	SourceAgent Source = "agent"
 )
 
