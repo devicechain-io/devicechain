@@ -217,7 +217,7 @@ cleanup() {
       "$(jq -n --arg t "$profile_disabled" '{t:$t}')" >/dev/null 2>&1 || echo "cleanup: could not re-enable it"
   fi
   # Held simulator sessions belong to this rig's container only.
-  if docker inspect "$device_container" >/dev/null 2>&1; then
+  if [[ "$(docker inspect -f '{{index .Config.Labels "devicechain.io/x509-rig"}}' "$device_container" 2>/dev/null || true)" == "$cluster" ]]; then
     MSYS_NO_PATHCONV=1 docker exec "$device_container" pkill dc-simulator 2>/dev/null || true
   fi
   # The CA and device private keys live only here. Removed however the run ends, unless
