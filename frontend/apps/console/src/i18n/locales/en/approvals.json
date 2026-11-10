@@ -7,7 +7,7 @@
   "notEnabled": "Agent actions are not enabled on this instance.",
   "empty": "No proposals match this state.",
   "stepUp": "Approving needs a fresh second factor",
-  "stepUpHelp": "Sign in again with your password and authenticator code, then retry the action.",
+  "stepUpHelp": "Enter a new code from your authenticator app. Recovery codes cannot be used for step-up. (Preview.)",
   "signInAgain": "Sign in again",
   "agentActions": "Agent actions",
   "inEffect": "Agent actions are in effect.",
@@ -57,5 +57,10 @@
   "CANCELLED": "Cancelled",
   "KILLED": "Stopped",
   "ALARM_ACK": "Acknowledge alarms",
-  "ALARM_CLEAR": "Clear alarms"
+  "ALARM_CLEAR": "Clear alarms",
+  "authenticatorCode": "Authenticator code",
+  "verifyCode": "Verify code",
+  "stepUpInvalid": "Code not accepted. Try a new authenticator code; repeated attempts may temporarily lock verification.",
+  "stepUpSuccess": "Second factor verified. Retry your action.",
+  "stepUpUnavailable": "In-session verification is unavailable. Sign in again to continue."
 }

@@ -914,6 +914,22 @@ mutation Verify($challenge: String!, $code: String!) {
 
 `verifyMfa` returns what `login` returns, and the client carries on with `selectTenant` as before. `code` is the six-digit app code or a recovery code (`ABCD-EFGH-JKMN-PQRS`, in any case, with or without the hyphens). A challenge lasts five minutes, takes five attempts and signs in once.
 
+**In-session step-up (Preview: may change in a minor release).** When an agent approval or policy loosening returns `STEP_UP_REQUIRED`, send your own tenant access token in `Authorization: Bearer ...` and your console refresh token with a fresh authenticator code:
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+`stepUp` returns the same `AuthToken` pair as `refresh`. Store both replacement tokens, then retry the action. It keeps the session id and epoch and advances `mfa_time`; an ordinary refresh does not renew factor freshness. The refresh token must belong to the same username and tenant as the access token. Agent-origin, service, identity and refresh tokens cannot authorize this operation, and OAuth refresh tokens cannot name the session. Ended sessions and rotated session epochs are refused.
+
+Only TOTP codes are accepted: recovery codes are refused **without being evaluated or consumed**. Wrong, replayed and locked codes all return `invalid code` and share sign-in's factor lockout; a wrong code leaves the refresh token usable. One verification is allowed per request. Single sign-on sessions return `STEP_UP_SSO`; accounts without a factor return `MFA_NOT_ENROLLED`. The console's approval dialog verifies without signing out and tells you to retry; sign-in again is offered only when the mutation is unavailable, including older servers, network/store outages, single sign-on and missing enrollment.
+
 The operations are on the user-management endpoint. `mfaStatus`, `beginTotpEnrollment`, `confirmTotpEnrollment`, `regenerateRecoveryCodes` and `disableTotp` take the identity token as an argument (not in an `Authorization` header), not a tenant token. `verifyMfa` takes no token. The tenant-plane `setTenantMfaRequired` takes the tenant access token and needs `member:write` and an unscoped caller. `resetIdentityMfa` and the admin API's `setTenantMfaRequired` are on the admin API and need `user:write`:
 
 | Operation | What it does |

@@ -129,7 +129,7 @@ A superuser's session is never given an action scope. An operator who wants an a
 
 - Turn `agentActuation.enabled` on in a separate upgrade, after the release that brings it has finished rolling out. Pods of an earlier release do not know agent accounts and would issue an agent account's token with its roles' write permissions; agent accounts receive proposal-only tokens only from pods of this release or later, which is why an agent account can be created only while the switch is on.
 - If you turn the switch off while an OAuth client still has action scopes registered, remove those scopes in the same edit the next time you change the client: an edit that keeps a scope the instance no longer offers is refused.
-- Loosening the policy needs a second factor presented with a one-time code within the step-up age. A tenant administrator who signs in only through single sign-on, or has not enrolled a code, cannot loosen it until the console offers a step-up prompt; tightening and the kill switch are always available.
+- Loosening the policy needs a second factor presented within the step-up age. The console offers an authenticator-code dialog on `STEP_UP_REQUIRED`, then asks you to retry the action without signing out. The tenant API's `stepUp(refreshToken, code)` renews the factor time in your own password session and rotates its tokens (Preview: may change in a minor release). Recovery codes are refused without redemption. Single sign-on sessions and accounts without an enrolled factor cannot use this mutation; when verification is unavailable the console offers sign-in again. Tightening and the kill switch remain available.
 
 ### Proposals and approvals (preview) {#agent-proposals}
 

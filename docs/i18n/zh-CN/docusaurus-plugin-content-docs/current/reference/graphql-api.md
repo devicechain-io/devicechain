@@ -694,6 +694,22 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 ## 使用双重身份验证登录 {#two-factor-sign-in}
 
+**会话内加强验证（预览：可能在次要版本中更改）。** 代理批准或放宽策略返回 `STEP_UP_REQUIRED` 时，在 `Authorization: Bearer ...` 中发送自己的租户访问令牌，并提供控制台自己的刷新令牌及新的身份验证器验证码：
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+返回与 `refresh` 相同的 `AuthToken` 令牌对。保存两个替换令牌后重试操作，无需退出登录。会话标识符和纪元保持不变，`mfa_time` 更新；普通刷新不会更新因素验证时间。两个令牌必须属于同一用户名和租户。代理、服务、身份和刷新令牌不能授权此操作；OAuth 刷新令牌、已结束的会话和已轮换的纪元也会被拒绝。
+
+仅接受 TOTP：恢复码会被拒绝，**既不验证也不消耗**。错误、重放和被锁定的验证码均返回 `invalid code`，并与登录共享因素锁定；错误验证码不会消耗刷新令牌。每个请求仅允许一次验证。单点登录会话返回 `STEP_UP_SSO`，未注册因素的账户返回 `MFA_NOT_ENROLLED`。控制台验证成功后会提示重试操作；只有变更不可用时才提供重新登录，包括旧版服务器、网络或存储故障、单点登录以及未注册因素的情况。
+
 设有[双重身份验证](../guides/two-factor-authentication.md)的账号无法从 `login` 获得令牌。密码正确时，`login` 以错误码 `MFA_CHALLENGE` 失败，并在 `extensions` 中携带一个质询；在客户端把代码发给 `verifyMfa` 之前不会签发任何东西。**只处理 `login` 成功情形的客户端，对这些账号现在会失败**，得到一个错误，而不会拿到不该拿到的令牌。
 
 ```json

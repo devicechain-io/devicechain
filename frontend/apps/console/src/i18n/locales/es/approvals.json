@@ -7,7 +7,7 @@
   "notEnabled": "Las acciones de agentes no están habilitadas en esta instancia.",
   "empty": "No hay propuestas en este estado.",
   "stepUp": "Para aprobar se necesita verificar de nuevo un segundo factor",
-  "stepUpHelp": "Vuelve a iniciar sesión con tu contraseña y el código de tu aplicación de autenticación y, después, vuelve a intentar la acción.",
+  "stepUpHelp": "Introduce un código nuevo de tu aplicación de autenticación. No se admiten códigos de recuperación. (Vista previa.)",
   "signInAgain": "Volver a iniciar sesión",
   "agentActions": "Acciones de agentes",
   "inEffect": "Las acciones de agentes están activas.",
@@ -57,5 +57,10 @@
   "CANCELLED": "Cancelada",
   "KILLED": "Detenida",
   "ALARM_ACK": "Reconocer alarmas",
-  "ALARM_CLEAR": "Cerrar alarmas"
+  "ALARM_CLEAR": "Cerrar alarmas",
+  "authenticatorCode": "Código de autenticación",
+  "verifyCode": "Verificar código",
+  "stepUpInvalid": "Código no aceptado. Prueba con uno nuevo; los intentos repetidos pueden bloquear temporalmente la verificación.",
+  "stepUpSuccess": "Segundo factor verificado. Vuelve a intentar la acción.",
+  "stepUpUnavailable": "La verificación en la sesión no está disponible. Inicia sesión de nuevo para continuar."
 }

@@ -18,6 +18,7 @@ import {
   completeSso as apiCompleteSso,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
+  stepUp as apiStepUp,
   logout as apiLogout,
   getIdentityMemberships as apiIdentityMemberships,
   type IdentityAuth,
@@ -80,6 +81,8 @@ interface AuthContextValue {
    * does, so everything after (selectTenant, refresh, logout) is the same.
    */
   verifyMfa: (challenge: string, code: string) => Promise<IdentityAuth>;
+  /** Preview: verify an authenticator code and rotate the tenant session in place. */
+  stepUp: (code: string) => Promise<void>;
   /**
    * Replace the identity session with a fresh sign-in the server handed back (turning two-factor
    * authentication on ends every session the account had, and answers the caller's
@@ -328,6 +331,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyTokens, expireTenant],
   );
 
+  const stepUp = useCallback(async (code: string) => {
+    // Finish any ordinary refresh before taking the refresh-token snapshot.
+    if (!(await session.getAccessToken())) throw new Error('session unavailable');
+    const held = tokensRef.current;
+    if (!held) throw new Error('session unavailable');
+    const pair = await apiStepUp(held.refreshToken, code);
+    // A sign-out or tenant switch while the dialog was waiting must win.
+    if (tokensRef.current !== held) throw new Error('session changed');
+    session.reset();
+    applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
+  }, [session, applyTokens]);
+
   const logout = useCallback(async () => {
     // Both tokens name the same sign-in when they came from one login; send each that is
     // held, so a stale tenant session left over from an earlier login is ended too.
@@ -531,6 +546,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       verifyMfa,
+      stepUp,
       adoptIdentity,
       forgetSessions,
       completeSso,
@@ -551,6 +567,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       verifyMfa,
+      stepUp,
       adoptIdentity,
       forgetSessions,
       completeSso,

@@ -87,16 +87,16 @@ type sessionRecord struct {
 	ConnectionKind iam.IdpKind `json:"connection_kind,omitempty"`
 	Anchor         time.Time   `json:"anchor"`
 	// Amr is how a PASSWORD sign-in proved who the person is (auth.AmrPasswordOnly,
-	// AmrPasswordOTP, AmrPasswordRecovery). It is written once, by startSession, and every
-	// token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
+	// AmrPasswordOTP, AmrPasswordRecovery). Written by startSession and advanced by StepUp,
+	// every token minted from this sign-in takes its "amr" claim from HERE and nowhere else: never
 	// from a token the caller presented, which a forged or older refresh token could
 	// overstate. A record written by a build that predates it has none and reads as no
 	// second factor, so a tenant that requires one refuses it. A single sign-on records none.
 	Amr []string `json:"amr,omitempty"`
 	// MfaAt is when this sign-in last VERIFIED a second factor: the code that completed it. Every
 	// token minted from the sign-in carries it as "mfa_time", copied unchanged through every
-	// refresh, so a step-up check reads how long ago a person actually presented a factor rather
-	// than how long ago a token was minted. Nil when the sign-in presented none, and for a record
+	// refresh until StepUp advances it. A step-up check reads when a person presented a factor,
+	// rather than when a token was minted. Nil when the sign-in presented none, and for a record
 	// written before it existed, which reads as "no recent factor".
 	MfaAt *time.Time `json:"mfa_at,omitempty"`
 }

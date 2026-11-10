@@ -1,7 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { StepUpDialog } from '@/components/StepUpDialog';
 import { useTranslation } from 'react-i18next';
 import { hasAuthority, isScoped } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
@@ -17,9 +18,14 @@ import { ErrorState } from '@/components/ui/error-state';
 export function StepUpPrompt({ path }: { path: string }) {
   const { t } = useTranslation('approvals');
   const { logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [fallback, setFallback] = useState(false);
+  const [verified, setVerified] = useState(false);
   return <div role="status" className="space-y-2 rounded-md border border-warning p-4">
-    <p>{t('stepUp')}</p><p className="text-sm">{t('stepUpHelp')}</p>
-    <Button onClick={() => { setStepUpReturn(path); logout(); }}>{t('signInAgain')}</Button>
+    <p>{t(verified ? 'stepUpSuccess' : 'stepUp')}</p>
+    {fallback ? <><p>{t('stepUpUnavailable')}</p><Button onClick={() => { setStepUpReturn(path); void logout(); }}>{t('signInAgain')}</Button></>
+      : !verified && <Button onClick={() => setOpen(true)}>{t('verifyCode')}</Button>}
+    <StepUpDialog open={open} onOpenChange={setOpen} onSuccess={() => setVerified(true)} onUnavailable={() => setFallback(true)} />
   </div>;
 }
 
