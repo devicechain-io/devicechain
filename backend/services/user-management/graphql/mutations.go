@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -119,8 +120,8 @@ func (r *SignOutResolver) ProviderSignOutUrl() *string {
 }
 
 // UpdateProfile lets the signed-in user edit their own display name (first/last).
-// Self-scoped: it targets the identity carried in the caller's token, so being
-// authenticated is sufficient; email and credentials are immutable here.
+// Self-scoped: it targets the identity carried in the caller's human session access
+// token; agent-origin tokens are refused. Email and credentials are immutable here.
 //
 // It takes a dedicated ProfileUpdateRequest rather than two inline arguments. The
 // arguments were already effectively three-state — a nil pointer left a field alone —
@@ -133,6 +134,9 @@ func (r *SchemaResolver) UpdateProfile(ctx context.Context, args struct {
 	claims, ok := auth.ClaimsFromContext(ctx)
 	if !ok {
 		return nil, auth.ErrUnauthenticated
+	}
+	if auth.IsAgentOrigin(claims) || claims.TokenType != auth.TokenTypeAccess {
+		return nil, fmt.Errorf("%w: updateProfile requires a person's own session access token", auth.ErrForbidden)
 	}
 	id, err := r.getIdentityManager(ctx).UpdateProfile(ctx, claims.Username, &args.Request)
 	if err != nil {
