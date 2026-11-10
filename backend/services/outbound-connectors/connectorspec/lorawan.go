@@ -4,6 +4,7 @@
 package connectorspec
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -19,6 +20,7 @@ var ttsIDShape = regexp.MustCompile(`^[a-z0-9](?:-?[a-z0-9]){2,35}$`)
 const (
 	NetworkServerChirpStackV4 = "chirpstack_v4"
 	NetworkServerTTSV3        = "tts_v3"
+	NetworkServerWebhook      = "webhook"
 )
 
 // LoRaWANDownlinkType is the connector type that links an inbound integration to its network
@@ -42,7 +44,14 @@ type lorawanConfig struct {
 	// ApplicationID is The Things Stack application the devices belong to. Required for tts_v3
 	// (its downlink API is addressed by application and device id) and refused for chirpstack_v4,
 	// which has no such thing: a field that cannot mean anything must not be accepted silently.
-	ApplicationID string `json:"applicationId"`
+	ApplicationID string            `json:"applicationId"`
+	URLTemplate   *string           `json:"urlTemplate"`
+	Method        *string           `json:"method"`
+	ContentType   *string           `json:"contentType"`
+	BodyTemplate  *string           `json:"bodyTemplate"`
+	Headers       map[string]string `json:"headers"`
+	AuthHeader    *string           `json:"authHeader"`
+	AuthPrefix    *string           `json:"authPrefix"`
 }
 
 // LoRaWANDownlinkTarget is a validated network-server link. It is NOT a publish destination: the
@@ -56,7 +65,8 @@ type LoRaWANDownlinkTarget struct {
 	// ApplicationID is the The Things Stack application id (tts_v3 only).
 	ApplicationID string
 	// APIKey is the network server's API token, in memory only.
-	APIKey string
+	APIKey  string
+	Webhook *WebhookSpec
 }
 
 func (LoRaWANDownlinkTarget) isTarget() {}
@@ -65,6 +75,17 @@ func parseLoRaWANDownlink(config []byte) (Target, error) {
 	var c lorawanConfig
 	if err := decodeStrict(LoRaWANDownlinkType, config, &c); err != nil {
 		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(config, &fields)
+	hasWebhookFields := false
+	for _, field := range []string{"urlTemplate", "method", "contentType", "bodyTemplate", "headers", "authHeader", "authPrefix"} {
+		if _, present := fields[field]; present {
+			hasWebhookFields = true
+		}
+	}
+	if (c.NetworkServer == NetworkServerChirpStackV4 || c.NetworkServer == NetworkServerTTSV3) && hasWebhookFields {
+		return nil, fmt.Errorf("%s config: webhook template fields are only for webhook", LoRaWANDownlinkType)
 	}
 	switch c.NetworkServer {
 	case NetworkServerChirpStackV4:
@@ -75,10 +96,14 @@ func parseLoRaWANDownlink(config []byte) (Target, error) {
 		if len(c.ApplicationID) > 36 || !ttsIDShape.MatchString(c.ApplicationID) {
 			return nil, fmt.Errorf("%s config: applicationId must be the The Things Stack application id (3 to 36 lower-case letters, digits and single dashes)", LoRaWANDownlinkType)
 		}
+	case NetworkServerWebhook:
+		if _, present := fields["applicationId"]; present {
+			return nil, fmt.Errorf("%s config: applicationId is only for tts_v3", LoRaWANDownlinkType)
+		}
 	case "":
 		return nil, fmt.Errorf("%s config: networkServer is required (chirpstack_v4 or tts_v3)", LoRaWANDownlinkType)
 	default:
-		return nil, fmt.Errorf("%s config: networkServer %q is not one of chirpstack_v4, tts_v3", LoRaWANDownlinkType, c.NetworkServer)
+		return nil, fmt.Errorf("%s config: networkServer %q is not one of chirpstack_v4, tts_v3, webhook", LoRaWANDownlinkType, c.NetworkServer)
 	}
 	if c.Integration == "" || len(c.Integration) > maxIntegrationTokenLen ||
 		strings.ContainsAny(c.Integration, " \t\r\n:/\\") {
@@ -93,7 +118,14 @@ func parseLoRaWANDownlink(config []byte) (Target, error) {
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawPath = ""
-	return LoRaWANDownlinkTarget{NetworkServer: c.NetworkServer, BaseURL: u, Integration: c.Integration,
+	var webhook *WebhookSpec
+	if c.NetworkServer == NetworkServerWebhook {
+		webhook, err = parseWebhook(c, u)
+		if err != nil {
+			return nil, fmt.Errorf("%s config: %w", LoRaWANDownlinkType, err)
+		}
+	}
+	return LoRaWANDownlinkTarget{Webhook: webhook, NetworkServer: c.NetworkServer, BaseURL: u, Integration: c.Integration,
 		ApplicationID: c.ApplicationID}, nil
 }
 

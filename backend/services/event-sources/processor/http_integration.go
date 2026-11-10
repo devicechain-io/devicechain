@@ -691,6 +691,8 @@ func isDownlinkEvent(t integrationcodec.Type, r *http.Request, messageType strin
 	case integrationcodec.ChirpStackV4:
 		ev := r.URL.Query().Get("event")
 		return ev == integrationcodec.DownlinkAck || ev == integrationcodec.DownlinkTxAck
+	case integrationcodec.GenericJSON:
+		return integrationcodec.IsGenericAckPath(messageType)
 	case integrationcodec.TTSV3:
 		seg := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(messageType))
 		return strings.HasPrefix(seg, "downlink")

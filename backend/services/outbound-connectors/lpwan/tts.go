@@ -154,6 +154,7 @@ func (c *TTS) Enqueue(ctx context.Context, t connectorspec.LoRaWANDownlinkTarget
 type Router struct {
 	ChirpStack Enqueuer
 	TTS        Enqueuer
+	Webhook    Enqueuer
 }
 
 // Enqueue implements Enqueuer.
@@ -162,6 +163,10 @@ func (r Router) Enqueue(ctx context.Context, t connectorspec.LoRaWANDownlinkTarg
 	case connectorspec.NetworkServerChirpStackV4:
 		if r.ChirpStack != nil {
 			return r.ChirpStack.Enqueue(ctx, t, device, p, expires)
+		}
+	case connectorspec.NetworkServerWebhook:
+		if r.Webhook != nil {
+			return r.Webhook.Enqueue(ctx, t, device, p, expires)
 		}
 	case connectorspec.NetworkServerTTSV3:
 		if r.TTS != nil {

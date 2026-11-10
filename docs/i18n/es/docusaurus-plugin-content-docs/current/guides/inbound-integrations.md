@@ -271,11 +271,11 @@ Conviene conocer dos casos:
 - Un dispositivo que además se conecta por MQTT se juzga por el último transporte por el que informó. Mientras su último informe fue a través de la integración, sus comandos fallan; cuando informa por MQTT, se entregan.
 - Un dispositivo que nunca ha informado no tiene transporte registrado, así que sus comandos se despachan como de costumbre, y caducan sin respuesta, hasta que informa por primera vez.
 
-Para un dispositivo que debe recibir comandos y no está detrás de un servidor de red ChirpStack v4, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
+Para un dispositivo cuyo servidor de red no tiene API de downlink, dale también una conexión MQTT. Consulta la [matriz de transportes](../reference/transport-matrix.md).
 
-## Downlink LoRaWAN (ChirpStack v4) {#lorawan-downlink}
+## Downlink LoRaWAN {#lorawan-downlink}
 
-Una instalación que ejecuta los conectores de salida con el downlink activado (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; el chart de Helm hace entonces que la entrega de comandos despache estos comandos, y rechaza una copia de esa marca puesta a mano) envía un comando a un dispositivo detrás de un servidor de red ChirpStack v4 poniendo un downlink en la cola de ese servidor. Nada cambia en una instalación que lo deja desactivado.
+Una instalación que ejecuta los conectores de salida con el downlink activado (`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled: true`; el chart de Helm hace entonces que la entrega de comandos despache estos comandos, y rechaza una copia de esa marca puesta a mano) envía comandos poniendo downlinks en la cola del servidor vinculado. Se admiten ChirpStack v4, The Things Stack v3 y webhooks HTTP configurables. A continuación se describe ChirpStack; los demás servidores tienen subsecciones más abajo. Nada cambia en una instalación que lo deja desactivado.
 
 **1. Vincula la integración a su servidor de red.** Crea y publica un conector de tipo `lorawan_downlink`:
 
@@ -366,10 +366,90 @@ Un informe se asocia a su comando solo por el correlation id `dc:` que puso la p
 
 **Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
 
+### Cualquier otro servidor de red (webhook) {#lorawan-downlink-webhook}
+
+Para un servidor de red sin cliente nativo, publica un conector `lorawan_downlink` con `networkServer: "webhook"`. El dispositivo necesita un alias `lorawan.deveui`; la plataforma obtiene su DevEUI del dispositivo. Usa los mismos parámetros de comando o el codificador tipado descritos arriba. Exactamente un enlace publicado debe nombrar la integración entrante.
+
+| Configuración | Significado |
+| --- | --- |
+| `networkServer` | Obligatorio: `webhook`. |
+| `baseUrl` | Raíz de API HTTP(S) obligatoria con host literal; admite un prefijo de ruta. Sin consulta, fragmento ni información de usuario. |
+| `integration` | Token obligatorio de la integración entrante. |
+| `urlTemplate` | Ruta obligatoria, con consulta opcional, que empieza por `/`; máximo 1024 bytes. |
+| `method` | `POST` (predeterminado), `PUT` o `PATCH`. |
+| `contentType` | `application/json` (predeterminado), `text/plain` o `application/x-www-form-urlencoded`. |
+| `bodyTemplate` | Cuerpo opcional, máximo 8192 bytes; puede estar vacío. Los cuerpos JSON deben producir JSON válido. |
+| `headers` | Hasta 16 cabeceras personalizadas, cada valor de hasta 512 bytes. Los nombres son tokens HTTP literales; los valores admiten marcadores. |
+| `authHeader` | Nombre de la cabecera de credencial; por defecto `Authorization`. |
+| `authPrefix` | Por defecto `"Bearer "`; `""` explícito envía el secreto sin prefijo. Máximo 32 caracteres, sin caracteres de control. |
+| Secreto del conector | Credencial de API obligatoria, cifrada y de solo escritura. El valor de la cabecera es `authPrefix + secret`. |
+
+Se rechaza `applicationId` para webhook. Los campos específicos de webhook se rechazan para los tipos nativos de servidor. Los nombres de cabecera deben ser tokens HTTP válidos. Las cabeceras personalizadas no pueden definir `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Content-Type`, `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie` ni el `authHeader` configurado (sin distinguir mayúsculas). `authHeader` no puede ser una cabecera de delimitación, tipo de contenido, conexión o cookies. Los valores de cabecera no pueden contener caracteres de control. Usa `contentType` para elegir el formato del cuerpo.
+
+| Marcador | Valor generado |
+| --- | --- |
+| `{{devEui}}` | 16 dígitos hexadecimales en mayúsculas. |
+| `{{fPort}}` | Puerto de aplicación decimal. |
+| `{{payloadBase64}}` | Payload en base64 estándar con relleno. |
+| `{{payloadHex}}` | Payload hexadecimal en minúsculas. |
+| `{{confirmed}}` | `true` o `false`. |
+| `{{correlationId}}` | `dc:` generado por la plataforma seguido de 32 dígitos hexadecimales en minúsculas. |
+
+Solo se aceptan estos nombres exactos. Se rechazan espacios dentro del marcador, marcadores desconocidos o incompletos y `{{` literal; las llaves sueltas son literales para JSON. Los valores en rutas URL se escapan como segmentos de ruta y los de consulta como componentes de consulta; los valores del cuerpo y las cabeceras se insertan sin escape. La sustitución se hace en una sola pasada. La URL o el cuerpo debe contener `{{devEui}}`.
+
+Por ejemplo, con el secreto del conector establecido a la credencial de API:
+
+```json
+{
+  "networkServer": "webhook",
+  "baseUrl": "https://ns.example.com/api",
+  "integration": "my-integration-token",
+  "urlTemplate": "/devices/{{devEui}}/downlinks",
+  "method": "POST",
+  "contentType": "application/json",
+  "bodyTemplate": "{\"devEui\":\"{{devEui}}\",\"fPort\":{{fPort}},\"data\":\"{{payloadBase64}}\",\"confirmed\":{{confirmed}},\"ref\":\"{{correlationId}}\"}",
+  "headers": {
+    "X-Correlation-Id": "{{correlationId}}"
+  },
+  "authHeader": "Authorization",
+  "authPrefix": "Bearer "
+}
+```
+
+Un comando `{"fPort":10,"hex":"0a0b","confirmed":false}` para el DevEUI `0011223344556677` se envía a `https://ns.example.com/api/devices/0011223344556677/downlinks` con `data: "Cgs="`, `fPort: 10`, `confirmed: false` y la referencia generada en el cuerpo y la cabecera. Adapta los nombres de campo a la API del servidor.
+
+La llamada usa la política de salida; los destinos privados necesitan una autorización del operador. Nunca se siguen redirecciones ni se usan las variables de entorno del proxy. Las plantillas no pueden cambiar el esquema o host base, añadir información de usuario o fragmentos, ni usar `..` o barras inversas. La credencial se establece al final y nunca aparece en errores; solo se muestra el estado HTTP, nunca el texto de respuesta del servidor.
+
+| Resultado del envío | Resultado del comando |
+| --- | --- |
+| HTTP 2xx | Aceptado. Sin confirmar: `SUCCEEDED`, etapa `queued`; confirmado: permanece `SENT` esperando un ack. La aceptación en cola no demuestra la entrega. |
+| Configuración/parámetros inválidos, falta de DevEUI, rechazo de salida, fallo DNS/conexión antes de escribir u otros HTTP 4xx | `FAILED`, no entregado (`UNSENT`); es seguro volver a enviarlo. |
+| HTTP 3xx, 408, 499, 5xx o fallo ambiguo después de escribir | `TIMEOUT`, resultado desconocido (`UNANSWERED`); reenviar puede ejecutar dos veces. |
+
+**Los downlinks confirmados requieren `{{correlationId}}` en la URL, el cuerpo o un valor de cabecera.** En caso contrario, el comando se rechaza antes del despacho. El servidor de red o su middleware debe conservar esa referencia y enviar un acuse de vuelta. El plazo pendiente es la caducidad del comando, limitado por defecto a 24 horas.
+
+**Contrato del ack.** Envía un POST a la [URL de integración JSON genérica](#generic-json) autenticada, añadiendo `ack` o un segmento de ruta que empiece por `downlink` (por ejemplo `/downlink-ack` o `/downlink-nack`; la comparación ignora mayúsculas y `-`, `_`, `/`). Usa `Content-Type: application/json` y el token bearer de la integración. `idFrom` identifica al dispositivo igual que en los uplinks: `header:`, `query:` o `pointer:` dentro de este único objeto ack. Si `idFrom` es `pointer:/devEui`, añade `"devEui":"0011223344556677"` a este cuerpo:
+
+```json
+{"correlationId":"dc:0123456789abcdef0123456789abcdef","status":"acknowledged"}
+```
+
+`correlationId` es obligatorio, empieza por `dc:`, contiene hexadecimal en minúsculas tras el prefijo y tiene como máximo 100 caracteres. `status` es obligatorio y distingue mayúsculas. Las rutas ack de integraciones binarias genéricas se ignoran. El cuerpo es un único objeto JSON sujeto a los límites normales de solicitud y elemento; no se aplica la configuración de arreglos de uplinks.
+
+| Ack `status` | Resultado del comando |
+| --- | --- |
+| `acknowledged` | `SUCCEEDED`, etapa `acknowledged`. |
+| `timeout` | `TIMEOUT`, resultado desconocido; el acuse puede haberse perdido. |
+| `failed` | `TIMEOUT`, resultado desconocido; este informe no demuestra que la trama nunca se transmitió. |
+| Ningún informe antes del plazo | `TIMEOUT`, resultado desconocido. |
+
+El informe debe coincidir en id de correlación, integración y token de dispositivo resuelto por la plataforma. Los informes de otro dispositivo se descartan y cuentan como `mismatch`; los elementos pendientes inexistentes o ya cerrados se descartan y cuentan como `unmatched` en `lpwan_downlink_reports_total`, como arriba. Las rutas ack usan el limitador de informes de downlink y no se descartan con la telemetría. La URL base de integración sin ruta no nombra ningún tipo ack.
+
+
 ### Codificar comandos a partir de parámetros tipados {#lorawan-command-encoder}
 
 Una definición de comando puede incluir una cadena JSON `encoder` opcional. Publica
-el perfil para activarla. Se aplica tanto a ChirpStack v4 como a The Things Stack v3.
+el perfil para activarla. Se aplica a ChirpStack v4, The Things Stack v3 y los enlaces webhook.
 El codificador vigente al despachar el comando es el que se aplica; una nueva
 publicación se aplica a los comandos despachados después de ella, incluidos los que
 ya estaban en cola. La definición publicada se consulta de nuevo en cada despacho,
@@ -460,7 +540,6 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Downlink hacia remitentes genéricos.** El [downlink LoRaWAN](#lorawan-downlink) cubre ChirpStack v4 y The Things Stack v3, con cargas útiles en bruto o [parámetros tipados codificados](#lorawan-command-encoder). Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.

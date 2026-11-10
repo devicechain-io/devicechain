@@ -165,6 +165,12 @@ func frameTextOf(item map[string]any, s *GenericSettings) (text, encoding string
 }
 
 func decodeGenericJSON(d *Descriptor, r *Request) (*Result, error) {
+	if IsGenericAckPath(r.MessageType) {
+		if !r.DownlinkReports {
+			return &Result{Ignored: true}, nil
+		}
+		return decodeGenericAck(d, r)
+	}
 	s := d.Settings()
 	if s == nil {
 		return nil, fmt.Errorf("integration %q has no generic settings", d.Token)
@@ -270,6 +276,9 @@ func decodeGenericJSON(d *Descriptor, r *Request) (*Result, error) {
 }
 
 func decodeGenericBinary(d *Descriptor, r *Request) (*Result, error) {
+	if IsGenericAckPath(r.MessageType) {
+		return &Result{Ignored: true}, nil
+	}
 	s := d.Settings()
 	if s == nil {
 		return nil, fmt.Errorf("integration %q has no generic settings", d.Token)
@@ -300,4 +309,80 @@ func decodeGenericBinary(d *Descriptor, r *Request) (*Result, error) {
 		AltId: "gen:" + shaHex([]byte(id), r.Body) + "-" + strconv.FormatInt(at.UnixMilli(), 10),
 		Frame: r.Body, FPort: NoLoRaWAN, FCnt: NoLoRaWAN,
 	}}}, nil
+}
+
+// GenericDeviceRef marks reports whose identity is proven by the integration's device lookup.
+const GenericDeviceRef = "webhook"
+
+// IsGenericAckPath identifies generic acknowledgement routes without matching uplink names.
+func IsGenericAckPath(messageType string) bool {
+	segment := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(messageType))
+	return segment == "ack" || strings.HasPrefix(segment, "downlink")
+}
+
+func decodeGenericAck(d *Descriptor, r *Request) (*Result, error) {
+	s := d.Settings()
+	if s == nil {
+		return nil, fmt.Errorf("integration %q has no generic settings", d.Token)
+	}
+	if !isJSONContent(r.ContentType) {
+		return nil, malformed("the body is not JSON (content type %q)", clip(r.ContentType))
+	}
+	var item map[string]any
+	if err := parseDocument(r.Body, &item); err != nil {
+		return nil, err
+	}
+	if item == nil {
+		return nil, malformed("the acknowledgement must be a JSON object")
+	}
+	canonical, err := json.Marshal(item)
+	if err != nil || len(canonical) > MaxDecodedBytes {
+		return nil, malformed("acknowledgement exceeds the item size limit")
+	}
+	key, ok := item["correlationId"].(string)
+	if !ok || !strings.HasPrefix(key, DownlinkCorrelationPrefix) || len(key) > 100 || len(key) <= len(DownlinkCorrelationPrefix) {
+		return nil, malformed("correlationId must be a platform dc: correlation id")
+	}
+	for _, c := range strings.TrimPrefix(key, DownlinkCorrelationPrefix) {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return nil, malformed("correlationId must contain lower-case hex after dc:")
+		}
+	}
+	status, _ := item["status"].(string)
+	event := DownlinkEvent{Kind: DownlinkAck, QueueItemID: key, DeviceRef: GenericDeviceRef}
+	switch status {
+	case "acknowledged":
+		event.Acknowledged = true
+	case "timeout":
+	case "failed":
+		event.Kind = DownlinkFailed
+		event.ErrorNamespace = GenericDeviceRef
+		event.ErrorName = "failed"
+	default:
+		return nil, malformed("status must be acknowledged, timeout or failed")
+	}
+	id, fromRequest, err := fixedId(s, r)
+	if err != nil {
+		return nil, err
+	}
+	if !fromRequest {
+		_, pointer := idSource(s)
+		v, ok := pointerGet(item, pointer)
+		if !ok {
+			return nil, malformed("acknowledgement has no device identifier at %s", pointer)
+		}
+		id, ok = scalarText(v)
+		if !ok {
+			return nil, malformed("acknowledgement device identifier must be a string or number")
+		}
+	}
+	event.Scheme, err = d.Scheme()
+	if err != nil {
+		return nil, err
+	}
+	event.Identifier, err = normalized(event.Scheme, id)
+	if err != nil {
+		return nil, malformed("%v", err)
+	}
+	return &Result{Downlinks: []DownlinkEvent{event}}, nil
 }
