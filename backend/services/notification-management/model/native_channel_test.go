@@ -104,6 +104,10 @@ func TestNativeConfigIsStrict(t *testing.T) {
 		{ChannelTypePagerDuty, `{"region":"ap"}`},
 		{ChannelTypePagerDuty, `{"region":"us","extra":1}`},
 		{ChannelTypeSlack, `{"linkBaseUrl":"javascript:alert(1)"}`},
+		{ChannelTypeSlack, `{"linkBaseUrl":"https://console.example?x=1"}`},
+		{ChannelTypeSlack, `{"linkBaseUrl":"https://console.example#alarm"}`},
+		{ChannelTypeSlack, `{"linkBaseUrl":"https://console.example?"}`},
+		{ChannelTypeSlack, `{"linkBaseUrl":"https://console.example#"}`},
 		{ChannelTypeSlack, `{"linkBaseUrl":"https://u:p@c.example"}`},
 		{ChannelTypeSlack, `{} {}`},
 		{ChannelTypePagerDuty, `{"source":"` + strings.Repeat("s", 256) + `"}`},
@@ -125,6 +129,9 @@ func TestNativeConfigIsStrict(t *testing.T) {
 	l, err := ParseLinkConfig("c", ChannelTypeSlack, strPtr(`{"linkBaseUrl":"https://console.example.com///"}`))
 	if err != nil || l.LinkBaseURL != "https://console.example.com" {
 		t.Fatalf("link = %+v, %v", l, err)
+	}
+	if l, err := ParseLinkConfig("c", ChannelTypeSlack, strPtr(`{"linkBaseUrl":"http://console.example"}`)); err != nil || l.LinkBaseURL != "http://console.example" {
+		t.Fatalf("http base: %+v, %v", l, err)
 	}
 	if _, err := ParseLinkConfig("c", ChannelTypeSlack, strPtr("  ")); err != nil {
 		t.Fatalf("blank config is no config: %v", err)

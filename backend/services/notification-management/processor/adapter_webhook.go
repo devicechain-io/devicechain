@@ -25,7 +25,7 @@ import (
 // adapter rather than a vendor SDK. The channel's Config holds the URL/method/headers and
 // states `auth` (none | bearer | header); the channel's Secret must agree with it, and
 // httpsink.Send refuses a channel whose secret does not (terminally — see deliverWithRetry).
-// The parser is model.ParseWebhookConfig, shared with channel create/update. The outbound
+// Delivery tolerates invalid stored console links through model.ParseWebhookConfigForDelivery. The outbound
 // hardening (no-redirect client, reserved-header dropping, response-body suppression)
 // lives in core/httpsink, shared with the ADR-060 connector sinks.
 type webhookAdapter struct {
@@ -43,10 +43,12 @@ type webhookAdapter struct {
 // carry recipients for a downstream consumer, so they are threaded into the payload.
 func (a *webhookAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, recipients []string, msg *RenderedNotification) error {
-	cfg, err := model.ParseWebhookConfig(channel.Token, dcgraphql.MetadataStr(channel.Config))
+	cfg, linkBaseErr, err := model.ParseWebhookConfigForDelivery(channel.Token, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
+
+	warnInvalidLinkBase(channel.Token, linkBaseErr)
 
 	body, err := json.Marshal(webhookBody(recipients, msg, cfg.LinkBaseURL))
 	if err != nil {

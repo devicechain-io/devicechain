@@ -300,7 +300,7 @@ func TestNativeAdaptersRefuseARenderingWithoutAnAlarm(t *testing.T) {
 func TestNativeAdaptersRejectBadConfig(t *testing.T) {
 	for _, ch := range []*model.NotificationChannel{
 		channelWith("c", model.ChannelTypeSlack, `{"nope":1}`),
-		channelWith("c", model.ChannelTypeTeams, `{"linkBaseUrl":"ftp://x"}`),
+		channelWith("c", model.ChannelTypeTeams, `{"nope":1}`),
 		channelWith("c", model.ChannelTypePagerDuty, `{"region":"mars"}`),
 	} {
 		var a ChannelAdapter
@@ -599,5 +599,51 @@ func TestANativeChannelErrorNeverCarriesTheResponseBody(t *testing.T) {
 	err = a.Deliver(context.Background(), channelWith("pd", model.ChannelTypePagerDuty, ""), "ECHOEDKEY", nil, rendered("RAISED"))
 	if err == nil || strings.Contains(err.Error(), "ECHOEDKEY") {
 		t.Fatalf("PagerDuty's reflected routing key leaked (or the call succeeded): %v", err)
+	}
+}
+
+func TestNativeStoredInvalidLinkBaseStillDelivers(t *testing.T) {
+	for _, kind := range []string{model.ChannelTypeSlack, model.ChannelTypeTeams, model.ChannelTypePagerDuty} {
+		t.Run(kind, func(t *testing.T) {
+			f := newProviderFake(t, 200, "{}")
+			var adapter ChannelAdapter
+			switch kind {
+			case model.ChannelTypeSlack:
+				adapter = &slackAdapter{client: f.srv.Client()}
+			case model.ChannelTypeTeams:
+				adapter = &teamsAdapter{client: f.srv.Client()}
+			default:
+				adapter = &pagerDutyAdapter{client: f.srv.Client(), endpoint: f.srv.URL}
+			}
+			ch := channelWith(t.Name(), kind, `{"linkBaseUrl":"https://c.example/?x=1"}`)
+			msg := rendered("RAISED")
+			msg.Alarm.DeviceToken = "device-1"
+			if err := adapter.Deliver(context.Background(), ch, f.srv.URL, nil, msg); err != nil {
+				t.Fatalf("deliver: %v", err)
+			}
+			if f.calls != 1 {
+				t.Fatalf("got %d deliveries, want 1", f.calls)
+			}
+			switch kind {
+			case model.ChannelTypeSlack:
+				_, blocks := slackBlocks(t, f.body)
+				if got := strings.Join(blockTypes(blocks), ","); got != "header,section,context" {
+					t.Fatalf("blocks = %s, want no link/button", got)
+				}
+			case model.ChannelTypeTeams:
+				card := asMaps(t, f.body["attachments"])[0]["content"].(map[string]any)
+				if _, ok := card["actions"]; ok {
+					t.Fatalf("unexpected link actions: %v", card["actions"])
+				}
+			case model.ChannelTypePagerDuty:
+				if _, ok := f.body["links"]; ok {
+					t.Fatalf("unexpected links: %v", f.body["links"])
+				}
+			}
+			raw, _ := json.Marshal(f.body)
+			if strings.Contains(string(raw), "c.example") {
+				t.Fatalf("invalid link in payload: %s", raw)
+			}
+		})
 	}
 }

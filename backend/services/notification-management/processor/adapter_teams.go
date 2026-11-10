@@ -25,10 +25,11 @@ type teamsAdapter struct {
 // Deliver posts the card. recipients is ignored: the workflow decides where it posts.
 func (a *teamsAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, _ []string, msg *RenderedNotification) error {
-	cfg, err := model.ParseLinkConfig(channel.Token, model.ChannelTypeTeams, dcgraphql.MetadataStr(channel.Config))
+	cfg, linkBaseErr, err := model.ParseLinkConfigForDelivery(channel.Token, model.ChannelTypeTeams, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
+	warnInvalidLinkBase(channel.Token, linkBaseErr)
 	if err := requireSecret(channel, secret); err != nil {
 		return err
 	}

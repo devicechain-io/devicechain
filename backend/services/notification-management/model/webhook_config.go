@@ -49,45 +49,62 @@ type WebhookConfig struct {
 }
 
 // ParseWebhookConfig unmarshals and validates a webhook channel's config; token names the
-// channel in errors, and config may be nil. It is THE webhook parser: channel create and
-// update call it (through validateChannelCredential) and so does delivery, so what is
-// accepted at save time and what is sent cannot drift apart.
+// channel in errors, and config may be nil. Channel create and update call it through
+// validateChannelCredential. Delivery uses ParseWebhookConfigForDelivery to tolerate a
+// stored invalid linkBaseUrl while validating all other settings with this parser.
 //
 // The http/https scheme guard is shared with the connector sinks (httpsink.ValidateURL);
 // webhook delivery is POST-only, since an unbounded method choice widens the SSRF surface
 // (a tenant-authored PUT/DELETE against an internal service) for no benefit.
 func ParseWebhookConfig(token string, config *string) (*WebhookConfig, error) {
+	cfg, _, err := parseWebhookConfig(token, config, false)
+	return cfg, err
+}
+
+// ParseWebhookConfigForDelivery validates a stored config, omitting an invalid optional
+// linkBaseUrl so it cannot prevent delivery. linkBaseErr reports the omitted link;
+// err reports any failure that still prevents delivery.
+func ParseWebhookConfigForDelivery(token string, config *string) (cfg *WebhookConfig, linkBaseErr error, err error) {
+	return parseWebhookConfig(token, config, true)
+}
+
+func parseWebhookConfig(token string, config *string, tolerateLink bool) (*WebhookConfig, error, error) {
+	var linkErr error
 	cfg := &WebhookConfig{}
 	if config != nil {
 		if err := json.Unmarshal([]byte(*config), cfg); err != nil {
-			return nil, fmt.Errorf("webhook channel %q has invalid config: %w", token, err)
+			return nil, linkErr, fmt.Errorf("webhook channel %q has invalid config: %w", token, err)
 		}
 	}
 	if cfg.URL == "" {
-		return nil, fmt.Errorf("webhook channel %q config is missing url", token)
+		return nil, linkErr, fmt.Errorf("webhook channel %q config is missing url", token)
 	}
 	if _, err := httpsink.ValidateURL(cfg.URL); err != nil {
-		return nil, fmt.Errorf("webhook channel %q has an %w", token, err)
+		return nil, linkErr, fmt.Errorf("webhook channel %q has an %w", token, err)
 	}
 	base, err := normalizeLinkBase(token, ChannelTypeWebhook, cfg.LinkBaseURL)
 	if err != nil {
-		return nil, err
+		if !tolerateLink {
+			return nil, nil, err
+		}
+		linkErr = err
+		base = ""
 	}
 	cfg.LinkBaseURL = base
 	if cfg.Method == "" {
 		cfg.Method = http.MethodPost
 	}
 	if cfg.Method != http.MethodPost {
-		return nil, fmt.Errorf("webhook channel %q method %q is not supported (POST only)", token, cfg.Method)
+		return nil, linkErr, fmt.Errorf("webhook channel %q method %q is not supported (POST only)", token, cfg.Method)
 	}
 	switch cfg.Auth {
 	case "":
-		return nil, fmt.Errorf("webhook channel %q config is missing auth: set \"none\" if the URL itself "+
+		return nil, linkErr, fmt.Errorf("webhook channel %q config is missing auth: set \"none\" if the URL itself "+
 			"carries the credential (a Slack incoming webhook), or \"bearer\" or \"header\" to present the "+
 			"channel's secret: %w", token, httpsink.ErrAuthModeUnstated)
 	case WebhookAuthNone, WebhookAuthBearer, WebhookAuthHeader:
 	default:
-		return nil, fmt.Errorf("webhook channel %q auth %q is not one of none, bearer, header: %w",
+		return nil, linkErr, fmt.Errorf("webhook channel %q auth %q is not one of none, bearer, header: %w",
 			token, cfg.Auth, httpsink.ErrAuthRefused)
 	}
 	// authHeader is written to the wire AFTER httpsink's reserved-header drop loop, so an
@@ -97,14 +114,14 @@ func ParseWebhookConfig(token string, config *string) (*WebhookConfig, error) {
 	// field. httpsink.Send checks it again at the point of use, for a row saved before either
 	// check existed.
 	if err := cfg.HTTPAuth().Validate(); err != nil {
-		return nil, fmt.Errorf("webhook channel %q has an invalid auth configuration: %w", token, err)
+		return nil, linkErr, fmt.Errorf("webhook channel %q has an invalid auth configuration: %w", token, err)
 	}
 	if cfg.Signing {
 		if err := httpsink.CheckSigningAuth(cfg.HTTPAuth()); err != nil {
-			return nil, fmt.Errorf("webhook channel %q: %w", token, err)
+			return nil, linkErr, fmt.Errorf("webhook channel %q: %w", token, err)
 		}
 	}
-	return cfg, nil
+	return cfg, linkErr, nil
 }
 
 // HTTPAuth maps the declared mode onto httpsink's. Call it only on a parsed config.

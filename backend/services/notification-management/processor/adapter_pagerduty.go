@@ -83,10 +83,11 @@ func pdSeverity(s string) string {
 // Deliver sends one event. recipients is ignored: the routing key picks the service.
 func (a *pagerDutyAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, _ []string, msg *RenderedNotification) error {
-	cfg, err := model.ParsePagerDutyConfig(channel.Token, dcgraphql.MetadataStr(channel.Config))
+	cfg, linkBaseErr, err := model.ParsePagerDutyConfigForDelivery(channel.Token, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
+	warnInvalidLinkBase(channel.Token, linkBaseErr)
 	if err := requireSecret(channel, secret); err != nil {
 		return err
 	}

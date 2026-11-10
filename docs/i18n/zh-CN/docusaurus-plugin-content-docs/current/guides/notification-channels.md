@@ -85,14 +85,14 @@ Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 
 
 Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知（`RENOTIFIED`）和调度器拾取的延迟 `CLEARED` 通知也会在已知时包含这些设备和来源字段。升级前已发送过通知的告警，其后续此类通知会省略这些字段。
 
-可在 Webhook 通道的 `config` 中设置可选的 `linkBaseUrl`，值为控制台的 `https` 基础 URL，例如 `"linkBaseUrl":"https://console.example.com"`。此时，正文会包含 `alarmUrl`，并在告警指明其设备时包含 `deviceUrl`。未设置 `linkBaseUrl` 时，这两个键均会省略。
+可在 Webhook 通道的 `config` 中设置可选的 `linkBaseUrl`，值为控制台的 `http` 或 `https` 基础 URL（推荐 `https`），例如 `"linkBaseUrl":"https://console.example.com"`。此时，正文会包含 `alarmUrl`，并在告警指明其设备时包含 `deviceUrl`。基础 URL 不得包含查询字符串或片段，因为链接通过追加路径构建。未设置 `linkBaseUrl` 时，这两个键均会省略。如果已存储的 Webhook 配置中的 `linkBaseUrl` 无效，投递时会跳过该值，省略这两个链接并记录警告。
 
 ### 原生 Slack、Teams 和 PagerDuty 渠道 {#native-channels}
 
 这三种原生类型使用各服务自己的格式，而不是通用的 JSON 正文。它们共享三条规则：
 
 - **凭据就是 `secret`。** Slack 和 Teams 的凭据是 webhook URL（它本身就是凭据，因此加密存储且不会返回，不放在 `config` 中）；PagerDuty 的凭据是 Events API v2 路由密钥。没有 `auth` 设置。没有密钥的原生渠道在保存时被拒绝；向没有密钥的渠道投递，会在首次尝试时被拒绝且不重试，计入 `reason="credential"`。
-- **`config` 可选且严格。** 保存渠道时，未知键会被拒绝，因此拼错的设置不会被悄悄忽略。`linkBaseUrl` 是控制台的地址；设置后，消息会带有指向 `<linkBaseUrl>/alarms` 的 **Open alarms** 按钮或链接。
+- **`config` 可选且严格。** 保存渠道时，未知键会被拒绝，因此拼错的设置不会被悄悄忽略。`linkBaseUrl` 是控制台的 `http` 或 `https` 地址（推荐 `https`），不得包含查询字符串或片段；设置后，消息会带有指向 `<linkBaseUrl>/alarms` 的 **Open alarms** 按钮或链接。
 - **投递经过与 webhook 相同的出站防护。** 指向私有、环回或云元数据地址的目标会被拒绝且不重试（`reason="egress"`），实例的出站放行规则与 webhook 完全一样地生效。规则的 `recipients` 会被忽略：消息发往何处由 webhook 或路由密钥决定。
 
 每条消息都会写明告警、严重程度、状态、来源设备、触发它的指标和值，以及触发时间。告警处于打开且未确认状态时，会提示在控制台中确认告警以停止后续通知；已清除或已确认的告警不显示该提示。

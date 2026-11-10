@@ -26,10 +26,11 @@ type slackAdapter struct {
 // conversation by Slack itself.
 func (a *slackAdapter) Deliver(ctx context.Context, channel *model.NotificationChannel,
 	secret string, _ []string, msg *RenderedNotification) error {
-	cfg, err := model.ParseLinkConfig(channel.Token, model.ChannelTypeSlack, dcgraphql.MetadataStr(channel.Config))
+	cfg, linkBaseErr, err := model.ParseLinkConfigForDelivery(channel.Token, model.ChannelTypeSlack, dcgraphql.MetadataStr(channel.Config))
 	if err != nil {
 		return err
 	}
+	warnInvalidLinkBase(channel.Token, linkBaseErr)
 	if err := requireSecret(channel, secret); err != nil {
 		return err
 	}
