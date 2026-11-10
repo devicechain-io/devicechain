@@ -453,7 +453,6 @@ func TestPolicyIsReadFromTheGateOnTheRegisteredRoute(t *testing.T) {
 		wantOther   int
 	}{
 		{"enforce", http.StatusUnauthorized},
-		{"observe", http.StatusOK},
 		{"", http.StatusUnauthorized}, // the release default is enforce (from v1.3)
 	} {
 		t.Run("enforcement="+tc.enforcement, func(t *testing.T) {
@@ -492,4 +491,15 @@ func TestPolicyIsReadFromTheGateOnTheRegisteredRoute(t *testing.T) {
 			assert.True(t, acked, closed)
 		})
 	}
+}
+
+// From v1.4 the instance document may not opt out of enforcement: loading one that says observe
+// fails, so no plane can be wired from it.
+func TestInstanceDocumentWithObserveIsRefused(t *testing.T) {
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management", Readiness: core.NewReadinessGate()}
+	prevLevel := zerolog.GlobalLevel()
+	t.Cleanup(func() { zerolog.SetGlobalLevel(prevLevel) })
+	err := ms.LoadInstanceConfigurationFrom(writeInstanceDoc(t, "observe"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "removed in v1.4")
 }

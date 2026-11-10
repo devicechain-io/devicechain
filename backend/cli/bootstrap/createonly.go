@@ -88,6 +88,8 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 			wouldDo(fmt.Sprintf(
 				"REFUSE: instance %q is already running here, so a real run would stop at this "+
 					"step and point at `dcctl upgrade`", st.Instance))
+		} else if err := bootstrapObserveRefusal(st, deployed); err != nil {
+			wouldDo("REFUSE: " + err.Error())
 		} else if finishing {
 			wouldDo(fmt.Sprintf("finish instance %q, whose first bootstrap did not complete", st.Instance))
 		}
@@ -112,6 +114,9 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 	if err := rebuildRefusalReason(st, deployed, decl); err != nil {
 		return err
 	}
+	if err := bootstrapObserveRefusal(st, deployed); err != nil {
+		return err
+	}
 	finishing := deployed != nil && bootstrapUnfinished(decl)
 	// Past the refusal with a document in hand and no unfinished record means a
 	// carve-out let this run through over a live instance, whose superuser was seeded
@@ -122,6 +127,19 @@ func stepRefuseRebuild(ctx context.Context, st *State) error {
 	if finishing {
 		fmt.Println(color.YellowString("  instance %q exists but its first bootstrap did not finish; "+
 			"this run finishes it, reusing what the earlier run put in the cluster", st.Instance))
+	}
+	return nil
+}
+
+func bootstrapObserveRefusal(st *State, deployed *config.InstanceConfiguration) error {
+	// This step precedes stepDeclareInstance, which adopts the recorded overlay.
+	// ValuesOverlay therefore still represents the user's explicit --values;
+	// bootstrap has no --reset-values flag.
+	if deployed != nil && deployed.Infrastructure.TokenAudience.Enforcement == "observe" &&
+		st.ValuesOverlay == nil {
+		return fmt.Errorf("the deployed instance configuration document for instance %q sets "+
+			"infrastructure.tokenAudience.enforcement to observe, which v1.4 refuses. Re-run with "+
+			"`--values <file without the key>`. Nothing has been changed", st.Instance)
 	}
 	return nil
 }

@@ -93,16 +93,25 @@ type PlanePolicy struct {
 	lim    *warnLimiter
 }
 
+// validateAudiencePolicy preserves the in-process observe API for compatibility.
+// Services validate the instance document before constructing any policy.
+func validateAudiencePolicy(cfg config.TokenAudienceConfiguration) error {
+	if cfg.Enforcement == string(config.TokenAudienceObserve) {
+		cfg.Enforcement = string(config.TokenAudienceEnforce)
+	}
+	return cfg.Validate()
+}
+
 // NewPlanePolicy builds the policy for one area from the instance's token-audience block.
-// It validates the block again, so a hand-built configuration cannot install a policy the
-// loader would have refused.
+// It validates resource identifiers and modes again. Programmatic callers retain observe
+// compatibility; service startup validates the document before reaching this constructor.
 //
 // An area that is not a platform area (including empty) gets a policy with NO own-area
 // resource: a token bound to some area is then never "this area's". That is not an error,
 // because test Microservices use made-up area names and a break-glass build uses a struct
 // literal; a production area is always in the roster, which a chart test pins.
 func NewPlanePolicy(cfg config.TokenAudienceConfiguration, area string, rec Recorder) (*PlanePolicy, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := validateAudiencePolicy(cfg); err != nil {
 		return nil, err
 	}
 	p := &PlanePolicy{

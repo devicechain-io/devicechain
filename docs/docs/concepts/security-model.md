@@ -104,7 +104,7 @@ Two checks use the audience. They are defence in depth: a token's authorities ar
 
 ### The allowlist {#token-audience-allowlist}
 
-These are the resources the authorization server binds a token to, and the audiences an API accepts, under `enforce`, the default. Under `observe`, anything else is counted and logged but served:
+These are the resources the authorization server binds a token to, and the audiences an API accepts:
 
 - **The MCP server**, when it is deployed: its resource URL, `<origin>/api/mcp`.
 - **Each area's API**, at `<origin>/api/<area>` for every area except `mcp`, for example `https://iot.example.com/api/device-management`.
@@ -114,9 +114,11 @@ Matching is byte for byte. There is no case folding and no trailing-slash handli
 
 ### Observe and enforce {#token-audience-modes}
 
-`enforcement` decides what happens to a request that breaks either check:
+From `v1.4`, token audiences are always enforced. A service refuses `infrastructure.tokenAudience.enforcement: observe` at startup, and the chart schema rejects it. Remove the key (unset means `enforce`) or set it to `enforce` before upgrading. In Helm values and a `dcctl` overlay, remove `instance.config.infrastructure.tokenAudience.enforcement`; also remove it from the stored overlay annotation and the previously installed release's user-supplied values. For `instance.existingSecret`, remove `infrastructure.tokenAudience.enforcement` from the authored document or set it to `enforce`. `dcctl upgrade` checks these sources before any mutation.
 
-| Where | `observe` | `enforce` |
+The table below describes the historical `observe` behavior on `v1.2`/`v1.3` instances and the enforced behavior in `v1.4`. A token with no audience remains accepted. `unscopedClientCredentials: observe` is a separate setting and remains supported.
+
+| Where | `observe` (v1.2/v1.3) | `enforce` |
 | --- | --- | --- |
 | Authorization endpoint | Counted and logged; the sign-in page is served as before | The client is sent back to its redirect address with `invalid_target` |
 | `client_credentials` grant | Counted and logged; the token is issued | `invalid_target`. An unlisted resource is judged after the client's secret has been checked, so an unauthenticated sender is not told what the list holds |
@@ -125,25 +127,9 @@ Matching is byte for byte. There is no case folding and no trailing-slash handli
 | A `resource` on a code or refresh request that differs from the one the grant is bound to | Counted and logged; served | `invalid_target`; a refresh token is not spent |
 | An API | Counted as `would_reject` and logged; served | `401`, the same answer as for an invalid token |
 
-`enforce` is the default from `v1.3`; `v1.2` defaulted to `observe`. Setting `enforcement: observe` keeps the `v1.2` behaviour for this one minor, as an opt-out. `v1.4` removes the opt-out: a service refuses to start with `observe` in the document, and the chart rejects it.
-
-To opt out, set the key in your Helm values, or in a `dcctl` [values overlay](../deployment/tuning-an-instance.md#tunable), and upgrade. Set it before you upgrade to `v1.3` if you want no pod to enforce during the roll:
-
-```yaml
-instance:
-  config:
-    infrastructure:
-      tokenAudience:
-        enforcement: observe
-```
-
-On an instance whose configuration you write yourself (`instance.existingSecret`), put `"enforcement": "observe"` in the document's `infrastructure.tokenAudience` block instead. See the [upgrade notes](../deployment/releases-and-upgrades.md#v130-token-audience).
-
-A token that names no resource is accepted by every area's API, in both modes. A client that never sends `resource` is not affected by either check.
-
 ### Reading the counters {#token-audience-reading}
 
-Under `enforce`, a refused request is counted with the verdict `rejected`. If you are not sure what your clients send, run `observe` first and watch the counters: a `would_reject` series that never moves means `enforce` changes nothing for your clients. The series, the two alerts and how to find the client behind a count are in [Token audience checks](../deployment/observability.md#token-audience-checks).
+Refused audience and resource requests are counted as `rejected`. The `would_reject` series and the two alerts are retained for compatibility and can only fire on `v1.2`/`v1.3` instances running observe. See [Token audience checks](../deployment/observability.md#token-audience-checks).
 
 ### Configuration {#token-audience-config}
 
@@ -151,7 +137,7 @@ The policy is instance configuration under `infrastructure.tokenAudience`, in th
 
 | Key | Written by | Value |
 | --- | --- | --- |
-| `enforcement` | You | `observe`, `enforce`, or unset. Unset is the release default, `enforce` from `v1.3` (`observe` in `v1.2`). It governs both checks together. |
+| `enforcement` | You | Unset or `enforce`; both enforce token audiences. `v1.4` refuses `observe`. |
 | `unscopedClientCredentials` | You | Unset or `observe`. `enforce` is refused at startup in this release, because the rule it would switch on does not refuse anything yet. See [Service accounts](../user-guide/service-accounts.md#binding-a-token-to-a-resource). |
 | `externalResources` | You | A list of at most 8 resource identifiers outside the platform. |
 | `areaBaseUrl` | The chart | `<origin>/api`, from the ingress host. Set only when the origin is https, or a plain-http loopback host such as `localhost`. An ingress without TLS on any other host has no area resources, just as it has no authorization server. |
@@ -159,7 +145,7 @@ The policy is instance configuration under `infrastructure.tokenAudience`, in th
 
 A service stops at startup, naming the key, when the block breaks any of these rules:
 
-- `enforcement` and `unscopedClientCredentials` must be `observe` or `enforce`, or unset. Unset `unscopedClientCredentials` and `observe` are the same, and `enforce` is refused as above.
+- `enforcement` must be unset or `enforce`; `v1.4` refuses `observe`. `unscopedClientCredentials` must be unset or `observe`; `enforce` is refused for that separate setting.
 - `areaBaseUrl` and each list entry must be an absolute URL with an `https` scheme (`http` only for `localhost`, `127.0.0.1` or `::1`), with a lowercase scheme and host, no query, fragment or user information, and no trailing slash.
 - Each list holds at most 8 entries. No entry may appear twice, in either list, and none may equal an area's own identifier.
 - An `externalResources` entry may not sit under `areaBaseUrl`: with an `areaBaseUrl` of `https://iot.example.com/api`, both `https://iot.example.com/api` and `https://iot.example.com/api/x` are refused, and `https://iot.example.com/apiary` is not. This stops a platform area being re-labelled as external.
@@ -178,7 +164,7 @@ On an instance whose configuration you write yourself (`instance.existingSecret`
 }
 ```
 
-Without it the area resources are unknown and `mcp` is not registered. Under `enforce`, the default, `mcp` then refuses to start and every call it forwards would be refused; under `observe` those calls are counted as would-be refusals. `dcctl upgrade` refuses a document that omits the MCP entry, and only warns when `enforcement` is `observe`.
+Without this block the area resources are unknown and MCP is not registered. MCP refuses to start if its resource is missing; `dcctl upgrade` also refuses a document that omits the MCP entry.
 
 ## Two-factor authentication {#two-factor}
 

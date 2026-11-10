@@ -74,14 +74,14 @@ func TestDefaultEnforcementAdmitsTokensWithNoAudience(t *testing.T) {
 	}
 }
 
-// The opt-out: an explicit observe restores the v1.2 behaviour, a mismatched audience is
-// counted and served.
-func TestLoadInstanceConfigurationHonoursAnExplicitObserve(t *testing.T) {
+// Documents refuse observe; policies constructed in code retain observe compatibility.
+func TestLoadInstanceConfigurationRefusesObserveButPoliciesRetainCompatibility(t *testing.T) {
 	keepGlobalLevel(t)
 	ms := &Microservice{FunctionalArea: "event-management", Readiness: NewReadinessGate()}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, audienceDoc(chartDerivedAudience+`, "enforcement": "observe"`))))
-	p := ms.Readiness.AudiencePolicy()
+	require.ErrorContains(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, audienceDoc(chartDerivedAudience+`, "enforcement": "observe"`))), "removed in v1.4")
+	p, err := auth.NewPlanePolicy(config.TokenAudienceConfiguration{Enforcement: "observe", AreaBaseUrl: "https://iot.example.com/api"}, "event-management", nil)
+	require.NoError(t, err)
 	assert.Equal(t, config.TokenAudienceObserve, p.Mode())
 	assert.NoError(t, p.Admit(claimsWithAud("https://iot.example.com/api/device-management"), auth.PlaneGraphQL))
 	assert.NoError(t, p.Admit(claimsWithAud("https://elsewhere.example.org"), auth.PlaneGraphQL))

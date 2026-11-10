@@ -34,7 +34,7 @@ func TestTheManagerBuiltLikeMainRunsTheInstancesTokenAudienceMode(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, mscfg.TokenAudienceEnforce, m.ResourceEnforcement())
 
-	// The counterweight, and the opt-out: an explicit observe reaches the Manager.
+	// Programmatic construction retains observe compatibility; documents refuse it at load.
 
 	m, err = build(mscfg.TokenAudienceConfiguration{Enforcement: "observe"})
 	require.NoError(t, err)

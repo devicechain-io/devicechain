@@ -44,6 +44,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"sigs.k8s.io/yaml"
 )
@@ -383,10 +384,42 @@ func overlaySchemaProbe() map[string]interface{} {
 	}
 }
 
+// refuseObserveValues also checks historical release values without applying the overlay allowlist.
+func refuseObserveValues(values map[string]interface{}, source string) error {
+	var current interface{} = values
+	for _, key := range []string{"instance", "config", "infrastructure", "tokenAudience", "enforcement"} {
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		current = m[key]
+	}
+	if current == "observe" {
+		err := (config.TokenAudienceConfiguration{Enforcement: "observe"}).Validate()
+		return fmt.Errorf("%s: %w. Remove instance.config.infrastructure.tokenAudience.enforcement from the values or set it to enforce; v1.4 refuses observe. Nothing has been changed", source, err)
+	}
+	return nil
+}
+
+// refuseCarriedObserveValues names the command that can replace historical values.
+func refuseCarriedObserveValues(values map[string]interface{}, source, command string) error {
+	if err := refuseObserveValues(values, source); err != nil {
+		remedy := "re-run `dcctl " + command + "` with `--values <file without the key>`"
+		if command == "upgrade" {
+			remedy += " or `--reset-values`"
+		}
+		return fmt.Errorf("%w; %s", err, remedy)
+	}
+	return nil
+}
+
 // ValidateValuesOverlay judges an overlay against this build's chart: the key allowlist,
 // then values.schema.json over the chart's own defaults with the overlay on top. It reads
 // nothing from a cluster, so it runs before anything exists to change.
 func ValidateValuesOverlay(overlay map[string]interface{}) error {
+	if err := refuseObserveValues(overlay, "the values overlay"); err != nil {
+		return err
+	}
 	if err := refuseOverlayKeys(overlay, "the values overlay"); err != nil {
 		return err
 	}
@@ -427,6 +460,9 @@ func LoadValuesOverlay(files []string) (map[string]interface{}, error) {
 		if len(overlayLeaves(one)) == 0 {
 			return nil, fmt.Errorf("--values %s sets no values. To remove the overlay recorded on an instance, "+
 				"use `dcctl upgrade --reset-values`", f)
+		}
+		if err := refuseObserveValues(one, "--values "+f); err != nil {
+			return nil, err
 		}
 		if err := refuseOverlayKeys(one, "--values "+f); err != nil {
 			return nil, err

@@ -45,7 +45,7 @@ func checkAudienceRegistration(resourceURL string, cfg config.TokenAudienceConfi
 	mode := cfg.EffectiveEnforcement()
 	if mode == config.TokenAudienceEnforce {
 		return fmt.Errorf("%s does not contain this service's resourceUrl %q: the API planes would "+
-			"refuse every call mcp forwards; add it, or set infrastructure.tokenAudience.enforcement to observe",
+			"refuse every call mcp forwards; add it to infrastructure.tokenAudience.mcpResources",
 			mcpRegisteredKey, resourceURL)
 	}
 	log.Error().Str("resourceUrl", resourceURL).Str("key", mcpRegisteredKey).Str("mode", string(mode)).
