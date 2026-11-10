@@ -207,3 +207,32 @@ func TestStepUpAbsoluteLifetimeBeforeEvaluatingCode(t *testing.T) {
 		})
 	}
 }
+
+// A step-up rewrites the session record, which restarts its KV TTL; the absolute lifetime of a
+// password sign-in is therefore enforced when the session is loaded, so an ordinary refresh
+// cannot outlive Anchor + refreshTTL whatever the record's own expiry says.
+func TestPasswordSessionCeilingAppliesToOrdinaryRefresh(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(map[bool]string{false: "just under ceiling", true: "past ceiling"}[expired], func(t *testing.T) {
+			e := newMfaEnv(t)
+			e.createMember(t, "pat@example.com", "pw-1")
+			_, pair := e.login(t, "pat@example.com", "pw-1")
+			refresh, err := e.validator.ValidateRefresh(pair.RefreshToken)
+			require.NoError(t, err)
+			rec, err := e.m.loadSession(refresh.SessionID, refresh.Username)
+			require.NoError(t, err)
+			e.m.refreshTTL = time.Hour
+			now := rec.Anchor.Add(time.Hour).Add(-time.Nanosecond)
+			if expired {
+				now = now.Add(2 * time.Nanosecond)
+			}
+			e.m.now = func() time.Time { return now }
+			_, err = e.m.Refresh(context.Background(), pair.RefreshToken)
+			if expired {
+				require.ErrorIs(t, err, ErrInvalidToken)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

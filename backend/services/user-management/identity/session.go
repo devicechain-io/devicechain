@@ -212,7 +212,22 @@ func (m *Manager) loadSession(sid auth.SessionID, email string) (*sessionRecord,
 	if rec.Email != email {
 		return nil, errSessionEnded
 	}
+	// A password sign-in has an absolute lifetime of one refresh TTL from its anchor. The
+	// record's own expiry is a per-message KV TTL that any rewrite (a step-up) restarts, so the
+	// ceiling is enforced HERE, on every load, and not left to the bucket. Single sign-on
+	// carries its own ceiling (admitSsoSession).
+	if rec.Method == SessionMethodPassword && !rec.Anchor.IsZero() && m.clock().Sub(rec.Anchor) > m.sessionCeiling() {
+		return nil, errSessionEnded
+	}
 	return &rec, nil
+}
+
+// sessionCeiling is the absolute lifetime of a password sign-in.
+func (m *Manager) sessionCeiling() time.Duration {
+	if m.refreshTTL <= 0 {
+		return auth.DefaultRefreshTTL
+	}
+	return m.refreshTTL
 }
 
 // sessionLive reports whether the sign-in a credential names is still open.
