@@ -289,7 +289,7 @@ Una instalación que ejecuta los conectores de salida con el downlink activado (
 
 `integration` es el token de la integración de entrada cuyos dispositivos atiende este servidor. El **secreto** del conector es una clave de API de ChirpStack con permiso para encolar downlinks (la API REST de ChirpStack v4, servida por su componente `chirpstack-rest-api`); se guarda cifrado y no se vuelve a mostrar. Solo un conector publicado puede nombrar una integración: con ninguno, o con dos, un comando se rechaza en lugar de enviarse. Como todo conector, la llamada a `baseUrl` pasa por la política de salida de la plataforma, así que un servidor en una dirección privada necesita una autorización del operador.
 
-**2. Define el comando.** Da al perfil del tipo de dispositivo un comando con estos parámetros:
+**2. Define el comando.** Sin codificador, da al perfil del tipo de dispositivo un comando con estos parámetros de payload en bruto. Para enviar valores tipados, configura un [codificador](#lorawan-command-encoder):
 
 | Parámetro | Significado |
 | --- | --- |
@@ -366,12 +366,18 @@ Un informe se asocia a su comando solo por el correlation id `dc:` que puso la p
 
 **Activarlo en una instalación en marcha.** El downlink se activa con una sola actualización de Helm, y mientras los pods se reinician, los pods de entrega de comandos que aún no se han reiniciado siguen haciendo fallar de inmediato un comando a un dispositivo de integración, como antes de que existiera el downlink, con `COMMAND_TRANSPORT_UNSUPPORTED`. No se envía nada por ese comando y es seguro emitirlo de nuevo cuando termine la actualización. Para evitar esa ventana, pausa los comandos a dispositivos de integración mientras dure la actualización. Un comando emitido en los minutos previos al primer arranque del adaptador se recoge igualmente cuando este arranca.
 
-### Codificar comandos a partir de parámetros tipados
+### Codificar comandos a partir de parámetros tipados {#lorawan-command-encoder}
 
 Una definición de comando puede incluir una cadena JSON `encoder` opcional. Publica
 el perfil para activarla. Se aplica tanto a ChirpStack v4 como a The Things Stack v3.
 El codificador vigente al despachar el comando es el que se aplica; una nueva
-publicación se aplica a los comandos despachados después de ella.
+publicación se aplica a los comandos despachados después de ella, incluidos los que
+ya estaban en cola. La definición publicada se consulta de nuevo en cada despacho,
+sin conservar el codificador en caché entre publicaciones. Si la consulta falla o
+devuelve una respuesta incompleta, se reintenta: el comando queda pendiente y no se
+envía nada. Un problema definitivo de la definición (codificador inválido,
+definiciones de comando duplicadas o comando ausente de un vocabulario publicado
+restringido) rechaza el comando como **no enviado**.
 Este documento concatena constantes, números escalados, booleanos y bits:
 
 ```json
@@ -416,7 +422,12 @@ El payload `{"setpoint":21.5,"mode":3}` produce `00d703` en hexadecimal, o `ANcD
 en base64, en el puerto 12. El cálculo invierte el decodificador:
 `raw = (value - offset) / scale`. La escala vale 1 por defecto y su magnitud debe estar entre `1e-9` y `1e9`.
 El desplazamiento vale 0 por defecto y su magnitud no puede superar `1e9`; ambos deben
-ser finitos. El valor raw debe caber en su tipo antes de redondear. Con escala 1 y
+ser finitos. Las combinaciones de escala y desplazamiento que dejan muy poca precisión
+`float64` para la tolerancia de `1e-6` del entero raw se rechazan al guardar la
+definición, aunque ambos valores cumplan sus límites individuales. Aumenta la
+magnitud de la escala o reduce la del desplazamiento para corregirlo. El rango del
+valor raw se comprueba antes de redondear, con una tolerancia de `1e-6` en los límites
+para errores de coma flotante. Con escala 1 y
 desplazamiento 0 se exige un entero exacto; otras transformaciones admiten una
 tolerancia de `1e-6`. La magnitud de entrada no puede superar `1e15`, y las magnitudes
 de entrada y raw deben ser menores que `2^53`. `215.4` con escala 1 se rechaza. NaN, infinito,
@@ -449,7 +460,7 @@ Consulta el [modelo de seguridad](../concepts/security-model.md).
 
 ## No incluido en la versión 1 {#not-supported}
 
-- **Downlink hacia remitentes genéricos y codificadores de carga útil.** El [downlink LoRaWAN](#lorawan-downlink) cubre ChirpStack v4 y The Things Stack v3, y solo cargas útiles en bruto. Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
+- **Downlink hacia remitentes genéricos.** El [downlink LoRaWAN](#lorawan-downlink) cubre ChirpStack v4 y The Things Stack v3, con cargas útiles en bruto o [parámetros tipados codificados](#lorawan-command-encoder). Los comandos a cualquier otro dispositivo de integración fallan como se describe en [Comandos a dispositivos de integración](#commands).
 - **Payloads firmados.** No hay comprobación de HMAC ni de firma en una petición. El token bearer es la única credencial, y el transporte debe ser TLS.
 - **Mensajes join, status y de ubicación.** Se confirman y se ignoran.
 - **Creación automática de dispositivos.** Un identificador desconocido se lista, no se crea. Añades el dispositivo tú mismo, desde la lista.

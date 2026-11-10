@@ -289,7 +289,7 @@ An installation that runs the outbound connectors with the downlink switched on 
 
 `integration` is the token of the inbound integration whose devices this server serves. The connector's **secret** is a ChirpStack API key allowed to enqueue downlinks (the REST API of ChirpStack v4, served by its `chirpstack-rest-api` component); it is stored encrypted and never shown again. Exactly one published connector may name an integration: with none, or with two, a command is refused rather than sent. Like every connector, the call to `baseUrl` goes through the platform's egress policy, so a server on a private address needs an operator allowance.
 
-**2. Define the command.** Give the device type's profile a command with these parameters:
+**2. Define the command.** Without an encoder, give the device type's profile a command with these raw payload parameters. To send typed values instead, configure an [encoder](#lorawan-command-encoder):
 
 | Parameter | Meaning |
 | --- | --- |
@@ -367,12 +367,17 @@ A report is matched to its command only by the `dc:` correlation id the platform
 **Switching it on in a running installation.** The downlink is enabled by one Helm upgrade, and while the pods roll, command delivery pods that have not yet restarted still fail a command to an integration device on sight, as they did before the downlink existed, with `COMMAND_TRANSPORT_UNSUPPORTED`. Nothing is sent for such a command and it is safe to issue again once the upgrade has finished. To avoid the window, pause commands to integration devices for the length of the upgrade. A command issued in the minutes before the adapter first starts is still picked up when it does.
 
 
-### Encoding commands from typed parameters
+### Encoding commands from typed parameters {#lorawan-command-encoder}
 
 A command definition can carry an optional `encoder` JSON string. Publish the device
 profile to activate it. Both ChirpStack v4 and The Things Stack v3 use the same encoder.
 The encoder in force when a command is dispatched applies; republishing applies to
-commands dispatched after the publish.
+commands dispatched after the publish, including commands already queued. The published
+definition is read afresh for every dispatch, with no encoder cache across a publish.
+If the definition lookup fails or returns an incomplete response, it is retried:
+the command stays pending and nothing is sent. A definitive definition problem
+(an invalid encoder, duplicate command definitions, or a command absent from a
+constrained published vocabulary) refuses the command as **not sent**.
 For example, this document combines constant bytes, a scaled number, a boolean and packed bits:
 
 ```json
@@ -417,7 +422,11 @@ The command payload `{"setpoint":21.5,"mode":3}` becomes hex `00d703`, or base64
 `ANcD`, on port 12. Numeric encoding inverts the decoder arithmetic:
 `raw = (value - offset) / scale`. Scale defaults to 1; its magnitude must be between `1e-9` and `1e9`.
 Offset defaults to 0 and its magnitude must be at most `1e9`. Both must be finite.
-The raw value must fit its type before rounding is considered. Identity mappings
+Scale/offset combinations that leave too little `float64` precision for the `1e-6`
+raw-integer tolerance are refused when you save the definition, even if both values
+meet those individual bounds. Increase the scale magnitude or reduce the offset
+magnitude to resolve this. The raw value is checked against its type range before
+rounding, allowing `1e-6` at the boundaries for floating-point error. Identity mappings
 (scale 1, offset 0) require an exact integer input; other mappings allow a `1e-6`
 integer tolerance. Input magnitude must be at most `1e15`, and input and raw
 magnitudes must be below `2^53`. Nothing is silently rounded or truncated: `215.4` with
@@ -450,7 +459,7 @@ See the [security model](../concepts/security-model.md).
 
 ## Not in v1 {#not-supported}
 
-- **Downlink to generic senders, and payload encoders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and The Things Stack v3, and raw payloads only. Commands to any other integration device fail as described in [Commands to integration devices](#commands).
+- **Downlink to generic senders.** The [LoRaWAN downlink](#lorawan-downlink) covers ChirpStack v4 and The Things Stack v3, with raw payloads or [encoded typed parameters](#lorawan-command-encoder). Commands to any other integration device fail as described in [Commands to integration devices](#commands).
 - **Signed payloads.** There is no HMAC or signature check on a request. The bearer token is the only credential, and the transport must be TLS.
 - **Join, status and location messages.** They are acknowledged and ignored.
 - **Automatic device creation.** An unknown identifier is listed, not created. You add the device yourself, from the list.
