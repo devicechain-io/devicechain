@@ -13,6 +13,7 @@
 // here) and otherwise omits it. The payload is a flat JSON object keyed by parameter name.
 
 import type { CommandParameter } from '@devicechain/dashboards';
+import { commandStrings } from '../command-strings';
 
 const DATA_TYPES = new Set(['DOUBLE', 'INT', 'BOOLEAN', 'STRING']);
 
@@ -102,31 +103,33 @@ export function defaultValues(params: CommandParameter[]): Record<string, string
 export function validateParams(
   params: CommandParameter[],
   values: Record<string, string>,
+  locale?: string,
 ): Record<string, string> {
+  const strings = commandStrings(locale);
   const errors: Record<string, string> = {};
   for (const p of params) {
     if (!isScalar(p)) {
       // A required structured parameter can't be satisfied here — refuse to send an
       // incomplete command rather than silently omitting it.
-      if (p.required) errors[p.name] = 'Structured parameter — not supported here';
+      if (p.required) errors[p.name] = strings.structured;
       continue;
     }
     if (p.dataType === 'BOOLEAN') continue; // a checkbox always carries a valid value
     const raw = (values[p.name] ?? '').trim();
     if (raw === '') {
-      if (p.required) errors[p.name] = 'Required';
+      if (p.required) errors[p.name] = strings.required;
       continue; // an empty optional value is fine — it's just omitted from the payload
     }
     if (p.dataType === 'INT' || p.dataType === 'DOUBLE') {
       const n = Number(raw);
       if (!Number.isFinite(n)) {
-        errors[p.name] = 'Must be a number';
+        errors[p.name] = strings.number;
       } else if (p.dataType === 'INT' && !Number.isInteger(n)) {
-        errors[p.name] = 'Must be a whole number';
+        errors[p.name] = strings.integer;
       } else if (p.minValue != null && n < p.minValue) {
-        errors[p.name] = `Must be ≥ ${p.minValue}`;
+        errors[p.name] = strings.minimum(p.minValue);
       } else if (p.maxValue != null && n > p.maxValue) {
-        errors[p.name] = `Must be ≤ ${p.maxValue}`;
+        errors[p.name] = strings.maximum(p.maxValue);
       }
     }
   }
