@@ -53,7 +53,7 @@ func writtenDigest(t *testing.T, w *fakeWriter) string {
 // the proof - are not re-pinned each time Message gains a field that only a consumer sets. A
 // message that DID carry one would print it, and fail.
 // readerOnlyFields matches the nil pointers Message prints for what only a reader sets.
-var readerOnlyFields = regexp.MustCompile(`, (member|split):\(\*messaging\.\w+\)\(nil\)|, NumPending:0x0`)
+var readerOnlyFields = regexp.MustCompile(`, (member|split):\(\*messaging\.\w+\)\(nil\)|, NumPending:0x0|, traceContext:context\.Context\(nil\)|, traceMembers:\[\]messaging\.TraceMember\(nil\)`)
 
 func publishedForm(m messaging.Message) string {
 	return readerOnlyFields.ReplaceAllString(fmt.Sprintf("%#v", m), "")

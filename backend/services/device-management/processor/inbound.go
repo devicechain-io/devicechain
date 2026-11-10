@@ -755,6 +755,7 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 // in order with everything published.
 func (iproc *InboundEventsProcessor) publishResolvedLegacy(ctx context.Context, item resolvedItem, bytes []byte, marshalErr error) {
 	coord := item.coord
+	ctx = coord.src.Context(ctx)
 	settle := func(err error) { iproc.settleResolved(coord, err) }
 	if marshalErr != nil {
 		log.Error().Err(marshalErr).Msg("unable to marshal resolved event to protobuf")

@@ -39,7 +39,7 @@ su estado. Tres insignias piden atención:
 ## Crear una integración {#creating}
 
 Antes de empezar, ten un tipo de dispositivo para los dispositivos que hay detrás del remitente, y a ser
-posible una [métrica](/user-guide/device-types-and-profiles#métricas) declarada para cada valor
+posible una [métrica](device-types-and-profiles.md#metrics) declarada para cada valor
 decodificado al que quieras dar una unidad. Después elige **Nueva integración** y rellena:
 
 - **Tipo de remitente**: **ChirpStack v4**, **The Things Stack v3**, **JSON genérico** o **Binario

@@ -158,10 +158,13 @@ configure clients, approver roles and action rules.
    of at most 512 bytes. If prompted, choose **Sign in again**, authenticate with your password
    and authenticator code, then retry after returning to the proposal. Signing in alone does not
    submit an approval.
-3. If that approval would complete the proposal, the console reports that execution is unavailable.
-   **The approval is not recorded, the proposal stays pending, and no alarm is acknowledged or
-   cleared.** `EXECUTED` in the state filter is not evidence that execution is supported. Perform
-   any needed alarm action yourself on the [Alarms page](../user-guide/alarms.md).
+3. If that approval would complete the proposal, the confirmation says that approving carries the
+   action out as you. The platform asks the agent policy again and acknowledges or clears the
+   alarms in one step; the proposal then shows `EXECUTED` with its result. If the policy refuses
+   or the alarms changed (`DEPENDENCY_CHANGED`), the proposal shows `REFUSED` with the reason and
+   no alarm is acknowledged or cleared. If someone else is deciding the same proposal at that
+   moment, the console reports `CONCURRENT_APPROVAL` and refreshes it. A server that still answers
+   with the deprecated `EXECUTION_NOT_AVAILABLE` records no approval and changes no alarm.
 
 The **Agent actions** panel lets an agent administrator choose **Turn agent actions off** and
 confirm, without step-up. **Turn agent actions back on** requires step-up and does not override

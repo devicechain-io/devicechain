@@ -4,6 +4,7 @@
 package model
 
 import (
+	"context"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/eventtype"
@@ -14,6 +15,8 @@ var EventTypesByName map[string]eventtype.EventType
 
 // Unresolved event details.
 type UnresolvedEvent struct {
+	// TraceContext is local pipeline metadata; it is never serialized.
+	TraceContext context.Context `json:"-"`
 	Source       string
 	AltId        *string
 	Device       string

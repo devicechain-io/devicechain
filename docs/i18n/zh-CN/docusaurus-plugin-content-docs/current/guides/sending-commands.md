@@ -80,6 +80,7 @@ mutation {
 | `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | 载荷或元数据字符串超过 64 KiB。 | 否 |
 | `COMMAND_NAME_TOO_LONG` | 命令名称超过 128 字节。 | 否 |
 | `EXPIRES_AT_INVALID` | `expiresAt` 不是 RFC3339 时间戳。 | 否 |
+| `DELIVERY_OPTION_INVALID` / `DELIVERY_OPTION_NOT_APPLICABLE` | `deliveryMode` 或 `maxAttempts` 不是平台认识的值，或设备未使用[通过 HTTP 拉取命令的通道](../concepts/commands.md#http-command-pull)；这两个选项仅适用于该通道。 | 否 |
 | `TOKEN_IN_USE` | 令牌由不属于你的命令占用，实际通常是平台为批次创建的命令。 | 否，请换令牌 |
 | `COMMAND_REJECTED` | 收到没有分类的拒绝。 | 否 |
 
