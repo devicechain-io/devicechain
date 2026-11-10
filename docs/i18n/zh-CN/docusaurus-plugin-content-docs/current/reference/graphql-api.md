@@ -65,6 +65,11 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 - 读取设备凭据需要 `device:write`，不是 `device:read`。
 - `latestLocation` 需要 `location:read`，其他同属 `device-state` 的接口需要 `state:read`。
+- 固定资产的安装位置（`Device.installedPosition`、`Asset.installedPosition`）需要 `location:installed:read`，
+  而 `location:read` 包含该权限。这是安装数据，绝不会回退到设备上报的位置。
+  调用者若两项权限都没有，读取任何设备和资产时都会得到 `positionWithheld: true`，无论它是否有位置；
+  该标志仅针对安装位置。设置和清除安装位置（`setInstalledPosition`、`clearInstalledPosition`）需要
+  `device:write`，且仅能访问租户部分数据的成员不能写入安装位置。
 - `demoteAssertedPresence` 需要 `state:demote`，不同于前两者。
   默认没有角色直接声明它；只有持有 `*` 超级权限的角色，例如预置的 `tenant-admin`，无需明确授权就能使用。
   它是事件流水线之外唯一写入实时状态投影的接口，一次调用会影响整个事件源的设备。

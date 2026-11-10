@@ -918,7 +918,7 @@ chart 覆盖链条各环节：
 
 | 序列 | 标签 | 如何读取 |
 | --- | --- | --- |
-| `devicechain_<区域>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe (v1.2/v1.3)：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
+| `devicechain_<area>_token_audience_checks_total` | `plane`、`audience`、`verdict` | 每个到达某个服务的已认证请求计一次（`graphql_ws` 则在连接完成认证时按连接计一次）。`audience` 是令牌的绑定对象，从该服务的角度看：`none`、`own_area`、`mcp`、`other_area`、`external` 或 `unlisted`。`verdict` 是 `accepted`、`would_reject`（observe (v1.2/v1.3)：统计并照常处理）或 `rejected`（enforce：以 `401` 拒绝，WebSocket 则以关闭码 `4401` 关闭连接）。`plane` 是接收请求的入口：`graphql`、`graphql_ws`、`admin`、`settings`、`upload`、`branding` 或 `userinfo`；每个服务只报告它具备的入口。 |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`、`resource`、`verdict` | 授权服务器每做出一次资源判定计一次。`grant` 是 `authorization_code`、`refresh_token` 或 `client_credentials`。`resource` 是所申请内容的类别：`none`、`area`、`mcp`、`external`、`unlisted`、`malformed` 或 `multiple`。`resource` 与其授权码或刷新令牌所绑定的资源不同的请求也会计入这里。 |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | 指定了资源却未指定 scope 的 `client_credentials` 请求，这种请求已被弃用。判定始终是 `would_reject`，请求照常处理。 |
 | `devicechain_mcp_token_audience_registered` | 无 | MCP 的 resourceUrl 位于 `infrastructure.tokenAudience.mcpResources` 中时为 1，否则为 0。缺少时 MCP 拒绝启动。 |

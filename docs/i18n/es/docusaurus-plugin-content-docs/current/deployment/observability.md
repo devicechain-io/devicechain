@@ -224,7 +224,7 @@ receptor que descarta todas las alertas. Una instancia en ese estado lo indica.
 `dcctl instances list` muestra `ALERTS NOT ROUTED` junto a ella, y la condición `AlertsRouted` de la
 instancia es `False`. La condición no hace que la instancia deje de estar lista.
 
-Dé un receptor a Alertmanager al instalar, o más tarde en cualquier instancia:
+Da un receptor a Alertmanager al instalar, o más tarde en cualquier instancia:
 
 ```bash
 # Un webhook: los relés compatibles con Slack, PagerDuty, Opsgenie y la mayoría de las herramientas de incidentes lo aceptan.
@@ -243,7 +243,7 @@ dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/servic
 - **Se envían todas las alertas**: `critical`, `warning` e `info`. Una alerta `critical` silencia la
   `warning` de la misma alerta y el mismo namespace.
 - **Las URL y la contraseña SMTP se guardan en un Secret** (`dc-alertmanager-config`, en el namespace
-  `monitoring`), no en el estado de la infraestructura de su máquina. La instancia solo registra qué
+  `monitoring`), no en el estado de la infraestructura de tu máquina. La instancia solo registra qué
   tipos de receptor existen.
 - **Indicar cualquier opción `--alert-*` vuelve a declarar todo el enrutamiento.** `--alert-email`
   por sí sola elimina un webhook configurado antes. Una ejecución sin ninguna opción `--alert-*` deja
@@ -259,8 +259,8 @@ dcctl upgrade local my-instance --alert-webhook https://hooks.example.com/servic
 
 Si Alertmanager está caído o no alcanza su receptor, no llega ninguna alerta, y un clúster sin
 alertas se ve igual que uno sano. Para esto existe la alerta `Watchdog`, que se dispara siempre, por
-diseño. Envíela a un servicio de interruptor de hombre muerto (Healthchecks, Dead Man's Snitch,
-Cronitor) que le avise cuando los avisos dejen de llegar:
+diseño. Envíala a un servicio de interruptor de hombre muerto (Healthchecks, Dead Man's Snitch,
+Cronitor) que te avise cuando los avisos dejen de llegar:
 
 ```bash
 dcctl install local --alert-webhook https://hooks.example.com/... \
@@ -273,11 +273,11 @@ alertas en silencio pasaría inadvertido.
 
 ### Receptores más allá del webhook y el correo
 
-`--alert-config <archivo>` usa su propia configuración de Alertmanager tal cual. Úsela para receptores
+`--alert-config <archivo>` usa tu propia configuración de Alertmanager tal cual. Úsala para receptores
 de Slack, PagerDuty, Opsgenie o Teams, o para enrutar por etiquetas. No se puede combinar con las
 demás opciones `--alert-*`. `dcctl` comprueba que el archivo se analiza, que cada ruta nombra un
 receptor definido en el archivo y si algún receptor entrega a alguna parte. No envía ningún mensaje
-de prueba, y no es el analizador de Alertmanager: ejecute antes `amtool check-config` sobre el archivo, porque un Alertmanager que rechaza una configuración sigue funcionando con la anterior. Enrute la alerta `Watchdog` dentro de su archivo: `dcctl` la cuenta como enrutada cuando
+de prueba, y no es el analizador de Alertmanager: ejecuta antes `amtool check-config` sobre el archivo, porque un Alertmanager que rechaza una configuración sigue funcionando con la anterior. Enruta la alerta `Watchdog` dentro de tu archivo: `dcctl` la cuenta como enrutada cuando
 una ruta selecciona `alertname = "Watchdog"` y su receptor entrega.
 
 Cada alerta incluye un `runbook_url` que abre su entrada en la [Guía de alertas](./alert-runbook.md),
@@ -924,8 +924,8 @@ arrancar, después de cada recarga y una vez por minuto.
 | --- | --- | --- |
 | `BrokerMqttClientAuthLost` (warning) | Durante diez minutos, el servidor del broker indicado por la etiqueta `pod` ha servido MQTT sobre TLS sin pedir certificados de cliente, o no ha ejecutado la imagen del broker de DeviceChain (el sidecar de métricas informa del servidor, pero el servidor no publica ninguna de sus propias métricas). Los dispositivos que se autentican con certificado no pueden conectarse; los dispositivos con token o contraseña no se ven afectados. | Compruebe la imagen del servidor: `kubectl get pod -n <namespace> <pod> -o jsonpath='{.spec.containers[0].image}'`. Si es la imagen original `nats`, la instancia volvió a ella, y los dispositivos con certificado seguirán rechazados hasta que se restaure la imagen de DeviceChain. Si es la imagen de DeviceChain, lea el log del servidor en torno a su última recarga de configuración y busque la línea que dice que el listener no está pidiendo certificados de cliente, o que la comprobación no pudo completarse; después reinicie el pod e informe del log. |
 | `BrokerLeadershipImbalanced` (warning) | Durante treinta minutos, al menos un servidor del broker ha liderado menos de la mitad de los streams que le corresponderían en un reparto equitativo. Solo se cuentan los streams que `dcctl` puede mover: los streams replicados de esta instancia salvo los de ingesta de dispositivos, que nunca se reequilibran. Tras un reinicio gradual, el servidor reiniciado en último lugar no lidera nada y los demás lideran todo, lo que aumenta la latencia de publicación y resta algo de rendimiento de ingesta. `dcctl upgrade` reparte el liderazgo tras reiniciar el broker, así que esto salta tras un reinicio hecho de otro modo (un drenaje de nodo, la pérdida de un pod, un despliegue manual) o cuando ese paso emitió una advertencia. | Ejecute `dcctl broker rebalance <instance>`; cada movimiento es una breve elección para un stream, y un broker que ya está equilibrado se deja como está, salvo que se aparta el stream de eventos resueltos del servidor que lidera la captura o el stream de entrada. El panel *Stream leaders per server* del panel de mensajería muestra el reparto. Si vuelve poco después, busque reinicios repetidos del broker. |
-| `BrokerCertificateExpiringSoon` (warning) | Durante una hora, el certificado TLS que presenta el servidor del broker indicado por la etiqueta `pod` caduca en menos de 30 días y en más de 7. Cuando caduca, el broker rechaza las conexiones TLS de los dispositivos y de los servicios de la propia instancia. El certificado solo lo renueva `dcctl upgrade`, así que una instancia que no se actualiza durante unos once meses llega hasta aquí. | Ejecute `dcctl install <provider>` y luego `dcctl upgrade <provider> <instance>`, con el mismo `dcctl` y los ajustes con que se instaló el clúster: vuelve a emitir el certificado dentro de sus últimos 30 días y, cuando solo cambió el certificado, lo sustituye sin reiniciar el broker. La alerta se resuelve cuando el servidor presenta el certificado nuevo. Si sigue saltando tras un upgrade, el servidor no cambió; lea su log y reinicie el pod. |
-| `BrokerCertificateExpiryCritical` (critical) | Durante diez minutos, el certificado que presenta el servidor caduca en menos de 7 días, o ya ha caducado. | Ejecute `dcctl install <provider>` y luego `dcctl upgrade <provider> <instance>`, con el mismo `dcctl` y los ajustes con que se instaló el clúster, ahora. Una instancia creada con una versión temprana no conserva su autoridad de certificación y no puede volver a emitir el certificado en su sitio; `dcctl upgrade` lo indica y la instancia debe reconstruirse. Si ya se ejecutó un upgrade y sigue saltando, reinicie el pod del servidor. |
+| `BrokerCertificateExpiringSoon` (warning) | Durante una hora, el certificado TLS que presenta el servidor del broker indicado por la etiqueta `pod` caduca en menos de 30 días y en más de 7. Cuando caduca, el broker rechaza las conexiones TLS de los dispositivos y de los servicios de la propia instancia. El certificado solo lo renueva `dcctl upgrade`, así que una instancia que no se actualiza durante unos once meses llega hasta aquí. | Ejecuta `dcctl install <provider>` y luego `dcctl upgrade <provider> <instance>`, con el mismo `dcctl` y los ajustes con que se instaló el clúster: vuelve a emitir el certificado dentro de sus últimos 30 días y, cuando solo cambió el certificado, lo sustituye sin reiniciar el broker. La alerta se resuelve cuando el servidor presenta el certificado nuevo. Si sigue saltando tras un upgrade, el servidor no cambió; lee su log y reinicia el pod. |
+| `BrokerCertificateExpiryCritical` (critical) | Durante diez minutos, el certificado que presenta el servidor caduca en menos de 7 días, o ya ha caducado. | Ejecuta `dcctl install <provider>` y luego `dcctl upgrade <provider> <instance>`, con el mismo `dcctl` y los ajustes con que se instaló el clúster, ahora. Una instancia creada con una versión temprana no conserva su autoridad de certificación y no puede volver a emitir el certificado en su sitio; `dcctl upgrade` lo indica y la instancia debe reconstruirse. Si ya se ejecutó un upgrade y sigue saltando, reinicia el pod del servidor. |
 
 Las dos alertas de certificado leen `dc_broker_mqtt_tls_cert_not_after_seconds`, la caducidad del
 certificado que el broker presenta ahora mismo a las conexiones nuevas, así que siguen lo que ven
@@ -1806,7 +1806,7 @@ Cada API comprueba la audiencia del token y el servidor de autorización comprue
 
 | Serie | Etiquetas | Cómo leerla |
 | --- | --- | --- |
-| `devicechain_<área>_token_audience_checks_total` | `plane`, `audience`, `verdict` | Una por solicitud autenticada a un servicio (para `graphql_ws`, una por conexión, cuando se autentica). `audience` es aquello a lo que está vinculado el token, visto desde ese servicio: `none`, `own_area`, `mcp`, `other_area`, `external` o `unlisted`. `verdict` es `accepted`, `would_reject` (observe (v1.2/v1.3): se cuenta y se atiende) o `rejected` (enforce: se rechaza con `401`, o cerrando un WebSocket con el código `4401`). `plane` es la superficie que recibió la solicitud: `graphql`, `graphql_ws`, `admin`, `settings`, `upload`, `branding` o `userinfo`; cada servicio informa de las que tiene. |
+| `devicechain_<area>_token_audience_checks_total` | `plane`, `audience`, `verdict` | Una por solicitud autenticada a un servicio (para `graphql_ws`, una por conexión, cuando se autentica). `audience` es aquello a lo que está vinculado el token, visto desde ese servicio: `none`, `own_area`, `mcp`, `other_area`, `external` o `unlisted`. `verdict` es `accepted`, `would_reject` (observe (v1.2/v1.3): se cuenta y se atiende) o `rejected` (enforce: se rechaza con `401`, o cerrando un WebSocket con el código `4401`). `plane` es la superficie que recibió la solicitud: `graphql`, `graphql_ws`, `admin`, `settings`, `upload`, `branding` o `userinfo`; cada servicio informa de las que tiene. |
 | `devicechain_usermanagement_oauth_resource_checks_total` | `grant`, `resource`, `verdict` | Una por decisión sobre un recurso en el servidor de autorización. `grant` es `authorization_code`, `refresh_token` o `client_credentials`. `resource` es la clase de lo que se pidió: `none`, `area`, `mcp`, `external`, `unlisted`, `malformed` o `multiple`. También se cuenta aquí una solicitud cuyo `resource` difiere de aquel al que está vinculado su código o token de renovación. |
 | `devicechain_usermanagement_oauth_unscoped_client_credentials_total` | `verdict` | Solicitudes `client_credentials` que indicaron un recurso sin un ámbito, que están obsoletas. El veredicto es siempre `would_reject` y la solicitud se atiende. |
 | `devicechain_mcp_token_audience_registered` | ninguna | 1 si el resourceUrl de MCP figura en `infrastructure.tokenAudience.mcpResources`; 0 si falta. MCP rechaza el arranque cuando falta. |
@@ -1816,7 +1816,7 @@ En las dos primeras filas, `rejected` indica que se rechaza a un cliente. `would
 - **Cuentan solicitudes, no clientes.** Un cliente que sigue enviando el mismo token mueve una serie en cada llamada, y un plano cuenta antes de que se ejecute la autorización de GraphQL. Una serie distinta de cero responde a «¿algún cliente hace esto?», y el registro responde a «¿cuál?». Un token falsificado o caducado nunca mueve un contador de plano, porque la comprobación se hace después de verificar la firma. Los contadores del servidor de autorización se mueven después de que el cliente se haya autenticado, con una excepción: el endpoint de autorización cuenta la solicitud antes de que nadie haya iniciado sesión, con valores que son públicos, así que cualquiera que alcance esa página puede mover su serie.
 - En audiencia y recurso, `v1.4` emite `accepted` o `rejected`; `would_reject` se conserva para instancias anteriores. El contador separado de credenciales sin scope sigue emitiendo `would_reject`.
 
-Antes de actualizar a `v1.4`, corrija los clientes identificados por los contadores `would_reject` de la instancia anterior y quite `enforcement: observe` de los valores, overlays almacenados, valores del release anterior y documentos Secret. Sin definir significa enforce.
+Antes de actualizar a `v1.4`, corrige los clientes identificados por los contadores `would_reject` de la instancia anterior y quita `enforcement: observe` de los valores, overlays almacenados, valores del release anterior y documentos Secret. Sin definir significa enforce.
 
 `TokenAudienceWouldReject` y `OAuthResourceWouldReject` se conservan por compatibilidad. No pueden activarse en una instancia `v1.4`; solo en una instancia `v1.2`/`v1.3` con observe. Son alertas `info` y requieren una tasa positiva durante una hora sobre la ventana de la última hora.
 

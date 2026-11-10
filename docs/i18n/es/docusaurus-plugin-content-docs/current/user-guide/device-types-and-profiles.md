@@ -98,7 +98,7 @@ crea al **publicar**. Así, un cambio en una métrica, un comando o una clave de
 llega a los dispositivos cuando publicas el perfil. Consulta
 [Publicar una versión](#publishing-a-version).
 
-### Métricas
+### Métricas {#metrics}
 
 **Métricas** enumera las mediciones tipadas que envía un dispositivo de este perfil.
 

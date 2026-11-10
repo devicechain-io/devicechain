@@ -24,7 +24,7 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 - `get_device` — los detalles de un dispositivo individual.
 - `get_device_capabilities` — qué puede medir un dispositivo y los comandos publicados que acepta, con el esquema de parámetros de cada comando. Las métricas proceden de las definiciones actuales del perfil, así que pueden incluir alguna que aún no se ha publicado; los comandos son siempre los publicados.
 
-`list_devices` y `get_device` todavía no indican si un dispositivo está deshabilitado, y `list_devices` no puede filtrar por ello. Un dispositivo deshabilitado aparece exactamente igual que uno activo, así que con estas herramientas un asistente no puede distinguir un dispositivo en cuarentena de uno que funciona. Comprueba el estado del dispositivo en la consola, donde un dispositivo deshabilitado lleva el distintivo **Deshabilitado**; consulta [Deshabilitar y habilitar un dispositivo](../user-guide/devices.md).
+`list_devices` y `get_device` todavía no indican si un dispositivo está deshabilitado, y `list_devices` no puede filtrar por ello. Un dispositivo deshabilitado aparece exactamente igual que uno activo, así que con estas herramientas un asistente no puede distinguir un dispositivo en cuarentena de uno que funciona. Comprueba el estado del dispositivo en la consola, donde un dispositivo deshabilitado lleva el distintivo **Deshabilitado**; consulta [Deshabilitar y habilitar un dispositivo](../user-guide/devices.md#disabling-and-enabling-a-device).
 
 **Estado en vivo y telemetría**
 
@@ -75,12 +75,12 @@ El resultado también enumera las clases que contiene en `_meta`, bajo `io.devic
 Los tokens de entidad, como el de un dispositivo o una alarma, permanecen en el nivel superior porque la siguiente llamada a una herramienta tiene que nombrarlos. Un token solo puede contener letras, dígitos, guiones y guiones bajos, lo que lo mantiene corto y sin signos de puntuación, pero lo elige igualmente quien creó la entidad.
 
 :::note Actualización
-Los campos que antes estaban junto a un token (el `name`, `description` y `externalId` de un dispositivo, el `name` y `unit` de una métrica, el `alarmKey` de una alarma, el `name` y `error` de un comando) ahora están bajo `untrusted` como `{ "value": ..., "source": ... }`. Actualice los clientes que los leen.
+Los campos que antes estaban junto a un token (el `name`, `description` y `externalId` de un dispositivo, el `name` y `unit` de una métrica, el `alarmKey` de una alarma, el `name` y `error` de un comando) ahora están bajo `untrusted` como `{ "value": ..., "source": ... }`. Actualiza los clientes que los leen.
 :::
 
 ## Acciones de agentes: quién puede actuar y cómo detenerlo (vista previa) {#agent-actions}
 
-DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Los controles siguientes deciden **si un asistente puede pedir actuar**, y un asistente ya puede proponer una acción sobre alarmas para que la aprueben personas ([Propuestas y aprobaciones](#agent-proposals)). Las acciones sobre alarmas requieren la aprobación final de una persona. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces), salvo la marca `agent` de las cuentas de servicio, que es estable: quitarla más adelante convertiría las cuentas de agente de nuevo en integraciones con los permisos de escritura de sus roles.
+DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Los controles siguientes deciden **si un asistente puede pedir actuar**, y un asistente ya puede proponer una acción sobre alarmas para que la aprueben personas ([Propuestas y aprobaciones](#agent-proposals)). Todavía no existe ninguna herramienta de acción MCP, y las acciones sobre alarmas requieren la aprobación final de una persona. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces), salvo la marca `agent` de las cuentas de servicio, que es estable: quitarla más adelante convertiría las cuentas de agente de nuevo en integraciones con los permisos de escritura de sus roles.
 
 **Un asistente nunca tiene un permiso de escritura.** Cuando una persona autoriza a un asistente para un alcance de acción, el token que recibe lleva un permiso de *propuesta* en lugar del permiso de escritura de la persona: `alarm:propose` en lugar de `alarm:write`, `command:propose` en lugar de `command:write`. El permiso de propuesta se calcula a partir de lo que la persona tiene en ese momento, y se vuelve a calcular en cada renovación, así que una persona que pierde `alarm:write` le quita `alarm:propose` a su asistente en el plazo de vida de un token. Ningún rol puede conceder un permiso de propuesta, y el `*` de un superusuario nunca cuenta como tal. Toda operación existente que cambia datos comprueba el permiso de escritura, así que un token de asistente robado no puede cambiar nada, aunque se envíe directamente a la API en vez de a través del servidor MCP.
 
@@ -211,13 +211,13 @@ Esa única cadena cumple tres funciones, y por eso es la única que necesitas:
 No introduces nada más a mano. Cuando el endpoint responde `401`, el cliente lee la ubicación de los metadatos en la cabecera `WWW-Authenticate` de la respuesta y la sigue. Ese documento le dice dónde está el servidor de autorización, y el cliente pide entonces al servidor de autorización sus propios metadatos. El descubrimiento son esas tres peticiones, y puedes recorrerlas a mano antes de apuntar ningún cliente:
 
 ```bash
-# 1. El endpoint responde 401 y nombra su documento de metadatos.
+# 1. The endpoint answers 401 and names its metadata document.
 curl -i -X POST https://<your-instance-host>/api/mcp
 
-# 2. Ese documento nombra el servidor de autorización.
+# 2. That document names the authorization server.
 curl https://<your-instance-host>/.well-known/oauth-protected-resource/api/mcp
 
-# 3. El servidor de autorización describe dónde iniciar sesión y obtener un token.
+# 3. The authorization server describes where to log in and get a token.
 curl https://<your-instance-host>/.well-known/oauth-authorization-server/api/user-management
 ```
 
@@ -238,7 +238,7 @@ Instalar el área `mcp` con más de una réplica se rechaza de plano, en lugar d
 La dirección de [Adónde apuntar un cliente](#where-to-point-a-client) es el **identificador de recurso** del servidor. Un token que el cliente pide para ella nombra esa dirección como su audiencia, y, con `enforce`, el valor por defecto, el servidor de autorización solo vincula un token a una dirección que figure en la lista de permitidos de la instancia. Esa misma dirección debe estar registrada para que las API de la plataforma acepten las llamadas que este servidor reenvía, porque esas llamadas llevan el vínculo MCP. [Audiencia del token](./security-model.md#token-audience) explica la lista de permitidos y la aplicación de las comprobaciones.
 
 - **El chart la registra.** Escribe la `resourceUrl` del servidor en `infrastructure.tokenAudience.mcpResources`. No tienes que hacer nada.
-- **El servidor comprueba al arrancar.** Si falta su `resourceUrl` en `infrastructure.tokenAudience.mcpResources`, informa `devicechain_mcp_token_audience_registered` como 0 y rechaza el arranque. Añada el recurso al documento de `instance.existingSecret`. `v1.4` rechaza `enforcement: observe`; quite la clave o use `enforce`.
+- **El servidor comprueba al arrancar.** Si falta su `resourceUrl` en `infrastructure.tokenAudience.mcpResources`, informa `devicechain_mcp_token_audience_registered` como 0 y rechaza el arranque. Añade el recurso al documento de `instance.existingSecret`. `v1.4` rechaza `enforcement: observe`; quita la clave o usa `enforce`.
 - **Escribe la dirección con esquema y host en minúsculas.** La comparación es byte a byte. Una `resourceUrl` que fijes a mano con una mayúscula en el esquema o en el host no se admite en la lista, y con `enforce` el chart se niega a renderizarla, así que cámbiala a minúsculas.
 - **Un cliente debe enviar la misma dirección** como su `resource`. Un cliente que no envía nada, o envía otro valor, recibe un token que no está vinculado a este servidor o, con `enforce`, es rechazado.
 
