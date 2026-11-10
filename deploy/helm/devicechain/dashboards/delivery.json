@@ -1443,7 +1443,7 @@
       "id": 23,
       "type": "stat",
       "title": "Failed escalation passes",
-      "description": "Escalation passes over the selected time range that failed. The scheduler re-notifies alarms that stayed open; a failed pass means some of them were not re-notified until the next pass. Check the notification service log.",
+      "description": "Escalation passes over the selected time range that failed. The scheduler re-notifies alarms that stayed open; a failed pass means some of them were not re-notified until the next pass. Check the notification service log. This also counts failed pickup of pending clear notifications; compare the escalation and clear pickup passes below.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -1706,8 +1706,8 @@
     {
       "id": 27,
       "type": "timeseries",
-      "title": "Escalation passes",
-      "description": "Passes of the escalation scheduler, by outcome. It runs on a timer in every replica of the notification service. Failed passes need attention; skipped means another replica held the work.",
+      "title": "Escalation and clear pickup passes",
+      "description": "The scheduler re-pages active alarms and picks up pending clear notifications. Failed means the pass could not do its work, including when clear pickup reached no delivery target. Partial means some work completed: clears may remain after the pickup budget, or some tenants may have failed. Check logs to distinguish these cases. Repeated failures need database and channel checks. There is no separate clear-only counter.",
       "gridPos": {
         "h": 8,
         "w": 12,

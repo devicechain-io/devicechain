@@ -867,3 +867,216 @@ tests:
       - eval_time: 30m
         alertname: IngestAppendSkewLarge
         exp_alerts: []
+
+  # IntegrationDownlinkReportsDiscarded: sustained failures, pending window, burst, healthy and isolation cases.
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_integration_downlink_reports_total{namespace="dci-devicechain", result="rate_limited"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations:
+          runbook_url: https://docs.devicechain.io/deployment/alert-runbook#integrationdownlinkreportsdiscarded
+          summary: Network-server downlink reports are being accepted and discarded
+          description: For 10 minutes, inbound integrations have discarded downlink reports above their separate report
+            allowance while answering 202. The sender believes they arrived, and commands those reports would settle
+            wait until their deadline. Reduce the report flood and inspect integration traffic and the confirmed-downlink
+            dashboard before resending commands.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_integration_downlink_reports_total{namespace="dci-devicechain", result="rate_limited"}
+      values: 0+0x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_integration_downlink_reports_total{namespace="another-instance", result="rate_limited"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_integration_downlink_reports_total{namespace="dci-devicechain", result="rate_limited"}
+      values: 0+0x5 1+0x35
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_integration_downlink_reports_total{namespace="dci-devicechain", result="published"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: IntegrationDownlinkReportsDiscarded
+      exp_alerts: []
+
+  # DeviceUplinkMessagesFailing: sustained failures, pending window, burst, healthy and isolation cases.
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="no_decoder"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: &DeviceUplinkMessagesFailing
+          runbook_url: https://docs.devicechain.io/deployment/alert-runbook#deviceuplinkmessagesfailing
+          summary: Device MQTT payloads cannot reach their decoder pipeline
+          description: For 10 minutes, raw device MQTT uplinks have failed before reaching the decoder pipeline. Missing
+            decoders, invalid or oversized payloads and unknown devices go to failed-decode; plan lookup and publish
+            failures retry through the broker. Inspect the Ingest dashboard result labels, failed-events and event-sources
+            logs; check the profile decoder and device-management or broker availability. PayloadDecoderFailuresHigh
+            covers failures after handoff to the decoder.
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="bad_request"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *DeviceUplinkMessagesFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="too_large"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *DeviceUplinkMessagesFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="internal_error"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *DeviceUplinkMessagesFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="unauthorized"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *DeviceUplinkMessagesFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="plan_unavailable"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *DeviceUplinkMessagesFailing
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="publish_failed"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 9m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          devicechain_instance: devicechain
+        exp_annotations: *DeviceUplinkMessagesFailing
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="no_decoder"}
+      values: 0+0x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="another-instance", result="no_decoder"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="no_decoder"}
+      values: 0+0x5 1+0x35
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []
+  - interval: 1m
+    input_series:
+    - series: devicechain_eventsources_device_uplink_messages_total{namespace="dci-devicechain", result="accepted"}
+      values: 0+1x40
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: DeviceUplinkMessagesFailing
+      exp_alerts: []

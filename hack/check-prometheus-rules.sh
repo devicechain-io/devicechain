@@ -1157,7 +1157,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience payload-decoder)
+required_groups=(notification-management database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience payload-decoder)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1248,6 +1248,7 @@ where the comparison binds."
 # files encode one group's semantics each and an unrelated rule's labels showing up
 # in the results would be a failure here for no reason.
 declare -A rule_tests=(
+  [notification-management]="$repo_root/hack/testdata/prometheus-rules-notification-management-tests.yaml"
   [database-backup]="$repo_root/hack/testdata/prometheus-rules-tests.yaml"
   [database-storage]="$repo_root/hack/testdata/prometheus-rules-storage-tests.yaml"
   [database-control-plane]="$repo_root/hack/testdata/prometheus-rules-control-plane-tests.yaml"
