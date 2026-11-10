@@ -44,16 +44,19 @@ title: 传输能力矩阵
 
 设备如何接入平台，以及平台如何与设备反向通信。
 
+HTTP 命令拉取和 LoRaWAN 集成下行在规范中以 `basis: "prose"` 声明为 `◐`。
+下文描述其支持范围和限制；已记录的测试运行并未测量这两项能力。
+
 {/* conformance:table device-transports */}
 
 | 传输 | 读取 | 写入 | 订阅 |
 | --- | :---: | :---: | :---: |
 | [MQTT](../guides/connecting-a-device.md#mqtt)（平台代理） | ○ | ◐ | ◐ |
-| [HTTP](../guides/connecting-a-device.md#http) | ○ | ○ | ● |
+| [HTTP](../guides/connecting-a-device.md#http) | ○ | ◐ | ● |
 | MQTT（外部代理） | ○ | ○ | ◐ |
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ◐ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
-| [入站集成](../guides/inbound-integrations.md)（LoRaWAN 网络服务器、webhook） | ○ | ○ | ◐ |
+| [入站集成](../guides/inbound-integrations.md)（LoRaWAN 网络服务器、webhook） | ○ | ◐ | ◐ |
 
 ### MQTT：平台代理 {#mqtt--the-platform-broker}
 
@@ -101,7 +104,7 @@ title: 传输能力矩阵
 
 ### HTTP {#http}
 
-使用相同 JSON 事件正文的 `POST` 端点，简单且单向。
+使用相同 JSON 事件正文的 `POST` 端点，另有可选的命令轮询。
 
 - **订阅 ●**：`POST /{instanceId}/{tenant}/events` 返回：
   - 事件存入平台入站流后返回 `202`，并带 `X-DC-Event-Id` 回执响应头；
@@ -119,16 +122,15 @@ title: 传输能力矩阵
   除非事件携带 `altId` 和 `occurredTime`（参见[服务质量](../guides/connecting-a-device.md#quality-of-service)）。
   `429` 同样意味着事件未被接受，它携带 `Retry-After` 响应头，应退避后重试。
   `202`、`400`、`401` 和 `404` 是该次请求的终结响应。
-- **写入 ○ / 读取 ○**：**完全没有下行链路。**仅通过 HTTP 接入平台的设备无法接收命令。
-  这更多是集成方式本身的形态，而非等待修复的缺口：需要接收命令的设备也应建立 MQTT 连接。
+- **写入 ◐ / 读取 ○**：通过可选的 [HTTP 命令拉取](../concepts/commands.md#http-command-pull)
+  接收命令。将设备类型的 `commandChannel` 设置为 `HTTP_PULL`；设备轮询命令、确认接收，
+  并通过 HTTP 发送响应。命令会等待拉取，但仍受过期时间限制。
+  此通道不传递配置或托管更新分配，也没有由平台发起的读取原语。
 
-  向仅使用 HTTP 的设备发送命令，**不会被拒绝，而是最终过期**。
-  平台不会为通过 HTTP 到达的设备生成传输名称（设备记录的来源是运维人员给事件源指定的 ID），
-  因此识别不可投递传输的门控无法识别这种情况。
-  命令会被接受，发布到没有设备订阅的位置，标记为 `SENT`，最后成为 `TIMEOUT`。
-  本页只有 Sparkplug（在未启用命令时）和[入站集成](../guides/inbound-integrations.md#commands)在此列为 `○` 时，会迅速得到 `FAILED`。
-- 接入监听器终止的是明文 HTTP，本身没有传输认证；设备凭据放在事件正文中。
-  需要 TLS 时，由服务前面的组件提供。
+  默认命令通道仍为 `PUBLISH`。在此设置下，命令会被发布，不会等待 HTTP 轮询；
+  没有订阅者的纯 HTTP 设备无法收到它们，命令最终超时。
+- 接入监听器终止明文 HTTP，本身没有传输认证；事件凭据放在事件正文中，命令拉取则使用
+  bearer 访问令牌。需要 TLS 时，由服务前面的组件提供。
 
 ### 自注册 {#self-registration}
 
@@ -274,8 +276,8 @@ Sparkplug 设备的身份来自它发布所用的主题，因此逐事件设备�
 | Write | ◐ | 单个标量资源，仅支持替换 |
 | Execute | ● | 可以带参数或不带参数。针对 Device 对象出厂重置资源（`/3/0/5`）的原始 Execute 会被以 `COMMAND_DESTRUCTIVE_REFUSED` 拒绝；计划提供带确认的具名操作 |
 | Reboot（`lwm2m.reboot`） | ● | 具名命令，执行设备对象的 Reboot 资源；不带参数 |
-| 读取设备信息（`lwm2m.readDeviceInfo`） | ◐ | 具名命令，读取设备对象的制造商、型号、序列号、固件版本和电池电量，并列出设备不具备的资源。仅解码 text/plain 应答：对单个资源读取以 TLV 应答的设备（Eclipse Leshan 默认如此），其所有资源都会被列为缺失，命令失败 |
-| 设备信息采集 | ◐ | 注册时会读取一次相同的资源，并记录为客户端属性；每台设备每小时最多一次，且绝不会延迟注册或遥测。仅解码 text/plain 应答，因此以 TLV 应答的设备不会记录任何内容 |
+| 读取设备信息（`lwm2m.readDeviceInfo`） | ◐ | 具名命令，读取设备对象的制造商、型号、序列号、固件版本和电池电量，并列出设备不具备的资源。支持解码 text/plain 和 LwM2M TLV 应答 |
+| 设备信息采集 | ◐ | 注册时会读取一次相同的资源，并记录为客户端属性；每台设备每小时最多一次，且绝不会延迟注册或遥测。支持解码 text/plain 和 LwM2M TLV 应答 |
 | Observe | ◐ | 仅 SenML-JSON；仅数值资源；固定对象允许列表；每个注册最多 32 个 |
 | Discover | ○ | 未实现 |
 | Create | ○ | 未实现 |
@@ -285,12 +287,23 @@ Sparkplug 设备的身份来自它发布所用的主题，因此逐事件设备�
 
 设备认证在 DTLS 握手时逐设备进行，使用预共享密钥。X.509 和原始公钥凭据在规划中。
 
+设备信息的两个单元格仍为 `◐`：已记录的符合性测试测量的是旧版仅支持 text/plain 的实现及其
+TLV 限制。当前实现也能解码 TLV，但尚未通过新一轮测试测量；记录的结果和限制检查均未修改。
+这不表示 Observe 已支持 TLV 解码。
+
 ### 入站集成 {#inbound-integrations}
 
 ChirpStack 或 The Things Stack 这样的网络服务器，或任何能 `POST` JSON 或字节的系统，会把设备的数据转发到租户的[集成](../guides/inbound-integrations.md)。设备从不连接 DeviceChain。
 
 - **订阅 ◐**：平台把发送方提供的解码值存储为普通测量。它不是 `●` 的原因：租户超出接入额度时到达的消息会返回 `202` 并被丢弃，因为拒绝反正也会丢失它，而且有些网络服务器会暂停被拒绝的 webhook。因此发送方得不到通知。没有任何解码内容的上行会被确认，但不存储任何内容，并被计数。`IntegrationShedAccepted` 和 `IntegrationUndecodedHigh` 会报告这两种情况。在设备配置文件上编写的[载荷解码器](../guides/payload-decoders.md)可以改为在平台中解码原始帧；它将从 v1.2 起解码实时上行。
-- **写入 ○ / 读取 ○**：没有下行。发给最近一次通过集成上报的设备的命令**会被接受，然后失败**：在下一次投递扫描时以 `COMMAND_TRANSPORT_UNSUPPORTED` 失败，而不是一直等到过期。该失败是最终结果。从未上报过的设备没有记录的传输，因此它的命令会被下发并过期，直到它首次上报为止。由于记录的传输是设备最近一次上报所用的传输，同时通过 MQTT 发送的设备，在通过 MQTT 上报之后即可再次接收命令。
+- **写入 ◐ / 读取 ○**：可选的 [LoRaWAN 下行](../guides/inbound-integrations.md#lorawan-downlink)
+  可在 ChirpStack v4 或 The Things Stack v3 上将命令加入队列。非确认下行报告队列接受；
+  确认下行会等待设备的确认。不支持通用发送方下行。适配器关闭时，发给最近一次通过集成
+  上报的设备的命令会被接受，然后在下一次投递扫描时以 `COMMAND_TRANSPORT_UNSUPPORTED`
+  失败，该失败是最终结果。适配器开启时，如果集成没有可用的网络服务器链路，适配器会
+  以未发送拒绝该命令。从未上报过的设备没有记录的传输，因此它的命令会被下发并过期，
+  直到首次上报。平台记录最近一次上报的传输；同时使用 MQTT 的设备在通过 MQTT 上报后
+  可以再次接收命令。
 
 ## 出站连接器 {#outbound-connectors}
 
