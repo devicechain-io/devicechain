@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
 	assets "github.com/devicechain-io/dc-deploy"
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/fatih/color"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	corev1 "k8s.io/api/core/v1"
@@ -220,7 +222,7 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 		return err
 	}
 	if unchecked != "" {
-		fmt.Println(color.YellowString("  the broker's requests were not checked against node capacity: %s", unchecked))
+		fmt.Println(color.YellowString("  broker requests stated by the operator were not checked against node capacity: %s", unchecked))
 	}
 	unreachable := func(err error) error {
 		if st.DryRun {
@@ -246,12 +248,12 @@ func checkHaNodeCapacity(ctx context.Context, st *State) error {
 
 // operatorStatesVar uses the same instance root and precedence check as the apply.
 var operatorStatesVar = func(st *State, name string) bool {
-	workdir, err := instanceStateDir(st.Instance, "infra")
+	instanceDir, err := dcdir.Instance(st.Instance)
 	if err != nil {
 		// An empty directory cannot supply files; TF_VAR statements still count.
 		return statedByOperator("", name)
 	}
-	return statedByOperator(filepath.Join(workdir, assets.InstanceRootDir), name)
+	return statedByOperator(filepath.Join(instanceDir, "infra", assets.InstanceRootDir), name)
 }
 
 // listNodes reads the cluster's nodes, for this guard and for the database placement
@@ -302,7 +304,7 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node, req *brokerRequest
 			if memory.Cmp(largestMemory) > 0 {
 				largestMemory = memory.DeepCopy()
 			}
-			if cpu.Cmp(req.CPU) < 0 || memory.Cmp(req.Memory) < 0 {
+			if (req.CPU != nil && cpu.Cmp(*req.CPU) < 0) || (req.Memory != nil && memory.Cmp(*req.Memory) < 0) {
 				continue
 			}
 		}
@@ -312,17 +314,43 @@ func schedulableShortfall(ha haTopology, nodes []corev1.Node, req *brokerRequest
 		return nil
 	}
 	if req != nil && schedulable < eligible {
-		smaller := sizePresets[SizePerf12k]
+		var requests, maxima, resources, variables []string
+		if req.CPU != nil {
+			requests = append(requests, req.CPUText+" CPU")
+			maxima = append(maxima, "the largest allocatable CPU on any eligible node is "+largestCPU.String()+" CPU")
+			resources = append(resources, "CPU")
+			variables = append(variables, "nats_cpu_request")
+		}
+		if req.Memory != nil {
+			requests = append(requests, req.MemText+" memory")
+			maxima = append(maxima, "the largest allocatable memory is "+largestMemory.String())
+			resources = append(resources, "memory")
+			variables = append(variables, "nats_memory_request")
+		}
+		maximaText := strings.Join(maxima, ", and ")
+		if len(maxima) > 1 {
+			maximaText += " (these maxima may be on different nodes)"
+		}
+		remediation := "use a smaller --size (base asks for less)"
+		if smaller := smallerBrokerPreset(req.Preset); smaller != nil {
+			var smallerRequests []string
+			if req.CPU != nil {
+				smallerRequests = append(smallerRequests, smaller.NatsCPURequest+" CPU")
+			}
+			if req.Memory != nil {
+				smallerRequests = append(smallerRequests, smaller.NatsMemoryRequest)
+			}
+			remediation = fmt.Sprintf("use a smaller --size (%s asks %s per broker; base asks for less)", smaller.Name, strings.Join(smallerRequests, " / "))
+		}
 		return fmt.Errorf(
-			"--ha with size %s places %d NATS servers one per node, each requesting %s CPU and %s memory; "+
-				"%d of %d otherwise-eligible node(s) can hold one broker. The largest allocatable CPU on any eligible node is %s CPU, "+
-				"and the largest allocatable memory is %s (these maxima may be on different nodes). "+
+			"--ha with size %s places %d NATS servers one per node, each requesting %s; "+
+				"%d of %d otherwise-eligible node(s) can hold one broker. For the checked resources, %s. "+
 				"This is an allocatable check, not a free-capacity check or scheduler simulation. "+
-				"To fix this, use a smaller --size (%s asks %s CPU / %s per broker; base asks for less), "+
-				"or add nodes with at least that much allocatable CPU and memory, or state nats_cpu_request / nats_memory_request "+
+				"To fix this, %s, "+
+				"or add nodes with at least that much allocatable %s, or state %s "+
 				"in the instance root's terraform.tfvars (a stated request is not checked here)",
-			req.Preset, ha.ServerReplicas, req.CPUText, req.MemText, schedulable, eligible,
-			largestCPU.String(), largestMemory.String(), smaller.Name, smaller.NatsCPURequest, smaller.NatsMemoryRequest)
+			req.Preset, ha.ServerReplicas, strings.Join(requests, " and "), schedulable, eligible,
+			maximaText, remediation, strings.Join(resources, " and "), strings.Join(variables, " / "))
 	}
 	return fmt.Errorf(
 		"--ha places %d NATS servers one per node, and this cluster has %d node(s) that can "+

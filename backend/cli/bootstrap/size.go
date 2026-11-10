@@ -223,7 +223,7 @@ func sizeFor(st *State) *sizePreset {
 
 type brokerRequest struct {
 	Preset           string
-	CPU, Memory      resource.Quantity
+	CPU, Memory      *resource.Quantity
 	CPUText, MemText string
 }
 
@@ -244,18 +244,58 @@ func brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequ
 		}
 	}
 	if len(missing) > 0 {
-		return nil, "the operator states " + strings.Join(missing, " / "), nil
+		unchecked = "the operator states " + strings.Join(missing, " / ")
+	}
+	if len(missing) == 2 {
+		return nil, unchecked, nil
 	}
 	req = &brokerRequest{Preset: p.Name, CPUText: values["nats_cpu_request"], MemText: values["nats_memory_request"]}
-	req.CPU, err = resource.ParseQuantity(req.CPUText)
-	if err != nil {
-		return nil, "", fmt.Errorf("parsing %s nats_cpu_request: %w", p.Name, err)
+	if _, ok := values["nats_cpu_request"]; ok {
+		cpu, err := resource.ParseQuantity(req.CPUText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_cpu_request: %w", p.Name, err)
+		}
+		req.CPU = &cpu
 	}
-	req.Memory, err = resource.ParseQuantity(req.MemText)
-	if err != nil {
-		return nil, "", fmt.Errorf("parsing %s nats_memory_request: %w", p.Name, err)
+	if _, ok := values["nats_memory_request"]; ok {
+		memory, err := resource.ParseQuantity(req.MemText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_memory_request: %w", p.Name, err)
+		}
+		req.Memory = &memory
 	}
-	return req, "", nil
+	return req, unchecked, nil
+}
+
+// smallerBrokerPreset finds the largest preset strictly below both selected requests.
+func smallerBrokerPreset(selected string) *sizePreset {
+	p, ok := sizePresets[selected]
+	if !ok {
+		return nil
+	}
+	cpu, cpuErr := resource.ParseQuantity(p.NatsCPURequest)
+	memory, memErr := resource.ParseQuantity(p.NatsMemoryRequest)
+	if cpuErr != nil || memErr != nil {
+		return nil
+	}
+	var best *sizePreset
+	var bestCPU, bestMemory resource.Quantity
+	for _, name := range sizeNames {
+		candidate, ok := sizePresets[name]
+		if !ok {
+			continue
+		}
+		candidateCPU, cpuErr := resource.ParseQuantity(candidate.NatsCPURequest)
+		candidateMemory, memErr := resource.ParseQuantity(candidate.NatsMemoryRequest)
+		if cpuErr != nil || memErr != nil || candidateCPU.Cmp(cpu) >= 0 || candidateMemory.Cmp(memory) >= 0 {
+			continue
+		}
+		if best == nil || candidateCPU.Cmp(bestCPU) > 0 || (candidateCPU.Cmp(bestCPU) == 0 && candidateMemory.Cmp(bestMemory) > 0) {
+			best = &candidate
+			bestCPU, bestMemory = candidateCPU, candidateMemory
+		}
+	}
+	return best
 }
 
 // helmValues is the preset's chart values, to sit BELOW what dcctl computes. Nil for base.

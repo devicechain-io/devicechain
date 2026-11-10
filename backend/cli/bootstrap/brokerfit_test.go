@@ -48,8 +48,10 @@ func TestBrokerFitCapacity(t *testing.T) {
 		{"base", State{HA: true}, three("1", "1Gi"), "", nil},
 		{"compact", State{HA: true, Compact: true, Size: SizePerf16k}, three("1", "1Gi"), "", nil},
 		{"perf 12k", State{HA: true, Size: SizePerf12k}, three("4", "16Gi"), "", nil},
-		{"operator CPU", State{HA: true, Size: SizePerf16k}, three("1", "1Gi"), "nats_cpu_request", nil},
-		{"operator memory", State{HA: true, Size: SizePerf16k}, three("1", "1Gi"), "nats_memory_request", nil},
+		{"perf 12k shortfall", State{HA: true, Size: SizePerf12k}, three("2", "16Gi"), "", []string{"4 CPU", "base asks for less"}},
+		{"operator CPU", State{HA: true, Size: SizePerf16k}, three("8", "4Gi"), "nats_cpu_request", []string{"0 of 3", "6Gi memory"}},
+		{"operator memory", State{HA: true, Size: SizePerf16k}, three("4", "16Gi"), "nats_memory_request", []string{"0 of 3", "6 CPU"}},
+		{"operator both", State{HA: true, Size: SizePerf16k}, three("1", "1Gi"), "both", nil},
 		{"cordoned", State{HA: true, Size: SizePerf16k}, cordoned, "", []string{"--ha places", "2 node(s)"}},
 		{"NoSchedule", State{HA: true, Size: SizePerf16k}, tainted, "", []string{"--ha places", "2 node(s)"}},
 		{"NoExecute", State{HA: true, Size: SizePerf16k}, noExecute, "", []string{"--ha places", "2 node(s)"}},
@@ -58,7 +60,7 @@ func TestBrokerFitCapacity(t *testing.T) {
 			originalList, originalStates := listNodes, operatorStatesVar
 			t.Cleanup(func() { listNodes, operatorStatesVar = originalList, originalStates })
 			listNodes = func(context.Context, string) ([]corev1.Node, error) { return tc.nodes, nil }
-			operatorStatesVar = func(_ *State, name string) bool { return name == tc.stated }
+			operatorStatesVar = func(_ *State, name string) bool { return name == tc.stated || tc.stated == "both" }
 			err := checkHaNodeCapacity(context.Background(), &tc.st)
 			if len(tc.want) == 0 {
 				if err != nil {
@@ -72,6 +74,21 @@ func TestBrokerFitCapacity(t *testing.T) {
 			for _, text := range tc.want {
 				if !strings.Contains(err.Error(), text) {
 					t.Errorf("error %q does not contain %q", err, text)
+				}
+			}
+			var absent []string
+			if tc.st.Size == SizePerf12k {
+				absent = append(absent, "perf-12k asks")
+			}
+			if tc.stated == "nats_cpu_request" {
+				absent = append(absent, "CPU", "nats_cpu_request")
+			}
+			if tc.stated == "nats_memory_request" {
+				absent = append(absent, "memory", "nats_memory_request", "6Gi")
+			}
+			for _, text := range absent {
+				if strings.Contains(err.Error(), text) {
+					t.Errorf("error %q unexpectedly contains %q", err, text)
 				}
 			}
 		})
@@ -100,12 +117,24 @@ func TestBrokerFitRequests(t *testing.T) {
 		req, unchecked, err := brokerRequestFor(&State{Size: SizePerf16k}, func(name string) bool {
 			return name == stated || stated == "both"
 		})
-		if err != nil || req != nil || unchecked == "" {
+		if err != nil || unchecked == "" {
 			t.Fatalf("stated %s: got %v, %q, %v", stated, req, unchecked, err)
 		}
+		if stated == "both" {
+			if req != nil {
+				t.Fatalf("both stated: got a checked request: %v", req)
+			}
+		} else {
+			if req == nil {
+				t.Fatalf("stated %s: omitted the remaining preset request", stated)
+			}
+			if (req.CPU == nil) != (stated == "nats_cpu_request") || (req.Memory == nil) != (stated == "nats_memory_request") {
+				t.Errorf("stated %s: incorrect checked resources: %+v", stated, req)
+			}
+		}
 		for _, name := range []string{"nats_cpu_request", "nats_memory_request"} {
-			if (stated == name || stated == "both") && !strings.Contains(unchecked, name) {
-				t.Errorf("unchecked reason %q omits %s", unchecked, name)
+			if strings.Contains(unchecked, name) != (stated == name || stated == "both") {
+				t.Errorf("stated %s: unchecked reason %q incorrectly reports %s", stated, unchecked, name)
 			}
 		}
 	}
