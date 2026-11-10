@@ -199,10 +199,10 @@ func TestSnapshotLockReadOnPostgres(t *testing.T) {
 	}
 
 	// 4. Reset's compare-and-swap reads the same floor.
-	if err := store.Reset(ctx, "singleton", 100); !errors.Is(err, ErrResetRaced) {
+	if err := store.Reset(ctx, "singleton", 100, wm); !errors.Is(err, ErrResetRaced) {
 		t.Fatalf("Reset against a moved row on Postgres: got %v, want ErrResetRaced", err)
 	}
-	if err := store.Reset(ctx, "singleton", 101); err != nil {
+	if err := store.Reset(ctx, "singleton", 101, wm); err != nil {
 		t.Fatalf("Reset against the row it read on Postgres: %v", err)
 	}
 	if _, ok, err := store.Load(ctx, "singleton"); err != nil || ok {
@@ -226,7 +226,8 @@ func BenchmarkSnapshotSavePostgres(b *testing.B) {
 		b.Run(sz.name, func(b *testing.B) {
 			payload := make([]byte, sz.n)
 			rng.Read(payload)
-			if err := store.Reset(ctx, "singleton", mustCommittedSeq(b, store)); err != nil {
+			floor := mustCommittedFloor(b, store)
+			if err := store.Reset(ctx, "singleton", floor.StreamSeq, floor.Watermark); err != nil {
 				b.Fatalf("clear: %v", err)
 			}
 			if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 1, Watermark: wm, Payload: payload}); err != nil {
@@ -258,7 +259,8 @@ func BenchmarkSnapshotLockReadPostgres(b *testing.B) {
 		b.Run(sz.name, func(b *testing.B) {
 			payload := make([]byte, sz.n)
 			rng.Read(payload)
-			if err := store.Reset(ctx, "singleton", mustCommittedSeq(b, store)); err != nil {
+			floor := mustCommittedFloor(b, store)
+			if err := store.Reset(ctx, "singleton", floor.StreamSeq, floor.Watermark); err != nil {
 				b.Fatalf("clear: %v", err)
 			}
 			if err := store.Save(ctx, &DetectSnapshot{PartitionId: "singleton", StreamSeq: 1, Watermark: wm, Payload: payload}); err != nil {
@@ -278,10 +280,12 @@ func BenchmarkSnapshotLockReadPostgres(b *testing.B) {
 	}
 }
 
-func mustCommittedSeq(b *testing.B, store *SnapshotStore) int64 {
-	seq, _, err := store.LoadCommittedSeq(context.Background(), "singleton")
-	if err != nil {
-		b.Fatalf("read committed seq: %v", err)
+func mustCommittedFloor(b *testing.B, store *SnapshotStore) snapshotFloor {
+	var floor snapshotFloor
+	err := store.rdb.Database.Model(&DetectSnapshot{}).Select("stream_seq", "watermark").
+		Where("partition_id = ?", "singleton").Take(&floor).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		b.Fatalf("read committed floor: %v", err)
 	}
-	return seq
+	return floor
 }
