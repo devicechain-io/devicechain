@@ -40,6 +40,7 @@ import {
   LockKeyhole,
   PlugZap,
 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { Logomark, LogoHorizontal } from '@/components/brand/Logo';
 import {
@@ -116,6 +117,7 @@ export const NAV: NavNode[] = [
     icon: LayoutDashboard,
     items: [
       { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read', scoped: true },
+      { labelKey: 'approvals', href: '/approvals', icon: ShieldCheck, requires: 'agent:admin' },
       { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read', scoped: true },
       // Events the platform refused (unknown device, bad credential...), for the members who manage devices
       // and so can act on one (device:write). A whole-tenant view with no
@@ -463,6 +465,9 @@ function NavLeafLink({ leaf, pathname }: { leaf: NavLeaf; pathname: string }) {
             </span>
           ) : (
             <span>{t(leaf.labelKey)}</span>
+          )}
+          {leaf.labelKey === 'approvals' && (
+            <Badge variant="secondary" className="text-[0.625rem]">{t('approvals:preview')}</Badge>
           )}
         </Link>
       </SidebarMenuSubButton>

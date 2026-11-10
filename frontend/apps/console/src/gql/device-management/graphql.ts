@@ -4,6 +4,42 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** (Preview: may change in a minor release.) The kind of action an agent proposal asks for. */
+export type AgentProposalKind =
+  /** Acknowledge alarms. */
+  | 'ALARM_ACK'
+  /** Clear alarms. */
+  | 'ALARM_CLEAR';
+
+/** (Preview: may change in a minor release.) Filters for listing agent proposals. */
+export type AgentProposalSearchCriteria = {
+  /** Only proposals of this kind. */
+  kind?: AgentProposalKind | null | undefined;
+  /** The page to return, starting at 1. */
+  pageNumber: number;
+  /** How many proposals a page holds. */
+  pageSize: number;
+  /** Only proposals in this state. */
+  state?: AgentProposalState | null | undefined;
+};
+
+/** (Preview: may change in a minor release.) Where an agent proposal is in its life. */
+export type AgentProposalState =
+  /** Withdrawn by the agent that proposed it. */
+  | 'CANCELLED'
+  /** Approved and carried out. */
+  | 'EXECUTED'
+  /** Nobody approved it before it expired. */
+  | 'EXPIRED'
+  /** Ended by an agent-actions switch being turned off. */
+  | 'KILLED'
+  /** Waiting for people to approve it. The only state that changes. */
+  | 'PROPOSED'
+  /** The tenant's agent policy, or a check made when a person approved it, refused it. The reasons say why. */
+  | 'REFUSED'
+  /** A person rejected it. */
+  | 'REJECTED';
+
 /**
  * An anchor to filter alarms by: the alarms of one customer, area or asset, as stamped when each
  * alarm cycle began. An alarm stays under the area its device was in when the alarm was raised,
@@ -1496,6 +1532,36 @@ export type UnregisteredIntegrationDeviceSearchCriteria = {
   pageSize: number;
 };
 
+export type AgentProposalsQueryVariables = Exact<{
+  criteria: AgentProposalSearchCriteria;
+}>;
+
+
+export type AgentProposalsQuery = { agentProposals: { results: Array<{ token: string, kind: AgentProposalKind, state: AgentProposalState, payload: string, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, rationale: string | null, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, approvals: Array<{ principal: string, approvedAt: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AgentProposalDetailQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AgentProposalDetailQuery = { agentProposal: { token: string, kind: AgentProposalKind, state: AgentProposalState, payload: string, targets: Array<string>, digest: string, impact: string, targetCount: number, proposerPrincipal: string, proposerClient: string, clientAttested: boolean, rationale: string | null, policyVersion: number, requiredApprovals: number, reasons: Array<string>, createdAt: string, expiresAt: string, decidedAt: string | null, decidedBy: string | null, note: string | null, approvals: Array<{ principal: string, approvedAt: string }> } };
+
+export type ApproveAgentProposalMutationVariables = Exact<{
+  token: string;
+  digest: string;
+}>;
+
+
+export type ApproveAgentProposalMutation = { approveAgentProposal: { token: string } };
+
+export type RejectAgentProposalMutationVariables = Exact<{
+  token: string;
+  note?: string | null | undefined;
+}>;
+
+
+export type RejectAgentProposalMutation = { rejectAgentProposal: { token: string } };
+
 export type AlarmsQueryVariables = Exact<{
   criteria: AlarmSearchCriteria;
 }>;
@@ -2787,6 +2853,87 @@ export class TypedDocumentString<TResult, TVariables>
   }
 }
 
+export const AgentProposalsDocument = new TypedDocumentString(`
+    query AgentProposals($criteria: AgentProposalSearchCriteria!) {
+  agentProposals(criteria: $criteria) {
+    results {
+      token
+      kind
+      state
+      payload
+      targets
+      digest
+      impact
+      targetCount
+      proposerPrincipal
+      proposerClient
+      clientAttested
+      rationale
+      policyVersion
+      requiredApprovals
+      approvals {
+        principal
+        approvedAt
+      }
+      reasons
+      createdAt
+      expiresAt
+      decidedAt
+      decidedBy
+      note
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AgentProposalsQuery, AgentProposalsQueryVariables>;
+export const AgentProposalDetailDocument = new TypedDocumentString(`
+    query AgentProposalDetail($token: String!) {
+  agentProposal(token: $token) {
+    token
+    kind
+    state
+    payload
+    targets
+    digest
+    impact
+    targetCount
+    proposerPrincipal
+    proposerClient
+    clientAttested
+    rationale
+    policyVersion
+    requiredApprovals
+    approvals {
+      principal
+      approvedAt
+    }
+    reasons
+    createdAt
+    expiresAt
+    decidedAt
+    decidedBy
+    note
+  }
+}
+    `) as unknown as TypedDocumentString<AgentProposalDetailQuery, AgentProposalDetailQueryVariables>;
+export const ApproveAgentProposalDocument = new TypedDocumentString(`
+    mutation ApproveAgentProposal($token: String!, $digest: String!) {
+  approveAgentProposal(token: $token, digest: $digest) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveAgentProposalMutation, ApproveAgentProposalMutationVariables>;
+export const RejectAgentProposalDocument = new TypedDocumentString(`
+    mutation RejectAgentProposal($token: String!, $note: String) {
+  rejectAgentProposal(token: $token, note: $note) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RejectAgentProposalMutation, RejectAgentProposalMutationVariables>;
 export const AlarmsDocument = new TypedDocumentString(`
     query Alarms($criteria: AlarmSearchCriteria!) {
   alarms(criteria: $criteria) {
