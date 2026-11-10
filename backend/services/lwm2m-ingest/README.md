@@ -270,5 +270,7 @@ Four scenarios: `lifecycle_and_tenancy` (Register/Update/Deregister with a **hos
 emitter, a recording ingester), never the client's self-report, so a client that lies or
 no-ops cannot manufacture a pass.
 
-🔴 **Commands are not covered by this harness.** The manual Leshan procedure in
-[COMMANDS.md](COMMANDS.md#interop) is the only downlink coverage there is.
+🔴 **Commands are not covered by this harness.** For downlink coverage, use the manual Leshan
+procedure in [COMMANDS.md](COMMANDS.md#interop) or the live
+[transport conformance rig](../../../hack/conformance/README.md), which checks read, write,
+execute and the named commands.

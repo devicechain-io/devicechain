@@ -87,7 +87,7 @@ token, la categoría, cuántos tipos de dispositivo lo usan, la descripción y l
 funcional como termostato o contador) y una descripción.
 
 Selecciona un perfil para abrirlo. Sus pestañas son **Básico**, **Métricas**, **Comandos**,
-**Configuración**, **Reglas de detección**, **Estado de reglas** y **Versiones**. Las reglas de
+**Configuración**, **Decodificador**, **Reglas de detección**, **Estado de reglas** y **Versiones**. Las reglas de
 detección y su estado tienen su propio capítulo.
 
 ### Borradores y versiones
@@ -157,6 +157,15 @@ Un dispositivo solo ve las claves declaradas. Si no hay ninguna, ve un documento
 
 Los valores se fijan en cada dispositivo, como atributos compartidos. La
 [pestaña Configuración](./devices.md#configuration) de un dispositivo muestra el resultado.
+
+### Decodificador {#decoder}
+
+**Decodificador** convierte una trama binaria, JSON genérico o el objeto decodificado de un servidor
+de red en mediciones. Edita el borrador, usa **Ejecutar prueba** para comprobar una entrada sin
+guardar lecturas y **Guardar decodificador** para guardarlo. El decodificador solo entra en vigor
+cuando publicas el perfil. **Quitar decodificador** lo elimina del borrador; las versiones publicadas
+conservan el suyo. Consulta [Decodificadores de carga útil](/guides/payload-decoders) para conocer
+el contrato de entrada y los límites.
 
 ### Publicar una versión {#publishing-a-version}
 

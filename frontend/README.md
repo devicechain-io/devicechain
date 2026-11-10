@@ -28,15 +28,15 @@ frontend/
                      contract: DashboardHub (multiplexes live subscriptions), the
                      slot / binding-manifest model, parse/serialize/migrate, and the
                      canvas-editor transforms.
-    widgets/         @devicechain/widgets — six built-in widgets (time-series chart
-                     + gauge over Apache ECharts, latest-card, table, label, image)
-                     + the view-only DashboardRenderer. Pure { widget, data }
-                     contract; themed via CSS vars (no Tailwind — run anywhere).
+    widgets/         @devicechain/widgets — 32 built-in widgets (charts, gauges,
+                     tables, alarm views, command controls, selectors and a map)
+                     + DashboardRenderer (pass actions to enable writes).
+                     Themed via CSS vars (no Tailwind — run anywhere).
 ```
 
 ## Stack
 
-- **React 19** + **TypeScript** (strict), bundled with **Vite 6**
+- **React 19** + **TypeScript** (strict), bundled with **Vite 8**
 - **Tailwind CSS v4** with a zinc **shadcn/ui** theme (console only; the widget
   packages are Tailwind-free so a host can embed them)
 - **react-router-dom 7**, **sonner** toasts, **lucide-react** icons
@@ -109,8 +109,8 @@ npm ci && npm run codegen && npm run typecheck && npm run build && npm test
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Start a dev server |
+| `npm run dev` | Start the console dev server (`npm run dev:dash` starts the viewer) |
 | `npm run codegen` | Regenerate the console's typed GraphQL operations |
 | `npm run typecheck` | `tsc --noEmit` across the workspace |
 | `npm run build` | Type-check + production build (all apps) |
-| `npm test` | Vitest across the packages |
+| `npm test` | Run tests across workspaces that declare a test script |

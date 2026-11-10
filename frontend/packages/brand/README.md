@@ -67,7 +67,7 @@ background theming.
 
 ## Why the values are stored as hex
 
-The brandmark artwork is hex (`branding/logo.svg`), so hex is the origin and
+The brandmark artwork is hex (`branding/logos/logo.svg`), so hex is the origin and
 every other form is derived. This is not cosmetic. The console previously
 declared the brand blue as the rounded triple `197 71% 42%`, which renders
 `#1f8cb7` — **not** the `#208cb7` in the artwork. One channel out of 255, invisible
@@ -94,15 +94,7 @@ to silence the script.
 
 ## Migration status
 
-No consumer has been migrated yet — this package is currently the source of
-truth plus the drift alarm. Known disagreements at time of writing:
-
-- **console** `--primary` (light and dark) — rounded triples, as described
-  above. Adopting the derived values is a no-op to the eye.
-- **marketing site** `--brand-bright` — had drifted to `#3aa9d4`
-  (`hsl(197 64% 53%)`), a third value that neither the console nor the docs
-  used. The console and docs both use `#24a3d6` (`hsl(197 71% 49%)`), and the
-  console is the documented source of truth, so it wins here. Applying it is a
-  **visible** change to the site's hover states and hero eyebrow and should be
-  reviewed on its own.
-- **docs** — already agrees on both light and dark.
+The console and dashboard viewer import `css/shadcn.css`; the docs site imports
+`css/infima.css`. These consumers use the generated values directly. The marketing
+site lives in a separate repository; use `DC_WEBSITE` with `verify` to check its
+current values.

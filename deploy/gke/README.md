@@ -413,7 +413,7 @@ The ingress controller gets a Google Cloud load balancer with a public IP. Wait 
 the address, then build an instance whose host name points at it:
 
 ```bash
-kubectl --context "$CTX" get svc -A | grep ingress-nginx-controller   # EXTERNAL-IP
+kubectl --context "$CTX" -n traefik get svc   # EXTERNAL-IP
 IP=<external-ip>
 
 dcctl bootstrap local my-instance --kube-context "$CTX" --host "$IP.nip.io"
@@ -503,8 +503,11 @@ ingress load balancer. Deleting those namespaces releases them:
 
 ```bash
 dcctl destroy local my-instance --kube-context "$CTX"
-kubectl --context "$CTX" delete namespace ingress-nginx dc-system monitoring
+kubectl --context "$CTX" delete namespace traefik dc-system monitoring
 ```
+
+If this cluster still runs the legacy ingress-nginx controller, delete its `ingress-nginx`
+namespace too, so its load balancer is released before you destroy the cluster.
 
 `kubectl delete namespace` returns once the namespaces are gone. If you installed with
 `--backup-snapshot-class`, deleting the provider's copy of each database snapshot can

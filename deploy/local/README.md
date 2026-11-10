@@ -39,17 +39,16 @@ defaults to.
 
 ## Prerequisites
 
-Tooling (the [preflight](#preflight) script checks all of these):
+Tooling (`dcctl preflight local` checks the host tools, with source-build tools optional):
 
 | Tool | Why | Install |
 |---|---|---|
 | Docker engine | kind runs nodes as containers | native in WSL2 / Linux (not Docker Desktop — see below) |
 | `kind` | the cluster | `go install sigs.k8s.io/kind@latest` |
 | `kubectl` | talk to the cluster | distro pkg / official binary |
-| `helm` | render the app chart | `helm` v3 |
 | `tofu` (or `terraform`) | infra (NATS/PG/Timescale/ingress/cert-manager) | OpenTofu |
-| `cloud-provider-kind` | gives `type: LoadBalancer` services real IPs (ingress-nginx, NATS MQTT) | `go install sigs.k8s.io/cloud-provider-kind@latest` |
-| `go` | build `dcctl` + images | 1.22+ |
+| `cloud-provider-kind` (optional) | gives `type: LoadBalancer` services real IPs | `go install sigs.k8s.io/cloud-provider-kind@latest` |
+| `go` | build `dcctl` + images (source builds only) | 1.27 toolchain (`go.work`) |
 
 ---
 
@@ -145,7 +144,7 @@ What remains here is the part dcctl does not own: the **host diagnosis**, the
    if there is none (`--cluster <name>`, default `devicechain`), then installs what
    every instance shares: the **DeviceChain operator and its two CRDs** in
    `dc-k8s-system`, and into `dc-system` the CloudNativePG operator, the relational
-   store (`dc-rdb`), the backup object store, cert-manager, monitoring and ingress.
+   store (`dc-rdb`), the backup object store, cert-manager, monitoring, and Traefik with Gateway API.
    Once per cluster; re-running converges, and changing its settings (`--ha`,
    `--compact`, ...) is refused while any instance exists. `dcctl bootstrap` refuses on
    a cluster where it has not completed. Re-running it is also how the cluster moves to
@@ -187,19 +186,19 @@ pkill -x cloud-provider-kind             # only if you started it
 `ghcr.io/devicechain-io/<area>:<VERSION>` — no source build, no local registry.
 This mirrors what an end user gets (most users won't even have the source).
 
-`VERSION` defaults to the newest release **tag** reachable from `HEAD`,
-prereleases excluded. Pin a different one explicitly:
+The default image version is pinned into the released `dcctl` binary at build time;
+it is not discovered from this checkout. Pin a different published release explicitly:
 
 ```bash
-dcctl bootstrap local dev                    # published images at the newest release tag
-dcctl bootstrap local dev --version v1.4.0   # published images at a specific release
+dcctl bootstrap local dev                    # published images pinned by this dcctl release
+dcctl bootstrap local dev --version v1.3.0   # published images at a specific release
 ```
 
 Note the leading `v`: the release pipeline tags images with the git tag verbatim,
-so `ghcr.io/devicechain-io/device-management:v1.4.0` exists and `:1.4.0` does not.
-If no release tag is reachable — a tarball export, a shallow clone, a fork with no
-releases — `dcctl bootstrap` refuses rather than guessing a version that would
-`ImagePullBackOff` several minutes later.
+so the v1.3.0 image is `ghcr.io/devicechain-io/device-management:v1.3.0`. A bare
+`--version 1.3.0` is normalized to `v1.3.0` for the published registry. A locally
+built `dcctl` has no pinned image version and refuses this path unless you pass
+`--version` or `--build`.
 
 **Developers** who are changing service code build from source instead:
 
@@ -235,16 +234,18 @@ deploy/local/bounce.sh device-management   # one service
 ```
 
 For active **UI** work the faster loop is `npm run dev` (Vite HMR) pointed at the
-instance ingress — see [`frontend/.env.example`](../../frontend/.env.example).
+instance ingress — set `VITE_GATEWAY_TARGET` in `frontend/apps/console/.env.local`
+and remove the `/api/<area>` rewrite in
+[`vite.config.ts`](../../frontend/apps/console/vite.config.ts), as its comment explains.
 Use `bounce.sh` when you need to validate the actual served artifact.
 
 ---
 
 ## Reaching the UI / API
 
-- **From WSL2:** hit the ingress-nginx LoadBalancer IP that `cloud-provider-kind`
-  assigns (printed at the end of the bootstrap), or `localhost` via the node port
-  mappings in `kind-cluster.yaml`.
+- **From WSL2:** use `localhost` via the host-port mappings in `kind-cluster.yaml`.
+  The default kind install uses Traefik with a NodePort Service; `cloud-provider-kind`
+  is not needed for this path.
 - **From the Windows browser:** with `networkingMode=mirrored`, `localhost` is
   shared — the node port mappings (80/443) are reachable directly.
 

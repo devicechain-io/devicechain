@@ -256,7 +256,7 @@ sidebar_position: 5
 
 ## 启用计算指标 {#turning-calculated-metrics-on}
 
-单个配置文件可以发布多少个计算指标，由实例运维人员按**套餐等级**设置，位置是 **Admin → Tiers** 中的 **Calculated metrics per profile**。平台默认值为 `0`，表示计算指标处于关闭状态：你可以编写并测试公式，但发布含有计算指标的配置文件会被拒绝，并提示：
+单个配置文件可以发布多少个计算指标，由实例运维人员按**套餐等级**设置，位置是 **Admin console → Tenants → Tiers** 下该套餐等级的 **Settings**（设置）选项卡中的 **Calculated metrics per profile**。平台默认值为 `0`，表示计算指标处于关闭状态：你可以编写并测试公式，但发布含有计算指标的配置文件会被拒绝，并提示：
 
 > cannot publish device profile: it has N calculated metric(s), and calculated metrics are not enabled for this tenant's tier
 
