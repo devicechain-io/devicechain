@@ -218,6 +218,7 @@ function FacetKeyForm({ onDone }: { onDone: () => void }) {
   } | null>(null);
 
   useEffect(() => {
+    setTypeCheck(null);
     if (!trimmedKey) return;
     let stale = false;
     void findFacetKey(memberType, trimmedKey).then(
