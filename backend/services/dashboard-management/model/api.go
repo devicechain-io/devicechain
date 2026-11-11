@@ -25,6 +25,24 @@ import (
 // keeps a single tenant from exhausting shared storage with an oversized document.
 const maxDefinitionBytes = 1 << 20
 
+// maxDashboardVersions bounds immutable history per dashboard. Capacity is a row
+// count, independent of the monotonic version numbers (history may be sparse).
+const maxDashboardVersions = 1000
+
+// ErrVersionLimit is returned only when publishing would exceed the history cap.
+// Existing history and the draft remain available at and above the cap.
+var ErrVersionLimit = &versionLimitError{}
+
+type versionLimitError struct{}
+
+func (*versionLimitError) Error() string {
+	return fmt.Sprintf("dashboard has reached the limit of %d published versions; publish a new dashboard to continue; existing history and draft remain available", maxDashboardVersions)
+}
+
+func (*versionLimitError) Extensions() map[string]any {
+	return map[string]any{"code": "DASHBOARD_VERSION_LIMIT"}
+}
+
 // ErrInvalidDefinition is returned when a create/update carries a Definition that
 // is not a well-formed JSON object or has an invalid device selector.
 var ErrInvalidDefinition = errors.New("dashboard definition must be a JSON object")
@@ -363,6 +381,17 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 		// own view. Checked against the locked row, so no writer can slip in after it.
 		if err := rdb.RefuseIfMoved(locked.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
 			return err
+		}
+
+		// Hold the parent lock across the capacity check and insert so concurrent
+		// publishes cannot both consume the final slot. Refusal writes nothing.
+		var count int64
+		if err := tx.Model(&DashboardVersion{}).
+			Where("dashboard_id = ?", locked.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= maxDashboardVersions {
+			return ErrVersionLimit
 		}
 
 		var maxVersion int32

@@ -254,16 +254,11 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 	}
 
 	updated := matches[0]
+	assignments := make(map[string]any)
 
-	// The type hop resolves BEFORE anything is written, so an unknown customer type
-	// refuses the WHOLE update rather than applying the fields it liked first. The
-	// nil guard is not decoration: the preload comes back nil for a dangling FK, and
-	// the comparison this replaces dereferenced it unconditionally.
-	currentTypeToken := ""
-	if updated.CustomerType != nil {
-		currentTypeToken = updated.CustomerType.Token
-	}
-	retypeTo, retype, err := resolveRequiredTypeRef(request.CustomerTypeToken, currentTypeToken, "customerTypeToken")
+	// Resolve every explicitly named type before writing anything, including a
+	// request naming the type read above. Omitted references are left alone.
+	retypeTo, retype, err := resolveRequiredTypeRef(request.CustomerTypeToken, "", "customerTypeToken")
 	if err != nil {
 		return nil, err
 	}
@@ -275,27 +270,40 @@ func (api *Api) UpdateCustomer(ctx context.Context, token string, request *Custo
 		if len(types) == 0 {
 			return nil, gorm.ErrRecordNotFound
 		}
-		updated.CustomerType = types[0]
-		// Belt-and-braces: gorm's Save syncs a belongs-to FK from the association it is
-		// given, so this is not load-bearing the way the device version is (that one is
-		// READ back by the post-commit roster resolve). It is set anyway so the in-memory
-		// value the caller is handed back agrees with the row.
-		updated.CustomerTypeId = types[0].ID
+		assignments["customer_type_id"] = types[0].ID
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
-	if err != nil {
-		return nil, err
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
 	}
-	updated.Metadata = metadataJSON
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Metadata.Set {
+		metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.Value)
+		if err != nil {
+			return nil, err
+		}
+		assignments["metadata"] = metadataJSON
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
 
-	result := api.RDB.DB(ctx).Save(updated)
+	// Only named columns are written: values read above for omitted fields may
+	// already be stale. The preloaded type must not be saved as an association.
+	result := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments)
 	if result.Error != nil {
 		return nil, result.Error
 	}
-	return updated, nil
+	reloaded, err := api.CustomersById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // Get customers by id.
