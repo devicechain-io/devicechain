@@ -242,7 +242,8 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 
 // UpdateDeviceCredential applies a PARTIAL update: a field the caller did not name keeps
 // its stored value — including the SECRET, which the full-replace shape blanked on every
-// edit that failed to restate it.
+// edit that failed to restate it. Only named columns are written; omitted fields stay
+// untouched even when another writer changes them after the read.
 func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	request *DeviceCredentialUpdateRequest) (*DeviceCredential, error) {
 	matches, err := api.DeviceCredentialsByToken(ctx, []string{token})
@@ -256,6 +257,9 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// The device the credential belonged to before this update: a re-point must evict the
 	// credential's cached copy under the device it is leaving as well as the one it joins.
 	priorDeviceId := updated.DeviceId
+	// The type every derived value below (the stored id's encoding, the secret's rules) was resolved
+	// against; the locked row must still hold it, or those values are for a credential that is gone.
+	readType := updated.CredentialType
 
 	// Everything that can refuse resolves before anything is written, so a refused update
 	// leaves the credential exactly as the device last authenticated with it.
@@ -352,6 +356,33 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		}
 	}
 
+	assignments := map[string]any{}
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.CredentialType.Set {
+		assignments["credential_type"] = credentialType
+	}
+	if request.CredentialId.Set {
+		// IssuedCredentialId is response-only (gorm:"-"), never a stored column.
+		assignments["credential_id"] = credentialId
+	}
+	if request.Enabled.Set {
+		assignments["enabled"] = enabled
+	}
+	if request.ExpiresAt.Set {
+		assignments["expires_at"] = expiresAt
+	}
+	if request.CredentialValue.Set || request.CredentialType.Set || secretDigest != updated.SecretDigest {
+		assignments["secret_digest"] = secretDigest
+		// Retire any old pod's plaintext together with the digest, as Save did,
+		// so a later adoption cannot bring back the password this write replaced.
+		assignments["credential_value"] = sql.NullString{}
+	}
+	if repoint {
+		assignments["device_id"] = device.ID
+	}
+
 	updated.Metadata = metadataJSON
 	updated.CredentialType = credentialType
 	updated.CredentialId = credentialId
@@ -361,10 +392,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	updated.ExpiresAt = expiresAt
 	if device != nil {
 		updated.Device = device
-		// Belt-and-braces, and said so rather than left to look load-bearing: gorm's Save
-		// syncs a belongs-to FK from the association it is given, so a mutant deleting this
-		// line is behaviour-equivalent and survives on purpose. It is set anyway so the
-		// in-memory value handed back to the caller agrees with the row.
+		// The named-column update and post-commit logic both use the explicit FK.
 		updated.DeviceId = device.ID
 	}
 
@@ -402,6 +430,9 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		var cur DeviceCredential
 		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", updated.ID).Take(&cur).Error; err != nil {
 			return err
+		}
+		if cur.CredentialType != readType {
+			return fmt.Errorf("credential %q changed type while this update was prepared; retry", updated.Token)
 		}
 		// The inline kick after the commit names the owner in force too, not the one the unlocked read saw.
 		lockedOwnerId = cur.DeviceId
@@ -443,8 +474,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 				movedFrom = tokens[0]
 			}
 		}
-		if err := tx.Omit("ProvisioningProfileId", "TrustAnchorId", "CertificatePem").Save(updated).Error; err != nil {
-			return err
+		if len(assignments) != 0 {
+			res := rdb.AdvancingFrom(tx, cur.UpdatedAt).Model(&cur).Omit(clause.Associations).
+				Where("id = ?", updated.ID).Updates(assignments)
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return gorm.ErrRecordNotFound
+			}
 		}
 		if certMove && movedFrom != "" {
 			// The device it left is no longer found by the marker's expansion; see
@@ -469,7 +507,21 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 			return updated, kerr
 		}
 	}
-	return updated, nil
+	if len(assignments) == 0 {
+		return updated, nil
+	}
+	matches, err = api.DeviceCredentialsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	// Preserve the one response that shows a newly issued access token.
+	if request.CredentialId.Set {
+		matches[0].IssuedCredentialId = updated.IssuedCredentialId
+	}
+	return matches[0], nil
 }
 
 // adoptLegacySecret is the stored secret an update that does not name one must keep. That is
