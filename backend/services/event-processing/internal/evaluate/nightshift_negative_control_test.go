@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/nightshift"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	"github.com/devicechain-io/dc-event-processing/internal/testdata/streamprobe"
+	"github.com/devicechain-io/dc-event-processing/internal/streamprobe"
 	"github.com/devicechain-io/dc-event-processing/processor"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/stretchr/testify/require"

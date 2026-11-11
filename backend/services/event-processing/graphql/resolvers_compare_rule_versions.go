@@ -158,18 +158,28 @@ func (r *SchemaResolver) CompareRuleVersions(ctx context.Context, args struct{ I
 			history[version] = historicalRule{err: err}
 			return nil, false, err
 		}
-		if p.Base == nil {
-			return nil, false, nil
+		// The reviewed rule is named by the base envelope, or by the draft when the change
+		// introduces the rule.
+		token := ""
+		switch {
+		case p.Base != nil:
+			token = p.Base.Token
+		case p.Draft != nil:
+			token = p.Draft.Token
 		}
 		for _, row := range rows {
-			if row.RuleToken == p.Base.Token {
+			if row.RuleToken == token {
 				env := &review.RuleEnvelope{Token: row.RuleToken, Enabled: true, Definition: json.RawMessage(row.Definition), EntityGroupToken: row.EntityGroupToken, EntityGroupVersion: int(row.EntityGroupVersion)}
 				history[version] = historicalRule{env: env, found: true}
 				return env, true, nil
 			}
 		}
-		history[version] = historicalRule{}
-		return nil, false, nil
+		// A version whose rule set is on record but does not hold the rule had no such rule
+		// (the projection keeps only enabled rules): no command actions. A version with nothing
+		// on record is unknown, which the engine treats as different.
+		known := len(rows) > 0
+		history[version] = historicalRule{found: known}
+		return nil, known, nil
 	}
 	runCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
