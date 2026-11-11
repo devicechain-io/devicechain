@@ -302,6 +302,24 @@ type InstanceSpec struct {
 	// +optional
 	RestoredAt *metav1.Time `json:"restoredAt,omitempty"`
 
+	// MQTTDeviceUplinks records whether a device may publish its own payload to its
+	// raw-payload MQTT topic for the decoder on its device type's profile
+	// (the instance configuration's infrastructure.nats.mqttDeviceUplinks).
+	// A pointer, because there are three answers and only two of them are a decision:
+	// absent means the choice was never made, so the platform's default applies;
+	// true and false are the operator's own words, and an
+	// explicit false is kept as false by every later upgrade.
+	//
+	// Fixed configuration, so it is recorded here and not in the free-form tuning
+	// overlay: `dcctl upgrade` reads it back and writes it into the instance
+	// configuration document it composes, which is the only way a setting survives a
+	// version bump now that dcctl owns that document.
+	// Turn on only after every event-sources and device-management replica runs a
+	// release that knows the topic, in an upgrade of its own.
+	//
+	// +optional
+	MQTTDeviceUplinks *bool `json:"mqttDeviceUplinks,omitempty"`
+
 	// MQTTFailClosed records the operator's choice of the fail-closed MQTT QoS 1
 	// acknowledgement (the instance configuration's infrastructure.nats.mqttFailClosed).
 	// A pointer, because there are three answers and only two of them are a decision:

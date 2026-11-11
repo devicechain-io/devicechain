@@ -2390,6 +2390,9 @@ functionalAreas:
     strategy: Recreate
     config: {}
       # resourceUrl: https://<host>/api/mcp
+      # Preview proposal tools: off by default. The user-management AS-side instance
+      # switch (agentActuation.enabled) must also be on and a tenant policy published.
+      # agentActuation: {enabled: false}
       # issuerUrl: https://<host>/api/user-management
   outbound-connectors:
     # The outbound-connectors service (ADR-060): a durable consumer of the

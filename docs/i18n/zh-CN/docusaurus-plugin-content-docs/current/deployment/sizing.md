@@ -62,7 +62,7 @@ Broker、卷以及事件存储预写日志的额度：
 
 JetStream 卷的大小按设计速率的预留量能装下来确定；升级绝不会调整实例已有的卷，因此把规格应用到现有实例时，会保留它创建时的卷。
 
-最后一行属于集群的关系型存储，而不是实例。bootstrap 不会传递它：请在运行 `dcctl install` 时声明，并同时声明一个留有余量的卷，例如 `TF_VAR_postgres_max_wal_size_mib=4096` 和 `TF_VAR_postgres_storage=16Gi`。它通过集群定义到达数据库（数据库 Operator 不允许 `ALTER SYSTEM`），不会改变运行中的 Pod；由于日志与数据共用一个卷，如果取值超过 `postgres_storage` 的四分之一，计划会被拒绝。默认值 0 沿用 PostgreSQL 自带的 1GB，在这个速率下，每一两分钟就会因日志量而触发一次检查点。 `dcctl` 不会记录 `postgres_max_wal_size_mib`：之后重新运行 `dcctl install` 而不带该变量，会把它恢复为 PostgreSQL 的 1GB。这只是重新加载级别的变化，不会使任何数据面临风险，但请在每次 install 运行时都声明该变量（例如写在 `terraform.tfvars` 中）。
+最后一行属于集群的关系型存储，而不是实例。bootstrap 不会传递它：请使用 `dcctl install --relational-store-max-wal-mib 4096` 设置，并同时声明一个留有余量的卷，例如 `TF_VAR_postgres_storage=16Gi`。选择在应用前记录，之后安装时省略标志会保留该选择。已记录的值会显式传递，并覆盖 `TF_VAR_postgres_max_wal_size_mib`；`--relational-store-max-wal-mib=0` 会记录恢复 PostgreSQL 自带的 1GB 的选择。它通过集群定义到达数据库（数据库 Operator 不允许 `ALTER SYSTEM`）。此更改只需重新加载，不会重启任何 Pod。由于日志与数据共用一个卷，如果取值超过 `postgres_storage` 的四分之一，计划会被拒绝。使用默认的 1GB 时，在这个速率下，每一两分钟就会因日志量而触发一次检查点。
 
 ### 实测与推导 {#perf-12k-derived}
 
