@@ -561,3 +561,19 @@ export async function getTenantTokenMasks(): Promise<string> {
   const data = await gql('user-management', TOKEN_MASKS);
   return data.tokenMasks;
 }
+
+const STEP_UP = graphql(`
+  mutation StepUp($refreshToken: String!, $code: String!) {
+    stepUp(refreshToken: $refreshToken, code: $code) {
+      accessToken
+      refreshToken
+      expiresAt
+    }
+  }
+`);
+
+/** Preview: refresh the second factor of the authenticated console session. */
+export async function stepUp(refreshToken: string, code: string): Promise<AuthToken> {
+  const data = await gql('user-management', STEP_UP, { refreshToken, code });
+  return data.stepUp;
+}

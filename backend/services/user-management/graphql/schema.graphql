@@ -1378,6 +1378,18 @@ type Mutation {
         tenant: String!
     ): AuthToken!
     """
+    Verify an authenticator code in the caller's own password session and rotate its tokens.
+    Requires a tenant access token and its matching console refresh token. Recovery codes
+    are refused without redemption. (Preview: may change in a minor release.)
+    """
+    stepUp(
+        """The console session's current refresh token. It is replaced by the one this returns."""
+        refreshToken: String!
+        """The current six-digit code from the authenticator app. Recovery codes are refused."""
+        code: String!
+    ): AuthToken!
+
+    """
     Completes a sign-in that login held for its second factor, and returns what login returns:
     an identity token and the tenants the identity may enter. Needs no token. challenge is the
     handle from login's MFA_CHALLENGE error; code is a code from the authenticator app (six

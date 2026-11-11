@@ -335,6 +335,8 @@ Kafka 有真正的 `tls` 开关；MQTT 连接器配置则**没有任何 TLS 字�
 将来发布此能力时，它会像 AWS 连接器一样使用存储在连接器上的凭据认证，而不会使用 Pod 身份。
 :::
 
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+
 与连接器不同，[通知渠道](../guides/notification-channels.md) 通过 SMTP 和 webhook 联系人，而不是系统。
 
 ## 尚不可用 {#not-available}

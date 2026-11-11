@@ -21,6 +21,7 @@ import {
 } from '@devicechain/widget-sdk';
 
 import { NoReading } from '../no-reading-core';
+import { tableStrings } from '../table-strings';
 
 const cell: CSSProperties = { padding: `${spaceVar(1)} ${spaceVar(3)}`, textAlign: 'left' };
 const headCell: CSSProperties = {
@@ -35,6 +36,7 @@ const headCell: CSSProperties = {
 
 export function Table({ widget, data }: WidgetProps) {
   const timeZone = useWidgetTimeZone();
+  const words = tableStrings();
   const rows = Object.values(data.latest).sort((a, b) => a.name.localeCompare(b.name));
   // Round to a fixed number of decimals when configured; unset keeps the raw value
   // (formatValue's default). A live sensor value is otherwise a wall of digits.
@@ -58,9 +60,9 @@ export function Table({ widget, data }: WidgetProps) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: fontVar('md'), color: css('foreground') }}>
           <thead>
             <tr>
-              <th style={headCell}>Measurement</th>
-              <th style={headCell}>Value</th>
-              <th style={headCell}>Time</th>
+              <th style={headCell}>{words.measurement}</th>
+              <th style={headCell}>{words.value}</th>
+              <th style={headCell}>{words.time}</th>
             </tr>
           </thead>
           <tbody>

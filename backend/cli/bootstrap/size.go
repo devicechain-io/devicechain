@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // The size axis: `--size base|compact|perf-12k|perf-16k`.
@@ -218,6 +219,83 @@ func sizeFor(st *State) *sizePreset {
 		return nil
 	}
 	return &p
+}
+
+type brokerRequest struct {
+	Preset           string
+	CPU, Memory      *resource.Quantity
+	CPUText, MemText string
+}
+
+// brokerRequestFor checks only requests still supplied by the built-in preset.
+func brokerRequestFor(st *State, stated func(name string) bool) (req *brokerRequest, unchecked string, err error) {
+	p := sizeFor(st)
+	if p == nil {
+		return nil, "", nil
+	}
+	values := map[string]string{}
+	for _, v := range p.tofuVarsFor(st, stated) {
+		values[v.Name] = v.Value
+	}
+	var missing []string
+	for _, name := range []string{"nats_cpu_request", "nats_memory_request"} {
+		if _, ok := values[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		unchecked = "the operator states " + strings.Join(missing, " / ")
+	}
+	if len(missing) == 2 {
+		return nil, unchecked, nil
+	}
+	req = &brokerRequest{Preset: p.Name, CPUText: values["nats_cpu_request"], MemText: values["nats_memory_request"]}
+	if _, ok := values["nats_cpu_request"]; ok {
+		cpu, err := resource.ParseQuantity(req.CPUText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_cpu_request: %w", p.Name, err)
+		}
+		req.CPU = &cpu
+	}
+	if _, ok := values["nats_memory_request"]; ok {
+		memory, err := resource.ParseQuantity(req.MemText)
+		if err != nil {
+			return nil, unchecked, fmt.Errorf("parsing %s nats_memory_request: %w", p.Name, err)
+		}
+		req.Memory = &memory
+	}
+	return req, unchecked, nil
+}
+
+// smallerBrokerPreset finds the largest preset strictly below both selected requests.
+func smallerBrokerPreset(selected string) *sizePreset {
+	p, ok := sizePresets[selected]
+	if !ok {
+		return nil
+	}
+	cpu, cpuErr := resource.ParseQuantity(p.NatsCPURequest)
+	memory, memErr := resource.ParseQuantity(p.NatsMemoryRequest)
+	if cpuErr != nil || memErr != nil {
+		return nil
+	}
+	var best *sizePreset
+	var bestCPU, bestMemory resource.Quantity
+	for _, name := range sizeNames {
+		candidate, ok := sizePresets[name]
+		if !ok {
+			continue
+		}
+		candidateCPU, cpuErr := resource.ParseQuantity(candidate.NatsCPURequest)
+		candidateMemory, memErr := resource.ParseQuantity(candidate.NatsMemoryRequest)
+		if cpuErr != nil || memErr != nil || candidateCPU.Cmp(cpu) >= 0 || candidateMemory.Cmp(memory) >= 0 {
+			continue
+		}
+		if best == nil || candidateCPU.Cmp(bestCPU) > 0 || (candidateCPU.Cmp(bestCPU) == 0 && candidateMemory.Cmp(bestMemory) > 0) {
+			best = &candidate
+			bestCPU, bestMemory = candidateCPU, candidateMemory
+		}
+	}
+	return best
 }
 
 // helmValues is the preset's chart values, to sit BELOW what dcctl computes. Nil for base.
