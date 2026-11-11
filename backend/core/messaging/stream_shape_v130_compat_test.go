@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,12 +46,32 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 				t.Fatalf("%s is no longer declared: %s", suffix, why)
 			}
 			got := nmgr.expectedStream(suffix)
-			if !slices.Equal(got.subjects, want.Subjects) {
-				if suffix == streams.MaxDeliveries {
-					t.Errorf("%s subjects = %v, want %v: v1.3.0 services require the exact advisory list; tolerance for extra advisory subjects only starts with this release", suffix, got.subjects, want.Subjects)
-				} else {
-					t.Errorf("%s subjects = %v, want %v: %s", suffix, got.subjects, want.Subjects, why)
+			if suffix == streams.MaxDeliveries {
+				// The shared advisory stream gains one subject per capturing stream a release adds. A v1.4
+				// pod tolerates extra advisory subjects (#2443), so a later release may declare new streams;
+				// what must never move is every subject v1.3.0 already listed, and every EXTRA subject must
+				// belong to a stream this snapshot does not know (a v1.3.0 stream's advisory cannot change).
+				for _, w := range want.Subjects {
+					if !slices.Contains(got.subjects, w) {
+						t.Errorf("%s lost advisory subject %q that v1.3.0 declared", suffix, w)
+					}
 				}
+				for _, g := range got.subjects {
+					if slices.Contains(want.Subjects, g) {
+						continue
+					}
+					known := false
+					for other := range snapshot {
+						if other != suffix && strings.Contains(g, StreamName("inst", other)) {
+							known = true
+						}
+					}
+					if known {
+						t.Errorf("%s gained advisory subject %q for a stream v1.3.0 already declared", suffix, g)
+					}
+				}
+			} else if !slices.Equal(got.subjects, want.Subjects) {
+				t.Errorf("%s subjects = %v, want %v: %s", suffix, got.subjects, want.Subjects, why)
 			}
 			if got.retention.String() != want.Retention {
 				t.Errorf("%s retention = %s, want %s: %s", suffix, got.retention.String(), want.Retention, why)
