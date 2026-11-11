@@ -5,10 +5,10 @@ package model
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // ASSET PROPERTIES (ADR-072): the type contract, and the two gates over it.
@@ -130,12 +130,12 @@ func jsonNullToNil(doc *datatypes.JSON) *datatypes.JSON {
 //	otherwise                           — the shared strict document check.
 //
 // 🔴 A consequence worth stating plainly, because it will be met before it is read:
-// publishing a contract with a REQUIRED property makes every existing asset of that
-// type non-conformant, and the next write to any of them — including one that only
-// renames it — is refused until the property is supplied. That is what "required"
-// means; the escape hatch is to roll the type back to a version that did not demand
-// it, which is instant and non-destructive.
-func (api *Api) validateAssetProperties(ctx context.Context, assetType *AssetType, document *datatypes.JSON) error {
+// publishing a contract with a REQUIRED property can leave existing assets
+// nonconforming. Property writes and explicit retypes validate against the active
+// contract; unrelated edits remain allowed, including after a rollback.
+// db is the caller's transaction when validating an update, so the contract read
+// and the effective pair are checked on the same database handle as the write.
+func (api *Api) validateAssetProperties(db *gorm.DB, assetType *AssetType, document *datatypes.JSON) error {
 	raw := []byte(nil)
 	if document != nil {
 		raw = []byte(*document)
@@ -166,9 +166,10 @@ func (api *Api) validateAssetProperties(ctx context.Context, assetType *AssetTyp
 				"(publish the asset type first)", assetType.Token)
 	}
 
-	version, err := api.assetTypeVersionByNumber(ctx, assetType.ID, assetType.ActiveVersion.Int32)
-	if err != nil {
-		return err
+	var version AssetTypeVersion
+	if err := db.Where("asset_type_id = ? AND version = ?", assetType.ID, assetType.ActiveVersion.Int32).
+		First(&version).Error; err != nil {
+		return fmt.Errorf("asset type %q version %d: %w", assetType.Token, assetType.ActiveVersion.Int32, err)
 	}
 	specs, err := decodeSpecsStrict(version.PropertySchema)
 	if err != nil {
