@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // resolveProfileId maps an optional profile token to a profile id for the
@@ -135,10 +136,8 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 // sent. The entity is looked up by the `token` ARGUMENT — the request payload no
 // longer carries one, so an update cannot move a type's token.
 //
-// Each assignment folds the field's three states onto the stored value: absent
-// keeps it, null clears it, a value sets it. Reading `found.X` as the "current"
-// argument is what makes an omitted field a no-op, so these must stay assignments
-// FROM the loaded record rather than from the request alone.
+// Only named columns are written, so omitted fields retain concurrent edits.
+// Explicit null clears a nullable field; an empty request performs no write.
 func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	request *DeviceTypeUpdateRequest) (*DeviceType, error) {
 	matches, err := api.DeviceTypesByToken(ctx, []string{token})
@@ -181,35 +180,70 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 		}
 	}
 
-	found.Name = request.Name.ApplyToNullString(found.Name)
-	found.Description = request.Description.ApplyToNullString(found.Description)
-	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
-	found.Icon = request.Icon.ApplyToNullString(found.Icon)
-	found.BackgroundColor = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
-	found.ForegroundColor = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
-	found.BorderColor = request.BorderColor.ApplyToNullString(found.BorderColor)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	found.Metadata = metadataJSON
-	found.SemanticTypes, err = api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
+	semanticTypes, err := api.semanticTypesOnUpdate(ctx, request.SemanticTypes, found.SemanticTypes)
 	if err != nil {
 		return nil, err
 	}
-	found.ProfileId = profileId
-	found.MaintenanceWindowId = windowId
-	// gorm's Save syncs a belongs-to FK from the loaded association, and this read does not
-	// preload it, so the association must not be left stale beside the new id.
-	found.MaintenanceWindow = nil
-	found.Manufacturer = request.Manufacturer.ApplyToNullString(found.Manufacturer)
-	found.ModelName = request.Model.ApplyToNullString(found.ModelName)
-	found.CommandChannel = commandChannel
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(found.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(found.Description)
+	}
+	if request.ImageUrl.Set {
+		assignments["image_url"] = request.ImageUrl.ApplyToNullString(found.ImageUrl)
+	}
+	if request.Icon.Set {
+		assignments["icon"] = request.Icon.ApplyToNullString(found.Icon)
+	}
+	if request.BackgroundColor.Set {
+		assignments["background_color"] = request.BackgroundColor.ApplyToNullString(found.BackgroundColor)
+	}
+	if request.ForegroundColor.Set {
+		assignments["foreground_color"] = request.ForegroundColor.ApplyToNullString(found.ForegroundColor)
+	}
+	if request.BorderColor.Set {
+		assignments["border_color"] = request.BorderColor.ApplyToNullString(found.BorderColor)
+	}
+	if request.Manufacturer.Set {
+		assignments["manufacturer"] = request.Manufacturer.ApplyToNullString(found.Manufacturer)
+	}
+	if request.Model.Set {
+		assignments["model"] = request.Model.ApplyToNullString(found.ModelName)
+	}
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.SemanticTypes.Set {
+		assignments["semantic_types"] = semanticTypes
+	}
+	if request.ProfileToken.Set {
+		assignments["profile_id"] = profileId
+	}
+	if request.MaintenanceWindowToken.Set {
+		assignments["maintenance_window_id"] = windowId
+	}
+	if request.CommandChannel.Set {
+		assignments["command_channel"] = commandChannel
+	}
+	if len(assignments) == 0 {
+		return found, nil
+	}
 
 	repointed := !uintPtrEqual(oldProfileId, profileId)
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Save(found).Error; err != nil {
-			return err
+		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
+			Where("id = ?", found.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
 		}
 		if !repointed {
 			return nil
@@ -236,7 +270,14 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	if repointed {
 		api.emitDeviceRosterForType(ctx, found.ID)
 	}
-	return found, nil
+	matches, err = api.DeviceTypesByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // uintPtrEqual reports whether two optional foreign keys name the same profile (both

@@ -13,6 +13,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Create a new command definition (ADR-043).
@@ -124,6 +125,7 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 // fields (deviceProfileToken, commandKey) refuse a null. The key-uniqueness check is
 // asked of the EFFECTIVE (profile, key) pair rather than of the request, since under
 // three states either half may be absent.
+// Only named columns are written; an empty request performs no write.
 func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	request *CommandDefinitionUpdateRequest) (*CommandDefinition, error) {
 	matches, err := api.CommandDefinitionsByToken(ctx, []string{token})
@@ -208,23 +210,59 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 		return nil, err
 	}
 
-	updated.CommandKey = commandKey
-	updated.Impact = impact
-	updated.Metadata = metadataJSON
-	updated.Encoder = encoderJSON
-	updated.ParameterSchema = parameterSchemaJSON
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	if reparent != nil {
-		updated.DeviceProfile = reparent
-		updated.DeviceProfileId = reparent.ID
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
 	}
-
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
 	}
-	return updated, nil
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.CommandKey.Set {
+		assignments["command_key"] = commandKey
+	}
+	if request.Impact.Set {
+		assignments["impact"] = impact
+	}
+	if request.Encoder.Set {
+		assignments["encoder"] = encoderJSON
+	}
+	if request.ParameterSchema.Set {
+		assignments["parameter_schema"] = parameterSchemaJSON
+	}
+	if request.DeviceProfileToken.Set {
+		profileID := updated.DeviceProfileId
+		if reparent != nil {
+			profileID = reparent.ID
+		}
+		assignments["device_profile_id"] = profileID
+	}
+	if len(assignments) == 0 {
+		return updated, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, updated.UpdatedAt).Model(updated).Omit(clause.Associations).
+			Where("id = ?", updated.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.CommandDefinitionsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // Get command definitions by id.
