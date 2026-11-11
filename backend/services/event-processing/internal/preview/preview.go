@@ -3,12 +3,12 @@
 
 // Package preview is the replay-driven rule preview (ADR-053 slice 9d): run a DRAFT detection
 // rule against REPLAYED history in a THROWAWAY in-memory DETECT core and collect the RAISE /
-// RESOLVE edges it WOULD have produced â€” the "what would this rule have done?" headline â€” without
+// RESOLVE edges it WOULD have produced — the "what would this rule have done?" headline — without
 // publishing anything or perturbing the live singleton.
 //
-// THE ISOLATION CONTRACT (the correctness landmine, spec Â§7.2). A preview shares NOTHING mutable
+// THE ISOLATION CONTRACT (the correctness landmine, spec §7.2). A preview shares NOTHING mutable
 // with production:
-//   - a FRESH detect.Engine (core.NewEngine binds no persistence â€” there is no snapshot store to
+//   - a FRESH detect.Engine (core.NewEngine binds no persistence — there is no snapshot store to
 //     write, and this harness never calls Snapshot/Restore), so a preview cannot write a checkpoint;
 //   - a FRESH RuleRegistry holding only the draft rule, so it cannot touch the live rule set;
 //   - a replay read BY SEQUENCE (NewReplayReaderFromTime: batched direct gets, no consumer created
@@ -17,7 +17,7 @@
 //   - it COLLECTS detections off engine.Drain() rather than routing them through the Publisher, so
 //     nothing is ever written to a tenant subject.
 //
-// The harness therefore takes no Store, no live engine, and no MessageWriter â€” the isolation is
+// The harness therefore takes no Store, no live engine, and no MessageWriter — the isolation is
 // structural, not a runtime check.
 //
 // DRAFT CALCULATED METRICS (ADR-082, preview parity). A replayed event carries the calculated
@@ -27,10 +27,10 @@
 // values re-derived under the draft's formulas by dmmodel.ProfileResolution.Recalculate, which
 // runs the resolver's own Calculation: every stored calculated value is replaced, a formula the
 // draft deleted produces nothing, and one it added or edited produces what it computes from the
-// event's stored raw values â€” which are the device's own strings, so the value is the one the
+// event's stored raw values — which are the device's own strings, so the value is the one the
 // resolver would store under the draft, not an approximation of it. The re-derived event is a
 // COPY built for the engine and dropped with it: the replayed message, its decoded event and the
-// stream are never written, and the draft reaches no live engine, store or subject â€” it lives in
+// stream are never written, and the draft reaches no live engine, store or subject — it lives in
 // this call's arguments and nowhere else (TestDraftCalculationLeaksNowhere).
 //
 // PER-DEVICE CONSTANTS (a formula's `device.name`) are the one input a replayed event does not
@@ -80,7 +80,7 @@ const DefaultMaxWindow = 24 * time.Hour
 const DefaultMaxScan = replayinput.DefaultMaxScan
 
 // DefaultMaxRead bounds how many DELIVERED messages a preview reads regardless of whether they are in
-// scope â€” the ceiling that actually bounds the work (ADR-023). The replay reader delivers EVERY
+// scope — the ceiling that actually bounds the work (ADR-023). The replay reader delivers EVERY
 // tenant's events over the window's publish-time span up to the stream head, so without this a
 // narrow-profile preview over a busy multi-tenant instance would decode the whole stream tail while
 // EventsScanned (in-scope only) stayed near zero and never tripped DefaultMaxScan. Hitting it degrades.
@@ -93,8 +93,8 @@ type TimeRange struct {
 }
 
 // Firing is one edge the draft rule would have emitted: a RAISE or a RESOLVE for a series at a time.
-// It carries the triggering scalar (Value/HasValue) so the slice-9e node trace can reconstruct â€” off
-// the engine â€” how each REACT branch/action would have gated on this firing (the same value/series a
+// It carries the triggering scalar (Value/HasValue) so the slice-9e node trace can reconstruct — off
+// the engine — how each REACT branch/action would have gated on this firing (the same value/series a
 // guard sees); it carries no triggering-event id (a firing is a state edge, not always one event).
 type Firing struct {
 	OccurredAt time.Time
@@ -183,10 +183,10 @@ func WithDeviceConstants(byDevice map[string][]calcfield.Constant) Option {
 // reg is a registry holding ONLY the draft rule(s), filed under (tenant, profileVersion). suffix is the
 // resolved-events stream suffix. lateness is the engine's allowed lateness (0 for a deterministic
 // preview). maxScan bounds the in-scope events processed and maxRead the TOTAL messages delivered
-// (0 â‡’ the defaults); either cap degrades (truncates) rather than running unbounded.
+// (0 ⇒ the defaults); either cap degrades (truncates) rather than running unbounded.
 //
 // fences is the seam onto the FROZEN geofence snapshots (ADR-078) and may be nil when no source
-// is wired. It is what makes a geofence preview CORRECT rather than vacuous â€” see the fenceSets
+// is wired. It is what makes a geofence preview CORRECT rather than vacuous — see the fenceSets
 // resolution below, and note that it is deliberately NOT modelled on the nil-attr degradation.
 //
 // draft, when non-nil, is a draft profile's resolution whose calculated metrics replace the
@@ -220,7 +220,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	var res Result
 	// Aged-out: the window starts before the earliest retained event, so history is evicted below it.
 	// JetStream clamps the start to the first retained message; report the truncation rather than a
-	// misleadingly-empty preview (spec Â§7.3 â€” degrade, don't error/hang).
+	// misleadingly-empty preview (spec §7.3 — degrade, don't error/hang).
 	if !firstTime.IsZero() && tr.Start.Before(firstTime) {
 		addDegraded(&res.Degraded, "history before the earliest retained event is unavailable; previewing from the earliest retained event")
 	}
@@ -237,13 +237,13 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		// A structured dynamic threshold therefore does not fire (its positive presence guard reads
 		// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
 		// attribute previews that fallback on EVERY device, including devices that do have the
-		// attribute live â€” documented.
+		// attribute live — documented.
 		//
-		// ðŸ”´ FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
+		// 🔴 FENCES DO NOT DEGRADE THE SAME WAY, AND THE ASYMMETRY IS THE POINT. attr degrades
 		// because a device attribute is CURRENT state with no historical record: there is no way to
 		// know what a threshold was last Tuesday, so the honest preview is "as if unset". A fence
-		// set is different in kind â€” the event NAMES the version it was resolved against, and that
-		// version's fences are frozen and still on record â€” so the exact set that was live is
+		// set is different in kind — the event NAMES the version it was resolved against, and that
+		// version's fences are frozen and still on record — so the exact set that was live is
 		// recoverable and the preview can be CORRECT. Copying attr's degradation here would render
 		// every geofence rule as never-firing, which for a preview whose entire job is "what would
 		// this rule have done" is worse than useless: it is a confident wrong answer about the
@@ -291,7 +291,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	// duration reading further behind the frontier than its hold, or a threshold reading older than
 	// an alarm's newest, or a redelivered threshold match behind the frontier) reached the engine and were not
 	// used. Unreported, the preview would answer "the rule would not have fired" about readings it
-	// never looked at â€” the confident wrong answer this package exists to avoid. The live engine
+	// never looked at — the confident wrong answer this package exists to avoid. The live engine
 	// declines the same readings, but counts them on a metric; here the count is the only trace.
 	if n := engine.DrainLateSamples(); n > 0 {
 		noun := "readings"
@@ -324,7 +324,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 
 // recalculated returns event with its calculated values re-derived under draft, as a new event
 // value sharing nothing writable with the one decoded off the stream: the payload and every
-// sample's entry slice are new. A non-measurement event is returned as it is â€” no formula
+// sample's entry slice are new. A non-measurement event is returned as it is — no formula
 // reads a location or an alert.
 func recalculated(event *resolvedevent.ResolvedEvent, draft dmmodel.ProfileResolution, constants []calcfield.Constant,
 	stats *Stats) *resolvedevent.ResolvedEvent {

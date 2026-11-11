@@ -35,7 +35,7 @@
 // of order inside that budget is folded in, and one beyond it is declined and counted. A run with a
 // different lateness than live would pass a test that live fails, or the reverse.
 //
-// ðŸ”´ WHAT IT DOES NOT MODEL, said here so a green test is not read as more than it is. It resolves
+// 🔴 WHAT IT DOES NOT MODEL, said here so a green test is not read as more than it is. It resolves
 // no device attributes (a dynamic threshold reads none, as in the preview), it has no device
 // registry, so a command is not checked against the device's command vocabulary (command-delivery
 // does that at enqueue), a connector reference is not checked to exist, and a rule scoped to an
