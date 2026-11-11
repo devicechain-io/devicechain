@@ -261,15 +261,14 @@ func notExactlyOneQuery(docs []document) []string {
 		switch {
 		case err != nil:
 			bad = append(bad, fmt.Sprintf("%s (%s): unreadable: %v", name, d.area, err))
-		case len(ops) != 1 || ops[0] != "query":
+		case len(ops) != 1 || ops[0] != "query" && !(d.area == "device-management" && d.text == allowedProposalMutation && ops[0] == "mutation"):
 			bad = append(bad, fmt.Sprintf("%s (%s): operations %v, want exactly [query]", name, d.area, ops))
 		}
 	}
 	return bad
 }
 
-// TestReadToolsIssueOnlyQueries: every document this package sends (newDocument records them
-// all, and documents_test.go proves nothing else builds one) is exactly one query operation.
+// Every document is exactly one query, except the explicitly pinned alarm proposal mutation.
 func TestReadToolsIssueOnlyQueries(t *testing.T) {
 	if len(documents) < 10 {
 		t.Fatalf("only %d documents are registered; a ratchet over an empty registry passes anything", len(documents))
@@ -332,5 +331,40 @@ func TestTheDocumentKindRatchetCatchesWhatItIsFor(t *testing.T) {
 		if (len(bad) > 0) != c.wantBad {
 			t.Errorf("%s: reported=%v (%v), want reported=%v", c.name, len(bad) > 0, bad, c.wantBad)
 		}
+	}
+}
+
+const allowedProposalMutation = `mutation ProposeAlarmAction($input: AgentAlarmProposalInput!) {
+ proposeAlarmAction(input: $input) { status verdict requiredApprovals reasons digest expiresAt targetCount preview { alarmToken state acknowledged hidesLiveCondition } proposal { token kind state targets digest impact targetCount proposerPrincipal proposerClient clientAttested rationale policyVersion requiredApprovals approvals { principal approvedAt } reasons createdAt expiresAt decidedAt decidedBy note } }
+}`
+
+func TestProposalMutationExceptionIsExact(t *testing.T) {
+	if bad := notExactlyOneQuery([]document{proposeAlarmActionMutation}); len(bad) != 0 {
+		t.Fatal(bad)
+	}
+	for _, d := range []document{
+		{area: "other-area", text: proposeAlarmActionMutation.text},
+		{area: "device-management", text: proposeAlarmActionMutation.text + " mutation Execute { execute }"},
+		{area: "device-management", text: "mutation ProposeAlarmAction { approveAgentProposal(token: \"p\", digest: \"d\") { token } }"},
+	} {
+		if len(notExactlyOneQuery([]document{d})) == 0 {
+			t.Fatal("mutation exception admitted an unrelated document")
+		}
+	}
+	count := 0
+	for _, d := range documents {
+		ops, err := documentOperations(d.text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ops) == 1 && ops[0] == "mutation" {
+			count++
+			if d != proposeAlarmActionMutation {
+				t.Fatal("unexpected mutation")
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("mutations=%d want 1", count)
 	}
 }
