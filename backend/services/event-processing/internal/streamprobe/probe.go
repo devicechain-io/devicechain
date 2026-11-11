@@ -37,7 +37,7 @@ func New(t testing.TB) *Probe {
 	t.Cleanup(func() { srv.Shutdown(); srv.WaitForShutdown() })
 	u, err := url.Parse(srv.ClientURL())
 	require.NoError(t, err)
-	port, err := strconv.Atoi(u.Port())
+	port, err := strconv.ParseUint(u.Port(), 10, 16)
 	require.NoError(t, err)
 	ms := &core.Microservice{InstanceId: "reviewprobe", FunctionalArea: "event-processing"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
