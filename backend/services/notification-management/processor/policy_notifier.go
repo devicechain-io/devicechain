@@ -756,9 +756,9 @@ func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 // claim (another pod won, or the alarm resolved between the read and the claim) is a
 // silent no-op. Because the tier is advanced by the claim, escalation stays bounded even
 // if the subsequent send fails — the accepted tradeoff is a rare missed page if the pod
-// dies between claim and send. An error is returned only for a DB error on the claim or
-// when the claim was won but every delivery failed, so the scheduler logs and retries the
-// alarm on a later tick.
+// dies between claim and send. Claim or delivery failures return an error; a mix of
+// delivered and failed channels returns ErrPassPartial so the scheduler can account for
+// the incomplete service without repeating the claimed tier.
 //
 // Escalation uses ONE shared clock and tier per alarm (state.LastNotifiedAt /
 // EscalationLevel), not per policy: when several escalation-enabled policies match one
@@ -825,6 +825,10 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 		if err := n.api.AddPagedTargets(ctx, state.AlarmToken, state.CycleRaisedAt, pagedTargets(tally.targets)); err != nil {
 			log.Warn().Err(err).Str("alarm", state.AlarmToken).
 				Msg("Could not record the targets an escalation reached")
+		}
+		if tally.retryable() > 0 {
+			return fmt.Errorf("%d of %d escalation deliveries failed for alarm %q: %w",
+				tally.retryable(), len(deliveries), state.AlarmToken, core.ErrPassPartial)
 		}
 	}
 	if tally.delivered == 0 {

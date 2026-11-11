@@ -1108,3 +1108,159 @@ func TestIntegrationDirectAreaGrantToAReaderIsRevokedOnBoot(t *testing.T) {
 	require.Len(t, tenantsVisible(t, reader, "measurement_events"), 1,
 		"the boot revoked the reader's own surface access along with the stray grant")
 }
+
+// Membership, rather than the naming convention alone, brings a role inside the
+// grant boundary. Exercise each group independently and both together, with an
+// unrelated role carrying the same stray grants as a control for the query's scope.
+func TestIntegrationAnalyticsNonPrefixedGroupMembersAreReconciled(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	cases := []struct {
+		role   string
+		groups []string
+	}{
+		{"bi_general_member_it", []string{AnalyticsReaderRole}},
+		{"bi_position_member_it", []string{AnalyticsLocationReaderRole}},
+		{"bi_both_member_it", []string{AnalyticsReaderRole, AnalyticsLocationReaderRole}},
+		{"bi_unrelated_it", nil},
+	}
+	readers := make(map[string]*pgx.Conn, len(cases))
+	for _, tc := range cases {
+		role := tc.role
+		drop := func() {
+			_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", role)).Error
+			_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", role)).Error
+		}
+		drop()
+		t.Cleanup(drop)
+		require.NoError(t, sys.Exec(fmt.Sprintf(
+			"CREATE ROLE %q LOGIN INHERIT PASSWORD '%s'", role, analyticsITPassword)).Error)
+		for _, group := range tc.groups {
+			require.NoError(t, sys.Exec(fmt.Sprintf("GRANT %q TO %q", group, role)).Error)
+		}
+		readers[role] = connectAs(t, role)
+
+		// Prove the planted area access exposes both tenants before reconciling.
+		require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO %q`,
+			AnalyticsAreaSchema, role)).Error)
+		require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON ALL TABLES IN SCHEMA %q TO %q`,
+			AnalyticsAreaSchema, role)).Error)
+		var n int
+		require.NoError(t, readers[role].QueryRow(ctx, fmt.Sprintf(
+			`SELECT count(DISTINCT tenant_id) FROM %q.measurement_events`, AnalyticsAreaSchema)).Scan(&n))
+		require.Equal(t, 2, n, "the stray grant must expose both tenants for %s", role)
+	}
+
+	// Ask the real catalog query as well: overlapping memberships must yield one
+	// target, and an unrelated role must not enter the convergence plan.
+	var roles []string
+	require.NoError(t, sys.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&roles).Error)
+	for _, tc := range cases {
+		count := 0
+		for _, role := range roles {
+			if role == tc.role {
+				count++
+			}
+		}
+		want := 1
+		if len(tc.groups) == 0 {
+			want = 0
+		}
+		require.Equal(t, want, count, "catalog selection for %s", tc.role)
+	}
+
+	for pass := 1; pass <= 2; pass++ {
+		require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr), "reconciliation %d", pass)
+		for _, tc := range cases {
+			unrelated := len(tc.groups) == 0
+			var usage, selectArea bool
+			require.NoError(t, sys.Raw(`SELECT has_schema_privilege(?, ?, 'USAGE')`,
+				tc.role, AnalyticsAreaSchema).Scan(&usage).Error)
+			require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`,
+				tc.role, fmt.Sprintf(`%q.measurement_events`, AnalyticsAreaSchema)).Scan(&selectArea).Error)
+			require.Equal(t, unrelated, usage, "area USAGE for %s after pass %d", tc.role, pass)
+			require.Equal(t, unrelated, selectArea, "area SELECT for %s after pass %d", tc.role, pass)
+			var n int
+			err := readers[tc.role].QueryRow(ctx, fmt.Sprintf(
+				`SELECT count(DISTINCT tenant_id) FROM %q.measurement_events`, AnalyticsAreaSchema)).Scan(&n)
+			if unrelated {
+				require.NoError(t, err)
+				require.Equal(t, 2, n, "unrelated role's access was changed")
+				continue
+			}
+			require.Error(t, err, "member %s retained raw area access", tc.role)
+			require.Contains(t, strings.ToLower(err.Error()), "permission denied")
+
+			// Only the declared groups supply analytics privileges. Arbitrary names
+			// carry no tenant identity, so permitted queries still return zero rows.
+			for _, view := range analyticsViews {
+				want := false
+				for _, group := range tc.groups {
+					want = want || group == view.group
+				}
+				var granted bool
+				require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`,
+					tc.role, fmt.Sprintf("%s.%s", AnalyticsSchema, view.name)).Scan(&granted).Error)
+				require.Equal(t, want, granted, "%s access to %s after pass %d", tc.role, view.name, pass)
+				if want {
+					require.Empty(t, tenantsVisible(t, readers[tc.role], view.name),
+						"a member without a tenant identity must see no tenants")
+				}
+			}
+		}
+		// The established prefix-named readers still retain their tenant-scoped data.
+		require.Contains(t, tenantsVisible(t, connectAs(t, AnalyticsRolePrefix+tenantB), "measurement_events"), tenantB)
+		require.Contains(t, tenantsVisible(t, connectAs(t, AnalyticsRolePrefix+tenantA), "location_events"), tenantA)
+	}
+}
+
+// 🔴 The platform's own role must never be selected by membership: the reconciler runs as
+// the area schema's owner, and Postgres lets an owner revoke its privileges from itself.
+// Both exclusions are measured here — the session user (via SET ROLE) and the area
+// schema's owner — each with a control member that IS selected under the same conditions.
+func TestIntegrationAnalyticsMembershipNeverSelectsThePlatformRole(t *testing.T) {
+	_, sys := analyticsHarness(t)
+	const app, owner, control = "bi_app_like_it", "bi_owner_like_it", "bi_member_control_it"
+	for _, role := range []string{app, owner, control} {
+		role := role
+		drop := func() {
+			_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", role)).Error
+			_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", role)).Error
+		}
+		drop()
+		t.Cleanup(drop)
+		require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q NOLOGIN", role)).Error)
+		require.NoError(t, sys.Exec(fmt.Sprintf("GRANT %q TO %q", AnalyticsReaderRole, role)).Error)
+	}
+	selected := func(db *gorm.DB) map[string]bool {
+		var roles []string
+		require.NoError(t, db.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&roles).Error)
+		out := map[string]bool{}
+		for _, r := range roles {
+			out[r] = true
+		}
+		return out
+	}
+
+	// The session user: the same query run AS the member must not name it.
+	require.NoError(t, sys.Transaction(func(tx *gorm.DB) error {
+		require.NoError(t, tx.Exec(fmt.Sprintf("SET LOCAL ROLE %q", app)).Error)
+		got := selected(tx)
+		require.False(t, got[app], "the session user was selected by membership")
+		require.True(t, got[control], "control: a member must still be selected")
+		return nil
+	}))
+
+	// The area schema's owner, while the query runs as someone else.
+	var prior string
+	require.NoError(t, sys.Raw(`SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = ?`,
+		AnalyticsAreaSchema).Scan(&prior).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, owner)).Error)
+	t.Cleanup(func() {
+		_ = sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, prior)).Error
+	})
+	got := selected(sys)
+	require.False(t, got[owner], "the area schema's owner was selected by membership")
+	require.True(t, got[control], "control: a member must still be selected")
+	require.True(t, got[app], "control: the app-like member is selected when it is not the session user")
+}

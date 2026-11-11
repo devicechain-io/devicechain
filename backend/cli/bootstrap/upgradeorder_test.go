@@ -94,7 +94,7 @@ func TestTheInstallOrderIsReadFromTheClustersInstallRecord(t *testing.T) {
 
 	// A re-install that started and did not finish keeps the last completed install's version.
 	typed := put(t, "v1.2.0")
-	if err := markInstallApplying(ctx, typed, "uid", "v1.3.0", now); err != nil {
+	if err := markInstallApplying(ctx, typed, "uid", "v1.3.0", now, nil); err != nil {
 		t.Fatal(err)
 	}
 	w, err := readInstallWitness(ctx, typed)

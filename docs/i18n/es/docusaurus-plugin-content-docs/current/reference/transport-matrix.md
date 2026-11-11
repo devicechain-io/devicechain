@@ -121,7 +121,7 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
   mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
-  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulta
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
   [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, y con él activado el techo es más bajo. Un almacén lleno rechaza publicaciones, y la presión sobre el almacén frena las nuevas conexiones de dispositivos al alcanzar el 80 % de ocupación hasta que baja del 60 %. Esto no elimina el límite independiente de memoria del bróker ni el riesgo de quedarse sin memoria; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
@@ -451,6 +451,8 @@ acabando en la cola de mensajes muertos como no soportado si un `publish` lo apu
 pero no ejecutable, nunca descartado en silencio. Cuando se publique, se autenticará con una credencial
 guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
 :::
+
+`updateConnector` rechaza un `expectedUpdatedAt` obsoleto con `errors[*].extensions.code` igual a `STALE_WRITE`. No se escribe nada; el mensaje sigue siendo "connector was modified by another writer; reload and try again". Este código solo se aplica a las actualizaciones de conectores. `CONFLICT` sigue indicando una colisión de unicidad; los errores de otras operaciones no cambian. Clasifica por código, no por el texto del mensaje. La consola conserva los cambios sin guardar y muestra una indicación localizada para copiarlos antes de volver a cargar, aplicarlos de nuevo y reintentar guardar.
 
 Aparte de los conectores, los [canales de notificación](../guides/notification-channels.md) llegan a
 personas y no a sistemas, por SMTP y webhook.

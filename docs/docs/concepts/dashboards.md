@@ -111,6 +111,8 @@ A widget does not embed a query. It embeds a typed **selector** that the runtime
 
 Two further kinds, `devices` and `relatedTraversal`, are reserved so a stored definition stays forward-compatible. The runtime rejects them until they are implemented.
 
+Saving a draft is refused with an invalid-definition error when a widget's datasource says `kind: device` but `deviceToken` is not a string or `measurements` is not an array of strings. Empty values from an unfinished draft (an empty token and an empty measurements array) are accepted; other kinds are not checked, and the token is not checked for existence.
+
 Selectors are resolved through the client SDK against the GraphQL API. That makes resolution:
 
 - **current** — a device newly assigned to an area appears on that area's dashboard without editing it, the next time the dashboard is opened (a board already open keeps the members it resolved until it is reloaded);

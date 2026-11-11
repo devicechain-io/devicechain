@@ -12,33 +12,37 @@ import (
 
 // Install command flags.
 var (
-	installKubeContext       string
-	installCluster           string
-	installDryRun            bool
-	installAssumeYes         bool
-	installSkipPreflight     bool
-	installDev               bool
-	installHA                bool
-	installCompact           bool
-	installSize              string
-	installNoTLS             bool
-	installNoMonitoring      bool
-	installAlerts            alertFlags
-	installNoCNPG            bool
-	installAllowLegacyDb     bool
-	installBackupCredentials string
-	installBackupSnapClass   string
-	installDBNodeSelector    []string
-	installDBTolerations     []string
-	installMaxConnections    int
-	installRestoreRdbFrom    string
-	installRestoreRdbAt      string
-	installRegistry          string
-	installVersion           string
-	installBuild             bool
-	installRemoveLegacy      bool
-	installAWSNLB            string
-	installMQTTGateway       bool
+	installKubeContext         string
+	installCluster             string
+	installDryRun              bool
+	installAssumeYes           bool
+	installSkipPreflight       bool
+	installDev                 bool
+	installHA                  bool
+	installCompact             bool
+	installSize                string
+	installNoTLS               bool
+	installNoMonitoring        bool
+	installAlerts              alertFlags
+	installNoCNPG              bool
+	installAllowLegacyDb       bool
+	installBackupCredentials   string
+	installBackupSnapClass     string
+	installDBNodeSelector      []string
+	installDBTolerations       []string
+	installMaxConnections      int
+	installRelationalMaxWALMiB int
+	// Points to the registered flag's Changed bit so options can read presence
+	// without referring back to installCmd during its own initialization.
+	installRelationalWALGiven *bool
+	installRestoreRdbFrom     string
+	installRestoreRdbAt       string
+	installRegistry           string
+	installVersion            string
+	installBuild              bool
+	installRemoveLegacy       bool
+	installAWSNLB             string
+	installMQTTGateway        bool
 	// installMQTTGatewayGiven is whether --mqtt-gateway was on the command line, read off the flag set in RunE.
 	installMQTTGatewayGiven bool
 )
@@ -164,6 +168,10 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 	if err := bootstrap.ValidateAWSNLB(installAWSNLB); err != nil {
 		return bootstrap.InstallOptions{}, err
 	}
+	wal := installRelationalWALFromArgv()
+	if err := bootstrap.ValidateRelationalStoreWAL(wal); err != nil {
+		return bootstrap.InstallOptions{}, err
+	}
 	placement, err := installPlacementFromArgv()
 	if err != nil {
 		return bootstrap.InstallOptions{}, err
@@ -198,10 +206,11 @@ func installOptions(dest *bootstrap.BackupDestination, restore bootstrap.Restore
 		BackupSnapshotClass: installBackupSnapClass,
 		// Parsed from argv above by ParseDatabasePlacement, and checked against the cluster's
 		// nodes by the install itself before anything is written.
-		DatabasePlacement: placement,
-		MaxConnections:    installMaxConnections,
-		Restore:           restore,
-		DcctlVersion:      Version,
+		DatabasePlacement:        placement,
+		MaxConnections:           installMaxConnections,
+		RelationalStoreMaxWALMiB: wal,
+		Restore:                  restore,
+		DcctlVersion:             Version,
 
 		RemoveLegacyIngress: installRemoveLegacy,
 		AWSNLB:              installAWSNLB,
@@ -283,6 +292,9 @@ the cluster, with one exception: the connection budget may be raised.`,
 			if installCompact {
 				fmt.Println("note: --ha adds two more NATS servers per instance and their volumes; the printed compact footprint is measured single-node and is a floor, not the total")
 			}
+		}
+		if err := bootstrap.ValidateRelationalStoreWAL(installRelationalWALFromArgv()); err != nil {
+			return err
 		}
 		if installMaxConnections != 0 && installMaxConnections < 100 {
 			return fmt.Errorf("--max-connections must be at least 100 (got %d)", installMaxConnections)
@@ -372,6 +384,14 @@ the cluster, with one exception: the connection budget may be raised.`,
 	SilenceUsage: true,
 }
 
+func installRelationalWALFromArgv() *int {
+	if installRelationalWALGiven == nil || !*installRelationalWALGiven {
+		return nil
+	}
+	v := installRelationalMaxWALMiB
+	return &v
+}
+
 func init() {
 	installCmd.Flags().StringVar(&installKubeContext, "kube-context", "", "install into this existing cluster instead of a local kind cluster (never created or deleted by dcctl)")
 	installCmd.Flags().StringVar(&installCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster to create or use")
@@ -444,6 +464,10 @@ func init() {
 	installCmd.Flags().StringVar(&installAWSNLB, "aws-nlb", "", "EKS: which ingress controllers' LoadBalancer Services get an AWS Network Load Balancer (service.beta.kubernetes.io/aws-load-balancer-type: nlb) instead of the Classic one a plain Service gets: traefik, nginx, all, or none (turns it off). Only a Network Load Balancer passes the client's address through, which the per-source rate limits and the trusted-proxy rule depend on. Left off, each controller's Service keeps what it has. A value that CHANGES an existing Service replaces its load balancer and so changes the hostname clients resolve: repoint DNS afterwards (the install says so). traefik alone leaves ingress-nginx's Service as it is, for a cluster mid-cutover")
 	installCmd.Flags().BoolVar(&installMQTTGateway, "mqtt-gateway", false, "open TCP 8883 on the ingress controller (Traefik) so an instance can serve MQTT over TLS to devices outside the cluster through its Gateway (dcctl bootstrap|upgrade --mqtt-exposure gateway). It publishes a NEW port on the controller's load balancer, so it is off unless asked for. The broker terminates TLS itself; the controller passes the connection through by SNI. Left off, the install keeps whatever the controller's Service has; --mqtt-gateway=false closes it")
 	installCmd.Flags().IntVar(&installMaxConnections, "max-connections", 0, "the relational store's connection budget (default 700 on a first install, and what the cluster has on a re-run). Each instance reserves (its relational services x 40) of it when bootstrapped; the default admits two default-profile instances")
+
+	installCmd.Flags().IntVar(&installRelationalMaxWALMiB, "relational-store-max-wal-mib", 0, "relational store max_wal_size soft checkpoint target in MiB (0: stock default; positive: at least 64). Omitted keeps the recorded choice, or the root default on a first install. Recorded before apply; limited to a quarter of storage by the root")
+
+	installRelationalWALGiven = &installCmd.Flags().Lookup("relational-store-max-wal-mib").Changed
 
 	rootCmd.AddCommand(installCmd)
 }

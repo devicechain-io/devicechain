@@ -273,7 +273,11 @@ func (o *orderedWriter) publishGuardedAck(ctx context.Context, msg Message, done
 	// deadline is enforced by awaitPubAck.) The one re-send the writer makes, of a publish
 	// whose id is still in process, is settle's, which says when that reorders and why it is
 	// the lesser cost.
-	nm := natsMsg(subject, msg)
+	nm, spans := startPublishMessage(ctx, subject, o.suffix, msg)
+	if len(spans) > 0 {
+		finished := done
+		done = func(err error) { finishPublish(spans, err); finished(err) }
+	}
 	fut, err := o.js.PublishMsgAsync(nm)
 	if err != nil {
 		o.pending <- orderedPending{err: err, brokerFailed: true, sent: sent, done: done}
