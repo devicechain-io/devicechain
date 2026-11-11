@@ -153,6 +153,10 @@ func refuseAnOlderInstall(prev *InstallRecord, dcctlVersion string) error {
 	}
 	newest, newestVersion := ours, ""
 	for _, version := range versions {
+		// A source build's stamp (dev, -dev.) is not a release, here as on the caller's side.
+		if version == "dev" || IsUnpublishedImageVersion(version) {
+			continue
+		}
 		if release, ok := parseRelease(version); ok && release.compare(newest) > 0 {
 			newest, newestVersion = release, version
 		}

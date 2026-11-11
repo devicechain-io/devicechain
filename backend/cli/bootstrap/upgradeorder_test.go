@@ -449,6 +449,10 @@ func TestRefuseAnOlderInstall(t *testing.T) {
 		{"local dcctl", installed("v1.5.0"), "local", ""},
 		{"empty record version", installed(""), "v1.4.0", ""},
 		{"garbage record version", installed("garbage"), "v1.4.0", ""},
+		{"source-built record version", installed("v1.5.0-dev.3"), "v1.4.0", ""},
+		{"dev record version", installed("dev"), "v1.4.0", ""},
+		{"source-built attempt over an older completed", applying("v1.5.0-dev.3", "v1.3.0"), "v1.4.0", ""},
+		{"source-built attempt over a newer completed", applying("v1.5.0-dev.3", "v1.5.0"), "v1.4.0", "v1.5.0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := refuseAnOlderInstall(tc.prev, tc.own)
@@ -493,6 +497,43 @@ func TestConnectAndRefuseRejectsAnOlderInstallBeforeAnyWrite(t *testing.T) {
 				if verb := action.GetVerb(); verb != "get" && verb != "list" && verb != "watch" {
 					t.Errorf("wrote before refusing: %s", verb)
 				}
+			}
+		})
+	}
+}
+
+// A bootstrap re-run over an existing declaration (an unfinished bootstrap, a restore retry, a
+// carve-out) moves the image version too, so it is refused an earlier release exactly as
+// `dcctl upgrade` is, before anything is written and before the envelope check reaches the cluster.
+func TestABootstrapRerunDoesNotMoveAnInstanceBack(t *testing.T) {
+	for _, tc := range []struct {
+		name, declaredRegistry, declared, targetRegistry, target string
+		refused                                                  bool
+	}{
+		{"older release", DefaultImageRegistry, "v1.4.0", DefaultImageRegistry, "v1.3.0", true},
+		{"older patch", DefaultImageRegistry, "v1.4.1", DefaultImageRegistry, "v1.4.0", true},
+		{"same release", DefaultImageRegistry, "v1.4.0", DefaultImageRegistry, "v1.4.0", false},
+		{"custom registry", "localhost:5000", "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"source build", DefaultImageRegistry, "v1.4.0-dev.2", DefaultImageRegistry, "v1.3.0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			orig := readInstanceDeclaration
+			t.Cleanup(func() { readInstanceDeclaration = orig })
+			readInstanceDeclaration = func(context.Context, string, string) (*dcv1beta1.Instance, error) {
+				inst := readyGuide()
+				inst.Spec.ImageRegistry, inst.Spec.ImageVersion = tc.declaredRegistry, tc.declared
+				return inst, nil
+			}
+			// A context no kubeconfig names: anything past the refusal fails fast, never reaching a cluster.
+			st := &State{Instance: "guide", KubeContext: "dcctl-forward-only-test-no-such-context",
+				ImageRegistry: tc.targetRegistry, ImageVersion: tc.target}
+			err := stepDeclareInstance(t.Context(), st)
+			if tc.refused {
+				requireOrderMessage(t, err, tc.declared, tc.target, "no downgrade", "Nothing has been changed")
+				return
+			}
+			if err != nil && strings.Contains(err.Error(), "no downgrade") {
+				t.Fatalf("refused as a downgrade: %v", err)
 			}
 		})
 	}
