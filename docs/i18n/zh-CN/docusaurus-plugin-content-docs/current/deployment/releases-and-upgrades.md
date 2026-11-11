@@ -548,6 +548,8 @@ dcctl upgrade local devicechain --version v1.4.0
   - 在 `v1.4.0` 安装就绪后，单独进行一次升级来设置 `infrastructure.nats.mqttDeviceUplinks`。旧 Pod 会如何处理此设置（包括流漂移错误），参见[通过 MQTT 发送设备自有载荷](#v140-mqtt-uplinks)。
   - 在 `v1.4.0` 发布完成后，单独进行一次升级来设置 `agentActuation.enabled`。参见[代理动作（预览）](#v140-agent-actions)。
   - 只有在所有 `event-sources` Pod 都是 `v1.4.0` 后，才设置 `eventSources.ingestMetering: lagCredit`。参见[带延迟补偿的接入计量](#v140-ingest-metering)。
+  - 仅在发布完成后开启 LoRaWAN 下行（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`），如果它尚未开启：开启期间重启的 `v1.3.0` `event-sources` Pod 会因 `v1.4.0` 由此派生的配置键而停止。
+  - 仅在发布完成后使用 `--dev-allow-egress`：任何条目都会向实例配置添加 `infrastructure.egress.devAllowedDestinations`，重启的 `v1.3.0` Pod 会拒绝该配置。参见[本地开发出站访问](#v140-dev-egress)。
 - **如果 LoRaWAN 下行已开启**（`functionalAreas.outbound-connectors.config.lpwanDownlink.enabled`），在发布期间重启的 `v1.3.0` `event-sources` Pod 会因 `unknown field "lpwanDownlink"` 而停止。`v1.4.0` 会在 `event-sources` 收到的配置中加入该键（由 chart 推导，不可手动设置），而 `v1.3.0` Pod 会拒绝它不认识的键。未重启的 Pod 不受影响，发布过程会用可正常启动的 `v1.4.0` Pod 替换已停止的 Pod。下行保持关闭（默认）时，`event-sources` 没有任何变化。
 - **检查通用 webhook、Slack、Teams 和 PagerDuty 渠道的 `linkBaseUrl`。**现在保存渠道时会验证它（拒绝查询或片段），升级后投递时，已存储的无效值会使链接被省略，通知仍会发送。参见[标明设备的通知](#v140-notifications)。
 - **重命名以 `dcsa_` 开头的 OAuth 客户端 ID（不区分大小写），包括预置配置中的 ID。** 此前缀标识服务账号，可能与代理策略的客户端列表冲突。参见[现有操作的更严格检查](#v140-tightenings)。
@@ -647,7 +649,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 
 #### 本地开发出站访问 {#v140-dev-egress}
 
-`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--dev-allow-egress <address-or-CIDR>`（可重复指定，也可用逗号分隔；`none` 用于清空），让本地集群中的 webhook 或连接器能够访问你自己机器或局域网上的服务。除非 Kubernetes 上下文以 `kind-` 或 `k3d-` 开头，或为 `minikube`、`docker-desktop`、`rancher-desktop`（也接受带连字符及配置名称后缀的形式），否则会被拒绝。它使用独立的键 `infrastructure.egress.devAllowedDestinations`，运维控制器的 `allowedDestinations` 仍不可调整。无论列出什么，云元数据地址、回环、链路本地和组播范围，以及其他绝不允许的范围仍会被阻止；与其中任一范围重叠的条目都会使 `dcctl` 在开始时失败。该设置会记录在实例上，供后续升级保留；`dcctl instances` 将其显示为 `DEV EGRESS ALLOWED`，每个使用它的服务都会在启动时记录警告。参见[出站连接器](../concepts/outbound-connectors.md)。
+`dcctl bootstrap` 和 `dcctl upgrade` 接受 `--dev-allow-egress <address-or-CIDR>`（可重复指定，也可用逗号分隔；`none` 用于清空），让本地集群中的 webhook 或连接器能够访问你自己机器或局域网上的服务。除非 Kubernetes 上下文以 `kind-` 或 `k3d-` 开头，或为 `minikube`、`docker-desktop`、`rancher-desktop`（也接受带连字符及配置名称后缀的形式），否则会被拒绝。它使用独立的键 `infrastructure.egress.devAllowedDestinations`，运维控制器的 `allowedDestinations` 仍不可调整。无论列出什么，云元数据地址、回环、链路本地和组播范围，以及其他绝不允许的范围仍会被阻止；与其中任一范围重叠的条目都会使 `dcctl` 在开始时失败。该设置会记录在实例上，供后续升级保留；`dcctl instances` 将其显示为 `DEV EGRESS ALLOWED`，每个使用它的服务都会在启动时记录警告。参见[出站连接器](../concepts/outbound-connectors.md)。 请在所有 Pod 都是 `v1.4.0` 后再设置：重启的 `v1.3.0` Pod 会拒绝列出任何条目的配置。
 
 #### 本版本的其他变更 {#v140-other-changes}
 
@@ -660,6 +662,7 @@ AI 代理可以提议确认或清除告警。此预览功能默认关闭，最�
 - **本版本功能的面板和告警。** Ingest、Command Delivery 和 Delivery 看板新增面板，覆盖设备 MQTT 上行、LoRaWAN 确认与下行、集成下行报告、按延迟补偿的接入计量、OCSP 以及清除通知拾取；七个新告警都有[运行手册条目](./alert-runbook.md)：`LpwanAckReportsAnomalous`, `LpwanAckSettlementFailing`, `LpwanDownlinkTrackingFailing`, `IntegrationDownlinkReportsDiscarded`, `DeviceUplinkMessagesFailing`, `X509OcspUnavailableAllowed` and `NotificationClearPickupFailing`。
 - **被拒绝的数据库读取**会返回错误，而不是发生空指针 panic。
 - **代理令牌不能再更改某个人的个人资料名称：**`updateProfile` 拒绝代理令牌。
+- **使用 Go 1.27.4 构建。** `v1.4.0` 的二进制文件和镜像使用 Go 1.27.4 构建，修复了标准库 `net/http` 中的一个漏洞。
 
 #### 架构变更与回退 {#v140-going-back}
 
