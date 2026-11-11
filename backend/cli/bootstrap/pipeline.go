@@ -581,7 +581,7 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 	// Only the published registry is normalized: a registry the operator named holds
 	// whatever tags they pushed (the upgrade drill pushes 0.24.0-drill.1 to
 	// localhost:5000), and rewriting those would break exactly that.
-	if !build && registry == DefaultImageRegistry && bareSemver.MatchString(version) {
+	if !build && isPublishedRegistry(registry) && bareSemver.MatchString(version) {
 		version = "v" + version
 	}
 	// Deploying an image tag that was never published fails as an

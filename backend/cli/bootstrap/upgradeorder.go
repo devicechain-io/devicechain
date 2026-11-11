@@ -216,21 +216,6 @@ func refuseForeignRelease(requested, ownRelease, registry, retry string) error {
 	return judgeForeignRelease("--version "+requested, requested, ownRelease, registry, retry, false)
 }
 
-// normalizeRegistry reduces the spellings of one registry to a comparable form: surrounding
-// space, an https:// scheme, trailing slashes, case (the whole string is lowercased, path included) and the default :443 are not
-// differences. Anything else is left alone, so a genuinely different registry stays different.
-func normalizeRegistry(r string) string {
-	r = strings.ToLower(strings.TrimSpace(r))
-	r = strings.TrimPrefix(r, "https://")
-	r = strings.TrimRight(r, "/")
-	host, rest, hasPath := strings.Cut(r, "/")
-	host = strings.TrimSuffix(host, ":443")
-	if hasPath {
-		return host + "/" + rest
-	}
-	return host
-}
-
 // judgeForeignRelease is refuseForeignRelease for a version that may not have been asked for with
 // --version: subject names where it came from, and olderOK lets a version older than this dcctl
 // through (an instance's declared version, which a flagless upgrade keeps).
@@ -239,7 +224,7 @@ func judgeForeignRelease(subject, requested, ownRelease, registry, retry string,
 	// pushes semver-shaped ones (0.24.0-drill.1). Only the published registry's tags are releases,
 	// and it is recognised by every spelling of it (ghcr.io:443/..., a trailing slash), not only
 	// the literal constant.
-	if requested == "" || (registry != "" && normalizeRegistry(registry) != normalizeRegistry(DefaultImageRegistry)) {
+	if requested == "" || (registry != "" && !isPublishedRegistry(registry)) {
 		return nil
 	}
 	want, ok := parseRelease(requested)
