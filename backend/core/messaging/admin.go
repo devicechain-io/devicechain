@@ -138,19 +138,38 @@ type streamExpectation struct {
 	// stream this release does not know is never handed to it. Other streams stay exact:
 	// adding a subject to a data stream changes what a reader is handed.
 	subjectsMayGrow bool
-	retention       nats.RetentionPolicy
-	duplicates      time.Duration
-	allowDirect     bool
+	// advisoryPrefix is what an EXTRA subject on a stream whose list may grow must start
+	// with: "$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.<instance>_". A newer release only
+	// ever adds a subject of the form AdvisorySubject(StreamName(instance, suffix), "*"), so an
+	// extra that is not exactly that shape (another advisory family, a wildcard, another
+	// instance's stream) is drift: it would fill the bounded work-queue stream with messages
+	// no recorder consumes, and discard-old would then evict the advisories that matter.
+	advisoryPrefix string
+	retention      nats.RetentionPolicy
+	duplicates     time.Duration
+	allowDirect    bool
 }
 
 func (nmgr *NatsManager) expectedStream(suffix string) streamExpectation {
 	return streamExpectation{
 		subjects:        nmgr.streamSubjects(suffix),
 		subjectsMayGrow: streams.ShapeOf(suffix) == streams.ShapeAdvisory,
+		advisoryPrefix:  maxDeliveriesAdvisoryPrefix + "." + StreamName(nmgr.Microservice.InstanceId, ""),
 		retention:       retentionPolicy(streams.RetentionFor(suffix)),
 		duplicates:      time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second,
 		allowDirect:     streams.AllowDirectFor(suffix),
 	}
+}
+
+// isStreamAdvisorySubject reports whether subject is "<prefix><stream>.*" for a single stream
+// name token: the only shape a newer release adds to the advisory stream.
+func isStreamAdvisorySubject(subject, prefix string) bool {
+	stream, ok := strings.CutPrefix(subject, prefix)
+	if !ok {
+		return false
+	}
+	stream, ok = strings.CutSuffix(stream, ".*")
+	return ok && stream != "" && !strings.ContainsAny(stream, ".*>")
 }
 
 // streamDrift lists how cfg differs from w. Each entry reads as a sentence fragment.
@@ -165,6 +184,15 @@ func streamDrift(cfg nats.StreamConfig, w streamExpectation) []string {
 		}
 		if len(missing) > 0 {
 			out = append(out, fmt.Sprintf("it is missing declared subjects %v", missing))
+		}
+		var foreign []string
+		for _, subject := range cfg.Subjects {
+			if !slices.Contains(w.subjects, subject) && !isStreamAdvisorySubject(subject, w.advisoryPrefix) {
+				foreign = append(foreign, subject)
+			}
+		}
+		if len(foreign) > 0 {
+			out = append(out, fmt.Sprintf("it captures subjects %v, which are not one stream's max-delivery advisories for this instance", foreign))
 		}
 	} else if !slices.Equal(cfg.Subjects, w.subjects) {
 		out = append(out, fmt.Sprintf("it captures subjects %v, not the declared %v", cfg.Subjects, w.subjects))
