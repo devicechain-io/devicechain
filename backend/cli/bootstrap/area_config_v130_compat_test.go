@@ -3,13 +3,13 @@
 
 package bootstrap
 
-// testdata/area_config_keys_v1.3.0.json freezes the per-area decoding schema at
-// v1.3.0: {"areas":{"<area>":{"retired":{path:reason},"tree":NODE}}}, using
+// testdata/area_config_keys_v1.4.0.json freezes the per-area decoding schema at
+// v1.4.0: {"areas":{"<area>":{"retired":{path:reason},"tree":NODE}}}, using
 // the same NODE shape as the instance snapshot. The per-area documents are the
 // dct-<instance>-config ConfigMap entries, each decoded strictly by its area's
 // typed config. An old pod must START against the new release's rendered config.
 //
-// REGENERATION RECIPE: git worktree add <temp-dir> v1.3.0 (or the new snapshot
+// REGENERATION RECIPE: git worktree add <temp-dir> v1.4.0 (or the new snapshot
 // tag). In that worktree, add a throwaway main package importing every
 // backend/services/*/config package. Reflect over each area's root
 // New<X>Configuration() type following encoding/json decoding rules: use the json
@@ -37,14 +37,14 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-const areaConfigSnapshotTag = "v1.3.0"
+const areaConfigSnapshotTag = "v1.4.0"
 
-// instanceConfigSnapshotTag names the tag of instance_config_keys_v1.3.0.json.
-const instanceConfigSnapshotTag = "v1.3.0"
+// instanceConfigSnapshotTag names the tag of instance_config_keys_v1.4.0.json.
+const instanceConfigSnapshotTag = "v1.4.0"
 
 func loadV130AreaConfigSnapshot(t *testing.T) map[string]v130ConfigSnapshot {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/area_config_keys_v1.3.0.json")
+	raw, err := os.ReadFile("testdata/area_config_keys_v1.4.0.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func loadV130AreaConfigSnapshot(t *testing.T) map[string]v130ConfigSnapshot {
 		t.Fatal(err)
 	}
 	if len(snapshot.Areas) == 0 {
-		t.Fatal("v1.3.0 area config snapshot has no areas")
+		t.Fatal("v1.4.0 area config snapshot has no areas")
 	}
 	return snapshot.Areas
 }
@@ -113,7 +113,7 @@ func TestAreaConfigDocumentsDecodeOnV130(t *testing.T) {
 		for name, raw := range renderAreaConfigDocuments(t, ch, vals) {
 			area, ok := snapshot[name]
 			if !ok {
-				t.Logf("skipping post-v1.3.0 area %q: no v1.3.0 pod exists for it", name)
+				t.Logf("skipping post-v1.4.0 area %q: no v1.4.0 pod exists for it", name)
 				continue
 			}
 			seen[name] = true
@@ -130,7 +130,7 @@ func TestAreaConfigDocumentsDecodeOnV130(t *testing.T) {
 				nonEmpty++
 			}
 			if paths := unknownV130ConfigPaths(doc, area.Tree, area.Retired, ""); len(paths) != 0 {
-				t.Errorf("area %q has unknown v1.3.0 configuration keys: %s; a v1.3.0 pod of that area decodes the document strictly and refuses an unknown key, so a key added after v1.3.0 must be left out of the document while at its default", name, strings.Join(paths, ", "))
+				t.Errorf("area %q has unknown v1.4.0 configuration keys: %s; a v1.4.0 pod of that area decodes the document strictly and refuses an unknown key, so a key added after v1.4.0 must be left out of the document while at its default", name, strings.Join(paths, ", "))
 			}
 		}
 	}
@@ -183,24 +183,14 @@ func TestAreaConfigWalker(t *testing.T) {
 	if !ok {
 		t.Fatal("snapshot lacks event-sources")
 	}
-	// Only assert rejection when the frozen schema lacks this field. Its
-	// presence in v1.3.0 must be read from the snapshot, not assumed.
-	for name := range events.Tree.Fields {
-		if strings.EqualFold(name, "lpwanDownlink") {
-			return
-		}
-	}
-	for path := range events.Retired {
-		if strings.EqualFold(path, "lpwanDownlink") {
-			return
-		}
-	}
+	// lpwanDownlink was added in v1.4.0, so it must be KNOWN to the frozen schema; a key
+	// that is in no release must still be reported.
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(`{"lpwanDownlink":{"enabled":true}}`), &doc); err != nil {
+	if err := json.Unmarshal([]byte(`{"lpwanDownlink":true,"noSuchKeyPlanted":1}`), &doc); err != nil {
 		t.Fatal(err)
 	}
-	if got := unknownV130ConfigPaths(doc, events.Tree, events.Retired, ""); !slices.Equal(got, []string{"lpwanDownlink"}) {
-		t.Errorf("event-sources unknown paths = %v, want [lpwanDownlink]", got)
+	if got := unknownV130ConfigPaths(doc, events.Tree, events.Retired, ""); !slices.Equal(got, []string{"noSuchKeyPlanted"}) {
+		t.Errorf("event-sources unknown paths = %v, want [noSuchKeyPlanted]", got)
 	}
 }
 

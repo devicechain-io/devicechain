@@ -15,11 +15,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
-// The frozen snapshot records every stream declared by v1.3.0 for instance "inst".
+// The frozen snapshot records every stream declared by v1.4.0 for instance "inst".
 // Pin the release an upgrade starts from, allowing new streams but preserving the
 // shapes old pods verify when they restart during the roll.
 func TestDefaultStreamShapesMatchV130(t *testing.T) {
-	raw, err := os.ReadFile("testdata/streams_v1.3.0.json")
+	raw, err := os.ReadFile("testdata/streams_v1.4.0.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,12 +33,12 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshot) == 0 {
-		t.Fatal("v1.3.0 stream snapshot is empty")
+		t.Fatal("v1.4.0 stream snapshot is empty")
 	}
 	cfg := config.NewDefaultInstanceConfiguration()
 	cfg.ApplyDefaults()
 	nmgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "inst", InstanceConfiguration: *cfg}}
-	const why = "v1.3.0 services verify these exactly at start (streamDrift) and refuse to start on a difference, so under default settings a declared stream must keep v1.3.0's shape"
+	const why = "v1.4.0 services verify these exactly at start (streamDrift) and refuse to start on a difference, so under default settings a declared stream must keep v1.4.0's shape"
 	for suffix, want := range snapshot {
 		t.Run(suffix, func(t *testing.T) {
 			if !streams.IsDeclared(suffix) {
@@ -47,7 +47,7 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 			got := nmgr.expectedStream(suffix)
 			if !slices.Equal(got.subjects, want.Subjects) {
 				if suffix == streams.MaxDeliveries {
-					t.Errorf("%s subjects = %v, want %v: v1.3.0 services require the exact advisory list; tolerance for extra advisory subjects only starts with this release", suffix, got.subjects, want.Subjects)
+					t.Errorf("%s subjects = %v, want %v: the advisory list v1.4.0 pods verify must not change shape", suffix, got.subjects, want.Subjects)
 				} else {
 					t.Errorf("%s subjects = %v, want %v: %s", suffix, got.subjects, want.Subjects, why)
 				}
