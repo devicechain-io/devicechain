@@ -144,10 +144,12 @@ DeviceChain 正在让助手不仅能读取，还能操作：确认告警、发�
 
 ### Reviewing proposals in the console (preview) {#approvals-inbox}
 
-打开 **Monitor > Approvals**。收件箱要求拥有不受范围限制的租户成员身份和 `agent:admin`，
+打开 **Monitor > Approvals**。收件箱要求拥有不受范围限制的租户成员身份和 `agent:admin`或当前批准者资格（批准者角色、`alarm:write` 和已激活的第二因素），
 并且实例的代理操作开关必须已启用。列出提议还需要 `alarm:read`；批准仍要求具备上述
 批准者角色、`alarm:write` 和新近验证的第二因素。收件箱不编辑策略文档：请使用策略 API
 配置客户端、批准者角色和操作规则。
+
+租户紧急关闭开关仅对拥有 `agent:admin` 的用户可见。
 
 1. 收件箱初始显示 **Pending**。使用 **State** 查看已拒绝、已过期或被策略拒绝的提议。
    通过客户端名称打开提议。检查操作、目标令牌、影响、规范化载荷、摘要、策略版本和原因。
