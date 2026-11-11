@@ -136,6 +136,10 @@ type Microservice struct {
 	// See MetricsRegisterer for what that means and why it is the safe direction.
 	metricsReg *prometheus.Registry
 
+	// Constructed once during startup, including when startup is retried.
+	instanceIdGrammarOnce  sync.Once
+	instanceIdNoncanonical prometheus.Gauge
+
 	// audienceRec is the token-audience counter (see installAudiencePolicy). It is built on
 	// the first policy install and reused by every later one, because registering the same
 	// collector twice on one registry is an AlreadyRegistered error and the instance
@@ -492,6 +496,7 @@ func (ms *Microservice) InitializeAndStart() error {
 		log.Error().Err(err).Str("instanceId", ms.InstanceId).Msg("Invalid instance id (DC_INSTANCE_ID); refusing to start")
 		return fmt.Errorf("invalid instance id: %w", err)
 	}
+	ms.reportInstanceIdGrammar(&log.Logger)
 	// A removed environment variable that is still being SET is refused rather than
 	// ignored. Ignoring it is the silent half of the defect this key was moved into
 	// typed config to close: the deployment that wrote a drain window would get the

@@ -16,11 +16,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
-// The frozen snapshot records every stream declared by v1.3.0 for instance "inst".
+// The frozen snapshot records every stream declared by v1.4.0 for instance "inst".
 // Pin the release an upgrade starts from, allowing new streams but preserving the
 // shapes old pods verify when they restart during the roll.
 func TestDefaultStreamShapesMatchV130(t *testing.T) {
-	raw, err := os.ReadFile("testdata/streams_v1.3.0.json")
+	raw, err := os.ReadFile("testdata/streams_v1.4.0.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,12 +34,12 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshot) == 0 {
-		t.Fatal("v1.3.0 stream snapshot is empty")
+		t.Fatal("v1.4.0 stream snapshot is empty")
 	}
 	cfg := config.NewDefaultInstanceConfiguration()
 	cfg.ApplyDefaults()
 	nmgr := &NatsManager{Microservice: &core.Microservice{InstanceId: "inst", InstanceConfiguration: *cfg}}
-	const why = "v1.3.0 services verify these exactly at start (streamDrift) and refuse to start on a difference, so under default settings a declared stream must keep v1.3.0's shape"
+	const why = "v1.4.0 services verify these exactly at start (streamDrift) and refuse to start on a difference, so under default settings a declared stream must keep v1.4.0's shape"
 	for suffix, want := range snapshot {
 		t.Run(suffix, func(t *testing.T) {
 			if !streams.IsDeclared(suffix) {
@@ -47,13 +47,14 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 			}
 			got := nmgr.expectedStream(suffix)
 			if suffix == streams.MaxDeliveries {
-				// The shared advisory stream gains one subject per capturing stream a release adds. A v1.4
-				// pod tolerates extra advisory subjects (#2443), so a later release may declare new streams;
-				// what must never move is every subject v1.3.0 already listed, and every EXTRA subject must
-				// belong to a stream this snapshot does not know (a v1.3.0 stream's advisory cannot change).
+				// The shared advisory stream gains one subject per capturing stream a release adds. A v1.4.0
+				// pod tolerates extra advisory subjects of exactly one stream's shape (streamDrift), so a later
+				// release may declare new streams; what must never move is every subject v1.4.0 already listed,
+				// every EXTRA subject must have that accepted shape, and it must belong to a stream this snapshot
+				// does not know (a v1.4.0 stream's advisory cannot change).
 				for _, w := range want.Subjects {
 					if !slices.Contains(got.subjects, w) {
-						t.Errorf("%s lost advisory subject %q that v1.3.0 declared", suffix, w)
+						t.Errorf("%s lost advisory subject %q that v1.4.0 declared", suffix, w)
 					}
 				}
 				for _, g := range got.subjects {
@@ -67,7 +68,10 @@ func TestDefaultStreamShapesMatchV130(t *testing.T) {
 						}
 					}
 					if known {
-						t.Errorf("%s gained advisory subject %q for a stream v1.3.0 already declared", suffix, g)
+						t.Errorf("%s gained advisory subject %q for a stream v1.4.0 already declared", suffix, g)
+					}
+					if !isStreamAdvisorySubject(g, got.advisoryPrefix) {
+						t.Errorf("%s gained advisory subject %q, which v1.4.0 pods refuse: not one stream's max-delivery advisory for this instance", suffix, g)
 					}
 				}
 			} else if !slices.Equal(got.subjects, want.Subjects) {
