@@ -115,7 +115,7 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	}); err != nil {
 		return nil, err
 	}
-	matches, err = api.DeviceProfilesByToken(ctx, []string{token})
+	matches, err = api.DeviceProfilesById(ctx, []uint{found.ID})
 	if err != nil {
 		return nil, err
 	}

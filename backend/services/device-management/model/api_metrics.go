@@ -227,7 +227,7 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	}); err != nil {
 		return nil, err
 	}
-	matches, err = api.MetricDefinitionsByToken(ctx, []string{token})
+	matches, err = api.MetricDefinitionsById(ctx, []uint{updated.ID})
 	if err != nil {
 		return nil, err
 	}

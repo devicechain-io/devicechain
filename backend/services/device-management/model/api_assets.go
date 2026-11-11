@@ -144,7 +144,7 @@ func (api *Api) UpdateAssetType(ctx context.Context, token string,
 	}); err != nil {
 		return nil, err
 	}
-	matches, err = api.AssetTypesByToken(ctx, []string{token})
+	matches, err = api.AssetTypesById(ctx, []uint{found.ID})
 	if err != nil {
 		return nil, err
 	}
