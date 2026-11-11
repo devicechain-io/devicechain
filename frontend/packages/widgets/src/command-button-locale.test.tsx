@@ -7,8 +7,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandButton } from './widgets/command-button';
-import { validateParams } from './widgets/command-params';
-import { commandStatusLabel } from './widgets/command-status';
+import { validateParams, validateParamsIn } from './widgets/command-params';
+import { commandStatusLabel, commandStatusLabelIn } from './widgets/command-status';
 
 const originalLang = document.documentElement.lang;
 beforeEach(() => { document.documentElement.lang = 'es-MX'; });
@@ -105,14 +105,14 @@ describe('command form locale', () => {
 
   it('localizes helpers implicitly and supports explicit locale overrides', () => {
     expect(commandStatusLabel('SUCCESSFUL')).toBe('Exitoso');
-    expect(commandStatusLabel('SUCCESSFUL', 'en')).toBe('Successful');
-    expect(commandStatusLabel('SUCCESSFUL', 'fr')).toBe('Successful');
+    expect(commandStatusLabelIn('SUCCESSFUL', 'en')).toBe('Successful');
+    expect(commandStatusLabelIn('SUCCESSFUL', 'fr')).toBe('Successful');
     expect(commandStatusLabel('FUTURE_STATUS')).toBe('Future status');
     expect(commandStatusLabel('')).toBe('');
     expect(validateParams([{ name: 'x', required: true }], {})).toEqual({ x: 'Obligatorio' });
-    expect(validateParams([{ name: 'x', required: true }], {}, 'en')).toEqual({ x: 'Required' });
-    expect(validateParams([{ name: 'x', required: true }], {}, 'fr')).toEqual({ x: 'Required' });
-    expect(validateParams([{ name: 'x', required: true }], {}, 'ES-es')).toEqual({ x: 'Obligatorio' });
+    expect(validateParamsIn([{ name: 'x', required: true }], {}, 'en')).toEqual({ x: 'Required' });
+    expect(validateParamsIn([{ name: 'x', required: true }], {}, 'fr')).toEqual({ x: 'Required' });
+    expect(validateParamsIn([{ name: 'x', required: true }], {}, 'ES-es')).toEqual({ x: 'Obligatorio' });
   });
 
   it.each([
@@ -121,7 +121,7 @@ describe('command form locale', () => {
     ['EXPIRED', 'Caducado'], ['CANCELLED', 'Cancelado'],
   ])('uses console vocabulary for %s', (status, label) => {
     expect(commandStatusLabel(status)).toBe(label);
-    expect(commandStatusLabel(status, 'es')).toBe(label);
+    expect(commandStatusLabelIn(status, 'es')).toBe(label);
   });
 
   it('localizes numeric and structured validation without changing field keys', () => {

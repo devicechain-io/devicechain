@@ -100,7 +100,12 @@ export function defaultValues(params: CommandParameter[]): Record<string, string
 // (a missing value on a required scalar; a BOOLEAN always has a value so is never
 // "required-missing"), numeric validity/bounds for INT/DOUBLE, and blocks a REQUIRED
 // OBJECT parameter (it can't be supplied through the typed form).
-export function validateParams(
+export function validateParams(params: CommandParameter[], values: Record<string, string>): Record<string, string> {
+  return validateParamsIn(params, values);
+}
+
+/** validateParams for an explicit locale (module-internal; not part of the package API). */
+export function validateParamsIn(
   params: CommandParameter[],
   values: Record<string, string>,
   locale?: string,

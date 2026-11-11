@@ -60,8 +60,14 @@ export function isTerminalStatus(status: string): boolean {
   return isTerminalCommandStatus(status);
 }
 
-// Known statuses are localized; future values keep a readable title-case fallback.
-export function commandStatusLabel(status: string, locale?: string): string {
+// Known statuses are localized for the viewer; future values keep a readable title-case
+// fallback. The published signature is unchanged: the locale comes from the viewer.
+export function commandStatusLabel(status: string): string {
+  return commandStatusLabelIn(status);
+}
+
+/** commandStatusLabel for an explicit locale (module-internal; not part of the package API). */
+export function commandStatusLabelIn(status: string, locale?: string): string {
   if (!status) return '';
   return commandStrings(locale).status[status]
     ?? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase().replace(/_/g, ' ');

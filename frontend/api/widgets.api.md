@@ -9171,7 +9171,7 @@ export declare function commandStatusColor(status: string): string;
 ## `.:commandStatusLabel`
 
 ```ts
-export declare function commandStatusLabel(status: string, locale?: string): string;
+export declare function commandStatusLabel(status: string): string;
 ```
 
 ## `.:createBuiltinWidgetRegistry`
@@ -9517,7 +9517,7 @@ export declare function validateDefinitionOptions(definition: WidgetCarrier, opt
 ## `.:validateParams`
 
 ```ts
-export declare function validateParams(params: CommandParameter[], values: Record<string, string>, locale?: string): Record<string, string>;
+export declare function validateParams(params: CommandParameter[], values: Record<string, string>): Record<string, string>;
 ```
 
 ## `.:validateWidgetOptions`
