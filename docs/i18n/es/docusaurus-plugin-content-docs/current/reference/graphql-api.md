@@ -1082,6 +1082,7 @@ trunca nada ni se aplica nada a medias, así que reduce la solicitud y envíala 
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
 | Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
 | Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulta [Enviar comandos](../guides/sending-commands.md)). |
+| Estados de recálculo de métricas calculadas | 5 entradas | `statuses` de `calculatedMetricBackfills`, contando duplicados. Las listas más largas se rechazan antes de cualquier consulta; se eliminan los duplicados de las listas aceptadas. |
 | Destinatarios por regla de notificación | 100 | La lista `recipients` de una regla de una política de notificación. |
 | URI de redirección de cliente OAuth | 16 entradas, 2048 B cada una | `redirectUris` de `createOauthClient` y `updateOauthClient`. |
 | Ámbitos de cliente OAuth | 16 entradas, 64 B cada una | `scopes` de `createOauthClient` y `updateOauthClient`. |
