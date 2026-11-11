@@ -1781,6 +1781,7 @@ instance was bootstrapped on).
 * [dcctl sim start](#dcctl-sim-start)	 - Start (resume) a stopped sim's emit loop
 * [dcctl sim status](#dcctl-sim-status)	 - Show a running sim's lifecycle state
 * [dcctl sim stop](#dcctl-sim-stop)	 - Stop a running sim's emit loop (tenant + data are kept)
+* [dcctl sim windows](#dcctl-sim-windows)	 - Print the recorded episode windows (role, start, end)
 
 ## dcctl sim create {#dcctl-sim-create}
 
@@ -1818,6 +1819,7 @@ dcctl sim create <name> [flags]
 ### Options
 
 ```
+      --episode string       towerpulse episode (classic or night-shift; default classic)
   -h, --help                 help for create
       --host-header string   Host the instance Gateway routes on, when --server is an address (an IP or localhost) rather than that host; the sim presents it too (default: the instance's recorded host)
       --ingress string       device-plane HTTP ingress base URL (default http(s)://<server>:8081)
@@ -2043,6 +2045,37 @@ dcctl sim stop <name> [flags]
 
 ```
   -h, --help   help for stop
+```
+
+### Options inherited from parent commands
+
+```
+      --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
+      --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
+      --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
+  -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
+      --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+      --otp string              one-time code (or a recovery code) for an account with two-factor authentication; used for the first sign-in only. A terminal is prompted instead when none is given
+  -s, --server string           instance host for platform API calls (default "localhost")
+      --tls                     use https/wss for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
+
+## dcctl sim windows {#dcctl-sim-windows}
+
+Print the recorded episode windows (role, start, end)
+
+```
+dcctl sim windows <name> [flags]
+```
+
+### Options
+
+```
+  -h, --help   help for windows
 ```
 
 ### Options inherited from parent commands

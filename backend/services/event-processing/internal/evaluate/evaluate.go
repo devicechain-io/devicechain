@@ -35,7 +35,7 @@
 // of order inside that budget is folded in, and one beyond it is declined and counted. A run with a
 // different lateness than live would pass a test that live fails, or the reverse.
 //
-// 🔴 WHAT IT DOES NOT MODEL, said here so a green test is not read as more than it is. It resolves
+// ðŸ”´ WHAT IT DOES NOT MODEL, said here so a green test is not read as more than it is. It resolves
 // no device attributes (a dynamic threshold reads none, as in the preview), it has no device
 // registry, so a command is not checked against the device's command vocabulary (command-delivery
 // does that at enqueue), a connector reference is not checked to exist, and a rule scoped to an
@@ -157,6 +157,8 @@ type Params struct {
 	// AppliedGuard applies the live duplicate-event guard (on exactly when event envelopes are on),
 	// so a duplicate is dropped here when it would be dropped there.
 	AppliedGuard bool
+	// AttributeLate records declined readings by the device being delivered.
+	AttributeLate bool
 }
 
 // Edge is one transition a rule derived.
@@ -222,9 +224,10 @@ type Stats struct {
 // rule, raise before resolve at a shared instant, and an edge's intents follow it in the rule's
 // action order.
 type Result struct {
-	Edges   []Edge
-	Intents []Intent
-	Stats   Stats
+	Edges        []Edge
+	Intents      []Intent
+	LateByDevice map[string]int `json:",omitempty"`
+	Stats        Stats
 	// Evaluated is the token of every rule the run evaluated, in the order given.
 	Evaluated []string
 	// Degradations names each reason the result is partial, with a count, in a fixed order.
@@ -353,6 +356,9 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	}
 
 	res := Result{}
+	if p.AttributeLate {
+		res.LateByDevice = map[string]int{}
+	}
 	res.Stats.RulesEvaluated = len(scoped)
 	for _, r := range p.Rules {
 		res.Evaluated = append(res.Evaluated, r.Token)
@@ -377,6 +383,13 @@ func Run(ctx context.Context, p Params) (Result, error) {
 		res.Stats.EvalErrors += plan.EvalErrors
 		res.Stats.EventsFed++
 		engine.ProcessReceived(seq, e.At, runtime.ReceiptOf(ev, e.At), plan.Events)
+		if p.AttributeLate {
+			n := int(engine.DrainLateSamples())
+			if n > 0 {
+				res.LateByDevice[e.Device] += n
+				res.Stats.LateReadings += n
+			}
+		}
 		run.collect(engine.Drain(), e.At)
 	}
 
@@ -391,7 +404,7 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	engine.Advance(advanceTo.Add(time.Nanosecond))
 	run.collect(engine.Drain(), advanceTo)
 
-	res.Stats.LateReadings = int(engine.DrainLateSamples())
+	res.Stats.LateReadings += int(engine.DrainLateSamples())
 	degrade := func(reason string, n int, text string) {
 		if n <= 0 {
 			return
