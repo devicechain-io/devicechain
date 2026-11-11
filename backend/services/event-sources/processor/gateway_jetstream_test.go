@@ -6,15 +6,20 @@ package processor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/tracing"
 )
 
 // recordingAck stands in for the broker's acknowledgement of a consumed message.
@@ -863,4 +868,68 @@ func TestAFirstDeliveryIsStillMetered(t *testing.T) {
 	require.Zero(t, published, "a first delivery over the ceiling must be shed, not admitted")
 	acks := ack.counts()
 	require.Equal(t, 1, acks, "a shed message is a deliberate drop and must ack")
+}
+
+// A capture-stream message is device-originated, so a traceparent in its headers is untrusted: the
+// ingest span is a new local root that LINKS to it, never adopts its trace id, sampled flag or
+// tracestate.
+func TestCaptureTraceContextIsLinkedNeverAdopted(t *testing.T) {
+	const remoteTrace = "0af7651916cd43dd8448eb211c80319c"
+	headers := map[string]string{
+		"traceparent": "00-" + remoteTrace + "-b7ad6b7169203331-01",
+		"tracestate":  "vendor=" + strings.Repeat("x", 200),
+	}
+	run := func(t *testing.T, sampler sdktrace.Sampler) (trace.SpanContext, []sdktrace.ReadOnlySpan) {
+		exporter := tracetest.NewInMemoryExporter()
+		tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sampler))
+		t.Cleanup(tracing.Install(tp))
+		h := newCaptureHarness(t)
+		ack := &recordingAck{}
+		m := capturedMsg(captureSubject, validEvent, 1, 77, ack)
+		m.Headers = headers
+		// Guard the fixture: the tracestate must be valid, so extraction keeps it and only the edge drops it.
+		remote := trace.SpanContextFromContext(m.TraceContext())
+		require.True(t, remote.IsSampled() && remote.TraceState().Len() == 1, "fixture traceparent/tracestate must parse")
+		h.source.handle(m)
+		require.True(t, ack.settled(t), "message never settled")
+		events := h.publishedEvents()
+		require.Len(t, events, 1)
+		require.NotNil(t, events[0].TraceContext)
+		// The ingest span ends just after the message settles.
+		if _, ok := sampler.(interface{ Description() string }); ok && sampler.Description() == sdktrace.AlwaysSample().Description() {
+			require.Eventually(t, func() bool { return len(exporter.GetSpans()) == 1 }, 5*time.Second, 5*time.Millisecond)
+		}
+		return trace.SpanContextFromContext(events[0].TraceContext), exporter.GetSpans().Snapshots()
+	}
+
+	t.Run("ratio 0 records nothing and adopts nothing", func(t *testing.T) {
+		sc, spans := run(t, sdktrace.ParentBased(sdktrace.TraceIDRatioBased(0)))
+		require.False(t, sc.IsSampled(), "a device chose sampling")
+		require.NotEqual(t, remoteTrace, sc.TraceID().String(), "the device's trace id was adopted")
+		require.Zero(t, sc.TraceState().Len(), "the device's tracestate was propagated")
+		require.Empty(t, spans)
+	})
+	t.Run("ratio 1 is a root span with one link", func(t *testing.T) {
+		sc, spans := run(t, sdktrace.AlwaysSample())
+		require.NotEqual(t, remoteTrace, sc.TraceID().String())
+		require.Zero(t, sc.TraceState().Len())
+		require.Len(t, spans, 1)
+		require.False(t, spans[0].Parent().IsValid(), "the ingest span must be a new root")
+		require.Len(t, spans[0].Links(), 1)
+		require.Equal(t, remoteTrace, spans[0].Links()[0].SpanContext.TraceID().String())
+		require.Zero(t, spans[0].Links()[0].SpanContext.TraceState().Len())
+	})
+}
+
+// With tracing off the capture path attaches nothing: no span, no trace context on the event.
+func TestCaptureTracingDisabledLeavesTheEventUntraced(t *testing.T) {
+	h := newCaptureHarness(t)
+	ack := &recordingAck{}
+	m := capturedMsg(captureSubject, validEvent, 1, 78, ack)
+	m.Headers = map[string]string{"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
+	h.source.handle(m)
+	require.True(t, ack.settled(t), "message never settled")
+	events := h.publishedEvents()
+	require.Len(t, events, 1)
+	require.Nil(t, events[0].TraceContext)
 }
