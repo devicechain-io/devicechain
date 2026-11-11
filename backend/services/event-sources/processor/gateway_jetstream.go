@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	core "github.com/devicechain-io/dc-microservice/core"
@@ -803,25 +804,25 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 	// reading-shed counters, never on the message stage's rate-limited counter.
 	es.received(es.Id, msg.Value)
 
-	var traceContext context.Context
+	var remote trace.SpanContext
 	if tracing.Enabled() {
-		traceContext = msg.TraceContext()
+		remote = trace.SpanContextFromContext(msg.TraceContext())
 	}
 	es.messages <- rawMessage{
-		traceContext: traceContext,
-		tenant:       tenant,
-		payload:      msg.Value,
-		device:       deviceFromSubject(msg.Subject),
-		dedupID:      dedupID,
-		receivedAt:   msg.AppendTime,
-		meterAt:      meterAt,
-		metering:     metering,
-		redelivery:   redelivery,
-		origin:       OriginAuthenticated,
-		assertion:    assertedByCaptureBroker(msg),
-		uplink:       isUplink,
-		done:         es.settleAndForget(settle, beatRef),
-		shed:         shed,
+		remote:     remote,
+		tenant:     tenant,
+		payload:    msg.Value,
+		device:     deviceFromSubject(msg.Subject),
+		dedupID:    dedupID,
+		receivedAt: msg.AppendTime,
+		meterAt:    meterAt,
+		metering:   metering,
+		redelivery: redelivery,
+		origin:     OriginAuthenticated,
+		assertion:  assertedByCaptureBroker(msg),
+		uplink:     isUplink,
+		done:       es.settleAndForget(settle, beatRef),
+		shed:       shed,
 	}
 }
 
