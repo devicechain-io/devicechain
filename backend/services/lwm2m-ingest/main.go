@@ -614,7 +614,9 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		TenantDeleted: tenantGate,
 	})
 	// Bound to this term: a fresh term builds a fresh registry and starts its own sweep.
-	go reg.RunTenantSweep(leaderCtx, registry.DefaultTenantSweepInterval)
+	if !reg.StartTenantSweep(leaderCtx, registry.DefaultTenantSweepInterval) {
+		log.Warn().Msg("Could not start LwM2M tenant sweep: registry already stopped.")
+	}
 	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, connTable, decode.DefaultObjectAllowlist, limiter, leaderCtx)
 
 	// The L4b wake-drain fetcher reads a waking device's backlogged commands from command-delivery so
@@ -1182,7 +1184,7 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	setLeader(false)
 	stopServing()    // on a term that served: records intent, THEN Stops the socket, so the ensuing Serve return is graceful. On one that did not: the bare Stop that closes the bound socket
 	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
-	reg.Wait()       // join the term's reconstruction goroutines (orphan DISCONNECTs, the in-term retry): all bound by the cancelled leaderCtx, so this does not wait out an emit budget
+	reg.Wait()       // join the term's tenant sweep callbacks and reconstruction goroutines before releasing the lease; the cancelled leaderCtx aborts presence retries
 	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
 
