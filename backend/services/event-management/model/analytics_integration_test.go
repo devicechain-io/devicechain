@@ -34,6 +34,7 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -42,6 +43,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -115,7 +119,7 @@ func analyticsHarness(t *testing.T) (*rdb.RdbManager, *gorm.DB) {
 	}
 	seedBothTenants(t, sys)
 	createAnalyticsITRoles(t, sys)
-	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr, newTestAnalyticsMetrics()))
 	return mgr, sys
 }
 
@@ -476,7 +480,7 @@ func TestIntegrationAnalyticsGrantsConvergeOnEveryBoot(t *testing.T) {
 		"the control did not leak, so the convergence below would prove nothing (saw %d tenants)", n)
 
 	// Boot. The reconciler must take it back.
-	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()))
 	require.Error(t, conn.QueryRow(ctx, crossTenant).Scan(&n),
 		"a boot left the read role holding privileges on the area schema")
 
@@ -524,7 +528,7 @@ func TestIntegrationAnalyticsPublicGrantsAreConvergedToo(t *testing.T) {
 	require.NoError(t, conn.QueryRow(ctx, crossTenant).Scan(&n))
 	require.Equalf(t, 2, n, "the control did not leak (saw %d tenants), so the boot below proves nothing", n)
 
-	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()))
 	require.Error(t, conn.QueryRow(ctx, crossTenant).Scan(&n),
 		"a boot left PUBLIC holding privileges on the area schema")
 
@@ -696,7 +700,7 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 	require.Lenf(t, tenantsVisible(t, conn, probe), 2,
 		"the migration chain repaired the view, so this test is no longer about the reconciler")
 
-	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr, newTestAnalyticsMetrics()))
 	require.Len(t, tenantsVisible(t, conn, probe), 1, "a boot did not restore the tenant boundary")
 
 	// 🔴 THE SECOND DAMAGE SHAPE, because the integrity check now decides whether the
@@ -711,7 +715,7 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 	require.Falsef(t, intact, "a view with no security barrier was reported intact")
 	require.Contains(t, reason, "security barrier")
 
-	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr, newTestAnalyticsMetrics()))
 	intact, reason, err = analyticsSurfaceIntact(sys)
 	require.NoError(t, err)
 	require.Truef(t, intact, "a boot did not restore the security barrier: %s", reason)
@@ -729,7 +733,7 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 	intact, _, err = analyticsSurfaceIntact(sys)
 	require.NoError(t, err)
 	require.False(t, intact, "a view whose predicate is disjoined with `true` was reported intact")
-	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr, newTestAnalyticsMetrics()))
 	require.Len(t, tenantsVisible(t, conn, probe), 1, "a boot did not restore the predicate")
 
 	// 🔴 THE FOURTH: the identity FUNCTION, which no view-level check can see. Every
@@ -755,7 +759,7 @@ func TestIntegrationAnalyticsSurfaceHealsADamagedView(t *testing.T) {
 		require.NoError(t, err)
 		require.Falsef(t, viewsStillFine, "%s was reported intact", damage.name)
 
-		require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+		require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr, newTestAnalyticsMetrics()))
 		ok, why, err := analyticsSurfaceIntact(sys)
 		require.NoError(t, err)
 		require.Truef(t, ok, "a boot did not repair %s: %s", damage.name, why)
@@ -845,7 +849,7 @@ func TestIntegrationChainRunsAsTheLeastPrivilegeRole(t *testing.T) {
 	// below would pass while measuring nothing at all, which is exactly the vacuous shape
 	// this file exists to avoid. The assertion after it is what says the path ran.
 	createAnalyticsITRoles(t, sys)
-	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(context.Background(), mgr, newTestAnalyticsMetrics()))
 
 	var granted bool
 	require.NoError(t, own.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`,
@@ -961,7 +965,7 @@ func TestIntegrationStalePositionGrantIsRevokedOnBoot(t *testing.T) {
 	require.Positivef(t, n,
 		"the control did not leak, so the boot below would prove nothing (saw %d rows)", n)
 
-	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()))
 
 	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
 		"a boot left the general reader group holding position")
@@ -1009,7 +1013,7 @@ func TestIntegrationDirectPositionGrantToAReaderIsRevokedOnBoot(t *testing.T) {
 	require.Positivef(t, n,
 		"the control did not leak, so the boot below would prove nothing (saw %d rows)", n)
 
-	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()))
 
 	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
 		"a boot left a per-tenant reader holding position by a direct grant")
@@ -1046,7 +1050,7 @@ func TestIntegrationPositionGrantToPublicIsRevokedOnBoot(t *testing.T) {
 	require.Positivef(t, n,
 		"the control did not leak, so the boot below would prove nothing (saw %d rows)", n)
 
-	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()))
 
 	require.Error(t, reader.QueryRow(ctx, position).Scan(&n),
 		"a boot left PUBLIC holding position on the read surface")
@@ -1092,7 +1096,7 @@ func TestIntegrationDirectAreaGrantToAReaderIsRevokedOnBoot(t *testing.T) {
 	require.Equalf(t, 2, n,
 		"the control did not leak, so the boot below would prove nothing (saw %d tenants)", n)
 
-	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr))
+	require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()))
 
 	require.Error(t, reader.QueryRow(ctx, crossTenant).Scan(&n),
 		"a boot left a per-tenant reader holding privileges on the area schema")
@@ -1153,12 +1157,12 @@ func TestIntegrationAnalyticsNonPrefixedGroupMembersAreReconciled(t *testing.T) 
 
 	// Ask the real catalog query as well: overlapping memberships must yield one
 	// target, and an unrelated role must not enter the convergence plan.
-	var roles []string
+	var roles []analyticsRoleRow
 	require.NoError(t, sys.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&roles).Error)
 	for _, tc := range cases {
 		count := 0
 		for _, role := range roles {
-			if role == tc.role {
+			if role.Rolname == tc.role {
 				count++
 			}
 		}
@@ -1170,7 +1174,7 @@ func TestIntegrationAnalyticsNonPrefixedGroupMembersAreReconciled(t *testing.T) 
 	}
 
 	for pass := 1; pass <= 2; pass++ {
-		require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr), "reconciliation %d", pass)
+		require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()), "reconciliation %d", pass)
 		for _, tc := range cases {
 			unrelated := len(tc.groups) == 0
 			var usage, selectArea bool
@@ -1233,11 +1237,11 @@ func TestIntegrationAnalyticsMembershipNeverSelectsThePlatformRole(t *testing.T)
 		require.NoError(t, sys.Exec(fmt.Sprintf("GRANT %q TO %q", AnalyticsReaderRole, role)).Error)
 	}
 	selected := func(db *gorm.DB) map[string]bool {
-		var roles []string
+		var roles []analyticsRoleRow
 		require.NoError(t, db.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&roles).Error)
 		out := map[string]bool{}
 		for _, r := range roles {
-			out[r] = true
+			out[r.Rolname] = true
 		}
 		return out
 	}
@@ -1263,4 +1267,218 @@ func TestIntegrationAnalyticsMembershipNeverSelectsThePlatformRole(t *testing.T)
 	require.False(t, got[owner], "the area schema's owner was selected by membership")
 	require.True(t, got[control], "control: a member must still be selected")
 	require.True(t, got[app], "control: the app-like member is selected when it is not the session user")
+}
+
+// 🔴 Name collisions must refuse the boot without preserving other readers' stray grants.
+func TestIntegrationAnalyticsSuperuserNamedLikeAReaderIsSkippedNotRefused(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	superuser := AnalyticsRolePrefix + "super_it"
+	drop := func() {
+		_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", superuser)).Error
+		_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", superuser)).Error
+	}
+	drop()
+	t.Cleanup(drop)
+	require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q SUPERUSER NOLOGIN", superuser)).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf("GRANT USAGE ON SCHEMA %q TO %q", AnalyticsAreaSchema, superuser)).Error)
+	// Superuser privilege checks are always true; inspect the explicit ACL instead.
+	hasUsageACL := func() bool {
+		var granted bool
+		require.NoError(t, sys.Raw(`SELECT EXISTS (
+			SELECT 1 FROM pg_namespace n, aclexplode(n.nspacl) a
+			WHERE n.nspname = ? AND a.grantee = ?::regrole AND a.privilege_type = 'USAGE'
+		)`, AnalyticsAreaSchema, superuser).Scan(&granted).Error)
+		return granted
+	}
+	require.True(t, hasUsageACL(), "control: the superuser must carry an explicit area USAGE grant")
+
+	reader := AnalyticsRolePrefix + tenantB
+	require.NoError(t, sys.Exec(fmt.Sprintf("GRANT USAGE ON SCHEMA %q TO %q", AnalyticsAreaSchema, reader)).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA %q TO %q", AnalyticsAreaSchema, reader)).Error)
+	readerHasSelect := func() bool {
+		var granted bool
+		require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`, reader,
+			fmt.Sprintf(`%q.measurement_events`, AnalyticsAreaSchema)).Scan(&granted).Error)
+		return granted
+	}
+	require.True(t, readerHasSelect(), "control: the ordinary reader must carry the stray grant")
+
+	var output bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&output).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = previous })
+	metrics := newTestAnalyticsMetrics()
+	for pass := 1; pass <= 2; pass++ {
+		require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, metrics))
+		require.True(t, hasUsageACL(), "the superuser must be skipped, not converged")
+		require.Equal(t, float64(pass), testutil.ToFloat64(metrics.PlatformCollisions))
+		require.False(t, readerHasSelect(), "skipping a superuser must not preserve another reader's stray grant")
+	}
+	warnNamesRole := false
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, `"level":"warn"`) && strings.Contains(line, superuser) {
+			warnNamesRole = true
+		}
+	}
+	require.True(t, warnNamesRole, "expected a warning naming %s in %s", superuser, output.String())
+}
+
+func TestIntegrationAnalyticsPrefixArmRefusesThePlatformRole(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	platform := AnalyticsRolePrefix + "platform_it"
+	session := AnalyticsRolePrefix + "session_it"
+	for _, role := range []string{platform, session} {
+		role := role
+		drop := func() {
+			_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", role)).Error
+			_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", role)).Error
+		}
+		drop()
+		t.Cleanup(drop)
+		require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q NOLOGIN", role)).Error)
+	}
+	var prior string
+	require.NoError(t, sys.Raw(`SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = ?`,
+		AnalyticsAreaSchema).Scan(&prior).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, platform)).Error)
+	// The harness's schema is superuser-owned with an empty ACL, so the new owner holds
+	// nothing until granted. Give it the privilege a converge would strip, and prove it.
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO %q`, AnalyticsAreaSchema, platform)).Error)
+	var ownerUsage bool
+	require.NoError(t, sys.Raw(`SELECT has_schema_privilege(?, ?, 'USAGE')`, platform,
+		AnalyticsAreaSchema).Scan(&ownerUsage).Error)
+	require.True(t, ownerUsage, "control: the platform owner must hold area USAGE before reconciling")
+	t.Cleanup(func() {
+		require.NoError(t, sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, prior)).Error)
+	})
+
+	reader := AnalyticsRolePrefix + tenantB
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO %q`, AnalyticsAreaSchema, reader)).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON ALL TABLES IN SCHEMA %q TO %q`, AnalyticsAreaSchema, reader)).Error)
+	var granted bool
+	require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`, reader,
+		fmt.Sprintf(`%q.measurement_events`, AnalyticsAreaSchema)).Scan(&granted).Error)
+	require.True(t, granted, "control: the ordinary reader must carry the stray grant")
+
+	metrics := newTestAnalyticsMetrics()
+	err := ReconcileAnalyticsSurface(ctx, mgr, metrics)
+	require.Zero(t, testutil.ToFloat64(metrics.PlatformCollisions))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), platform)
+	require.Contains(t, err.Error(), "rename")
+	require.NoError(t, sys.Raw(`SELECT has_schema_privilege(?, ?, 'USAGE')`, platform,
+		AnalyticsAreaSchema).Scan(&granted).Error)
+	require.True(t, granted, "the platform owner must never be converged")
+	require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`, reader,
+		fmt.Sprintf(`%q.measurement_events`, AnalyticsAreaSchema)).Scan(&granted).Error)
+	require.False(t, granted, "a refused platform role must not preserve another reader's stray grant")
+
+	superuser := AnalyticsRolePrefix + "super_query_it"
+	dropSuperuser := func() {
+		_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", superuser)).Error
+		_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", superuser)).Error
+	}
+	dropSuperuser()
+	t.Cleanup(dropSuperuser)
+	require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q SUPERUSER NOLOGIN", superuser)).Error)
+
+	// The current role must be refused even when selected solely by its reader name.
+	require.NoError(t, sys.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(fmt.Sprintf("SET LOCAL ROLE %q", session)).Error; err != nil {
+			return err
+		}
+		var rows []analyticsRoleRow
+		if err := tx.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&rows).Error; err != nil {
+			return err
+		}
+		flags := map[string]analyticsRoleRow{}
+		for _, row := range rows {
+			flags[row.Rolname] = row
+		}
+		require.Contains(t, flags, session)
+		require.True(t, flags[session].Refuse)
+		require.Contains(t, flags, reader)
+		require.False(t, flags[reader].Refuse)
+		require.Contains(t, flags, superuser)
+		require.False(t, flags[superuser].Refuse)
+		require.True(t, flags[superuser].Superuser)
+		return nil
+	}))
+}
+
+func TestIntegrationAnalyticsNestedMembersAreReconciled(t *testing.T) {
+	mgr, sys := analyticsHarness(t)
+	ctx := context.Background()
+	const mid, leaf, deep = "bi_mid_it", "bi_leaf_it", "bi_deep_it"
+	const owner, behind = "bi_owner_mid_it", "bi_behind_owner_it"
+	for _, role := range []string{mid, leaf, deep, owner, behind} {
+		role := role
+		drop := func() {
+			_ = sys.Exec(fmt.Sprintf("DROP OWNED BY %q", role)).Error
+			_ = sys.Exec(fmt.Sprintf("DROP ROLE IF EXISTS %q", role)).Error
+		}
+		drop()
+		t.Cleanup(drop)
+		options := "NOLOGIN"
+		if role == leaf || role == deep {
+			options = fmt.Sprintf("LOGIN INHERIT PASSWORD '%s'", analyticsITPassword)
+		}
+		require.NoError(t, sys.Exec(fmt.Sprintf("CREATE ROLE %q %s", role, options)).Error)
+	}
+	for _, edge := range [][2]string{{AnalyticsReaderRole, mid}, {mid, leaf}, {leaf, deep}, {mid, owner}, {owner, behind}} {
+		require.NoError(t, sys.Exec(fmt.Sprintf("GRANT %q TO %q", edge[0], edge[1])).Error)
+	}
+	for _, role := range []string{leaf, deep} {
+		require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT USAGE ON SCHEMA %q TO %q`, AnalyticsAreaSchema, role)).Error)
+		require.NoError(t, sys.Exec(fmt.Sprintf(`GRANT SELECT ON ALL TABLES IN SCHEMA %q TO %q`, AnalyticsAreaSchema, role)).Error)
+	}
+	reader := connectAs(t, leaf)
+	crossTenant := fmt.Sprintf(`SELECT count(DISTINCT tenant_id) FROM %q.measurement_events`, AnalyticsAreaSchema)
+	var n int
+	require.NoError(t, reader.QueryRow(ctx, crossTenant).Scan(&n))
+	require.Equal(t, 2, n, "control: the nested member must read both tenants before repair")
+
+	selected := func() map[string]int {
+		var rows []analyticsRoleRow
+		require.NoError(t, sys.Raw(analyticsRolesQuery(), analyticsRolesQueryArgs()...).Scan(&rows).Error)
+		counts := map[string]int{}
+		for _, row := range rows {
+			counts[row.Rolname]++
+		}
+		return counts
+	}
+	for pass := 1; pass <= 2; pass++ {
+		require.NoError(t, ReconcileAnalyticsSurface(ctx, mgr, newTestAnalyticsMetrics()), "reconciliation %d", pass)
+		for _, role := range []string{leaf, deep} {
+			var usage, selectArea bool
+			require.NoError(t, sys.Raw(`SELECT has_schema_privilege(?, ?, 'USAGE')`, role,
+				AnalyticsAreaSchema).Scan(&usage).Error)
+			require.NoError(t, sys.Raw(`SELECT has_table_privilege(?, ?, 'SELECT')`, role,
+				fmt.Sprintf(`%q.measurement_events`, AnalyticsAreaSchema)).Scan(&selectArea).Error)
+			require.False(t, usage, "%s retained area USAGE after pass %d", role, pass)
+			require.False(t, selectArea, "%s retained area SELECT after pass %d", role, pass)
+		}
+		err := reader.QueryRow(ctx, crossTenant).Scan(&n)
+		require.Error(t, err)
+		require.Contains(t, strings.ToLower(err.Error()), "permission denied")
+		counts := selected()
+		for _, role := range []string{mid, leaf, deep} {
+			require.Equal(t, 1, counts[role], "each nested role must be selected once: %s", role)
+		}
+	}
+
+	// 🔴 A platform role at an intermediate level blocks traversal through that branch.
+	var prior string
+	require.NoError(t, sys.Raw(`SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = ?`,
+		AnalyticsAreaSchema).Scan(&prior).Error)
+	require.NoError(t, sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, owner)).Error)
+	t.Cleanup(func() {
+		require.NoError(t, sys.Exec(fmt.Sprintf("ALTER SCHEMA %q OWNER TO %q", AnalyticsAreaSchema, prior)).Error)
+	})
+	counts := selected()
+	require.Zero(t, counts[owner], "the nested area owner must be excluded")
+	require.Zero(t, counts[behind], "membership must not traverse the excluded owner")
+	require.Equal(t, 1, counts[leaf], "control: the other nested branch must still be selected")
 }
