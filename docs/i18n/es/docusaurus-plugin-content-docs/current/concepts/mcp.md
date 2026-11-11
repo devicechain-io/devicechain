@@ -145,11 +145,13 @@ El asistente **propone** una acción y las personas deciden. En esta **vista pre
 ### Reviewing proposals in the console (preview) {#approvals-inbox}
 
 Abre **Supervisión > Aprobaciones**. La bandeja requiere una membresía en el inquilino sin
-restricción de alcance con `agent:admin`, y el interruptor de acciones de agentes de la instancia
+restricción de alcance con `agent:admin` o un aprobador actual (rol aprobador, `alarm:write` y segundo factor activo), y el interruptor de acciones de agentes de la instancia
 debe estar habilitado. Listar propuestas también necesita `alarm:read`; aprobar sigue requiriendo
 el rol aprobador, `alarm:write` y el segundo factor reciente descritos arriba. La bandeja no edita
 el documento de política: usa la API de políticas para configurar clientes, roles aprobadores y
 reglas de acción.
+
+El interruptor de emergencia solo es visible con `agent:admin`.
 
 1. La bandeja empieza en **Pendiente**. Usa **Estado** para inspeccionar propuestas rechazadas,
    caducadas o denegadas. Abre una propuesta mediante el nombre de su cliente. Revisa la acción,
