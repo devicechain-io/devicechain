@@ -110,7 +110,7 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 | `mqttExposure.loadBalancer` | Los ajustes de nube del balanceador de carga de MQTT, como un balanceador interno y los rangos de origen permitidos |
 | `instance.config.infrastructure.nats.streamDesignRate`, `.streamRunwayMinutes`, `.streamMaxBytes`, `.streamMaxBytesCold`, `.streamMaxMsgs` | El margen de interrupción para el que se dimensionan los streams de eventos y sus techos de bytes y mensajes. La reserva se comprueba con el volumen del broker antes de escribir nada |
 | `instance.config.infrastructure.messaging.envelopes.resolved`, `.inbound`, `.inboundLingerMillis` | Si los eventos se escriben como envelopes, desactivado por defecto |
-| `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Las audiencias siempre se aplican. Deje enforcement sin definir o use `enforce`; `v1.4` rechaza `observe`. La opción distinta `unscopedClientCredentials: observe` sigue admitida. `externalResources` enumera servidores externos. El chart deriva y controla las otras dos claves. |
+| `instance.config.infrastructure.tokenAudience.enforcement`, `.unscopedClientCredentials`, `.externalResources` | Las audiencias siempre se aplican. Deja enforcement sin definir o usa `enforce`; `v1.4` rechaza `observe`. La opción distinta `unscopedClientCredentials: observe` sigue admitida. `externalResources` enumera servidores externos. El chart deriva y controla las otras dos claves. |
 | `eventSources.ingestMetering` | Medición de ingesta con crédito por retraso opcional; consulta [Ingest metering](#ingest-metering). Predeterminado: `legacy` |
 | `brokerAdmin.allowCeilingShrink` | Permite que una actualización baje un techo de stream por debajo de lo que contiene. Fíjalo para esa actualización y quítalo después |
 
@@ -163,11 +163,11 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
 - **Bytes por fila almacenada.** Una fila de medición cuesta unos 600 bytes en disco, índices
   incluidos, antes de comprimir: un volumen de 32Gi contenía unos 51 millones de filas cuando se
   llenó en una prueba a 10 000 lecturas por segundo. Una medición anterior dio cerca de 1 KB con el
-  registro de escritura anticipada; dimensione con la cifra mayor hasta que haya medido la suya; la fórmula siguiente toma el tamaño de fila como variable.
+  registro de escritura anticipada; dimensiona con la cifra mayor hasta que hayas medido la tuya; la fórmula siguiente toma el tamaño de fila como variable.
   El almacén de eventos comprime los fragmentos anteriores a `lifecycle.compressAfterDays` (7 por
   defecto) en la configuración de `event-management`, sin pérdida, pero no hace nada con la semana
-  más reciente: dimensione el volumen para al menos esa cantidad de datos sin comprimir. La cifra
-  de 600 bytes es la no comprimida, y la razón de compresión depende de sus datos, así que mídala
+  más reciente: dimensiona el volumen para al menos esa cantidad de datos sin comprimir. La cifra
+  de 600 bytes es la no comprimida, y la razón de compresión depende de tus datos, así que mídela
   antes de contar con ella. Contando todas las tablas en las que se escribe un evento (eventos y
   mediciones, con índices), una medición posterior en GKE dio 756 bytes por evento almacenado, sin
   comprimir.
@@ -179,14 +179,14 @@ hay que dimensionar a propósito. Tres cifras lo deciden.
   solo tiene que contener la ventana más la semana sin comprimir.
 
 Como regla, la ventana sin comprimir necesita lecturas por segundo × (1 + métricas calculadas) × bytes por fila × 86 400 segundos × días, dejando libre una cuarta parte del volumen para el registro de
-escritura anticipada, el mantenimiento y el crecimiento. A los 600 bytes medidos y 10 000 lecturas por segundo son unos 520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añada lo que
+escritura anticipada, el mantenimiento y el crecimiento. A los 600 bytes medidos y 10 000 lecturas por segundo son unos 520 GB al día, así que los siete días sin comprimir por defecto son unos 3,6 TB. Añade lo que
 necesiten el historial comprimido y la ventana de retención.
 
 Tres alertas vigilan el volumen, en el orden en que conviene enterarse: `DatabaseVolumeFillsWithinDay`
 (va camino de llenarse en 24 horas), `DatabaseVolumeFillingFast` (en una hora) y
 `DatabaseVolumeCritical` (95 % lleno). Si la base de datos deja de aceptar escrituras de todos
 modos, salta `EventStoreRefusingWrites` y `event-management` retiene los eventos que no pudo
-almacenar en lugar de descartarlos (vea [Cuando el almacén de eventos no puede aceptar
+almacenar en lugar de descartarlos (ve [Cuando el almacén de eventos no puede aceptar
 escrituras](./observability.md#event-store-down)).
 
 ### Puntos de control, tamaño de fragmento y compresión con tasas altas {#event-store-checkpoints}
@@ -203,46 +203,46 @@ de lecturas por segundo.
   vez que se llena el registro. Ambos se aplican por recarga, sin reinicio. El coste es la
   recuperación tras una caída: después de una parada no limpia, la base de datos reproduce el
   registro escrito desde su último punto de control, hasta unos 30 minutos, porque un punto de control se reparte durante la mayor parte de su intervalo. Al dimensionar el almacén
-  para una tasa mayor, suba `timescale_max_wal_size_mib` y baje `timescale_checkpoint_timeout`
+  para una tasa mayor, sube `timescale_max_wal_size_mib` y baja `timescale_checkpoint_timeout`
   juntos: para que los puntos de control sigan el reloj, `max_wal_size` debe ser al menos el triple
   del registro escrito por intervalo de punto de control. El registro vive en el volumen de datos,
   así que esa cifra tiene que caber en él.
   **Regla de dimensionamiento.** Postgres solicita un punto de control, antes de que venza el
   temporizador, cuando el registro escrito desde el anterior alcanza aproximadamente
   `max_wal_size` / (1 + `checkpoint_completion_target`), es decir, `max_wal_size` dividido entre
-  1,9. Para que los puntos de control del almacén de eventos sigan el reloj, fije `max_wal_size` en
+  1,9. Para que los puntos de control del almacén de eventos sigan el reloj, fija `max_wal_size` en
   al menos 1,9 × `checkpoint_timeout` (900 segundos por defecto) × la tasa de registro en bytes por
-  segundo. Mida la tasa en su propio almacén (`wal_bytes` de `pg_stat_wal`, en una ventana);
+  segundo. Mide la tasa en tu propio almacén (`wal_bytes` de `pg_stat_wal`, en una ventana);
   depende del ancho de fila y de los índices. Ejemplo de una prueba de rendimiento en GKE: con el límite predeterminado
   de 13 GiB, el almacén de eventos hizo puntos de control por reloj a 8.000 eventos MQTT por segundo
   (9,4 MB/s de registro), pero a 12.000 por segundo (15,3 MB/s) solicitó un punto de control en lugar
   de esperar al temporizador, porque 15 MB/s escriben unos 7 GB en menos de ocho minutos. MB/s aquí
   significa 10^6 bytes por segundo. A 15,3 MB/s la regla da 1,9 × 900 × 15,3 MB/s = 26,2 GB, es decir,
-  24,4 GiB, así que fije unos 25 GiB a 12.000 por segundo. Escalando la tasa medida a 20.000 por
+  24,4 GiB, así que fija unos 25 GiB a 12.000 por segundo. Escalando la tasa medida a 20.000 por
   segundo (unos 25,5 MB/s) salen unos 40,6 GiB, así que unos 41 GiB; esta segunda cifra es una
-  extrapolación, no una medición. Redondee hacia arriba en ambos casos y mida su propia tasa. El
-  registro vive en el volumen de datos, así que dimensione el volumen para ese límite además de para los datos. El triple indicado
+  extrapolación, no una medición. Redondea hacia arriba en ambos casos y mide tu propia tasa. El
+  registro vive en el volumen de datos, así que dimensiona el volumen para ese límite además de para los datos. El triple indicado
   arriba es el margen que conviene mantener sobre este mínimo.
   Estos ajustes afinan solo el almacén de eventos. La base de datos relacional conserva sus valores
   predeterminados (`max_wal_size` de 1 GB y `checkpoint_timeout` de cinco minutos); en la misma
   prueba solicitó de 3 a 6 puntos de control en cada ventana de 7,5 minutos con 4,5 a 7 MB/s de
   registro, algo esperable en ella y no una señal de que el almacén de eventos esté mal ajustado.
   Una actualización lo aplica también a un almacén existente, con el tamaño actual de su volumen.
-  Si ese volumen ya está casi lleno, ejecute `dcctl upgrade --event-store-max-wal-mib 1024` para conservar el
-  1 GiB anterior (con OpenTofu, fije `timescale_max_wal_size_mib` en 1024).
+  Si ese volumen ya está casi lleno, ejecuta `dcctl upgrade --event-store-max-wal-mib 1024` para conservar el
+  1 GiB anterior (con OpenTofu, fija `timescale_max_wal_size_mib` en 1024).
 - **Intervalo de fragmento.** `lifecycle.chunkIntervalHours` es 24 por defecto y solo afecta a los
   fragmentos creados después de cambiarlo. Los índices de un fragmento deben caber en memoria
   mientras se escribe en él, y los de los fragmentos activos en aproximadamente una cuarta parte
   de la RAM de la base de datos. A 1.000 lecturas por segundo un fragmento diario ocupa decenas de
-  gigabytes y el valor predeterminado es correcto. A 10.000 o más, use de 1 a 6 horas.
+  gigabytes y el valor predeterminado es correcto. A 10.000 o más, usa de 1 a 6 horas.
 - **Compresión tras N días.** `lifecycle.compressAfterDays` es 7 por defecto, lo que deja una
   semana de datos sin comprimir. A 10.000 lecturas por segundo son varios terabytes de datos
-  calientes. Si no consulta datos en bruto de más de uno o dos días, fíjelo en 1 y dimensione el
+  calientes. Si no consulta datos en bruto de más de uno o dos días, fíjalo en 1 y dimensiona el
   volumen en consecuencia.
 
 ### Ampliar el volumen en línea {#event-store-expand}
 
-En una StorageClass que permita ampliar volúmenes, suba el tamaño en el Cluster del almacén de
+En una StorageClass que permita ampliar volúmenes, sube el tamaño en el Cluster del almacén de
 eventos. El operador de la base de datos redimensiona la reclamación de cada instancia en su sitio,
 sin reiniciar:
 
@@ -253,9 +253,9 @@ kubectl -n <instance namespace> get pvc -w
 ```
 
 Si el pod de la base de datos ya estaba en bucle de reinicios
-por el disco lleno, elimine ese pod cuando su reclamación haya crecido para que reinicie sobre el
+por el disco lleno, elimina ese pod cuando su reclamación haya crecido para que reinicie sobre el
 sistema de archivos mayor. Entonces se almacenan los eventos retenidos y la acumulación detrás de
-ellos, y las alertas se resuelven al subir la fracción libre. Fije también `timescale_storage` al nuevo tamaño en la configuración OpenTofu de la instalación. El Cluster se aplica desde ese valor: la fusión de tres vías de Helm conserva un tamaño modificado a mano solo mientras el valor configurado no cambie, un valor configurado menor hace que el operador de la base de datos rechace la reducción y falle una aplicación directa (la propia `dcctl upgrade` conserva el tamaño actual del volumen y nunca lo reduce), y una reconstrucción de recuperación ante desastres vuelve al tamaño configurado.
+ellos, y las alertas se resuelven al subir la fracción libre. Fija también `timescale_storage` al nuevo tamaño en la configuración OpenTofu de la instalación. El Cluster se aplica desde ese valor: la fusión de tres vías de Helm conserva un tamaño modificado a mano solo mientras el valor configurado no cambie, un valor configurado menor hace que el operador de la base de datos rechace la reducción y falle una aplicación directa (la propia `dcctl upgrade` conserva el tamaño actual del volumen y nunca lo reduce), y una reconstrucción de recuperación ante desastres vuelve al tamaño configurado.
 
 ### Cuando el cambio de tamaño no llega a los volúmenes {#event-store-expand-pvc}
 
@@ -264,11 +264,11 @@ reconcilia el Cluster, y un Cluster en mal estado puede no hacerlo. En el incide
 que motiva estas notas, ambas réplicas en espera entraban en bucle de fallos con `No space left on
 device`, y modificar el Cluster no cambió las reclamaciones en unos tres minutos; modificar las
 reclamaciones directamente sí. Si `kubectl get pvc` sigue mostrando la capacidad anterior unos
-minutos después de modificar el Cluster, amplíe usted las reclamaciones. Lo mismo vale para la base de
+minutos después de modificar el Cluster, amplía tú las reclamaciones. Lo mismo vale para la base de
 datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `DatabaseVolumeFillingUp`,
 `DatabaseVolumeAlmostFull` y `DatabaseVolumeCritical` además del almacén de eventos.
 
-1. Compruebe que la StorageClass permite la expansión. Sin ella el cambio se rechaza y las únicas
+1. Comprueba que la StorageClass permite la expansión. Sin ella el cambio se rechaza y las únicas
    salidas son acortar la retención (que libera espacio al descartarse fragmentos) o restaurar en un
    Cluster mayor:
 
@@ -277,7 +277,7 @@ datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `Data
    kubectl get storageclass <esa clase> -o jsonpath='{.allowVolumeExpansion}{"\n"}'   # debe imprimir true
    ```
 
-2. Modifique todas las reclamaciones del Cluster al mismo tamaño (`dc-tsdb-1`, `dc-tsdb-2`,
+2. Modifica todas las reclamaciones del Cluster al mismo tamaño (`dc-tsdb-1`, `dc-tsdb-2`,
    `dc-tsdb-3`). Una reclamación solo puede crecer:
 
    ```bash
@@ -287,14 +287,14 @@ datos relacional (Cluster `dc-rdb`, reclamaciones `dc-rdb-N`), que vigilan `Data
    done
    ```
 
-3. Mantenga `spec.storage.size` del Cluster y el ajuste `timescale_storage` en el mismo tamaño, como
+3. Mantén `spec.storage.size` del Cluster y el ajuste `timescale_storage` en el mismo tamaño, como
    se describió antes, para que el operador y la siguiente aplicación coincidan con lo que hizo.
 
-Verifique antes de darlo por terminado:
+Verifica antes de darlo por terminado:
 
 - `kubectl -n <espacio de nombres de la instancia> get pvc` muestra la nueva capacidad en `CAPACITY`
   para todos los miembros. Una reclamación que queda con la condición `FileSystemResizePending`
-  amplía su sistema de archivos al reiniciarse su pod: elimine el pod, un miembro cada vez, esperando
+  amplía su sistema de archivos al reiniciarse su pod: elimina el pod, un miembro cada vez, esperando
   a que vuelva a estar listo antes del siguiente, y el primario al final.
 - `df -h` dentro del contenedor de la base de datos (`kubectl -n <espacio de nombres de la
   instancia> exec dc-tsdb-1 -c postgres -- df -h /var/lib/postgresql/data`) informa del sistema de

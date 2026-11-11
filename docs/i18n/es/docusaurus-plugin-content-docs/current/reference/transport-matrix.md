@@ -121,7 +121,7 @@ operador lo ha activado; consulta [Conectar dispositivos desde fuera del clúste
   la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
   PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
   mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. `dcctl bootstrap` y
-  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulte
+  `dcctl upgrade` lo activan con `--mqtt-fail-closed`. Consulta
   [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
   [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed). Está desactivado por defecto en 1.0, y con él activado el techo es más bajo. Un almacén lleno rechaza publicaciones, y la presión sobre el almacén frena las nuevas conexiones de dispositivos al alcanzar el 80 % de ocupación hasta que baja del 60 %. Esto no elimina el límite independiente de memoria del bróker ni el riesgo de quedarse sin memoria; el techo medido y las cotas de pérdida con él desactivado están en [calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
