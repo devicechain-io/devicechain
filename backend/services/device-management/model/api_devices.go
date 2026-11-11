@@ -270,7 +270,7 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	if repointed {
 		api.emitDeviceRosterForType(ctx, found.ID)
 	}
-	matches, err = api.DeviceTypesByToken(ctx, []string{token})
+	matches, err = api.DeviceTypesById(ctx, []uint{found.ID})
 	if err != nil {
 		return nil, err
 	}

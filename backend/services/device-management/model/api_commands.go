@@ -255,7 +255,7 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	}); err != nil {
 		return nil, err
 	}
-	matches, err = api.CommandDefinitionsByToken(ctx, []string{token})
+	matches, err = api.CommandDefinitionsById(ctx, []uint{updated.ID})
 	if err != nil {
 		return nil, err
 	}

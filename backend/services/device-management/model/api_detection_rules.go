@@ -286,7 +286,7 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	}); err != nil {
 		return nil, err
 	}
-	matches, err = api.DetectionRulesByToken(ctx, []string{token})
+	matches, err = api.DetectionRulesById(ctx, []uint{updated.ID})
 	if err != nil {
 		return nil, err
 	}
