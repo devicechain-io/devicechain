@@ -11,6 +11,8 @@ import (
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -40,7 +42,7 @@ func TestUpgradeIsRefusedWhenTheClusterInstallIsOlderThanThisDcctl(t *testing.T)
 		// The counterweights: a check that refused these would break every upgrade there is.
 		{"a re-run at the same version", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0", false, ""},
 		{"the bare form of the same version", installWitness{Found: true, DcctlVersion: "1.3.0"}, "v1.3.0", false, ""},
-		{"install by a newer dcctl (an older dcctl going back)", installWitness{Found: true, DcctlVersion: "v1.4.0"}, "v1.3.0", false, ""},
+		{"install by a newer dcctl satisfies the install prerequisite", installWitness{Found: true, DcctlVersion: "v1.4.0"}, "v1.3.0", false, ""},
 		{"a candidate over a final release", installWitness{Found: true, DcctlVersion: "v1.3.0"}, "v1.3.0-rc.1", false, ""},
 		{"a source build is not compared", installWitness{}, "dev", false, ""},
 		{"a stamped source build is not compared", installWitness{Found: true, DcctlVersion: "v1.2.0"}, "v1.3.0-dev.20261109", false, ""},
@@ -159,7 +161,7 @@ func TestANewerDcctlIsNotPointedAtAnOlderRelease(t *testing.T) {
 		{"an older release on the published registry", "v1.2.0", "v1.3.0", DefaultImageRegistry, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := refuseForeignRelease(tc.requested, tc.own, tc.registry, "dcctl upgrade local prod --version "+tc.requested)
+			err := refuseForeignRelease(tc.requested, tc.own, tc.registry)
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -169,7 +171,14 @@ func TestANewerDcctlIsNotPointedAtAnOlderRelease(t *testing.T) {
 			if err == nil {
 				t.Fatalf("--version %s from a %s dcctl was let through", tc.requested, tc.own)
 			}
-			for _, want := range []string{"the dcctl of release", tc.requested, tc.own} {
+			want, _ := parseRelease(tc.requested)
+			own, _ := parseRelease(tc.own)
+			if want.compare(own) < 0 {
+				requireOrderMessage(t, err, "no downgrade", "versioning-policy#upgrade-paths")
+			} else {
+				requireOrderMessage(t, err, "Get the dcctl of release "+tc.requested)
+			}
+			for _, want := range []string{tc.requested, tc.own} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}
@@ -192,8 +201,8 @@ func TestAnUpgradeToAnOlderReleaseIsRefusedWhereTheVersionIsSettled(t *testing.T
 		})
 	}
 	err := apply("v1.2.0")
-	if err == nil || !strings.Contains(err.Error(), "dcctl of release v1.2.0") {
-		t.Fatalf("--version v1.2.0 from a v1.3.0 dcctl was not refused with the way back: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no downgrade") || !strings.Contains(err.Error(), "only moves an instance to its own release") {
+		t.Fatalf("--version v1.2.0 from a v1.3.0 dcctl was not refused with the forward-only policy: %v", err)
 	}
 	if err := apply("v1.3.0"); err != nil {
 		t.Errorf("the dcctl's own release was refused: %v", err)
@@ -239,7 +248,7 @@ func TestANewerVersionIsNotAnInstallThenUpgradeLoop(t *testing.T) {
 	// The v1.3.0 dcctl: install --version v1.4.0 is refused up front, so it never records a
 	// version that cannot satisfy the upgrade, and the refusal names the newer dcctl.
 	DefaultImageVersion = "v1.3.0"
-	err := RefuseForeignRelease(newer, DefaultImageRegistry, "dcctl install local --version "+newer)
+	err := RefuseForeignRelease(newer, DefaultImageRegistry)
 	if err == nil || !strings.Contains(err.Error(), "Get the dcctl of release "+newer) {
 		t.Fatalf("install --version %s from a v1.3.0 dcctl was let through: %v", newer, err)
 	}
@@ -249,14 +258,14 @@ func TestANewerVersionIsNotAnInstallThenUpgradeLoop(t *testing.T) {
 	if err := requireInstallOrderFor(ctx, typed, "v1.3.0", orderInstall); err != nil {
 		t.Fatalf("an install by the same dcctl was refused: %v", err)
 	}
-	err = refuseForeignRelease(newer, DefaultImageVersion, DefaultImageRegistry, "unused")
+	err = refuseForeignRelease(newer, DefaultImageVersion, DefaultImageRegistry)
 	if err == nil || !strings.Contains(err.Error(), "Get the dcctl of release "+newer) {
 		t.Fatalf("upgrade --version %s from a v1.3.0 dcctl was let through: %v", newer, err)
 	}
 
 	// The remedy: the v1.4.0 dcctl installs, then upgrades, and nothing refuses.
 	DefaultImageVersion = newer
-	if err := RefuseForeignRelease(newer, DefaultImageRegistry, "unused"); err != nil {
+	if err := RefuseForeignRelease(newer, DefaultImageRegistry); err != nil {
 		t.Fatalf("install --version %s from the v1.4.0 dcctl was refused: %v", newer, err)
 	}
 	if err := requireInstallOrderFor(ctx, typed, newer, orderInstall); err == nil {
@@ -266,7 +275,7 @@ func TestANewerVersionIsNotAnInstallThenUpgradeLoop(t *testing.T) {
 	if err := requireInstallOrderFor(ctx, typed, newer, orderInstall); err != nil {
 		t.Fatalf("the upgrade was still refused after the newer dcctl installed: %v", err)
 	}
-	if err := refuseForeignRelease(newer, DefaultImageVersion, DefaultImageRegistry, "unused"); err != nil {
+	if err := refuseForeignRelease(newer, DefaultImageVersion, DefaultImageRegistry); err != nil {
 		t.Fatalf("the newer dcctl was refused its own release: %v", err)
 	}
 }
@@ -316,12 +325,175 @@ func TestSpellingsOfThePublishedRegistryAreNotCustomRegistries(t *testing.T) {
 		{"ghcr.io/other", false},
 		{"localhost:5000", false},
 	} {
-		err := refuseForeignRelease("v1.2.0", "v1.3.0", tc.registry, "retry")
+		err := refuseForeignRelease("v1.2.0", "v1.3.0", tc.registry)
 		if tc.refused && err == nil {
 			t.Errorf("registry %q bypassed the published-registry check", tc.registry)
 		}
 		if !tc.refused && err != nil {
 			t.Errorf("registry %q was judged as the published one: %v", tc.registry, err)
 		}
+	}
+}
+
+func TestRefuseADowngrade(t *testing.T) {
+	for _, tc := range []struct {
+		name, declaredRegistry, declared, targetRegistry, target string
+		refused                                                  bool
+	}{
+		{"older minor", "", "v1.4.0", "", "v1.3.0", true},
+		{"older patch", DefaultImageRegistry, "v1.3.1", DefaultImageRegistry, "v1.3.0", true},
+		{"older candidate", "", "v1.4.0-rc.2", "", "v1.4.0-rc.1", true},
+		{"candidate before final", "", "v1.4.0", "", "v1.4.0-rc.2", true},
+		{"equal", "", "v1.3.0", "", "v1.3.0", false},
+		{"newer", "", "v1.2.0", "", "v1.3.0", false},
+		{"custom declaration", "localhost:5000", "v1.4.0", "", "v1.3.0", false},
+		{"custom target", "", "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"published spelling", "ghcr.io:443/devicechain-io/", "v1.4.0", DefaultImageRegistry, "v1.3.0", true},
+		{"dev declaration", "", "dev", "", "v1.3.0", false},
+		{"local declaration", "", "local-abc", "", "v1.3.0", false},
+		{"empty declaration", "", "", "", "v1.3.0", false},
+		{"unparseable declaration", "", "garbage", "", "v1.3.0", false},
+		{"unpublished semver declaration", "", "v1.4.0-dev.3", "", "v1.3.0", false},
+		{"dev target", "", "v1.4.0", "", "dev", false},
+		{"local target", "", "v1.4.0", "", "local-abc", false},
+		{"empty target", "", "v1.4.0", "", "", false},
+		{"unparseable target", "", "v1.4.0", "", "garbage", false},
+		{"unpublished semver target", "", "v1.4.0", "", "v1.3.0-dev.3", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := refuseADowngrade("guide", tc.declaredRegistry, tc.declared, tc.targetRegistry, tc.target)
+			if !tc.refused {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			requireOrderMessage(t, err, "guide", tc.declared, tc.target, "no downgrade", "roll forward", "restore from backup", "Nothing has been changed")
+		})
+	}
+}
+
+func requireOrderMessage(t *testing.T, err error, fragments ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected forward-only refusal")
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("refusal missing %q: %v", fragment, err)
+		}
+	}
+}
+
+func TestUpgradeDeclarationRefusesMovingBack(t *testing.T) {
+	saved := DefaultImageVersion
+	t.Cleanup(func() { DefaultImageVersion = saved })
+	for _, tc := range []struct {
+		name, own, declaredRegistry, declared, targetRegistry, target string
+		refused                                                       bool
+	}{
+		{"older minor", "v1.3.0", DefaultImageRegistry, "v1.4.0", "", "v1.3.0", true},
+		{"older patch", "v1.3.0", DefaultImageRegistry, "v1.3.1", "", "v1.3.0", true},
+		{"older candidate", "v1.4.0-rc.1", DefaultImageRegistry, "v1.4.0-rc.2", "", "v1.4.0-rc.1", true},
+		{"source built dcctl still refuses", "dev", DefaultImageRegistry, "v1.4.0", "", "v1.3.0", true},
+		{"unpublished dcctl still refuses", "v1.3.0-dev.3", DefaultImageRegistry, "v1.4.0", "", "v1.3.0", true},
+		{"forward", "v1.3.0", DefaultImageRegistry, "v1.2.0", "", "v1.3.0", false},
+		{"equal", "v1.3.0", DefaultImageRegistry, "v1.3.0", "", "v1.3.0", false},
+		{"flagless", "v1.3.0", DefaultImageRegistry, "v1.2.0", "", "", false},
+		{"custom declaration and target", "v1.3.0", "localhost:5000", "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"custom declaration only", "v1.3.0", "localhost:5000", "v1.4.0", DefaultImageRegistry, "v1.3.0", false},
+		{"custom target only", "v1.3.0", DefaultImageRegistry, "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"dev declaration", "v1.3.0", DefaultImageRegistry, "dev", "", "v1.3.0", false},
+		{"local declaration", "v1.3.0", DefaultImageRegistry, "local-abc", "", "v1.3.0", false},
+		{"empty declaration", "v1.3.0", DefaultImageRegistry, "", "", "v1.3.0", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			DefaultImageVersion = tc.own
+			inst := readyGuide()
+			inst.Spec.ImageRegistry, inst.Spec.ImageVersion = tc.declaredRegistry, tc.declared
+			st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+			err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide", ImageRegistry: tc.targetRegistry, ImageVersion: tc.target}})
+			if tc.refused {
+				requireOrderMessage(t, err, tc.declared, "no downgrade")
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRefuseAnOlderInstall(t *testing.T) {
+	installed := func(v string) *InstallRecord { return &InstallRecord{Phase: installPhaseInstalled, DcctlVersion: v} }
+	applying := func(current, last string) *InstallRecord {
+		return &InstallRecord{Phase: installPhaseApplying, DcctlVersion: current, LastInstalled: &CompletedInstall{DcctlVersion: last}}
+	}
+	for _, tc := range []struct {
+		name        string
+		prev        *InstallRecord
+		own, newest string
+	}{
+		{"newer installed", installed("v1.5.0"), "v1.4.0", "v1.5.0"},
+		{"newer attempt", applying("v1.5.0", "v1.4.0"), "v1.4.0", "v1.5.0"},
+		{"newer completed", applying("v1.4.0", "v1.5.0"), "v1.4.0", "v1.5.0"},
+		{"newest of both", applying("v1.5.0", "v1.6.0"), "v1.4.0", "v1.6.0"},
+		{"unknown attempt with newer completed", applying("garbage", "v1.5.0"), "v1.4.0", "v1.5.0"},
+		{"older patch", installed("v1.4.1"), "v1.4.0", "v1.4.1"},
+		{"older candidate", installed("v1.4.0-rc.2"), "v1.4.0-rc.1", "v1.4.0-rc.2"},
+		{"equal", installed("v1.4.0"), "v1.4.0", ""},
+		{"older recorded", installed("v1.3.0"), "v1.4.0", ""},
+		{"no record", nil, "v1.4.0", ""},
+		{"dev dcctl", installed("v1.5.0"), "dev", ""},
+		{"unpublished dcctl", installed("v1.5.0"), "v1.4.0-dev.3", ""},
+		{"local dcctl", installed("v1.5.0"), "local", ""},
+		{"empty record version", installed(""), "v1.4.0", ""},
+		{"garbage record version", installed("garbage"), "v1.4.0", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := refuseAnOlderInstall(tc.prev, tc.own)
+			if tc.newest != "" {
+				requireOrderMessage(t, err, tc.newest, tc.own, "or newer", "no downgrade", "Nothing has been changed")
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestConnectAndRefuseRejectsAnOlderInstallBeforeAnyWrite(t *testing.T) {
+	for _, applying := range []bool{false, true} {
+		name := "installed"
+		if applying {
+			name = "applying"
+		}
+		t.Run(name, func(t *testing.T) {
+			typed := fake.NewClientset()
+			rec := installed()
+			rec.DcctlVersion = "v1.5.0"
+			if applying {
+				rec.Phase = installPhaseApplying
+				rec.LastInstalled = &CompletedInstall{DcctlVersion: "v1.4.0"}
+			}
+			if err := putInstallRecord(t.Context(), typed, *rec); err != nil {
+				t.Fatal(err)
+			}
+			typed.ClearActions()
+			orig := installClients
+			t.Cleanup(func() { installClients = orig })
+			installClients = func(string) (dynamic.Interface, kubernetes.Interface, error) { return nil, typed, nil }
+			withClusterInstances(t, nil, nil)
+			st, settings := reinstallState()
+			st.DcctlVersion = "v1.4.0"
+			_, _, err := connectAndRefuse(t.Context(), st, settings, stateHere())
+			requireOrderMessage(t, err, "v1.5.0", "or newer", "no downgrade", "Nothing has been changed")
+			for _, action := range typed.Actions() {
+				if verb := action.GetVerb(); verb != "get" && verb != "list" && verb != "watch" {
+					t.Errorf("wrote before refusing: %s", verb)
+				}
+			}
+		})
 	}
 }

@@ -105,6 +105,10 @@ herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálo
   estable anterior. Si falla, la versión se detiene: no se publican para ella la versión de GitHub, los binarios de `dcctl` ni los
   paquetes de los SDK. Sus imágenes de contenedor y su chart pueden estar ya en el registro, pero no son una versión.
 - **No hay descenso de versión.** Una versión nueva puede migrar la base de datos de formas que una versión anterior no puede leer.
+  dcctl lo impone: `dcctl upgrade` rechaza una versión anterior a la declarada en la instancia,
+  y `dcctl install` rechaza ejecutarse con un dcctl anterior al que instaló el clúster por última vez.
+  Ninguna de las dos comprobaciones tiene una opción para omitirla. Un dcctl anterior a esta política
+  no incluye estas comprobaciones, así que usa el dcctl de la versión actual.
   Si una actualización sale mal, avance a una versión corregida o restaure desde una copia de seguridad con el procedimiento de
   [recuperación ante desastres](./disaster-recovery.md). No usa `helm rollback` para volver atrás.
 

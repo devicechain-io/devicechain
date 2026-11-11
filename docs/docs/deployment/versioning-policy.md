@@ -104,6 +104,10 @@ read tools remain in the not-covered catalog above.
   previous stable release. If it fails, the release is stopped: no GitHub release, `dcctl` binaries or SDK packages
   are published for it. Its container images and chart may already be in the registry, but they are not a release.
 - **There is no downgrade.** A new release may migrate the database in ways an earlier release cannot read.
+  dcctl enforces this: `dcctl upgrade` refuses a release older than the one the instance is declared at,
+  and `dcctl install` refuses to run with a dcctl older than the one that last installed the cluster.
+  Neither check has an override. A dcctl older than this policy does not carry these checks, so use
+  the current release's dcctl.
   If an upgrade goes wrong, roll forward to a fixed release, or restore from backup using the
   [disaster recovery](./disaster-recovery.md) procedure. Do not use `helm rollback` to go back.
 
