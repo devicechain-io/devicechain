@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -259,9 +258,7 @@ func lockTenantForDashboardCreate(ctx context.Context, tx *gorm.DB) error {
 	if !ok {
 		return fmt.Errorf("cannot lock for dashboard creation: %w", core.ErrNoTenant)
 	}
-	hash := fnv.New64a()
-	_, _ = hash.Write([]byte("dashboard-create:" + tenant))
-	return tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(hash.Sum64())).Error
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", rdb.AdvisoryLockKey("dashboard-create:"+tenant)).Error
 }
 
 // UpdateDashboard applies a PARTIAL update to the dashboard (the mutable draft) with the
