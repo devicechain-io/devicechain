@@ -707,6 +707,8 @@ Some refusals look similar and do not carry `CONFLICT`:
 - Deleting a record that other records still refer to carries `REFERENCE_VIOLATION`. See
   [A reference or a value that is refused](#reference-and-invalid-values).
 
+`updateConnector` refuses a stale `expectedUpdatedAt` with `errors[*].extensions.code` set to `STALE_WRITE`. Nothing is written; the message remains "connector was modified by another writer; reload and try again". This code applies only to connector updates. `CONFLICT` continues to mean a uniqueness collision; errors from other operations are unchanged. Classify by code rather than message text. The console keeps unsaved edits and shows a localized hint to copy them before reloading, then reapply them and retry saving.
+
 ### A reference or a value that is refused {#reference-and-invalid-values}
 
 Two other refusals are answered the same way, each with its own code.
