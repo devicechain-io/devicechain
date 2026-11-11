@@ -12,12 +12,12 @@ func TestUpgradeEventStoreFlagsReachTheOptions(t *testing.T) {
 		upgradeEventStoreMaxWAL, upgradeEventStoreMaxWALGiven = 0, false
 		upgradeEventStoreCheckpoint, upgradeEventStoreCheckpointGiven = "", false
 	}()
-	if up := upgradeOptions("prod", nil, nil); up.EventStoreMaxWALMiB != nil || up.EventStoreCheckpointTimeout != nil {
+	if up := upgradeOptions("prod", nil, nil, nil); up.EventStoreMaxWALMiB != nil || up.EventStoreCheckpointTimeout != nil {
 		t.Fatal("flagless upgrade carries event store tuning")
 	}
 	upgradeEventStoreMaxWALGiven, upgradeEventStoreMaxWAL = true, 0
 	upgradeEventStoreCheckpointGiven, upgradeEventStoreCheckpoint = true, "10min"
-	up := upgradeOptions("prod", nil, nil)
+	up := upgradeOptions("prod", nil, nil, nil)
 	if up.EventStoreMaxWALMiB == nil || *up.EventStoreMaxWALMiB != 0 {
 		t.Fatalf("a given 0 was lost: %v", up.EventStoreMaxWALMiB)
 	}
