@@ -1021,6 +1021,7 @@ characters.
 
 | Bound | Limit | Applies to |
 | --- | --- | --- |
+| Audit actor filter | 256 B | `actor` in `AuditEventSearchCriteria` (tenant plane) and `AdminAuditEventSearchCriteria` (admin plane). |
 | Attribute key | 128 B | `setEntityAttribute` `attrKey`. |
 | Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
 | Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
