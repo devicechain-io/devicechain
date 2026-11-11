@@ -108,6 +108,7 @@ herramienta MCP de acción; las herramientas MCP de lectura siguen en el catálo
   dcctl lo impone: `dcctl upgrade`, y una nueva ejecución de `dcctl bootstrap` sobre una instancia existente,
   rechazan una versión anterior a la declarada en la instancia,
   y `dcctl install` rechaza ejecutarse con un dcctl anterior al que instaló el clúster por última vez.
+  Una etiqueta de versión es esa versión en cualquier registro, así que esto también se aplica a una instancia que descarga de un espejo.
   Ninguna de las dos comprobaciones tiene una opción para omitirla. Un dcctl anterior a esta política
   no incluye estas comprobaciones, así que usa el dcctl de la versión actual.
   Si una actualización sale mal, avance a una versión corregida o restaure desde una copia de seguridad con el procedimiento de

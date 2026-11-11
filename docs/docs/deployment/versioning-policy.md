@@ -107,6 +107,7 @@ read tools remain in the not-covered catalog above.
   dcctl enforces this: `dcctl upgrade`, and a `dcctl bootstrap` re-run over an existing instance, refuse a
   release older than the one the instance is declared at,
   and `dcctl install` refuses to run with a dcctl older than the one that last installed the cluster.
+  A release tag is a release on any registry, so this holds for an instance pulling from a mirror too.
   Neither check has an override. A dcctl older than this policy does not carry these checks, so use
   the current release's dcctl.
   If an upgrade goes wrong, roll forward to a fixed release, or restore from backup using the

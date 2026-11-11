@@ -157,7 +157,11 @@ func TestANewerDcctlIsNotPointedAtAnOlderRelease(t *testing.T) {
 		{"a tag that is no release", "my-build", "v1.3.0", "", false},
 		{"a source-built dcctl", "v1.2.0", "dev", "", false},
 		{"a drill tag on a registry of the operator's own", "0.24.0-drill.1", "v1.3.0", "localhost:5000", false},
-		{"an older release tag on a registry of the operator's own", "v1.2.0", "v1.3.0", "localhost:5000", false},
+		{"an older release tag on a registry of the operator's own (a mirror)", "v1.2.0", "v1.3.0", "localhost:5000", true},
+		{"an older candidate on a mirror", "v1.3.0-rc.2", "v1.3.0", "mirror.example/devicechain-io", true},
+		{"a newer release on a mirror", "v1.4.0", "v1.3.0", "mirror.example/devicechain-io", true},
+		{"this dcctl's release on a mirror", "v1.3.0", "v1.3.0", "mirror.example/devicechain-io", false},
+		{"an older drill tag on a mirror", "v1.2.0-drill.1", "v1.3.0", "mirror.example/devicechain-io", false},
 		{"an older release on the published registry", "v1.2.0", "v1.3.0", DefaultImageRegistry, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -305,8 +309,12 @@ func TestAFlaglessUpgradeOfADeclarationNewerThanThisDcctlIsRefused(t *testing.T)
 	if err := apply(DefaultImageRegistry, "v1.2.0"); err != nil {
 		t.Errorf("a declaration older than this dcctl was refused: %v", err)
 	}
-	if err := apply("localhost:5000", "v1.4.0"); err != nil {
-		t.Errorf("a tag on the operator's own registry was judged as a release: %v", err)
+	// A release tag on a registry of the operator's own (a mirror) is still that release.
+	if err := apply("localhost:5000", "v1.4.0"); err == nil || !strings.Contains(err.Error(), "Get the dcctl of release v1.4.0") {
+		t.Errorf("a mirror declaration at v1.4.0 was re-applied by a v1.3.0 dcctl: %v", err)
+	}
+	if err := apply("localhost:5000", "v1.4.0-drill.1"); err != nil {
+		t.Errorf("a drill tag on the operator's own registry was judged as a release: %v", err)
 	}
 }
 
@@ -325,7 +333,8 @@ func TestSpellingsOfThePublishedRegistryAreNotCustomRegistries(t *testing.T) {
 		{"ghcr.io/other", false},
 		{"localhost:5000", false},
 	} {
-		err := refuseForeignRelease("v1.2.0", "v1.3.0", tc.registry)
+		// A drill tag: ordered on the published registry, whatever was pushed anywhere else.
+		err := refuseForeignRelease("v1.2.0-drill.1", "v1.3.0", tc.registry)
 		if tc.refused && err == nil {
 			t.Errorf("registry %q bypassed the published-registry check", tc.registry)
 		}
@@ -346,8 +355,12 @@ func TestRefuseADowngrade(t *testing.T) {
 		{"candidate before final", "", "v1.4.0", "", "v1.4.0-rc.2", true},
 		{"equal", "", "v1.3.0", "", "v1.3.0", false},
 		{"newer", "", "v1.2.0", "", "v1.3.0", false},
-		{"custom declaration", "localhost:5000", "v1.4.0", "", "v1.3.0", false},
-		{"custom target", "", "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"release tags on a mirror declaration", "localhost:5000", "v1.4.0", "", "v1.3.0", true},
+		{"release tags on a mirror target", "", "v1.4.0", "localhost:5000", "v1.3.0", true},
+		{"candidates on a mirror", "mirror.example/dc", "v1.4.0-rc.2", "mirror.example/dc", "v1.4.0-rc.1", true},
+		{"drill tag on a custom declaration", "localhost:5000", "v1.4.0-drill.1", "", "v1.3.0", false},
+		{"drill tag on a custom target", "", "v1.4.0", "localhost:5000", "v1.3.0-drill.1", false},
+		{"drill tag on the published registry is ordered", "", "v1.4.0-drill.2", "", "v1.4.0-drill.1", true},
 		{"published spelling", "ghcr.io:443/devicechain-io/", "v1.4.0", DefaultImageRegistry, "v1.3.0", true},
 		{"dev declaration", "", "dev", "", "v1.3.0", false},
 		{"local declaration", "", "local-abc", "", "v1.3.0", false},
@@ -368,7 +381,7 @@ func TestRefuseADowngrade(t *testing.T) {
 				}
 				return
 			}
-			requireOrderMessage(t, err, "guide", tc.declared, tc.target, "no downgrade", "roll forward", "restore from backup", "Nothing has been changed")
+			requireOrderMessage(t, err, "guide", tc.declared, tc.target, "no downgrade", "roll forward", "restore a backup with the current dcctl", "onto a new cluster", "Nothing has been changed")
 		})
 	}
 }
@@ -400,9 +413,12 @@ func TestUpgradeDeclarationRefusesMovingBack(t *testing.T) {
 		{"forward", "v1.3.0", DefaultImageRegistry, "v1.2.0", "", "v1.3.0", false},
 		{"equal", "v1.3.0", DefaultImageRegistry, "v1.3.0", "", "v1.3.0", false},
 		{"flagless", "v1.3.0", DefaultImageRegistry, "v1.2.0", "", "", false},
-		{"custom declaration and target", "v1.3.0", "localhost:5000", "v1.4.0", "localhost:5000", "v1.3.0", false},
-		{"custom declaration only", "v1.3.0", "localhost:5000", "v1.4.0", DefaultImageRegistry, "v1.3.0", false},
-		{"custom target only", "v1.3.0", DefaultImageRegistry, "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"a mirror instance at v1.4.0 to v1.3.0", "v1.3.0", "mirror.example/devicechain-io", "v1.4.0", "mirror.example/devicechain-io", "v1.3.0", true},
+		{"a published instance to an older release on a mirror", "v1.3.0", DefaultImageRegistry, "v1.4.0", "mirror.example/devicechain-io", "v1.3.0", true},
+		{"a mirror instance to an older published release", "v1.3.0", "localhost:5000", "v1.4.0", DefaultImageRegistry, "v1.3.0", true},
+		{"a mirror instance forward", "v1.3.0", "mirror.example/devicechain-io", "v1.2.0", "mirror.example/devicechain-io", "v1.3.0", false},
+		{"custom drill tags", "v1.3.0", "localhost:5000", "v1.4.0-drill.1", "localhost:5000", "v1.3.0-drill.1", false},
+		{"a custom drill declaration", "v1.3.0", "localhost:5000", "v1.4.0-drill.1", DefaultImageRegistry, "v1.3.0", false},
 		{"dev declaration", "v1.3.0", DefaultImageRegistry, "dev", "", "v1.3.0", false},
 		{"local declaration", "v1.3.0", DefaultImageRegistry, "local-abc", "", "v1.3.0", false},
 		{"empty declaration", "v1.3.0", DefaultImageRegistry, "", "", "v1.3.0", false},
@@ -513,7 +529,8 @@ func TestABootstrapRerunDoesNotMoveAnInstanceBack(t *testing.T) {
 		{"older release", DefaultImageRegistry, "v1.4.0", DefaultImageRegistry, "v1.3.0", true},
 		{"older patch", DefaultImageRegistry, "v1.4.1", DefaultImageRegistry, "v1.4.0", true},
 		{"same release", DefaultImageRegistry, "v1.4.0", DefaultImageRegistry, "v1.4.0", false},
-		{"custom registry", "localhost:5000", "v1.4.0", "localhost:5000", "v1.3.0", false},
+		{"a mirror", "localhost:5000", "v1.4.0", "localhost:5000", "v1.3.0", true},
+		{"a custom drill tag", "localhost:5000", "v1.4.0-drill.2", "localhost:5000", "v1.4.0-drill.1", false},
 		{"source build", DefaultImageRegistry, "v1.4.0-dev.2", DefaultImageRegistry, "v1.3.0", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

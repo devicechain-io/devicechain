@@ -113,18 +113,55 @@ type installWitness struct {
 	DcctlVersion string
 }
 
-// refuseADowngrade orders the instance's declared and target releases, independently
-// of this dcctl's own version. Tags on a custom registry cannot be ordered as releases.
-func refuseADowngrade(instance, declaredRegistry, declaredVersion, targetRegistry, targetVersion string) error {
-	for _, registry := range []string{declaredRegistry, targetRegistry} {
-		if registry != "" && !isPublishedRegistry(registry) {
-			return nil
-		}
+// releaseTagOnAnyRegistry reports whether a tag reads as a release wherever it was pushed: a
+// final release (v1.4.0) or a release candidate (v1.4.0-rc.2).
+//
+// 🔴 A MIRROR CARRIES RELEASES TOO. A mirrored or air-gapped instance runs the published tags
+// from a registry of its own, so "not the published registry" cannot mean "not a release":
+// that exemption let a mirror instance at v1.4.0 be moved to v1.3.0, and let
+// `--registry <mirror> --version v1.3.0` move a ghcr instance back. Only a tag that does not
+// read as a release (another pre-release such as 0.24.0-drill.1, a local build's free-form tag)
+// is whatever the operator pushed, and stays unordered on a registry of their own.
+func releaseTagOnAnyRegistry(v string) bool {
+	r, ok := parseRelease(v)
+	if !ok {
+		return false
 	}
+	switch {
+	case len(r.pre) == 0:
+		return true
+	case len(r.pre) == 2 && r.pre[0] == "rc":
+		_, err := strconv.Atoi(r.pre[1])
+		return err == nil
+	}
+	return false
+}
+
+// orderableOn reports whether a tag on a registry can be ordered as a release: anything
+// parseable on the published registry, and only a release tag on any other.
+func orderableOn(registry, v string) bool {
+	if registry == "" || isPublishedRegistry(registry) {
+		return true
+	}
+	return releaseTagOnAnyRegistry(v)
+}
+
+// noDowngradeRemedy is the one remedy every forward-only refusal names.
+const noDowngradeRemedy = "there is no downgrade (see https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). " +
+	"If an upgrade went wrong, roll forward to a fixed release with that release's dcctl, or restore a backup " +
+	"with the current dcctl, which migrates the older data forward, in place or onto a new cluster"
+
+// refuseADowngrade orders the instance's declared and target releases, independently
+// of this dcctl's own version. A tag that is not a release, on a registry of the operator's
+// own, cannot be ordered (see releaseTagOnAnyRegistry).
+func refuseADowngrade(instance, declaredRegistry, declaredVersion, targetRegistry, targetVersion string) error {
 	for _, version := range []string{declaredVersion, targetVersion} {
 		if version == "" || IsUnpublishedImageVersion(version) {
 			return nil
 		}
+	}
+	if !orderableOn(declaredRegistry, declaredVersion) || !orderableOn(targetRegistry, targetVersion) {
+		return nil
 	}
 	declared, declaredOK := parseRelease(declaredVersion)
 	target, targetOK := parseRelease(targetVersion)
@@ -132,9 +169,7 @@ func refuseADowngrade(instance, declaredRegistry, declaredVersion, targetRegistr
 		return nil
 	}
 	return fmt.Errorf("instance %q is declared at %s, and %s is older. dcctl does not move an instance "+
-		"to an earlier release: there is no downgrade (see https://docs.devicechain.io/deployment/versioning-policy#upgrade-paths). "+
-		"If an upgrade went wrong, roll forward to a fixed release with that release's dcctl, or restore from backup. "+
-		"Nothing has been changed", instance, declaredVersion, targetVersion)
+		"to an earlier release: %s. Nothing has been changed", instance, declaredVersion, targetVersion, noDowngradeRemedy)
 }
 
 // refuseAnOlderInstall checks both the current attempt and the last completed install:
@@ -278,10 +313,11 @@ func refuseForeignRelease(requested, ownRelease, registry string) error {
 // through (an instance's declared version, which a flagless upgrade keeps).
 func judgeForeignRelease(subject, requested, ownRelease, registry string, olderOK bool) error {
 	// 🔴 A TAG ON A REGISTRY OF THE OPERATOR'S OWN IS WHATEVER THEY PUSHED, and the upgrade drill
-	// pushes semver-shaped ones (0.24.0-drill.1). Only the published registry's tags are releases,
-	// and it is recognised by every spelling of it (ghcr.io:443/..., a trailing slash), not only
-	// the literal constant.
-	if requested == "" || (registry != "" && !isPublishedRegistry(registry)) {
+	// pushes semver-shaped ones (0.24.0-drill.1), so such a tag is not ordered — UNLESS it reads
+	// as a release (v1.3.0, v1.4.0-rc.2), which is what a mirror carries; see
+	// releaseTagOnAnyRegistry. The published registry is recognised by every spelling of it
+	// (ghcr.io:443/..., a trailing slash), not only the literal constant.
+	if requested == "" || !orderableOn(registry, requested) {
 		return nil
 	}
 	want, ok := parseRelease(requested)

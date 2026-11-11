@@ -2269,8 +2269,10 @@ a release older than the one the instance is declared at is refused, whichever d
 runs it. A NEWER release is refused too, and installing it with
 this dcctl would not help, because the install record names the dcctl that ran the
 install, not the --version it was given: get the dcctl of the newer release, run
-'dcctl install' with it, then upgrade. A tag on a registry of your own (--registry)
-and this dcctl's own release are not affected, and a flag-less upgrade is refused only when the
+'dcctl install' with it, then upgrade. A release tag (v1.4.0, v1.4.0-rc.1) is that
+release on any registry, a mirror included, so these checks apply to it there too; any
+other tag on a registry of your own (--registry), such as a local build's, is not compared.
+This dcctl's own release is not affected, and a flag-less upgrade is refused only when the
 instance is declared at a release newer than this dcctl.
 
 It replaces no credential. Every credential the instance is running on is read back

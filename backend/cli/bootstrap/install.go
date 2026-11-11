@@ -243,19 +243,20 @@ func Install(ctx context.Context, provider Provider, opts InstallOptions) error 
 		return identityReadError(binding.Describe(), err)
 	}
 	st.ClusterUID, st.Binding.ClusterUID = uid, uid
+	// The clients the first writes below go through come out of the refusals, so
+	// those writes cannot be reached without them. See connectAndRefuse.
+	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
+	if err != nil {
+		return err
+	}
+	// After the refusals, so a refused install (an older dcctl over a newer cluster) does not
+	// restamp this machine's record of the cluster with the dcctl it refused.
 	if err := WriteClusterRecord(ClusterRecord{
 		UID: uid, Cluster: binding.Cluster, KubeContext: binding.KubeContext, Managed: binding.Managed,
 		FirstSeenAt: time.Now().UTC(), DcctlVersion: opts.DcctlVersion,
 	}); err != nil {
 		fmt.Println(color.YellowString("warning: could not record what is known about cluster %s (%v).",
 			binding.Describe(), err))
-	}
-
-	// The clients the first writes below go through come out of the refusals, so
-	// those writes cannot be reached without them. See connectAndRefuse.
-	dyn, typed, err := connectAndRefuse(ctx, st, settings, localClusterStateExists)
-	if err != nil {
-		return err
 	}
 
 	doing("settling the cluster's credentials")
