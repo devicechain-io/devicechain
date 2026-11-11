@@ -74,7 +74,7 @@ type NotificationProcessor struct {
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups let
 	// ExecuteStop drain the reader before closing the channel it feeds, so the reader
 	// can never send on a closed channel at SIGTERM, and the workers drain the
-	// remaining backlog to completion before exiting.
+	// remaining backlog before exiting, unless Stop's context expires and cancels dispatch.
 	// Hold keeps an alarm event unacked, outside its delivery budget, while the relational
 	// store cannot take writes (core/storehold). Without it an outage past the delivery budget
 	// (about four minutes) dead-lettered the event and acked it: nobody was paged. Only the
@@ -84,10 +84,13 @@ type NotificationProcessor struct {
 	// only when nothing was delivered. Nil holds nothing.
 	Hold *storehold.Holder
 
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	readerWG   sync.WaitGroup
-	workerWG   sync.WaitGroup
+	procCtx        context.Context
+	procCancel     context.CancelFunc
+	readerWG       sync.WaitGroup
+	workerWG       sync.WaitGroup
+	dispatchCancel context.CancelFunc
+	stopOnce       sync.Once
+	stopDone       chan struct{}
 
 	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
 	// the errors stop clearing. Built on first use by pacer(), because this struct is also
@@ -207,6 +210,7 @@ func (np *NotificationProcessor) Initialize(ctx context.Context) error {
 func (np *NotificationProcessor) ExecuteInitialize(ctx context.Context) error {
 	// Derive the cancelable context the read loop runs under (A5).
 	np.procCtx, np.procCancel = context.WithCancel(ctx)
+	np.stopDone = make(chan struct{})
 	np.initializeWorkers()
 	return nil
 }
@@ -217,14 +221,15 @@ func (np *NotificationProcessor) initializeWorkers() {
 	// alarms, so a deeper channel would never fill — and a deeper one in front of a reader
 	// WITHOUT capacity is how a burst came to sit past AckWait and be paged twice.
 	np.messages = make(chan messaging.Message, WORKER_COUNT)
+	dispatchCtx, cancel := context.WithCancel(context.Background())
+	np.dispatchCancel = cancel
 	for w := 1; w <= WORKER_COUNT; w++ {
 		np.workerWG.Add(1)
-		// Workers run on a background context (not the cancelable read context) so
-		// that on shutdown they drain the remaining buffered messages to completion
-		// and ack them rather than aborting in-flight dispatches.
+		// Reader cancellation starts graceful draining. Only expiration of Stop's
+		// context cancels dispatch, so completed deliveries can still be acknowledged.
 		go func() {
 			defer np.workerWG.Done()
-			np.processMessages(context.Background())
+			np.processMessages(dispatchCtx)
 		}()
 	}
 }
@@ -284,6 +289,11 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	// RED metrics for this dispatch (E13): time the message and record its
 	// disposition exactly once on whichever path it leaves by.
 	done := np.metrics.Start()
+	if ctx.Err() != nil {
+		// Buffered work abandoned at the drain deadline has not been attempted.
+		done(core.ResultRetry)
+		return
+	}
 
 	// Derive the per-message tenant from the message subject and build a tenant-scoped
 	// context. Without a parseable tenant the notification cannot be routed safely
@@ -332,6 +342,13 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 	if err := np.Hold.RunCtx(holdCtx, msgctx, []messaging.Message{msg}, func(c context.Context) error {
 		return np.Notifier.Notify(messaging.WithAckDeadline(c, msg), event)
 	}); err != nil {
+		// A partial delivery is final: retrying would repeat the channels that sent.
+		// In particular, cancellation after a delivery must not turn it into a retry.
+		if errors.Is(err, core.ErrPassPartial) {
+			msg.Ack()
+			done(core.ResultOK)
+			return
+		}
 		// 🔴 ONE ERROR IS PERMANENT AND MUST NOT SPEND THE RETRY BUDGET: the tenant has been
 		// deleted and this area's ADR-077 erasure fence refuses its writes. It reaches here
 		// as an ordinary error, which everything below would read as transient — five
@@ -351,6 +368,12 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 					"been erased, so no redelivery could ever be applied.")
 			msg.Ack()
 			done(core.ResultErased)
+			return
+		}
+		if ctx.Err() != nil {
+			// Shutdown abandoned this attempt, even at MaxDeliver. It is not an
+			// exhausted delivery failure and must remain unacked and unlettered.
+			done(core.ResultRetry)
 			return
 		}
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
@@ -390,14 +413,32 @@ func (np *NotificationProcessor) Stop(ctx context.Context) error {
 // ExecuteStop unwinds the pipeline in dependency order so no goroutine ever sends on
 // a closed channel (A5): stop the reader, then close the channel it feeds, then wait
 // for the workers to drain the backlog and exit.
-func (np *NotificationProcessor) ExecuteStop(context.Context) error {
+func (np *NotificationProcessor) ExecuteStop(ctx context.Context) error {
 	if np.procCancel != nil {
 		np.procCancel()
 	}
-	np.readerWG.Wait() // reader stopped: no more sends to messages
-	close(np.messages) //
-	np.workerWG.Wait() // workers drained + exited
-	return nil
+	// One coordinator for this processor's lifetime, including retries after a
+	// timed-out Stop. It alone owns channel closure and finishes teardown even
+	// after the caller's deadline; repeated attempts never add waiter goroutines.
+	np.stopOnce.Do(func() {
+		go func() {
+			np.readerWG.Wait()
+			close(np.messages)
+			np.workerWG.Wait()
+			np.dispatchCancel()
+			close(np.stopDone)
+		}()
+	})
+	select {
+	case <-ctx.Done():
+		np.dispatchCancel()
+		return fmt.Errorf("draining notification dispatch: %w", ctx.Err())
+	case <-np.stopDone:
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("draining notification dispatch: %w", err)
+		}
+		return nil
+	}
 }
 
 // Terminate component.
