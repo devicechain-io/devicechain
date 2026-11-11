@@ -56,7 +56,9 @@ func applyUpgradeValuesOverlay(st *State, inst *dcv1beta1.Instance, opts Upgrade
 			}
 		}
 	}
-	return nil
+	// A freshly typed value that contradicts the recorded device-uplinks choice is refused
+	// with the overlay settled and nothing written.
+	return checkDeviceUplinksOverlay(st)
 }
 
 // valuesOverlayChanges is whether this run changes the recorded overlay.

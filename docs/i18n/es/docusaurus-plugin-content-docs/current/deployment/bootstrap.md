@@ -104,7 +104,7 @@ lugar de pasarse por alto.
 datos relacional, y termina con un error que nombra la base de datos y cuántas de sus instancias
 están listas si alguna no lo ha hecho. Para entonces la instalación ya está registrada y el bloqueo
 del clúster liberado, así que se pueden hacer bootstrap de instancias mientras sigue esperando. Para
-seguir la base de datos, obsérvela con `kubectl`; ejecutar de nuevo el mismo `dcctl install` también
+seguir la base de datos, obsérvala con `kubectl`; ejecutar de nuevo el mismo `dcctl install` también
 sigue esperando, pero vuelve a aplicar los requisitos previos y rechaza los bootstraps mientras se
 ejecuta.
 
@@ -295,6 +295,12 @@ existe una actualización en sitio. En una instancia creada antes de ese cambio,
 inicial **se niega** y te indica cómo volcar los datos o descartarlos deliberadamente.
 Consulta [la excepción de la base de datos heredada](#legacy-db-removal).
 :::
+
+### Ajuste del WAL del almacén relacional {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` fija en 4096 MiB el objetivo flexible de checkpoints `max_wal_size` del almacén relacional compartido. Omitir la opción conserva la elección registrada; en la primera instalación sin elección se mantiene el valor predeterminado de PostgreSQL (1 GiB). `--relational-store-max-wal-mib=0` registra un restablecimiento a ese valor. Los valores positivos deben ser de al menos 64 MiB. La elección se registra antes de aplicar: un reintento sin la opción tras un fallo la conserva, incluido el restablecimiento explícito.
+
+Es un objetivo flexible de checkpoints, no un límite de `pg_wal`: el WAL puede superarlo si los checkpoints o el archivado se retrasan. La raíz del clúster sigue rechazando objetivos mayores que un cuarto del almacenamiento del almacén relacional. Los tamaños de rendimiento recomiendan valores de WAL, pero nunca los aplican automáticamente. Los cambios solo requieren una recarga y se permiten mientras existan instancias en el clúster.
 
 ### La excepción de la base de datos heredada {#legacy-db-removal}
 
@@ -980,6 +986,7 @@ arrancada en él los sigue. Ninguno es un flag de `dcctl bootstrap`.
 | `--restore-rdb-from <archive>` | Recuperación ante desastres: recupera el almacén relacional compartido desde esta ruta de archivo dentro del bucket de respaldos (`dc-rdb` para un almacén que nunca se ha restaurado) en lugar de inicializar uno vacío. Solo surte efecto cuando el almacén se **crea** —contra un clúster cuyo almacén ya existe no mueve ningún dato—, así que es una palanca de reconstrucción, no de reparación. Necesita el plugin de respaldo, así que se rechaza en un clúster instalado con `--no-cnpg` o con `--compact --no-tls`. Consulta [Recuperar una instancia](./disaster-recovery.md#recover). |
 | `--restore-rdb-at <timestamp>` | Detiene esa recuperación en un instante en lugar de reproducir todo el archivo, para datos destruidos *correctamente*, por una migración defectuosa o un borrado por error; elige un momento estrictamente anterior al daño. Necesita `--restore-rdb-from`, y una marca de tiempo RFC 3339 con desfase explícito (`2026-07-27T13:59:00Z`): sin él, PostgreSQL la interpreta en la zona horaria del propio servidor en recuperación y se detiene en un momento distinto del que nombraste. |
 | `--max-connections <n>` | El presupuesto de conexiones de la base de datos relacional (por defecto `700` en una primera instalación; una nueva ejecución sin él conserva el presupuesto actual); consulta [el presupuesto de conexiones](#connection-budget). Puede aumentarse, pero no reducirse, con instancias en marcha. |
+| `--relational-store-max-wal-mib <n>` | Objetivo flexible de checkpoints `max_wal_size` del almacén relacional, en MiB. Omitir conserva la elección registrada (primera instalación: 1 GiB); `0` registra un restablecimiento; valores positivos de al menos `64`. Se registra antes de aplicar y se conserva al reintentar sin la opción. La raíz lo limita a un cuarto del almacenamiento. Los tamaños de rendimiento no lo fijan automáticamente. Consulta [el ajuste del WAL relacional](#relational-store-wal). |
 | `--allow-legacy-db-removal` | La mitad relacional de la excepción única descrita en [Qué hace bootstrap](#what-it-does). |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no crea ningún clúster, así que las comprobaciones que necesitan leer uno —en particular la de capacidad de nodos de `--ha`— informan de lo que no pudieron ver en lugar de hacer fallar el ensayo. Lo que *sí* llegan a ver sigue siendo fatal: un clúster que responde y no puede alojar `--ha` también hace fallar una ejecución en seco. En un clúster que responde, una ejecución en seco también aplica los rechazos de una reinstalación —una instalación desde una máquina sin el estado del clúster, ajustes cambiados bajo instancias en ejecución, un `--backup-snapshot-class` inutilizable— y falla con el mismo mensaje que daría la instalación. En un clúster al que no llega, dice que no los comprobó. |
 | `--yes` | No pregunta antes de crear un clúster de kind. |
@@ -1516,25 +1523,25 @@ límite de memoria del propio servicio. A 6.000 eventos por segundo esto redujo 
 recolector se ejecutó entre cuatro y trece veces menos. El límite blando es lo que mantiene el
 montón más grande dentro del contenedor: hace que el recolector trabaje más en lugar de dejar que
 el montón supere el límite. Por eso `event-processing` tiene 384Mi, ya que su conjunto de trabajo
-llegó a 174 MiB de 256Mi en esa prueba. Ponga `functionalAreas.<servicio>.gogc` y
+llegó a 174 MiB de 256Mi en esa prueba. Pon `functionalAreas.<servicio>.gogc` y
 `functionalAreas.<servicio>.goMemLimitPercent` a `0` para desactivar cualquiera de los dos en un
 servicio.
 
-**Dimensionar la memoria para su flota y su ritmo de eventos.** Dos límites dependen del despliegue,
+**Dimensionar la memoria para tu flota y tu ritmo de eventos.** Dos límites dependen del despliegue,
 no solo de los valores por defecto. Las cifras se ajustaron a una prueba en Google Kubernetes Engine
-y son aproximadas; deje un margen de al menos la mitad sobre ellas.
+y son aproximadas; deja un margen de al menos la mitad sobre ellas.
 
 - **`device-management` según el tamaño de la flota.** Cada réplica guarda en caché toda la flota,
   así que el montón sigue al número de dispositivos, no al ritmo de eventos, y sus cachés también.
   Su límite, `inMemoryCache.perDeviceCacheMiB`, es de 80 MiB por defecto. Era de 24, que solo
   guardaba de 8 000 a 10 000 dispositivos (un dispositivo ocupa de 2,5 a 3,1 KB en la caché por
   token), así que una flota de 12 000 a 20 000 dispositivos recorría la caché en ciclo y costaba hasta
-  cuatro veces más CPU por evento. Fije el límite en 4 MiB por cada 1 000 dispositivos que se
+  cuatro veces más CPU por evento. Fija el límite en 4 MiB por cada 1 000 dispositivos que se
   resuelven por su token, y el límite de memoria en 2 × (3 × `perDeviceCacheMiB` +
   `credentialCacheMiB` + 36 + 60) MiB, donde 36 son las dos cachés pequeñas y 60 el resto del
   servicio. Los 768Mi por defecto son esa regla para los límites por defecto (80 y 32): guardan una
   flota de 20 000 dispositivos con una cuarta parte de margen, y con todas las cachés llenas el límite
-  blando sigue siendo 1,5 veces lo vivo. Para 60 000 dispositivos por el camino del token, fije
+  blando sigue siendo 1,5 veces lo vivo. Para 60 000 dispositivos por el camino del token, fija
   `perDeviceCacheMiB` en 240 y el límite en 1,7Gi. El montón de Go fue de 206 a 243 MiB con 8 000 a
   20 000 dispositivos con el límite antiguo lleno. El límite se fija con
   `functionalAreas.device-management.resources.limits.memory`; los ajustes de las cachés están en
@@ -1543,17 +1550,17 @@ y son aproximadas; deje un margen de al menos la mitad sobre ellas.
   contra duplicados guarda la identidad de cada evento aplicado durante unos diez minutos. La memoria
   residente fue de 265 a 269 MiB con 4 500 a 6 000 eventos por segundo y de 388 MiB con 12 000 (de 68
   a 85 MiB con los ajustes desactivados): unos 150 MiB más 22 MiB por cada 1 000 eventos por segundo.
-  Fije el límite en una vez y media esa cifra. Los 768Mi por defecto son un mínimo fijo y no crecen con el ritmo.
+  Fija el límite en una vez y media esa cifra. Los 768Mi por defecto son un mínimo fijo y no crecen con el ritmo.
   Cubren unos 12 000 eventos por segundo con margen: el montón de Go fue de 441, 488, 511 y 516 MiB
   (residente de 500 a 571 MiB) con 8 000, 12 000, 16 000 y 20 000 eventos por segundo, frente a un
   límite blando de 576 MiB, así que desde unos 16 000 eventos por segundo sostenidos el pod recolecta
-  en su límite blando. **Con sobres activados y 16 000 eventos por segundo o más, fije unos 1Gi.** La
+  en su límite blando. **Con sobres activados y 16 000 eventos por segundo o más, fija unos 1Gi.** La
   protección guarda el ritmo por diez minutos, así que un ritmo que se alcanzó en rampa se lee más
   alto que el mismo ritmo alcanzado desde reposo. Se fija con
   `functionalAreas.event-processing.resources.limits.memory`. Con ambos ajustes desactivados, los
   384Mi no cambian.
 
-Suba un límite solo en un nodo con memoria que dar: la solicitud sigue siendo 128Mi, así que el
+Sube un límite solo en un nodo con memoria que dar: la solicitud sigue siendo 128Mi, así que el
 planificador no reserva la diferencia, y un pod que crece hasta su límite en un nodo lleno es
 desalojado o terminado.
 
@@ -1714,11 +1721,11 @@ un nodo se quedaba sin memoria.
   cada 1 000), frente a un límite blando de 3,2 GiB. Un servidor en su límite blando no muere:
   recolecta sin parar, lo que cuesta CPU del bróker y tiempo de confirmación y no deja ningún reinicio
   que buscar. A 12 000 eventos por segundo el tiempo de confirmación en el percentil 99 fue de 101 ms
-  con 4Gi y de 25 ms con 20Gi, y el bróker usó un 9 % menos de CPU por evento. Por eso, aumente
+  con 4Gi y de 25 ms con 20Gi, y el bróker usó un 9 % menos de CPU por evento. Por eso, aumenta
   `nats_memory_limit` cuando el `container_memory_working_set_bytes` de un servidor esté a menos del
   10 % del 80 % de su límite, y no solo después de un `OOMKilled`. Para dimensionarlo para un ritmo de
   diseño, cuente 0,35 GiB por cada 1 000 eventos por segundo (el conjunto de trabajo, un 15 % de
-  margen, sobre el límite blando del 80 %) y redondee hacia arriba: 3Gi a 8 000, 5Gi a 12 000, 6Gi a
+  margen, sobre el límite blando del 80 %) y redondea hacia arriba: 3Gi a 8 000, 5Gi a 12 000, 6Gi a
   16 000, 7Gi a 20 000. Esto se midió en un servidor de una instancia sin `--ha`; un servidor en
   clúster no se midió de nuevo. Un límite no reserva nada, así que el nodo debe tener el espacio
   cuando el conjunto de trabajo crezca hasta él.
@@ -1877,7 +1884,7 @@ horas de un inquilino que envía a su techo predeterminado completo.
 
 Una fila de medición costó unos 600 bytes en disco, índices incluidos y antes de comprimir, en una
 prueba posterior (51 millones de filas llenaron 31 GB), así que la cifra anterior es la prudente.
-Cómo dimensionar el volumen para su tráfico, con métricas calculadas y retención, y cómo ampliarlo
+Cómo dimensionar el volumen para tu tráfico, con métricas calculadas y retención, y cómo ampliarlo
 en línea, está en [Dimensionar el almacén de eventos](./tuning-an-instance.md#event-store-sizing).
 
 El almacén de eventos comprime las imágenes de página de su registro de escritura anticipada

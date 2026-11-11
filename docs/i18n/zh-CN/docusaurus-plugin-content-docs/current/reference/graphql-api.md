@@ -575,6 +575,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 - 用已有 token 创建命令不会拒绝，而是返回原命令。参见[发送命令](../guides/sending-commands.md#issue-it)。
 - 删除仍被其他记录引用的记录会携带 `REFERENCE_VIOLATION`。参见[引用或值被拒绝](#reference-and-invalid-values)。
 
+`updateConnector` 会拒绝过时的 `expectedUpdatedAt`，并将 `errors[*].extensions.code` 设为 `STALE_WRITE`。不会写入任何内容；消息仍为 "connector was modified by another writer; reload and try again"。此代码仅适用于连接器更新。`CONFLICT` 仍表示唯一值冲突；其他操作的错误不变。请根据代码而非消息文本分类。控制台会保留未保存的编辑，并显示本地化提示：重新加载前先复制这些编辑，然后重新应用并重试保存。
+
 ### 引用或值被拒绝 {#reference-and-invalid-values}
 
 另外两种拒绝也使用相同响应方式，各有自己的代码。
@@ -699,6 +701,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 ## 使用双重身份验证登录 {#two-factor-sign-in}
 
+
 设有[双重身份验证](../guides/two-factor-authentication.md)的账号无法从 `login` 获得令牌。密码正确时，`login` 以错误码 `MFA_CHALLENGE` 失败，并在 `extensions` 中携带一个质询；在客户端把代码发给 `verifyMfa` 之前不会签发任何东西。**只处理 `login` 成功情形的客户端，对这些账号现在会失败**，得到一个错误，而不会拿到不该拿到的令牌。
 
 ```json
@@ -727,6 +730,21 @@ mutation Verify($challenge: String!, $code: String!) {
 ```
 
 `verifyMfa` 返回与 `login` 相同的内容，客户端像以前一样继续调用 `selectTenant`。`code` 是六位应用代码或恢复码（`ABCD-EFGH-JKMN-PQRS`，大小写均可，带不带连字符均可）。质询有效期五分钟，允许五次尝试，只能完成一次登录。
+
+**会话内加强验证（预览：可能在次要版本中更改）。** 代理批准或放宽策略返回 `STEP_UP_REQUIRED` 时，在 `Authorization: Bearer ...` 中发送自己的租户访问令牌，并提供控制台自己的刷新令牌及新的身份验证器验证码：
+
+```graphql
+mutation StepUp($refreshToken: String!, $code: String!) {
+  stepUp(refreshToken: $refreshToken, code: $code) {
+    accessToken
+    refreshToken
+    expiresAt
+  }
+}
+```
+
+返回与 `refresh` 相同的 `AuthToken` 令牌对。保存两个替换令牌后重试操作，无需退出登录。会话标识符和纪元保持不变，`mfa_time` 更新；普通刷新不会更新因素验证时间。两个令牌必须属于同一用户名和租户。代理、服务、身份和刷新令牌不能授权此操作；OAuth 刷新令牌、已结束的会话和已轮换的纪元也会被拒绝。
+
 
 这些操作位于 user-management 端点。`mfaStatus`、`beginTotpEnrollment`、`confirmTotpEnrollment`、`regenerateRecoveryCodes` 和 `disableTotp` 以参数形式接收身份令牌（不放在 `Authorization` 头中），而不是租户令牌。`verifyMfa` 不接收令牌。租户平面的 `setTenantMfaRequired` 使用租户访问令牌，需要 `member:write`，且调用者不能带有范围限制。`resetIdentityMfa` 和管理 API 的 `setTenantMfaRequired` 位于管理 API，需要 `user:write`：
 

@@ -24,7 +24,7 @@ func TestSparkplugSourceReachesTheBootstrapAndUpgradeOptions(t *testing.T) {
 
 	bootstrapSparkplugSources = someSources
 	t.Cleanup(func() { bootstrapSparkplugSources = nil })
-	opts := bootstrapOptions("prod", nil, nil)
+	opts := bootstrapOptions("prod", nil, nil, nil)
 	if len(opts.SparkplugSources) != 1 {
 		t.Fatalf("bootstrap options lost the sources: %v", opts.SparkplugSources)
 	}
@@ -35,11 +35,11 @@ func TestSparkplugSourceReachesTheBootstrapAndUpgradeOptions(t *testing.T) {
 
 	upgradeSparkplugSources = someSources
 	t.Cleanup(func() { upgradeSparkplugSources = nil })
-	if up := upgradeOptions("prod", nil, nil); len(up.SparkplugSources) != 1 {
+	if up := upgradeOptions("prod", nil, nil, nil); len(up.SparkplugSources) != 1 {
 		t.Fatalf("upgrade options lost the sources: %v", up.SparkplugSources)
 	}
 	upgradeSparkplugSources = nil
-	if up := upgradeOptions("prod", nil, nil); up.SparkplugSources != nil || up.WithdrawSparkplugSources {
+	if up := upgradeOptions("prod", nil, nil, nil); up.SparkplugSources != nil || up.WithdrawSparkplugSources {
 		t.Fatalf("an upgrade given no file carries sources: %v", up.SparkplugSources)
 	}
 
@@ -49,11 +49,11 @@ func TestSparkplugSourceReachesTheBootstrapAndUpgradeOptions(t *testing.T) {
 	}
 	bootstrapWithdrawSparkplug, upgradeWithdrawSparkplug = true, true
 	t.Cleanup(func() { bootstrapWithdrawSparkplug, upgradeWithdrawSparkplug = false, false })
-	if !upgradeOptions("prod", nil, nil).WithdrawSparkplugSources {
+	if !upgradeOptions("prod", nil, nil, nil).WithdrawSparkplugSources {
 		t.Fatal("upgrade options lost the withdrawal")
 	}
 	bootstrapSparkplugSources = nil
-	bopts := bootstrapOptions("prod", nil, nil)
+	bopts := bootstrapOptions("prod", nil, nil, nil)
 	if !bopts.WithdrawSparkplugSources {
 		t.Fatal("bootstrap options lost the withdrawal")
 	}

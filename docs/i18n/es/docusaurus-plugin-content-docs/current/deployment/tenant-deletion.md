@@ -416,7 +416,7 @@ normalidad desde su primera petición.
 Una escritura rechazada no se reintenta. Un servicio que se encuentra con el rechazo al tratar un
 mensaje de un flujo reconoce el mensaje en la misma entrega en que llegó y no registra nada sobre
 él: ni una carta muerta ni un registro en `failed-events`, porque cualquiera de los dos sería una
-copia nueva de los datos que se están borrando. Cuenta el mensaje como `erased` (consulte
+copia nueva de los datos que se están borrando. Cuenta el mensaje como `erased` (consulta
 [Resultados de los mensajes](./observability.md#message-results)). Cuando un servicio escribe en una
 sola transacción mensajes de varios inquilinos, el rechazo liquida a la vez todos los mensajes del
 inquilino eliminado que contiene, y los mensajes de los demás inquilinos se escriben sin ellos. Una

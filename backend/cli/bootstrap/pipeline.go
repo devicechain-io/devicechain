@@ -208,6 +208,12 @@ type State struct {
 	// MqttFailClosedChange says this upgrade was given --mqtt-fail-closed with a value the
 	// declaration does not hold, so recordUpgradedVersion must write it.
 	MqttFailClosedChange bool
+	// MqttDeviceUplinks is the settled choice, carried forward from the declaration.
+	MqttDeviceUplinks *bool
+	// MqttDeviceUplinksGiven says this run was given --mqtt-device-uplinks.
+	MqttDeviceUplinksGiven bool
+	// MqttDeviceUplinksChange records a flag choice different from the declaration.
+	MqttDeviceUplinksChange bool
 	// MQTTExposure and MQTTHost are the settled exposure of the MQTT broker to devices outside the
 	// cluster (none, gateway or loadbalancer, and the DNS name they dial): the flags, else the
 	// declaration's, see mqttexposure.go. MQTTExposureChange says an upgrade must record them, and
@@ -408,6 +414,8 @@ type State struct {
 	// MaxConnections is the relational store's connection budget an install asks for.
 	// Zero keeps what the cluster was installed with.
 	MaxConnections int
+	// RelationalStoreMaxWALMiB is the optional install choice, restored before apply.
+	RelationalStoreMaxWALMiB *int
 	// NATSTLS is the broker's authority and the leaf it signs, minted here rather
 	// than during the apply so the private half never reaches the infrastructure
 	// state. Only the public CA is passed to OpenTofu.

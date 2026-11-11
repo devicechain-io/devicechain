@@ -22,7 +22,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useAuth } from '@/auth/AuthProvider';
-import { hasAuthority } from '@devicechain/client';
+import { GraphQLRequestError, hasAuthority } from '@devicechain/client';
 import { getConnector, updateConnector, type Connector } from '@/lib/api/connectors';
 import {
   ConnectorConfigForm,
@@ -157,8 +157,13 @@ function ConnectorEditor({ loaded }: { loaded: Connector }) {
       setEditor((e) => ({ ...e, secret: { mode: nextHasSecret ? 'keep' : 'set', value: '' } }));
       toast(t('saved'));
     } catch (err) {
-      toast(errMessage(err), 'error');
-      setFormError(errMessage(err));
+      const message =
+        err instanceof GraphQLRequestError &&
+        err.errors?.some((error) => error.extensions?.code === 'STALE_WRITE')
+          ? t('staleWrite')
+          : errMessage(err);
+      toast(message, 'error');
+      setFormError(message);
     } finally {
       setSaving(false);
     }

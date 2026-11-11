@@ -70,7 +70,7 @@ func newLoginFixture(t *testing.T, free int) *loginFixture {
 	frozen := time.Unix(1_700_000_000, 0)
 	f := &loginFixture{rdbm: rdbm, store: store}
 	checker, err := credential.NewChecker(store,
-		map[credential.Kind]credential.Policy{credential.KindIdentity: policy, credential.KindOAuthClient: policy},
+		map[credential.Kind]credential.Policy{credential.KindIdentity: policy, credential.KindOAuthClient: policy, credential.KindTotp: {Unthrottled: true}},
 		credential.WithClock(func() time.Time { return frozen }),
 		credential.WithCompareObserver(func([]byte) { f.compares.Add(1) }))
 	require.NoError(t, err)

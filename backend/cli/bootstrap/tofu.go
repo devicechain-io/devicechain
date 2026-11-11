@@ -609,6 +609,9 @@ func infraVarsIn(st *State, rootdir string) []string {
 	if st.MaxConnections > 0 {
 		vars = append(vars, fmt.Sprintf("postgres_max_connections=%d", st.MaxConnections))
 	}
+	if st.RelationalStoreMaxWALMiB != nil {
+		vars = append(vars, fmt.Sprintf("postgres_max_wal_size_mib=%d", *st.RelationalStoreMaxWALMiB))
+	}
 	// The compact preset's volumes (compactSizing). The JetStream PV is DERIVED from
 	// the stream ceilings helmInstall states, not chosen alongside them: every
 	// per-stream ceiling is reserved UP FRONT at stream creation, so a volume smaller

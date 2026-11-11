@@ -319,13 +319,13 @@ type Mutation {
     version until you publish again. Fails if no connector has the token. If
     expectedUpdatedAt is given and the connector has changed since, nothing is written and
     the call fails with the message "connector was modified by another writer; reload and
-    try again" (this error carries no code). Requires connector:write.
+    try again" and extensions.code STALE_WRITE. Requires connector:write.
     """
     # Partially update the connector (draft) with the given (current) token: an omitted
     # field is left alone, an explicit null clears it. When expectedUpdatedAt is
     # supplied it is an optimistic-concurrency precondition: the update is refused if the
     # connector's updatedAt has changed since, a concurrent edit ("connector was modified
-    # by another writer; reload and try again"; this is not the CONFLICT code). Pass the
+    # by another writer; reload and try again"; code STALE_WRITE, not CONFLICT). Pass the
     # updatedAt the caller last read.
     updateConnector(
         """Current token of the connector to update."""
