@@ -8,6 +8,7 @@ package cmd
 // of arguments it takes, and every `hack/` path in one must exist in the tree.
 // Local recursive patterns in go build/go vet must start inside a Go module.
 // Literal local Helm installs must render successfully, entirely offline.
+// Literal GraphQL curl documents are validated against each endpoint schema plane.
 // Literal psql SELECT columns are checked against the frozen analytics projection.
 //
 // WHY A TEST IN THIS PACKAGE. The source of truth for dcctl is the cobra tree, and this
@@ -38,7 +39,7 @@ package cmd
 // syntax and release-history pages are visibly skipped. It never executes SQL.
 // It does not otherwise prove a flag's value parses,
 // that the command succeeds, or that the sentence beside it is true. Every other tool
-// (kubectl, curl, ...) is counted, not checked, and the count is printed, so the
+// (kubectl, non-GraphQL curl, ...) is counted, not checked, and the count is printed, so the
 // uncovered surface is visible rather than implied:
 //
 //	cd backend/cli && go test ./cmd -run TestPublishedDocsCommandsExist -v -count=1
@@ -311,7 +312,9 @@ func splitSegments(s string) [][]string {
 }
 
 // shellSegments can retain subshell boundaries for working-directory tracking.
-func shellSegments(s string, groups bool) [][]string {
+// markDynamic annotates double-quoted shell expansions for the GraphQL body check;
+// callers checking other tools retain the original words.
+func shellSegments(s string, groups bool, markDynamic ...bool) [][]string {
 	var segs [][]string
 	var cur []string
 	var word strings.Builder
@@ -352,6 +355,11 @@ func shellSegments(s string, groups bool) [][]string {
 			for i++; i < len(s) && s[i] != '"'; i++ {
 				if s[i] == '\\' && i+1 < len(s) {
 					i++
+					word.WriteByte(s[i])
+					continue
+				}
+				if len(markDynamic) > 0 && markDynamic[0] && s[i] == '$' {
+					word.WriteString(substPlaceholder)
 				}
 				word.WriteByte(s[i])
 			}
@@ -749,20 +757,24 @@ func docsGoRecursiveCommand(words []string) bool {
 }
 
 type docsScan struct {
-	findings     []docsFinding
-	dcctlChecked int
-	dcctlSkipped []string // where: text, for templates
-	hackChecked  int
-	goChecked    int
-	goSkipped    []string
-	goLayout     *docsGoLayout
-	helmRepo     string
-	helmChecked  int
-	helmSkipped  []string
-	helmStandIns []string
-	sqlChecked   int
-	sqlSkipped   []string
-	sqlRepo      string
+	findings       []docsFinding
+	dcctlChecked   int
+	dcctlSkipped   []string // where: text, for templates
+	hackChecked    int
+	goChecked      int
+	goSkipped      []string
+	goLayout       *docsGoLayout
+	helmRepo       string
+	helmChecked    int
+	helmSkipped    []string
+	helmStandIns   []string
+	sqlChecked     int
+	sqlSkipped     []string
+	sqlRepo        string
+	graphqlChecked int
+	graphqlSkipped []string
+	graphqlRepo    string
+	graphqlSchemas map[string]docsGraphQLSchema
 
 	uncovered map[string]int // first word -> count
 }
@@ -797,7 +809,7 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 			}
 			s.scanGoCommands(outer, where, &wd, &stack, &loops)
 			for _, cmdline := range append([]string{outer}, inner...) {
-				for _, seg := range splitSegments(cmdline) {
+				for segmentIndex, seg := range splitSegments(cmdline) {
 					words := commandWords(seg)
 					if len(words) == 0 {
 						continue
@@ -805,6 +817,9 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 					if !isDcctl(words[0]) {
 						if words[0] == "psql" {
 							s.scanPsql(words, where)
+							continue
+						}
+						if words[0] == "curl" && s.scanCurlGraphQL(commandWords(shellSegments(cmdline, false, true)[segmentIndex]), where) {
 							continue
 						}
 						if docsHelmInstall(words) || s.goLayout != nil && docsGoRecursiveCommand(words) {
@@ -834,7 +849,7 @@ func scanDocsText(root *cobra.Command, file, text string, exists func(string) bo
 }
 
 func newDocsScan() *docsScan {
-	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot, sqlRepo: repoRoot}
+	return &docsScan{uncovered: map[string]int{}, helmRepo: repoRoot, sqlRepo: repoRoot, graphqlRepo: repoRoot}
 }
 
 // docsTrees returns docs/docs and every locale's current tree under repo, relative to it.
@@ -893,6 +908,7 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		s.goLayout = layout
 		s.helmRepo = repo
 		s.sqlRepo = repo
+		s.graphqlRepo = repo
 		err := filepath.WalkDir(filepath.Join(repo, tree), func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -942,6 +958,12 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 		total.helmSkipped = append(total.helmSkipped, s.helmSkipped...)
 		total.goChecked += s.goChecked
 		total.goSkipped = append(total.goSkipped, s.goSkipped...)
+		if floors[filepath.FromSlash(tree)] && s.graphqlChecked < minGraphQLChecksPerTree {
+			problems = append(problems, fmt.Sprintf("%s: found only %d GraphQL curl documents (floor %d); the extractor is losing blocks", tree, s.graphqlChecked, minGraphQLChecksPerTree))
+		}
+		report = append(report, fmt.Sprintf("%s: %d GraphQL curl documents checked, %d skipped", tree, s.graphqlChecked, len(s.graphqlSkipped)))
+		total.graphqlChecked += s.graphqlChecked
+		total.graphqlSkipped = append(total.graphqlSkipped, s.graphqlSkipped...)
 		report = append(report, fmt.Sprintf("%s: %d SQL SELECTs checked, %d skipped", tree, s.sqlChecked, len(s.sqlSkipped)))
 		total.sqlChecked += s.sqlChecked
 		total.sqlSkipped = append(total.sqlSkipped, s.sqlSkipped...)
@@ -956,6 +978,10 @@ func checkPublishedDocs(root *cobra.Command, repo string) (problems, report []st
 	for _, s := range total.dcctlSkipped {
 		report = append(report, "skipped (template): "+s)
 	}
+	for _, skipped := range total.graphqlSkipped {
+		report = append(report, "skipped (GraphQL curl): "+skipped)
+	}
+	report = append(report, fmt.Sprintf("GraphQL curl: %d checked, %d skipped", total.graphqlChecked, len(total.graphqlSkipped)))
 	for _, skipped := range total.sqlSkipped {
 		report = append(report, "skipped (SQL SELECT): "+skipped)
 	}
@@ -1028,8 +1054,18 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "hack", "real.sh"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	schemaDir := filepath.Join(repo, "backend", "services", "fixture", "graphql")
+	if err := os.MkdirAll(schemaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(schemaDir, "schema.graphql"), []byte("type Query { good: String }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var page strings.Builder
 	page.WriteString("```bash\n")
+	for i := 0; i < minGraphQLChecksPerTree; i++ {
+		page.WriteString("curl /api/fixture/graphql -d '{\"query\":\"{good}\"}'\n")
+	}
 	for i := 0; i < minDcctlInvocationsPerTree; i++ {
 		page.WriteString("dcctl bootstrap local prod --yes\n")
 	}
@@ -1052,6 +1088,18 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 	}
 	if len(problems) != 0 {
 		t.Fatalf("a clean tree failed: %v", problems)
+	}
+
+	graphqlBad := filepath.Join(repo, locales[1], "graphql-bad.md")
+	if err := os.WriteFile(graphqlBad, []byte("```bash\ncurl /api/fixture/graphql -d '{\"query\":\"{goood}\"}'\n```\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	problems, _, _ = checkPublishedDocs(rootCmd, repo)
+	if len(problems) != 1 || !strings.Contains(problems[0], "graphql-bad.md:2") || !strings.Contains(problems[0], `Cannot query field "goood"`) {
+		t.Fatalf("GraphQL whole-gate mutant: %v", problems)
+	}
+	if err := os.Remove(graphqlBad); err != nil {
+		t.Fatal(err)
 	}
 
 	// A bogus command in the Spanish tree only.
@@ -1098,8 +1146,8 @@ func TestPublishedDocsGateFailsOnAPlantedTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	problems, _, _ = checkPublishedDocs(rootCmd, repo)
-	if len(problems) != 2 || !strings.Contains(strings.Join(problems, "\n"), "zh-CN/docusaurus-plugin-content-docs/current: found only 0 dcctl") {
-		t.Errorf("an unreadable tree did not trip both floors: %v", problems)
+	if len(problems) != 3 || !strings.Contains(strings.Join(problems, "\n"), "zh-CN/docusaurus-plugin-content-docs/current: found only 0 dcctl") || !strings.Contains(strings.Join(problems, "\n"), "found only 0 GraphQL curl documents") {
+		t.Errorf("an unreadable tree did not trip all three floors: %v", problems)
 	}
 
 	// A missing translation tree.
