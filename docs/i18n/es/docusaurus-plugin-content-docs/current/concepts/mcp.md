@@ -129,7 +129,7 @@ La sesión de un superusuario nunca recibe un alcance de acción. Un operador qu
 
 - Enciende `agentActuation.enabled` en una actualización aparte, cuando la versión que lo trae haya terminado de desplegarse. Los pods de una versión anterior no conocen las cuentas de agente y emitirían el token de una de ellas con los permisos de escritura de sus roles; las cuentas de agente reciben tokens solo de propuesta únicamente de pods de esta versión o posteriores, y por eso una cuenta de agente solo puede crearse con el interruptor encendido.
 - Si apagas el interruptor mientras un cliente OAuth aún tiene alcances de acción registrados, quita esos alcances en la misma edición la próxima vez que cambies el cliente: una edición que conserva un alcance que la instancia ya no ofrece se rechaza.
-- Relajar la política necesita un segundo factor reciente dentro de la antigüedad de verificación. Si la consola te pide que vuelvas a iniciar sesión, usa tu contraseña y el código de tu aplicación de autenticación y vuelve a intentarlo. Un inicio de sesión solo mediante SSO no aporta esta verificación adicional; registra primero una aplicación de autenticación. Endurecer la política y apagar las acciones de agentes no necesitan verificación adicional.
+- Relajar la política requiere un segundo factor reciente. Ante `STEP_UP_REQUIRED`, la consola solicita un código de la aplicación de autenticación y después indica que vuelvas a intentar la acción sin cerrar sesión. `stepUp(refreshToken, code)` en la API del inquilino actualiza la hora del factor en tu propia sesión con contraseña y rota los tokens (Vista previa: puede cambiar en una versión menor). Rechaza los códigos de recuperación sin canjearlos. Las sesiones de inicio de sesión único y las cuentas sin un factor registrado no pueden usar esta mutación; si la verificación no está disponible, la consola ofrece iniciar sesión de nuevo. Endurecer la política y el interruptor de parada siguen disponibles.
 
 ### Propuestas y aprobaciones (vista previa) {#agent-proposals}
 
@@ -157,9 +157,10 @@ reglas de acción.
    de la política y los motivos. Trata **Justificación del agente** como texto no confiable;
    **Cliente no verificado** significa que la identidad del cliente no está certificada.
 2. Elige **Aprobar** y confirma la acción mostrada, o **Rechazar** e introduce, si quieres, una nota
-   de un máximo de 512 bytes. Si se te pide, elige **Volver a iniciar sesión**, autentícate con tu
-   contraseña y el código de tu aplicación de autenticación y vuelve a intentarlo al regresar a
-   la propuesta. Iniciar sesión por sí solo no envía una aprobación.
+   de un máximo de 512 bytes. Si se te pide, elige **Verificar código**, introduce el código de tu
+   aplicación de autenticación y vuelve a intentar la aprobación; no cierras sesión. Si la
+   verificación no está disponible (inicio de sesión único, sin autenticador registrado), elige
+   **Volver a iniciar sesión**. Verificar un código por sí solo no envía una aprobación.
 3. Si esa aprobación completara la propuesta, la confirmación indica que, al aprobar, la acción
    se ejecuta en tu nombre. La plataforma vuelve a consultar la política de agentes y reconoce o
    cierra las alarmas en un solo paso; la propuesta muestra entonces `EXECUTED` con su resultado.

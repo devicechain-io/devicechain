@@ -91,7 +91,7 @@ const (
 // MfaCodes is the data plane's closed set of second-factor error codes.
 func MfaCodes() []string {
 	return []string{CodeMfaChallenge, CodeMfaRequired, CodeMfaEnrollmentRequired,
-		CodeMfaChallengeExpired, CodeMfaAlreadyEnrolled, CodeMfaNotEnrolled}
+		CodeMfaChallengeExpired, CodeMfaAlreadyEnrolled, CodeMfaNotEnrolled, CodeStepUpSso}
 }
 
 // MfaError is a second-factor refusal that carries its wire code.

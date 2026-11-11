@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   verifyMfa: vi.fn(),
+  stepUp: vi.fn(),
   selectTenant: vi.fn(),
   logout: vi.fn(),
   refresh: vi.fn(),
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/user-management', () => ({
   login: vi.fn(),
+  stepUp: (...a: unknown[]) => h.stepUp(...a),
   verifyMfa: (...a: unknown[]) => h.verifyMfa(...a),
   selectTenant: (...a: unknown[]) => h.selectTenant(...a),
   refresh: (...a: unknown[]) => h.refresh(...a),
@@ -187,5 +189,32 @@ describe('a session that can no longer be refreshed', () => {
       await resolveAuthToken().catch(() => null);
     });
     expect(consumeSessionExpired()).toBe(reason);
+  });
+});
+
+describe('in-session stepUp', () => {
+  beforeEach(() => {
+    window.localStorage.setItem('dc-auth', JSON.stringify({ accessToken: ACCESS, refreshToken: REFRESH }));
+    window.localStorage.setItem('dc-identity', JSON.stringify({ identityToken: OLD_ID, superuser: false, memberships: [] }));
+  });
+  it('uses the stored refresh token and persists both new tokens without signing out', async () => {
+    const pair = { accessToken: jwt({ tenant: 'acme', exp: future, mfa_time: future - 3600 }),
+      refreshToken: jwt({ tenant: 'acme', exp: future, jti: 'rotated' }) };
+    h.stepUp.mockResolvedValue(pair);
+    mount();
+    await act(async () => { await auth.stepUp('123456'); });
+    expect(h.stepUp).toHaveBeenCalledExactlyOnceWith(REFRESH, '123456');
+    expect(stored('dc-auth')).toEqual(pair);
+    expect(stored('dc-identity').identityToken).toBe(OLD_ID);
+    expect(await resolveAuthToken()).toBe(pair.accessToken);
+    expect(h.logout).not.toHaveBeenCalled();
+  });
+  it('leaves the session in place when the code is refused', async () => {
+    h.stepUp.mockRejectedValue(new Error('invalid code'));
+    mount();
+    await act(async () => { await expect(auth.stepUp('123456')).rejects.toThrow('invalid code'); });
+    expect(stored('dc-auth')).toEqual({ accessToken: ACCESS, refreshToken: REFRESH });
+    expect(auth.isAuthenticated).toBe(true);
+    expect(h.logout).not.toHaveBeenCalled();
   });
 });

@@ -129,7 +129,7 @@ A superuser's session is never given an action scope. An operator who wants an a
 
 - Turn `agentActuation.enabled` on in a separate upgrade, after the release that brings it has finished rolling out. Pods of an earlier release do not know agent accounts and would issue an agent account's token with its roles' write permissions; agent accounts receive proposal-only tokens only from pods of this release or later, which is why an agent account can be created only while the switch is on.
 - If you turn the switch off while an OAuth client still has action scopes registered, remove those scopes in the same edit the next time you change the client: an edit that keeps a scope the instance no longer offers is refused.
-- Loosening the policy needs a fresh second factor within the step-up age. If the console asks you to sign in again, use your password and authenticator code, then retry. An SSO-only sign-in does not supply this step-up; enroll an authenticator first. Tightening and turning agent actions off need no step-up.
+- Loosening the policy needs a second factor presented within the step-up age. The console offers an authenticator-code dialog on `STEP_UP_REQUIRED`, then asks you to retry the action without signing out. The tenant API's `stepUp(refreshToken, code)` renews the factor time in your own password session and rotates its tokens (Preview: may change in a minor release). Recovery codes are refused without redemption. Single sign-on sessions and accounts without an enrolled factor cannot use this mutation; when verification is unavailable the console offers sign-in again. Tightening and the kill switch remain available.
 
 ### Proposals and approvals (preview) {#agent-proposals}
 
@@ -155,8 +155,9 @@ configure clients, approver roles and action rules.
    payload, digest, policy version and reasons. Treat **Agent rationale** as untrusted text;
    **Unverified client** means the client identity is not attested.
 2. Choose **Approve** and confirm the displayed action, or **Reject** and optionally enter a note
-   of at most 512 bytes. If prompted, choose **Sign in again**, authenticate with your password
-   and authenticator code, then retry after returning to the proposal. Signing in alone does not
+   of at most 512 bytes. If prompted, choose **Verify code**, enter your authenticator code, then
+   retry the approval; you stay signed in. If verification is unavailable (single sign-on, no
+   authenticator enrolled), choose **Sign in again** instead. Verifying a code alone does not
    submit an approval.
 3. If that approval would complete the proposal, the confirmation says that approving carries the
    action out as you. The platform asks the agent policy again and acknowledges or clears the
