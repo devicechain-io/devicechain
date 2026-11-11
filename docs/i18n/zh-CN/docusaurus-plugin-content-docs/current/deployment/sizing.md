@@ -117,6 +117,7 @@ Broker、卷以及预写日志的额度：
 
 - **事件信封。** 这些数据是在开启信封时测得的，信封约可降低五分之一的 CPU。它是单独的开关，所以当 `perf` 规格在关闭信封的情况下运行时，`dcctl bootstrap` 会提示你。
 - **`--ha`。** 该速率是在单个 Broker 服务器上测得的。这种组合是允许的，`dcctl bootstrap` 会提示它尚未实测。
+- **`--ha` 下的节点适配。** 这是 `dcctl bootstrap` 的检查；upgrade 不会运行此检查。使用 `--ha` 时，如果可调度节点中能各自满足 Broker 请求（`perf-16k` 为 6 CPU 与 6Gi，`perf-12k` 为 4 CPU 与 4Gi）的可分配 CPU 和内存的不足三个，`perf` 规格会被拒绝。检查在声明实例之前运行，因此可以用更小的 `--size` 重新运行。每个节点单独判断，一个节点的 CPU 与另一个节点的内存不会相加。错误信息会给出所见最大的节点以及解决办法：声明环境变量 `TF_VAR_nats_cpu_request` / `TF_VAR_nats_memory_request`，或在实例根目录的 `terraform.tfvars` 中设置 `nats_cpu_request` / `nats_memory_request`；该文件只有在实例根目录已存在时才会被读取，也就是重新运行时。首次 bootstrap 请使用环境变量。自行声明的请求不会被 `dcctl` 检查。其他选项是改用更小的 `--size` 或换更大的节点。它只比较可分配容量，不涉及空闲量或调度器的决定。`--dry-run` 下同样会拒绝，但集群无法连接时只会给出警告。
 - **共享数据库与节点。** 关系型存储的卷、数据库的 CPU 与内存请求、监控卷以及节点池都属于集群，保持 `dcctl install` 和你的集群留下的状态。关系型存储的 `max_wal_size` 是同一类设置：规格只公布测量时所用的值，由你在安装时声明（见上文）。实测的集群使用三个节点池：服务用 `t2d-standard-8`（两个节点），数据库用 `n2d-standard-8`（两个节点），Broker 单独用一个 `t2d-standard-8`，压测发生器在别处。
 
 ## 哪个值优先 {#precedence}
