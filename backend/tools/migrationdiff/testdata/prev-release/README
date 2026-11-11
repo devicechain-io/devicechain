@@ -1,10 +1,51 @@
-These are the verbatim, LF pg_dump schema goldens from v1.3.0.
-Refresh to the previous released minor on EVERY release (replace v1.3.0 below):
+These are verbatim, LF pg_dump schema goldens from the tag named by prevRelease
+in prev_release_columns_test.go. Old pods keep writing during rolling upgrades;
+the integration tests compare these columns with the CURRENT migrated catalog
+and replay frozen previous-release writers.
 
-mkdir -p backend/tools/migrationdiff/testdata/prev-release/v1.3.0
-for f in $(git ls-tree --name-only v1.3.0 backend/tools/migrationdiff/golden/); do git show v1.3.0:$f > backend/tools/migrationdiff/testdata/prev-release/v1.3.0/$(basename $f); done
+Refresh on EVERY release: edit prevRelease, regenerate the directory, re-freeze
+the writer shapes from the tag. Run these Bash commands from the repository root
+(after editing prevRelease to the previous released minor):
 
-Run the commands from the repository root.
-Old pods keep writing during rolling upgrades; the integration tests compare these
-columns with the CURRENT migrated catalog and replay frozen previous-release writers.
-Update the test fixture path and writer snapshots together when advancing the minor.
+    release=$(sed -n 's/^const prevRelease = "\(.*\)"/\1/p' backend/tools/migrationdiff/prev_release_columns_test.go)
+    test -n "$release" && git rev-parse --verify "refs/tags/$release" || exit 1
+    fixtures=backend/tools/migrationdiff/testdata/prev-release
+    find "$fixtures" -mindepth 1 -maxdepth 1 -type d -name 'v*' -exec rm -r -- {} +
+    mkdir -p "$fixtures/$release"
+    for f in $(git ls-tree -r --name-only "$release" backend/tools/migrationdiff/golden/); do
+        git show "$release:$f" > "$fixtures/$release/$(basename "$f")" || exit 1
+        cmp "$fixtures/$release/$(basename "$f")" <(git show "$release:$f") || exit 1
+    done
+
+Read the tagged sources, never substitute live models or embedded bases:
+
+    git show "$release:backend/services/notification-management/model/model_state.go"
+    git show "$release:backend/services/notification-management/model/api_state.go"
+    git show "$release:backend/core/rdb/model.go"
+    git show "$release:backend/services/device-state/model/model.go"
+    git show "$release:backend/services/device-state/model/columnar_writes.go"
+    git show "$release:backend/services/device-state/model/projection_merge.go"
+    git show "$release:backend/services/device-state/model/dropped_measurements.go"
+    git show "$release:backend/services/device-state/model/api.go"
+    git show "$release:backend/services/device-state/model/ownership.go"
+    git show "$release:backend/core/rdb/insert_columns.go"
+    git show "$release:backend/core/rdb/insert_columns_upsert.go"
+    git show "$release:backend/core/rdb/anchors.go"
+    git diff --stat "$release" HEAD -- 'backend/services/*/schema/*' 'backend/services/*/model/migration*'
+
+Expand the tagged bases by hand, preserving every field and gorm tag. Replay
+every Create, full Save, distinct Updates/UpdateColumns map and delete shape,
+including nullable values, and read back their effects. Cite each tagged function.
+Regenerate the column-array SQL from the tagged column lists, conflict arms and
+rdb builders; compare every frozen constant byte for byte. For gorm builders use
+a Postgres DryRun with the service table prefix, including tenant callbacks (or
+the equivalent explicit tenant predicates). Keep the column guard fail-loud and
+the migration sync.Once.
+
+    cd backend/tools/migrationdiff
+    test -z "$(gofmt -l .)"
+    go vet -tags integration ./...
+    go build ./...
+    go test -p 2 -count=1 ./...
+
+Run the integration replays separately against Postgres.

@@ -21,6 +21,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const prevRelease = "v1.4.0"
+
 var (
 	prevMigrateOnce sync.Once
 	prevMigrateErr  error
@@ -81,7 +83,7 @@ func prevWhitespace(s string) string { return strings.Join(strings.Fields(s), " 
 
 func prevReleaseFixture(t *testing.T) prevCatalog {
 	t.Helper()
-	files, err := filepath.Glob("testdata/prev-release/v1.3.0/*.sql")
+	files, err := filepath.Glob(filepath.Join("testdata", "prev-release", prevRelease, "*.sql"))
 	require.NoError(t, err)
 	require.Len(t, files, len(areas), "fixture must cover every area")
 	result := prevCatalog{}
@@ -191,20 +193,20 @@ func TestPrevReleaseColumns(t *testing.T) {
 		now, exists := live[key]
 		label := key.schema + "." + key.table
 		if !exists {
-			violations = append(violations, label+": v1.3.0 table missing")
+			violations = append(violations, label+": "+prevRelease+" table missing")
 			continue
 		}
 		for name, before := range columns {
 			after, exists := now[name]
 			if !exists {
-				violations = append(violations, label+"."+name+": v1.3.0 column missing (drop/rename)")
+				violations = append(violations, label+"."+name+": "+prevRelease+" column missing (drop/rename)")
 				continue
 			}
 			if prevWhitespace(before.typeText) != prevWhitespace(after.typeText) {
 				violations = append(violations, fmt.Sprintf("%s.%s: type changed from %q to %q", label, name, before.typeText, after.typeText))
 			}
 			// A default does not rescue this one: a default fills an OMITTED column, and a
-			// v1.3 writer that knows the column binds NULL to it explicitly (absent
+			// previous-release writer that knows the column binds NULL to it explicitly (absent
 			// coordinates, absent measurement metadata), which NOT NULL then refuses.
 			if !before.notNull && after.notNull {
 				violations = append(violations, label+"."+name+": nullable column became NOT NULL (an old writer may bind NULL explicitly; a default does not apply)")
@@ -218,6 +220,6 @@ func TestPrevReleaseColumns(t *testing.T) {
 	}
 	sort.Strings(violations)
 	if len(violations) > 0 {
-		t.Fatalf("v1.3.0 rolling-writer incompatibilities:\n  %s\nA v1.3 pod's INSERT omits columns it does not know; additions must accept omitted values. Old tables, columns and types must survive the overlap.", strings.Join(violations, "\n  "))
+		t.Fatalf("%s rolling-writer incompatibilities:\n  %s\nA %s pod's INSERT omits columns it does not know; additions must accept omitted values. Old tables, columns and types must survive the overlap.", prevRelease, strings.Join(violations, "\n  "), prevRelease)
 	}
 }
