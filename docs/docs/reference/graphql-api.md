@@ -1031,6 +1031,7 @@ characters.
 | Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
 | JSON input size | 64 KiB | Each metadata, properties, configuration, payload or recipients value sent as JSON. Command payloads and metadata are refused with `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (see [Sending commands](../guides/sending-commands.md)). |
 | Recipients per notification rule | 100 | The `recipients` list of a notification policy rule. |
+| Rules per notification policy | 100 | One supplied `rules` list when creating or updating a policy. Updates that omit `rules` preserve the stored rule set. |
 | OAuth client redirect URIs | 16 entries, 2,048 B each | `redirectUris` on `createOauthClient` and `updateOauthClient`. |
 | OAuth client scopes | 16 entries, 64 B each | `scopes` on `createOauthClient` and `updateOauthClient`. |
 | Tenant tiers | 100 tiers, 128 B per token | The tier catalog (`createTenantTier` refuses a 101st tier) and `orderedTokens` on `reorderTenantTiers`, which must name every tier. |
