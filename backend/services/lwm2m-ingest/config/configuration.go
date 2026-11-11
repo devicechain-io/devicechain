@@ -24,6 +24,8 @@ import (
 	"math"
 	"os"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/core"
 )
 
 const (
@@ -214,8 +216,8 @@ type PskIdentity struct {
 	// one registration, and its objects/instances live under it. Required.
 	ExternalId string `json:"externalId"`
 	// DeviceTypeToken is the device type stamped on the device row when AutoRegister
-	// creates it on first registration. Required when AutoRegister is set; ignored
-	// otherwise.
+	// creates it on first registration. Required when AutoRegister is set, and unused
+	// otherwise; when set it must satisfy the token grammar either way.
 	DeviceTypeToken string `json:"deviceTypeToken"`
 	// AutoRegister creates the device row in device-management on first registration
 	// (ALLOW_NEW): a provisioned credential is meant to become a device. When false the
@@ -350,6 +352,13 @@ func (c *Lwm2mConfiguration) Validate() error {
 		}
 		if id.AutoRegister && strings.TrimSpace(id.DeviceTypeToken) == "" {
 			return fmt.Errorf("security.identities[%d]: deviceTypeToken is required when autoRegister is set (it is stamped on the auto-created device row)", i)
+		}
+		// As in Sparkplug, validate any named type at load so a malformed token
+		// fails here rather than on every auto-registration at device creation.
+		if id.DeviceTypeToken != "" {
+			if err := core.ValidateToken(id.DeviceTypeToken); err != nil {
+				return fmt.Errorf("security.identities[%d].deviceTypeToken: %w", i, err)
+			}
 		}
 		// NOTE: a duplicate (tenant, externalId) across two identities is DELIBERATELY
 		// allowed — it is the credential-rotation overlap (two live PSKs for one device

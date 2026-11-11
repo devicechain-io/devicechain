@@ -958,6 +958,26 @@
             "type": "object",
             "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup.",
             "properties": {
+              "security": {
+                "type": "object",
+                "description": "lwm2m-ingest: the DTLS listener settings and the pre-shared-key identities.",
+                "properties": {
+                  "identities": {
+                    "type": "array",
+                    "description": "lwm2m-ingest: one binding per pre-shared-key identity. dcctl writes these from --lwm2m-identities.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "deviceTypeToken": {
+                          "type": "string",
+                          "pattern": "^([A-Za-z0-9][A-Za-z0-9_-]*)?$",
+                          "description": "The device type stamped on a device that autoRegister creates. When set, it must be a valid token: a letter or digit, then letters, digits, hyphens or underscores. The service refuses any other value at startup."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
               "ingestRateLimit": {
                 "type": "object",
                 "description": "event-sources, lwm2m-ingest and sparkplug-ingest: the platform-default per-tenant ingest ceiling. A tenant's tier overrides it.",
