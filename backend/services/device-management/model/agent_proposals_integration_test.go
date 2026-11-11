@@ -138,10 +138,17 @@ func TestAgentProposalApprovalsCompareAndSetUnderRace(t *testing.T) {
 }
 
 // concurrentAlarmPublisher is safe across the eight final-approval callers.
-type concurrentAlarmPublisher struct{ calls atomic.Int32 }
+// concurrentAlarmPublisher counts what it is handed. The relay drains EVERY tenant's queued effects,
+// and the integration database outlives each test, so a test names the one alarm it is counting.
+type concurrentAlarmPublisher struct {
+	calls atomic.Int32
+	only  string
+}
 
-func (p *concurrentAlarmPublisher) PublishAlarmEvent(context.Context, *AlarmStateChangeEvent) {
-	p.calls.Add(1)
+func (p *concurrentAlarmPublisher) PublishAlarmEvent(_ context.Context, e *AlarmStateChangeEvent) {
+	if p.only == "" || e.AlarmToken == p.only {
+		p.calls.Add(1)
+	}
 }
 
 // fixedExecutionDecider has no mutable request log, so the race tests do not race the fake.
@@ -162,7 +169,7 @@ func TestExecuteConsumesApprovalOnce(t *testing.T) {
 	replica := NewApi(api.RDB)
 	replica.AgentDecider = api.AgentDecider
 	replica.KillFeed = api.KillFeed
-	pubs := []*concurrentAlarmPublisher{{}, {}}
+	pubs := []*concurrentAlarmPublisher{{only: "execute"}, {only: "execute"}}
 	api.AlarmPublisher = pubs[0]
 	replica.AlarmPublisher = pubs[1]
 	apis := []*Api{api, replica}
