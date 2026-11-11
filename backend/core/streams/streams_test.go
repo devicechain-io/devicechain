@@ -3,7 +3,10 @@
 
 package streams
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The declaration is only worth centralizing if it cannot be quietly incomplete.
 // These tests pin the properties that make "add an entry to All" sufficient.
@@ -16,7 +19,7 @@ func TestAllIsWellFormed(t *testing.T) {
 		}
 		if seen[s.Suffix] {
 			// A duplicate would be counted twice by the budget, inflating the
-			// disk floor — which looks like conservatism rather than a bug.
+			// disk floor â€” which looks like conservatism rather than a bug.
 			t.Errorf("suffix %q is declared twice", s.Suffix)
 		}
 		seen[s.Suffix] = true
@@ -38,7 +41,7 @@ func TestDerivedSuffixesAreDeclared(t *testing.T) {
 		declared[s.Suffix] = true
 	}
 	// Only connector-dispatch has a dead-letter stream today. If another base
-	// gains one, it belongs in All and in this list — which is the point: the
+	// gains one, it belongs in All and in this list â€” which is the point: the
 	// derived name has to be written down somewhere that a reader will find.
 	for _, base := range []string{ConnectorDispatch} {
 		if got := DeadLetter(base); !declared[got] {
@@ -59,7 +62,7 @@ func TestDerivedSuffixesAreDeclared(t *testing.T) {
 // stream silently evicts live data via DiscardOld and looks like nothing.
 func TestTierForFailsSafeToHot(t *testing.T) {
 	if got := TierFor("a-suffix-nobody-declared"); got != Hot {
-		t.Errorf("TierFor(unknown) = %v, want Hot — an unclassified stream must "+
+		t.Errorf("TierFor(unknown) = %v, want Hot â€” an unclassified stream must "+
 			"over-reserve rather than silently under-buffer", got)
 	}
 	if got := TierFor(InboundEvents); got != Hot {
@@ -79,9 +82,9 @@ func TestIsPerDevice(t *testing.T) {
 	// AUTHENTICATED statement of who answered. A tenant-scoped response subject let any
 	// device in a tenant settle any other device's command.
 	//
-	// 🔴 THIS TEST USED TO ASSERT THE OPPOSITE, with a reason that was not true: that
+	// ðŸ”´ THIS TEST USED TO ASSERT THE OPPOSITE, with a reason that was not true: that
 	// per-device "would split the consumer's filter and strand every response". It does
-	// not — StreamSubject appends the wildcard level for this shape, so one filter still
+	// not â€” StreamSubject appends the wildcard level for this shape, so one filter still
 	// covers every device, exactly as it already did for DeviceCommands.
 	if !IsPerDevice(CommandResponses) {
 		t.Errorf("%q carries the responding device's token and must report PerDevice", CommandResponses)
@@ -114,7 +117,7 @@ func TestShapeOf(t *testing.T) {
 // alone. An accidental cap on a stream meant to track its tier pins it below the ceiling an
 // operator sized the deployment with, and nothing reports it.
 //
-// 🔴 THE DEVICE-EVENTS CAPTURE STREAM IS NAMED HERE ON PURPOSE. It carried a 256 MiB cap, and
+// ðŸ”´ THE DEVICE-EVENTS CAPTURE STREAM IS NAMED HERE ON PURPOSE. It carried a 256 MiB cap, and
 // a perf run lost 7.2% of its PUBACKed MQTT events when the backlog crossed it, with no
 // setting able to raise it: streamMaxBytes moved the tier and the cap stayed.
 // Its ceiling is the whole margin between devices publishing faster than event-sources drains
@@ -170,7 +173,7 @@ func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
 	}
 }
 
-// Every stream says what a letter about one of its messages is — or that there is none.
+// Every stream says what a letter about one of its messages is â€” or that there is none.
 // An empty declaration is refused because the max-delivery recorder reads it for every
 // stream a service consumes: "" would be a stream whose abandoned deliveries are neither
 // lettered nor counted as refused, which is the silent drop the recorder exists to end.
@@ -194,7 +197,7 @@ func TestEveryStreamDeclaresADeadLetterKind(t *testing.T) {
 }
 
 // A verbatim copy is a real stream the writer ensures and the budget counts, so it must be
-// declared — and it must itself be unlettered, or a give-up on the copy would be copied.
+// declared â€” and it must itself be unlettered, or a give-up on the copy would be copied.
 func TestVerbatimCopyNamesADeclaredStream(t *testing.T) {
 	copies := 0
 	for _, s := range All {
@@ -262,7 +265,7 @@ func TestReplayCoveredIsDeclaredOnlyWhereProven(t *testing.T) {
 }
 
 // The work-queue retention is the max-delivery capture's alone. Anything else declared so
-// would lose a message the moment one reader acked it — every other stream has several
+// would lose a message the moment one reader acked it â€” every other stream has several
 // readers, one per area, each owed its own copy.
 func TestOnlyTheCaptureStreamIsWorkQueue(t *testing.T) {
 	for _, s := range All {
@@ -364,5 +367,30 @@ func TestAgentActuationKillsContract(t *testing.T) {
 	}
 	if s.Tier != Cold || s.Shape != ShapeTenant || s.DeadLetterKind != kindControlFact || !s.PlatformAuthored || s.DuplicateWindowSeconds != BrokerDefaultDuplicateWindowSeconds {
 		t.Fatalf("incorrect kill stream contract: %+v", s)
+	}
+}
+
+// Uncaptured streams must explain how exhaustion is settled without the recorder.
+func TestMaxDeliveriesCaptureDeclaration(t *testing.T) {
+	for _, s := range All {
+		if s.MaxDeliveriesUncaptured != "" {
+			if strings.TrimSpace(s.MaxDeliveriesUncaptured) == "" {
+				t.Errorf("%s has an empty uncaptured reason", s.Suffix)
+			}
+			if MaxDeliveriesCaptured(s.Suffix) {
+				t.Errorf("%s declares itself uncaptured but the accessor captures it", s.Suffix)
+			}
+		} else if s.Shape != ShapeAdvisory && !MaxDeliveriesCaptured(s.Suffix) {
+			t.Errorf("%s must remain captured", s.Suffix)
+		}
+	}
+	if MaxDeliveriesCaptured(LpwanDownlinkEvents) {
+		t.Error("lpwan-downlink-events must be uncaptured")
+	}
+	if strings.TrimSpace(bySuffix[LpwanDownlinkEvents].MaxDeliveriesUncaptured) == "" {
+		t.Error("lpwan-downlink-events must give its uncaptured reason")
+	}
+	if MaxDeliveriesCaptured(MaxDeliveries) || MaxDeliveriesCaptured("undeclared") {
+		t.Error("advisory-shaped and undeclared streams must not be captured")
 	}
 }

@@ -153,7 +153,15 @@ type GatewayJetStreamSource struct {
 	beatRef atomic.Uint64
 
 	lifecycle core.LifecycleManager
-	cancel    context.CancelFunc
+	// runMu serializes start/stop and protects runLive and the channel-close flags.
+	// A timed-out stop leaves the run live: handle still uses this run's fields,
+	// so none may be replaced until a subsequent stop finishes every stage.
+	runMu           sync.Mutex
+	runLive         bool
+	messagesClosed  bool
+	publishesClosed bool
+	writerClosed    chan struct{}
+	cancel          context.CancelFunc
 	// drained closes once the read loop has returned, so Stop does not race the
 	// loop into a closed message channel.
 	drained chan struct{}
@@ -329,6 +337,13 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 			return fmt.Errorf("event source %q: infrastructure.messaging.envelopes.inbound is on, but the capture writer (%T) cannot report a PubAck, so it could not settle the envelopes it published", es.Id, es.writer)
 		}
 	}
+	es.runMu.Lock()
+	defer es.runMu.Unlock()
+	if es.runLive {
+		return fmt.Errorf("event source %q: the previous run has not finished stopping (a stop timed out); retry ExecuteStop until it completes before starting again", es.Id)
+	}
+	// All validation is complete; there are no fallible startup returns below.
+	es.runLive = true
 	drained := make(chan struct{})
 	es.drained = drained
 	es.startPipeline(DECODE_WORKER_COUNT)
@@ -359,6 +374,9 @@ func (es *GatewayJetStreamSource) Stop(ctx context.Context) error {
 // rather than reading the field, so a worker lingering from a stop cut short by its
 // deadline cannot send into a later start's channel.
 func (es *GatewayJetStreamSource) startPipeline(workers int) {
+	// ExecuteStart holds runMu; isolated pipeline tests call this before stopping.
+	es.messagesClosed, es.publishesClosed = false, false
+	es.writerClosed = nil
 	messages := make(chan rawMessage, DECODE_CHANNEL_DEPTH)
 	publishes := make(chan pendingPublish)
 	workersDone := make(chan struct{})
@@ -462,6 +480,8 @@ func submitLoop(publishes <-chan pendingPublish, writer messaging.OrderedWriter,
 // stream redelivers it to whichever pod is running, the capture dedup id stores it once,
 // and at-least-once is exactly the guarantee this source exists to provide.
 func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
+	es.runMu.Lock()
+	defer es.runMu.Unlock()
 	if es.cancel != nil {
 		es.cancel()
 	}
@@ -475,6 +495,7 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	// permits that stop, and without this it would wait out the whole deadline on a nil
 	// channel.
 	if es.drained == nil {
+		es.runLive = false
 		return nil
 	}
 	// Draining before the read loop is waited for, not after: the loop can be blocked
@@ -494,7 +515,9 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 	if !es.await(ctx, es.drained, "read loop") {
 		return nil
 	}
-	es.stopPipeline(ctx)
+	if es.stopPipelineLocked(ctx) {
+		es.runLive = false
+	}
 	return nil
 }
 
@@ -503,13 +526,24 @@ func (es *GatewayJetStreamSource) ExecuteStop(ctx context.Context) error {
 // that it is complete on its own, as the tests that run the pipeline without a read loop
 // use it.
 func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
+	es.runMu.Lock()
+	defer es.runMu.Unlock()
+	return es.stopPipelineLocked(ctx)
+}
+
+// stopPipelineLocked resumes a partial stop without closing a channel twice.
+// Only ExecuteStop clears runLive, after this reports that every stage finished.
+func (es *GatewayJetStreamSource) stopPipelineLocked(ctx context.Context) bool {
 	es.writer.Draining()
 	if ce := es.ce; ce != nil {
 		// Draining has begun: end the settlement walks now, so none is still retrying (and none can
 		// fire a done) after this returns. What they leave unsettled stays unacked for the next pod.
 		ce.cancel()
 	}
-	close(es.messages)
+	if !es.messagesClosed {
+		close(es.messages)
+		es.messagesClosed = true
+	}
 	if !es.await(ctx, es.workersDone, "decode workers") {
 		return false
 	}
@@ -524,16 +558,25 @@ func (es *GatewayJetStreamSource) stopPipeline(ctx context.Context) bool {
 	if !es.await(ctx, uplinksDone, "device uplink publishes") {
 		return false
 	}
-	close(es.publishes)
+	if !es.publishesClosed {
+		close(es.publishes)
+		es.publishesClosed = true
+	}
 	if !es.await(ctx, es.submitterDone, "publish submitter") {
 		return false
 	}
-	closed := make(chan struct{})
-	go func() {
-		defer close(closed)
-		es.writer.Close()
-	}()
-	if !es.await(ctx, closed, "inbound-events publishes") {
+	// Close can return immediately on a repeat call while its first call is still
+	// settling. Retries must wait for that original call before allowing a new run.
+	if es.writerClosed == nil {
+		closed := make(chan struct{})
+		es.writerClosed = closed
+		writer := es.writer
+		go func() {
+			defer close(closed)
+			writer.Close()
+		}()
+	}
+	if !es.await(ctx, es.writerClosed, "inbound-events publishes") {
 		return false
 	}
 	if ce := es.ce; ce != nil {
