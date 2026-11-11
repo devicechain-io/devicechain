@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
 )
 
@@ -32,7 +31,9 @@ func (s *Store) ReadSnapshot(ctx context.Context, fn func(ctx context.Context) e
 	if InSnapshot(ctx) {
 		return fn(ctx)
 	}
-	db := s.db.DB(core.WithSystemContext(ctx))
+	// sys, not a second system-context call site: ctx carries no snapshot here, so this is the
+	// instance-global pool handle every store read already uses.
+	db := s.sys(ctx)
 	var opts []*sql.TxOptions
 	if db.Dialector.Name() == "postgres" {
 		opts = append(opts, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
