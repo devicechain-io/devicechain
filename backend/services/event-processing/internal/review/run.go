@@ -264,10 +264,21 @@ func Run(ctx context.Context, p Params) (Result, error) {
 	degraded := false
 	for _, w := range out.Windows {
 		degraded = degraded || len(w.Degraded) > 0
+		for _, c := range w.Devices {
+			if c.LateBase > 0 || c.LateDraft > 0 {
+				out.Incomplete = append(out.Incomplete, fmt.Sprintf("%s has readings declined as late in the %s window on base (%d) or draft (%d).", c.Device, w.Role, c.LateBase, c.LateDraft))
+			}
+			out.Incomplete = append(out.Incomplete, readingCauses(c, w.Role, b, d)...)
+			for i, state := range []State{c.StateBase, c.StateDraft} {
+				if state == Unknown {
+					out.Incomplete = append(out.Incomplete, fmt.Sprintf("%s has UNKNOWN %s state when the %s window began.", c.Device, []string{"base", "draft"}[i], w.Role))
+				}
+			}
+		}
 	}
 	if fail && !inc {
 		out.Outcome = "FAILED"
-	} else if !fail && !inc && !degraded && per[Incident] > 0 && per[Normal] > 0 {
+	} else if !fail && !inc && !degraded && len(out.Incomplete) == 0 && per[Incident] > 0 && per[Normal] > 0 {
 		out.Outcome = "PASSED"
 	}
 	var digests strings.Builder
@@ -281,7 +292,8 @@ func evaluateSide(ctx context.Context, p Params, s side, evs []evaluate.Event, e
 	if !s.enabled() || len(evs) == 0 {
 		return evaluate.Result{}, nil
 	}
-	return evaluate.Run(ctx, evaluate.Params{Tenant: p.Tenant, ProfileVersion: p.ProfileToken + "@review", Rules: []evaluate.Rule{{Token: s.env.Token, Def: s.def}}, Events: evs, AdvanceTo: end, Lateness: p.Lateness, AppliedGuard: p.AppliedGuard, AttributeLate: true, MaxEvents: evaluate.HardMaxEvents, MaxEdges: evaluate.HardMaxEdges, MaxIntents: evaluate.HardMaxIntents})
+	// Scan already applied the guard using the original recorded event identities.
+	return evaluate.Run(ctx, evaluate.Params{Tenant: p.Tenant, ProfileVersion: p.ProfileToken + "@review", Rules: []evaluate.Rule{{Token: s.env.Token, Def: s.def}}, Events: evs, AdvanceTo: end, Lateness: p.Lateness, AppliedGuard: false, AttributeLate: true, MaxEvents: evaluate.HardMaxEvents, MaxEdges: evaluate.HardMaxEdges, MaxIntents: evaluate.HardMaxIntents})
 }
 func readWindow(ctx context.Context, p Params, w Window, lead time.Duration, devices []string) (WindowResult, []evaluate.Event, error) {
 	wr := WindowResult{Role: w.Role, Start: w.Start, End: w.End, LeadInStart: w.Start.Add(-lead)}
@@ -289,7 +301,7 @@ func readWindow(ctx context.Context, p Params, w Window, lead time.Duration, dev
 	coverage := map[string]*DeviceCoverage{}
 	for _, dev := range devices {
 		set[dev] = true
-		coverage[dev] = &DeviceCoverage{Device: dev, Readings: map[string]int{}, LeadInReadings: map[string]int{}, Versions: map[string]int{}}
+		coverage[dev] = &DeviceCoverage{Device: dev, Readings: map[string]int{}, MetricTypes: map[string][]string{}, LeadInReadings: map[string]int{}, Versions: map[string]int{}}
 	}
 	budget := p.WindowBudget
 	if budget == 0 {
@@ -340,6 +352,13 @@ func readWindow(ctx context.Context, p Params, w Window, lead time.Duration, dev
 			}
 			e := evaluate.Event{Device: ev.SourceDeviceToken, At: at}
 			for _, m := range entry.Entries {
+				// Keep supplied types even when a value is no longer numeric.
+				if m.DataType != nil {
+					c := coverage[e.Device]
+					types := c.MetricTypes[m.Name]
+					addReason(&types, *m.DataType)
+					c.MetricTypes[m.Name] = types
+				}
 				v, err := strconv.ParseFloat(m.Value, 64)
 				if err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) {
 					e.Metrics = append(e.Metrics, evaluate.Metric{Name: m.Name, Value: v})
@@ -395,6 +414,9 @@ func readWindow(ctx context.Context, p Params, w Window, lead time.Duration, dev
 		wr.Bounds.LastSeq = bound.LastSeq
 	}
 	for _, dev := range devices {
+		for _, types := range coverage[dev].MetricTypes {
+			sort.Strings(types)
+		}
 		wr.Devices = append(wr.Devices, *coverage[dev])
 	}
 	var canonical strings.Builder

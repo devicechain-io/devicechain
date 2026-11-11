@@ -5,6 +5,7 @@ package review
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,34 @@ func judgedResult(r evaluate.Result, w WindowResult, until *time.Time) ruletest.
 	}
 	return out
 }
+
+// readingCauses is the rule-3 overlay shared with review-wide completeness.
+func readingCauses(c DeviceCoverage, role Role, b, d side) []string {
+	var causes []string
+	if len(c.Readings) == 0 {
+		causes = append(causes, fmt.Sprintf("%s has no reading in the %s window.", c.Device, role))
+	}
+	metrics := map[string]bool{}
+	for _, s := range []side{b, d} {
+		for _, m := range s.metrics() {
+			metrics[m] = true
+		}
+	}
+	names := make([]string, 0, len(metrics))
+	for m := range metrics {
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	for _, m := range names {
+		if c.Readings[m] == 0 {
+			causes = append(causes, fmt.Sprintf("%s has no reading of %s in the %s window.", c.Device, m, role))
+		}
+		if types := c.MetricTypes[m]; len(types) > 1 {
+			causes = append(causes, fmt.Sprintf("%s has a metric-type change for %s in the %s window (including lead-in): %s.", c.Device, m, role, strings.Join(types, ", ")))
+		}
+	}
+	return causes
+}
 func judge(e ruletest.Expect, w WindowResult, b, d side, r evaluate.Result, draft bool) (Verdict, string, []ReadingRef, string) {
 	judgedSide := b
 	if draft {
@@ -78,15 +107,8 @@ func judge(e ruletest.Expect, w WindowResult, b, d side, r evaluate.Result, draf
 		}
 	}
 	for _, c := range touched {
-		if len(c.Readings) == 0 {
-			return finish(Inconclusive, fmt.Sprintf("%s has no reading in the %s window", c.Device, w.Role))
-		}
-		for _, s := range []side{b, d} {
-			for _, m := range s.metrics() {
-				if c.Readings[m] == 0 {
-					return finish(Inconclusive, fmt.Sprintf("%s has no reading of %s in the %s window", c.Device, m, w.Role))
-				}
-			}
+		if causes := readingCauses(c, w.Role, b, d); len(causes) > 0 {
+			return finish(Inconclusive, causes[0])
 		}
 	}
 	negative := e.NeverRaised != nil || e.NeverIntent != nil

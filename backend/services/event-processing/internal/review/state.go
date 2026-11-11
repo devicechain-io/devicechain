@@ -44,8 +44,13 @@ func startState(s side, r evaluate.Result, events []evaluate.Event, dev string, 
 		return Clear
 	}
 	state := Unknown
+	edgeStart := lo
+	if s.fidelity.ResetKind == rules.ResetAggregate {
+		// Cold-start partial aggregates do not establish the live window's state.
+		edgeStart = lo.Add(s.fidelity.Horizon)
+	}
 	for _, e := range r.Edges {
-		if e.Series == dev && !e.At.Before(lo) && e.At.Before(start) {
+		if e.Series == dev && !e.At.Before(edgeStart) && e.At.Before(start) {
 			state = Clear
 			if e.Raise {
 				state = Raised
@@ -171,7 +176,14 @@ func commandActions(env *RuleEnvelope) (string, error) {
 	var keys []string
 	for _, a := range def.Actions {
 		if a.Type == rules.ActionSendCommand && a.SendCommand != nil {
-			b, _ := json.Marshal([]string{a.SendCommand.Command, canonicalJSON(a.SendCommand.Payload)})
+			// Copy the nested action before normalizing its JSON payload.
+			command := *a.SendCommand
+			command.Payload = canonicalJSON(command.Payload)
+			a.SendCommand = &command
+			b, err := json.Marshal(a)
+			if err != nil {
+				return "", err
+			}
 			keys = append(keys, string(b))
 		}
 	}
@@ -211,7 +223,11 @@ func divergence(ctx context.Context, p Params, b, d side, br, dr evaluate.Result
 		m := map[time.Time][]string{}
 		for _, in := range r.Intents {
 			if in.Series == c.Device && in.Kind == evaluate.KindSendCommand && !in.At.Before(lo) {
-				key, _ := json.Marshal([]string{in.Command, canonicalJSON(in.Payload)})
+				parts := []string{in.Command, canonicalJSON(in.Payload)}
+				if in.ExpiresAt != nil {
+					parts = append(parts, in.ExpiresAt.Sub(in.At).String())
+				}
+				key, _ := json.Marshal(parts)
 				at := in.At.UTC()
 				m[at] = append(m[at], string(key))
 			}

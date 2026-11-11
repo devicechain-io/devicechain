@@ -95,17 +95,18 @@ const (
 )
 
 type DeviceCoverage struct {
-	Device         string         `json:"device"`
-	Readings       map[string]int `json:"readings"`
-	LeadInReadings map[string]int `json:"leadInReadings"`
-	First          time.Time      `json:"first"`
-	Last           time.Time      `json:"last"`
-	Versions       map[string]int `json:"versions"`
-	LateBase       int            `json:"lateBase"`
-	LateDraft      int            `json:"lateDraft"`
-	StateBase      State          `json:"stateBase"`
-	StateDraft     State          `json:"stateDraft"`
-	Divergence     *time.Time     `json:"divergence"`
+	Device         string              `json:"device"`
+	Readings       map[string]int      `json:"readings"`
+	MetricTypes    map[string][]string `json:"metricTypes"`
+	LeadInReadings map[string]int      `json:"leadInReadings"`
+	First          time.Time           `json:"first"`
+	Last           time.Time           `json:"last"`
+	Versions       map[string]int      `json:"versions"`
+	LateBase       int                 `json:"lateBase"`
+	LateDraft      int                 `json:"lateDraft"`
+	StateBase      State               `json:"stateBase"`
+	StateDraft     State               `json:"stateDraft"`
+	Divergence     *time.Time          `json:"divergence"`
 }
 type ReadingRef struct {
 	Device   string        `json:"device"`
@@ -196,5 +197,6 @@ type Result struct {
 	Windows      []WindowResult      `json:"windows"`
 	Expectations []ExpectationResult `json:"expectations"`
 	Outcome      string              `json:"outcome"`
+	Incomplete   []string            `json:"incomplete"`
 	InputDigest  string              `json:"inputDigest"`
 }

@@ -94,8 +94,8 @@ func changeTime(c Change) time.Time {
 	return *c.Draft
 }
 
-// diff preserves the experimental DiffFirings two-list walk: within the shift
-// window pair the next elements, otherwise consume only the earlier one.
+// diff removes exact matches first, then uses the experimental DiffFirings
+// two-list walk: pair within the shift window, otherwise consume the earlier one.
 func diff(w *WindowResult, b, d side, shift time.Duration) {
 	if shift == 0 {
 		shift = DefaultShiftWindow
@@ -126,6 +126,36 @@ func diff(w *WindowResult, b, d side, shift time.Duration) {
 	var changes []Change
 	for k := range set {
 		bs, ds := bm[k], dm[k]
+		// Remove the exact multiset intersection before pairing changed elements.
+		type exactKey struct {
+			at      time.Time
+			content Content
+		}
+		remaining := map[exactKey]int{}
+		for _, e := range ds {
+			remaining[exactKey{e.at.UTC(), e.content}]++
+		}
+		matched := map[exactKey]int{}
+		var baseRest, draftRest []element
+		for _, e := range bs {
+			key := exactKey{e.at.UTC(), e.content}
+			if remaining[key] > 0 {
+				remaining[key]--
+				matched[key]++
+				w.Counts.Unchanged++
+			} else {
+				baseRest = append(baseRest, e)
+			}
+		}
+		for _, e := range ds {
+			key := exactKey{e.at.UTC(), e.content}
+			if matched[key] > 0 {
+				matched[key]--
+			} else {
+				draftRest = append(draftRest, e)
+			}
+		}
+		bs, ds = baseRest, draftRest
 		i, j := 0, 0
 		for i < len(bs) || j < len(ds) {
 			c := Change{Device: k.device, Subject: k.subject, Discriminator: k.discriminator}
@@ -171,7 +201,8 @@ func diff(w *WindowResult, b, d side, shift time.Duration) {
 			}
 			for _, dev := range w.Devices {
 				if dev.Device == c.Device && dev.Divergence != nil {
-					c.AfterDivergence = changeTime(c).After(*dev.Divergence)
+					c.AfterDivergence = (c.Base != nil && c.Base.After(*dev.Divergence)) ||
+						(c.Draft != nil && c.Draft.After(*dev.Divergence))
 				}
 			}
 			changes = append(changes, c)
