@@ -12,6 +12,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Create a new device profile.
@@ -62,33 +63,25 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	}
 
 	found := matches[0]
-
-	found.Name = request.Name.ApplyToNullString(found.Name)
-	found.Description = request.Description.ApplyToNullString(found.Description)
-	found.Category = request.Category.ApplyToNullString(found.Category)
+	assignments := map[string]any{}
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(found.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(found.Description)
+	}
+	if request.Category.Set {
+		assignments["category"] = request.Category.ApplyToNullString(found.Category)
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(found.Metadata)))
 	if err != nil {
 		return nil, err
 	}
-	found.Metadata = metadataJSON
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
 
-	// The position declaration (ADR-078) now takes the same three states as every other
-	// field here: omitted PRESERVES it, an explicit null clears it, an object replaces
-	// it. Omission used to be the CLEAR operation, which meant a caller restating the
-	// profile's other fields silently un-declared position for every device built on it
-	// — the reason the console had to carry the declaration forward by hand. The Save
-	// below writes a nil pointer as SQL NULL (Metadata already depends on this), which
-	// restores exactly the never-declared state in the DRAFT — as it should, since a
-	// device that no longer reports position should display exactly like one that never
-	// did. What distinguishes a cleared profile from one that never declared is the
-	// append-only version history: the version published while it was declared still
-	// carries the declaration, so the clear is visible as a change between versions
-	// rather than as a tombstone in the draft.
-	//
-	// 🔴 THE STORED DECLARATION IS DECODED, NOT COPIED AS A COLUMN. The absent state has
-	// to fold onto the current value, and reading it through Location() is what keeps
-	// "declared with no expectations stated" (`{}`) distinct from "does not report
-	// position" (SQL NULL) across the fold — the two values the whole design rests on.
+	// Decode and fold so an empty declaration stays distinct from SQL NULL.
 	currentLocation, err := found.Location()
 	if err != nil {
 		return nil, err
@@ -97,26 +90,39 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
-	found.LocationDeclaration = location
-
-	// Omit active_version AND active_since: a draft/metadata edit must never write the
-	// version pointer back. `found` was loaded before this Save, so writing it whole would
-	// let an edit racing a concurrent PublishDeviceProfile/RollbackDeviceProfile silently
-	// revert the active pointer — the version devices resolve — to its stale value. The
-	// pointer is moved only by publish/rollback (same class of race as ADR-062's
-	// EntityGroup update; fixed here too since it is the identical latent bug).
-	// active_since is the pointer's other half — publish and rollback write the two in one
-	// statement — so it is omitted with it: writing back a stale instant beside a current
-	// version would make the reconcile door answer an activation the fact never carried, and
-	// would lower the floor the next activation is minted above.
-	// configuration_declaration is omitted for the same reason: it is written only by
-	// SetDeviceProfileConfigurationDeclaration, so an edit built from a stale read must not
-	// write a stale declaration back over one set in between.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince", "ConfigurationDeclaration", "DecoderDeclaration").Save(found)
-	if result.Error != nil {
-		return nil, result.Error
+	if request.Location.Set {
+		assignments["location_declaration"] = nil
+		if location != nil {
+			assignments["location_declaration"] = location
+		}
 	}
-	return found, nil
+
+	// Only named columns are written: publish/rollback own the active pointer,
+	// and the configuration and decoder setters own their declarations.
+	if len(assignments) == 0 {
+		return found, nil
+	}
+	if err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		res := rdb.AdvancingFrom(tx, found.UpdatedAt).Model(found).Omit(clause.Associations).
+			Where("id = ?", found.ID).Updates(assignments)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	matches, err = api.DeviceProfilesByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // RenameDeviceProfile changes a profile's token, and changes nothing else.
@@ -213,8 +219,8 @@ func (api *Api) RenameDeviceProfile(ctx context.Context, token string, newToken 
 		// 🔴 ONE COLUMN, NOT THE WHOLE ROW, and here that subsumes a guard rather than
 		// merely being tidier. `found` was loaded before this write, so saving it whole
 		// would let a rename racing a concurrent publish or rollback revert the active
-		// version pointer devices resolve — which is why UpdateDeviceProfile has to
-		// Omit("ActiveVersion") explicitly. A write naming one column cannot revert any
+		// version pointer devices resolve — which is why UpdateDeviceProfile writes
+		// only named columns. A write naming one column cannot revert any
 		// other, so there is nothing to omit. It still passes through the token-grammar
 		// callback (a map destination is checked the same way a struct is) and the
 		// tenant-scope callback.
