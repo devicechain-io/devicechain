@@ -340,6 +340,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// MQTT_BASIC must carry a password in the same request, so no secret chosen under another
 	// type (or none) becomes a password that skipped the minimum length.
 	secretDigest := updated.SecretDigest
+	// The secret state this update was derived from. Under the row lock the stored state must still be
+	// this one whenever the digest is written without a new password in the request (see below).
+	readDigest := updated.SecretDigest
+	var readLegacy sql.NullString
+	if !request.CredentialValue.Set {
+		if readLegacy, err = api.legacySecretOf(api.RDB.DB(ctx), updated.ID); err != nil {
+			return nil, err
+		}
+	}
 	switch {
 	case !credentialRequiresSecret(credentialType):
 		secretDigest = sql.NullString{}
@@ -351,8 +360,12 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 			return nil, err
 		}
 	default:
-		if secretDigest, err = api.adoptLegacySecret(ctx, updated); err != nil {
-			return nil, err
+		// Adopted from the plaintext read above, the same read the under-lock comparison uses, so the
+		// digest written and the state it is checked against cannot differ.
+		if readLegacy.Valid && readLegacy.String != "" {
+			if secretDigest, err = digestSecret(api.DeviceSecretKey, updated.TenantId, &readLegacy.String, 0); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -433,6 +446,19 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 		}
 		if cur.CredentialType != readType {
 			return fmt.Errorf("credential %q changed type while this update was prepared; retry", updated.Token)
+		}
+		// A digest derived from the unlocked read (kept as it was, adopted from the legacy plaintext, or
+		// cleared by a type that holds none) must not be written over a secret rotated since: that would
+		// bring back a password the rotation retired. Refused rather than re-derived: the caller retries
+		// against the rotated state.
+		if _, writes := assignments["secret_digest"]; writes && !request.CredentialValue.Set {
+			curLegacy, err := api.legacySecretOf(tx, cur.ID)
+			if err != nil {
+				return err
+			}
+			if cur.SecretDigest != readDigest || curLegacy != readLegacy {
+				return fmt.Errorf("credential %q's secret changed while this update was prepared; retry", updated.Token)
+			}
 		}
 		// The inline kick after the commit names the owner in force too, not the one the unlocked read saw.
 		lockedOwnerId = cur.DeviceId
@@ -524,23 +550,17 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	return matches[0], nil
 }
 
-// adoptLegacySecret is the stored secret an update that does not name one must keep. That is
-// the row's digest, UNLESS an old-version pod rotated the password during a rolling
-// upgrade: it wrote the new password into credential_value and left secret_digest alone,
-// so the plaintext column holds the later secret. The save that follows writes that column
-// NULL (LegacyCredentialValue), so the plaintext is digested here first rather than
-// discarded, which would bring back the password the old pod rotated away. Outside an
-// upgrade's overlap the column is always NULL and this returns the digest unchanged.
-func (api *Api) adoptLegacySecret(ctx context.Context, cred *DeviceCredential) (sql.NullString, error) {
+// legacySecretOf reads the credential's legacy plaintext column, which the model can write but not read.
+func (api *Api) legacySecretOf(db *gorm.DB, id uint) (sql.NullString, error) {
 	var legacy []sql.NullString
-	if err := api.RDB.DB(ctx).Model(&DeviceCredential{}).Where("id = ?", cred.ID).
+	if err := db.Unscoped().Model(&DeviceCredential{}).Where("id = ?", id).
 		Pluck("credential_value", &legacy).Error; err != nil {
 		return sql.NullString{}, err
 	}
-	if len(legacy) != 1 || !legacy[0].Valid || legacy[0].String == "" {
-		return cred.SecretDigest, nil
+	if len(legacy) != 1 {
+		return sql.NullString{}, nil
 	}
-	return digestSecret(api.DeviceSecretKey, cred.TenantId, &legacy[0].String, 0)
+	return legacy[0], nil
 }
 
 // Get device credentials by id.

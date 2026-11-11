@@ -200,3 +200,75 @@ func TestUpdateDeviceCredentialAdoptsLegacySecretAndClearsPlaintext(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, beforeWrites, customerPartialWrites(statements), "after adoption an empty request must issue no writes")
 }
+
+// rotateOnFirstRead registers a one-shot callback that, right after the first read of the credential,
+// (the afterReads-th read of the table) stores digest (and clears the legacy plaintext) the way another writer's rotation would.
+func rotateOnFirstRead(t *testing.T, api *Api, ctx context.Context, digest sql.NullString, afterReads int) *bool {
+	t.Helper()
+	fired := false
+	reads := 0
+	const callback = "test:device_credential_secret_rotation"
+	db := api.RDB.DB(ctx)
+	require.NoError(t, db.Callback().Query().After("gorm:after_query").Register(callback, func(tx *gorm.DB) {
+		if fired || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "device_credentials" || tx.Error != nil || tx.RowsAffected == 0 {
+			return
+		}
+		if reads++; reads < afterReads {
+			return
+		}
+		fired = true
+		fresh := api.RDB.DB(ctx).Session(&gorm.Session{NewDB: true})
+		tx.AddError(fresh.Model(&DeviceCredential{}).Where("token = ?", "dcred-1").
+			Updates(map[string]any{"secret_digest": digest, "credential_value": sql.NullString{}}).Error)
+	}))
+	t.Cleanup(func() { require.NoError(t, db.Callback().Query().Remove(callback)) })
+	return &fired
+}
+
+// A type-naming update derives the digest from the unlocked read; a rotation between that read and the
+// lock must survive it (the retired password must stay refused).
+func TestUpdateDeviceCredentialTypeEditDoesNotUndoConcurrentRotation(t *testing.T) {
+	api, ctx, _ := deviceCredentialStaleFixture(t)
+	var before DeviceCredential
+	require.NoError(t, api.RDB.DB(ctx).Where("token = ?", "dcred-1").First(&before).Error)
+	newPassword := "rotated-material-0123456"
+	rotated, err := digestSecret(api.DeviceSecretKey, before.TenantId, &newPassword, 0)
+	require.NoError(t, err)
+	require.NotEqual(t, before.SecretDigest, rotated)
+	fired := rotateOnFirstRead(t, api, ctx, rotated, 1)
+
+	_, err = api.UpdateDeviceCredential(ctx, "dcred-1", &DeviceCredentialUpdateRequest{
+		CredentialType: dcgraphql.OptionalStringOf(string(CredentialMqttBasic)),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "retry")
+	require.True(t, *fired, "the rotation must execute between the read and the lock")
+	var stored DeviceCredential
+	require.NoError(t, api.RDB.DB(ctx).First(&stored, before.ID).Error)
+	require.Equal(t, rotated, stored.SecretDigest, "the rotated secret must survive; the old password must stay refused")
+}
+
+// A legacy-plaintext row is adopted from the plaintext read before the lock; a rotation in between must
+// not be overwritten with the digest of the retired plaintext.
+func TestUpdateDeviceCredentialLegacyAdoptionDoesNotUndoConcurrentRotation(t *testing.T) {
+	api, ctx, _ := deviceCredentialStaleFixture(t)
+	require.NoError(t, api.RDB.DB(ctx).Exec("UPDATE device_credentials SET credential_value = ? WHERE token = ?",
+		"legacy-rotated-material-0123", "dcred-1").Error)
+	var before DeviceCredential
+	require.NoError(t, api.RDB.DB(ctx).Where("token = ?", "dcred-1").First(&before).Error)
+	newPassword := "rotated-material-0123456"
+	rotated, err := digestSecret(api.DeviceSecretKey, before.TenantId, &newPassword, 0)
+	require.NoError(t, err)
+	fired := rotateOnFirstRead(t, api, ctx, rotated, 2) // after the legacy plaintext read
+
+	_, err = api.UpdateDeviceCredential(ctx, "dcred-1", &DeviceCredentialUpdateRequest{
+		Enabled: dcgraphql.OptionalBoolOf(false),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "retry")
+	require.True(t, *fired)
+	var stored DeviceCredential
+	require.NoError(t, api.RDB.DB(ctx).First(&stored, before.ID).Error)
+	require.Equal(t, rotated, stored.SecretDigest)
+	require.True(t, stored.Enabled, "a refused update writes nothing")
+}

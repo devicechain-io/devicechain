@@ -861,6 +861,11 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// disabled device is rostered with no profile so no absence rule raises "device silent"
 	// for the traffic it is refused (rosterEntries), and an enabled one is rostered under its
 	// profile again. Disabling a device that is already disabled changes nothing.
+	//
+	// Known and accepted: `toggled` is decided from the unlocked read, so an enable/disable that races
+	// an opposite toggle can skip the expected_since stamp and the post-enable publish for this call.
+	// disabled_at itself is written from the request, so the stored state is never wrong; only the
+	// roster nudge and the configuration resend are, and the next reconcile repairs them.
 	toggled := disabledAt.Valid != updated.DisabledAt.Valid
 	updated.DisabledAt = disabledAt
 	if retyped || toggled {
