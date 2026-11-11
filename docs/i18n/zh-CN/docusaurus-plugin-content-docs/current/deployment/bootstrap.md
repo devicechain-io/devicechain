@@ -158,6 +158,12 @@ and nothing has been changed: ... Destroy an instance, or raise the budget by re
 关系型数据库已从 StatefulSet 改为 CloudNativePG 集群，无法原地升级。对更早创建的实例，初始化会**拒绝**执行，并说明如何导出数据或有意丢弃数据。详见[旧数据库例外](#legacy-db-removal)。
 :::
 
+### 关系型存储 WAL 调优 {#relational-store-wal}
+
+`dcctl install --relational-store-max-wal-mib 4096` 将共享关系型存储的 `max_wal_size` 软检查点目标设为 4096 MiB。省略此标志会保留已记录的选择；首次安装且未选择时，沿用根配置的 PostgreSQL 默认值（1 GiB）。传入 `--relational-store-max-wal-mib=0` 会记录恢复默认值的选择。正数必须至少为 64 MiB。选择在应用前记录，因此应用失败后不带标志重试仍会保留该选择，包括显式恢复默认值。
+
+这是软检查点目标，并非 `pg_wal` 的硬上限：检查点或归档落后时 WAL 可以超过它。集群根配置仍会拒绝超过关系型存储容量四分之一的目标。性能规格推荐 WAL 值，但不会自动应用。此更改只需重新加载，集群中存在实例时也允许更改。
+
 ### 旧数据库例外 {#legacy-db-removal}
 
 Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级。拒绝执行可防止旧数据库被删除后，一个空数据库接管相同主机名，导致实例看似健康却没有数据。
@@ -478,6 +484,7 @@ chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之
 | `--restore-rdb-from <archive>` | 灾难恢复：从备份桶内归档路径恢复共享关系型存储（未恢复过时为 `dc-rdb`），不初始化空库。仅**创建**时生效，已有存储时不移动数据，是重建而非修复操作。需备份插件，`--no-cnpg` 或 `--compact --no-tls` 时拒绝。见[恢复实例](./disaster-recovery.md#recover)。 |
 | `--restore-rdb-at <timestamp>` | 在指定时间停止恢复，而非重放全部归档。用于错误迁移或误删除等被系统正常执行的数据破坏，必须选破坏之前的时间。需 `--restore-rdb-from` 和带显式偏移的 RFC 3339 时间（`2026-07-27T13:59:00Z`），否则 PostgreSQL 按恢复服务器时区解释，停止时间不同。 |
 | `--max-connections <n>` | 关系型数据库连接预算，首次默认 `700`，重跑未指定时保留当前值。见[连接预算](#connection-budget)。运行实例存在时只能提高，不可降低。 |
+| `--relational-store-max-wal-mib <n>` | 关系型存储 `max_wal_size` 软检查点目标，单位 MiB。省略则保留已记录的选择（首次安装：默认 1 GiB）；`0` 记录恢复默认值；正数至少为 `64`。应用前记录，失败后不带标志重试仍保留。根配置限制为存储容量的四分之一。性能规格不会自动设置。参见[关系型 WAL 调优](#relational-store-wal)。 |
 | `--allow-legacy-db-removal` | [初始化过程](#what-it-does)所述一次性例外的关系型数据库部分。 |
 | `--dry-run` | 打印行为，不改变内容、不创建集群。因此需读取集群的检查，尤其 `--ha` 节点容量检查，无法读取时报告未检查，不阻止演练。但可读集群若无法承载高可用，试运行也失败。可访问时，同样拒绝缺少集群本地状态的机器重安装、在运行实例下改变设置、不可用快照类，并使用相同错误消息；不可访问时说明未检查。 |
 | `--yes` | 创建 kind 集群前不询问。 |
