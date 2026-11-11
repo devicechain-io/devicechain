@@ -74,6 +74,12 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 			return err
 		}
 	}
+	// Refuse before the declaration write: a re-run keeps the recorded size via
+	// adoptRecordedSize, so writing first would turn "use a smaller --size" into
+	// a second refusal. The size is settled here, including on dry runs.
+	if err := checkHaNodeCapacity(ctx, st); err != nil {
+		return err
+	}
 	if err := checkDeviceUplinksOverlay(st); err != nil {
 		return err
 	}
