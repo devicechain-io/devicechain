@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // CreateNotificationChannel creates a delivery channel. The channel type must be
@@ -167,16 +168,34 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 		}
 	}
 
-	updated.Name = request.Name.ApplyToNullString(updated.Name)
-	updated.Description = request.Description.ApplyToNullString(updated.Description)
-	updated.Metadata = metadataJSON
-	updated.ChannelType = channelType
-	updated.Config = configJSON
-	updated.Enabled = enabled
-
-	result := api.RDB.DB(ctx).Save(updated)
-	if result.Error != nil {
-		return nil, result.Error
+	assignments := make(map[string]any)
+	if request.Name.Set {
+		assignments["name"] = request.Name.ApplyToNullString(updated.Name)
+	}
+	if request.Description.Set {
+		assignments["description"] = request.Description.ApplyToNullString(updated.Description)
+	}
+	if request.Metadata.Set {
+		assignments["metadata"] = metadataJSON
+	}
+	if request.ChannelType.Set {
+		assignments["channel_type"] = channelType
+	}
+	if request.Config.Set {
+		assignments["config"] = configJSON
+	}
+	if request.Enabled.Set {
+		assignments["enabled"] = enabled
+	}
+	if len(assignments) == 0 && !request.Secret.Set {
+		return updated, nil
+	}
+	// Effective inputs above are needed for credential validation, but omitted
+	// columns may already have changed since the read and must never be assigned.
+	if len(assignments) > 0 {
+		if err := api.RDB.DB(ctx).Model(updated).Omit(clause.Associations).Updates(assignments).Error; err != nil {
+			return nil, err
+		}
 	}
 	// The secret is the one field whose three states do not map onto a column, because it
 	// is not one: it lives in the envelope-encrypted store, keyed by the channel's
@@ -201,7 +220,14 @@ func (api *Api) UpdateNotificationChannel(ctx context.Context, token string,
 			return nil, err
 		}
 	}
-	return updated, nil
+	reloaded, err := api.NotificationChannelsById(ctx, []uint{updated.ID})
+	if err != nil {
+		return nil, err
+	}
+	if len(reloaded) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return reloaded[0], nil
 }
 
 // RenameNotificationChannel moves a channel from token to newToken, and is the ONLY way
