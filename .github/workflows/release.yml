@@ -89,6 +89,8 @@ jobs:
     outputs:
       version: ${{ steps.semver.outputs.version }}
       is_prerelease: ${{ steps.semver.outputs.is_prerelease }}
+      moves_latest: ${{ steps.lts.outputs.moves_latest }}
+      lts_line: ${{ steps.lts.outputs.line }}
       smoke: ${{ steps.smoke.outputs.smoke }}
       sign: ${{ steps.smoke.outputs.sign }}
     steps:
@@ -138,6 +140,18 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
           echo "Releasing $version (prerelease=$is_prerelease)"
+
+      # The long-term-support line's two release-time rules (hack/lts.sh carries the reasoning and
+      # a self-test): a line that has a release-X.Y-lts branch is tagged FROM that branch, and `latest`
+      # moves only for the highest stable tag, so a patch of an older line never moves it backwards.
+      # Both are no-ops for every release cut before an LTS branch exists.
+      - name: Tag is cut from its line's branch, and does it move latest
+        id: lts
+        run: |
+          set -euo pipefail
+          hack/lts.sh check-tag "${GITHUB_REF_NAME}"
+          echo "moves_latest=$(hack/lts.sh moves-latest "${GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
+          echo "line=$(hack/lts.sh line-of-tag "${GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
 
       - name: Build image module list
         id: smoke
@@ -238,6 +252,7 @@ jobs:
           MODULE: ${{ matrix.module }}
           VERSION: ${{ needs.guard.outputs.version }}
           IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
+          MOVES_LATEST: ${{ needs.guard.outputs.moves_latest }}
         run: |
           # Every image publishes at an EXPLICIT repo via ko --bare (KO_DOCKER_REPO
           # used verbatim as the image name), matching the names the Helm chart
@@ -256,8 +271,9 @@ jobs:
           fi
           echo "repo=${REGISTRY}/${name}" >> "$GITHUB_OUTPUT"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
-          # :latest moves ONLY on stable releases -- never on prereleases.
-          if [ "$IS_PRERELEASE" = "false" ]; then
+          # :latest moves ONLY on stable releases -- never on prereleases -- and only when this is the
+          # highest stable tag, so a patch of an older (LTS) line cannot move it backwards.
+          if [ "$IS_PRERELEASE" = "false" ] && [ "$MOVES_LATEST" = "true" ]; then
             echo "tags=${VERSION},latest" >> "$GITHUB_OUTPUT"
           else
             echo "tags=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -417,11 +433,12 @@ jobs:
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
+          MOVES_LATEST: ${{ needs.guard.outputs.moves_latest }}
         run: |
           # :latest moves ONLY on stable releases -- never on prereleases
           # (mirrors the ko images job).
           tags="${REGISTRY}/frontend:${VERSION}"
-          if [ "$IS_PRERELEASE" = "false" ]; then
+          if [ "$IS_PRERELEASE" = "false" ] && [ "$MOVES_LATEST" = "true" ]; then
             tags="${tags},${REGISTRY}/frontend:latest"
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
@@ -825,6 +842,8 @@ jobs:
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           IS_PRERELEASE: ${{ needs.guard.outputs.is_prerelease }}
+          MOVES_LATEST: ${{ needs.guard.outputs.moves_latest }}
+          LTS_LINE: ${{ needs.guard.outputs.lts_line }}
         run: |
           # `latest` moves ONLY on a stable release, mirroring the image and chart tags.
           # A prerelease goes to `next`, so `npm install @devicechain/widgets` keeps
@@ -832,6 +851,10 @@ jobs:
           tag=latest
           if [ "$IS_PRERELEASE" = "true" ]; then
             tag=next
+          elif [ "$MOVES_LATEST" != "true" ]; then
+            # A stable release that is not the highest one is a patch of an older (LTS) line:
+            # it must not move `latest` backwards, so it gets a dist-tag of its own line (lts-1-2: dist-tags cannot hold a dot).
+            tag="lts-${LTS_LINE//./-}"
           fi
           node scripts/publish-packages.mjs --version "$VERSION" --tag "$tag"
 

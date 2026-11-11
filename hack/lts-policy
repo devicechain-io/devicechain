@@ -1,0 +1,17 @@
+# THE ONE FACT THE LTS TOOLING CANNOT DERIVE: which release line, if any, is the
+# supported long-term-support line right now.
+#
+# Read by hack/lts.sh (and through it the backport workflow and the LTS upgrade
+# drill). One supported LTS line at a time, 18 months, security and critical fixes
+# only; docs/docs/deployment/lts-policy.md is the public statement of the promise.
+#
+#   current-lts: none     no line is designated; the backport workflow proposes
+#                         nothing and the drill refuses to run
+#   current-lts: X.Y      the line X.Y is the LTS line. Its branch is
+#                         release-X.Y-lts, cut from the X.Y.0 tag, and every patch
+#                         release of the line is tagged from that branch
+#
+# DECLARED, NOT INFERRED: designating a line is a decision a maintainer takes after
+# the line has soaked, so it is written down here by a pull request and not guessed
+# from the tag list. Designating a line is the only edit this file ever needs.
+current-lts: none

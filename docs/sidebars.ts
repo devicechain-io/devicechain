@@ -315,6 +315,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'deployment/releases-and-upgrades',
             'deployment/versioning-policy',
+            'deployment/lts-policy',
             'deployment/verifying-releases',
             'deployment/security-process',
             // The label's translations live under `sidebar.docs.link.All releases on GitHub`.

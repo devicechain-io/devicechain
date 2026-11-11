@@ -14,7 +14,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'release-*-lts']
 
 # Least privilege: validation jobs only need to read the repo.
 permissions:
@@ -1330,6 +1330,15 @@ jobs:
       # A mutable `@v4` ref is code an outsider can change without a diff here.
       - name: Every action is pinned to a commit SHA
         run: hack/check-action-pins.sh
+
+      # The long-term-support tooling's own self-tests: the branch and tag rules the release workflow calls,
+      # the backport bot's eligibility and cherry-pick logic, and the LTS upgrade drill's verdict logic
+      # (including that its planted-defect control can fail, and fails for the right reason).
+      - name: LTS tooling self-tests
+        run: |
+          hack/lts.sh --self-test
+          hack/lts-backport.sh --self-test
+          hack/lts-upgrade-drill.sh --self-test
 
       # The loadtest gate's L3 negative control and positive test must drive
       # different tenants: the positive run's clean-tenant precheck would otherwise

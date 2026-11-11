@@ -1,0 +1,33 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package schema
+
+// THE PLANTED DEFECT for the LTS upgrade drill's negative control (hack/lts-upgrade-drill.sh).
+//
+// This file is NOT compiled where it lives: the drill copies it into a throwaway checkout of the
+// tree under test as zz_planted_lts_drill.go, so it needs no patch context that could drift as
+// migrations.go changes. It appends one migration, last, that REWRITES data without changing the
+// schema -- the failure `hack/migration-diff.sh verify` cannot see (it compares
+// `pg_dump --schema-only`) and the one the upgrade drill exists to catch: every device's name gains
+// a suffix. The drill's read-back of the seeded device must then report a field that CHANGED.
+//
+// It is deliberately a data rewrite and not a dropped row or a dropped column: a drop would be
+// noticed by many checks, and the control is worth something only if the narrow, quiet defect is
+// the one that fails it.
+
+import (
+	gormigrate "github.com/go-gormigrate/gormigrate/v2"
+	"gorm.io/gorm"
+)
+
+func init() {
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "29991231235959",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.Exec(`UPDATE "device-management"."devices" ` +
+				`SET name = COALESCE(name, '') || ' (planted)';`).Error
+		},
+		Rollback: func(tx *gorm.DB) error { return nil },
+	})
+}
